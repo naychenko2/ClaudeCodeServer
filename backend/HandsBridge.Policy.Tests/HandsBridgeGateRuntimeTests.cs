@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.Loader;
 using System.Text.Json;
 using Xunit;
+using Xunit.Sdk;
 
 namespace HandsBridge.Policy.Tests;
 
@@ -111,6 +112,77 @@ public class HandsBridgeGateRuntimeTests
         AssertGateDenied(result, "browser_click", "unknown or stale");
     }
 
+    /// <summary>
+    /// Сквозной тест mouse_control (D2b-1.1): вызов инструмента с точкой над «запрещённым» окном
+    /// (NoWindows → GetRootWindowAt = 0) возвращает отказ гейта, а ввод не отправляется.
+    /// На Linux гейт отказывает до первого WinAPI, поэтому тест исполняется целиком.
+    /// </summary>
+    [SkippableFact]
+    public async Task Mouse_control_denied_by_gate_does_not_send_input()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var actionType = type.GetNestedType("MouseControlAction")!;
+        var click = Enum.Parse(actionType, "Click");
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = click,
+            ["x"] = 100,
+            ["y"] = 200,
+        });
+
+        AssertGateDenied(result, "mouse_control", "No window at");
+    }
+
+    /// <summary>
+    /// Сквозной тест drag и scroll (D2b-2): вызов с точкой над окном, которого гейт не знает, возвращает
+    /// отказ гейта до любого ввода; колесо выше потолка отказывает по форме, а не доходит до SendInput.
+    /// </summary>
+    [SkippableTheory]
+    [InlineData("Drag", "No window at")]
+    [InlineData("Scroll", "No window at")]
+    public async Task Mouse_control_drag_and_scroll_are_denied_by_gate(string actionName, string reason)
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var action = Enum.Parse(type.GetNestedType("MouseControlAction")!, actionName);
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = action,
+            ["x"] = 100,
+            ["y"] = 200,
+            ["toX"] = 300,
+            ["toY"] = 400,
+            ["direction"] = "down",
+        });
+
+        AssertGateDenied(result, "mouse_control", reason);
+    }
+
+    [SkippableFact]
+    public async Task Mouse_control_scroll_above_the_wheel_cap_is_denied_by_gate()
+    {
+        Skip.IfNot(OperatingSystem.IsWindows(), "mouse_control: WinAPI (GetForegroundWindow) — только Windows");
+
+        var type = Bridge.Value.GetType("Sbroenne.WindowsMcp.Tools.MouseControlTool", throwOnError: true)!;
+        var scroll = Enum.Parse(type.GetNestedType("MouseControlAction")!, "Scroll");
+
+        var result = await Call("Sbroenne.WindowsMcp.Tools.MouseControlTool", new()
+        {
+            ["action"] = scroll,
+            ["x"] = 100,
+            ["y"] = 200,
+            ["direction"] = "down",
+            ["amount"] = 21,
+        });
+
+        AssertGateDenied(result, "mouse_control", "between 1 and 20");
+    }
+
     private static void AssertGateDenied((bool IsError, string Text) result, string tool, string reason)
     {
         Assert.True(result.IsError, result.Text);
@@ -138,8 +210,12 @@ public class HandsBridgeGateRuntimeTests
     internal static async Task<(bool IsError, string Text)> Call(string typeName, Dictionary<string, object?> args)
     {
         var type = Bridge.Value.GetType(typeName, throwOnError: true)!;
-        var method = type.GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(m => m.GetCustomAttributes().Any(a => a.GetType().Name == "McpServerToolAttribute"));
+        var methods = type.GetMethods(BindingFlags.Public | BindingFlags.Static);
+        // По атрибуту [McpServerTool]; если снят (scan_canvas — не публикуется в первой выкладке),
+        // fallback по имени: у такого инструмента ровно один публичный статический ExecuteAsync.
+        var method = methods.FirstOrDefault(m => m.GetCustomAttributes()
+                .Any(a => a.GetType().Name == "McpServerToolAttribute"))
+            ?? methods.Single(m => m.Name == "ExecuteAsync");
 
         var values = method.GetParameters()
             .Select(p => p.ParameterType == typeof(CancellationToken) ? CancellationToken.None

@@ -70,6 +70,8 @@ P=$(venv audiosr 3.11); uv pip install -q -p "$P" $TI $T28 audiosr "setuptools<8
 clone ace-step/ACE-Step-1.5 acestep15
 (cd "$AUDIO_ROOT/acestep15" && uv sync -q)
 P=$(venv bench 3.12); uv pip install -q -p "$P" $TI $T28 nvidia-cudnn-cu12 faster-whisper num2words soundfile numpy pyloudnorm
+# встречи со спикерами — версии как у конвейера транскрибации, whisperx сам тянет torch 2.8+cu128
+P=$(venv whisperx 3.12); uv pip install -q -p "$P" whisperx==3.8.6
 
 echo "== веса (только вне шлагбаума: воркеры запускаются с HF_HUB_OFFLINE=1)"
 export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
@@ -77,6 +79,8 @@ export HF_HUB_DISABLE_XET=1   # xet-клиент не видит HTTPS_PROXY
 "$AUDIO_ROOT/seedvc-env/.venv/bin/python" "$DEPLOY/warm_models.py" seedvc
 "$AUDIO_ROOT/audiosr/.venv/bin/python" "$DEPLOY/warm_models.py" audiosr
 "$AUDIO_ROOT/bench/.venv/bin/python" "$DEPLOY/warm_models.py" whisper
+# модель диаризации закрыта соглашением на HF: нужен HF_TOKEN аккаунта, который его принял
+"$AUDIO_ROOT/whisperx/.venv/bin/python" "$DEPLOY/warm_models.py" diarize
 "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python" "$DEPLOY/warm_models.py" qwen3tts "$AUDIO_MODELS"
 "$AUDIO_ROOT/chatterbox/.venv/bin/python" "$DEPLOY/warm_models.py" chatterbox "$AUDIO_MODELS"
 "$AUDIO_ROOT/moss-tts/.venv/bin/python" "$DEPLOY/warm_models.py" moss "$AUDIO_MODELS"
@@ -89,7 +93,7 @@ echo "== конфиг воркеров"
 W="$DEPLOY/workers"
 cat > "$AUDIO_ROOT/workers.json" <<JSON
 {"families": {
-  "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py"},
+  "tts": {"python": "$AUDIO_ROOT/qwen3tts-env/.venv/bin/python", "script": "$W/worker_tts.py", "vram_mb": 4400},
   "chatterbox": {"python": "$AUDIO_ROOT/chatterbox/.venv/bin/python", "script": "$W/worker_chatterbox.py"},
   "moss": {"python": "$AUDIO_ROOT/moss-tts/.venv/bin/python", "script": "$W/worker_moss.py"},
   "sep": {"python": "$AUDIO_ROOT/util/.venv/bin/python", "script": "$W/worker_sep.py"},
@@ -99,6 +103,7 @@ cat > "$AUDIO_ROOT/workers.json" <<JSON
   "rvc": {"python": "$AUDIO_ROOT/applio/.venv/bin/python", "script": "$W/worker_rvc.py", "cwd": "$AUDIO_ROOT/applio"},
   "audiosr": {"python": "$AUDIO_ROOT/audiosr/.venv/bin/python", "script": "$W/worker_audiosr.py"},
   "asr": {"python": "$AUDIO_ROOT/bench/.venv/bin/python", "script": "$W/worker_asr.py"},
+  "whisperx": {"python": "$AUDIO_ROOT/whisperx/.venv/bin/python", "script": "$W/worker_asr_diarize.py"},
   "acestep": {"python": "$AUDIO_ROOT/acestep15/.venv/bin/python", "script": "$W/worker_acestep.py", "cwd": "$AUDIO_ROOT/acestep15",
               "env": {"ACESTEP_CHECKPOINTS_DIR": "$AUDIO_MODELS/acestep-checkpoints"}}
 }}

@@ -2,7 +2,8 @@
 // в трёх местах и копии расходились: у быстрых операций при стрелках на холсте цена уходила с
 // hasAnnotations: true, а запуск — с false. Теперь «что уйдёт вместе с запуском» решает одна функция.
 
-import type { EditMode, ImageEditOp, ImageEditQuoteRequest } from '../api';
+import type { MediaFormatWish } from 'aihome_shell/kit';
+import type { EditMode, FaceTarget, ImageEditOp, ImageEditQuoteRequest } from '../api';
 import { hasAnnotationMark, type Mark } from '../marks';
 
 // Пометки уходят запуску только у правки: «Изменить» и «Изменить отмеченное»; быстрым операциям
@@ -26,9 +27,17 @@ export interface QuoteBodyInput {
   size: { w: number; h: number } | null;
   // Чат и ревизия контекста: с ними сервер берёт образцы, персонажа и размер из стора
   context?: { sessionId: string; contextRevision: number } | null;
+  // Формат генерации (ADR-025): желание проекта; undefined — флаг выключен, поле в тело не кладётся
+  format?: MediaFormatWish | null;
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки (персонажи — в faces);
+  // с ней context не едет
+  faceTarget?: FaceTarget | null;
 }
 
 export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
+  // FaceTarget и ContextRevision несовместимы: сервер вернёт invalid_request, поэтому с целью
+  // подстановки ревизию контекста (и его образцы/персонажа) в тело не кладём
+  const face = i.faceTarget != null;
   return {
     provider: i.provider, model: i.model, mode: i.mode, op: i.op, count: i.count,
     hasMask: i.withMask,
@@ -36,6 +45,8 @@ export function buildQuoteBody(i: QuoteBodyInput): ImageEditQuoteRequest {
     removal: i.removal,
     references: i.references, hasCharacter: i.hasCharacter,
     width: i.size?.w ?? null, height: i.size?.h ?? null,
-    ...(i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
+    ...(face ? null : i.context ? { sessionId: i.context.sessionId, contextRevision: i.context.contextRevision } : null),
+    ...(i.format !== undefined ? { format: i.format } : null),
+    ...(face ? { faceTarget: i.faceTarget } : null),
   };
 }

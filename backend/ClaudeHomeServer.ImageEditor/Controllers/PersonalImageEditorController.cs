@@ -35,6 +35,11 @@ public class PersonalImageEditorController(
     public IActionResult Catalog(string sessionId) =>
         Gate(sessionId, out _, out var denied) ? CatalogOf() : denied;
 
+    [HttpGet("format")]
+    public async Task<IActionResult> Format(string sessionId, [FromQuery] string? provider, [FromQuery] string? model,
+        [FromQuery] string? op, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string sessionId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
         Gate(sessionId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
@@ -49,7 +54,7 @@ public class PersonalImageEditorController(
     [RequestSizeLimit(MaxUploadBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBodyBytes)]
     public async Task<IActionResult> Upload(string sessionId, IFormFile? file, CancellationToken ct) =>
-        Gate(sessionId, out _, out var denied) ? await UploadIn(file, ct) : denied;
+        Gate(sessionId, out var scope, out var denied) ? await UploadIn(scope, file, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string sessionId, string jobId) =>
@@ -76,7 +81,7 @@ public class PersonalImageEditorController(
     // Выбор человека личной области — один на владельца, как и сама область
     [HttpGet("prefs")]
     public IActionResult GetPrefs(string sessionId) =>
-        Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(UserId, scope)) : denied;
+        Gate(sessionId, out var scope, out var denied) ? Ok(prefs.Get(scope.Tenant, scope)) : denied;
 
     // characterSlug принудительно null: персонажей у личной области нет
     [HttpPut("prefs")]
@@ -85,7 +90,7 @@ public class PersonalImageEditorController(
         if (!Gate(sessionId, out var scope, out var denied)) return denied;
         if (ImageProjectPrefsService.Validate(req is null ? null : req with { CharacterSlug = null }) is { } error)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, error);
-        return Ok(await prefs.SetAsync(UserId, scope, req!));
+        return Ok(await prefs.SetAsync(scope.Tenant, scope, req!));
     }
 
     private bool Gate(string sessionId, [NotNullWhen(true)] out ImageEditScope? scope,
@@ -106,7 +111,7 @@ public class PersonalThreadsController(
 {
     [HttpGet]
     public IActionResult Get(string sessionId) =>
-        Gate(sessionId, out _, out var denied) ? GetIn(sessionId) : denied;
+        Gate(sessionId, out var scope, out var denied) ? GetIn(scope, sessionId) : denied;
 
     [HttpPost]
     public async Task<IActionResult> Open(string sessionId, [FromBody] ImageThreadOpenRequest req, CancellationToken ct) =>
@@ -127,6 +132,11 @@ public class PersonalThreadsController(
     [HttpPost("{threadId}/steps")]
     public async Task<IActionResult> AddStep(string sessionId, string threadId, [FromBody] ImageThreadStepRequest req) =>
         Gate(sessionId, out var scope, out var denied) ? await AddStepIn(scope, sessionId, threadId, req) : denied;
+
+    [HttpPost("{threadId}/crop")]
+    public async Task<IActionResult> Crop(string sessionId, string threadId, [FromBody] ImageThreadCropRequest req,
+        CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await CropIn(scope, sessionId, threadId, req, ct) : denied;
 
     [HttpPost("{threadId}/take")]
     public async Task<IActionResult> Take(string sessionId, string threadId, [FromBody] ImageThreadTakeRequest req,

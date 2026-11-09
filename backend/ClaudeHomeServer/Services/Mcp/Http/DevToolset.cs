@@ -34,7 +34,9 @@ public sealed class DevToolset(
     // реестра, что у панели. Нет — стенд честно отказывает, сборка работает
     DevServerService? devServer = null,
     ProjectServiceDiscovery? discovery = null,
-    TestRunsOptions? options = null) : IMcpParameterizedToolset
+    TestRunsOptions? options = null,
+    // Список worktree проекта для параметра tree; нет — tree принимает только копию мутации
+    Git.GitService? git = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.DevName;
     public const string ToolName = "build";
@@ -64,6 +66,10 @@ public sealed class DevToolset(
     private readonly DevStand _stand = new(new ProjectRunCaller(sessions, projects, personas, broadcaster),
         devServer, discovery, dotnet, npm, (options ?? new TestRunsOptions()).CeilingSeconds);
 
+    // Стенд этого тулсета: тесту короткого потолка нужен порог «остатка на запуск» на этом
+    // экземпляре; дефолт продукта при этом не меняется (DevStand.DefaultMinReadyBudget)
+    internal DevStand Stand => _stand;
+
     public string Name => ServerName;
     public string Version => "1.0.0";
 
@@ -84,6 +90,11 @@ public sealed class DevToolset(
             return ProjectRunCaller.Deny(error);
 
         var root = ProjectRunCaller.RootOf(session, project);
+        // tree: сборка в worktree проекта или копии мутации; корень меняется, очередь и счётчик те же
+        var tree = await MutationCopyTree.ResolveAsync(ProjectRunCaller.StringArg(arguments, MutationCopyTree.ParamName),
+            root, ProjectRunCaller.WorktreeLister(git, project, context.OwnerId), ct);
+        if (!tree.Ok) return ProjectRunCaller.Deny(tree.Error);
+        root = tree.Root;
         if (!TryParseKind(ProjectRunCaller.StringArg(arguments, "kind"), out var isNpm, out error))
             return ProjectRunCaller.Deny(error);
         var script = ProjectRunCaller.StringArg(arguments, "script");
@@ -241,6 +252,11 @@ public sealed class DevToolset(
                         ["type"] = "string",
                         ["enum"] = new JsonArray("dotnet", "npm"),
                         ["description"] = "Вид сборки; по умолчанию dotnet",
+                    },
+                    [MutationCopyTree.ParamName] = new JsonObject
+                    {
+                        ["type"] = "string",
+                        ["description"] = MutationCopyTree.ParamDescription,
                     },
                     ["target"] = new JsonObject
                     {

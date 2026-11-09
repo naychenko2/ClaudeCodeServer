@@ -59,23 +59,39 @@ public sealed class ChatContextFocusMirror(
     // эта нить, закреплённая на версии-основе запуска, он переезжает на новую версию. Метка того, кто его
     // поставил (By), и id элемента сохраняются. Закреплённую на другой версии не трогаем: человек выбрал её
     // сам, пока запуск шёл. Без закрепления (versionId нет) двигать нечего — читатели берут текущую версию нити.
-    // Сбой зеркала запись вертикали не откатывает
-    public void AdvanceVersion(string ownerId, string sessionId, string kind, string threadId, string? baseVersionId,
-        string newVersionId, string refKey = ThreadKey)
+    // Сдвиг помечает закрепление служебным ключом pinnedBy=auto; выбор человека пишет Ref без него. onlyIfAuto —
+    // двигать, только если закрепление поставил сам сдвиг (второй шаг запуска: ручной выбор первой версии не
+    // отличить от авто-сдвига по одной версии). Сбой зеркала запись вертикали не откатывает
+    public AdvanceResult AdvanceVersion(string ownerId, string sessionId, string kind, string threadId, string? baseVersionId,
+        string newVersionId, string refKey = ThreadKey, bool onlyIfAuto = false)
     {
         try
         {
-            if (store.Get(ownerId, sessionId).Primary is not { } p || p.Kind != kind || ThreadOf(p, refKey) != threadId) return;
-            if (p.Ref["versionId"] is not JsonValue v || !v.TryGetValue<string>(out var pinned) || pinned != baseVersionId) return;
+            if (store.Get(ownerId, sessionId).Primary is not { } p || p.Kind != kind || ThreadOf(p, refKey) != threadId)
+                return AdvanceResult.NotPinned;
+            if (p.Ref["versionId"] is not JsonValue v || !v.TryGetValue<string>(out var pinned) || pinned != baseVersionId)
+                return AdvanceResult.NotPinned;
+            if (onlyIfAuto && !(p.Ref[PinnedByKey] is JsonValue by && by.TryGetValue<string>(out var who) && who == PinnedByAuto))
+                return AdvanceResult.HeldByHuman;
             var next = (JsonObject)p.Ref.DeepClone();
             next["versionId"] = newVersionId;
+            next[PinnedByKey] = PinnedByAuto;
             store.SetPrimary(ownerId, sessionId, p with { Ref = next }, null);
+            return AdvanceResult.Moved;
         }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Основной объект {Kind} чата {SessionId} не перешёл на версию {VersionId}", kind, sessionId, newVersionId);
+            return AdvanceResult.NotPinned;
         }
     }
+
+    // Moved — основной объект переехал; HeldByHuman — закреплён именно на baseVersionId человеком (при onlyIfAuto);
+    // NotPinned — двигать нечего (другой объект, другая версия, нет закрепления, сбой)
+    public enum AdvanceResult { NotPinned, Moved, HeldByHuman }
+
+    public const string PinnedByKey = "pinnedBy";
+    public const string PinnedByAuto = "auto";
 
     // Нить удалена: убрать её из основного и референсов
     public void Forget(string ownerId, string sessionId, string kind, string threadId, string refKey = ThreadKey)

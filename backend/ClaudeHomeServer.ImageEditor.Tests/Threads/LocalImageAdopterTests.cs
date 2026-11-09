@@ -25,14 +25,12 @@ public sealed class LocalImageAdopterTests : IDisposable
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "ccs_image_adopt_" + Guid.NewGuid().ToString("N"));
     private readonly ImageThreadStore _store;
     private readonly List<StoredModuleRecord> _records = [];
-    private readonly Mock<IFeatureFlagGate> _flags = new();
     private readonly Mock<ISessionDirectory> _directory = new();
     private readonly Mock<IProjectManager> _projects = new();
 
     public LocalImageAdopterTests()
     {
         _store = new ImageThreadStore(Path.Combine(_dir, ImageThreadStore.DirName));
-        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(true);
         var session = new Session { Id = Chat, OwnerId = Owner, ProjectId = Project };
         _directory.Setup(d => d.GetById(Chat)).Returns(session);
         _directory.Setup(d => d.ResolveOwnerId(session)).Returns(Owner);
@@ -53,7 +51,7 @@ public sealed class LocalImageAdopterTests : IDisposable
         var threads = new ImageThreadService(_store, NullLogger<ImageThreadService>.Instance, _directory.Object, feed.Object,
             new Mock<ISessionBroadcaster>().Object,
             withSteps ? new ImageEditSteps(new SkiaImageRaster(), new ImageEditWorkspace(Path.Combine(_dir, "ws")), new Mock<IImageEditJobs>().Object) : null);
-        return new LocalImageAdopter(threads, _directory.Object, _projects.Object, _flags.Object);
+        return new LocalImageAdopter(threads, _directory.Object, _projects.Object);
     }
 
     private static LocalMediaAdoption Result(params (string Path, string Type)[] files) =>
@@ -85,17 +83,6 @@ public sealed class LocalImageAdopterTests : IDisposable
         state.Threads.Should().HaveCount(2);
         _records.Should().ContainSingle("второго якоря на тот же файл нет");
         state.Focus.Should().Be(mine, "выбор картинки человеком агент не трогает");
-    }
-
-    [Fact]
-    public async Task Выключенный_флаг_молчит()
-    {
-        _flags.Setup(f => f.IsEnabled(Owner, FeatureFlagKeys.ImageEditor)).Returns(false);
-
-        await Adopter().AdoptAsync(Result((Pic, "image/png")), default);
-
-        _store.Get(Owner, Chat).Threads.Should().BeEmpty();
-        _records.Should().BeEmpty();
     }
 
     private string[] Pngs(int count)

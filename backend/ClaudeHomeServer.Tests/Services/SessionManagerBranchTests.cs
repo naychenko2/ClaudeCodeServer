@@ -366,6 +366,26 @@ public class SessionManagerBranchTests : IDisposable
         result.Session.BranchedFromSessionId.Should().Be(session.Id);
     }
 
+    // Снимок накопленного cost-state — поле, специфичное для ветки (передаётся configure'ом
+    // общего хелпера преемника после выноса из BranchAsync). Без него --resume ветки считал бы
+    // всю историю родителя заново.
+    [Fact]
+    public async Task Наследование_CostState_ВеткаБерётСнимокРодителя()
+    {
+        var (session, _, _, text1, _) = await SeedBranchableChatAsync("coststate");
+        session.LastCostState = new SessionCostState
+        {
+            ClaudeSessionId = "csid-original",
+            TotalCostUsd = 1.25,
+        };
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        result.Session.LastCostState.Should().NotBeNull("снимок cost-state родителя — база дельты первого хода ветки");
+        result.Session.LastCostState!.TotalCostUsd.Should().Be(1.25);
+        result.Session.LastCostState.ClaudeSessionId.Should().Be("csid-original");
+    }
+
     // --- Имя по умолчанию ---
 
     [Fact]
@@ -811,5 +831,89 @@ public class SessionManagerBranchTests : IDisposable
         e.Turn.OwnerId.Should().Be(TestUserId, "у проектного чата владелец берётся у проекта");
         e.Turn.ProjectId.Should().Be(project.Id);
         e.Turn.TurnSeq.Should().Be(0, "хода нет");
+    }
+
+    // --- S2d-7b-1: приватность ветки ---
+
+    private const string Участник = "u-participant";
+
+    private async Task<(Session Session, string Text1)> SeedPrivateBranchableAsync(string suffix, string author = TestUserId)
+    {
+        var (session, project, _, text1, _) = await SeedBranchableChatAsync(suffix);
+        project.Members = [new ProjectMember { UserId = Участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
+        session.CreatedByUserId = author;
+        session.PrivateToUserId = author;
+        session.ExcludeFromDossiers = true;
+        return (session, text1);
+    }
+
+    [Fact]
+    public async Task Ветка_ПриватныйЧат_ВеткаПриватнаяУАвтора_УчастникНеВидитЕё()
+    {
+        var (session, text1) = await SeedPrivateBranchableAsync("priv-branch");
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        result.Session.PrivateToUserId.Should().Be(TestUserId, "ветка приватного чата остаётся приватной");
+        result.Session.CreatedByUserId.Should().Be(TestUserId);
+        result.Session.ExcludeFromDossiers.Should().BeTrue();
+        _sut.IsVisibleTo(result.Session.Id, Участник).Should().BeFalse();
+        _sut.IsVisibleTo(result.Session.Id, TestUserId).Should().BeTrue();
+        _sut.GetAllOwnedVisibleBy(Участник).Should().NotContain(x => x.Id == result.Session.Id);
+    }
+
+    [Fact]
+    public async Task Ветка_ОбщийЧат_ВеткаОбщая()
+    {
+        var (session, project, _, text1, _) = await SeedBranchableChatAsync("shared-branch");
+        project.Members = [new ProjectMember { UserId = Участник, Role = ClaudeHomeServer.Services.Access.ProjectRole.Editor, AddedBy = TestUserId }];
+
+        var result = await _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        result.Session.PrivateToUserId.Should().BeNull();
+        _sut.IsVisibleTo(result.Session.Id, Участник).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Ветка_ЧужойПриватныйЧат_ВладелецПроекта_404_ВеткиНет()
+    {
+        var (session, text1) = await SeedPrivateBranchableAsync("priv-branch-foreign", author: Участник);
+        var before = _sut.GetAll().Count();
+
+        var act = () => _sut.BranchAsync(session.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+
+        await act.Should().ThrowAsync<KeyNotFoundException>();
+        _sut.GetAll().Count().Should().Be(before, "чат-преемник с содержимым чужого приватного чата не создан");
+    }
+
+    // Гонка «ветвление ↔ смена видимости», барьер — замок видимости чата. Порядок «ветка первой»: тумблер
+    // стоит на замке, ветвление проходит целиком, пока исходный чат ещё приватный, — ветка приватная
+    // (консервативный исход), после снятия замка тумблер отрабатывает штатно. Порядок «тумблер первым»:
+    // исходный чат уже открыт — ветка общая, как у любого общего чата.
+    [Fact]
+    public async Task Ветка_ГонкаСоСменойВидимости_БарьерЗамкомВидимости_ИсходОбоихПорядковОднозначен()
+    {
+        var (first, text1) = await SeedPrivateBranchableAsync("priv-branch-race-a");
+        var lockObj = (Lock)GetEntry(first.Id).GetType().GetField("VisibilityLock")!.GetValue(GetEntry(first.Id))!;
+        // Замок держит отдельный поток (Lock привязан к потоку), пока идёт ветвление
+        using var held = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var holder = Task.Run(() => { lock (lockObj) { held.Set(); release.Wait(); } });
+        held.Wait();
+        var toggle = Task.Run(() => _sut.SetChatVisibility(first.Id, TestUserId, makePrivate: false));
+        await Task.Delay(100);
+        toggle.IsCompleted.Should().BeFalse("тумблер держится на замке видимости");
+        var branched = await _sut.BranchAsync(first.Id, TestUserId, 0, text1, SessionManager.ChatBranchInclude.Turn);
+        release.Set();
+        await holder;
+        (await toggle).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        first.PrivateToUserId.Should().BeNull();
+        branched.Session.PrivateToUserId.Should().Be(TestUserId,
+            "ветка снята, пока исходный чат был приватным, — остаётся приватной");
+
+        var (second, text2) = await SeedPrivateBranchableAsync("priv-branch-race-b");
+        _sut.SetChatVisibility(second.Id, TestUserId, makePrivate: false).Outcome.Should().Be(ChatVisibilityOutcome.Ok);
+        var after = await _sut.BranchAsync(second.Id, TestUserId, 0, text2, SessionManager.ChatBranchInclude.Turn);
+        after.Session.PrivateToUserId.Should().BeNull("исходный чат уже открыт — ветка общая");
     }
 }

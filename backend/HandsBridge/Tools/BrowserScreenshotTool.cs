@@ -36,7 +36,10 @@ public static partial class BrowserScreenshotTool
             return HandsGate.Deny(HandsTools.BrowserScreenshot, gate);
         }
 
-        HandsGate.Acted(HandsTools.BrowserScreenshot);
+        if (HandsGate.Acted(HandsTools.BrowserScreenshot) is { } busy)
+        {
+            return busy;
+        }
 
         var reply = await BrowserHost.Session.ScreenshotAsync(cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserScreenshot, reply);

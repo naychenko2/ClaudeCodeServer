@@ -260,11 +260,25 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             }, log);
         });
 
+    // Выбор фото персонажа дописывается к уже лежащему запуску (подбор идёт в задаче, после запуска).
+    // Запуска ещё нет или выбор уже записан — ничего не меняет
+    public ImageThreadWrite SetLaunchCharacter(string ownerId, string sessionId, string threadId, string jobId,
+        ImageThreadCharacter character) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { } launch || launch.Character is not null)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            return Replace(state, thread with
+            {
+                Launches = [.. thread.Launches.Select(l => l.JobId == jobId ? l with { Character = character } : l)],
+            });
+        });
+
     // Готовые по ходу варианты идущего запуска: версии добавляются, статус запуска НЕ меняется — его
     // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
     // Журнал не пишется: строка одна на весь запуск, в финале
     public ImageThreadWrite AddLaunchVersions(string ownerId, string sessionId, string threadId, string jobId,
-        IReadOnlyList<(int Variant, string StepId)> variants) =>
+        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
@@ -281,8 +295,9 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // версия, если человек не сменил текущую, пока шла генерация. Запуск уже не идёт (повтор, потерян
     // при перезапуске) — ничего не меняет. log получает ВСЕ версии запуска, а не только прирост
     public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
-        IReadOnlyList<(int Variant, string StepId)> variants,
-        Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null) =>
+        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
+        Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null,
+        IReadOnlyList<(int N, string Status, double? Similarity)>? faceResults = null) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
@@ -291,23 +306,48 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             var (grown, added) = WithLaunchVersions(thread, launch, variants);
             var after = grown with
             {
-                Launches = [.. grown.Launches.Select(l => l.JobId == jobId ? l with { Status = status } : l)],
+                Launches = [.. grown.Launches.Select(l => l.JobId == jobId
+                    ? l with { Status = status, FaceTargets = WithFaceResults(l.FaceTargets, faceResults) }
+                    : l)],
             };
+            (after, var moved) = WithMostSimilar(after, launch);
             List<ImageThreadVersion> all = [.. after.Versions.Where(v => v.JobId == jobId)];
-            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added };
+            return Replace(state, after, log?.Invoke(after, all)) with { NewVersions = added, MovedToMostSimilar = moved };
         });
+
+    // Самая похожая версия запуска (максимум Similarity, при ничьей — меньший номер) получает MostSimilar и
+    // становится текущей, но только при двух и более версиях с числом и пока текущей остаётся основа запуска или первая версия запуска
+    // (её поставил авто-сдвиг): выбор человека не трогаем. Нет ни одного числа — ничего не меняется.
+    // Moved — (первая версия запуска, самая похожая), если текущая действительно переехала на другую версию
+    private static (ImageThread Thread, (string From, string To)? Moved) WithMostSimilar(ImageThread thread, ImageThreadLaunch launch)
+    {
+        var own = thread.Versions.Where(v => v.JobId == launch.JobId).OrderBy(v => v.Number).ToList();
+        var scored = own.Where(v => v.Similarity != null).ToList();
+        // Пометка осмысленна, только когда есть из чего выбирать: одиночный вариант «самым похожим» не называем
+        if (scored.Count < 2) return (thread, null);
+        var best = scored
+            .OrderByDescending(v => v.Similarity).ThenBy(v => v.Number).First();
+        var current = thread.CurrentVersionId;
+        var follow = current == launch.BaseVersionId || (own.Count > 0 && current == own[0].Id);
+        var moved = follow && best.Id != own[0].Id ? (own[0].Id, best.Id) : ((string, string)?)null;
+        return (thread with
+        {
+            Versions = [.. thread.Versions.Select(v => v.JobId == launch.JobId ? v with { MostSimilar = v.Id == best.Id } : v)],
+            CurrentVersionId = follow ? best.Id : current,
+        }, moved);
+    }
 
     // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.
     // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска
     private (ImageThread After, List<ImageThreadVersion> Added) WithLaunchVersions(ImageThread thread,
-        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId)> variants)
+        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants)
     {
         var number = thread.Versions.Max(v => v.Number) + 1;
         var now = Now();
         List<ImageThreadVersion> added = [.. variants
             .Where(v => !thread.Versions.Any(x => x.JobId == launch.JobId && x.Variant == v.Variant))
             .Select((v, i) => new ImageThreadVersion(NewId(), number + i, launch.JobId,
-                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now))];
+                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now, v.Similarity))];
         var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
         return (thread with
         {
@@ -553,6 +593,28 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
         return ImageThreadsState.Empty;
     }
 
+    // Статус и сходство лиц по номеру (ADR-028, §9–11); лицо без итога остаётся как было
+    private static IReadOnlyList<ImageThreadFaceTarget>? WithFaceResults(IReadOnlyList<ImageThreadFaceTarget>? targets,
+        IReadOnlyList<(int N, string Status, double? Similarity)>? results) =>
+        targets is null || results is null
+            ? targets
+            : [.. targets.Select(t => results.FirstOrDefault(r => r.N == t.N) is { Status: not null } r
+                ? t with { Status = r.Status, Similarity = r.Similarity }
+                : t)];
+
+    // Одиночное «faceTarget» этапа 2 читается как массив из одного элемента (ADR-028, §10): статус — по
+    // статусу запуска (done у done, иначе статус запуска), сходство — старого поля версии запуска
+    private static ImageThreadLaunch NormalizeLaunch(ImageThreadLaunch l, IReadOnlyList<ImageThreadVersion> versions)
+    {
+        if (l.FaceTargets is not null || l.FaceTarget is not { } old) return l;
+        var similarity = versions.FirstOrDefault(v => v.JobId == l.JobId && v.Similarity != null)?.Similarity;
+        return l with
+        {
+            FaceTarget = null,
+            FaceTargets = [old with { Status = l.Status, Similarity = old.Similarity ?? similarity }],
+        };
+    }
+
     // Миграция на чтении: у нити до 27.09 версий нет — ей достаётся исходник в работе, чья картинка
     // — текущий шаг стопки (ImageThread.ImageStepOf). Стопки остаются как были: их якоря в ленте
     // продолжают разрешаться, а файл перепишется в новом виде при следующей записи
@@ -567,7 +629,7 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             Stacks = [.. (t.Stacks ?? []).Select(s => s with { Steps = s.Steps ?? [] })],
             Versions = versions,
             CurrentVersionId = versions.Any(v => v.Id == t.CurrentVersionId) ? t.CurrentVersionId : ImageThreadVersion.OriginId,
-            Launches = t.Launches ?? [],
+            Launches = [.. (t.Launches ?? []).Select(l => NormalizeLaunch(l, versions))],
         };
     }
 

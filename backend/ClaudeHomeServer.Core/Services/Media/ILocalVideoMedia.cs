@@ -23,6 +23,23 @@ public interface ILocalVideoMedia
 
     Task<LocalVideoPoll> PollAsync(string ticket, CancellationToken ct);
 
+    // Время апскейла «Макс» (1440p) после съёмки этого запроса по таблице замеров; null — ролик такой длины не замерен.
+    // Сумма с EtaSeconds даёт полное время запуска (ADR-025, решение 1)
+    int? UpscaleEtaSeconds(LocalVideoRequest request) => null;
+
+    // Вторая тяжёлая задача: латентный апскейл ЗАВЕРШЁННОЙ съёмки по её тикету (target — "1440p"). Латент съёмки
+    // адаптер держит до конца апскейла; новый тикет опрашивают PollAsync и снимают CancelAsync, как у съёмки.
+    // Тикета нет в памяти (рестарт) или латент не сохранился — Fail с причиной. Реализация по умолчанию — «не умею»
+    Task<LocalVideoSubmitted> SubmitUpscaleAsync(string ticket, string target, CancellationToken ct) =>
+        Task.FromResult(LocalVideoSubmitted.Fail("Увеличение недоступно: адаптер локальной съёмки его не поддерживает."));
+
+    // Сколько живёт контекст съёмки для увеличения (латент и входы в ComfyUI, тикет в памяти): после этого срока
+    // «Повторить увеличение» уже нельзя, а файлы убирает чистка адаптера
+    static readonly TimeSpan ShotTtl = TimeSpan.FromHours(12);
+
+    // Можно ли сейчас увеличить съёмку по её тикету (контекст жив, латент сохранён). Нет — Fail у SubmitUpscaleAsync
+    bool CanUpscale(string ticket) => false;
+
     // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id. Задачи в очереди нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }
@@ -36,7 +53,10 @@ public sealed record LocalVideoRequest(
     int Seconds = 5,
     string Size = "full",
     bool? Fast = null,
-    long? Seed = null);
+    long? Seed = null,
+    // Метка происхождения прогона (шаг 23): кто, из какой сессии, вид, операция, тяжёлая ли.
+    // null — вызывающая сторона ещё не передаёт (шаги 28–30); реестр пишет неопределённое происхождение.
+    LocalJobOrigin? Origin = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: «попробуй позже», а не ошибка запроса
 public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -47,14 +67,15 @@ public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int
 public enum LocalVideoState { Queued, Running, Completed, Failed }
 
 // Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива; Percent — доля шагов сэмплера 0..1
-// по прогрессу ComfyUI (null — данных нет)
+// по прогрессу ComfyUI (null — данных нет). Gpu — снимок очереди GPU (шаг 26; пока null).
 public sealed record LocalVideoPoll(
     LocalVideoState State,
     int? QueuePosition,
     LocalVideoFile? File,
     string? Error,
     string? Warning = null,
-    double? Percent = null);
+    double? Percent = null,
+    LocalGpuQueueInfo? Gpu = null);
 
 // Extension — с точкой («.mp4»); HasSound — в ролике есть звуковая дорожка
 public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound);

@@ -99,6 +99,8 @@ public class DeployController(DeployService deploy, SessionManager sessions) : C
             StatusCode(503, new { error = result.Error, reason = "not_configured" }),
         DeployStartStatus.Misconfigured =>
             StatusCode(503, new { error = result.Error, reason = "misconfigured" }),
+        DeployStartStatus.Unsupported =>
+            StatusCode(501, new { error = result.Error, reason = "unsupported" }),
         _ => StatusCode(500, new { error = result.Error, deployId = result.DeployId }),
     };
 

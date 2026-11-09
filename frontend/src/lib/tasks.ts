@@ -2,14 +2,15 @@
 // Паттерн стора — как featureFlags.ts: модульное состояние + useSyncExternalStore.
 // Realtime: бэк шлёт task_changed в группу user_{userId} — стор обновляется сам.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { MessageSquareOff, Pause, Unplug, type LucideIcon } from 'lucide-react';
 import type { BoardColumn, CreateTaskDto, Task, TaskPriority, TaskRecurrence, TaskRecurrenceType, TaskStatus, UpdateTaskDto } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { C } from './design';
 import { getEffectiveTheme } from './themeMode';
-import { isOnline, OfflineError, subscribeOnline } from './offline';
-import { idbGet, idbSet } from './idb';
+import { isLegacyPassiveKey, isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
+import { idbDelete, idbGet, idbKeys, idbSet } from './idb';
 import {
   applyUpdateLocally, buildLocalTask, configureOutbox, drainTaskOutbox,
   enqueue, mergePending, outboxHasPending,
@@ -22,7 +23,6 @@ let _loaded = false;
 let _loading: Promise<void> | null = null;
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
-let _hydrated = false;
 
 // Локальный снапшот стора в IndexedDB (переживает перезагрузку, виден офлайн).
 // Ключ отдельный от пассивного GET-кэша /tasks: здесь состояние С наложенными
@@ -30,12 +30,28 @@ let _hydrated = false;
 const TASKS_SNAPSHOT_KEY = 'tasks:all';
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;
 
+// Снапшот — structured clone ВСЕГО массива, поэтому пишем не чаще раза в окно,
+// а при уходе вкладки в фон дописываем отложенное сразу.
+const PERSIST_WINDOW_MS = 10_000;
+
+function flushPersist() {
+  if (!_persistTimer) return;
+  clearTimeout(_persistTimer);
+  _persistTimer = null;
+  idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks.map(lightenTask), savedAt: Date.now() }).catch(() => {});
+}
+
 function persistTasks() {
   if (_persistTimer) return;
-  _persistTimer = setTimeout(() => {
-    _persistTimer = null;
-    idbSet(TASKS_SNAPSHOT_KEY, { data: _tasks, savedAt: Date.now() }).catch(() => {});
-  }, 300);
+  _persistTimer = setTimeout(flushPersist, PERSIST_WINDOW_MS);
+}
+
+if (typeof document !== 'undefined' && typeof document.addEventListener === 'function'
+  && typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPersist();
+  });
+  window.addEventListener('pagehide', flushPersist);
 }
 
 function emit() {
@@ -43,7 +59,74 @@ function emit() {
   persistTasks();
 }
 
-function upsert(task: Task) {
+// === Облегчение стора (инвариант И3: вкладка держит не больше K полных задач) ===
+// Полный текст (description/resultMarkdown) тяжёл: на проде список целиком 83,8 МБ против
+// 22,8 МБ облегчённого. Поэтому стор по умолчанию облегчённый, а полными остаются только
+// задачи, которые человек открывал недавно (LRU на FULL_TASKS_CAP), открытые на правку
+// (_editing) и с несинхронизированной правкой в outbox. Всё прочее, включая полные задачи
+// из realtime task_changed, на входе в стор переводится в listItem.
+
+export const FULL_TASKS_CAP = 30;
+const PREVIEW_LENGTH = 200;
+
+// Единственная проекция «полная → лёгкая» на фронте; зеркало бэкового TaskListItem.From.
+export function toListItem(task: Task): Task {
+  if (task.listItem) return task;
+  const { resultMarkdown, ...rest } = task;
+  const description = task.description ?? '';
+  let preview = description;
+  if (description.length > PREVIEW_LENGTH) {
+    let cut = PREVIEW_LENGTH;
+    const last = description.charCodeAt(cut - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut--;   // не рвём суррогатную пару
+    preview = description.slice(0, cut) + '…';
+  }
+  return {
+    ...rest,
+    description: '',
+    listItem: true,
+    hasDescription: description.length > 0,
+    hasResult: !!resultMarkdown,
+    descriptionPreview: preview,
+  };
+}
+
+// id недавно открытых задач, самая свежая — в конце
+let _openedLru: string[] = [];
+
+function keepFull(id: string): boolean {
+  return _editing.has(id) || outboxHasPending(id) || _openedLru.includes(id);
+}
+
+function lightenTask(task: Task): Task {
+  return task.listItem || keepFull(task.id) ? task : toListItem(task);
+}
+
+// Запомнить id как недавно открытый; вернуть вытесненный (если был)
+function pushOpened(id: string): string | undefined {
+  _openedLru = _openedLru.filter(x => x !== id);
+  _openedLru.push(id);
+  return _openedLru.length > FULL_TASKS_CAP ? _openedLru.shift() : undefined;
+}
+
+// Задачу открыли или правят: она остаётся полной, вытесненная из LRU — облегчается
+function touchOpened(id: string): void {
+  const evicted = pushOpened(id);
+  if (!evicted || keepFull(evicted)) return;
+  const idx = _tasks.findIndex(t => t.id === evicted);
+  if (idx < 0 || _tasks[idx].listItem) return;
+  _tasks = [..._tasks.slice(0, idx), toListItem(_tasks[idx]), ..._tasks.slice(idx + 1)];
+  emit();
+}
+
+// Полная задача, с которой работает человек (открытие, ответ мутации): держим полной
+function upsertOpened(task: Task) {
+  touchOpened(task.id);
+  upsert(task);
+}
+
+function upsert(incoming: Task) {
+  const task = lightenTask(incoming);
   const idx = _tasks.findIndex(t => t.id === task.id);
   _tasks = idx >= 0
     ? [..._tasks.slice(0, idx), task, ..._tasks.slice(idx + 1)]
@@ -62,7 +145,7 @@ function remove(taskId: string) {
 // task_changed шлётся в группу user_{userId} — вступаем в неё
 // (повторный JoinUser для того же соединения безопасен)
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 
@@ -77,20 +160,120 @@ function wireRealtime() {
     if (msg.action === 'deleted') remove(msg.task.id);
     else upsert(msg.task);
   });
-  // После разрыва соединения сначала проигрываем офлайн-очередь (reload внутри дренажа
-  // канонизирует состояние, когда очередь опустеет — иначе он затрёт pending-правки).
-  onReconnected(() => { joinUserGroup(); void drainTaskOutbox(); });
+  // После разрыва соединения сначала проигрываем офлайн-очередь. reloadWhenEmpty:
+  // realtime-события задач, пришедшие за время обрыва, потеряны — стор канонизируем
+  // reload'ом, даже если очередь была пуста (reload один — дренаж его не дублирует).
+  onReconnected(() => { joinUserGroup(); void drainTaskOutbox({ reloadWhenEmpty: true }); });
   // Связь может подняться и через probe в offline.ts (без WS-reconnected) — тоже дренажим.
-  subscribeOnline(() => { if (isOnline()) void drainTaskOutbox(); });
+  subscribeOnline(() => { if (isOnline()) void drainTaskOutbox({ reloadWhenEmpty: true }); });
+}
+
+// === Реестр «открытых на правку» задач ===
+// Id задач, чья форма правки (TaskEditForm) сейчас смонтирована. Пока задача в этом
+// реестре, keepLoadedFull не подменяет её полную версию облегчённой — иначе панель
+// увидит listItem, догрузит и размонтирует форму, потеряв несохранённые правки.
+// TaskEditForm зовёт markEditing/unmarkEditing в эффекте монтирования/размонтирования.
+const _editing = new Set<string>();
+
+export function markEditing(id: string): void {
+  _editing.add(id);
+  touchOpened(id);
+}
+
+export function unmarkEditing(id: string): void {
+  _editing.delete(id);
+}
+
+// Сохранить уже загруженный ПОЛНЫЙ текст при перезагрузке списка: серверный элемент
+// облегчённый (listItem), и слепая подмена затирала бы описание/итог открытой карточки.
+// Полную версию оставляем, если задача не менялась на сервере (тот же updatedAt) ИЛИ
+// сейчас открыта на правку (в _editing) — иначе форма правки размонтируется. Иначе
+// берём облегчённую, полную догрузит ensureFullTask при следующем открытии.
+export function keepLoadedFull(list: Task[], current: Task[]): Task[] {
+  const full = new Map(current.filter(t => !t.listItem).map(t => [t.id, t]));
+  return list.map(t => {
+    const cur = full.get(t.id);
+    return t.listItem && cur && (cur.updatedAt === t.updatedAt || _editing.has(t.id)) ? cur : t;
+  });
 }
 
 export async function reloadTasks(): Promise<void> {
-  const list = await api.tasks.listAll();
+  let fresh: Task[];
+  try {
+    fresh = await api.tasks.listAll();
+  } catch (e) {
+    // Офлайн: список запрашивается с live (в пассивный GET-кэш не пишется), единственный
+    // экземпляр на диске — снапшот tasks:all. Берём стор из него, ошибку наружу не отдаём.
+    if (e instanceof OfflineError) { await hydrateFromCache(); return; }
+    throw e;
+  }
+  const list = keepLoadedFull(fresh, _tasks);
   // Поверх серверного списка накатываем ещё не синхронизированные офлайн-правки
   // (защита от reload при непустой очереди — напр. online-эффект опередил дренаж).
   _tasks = await mergePending(list, _tasks);
   _loaded = true;
   emit();
+}
+
+// === Догрузка полной карточки ===
+// Список приходит без Description/ResultMarkdown (listItem). Всё, что показывает или
+// редактирует полный текст (панель задачи, форма правки), сначала зовёт ensureFullTask.
+const _fullInflight = new Map<string, Promise<void>>();
+
+export function ensureFullTask(id: string): Promise<void> {
+  const cur = _tasks.find(t => t.id === id);
+  // Полная версия уже в сторе — грузить нечего. Задачи в сторе нет вовсе (снимок у родителя
+  // обогнал стор) — грузим всё равно: иначе панель вечно ждала бы «Загружаю…»
+  if (cur && !cur.listItem) { touchOpened(id); return Promise.resolve(); }
+  const running = _fullInflight.get(id);
+  if (running) return running;
+  const known = !!cur;
+  const p = api.tasks.get(id).then(full => {
+    const now = _tasks.find(t => t.id === id);
+    // Заменена полной версией (realtime/ответ мутации) пока грузили — ничего не делаем
+    if (now && !now.listItem) return;
+    if (!now) {
+      // Была в сторе и пропала — удалена, пока грузили; не было вовсе — добавляем
+      if (!known) upsertOpened(full);
+      return;
+    }
+    if (outboxHasPending(id)) {
+      // Есть несинхронизированная локальная правка — она новее серверной копии:
+      // подмешиваем только тексты, которых локально нет, остальное оставляем как есть
+      upsertOpened({
+        ...now,
+        description: now.description || full.description,
+        resultMarkdown: now.resultMarkdown ?? full.resultMarkdown,
+        listItem: undefined,
+      });
+    } else {
+      upsertOpened(full);
+    }
+  }).finally(() => { _fullInflight.delete(id); });
+  _fullInflight.set(id, p);
+  return p;
+}
+
+export type FullTaskState = 'ready' | 'loading' | 'error';
+
+// Состояние полной загрузки задачи для экрана, которому нужен полный текст.
+// ready — текст есть (задача не облегчённая); loading — идёт догрузка; error — не вышло
+// (retry() повторяет). Облегчённой задача перестаёт быть, когда стор получит полную версию.
+export function useEnsureFullTask(task: Task): { state: FullTaskState; retry: () => void } {
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const needsFull = !!task.listItem;
+  useEffect(() => {
+    if (!needsFull) return;
+    let alive = true;
+    setFailed(false);
+    ensureFullTask(task.id).catch(() => { if (alive) setFailed(true); });
+    return () => { alive = false; };
+  }, [task.id, needsFull, attempt]);
+  return {
+    state: !needsFull ? 'ready' : failed ? 'error' : 'loading',
+    retry: () => setAttempt(a => a + 1),
+  };
 }
 
 // Регистрируем store-хуки очереди лениво — внутри ensureTasksLoaded, а не на
@@ -102,12 +285,43 @@ let _outboxConfigured = false;
 
 // Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
 // и последний известный список видны сразу и переживают перезагрузку страницы.
-async function hydrateFromCache(): Promise<void> {
-  if (_hydrated) return;
-  _hydrated = true;
-  if (_loaded) return;   // сеть уже успела наполнить стор
-  const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
-  if (cached?.data && !_loaded) { _tasks = cached.data; emit(); }
+// Пассивный GET-кэш (offline.ts) хранил списки задач и фич ВТОРЫМ экземпляром рядом с tasks:all:
+// сотни КБ на чат, без вытеснения. Теперь эти запросы идут с live и в кэш не пишутся, а
+// остатки прежних записей сносим. Перечень шаблонов ключей — один, в offline.ts (isLegacyPassiveKey).
+// Чистка разовая: признак живёт в том же разделе meta, сам по себе в кэш запросов не попадает.
+// Версия поднимается, когда набор шаблонов расширяется: клиентам с прошлым признаком нужен новый прогон.
+// v3 — правило расширено до любого голого URL-ключа: осиротевшие ключи sync-класса
+// (листинги дерева и содержимое файлов, индекс фич, список чатов) и прочих потребителей
+// пассивного кэша (notifications, ai/caps, deviceAgent, chatContext и прочие GET-запросы).
+const LEGACY_PURGE_DONE_KEY = 'tasks:legacy-cache-purged:v3';
+
+export async function purgeLegacyTaskListCache(): Promise<void> {
+  if (await idbGet(LEGACY_PURGE_DONE_KEY).catch(() => undefined)) return;
+  const keys = await idbKeys().catch(() => null);
+  if (!keys) return;
+  const stale = keys.filter(isLegacyPassiveKey);
+  await Promise.all(stale.map(k => idbDelete(k).catch(() => {})));
+  await idbSet(LEGACY_PURGE_DONE_KEY, { data: true, savedAt: Date.now() }).catch(() => {});
+}
+
+// Подхватить локальный снапшот стора из IndexedDB (мгновенно, до сети): офлайн-правки
+// и последний известный список видны сразу и переживают перезагрузку страницы.
+// Промис общий: офлайн-ветка reloadTasks дожидается ту же гидрацию, что запустил ensureTasksLoaded.
+let _hydrating: Promise<void> | null = null;
+
+function hydrateFromCache(): Promise<void> {
+  if (_hydrating) return _hydrating;
+  _hydrating = (async () => {
+    void purgeLegacyTaskListCache();
+    const cached = await idbGet<Task[]>(TASKS_SNAPSHOT_KEY).catch(() => undefined);
+    if (cached?.data && !_loaded) {
+      // Прежний снапшот мог хранить полные задачи: недавно открытые (до K) остаются полными
+      for (const t of cached.data) if (!t.listItem) pushOpened(t.id);
+      _tasks = cached.data.map(lightenTask);
+      emit();
+    }
+  })();
+  return _hydrating;
 }
 
 // Первая загрузка (идемпотентно). Вызывается из компонентов задач при монтировании.
@@ -164,7 +378,7 @@ function localNextOrder(): number {
 function createTaskOffline(projectId: string | null, dto: CreateTaskDto): Task {
   const id = dto.id ?? crypto.randomUUID();
   const task = buildLocalTask(id, projectId, dto, localNextOrder());
-  upsert(task);
+  upsertOpened(task);
   void enqueue(id, 'create', dto, { projectId });
   return task;
 }
@@ -173,7 +387,7 @@ export async function createTask(projectId: string | null, dto: CreateTaskDto): 
   if (offlineEnabled() && !isOnline()) return createTaskOffline(projectId, dto);
   try {
     const task = await api.tasks.create(projectId, dto);
-    upsert(task);
+    upsertOpened(task);
     return task;
   } catch (e) {
     if (offlineEnabled() && e instanceof OfflineError) return createTaskOffline(projectId, dto);
@@ -184,7 +398,7 @@ export async function createTask(projectId: string | null, dto: CreateTaskDto): 
 function updateTaskOffline(taskId: string, dto: UpdateTaskDto): Task {
   const cur = _tasks.find(t => t.id === taskId);
   const next = cur ? applyUpdateLocally(cur, dto) : undefined;
-  if (next) upsert(next);
+  if (next) upsertOpened(next);
   void enqueue(taskId, 'update', dto, { baseUpdatedAt: cur?.updatedAt });
   return next ?? (cur as Task);
 }
@@ -193,7 +407,7 @@ export async function updateTask(taskId: string, dto: UpdateTaskDto): Promise<Ta
   if (offlineEnabled() && !isOnline()) return updateTaskOffline(taskId, dto);
   try {
     const task = await api.tasks.update(taskId, dto);
-    upsert(task);
+    upsertOpened(task);
     return task;
   } catch (e) {
     if (offlineEnabled() && e instanceof OfflineError) return updateTaskOffline(taskId, dto);
@@ -538,19 +752,72 @@ export function deviceWaitDuration(sinceIso: string, now: number = Date.now()): 
   return rest ? `${h} ч ${rest} мин` : `${h} ч`;
 }
 
-// Причина остановки исполнителя человеческим языком — зеркало ExecutorStopText на бэке.
-// Неизвестная причина (пометку поставил более новый бэк) — общая формулировка, не ключ.
-export function executorStopText(reason: string | null | undefined, deviceName?: string | null): string {
-  switch (reason) {
-    case 'device_wait_expired':
-      return `${deviceName ? `Устройство «${deviceName}»` : 'Устройство проекта'} не вышло на связь за 24 часа — задача не запускалась`;
-    case 'auth_failed':
-      return 'Не удалось авторизоваться у провайдера модели';
-    case 'subagent_stuck':
-      return 'Сабагент раз за разом обрывается посреди работы, добить его не удалось';
-    default:
-      return 'Исполнение прервано';
+// Вид плашки терминальной остановки исполнителя (W4-HOLD-F5, хвост R-F5): текст, тон и
+// глиф — из одной функции, а не из трёх параллельных веток. Карточка и панель деталей
+// берут этот триплет целиком, поэтому причина не может получить разный текст, тон и
+// глиф в разных местах.
+// Глиф по категории причины: штатная пауза фичи — Pause (тот же, что у кнопки «Пауза»
+// в шапке фичи); истёкшая пауза, чат которой исчез — MessageSquareOff («сообщения нет»);
+// устройство и связь с ним — Unplug.
+// Часть кейсов опережает бэк (feature_held — бэковая формулировка ещё не сверена, дефект
+// 93658efc); синхронизация с ExecutorStopText на бэке — при закрытии 93658efc.
+export interface StopVisual {
+  text: string;
+  tone: 'warning' | 'danger';
+  icon: LucideIcon;
+}
+
+// Таблица известных кодов (бэк: ExecutorStopClassifier). Источник перевода и признака
+// «код известен» для всех кодов, кроме device_wait_expired: его текст требует имени
+// устройства, поэтому он строится в knownStopVisual выше таблицы (R-F17 п.3; прежний
+// комментарий называл таблицу «единственной» — это было неверно). knownStopVisual спрашивает
+// её сам, второго списка кодов нигде быть не может (defect c79050aa: сводка фичи переводит
+// то же поле из этой же таблицы). Записи и сам объект заморожены: потребители только
+// читают (R-F17 п.4).
+const STOP_VISUALS: Record<string, StopVisual> = Object.freeze({
+  auth_failed: Object.freeze<StopVisual>({ text: 'Не удалось авторизоваться у провайдера модели', tone: 'danger', icon: Unplug }),
+  subagent_stuck: Object.freeze<StopVisual>({ text: 'Сабагент раз за разом обрывается посреди работы, добить его не удалось', tone: 'danger', icon: Unplug }),
+  tool_call_leak_stuck: Object.freeze<StopVisual>({ text: 'Вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось', tone: 'danger', icon: Unplug }),
+  // W4-HOLD-F4 (возврат R-F4): feature_held — штатная пауза фичи (W4-HOLD-D), а не
+  // авария: без своей формулировки карточка выдавала «Исполнение прервано» и
+  // толкала человека перезапускать шаг, который гейт паузы всё равно отклонит.
+  feature_held: Object.freeze<StopVisual>({ text: 'Фичу удержали на паузе — шаг ждёт снятия паузы', tone: 'warning', icon: Pause }),
+  // W4-HOLD-F5 (п.1 R-F5): feature_held_expired — про исчезнувший чат паузы, а не про
+  // оборванную связь: свой глиф MessageSquareOff, а не Unplug.
+  feature_held_expired: Object.freeze<StopVisual>({ text: 'Чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить', tone: 'danger', icon: MessageSquareOff }),
+  // R-F17 (п.1 R-F16): interrupted_by_user — «Стоп» человека (бэк: ExecutorStopClassifier.
+  // InterruptedByUserReason, ExecutorStopClassifier.cs:52, ставится TaskExecutionService.cs:1244).
+  // Без записи в таблице строка «Сейчас» сводилась к «нет причины», а карточка и блок
+  // «Остановлена» называли это событие «Исполнение прервано» через общий фолбэк. Формулировка —
+  // та же, что у соседних поверхностей: их тексты не меняются, меняется только «Сейчас».
+  interrupted_by_user: Object.freeze<StopVisual>({ text: 'Исполнение прервано', tone: 'danger', icon: Unplug }),
+});
+
+// Перевод известного кода, null — неизвестного (пометку поставил более новый бэк).
+// hasOwnProperty, а не прямая индексация: имя из прототипа ('toString', 'constructor')
+// не должно читаться известным кодом.
+export function knownStopVisual(reason: string | null | undefined, deviceName?: string | null): StopVisual | null {
+  if (reason === 'device_wait_expired') {
+    return {
+      text: `${deviceName ? `Устройство «${deviceName}»` : 'Устройство проекта'} не вышло на связь за 24 часа — задача не запускалась`,
+      tone: 'danger',
+      icon: Unplug,
+    };
   }
+  if (reason != null && Object.prototype.hasOwnProperty.call(STOP_VISUALS, reason)) return STOP_VISUALS[reason];
+  return null;
+}
+
+// Неизвестная причина — общая формулировка, не ключ.
+export function executorStopVisual(reason: string | null | undefined, deviceName?: string | null): StopVisual {
+  return knownStopVisual(reason, deviceName) ?? { text: 'Исполнение прервано', tone: 'danger', icon: Unplug };
+}
+
+// Терминальная ли остановка: работа встала насовсем и ждёт человека. Зеркало
+// ExecutorStopClassifier.IsTerminal на бэке: восстановимые остановки (subagent_truncated,
+// tool_call_leaked) лечатся добиванием/повтором сами — плашку на карточке давать не за что.
+export function isTerminalStop(reason: string | null | undefined): boolean {
+  return !!reason && reason !== 'subagent_truncated' && reason !== 'tool_call_leaked';
 }
 
 // Role == "review" у колонки доски — триггер правила «дефект в ревью без шагов = отказ».
@@ -711,10 +978,20 @@ const DUE_BUCKET_COLOR: Record<DueBucket, string> = {
 
 export const ASSIGNEE_LABEL: Record<string, string> = { me: 'Я', claude: 'AI', none: 'Не назначен' };
 
+// Имена дорожек «по исполнителю» для ОБЩЕГО проекта (S2b-F5): userId → имя.
+// Вызывающий строит их из вида участников (владелец первым, затем участники).
+// Без этого контекста дорожки прежние (Я/AI/Не назначен) — личный проект и хаб.
+export interface BoardAssigneePeople {
+  names: Map<string, string>;
+  // id владельца: старый 'me' без assigneeUserId относится к нему (К9)
+  ownerUserId?: string | null;
+}
+
 // Разбить задачи на дорожки согласно groupBy. Порядок дорожек фиксирован
 // (приоритет/срок — по важности), у проектов — личные первыми. Пустые дорожки не рисуем.
 export function boardLanes(
   tasks: Task[], groupBy: BoardGroupBy, projectsById: Map<string, { name: string }>,
+  assigneePeople?: BoardAssigneePeople,
 ): BoardLane[] {
   if (groupBy === 'none') return [{ key: 'all', label: '', tasks }];
 
@@ -729,6 +1006,30 @@ export function boardLanes(
       .map(p => ({ key: p, label: PRIORITY_LABEL[p], color: PRIORITY_COLOR[p], tasks: byKey.get(p)! }));
   }
   if (groupBy === 'assignee') {
+    if (assigneePeople) {
+      // Общий проект (S2b-F5): дорожки разведены по assigneeUserId. AI — 'claude';
+      // участник — дорожка с его именем; любая человеческая задача без id — дорожка
+      // владельца: и старый 'me' без id (К9), и задача вообще без assignee — бэк
+      // (TaskManager.ResolveMeUserId) читает Assignee=null как Me без id, т.е. владельца;
+      // 'none' («Без исполнителя») остаётся для id, которого нет в names (ушедший/неизвестный)
+      tasks.forEach(t => {
+        if (t.assignee === 'claude') { push('claude', t); return; }
+        const uid = t.assigneeUserId ?? assigneePeople.ownerUserId ?? undefined;
+        const name = uid ? assigneePeople.names.get(uid) : undefined;
+        push(name ? 'u:' + uid : 'none', t);
+      });
+      const lanes: BoardLane[] = [];
+      if (byKey.has('claude')) lanes.push({ key: 'claude', label: ASSIGNEE_LABEL.claude, tasks: byKey.get('claude')! });
+      // Дорожки участников — в порядке списка имён (владелец первым)
+      for (const [uid, name] of assigneePeople.names) {
+        const k = 'u:' + uid;
+        if (byKey.has(k)) lanes.push({ key: k, label: name, tasks: byKey.get(k)! });
+      }
+      // В общем проекте подпись строки — «Без исполнителя» (тот же термин, что в карточке),
+      // а не прежнее «Не назначен» личного вида
+      if (byKey.has('none')) lanes.push({ key: 'none', label: 'Без исполнителя', tasks: byKey.get('none')! });
+      return lanes;
+    }
     tasks.forEach(t => push(t.assignee ?? 'none', t));
     return ['claude', 'me', 'none'].filter(k => byKey.has(k))
       .map(k => ({ key: k, label: ASSIGNEE_LABEL[k], tasks: byKey.get(k)! }));

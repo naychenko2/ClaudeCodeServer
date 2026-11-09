@@ -31,6 +31,36 @@ export {
   getNoteForView, saveNoteOffline, createNoteOffline, deleteNoteOffline, offlineResolve,
 } from '../notesOffline';
 
+// ─── wiki (LLM-wiki: стор + операции) ────────────────────────────────────────
+// Единственный стор — хостовый: MF-модуль «Заметки» берёт стор вики, флаги и WikiError
+// через кит — своя копия относительных импортов дублировала бы состояние стора и давала
+// отдельный экземпляр WikiError (QA P1, дефект B1).
+export {
+  parseSectionKey, groupSectionsByKind, WikiError,
+  ensureWikiLoaded, loadWikiTree, loadWikiCatalog, loadWikiPage,
+  getWikiTreeSnapshot, initializeWiki, adoptWikiPage, deleteWikiSection,
+  listWikiPackages, decideWikiPackage, acceptAllWikiPackage,
+  loadWikiJournal, retractWikiSource, getWikiHealth, runWikiLint,
+  analyzeWikiChat, loadWikiChatAnalyzeStatus, loadWikiChats, setWikiChatMark, ingestWikiNote, transferWikiNote,
+  adoptWikiPageMine,
+  useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
+  requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
+  loadWikiSettings, useWikiSettings, putWikiNightly, runWikiNightlyNow, putWikiAutoApply, resumeWikiApplyClass,
+  wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
+  restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
+} from '../wiki';
+export type {
+  WikiSectionDto, WikiPageInfoDto, WikiPackageDto, WikiPackageOperationDto,
+  WikiApplyOutcomeDto, WikiDecisionDto, WikiJournalDto, WikiJournalEntryDto,
+  WikiRetractDto, WikiChatAnalyzeOk, WikiNoteIngestDto, WikiNoteTransferDto, WikiOpenRequest,
+  WikiChatTriage, WikiChatMark,
+  WikiSettingsSnapshot, WikiApplyClassDto, WikiNightlySettings, WikiLastNight, WikiPutNightlyResult,
+  WikiNightlyPatch, WikiNightlyOutcome,
+  WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
+  WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
+  WikiAdoptMineResult,
+} from '../wiki';
+
 // ─── subsystems ──────────────────────────────────────────────────────────────
 export { useSubsystem, isSubsystemEnabled } from '../subsystems';
 
@@ -48,9 +78,15 @@ export {
   useChatContext, getChatContextState, refreshChatContext, setPrimary, attachRef, detachRef, clearContext, releasePrimary, undoReleasePrimary, useReleaseOffer,
 } from '../chatContext/store';
 export { objectKey, pickDefaultAction, presetAction } from '../chatContext/actionMemory';
+export { thumbOf } from '../chatContext/thumbs';
 export { refOf, rolesFor } from '../chatContext/fill';
 export type { ContextCandidate } from '../chatContext/fill';
 export type { ContextRole, ContextUpload, ContextNote, ContextMenuItem } from '../chatContext/types';
+export type {
+  FormatModel, FormatEditModel, MediaFormatState, MediaFormatWish, MediaFormatCaps, FormatTierOption, FormatTierKey,
+  ResolvedFormat, FormatMode, CropAnchor, FramesAnchor, FormatFramesModel, FormatLockAsk,
+} from '../chatContext/formatTypes';
+export { FORMAT_TEXT, TIER_NAME, generateChip, priceLabel, sizeLabel } from '../chatContext/formatText';
 export { notifyKindChanged } from '../chatContext/actionRun';
 export { ReportedError } from '../chatContext/errors';
 export { etaTicker, etaFraction } from '../chatContext/etaProgress';
@@ -72,7 +108,7 @@ export { followPeeked } from '../genPanelOpen';
 // ─── offline ─────────────────────────────────────────────────────────────────
 // request и readStoredToken — низкоуровневый HTTP редактора картинок: его api.ts
 // ходит по своим маршрутам в обход фасада api
-export { OfflineError, request, readStoredToken } from '../offline';
+export { OfflineError, RequestTimeoutError, request, readStoredToken } from '../offline';
 
 // ─── featureFlags ────────────────────────────────────────────────────────────
 export { FLAGS, useFeature, getFlag } from '../featureFlags';
@@ -87,7 +123,7 @@ export { showToast } from '../toast';
 export { ensurePersonasLoaded, usePersonas, personaLabel } from '../personas';
 
 // ─── breakpoints ─────────────────────────────────────────────────────────────
-export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../breakpoints';
+export { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX, TABLET_WIDE_MIN } from '../breakpoints';
 
 // ─── noAutofill ──────────────────────────────────────────────────────────────
 export { NO_AUTOFILL } from '../noAutofill';
@@ -147,7 +183,7 @@ export {
   IslandScaffold, PanelHeaderSlot, useHasPanelHeader, MenuItem, MenuSep,
   SidebarSection, Toggle, PageCanvas, WaitingIndicator, Dot,
   Island, EmptyState, Field, TextField, TextArea, IconField, ModalActions, Menu, SegmentedControl, Checkbox,
-  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented,
+  Chip, ChipX, ProgressBar, MetaChip, Select, InlineSegmented, Notice,
 } from '../../components/ui';
 export type { SelectOption } from '../../components/ui';
 
@@ -180,6 +216,19 @@ export { HubHeader } from '../../components/HubHeader';
 // ─── components/chat/contexts ────────────────────────────────────────────────
 export { ChatProjectContext } from '../../components/chat/contexts';
 
+// ─── components/LocalGpuQueueLine ──────────────────────────────────────────────
+// Строка ожидания локальной GPU-очереди в карточках трёх редакторов (ADR-029 §8):
+// относительный импорт из features/ собрал бы вторую копию компонента в remote.
+export { LocalGpuQueueLine } from '../../components/LocalGpuQueueLine';
+
+// ─── cloudRescue ───────────────────────────────────────────────────────────────
+// Общая логика «Сделать в облаке» трёх редакторов (ADR-029 §8): guard двойного клика,
+// «стенд лежит», выбор облачного исполнителя, текст диалога и подпись кнопки.
+export {
+  makeLaunchGuard, isStandDown, cloudCandidate,
+  CLOUD_DIALOG_TITLE, cloudDialogSubtitle, cloudButtonLabel,
+} from '../cloudRescue';
+
 // ─── features/personas/PersonaAvatar ─────────────────────────────────────────
 export { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
@@ -190,7 +239,7 @@ export { WidgetCard, WidgetAction, WidgetEmpty, relTime, MiniSegment } from '../
 export { PanelZone } from '../../pages/workspace/PanelZone';
 
 // ─── pages/workspace/panelCatalog ────────────────────────────────────────────
-export { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
+export { NOTES_KEYS, WIKI_PANEL_KEYS } from '../../pages/workspace/panelCatalog';
 
 // ─── pages/workspace/panelStackState ─────────────────────────────────────────
 export { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';

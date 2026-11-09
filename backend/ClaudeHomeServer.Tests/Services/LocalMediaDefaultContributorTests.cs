@@ -10,18 +10,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // Шаг 3 «локальная модель по умолчанию»: условия показа хвостовой секции и её тексты
 public class LocalMediaDefaultContributorTests
 {
-    private sealed class Flags(params string[] on) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => on.Contains(key);
-    }
-
-    private static readonly string[] AllFlags =
-        [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor, FeatureFlagKeys.AudioEditor, FeatureFlagKeys.VideoEditor];
-
     private static LocalMediaDefaultContributor Contributor(
-        string[]? flags = null, bool localMedia = true, bool images = true, bool agentLaunch = true,
+        bool localMedia = true, bool images = true, bool agentLaunch = true,
         bool audioAgentLaunch = true, bool videoAgentLaunch = true) =>
-        new(new Flags(flags ?? AllFlags), new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        new(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["LocalMedia:Enabled"] = localMedia ? "true" : "false",
             ["Subsystems:images:Enabled"] = images ? "true" : "false",
@@ -43,20 +35,12 @@ public class LocalMediaDefaultContributorTests
             Unattended: unattended);
 
     [Fact]
-    public void Проект_с_local_media_и_флагом_видит_правило() =>
+    public void Проект_с_local_media_видит_правило() =>
         Contributor().IsEnabled(Project()).Should().BeTrue();
 
     [Fact]
-    public void Личный_чат_с_флагом_редактора_видит_правило() =>
+    public void Личный_чат_с_редактором_видит_правило() =>
         Contributor().IsEnabled(Personal()).Should().BeTrue();
-
-    [Fact]
-    public void Флаг_выключен_правила_нет()
-    {
-        var c = Contributor(flags: [FeatureFlagKeys.ImageEditor]);
-        c.IsEnabled(Project()).Should().BeFalse();
-        c.IsEnabled(Personal()).Should().BeFalse();
-    }
 
     // ReadOnly-персона и локальный проект ADR-016 не получают local-media (SessionManager
     // .BuildLocalMediaContext) — до секции это доходит как HasLocalMediaMcp = false
@@ -68,10 +52,6 @@ public class LocalMediaDefaultContributorTests
         Contributor().IsEnabled(Project(hasLocalMediaMcp: false)).Should().BeFalse(why);
 
     [Fact]
-    public void Личный_чат_без_флага_редактора_правила_нет() =>
-        Contributor(flags: [FeatureFlagKeys.LocalMediaDefault]).IsEnabled(Personal()).Should().BeFalse();
-
-    [Fact]
     public void Личный_чат_без_запуска_агентом_правила_нет() =>
         Contributor(agentLaunch: false).IsEnabled(Personal()).Should().BeFalse();
 
@@ -80,10 +60,6 @@ public class LocalMediaDefaultContributorTests
     [Fact]
     public void Личный_чат_без_доставленного_редактора_правила_нет() =>
         Contributor().IsEnabled(Personal(hasImageEditorMcp: false)).Should().BeFalse();
-
-    [Fact]
-    public void Проекту_флаг_редактора_не_нужен() =>
-        Contributor(flags: [FeatureFlagKeys.LocalMediaDefault]).IsEnabled(Project()).Should().BeTrue();
 
     // Ходы без человека: признак считает TurnAudience.IsUnattended, здесь — его три источника
     [Theory]
@@ -207,7 +183,7 @@ public class LocalMediaDefaultContributorTests
     [Fact]
     public void Стоит_сразу_после_блока_картинок() =>
         Contributor().Order.Should().Be(
-            new ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor(new Flags()).Order + 10);
+            new ClaudeHomeServer.Services.ImageEditor.Chats.ImageEditorStateContributor().Order + 10);
 
     // Устаревшая фраза «локальных моделей для них нет» — уже ложь: у local-media есть 9 аудио-инструментов,
     // из-за неё модель уводила звук в облако. Проектный вариант их перечисляет, личный — честно говорит, что нет.
@@ -252,13 +228,11 @@ public class LocalMediaDefaultContributorTests
     // Без доставленного сервера, без флага модуля или без audio_generate — прежние варианты
     [Theory]
     [InlineData("сервер не доставлен")]
-    [InlineData("флаг audio-editor выключен")]
     [InlineData("AudioEditor:AgentLaunch=false")]
     public async Task Без_модуля_звука_прежние_тексты(string why)
     {
         var contributor = why switch
         {
-            "флаг audio-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
             "AudioEditor:AgentLaunch=false" => Contributor(audioAgentLaunch: false),
             _ => Contributor(),
         };
@@ -306,13 +280,11 @@ public class LocalMediaDefaultContributorTests
     // Без доставленного сервера, без флага модуля или без video_shoot — прежние варианты
     [Theory]
     [InlineData("сервер не доставлен")]
-    [InlineData("флаг video-editor выключен")]
     [InlineData("VideoEditor:AgentLaunch=false")]
     public async Task Без_модуля_видео_прежние_тексты(string why)
     {
         var contributor = why switch
         {
-            "флаг video-editor выключен" => Contributor(flags: [FeatureFlagKeys.LocalMediaDefault, FeatureFlagKeys.ImageEditor]),
             "VideoEditor:AgentLaunch=false" => Contributor(videoAgentLaunch: false),
             _ => Contributor(),
         };

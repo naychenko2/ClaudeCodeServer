@@ -19,6 +19,11 @@ public sealed class LlmGatewayOptions
     // Выход наружу собственного трафика CLI устройства (задача 2.9).
     public EgressGatewayOptions Egress { get; set; } = new();
 
+    // OCR страницы локальной Qwen (фича «руки без UIA», этап A, шаг A1): картинка страницы →
+    // текст. Выключен по умолчанию — включение только в appsettings.Local.json у админа
+    // (LlmGateway:Ocr:Enabled=true), как и остальной шлюз.
+    public OcrGatewayOptions Ocr { get; set; } = new();
+
     // Диагностика дефекта провайдера (NormalizeToolInputArrays): каталог, куда шлюз кладёт
     // тело ЗАПРОСА, ответ на который пришлось нормализовать, — чтобы воспроизвести дефект
     // голым запросом к провайдеру. Пусто — дамп выключен. В теле весь разговор чата
@@ -51,4 +56,18 @@ public sealed class EgressGatewayOptions
     public TimeSpan InactivityTimeout { get; set; } = TimeSpan.FromSeconds(60);
     public TimeSpan MaxLifetime { get; set; } = TimeSpan.FromMinutes(5);
     public long MaxBytesPerTunnel { get; set; } = 1L << 30;
+}
+
+// OCR страницы локальной Qwen (LlmGateway:Ocr:*). Вычитается через IOptionsMonitor на каждом
+// запросе, как весь LlmGateway: выключение/настройка не требует рестарта.
+public sealed class OcrGatewayOptions
+{
+    // false — OCR не ходит в vLLM, отказ Disabled. Включение — только appsettings.Local.json.
+    public bool Enabled { get; set; }
+
+    // Таймаут одной страницы (сек): префилл картинки на общей GPU занимает десятки секунд.
+    public int PageTimeoutSec { get; set; } = 60;
+
+    // Потолок ожидания слота OCR (сек): одна страница за раз (общая GPU), сверх — BusyTimeout.
+    public int BusyWaitSec { get; set; } = 120;
 }

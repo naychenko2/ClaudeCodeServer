@@ -22,6 +22,9 @@ internal interface IControlConnection
 
     /// <summary>Соединение поднялось заново — сервер забыл hello.</summary>
     event Func<Task>? Reconnected;
+
+    /// <summary>Сервер просит повторить hello: требуемая версия CLI сменилась.</summary>
+    event Func<Task>? HelloRequested;
 }
 
 /// <summary>Управляемая копия CLI глазами координатора (боевая — <see cref="ManagedCli"/>).</summary>
@@ -119,6 +122,7 @@ internal sealed class AgentCoordinator : IAsyncDisposable
 
         _control.ExecOpen += OnExecOpenAsync;
         _control.Reconnected += () => HelloAsync(force: true);
+        _control.HelloRequested += OnHelloRequestedAsync;
         _harness.Changed += OnHarnessChanged;
         if (_updates is not null) _updates.Changed += OnUpdateChanged;
     }
@@ -204,6 +208,16 @@ internal sealed class AgentCoordinator : IAsyncDisposable
     /// <summary>Период с разбросом; <paramref name="sample"/> ∈ [0, 1) растягивается на ±<see cref="UpdateCheckJitter"/>.</summary>
     internal static TimeSpan Jittered(TimeSpan period, double sample) =>
         period * (1 - UpdateCheckJitter + 2 * UpdateCheckJitter * sample);
+
+    private async Task OnHelloRequestedAsync()
+    {
+        if (_stopping.IsCancellationRequested) return;
+        try { await HelloAsync(force: true); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Повторный hello по просьбе сервера не ушёл");
+        }
+    }
 
     private void OnHarnessChanged(HarnessStatus status) => RepeatHello("смены копии CLI");
 

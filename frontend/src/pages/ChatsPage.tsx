@@ -6,6 +6,7 @@ import { forgetChatContextOnDeleted } from '../lib/chatContext/forget';
 import { archiveApi } from '../api/chats';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
 import { joinUser, onMessage } from '../lib/signalr';
+import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
 import { showArchivedToast } from '../lib/archiveToast';
@@ -16,6 +17,7 @@ import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
+import { useLocalModelWatcher } from '../features/localModel/useLocalModelWatcher';
 import { ChatList } from '../components/ChatList';
 import { ChatPanel } from '../components/ChatPanel';
 import { PanelZone } from './workspace/PanelZone';
@@ -27,7 +29,7 @@ import { IslandSplitter } from '../components/ui/IslandSplitter';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels, openKeysOf } from './workspace/panelStackState';
 import { followHost } from '../lib/genPanelFollow';
-import { CHAT_KEYS, CHAT_RIGHT_KEYS, isPanelKey, type PanelKey } from './workspace/panelCatalog';
+import { CHAT_KEYS, CHAT_RIGHT_KEYS, chatPanelDefAllowed, keyAllowed, type PanelKey } from './workspace/panelCatalog';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot } from '../lib/subsystems/registry';
 import type { RevealPanelDetail, WorkspacePanelDefApi, WorkspacePanelDefCtx } from '../lib/subsystems/registryCore';
@@ -38,7 +40,9 @@ import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
+import { autoNavigateToContinued } from '../lib/chatContinue';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
+import { acceptDraftReplyByChat } from '../lib/draftReply';
 
 const OPEN_CHAT_KEY = 'cc_open_chat';
 
@@ -57,6 +61,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const [creating, setCreating] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const isMobile = useIsMobile();
+  // Сторож configured локальной модели (опрос + подписка страницы), см. хук
+  useLocalModelWatcher(auth.role === 'admin');
   // Планшет (601–1199): боковые зоны уходят в компакт-режим drawer'ов поверх ленты,
   // как в проектном воркспейсе. Формула та же, что в ChatHeaderBar: флаг зависит от
   // ширины окна, иначе переход мобил↔десктоп через ресайз пропустил бы его.
@@ -103,13 +109,16 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // Первичная загрузка + поллинг + realtime-обновление статусов через user-группу
   useEffect(() => {
     refresh();
-    const poll = setInterval(refresh, 5000);
+    // Пауза на скрытой вкладке + догон: час фоновых агентов не должен жечь сеть опросом
+    const stop = startVisiblePoll(refresh, 5000);
     if (auth.id) joinUser(auth.id).catch(() => {});
+    // Пачка status_changed/task_changed — один fetch, а не по одному на событие
+    const [refreshThrottled, disposeThrottle] = throttleRefetch(refresh, 1000);
     const off = onMessage(msg => {
-      if (msg.type === 'status_changed') refresh();
+      if (msg.type === 'status_changed') refreshThrottled();
       // Смена статуса задачи меняет признак «Готово» её чата (taskDone в HomeSessionDto).
       // Перечитываем список — иначе фильтр «Готово» обновится только на следующем тике поллинга.
-      if (msg.type === 'task_changed') refresh();
+      if (msg.type === 'task_changed') refreshThrottled();
       // Чат удалён на сервере (в т.ч. авто-удаление временного) — убираем из списка,
       // открытый чат закрываем. Side-эффекты в апдейтере идемпотентны.
       if (msg.type === 'chat_deleted') {
@@ -129,6 +138,15 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           ? { ...c, name: msg.name, topic: msg.topic ?? c.topic }
           : c));
       }
+      // «Продолжить в новом чате»: исходный чат продолжён — обновляем continuedInSessionId
+      // в списке (пометка «Продолжен в новом чате») и, если открыт именно он, переходим
+      // в новый (тост). Открыт другой чат/экран — только стор, без перехода.
+      if (msg.type === 'chat_continued') {
+        autoNavigateToContinued(msg);
+        setChats(prev => prev.map(c => c.id === msg.sessionId
+          ? { ...c, continuedInSessionId: msg.newSessionId }
+          : c));
+      }
       // Чат убран/возвращён из архива на другом клиенте/устройстве: сервер шлёт
       // chat_archived, мы рефетчим конкретный чат и кладём обновление в список —
       // иначе archived-флаг залежался бы до следующего тика поллинга (5с).
@@ -145,8 +163,9 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       }
     });
     return () => {
-      clearInterval(poll);
+      stop();
       off();
+      disposeThrottle();
       // Группу user_{id} НЕ покидаем: она сессионная и общая (её держат
       // NotificationToasts и стор задач). Ранний LeaveUser выкидывал всё
       // соединение из группы → task_changed переставал доходить в проектном чате.
@@ -189,6 +208,25 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     };
     window.addEventListener('cc-open-chat', open);
     return () => window.removeEventListener('cc-open-chat', open);
+  }, []);
+
+  // «Править»/«Попросить агента исправить» из карточки черновика в ленте: готовая реплика
+  // → поле ввода ТОГО чата, в чьей ленте нарисована карточка (cc-compose-prefill), не
+  // отправляется сама. Событие несёт chatId карточки; принимаем, только если chatId = id
+  // активного чата. Проект не сравниваем: черновик может быть из проекта, а чат — вне
+  // проекта (сравнение проектов роняло реплику в чате вне проекта). Ref — чтобы handler
+  // видел свежий activeId без перерегистрации слушателя на каждом обновлении списка.
+  const activeIdRef = useRef<string | null>(null);
+  activeIdRef.current = activeId;
+  useEffect(() => {
+    const onDraftReply = (e: Event) => {
+      const { chatId, reply } = (e as CustomEvent<{ chatId?: unknown; reply?: string }>).detail ?? {};
+      if (!acceptDraftReplyByChat(chatId, activeIdRef.current, reply)) return;
+      sessionStorage.setItem('cc_pending_chat_prompt', reply!);
+      window.dispatchEvent(new Event('cc-compose-prefill'));
+    };
+    window.addEventListener('cc-draft-reply', onDraftReply);
+    return () => window.removeEventListener('cc-draft-reply', onDraftReply);
   }, []);
 
   const selectChat = (chat: Session) => {
@@ -298,9 +336,16 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   chatOpenKeys.current = openKeysOf(chatZones);
   // Панели подсистем в правой зоне личного чата (слот workspace-panel-def): проекта
   // здесь нет, поэтому projectId = null — проектные вклады («Персонажи») отказываются
-  // сами. Без вкладов контента нет, и рельса кнопок не показывает
+  // сами. «Локальные модели» — сервер, а не проект: ключ живёт в chatRight, но в
+  // личном чате панель показываем только админу (chatPanelDefAllowed) — у не-админа
+  // нового значка в своей рельсе нет. Без вкладов контента нет, и рельса кнопок
+  // не показывает
   const panelDefs = useSlot<WorkspacePanelDefCtx, WorkspacePanelDefApi>(SLOT_WORKSPACE_PANEL_DEF);
   const chatRight = CHAT_RIGHT_KEYS;
+  // Точка состояния на значке «Локальных моделей» (Ф6): тот же геттер фичи, что в
+  // воркспейсе (состояние — из лёгкого опроса useLocalModelWatcher, вызван в начале
+  // компонента; его подписка перерисовывает страницу при смене состояния)
+  const localModelBadge = panelDefs.find(d => d.name === 'localModel')?.action?.indicator?.() ?? null;
   // Канал выбрали в КАТАЛОГЕ — эфир идёт в боковой панели, а та могла быть закрыта
   // или лежать в ящике рельсы. Раскладка — епархия страницы, поэтому являет панель
   // она, а стор только просит об этом событием.
@@ -319,12 +364,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
-      const key = d?.key;
-      if (!isPanelKey(key) || !chatRight.includes(key)) return;
+      const key = d?.key as PanelKey | undefined;
+      if (!key || !keyAllowed(key, chatRight)) return;
       if (isGenPanelKey(key)) setGenZoneFor(activeId);
       // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
       const host = d?.follow ? followHost(chatOpenKeys.current, key) : null;
-      if (host && isPanelKey(host)) replaceWith(key, host);
+      if (host && keyAllowed(host as PanelKey, chatRight)) replaceWith(key, host as PanelKey);
       else reveal(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
@@ -595,23 +640,31 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // сообщения (есть что показать в артефактах). Для нового пустого чата
           // рельса не нужна — это держит центральную область симметричной:
           // IslandScaffold видит right=undefined и применяет авто-компенсацию.
-          // Правой зоне доступны ТОЛЬКО панели сессии и генерации: список чатов рисует левая
-          // (контент есть лишь у неё), и уехавшая сюда панель «Чаты» пропадала бы
-          // с экрана целиком. Набор ключей это запрещает — и заодно чинит
-          // раскладку, сохранённую до появления правила.
+          // Правой зоне доступны панели сессии, генерации и «Локальных моделей»
+          // (это сервер, а не проект): список чатов рисует левая (контент есть лишь у
+          // неё), и уехавшая сюда панель «Чаты» пропадала бы с экрана целиком. Набор
+          // ключей это запрещает — и заодно чинит раскладку, сохранённую до правила.
+          // Вклад подсистемы проходит ещё и через chatPanelDefAllowed: «Локальные
+          // модели» в личном чате — только админу (их значок здесь — новый для
+          // не-админа, и он ему не нужен).
           right={activeChat && (activeChat.messageCount > 0 || genZoneFor === activeChat.id) ? (
             <PanelZone
               side="right" allowedKeys={chatRight} hideWhenEmpty panelStack={chatPanels}
               onUserClose={k => markGenPanelDismissed(activeChat.id, k)}
               panels={{
                 ...Object.fromEntries(panelDefs.flatMap(d => (
-                  d.name && isPanelKey(d.name) && chatRight.includes(d.name) && d.render && d.name !== 'chatContext' && (d.action?.isAvailable?.(null) ?? true)
+                  d.name && keyAllowed(d.name as PanelKey, chatRight) && d.render && d.name !== 'chatContext'
+                    && (d.action?.isAvailable?.(null) ?? true) && chatPanelDefAllowed(d.name as PanelKey, auth.role === 'admin')
                     ? [[d.name, d.render({ projectId: null, sessionId: activeChat.id, isMobile: false, onClose: () => { markGenPanelDismissed(activeChat.id, d.name!); closePanelKey(d.name as PanelKey); } })]]
                     : []
                 ))),
                 chatContext: <ContextPanelHost session={activeChat} project={null}
                   onClose={() => { markGenPanelDismissed(activeChat.id, 'chatContext'); closePanelKey('chatContext'); }} />,
               }}
+              // Точка «Локальных моделей» — та же, что в рельсе проекта (Ф6): у
+              // не-админа геттер молчит (он не спрашивает состояние второй дорожки),
+              // и значка с точкой здесь нет вовсе
+              railBadges={localModelBadge ? { localModel: localModelBadge } : undefined}
               sessionPanels={sessionPanels} compact={isTablet}
             />
           ) : undefined}

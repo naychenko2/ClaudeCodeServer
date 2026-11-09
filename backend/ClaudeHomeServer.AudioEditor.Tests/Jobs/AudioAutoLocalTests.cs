@@ -25,9 +25,8 @@ public sealed class AudioAutoLocalTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
     }
 
-    private AudioEditJobService Service(bool flag, params IAudioEngine[] engines) =>
-        new(engines, new AudioEditWorkspace(Path.Combine(_root, "work")), NullLogger<AudioEditJobService>.Instance,
-            flags: new Flags(flag ? [FeatureFlagKeys.LocalMediaDefault] : []));
+    private AudioEditJobService Service(params IAudioEngine[] engines) =>
+        new(engines, new AudioEditWorkspace(Path.Combine(_root, "work")), NullLogger<AudioEditJobService>.Instance);
 
     private static Engine Fal() => new("fal", [AudioOp.Speak, AudioOp.Song]);
 
@@ -43,41 +42,35 @@ public sealed class AudioAutoLocalTests : IDisposable
     }
 
     [Fact]
-    public async Task FlagOn_Project_AutoTakesLocal()
+    public async Task Project_AutoTakesLocal()
     {
-        (await AutoProvider(Service(true, Fal(), Local()), ProjectScope)).Should().Be("local");
+        (await AutoProvider(Service(Fal(), Local()), ProjectScope)).Should().Be("local");
     }
 
     [Fact]
-    public async Task FlagOn_LocalLacksOperation_FallsBackToFal()
+    public async Task LocalLacksOperation_FallsBackToFal()
     {
-        (await AutoProvider(Service(true, Fal(), Local()), ProjectScope, "song")).Should().Be("fal");
+        (await AutoProvider(Service(Fal(), Local()), ProjectScope, "song")).Should().Be("fal");
     }
 
     [Fact]
-    public async Task FlagOn_LocalDown_FallsBackToFal()
+    public async Task LocalDown_FallsBackToFal()
     {
         var local = Local();
         local.IsEnabled = false;
-        (await AutoProvider(Service(true, Fal(), local), ProjectScope)).Should().Be("fal");
+        (await AutoProvider(Service(Fal(), local), ProjectScope)).Should().Be("fal");
     }
 
     [Fact]
-    public async Task FlagOn_PersonalChat_OldOrder()
+    public async Task PersonalChat_OldOrder()
     {
-        (await AutoProvider(Service(true, Fal(), Local()), PersonalScope)).Should().Be("fal");
+        (await AutoProvider(Service(Fal(), Local()), PersonalScope)).Should().Be("fal");
     }
 
     [Fact]
-    public async Task FlagOff_OldOrder()
+    public async Task ExplicitProvider_NotSubstituted()
     {
-        (await AutoProvider(Service(false, Fal(), Local()), ProjectScope)).Should().Be("fal");
-    }
-
-    [Fact]
-    public async Task FlagOn_ExplicitProvider_NotSubstituted()
-    {
-        (await AutoProvider(Service(true, Fal(), Local()), ProjectScope, provider: "fal")).Should().Be("fal");
+        (await AutoProvider(Service(Fal(), Local()), ProjectScope, provider: "fal")).Should().Be("fal");
     }
 
     // Порядок «Авто» фронт берёт из каталога, а не считает сам: сводка обязана совпасть с котировкой
@@ -91,19 +84,6 @@ public sealed class AudioAutoLocalTests : IDisposable
         // Список показа от флага не зависит
         AudioCatalogView.Build(engines, ProjectScope, preferLocal: true).Providers.Select(p => p.Key)
             .Should().Equal("fal", "local");
-    }
-
-    [Fact]
-    public void PrefersLocal_ReadsOwnerFlag()
-    {
-        Service(true).PrefersLocal(Owner).Should().BeTrue();
-        Service(true).PrefersLocal("someone-else").Should().BeFalse();
-        Service(false).PrefersLocal(Owner).Should().BeFalse();
-    }
-
-    private sealed class Flags(string[] on) : IFeatureFlagGate
-    {
-        public bool IsEnabled(string userId, string key) => userId == Owner && on.Contains(key);
     }
 
     private sealed class Engine(string key, AudioOp[] ops, string? personalRefusal = null) : IAudioEngine

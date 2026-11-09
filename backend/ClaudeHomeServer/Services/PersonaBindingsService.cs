@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Plugins;
 
 namespace ClaudeHomeServer.Services;
 
@@ -121,6 +122,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
     private readonly Mcp.McpRegistry? _mcpRegistry;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
+    // Шов «навык плагина существует» (QA-фикс L3): проверка Skill-привязки plugin:{id}/{skill}
+    // при СОЗДАНИИ. Опциональная зависимость: подсистема Plugins выключена → null (Main
+    // отвечает «Подсистема плагинов выключена», не 500). Реализация — в вертикали Plugins.
+    private readonly IPluginSkillResolver? _pluginSkillResolver;
 
     // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
     private readonly ISphereDirectory? _spheres;
@@ -142,7 +147,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
         // заметочным привязкам тихо возвращает пусто (ExtractNotesAsync).
         INoteSemanticIndex? notesKb = null,
         // Зона персоны сферы; без справочника (юнит-тесты) сфер нет
-        ISphereDirectory? spheres = null)
+        ISphereDirectory? spheres = null,
+        // Шов «навык плагина существует» (QA-фикс L3): опциональная зависимость —
+        // подсистема Plugins выключена (Subsystems:plugins:Enabled=false) → null.
+        IPluginSkillResolver? pluginSkillResolver = null)
     {
         _spheres = spheres;
         _personas = personas;
@@ -156,6 +164,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         _mcpRegistry = mcpRegistry;
         _config = config;
         _log = log;
+        _pluginSkillResolver = pluginSkillResolver;
     }
 
     // --- Tool-рубильники ---
@@ -401,6 +410,30 @@ public class PersonaBindingsService : IPersonaServerToolGate
         }
         if (touched > 0)
             _log.LogInformation("Привязки на удалённый MCP-сервер «{Key}» убраны у {Count} персон", serverKey, touched);
+        return touched;
+    }
+
+    // Подвести Skill-привязки «plugin:{pluginId}/…» у всех персон владельца — вызывается
+    // каскадом удаления установки плагина (IPluginInstallCascade → IPersonaPluginBindingPurger,
+    // QA-фикс L3). Без этого мёртвая привязка (плагин удалён, а навык из его пакета) оставалась
+    // бы в персоне: READ-путь её тихо пропускал, но список привязок нес бы запись «в пустоту».
+    // UpdateBindings поднимает OnPersonaChanged → SessionManager инвалидирует сессии персоны.
+    // Возвращает число тронутых персон (0 — некого чистить).
+    public int PurgePluginSkillBindings(string ownerId, string pluginId)
+    {
+        var prefix = PluginSkillTarget.Prefix + pluginId + "/";
+        var touched = 0;
+        foreach (var persona in _personas.GetByOwner(ownerId))
+        {
+            if (persona.Bindings is not { Count: > 0 } bindings) continue;
+            var kept = bindings.Where(b => b.Type != PersonaBindingType.Skill
+                || !b.Target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (kept.Count == bindings.Count) continue;
+            _personas.UpdateBindings(persona.Id, ownerId, kept);
+            touched++;
+        }
+        if (touched > 0)
+            _log.LogInformation("Skill-привязки на удалённый плагин «{Id}» убраны у {Count} персон", pluginId, touched);
         return touched;
     }
 
@@ -696,17 +729,21 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // или в индекс ничего не попало. mountedSections — секции workspace, реально
     // смонтированные сессии (типы без своей секции опускаются).
     public async Task<string?> BuildTurnBlockAsync(string ownerId, string personaId, string turnText,
-        IReadOnlyList<string> mountedSections)
+        IReadOnlyList<string> mountedSections, string? projectId = null)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona?.Bindings is not { Count: > 0 } bindings) return null;
         var active = bindings.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
         if (active.Count == 0) return null;
 
-        var index = BuildIndex(ownerId, active, mountedSections);
+        // M2: проект хода — для фильтрации Skill-привязок плагинов по локальности
+        // (ProjectCapabilities.PluginsFor): у локального проекта плагины выключены,
+        // привязка навыка плагина не попадает в промпт. null — ход без привязки.
+        var project = projectId is null ? null : _projects.GetById(projectId);
+        var index = BuildIndex(ownerId, active, mountedSections, project);
         // Серверные выжимки: always-источники + auto-привязки знаний к произвольным
         // Dify-датасетам (у которых нет инструмента поиска — подгружаем сами по релевантности).
-        var extracts = await BuildExtractsAsync(ownerId, active, turnText);
+        var extracts = await BuildExtractsAsync(ownerId, active, turnText, project);
         if (index is null && extracts is null) return null;
         if (index is null) return extracts;
         return extracts is null ? index : index + "\n" + extracts;
@@ -761,13 +798,13 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // Привязка с недоступным способом (нет секции workspace, цель не найдена) опускается.
     // Internal — для юнит-тестов чистой логики сборки.
     internal string? BuildIndex(string ownerId, IReadOnlyList<PersonaBinding> active,
-        IReadOnlyList<string> mountedSections)
+        IReadOnlyList<string> mountedSections, Project? project = null)
     {
         var lines = new List<string>();
         foreach (var binding in active)
         {
             if (lines.Count >= IndexLimit) break;
-            var way = DescribeWay(ownerId, binding, mountedSections);
+            var way = DescribeWay(ownerId, binding, mountedSections, project);
             if (way is null) continue;
             var cond = binding.Condition?.Trim();
             lines.Add(string.IsNullOrEmpty(cond)
@@ -799,7 +836,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
 
     // Способ подгрузки источника для строки индекса; null — тип опускается
     // (секция workspace не смонтирована или цель не найдена/удалена).
-    private string? DescribeWay(string ownerId, PersonaBinding binding, IReadOnlyList<string> mountedSections)
+    private string? DescribeWay(string ownerId, PersonaBinding binding, IReadOnlyList<string> mountedSections,
+        Project? turnProject = null)
     {
         switch (binding.Type)
         {
@@ -839,6 +877,18 @@ public class PersonaBindingsService : IPersonaServerToolGate
                 }
             case PersonaBindingType.Skill:
                 {
+                    // Плагин владельца: target «plugin:{id}/{skill}» — навык из пакета владельца.
+                    // Плагин удалён/выключен → null: привязка тихо пропадает из промпта, без
+                    // исключения (ADR-031 §2.5). turnProject — фильтрация по локальности (M2).
+                    if (binding.Target.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var pluginSkill = _skills.ResolveOwnerPluginSkill(ownerId, binding.Target, turnProject);
+                        if (pluginSkill is null) return null;
+                        // M3: в container агенту не дают хостовый путь (в песочнице он другой).
+                        // Промпт — «используй навык {slug}:{skill} через Skill-тул» (после C1
+                        // --plugin-dir доставляет пакет, Skill-тул его видит), а не путь.
+                        return $"используй навык {pluginSkill.Name} через Skill-тул";
+                    }
                     var skill = _skills.GetGlobalSkills()
                         .FirstOrDefault(s => string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase));
                     if (skill is null) return null;
@@ -884,7 +934,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // knowledge_search по условию (для произвольных датасетов гейт по score невозможен:
     // эмбеддинги дают высокий score и на нерелевантный запрос).
     private async Task<string?> BuildExtractsAsync(string ownerId,
-        IReadOnlyList<PersonaBinding> active, string turnText)
+        IReadOnlyList<PersonaBinding> active, string turnText, Project? project = null)
     {
         var always = active.Where(b => b.Mode == PersonaBindingMode.Always).Take(AlwaysLimit).ToList();
         if (always.Count == 0) return null;
@@ -893,7 +943,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         if (query.Length > 500) query = query[..500];
         var timeoutMs = int.TryParse(_config["Persona:BindingsTimeoutMs"], out var t) ? t : 3000;
 
-        var tasks = always.Select(b => ExtractAsync(ownerId, b, query)).ToList();
+        var tasks = always.Select(b => ExtractAsync(ownerId, b, query, project)).ToList();
         try { await Task.WhenAny(Task.WhenAll(tasks), Task.Delay(timeoutMs)); }
         catch { /* сбои отдельных источников разбираются ниже по задачам */ }
 
@@ -911,7 +961,8 @@ public class PersonaBindingsService : IPersonaServerToolGate
     }
 
     // Выжимка одного источника. Ошибки → warning в лог и null (ход идёт без неё).
-    private async Task<string?> ExtractAsync(string ownerId, PersonaBinding binding, string query)
+    private async Task<string?> ExtractAsync(string ownerId, PersonaBinding binding, string query,
+        Project? project = null)
     {
         var maxChars = int.TryParse(_config["Persona:BindingsSnippetMaxChars"], out var m) ? m : 1500;
         try
@@ -921,7 +972,11 @@ public class PersonaBindingsService : IPersonaServerToolGate
                 PersonaBindingType.Knowledge => await ExtractKnowledgeAsync(ownerId, binding, query),
                 PersonaBindingType.Notes => await ExtractNotesAsync(ownerId, binding, query),
                 PersonaBindingType.ProjectPath => ExtractProjectFile(ownerId, binding),
-                PersonaBindingType.Skill => _skills.GetSkillContent(binding.Target),
+                // Плагин владельца (target «plugin:{id}/{skill}») — содержимое из пакета;
+                // обычный навык — из глобального каталога. project — фильтрация по локальности (M2).
+                PersonaBindingType.Skill => binding.Target.StartsWith("plugin:", StringComparison.OrdinalIgnoreCase)
+                    ? _skills.GetOwnerPluginSkillContent(ownerId, binding.Target, project)
+                    : _skills.GetSkillContent(binding.Target),
                 _ => null, // Project/Tool — только строка индекса, выжимки нет
             };
             if (string.IsNullOrWhiteSpace(text)) return null;
@@ -1112,6 +1167,22 @@ public class PersonaBindingsService : IPersonaServerToolGate
                     return "Источник заметок не найден";
                 break;
             case PersonaBindingType.Skill:
+                // Плагин владельца (ADR-031 §2.5): target «plugin:{id}/{skill}» — навык из
+                // пакета владельца. Проверяем через шов IPluginSkillResolver: плагин с таким
+                // id установлен ВЛАДЕЛЬЦЕМ ПЕРСОНЫ (не чужим), включён, в пакете объявлен
+                // такой навык, флаг plugins-mvp вкл. Подсистема выключена (шов null) — понятный
+                // отказ, не 500. Не-plugin цели — прежняя проверка по глобальным навыкам.
+                if (binding.Target.StartsWith(PluginSkillTarget.Prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!PluginSkillTarget.TryParse(binding.Target, out var pluginTarget))
+                        return "Некорректная цель привязки навыка плагина (ожидается plugin:{id}/{skill})";
+                    if (_pluginSkillResolver is null)
+                        return "Подсистема плагинов выключена";
+                    var check = _pluginSkillResolver.Check(ownerId, pluginTarget.PluginId, pluginTarget.Skill);
+                    if (check is not null)
+                        return check.Reason;
+                    break;
+                }
                 if (_skills.GetGlobalSkills()
                         .All(s => !string.Equals(s.Name, binding.Target, StringComparison.OrdinalIgnoreCase)))
                     return "Скилл не найден среди глобальных";

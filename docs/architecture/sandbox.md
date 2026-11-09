@@ -74,6 +74,20 @@
   возвращаются `MSBUILDDISABLENODEREUSE=1`, `DOTNET_CLI_USE_MSBUILD_SERVER=0`,
   `UseSharedCompilation=false` (для не-сборщиков безвредны).
 
+  **Порядок остановки scope ↔ сервис** (`Execution:Isolation:StopAfterUnit`, автоопределение
+  по `/proc/self/cgroup`). При выключении МАШИНЫ менеджер пользователя systemd останавливает
+  `ccs.service` и scope-юниты CLI (`ccs-run-*.scope`) одной транзакцией БЕЗ порядка: CLI раньше
+  сервера получал SIGTERM, успевал прислать `result{subtype:error}` и чат уходил в `Error`, а не
+  оставался `Working` для авто-продолжения (инцидент 20.10 15:33). Обёртка ставит
+  `--property=Before=<юнит сервера>`, и scope гасится ПОСЛЕ `ccs.service` — путь сводится к
+  штатной остановке (`KillAllProcesses` → `_stopping`). Юнит определяется один раз при старте:
+  последний сегмент `/proc/self/cgroup`, если он валидное имя `*.service` (сомнительное —
+  без свойства: лучше не ставить `Before=`, чем провалить пробу `systemd-run` и, с ней,
+  всю обёртку scope); dev-стенд из `dotnet run` и Windows — без свойства. `Before=` —
+  только порядок: членство в cgroup, OOM-лимиты slice, `KillMode` scope и
+  `ScopeOrphanSweeper` не меняются. Container-владельцы при перезагрузке машины пока не
+  покрыты (см. ADR-033, «Сценарии отказа и реакция», п. 6).
+
   **Приватные узлы сборок сервера вне scope** (`ProcessSpec.PrivateBuildNodes`). Сборки, которые
   запускает сам бэкенд, — `run_tests`, `build`, фаза сборки `start_stand`, прогрев свежего
   worktree — несут эту метку. Вне scope (Windows, scope выключен, песочница) раннер ставит им те
@@ -124,7 +138,7 @@
   `Execution:Isolation:MaxConcurrentBuilds`, дефолт 2; явный `0` — без ограничения, откат
   без пересборки). **Это дополнение к лимитам cgroup, а не замена им.** Основная защита от
   OOM — жёсткий потолок на `ccs-agents.slice` (`MemoryMax` + `MemorySwapMax=0` +
-  `ManagedOOMMemoryPressure=kill`, плюс `ManagedOOMPreference=omit` на самом `ccs.service`):
+  `ManagedOOMMemoryPressure=kill` с порогом 80 % (`ManagedOOMMemoryPressureLimit`; 60 % по умолчанию ловили reclaim файлового кэша, инцидент 15.10), плюс `ManagedOOMPreference=omit` на самом `ccs.service`):
   лимит cgroup наследуется ВСЕМУ поддереву scope, включая сборки, которые агент запускает
   внутри хода своим Bash, — а это ровно те, что дали инцидент 21 сентября (четыре scope по
   4–5 GB, внутри `testhost.dll`, прогревов среди них не было). Гейт же считает только
@@ -233,3 +247,20 @@
   хостовых данных из кода не делаем.
 - **Переход на per-user контейнеры** позже без переделки: имя контейнера параметризовано,
   меняется только `SandboxManager`/фабрика драйвера.
+
+## CLI с хоста
+
+У песочницы своя npm-копия claude CLI, вшитая в образ, — автообновление хоста её не покрывает.
+Поэтому на Linux-хосте `SandboxManager` монтирует каталог версий хоста
+`~/.local/share/claude/versions` в `/opt/claude-host/versions:ro`, а
+`DockerProcessRunner.ClaudeCliCommand` на КАЖДОМ обращении читает цель симлинка
+`~/.local/bin/claude` и, если такая версия есть в каталоге, возвращает
+`/opt/claude-host/versions/<версия>`; иначе `"claude"` (образ). Версия хоста, песочницы и
+устройств общая; кэша нет — автообновление перекладывает симлинк.
+
+- Условия mount'а: Linux, существует каталог версий, `Sandbox:UseHostCli` не выключен (по
+  умолчанию `true`). Windows-хост и отсутствие каталога — прежнее поведение без ошибок.
+- Mount входит в `ConfigHash`: при выкатке контейнер один раз пересоздаётся (ходы в нём
+  оборвутся).
+- Контейнерный путь возникает только в момент запуска; бэкенд работает с хостовыми.
+- UID контейнера обязан совпадать с владельцем каталога на хосте (иначе нет чтения).

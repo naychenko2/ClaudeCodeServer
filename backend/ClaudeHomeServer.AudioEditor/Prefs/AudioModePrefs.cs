@@ -147,7 +147,7 @@ public sealed class AudioPrefsService(AudioPrefsStore store, ISessionBroadcaster
     {
         store.Save(ownerId, scope.Key, mode, prefs);
         if (broadcaster is null) return;
-        try { await broadcaster.ToOwner(ownerId, new Jobs.AudioPrefsChangedMessage(scope.Key, mode, prefs)); }
+        try { await broadcaster.ToProjectOrOwner(ownerId, AudioEditScope.ProjectIdOf(scope.Key), new Jobs.AudioPrefsChangedMessage(scope.Key, mode, prefs)); }
         catch (Exception) { }
     }
 

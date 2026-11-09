@@ -470,7 +470,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
             {!item.badge && item.dot && !closing && !pinning
               ? (
                 <span style={{ position: 'absolute', top: -3, right: -4, display: 'flex' }}>
-                  <Dot color={item.dot === 'muted' ? C.textMuted : item.dot === 'warning' ? C.warning : C.accent} size={8} />
+                  <Dot color={item.dot === 'muted' ? C.textMuted : item.dot === 'warning' ? C.warning : item.dot === 'info' ? C.info : C.accent} size={8} />
                 </span>
               )
               : null}

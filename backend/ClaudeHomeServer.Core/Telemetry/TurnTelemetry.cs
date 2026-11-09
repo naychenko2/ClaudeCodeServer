@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Core.Telemetry;
 
@@ -228,24 +229,28 @@ public static class TurnTelemetry
 
     /// <summary>
     /// Начало хода родного Claude с причиной промаха prompt cache первого вызова
-    /// (<c>diagnostics.cache_miss_reason.type</c>; null — промаха не было). Вызывающий пишет
-    /// ровно раз за ход и только если первый вызов хода реально случился: иначе знаменатель
-    /// доли холодных стартов раздуют ходы, упавшие до модели.
+    /// (<c>diagnostics.cache_miss_reason</c>). Вызывающий пишет ровно раз за ход и только
+    /// если первый вызов хода реально случился: иначе знаменатель доли холодных стартов
+    /// раздуют ходы, упавшие до модели.
     /// </summary>
-    public static void RecordPromptCacheTurn(string? missReason) =>
-        ServerMetrics.RecordPromptCacheTurn(ClassifyCacheMissReason(missReason));
+    public static void RecordPromptCacheTurn(PromptCacheMissReason reason) =>
+        ServerMetrics.RecordPromptCacheTurn(CacheMissReasonTag(reason));
 
     /// <summary>
-    /// Значение тега <c>reason</c> для <c>ccs.prompt_cache.turns</c>. Тип промаха приходит от
-    /// API и замкнутым множеством формально не является, поэтому белый список: известные
-    /// типы (сняты с транскриптов, замер 2026-10-15) — как есть, null — <c>none</c>, прочее —
-    /// <c>other</c>. Новый тип в <c>other</c> — повод внести его сюда, а не открыть тег.
+    /// Значение тега <c>reason</c> для <c>ccs.prompt_cache.turns</c>. Источник — замкнутый
+    /// enum <c>PromptCacheMissReason</c>, поэтому тег = его wire-имя (те же camelCase, что
+    /// на проводе с фронтом): новый член enum обязан попасть сюда, иначе он уйдёт в <c>other</c>
+    /// и разрез потеряет причину.
     /// </summary>
-    internal static string ClassifyCacheMissReason(string? missReason) => missReason switch
+    internal static string CacheMissReasonTag(PromptCacheMissReason reason) => reason switch
     {
-        null => "none",
-        "system_changed" or "tools_changed" or "model_changed" or "messages_changed"
-            or "previous_message_not_found" or "unavailable" => missReason,
+        PromptCacheMissReason.None => "none",
+        PromptCacheMissReason.SystemChanged => "systemChanged",
+        PromptCacheMissReason.MessagesChanged => "messagesChanged",
+        PromptCacheMissReason.Unavailable => "unavailable",
+        PromptCacheMissReason.PreviousMessageNotFound => "previousMessageNotFound",
+        PromptCacheMissReason.ModelChanged => "modelChanged",
+        PromptCacheMissReason.ToolsChanged => "toolsChanged",
         _ => MetricTagGuard.Overflow,
     };
 

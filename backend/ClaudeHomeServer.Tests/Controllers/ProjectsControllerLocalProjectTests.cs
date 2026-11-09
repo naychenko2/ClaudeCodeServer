@@ -28,9 +28,12 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// вне корней — разрешена, запретный путь и выключенная автовыдача — 400. Устройства без
 /// этой возможности («dev-exec») — старый агент: прежний отказ с подсказкой команды.
 /// </summary>
-public sealed class ProjectsControllerLocalProjectTests : IDisposable
+[Trait("Category", "Host")]
+public sealed class ProjectsControllerLocalProjectTests : IClassFixture<ProjectsControllerLocalProjectTests.Host>, IDisposable
 {
-    private sealed class FakeDeviceExec : IDeviceExecChannel
+    // internal, не public: заглушки держат Dictionary<string, LoopbackRelayChannel>, а он internal
+    // в TestKit.Host — public-свойство с таким типом не соберётся (CS0053)
+    internal sealed class FakeDeviceExec : IDeviceExecChannel
     {
         public Dictionary<string, DeviceExecStatus> Devices { get; } = [];
         public DeviceExecStatus? GetStatus(string ownerId, string deviceId) => Devices.GetValueOrDefault(deviceId);
@@ -39,7 +42,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     }
 
     /// <summary>Канал ретранслятора по устройствам: у каждого свой агент.</summary>
-    private sealed class RelayByDevice : IDeviceRelayChannel
+    internal sealed class RelayByDevice : IDeviceRelayChannel
     {
         public Dictionary<string, LoopbackRelayChannel> Agents { get; } = [];
         public Task<IDeviceExecStream> OpenRelayAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
@@ -47,7 +50,7 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     }
 
     /// <summary>Канал выдачи папки по устройствам.</summary>
-    private sealed class BindByDevice : IDeviceFolderBindChannel
+    internal sealed class BindByDevice : IDeviceFolderBindChannel
     {
         public Dictionary<string, LoopbackRelayChannel> Agents { get; } = [];
         public Task<IDeviceExecStream> OpenBindFolderAsync(string ownerId, string deviceId, CancellationToken ct = default) =>
@@ -59,28 +62,63 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         public IReadOnlyList<string> Roots { get; } = roots;
     }
 
-    private readonly FakeDeviceExec _devices = new();
-    private readonly RelayByDevice _relay = new();
-    private readonly BindByDevice _bind = new();
+    /// <summary>
+    /// Хост на класс: каналы-заглушки зарегистрированы один раз на весь класс. Их СОДЕРЖИМОЕ
+    /// (статусы устройств, агенты по устройствам) наполняется перед каждым тестом в конструкторе
+    /// класса — общий хост состояние между тестами помнит, а тесты его меняют.
+    /// </summary>
+    public sealed class Host : TestWebApplicationFactory
+    {
+        // internal: типы заглушек internal (см. заметку выше), public-свойства фикстуры были бы
+        // доступнее своего типа — CS0053
+        internal FakeDeviceExec DeviceStatuses { get; } = new();
+        internal RelayByDevice Relay { get; } = new();
+        internal BindByDevice Bind { get; } = new();
+
+        public Host()
+        {
+            ExtraServices = s =>
+            {
+                s.AddSingleton<IDeviceExecChannel>(DeviceStatuses);
+                s.AddSingleton<IDeviceRelayChannel>(Relay);
+                s.AddSingleton<IDeviceFolderBindChannel>(Bind);
+            };
+        }
+    }
+
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
+    private readonly FakeDeviceExec _devices;
+    private readonly RelayByDevice _relay;
+    private readonly BindByDevice _bind;
 
     // Машина устройства: разрешённый корень агента и «чужой» каталог рядом
     private readonly string _machine = Path.Combine(Path.GetTempPath(), "lp-agent-" + Guid.NewGuid().ToString("N"));
     private string AllowedRoot => Path.Combine(_machine, "allowed");
     private string Outside => Path.Combine(_machine, "outside");
 
-    // Машина агента с выдачей папки — рядом с тестами, а не в temp: на Windows temp лежит в
-    // запретном для выдачи AppData. Профиль этой «машины» — BindHome
-    private readonly string _bindMachine = Path.Combine(AppContext.BaseDirectory, "lp-bind-" + Guid.NewGuid().ToString("N"));
+    // Машина агента с выдачей папки: её каталог не должен попасть в агентный запретный список —
+    // правило безусловное (ADR-016 §5), и каталог бинарника тестов не гарантированно чистый:
+    // git-worktree живёт под .claude, а temp на Windows — в AppData. Берём первую базу, которую
+    // допускает то же AgentForbiddenPaths. Профиль этой «машины» — BindHome
+    private readonly string _bindMachine = Path.Combine(SafeMachineBase(), "lp-bind-" + Guid.NewGuid().ToString("N"));
     private string BindHome => Path.Combine(_bindMachine, "home");
     private readonly AgentRootsStore _bindRoots;
 
-    public ProjectsControllerLocalProjectTests()
+    public ProjectsControllerLocalProjectTests(Host host)
     {
+        _factory = host;
+        _devices = host.DeviceStatuses;
+        _relay = host.Relay;
+        _bind = host.Bind;
+        _client = host.CreateAuthenticatedClient();
+
         Directory.CreateDirectory(AllowedRoot);
         Directory.CreateDirectory(Outside);
 
+        // Базовое содержимое каналов перед каждым тестом: его изменил предыдущий тест,
+        // а общий хост держит эти же объекты на весь класс
+        _devices.Devices.Clear();
         _devices.Devices["dev-exec"] = Status("dev-exec", online: true, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
         _devices.Devices["dev-offline"] = Status("dev-offline", online: false, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
         _devices.Devices["dev-old"] = Status("dev-old", online: true, DeviceCapabilities.Exec);
@@ -91,18 +129,9 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         _devices.Devices["dev-bind-refused"] = Status("dev-bind-refused", online: true,
             DeviceCapabilities.Exec, DeviceCapabilities.Relay, DeviceCapabilities.BindFolder);
 
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s =>
-            {
-                s.AddSingleton<IDeviceExecChannel>(_devices);
-                s.AddSingleton<IDeviceRelayChannel>(_relay);
-                s.AddSingleton<IDeviceFolderBindChannel>(_bind);
-            },
-        };
-        _client = _factory.CreateAuthenticatedClient();
-
         // Папки сервера тоже разрешены агенту: «один путь на сервере и устройстве»
+        _relay.Agents.Clear();
+        _bind.Agents.Clear();
         var git = new GitService(AgentLauncherFactory.Instance);
         var policy = new AgentPathPolicy(new AllowedRoots(AllowedRoot, _factory.TempDir));
         var agent = new RelayHandler(new AgentProjectFiles(new FileService(git), policy), git);
@@ -126,6 +155,21 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         _relay.Agents["dev-bind-refused"] = new LoopbackRelayChannel { Agent = bindRelay.RunAsync };
     }
 
+    // База, под которой тестовой машине не запрещено жить: temp, затем каталог бинарника,
+    // поднимаясь до ближайшего разрешённого предка (корень диска — тоже запретный)
+    private static string SafeMachineBase()
+    {
+        foreach (var start in new[] { Path.GetTempPath(), AppContext.BaseDirectory })
+        {
+            for (var path = Path.GetFullPath(start); path.Length > 1; path = Path.GetDirectoryName(path) ?? "")
+            {
+                if (AgentForbiddenPaths.RefusalOf(path, new AgentForbiddenContext([], [], [])) is null)
+                    return path;
+            }
+        }
+        throw new InvalidOperationException("Нет безопасной базы для тестовой машины");
+    }
+
     // Каталог только владельцу на запись: общий на запись корень агент не добавит
     private static string PrivateDir(string path)
     {
@@ -134,9 +178,9 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
         return path;
     }
 
+    // Хост гасит фикстура после класса; здесь — только «машины» этого теста
     public void Dispose()
     {
-        _factory.Dispose();
         try { Directory.Delete(_machine, recursive: true); } catch { /* временная папка */ }
         try { Directory.Delete(_bindMachine, recursive: true); } catch { /* временная папка */ }
     }
@@ -157,9 +201,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     private static DeviceExecStatus Status(string id, bool online, params string[] caps) =>
         new(id, "home", online, "linux-x64", "1.0.0", "2.0.0", "2.0.0", caps, true, null);
 
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled }))
-            .EnsureSuccessStatusCode();
 
     private static async Task<JsonElement> BodyAsync(HttpResponseMessage r) =>
         JsonSerializer.Deserialize<JsonElement>(await r.Content.ReadAsStringAsync());
@@ -192,17 +233,8 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     }
 
     [Fact]
-    public async Task Создание_БезФлага_400()
-    {
-        var r = await CreateLocalAsync("dev-exec", DeviceDir());
-
-        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
-
-    [Fact]
     public async Task Создание_УстройствоБезExec_400()
     {
-        await SetFlagAsync(true);
 
         var r = await CreateLocalAsync("dev-noexec", DeviceDir());
 
@@ -213,7 +245,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_НеизвестноеУстройство_400()
     {
-        await SetFlagAsync(true);
 
         var r = await CreateLocalAsync("nope", DeviceDir());
 
@@ -223,7 +254,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ФлагИExec_201_ВDtoМатрицаИУстройство()
     {
-        await SetFlagAsync(true);
 
         var r = await _client.PostAsJsonAsync("/api/projects",
             new { name = "L", rootPath = DeviceDir(), deviceId = "dev-exec", enableGit = true });
@@ -250,7 +280,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_НетПапкиНаУстройстве_400_ПроектНеСоздан()
     {
-        await SetFlagAsync(true);
         var missing = Path.Combine(AllowedRoot, "nope");
 
         var r = await CreateLocalAsync("dev-exec", missing);
@@ -264,7 +293,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ПапкаВнеКорней_400СПодсказкойКоманды()
     {
-        await SetFlagAsync(true);
 
         var r = await CreateLocalAsync("dev-exec", Outside);
 
@@ -276,7 +304,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ПутьКФайлу_400()
     {
-        await SetFlagAsync(true);
         var file = Path.Combine(DeviceDir(), "a.txt");
         File.WriteAllText(file, "x");
 
@@ -289,7 +316,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_УстройствоОфлайн_400_ПроверитьНельзя()
     {
-        await SetFlagAsync(true);
 
         var r = await CreateLocalAsync("dev-offline", DeviceDir());
 
@@ -302,7 +328,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [InlineData("dev-old-relay")] // ретранслятор есть, операции check-path нет
     public async Task Создание_СтарыйАгент_ПроверкаПропущена_201(string deviceId)
     {
-        await SetFlagAsync(true);
 
         var r = await CreateLocalAsync(deviceId, Path.Combine(AllowedRoot, "nope"));
 
@@ -312,7 +337,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_НетПапкиНаУстройстве_400_ПривязкаНеМеняется()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
 
         var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device",
@@ -327,7 +351,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_ВнеКорней_400()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
 
         var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev-exec", rootPath = Outside });
@@ -339,7 +362,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_УстройствоОфлайн_400()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
 
         var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device", new { deviceId = "dev-offline", rootPath = DeviceDir() });
@@ -351,7 +373,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_ТаЖеПривязка_УстройствоНеСпрашивается()
     {
-        await SetFlagAsync(true);
         var dir = DeviceDir();
         var id = (await BodyAsync(await CreateLocalAsync("dev-exec", dir))).GetProperty("id").GetString()!;
         _devices.Devices["dev-exec"] = Status("dev-exec", online: false, DeviceCapabilities.Exec, DeviceCapabilities.Relay);
@@ -366,7 +387,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_НетПапки_АгентСоздаётИРазрешает_201СУведомлением()
     {
-        await SetFlagAsync(true);
         var path = Path.Combine(BindHome, "projects", "app");
 
         var r = await _client.PostAsJsonAsync("/api/projects", new { name = "Мой проект", rootPath = path, deviceId = "dev-bind" });
@@ -382,7 +402,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ПапкаВнеКорней_АгентРазрешает_201()
     {
-        await SetFlagAsync(true);
         var path = PrivateDir(Path.Combine(BindHome, "existing"));
 
         var r = await CreateLocalAsync("dev-bind", path);
@@ -396,7 +415,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ПапкаУжеПодКорнем_201БезУведомления()
     {
-        await SetFlagAsync(true);
         var root = PrivateDir(Path.Combine(BindHome, "work"));
         _bindRoots.Add(root);
         var path = PrivateDir(Path.Combine(root, "app"));
@@ -411,7 +429,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_ЗапретныйПуть_400_НичегоНеСоздано()
     {
-        await SetFlagAsync(true);
         var ssh = Path.Combine(BindHome, ".ssh");
 
         var r = await CreateLocalAsync("dev-bind", ssh);
@@ -425,7 +442,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_АвтовыдачаВыключенаНаМашине_ПрежнийОтказСПодсказкой()
     {
-        await SetFlagAsync(true);
         _bindRoots.SetAuto(false);
         var missing = Path.Combine(BindHome, "nope");
         var outside = PrivateDir(Path.Combine(BindHome, "existing"));
@@ -444,7 +460,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Создание_СтарыйАгентБезВыдачи_ПрежнийОтказСПодсказкойКоманды()
     {
-        await SetFlagAsync(true);
 
         // dev-exec возможность bind-folder не объявил; dev-bind-refused объявил, но канал отказал
         var r1 = await CreateLocalAsync("dev-exec", Outside);
@@ -462,7 +477,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_НетПапки_АгентСоздаётИРазрешает_200СУведомлением()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
         var path = Path.Combine(BindHome, "moved");
 
@@ -479,7 +493,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_ВнеКорней_АгентРазрешает_200()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
         var path = PrivateDir(Path.Combine(BindHome, "existing"));
 
@@ -509,7 +522,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task ОдинПутьНаСервереИУстройстве_ДваПроекта()
     {
-        await SetFlagAsync(true);
         var dir = MkDir();
 
         (await _client.PostAsJsonAsync("/api/projects", new { name = "S", rootPath = dir }))
@@ -521,7 +533,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_ПриЧатах_409()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
         (await _client.PostAsJsonAsync($"/api/projects/{id}/sessions", new { mode = "auto" })).EnsureSuccessStatusCode();
 
@@ -534,7 +545,6 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
     [Fact]
     public async Task Перепривязка_БезЧатов_200()
     {
-        await SetFlagAsync(true);
         var id = await CreateServerAsync();
 
         var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device",
@@ -542,16 +552,5 @@ public sealed class ProjectsControllerLocalProjectTests : IDisposable
 
         r.StatusCode.Should().Be(HttpStatusCode.OK);
         (await BodyAsync(r)).GetProperty("deviceId").GetString().Should().Be("dev-exec");
-    }
-
-    [Fact]
-    public async Task Перепривязка_БезФлага_400()
-    {
-        var id = await CreateServerAsync();
-
-        var r = await _client.PutAsJsonAsync($"/api/projects/{id}/device",
-            new { deviceId = "dev-exec", rootPath = DeviceDir() });
-
-        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 }

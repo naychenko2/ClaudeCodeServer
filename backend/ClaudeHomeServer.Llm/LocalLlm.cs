@@ -37,6 +37,46 @@ public interface ILocalLlmClient
         string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
         string? ownerId = null, string? label = null, CancellationToken ct = default);
 
+    // Те же вызовы, что ChatJsonAsync/GenerateTextAsync, но вместе с usage ответа движка.
+    // Нужны местам, которым важна фактическая НАГРУЗКА локали (ночной разбор вики и ступень 2
+    // отбора чатов), а не только текст. Usage = null — движок метрик не отдал (нет поля в
+    // ответе либо нераспознанный формат): вызов при этом успешен, потребитель прибавляет 0.
+    // Реализация по умолчанию оборачивает строковый метод без usage: фейки и потребители,
+    // которым метрик не нужен, ничего не переопределяют. Реализации, которые usage уже
+    // разбирают для RecordSpend (LlamaServerClient, OllamaClient), отдают его здесь же.
+    public async Task<(string? Text, UsageInfo? Usage)> ChatJsonDetailedAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        (await ChatJsonAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label), null);
+
+    public async Task<(string? Text, UsageInfo? Usage)> GenerateTextDetailedAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        (await GenerateTextAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct), null);
+
+    // Те же вызовы, но слот в общем счётчике допуска берётся С ОЖИДАНИЕМ в общей очереди (FIFO,
+    // с потолком ожидания), а не отказом при полной ёмкости. Нужен цепочкам БЕЗ облачной
+    // страховки (RunLocalOrChosen*: ночной разбор вики, ступень 2 отбора): у них нет следующего
+    // шага, и отказ по занятости был потерей работы, а не отступом на облако (WN-4).
+    // Отказ по занятости здесь — LocalEngineSlotRefusalException, а не (null, null): вызывающий
+    // обязан различать «движок занят» и «модель дала пустой ответ».
+    // Реализация по умолчанию — обычный вызов без ожидания: ждущий слот путь знают только
+    // клиенты под общим счётчиком (TrackedLocalLlmClient); прямые движки и тестовые фейки
+    // ничего не переопределяют.
+    public Task<(string? Text, UsageInfo? Usage)> ChatJsonAwaitingSlotAsync(
+        string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
+        string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
+        string? ownerId = null, string? label = null) =>
+        ChatJsonDetailedAsync(systemPrompt, userPrompt, jsonFormat, ct, model, timeoutMs,
+            numPredict, numCtx, ownerId, label);
+
+    public Task<(string? Text, UsageInfo? Usage)> GenerateTextAwaitingSlotAsync(
+        string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
+        string? ownerId = null, string? label = null, CancellationToken ct = default) =>
+        GenerateTextDetailedAsync(prompt, model, timeout, numPredict, numCtx, ownerId, label, ct);
+
     // Один разговорный ход голосового режима: полный messages[] → короткий ответ.
     // onDelta != null — потоковый режим: куски текста уходят вызывающему по границе
     // предложения через общий StreamSentenceBuffer (озвучка стартует, не дожидаясь
@@ -59,8 +99,12 @@ public interface ILocalLlmClient
 public sealed record ChatMsg(string Role, string Content);
 
 // Результат разговорного хода: текст ответа (null — пустой/сбойный вызов) и usage
-// для ResultMessage ленты. null usage — счётчики движок не отдал.
-public sealed record ChatTurnResult(string? Text, UsageInfo? Usage);
+// для ResultMessage ленты. null usage — счётчики движок не отдал. Busy — запрос в движок не
+// уходил: свободных слотов в общем счётчике допуска нет (не путать с отказом самого движка).
+public sealed record ChatTurnResult(string? Text, UsageInfo? Usage, bool Busy = false)
+{
+    public static ChatTurnResult EngineBusy { get; } = new(null, null, Busy: true);
+}
 
 // Транспортные настройки локального движка: общая точка чтения для обеих реализаций.
 // Приоритет: LocalLlm:{X} → Ollama:{X} → дефолт. Поля Ollama оставлены как фолбэк,
@@ -179,12 +223,15 @@ public sealed class StreamSentenceBuffer
     }
 }
 
-// Срезать из текста блок <think>…</think> целиком. Страховка для моделей в стиле qwen,
-// которые иногда всё равно выдают размышления, несмотря на enable_thinking:false.
+// Срезать из текста блок размышлений целиком. Страховка для моделей, которые выдают его
+// несмотря на enable_thinking:false: qwen — <think>…</think>; Gemma 4 при
+// reasoning_format:none кладёт в content пустой канал «<|channel>thought\n<channel|>»
+// (01.11.2026: маркер доезжал до заголовков чатов, коммитов и сводок).
 public static class ThinkingStripper
 {
     private static readonly System.Text.RegularExpressions.Regex Pattern =
-        new(@"<think>[\s\S]*?</think>\s*", System.Text.RegularExpressions.RegexOptions.Compiled);
+        new(@"(<think>[\s\S]*?</think>|<\|channel>[\s\S]*?<channel\|>)\s*",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
 
     public static string Strip(string text) =>
         string.IsNullOrEmpty(text) ? text : Pattern.Replace(text, "");

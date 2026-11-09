@@ -53,6 +53,22 @@ public enum FallbackErrorClass
     //     в Classify ниже) — кредиты могут пополнить в любой момент, TTL короткий (час).
     ModelNoAccess,
     ModelOutOfCredits,
+    // Процесс CLI убит сигналом ОС на нашей стороне (exit 137 / SIGKILL — systemd-oomd или
+    // oom-kill cgroup по нехватке памяти на машине). Сбой не в провайдере: соседняя пара пойдёт
+    // тем же процессом на той же машине, подмена только сжигает цепочку и уводит чат на чужую
+    // модель (инцидент 2026-10-10: три oom-kill подряд → MiniMax → opus → deepseek при живых
+    // провайдерах). Фолбэк не запускается, ход завершается честной ошибкой, модель не меняется.
+    // Маркер ставит ClaudeSession первым токеном Details (ProcessKilledMarker).
+    ProcessKilled,
+    // Файл аргумента CLI не найден на старте процесса (exit=1 до первого события): «--agents file
+    // not found», «Invalid MCP configuration: config file not found» и родственные «file not
+    // found». Локальная гонка: временный файл (per-run --agents / --mcp-config) пропал между
+    // записью и запуском. Сбой не в провайдере — соседняя пара пойдёт тем же процессом на той же
+    // машине и упрётся в тот же пропавший файл. Повтор той же пары (адаптер перезапускает CLI,
+    // тот пересобирает файлы) лечит; после одного повтора — честная ошибка хода (инцидент
+    // 2026-10-16: Opus → MiniMax-M3 без спроса, журнал ccs.service 06:37:51–53). Маркер ставит
+    // ClaudeSession в Details ErrorMessage (LocalFileMissingMarker) — как ProcessKilledMarker.
+    LocalFileMissing,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -118,6 +134,24 @@ public static class TurnErrorClassifier
     // токеном Details, когда раннер устройства отказал в запуске (офлайн, нет exec, харнес не готов)
     public const string DeviceRefusedMarker = "[Device:refused]";
 
+    // Маркер гибели процесса CLI от сигнала (exit 137): ClaudeSession ставит его первым токеном
+    // Details ошибки обрыва хода. Классификатор работает с СЫРЫМ текстом — по русской
+    // формулировке в Text гибель не опознать
+    public const string ProcessKilledMarker = "[Process:killed]";
+
+    // Маркер «остановлен сервером»: ClaudeSession ставит его первым токеном Details в ветке
+    // disposing ProcessDeathMessage (DisposeAsync: остановка сервера / реанимация / замена
+    // адаптера). Не oom-kill и не мёртвый эндпоинт: смена пары «модель × подписка» не лечит,
+    // поэтому класс None (фолбэк не запускается), а не Unreachable.
+    public const string ProcessStoppedByServerMarker = "[Process:stopped-by-server]";
+
+    // Маркер «файл аргумента CLI не найден»: ClaudeSession ставит его первым токеном Details,
+    // когда stderr запуска (exit=1 до первого события) несёт «file not found» — пропавший
+    // per-run файл --agents / --mcp-config. Локальная гонка, не мёртвый эндпоинт: смена пары
+    // не лечит, а повтор той же пары (CLI пересоберёт файлы) — лечит. Сырой stderr остаётся
+    // после маркера в Details, человек видит его в «Подробностях».
+    public const string LocalFileMissingMarker = "[Local:file-missing]";
+
     public static FallbackErrorClass Classify(TurnAttemptOutcome outcome)
     {
         // Остановка пользователем — не ошибка доставки
@@ -161,6 +195,31 @@ public static class TurnErrorClassifier
         // фолбэк лишь сжёг бы цепочку. Честная ошибка хода с текстом отказа
         if (outcome.ErrorText?.StartsWith(DeviceRefusedMarker, StringComparison.Ordinal) == true)
             return FallbackErrorClass.None;
+
+        // Процесс убит сигналом ОС (oom-kill) — тоже ДО ветки "без result → Unreachable":
+        // эндпоинт ни при чём, а смена пары не лечит нехватку памяти на нашей машине
+        if (outcome.ErrorText?.StartsWith(ProcessKilledMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.ProcessKilled;
+
+        // Процесс остановлен самим сервером (DisposeAsync: остановка/реанимация/замена адаптера)
+        // — тоже ДО ветки "без result → Unreachable": не oom-kill и не мёртвый эндпоинт, смена
+        // пары «модель × подписка» не лечит. Класс None: фолбэк не запускается, ход завершается
+        // честной ошибкой. Маркер ставит ClaudeSession первым токеном Details (ProcessDeathMessage).
+        if (outcome.ErrorText?.StartsWith(ProcessStoppedByServerMarker, StringComparison.Ordinal) == true)
+            return FallbackErrorClass.None;
+
+        // Файл аргумента CLI не найден на старте (exit=1 до первого события): локальная гонка
+        // per-run файла --agents / --mcp-config. Смена пары «модель × подписка» не лечит (тот же
+        // процесс на той же машине упрётся в тот же пропавший файл), а повтор той же пары (CLI
+        // пересоберёт файлы) — лечит. ДО ветки "без result → Unreachable": иначе пропавший файл
+        // маскировался бы под мёртвый эндпоинт и фолбэк жёл подписки (инцидент 2026-10-16).
+        // Маркер — основной канал (ClaudeSession ставит его, только когда ход не стартовал).
+        // Сырой «file not found» — запасной, но только при !HasResult: ответ провайдера (result
+        // есть) с HTML 5xx, содержащим «file not found», — это ProviderError/Unreachable, а не
+        // локальная гонка; без гейта по HasResult цитата в теле ответа ложно дала бы LocalFileMissing.
+        if (outcome.ErrorText?.StartsWith(LocalFileMissingMarker, StringComparison.Ordinal) == true
+            || (!outcome.HasResult && LooksLocalFileMissing(outcome.ErrorText)))
+            return FallbackErrorClass.LocalFileMissing;
 
         // Процесс умер без result — любой обрыв потока, включая посреди начатого ответа
         if (!outcome.HasResult) return FallbackErrorClass.Unreachable;
@@ -258,6 +317,10 @@ public static class TurnErrorClassifier
         // подсказки («нет доступа» — свойство тарифа; «нет кредитов» — пополнить кошелёк).
         FallbackErrorClass.ModelNoAccess => "model_no_access",
         FallbackErrorClass.ModelOutOfCredits => "model_out_of_credits",
+        FallbackErrorClass.ProcessKilled => "process_killed",
+        // Файл аргумента не найден: не идёт в ProviderSwitchedMessage (фолбэк не запускается),
+        // но имя полезно для лога/паспорта хода и для будущих подсказок.
+        FallbackErrorClass.LocalFileMissing => "local_file_missing",
         _ => null,
     };
 
@@ -403,12 +466,24 @@ public static class TurnErrorClassifier
         "gateway timeout",
     ];
 
+    // 5xx-код отдельным числом в тексте — но только с контекстом кода: «API Error: 529»,
+    // «status 503», «HTTP 500», «(503)», «Error 500:». Без контекста ловило «line 512»,
+    // «took 503 ms», «port 500» — и ошибка, которая должна была кончиться None (без фолбэка),
+    // уезжала в ProviderError и запускала цепочку (нарушение «None фолбэк не запускает»).
+    // Паритет с TurnFailureText.HttpServerErrorCode: 529 у Anthropic — та же перегрузка, и CLI
+    // отдаёт её в api_error_status=null, когда код есть только в тексте. Спрашивается только
+    // при ПУСТОМ статусе (ветка статусов решает по коду раньше), поэтому цитата 5xx в разборе
+    // инцидента при живом статусе сюда не доходит — тот же гейт, что у RateLimit (429 с
+    // квалификатором) и ContextOverflow (маркеры только при 400/413).
+    private static readonly System.Text.RegularExpressions.Regex ProviderErrorHttpCode =
+        new(@"(?i)(?:API Error:|status|HTTP|\(|Error )\s*(?<!\d)5\d{2}(?!\d)", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     private static bool LooksProviderError(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return false;
         foreach (var phrase in ProviderErrorPhrases)
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
-        return false;
+        return ProviderErrorHttpCode.IsMatch(value);
     }
 
     // Исчерпание локальных ресурсов ОС. Формулировки .NET для inotify («…user limit (N) on the
@@ -430,6 +505,14 @@ public static class TurnErrorClassifier
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
+
+    // Файл аргумента CLI не найден на старте процесса. Формулировки CLI: «Error: --agents file
+    // not found: /tmp/…», «Invalid MCP configuration: config file not found». Общий признак —
+    // «file not found» (case-insensitive): покрывает и --agents, и --mcp-config, и родственные
+    // «файл аргумента не найден». Узкий маркер (не голое «not found»/«missing»): в stderr запуска
+    // это ровно пропавший per-run файл, а не содержательный отказ провайдера.
+    private static bool LooksLocalFileMissing(string? value) =>
+        value is not null && value.Contains("file not found", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksUnreachable(string? value)
     {

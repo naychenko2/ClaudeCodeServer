@@ -228,6 +228,42 @@ public class TaskExecutionServiceStallTests : IDisposable
             .Should().Be(TaskExecutionService.ExecutorStallAction.None);
     }
 
+    // Расследование 88444536: переоткрытая через Update карточка не «мёртвая» — флаг доставки
+    // снят вместе со статусом, и после нового успешного хода к ней обычная ветка тишины.
+    // До правки первый же гард ClassifyStall возвращал None навсегда (карточка открыта,
+    // но не исполняется и не окликается).
+    [Fact]
+    public void ClassifyStall_ПереоткрытаяПослеДоставкиЗадача_СноваПодСторожем()
+    {
+        var task = _tasks.Create(null, "user-1", new CreateTaskRequest("Починить билд"));
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", Now.AddHours(-2));
+        _tasks.MarkClaudeResult(task.Id, "success");
+        // Флаг занимаем ДО перехода в Done: фон-доставка от TaskCompleted не должна
+        // разыграться с тестом (CAS уже занят — второй доставки не будет).
+        _tasks.TryMarkCompletionDelivered(task.Id).Should().BeTrue();
+        _tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+
+        // Оркестратор переоткрывает карточку для доработки — штатный путь через Update
+        _tasks.Update(task.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress));
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.CompletionDelivered.Should().BeFalse();
+
+        // Отказ ревью b6c2bca9 (major 1): пара запуска сбрасывается целиком — переоткрытая карточка
+        // не «ждёт результата идущего хода» (IsAwaitingResult), а честно «не запущена»
+        tracked.ClaudeStartedAt.Should().BeNull();
+        TaskExecutionService.IsAwaitingResult(tracked).Should().BeFalse();
+
+        // Новая попытка: обычный старт + успешный ход, задача не закрыта, чат молчит дольше порога
+        // → обычная ветка. До правки здесь хватало MarkClaudeResult без старта — он был живым
+        // только потому, что отметка запуска ошибочно не сбрасывалась.
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", Now.AddHours(-2));
+        _tasks.MarkClaudeResult(task.Id, "success");
+        tracked = _tasks.GetById(task.Id)!;
+        tracked.UpdatedAt = Now.AddHours(-1);
+        TaskExecutionService.ClassifyStall(tracked, null, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Alert);
+    }
+
     [Fact]
     public void ClassifyStall_ХодПровалился_НичегоНеДелаем()
     {
@@ -336,6 +372,24 @@ public class TaskExecutionServiceStallTests : IDisposable
             Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale);
 
         action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    // W4-HOLD-I (контракт §1 :179): задач удержанной фичи сторож не окликает и человека
+    // не зовёт — причина тишины сама пауза, а не брошенная работа. Мутация: убрать
+    // проверку featurePaused в ClassifyStall — оба абзаца краснеют.
+    [Fact]
+    public void ClassifyStall_ФичаНаПаузе_НиОкликаНиЗоваЧеловека()
+    {
+        var action = TaskExecutionService.ClassifyStall(StaleTask(),
+            Chat(SessionStatus.Active, Now.AddHours(-2)), Now, Stale, featurePaused: true);
+        action.Should().Be(TaskExecutionService.ExecutorStallAction.None,
+            "фича на паузе: исполнителя не окликаем");
+
+        // Второй шаг — зов человека — гасится тем же guard'ом
+        var alert = TaskExecutionService.ClassifyStall(StaleTask(nudgedAt: Now.AddMinutes(-20)),
+            Chat(SessionStatus.Active, Now.AddHours(-2)), Now, Stale, featurePaused: true);
+        alert.Should().Be(TaskExecutionService.ExecutorStallAction.None,
+            "фича на паузе: человека во время остановки не зовём");
     }
 
     // Тексты уведомления и подписи плашки разные — иначе координатор не отличит «ждёт»
@@ -466,6 +520,77 @@ public class TaskExecutionServiceStallTests : IDisposable
         var after = _tasks.GetById(task.Id)!;
         after.ExecutorNudgedAt.Should().BeNull();
         after.ExecutorStaleAlertedAt.Should().BeNull();
+    }
+
+    // W4-HOLD-I (контракт §1 :179): резолв паузы — на стороне вызывающего (CheckStalledExecutorAsync),
+    // предикат остаётся чистым. Шаг удержанной фичи, чей чат молчит больше порога, не получает
+    // ничего: ни оклика, ни уведомления. Мутация: убрать FeatureIsPaused в CheckStalledExecutorAsync
+    // — первый оклик краснеет.
+    [Fact]
+    public async Task CheckStalledExecutorAsync_HoldFeature_СтраховкаМолчит()
+    {
+        var user = _userStore.Add("stall-hold", "password123", "user");
+        var epic = _tasks.Create(null, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        _tasks.SetHold(epic.Id, "manual");
+        var created = _tasks.Create(null, user.Id, new CreateTaskRequest("Шаг удержанной фичи",
+            Role: "step", FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await _sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec");
+        StubProcess(chat);
+        chat.Status = SessionStatus.Active;
+        chat.UpdatedAt = Now - TimeSpan.FromMinutes(20);
+        _tasks.MarkClaudeStarted(created.Id, chat.Id, Now.AddHours(-2));
+        _tasks.MarkClaudeResult(created.Id, "success");
+
+        await _sut.CheckStalledExecutorAsync(_tasks.GetById(created.Id)!, Now);
+
+        var after = _tasks.GetById(created.Id)!;
+        after.ExecutorNudgedAt.Should().BeNull("задач удержанной фичи сторож не окликает");
+        after.ExecutorStaleAlertedAt.Should().BeNull();
+        Sent<UserMessageMessage>().Should().BeEmpty("оклика в чат исполнителя нет");
+        (await CountNotificationsAsync(user.Id)).Should().Be(0, "человека во время паузы не зовём");
+    }
+
+    // --- Ленивый резолв блокера (дефект 7f403c13) -----------------------------------
+    // Крючок OpenBlockerLookup читает history.json чата-постановщика целиком. До правки
+    // его звали для КАЖДОЙ незакрытой задачи на каждом тике (прод 2026-11-05: ~1100 загрузок
+    // раз в 30 с). Признак нужен только исходам Nudge/Alert — для остальных крючок не зовём.
+    // Мутация: вернуть безусловный вызов крючка — первый тест краснеет.
+
+    [Fact]
+    public async Task CheckStalledExecutorAsync_ЗадачаНеЗапускалась_КрючокБлокераНеЗовётся()
+    {
+        var calls = 0;
+        _sut.OpenBlockerLookup = _ => { calls++; return Task.FromResult(true); };
+        var todo = _tasks.Create(null, "user-1", new CreateTaskRequest("Ещё не начата"));
+        todo.Status.Should().Be(TaskItemStatus.Todo);
+        todo.ClaudeStartedAt.Should().BeNull();
+
+        await _sut.CheckStalledExecutorAsync(todo, Now);
+        // Исполнитель между ходами (тишина короче порога) — признак тоже не нужен
+        var (fresh, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(1));
+        await _sut.CheckStalledExecutorAsync(fresh, Now);
+
+        calls.Should().Be(0, "признак блокера не влияет на решение — историю постановщика не читаем");
+        Sent<UserMessageMessage>().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task CheckStalledExecutorAsync_ЗастрялСОткрытымБлокером_ЖдётОтветаКакРаньше()
+    {
+        var calls = 0;
+        _sut.OpenBlockerLookup = _ => { calls++; return Task.FromResult(true); };
+        // Чат молчит дольше порога — без блокера был бы Nudge, с блокером сразу зов человека
+        var (task, _) = await ArrangeExecutorChatAsync(silence: TimeSpan.FromMinutes(20));
+
+        await _sut.CheckStalledExecutorAsync(task, Now);
+
+        calls.Should().Be(1);
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorNudgedAt.Should().BeNull("при открытом блокере исполнителя не окликаем");
+        after.ExecutorStaleAlertedAt.Should().Be(Now);
+        var items = await _notifStore.GetListAsync(task.OwnerId!);
+        items.Should().ContainSingle().Which.Title.Should().Be("Исполнитель ждёт ответа по блокеру");
+        Sent<UserMessageMessage>().Should().BeEmpty("оклика в чат исполнителя нет");
     }
 
     // --- Закрытая задача без итога хода: доклад по одному сигналу D --------------

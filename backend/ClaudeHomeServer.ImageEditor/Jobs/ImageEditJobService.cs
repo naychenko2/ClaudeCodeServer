@@ -1,9 +1,12 @@
+using ClaudeHomeServer.Services.Media;
 using System.Collections.Concurrent;
+using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
+using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Spend;
 
 namespace ClaudeHomeServer.Services.ImageEditor;
@@ -48,6 +51,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     private readonly ConcurrentDictionary<string, Job> _jobs = new();
     private readonly CancellationTokenSource _shutdown = new();
     private readonly Lock _startLock = new();
+    private readonly ISessionDirectory? _sessions;
 
     public ImageEditJobService(
         IEnumerable<IImageEditor> editors,
@@ -56,8 +60,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ISpendCollector? spend = null,
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
-        IImageRaster? raster = null)
+        IImageRaster? raster = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
         _spend = spend;
@@ -77,10 +83,16 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // последнего варианта приходит раньше Finished. Сбой слушателя задачу не роняет
     public event Func<string, ImageEditJobDto, Task>? VariantReady;
 
+    // Фото персонажа выбраны для задачи (подбор идёт в ней, после ответа «запустить»): слушатель —
+    // нити картинок, выбор ложится в запись запуска. Сбой слушателя задачу не роняет
+    public event Func<string, ImageEditJobDto, ImageThreadCharacter, Task>? CharacterPicked;
+
     private sealed record Quote(
         string Id, string OwnerId, string ProjectId, string Provider, ImageEditModelInfo Model,
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
-        long? ContextRevision = null);
+        long? ContextRevision = null, ResolvedFormat? Format = null,
+        // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка
+        int? FacePasses = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -107,8 +119,14 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? Run { get; set; }
         public int? Runs { get; set; }
         public int? EtaSeconds { get; set; }
+        // Снимок очереди GPU ComfyUI (шаг 28): живой, обновляется каждым отчётом прогресса
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
+        // Итоги проходов подстановки (ADR-028, §9): статус и сходство каждого лица; пусто — не цепочка
+        public List<FacePassChain.FacePassResult> FaceResults { get; } = [];
+        // Сходство лица по номеру варианта; записи нет, если драйвер его не посчитал
+        public Dictionary<int, double> Similarities { get; } = [];
         public EditCost? Cost { get; set; }
         public EditOutcome? Outcome { get; set; }
         public bool? Charged { get; set; }
@@ -138,6 +156,21 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable,
                 ImageEditCatalog.UnavailableError(_editors, request.Provider));
 
+        // Правила подстановки на лицо (ADR-028, этап 3): лимит лиц, повторы номеров и персонажей.
+        // Котировка и запуск зовут одну и ту же чистую функцию; отказ — invalid_request
+        if (request.FaceTarget is { } faceTarget)
+        {
+            var rules = Faces.FaceTargetRules.Validate(faceTarget);
+            if (!rules.Ok)
+                return Fail<ImageEditQuoteDto>(rules.ErrorCode!, rules.Error!);
+        }
+
+        // Подстановка на лицо (ADR-028, этап 3): признаки для оценки — на сервере из числа проходов
+        // (холст + одно фото персонажа на проход, маска картинкой не идёт); присланные клиентом
+        // References/HasMask/HasCharacter игнорируются, чтобы REST и MCP дали одно время
+        if (request.FaceTarget is not null)
+            request = request with { References = 0, HasMask = false, HasCharacter = true, HasAnnotations = false };
+
         var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
         var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
@@ -153,6 +186,12 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.InvalidRequest,
                 $"Модель {model.Label}: вариантов от 1 до {model.Caps.MaxCount}");
 
+        // Формат запуска: желание → действующий формат под модель; он же учитывается в цене и уходит в драйвер
+        var format = ImageFormatPlan.For(op, model.Caps.Format, request.Format);
+        request = request with { Resolved = format };
+        if (ImageFormatPlan.TargetSize(format) is { } target && request.Width is null)
+            request = request with { Width = target.Width, Height = target.Height };
+
         ImageEditEstimateDto estimate;
         try
         {
@@ -165,9 +204,19 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.ProviderUnavailable, ex.Message);
         }
 
-        var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, request.Count,
+        // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; обычная правка — null.
+        // При N > 1 вариантов ровно 1 (котировка сама ставит Count = 1), ETA = N × ETA одной правки.
+        var facePasses = request.FaceTarget?.Faces.Count;
+        var count = request.Count;
+        if (facePasses is { } n && n > 1)
+        {
+            count = 1;
+            estimate = estimate with { EtaSeconds = estimate.EtaSeconds is { } eta ? eta * n : null };
+        }
+
+        var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, count,
             estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
-            request.ContextRevision);
+            request.ContextRevision, format, facePasses);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
@@ -175,8 +224,22 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
     public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
         _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
-            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision)
+            ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses,
+                ImageEditCatalog.WithInputLimits(q.Model).Caps)
             : null;
+
+    // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше
+    // формата из префов, который подставила котировка: без флага «Формат» сохранённая ✦ агента не вправе
+    // перебивать видимый выбор. Ступень остаётся от котировки; пропорции пересчитывает резолвер под модель
+    private static ResolvedFormat? ExplicitAspectOver(Quote quote, string? explicitAspect)
+    {
+        if (quote.Op != ImageEditOp.Generate || explicitAspect is null || quote.Format is not { } format
+            || format.Aspect == explicitAspect || !AspectCrop.TryParse(explicitAspect, out _))
+            return quote.Format;
+        var wish = new MediaFormat(FormatModes.Aspect, explicitAspect, format.Tier, null, null,
+            ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow);
+        return ImageFormatPlan.For(quote.Op, quote.Model.Caps.Format, wish) ?? quote.Format;
+    }
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
@@ -188,31 +251,48 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
                 "Котировка устарела — цена пересчитается автоматически");
 
+        // Сверка числа проходов (ADR-028, этап 3): число лиц при запуске ≠ N котировки —
+        // отказ, но котировка НЕ расходуется (остаётся в хранилище, клиент пересчитает ту же).
+        // Порядок «сначала сверить N, потом удалять» — до _quotes.TryRemove ниже.
+        // Почему две сверки: StartAsync зовут не только через сборщик, его сверка — защита в глубину
+        var launchPasses = input.FacePasses?.Count ?? (input.FaceTarget is null ? 0 : 1);
+        if (launchPasses != (quote.FacePasses ?? 0))
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.QuoteNotFound,
+                "Котировка посчитана на другое число лиц — цена пересчитается автоматически");
+        // Подбор фото персонажа (CharacterPicker) рассчитан на один запрос, у проходов цепочки его
+        // нет (ADR-028 §5). Сборщик их не смешивает; это защита в глубину для вызовов мимо него —
+        // отказ до подготовки запросов и до траты котировки
+        if (input.CharacterPicker is not null && (input.FacePasses?.Count ?? 0) > 1)
+            return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.InvalidRequest,
+                "Подбор фото несовместим с подстановкой на несколько лиц");
+
         // Ровно поставщик котировки: пропал — отказ, а не сосед
         var editor = ImageEditCatalog.FindAvailable(_editors, quote.Provider);
         if (editor is null)
             return Fail<ImageEditJobCreatedDto>(ImageEditErrorCodes.ProviderUnavailable,
                 $"Поставщик «{quote.Provider}» больше недоступен");
 
-        // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
+        // Запрос к драйверу: N = 1 — один; цепочка (ADR-028, этап 3) — по запросу на проход, каждый
+        // тем же путём (ужатие + Compose) от базового входа с полями прохода (ForPass). Все готовятся
+        // до постановки в очередь и до траты котировки: отказ любого прохода котировку не расходует.
+        // Размер возврата — по базовому исходнику, он у всех проходов один (берётся у первого)
+        var format = ExplicitAspectOver(quote, input.AspectRatio);
+        var passInputs = input.FacePasses is { Count: > 1 } facePasses
+            ? facePasses.Select(input.ForPass).ToList()
+            : [input];
+        var requests = new List<ImageEditRequest>(passInputs.Count);
         (int Width, int Height)? matchSize = null;
-        if (_fitter is not null)
+        foreach (var passInput in passInputs)
         {
-            var fitted = await _fitter.FitAsync(input, ImageEditCatalog.WithInputLimits(quote.Model).Caps, ct);
-            if (fitted.Value is not { } fit)
-                return Fail<ImageEditJobCreatedDto>(fitted.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
-                    fitted.Error ?? "Картинку не удалось подготовить");
-            input = fit.Input;
-            // «Дорисовать за края» и «Улучшить качество» меняют размер по смыслу — возврата нет
-            if (input.MatchSourceSize && quote.Op is not (ImageEditOp.Outpaint or ImageEditOp.Upscale)
-                && fit.SourceWidth is { } w && fit.SourceHeight is { } h)
-                matchSize = (w, h);
+            var prepared = await PrepareAsync(passInput, quote, format, ct);
+            if (prepared.Value is not { } p)
+                return Fail<ImageEditJobCreatedDto>(prepared.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
+                    passInput.FaceTarget is { } face && passInputs.Count > 1
+                        ? $"Лицо {face.N}: {prepared.Error ?? "Неверный запрос"}"
+                        : prepared.Error ?? "Неверный запрос");
+            if (requests.Count == 0) matchSize = p.MatchSize;
+            requests.Add(p.Request);
         }
-
-        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count, input.AspectRatio);
-        if (composed.Value is not { } request)
-            return Fail<ImageEditJobCreatedDto>(composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest,
-                composed.Error ?? "Неверный запрос");
 
         Job job;
         lock (_startLock)
@@ -236,20 +316,74 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Initiator = input.Initiator,
             };
             _jobs[job.Id] = job;
-            job.Completion = Task.Run(() => RunAsync(job, editor, request));
+            job.Completion = Task.Run(() => RunAsync(job, editor, requests, input.CharacterPicker, input.FacePasses));
         }
 
         _workspace.Sweep(Now());
         return ImageEditCallResult<ImageEditJobCreatedDto>.Ok(new ImageEditJobCreatedDto(job.Id));
     }
 
-    private async Task RunAsync(Job job, IImageEditor editor, ImageEditRequest request)
+    // Ужатие под лимиты модели и сборка запроса (Compose) — один путь для одиночного запуска и для
+    // каждого прохода цепочки. MatchSize — размер исходника до ужатия, куда вернуть результат
+    private sealed record PreparedRequest(ImageEditRequest Request, (int Width, int Height)? MatchSize);
+
+    private async Task<ImageEditCallResult<PreparedRequest>> PrepareAsync(
+        ImageEditJobInput input, Quote quote, ResolvedFormat? format, CancellationToken ct)
     {
+        // Ужатие до Compose: сверка размеров маски и исходника идёт уже по ужатым
+        (int Width, int Height)? matchSize = null;
+        if (_fitter is not null)
+        {
+            var fitted = await _fitter.FitAsync(input, ImageEditCatalog.WithInputLimits(quote.Model).Caps, ct);
+            if (fitted.Value is not { } fit)
+                return ImageEditCallResult<PreparedRequest>.Fail(
+                    fitted.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, fitted.Error ?? "Картинку не удалось подготовить");
+            input = fit.Input;
+            // «Дорисовать за края» и «Улучшить качество» меняют размер по смыслу — возврата нет
+            if (input.MatchSourceSize && quote.Op is not (ImageEditOp.Outpaint or ImageEditOp.Upscale)
+                && fit.SourceWidth is { } w && fit.SourceHeight is { } h)
+                matchSize = (w, h);
+        }
+
+        var composed = EditRequestComposer.Compose(input, quote.Op, quote.Model, quote.Count,
+            format?.Aspect ?? input.AspectRatio, format);
+        if (composed.Value is not { } request)
+            return ImageEditCallResult<PreparedRequest>.Fail(
+                composed.ErrorCode ?? ImageEditErrorCodes.InvalidRequest, composed.Error ?? "Неверный запрос");
+        return ImageEditCallResult<PreparedRequest>.Ok(new PreparedRequest(request, matchSize));
+    }
+
+    // requests — один запрос (N = 1 и обычная правка) или по запросу на проход цепочки (N > 1)
+    private async Task RunAsync(Job job, IImageEditor editor, IReadOnlyList<ImageEditRequest> requests,
+        Func<int, CancellationToken, Task<CharacterPickOutcome>>? picker,
+        IReadOnlyList<FacePass>? facePasses)
+    {
+        // Метка происхождения прогона (шаг 28): владелец, чат и тяжёлый ли — из задачи;
+        // вид=картинка и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут.
+        // Связь с источником (шаг 2): проект и job_id задачи — для LocalJobOrigin
+        requests = requests
+            .Select(r => r with { OwnerId = job.OwnerId, SessionId = job.ChatSessionId, Heavy = HeavyOf(job),
+                ProjectId = job.ProjectId, SourceJobId = job.Id })
+            .ToList();
+        var request = requests[0];
         ImageEditResult result;
         var cancelled = false;
         try
         {
-            result = await editor.RunAsync(request, new JobProgress(this, job), job.Cts.Token);
+            if (picker is not null) request = await PickCharacterAsync(job, request, picker);
+            if (facePasses is { Count: > 1 })
+            {
+                // Цепочка проходов (ADR-028, этап 3): исходник каждого прохода — выход предыдущего,
+                // N = 1 идёт прежним путём (поведение этапа 2 не меняется)
+                result = await FacePassChain.RunAsync(editor, facePasses, requests,
+                    new JobProgress(this, job), job.Cts.Token,
+                    r => { lock (job.Gate) job.FaceResults.Add(r); },
+                    PassSourcePreparer(job));
+            }
+            else
+            {
+                result = await editor.RunAsync(request, new JobProgress(this, job), job.Cts.Token);
+            }
         }
         catch (OperationCanceledException) when (job.Cts.IsCancellationRequested)
         {
@@ -268,9 +402,26 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (job.Gate) pipeline = job.Pipeline;
         await pipeline;
 
+        // Частичный результат (ADR-028, В1): цепочка отпустила версию (выход прохода 1) — задача
+        // не падает, даже если последний проход упал или отмена пришла после него
+        bool hasVersion;
+        lock (job.Gate) hasVersion = job.Variants.Count > 0;
+
         try
         {
-            if (!cancelled && result.Outcome == EditOutcome.Ok && result.Images.Count > 0)
+            if (hasVersion && facePasses is { Count: > 1 })
+            {
+                // Упал последний проход (версия из предыдущего уже в задаче): Completed + Outcome=Ok,
+                // текст ошибки — в Error. Отмена после прохода 1: Cancelled, версия остаётся
+                if (cancelled)
+                    await CancelPartialAsync(job, result);
+                else
+                {
+                    lock (job.Gate) job.Error = result.Error;
+                    await CompleteAsync(job, result with { Outcome = EditOutcome.Ok });
+                }
+            }
+            else if (!cancelled && result.Outcome == EditOutcome.Ok && result.Images.Count > 0)
                 await CompleteAsync(job, result);
             else
                 await FailAsync(job, editor, cancelled ? result with { Outcome = EditOutcome.Cancelled } : result);
@@ -287,6 +438,78 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             await NotifyFinishedAsync(job);
         }
     }
+
+    // Подготовка исходника прохода k+1 (ADR-028, Ш3): выход прохода k — полноразмерный файл модели,
+    // ужимается по весу под потолок холста (MaxCanvasMb ?? MaxInputMb), размер тот же (кроп и маска
+    // прохода — в пикселях базовой версии): lossless-выход прохода k сам становится img1, и склейка
+    // в графе остаётся единственной точкой шва. Без растра (тесты) — тождественно
+    private Func<ImageBytes, CancellationToken, Task<ImageEditCallResult<ImageBytes>>> PassSourcePreparer(Job job)
+    {
+        if (_fitter is not { } fitter)
+            return (source, _) => Task.FromResult(ImageEditCallResult<ImageBytes>.Ok(source));
+        var caps = ImageEditCatalog.WithInputLimits(job.Quote.Model).Caps;
+        return (source, ct) => fitter.FitWeightAsync(source, caps, ct);
+    }
+
+    // Подбор фото персонажа под сюжет: любой сбой оставляет запрос как есть (порядок «главное, затем
+    // манифест»), отмена пробрасывается. Новые фото ужимаются под лимиты модели, как и прежние
+    private async Task<ImageEditRequest> PickCharacterAsync(Job job, ImageEditRequest request,
+        Func<int, CancellationToken, Task<CharacterPickOutcome>> picker)
+    {
+        CharacterPickOutcome outcome;
+        try
+        {
+            outcome = await picker(ConfidentScore(job.Quote.Model), job.Cts.Token);
+        }
+        catch (OperationCanceledException) when (job.Cts.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Редактор картинок: подбор фото персонажа для задачи {JobId} не удался", job.Id);
+            return request;
+        }
+
+        if (CharacterPicked is { } handlers)
+        {
+            var dto = ToDto(job);
+            // Запись отражает, что драйвер реально получил: Compose уже ужалил ссылки персонажа
+            // под лимит модели (локальная — 1), а подбор подменяет только эти позиции. Обрезаем
+            // список до числа реально отправленных фото — иначе блок «Фото персонажа» покажет
+            // фото, которые модель не видела
+            var sent = request.References.Count(r => r.Role == ReferenceRole.Character);
+            var launch = outcome.Launch;
+            if (launch.Photos.Count > sent)
+                launch = launch with { Photos = launch.Photos.Take(sent).ToList() };
+            foreach (var listener in handlers.GetInvocationList().Cast<Func<string, ImageEditJobDto, ImageThreadCharacter, Task>>())
+            {
+                try { await listener(job.OwnerId, dto, launch); }
+                catch (Exception ex) { _log.LogWarning(ex, "Редактор картинок: слушатель подбора задачи {JobId} упал", job.Id); }
+            }
+        }
+        if (outcome.Photos is not { Count: > 0 } picked) return request;
+
+        if (_fitter is not null)
+        {
+            var fitted = await _fitter.FitAsync(
+                new ImageEditJobInput("", "", null, null, null, null, picked, null),
+                ImageEditCatalog.WithInputLimits(job.Quote.Model).Caps, job.Cts.Token);
+            if (fitted.Value is not { } fit) return request;
+            picked = fit.Input.References;
+        }
+
+        // Фото персонажа в запросе стоят подряд-или-нет, но по порядку: меняем их по месту,
+        // число и позиции остаются прежними — текст ролей в промпте не расходится с картинками
+        var index = 0;
+        var references = request.References
+            .Select(r => r.Role == ReferenceRole.Character && index < picked.Count ? picked[index++] : r)
+            .ToList();
+        return request with { References = references };
+    }
+
+    // Порог уверенности ракурса (ADR-027 §7): только local (MaxCharacterPhotos=1) подменяет
+    // главное фото на профильное при точном совпадении; у облака (null или иное) первым
+    // остаётся главное, как до подбора
+    private static int ConfidentScore(ImageEditModelInfo model) =>
+        model.Caps.MaxCharacterPhotos == 1 ? CharacterPhotoPicker.LocalConfidentScore : int.MaxValue;
 
     private Task NotifyFinishedAsync(Job job) => NotifyAsync(Finished, job, "завершения");
 
@@ -337,6 +560,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 lock (job.Gate)
                 {
                     job.Variants.Add(n);
+                    if (ready[i].Similarity is { } similarity) job.Similarities[n] = similarity;
                     if (mismatch) job.SizeNote = ImageEditSizeNotes.AspectMismatch;
                 }
             }
@@ -367,6 +591,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         lock (job.Gate)
         {
             job.Variants.AddRange(tail);
+            foreach (var n in tail)
+                if (result.Images[n - 1].Similarity is { } similarity) job.Similarities[n] = similarity;
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
@@ -375,7 +601,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             sizeNote = job.SizeNote;
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId, new ImageEditCompletedMessage(job.Id, job.ProjectId, [.. job.Variants], cost,
             job.ChatSessionId, job.Initiator, sizeNote, job.ThreadId));
     }
 
@@ -407,8 +633,38 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Cost = new EditCost(amount, editor.PriceUnit);
         }
         await NotifyFinishedAsync(job);
-        await Broadcast(job.OwnerId,
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
             new ImageEditFailedMessage(job.Id, job.ProjectId, result.Outcome, charged, result.Error, retry,
+                job.ChatSessionId, job.Initiator, job.ThreadId));
+    }
+
+    // Отмена после прохода 1 (ADR-028, В1): задача Cancelled, но версия (выход прохода 1) остаётся.
+    // Повторяет правило «отмена оставляет готовое»: запуск cancelled с версией. Событие —
+    // ImageEditFailedMessage(Outcome=Cancelled), как у обычной отмены; RetryQuote не строится
+    private async Task CancelPartialAsync(Job job, ImageEditResult result)
+    {
+        bool? charged;
+        bool written;
+        double? recorded;
+        lock (job.Gate)
+        {
+            charged = result.Charged ?? (job.Accepted ? null : false);
+            written = job.SpendWritten;
+            recorded = job.RecordedAmount;
+        }
+        if (charged == false && written)
+            WriteSpend(job, -recorded, -job.Quote.Count);
+
+        lock (job.Gate)
+        {
+            job.Status = ImageEditJobStatus.Cancelled;
+            job.Outcome = EditOutcome.Cancelled;
+            job.Charged = charged;
+            job.Error = result.Error;
+        }
+        await NotifyFinishedAsync(job);
+        await Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
+            new ImageEditFailedMessage(job.Id, job.ProjectId, EditOutcome.Cancelled, charged, result.Error, null,
                 job.ChatSessionId, job.Initiator, job.ThreadId));
     }
 
@@ -571,21 +827,22 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 job.Run = value.Run;
                 job.Runs = value.Runs;
                 job.EtaSeconds = value.EtaSeconds;
+                job.Gpu = value.Gpu;
                 elapsed = owner.RunElapsedSeconds(job);
             }
-            _ = owner.Broadcast(job.OwnerId,
+            _ = owner.Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
-                    elapsed));
+                    elapsed, value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {
@@ -606,7 +863,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;
 
     private ImageEditQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds);
+        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses);
 
     private ImageEditJobDto ToDto(Job j)
     {
@@ -614,8 +871,21 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             return new ImageEditJobDto(j.Id, j.ProjectId, j.Status, j.Quote.Provider, j.Quote.Model.Id,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.CreatedAt,
                 j.ChatSessionId, j.Initiator, j.BaseStepId, j.SizeNote, j.Quote.Count, j.Quote.Estimate, j.ThreadId,
-                j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j));
+                j.Run, j.Runs, j.EtaSeconds, RunElapsedSeconds(j),
+                // При N > 1 общего сходства нет (ADR-028 §11): N — плановое число лиц из котировки
+                // (Quote.FacePasses), а не состояние выполнения (FaceResults.Count) — иначе в окне между
+                // DeliverReady и onResult последнего прохода клиент видел бы «общее» сходство при N = 2.
+                // Сходство каждого лица — в FaceResults, «сходство варианта» не отдаём; N = 1 и обычная правка — как раньше
+                j.Quote.FacePasses is { } n && n > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
+                Op: ImageEditOpNames.OpName(j.Quote.Op),
+                FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
+                Gpu: j.Gpu);
     }
+
+    // Тяжёлый ли прогон (шаг 28): у локальных картинок прогоны короткие (секунды–десятки секунд),
+    // поэтому не «тяжёлые» в смысле очереди GPU — длинными там считаются видео. Метка едет в
+    // LocalJobOrigin и в снимок очереди (Busy); при появлении долгой операции — сюда
+    private static bool HeavyOf(Job job) => false;
 
     // Сколько идёт текущий прогон по часам бэкенда; вне Running — null. Звать под j.Gate
     private int? RunElapsedSeconds(Job j) =>

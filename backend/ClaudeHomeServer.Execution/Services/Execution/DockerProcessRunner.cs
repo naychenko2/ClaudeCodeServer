@@ -24,7 +24,35 @@ public sealed class DockerProcessRunner : IProcessLauncher
     public bool IsSandboxed => true;
     public bool TargetIsWindows => false;
     public IPathMapper Paths => _paths;
-    public string ClaudeCliCommand => "claude";
+    // Нативный CLI хоста из bind-mount'а (версию задаёт симлинк ~/.local/bin/claude), иначе
+    // npm-копия образа. Читаем на каждом обращении: автообновление хоста перекладывает симлинк.
+    public string ClaudeCliCommand
+    {
+        get
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var dir = SandboxManager.DefaultHostCliVersionsDir(_sandbox.Options);
+            if (dir is null) return "claude";
+            string? target = null;
+            try { target = new FileInfo(Path.Combine(home, ".local", "bin", "claude")).LinkTarget; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return ResolveClaudeCommand(dir, target);
+        }
+    }
+
+    // Чистый резолв: имя версии из цели симлинка хоста → путь в контейнере, если файл есть
+    // в каталоге версий; иначе "claude" (фолбэк на образ).
+    internal static string ResolveClaudeCommand(string? hostVersionsDir, string? linkTarget)
+    {
+        if (string.IsNullOrEmpty(hostVersionsDir) || string.IsNullOrEmpty(linkTarget)) return "claude";
+        var name = Path.GetFileName(linkTarget.TrimEnd('/', '\\'));
+        if (name.Length == 0 || !System.Text.RegularExpressions.Regex.IsMatch(name, @"^[A-Za-z0-9._-]+$"))
+            return "claude";
+        return File.Exists(Path.Combine(hostVersionsDir, name))
+            ? $"{SandboxManager.HostCliMount}/{name}"
+            : "claude";
+    }
     public string? McpApiUrlOverride => _sandbox.Options.McpApiUrl;
     public string HostTempDir
     {

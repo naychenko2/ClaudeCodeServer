@@ -1,0 +1,656 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Панель персонажа · финал (Г + шкала сходства) · макет</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет открывался без сервера.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R / SHADOW из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5; --c-accent-soft: #E8A990;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-focus-danger: 0 0 0 3px rgba(180, 69, 47, 0.14);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-modal: 0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --shadow-press: inset 0 1px 3px rgba(60, 50, 35, 0.12);
+    /* FS */ --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-h2: 22px;
+    /* SP */ --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    /* R  */ --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+    /* MODAL_W.confirm */ --modal-confirm: 380px;
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    /* Обвязка макета (не продукт) */
+    --doc-bg: #E9E4DA; --doc-card: #FBF8F2; --doc-line: #E0D7C8; --doc-text: #39332B; --doc-muted: #756B5E;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-on-dark: #FFFFFF;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C; --c-accent-soft: #9A5E48;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #453F37;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-focus-danger: 0 0 0 3px rgba(232, 120, 94, 0.26);
+    --shadow-island: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-modal: 0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --shadow-press: inset 0 1px 4px rgba(0, 0, 0, 0.38);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+    --doc-bg: #171411; --doc-card: #24201C; --doc-line: #3D3830; --doc-text: #EDE6DB; --doc-muted: #B3A897;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; padding: 16px 16px 60px; background: var(--doc-bg); color: var(--doc-text);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  svg.i { width: 16px; height: 16px; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.xs { width: 12px; height: 12px; } svg.i.lg { width: 20px; height: 20px; }
+
+  /* ── Обвязка макета (не продукт) ── */
+  .doc-wrap { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 24px; margin: 0 0 6px; line-height: 1.25; }
+  p.lead { color: var(--doc-muted); margin: 0 0 10px; max-width: 900px; line-height: 1.55; }
+  .nav-variants { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 8px; font-size: 12px; }
+  .nav-variants a { color: var(--doc-text); text-decoration: none; border: 1px solid var(--doc-line); border-radius: 10px; padding: 3px 9px; background: var(--doc-card); }
+  .nav-variants a[aria-current="page"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--doc-bg); padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+  @media (max-width: 700px) { .demo { position: static; } }
+  .demo .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--doc-muted); margin-right: 4px; min-width: 64px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--doc-line); background: var(--doc-card); border-radius: 10px; padding: 4px 9px; color: var(--doc-text); }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .layout { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .stage { display: flex; justify-content: center; min-width: 0; }
+  .dcard { background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 12px; padding: 10px 14px; line-height: 1.5; font-size: 12.5px; min-width: 0; margin-bottom: 12px; }
+  .dcard h3 { margin: 0 0 4px; font-size: 14px; }
+  .dcard ul { margin: 4px 0 0; padding-left: 18px; }
+  .dcard .muted { color: var(--doc-muted); }
+  .dcard code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .new-mark { display: inline-block; font-size: 10px; padding: 0 5px; border-radius: 6px; border: 1px dashed var(--c-info); color: var(--c-info); vertical-align: 1px; }
+
+  /* ── Панель (GenerationPanel, колонка) ── */
+  .panel { width: 380px; height: 700px; display: flex; flex-direction: column; background: var(--c-bg-panel);
+    border: 1px solid var(--c-border); border-radius: var(--r-xxl); box-shadow: var(--shadow-island); overflow: hidden; position: relative; }
+  .panel[data-w="m"] { width: 320px; height: 620px; border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); }
+  .panel[data-w="m"]::before { content: ''; display: block; width: 36px; height: 4px; border-radius: var(--r-max); background: var(--c-divider); margin: var(--sp-sm) auto 0; flex: 0 0 auto; }
+  .p-head { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-md) var(--sp-md) var(--sp-sm); color: var(--c-text-heading); font-weight: 600; font-size: var(--fs-md); flex: 0 0 auto; }
+  .p-head .sub { color: var(--c-text-muted); font-weight: 400; font-size: var(--fs-sm); }
+  .p-head .sp { flex: 1; }
+  .p-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+  .p-foot { flex: 0 0 auto; border-top: 1px solid var(--c-border); background: var(--c-bg-panel); padding: var(--sp-sm) var(--sp-md); display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; }
+  .pad { padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-md); min-width: 0; }
+
+  /* ── Кнопки (Button / IconButton) ── */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-xs); height: 32px; padding: 0 var(--sp-md);
+    border-radius: var(--r-md); border: 1px solid transparent; cursor: pointer; font-size: var(--fs-base); font-weight: 600; white-space: nowrap; background: none; color: var(--c-text-primary); }
+  .btn:focus-visible, .ibtn:focus-visible, .tab:focus-visible, .chip:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.primary { background: var(--c-accent); color: var(--c-on-accent); box-shadow: var(--shadow-button); }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.primary:active { box-shadow: var(--shadow-press); }
+  .btn.primary:disabled { background: var(--c-accent-soft); box-shadow: none; cursor: not-allowed; }
+  .btn.secondary { background: var(--c-bg-card); border-color: var(--c-border); }
+  .btn.secondary:hover, .btn.ghost:hover { background: var(--c-bg-selected); }
+  .btn.ghost { color: var(--c-text-secondary); }
+  .btn.ghostAccent { color: var(--c-accent); }
+  .btn.ghostAccent:hover { background: var(--c-accent-light); }
+  .btn.danger { background: var(--c-danger); color: var(--c-on-dark); }
+  .btn.dashed { border: 1px dashed var(--c-dashed); color: var(--c-text-secondary); background: transparent; }
+  .btn.dashed:hover { border-color: var(--c-accent); color: var(--c-accent); }
+  .btn.sm { height: 28px; padding: 0 var(--sp-sm); font-size: var(--fs-sm); }
+  .btn.lg { height: 40px; padding: 0 var(--sp-lg); font-size: var(--fs-md); }
+  .btn.block { width: 100%; }
+  .panel[data-w="m"] .btn { min-height: 40px; } /* touch: цель не меньше 40px */
+  .panel[data-w="m"] .btn.sm { min-height: 36px; }
+  .ibtn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-md); border: none; background: none; color: var(--c-text-secondary); cursor: pointer; flex: 0 0 auto; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .panel[data-w="m"] .ibtn { width: 40px; height: 40px; }
+
+  /* ── Бейджи, плашки, поля ── */
+  .badge { display: inline-flex; align-items: center; gap: var(--sp-xxs); font-size: var(--fs-xs); font-weight: 600; line-height: 1; padding: 3px var(--sp-sm); border-radius: var(--r-max); white-space: nowrap; }
+  .badge.neutral { background: var(--c-bg-inset); color: var(--c-text-secondary); }
+  .badge.accent { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.success { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.danger { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .notice { display: flex; gap: var(--sp-sm); align-items: flex-start; font-size: var(--fs-sm); line-height: 1.45; border-radius: var(--r-md); padding: var(--sp-sm) var(--sp-md); }
+  .notice.warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .notice.danger { background: var(--c-danger-bg); color: var(--c-danger-text); border: 1px solid var(--c-danger-border); }
+  .notice.success { background: var(--c-success-bg); color: var(--c-success-text); }
+  .notice.info { background: var(--c-info-bg); color: var(--c-text-primary); }
+  .notice svg { margin-top: 1px; }
+  .notice b { color: inherit; }
+  .field { display: flex; flex-direction: column; gap: var(--sp-xs); min-width: 0; }
+  .field > label, .flabel { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-secondary); }
+  .hint { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.45; }
+  .input { height: 32px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-white); padding: 0 var(--sp-sm); color: var(--c-text-primary); font-size: var(--fs-base); width: 100%; min-width: 0; }
+  textarea.input { height: auto; min-height: 56px; padding: var(--sp-xs) var(--sp-sm); resize: none; line-height: 1.45; }
+  .input:focus { outline: none; border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .panel[data-w="m"] .input { height: 40px; font-size: var(--fs-lg); } /* iOS не зумит поле от 16px */
+  .panel[data-w="m"] textarea.input { height: auto; }
+  .check { display: flex; gap: var(--sp-xs); align-items: center; font-size: var(--fs-sm); color: var(--c-text-primary); cursor: pointer; }
+  .check input { accent-color: var(--c-accent); width: 16px; height: 16px; margin: 0; }
+  .range { display: flex; align-items: center; gap: var(--sp-sm); }
+  .range input { flex: 1; min-width: 0; accent-color: var(--c-accent); }
+  .range span { font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 32px; text-align: right; }
+  .meta { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .muted { color: var(--c-text-muted); }
+  .sec-title { font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); display: flex; align-items: center; gap: var(--sp-xs); }
+  .divider { height: 1px; background: var(--c-divider); margin: 0; border: 0; }
+  .grow { flex: 1; min-width: 0; }
+  .row { display: flex; align-items: center; gap: var(--sp-sm); min-width: 0; }
+  .wrap { flex-wrap: wrap; }
+  .ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── ProgressBar ── */
+  .bar { height: 4px; border-radius: var(--r-max); background: var(--c-track); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--c-accent); border-radius: inherit; }
+
+  /* ── Фото-заглушки (содержимое, не UI) ── */
+  .ph { position: relative; display: block; aspect-ratio: 1; border-radius: var(--r-lg); border: 1px solid var(--c-border); overflow: hidden; color: var(--c-text-muted); }
+  .ph::after { content: ''; position: absolute; inset: 18% 22% 0; border-radius: 50% 50% 0 0;
+    background: radial-gradient(circle at 50% 28%, currentColor 0 22%, transparent 23%), radial-gradient(ellipse at 50% 100%, currentColor 0 48%, transparent 49%); opacity: .45; }
+  .ph.t1 { background: var(--c-accent-light); } .ph.t2 { background: var(--c-info-bg); } .ph.t3 { background: var(--c-success-bg); } .ph.t4 { background: var(--c-warning-bg); } .ph.t5 { background: var(--c-bg-inset); }
+  .ph .tag { position: absolute; left: var(--sp-xs); bottom: var(--sp-xs); z-index: 1; padding: 0 var(--sp-xs); font-size: var(--fs-xs); font-weight: 600; line-height: 1.4; background: var(--c-accent); color: var(--c-on-accent); border-radius: var(--r-sm); }
+  .ph.round { border-radius: var(--r-max); }
+  .photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: var(--sp-sm); }
+  .photos .add { aspect-ratio: 1; height: auto; flex-direction: column; gap: var(--sp-xxs); font-size: var(--fs-xs); padding: var(--sp-xs); }
+  .avatar { width: 44px; height: 44px; flex: 0 0 44px; }
+  .avatar.sm { width: 32px; height: 32px; flex-basis: 32px; }
+  .avatar.empty { display: inline-flex; align-items: center; justify-content: center; background: var(--c-bg-inset); border: 1px dashed var(--c-dashed); }
+  .avatar.empty::after { display: none; }
+
+  /* ── Карточка-поверхность ── */
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); min-width: 0; }
+  .card.accent { border-color: var(--c-accent-muted); background: var(--c-accent-light); }
+  .card.danger { border-color: var(--c-danger-border); background: var(--c-danger-bg); }
+  .card.success { border-color: transparent; background: var(--c-success-bg); }
+
+  /* ── Tabs (подчёркивание, ui/Tabs) ── */
+  .tabs { display: flex; gap: var(--sp-md); border-bottom: 1px solid var(--c-border); padding: 0 var(--sp-md); flex: 0 0 auto; overflow-x: auto; }
+  .tab { position: relative; border: none; background: none; padding: var(--sp-sm) 0; cursor: pointer; font-size: var(--fs-base); font-weight: 600; color: var(--c-text-muted); white-space: nowrap; display: inline-flex; align-items: center; gap: var(--sp-xs); }
+  .tab:hover { color: var(--c-text-primary); }
+  .tab[aria-selected="true"] { color: var(--c-text-heading); }
+  .tab[aria-selected="true"]::after { content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--c-accent); border-radius: 2px; }
+  .tab:disabled { color: var(--c-text-muted); opacity: .55; cursor: not-allowed; }
+  .tab .dot { width: 6px; height: 6px; border-radius: var(--r-max); background: var(--c-accent); }
+  .tab .dot.danger { background: var(--c-danger); }
+  .panel[data-w="m"] .tab { min-height: 40px; }
+
+  /* ── Раскрывашка ── */
+  details.more { border: 1px solid var(--c-border); border-radius: var(--r-md); min-width: 0; }
+  details.more > summary { list-style: none; display: flex; align-items: center; gap: var(--sp-xs); padding: var(--sp-sm) var(--sp-md); cursor: pointer; font-weight: 600; color: var(--c-text-heading); }
+  details.more > summary::-webkit-details-marker { display: none; }
+  details.more > summary .chev { transition: transform .15s; }
+  details.more[open] > summary .chev { transform: rotate(90deg); }
+  details.more > .in { padding: 0 var(--sp-md) var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-md); }
+  .panel[data-w="m"] details.more > summary { min-height: 44px; }
+
+  /* ── Строка-список (версии, меню) ── */
+  .list { display: flex; flex-direction: column; gap: var(--sp-xxs); }
+  .li { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm); border-radius: var(--r-md); min-width: 0; }
+  .li.btnlike { border: none; background: none; width: 100%; text-align: left; cursor: pointer; color: var(--c-text-primary); }
+  .li.btnlike:hover { background: var(--c-bg-selected); }
+  .li.on { background: var(--c-accent-light); }
+  .panel[data-w="m"] .li.btnlike { min-height: 44px; }
+
+  /* ── Шторка поверх панели и модалка ── */
+  .scrim { position: absolute; inset: 0; background: var(--c-overlay); z-index: 20; display: flex; align-items: flex-end; }
+  .scrim.center { align-items: center; justify-content: center; padding: var(--sp-md); }
+  .sheet { width: 100%; max-height: 88%; overflow-y: auto; background: var(--c-bg-card); border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-md); }
+  .sheet::before { content: ''; display: block; width: 36px; height: 4px; border-radius: var(--r-max); background: var(--c-divider); margin: 0 auto; flex: 0 0 auto; }
+  .modal { width: 100%; max-width: var(--modal-confirm); background: var(--c-bg-card); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); padding: var(--sp-lg); display: flex; flex-direction: column; gap: var(--sp-md); }
+  .modal h4, .sheet h4 { margin: 0; font-size: var(--fs-lg); color: var(--c-text-heading); }
+  .modal p { margin: 0; font-size: var(--fs-base); line-height: 1.5; color: var(--c-text-primary); }
+  .actions { display: flex; justify-content: flex-end; gap: var(--sp-sm); flex-wrap: wrap; }
+  .menu { position: absolute; z-index: 15; min-width: 220px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown, 0 8px 28px rgba(0,0,0,.18)); padding: var(--sp-xs); }
+  .menu .li.btnlike.danger { color: var(--c-danger-text); }
+</style>
+<style>
+  /* ── Финальный вариант: Г + шкала сходства из Б ── */
+  .collage { display: grid; grid-template-columns: 2fr 1fr; gap: var(--sp-xs); }
+  .collage .side { display: grid; grid-template-rows: 1fr 1fr; gap: var(--sp-xs); }
+  .collage .ph { aspect-ratio: auto; height: 100%; min-height: 0; }
+  .collage .ph.main { aspect-ratio: 1; }
+  .collage .more-ph b { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; background: var(--c-media-scrim); color: var(--c-on-dark); font-size: var(--fs-md); border-radius: inherit; }
+  /* мобила: коллаж ниже, чтобы главная кнопка была в первом экране шторки */
+  .panel[data-w="m"] .collage { height: 168px; }
+  .panel[data-w="m"] .collage .ph.main { aspect-ratio: auto; height: 100%; }
+  .cname { font-family: 'PT Serif', Georgia, serif; font-size: var(--fs-h2); color: var(--c-text-heading); line-height: 1.2; overflow-wrap: anywhere; }
+  .say { font-size: var(--fs-md); line-height: 1.45; color: var(--c-text-primary); }
+  .say b { color: var(--c-text-heading); }
+  .chips { display: flex; gap: var(--sp-xs); flex-wrap: wrap; }
+  .chip { display: inline-flex; align-items: center; gap: var(--sp-xs); height: 28px; padding: 0 var(--sp-sm); border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); font-size: var(--fs-sm); cursor: pointer; }
+  .chip:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .chip:active { box-shadow: var(--shadow-press); }
+  .chip b { color: var(--c-text-primary); font-weight: 600; }
+  .chip .dot { width: 6px; height: 6px; border-radius: var(--r-max); background: var(--c-warning); }
+  .panel[data-w="m"] .chip { height: 36px; }
+  .runbox { border-radius: var(--r-lg); background: var(--c-accent-light); border: 1px solid var(--c-accent-muted); padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); }
+
+  /* Шкала «Насколько похож» — три ProgressBar (4px) */
+  .meter { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-xs); }
+  .meter > i { display: block; height: 4px; border-radius: var(--r-max); background: var(--c-track); overflow: hidden; }
+  .meter > i.on { background: var(--c-success); }
+  .meter > i.run { background: linear-gradient(90deg, var(--c-accent) 62%, var(--c-track) 62%); }
+  .meter > i.est { background: linear-gradient(90deg, var(--c-accent-soft) 8%, var(--c-track) 8%); }
+  .legend { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-xs); }
+  .legend span { display: flex; flex-direction: column; gap: var(--sp-xxs); font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.3; min-width: 0; }
+  .legend span b { font-weight: 600; color: var(--c-text-secondary); }
+  .legend span.done b { color: var(--c-success-text); }
+  .legend span.now b { color: var(--c-accent); }
+  .legend span.fail b { color: var(--c-danger-text); }
+
+  /* Шторки: десктоп — модалка по центру (Modal кита), мобила — нижняя шторка */
+  .panel[data-w="p"] .scrim.sw { align-items: center; justify-content: center; padding: var(--sp-md); }
+  .panel[data-w="p"] .scrim.sw .sheet { border-radius: var(--r-modal); box-shadow: var(--shadow-modal); max-height: 94%; }
+  .panel[data-w="p"] .scrim.sw .sheet::before { display: none; }
+  .sheet .sec { display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .sheet .sec + .sec { border-top: 1px solid var(--c-divider); padding-top: var(--sp-md); }
+  .sec-head { display: flex; align-items: baseline; gap: var(--sp-sm); }
+  .sec-head .cnt { margin-left: auto; font-size: var(--fs-sm); color: var(--c-text-secondary); white-space: nowrap; }
+
+  /* Фото лица с метками */
+  .fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: var(--sp-sm); }
+  .fitem { display: flex; flex-direction: column; gap: var(--sp-xxs); min-width: 0; border: none; background: none; padding: 0; cursor: pointer; text-align: left; color: inherit; }
+  .fitem .ph { width: 100%; }
+  .fitem[aria-pressed="true"] .ph { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .fitem:focus-visible { outline: none; } .fitem:focus-visible .ph { box-shadow: var(--shadow-focus); }
+  .flab { font-size: var(--fs-xs); color: var(--c-text-secondary); line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+  .flab.pending { color: var(--c-text-muted); font-style: italic; }
+  .flab.none { color: var(--c-text-muted); }
+  .flab.human { color: var(--c-text-primary); }
+  .ph .rm { position: absolute; top: var(--sp-xxs); right: var(--sp-xxs); z-index: 2; width: 20px; height: 20px; border-radius: var(--r-max); border: none; background: var(--c-media-scrim); color: var(--c-on-dark); display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+  .panel[data-w="m"] .ph .rm { width: 28px; height: 28px; }
+
+  /* Редактор меток (InlineSegmented + Select) */
+  .labed { border: 1px solid var(--c-accent-muted); background: var(--c-accent-light); border-radius: var(--r-lg); padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-md); padding: var(--sp-xxs); gap: var(--sp-xxs); max-width: 100%; }
+  .seg button { border: none; background: none; height: 26px; padding: 0 var(--sp-sm); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--c-text-secondary); cursor: pointer; white-space: nowrap; flex: 1 1 auto; }
+  .seg button:hover { color: var(--c-text-primary); }
+  .seg button[aria-pressed="true"] { background: var(--c-bg-card); color: var(--c-text-heading); font-weight: 600; box-shadow: var(--shadow-island); }
+  .seg button:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .panel[data-w="m"] .seg { display: flex; } .panel[data-w="m"] .seg button { height: 36px; padding: 0 var(--sp-xs); }
+  .src { font-size: var(--fs-xs); color: var(--c-text-muted); display: flex; align-items: center; gap: var(--sp-xs); }
+
+  /* Подпись LoRA: имя режется, дата видна всегда */
+  .lora { display: flex; align-items: baseline; gap: var(--sp-xs); min-width: 0; font-size: var(--fs-sm); }
+  .lora .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; color: var(--c-text-primary); font-weight: 600; }
+  .lora .d { flex: 0 0 auto; white-space: nowrap; color: var(--c-text-muted); }
+  .oq { border: 1px dashed var(--c-info); border-radius: var(--r-md); padding: var(--sp-sm); display: flex; flex-direction: column; gap: var(--sp-xs); }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <nav class="nav-variants"><a href="character-panel-a.html">А · Вкладки</a><a href="character-panel-b.html">Б · Путь</a><a href="character-panel-c.html">В · Раздел</a><a href="character-panel-d.html">Г · Одна кнопка</a><a href="character-panel-final.html" aria-current="page">Финал · Г + шкала</a><a href="character-panel-final-spec.md">Спецификация (.md)</a></nav>
+  <h1 class="doc">Панель персонажа · финал: «одна кнопка» и шкала сходства</h1>
+  <p class="lead">Основа — вариант Г: лицо, имя, одна фраза и одна главная кнопка. Из варианта Б взята шкала «Насколько похож» из трёх делений: узнаётся (3 фото лица) → можно обучать (20 фото для обучения) → заметно похож (обучен). Фото, версии и тонкая настройка открываются шторками. Метки фото (ракурс и эмоция) живут в шторке «Фото», на первом экране их нет.</p>
+  <div class="demo">
+    <div class="row"><span class="lbl">Состояние</span>
+      <button class="tbtn" data-k="state" data-v="new">1 · Новый</button>
+      <button class="tbtn" data-k="state" data-v="photos">2 · С фото, не обучен</button>
+      <button class="tbtn" data-k="state" data-v="training">3 · Идёт обучение</button>
+      <button class="tbtn" data-k="state" data-v="trained">4 · Обучен, 2 версии</button>
+      <button class="tbtn" data-k="state" data-v="error">5 · Ошибка</button>
+    </div>
+    <div class="row" id="subs"><span class="lbl">Вариант</span></div>
+    <div class="row"><span class="lbl">Тема</span>
+      <button class="tbtn" data-k="theme" data-v="light">Светлая</button><button class="tbtn" data-k="theme" data-v="dark">Тёмная</button>
+      <span class="lbl" style="margin-left:12px">Ширина</span>
+      <button class="tbtn" data-k="w" data-v="p">Десктоп · панель 380</button><button class="tbtn" data-k="w" data-v="m">Мобила · 320</button>
+      <span class="lbl" style="margin-left:12px">Флаг меток</span>
+      <button class="tbtn" data-k="flag" data-v="on">Включён</button><button class="tbtn" data-k="flag" data-v="off">Выключен</button>
+    </div>
+  </div>
+
+  <div class="layout">
+    <div class="stage">
+      <div class="panel" data-wframe>
+        <div class="p-head"><i data-i="contact"></i>Персонажи<span class="sub">3</span><span class="sp"></span><button class="ibtn" aria-label="Закрыть панель"><i data-i="x"></i></button></div>
+        <div class="p-body">
+          <div class="pad" style="gap: var(--sp-lg)">
+            <div class="row" style="position:relative">
+              <button class="btn ghost sm" style="padding-left:0"><i data-i="left"></i>Все персонажи</button><span class="grow"></span>
+              <button class="ibtn" aria-label="Ещё" title="Ещё" data-show="photos training trained error" data-open="m-menu"><i data-i="more"></i></button>
+              <div class="menu" id="m-menu" data-layer hidden style="right:0; top: 32px" role="menu">
+                <button class="li btnlike" data-open="s-profile"><i data-i="pencil"></i>Имя и описание</button>
+                <button class="li btnlike" data-open="s-photos"><i data-i="image"></i>Фото</button>
+                <button class="li btnlike" data-open="s-versions" data-show="trained"><i data-i="layers"></i>Версии</button>
+                <button class="li btnlike" data-open="s-expert"><i data-i="sliders"></i>Тонкая настройка</button>
+                <hr class="divider" style="margin: var(--sp-xs) 0">
+                <button class="li btnlike danger" data-open="m-delete"><i data-i="trash"></i>Удалить персонажа</button>
+              </div>
+            </div>
+
+            <!-- ════ 1 · Новый ════ -->
+            <div data-show="new" style="display:flex; flex-direction:column; gap: var(--sp-md)">
+              <span class="cname">Новый персонаж</span>
+              <button class="btn dashed block" data-ss="new:base" style="height: 160px; flex-direction: column; gap: var(--sp-xs); border-radius: var(--r-xl); white-space: normal"><i data-i="upload" class="lg"></i>Загрузите 3–10 фото лица<span class="meta">Первое станет главным. JPG, PNG или WebP</span></button>
+              <div data-ss="new:filling" class="photos"><span class="ph t1"><span class="tag">Основное</span></span><span class="ph t2"></span><button class="btn dashed add"><i data-i="upload"></i>Ещё фото</button></div>
+              <div data-ss="new:filling" class="hint">Для главного подойдёт фото анфас на уровне глаз, лицо крупно, ровный фон.</div>
+              <div class="field"><label for="nm">Имя</label><input id="nm" class="input" placeholder="Например, Аня" data-ss="new:base"><input class="input" value="Аня" data-ss="new:filling"></div>
+              <div class="notice warning"><i data-i="shield"></i><span data-fs="on">Фото лица уходят выбранному сервису рисования при каждой генерации, а при загрузке — ещё и модели, которая размечает ракурс и эмоцию. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия</span><span data-fs="off">Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия</span></div>
+              <label class="check"><input type="checkbox">Понимаю, у людей на фото есть согласие</label>
+              <button class="btn primary lg block" disabled>Создать персонажа</button>
+              <span class="meta" style="text-align:center" data-ss="new:base">Не хватает: имя, ещё 3 фото, галочка согласия</span>
+              <span class="meta" style="text-align:center" data-ss="new:filling">Не хватает: ещё 1 фото, галочка согласия</span>
+            </div>
+
+            <!-- ════ 2–5 · Персонаж ════ -->
+            <div data-show="photos training trained error" style="display:flex; flex-direction:column; gap: var(--sp-md)">
+              <div class="collage">
+                <span class="ph main t1"></span>
+                <div class="side"><span class="ph t2"></span><span class="ph t3 more-ph"><b>+3</b></span></div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap: var(--sp-xs)">
+                <span class="cname">Аня</span>
+                <span class="say" data-ss="photos:base">Узнаётся по фото. <b>Обучите</b> — и сходство на картинках станет заметно точнее.</span>
+                <span class="say" data-ss="photos:few">Узнаётся по фото. Чтобы обучить, нужно ещё <b>12 фото</b> для обучения.</span>
+                <span class="say" data-ss="training:base">Учится быть похожим. Можно закрыть панель — обучение идёт само.</span>
+                <span class="say" data-ss="training:queued">Ждёт своей очереди на видеокарте. Можно закрыть панель — обучение начнётся само.</span>
+                <span class="say" data-ss="trained:base trained:fresh"><span class="badge success" style="vertical-align:1px"><i data-i="check" class="xs"></i>Обучен</span> Заметно похож. Рисуется по версии «Для открыток».</span>
+                <span class="say" data-ss="trained:own"><span class="badge success" style="vertical-align:1px"><i data-i="check" class="xs"></i>Обучен</span> Рисуется по своей обученной версии:</span>
+                <span class="lora" data-ss="trained:own"><span class="n" title="anna_portrait_v3_final_retrain_long_name_october">anna_portrait_v3_final_retrain_long_name_october</span><span class="d">· 3 октября</span></span>
+                <span class="say" data-ss="error:base"><span class="badge danger" style="vertical-align:1px">Ошибка</span> Не получилось обучить. Ваши фото не потерялись — можно попробовать ещё раз.</span>
+                <span class="say" data-ss="error:rejected"><span class="badge danger" style="vertical-align:1px">Ошибка</span> Ни одно фото не подошло: на них не нашли лицо. Загрузите другие.</span>
+              </div>
+
+              <!-- Шкала «Насколько похож» -->
+              <div style="display:flex; flex-direction:column; gap: var(--sp-xs)" role="group" aria-label="Насколько похож">
+                <span class="flabel">Насколько похож</span>
+                <div class="meter" data-ss="photos:base error:base error:rejected"><i class="on"></i><i class="on"></i><i></i></div>
+                <div class="meter" data-ss="photos:few"><i class="on"></i><i></i><i></i></div>
+                <div class="meter" data-ss="training:base"><i class="on"></i><i class="on"></i><i class="run"></i></div>
+                <div class="meter" data-ss="training:queued"><i class="on"></i><i class="on"></i><i class="est"></i></div>
+                <div class="meter" data-show="trained"><i class="on"></i><i class="on"></i><i class="on"></i></div>
+                <div class="legend">
+                  <span class="done"><b>Узнаётся</b>5 фото лица</span>
+                  <span class="done" data-ss="photos:base training:base training:queued trained:base trained:fresh trained:own error:base error:rejected"><b>Можно обучать</b>23 фото для обучения</span>
+                  <span class="now" data-ss="photos:few"><b>Можно обучать</b>8 из 20 для обучения</span>
+                  <span data-ss="photos:base"><b>Заметно похож</b>после обучения</span>
+                  <span data-ss="photos:few"><b>Заметно похож</b>после обучения</span>
+                  <span class="now" data-ss="training:base"><b>Обучается · 62%</b>осталось ~45 мин</span>
+                  <span class="now" data-ss="training:queued"><b>В очереди</b>ждёт видеокарту</span>
+                  <span class="done" data-show="trained"><b>Заметно похож</b>обучен 3 октября</span>
+                  <span class="fail" data-show="error"><b>Не получилось</b>попробуйте снова</span>
+                </div>
+              </div>
+
+              <!-- Одна главная кнопка -->
+              <button class="btn primary lg block" data-ss="photos:base" data-open="m-confirm"><i data-i="sparkles"></i>Обучить персонажа</button>
+              <span class="meta" data-ss="photos:base" style="text-align:center; margin-top: calc(-1 * var(--sp-sm))">На видеокарте AI Home · около 2 часов</span>
+              <button class="btn primary lg block" data-ss="photos:few" data-open="s-photos" data-focus="train"><i data-i="upload"></i>Добавить фото для обучения</button>
+              <span class="meta" data-ss="photos:few" style="text-align:center; margin-top: calc(-1 * var(--sp-sm))">Нужно минимум 20 · сейчас 8</span>
+              <div class="runbox" data-show="training">
+                <div class="row"><span class="sec-title grow" data-ss="training:base">Обучаем персонажа · шаг 1240 из 2000</span><span class="sec-title grow" data-ss="training:queued">Ждёт своей очереди на видеокарте…</span></div>
+                <div class="row"><span class="hint grow" data-ss="training:base">Осталось примерно 45 мин</span><span class="hint grow" data-ss="training:queued">Идёт обучение, оно займёт около 2 ч.</span><button class="btn ghost sm" data-open="m-cancel">Отменить обучение</button></div>
+              </div>
+              <div class="notice info" data-ss="trained:fresh" style="flex-direction:column; gap: var(--sp-sm)">
+                <span><b>Новая версия готова.</b> Она пока не подключена — персонаж рисуется по прежней версии. Попробуйте новую и подключите, если она вам нравится.</span>
+                <div class="row wrap"><button class="btn secondary sm">Подключить</button><button class="btn ghost sm">Оставить прежнюю</button></div>
+              </div>
+              <button class="btn primary lg block" data-show="trained"><i data-i="plus"></i>В контекст чата</button>
+              <button class="btn primary lg block" data-ss="error:base" data-k="state" data-v="training"><i data-i="refresh"></i>Попробовать снова</button>
+              <button class="btn primary lg block" data-ss="error:rejected" data-open="s-photos" data-focus="train"><i data-i="upload"></i>Заменить фото для обучения</button>
+
+              <!-- Тихие чипы -->
+              <div class="chips">
+                <button class="chip" data-open="s-photos"><i data-i="image" class="xs"></i>Фото <b data-ss="photos:base training:base training:queued trained:base trained:fresh trained:own error:base error:rejected">28</b><b data-ss="photos:few">13</b><span class="dot" data-ss="photos:few error:rejected" title="Нужны фото для обучения"></span></button>
+                <button class="chip" data-open="s-versions" data-show="trained"><i data-i="layers" class="xs"></i>Версии <b data-ss="trained:base trained:own">2</b><b data-ss="trained:fresh">3</b></button>
+                <button class="chip" data-open="s-expert"><i data-i="sliders" class="xs"></i>Тонкая настройка</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ════ Шторка «Фото» ════ -->
+        <div class="scrim sw" id="s-photos" data-layer hidden><div class="sheet" role="dialog" aria-modal="true" aria-labelledby="s-photos-h">
+          <div class="row"><h4 class="grow" id="s-photos-h">Фото Ани</h4><button class="ibtn" data-close aria-label="Закрыть"><i data-i="x"></i></button></div>
+
+          <div class="sec">
+            <div class="sec-head"><span class="sec-title">Лицо для узнавания</span><span class="cnt">5 из 10</span></div>
+            <span class="hint">Сервис рисования получает эти фото с каждой картинкой. Первое — главное.<span data-fs="on"> Метки ракурса и эмоции помогают взять фото под сюжет — нажмите на фото, чтобы поправить.</span></span>
+            <div class="fgrid">
+              <button class="fitem" data-pick="0" aria-pressed="false"><span class="ph t1"><span class="tag">Основное</span></span><span class="flab" data-fs="on">Анфас · спокойное</span></button>
+              <button class="fitem" data-pick="1" aria-pressed="false"><span class="ph t2"></span><span class="flab" data-fs="on">Вполоборота · улыбка</span></button>
+              <button class="fitem" data-pick="2" aria-pressed="false"><span class="ph t3"></span><span class="flab human" data-fs="on">Профиль · серьёзное</span></button>
+              <button class="fitem" data-pick="3" aria-pressed="false"><span class="ph t4"></span><span class="flab pending" data-fs="on">Размечаем…</span></button>
+              <button class="fitem" data-pick="4" aria-pressed="false"><span class="ph t5"></span><span class="flab none" data-fs="on">Без меток</span></button>
+              <button class="btn dashed add" id="face-add" disabled style="aspect-ratio:1; height:auto; flex-direction:column; gap: var(--sp-xxs); font-size: var(--fs-xs); padding: var(--sp-xs)"><i data-i="upload"></i>Ещё фото</button>
+            </div>
+
+            <!-- Редактор меток выбранного фото -->
+            <div class="labed" id="labed" data-fs="on" hidden>
+              <div class="row"><span class="sec-title grow" id="labed-t">Фото 2</span><button class="ibtn" id="labed-x" aria-label="Закрыть метки"><i data-i="x"></i></button></div>
+              <div class="field"><span class="flabel">Ракурс</span><div class="seg" data-g="angle"><button aria-pressed="false">Анфас</button><button aria-pressed="true">Вполоборота</button><button aria-pressed="false">Профиль</button></div></div>
+              <div class="field"><span class="flabel">Наклон головы</span><div class="seg" data-g="pitch"><button aria-pressed="true">Прямо</button><button aria-pressed="false">Вверх</button><button aria-pressed="false">Вниз</button></div></div>
+              <div class="field"><span class="flabel">Эмоция</span><select class="input" id="emo" aria-label="Эмоция"><option>Спокойное</option><option selected>Улыбка</option><option>Смех</option><option>Серьёзное</option><option>Грустное</option><option>Удивлённое</option></select></div>
+              <span class="src" id="labed-src"><i data-i="sparkles" class="xs"></i>Разметила модель. Ошиблась — поправьте, ваша правка останется.</span>
+              <div class="row wrap"><button class="btn ghost sm" data-open="m-rmphoto"><i data-i="trash" class="xs"></i>Убрать фото</button></div>
+            </div>
+
+            <div class="notice warning"><i data-i="shield"></i><span data-fs="on">Фото лица уходят выбранному сервису рисования при каждой генерации, а при загрузке — ещё и модели, которая размечает ракурс и эмоцию. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия</span><span data-fs="off">Фото будут отправляться выбранному сервису рисования при каждой генерации. У Higgsfield они попадут в общий аккаунт администратора. Загружайте фото чужих людей только с их согласия</span></div>
+            <label class="check"><input type="checkbox" id="consent-sheet">Понимаю, у людей на фото есть согласие</label>
+          </div>
+
+          <div class="sec" id="sec-train">
+            <div class="sec-head"><span class="sec-title">Для обучения</span><span class="cnt" data-ss="photos:base training:base training:queued trained:base trained:fresh trained:own error:base error:rejected">23 из 50</span><span class="cnt" data-ss="photos:few">8 из 50</span></div>
+            <span class="hint">Нужны только для обучения на видеокарте AI Home — в сервисы рисования не уходят. 20–50 фото одного человека: лицо хорошо видно, разные ракурсы, свет и фон.</span>
+            <div class="photos"><span class="ph t2"></span><span class="ph t3"></span><span class="ph t1"></span><span class="ph t4"></span><span class="ph t5"></span><span class="ph t2"></span><span class="ph t3"></span><button class="btn dashed add"><i data-i="plus"></i>Добавить фото</button></div>
+            <span class="hint" style="color: var(--c-success-text)" data-ss="photos:base training:base training:queued trained:base trained:fresh trained:own error:base">Фото достаточно. Можно обучать.</span>
+            <span class="hint" style="color: var(--c-warning-text)" data-ss="photos:few">Нужно ещё 12 фото, чтобы начать.</span>
+            <span class="hint" style="color: var(--c-danger-text)" data-ss="error:rejected">Ни одно фото не подошло: на них не нашли лицо. Загрузите другие.</span>
+            <span class="hint" data-ss="trained:base trained:fresh trained:own">Фото изменились после обучения? Чтобы учесть их, обучите заново в «Версиях».</span>
+          </div>
+        </div></div>
+
+        <!-- ════ Шторка «Версии» ════ -->
+        <div class="scrim sw" id="s-versions" data-layer hidden><div class="sheet" role="dialog" aria-modal="true">
+          <div class="row"><h4 class="grow">Версии персонажа</h4><span class="meta" data-ss="trained:base trained:own">2 из 5</span><span class="meta" data-ss="trained:fresh">3 из 5</span><button class="ibtn" data-close aria-label="Закрыть"><i data-i="x"></i></button></div>
+          <div class="oq" data-ss="trained:own" style="border-style: solid; border-color: var(--c-border)"><span class="meta">Сейчас подключена своя обученная версия</span><span class="lora"><span class="n">anna_portrait_v3_final_retrain_long_name_october</span><span class="d">· 3 октября</span></span></div>
+          <div class="list">
+            <div class="li" data-ss="trained:fresh"><span style="width:16px"></span><div class="grow"><div class="ell">Обучено 10 октября, 25 фото</div><div class="meta">Готова к подключению</div></div><button class="btn secondary sm">Подключить</button></div>
+            <div class="li on" data-ss="trained:base trained:fresh"><i data-i="check"></i><div class="grow"><div class="ell" style="font-weight:600">Для открыток</div><div class="meta">Обучено 3 октября, 23 фото · подключена</div></div><button class="ibtn" aria-label="Действия с версией"><i data-i="more"></i></button></div>
+            <div class="li" data-ss="trained:own"><span style="width:16px"></span><div class="grow"><div class="ell">Для открыток</div><div class="meta">Обучено 3 октября, 23 фото</div></div><button class="btn secondary sm">Подключить</button></div>
+            <div class="li"><span style="width:16px"></span><div class="grow"><div class="ell">Обучено 28 сентября, 20 фото</div><div class="meta">Готова к подключению</div></div><button class="btn secondary sm">Подключить</button></div>
+          </div>
+          <button class="btn ghost sm" style="align-self:flex-start" data-open="m-confirm"><i data-i="refresh" class="xs"></i>Обучить заново</button>
+        </div></div>
+
+        <!-- ════ Шторка «Тонкая настройка» ════ -->
+        <div class="scrim sw" id="s-expert" data-layer hidden><div class="sheet" role="dialog" aria-modal="true">
+          <div class="row"><h4 class="grow">Тонкая настройка</h4><button class="ibtn" data-close aria-label="Закрыть"><i data-i="x"></i></button></div>
+          <div class="field"><label>Слово-метка</label><input class="input" value="anya_face"><span class="hint">Подставляется само. Только латиница, цифры и «_», от 3 до 24 символов.</span></div>
+          <div class="field"><label>Сила сходства</label><div class="range"><input type="range" min="0" max="2" step="0.05" value="0.8" aria-label="Сила сходства"><span>0,80</span></div><span class="hint">По умолчанию 0,8. Слишком большая сила искажает картинку.</span></div>
+          <div class="field"><label>Своя обученная версия</label>
+            <select class="input"><option>Не выбрана — по обучению AI Home</option><option selected>anna_portrait_v3_final_retrain_long_name_october · 3 октября</option><option>anya_v1 · 12 сентября</option></select>
+            <span class="lora" data-show="trained error photos training"><span class="n">anna_portrait_v3_final_retrain_long_name_october</span><span class="d">· 3 октября</span></span>
+            <span class="hint">Файл из ComfyUI. Если выбрана, персонаж рисуется по ней, а не по версиям обучения.</span>
+          </div>
+          <div class="oq"><span class="new-mark" style="align-self:flex-start">открытый вопрос</span><span class="flabel">Сервисы рисования</span><div class="row"><span class="grow">Higgsfield</span><span class="badge neutral">По фото</span></div><span class="hint">Заготовка под Soul ID. Пока его нет, строку не показываем.</span></div>
+          <div class="row meta"><i data-i="folder" class="xs"></i>Папка: characters/anya/</div>
+          <div class="actions"><button class="btn ghost" data-close>Отмена</button><button class="btn primary" data-close>Сохранить</button></div>
+        </div></div>
+
+        <!-- ════ Шторка «Имя и описание» ════ -->
+        <div class="scrim sw" id="s-profile" data-layer hidden><div class="sheet" role="dialog" aria-modal="true">
+          <div class="row"><h4 class="grow">Имя и описание</h4><button class="ibtn" data-close aria-label="Закрыть"><i data-i="x"></i></button></div>
+          <div class="field"><label>Имя</label><input class="input" value="Аня"></div>
+          <div class="field"><label>Описание</label><textarea class="input">девушка 25 лет, каре, веснушки</textarea><span class="hint">Уходит в запрос вместе с фото: возраст, причёска, приметы</span></div>
+          <div class="actions"><button class="btn ghost" data-close>Отмена</button><button class="btn primary" data-close>Сохранить</button></div>
+        </div></div>
+
+        <!-- ════ Подтверждения ════ -->
+        <div class="scrim center" id="m-confirm" data-layer hidden><div class="modal" role="dialog" aria-modal="true"><h4>Начать обучение?</h4>
+          <p>Видеокарта будет занята примерно <b>2 часа</b>. Всё это время новые картинки на локальной модели будут стоять в очереди и ждать. Отменить обучение можно в любой момент.</p>
+          <p data-show="trained" class="hint">Новая версия не включится сама — вы выберете, подключать ли её, когда обучение закончится.</p>
+          <div class="actions"><button class="btn ghost" data-close>Не сейчас</button><button class="btn primary" data-k="state" data-v="training">Начать обучение</button></div></div></div>
+        <div class="scrim center" id="m-cancel" data-layer hidden><div class="modal" role="dialog" aria-modal="true"><h4>Остановить обучение?</h4><p>Результат не сохранится.</p>
+          <div class="actions"><button class="btn ghost" data-close>Продолжить</button><button class="btn danger" data-k="state" data-v="photos">Остановить</button></div></div></div>
+        <div class="scrim center" id="m-rmphoto" data-layer hidden><div class="modal" role="dialog" aria-modal="true"><h4>Убрать фото?</h4><p>Фото удалится из папки персонажа. Если это главное, главным станет следующее.</p>
+          <div class="actions"><button class="btn ghost" data-close>Оставить</button><button class="btn danger" data-close>Убрать</button></div></div></div>
+        <div class="scrim center" id="m-delete" data-layer hidden><div class="modal" role="dialog" aria-modal="true"><h4>Удалить «Аня»?</h4><p>Папка characters/anya/ с фото удалится из проекта</p>
+          <div class="actions"><button class="btn ghost" data-close>Отмена</button><button class="btn danger" data-k="state" data-v="new">Удалить</button></div></div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="dcard"><h3>Первый экран</h3>
+        <ul><li>Коллаж лиц, имя, одна фраза о том, что с персонажем сейчас, шкала «Насколько похож» и <b>одна главная кнопка</b>: «Создать персонажа» → «Обучить персонажа» (или «Добавить фото для обучения», если их меньше 20) → ход обучения с «Отменить обучение» → «В контекст чата» / «Попробовать снова».</li>
+          <li>Шкала — <b>ступени, а не процент</b>: метрики сходства в продукте нет. Третье деление во время обучения показывает его ход.</li></ul></div>
+      <div class="dcard"><h3>Шторки</h3>
+        <ul><li>Чипы «Фото», «Версии», «Тонкая настройка» и меню «⋯». В продукте это <code>Modal</code> кита: на десктопе модалка по центру, на мобиле нижняя шторка. В макете они нарисованы внутри панели.</li>
+          <li>Каждая шторка сохраняет свою часть. Общей «Сохранить» на карточке нет.</li></ul></div>
+      <div class="dcard"><h3>Фото: два набора, разные задачи</h3>
+        <ul><li><b>Лицо для узнавания</b> (3–10) уходит в сервис рисования с каждой картинкой. Только у этих фото есть метки.</li>
+          <li><b>Для обучения</b> (20–50) нужны только видеокарте AI Home, наружу не уходят.</li>
+          <li>Общую папку из варианта Б сюда не закладываем: она меняет контракт обучения и будет отдельным вопросом.</li></ul></div>
+      <div class="dcard"><h3>Метки фото <span class="new-mark">за флагом character-smart-photos</span></h3>
+        <ul><li>Под каждым фото лица — подпись «Ракурс · эмоция». Варианты подписи: «Размечаем…» и «Без меток». Нажатие на фото открывает редактор: ракурс, наклон, эмоция. Ручная правка помечается и авторазметкой не перезаписывается.</li>
+          <li>При выключенном флаге подписей нет, а текст согласия старый (переключатель «Флаг меток» выше).</li></ul></div>
+      <div class="dcard"><h3>Подписи LoRA</h3>
+        <ul><li>Подпись — имя файла и дата, без пути. Длинное имя обрезается многоточием, дата остаётся видна всегда (вариант «Своя версия подключена» в состоянии 4).</li></ul></div>
+      <div class="dcard muted">Полная спецификация для фронта — <a href="character-panel-final-spec.md">character-panel-final-spec.md</a>.</div>
+    </div>
+  </div>
+</div>
+<script>window.DEFAULTS = { state: 'photos' };</script>
+<script>
+// ── Демо-обвязка макета (не продукт) ──
+const ICONS = {
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  upload: '<path d="M12 3v12M7 8l5-5 5 5M5 21h14"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  sparkles: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 3v4M17 5h4"/>',
+  contact: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="12" cy="10" r="3"/><path d="M7 20c.6-2.5 2.6-4 5-4s4.4 1.5 5 4"/>',
+  shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/><path d="M12 9v3M12 15h.01"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/>',
+  pencil: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  sliders: '<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8M21 3v5h-5M21 12a9 9 0 0 1-15 6.7L3 16M3 21v-5h5"/>',
+  layers: '<path d="m12 3 9 5-9 5-9-5z"/><path d="m3 13 9 5 9-5"/>',
+  folder: '<path d="M3 6a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/>',
+};
+function hydrateIcons(root = document) {
+  root.querySelectorAll('i[data-i]').forEach(el => {
+    const cls = el.className ? ' ' + el.className : '';
+    el.outerHTML = `<svg class="i${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[el.dataset.i] || ''}</svg>`;
+  });
+}
+
+const SUBS = {
+  new: [['base', 'Пусто'], ['filling', 'Заполняется']],
+  photos: [['base', 'Фото хватает'], ['few', 'Мало фото для обучения']],
+  training: [['base', 'Обучается'], ['queued', 'В очереди']],
+  trained: [['base', 'Обычный'], ['fresh', 'Новая версия готова'], ['own', 'Своя версия подключена']],
+  error: [['base', 'Сбой на видеокарте'], ['rejected', 'Ни одно фото не подошло']],
+};
+const S = Object.assign({ state: 'new', sub: 'base', theme: 'light', w: 'p', flag: 'on' }, window.DEFAULTS || {});
+function renderSubs() {
+  const row = document.getElementById('subs');
+  row.querySelectorAll('button').forEach(b => b.remove());
+  for (const [v, t] of SUBS[S.state]) {
+    const b = document.createElement('button');
+    b.className = 'tbtn'; b.dataset.k = 'sub'; b.dataset.v = v; b.textContent = t;
+    row.appendChild(b);
+  }
+}
+function apply() {
+  document.documentElement.dataset.theme = S.theme;
+  document.querySelectorAll('[data-wframe]').forEach(f => { f.dataset.w = S.w; });
+  const ss = `${S.state}:${S.sub}`;
+  document.querySelectorAll('[data-show]').forEach(el => { el.hidden = !el.dataset.show.split(' ').includes(S.state); });
+  document.querySelectorAll('[data-ss]').forEach(el => { el.hidden = !el.dataset.ss.split(' ').includes(ss); });
+  document.querySelectorAll('[data-fs]').forEach(el => { if (el.id !== 'labed') el.hidden = el.dataset.fs !== S.flag; });
+  if (S.flag === 'off') document.getElementById('labed').hidden = true;
+  document.querySelectorAll('button.tbtn[data-k]').forEach(b => b.setAttribute('aria-pressed', String(S[b.dataset.k] === b.dataset.v)));
+}
+function closeLayers(except) { document.querySelectorAll('[data-layer]').forEach(l => { if (l.id !== except) l.hidden = true; }); }
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.menu') && !e.target.closest('[data-open]')) document.querySelectorAll('.menu[data-layer]').forEach(m => { m.hidden = true; });
+  const set = e.target.closest('[data-k]');
+  if (set) {
+    S[set.dataset.k] = set.dataset.v;
+    if (set.dataset.k === 'state') { S.sub = 'base'; renderSubs(); }
+    if (set.dataset.k === 'state' || set.dataset.k === 'sub') closeLayers();
+    apply();
+    return;
+  }
+  const open = e.target.closest('[data-open]');
+  if (open) {
+    // модалки подтверждения открываются поверх шторки, остальные слои закрывают друг друга
+    const target = document.getElementById(open.dataset.open);
+    if (!target.classList.contains('center')) closeLayers(open.dataset.open);
+    else document.querySelectorAll('.menu[data-layer]').forEach(m => { m.hidden = true; });
+    target.hidden = !target.hidden;
+    if (open.dataset.focus === 'train') document.getElementById('sec-train').scrollIntoView({ block: 'start' });
+    return;
+  }
+  if (e.target.closest('[data-close]') || e.target.matches('.scrim')) {
+    const l = e.target.closest('[data-layer]'); if (l) l.hidden = true;
+    return;
+  }
+  const pick = e.target.closest('.fitem');
+  if (pick && S.flag === 'on') {
+    document.querySelectorAll('.fitem').forEach(f => f.setAttribute('aria-pressed', String(f === pick)));
+    const ed = document.getElementById('labed');
+    ed.hidden = false;
+    document.getElementById('labed-t').textContent = `Фото ${Number(pick.dataset.pick) + 1}`;
+    return;
+  }
+  if (e.target.closest('#labed-x')) {
+    document.getElementById('labed').hidden = true;
+    document.querySelectorAll('.fitem').forEach(f => f.setAttribute('aria-pressed', 'false'));
+    return;
+  }
+  const segBtn = e.target.closest('.seg button');
+  if (segBtn) {
+    segBtn.parentElement.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b === segBtn)));
+    markHuman();
+  }
+});
+function markHuman() {
+  const sel = document.querySelector('.fitem[aria-pressed="true"]');
+  if (!sel) return;
+  const angle = document.querySelector('[data-g="angle"] [aria-pressed="true"]').textContent;
+  const emo = document.getElementById('emo').value.toLowerCase();
+  const lab = sel.querySelector('.flab');
+  lab.textContent = `${angle} · ${emo}`; lab.className = 'flab human';
+  document.getElementById('labed-src').innerHTML = '<svg class="i xs" viewBox="0 0 24 24" aria-hidden="true">' + ICONS.pencil + '</svg>Поправлено вами — авторазметка эту метку не тронет.';
+}
+document.getElementById('emo').addEventListener('change', markHuman);
+document.getElementById('consent-sheet').addEventListener('change', e => { document.getElementById('face-add').disabled = !e.target.checked; });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLayers(); });
+hydrateIcons();
+renderSubs();
+apply();
+</script>
+</body>
+</html>

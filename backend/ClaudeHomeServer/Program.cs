@@ -13,12 +13,14 @@ using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Devices;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm.Claude;
 using ClaudeHomeServer.Services.Team;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.ProjectServices;
 using ClaudeHomeServer.Services.Terminal;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Services.Turn;
@@ -166,8 +168,14 @@ builder.Services.AddExceptionHandler<ClaudeHomeServer.Services.Http.UnhandledExc
 // кодом local_project, а не 500 (ADR-016 §4, G1)
 var mvcBuilder = builder.Services.AddControllers(o => o.Filters.Add(new LocalProjectExceptionFilter()))
     .AddJsonOptions(o =>
+    {
         o.JsonSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // Чат автора голоса фичи живёт в сторе, но наружу не отдаётся — одним конвертером типа
+        // на все точки отдачи TaskItem (см. Services/FeatureNoteJsonConverter.cs). Тот же
+        // конвертер ниже у SignalR и в выходных опциях задач (FeatureJsonOptions, TasksToolset).
+        o.JsonSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
 // Вычисленные «связи» сессии (parentSessionId/taskDone) дописываются на границе
 // сериализации — одним конвертером типа Session на все точки отдачи (см.
 // Services/SessionJsonConverter.cs). Только в опциях MVC: стор sessions.json пишется
@@ -295,8 +303,18 @@ builder.Services.AddSignalR(o =>
         Microsoft.AspNetCore.SignalR.HubOptionsExtensions.AddFilter(o, new ProjectCapabilityHubFilter());
     })
     .AddJsonProtocol(o =>
+    {
         o.PayloadSerializerOptions.Converters.Add(
-            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase)));
+            new JsonStringEnumConverter(System.Text.Json.JsonNamingPolicy.CamelCase));
+        // task_changed несёт полный TaskItem: чат автора голоса фичи фильтруется тем же
+        // конвертером, что и REST-ответы (см. Services/FeatureNoteJsonConverter.cs).
+        o.PayloadSerializerOptions.Converters.Add(new ClaudeHomeServer.Services.FeatureNoteJsonConverter());
+    });
+
+// Реестр живых соединений пользователя (S1-4): держится рядом с SignalR — его читают
+// только хаб (OnConnected/OnDisconnected) и точки отзыва членства (ProjectMembershipService).
+// Состояние — память процесса, синглтон; после рестарта заполняется заново подключениями.
+builder.Services.AddSingleton<ClaudeHomeServer.Hubs.UserConnectionRegistry>();
 
 // Observability: OTel SDK (traces + metrics) с two-mode конфигурацией.
 // Конфиг через секцию Telemetry в appsettings*.json. См. docs/observability/overview.md.
@@ -347,6 +365,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.IDataBackupService,
 builder.Services.AddSingleton<JwtService>();
 builder.Services.AddSingleton<FeatureFlagService>();
 builder.Services.AddSingleton<AppSettingsService>();
+// Кэш ответа /api/usage (перф-3 B6): лёгкий scope=limits отдаётся из кэша, пока не изменились
+// входы (версии снимков/пула/опроса + mtime тарифа) — см. UsageResponseCache.
+builder.Services.AddSingleton<UsageResponseCache>();
+// История медиа-генераций (ADR-030, шаг 3): индекс 7 дней (читает журнал, получает события
+// от ComfyRunHistory через IMediaHistoryEventSink) и кэш миниатюр. Флаг/роль проверяет контроллер
+builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.MediaHistory.MediaHistoryThumbService>();
+// ComfyRunHistory (Images) резолвит наблюдателя лениво: тот же экземпляр индекса
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaHistoryEventSink>(sp => sp.GetRequiredService<ClaudeHomeServer.Services.MediaHistory.MediaHistoryIndex>());
+// Рубильник «медиа-панель для обычных пользователей» (ADR-030, 2026-10-18): секция
+// LocalModelStats, по умолчанию true; false — не-админ получает 404 на медиа/историю.
+// Связывание — единственная точка чтения (не инлайн config.GetValue в контроллерах).
+builder.Services.Configure<ClaudeHomeServer.Models.LocalModelStatsMediaOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.LocalModelStatsMediaOptions.Section));
 // AppSettingsService реализует ITierModelResolver (Core-шов для слота модели).
 // DI сама по себе не резолвит concrete→interface — пробрасываем вручную, тот
 // же singleton-экземпляр. Отдельного адаптера не нужно: класс уже реализует шов.
@@ -375,6 +406,12 @@ builder.Services.AddSingleton<ProjectManager>();
 // Ф5: явный класс-адаптер ProjectManagerAdapter (вместо фабрики-синонима) —
 // точка для подмены в тестах и формализация, что это узкая проекция, а не весь ProjectManager.
 builder.Services.AddSingleton<IProjectManager, ProjectManagerAdapter>();
+// Точка доступа к проекту/чату: область запроса (RequestScope) для [ProjectScope] и явных резолвов (S0-2)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.IProjectAccess, ClaudeHomeServer.Services.ProjectAccessService>();
+// Шов привязок чата к фиче (S2d-7b-2): настоящая реализация регистрируется в TasksSubsystem вместе
+// с TaskManager; при выключенной подсистеме — честное «привязок нет». Неразрешимый шов при включённой — сбой.
+if (!ClaudeHomeServer.Services.Composition.SubsystemGate.IsEnabled(builder.Configuration, "tasks"))
+    builder.Services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, ClaudeHomeServer.Services.NoFeatureChatLinks>();
 // Шов для вертикалей (Этап 3, волна 1): вместо прямой зависимости от ProjectManager
 // вертикали берут узкий контракт IProjectRootLookup. Реализация — тонкая обёртка
 // над ProjectManager в `Services/ProjectRootLookup`, живёт здесь же в Main.
@@ -448,6 +485,9 @@ builder.Services.AddSingleton<ProjectEventLogService>();
 // Notes видит только Append.
 builder.Services.AddSingleton<IProjectEventLogService>(sp => sp.GetRequiredService<ProjectEventLogService>());
 builder.Services.AddSingleton<PersonaManager>();
+// Миниатюры аватара (64/128/256): ленивая генерация через IImageRaster (подсистема Images,
+// ADR-018 §9) + сохранение рядом с оригиналом. Stateless — singleton.
+builder.Services.AddSingleton<PersonaAvatarThumbService>();
 // Форвардер, а не вторая регистрация: иначе второй стор персон и резолвер handle не видит
 // персон, созданных после старта (см. DuplicateSingletonRegistrationTests).
 builder.Services.AddSingleton<IPersonaHandleResolver>(sp => sp.GetRequiredService<PersonaManager>());
@@ -467,6 +507,12 @@ builder.Services.AddSingleton<PersonaBindingsService>();
 // секций промпта из чужих вертикалей (CodeGraph → codegraph). Без шва вертикаль
 // CodeGraph тянула бы root Services напрямую — запрет архитектуры.
 builder.Services.AddSingleton<IPersonaServerToolGate>(sp => sp.GetRequiredService<PersonaBindingsService>());
+// QA-фикс L3: форвардер IPersonaPluginBindingPurger → PersonaBindingsService — каскад
+// Plugins (PluginInstallCascade) снимает Skill-привязки plugin:{id} персон владельца, не
+// ссылаясь на Main напрямую (ADR-014). Регистрация неусловная: шов нужен, только когда
+// подсистема Plugins включена, но адаптер stateless и дёшево живёт всегда (как IPersonaServerToolGate).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Plugins.IPersonaPluginBindingPurger,
+    ClaudeHomeServer.Services.Composition.PluginBindingPurgerAdapter>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
 // и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
@@ -513,10 +559,6 @@ builder.Services.AddGatedHostedService<ImageChatV3Migration>(builder.Configurati
 // читает историю чата и заметку-итог, пишет сводку в сессию, а модель ей нужна лишь как
 // генератор текста через ICheapTextRunner (см. шапку файла).
 builder.Services.AddSingleton<ChatDigestService>();
-// Перенос в новый чат (место chat-handoff): тот же класс сервиса, что сводка карточки —
-// читает историю чата и создаёт чат-преемника через SessionManager, модель — через
-// ICheapTextRunner (docs/features/chat-handoff.md).
-builder.Services.AddSingleton<ChatHandoffService>();
 // TaskManager/TaskAiService/BoardService/DailyBriefingService/TaskSchedulerService
 // — DI в подсистеме `TasksSubsystem` (волна 4C, шаг 1).
 builder.Services.AddSingleton<FileService>();
@@ -528,6 +570,9 @@ builder.Services.AddSingleton<SessionContextResolver>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Каталог макетов фичи (волна 3, Б-mk-a): записки docs/mockups + linkedFiles. Stateless
+// singleton, как DocsIndexService, — корпус читает через него, своего кеша/обхода нет.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MockupCatalog>();
 // Гигиена карты проекта (CLAUDE.md): детерминированный сканер без модели, пороги —
 // из секции ProjectMap конфигурации. Состояния нет, читает файлы по запросу
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapScanner>();
@@ -541,6 +586,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.ProjectMapApplyServ
 // Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
 // отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
 builder.Services.AddSingleton<ProjectPresetService>();
+builder.Services.AddSingleton<SharedProjectsGate>();
+builder.Services.AddSingleton<ProjectMembershipService>();
 // Документы AI: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.MarkitdownService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocumentAiService>();
@@ -573,6 +620,11 @@ builder.Services.AddSingleton<FileWatcherService>();
 // PersonaMemoryAutolearnService. Здесь, а не в GitSubsystem, потому что регистрации
 // реакторов — общая композиция спины, а не домена Git.
 builder.Services.AddGatedHostedService<GitAutoCommitService>(builder.Configuration);
+// Журнал правок человека в общем проекте (S3-3): дебаунс-коммит ТОЛЬКО записанных путей с
+// автором-человеком. Один экземпляр: шов IHumanEditJournal и hosted-сервис — тот же объект.
+builder.Services.AddSingleton<HumanEditCommitter>();
+builder.Services.AddSingleton<IHumanEditJournal>(sp => sp.GetRequiredService<HumanEditCommitter>());
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp => sp.GetRequiredService<HumanEditCommitter>());
 // Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути
 // (Session.CommittedFilePaths), чтобы атрибуция файлов чатам не врала после коммита.
 // Аналогично GitAutoCommitService — реактор на горячем пути статуса, не домен Git.
@@ -704,6 +756,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
 // Контекст чата для агента (ADR-023 §3.2): context_state / context_attach / context_detach; сессия — хвостом
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
     ClaudeHomeServer.Services.Mcp.Http.TurnContextToolset>();
+// Плагины (ADR-031): тулсет — НЕусловно (Main), а не в PluginsSubsystem.Register: при
+// выключенной подсистеме сервер plugins обязан остаться в наборе (состав tools/list стабилен,
+// вызов — честный отказ). PluginDraftService — опциональная зависимость тулсета (null при
+// выключенной подсистеме); остальные зависимости (IMcpSessionAccessor/IProjectManager) — спина.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset,
+    ClaudeHomeServer.Services.Plugins.Mcp.PluginsToolset>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.McpToolsetRegistry>();
 // Белый список инструментов профиля провайдера (KeepMcpTools): читает McpTransportController
 // на tools/list и tools/call, сами тулсеты о нём не знают
@@ -730,6 +788,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Media.IMediaEvents, Clau
 // ни предикат на регистрации, ни пост-хок удаление дескрипторов здесь больше не нужны.
 builder.Services.AddPromptSectionContributors();
 builder.Services.AddSingleton<SessionManager>();
+// Актор и рамка хода (S2a-1): читает только шов, пишет ядро сессий в двух точках подачи
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnActorRegistry>(sp => sp.GetRequiredService<SessionManager>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.ITurnFrameSource>(sp => sp.GetRequiredService<SessionManager>());
+// Право актора в пишущих MCP-инструментах (S2c-6): таблица «инструмент → право», default-deny
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Access.IActorRightGate, ClaudeHomeServer.Services.Access.ActorRightGate>();
 // Серверные сторожа чатов: стор + цикл опроса. Запуск poll-команд — через
 // ILauncherFactory (среда владельца); цикл — hosted, в Testing-среде не поднимается
 // (см. AddHosted), юниты гоняют TickAsync напрямую
@@ -747,6 +810,9 @@ builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.Watchdog.Watchd
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
+// Кэш отпечатков префиксов истории (Перф-3 B8): SHA-256 2,5 МБ-истории не пересчитывается
+// на каждый запрос с курсором, а берётся по (csid, версия истории)
+builder.Services.AddSingleton<PrefixFingerprintCache>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();
@@ -759,6 +825,23 @@ builder.Services.AddSingleton<ITaskNotificationDispatcher>(sp => sp.GetRequiredS
 builder.Services.AddSingleton<PushSubscriptionStore>();
 builder.Services.AddSingleton<PushService>();
 builder.Services.AddSingleton<TaskExecutionService>();
+// Шов IFeatureHoldReleaser (Core) → TaskExecutionService: и автоснятие очереди (Tasks), и ручная
+// DELETE-ручка снимают удержание одним телом. Регистрация здесь, а не в AddFeatureQueue:
+// вертикаль Tasks не видит Main; сам исполнитель регистрируется unconditional — шов с ним рядом.
+builder.Services.AddSingleton<IFeatureHoldReleaser>(sp => sp.GetRequiredService<TaskExecutionService>());
+// Швы конвейера фич (Core → Main): карточка в ключевой чат — той же доставкой, что карточки снятия
+// паузы, и состав локальных исполнителей — для счётчика в хвосте хода и пинка простоя (Tasks).
+builder.Services.AddSingleton<IKeyChatCardSender>(sp => sp.GetRequiredService<TaskExecutionService>());
+builder.Services.AddSingleton<ILocalExecutorRoster, LocalExecutorRoster>();
+// Очередь фич (волна 6): регистрируется только при включённой подсистеме задач.
+builder.Services.AddFeatureQueue(builder.Configuration);
+// Запуск предгейта шага (NC-P1b): шов ITaskPregate опционален — вертикаль TestRuns отключаемая
+builder.Services.AddSingleton<TaskPregateService>();
+builder.Services.AddSingleton<ReviewTreePool>();
+// ProjectTreeLocator (шаг B1b фичы «Резолвинг ссылок по worktree»): единая точка резолвинга
+// относительных путей по деревьям проекта. Git — параметр с дефолтом: при выключенной
+// подсистеме локатор остаётся рабочим (анкер + корень), без 500.
+builder.Services.AddSingleton<ProjectTreeLocator>();
 // Шов ITaskExecutor (Core) → TaskExecutorAdapter → TaskExecutionService.
 // Адаптер резолвит TaskExecutionService через конструктор, DI форвардер ниже.
 builder.Services.AddSingleton<TaskExecutorAdapter>();
@@ -775,6 +858,13 @@ builder.Services.AddSingleton<TeamWaveService>();
 // в стадии «волна N» навсегда
 builder.Services.AddGatedHostedService<TeamWaveWatchdog>(builder.Configuration);
 builder.Services.AddSingleton<SessionSummaryService>();
+// «Продолжить в новом чате»: записка-передача от агента и новый чат с ней. Хостед-сервис —
+// подписка на TurnCompleted для продолжений, поставленных инструментом chats_continue из хода чата
+builder.Services.AddSingleton<ChatContinueService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatContinueService>());
+// «Перенос в новый чат» (место chat-handoff, шаг B-4 фичы про prompt cache): записка и
+// чат-преемник без resume. Не хостед: событий не слушает, путь выбирается по запросу ручки.
+builder.Services.AddSingleton<ChatHandoffService>();
 // Сводка карточки архива (место chat-digest, шаг 5 плана «Архив чатов») и
 // карта плана (место plan-map, «Визуальный разворот плана» часть B) —
 // DI в подсистеме `LlmSubsystem` (шаг 0 волны 4, см. LlmSubsystem.cs).
@@ -807,6 +897,10 @@ builder.Services.AddSingleton<IPersonaAutomationRunner>(sp => sp.GetRequiredServ
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
+// Ночная уборка worktree и /tmp, тревога о нехватке места (WorktreeCleanupService)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.WorktreeCleanupService>();
+builder.Services.AddGatedHostedFrom(builder.Configuration, sp =>
+    sp.GetRequiredService<ClaudeHomeServer.Services.WorktreeCleanupService>());
 
 // === Канал устройства (ADR-016): агент локальных проектов на машине пользователя ===
 // Реестр устройств и хеши их токенов — единственный стор канала; живые соединения хаба
@@ -817,6 +911,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceConnection
 // Статус рук локального проекта (ADR-016 §7) — в чат хода из донесений агента
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.ILocalHandsNotifier,
     ClaudeHomeServer.Services.Composition.LocalHandsNotifier>();
+// Живые события локальной модели (статистика локальных моделей): тиковый снимок генерации и
+// итог хода — в session-группу чата, только при наличии зрителя (LocalModelLiveSink).
+// Интерфейс (ILocalModelLiveSink) — в Llm; счётчик ходов (LocalModelTurnMeter) резолвит
+// его лениво, поэтому порядок регистрации не важен.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILocalModelLiveSink,
+    ClaudeHomeServer.Services.Composition.LocalModelLiveSink>();
 // Наблюдатель соединений — диспетчер выхода устройства в онлайн (ADR-016, план §5;
 // регистрация блоком ниже): форвард на тот же синглтон, не второй экземпляр.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceConnectionObserver>(
@@ -825,6 +925,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceConnectio
 // на тот же синглтон, который обслуживает WebSocket /api/devices/exec и Hello хаба.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Execution.IHostCliVersion, ClaudeHomeServer.Services.Execution.HostCliVersion>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.DeviceHarnessPolicy>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceHelloRequestSender,
+    ClaudeHomeServer.Services.Devices.DeviceHubHelloRequestSender>();
+builder.Services.AddHostedService<ClaudeHomeServer.Services.Devices.DeviceHelloRequestBroadcaster>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Devices.IDeviceExecOpenSender,
     ClaudeHomeServer.Services.Devices.DeviceHubExecOpenSender>();
 // Каталог релизов агента устройства (agent-distribution Р3, Р5): его читают и ack хаба, и
@@ -903,6 +1006,12 @@ builder.Services.AddHttpClient("safe-download")
 // провайдеров: подсистема самодостаточна, точку регистрации кеша в `Program.cs`
 // больше не держим.
 builder.Services.AddChatContext();
+// Личное состояние чата участника общего проекта (S1-7): оверлей поверх полей Session. Читает его
+// конвертер Session на границе сериализации, поэтому нужен доступ к текущему запросу.
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddSingleton(sp => new ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore(
+    ClaudeHomeServer.Services.ChatUserState.ChatUserStateStore.RootFromConfig(sp.GetRequiredService<IConfiguration>())));
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ChatUserStateService>();
 builder.Services.AddSubsystems(builder.Configuration,
     // `git` идёт ПЕРВЫМ: это нижний слой вертикалей — на него смотрят будущие
     // Dossiers (захват коммитов), Knowledge (синк файлов), Deploy (publish/rollback),
@@ -974,7 +1083,12 @@ builder.Services.AddSubsystems(builder.Configuration,
     // CLI «npx skills»). Регистрируется после Notes: порядок с Task/Notes не связан
     // (Skills — листовая, единственный шов `SessionManager → SkillsService` остаётся
     // до этапа 4 — расщепление SessionManager).
-    new ClaudeHomeServer.Services.Skills.SkillsSubsystem());
+    new ClaudeHomeServer.Services.Skills.SkillsSubsystem(),
+    // Plugins (ADR-031, шаг 1.2) — вертикаль плагинов владельца: хранилище
+    // (PluginStore) и IPluginDirSource (каталоги для --plugin-dir). Листовая:
+    // потребители (ClaudeSession, мост панели) берут IPluginDirSource/IPluginCapability
+    // опционально через Core-швы, порядок с остальными не связан.
+    new ClaudeHomeServer.Services.Plugins.PluginsSubsystem());
 // Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
 // и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
 // пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
@@ -1109,6 +1223,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.IShellCom
 builder.Services.AddSingleton<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>();
 builder.Services.AddSingleton<IHostedService>(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.RemoteCommands.RemoteCommandsService>());
+// Авто-возобновление ходов после рестарта (ADR-033): параметры из секции TurnAutoResume.
+builder.Services.Configure<ClaudeHomeServer.Models.TurnAutoResumeOptions>(builder.Configuration.GetSection(ClaudeHomeServer.Models.TurnAutoResumeOptions.Section));
+// Фоновый оркестратор: шов-хост (адаптер над SessionManager) + hosted-сервис (в Testing не стартует)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Composition.ITurnAutoResumeHost, ClaudeHomeServer.Services.SessionManagerTurnResumeHost>();
+builder.Services.AddGatedHostedService<ClaudeHomeServer.Services.TurnAutoResume.TurnAutoResumeService>(builder.Configuration);
 // Секция DifyOptions + KnowledgeService + ProjectKnowledgeSyncService (singleton + hosted
 // мост ProjectKnowledgeTurnSync) + UserKnowledgeCascade + IKnowledgeAlertNotifier +
 // KnowledgeIndexReconciler (singleton + hosted) — DI в подсистеме `KnowledgeSubsystem`
@@ -1543,6 +1662,9 @@ if (!inspectionMode)
 app.Services.GetRequiredService<JwtService>();
 // Раздача волн «Командной реализации»: конструктор вешает хук в SessionManager
 app.Services.GetRequiredService<TeamWaveService>();
+// Слоты ревью: учёт аренд в памяти после рестарта пуст — вернуть аренды открытых ревью,
+// чаты которых пережили рестарт, иначе их слот отдали бы другой задаче и сбросили
+await app.Services.GetRequiredService<ReviewTreePool>().RestoreLeasesAsync();
 // Слушатель событий стора сторожей (watchdogs_changed): подписка встаёт в конструкторе
 app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotifier>();
 // Синк файловых сабагентов-персон: подписки на события PersonaManager должны встать
@@ -1550,6 +1672,36 @@ app.Services.GetRequiredService<ClaudeHomeServer.Services.Watchdog.WatchdogNotif
 // В копии НЕ поднимаем: синк пишет .claude/agents/*.md в реальные папки проектов
 // из восстановленного projects.json — то есть в рабочие каталоги на диске.
 if (!inspectionMode) app.Services.GetRequiredService<PersonaAgentFileSync>();
+
+// Разовая миграция на JSON-канал (CLI ≥ 2.1.281): убирает синхронизированные .md-агентов
+// (только с маркером, папку целиком не трогает) из проектов, Chats и резерва persona-agents.
+// В JSON-режиме (дефолт) продукт .md больше не пишет — файлы мёртвый груз; в файловом
+// синке (Persona:AgentFiles=true) миграция no-op и маркер НЕ пишется: поздний переход
+// на JSON прогонит её ещё раз (за время файлового режима могли появиться новые .md).
+if (!inspectionMode)
+    try
+    {
+        var agentSync = app.Services.GetRequiredService<PersonaAgentFileSync>();
+        if (!agentSync.AgentFilesEnabled)
+        {
+            var dataDir = Path.GetDirectoryName(
+                app.Configuration["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+                ?? Path.Combine(AppContext.BaseDirectory, "data");
+            var marker = Path.Combine(dataDir, "agents-json-migration-v1.done");
+            if (!File.Exists(marker))
+            {
+                var removed = agentSync.MigrateLegacyAgentFiles();
+                Directory.CreateDirectory(dataDir);
+                File.WriteAllText(marker, $"{DateTime.UtcNow:O} removed={removed}");
+                if (removed > 0)
+                    Console.WriteLine($"[AgentsJsonMigration] удалено синхронизированных .md-агентов: {removed}");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[AgentsJsonMigration] миграция пропущена: {ex.Message}");
+    }
 
 // Однократная миграция @handle персон под контекстное правило: схлопывает лишние суффиксы
 // (masha-2 → masha там, где контексты не пересекаются) и чистит старые .md-файлы сабагентов
@@ -1621,10 +1773,19 @@ if (!inspectionMode)
     {
         try
         {
-            foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), "claude-mcp-*.json"))
-                try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
+            // claude-mcp-* — сервисный токен; claude-agents-* — определения сабагентов-персон;
+            // claude-prompt-* — системный промпт хода (все per-run, штатно удаляются финализацией прогона, осиротели — после крэша).
+            foreach (var pattern in new[] { "claude-mcp-*.json", "claude-agents-*.json", "claude-prompt-*.md" })
+                foreach (var f in Directory.EnumerateFiles(Path.GetTempPath(), pattern))
+                    try { if (File.GetLastWriteTimeUtc(f) < DateTime.UtcNow.AddHours(-6)) File.Delete(f); } catch { }
         }
         catch { /* нет доступа к temp — не критично */ }
+        try
+        {
+            // хук потребителей: признаки «файл уже правили» (<префикс проекта>_<session_id>) и каталоги отпечатков прежних сборок, TTL сутки
+            ClaudeRuntimeSettings.CleanupHookState(Path.GetTempPath(), TimeSpan.FromDays(1));
+        }
+        catch { /* не критично */ }
     });
 
 // Однократная миграция: переносим DifyDatasetId/DocumentTags из старых Project-записей в WorkspaceKnowledge
@@ -2164,6 +2325,8 @@ if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.UpstreamSelect
 if (app.Services.GetService<ClaudeHomeServer.Services.Llm.Gateway.TurnTokenService>() is not null)
 {
     ClaudeHomeServer.Services.Llm.Gateway.McpGatewayEndpoints.MapMcpGateway(app);
+    // OCR страницы локальной Qwen (фича «руки без UIA», этап A, шаг A2)
+    ClaudeHomeServer.Services.Llm.Gateway.OcrGatewayEndpoints.MapOcrGateway(app);
     // Туннель выхода собственного трафика CLI устройства: тумблер LlmGateway:Egress:Enabled
     ClaudeHomeServer.Services.Llm.Gateway.EgressGatewayEndpoints.MapEgressGateway(app);
 }

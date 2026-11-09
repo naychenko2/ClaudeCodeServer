@@ -12,7 +12,7 @@ import { IMAGE_KIND } from './state';
 import { imageRefOf, pickInContext, workWithInContext } from './work';
 
 // Версия, которую держит основной объект: явная в ref, иначе текущая версия нити
-function primaryVersion(primary: ChatContextPrimary, thread: ImageThread): string | null {
+export function primaryVersion(primary: ChatContextPrimary, thread: ImageThread): string | null {
   const v = primary.ref.versionId;
   return typeof v === 'string' ? v : thread.currentVersionId ?? null;
 }

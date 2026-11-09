@@ -1,0 +1,123 @@
+using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
+using FluentAssertions;
+
+namespace ClaudeHomeServer.Tests.Services.ChatContext;
+
+// Вид project-file: путь проверяется ProjectLinkGuard, в личном чате — отказ до RootPath
+public sealed class ProjectFileContextKindTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "ctx-pf-" + Guid.NewGuid().ToString("N"));
+    private readonly string _outside = Path.Combine(Path.GetTempPath(), "ctx-pf-out-" + Guid.NewGuid().ToString("N"));
+    private readonly ProjectFileContextKind _kind = new();
+
+    public ProjectFileContextKindTests()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "docs"));
+        Directory.CreateDirectory(_outside);
+        File.WriteAllText(Path.Combine(_root, "docs", "a.md"), "x");
+        File.WriteAllText(Path.Combine(_outside, "secret.txt"), "s");
+    }
+
+    public void Dispose()
+    {
+        Directory.Delete(_root, recursive: true);
+        Directory.Delete(_outside, recursive: true);
+    }
+
+    private ContextScope Scope(bool personal = false) =>
+        new("owner-1", new Session(), personal ? null : new Project { RootPath = _root });
+
+    private static JsonObject Ref(string path) => new() { ["path"] = path };
+
+    private static ContextItem Item(string path) =>
+        new("i1", ProjectFileContextKind.Kind, Ref(path), null, ContextActor.Human, DateTime.UtcNow);
+
+    [Fact]
+    public void Путь_внутри_проекта_годится() =>
+        _kind.Validate(Scope(), "project-file", Ref("docs/a.md")).Should().BeNull();
+
+    [Fact]
+    public void Выход_через_точки_отклоняется() =>
+        _kind.Validate(Scope(), "project-file", Ref("../" + Path.GetFileName(_outside) + "/secret.txt")).Should().Be("Путь вне проекта");
+
+    [Fact]
+    public void Абсолютный_путь_отклоняется() =>
+        _kind.Validate(Scope(), "project-file", Ref("/etc/passwd")).Should().Be("Путь вне проекта");
+
+    [Fact]
+    public void Символическая_ссылка_наружу_отклоняется()
+    {
+        Directory.CreateSymbolicLink(Path.Combine(_root, "link"), _outside);
+
+        _kind.Validate(Scope(), "project-file", Ref("link/secret.txt")).Should().Be("Путь идёт через символическую ссылку");
+    }
+
+    [Fact]
+    public void Локальный_проект_отказывает_до_диска_даже_для_существующего_файла()
+    {
+        var local = new ContextScope("owner-1", new Session(), new Project { RootPath = _root, DeviceId = "dev-1" });
+
+        _kind.Validate(local, "project-file", Ref("docs/a.md")).Should().Be(ProjectCapabilityGuard.FilesOnDeviceReason);
+        _kind.Describe(local, Item("docs/a.md")).Missing.Should().BeTrue("локальный файл сервер не видит");
+    }
+
+    [Fact]
+    public void Личный_чат_отклоняется_до_проверки_пути() =>
+        _kind.Validate(Scope(personal: true), "project-file", Ref("docs/a.md")).Should().NotBeNull();
+
+    [Fact]
+    public void Пустой_ref_отклоняется() =>
+        _kind.Validate(Scope(), "project-file", new JsonObject()).Should().NotBeNull();
+
+    [Fact]
+    public void Describe_даёт_имя_файла_и_не_missing()
+    {
+        var s = _kind.Describe(Scope(), Item("docs/a.md"));
+
+        s.Label.Should().Be("a.md");
+        s.Missing.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Describe_пропавшего_файла_помечает_missing()
+    {
+        var s = _kind.Describe(Scope(), Item("docs/gone.md"));
+
+        s.Label.Should().Be("gone.md");
+        s.Missing.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Describe_в_личном_чате_не_падает_и_missing() =>
+        _kind.Describe(Scope(personal: true), Item("docs/a.md")).Missing.Should().BeTrue();
+
+    [Fact]
+    public void Вид_не_бывает_основным()
+    {
+        _kind.AcceptedRefs(Scope(), Item("docs/a.md"), null).Should().BeEmpty();
+        _kind.DescribeExecutor(Scope(), Item("docs/a.md")).Should().BeNull();
+    }
+
+    // F2-P2f: в общем чате субъект приватности — вызывающий (ActorId), арендатор (OwnerId) его не подменяет
+    [Theory]
+    [InlineData("member-a", "member-a", true)]
+    [InlineData("member-a", "tenant", false)]
+    [InlineData("member-a", "member-b", false)]
+    [InlineData("tenant", "member-a", false)]
+    [InlineData("tenant", "tenant", true)]
+    [InlineData(null, "member-a", false)]
+    public void Private_в_общем_чате_судит_вызывающий_а_не_арендатор(string? actor, string fileOf, bool allowed)
+    {
+        var dir = Path.Combine(_root, ".cc-attachments", "private", fileOf, "g1");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "p.png"), "x");
+        var scope = new ContextScope("tenant", new Session(), new Project { RootPath = _root }, actor);
+        var path = $".cc-attachments/private/{fileOf}/g1/p.png";
+
+        _kind.Validate(scope, "project-file", Ref(path)).Should().Be(allowed ? null : "Путь вне проекта");
+        _kind.Describe(scope, Item(path)).Missing.Should().Be(!allowed);
+    }
+}

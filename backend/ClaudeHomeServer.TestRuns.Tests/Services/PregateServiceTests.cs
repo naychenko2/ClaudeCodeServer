@@ -1,0 +1,535 @@
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.TestRuns;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace ClaudeHomeServer.Tests.Services.TestRuns;
+
+/// <summary>
+/// Предгейт шага (ITaskPregate): проверки идут только из конфига Pregate:*, красная — по коду
+/// выхода с текстом предупреждения компилятора, пропуск по WhenChanged, занятое дерево, шов
+/// не регистрируется у выключенной подсистемы. Процесс подменяет лаунчер-заглушка: её вывод и
+/// код выхода решает функция от spec (в частности — от наличия -warnaserror в аргументах).
+/// </summary>
+public class PregateServiceTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), "ccs-pregate-" + Guid.NewGuid().ToString("N"));
+    private readonly List<Process> _processes = [];
+
+    public PregateServiceTests() => Directory.CreateDirectory(_root);
+
+    public void Dispose()
+    {
+        lock (_processes)
+            foreach (var p in _processes)
+            {
+                try { if (!p.HasExited) p.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+                p.Dispose();
+            }
+        try { Directory.Delete(_root, recursive: true); } catch { /* занят */ }
+        GC.SuppressFinalize(this);
+    }
+
+    private sealed class FakeLauncher(List<Process> processes, string root, Func<ProcessSpec, (string Output, int Exit)> behave)
+        : IProcessLauncher, ILauncherFactory
+    {
+        public ConcurrentQueue<ProcessSpec> Specs { get; } = new();
+
+        public bool IsSandboxed => false;
+        public bool TargetIsWindows => OperatingSystem.IsWindows();
+        public IPathMapper Paths => IdentityPathMapper.Instance;
+        public string ClaudeCliCommand => "claude";
+        public string HostTempDir => Path.GetTempPath();
+        public string? McpApiUrlOverride => null;
+
+        public IProcessLauncher Local => this;
+        public IProcessLauncher ForOwner(string? ownerId) => this;
+        public IProcessLauncher ForProject(Project project) => this;
+
+        public Process Start(ProcessSpec spec)
+        {
+            Specs.Enqueue(spec);
+            var (output, exit) = behave(spec);
+            var file = Path.Combine(root, Guid.NewGuid().ToString("N") + ".out");
+            File.WriteAllText(file, output);
+            var win = OperatingSystem.IsWindows();
+            var command = win ? $"type \"{file}\" & exit {exit}" : $"cat '{file}'; exit {exit}";
+            var process = LocalProcessRunner.Instance.Start(new ProcessSpec
+            {
+                FileName = win ? "cmd.exe" : "/bin/sh",
+                Args = win ? ["/c", command] : ["-c", command],
+                WorkingDirectory = root,
+                StdioEncoding = spec.StdioEncoding,
+                RedirectStdin = false,
+                Track = false,
+            });
+            lock (processes) processes.Add(process);
+            return process;
+        }
+
+        public void Kill(Process process, string? turnId = null)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* уже мёртв */ }
+        }
+
+        public int EstimateCommandLineLength(ProcessSpec spec) => 0;
+    }
+
+    private Project NewProject() => new() { Id = "p1", OwnerId = "u1", Name = "Предгейт", RootPath = _root };
+
+    private PregateRequest Request(IReadOnlyCollection<string>? changed = null) =>
+        new(NewProject(), _root, "sess-1", changed);
+
+    private static PregateCheckOptions Check(string name, string command = "dotnet", string[]? args = null,
+        string[]? whenChanged = null, string workingDirectory = ".") =>
+        new()
+        {
+            Name = name,
+            Command = command,
+            Args = [.. args ?? []],
+            WhenChanged = [.. whenChanged ?? []],
+            WorkingDirectory = workingDirectory,
+        };
+
+    private PregateService Service(FakeLauncher launcher, params PregateCheckOptions[] checks) =>
+        new(launcher, new TestRunsOptions(), new PregateOptions { Checks = [.. checks] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+    private FakeLauncher Launcher(Func<ProcessSpec, (string, int)> behave) => new(_processes, _root, behave);
+
+    // Env проверки доезжает до процесса; служебные ключи разбора вывода конфиг не перебивает
+    [Fact]
+    public async Task Env_ИзКонфигаВПроцесс_СлужебныеКлючиПоверх()
+    {
+        var launcher = Launcher(_ => ("ok", 0));
+        var check = Check("быстрые тесты") with
+        {
+            Env = new() { ["CCS_TEST_SHARDS_ADAPTIVE"] = "backend/ClaudeHomeServer.Tests=4", ["DOTNET_CLI_UI_LANGUAGE"] = "ru" },
+        };
+
+        var verdict = await Service(launcher, check).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        var env = launcher.Specs.Single().Env!;
+        env["CCS_TEST_SHARDS_ADAPTIVE"].Should().Be("backend/ClaudeHomeServer.Tests=4");
+        env["DOTNET_CLI_UI_LANGUAGE"].Should().Be("en", "разбор «error CS…» держится на английском выводе");
+        env["DOTNET_NOLOGO"].Should().Be("1");
+        PregateService.ProcessEnv(Check("build")).Keys.Should().BeEquivalentTo(["DOTNET_CLI_UI_LANGUAGE", "DOTNET_NOLOGO"]);
+    }
+
+    [Fact]
+    public async Task AllChecksExitZero_VerdictGreen()
+    {
+        var launcher = Launcher(_ => ("всё хорошо", 0));
+        var service = Service(launcher, Check("tsc", "npx", ["tsc", "-b"]), Check("build"));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Checks.Select(c => c.Status).Should().OnlyContain(s => s == PregateStatus.Green);
+        launcher.Specs.Select(s => s.FileName).Should().Equal("npx", "dotnet");
+        launcher.Specs.Should().OnlyContain(s => s.Heavy, "проверки идут слотом очереди сборок");
+    }
+
+    [Fact]
+    public async Task BuildWithWarning_VerdictRedWithCompilerWarningText()
+    {
+        // Сборка падает на предупреждении только при -warnaserror: без флага вердикт был бы зелёным
+        const string warning = "Foo.cs(12,9): warning CS8618: Non-nullable property 'Bar' must contain a non-null value";
+        var launcher = Launcher(spec => spec.Args.Contains("-warnaserror") ? (warning + "\nBuild FAILED.", 1) : ("Build succeeded.", 0));
+        var service = Service(launcher, Check("build -warnaserror", args: ["build", "-warnaserror"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeFalse();
+        var check = verdict.Checks.Should().ContainSingle().Subject;
+        check.Status.Should().Be(PregateStatus.Red);
+        check.Detail.Should().Contain("warning CS8618").And.Contain("код выхода 1");
+    }
+
+    [Fact]
+    public async Task WhenChangedDoesNotMatch_CheckSkippedAndNotStarted()
+    {
+        var launcher = Launcher(_ => ("", 1));
+        var service = Service(launcher, Check("tsc", whenChanged: ["frontend/"]));
+
+        var verdict = await service.RunAsync(Request(["backend/ClaudeHomeServer/Program.cs"]), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Skipped);
+        launcher.Specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WhenChangedMatches_CheckRuns()
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("tsc", whenChanged: ["frontend/"]));
+
+        var verdict = await service.RunAsync(Request(["frontend\\src\\App.tsx"]), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProcessCheckScriptMissingInTree_NotRunWithoutLaunching_AndVerdictIsUnmeasured()
+    {
+        var launcher = Launcher(_ => ("can't open file", 2));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py", "--run-fast"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        var check = verdict.Checks.Should().ContainSingle().Subject;
+        check.Status.Should().Be(PregateStatus.NotRun);
+        check.Detail.Should().Be("нет файла scripts/test-shards.py в этом дереве");
+        launcher.Specs.Should().BeEmpty("процесс не стартует, красного нет");
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Unmeasured.Should().NotBeNull("вердикт не записывается ни зелёным, ни красным — серия не растёт");
+    }
+
+    [Fact]
+    public async Task ProcessCheckScriptPresentInTree_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts"));
+        File.WriteAllText(Path.Combine(_root, "scripts", "test-shards.py"), "");
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("быстрые тесты", "python3", ["-I", "scripts/test-shards.py"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData("https://example.com/lint")]
+    [InlineData("/opt/ci/lint.sh")]
+    [InlineData("echo a/b c")]
+    public async Task ProcessCheckArgIsNotRelativePath_Runs(string arg)
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", [arg]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().NotBe(PregateStatus.NotRun);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task ProcessCheckArgIsExistingDirectory_Runs()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "scripts", "sub"));
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("проверка", "python3", ["scripts/sub"]));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Should().ContainSingle().Which.Status.Should().Be(PregateStatus.Green);
+        launcher.Specs.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task NoChecksConfigured_GreenWithoutLaunching()
+    {
+        var launcher = Launcher(_ => ("", 1));
+
+        var verdict = await Service(launcher).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Checks.Should().BeEmpty();
+        launcher.Specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WorkingDirectoryEscapesTree_CheckRedWithoutLaunching()
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("evil", workingDirectory: "../outside"));
+
+        var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeFalse();
+        launcher.Specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    [Trait("Category", "Slow")]
+    public async Task СуммаПроверокДлиннееПотолка_ОдинПотолокНаПрогон_RefusedСВыполненными()
+    {
+        // Потолок 4 с, каждая проверка 1,5 с: первая укладывается с запасом 2,5 с даже под нагрузкой, а четыре вместе
+        // (6 с) не помещаются с запасом 2 с — потолок обязан быть общим. Пропущенная проверка выполненной не считается
+        var launcher = Launcher(_ => { Thread.Sleep(1500); return ("ok", 0); });
+        var service = new PregateService(launcher, new TestRunsOptions { CeilingSeconds = 4 },
+            new PregateOptions { Checks = [Check("skip", whenChanged: ["nope/"]), Check("c1"), Check("c2"), Check("c3"), Check("c4")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        var verdict = await service.RunAsync(Request(["src/a.cs"]), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeFalse();
+        verdict.Refusal.Should().Contain("общий потолок").And.Contain("Уже выполнено").And.Contain("c1");
+        verdict.Refusal.Should().NotContain("skip — Skipped", "пропущенная проверка не выполнялась").And.Contain("Пропущено");
+        verdict.Checks.Should().NotBeEmpty().And.HaveCountLessThan(5);
+        verdict.Checks.Select(c => c.Name).Should().StartWith(["skip", "c1"]);
+    }
+
+    [Fact]
+    public async Task TreeBusy_RefusedAndRed()
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var pipeline = new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5));
+        var service = new PregateService(launcher, new TestRunsOptions(),
+            new PregateOptions { Checks = [Check("build")] }, pipeline);
+
+        using (pipeline.TryLockTree(_root))
+        {
+            var verdict = await service.RunAsync(Request(), CancellationToken.None);
+
+            verdict.IsGreen.Should().BeFalse();
+            verdict.Refusal.Should().Contain("уже идёт сборка");
+            launcher.Specs.Should().BeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task ChangedFilesOutsideEveryZone_AllSkipped_NothingApplicable()
+    {
+        var launcher = Launcher(_ => ("", 0));
+        var service = Service(launcher, Check("tsc", whenChanged: ["frontend/"]), Check("build", whenChanged: ["backend/"]));
+
+        var verdict = await service.RunAsync(Request(["docs/заметка.md"]), CancellationToken.None);
+
+        verdict.Checks.Should().OnlyContain(c => c.Status == PregateStatus.Skipped);
+        verdict.NothingApplicable.Should().BeTrue();
+        verdict.Unmeasured.Should().BeNull();
+        launcher.Specs.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task OneZoneHit_VerdictConclusive()
+    {
+        var service = Service(Launcher(_ => ("", 0)), Check("tsc", whenChanged: ["frontend/"]), Check("build", whenChanged: ["backend/"]));
+
+        var verdict = await service.RunAsync(Request(["backend/x.cs"]), CancellationToken.None);
+
+        verdict.NothingApplicable.Should().BeFalse();
+        verdict.Unmeasured.Should().BeNull();
+        verdict.IsGreen.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task UiProbeWithoutMeasurement_IsNotRun_AndMakesVerdictUnmeasured()
+    {
+        var service = Service(Launcher(_ => ("", 0)),
+            Check("tsc"), new PregateCheckOptions { Name = "ui", Kind = PregateCheckOptions.KindUiProbe });
+
+        var verdict = await service.RunAsync(Request(["frontend/a.tsx"]), CancellationToken.None);
+
+        verdict.Checks.Single(c => c.Name == "ui").Status.Should().Be(PregateStatus.NotRun);
+        verdict.Unmeasured.Should().Contain("ui").And.Contain("маршрут не задан");
+        verdict.NothingApplicable.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UiProbeWithRoutesButNoProbeService_IsNotRun()
+    {
+        var service = Service(Launcher(_ => ("", 0)), new PregateCheckOptions { Name = "ui", Kind = PregateCheckOptions.KindUiProbe });
+
+        var verdict = await service.RunAsync(Request(["frontend/a.tsx"]) with { UiRoutes = ["/#/ui-kit"] }, CancellationToken.None);
+
+        verdict.Checks.Single().Should().Match<PregateCheckResult>(c => c.Status == PregateStatus.NotRun && c.Detail.Contains("недоступен"));
+    }
+
+    [Fact]
+    public void Verdict_RedWinsOverNotRun_AndEmptySetStaysConclusive()
+    {
+        new PregateVerdict([new("a", PregateStatus.Red, "x"), new("b", PregateStatus.NotRun, "y")]).Unmeasured.Should().BeNull();
+        new PregateVerdict([]).Unmeasured.Should().BeNull();
+        new PregateVerdict([]).NothingApplicable.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Options_ReadOnlyFromPregateSection_NoBuiltInChecks()
+    {
+        PregateOptions.From(new ConfigurationBuilder().Build()).Checks.Should().BeEmpty("в коде зашитых проверок нет");
+
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            // Набор проверок — объект по имени проверки: имя = ключ (не индекс!)
+            ["Pregate:Checks:tsc:Command"] = "npx",
+            ["Pregate:Checks:tsc:Args:0"] = "tsc",
+            ["Pregate:Checks:tsc:Args:1"] = "-b",
+            ["Pregate:Checks:tsc:WorkingDirectory"] = "frontend",
+            ["Pregate:Checks:tsc:WhenChanged:0"] = "frontend/",
+            ["Pregate:Checks:ui:Kind"] = "ui-probe",
+            ["Pregate:Checks:ui:Origin"] = "http://127.0.0.1:5555",
+            ["Pregate:Checks:ui:Viewports:0"] = "360",
+            ["Pregate:Checks:ui:Viewports:1"] = "1280",
+        }).Build();
+
+        var options = PregateOptions.From(config);
+
+        options.Problem.Should().BeNull();
+        options.Checks.Should().HaveCount(2);
+        options.Checks[0].Should().BeEquivalentTo(new PregateCheckOptions
+        {
+            Name = "tsc", Command = "npx", Args = ["tsc", "-b"], WorkingDirectory = "frontend", WhenChanged = ["frontend/"],
+        });
+        options.Checks[1].Kind.Should().Be(PregateCheckOptions.KindUiProbe);
+        options.Checks[1].Viewports.Should().Equal(360, 1280);
+    }
+
+    private static ServiceCollection Services(IConfiguration config)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton(config);
+        services.AddSubsystems(config, new TestRunsSubsystem());
+        return services;
+    }
+
+    [Fact]
+    public async Task DefaultSet_FrontendStep_ClosesAfterGreenTscAndLintDesign()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "ClaudeHomeServer", "appsettings.json")))
+            dir = dir.Parent;
+        dir.Should().NotBeNull("appsettings.json основного проекта ищем вверх от каталога тестов");
+        var config = new ConfigurationBuilder().AddJsonFile(Path.Combine(dir!.FullName, "ClaudeHomeServer", "appsettings.json")).Build();
+        var options = PregateOptions.From(config);
+        options.Checks.Should().NotContain(c => c.Kind == PregateCheckOptions.KindUiProbe, "ui_probe мерит стенд чужого checkout и не входит в набор по умолчанию");
+
+        var launcher = Launcher(_ => ("", 0));
+        var service = new PregateService(launcher, new TestRunsOptions(), options,
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        var verdict = await service.RunAsync(Request(["frontend/src/a.tsx"]), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        verdict.Unmeasured.Should().BeNull();
+        verdict.Checks.Where(c => c.Status == PregateStatus.Green).Select(c => c.Name).Should().Equal("tsc", "lint:design");
+    }
+
+    [Fact]
+    public void SubsystemEnabled_RegistersPregateSeam()
+    {
+        var services = Services(new ConfigurationBuilder().Build());
+
+        services.Should().Contain(s => s.ServiceType == typeof(ITaskPregate) && s.ImplementationType == typeof(PregateService));
+    }
+
+    [Fact]
+    public void SubsystemDisabled_PregateSeamNotRegistered()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { [$"Subsystems:{TestRunsSubsystem.SubsystemKey}:Enabled"] = "false" }).Build();
+
+        var services = Services(config);
+
+        services.Should().NotContain(s => s.ServiceType == typeof(ITaskPregate));
+        services.Should().NotContain(s => s.ServiceType == typeof(PregateOptions));
+    }
+
+    // Потолок прогона — одно число на продукт (Core, RunBudget.MaxSeconds): вертикаль TestRuns
+    // берёт его оттуда же. Иначе «540» жил бы в двух сборках и разошёлся бы молча.
+    [Fact]
+    public void ПотолокПрогона_СовпадаетСПотолкомШваПредгейта()
+    {
+        TestRunsOptions.DefaultCeilingSeconds.Should().Be(PregateCeiling.MaxSeconds,
+            "потолок вертикали TestRuns и потолок шва предгейта — одно число (Core, RunBudget)");
+        PregateCeiling.MaxSeconds.Should().Be(540,
+            "общий потолок прогона изменился: он обязан быть меньше MCP_TOOL_TIMEOUT хода (600 с) — "
+            + "иначе ответ модели не успеет уйти; обнови описание инструмента и этот тест");
+    }
+
+    // Отказ по потолку печатает ПРИМЕНЁННЫЙ потолок, а не сырое число из TestRunsOptions:
+    // фактический потолок задаёт Sanitize шва (потребитель ставит его в CancelAfter), и печать
+    // сырого числа разошлась бы с фактом при смене любого из них.
+    [Theory]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-5, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    [InlineData(120, 120)]
+    public void ОтказПоПотолкуПечатаетПрименённоеЗначение(int configured, int expected)
+    {
+        var service = new PregateService(Launcher(_ => ("", 0)), new TestRunsOptions { CeilingSeconds = configured },
+            new PregateOptions { Checks = [Check("tsc")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        service.CeilingSeconds.Should().Be(expected, "применённый потолок — очищенное значение шва");
+        var refusal = service.CeilingRefusal("tsc");
+        refusal.Should().Contain($"потолок предгейта {expected} с",
+            "текст отказа обязан называть фактически применённый потолок");
+        if (configured != expected)
+            refusal.Should().NotContain($"потолок предгейта {configured} с",
+                "печатать сырое значение конфигурации — значит солгать о применённом потолке");
+    }
+
+    // Отказ «предгейт остановлен» тоже называет ПРИМЕНЁННЫЙ потолок. Потолок потребителя
+    // (TaskPregateService) ставится ДО git-проверок дерева, поэтому истекает он раньше
+    // потолка вертикали — в боевом пути в отказ уходит именно этот текст, и без числа
+    // исполнитель не отличил бы исчерпание бюджета от ошибки проверки.
+    [Theory]
+    [InlineData(0, PregateCeiling.MaxSeconds)]
+    [InlineData(-5, PregateCeiling.MaxSeconds)]
+    [InlineData(PregateCeiling.MaxSeconds + 1, PregateCeiling.MaxSeconds)]
+    [InlineData(120, 120)]
+    public void ОтказОстановленПечатаетПрименённыйПотолок(int configured, int expected)
+    {
+        var service = new PregateService(Launcher(_ => ("", 0)), new TestRunsOptions { CeilingSeconds = configured },
+            new PregateOptions { Checks = [Check("tsc")] },
+            new PhasePipeline(new BuildConcurrencyGate(2), TimeSpan.FromSeconds(5)));
+
+        service.StoppedRefusal().Should().Contain($"потолок предгейта — {expected} с",
+            "видимый отказ обязан называть фактически применённый потолок");
+    }
+
+    // Флаки зелёного прогона (блок test-shards.py «Флаки (прошли со второго раза)») не прощаются молча:
+    // статус зелёный, деталь — заголовок и FQN (не больше DetailLines), в сводке записи — «⚠ … флаки N» и FQN;
+    // красная серия на зелёном не растёт
+    [Fact]
+    public async Task ЗелёныйСФлаками_ДетальИСводкаСFqn_СерияНеРастёт()
+    {
+        var fqns = Enumerable.Range(1, 12).Select(i => $"ClaudeHomeServer.Tests.Foo.Тест{i}").ToList();
+        var output = "Шард 1: зелёный\nПерезапуск упавших: 12 (по одному разу, последовательно)\n"
+            + "Перезапуск: стена 3.1 с, запусков 1; TRX и логи — /tmp/rerun\n"
+            + "Флаки (прошли со второго раза): 12\n" + string.Join("\n", fqns.Select(f => "  " + f))
+            + "\nВсего: 12 шардов, стена 40 с\n";
+        var launcher = Launcher(_ => (output, 0));
+
+        var verdict = await Service(launcher, Check("быстрые тесты")).RunAsync(Request(), CancellationToken.None);
+
+        verdict.IsGreen.Should().BeTrue();
+        var check = verdict.Checks.Single();
+        check.Status.Should().Be(PregateStatus.Green, "флаки не краснят и не делают NotRun");
+        var detail = check.Detail.Split('\n');
+        detail[0].Should().Be("Флаки (прошли со второго раза): 12");
+        detail[1..].Should().Equal(fqns.Take(10), "FQN — не больше DetailLines, строка «Всего» в блок не попадает");
+
+        var summary = PregateRules.Summary(verdict);
+        summary.Should().StartWith("⚠ быстрые тесты: флаки 12\n");
+        summary.Should().Contain(fqns[0]).And.Contain(fqns[9]).And.NotContain(fqns[10]);
+
+        var red = new PregateRecord("aaa", false, "✗ build: x", DateTime.UtcNow, 1, "build");
+        var next = PregateRules.Next(red, "bbb", verdict.IsGreen, summary, null, DateTime.UtcNow);
+        next.Green.Should().BeTrue();
+        next.RedStreak.Should().Be(0, "зелёный с флаками обнуляет серию, а не наращивает её");
+    }
+
+    [Fact]
+    public async Task ЗелёныйБезФлаков_ДетальИСводкаПустые()
+    {
+        var launcher = Launcher(_ => ("Шард 1: зелёный\nВсего: 1 шард\n", 0));
+
+        var verdict = await Service(launcher, Check("быстрые тесты")).RunAsync(Request(), CancellationToken.None);
+
+        verdict.Checks.Single().Should().Be(new PregateCheckResult("быстрые тесты", PregateStatus.Green));
+        PregateRules.Summary(verdict).Should().BeEmpty();
+    }
+}

@@ -38,26 +38,26 @@ public sealed class FilmAssembler(
 
     private TimeSpan Timeout => TimeSpan.FromMinutes(Math.Clamp(config.GetValue("VideoEditor:AssembleTimeoutMinutes", DefaultTimeoutMinutes), 1, 240));
 
-    public FilmBuildStatusDto? Status(string ownerId, VideoEditScope scope, string? path)
+    public FilmBuildStatusDto? Status(string ownerId, string? actorId, VideoEditScope scope, string? path)
     {
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         return resolved.IsOk ? registry.Get(ownerId, scope.Key, resolved.Value!.Relative) : null;
     }
 
-    public bool Cancel(string ownerId, VideoEditScope scope, string? path)
+    public bool Cancel(string ownerId, string? actorId, VideoEditScope scope, string? path)
     {
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         return resolved.IsOk && registry.Cancel(ownerId, scope.Key, resolved.Value!.Relative);
     }
 
     // Заявка: быстрые проверки — здесь, остальное и сама сборка — в фоне. Возвращает состояние «ждём слот»
-    public FilmCallResult<FilmBuildStatusDto> Start(string ownerId, VideoEditScope scope, string? path, string initiator,
+    public FilmCallResult<FilmBuildStatusDto> Start(string ownerId, string? actorId, VideoEditScope scope, string? path, string initiator,
         string? sessionId = null)
     {
         if (dsp is not { Available: true })
             return FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.DspUnavailable,
                 "Сборка недоступна: на сервере нет ffmpeg или выключены «Картинки»");
-        var resolved = FilmService.ResolveFilm(scope, path);
+        var resolved = FilmService.ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         var film = resolved.Value!;
 
@@ -78,14 +78,14 @@ public sealed class FilmAssembler(
         // Файлы и размеры — сразу и до заявки: человек видит причину ответом, а не провалом в фоне
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File);
+            var clip = Resolve(film.Project, item.File, actorId);
             if (!clip.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(clip.ErrorCode!, clip.Error!);
             if (new FileInfo(clip.Value!.Full).Length > SafeMediaDownloader.VideoMaxBytes)
                 return FilmCallResult<FilmBuildStatusDto>.Fail(VideoEditorErrors.InvalidRequest, $"Клип больше 300 МБ: {item.File}");
         }
         if (doc.Music is { } music)
         {
-            var track = Resolve(film.Project, music.File);
+            var track = Resolve(film.Project, music.File, actorId);
             if (!track.IsOk) return FilmCallResult<FilmBuildStatusDto>.Fail(track.ErrorCode!, track.Error!);
         }
 
@@ -98,7 +98,7 @@ public sealed class FilmAssembler(
                 _ => "На сервере идёт слишком много сборок — попробуйте позже",
             });
 
-        var task = Task.Run(() => RunAsync(ownerId, scope, film, doc, entry!, initiator, sessionId));
+        var task = Task.Run(() => RunAsync(ownerId, actorId, scope, film, doc, entry!, initiator, sessionId));
         lock (_running)
         {
             _running.RemoveAll(t => t.IsCompleted);
@@ -115,16 +115,16 @@ public sealed class FilmAssembler(
         await Task.WhenAll(pending);
     }
 
-    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative)
+    private static FilmCallResult<FilmService.Resolved> Resolve(Project project, string relative, string? actorId)
     {
-        var inside = FilmService.ResolveInside(project, relative);
+        var inside = FilmService.ResolveInside(project, relative, actorId);
         if (!inside.IsOk) return inside;
         return File.Exists(inside.Value!.Full)
             ? inside
             : FilmCallResult<FilmService.Resolved>.Fail(VideoEditorErrors.FileNotFound, $"Файл не найден: {relative}");
     }
 
-    private async Task RunAsync(string ownerId, VideoEditScope scope, FilmService.Resolved film, FilmDocument doc,
+    private async Task RunAsync(string ownerId, string? actorId, VideoEditScope scope, FilmService.Resolved film, FilmDocument doc,
         FilmBuildRegistry.Entry entry, string initiator, string? sessionId)
     {
         var sw = Stopwatch.StartNew();
@@ -133,10 +133,12 @@ public sealed class FilmAssembler(
         string? error = null, outFile = null;
         try
         {
-            var planned = await PlanAsync(film, doc, entry.Cts.Token);
+            var planned = await PlanAsync(film, doc, actorId, entry.Cts.Token);
             if (planned.Error is not null) { error = planned.Error; return; }
 
-            // Хеш входов — на момент плана: правка за время сборки сделает фильм устаревшим, а не «собранным»
+            // doc.Aspect — кеш пропорций первой сцены: сборка его обновляет, и хеш входов считается уже с ним, иначе
+            // свежий фильм сразу «устарел» бы. Хеш — на момент плана: правка за время сборки сделает фильм устаревшим
+            doc = doc with { Aspect = planned.Aspect };
             var hash = FilmStaleness.SourceHash(film.Project.RootPath, doc);
             var progress = new BuildProgress(p => OnProgress(ownerId, scope, film, entry, p));
             var result = await dsp!.AssembleAsync(planned.Plan!, tmp, progress, entry.Cts.Token);
@@ -146,6 +148,7 @@ public sealed class FilmAssembler(
             if (outFile is null) { error = "Не нашлось свободного имени для film.mp4"; return; }
             var recorded = films.Films.Update(film.Full, current => current with
             {
+                Aspect = planned.Aspect,
                 Builds = [.. current.Builds.TakeLast(KeptBuilds - 1), new FilmBuild(outFile, hash, Now)],
             });
             if (recorded.Status != FilmStore.WriteStatus.Ok)
@@ -174,30 +177,38 @@ public sealed class FilmAssembler(
     }
 
     // План по документу: клипы пробуются (длина, звук, размер), обрезка укладывается в длину клипа
-    private async Task<(FilmPlan? Plan, string? Error)> PlanAsync(FilmService.Resolved film, FilmDocument doc, CancellationToken ct)
+    private async Task<(FilmPlan? Plan, string? Error, string Aspect)> PlanAsync(FilmService.Resolved film, FilmDocument doc, string? actorId, CancellationToken ct)
     {
         var clips = new List<FilmPlanClip>();
+        VideoDspInfo? first = null;
         foreach (var item in doc.Items)
         {
-            var clip = Resolve(film.Project, item.File);
-            if (!clip.IsOk) return (null, clip.Error);
+            var clip = Resolve(film.Project, item.File, actorId);
+            if (!clip.IsOk) return (null, clip.Error, doc.Aspect);
             var info = await dsp!.ProbeAsync(clip.Value!.Full, ct);
-            if (info is null) return (null, $"Клип не разобран как видео: {item.File}");
+            if (info is null) return (null, $"Клип не разобран как видео: {item.File}", doc.Aspect);
+            first ??= info;
             var start = Math.Clamp(item.Trim[0], 0, Math.Max(0, info.Seconds - MinPiece));
             var end = Math.Min(item.Trim[1], info.Seconds);
-            if (end - start < MinPiece) return (null, $"Обрезка клипа {item.File} выходит за его длину ({info.Seconds:0.#} с)");
+            if (end - start < MinPiece) return (null, $"Обрезка клипа {item.File} выходит за его длину ({info.Seconds:0.#} с)", doc.Aspect);
             clips.Add(new FilmPlanClip(clip.Value.Full, start, end, info.HasAudio));
         }
         FilmPlanMusic? music = null;
         if (doc.Music is { } m)
         {
-            var track = Resolve(film.Project, m.File);
-            if (!track.IsOk) return (null, track.Error);
+            var track = Resolve(film.Project, m.File, actorId);
+            if (!track.IsOk) return (null, track.Error, doc.Aspect);
             music = new FilmPlanMusic(track.Value!.Full, m.Volume, m.FadeOut);
         }
-        var size = FilmFormat.AspectSize(doc.Aspect) ?? (1280, 720);
+        // Формат фильма — формат первой сцены: размер её клипа (чётный, потолок 4096), а не всегда 720p; сцены другого
+        // формата получают чёрные полосы (scale…decrease + pad). Размер не определился — прежний 1280×720 по пропорциям
+        var size = first is { Width: > 0, Height: > 0 }
+            ? FilmFormat.AssembleSize(first.Width, first.Height)
+            : FilmFormat.AspectSize(doc.Aspect) ?? (1280, 720);
+        var aspect = first is { Width: > 0, Height: > 0 } ? FilmFormat.AspectOfSize(first.Width, first.Height) : doc.Aspect;
         return (new FilmPlan(size.Width, size.Height, 24, clips,
-            [.. doc.Cuts.Select(c => new FilmPlanCut(c.Type, c.Sec))], music, Timeout), null);
+            [.. doc.Cuts.Select(c => new FilmPlanCut(c.Type, c.Sec))], music, FilmFormat.ScaledTimeout(Timeout, size.Width, size.Height)),
+            null, aspect);
     }
 
     // film.mp4 → film.v2.mp4 → …: CreateNew через Move без перезаписи; временный файл лежит в той же папке
@@ -248,7 +259,7 @@ public sealed class FilmAssembler(
     {
         try
         {
-            if (films.State(ownerId, scope, film.Relative).Value is { } state)
+            if (films.StateOf(ownerId, scope, film, films.Films.ReadFile(film.Full)).Value is { } state)
                 await films.Threads.BroadcastFilmAsync(ownerId, scope.Key, film.Relative, state);
         }
         catch (Exception ex)

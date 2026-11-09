@@ -12,7 +12,8 @@
 # output_config срабатывает серверный дефолт, и ответ идёт сразу текстом.
 #
 # Всё остальное проксируется как есть, ответ — потоком (SSE). Невалидный JSON — fail-open.
-import gzip, http.client, json, os, re, sys, threading, time
+import base64, contextlib, gzip, hashlib, http.client, json, os, re, sys, threading, time
+from collections import Counter, deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -25,9 +26,49 @@ PORT = int(os.environ.get("LISTEN_PORT", "18021"))
 #   on     — пропускаем output_config: размышления включены, длина не ограничена;
 #   budget — как on, плюс thinking_token_budget=THINKING_BUDGET (нужен патч Anthropic-роутера
 #            vLLM, иначе поле молча игнорируется — см. vllm-patch/).
+#   hybrid — решение на каждый запрос по телу (thinking_decision): шаг планирования (последнее
+#            сообщение — текст человека, или результат инструмента с is_error) идёт как budget,
+#            продолжение после инструмента — как off плюс SAMPLING_FAST. Повод — замеры
+#            2026-10-08: на шагах после инструмента размышления не улучшают вызовы, а токены
+#            удваивают; без размышлений нужна защита от петли presence_penalty (карточка Qwen).
 THINKING_MODE = os.environ.get("THINKING_MODE", "off")
 THINKING_BUDGET = int(os.environ.get("THINKING_BUDGET", "512"))
 STRIP_KEYS = ("output_config",) if THINKING_MODE == "off" else ()
+# Сэмплинг локальной модели (замер 2026-10-08, flashnext-logs/sweep/verb-*): CLI шлёт
+# temperature=1 всегда, а у 27B при 1.0 — 4,7% ответов текстом вместо вызова инструмента и
+# ответы в среднем 920 токенов; при 0.7/0.8/20 — 0,7% и 790 (с директивой краткости в карте — 540).
+# Формат key=value через запятую (temperature=0.7,top_p=0.8,top_k=20): JSON в Environment=
+# systemd не переживает — кавычки он снимает. Перебивает значения CLI в запросе на локаль;
+# пусто — не трогать. В облако (автосжатие) не применяется: тело для него снимается до правки.
+def _parse_kv(text):
+    return {k: (int(v) if v.lstrip("-").isdigit() else float(v))
+            for k, v in (kv.split("=", 1) for kv in text.split(",") if kv)}
+
+
+SAMPLING = _parse_kv(os.environ.get("SAMPLING", ""))
+# Добавка к сэмплингу на шагах БЕЗ размышлений (off и быстрая ветка hybrid): presence_penalty=1.5 —
+# штатная защита Qwen от повторов в режиме без размышлений; внутри размышлений штраф вреден
+# (смешение языков, синтаксис кода), поэтому на шагах с размышлениями не применяется.
+# Поле presence_penalty принимает только патченный Anthropic-роутер (vllm-patch/presence-penalty).
+SAMPLING_FAST = _parse_kv(os.environ.get("SAMPLING_FAST", ""))
+# Гибрид v2 (замер 2026-10-08 вечером): быстрая ветка — только после результатов инструментов ЧТЕНИЯ.
+# В v1 (fast после любого tool_result) модель без размышлений теряла дисциплину «прочитал →
+# записал → следующий»: читала всё подряд, писала документ разом в лимит вывода, сводку без мысли
+# (hyb-2a: 101k токенов, 25 ошибок фактов). После Write/Edit/Bash и перед сводкой размышления нужны.
+HYBRID_FAST_AFTER = frozenset(x for x in os.environ.get("HYBRID_FAST_AFTER", "Read,Grep,Glob").split(",") if x)
+# Подмена усилия рассуждений (замер 2026-10-08: medium против low). CLI шлёт output_config.effort
+# из --effort (ccs даёт только low); шаблон Qwen3.8 принимает xhigh/medium/low. Пусто — не трогать.
+EFFORT_OVERRIDE = os.environ.get("EFFORT_OVERRIDE", "")
+# Снимок префикса первого хода (хранитель кэша, 2026-10-08): у первого запроса сессии (одно
+# сообщение) сохраняем model + tools + system в PREFIX_SNAPSHOT_DIR/<подпись>.json — ровно
+# то, что у всех сессий одной персоны в одном проекте совпадает (замер: 12,5–15k токенов из
+# 20,7k). prefix_keeper.py раз в несколько минут на холостом движке шлёт этот снимок с
+# max_tokens=1 и держит префикс в кэше: первый ответ 3,5 с вместо 8–10. Текста человека в
+# снимке нет (messages не сохраняются). Пусто — выключено. Повторная запись одной подписи —
+# не чаще раза в 10 минут.
+PREFIX_SNAPSHOT_DIR = os.environ.get("PREFIX_SNAPSHOT_DIR", "")
+PREFIX_SNAPSHOT_MIN_INTERVAL = int(os.environ.get("PREFIX_SNAPSHOT_MIN_INTERVAL", "600"))
+_prefix_snapshot_written = {}
 HOP = {"connection", "keep-alive", "proxy-connection", "transfer-encoding", "te",
        "trailer", "upgrade", "content-length", "host"}
 
@@ -118,17 +159,23 @@ PRUNE_MIN_TOKENS = int(os.environ.get("PRUNE_MIN_TOKENS", "24000"))
 # граница встаёт первый раз, дальше полосы идут через ступень: G, G+S, G+2S…
 #
 # Значение выбирается ОДНИМ неравенством: пока прунинг молчит, usage обязан остаться ниже
-# порога автосжатия CLI (232k при незаданной CLAUDE_CODE_AUTO_COMPACT_WINDOW). Худший ход,
-# на котором прунинг ещё молчит, несёт G − 1 по нашей оценке; к нему прибавляются недосчёт
-# огрубления системной части (ниже 13.6k при SYSTEM_ROUNDING_CHARS = 50 000) и один большой
+# порога автосжатия CLI — порога, а не базы окна:
+#
+#     порог = min(окно, CLAUDE_CODE_AUTO_COMPACT_WINDOW) − min(CLAUDE_CODE_MAX_OUTPUT_TOKENS, 20000) − 13000
+#
+# У локальной модели база 232k: при лимите вывода 8192 порог был ≈211k, с 2026-10-08 (20000) —
+# ≈199k. Худший ход, на котором прунинг ещё молчит, несёт G − 1 по нашей оценке; сверх него
+# usage может нести недосчёт средней оценки (до 5.3 %, «Мерка контекста» в README), недосчёт
+# огрубления системной части (до 13.5k при SYSTEM_ROUNDING_CHARS = 50 000) и один большой
 # Read, который придёт следующим (25k):
 #
-#     190 000 + 13 600 + 25 000 = 228 600 < 232 000
+#     150 000 × 1.05 + 13 500 + 25 000 = 196 000 < 199 000
 #
-# Отсюда 190 000. Прежние 150 000 брались при огрублении до 100k символов (недосчёт до 27k) и
-# при первой ступени, которой больше нет: с ней порог включения задавался не контекстом, а
-# накопленным обрезаемым объёмом, и запас приходилось держать вдвое больше.
-PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "190000"))
+# 2026-10-15: прежние 190 000 сравнивались с базой 232k вместо порога и после подъёма лимита
+# вывода легли прямо на порог — за 1116 запросов ни одной обрезки, чаты доезжали до сжатия.
+# Смена CLAUDE_CODE_MAX_OUTPUT_TOKENS или CLAUDE_CODE_AUTO_COMPACT_WINDOW двигает порог —
+# гейт пересчитать (держит тест test_гейт_оставляет_запас_до_автосжатия_CLI).
+PRUNE_MIN_CONTEXT_TOKENS = int(os.environ.get("PRUNE_MIN_CONTEXT_TOKENS", "150000"))
 # Огрубление системной части в оценке контекста — стателесс-гистерезис. История append-only и
 # только растёт, а системная часть НЕ обязана: секции промпта этого продукта пересобираются
 # каждый ход. Похудей системный блок у края полосы — k упал бы, граница отъехала назад, и
@@ -163,8 +210,10 @@ PRUNE_INPUTS = os.environ.get("PRUNE_INPUTS", "off")
 # Резать ли старые размышления. Отдельный флаг: у thinking-блоков есть подпись (vLLM блок без
 # неё принимает — проверено). Серия 23.09 (два чата, три варианта × три повтора, лимит 16384):
 # обрезка безвредна — итоговые отчёты с обрезкой несут те же факты, что контроль. Важно, ГДЕ
-# она что-то даёт: шаблон Qwen3 (preserve_thinking=false) и так отбрасывает размышления всех
+# она что-то даёт: шаблон Qwen3 при preserve_thinking=false отбрасывает размышления всех
 # прошлых ходов пользователя, в промпт попадают только блоки текущего хода — их и снимаем.
+# С 2026-10-08 стенд работает с preserve_thinking=true (блоки прошлых ходов остаются в промпте,
+# замер: та же точность, −37…60 % токенов); флаг off при этом важнее — обрезка резала бы и их.
 # Дефолт off сохранён как предохранитель на смену модели; в бою включается через mode.conf.
 PRUNE_THINKING = os.environ.get("PRUNE_THINKING", "off")
 # Разбор каждого запроса в журнал. ВЫКЛЮЧЕН по умолчанию: в лог попадает начало реплики,
@@ -224,6 +273,24 @@ COMPACT_SIGNATURE = os.environ.get(
 # Запрос сжатия при живом стенде молча уходил бы на локаль — те самые 330–430 с стоп-мира.
 # Две величины отвечают на разные вопросы и совпадали случайно.
 COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS", "150000"))
+# Фиксированный словарь значений маркера сжатия: шлюз ставит x-ccs-compaction, сырой CLI
+# (ход мимо шлюза) — x-claude-code-compaction. Значения те же, что у CLI (auto|manual|reactive);
+# вне словаря — мусор, по нему маршрут не едет.
+COMPACT_HEADER_VALUES = {"auto", "manual", "reactive"}
+# Сжатие с сохранением дословного (план «сжатие с сохранением дословного», шаг 5): к сводке в
+# ответе сжатия дописывается <ccs-preserved> — постановка, реплики человека, файлы, проверки,
+# план и якоря, собранные compactor.py по ОРИГИНАЛЬНОМУ телу. Дописывается в тот же текстовый
+# блок, где <summary> (только его CLI 2.1.301 берёт в запись сжатия — см. ВставкаБлока), а
+# текст вне <analysis>/<summary> CLI сохраняет: блок переживает сжатие дословно. Это расширение
+# исключения «прокси — труба» ровно на этот один тип запроса; логика — в compactor.py,
+# состояния у прокси по-прежнему нет. Включение — после замера шага 6.
+COMPACT_PRESERVE = os.environ.get("COMPACT_PRESERVE", "off")
+try:
+    import compactor
+except Exception as _e:  # fail-open: без модуля прокси работает как раньше, вставки нет
+    compactor = None
+    print(f"compactor.py не загружен ({_e!r}) — COMPACT_PRESERVE не действует",
+          file=sys.stderr, flush=True)
 
 # --- Карточка в ленте чата: событие о сдвиге границы -----------------------------------------
 #
@@ -233,8 +300,8 @@ COMPACT_MIN_CONTEXT_TOKENS = int(os.environ.get("COMPACT_MIN_CONTEXT_TOKENS", "1
 # сдвигами обрезка бесплатна (префикс тот же), и карточка на каждом ходу была бы шумом.
 #
 # Пусто = выключено: прокси остаётся прежним, пока адрес не задан в юните. Дефолт именно
-# такой, потому что служба запускается из рабочего дерева репозитория — код на ветке
-# разработки не должен менять поведение живого стенда до отмашки.
+# такой, потому что код новой фичи не должен менять поведение живого стенда до отмашки
+# (служба запускается из каталога выкладки /opt/ccs/proxy, см. README «Развёртывание»).
 BACKEND_EVENTS_URL = os.environ.get("BACKEND_EVENTS_URL", "")
 # Секрет ручки: тот же конфиг бэкенда, что и ключ облака, — вторую копию секрета в юните не
 # заводим по той же причине (разойдётся с первой).
@@ -246,9 +313,233 @@ EVENT_TIMEOUT = float(os.environ.get("EVENT_TIMEOUT", "5"))
 # проверено на стенде 2026-09-23: CLI дописывает его к каждому запросу к API.
 EVENT_SESSION_HEADER = os.environ.get("EVENT_SESSION_HEADER", "X-CCS-Session")
 
+# --- Предохранитель от петли в потоке ответа ---------------------------------------------------
+#
+# 2026-10-15: срез бюджета размышлений посреди плана → vLLM закрывает </think> → модель
+# продолжает план текстом и повторяет его по кругу, пока человек не нажмёт «Стоп». Детектора
+# повторов нет ни в роутере vLLM, ни в CLI. presence_penalty снижает повтор токенов, но не
+# стратегии. Поэтому прокси сам следит за дельтами thinking/text: n-грамма слов повторилась
+# LOOP_REPEATS раз в последних LOOP_WINDOW словах — петля. Тогда upstream закрывается, клиенту
+# закрывается открытый блок, и запрос один раз повторяется с иным сэмплингом; его поток
+# приклеивается к тому же ответу (без второго message_start, индексы блоков сдвинуты). Вторая
+# петля — ответ усекается с пометкой и штатным хвостом message_delta/message_stop.
+#
+# Дефолт off: код новой фичи не должен менять поведение живого стенда до отмашки — включает
+# mode.conf. Откат: LOOP_GUARD=off и рестарт.
+LOOP_GUARD = os.environ.get("LOOP_GUARD", "off")
+LOOP_WINDOW = int(os.environ.get("LOOP_WINDOW", "400"))        # слов в скользящем окне
+LOOP_NGRAM = int(os.environ.get("LOOP_NGRAM", "10"))           # длина n-граммы, слов
+LOOP_REPEATS = int(os.environ.get("LOOP_REPEATS", "3"))        # сколько повторов — петля
+LOOP_MIN_WORDS = int(os.environ.get("LOOP_MIN_WORDS", "120"))  # раньше не срабатывать
+LOOP_SPAN = int(os.environ.get("LOOP_SPAN", "30"))             # столько слов обязаны совпасть
+# Повтор запроса после петли: добавки к сэмплингу (presence_penalty потолком 2.0 — граница vLLM).
+LOOP_RETRY = os.environ.get("LOOP_RETRY", "on")
+LOOP_RETRY_SAMPLING = _parse_kv(os.environ.get("LOOP_RETRY_SAMPLING",
+                                               "presence_penalty=0.5,temperature=0.1"))
+
+# --- Предохранитель от мусорной генерации ---------------------------------------------------
+#
+# 2026-10-15: три хода исполнителей (промпты 66–110K) после попадания в prefix cache выдали шум
+# до упора в лимит 20 000 токенов, 569 с на ход: «compressа应急arco1ács Vat�业务能力igel…».
+# Причина — vLLM #60174 (DFlash2-драфтер + prefix cache на compressed-tensors). Предохранитель
+# петли такое не ловит: повтора нет, есть шум. Слово мусорное, если в нём смешаны письменности,
+# есть U+FFFD или оно длинное и без единого разделителя; доля таких слов в скользящем окне
+# JUNK_RATIO и выше — upstream закрывается, ответ обрывается пометкой. Повтора нет: тот же префикс
+# попадёт в тот же кэш и выдаст тот же мусор.
+#
+# 2026-10-17: второй признак — вырождение в цепочку одинаковых «слов» без букв и цифр. Ход
+# 17:53 (контекст 88K, 98,5 % из кэша): «зависит-зависит от (monoлит, ) … Про-ов- Проверя-»,
+# затем больше сотни строк из одного «-» до конца хода. Доля мусорных слов такое не видит
+# (в «-» нет письменностей), детектор петли тоже — «слова» без букв он выкидывает намеренно,
+# ради таблиц. Списки, таблицы и разделители чередуют такие «слова» с текстом, подряд их
+# десятками не бывает.
+#
+# Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
+# Откат: JUNK_GUARD=off и рестарт.
+JUNK_GUARD = os.environ.get("JUNK_GUARD", "off")
+JUNK_WINDOW = int(os.environ.get("JUNK_WINDOW", "80"))          # слов в скользящем окне
+JUNK_RATIO = float(os.environ.get("JUNK_RATIO", "0.35"))        # доля мусорных слов — обрыв
+JUNK_MIN_WORDS = int(os.environ.get("JUNK_MIN_WORDS", "60"))    # раньше не срабатывать
+JUNK_RUN = int(os.environ.get("JUNK_RUN", "40"))                # одинаковых «слов» без букв подряд
+# 2026-10-19: третий признак — узор внутри одного «слова». Ход 17:46 (rework-задача, контекст ~90K):
+# после «(сод-т-в-ог-д) … из-за-ог-ог-ог-ог-ог» ответ ушёл в 16 321 пятёрку подряд до лимита
+# вывода, чат останавливал человек. Доля мусорных слов не сработала: на 18 000 символов пришлось
+# 64 «слова», пробег пятёрок — одно из них, и оценивалось бы оно только по пробелу после него.
+# Цепочка «like-» была 9 при пороге 40. Поэтому: (а) пробег одного символа с буквой или цифрой
+# от JUNK_CHAR_RUN и повтор узора из 2–4 символов от JUNK_PERIOD_REPEATS раз — мусор, причём
+# проверяется и недописанный хвост слова, а не только слово по пробелу; знаки без букв
+# («────», «-----») не считаются — это разделители; (б) цепочка одинаковых слов с буквами — от
+# JUNK_RUN_WORD, у «слов» без букв порог JUNK_RUN прежний (таблицы). Число «1000000000000» и
+# base64 «AAAA…» в тексте короче JUNK_CHAR_RUN, «../» в путях реже JUNK_PERIOD_REPEATS.
+JUNK_RUN_WORD = int(os.environ.get("JUNK_RUN_WORD", "12"))            # одинаковых слов с буквами подряд
+JUNK_CHAR_RUN = int(os.environ.get("JUNK_CHAR_RUN", "48"))            # пробег одного символа в слове
+JUNK_PERIOD_REPEATS = int(os.environ.get("JUNK_PERIOD_REPEATS", "12"))  # повторов узора 2–4 символа
+# 2026-10-21: четвёртый признак — цепочка одинаковых чисел. Ход Киры 23:09 (контекст ~60K): после
+# «до-1:», «ре-1 в этапе», «вместе-1 вместе» размышление ушло в 2743 строки «-1» до среза бюджета.
+# Числа из цепочек исключены ради таблиц и матриц («0 0 0» × 300), петля их тоже не видит («1» без
+# букв). Поэтому у чисел свой порог JUNK_RUN_NUM — выше любой честной строки нулей в прозе.
+JUNK_RUN_NUM = int(os.environ.get("JUNK_RUN_NUM", "500"))             # одинаковых чисел подряд
+
+# Тело запроса, на котором сработал предохранитель петли или мусора (2026-10-17). Причину
+# срывов (порча состояния после prefix cache, DFlash2 или сама модель) по транскриптам не
+# различить — нужен тот самый запрос, чтобы переиграть его через кэш и мимо (cache_salt).
+# В отличие от PRUNE_DUMP_DIR пишутся только сработки — единицы в день, а не каждый запрос.
+# В файлах чужие чаты: каталог 0700, файлы 0600, хранятся GUARD_DUMP_KEEP последних.
+# Пусто — выключено. Откат: убрать строку из mode.conf и рестарт.
+GUARD_DUMP_DIR = os.environ.get("GUARD_DUMP_DIR", "")
+GUARD_DUMP_KEEP = int(os.environ.get("GUARD_DUMP_KEEP", "30"))
+
+# Карантин сессии после мусора (2026-10-17). Переигровка сработки 22:11 показала: мусор даёт
+# испорченное состояние в prefix cache, а не модель. Тот же запрос мимо кэша (cache_salt) — 7 из 7
+# чисто, через кэш после порчи — 6 из 6 мусор с первых слов. Поэтому «Повтори ход» бесполезен:
+# повтор попадёт в те же блоки. На срыве прокси сам переспрашивает с новой солью (полный префилл,
+# ~70 с на 95K), а сессия и дальше ходит со своей солью: один пересчёт — и кэш снова работает,
+# только в чистом пространстве, куда испорченные блоки не попадают. Остальных сессий это не
+# касается. Карантин живёт в памяти процесса: рестарт прокси его снимает.
+# Дефолт off: включает mode.conf. Откат: CACHE_QUARANTINE=off и рестарт.
+CACHE_QUARANTINE = os.environ.get("CACHE_QUARANTINE", "off")
+_карантин = {}  # заголовок сессии -> cache_salt
+
+# --- Атрибуция промахов prefix cache (2026-10-24) -------------------------------------------
+#
+# Повод: на проде Strata по 5–7 полных перечитываний 130–420K токенов в день (1–2,5 мин каждое,
+# сосед в это время декодирует 4 tok/s), и по размерам из engine.log не понять, ЧЕМ новый
+# промпт разошёлся с прошлым: клиент перестроил системную часть, историю или контекст стал
+# короче. PRUNE_DUMP_DIR отвечает на это, но хранит чужие чаты целиком — надолго не включить.
+# Здесь — без тел: на каждый запрос запоминается отпечаток (хеш системной части и хеш каждого
+# сообщения), а по концу ответа, если из кэша взято меньше MISS_RATIO промпта, в журнал уходит
+# одна строка: сессия, цифры кэша, что именно разошлось и на каком сообщении. Сжатие в облако
+# (compact) не учитывается: его usage — чужой. Откат: MISS_LOG=off и рестарт.
+MISS_LOG = os.environ.get("MISS_LOG", "on")
+MISS_RATIO = float(os.environ.get("MISS_RATIO", "0.5"))
+_отпечатки = {}  # заголовок сессии -> отпечаток последнего запроса (+ "prompt": размер по usage)
+_отпечатки_lock = threading.Lock()
+
+
+def _хеш(значение):
+    return hashlib.sha256(json.dumps(значение, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+
+
+def _размер(значение):
+    """Размер в символах канонического JSON — мерка «сколько места занимает», без содержимого."""
+    return len(json.dumps(значение, ensure_ascii=False, sort_keys=True))
+
+
+def _состав(m):
+    """Что за сообщение, без текста: роль, виды блоков (имя инструмента у tool_use), размер.
+    Пример: «user 180K [tool_result, text]», «assistant 2K [tool_use Read]»."""
+    if not isinstance(m, dict):
+        return f"? {_размер(m) // 1000}K"
+    content = m.get("content")
+    виды = []
+    if isinstance(content, list):
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            t = b.get("type") or "?"
+            if t == "tool_use" and b.get("name"):
+                t = f"tool_use {b['name']}"
+            if t not in виды:
+                виды.append(t)
+    elif isinstance(content, str):
+        виды = ["text"]
+    return f"{m.get('role', '?')} {_размер(m) // 1000}K [{', '.join(виды)}]"
+
+
+def fingerprint(doc):
+    """Отпечаток тела ПОСЛЕ правок прокси: системная часть (model + system + tools) и хеш каждого
+    сообщения. Сравнение соседних отпечатков одной сессии говорит, где разошёлся префикс, не
+    храня самих тел. Рядом — размеры (символы) и состав: чем набит контекст после расхождения."""
+    msgs = doc.get("messages") if isinstance(doc.get("messages"), list) else []
+    return {"system": _хеш([doc.get("model"), doc.get("system"), doc.get("tools")]),
+            "system_chars": (_размер(doc.get("system")), _размер(doc.get("tools"))),
+            "msgs": [_хеш(m) for m in msgs],
+            "состав": [_состав(m) for m in msgs]}
+
+
+def miss_verdict(прошлый, отпечаток, чтение, промпт):
+    """Текст причины промаха по двум отпечаткам. Чистая функция — для тестов."""
+    if прошлый is None:
+        return "первого запроса сессии прокси не видел (новая сессия или рестарт прокси)"
+    части = []
+    if прошлый["system"] != отпечаток["system"]:
+        части.append("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ (model/system/tools)")
+    a, b = прошлый["msgs"], отпечаток["msgs"]
+    общих = 0
+    for x, y in zip(a, b):
+        if x != y:
+            break
+        общих += 1
+    if общих == len(a) and len(b) >= len(a):
+        части.append(f"история продолжает прошлую ({len(a)}→{len(b)} сообщений)"
+                     + ("" if части else " — тело то же, блоки вытеснены из кэша движка"))
+    else:
+        части.append(f"история разошлась на сообщении {общих + 1} из {len(b)} "
+                     f"(в прошлом {len(a)}, совпали первые {общих})")
+        состав = отпечаток.get("состав") or []
+        хвост = состав[общих:общих + 6]
+        if хвост:
+            части.append("состав после расхождения: " + "; ".join(f"#{общих + 1 + i} {x}" for i, x in enumerate(хвост))
+                         + (f"; … ещё {len(состав) - общих - 6}" if len(состав) - общих > 6 else ""))
+    sc = отпечаток.get("system_chars")
+    if sc:
+        части.append(f"системная часть {sc[0] // 1000}K симв + tools {sc[1] // 1000}K")
+    if прошлый.get("prompt"):
+        части.append(f"промпт {прошлый['prompt']}→{промпт}")
+    return "; ".join(части)
+
+
+def attribute_miss(сессия, отпечаток, usage, prefill):
+    """По концу ответа: запоминает отпечаток сессии и, если кэш взял меньше MISS_RATIO промпта,
+    пишет строку-атрибуцию в журнал. Fail-open: любая ошибка — молча, ход не задевает."""
+    try:
+        чтение, промпт = usage_totals(usage)
+        with _отпечатки_lock:
+            прошлый = _отпечатки.get(сессия)
+            _отпечатки[сессия] = dict(отпечаток, prompt=промпт)
+            while len(_отпечатки) > 2000:  # прокси живёт неделями: старые сессии не копить
+                del _отпечатки[next(iter(_отпечатки))]
+        if MISS_LOG != "on" or not промпт or чтение is None or чтение >= промпт * MISS_RATIO:
+            return
+        print(f"промах кэша: сессия {сессия or '-'}: из кэша {чтение} из {промпт} "
+              f"({100 * чтение // промпт}%), prefill {prefill if prefill is None else round(prefill, 1)} с — "
+              f"{miss_verdict(прошлый, отпечаток, чтение, промпт)}", flush=True)
+    except Exception as e:  # noqa: BLE001 — журнал не смеет уронить ход
+        print(f"атрибуция промаха не удалась: {e!r}", file=sys.stderr, flush=True)
+
+# --- Прунинг картинок -----------------------------------------------------------------------
+#
+# Картинки (скриншоты через Read, вложения человека) живут в истории вечно: CLI шлёт её целиком
+# на каждом ходу. Сверх `--limit-mm-per-prompt` движок отвечает 400 «At most N image(s) may be
+# provided in one prompt» на КАЖДЫЙ следующий ход — чат мёртв и изнутри не чинится (инцидент
+# 14.09.2026). И каждый забытый скриншот 1920×1080 — это ~2K токенов контекста и KV навсегда.
+#
+# Правило детерминировано по позиции: оставляем картинки последнего сообщения человека и
+# IMAGE_KEEP самых свежих, остальные — текстовой заглушкой; сверх IMAGE_MAX режем старейшие
+# даже из оставленных. Картинки только дописываются в хвост, поэтому вырезанная однажды остаётся
+# вырезанной во всех следующих запросах: промах префикс-кэша — один, в момент вырезания.
+#
+# Дефолт off по той же причине, что у предохранителя петли: включает mode.conf.
+# Откат: IMAGE_PRUNE=off и рестарт.
+IMAGE_PRUNE = os.environ.get("IMAGE_PRUNE", "off")
+IMAGE_KEEP = int(os.environ.get("IMAGE_KEEP", "4"))
+IMAGE_MAX = int(os.environ.get("IMAGE_MAX", "12"))
+# Бюджет энкодера Qwen: патч 32×32 пикселя на токен, крупнее ~2K токенов картинку ужимают
+# (замер 15.10: 512×512 — 258, 1024×768 — 770, 1920×1080 — 2042).
+IMAGE_PATCH = 32
+IMAGE_TOKENS_CAP = 2048
+
 stats = {"requests": 0, "stripped": 0, "pruned_blocks": 0, "pruned_chars": 0,
+         "images_pruned": 0, "images_kept": 0, "image_tokens_saved": 0,
          "compact_routed": 0, "compact_fallback": 0, "compact_signature_small": 0,
-         "events_sent": 0, "events_failed": 0}
+         "compact_routed_header": 0, "compact_cloud_retry": 0,
+         "compact_preserved": 0, "compact_preserve_failed": 0, "usage_normalized": 0,
+         "events_sent": 0, "events_failed": 0, "hybrid_think": 0, "hybrid_fast": 0,
+         "prefix_snapshots": 0, "loops_detected": 0, "loops_retried": 0,
+         "loops_truncated": 0, "loop_guard_errors": 0,
+         "junk_aborts": 0, "junk_words_max_ratio": 0.0, "guard_dumps": 0,
+         "quarantine_retries": 0, "quarantine_failed": 0, "quarantine_salted": 0,
+         "quarantine_loop_reused": 0}
 
 # CLI вставляет в историю system-сообщение "<total_tokens>N tokens left</total_tokens>" на
 # каждом шаге, и N каждый раз новое. Шаблон Qwen требует system только первым, поэтому
@@ -313,7 +604,7 @@ PRUNE_THINKING_PLACEHOLDER = "[Old thinking cleared]"
 
 
 def _prunable_size(content):
-    """Длина вывода в символах или None, если форму не разбираем (картинки и прочее — не трогаем)."""
+    """Длина вывода в символах или None, если форму не разбираем (картинки режет prune_images)."""
     if isinstance(content, str):
         return len(content)
     if isinstance(content, list) and all(
@@ -585,6 +876,166 @@ def prune_tool_results(msgs, keep_tail_tokens=None, step_tokens=None, min_chars=
     return out, freed, len(victims)
 
 
+def image_size(data):
+    """(ширина, высота) по заголовку PNG/JPEG/WebP/GIF или None. Картинку не декодирует."""
+    if not isinstance(data, (bytes, bytearray)) or len(data) < 10:
+        return None
+    if data[:8] == b"\x89PNG\r\n\x1a\n" and len(data) >= 24 and data[12:16] == b"IHDR":
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP" and len(data) >= 30:
+        вид = data[12:16]
+        if вид == b"VP8 ":
+            return (int.from_bytes(data[26:28], "little") & 0x3FFF,
+                    int.from_bytes(data[28:30], "little") & 0x3FFF)
+        if вид == b"VP8L":
+            биты = int.from_bytes(data[21:25], "little")
+            return 1 + (биты & 0x3FFF), 1 + ((биты >> 14) & 0x3FFF)
+        if вид == b"VP8X":
+            return 1 + int.from_bytes(data[24:27], "little"), 1 + int.from_bytes(data[27:30], "little")
+        return None
+    if data[:2] == b"\xff\xd8":
+        # Маркеры по порядку до SOFn; EXIF и прочие APPn пропускаем по их длине.
+        i = 2
+        while i + 4 <= len(data):
+            if data[i] != 0xFF:
+                return None
+            маркер = data[i + 1]
+            if маркер == 0xFF:  # заполнитель
+                i += 1
+                continue
+            if маркер in (0xD8, 0x01) or 0xD0 <= маркер <= 0xD7:
+                i += 2
+                continue
+            длина = int.from_bytes(data[i + 2:i + 4], "big")
+            if 0xC0 <= маркер <= 0xCF and маркер not in (0xC4, 0xC8, 0xCC):
+                if i + 9 > len(data):
+                    return None
+                return int.from_bytes(data[i + 7:i + 9], "big"), int.from_bytes(data[i + 5:i + 7], "big")
+            i += 2 + длина
+    return None
+
+
+def _image_dims(block):
+    """Размер картинки из base64 блока. Декодируем начало; заголовок JPEG с крупным EXIF —
+    дальше 96 КБ, тогда весь файл (бывает редко, а на каждом ходу картинок не больше IMAGE_MAX)."""
+    src = block.get("source")
+    if not isinstance(src, dict) or src.get("type") != "base64" or not isinstance(src.get("data"), str):
+        return None
+    сырьё = src["data"]
+    try:
+        начало = сырьё[:131072]
+        размер = image_size(base64.b64decode(начало[:len(начало) // 4 * 4]))
+        if размер is None and len(сырьё) > len(начало):
+            размер = image_size(base64.b64decode(сырьё))
+    except (ValueError, TypeError):
+        return None
+    return размер
+
+
+def image_tokens(dims):
+    """Оценка токенов картинки: патч 32×32 на токен, потолок — бюджет энкодера."""
+    if not dims:
+        return IMAGE_TOKENS_CAP
+    w, h = dims
+    return min(IMAGE_TOKENS_CAP, -(-w // IMAGE_PATCH) * -(-h // IMAGE_PATCH))
+
+
+def image_placeholder(dims, tokens):
+    if dims:
+        return (f"[картинка {dims[0]}×{dims[1]}, ~{tokens} токенов, вырезана прокси — "
+                "открой заново, если нужна]")
+    return f"[картинка, ~{tokens} токенов, вырезана прокси — открой заново, если нужна]"
+
+
+def _last_human_index(msgs):
+    """Номер последнего сообщения человека: user-сообщение без tool_result. Ход агента
+    (вызовы инструментов) идёт user-сообщениями с tool_result — их мы человеком не считаем."""
+    for mi in range(len(msgs) - 1, -1, -1):
+        m = msgs[mi]
+        if not isinstance(m, dict) or m.get("role") != "user":
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            return mi
+        if isinstance(c, list) and not any(
+                isinstance(b, dict) and b.get("type") == "tool_result" for b in c):
+            return mi
+    return None
+
+
+def prune_images(msgs, keep=None, max_images=None):
+    """Вырезает старые картинки. Возвращает (сообщения, сводка). Вход не мутирует.
+
+    Сводка: {"pruned", "kept", "tokens"} — вырезано, оставлено, сколько токенов сэкономлено.
+    Картинок нет или резать нечего — те же самые `msgs` (тело уйдёт байт в байт).
+    """
+    keep = IMAGE_KEEP if keep is None else max(0, keep)
+    max_images = IMAGE_MAX if max_images is None else max(0, max_images)
+
+    # (номер сообщения, номер блока, номер внутри tool_result или None) в порядке появления
+    found = []
+    for mi, m in enumerate(msgs):
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            continue
+        for bi, b in enumerate(m["content"]):
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "image":
+                found.append((mi, bi, None))
+            elif b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+                for ci, x in enumerate(b["content"]):
+                    if isinstance(x, dict) and x.get("type") == "image":
+                        found.append((mi, bi, ci))
+    сводка = {"pruned": 0, "kept": len(found), "tokens": 0}
+    if not found:
+        return msgs, сводка
+
+    человек = _last_human_index(msgs)
+    оставить = set(range(max(0, len(found) - keep), len(found)))
+    оставить |= {i for i, (mi, _, ci) in enumerate(found) if mi == человек and ci is None}
+    # Жёсткий потолок: сверх него движок отвечает 400 на каждый ход — режем старейшие
+    # даже из того, что хотели оставить.
+    if len(оставить) > max_images:
+        оставить = set(sorted(оставить)[len(оставить) - max_images:])
+    жертвы = [f for i, f in enumerate(found) if i not in оставить]
+    if not жертвы:
+        return msgs, сводка
+
+    out = list(msgs)
+    копии = {}  # копируем только задетые сообщения и блоки
+
+    def сообщение(mi):
+        if mi not in копии:
+            m = dict(out[mi])
+            m["content"] = list(m["content"])
+            out[mi] = копии[mi] = m
+        return копии[mi]
+
+    for mi, bi, ci in жертвы:
+        content = сообщение(mi)["content"]
+        if ci is None:
+            исходный = content[bi]
+        else:
+            if content[bi] is msgs[mi]["content"][bi]:
+                b = dict(content[bi])
+                b["content"] = list(b["content"])
+                content[bi] = b
+            исходный = content[bi]["content"][ci]
+        dims = _image_dims(исходный)
+        токенов = image_tokens(dims)
+        заглушка = {"type": "text", "text": image_placeholder(dims, токенов)}
+        if ci is None:
+            content[bi] = заглушка
+        else:
+            content[bi]["content"][ci] = заглушка
+        сводка["tokens"] += токенов
+    сводка["pruned"] = len(жертвы)
+    сводка["kept"] = len(found) - len(жертвы)
+    return out, сводка
+
+
 def _tail_text(msgs, role=None):
     """Текст последнего непустого сообщения: по нему и видно, ход это или запрос сжатия.
 
@@ -605,6 +1056,20 @@ def _tail_text(msgs, role=None):
         if текст.strip():
             return текст
     return ""
+
+
+def compact_header_kind(headers):
+    """Вид сжатия по заголовку-маркеру: x-ccs-compaction (шлюз) или x-claude-code-compaction
+    (ход, идущий мимо шлюза). None — заголовка нет или значение вне словаря (мусор).
+
+    Заголовок — ГЛАВНЫЙ признак: при нём тело любого размера уходит в облако, без проверки
+    сигнатуры и порога. Сигнатура + порог остаются запасным путём, когда заголовка нет.
+    """
+    raw = headers.get("x-ccs-compaction") or headers.get("x-claude-code-compaction")
+    if raw is None:
+        return None
+    v = raw.strip().lower()
+    return v if v in COMPACT_HEADER_VALUES else None
 
 
 def compact_verdict(doc, min_context_tokens=None):
@@ -639,6 +1104,150 @@ def is_compact_request(doc, min_context_tokens=None):
     return compact_verdict(doc, min_context_tokens)[0] == "route"
 
 
+def prefix_snapshot_body(doc):
+    """Снимок префикса из тела первого хода или None, если это не первый ход.
+
+    Берём model, tools и system. Строки трейлера «CCS-Session:»/«CCS-Task:» (если они ещё
+    в системном блоке — до переноса в хвост хода) обрезаем вместе со всем, что после них:
+    они различаются между сессиями, общий префикс заканчивается перед ними.
+    """
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list):
+        return None
+    # Первый ход — ровно одно сообщение человека; служебные сообщения role=system, которые CLI
+    # дописывает следом (напоминания, снимок окружения), ходом не считаются.
+    turn = [m for m in msgs if not (isinstance(m, dict) and m.get("role") == "system")]
+    if len(turn) != 1 or not isinstance(turn[0], dict) or turn[0].get("role") != "user":
+        return None
+    system = doc.get("system")
+    if isinstance(system, str):
+        blocks = [{"type": "text", "text": system}]
+    elif isinstance(system, list):
+        blocks = [dict(b) for b in system if isinstance(b, dict)]
+    else:
+        return None
+    cut = []
+    for b in blocks:
+        t = b.get("text", "")
+        m = re.search(r"^CCS-(Session|Task): ", t, re.M)
+        if m:
+            b = dict(b, text=t[:m.start()])
+            cut.append(b)
+            break
+        cut.append(b)
+    return {"model": doc.get("model"), "tools": doc.get("tools"), "system": cut}
+
+
+def prefix_signature(body):
+    raw = json.dumps({"model": body.get("model"), "tools": body.get("tools"), "system": body.get("system")},
+                     ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(raw).hexdigest()[:16]
+
+
+def save_prefix_snapshot(doc):
+    """Пишет снимок префикса первого хода; True — записан. Любая осечка — молча (fail-open)."""
+    if not PREFIX_SNAPSHOT_DIR:
+        return False
+    try:
+        body = prefix_snapshot_body(doc)
+        if body is None or not body.get("tools"):
+            return False
+        sig = prefix_signature(body)
+        now = time.time()
+        if now - _prefix_snapshot_written.get(sig, 0) < PREFIX_SNAPSHOT_MIN_INTERVAL:
+            return False
+        os.makedirs(PREFIX_SNAPSHOT_DIR, mode=0o700, exist_ok=True)
+        path = os.path.join(PREFIX_SNAPSHOT_DIR, f"{sig}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        _prefix_snapshot_written[sig] = now
+        with lock:
+            stats["prefix_snapshots"] += 1
+        return True
+    except Exception as e:
+        print(f"снимок префикса не записан: {e}", file=sys.stderr, flush=True)
+        return False
+
+
+def apply_sampling(doc, params=None):
+    """Подставляет SAMPLING (или params) в тело запроса; True — тело изменилось."""
+    changed = False
+    for k, v in (SAMPLING if params is None else params).items():
+        if doc.get(k) != v:
+            doc[k] = v
+            changed = True
+    return changed
+
+
+def thinking_decision(doc):
+    """Гибрид: "think" — шаг планирования, "fast" — продолжение после инструмента.
+
+    Решение только по телу, состояния нет. Последнее сообщение — текст человека (новый вопрос,
+    постановка задачи) → think. Последнее сообщение — результаты инструментов без ошибок → fast.
+    Хотя бы один результат с is_error → think: застревание на одном и том же падающем вызове —
+    тот случай, где рассуждение нужно. Непонятная форма → think (безопаснее).
+    """
+    msgs = doc.get("messages")
+    if not isinstance(msgs, list) or not msgs:
+        return "think"
+    # CLI дописывает после результата инструмента служебные сообщения role=system (напоминания,
+    # снимки окружения) — они не ход, их пропускаем; решает последнее содержательное сообщение.
+    # Замер 2026-10-08: без этого быстрая ветка не срабатывала ни разу (59 think / 0 fast).
+    last = next((m for m in reversed(msgs) if not (isinstance(m, dict) and m.get("role") == "system")), None)
+    if not isinstance(last, dict) or last.get("role") != "user":
+        return "think"
+    content = last.get("content")
+    if not isinstance(content, list):
+        return "think"
+    results = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_result"]
+    if not results:
+        return "think"
+    if any(b.get("is_error") for b in results):
+        return "think"
+    # Имя инструмента у результата — по парному tool_use в предыдущем сообщении ассистента.
+    # Неизвестный id (история обрезана, чужая форма) → think: безопаснее подумать лишний раз.
+    names = {}
+    for m in reversed(msgs):
+        if isinstance(m, dict) and m.get("role") == "assistant" and isinstance(m.get("content"), list):
+            names = {b.get("id"): b.get("name") for b in m["content"]
+                     if isinstance(b, dict) and b.get("type") == "tool_use"}
+            break
+    if all(names.get(b.get("tool_use_id")) in HYBRID_FAST_AFTER for b in results):
+        return "fast"
+    return "think"
+
+
+def apply_thinking_mode(doc):
+    """Применяет THINKING_MODE к телу: (изменилось ли тело, решение гибрида или None).
+
+    off — вырезать output_config (серверный дефолт без размышлений) и добавить SAMPLING_FAST;
+    budget — добавить thinking_token_budget; on — ничего; hybrid — budget или off по
+    thinking_decision. Ровно то же, что раньше делали STRIP_KEYS и ветка budget в обработчике.
+    """
+    mode, decision = THINKING_MODE, None
+    if mode == "hybrid":
+        decision = thinking_decision(doc)
+        mode = "budget" if decision == "think" else "off"
+    changed = False
+    if mode == "off":
+        if "output_config" in doc:
+            del doc["output_config"]
+            changed = True
+        if SAMPLING_FAST and apply_sampling(doc, SAMPLING_FAST):
+            changed = True
+    elif mode == "budget" and "thinking_token_budget" not in doc:
+        doc["thinking_token_budget"] = THINKING_BUDGET
+        changed = True
+    if mode != "off" and EFFORT_OVERRIDE and isinstance(doc.get("output_config"), dict) \
+            and doc["output_config"].get("effort") != EFFORT_OVERRIDE:
+        doc["output_config"]["effort"] = EFFORT_OVERRIDE
+        changed = True
+    return changed, decision
+
+
 def compact_body(doc):
     """Тело для облака: то же самое, только `model` подменена. Вход не мутирует.
 
@@ -649,6 +1258,79 @@ def compact_body(doc):
     MiniMax принимает молча — проверено прямым запросом 2026-09-22 (HTTP 200).
     """
     return json.dumps(dict(doc, model=COMPACT_MODEL), ensure_ascii=False).encode("utf-8")
+
+
+def _preserve_failed(где, e):
+    with lock:
+        stats["compact_preserve_failed"] += 1
+    # Только тип и текст исключения: содержимое чата в журнал не берём.
+    print(f"сохранение дословного: {где} не удалось ({e!r}) — сжатие идёт без блока",
+          file=sys.stderr, flush=True)
+
+
+def _без_инструкции_сжатия(msgs):
+    """История без инструкции сжатия CLI — то, по чему считается блок.
+
+    Инструкция приходит последним сообщением человека, и compactor счёл бы её репликой: живая
+    проверка 2026-10-16 положила в блок ~13K символов «Your task is to create a detailed
+    summary…». Сигнатуру знает прокси, поэтому вырезает здесь: текстовые блоки (или строку),
+    начинающиеся с COMPACT_SIGNATURE, в последнем сообщении человека с текстом. Вход не мутирует.
+    """
+    for i in range(len(msgs) - 1, -1, -1):
+        m = msgs[i]
+        if not isinstance(m, dict) or m.get("role") != "user" or not _tail_text([m]).strip():
+            continue
+        c = m.get("content")
+        if isinstance(c, str):
+            остаток = None if c.lstrip().startswith(COMPACT_SIGNATURE) else c
+        else:
+            остаток = [b for b in c if not (isinstance(b, dict) and b.get("type") == "text"
+                       and (b.get("text") or "").lstrip().startswith(COMPACT_SIGNATURE))] or None
+        return msgs[:i] + ([] if остаток is None else [dict(m, content=остаток)]) + msgs[i + 1:]
+    return msgs
+
+
+def preserve_for_compact(doc):
+    """Блок <ccs-preserved> для ответа сжатия; None — вставки не будет.
+
+    Звать по ОРИГИНАЛЬНОМУ телу, до любых правок прокси; блок считается по нему без самой
+    инструкции сжатия (`_без_инструкции_сжатия`). Блок не None — в конец текста
+    последнего сообщения человека (это инструкция сжатия CLI) дописывается
+    `instruction_addendum()`: `doc` меняется на месте, и дополнение едет и в облако, и в
+    фолбэк на локаль. Середина истории не трогается.
+
+    Fail-open: любое исключение compactor — журнал, `compact_preserve_failed`, None и
+    нетронутый `doc`. Тело правится только после того, как всё посчитано.
+    """
+    try:
+        if compactor is None:
+            raise RuntimeError("compactor.py не загружен")
+        блок = compactor.build_preserved(dict(doc, messages=_без_инструкции_сжатия(doc["messages"])))
+        if блок is None:
+            return None
+        добавка = compactor.instruction_addendum()
+        if not isinstance(блок, str) or not isinstance(добавка, str):
+            raise TypeError("compactor вернул не строку")
+        msgs = doc["messages"]
+        # То же сообщение, по которому compact_verdict увидел сигнатуру.
+        for i in range(len(msgs) - 1, -1, -1):
+            m = msgs[i]
+            if not isinstance(m, dict) or m.get("role") != "user" or not _tail_text([m]).strip():
+                continue
+            c = m["content"]
+            if isinstance(c, str):
+                новое = c + "\n\n" + добавка
+            else:
+                j = max(k for k, b in enumerate(c)
+                        if isinstance(b, dict) and b.get("type") == "text")
+                новое = list(c)
+                новое[j] = dict(c[j], text=(c[j].get("text") or "") + "\n\n" + добавка)
+            msgs[i] = dict(m, content=новое)
+            return блок
+        raise ValueError("нет сообщения человека с текстом")
+    except Exception as e:
+        _preserve_failed("сборка блока", e)
+        return None
 
 
 def _secret_from_config(файл, путь, зачем):
@@ -769,6 +1451,21 @@ def boundary_shifted(session_id, blocks):
         return True
 
 
+# Сколько картинок вырезано в прошлый раз, по сессиям. Тот же смысл, что у границы: число
+# не изменилось — префикс тот же, карточке взяться неоткуда.
+_image_cuts = {}
+
+
+def images_shifted(session_id, pruned):
+    if not session_id or pruned <= 0:
+        return False
+    with _boundaries_lock:
+        if _image_cuts.get(session_id) == pruned:
+            return False
+        _image_cuts[session_id] = pruned
+        return True
+
+
 def usage_dict_from_chunk(chunk):
     """Сырой `usage` из куска SSE; `{}` — не нашли.
 
@@ -811,22 +1508,53 @@ def merge_usage(копилка, chunk):
     return копилка
 
 
+def _полная_форма(usage):
+    """Признак полной формы usage: `input_tokens` уже включает кэш (роутер vLLM, финальный
+    `message_delta`). Та же развилка, что в `usage_totals` и `diff_miss.цифры`: `input_tokens`
+    не меньше `cache_read_input_tokens`. Одна проверка — и в карточке, и в нормализации."""
+    return (usage.get("input_tokens") or 0) >= (usage.get("cache_read_input_tokens") or 0)
+
+
 def usage_totals(usage):
     """`(cache_read_input_tokens, весь промпт)` из накопленного usage — для карточки.
 
     `(None, None)` — если цифр нет вовсе (чужой формат ответа, оборванный поток).
 
-    У `input_tokens` роутера vLLM ДВЕ семантики, и различать их обязательно (та же развилка,
-    что в `diff_miss.цифры`): в `message_start` это только то, что прошло МИМО кэша, а в
-    финальном `message_delta` — ВЕСЬ промпт, кэш включительно. Сложишь слагаемые вслепую —
-    промпт удвоится, и доля из кэша в карточке соврёт вдвое. Признак полной формы простой:
-    `input_tokens` не меньше `cache_read_input_tokens`.
+    Копилка (`merge_usage`) берёт по максимуму, поэтому `input_tokens` в ней — это `input` из
+    `message_start` роутера vLLM, то есть ВЕСЬ промпт (дельта даёт только часть мимо кэша, она
+    меньше и не перекрывает). Тогда `input_tokens` не меньше `cache_read_input_tokens` — полная
+    форма, промпт = `input`. Если старта в копилке не было (чужой формат), слагаемые складываются.
     """
     вход = usage.get("input_tokens") or 0
     чтение = usage.get("cache_read_input_tokens")
-    промпт = вход if вход >= (чтение or 0) else (
+    промпт = вход if _полная_форма(usage) else (
         вход + (чтение or 0) + (usage.get("cache_creation_input_tokens") or 0))
     return (чтение if isinstance(чтение, int) else None), (промпт or None)
+
+
+def normalize_usage(usage, промпт_старта=None):
+    """Правит `message_delta.usage`, если `input_tokens` в нём — ВЕСЬ промпт, кэш включительно.
+
+    Снято живьём 2026-10-18 (README, «Нормализация usage»): роутер vLLM шлёт `message_start` с
+    `input_tokens` = ВЕСЬ промпт (оценка до поиска в кэше), а финальный `message_delta` — уже в
+    семантике Anthropic: `input` = только мимо кэша, `cache_read` и `cache_creation` отдельно, и
+    `input + cache_read + cache_creation` = промпт. «Полная форма» в дельте (`input` = весь промпт
+    при ненулевом кэше) не наблюдалась, но защита оставлена: опознаётся ТОЧНО — `input` дельты
+    равен `input` старта (в правильной форме он строго меньше при ненулевом кэше). Прежний
+    признак `input ≥ cache_read` был ошибочным: он принимал за полную форму любой промах кэша
+    (`input 773 ≥ read 0`) и обнулял `input`, а CLI берёт `input` дельты только когда он больше
+    нуля, иначе остаётся старт (весь промпт) — и промпт удваивался.
+
+    Возвращает (новый usage, изменилось ли). Вход не мутирует.
+    """
+    if not isinstance(usage, dict) or not промпт_старта:
+        return usage, False
+    вход = usage.get("input_tokens") or 0
+    чтение = usage.get("cache_read_input_tokens") or 0
+    создание = usage.get("cache_creation_input_tokens") or 0
+    if вход != промпт_старта or чтение + создание <= 0:
+        return usage, False
+    return dict(usage, input_tokens=max(0, вход - чтение - создание)), True
 
 
 def post_event(payload, connector=None):
@@ -881,6 +1609,702 @@ def send_event(payload):
     # Присваиваем ПОСЛЕ запуска: ждущий отправки тест иначе поймает поток между созданием и
     # стартом, а join по такому — RuntimeError.
     _last_event_thread = поток
+
+
+# --- Предохранитель от петли: детектор и реле потока ----------------------------------------
+
+# Края слова, которые не делают его другим: пунктуация, разметка, маркеры списков, ячейки таблиц.
+_LOOP_TRIM = "\"'`*_.,;:!?()[]{}<>«»“”‘’—–-|#>~"
+
+
+class ДетекторПетли:
+    """Скользящее окно слов из дельт thinking/text; петля — повтор длинного куска `repeats` раз.
+
+    Кандидат — n-грамма (LOOP_NGRAM слов), встретившаяся `repeats` раз в окне. Подтверждение —
+    последние LOOP_SPAN слов дословно совпадают с тем же куском на каждом шаге повтора. Без
+    подтверждения ловилась бы цепочка «Let me read the file A to understand how it works. Let
+    me read the file B …»: 10 слов без имени файла повторяются каждое предложение, хотя мысль
+    идёт вперёд. Настоящая петля повторяет весь кусок, имя файла меняется — нет.
+
+    Слово, а не токен: токенизатора у прокси нет, а для повтора фраз разницы нет. Код внутри
+    ```-заборов не считается (повтор строк в коде — норма), как и «слова» без букв и цифр —
+    разделители таблиц, маркеры списков, эмодзи. Кусок с малым числом разных слов
+    (`да | да | да`) петлёй не считается: это ячейки таблицы, а не повтор мысли.
+    """
+
+    def __init__(self, window=None, ngram=None, repeats=None, min_words=None, span=None):
+        self.window = window or LOOP_WINDOW
+        self.ngram = ngram or LOOP_NGRAM
+        self.repeats = repeats or LOOP_REPEATS
+        self.min_words = LOOP_MIN_WORDS if min_words is None else min_words
+        self.span = max(self.ngram, span or LOOP_SPAN)
+        self.слова = deque(maxlen=self.window + self.span)  # хвост потока, абсолютные номера
+        self.окно = deque()  # (n-грамма, номер её последнего слова) по порядку
+        self.позиции = {}  # n-грамма -> номера последних слов её вхождений в окне
+        self.всего = 0
+        self.хвост = ""  # незаконченное слово: дельты режут слова где угодно
+        self.в_коде = False
+        self.петля = None  # n-грамма, на которой сработали
+
+    def новый_блок(self):
+        """Начало блока: недописанное слово закончилось, забор кода не переходит в другой блок."""
+        if self.хвост:
+            self._слово(self.хвост)
+            self.хвост = ""
+        self.в_коде = False
+
+    def усвоить(self, текст):
+        """True — петля. Повторный вызов после срабатывания тоже True."""
+        if self.петля is not None:
+            return True
+        if not текст:
+            return False
+        текст = self.хвост + текст
+        слова = текст.split()
+        self.хвост = слова.pop() if слова and not текст[-1].isspace() else ""
+        return any(self._слово(w) for w in слова)
+
+    def _слово_по_номеру(self, i):
+        return self.слова[i - (self.всего - len(self.слова))]
+
+    def _слово(self, w):
+        if "```" in w:
+            if w.count("```") % 2:
+                self.в_коде = not self.в_коде
+            return False
+        if self.в_коде:
+            return False
+        норм = w.strip(_LOOP_TRIM).lower()
+        if not норм or not any(ch.isalnum() for ch in норм):
+            return False
+        self.слова.append(норм)
+        self.всего += 1
+        if self.всего < self.ngram:
+            return False
+        конец = self.всего - 1
+        g = tuple(self.слова[i] for i in range(len(self.слова) - self.ngram, len(self.слова)))
+        self.окно.append((g, конец))
+        self.позиции.setdefault(g, deque()).append(конец)
+        while self.окно and self.окно[0][1] <= конец - self.window + self.ngram - 1:
+            старая, _ = self.окно.popleft()
+            вхождения = self.позиции[старая]
+            вхождения.popleft()
+            if not вхождения:
+                del self.позиции[старая]
+        вхождения = self.позиции[g]
+        if (len(вхождения) < self.repeats or self.всего < self.min_words
+                or len({x for x in g if any(ch.isalpha() for ch in x)}) < max(3, self.ngram // 3)):
+            return False
+        прежние = list(вхождения)[-self.repeats:-1]
+        начало = конец - self.span + 1
+        if начало - (конец - прежние[0]) < self.всего - len(self.слова):
+            return False  # кусок для сверки уже выпал из памяти
+        for p in прежние:
+            шаг = конец - p
+            if any(self._слово_по_номеру(i) != self._слово_по_номеру(i - шаг)
+                   for i in range(начало, конец - self.ngram + 1)):
+                return False
+        self.петля = g
+        return True
+
+
+# Разделители: длинное слово с любым из них — путь, URL, идентификатор или base64, а не склейка.
+_JUNK_SEP = frozenset("/\\.-_:=,;()[]{}<>\"'")
+_JUNK_HEX = frozenset("0123456789abcdefABCDEF")
+# Края, которые не делают длинную склейку осмысленной: конец предложения, кавычки, разметка.
+_JUNK_TRIM = ".,;:!?\"'()[]{}<>«»*"
+
+
+def _письменность(ch):
+    """lat, cyr, cjk (иероглифы, кана, хангыль) или None — прочее не считаем."""
+    к = ord(ch)
+    if 0x4E00 <= к <= 0x9FFF or 0x3040 <= к <= 0x30FF or 0xAC00 <= к <= 0xD7AF:
+        return "cjk"
+    if not ch.isalpha():
+        return None
+    if к < 0x250:
+        return "lat"
+    return "cyr" if 0x400 <= к <= 0x4FF else None
+
+
+def мусорное_слово(w):
+    """U+FFFD; смесь письменностей в куске между разделителями; длинная склейка без разделителей.
+
+    Письменности сверяются внутри куска, а не всего слова: «vLLM-ом», «API-ключ», «PR'а» —
+    нормальная русская техническая речь. Длинное слово с иероглифами или каной — китайская или
+    японская фраза (пробелов там нет), чистый hex — хеш. Слово в обратных кавычках — инлайн-код.
+    """
+    if "\ufffd" in w:
+        return True
+    if "`" in w:
+        return False
+    кусок, есть_cjk = set(), False
+    for ch in w:
+        if ch in _JUNK_SEP:
+            if len(кусок) > 1:
+                return True
+            кусок = set()
+            continue
+        п = _письменность(ch)
+        if п:
+            кусок.add(п)
+            есть_cjk = есть_cjk or п == "cjk"
+    if len(кусок) > 1:
+        return True
+    ядро = w.strip(_JUNK_TRIM)
+    return (len(ядро) >= 25 and not есть_cjk and not any(ch in _JUNK_SEP for ch in ядро)
+            and not set(ядро) <= _JUNK_HEX)
+
+
+def узор_мусора(w, char_run=None, repeats=None):
+    """Пробег одного символа с буквой или цифрой от `char_run` подряд либо повтор узора из 2–4
+    символов от `repeats` раз внутри одного «слова» («5555…», «-ог-ог-ог-», «likelikelike»).
+    Возвращает причину или None. Знаки без букв («────») — разделители, не мусор; инлайн-код — нет.
+    """
+    char_run = JUNK_CHAR_RUN if char_run is None else char_run
+    repeats = JUNK_PERIOD_REPEATS if repeats is None else repeats
+    if "`" in w:
+        return None
+    m = re.search(r"(.)\1{%d,}" % (char_run - 1), w)
+    if m and m.group(1).isalnum():
+        return f"пробег {len(m.group(0))}× {m.group(1)!r}"
+    for m in re.finditer(r"(.{2,4}?)\1{%d,}" % (repeats - 1), w):
+        узор = m.group(1)
+        # Узор из одного символа («AA» в base64 «AAAA…») — это пробег, у него свой порог выше
+        if len(set(узор)) > 1 and any(ch.isalnum() for ch in узор):
+            return f"узор {len(m.group(0)) // len(узор)}× {узор!r}"
+    return None
+
+
+class ДетекторМусора:
+    """Скользящее окно слов из дельт thinking/text; мусор — доля мусорных слов `ratio` и выше.
+
+    Слова режутся так же, как у детектора петли: дельты рвут слова где угодно, код внутри
+    ```-заборов не считается (длинные токены там легальны). «Слова» без букв и цифр в долю не
+    идут, зато `run` одинаковых токенов подряд — второй признак мусора: вырождение в «- - - -»
+    (порог `run`), в одно слово «like like like…» (порог `run_word`) или в одно число
+    «-1 -1 -1…» (порог `run_num`, выше строк таблиц). Третий признак — узор внутри слова
+    (узор_мусора): проверяется и на недописанном хвосте, иначе пробег из тысяч символов без
+    пробела ждал бы конца блока.
+    """
+
+    def __init__(self, window=None, ratio=None, min_words=None, run=None, run_word=None,
+                 char_run=None, repeats=None, run_num=None):
+        self.window = window or JUNK_WINDOW
+        self.ratio = JUNK_RATIO if ratio is None else ratio
+        self.min_words = JUNK_MIN_WORDS if min_words is None else min_words
+        self.run = run or JUNK_RUN
+        self.run_word = run_word or JUNK_RUN_WORD
+        self.char_run = char_run or JUNK_CHAR_RUN
+        self.repeats = repeats or JUNK_PERIOD_REPEATS
+        self.run_num = run_num or JUNK_RUN_NUM
+        self.окно = deque(maxlen=self.window)  # True — мусорное слово
+        self.мусорных = 0
+        self.всего = 0
+        self.хвост = ""
+        self.в_коде = False
+        self.доля = 0.0  # доля мусора в окне на последней проверке
+        self.пустое, self.подряд = None, 0  # последний токен и длина цепочки из него
+        self.причина = ""  # чем сработал — для журнала и дампа
+        self.сработал = False
+
+    def новый_блок(self):
+        if self.хвост:
+            self._слово(self.хвост)
+            self.хвост = ""
+        self.в_коде = False
+
+    def усвоить(self, текст):
+        """True — мусор. Повторный вызов после срабатывания тоже True."""
+        if self.сработал:
+            return True
+        if not текст:
+            return False
+        текст = self.хвост + текст
+        слова = текст.split()
+        self.хвост = слова.pop() if слова and not текст[-1].isspace() else ""
+        if any(self._слово(w) for w in слова):
+            return True
+        # Недописанное слово: пробег «5555…» без пробела иначе ждал бы конца блока
+        if len(self.хвост) >= self.char_run and not self.в_коде and "```" not in self.хвост:
+            return self._узор(self.хвост)
+        return False
+
+    def _узор(self, w):
+        причина = узор_мусора(w, self.char_run, self.repeats)
+        if причина:
+            self.причина = причина
+            self.сработал = True
+            return True
+        return False
+
+    def _слово(self, w):
+        if "```" in w:
+            if w.count("```") % 2:
+                self.в_коде = not self.в_коде
+            return False
+        if self.в_коде:
+            return False
+        без_букв = "\ufffd" not in w and not any(ch.isalnum() for ch in w)
+        if not без_букв and self._узор(w):
+            return True
+        # Одинаковый токен подряд: «слово» без букв и цифр как есть, слово с буквами — без
+        # регистра и краевой пунктуации («like like like…», 18.10). Числа («0 0 0») — с порогом
+        # run_num: таблицы и матрицы короче, вырождение «-1» × 2743 (21.10) — нет.
+        ключ = w if без_букв else w.strip(_JUNK_TRIM).lower()
+        self.подряд = self.подряд + 1 if ключ == self.пустое else 1
+        self.пустое = ключ
+        порог = (self.run if без_букв else self.run_word if any(ch.isalpha() for ch in ключ)
+                 else self.run_num)
+        if self.подряд >= порог:
+            self.причина = f"цепочка {self.подряд}× {ключ!r}"
+            self.сработал = True
+            return True
+        if без_букв:
+            return False
+        мусор = мусорное_слово(w)
+        if len(self.окно) == self.окно.maxlen:
+            self.мусорных -= self.окно[0]
+        self.окно.append(мусор)
+        self.мусорных += мусор
+        self.всего += 1
+        if self.всего < self.min_words:
+            return False
+        self.доля = self.мусорных / len(self.окно)
+        if self.доля < self.ratio:
+            return False
+        self.причина = f"доля {self.доля:.2f} в окне {self.window}"
+        self.сработал = True
+        return True
+
+
+def _sse(тип, данные):
+    return (f"event: {тип}\ndata: " + json.dumps(данные, ensure_ascii=False) + "\n\n").encode()
+
+
+class РелеПотока:
+    """Пересылает SSE клиенту целыми событиями и прогоняет дельты через детектор.
+
+    Поток повтора (`повтор=True`) клеится к уже начатому ответу: его `message_start` клиенту
+    не отдаётся (второго начала сообщения у Anthropic-потока не бывает), а индексы блоков
+    сдвигаются на `сдвиг` — за последний блок первой попытки.
+
+    Fail-open, как у дампа: любое исключение разбора переводит реле в сквозной режим — дальше
+    байты идут клиенту как есть, без детектора. Ход ломать предохранитель не вправе.
+    """
+
+    БУФЕР_МАКС = 1 << 20  # событие без разделителя длиннее мегабайта — чужой формат, сдаёмся
+
+    def __init__(self, отдать, сдвиг=0, повтор=False, детектор=None, петли=True,
+                 детектор_мусора=None):
+        self.отдать = отдать
+        self.сдвиг = сдвиг
+        self.повтор = повтор
+        self.детектор = (детектор or ДетекторПетли()) if петли else None
+        self.детектор_мусора = детектор_мусора
+        self.мусор = False  # поймана мусорная генерация
+        self.буфер = b""
+        self.открыт = None  # [индекс у клиента, вид блока, пришла ли подпись]
+        self.следующий = сдвиг  # индекс клиента для следующего блока
+        self.выход = 0  # output_tokens из usage потока
+        self.петля = False
+        self.петля_в = None  # вид блока, где поймали петлю
+        self.сквозной = False
+        self.завершён = False  # message_stop клиенту отдан
+
+    def усвоить(self, chunk):
+        """Пересылает целые события из куска; True — поймана петля или мусор (хвост отброшен)."""
+        if self.петля or self.мусор:
+            return True
+        if self.сквозной:
+            self.отдать(chunk)
+            return False
+        self.буфер += chunk
+        событие = b""
+        try:
+            while True:
+                i = self.буфер.find(b"\n\n")
+                if i < 0:
+                    if len(self.буфер) > self.БУФЕР_МАКС:
+                        raise ValueError("нет разделителя событий SSE")
+                    return False
+                событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+                if self._событие(событие):
+                    self.буфер = b""
+                    return True
+                событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл (прерывание хода) — не считать ошибкой предохранителя:
+            # исключение пролетит мимо инкремента loop_guard_errors и будет поймано
+            # общим обработчиком выше, который просто фиксирует обрыв
+            raise
+        except Exception as e:
+            with lock:
+                stats["loop_guard_errors"] += 1
+            print(f"предохранитель петли выключен до конца ответа ({e!r})", file=sys.stderr, flush=True)
+            self.сквозной = True
+            остаток, self.буфер = событие + self.буфер, b""
+            if остаток:
+                self.отдать(остаток)
+            return False
+
+    def дослать(self):
+        """Конец потока: недописанный хвост буфера уходит клиенту как есть."""
+        if self.буфер and not self.петля and not self.мусор:
+            self.отдать(self.буфер)
+        self.буфер = b""
+
+    def _событие(self, сырое):
+        данные = None
+        for строка in сырое.split(b"\n"):
+            if строка.startswith(b"data:"):
+                try:
+                    данные = json.loads(строка[5:].strip())
+                except ValueError:
+                    данные = None
+        тип = данные.get("type") if isinstance(данные, dict) else None
+        if тип == "message_start" and self.повтор:
+            return False
+        if тип in ("content_block_start", "content_block_delta", "content_block_stop") \
+                and isinstance(данные.get("index"), int):
+            if self.сдвиг:
+                данные["index"] += self.сдвиг
+                сырое = _sse(тип, данные)
+            индекс = данные["index"]
+            if тип == "content_block_start":
+                вид = (данные.get("content_block") or {}).get("type")
+                self.открыт = [индекс, вид, False]
+                self.следующий = max(self.следующий, индекс + 1)
+                if self.детектор is not None:
+                    self.детектор.новый_блок()
+                if self.детектор_мусора is not None:
+                    self.детектор_мусора.новый_блок()
+            elif тип == "content_block_delta":
+                дельта = данные.get("delta") or {}
+                вид = дельта.get("type")
+                if вид == "signature_delta" and self.открыт is not None:
+                    self.открыт[2] = True
+                текст = (дельта.get("thinking") if вид == "thinking_delta"
+                         else дельта.get("text") if вид == "text_delta" else None)
+                if isinstance(текст, str):
+                    if self.детектор is not None and self.детектор.усвоить(текст):
+                        self.петля = True
+                        self.петля_в = self.открыт[1] if self.открыт else None
+                        return True
+                    if self.детектор_мусора is not None and self.детектор_мусора.усвоить(текст):
+                        self.мусор = True
+                        return True
+            else:
+                self.открыт = None
+        elif тип == "message_delta":
+            usage = данные.get("usage") or {}
+            if isinstance(usage.get("output_tokens"), int):
+                self.выход = usage["output_tokens"]
+        elif тип == "message_stop":
+            self.завершён = True
+        self.отдать(сырое)
+        return False
+
+    def закрыть_блок(self):
+        """Закрывает открытый у клиента блок; размышлению без подписи — подпись, как у vLLM."""
+        if self.открыт is None:
+            return
+        индекс, вид, подписан = self.открыт
+        if вид == "thinking" and not подписан:
+            self.отдать(_sse("content_block_delta", {"type": "content_block_delta", "index": индекс,
+                             "delta": {"type": "signature_delta", "signature": os.urandom(16).hex()}}))
+        self.отдать(_sse("content_block_stop", {"type": "content_block_stop", "index": индекс}))
+        self.открыт = None
+
+    def пометка(self, текст):
+        """Отдельный текстовый блок с пометкой прокси — следом за последним блоком ответа."""
+        индекс = self.следующий
+        self.следующий += 1
+        self.отдать(_sse("content_block_start", {"type": "content_block_start", "index": индекс,
+                         "content_block": {"type": "text", "text": ""}}))
+        self.отдать(_sse("content_block_delta", {"type": "content_block_delta", "index": индекс,
+                         "delta": {"type": "text_delta", "text": текст}}))
+        self.отдать(_sse("content_block_stop", {"type": "content_block_stop", "index": индекс}))
+
+    def хвост(self, выход=None):
+        """Штатный конец сообщения: stop_reason=end_turn и message_stop."""
+        self.отдать(_sse("message_delta", {"type": "message_delta",
+                         "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                         "usage": {"output_tokens": выход if выход is not None else self.выход}}))
+        self.отдать(_sse("message_stop", {"type": "message_stop"}))
+        self.завершён = True
+
+
+class ВставкаБлока:
+    """Поток ответа сжатия: блок <ccs-preserved> — в конец текстового блока со сводкой.
+
+    Почему не отдельным блоком: CLI 2.1.301 раскладывает поток по блокам в отдельные
+    сообщения, и в запись сжатия идёт только ПОСЛЕДНЕЕ сообщение, чей текст содержит
+    `<summary>` (`KEe`), а из него — первый текстовый блок (`QEe`). Отдельный блок до ответа
+    модели CLI выбросил бы — это поймала живая проверка 2026-10-16. Поэтому текст блока уходит
+    лишней `text_delta` перед `content_block_stop` каждого текстового блока, в котором была
+    `<summary>`; индексы модели не меняются. Текст вне тегов CLI сохраняет (`BWr`).
+
+    Стоит ПОСЛЕ реле предохранителя: пометки реле `<summary>` не содержат и не трогаются.
+    Разбор целыми событиями, как у реле. Сбой разбора — сквозной режим до конца ответа и
+    `compact_preserve_failed`: ход важнее блока. Сводки не было вовсе — тоже
+    `compact_preserve_failed` (CLI такой ответ и сам отвергнет).
+    """
+
+    БУФЕР_МАКС = РелеПотока.БУФЕР_МАКС
+
+    def __init__(self, отдать, текст):
+        self.отдать = отдать
+        self.текст = текст
+        self.буфер = b""
+        self.открыт = None  # [индекс, накопленный текст] открытого текстового блока
+        self.вставлен = False
+        self.начат = False  # пришёл message_start: это ответ модели, а не что-то чужое
+        self.сквозной = False
+
+    def усвоить(self, chunk):
+        if self.сквозной:
+            self.отдать(chunk)
+            return
+        self.буфер += chunk
+        событие = b""
+        try:
+            while True:
+                i = self.буфер.find(b"\n\n")
+                if i < 0:
+                    if len(self.буфер) > self.БУФЕР_МАКС:
+                        raise ValueError("нет разделителя событий SSE")
+                    return
+                событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+                self._событие(событие)
+                событие = b""
+        except (BrokenPipeError, ConnectionResetError):
+            # клиент ушёл — не считать ошибкой вставки: исключение пролетит мимо
+            # _preserve_failed и будет поймано общим обработчиком выше
+            raise
+        except Exception as e:
+            _preserve_failed("вставка в поток", e)
+            self.сквозной = True
+            остаток, self.буфер = событие + self.буфер, b""
+            if остаток:
+                self.отдать(остаток)
+
+    def дослать(self):
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+        if self.начат and not self.вставлен and not self.сквозной:
+            _preserve_failed("вставка в поток", RuntimeError("в ответе нет <summary>"))
+
+    def _событие(self, сырое):
+        данные = None
+        for строка in сырое.split(b"\n"):
+            if строка.startswith(b"data:"):
+                try:
+                    данные = json.loads(строка[5:].strip())
+                except ValueError:
+                    данные = None
+        тип = данные.get("type") if isinstance(данные, dict) else None
+        индекс = данные.get("index") if isinstance(данные, dict) else None
+        if тип == "message_start":
+            self.начат = True
+        elif тип == "content_block_start" and isinstance(индекс, int):
+            вид = (данные.get("content_block") or {}).get("type")
+            начало = (данные.get("content_block") or {}).get("text")
+            self.открыт = ([индекс, начало if isinstance(начало, str) else ""]
+                           if вид == "text" else None)
+        elif тип == "content_block_delta" and self.открыт is not None \
+                and индекс == self.открыт[0]:
+            текст = (данные.get("delta") or {}).get("text")
+            if isinstance(текст, str):
+                self.открыт[1] += текст
+        elif тип == "content_block_stop" and self.открыт is not None \
+                and индекс == self.открыт[0]:
+            if "<summary>" in self.открыт[1]:
+                self.отдать(_sse("content_block_delta", {"type": "content_block_delta",
+                                 "index": индекс, "delta": {"type": "text_delta",
+                                                            "text": self.текст}}))
+                if not self.вставлен:
+                    with lock:
+                        stats["compact_preserved"] += 1
+                self.вставлен = True
+            self.открыт = None
+        self.отдать(сырое)
+
+
+class ВставкаВJson:
+    """Не-потоковый ответ сжатия (`stream:false`): блок — в конец текста со сводкой.
+
+    CLI 2.1.301 сжимает потоком, но поведение не должно зависеть от формы ответа: тело
+    копится целиком (оно и так приходит целиком) и правится в `дослать` — по тому же правилу,
+    что и поток: текст блока дописывается в каждый текстовый блок с `<summary>`. Не JSON,
+    нет списка `content` или нет сводки — тело уходит как есть, с `compact_preserve_failed`.
+    """
+
+    def __init__(self, отдать, текст):
+        self.отдать = отдать
+        self.текст = текст
+        self.куски = []
+
+    def усвоить(self, chunk):
+        self.куски.append(chunk)
+
+    def дослать(self):
+        сырое, self.куски = b"".join(self.куски), []
+        if not сырое:
+            return
+        try:
+            doc = json.loads(сырое)
+            if not isinstance(doc, dict) or not isinstance(doc.get("content"), list):
+                raise ValueError("в ответе нет списка content")
+            найдено = False
+            for i, b in enumerate(doc["content"]):
+                if isinstance(b, dict) and b.get("type") == "text" \
+                        and isinstance(b.get("text"), str) and "<summary>" in b["text"]:
+                    doc["content"][i] = dict(b, text=b["text"] + self.текст)
+                    найдено = True
+            if not найдено:
+                raise ValueError("в ответе нет <summary>")
+            готовое = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+        except Exception as e:
+            _preserve_failed("вставка в ответ", e)
+            self.отдать(сырое)
+            return
+        with lock:
+            stats["compact_preserved"] += 1
+        self.отдать(готовое)
+
+
+class НормализаторUsage:
+    """Приводит `usage` ответа ЛОКАЛЬНОЙ модели к тому, что CLI соберёт верно (см. `normalize_usage`).
+
+    Живьём снято 2026-10-18: `message_start` vLLM несёт `input_tokens` = ВЕСЬ промпт, а
+    `message_delta` — `input` мимо кэша + `cache_read` + `cache_creation` (сумма = промпт). CLI
+    берёт `input_tokens` дельты, только если он больше нуля; при промахе кэша после сжатия
+    (`input` 773, creation 128128) или полном попадании (`input` 0) остаётся `input` старта —
+    весь промпт, и итог выходит вдвое больше реального. Лечим там, где корень: `input_tokens`
+    в `message_start` обнуляем — настоящую цифру CLI получит из дельты (она всегда следует за
+    стартом), а нулевая дельта больше не оставляет в итоге весь промпт.
+
+    SSE: правит `message_start` (обнуляет `input_tokens`, запоминает его как промпт) и страхует
+    `message_delta` от «полной формы». Не-SSE (один объект `usage` в правильной форме, снято
+    живьём) — тело проходит как есть. Облачный ответ (MiniMax: `input_tokens` 0 в старте,
+    остальное в дельте) сюда не попадает.
+
+    Fail-open, как и всё в прокси: любой сбой разбора — сквозной режим, ход важнее цифры.
+    """
+
+    БУФЕР_МАКС = РелеПотока.БУФЕР_МАКС
+
+    def __init__(self, отдать, sse):
+        self.отдать = отдать
+        self.sse = sse
+        self.буфер = b""
+        self.сквозной = not sse
+        self.промпт = None  # input_tokens из message_start, до обнуления
+
+    def усвоить(self, chunk):
+        if self.сквозной:
+            self.отдать(chunk)
+            return
+        self._sse(chunk)
+
+    def _sse(self, chunk):
+        self.буфер += chunk
+        while True:
+            i = self.буфер.find(b"\n\n")
+            if i < 0:
+                if len(self.буфер) > self.БУФЕР_МАКС:
+                    self._сквозной()
+                    return
+                return
+            событие, self.буфер = self.буфер[:i + 2], self.буфер[i + 2:]
+            self._событие(событие)
+            if self.сквозной:
+                return
+
+    def _событие(self, сырое):
+        """Правит `usage` в `message_start`/`message_delta`; событие ВСЕГДА уходит клиенту."""
+        for строка in сырое.split(b"\n"):
+            if not строка.startswith(b"data:"):
+                continue
+            try:
+                данные = json.loads(строка[5:].strip())
+            except ValueError:
+                break
+            if not isinstance(данные, dict):
+                break
+            тип = данные.get("type")
+            if тип == "message_start":
+                usage = (данные.get("message") or {}).get("usage")
+                вход = usage.get("input_tokens") if isinstance(usage, dict) else None
+                if isinstance(вход, int) and вход > 0:
+                    self.промпт = вход
+                    данные["message"]["usage"] = dict(usage, input_tokens=0)
+                    with lock:
+                        stats["usage_normalized"] += 1
+                    self.отдать(_sse("message_start", данные))
+                    return
+            elif тип == "message_delta":
+                usage = данные.get("usage")
+                if isinstance(usage, dict):
+                    новый, изменилось = normalize_usage(usage, self.промпт)
+                    if изменилось:
+                        данные["usage"] = новый
+                        with lock:
+                            stats["usage_normalized"] += 1
+                        self.отдать(_sse("message_delta", данные))
+                        return
+            break
+        self.отдать(сырое)
+
+    def дослать(self):
+        """Конец ответа: недочитанный хвост SSE (событие без пустой строки) уходит как есть."""
+        if self.сквозной:
+            return
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+
+    def _сквозной(self):
+        if self.буфер:
+            self.отдать(self.буфер)
+        self.буфер = b""
+        self.сквозной = True
+
+
+def retry_body(body):
+    """Тело повтора после петли: сэмплинг сдвинут на LOOP_RETRY_SAMPLING. None — не разобрать.
+
+    Соль prefix cache сюда не добавляет: её кладёт вызывающий через salted_body (карантин),
+    чтобы повтор шёл в чистом пространстве, а сессия и дальше ходила со своей солью."""
+    try:
+        doc = json.loads(body)
+        if not isinstance(doc, dict):
+            return None
+        for ключ, добавка in LOOP_RETRY_SAMPLING.items():
+            было = doc.get(ключ)
+            if not isinstance(было, (int, float)) or isinstance(было, bool):
+                было = 1.0 if ключ == "temperature" else 0.0  # дефолты vLLM
+            стало = round(было + добавка, 3)
+            if ключ == "presence_penalty":
+                стало = min(стало, 2.0)
+            doc[ключ] = стало
+        return json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return None
+
+
+def salted_body(body, соль):
+    """Тело с cache_salt: vLLM не берёт для него чужие блоки prefix cache. None — не разобрать."""
+    try:
+        doc = json.loads(body)
+        if not isinstance(doc, dict):
+            return None
+        doc["cache_salt"] = соль
+        return json.dumps(doc, ensure_ascii=False).encode("utf-8")
+    except Exception:
+        return None
 
 
 # --- Дамп тел на диск ------------------------------------------------------------------------
@@ -989,6 +2413,35 @@ def dump_request(тело, session, мета):
     return ЗаписьДампа(каталог, seq, session, тело, мета)
 
 
+def dump_guard(тело, session, мета):
+    """Кладёт в GUARD_DUMP_DIR тело запроса, на котором сработал предохранитель, и мету.
+
+    Тот же формат, что у `ЗаписьДампа` (gzip-тело + meta.json, 0600): переигрывать сработку и
+    разбирать дамп промахов можно одними инструментами. Хранятся GUARD_DUMP_KEEP свежих пар.
+    Fail-open: осечка записи — строка в журнал, ход идёт дальше.
+    """
+    if not GUARD_DUMP_DIR or not тело:
+        return
+    global _dump_seq
+    try:
+        os.makedirs(GUARD_DUMP_DIR, mode=0o700, exist_ok=True)
+        with _dump_lock:
+            _dump_seq += 1
+            seq = _dump_seq
+        запись = ЗаписьДампа(GUARD_DUMP_DIR, seq, session, тело, мета)
+        запись.записать()
+        with lock:
+            stats["guard_dumps"] += 1
+        тела = sorted((e for e in os.scandir(GUARD_DUMP_DIR) if e.name.endswith(".req.json.gz")),
+                      key=lambda e: e.stat().st_mtime)
+        for e in тела[:-GUARD_DUMP_KEEP] if GUARD_DUMP_KEEP > 0 else []:
+            for путь in (e.path, e.path[:-len(".req.json.gz")] + ".meta.json"):
+                with contextlib.suppress(OSError):
+                    os.remove(путь)
+    except Exception as e:
+        print(f"дамп сработки не записан ({e!r})", file=sys.stderr, flush=True)
+
+
 def _debug_dump(doc, msgs, body_len):
     """Разбор запроса в журнал: зачем прунинг решил так, а не иначе.
 
@@ -1054,7 +2507,17 @@ class Handler(BaseHTTPRequestHandler):
     def _stats(self):
         with lock:
             msg = json.dumps(dict(stats, prune=PRUNE_MODE, thinking=THINKING_MODE,
-                                  compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off")).encode()
+                                  compact=COMPACT_MODEL if COMPACT_UPSTREAM else "off",
+                                  compact_preserve=COMPACT_PRESERVE,
+                                  sampling=SAMPLING or "off",
+                                  sampling_fast=SAMPLING_FAST or "off",
+                                  effort=EFFORT_OVERRIDE or "cli", budget=THINKING_BUDGET,
+                                  loop_guard=(f"{LOOP_GUARD}: {LOOP_NGRAM}-грамма x{LOOP_REPEATS} "
+                                              f"в {LOOP_WINDOW} словах, повтор {LOOP_RETRY}"),
+                                  junk_guard=(f"{JUNK_GUARD}: доля {JUNK_RATIO} в {JUNK_WINDOW} "
+                                              f"словах, не раньше {JUNK_MIN_WORDS}, цепочка {JUNK_RUN}"),
+                                  image_prune=(f"{IMAGE_PRUNE}: свежих {IMAGE_KEEP}, "
+                                               f"потолок {IMAGE_MAX}"))).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(msg)))
@@ -1083,43 +2546,75 @@ class Handler(BaseHTTPRequestHandler):
         original = body  # на откат: любая осечка разбора обязана вернуть тело нетронутым
         stripped = False
         compact = None  # тело для облака, если это запрос автосжатия
+        сохранённое = None  # блок <ccs-preserved>, который допишется к сводке в ответе сжатия
         # Заголовок чата нужен обоим потребителям — карточке и дампу: разбор промахов идёт
         # ПО СЕССИЯМ (сравнивается соседняя пара запросов одного чата), и без него дамп
         # прогона превращается в кашу из ходов исполнителя и фоновых действий продукта.
         сессия = (self.headers.get(EVENT_SESSION_HEADER)
-                  if (BACKEND_EVENTS_URL or DUMP_DIR) else None)
+                  if (BACKEND_EVENTS_URL or DUMP_DIR or GUARD_DUMP_DIR
+                      or CACHE_QUARANTINE == "on") else None)
         событие = None  # заготовка карточки: цифры замера допишем по первому байту ответа
+        отпечаток = None  # атрибуция промаха кэша: отпечаток тела, ушедшего в движок
         дамп = None  # дамп тела, если включён PRUNE_DUMP_DIR
         compact_before = None
+        compact_by_header = False  # True — в облако шлём по заголовку-маркеру, а не по сигнатуре+порогу
         прунинг = {"blocks": 0, "freedChars": 0}
         if body and self.command == "POST":
             try:
                 doc = json.loads(body)
                 if isinstance(doc, dict):
                     # Распознаём и снимаем копию ДО правок: в облако едет сырая история.
-                    if COMPACT_UPSTREAM:
-                        вердикт, оценка = compact_verdict(doc)
-                        if вердикт == "route":
-                            compact = compact_body(doc)
-                            compact_before = оценка
-                        elif вердикт == "signature_small":
-                            # Настройка стенда разъехалась: CLI сжимается раньше, чем история
-                            # набирает порог. Молча отпускать такой запрос на локаль нельзя —
-                            # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
-                            with lock:
-                                stats["compact_signature_small"] += 1
-                            print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
-                                  f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
-                                  f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
-                                  f"опусти COMPACT_MIN_CONTEXT_TOKENS",
-                                  file=sys.stderr, flush=True)
-                    for k in STRIP_KEYS:
-                        if k in doc:
-                            del doc[k]
-                            stripped = True
-                    if THINKING_MODE == "budget" and "thinking_token_budget" not in doc:
-                        doc["thinking_token_budget"] = THINKING_BUDGET
+                    if COMPACT_UPSTREAM or COMPACT_PRESERVE == "on":
+                        маркер = compact_header_kind(self.headers)
+                        if маркер is not None:
+                            # Заголовок-маркер — ГЛАВНЫЙ признак: шлюз (x-ccs-compaction) или сырой
+                            # CLI (x-claude-code-compaction, ход мимо шлюза) помечают запрос-суммаризацию,
+                            # и тело ЛЮБОГО размера уходит в облако, без проверки сигнатуры и порога.
+                            if COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = 0
+                                compact_by_header = True
+                        else:
+                            # Заголовка нет — запасной путь: сигнатура + порог.
+                            вердикт, оценка = compact_verdict(doc)
+                            if вердикт == "route" and COMPACT_PRESERVE == "on":
+                                # По оригинальному телу и до compact_body: дополнение инструкции
+                                # должно уехать и в облако, и в фолбэк на локаль.
+                                сохранённое = preserve_for_compact(doc)
+                                if сохранённое is not None:
+                                    stripped = True
+                            if вердикт == "route" and COMPACT_UPSTREAM:
+                                compact = compact_body(doc)
+                                compact_before = оценка
+                            elif вердикт == "signature_small" and COMPACT_UPSTREAM:
+                                # Настройка стенда разъехалась: CLI сжимается раньше, чем история
+                                # набирает порог. Молча отпускать такой запрос на локаль нельзя —
+                                # это те самые 330–430 с стоп-мира, ради которых маршрут заведён.
+                                with lock:
+                                    stats["compact_signature_small"] += 1
+                                print(f"автосжатие: сигнатура есть, но тело {оценка} ток < порога "
+                                      f"{COMPACT_MIN_CONTEXT_TOKENS} — запрос уходит на локаль; "
+                                      f"подними CLAUDE_CODE_AUTO_COMPACT_WINDOW (>= 196192) или "
+                                      f"опусти COMPACT_MIN_CONTEXT_TOKENS; до нормализации usage "
+                                      f"(usage_normalized) раннее сжатие могло дать и удвоение "
+                                      f"input_tokens в message_delta",
+                                      file=sys.stderr, flush=True)
+                    if apply_sampling(doc):
                         stripped = True
+                    изменено, решение = apply_thinking_mode(doc)
+                    if изменено:
+                        stripped = True
+                    if решение is not None:
+                        with lock:
+                            stats["hybrid_" + решение] += 1
+                    if compact is None:
+                        save_prefix_snapshot(doc)
                     msgs = doc.get("messages")
                     if isinstance(msgs, list):
                         kept, seen_env = [], False
@@ -1136,9 +2631,23 @@ class Handler(BaseHTTPRequestHandler):
                             stripped = True
                         if PRUNE_DEBUG == "on":
                             _debug_dump(doc, kept, len(body))
+                        # Картинки — раньше прунинга выводов: тот видит уже окончательную
+                        # форму tool_result (с картинкой вывод он не трогает вовсе).
+                        картинки = None
+                        if IMAGE_PRUNE == "on":
+                            без_картинок, картинки = prune_images(kept)
+                            if картинки["pruned"]:
+                                kept = без_картинок
+                                doc["messages"] = kept
+                                stripped = True
+                            with lock:
+                                stats["images_pruned"] += картинки["pruned"]
+                                stats["images_kept"] += картинки["kept"]
+                                stats["image_tokens_saved"] += картинки["tokens"]
+                        blocks = freed = 0
+                        виды = {}
+                        системная = _system_chars(doc)
                         if PRUNE_MODE == "on":
-                            виды = {}
-                            системная = _system_chars(doc)
                             pruned_msgs, freed, blocks = prune_tool_results(
                                 kept, extra_chars=системная, kinds_out=виды)
                             if blocks:
@@ -1148,36 +2657,53 @@ class Handler(BaseHTTPRequestHandler):
                                 with lock:
                                     stats["pruned_blocks"] += blocks
                                     stats["pruned_chars"] += freed
-                                # Карточка — только на СДВИГЕ границы. Решение принимаем здесь,
-                                # до запроса, а отправляем по первому байту ответа: замер
-                                # prefill — это и есть «сколько человек ждал».
-                                #
-                                # Запрос, уезжающий в облако, пропускаем целиком, вместе с
-                                # запоминанием границы: обрезанное тело туда не идёт (сводку
-                                # облако пишет по оригиналам), и замер получился бы облачный
-                                # при рассказе о локальном пересчёте. Границу не запоминаем
-                                # намеренно — ход с фолбэком на локаль покажет карточку
-                                # следующим шагом, с честным замером.
-                                if compact is None and boundary_shifted(сессия, blocks):
-                                    до = estimate_tokens(_context_chars(kept), системная,
-                                                         _signature_chars(kept))
-                                    событие = {
-                                        "sessionId": сессия, "kind": "prune",
-                                        "tokensBefore": до,
-                                        "tokensAfter": max(0, до - estimate_tokens(freed)),
-                                        "blocks": blocks,
-                                        "resultBlocks": виды.get("result", 0),
-                                        "inputBlocks": виды.get("input", 0),
-                                        "thinkingBlocks": виды.get("thinking", 0)}
-                    if stripped:
+                        # Карточка — только на СДВИГЕ границы (или нового вырезания картинок:
+                        # это тот же промах кэша). Решение принимаем здесь, до запроса, а
+                        # отправляем по концу ответа: замер prefill — это и есть «сколько
+                        # человек ждал».
+                        #
+                        # Запрос, уезжающий в облако, пропускаем целиком, вместе с
+                        # запоминанием границы: обрезанное тело туда не идёт (сводку облако
+                        # пишет по оригиналам), и замер получился бы облачный при рассказе о
+                        # локальном пересчёте. Границу не запоминаем намеренно — ход с
+                        # фолбэком на локаль покажет карточку следующим шагом, с честным замером.
+                        сдвиг = compact is None and blocks > 0 and boundary_shifted(сессия, blocks)
+                        сдвиг_картинок = (compact is None and картинки is not None
+                                          and images_shifted(сессия, картинки["pruned"]))
+                        if сдвиг or сдвиг_картинок:
+                            до = (estimate_tokens(_context_chars(kept), системная,
+                                                  _signature_chars(kept)) if сдвиг else 0)
+                            событие = {
+                                "sessionId": сессия, "kind": "prune",
+                                "tokensBefore": до,
+                                "tokensAfter": max(0, до - estimate_tokens(freed)) if сдвиг else 0,
+                                "blocks": blocks if сдвиг else 0,
+                                "resultBlocks": виды.get("result", 0) if сдвиг else 0,
+                                "inputBlocks": виды.get("input", 0) if сдвиг else 0,
+                                "thinkingBlocks": виды.get("thinking", 0) if сдвиг else 0,
+                                "imageBlocks": картинки["pruned"] if картинки else 0,
+                                "imageTokens": картинки["tokens"] if картинки else 0}
+                    соль = (_карантин.get(сессия) if CACHE_QUARANTINE == "on" and сессия
+                            and compact is None else None)
+                    if соль and doc.get("cache_salt") != соль:
+                        doc["cache_salt"] = соль
+                        with lock:
+                            stats["quarantine_salted"] += 1
+                    if stripped or соль:
                         body = json.dumps(doc, ensure_ascii=False).encode("utf-8")
+                    if MISS_LOG == "on" and compact is None:
+                        отпечаток = fingerprint(doc)
             except Exception as e:
                 # fail-open: не наш формат ИЛИ неожиданная структура внутри — отдаём тело как
                 # есть. Ловим всё намеренно: исключение отсюда уходит в handle_one_request,
                 # клиент остаётся без ответа и висит до своего таймаута — то есть опечатка в
                 # разборе тела ломает ход пользователя молча. Тело чужое, доверять его форме
                 # нельзя: `{"type":"text","text":5}` достаточно, чтобы получить TypeError.
-                body, stripped, compact, событие = original, False, None, None
+                body, stripped, compact, событие, отпечаток = original, False, None, None, None
+                if сохранённое is not None:
+                    # Дополнение инструкции ушло вместе с правками — блок без него не вставляем.
+                    сохранённое = None
+                    _preserve_failed("разбор тела", e)
                 print(f"тело пропущено без правок: {e!r}", file=sys.stderr, flush=True)
         with lock:
             stats["requests"] += 1
@@ -1191,8 +2717,22 @@ class Handler(BaseHTTPRequestHandler):
         начало = time.monotonic()
         if compact is not None:
             попытка = open_compact(compact, self.path)
+            if попытка is None:
+                # Первая попытка облака упала, а ответ клиенту ещё не начат (send_response ниже) —
+                # повторяем один раз: обрыв в начале потока — самый вероятный из отказов, и он
+                # ещё лечится повтором. Второй отказ — фолбэк на локаль, как раньше.
+                попытка = open_compact(compact, self.path)
+                if попытка is not None:
+                    with lock:
+                        stats["compact_cloud_retry"] += 1
             with lock:
-                stats["compact_routed" if попытка else "compact_fallback"] += 1
+                if попытка:
+                    # Маршрут в облако: по заголовку-маркеру (compact_routed_header) или по
+                    # запасному пути сигнатура+порог (compact_routed) — исходы взаимно исключают
+                    # друг друга: запрос едет в облако ровно по одному признаку.
+                    stats["compact_routed_header" if compact_by_header else "compact_routed"] += 1
+                else:
+                    stats["compact_fallback"] += 1
             if попытка:
                 conn, resp, первый = попытка
                 дамп = dump_request(compact, сессия, dict(
@@ -1210,6 +2750,11 @@ class Handler(BaseHTTPRequestHandler):
                                "thinkingBlocks": 0}
         if resp is None:
             headers = {k: v for k, v in self.headers.items() if k.lower() not in HOP}
+            if сохранённое is not None:
+                # Сжатый ответ вставка не разберёт, а дополнение инструкции уже велело модели не
+                # пересказывать реплики: запись вышла бы беднее, чем без флага. Облако
+                # (open_compact) Accept-Encoding не шлёт и так.
+                headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
             if body:
                 headers["Content-Length"] = str(len(body))
             conn = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
@@ -1245,12 +2790,50 @@ class Handler(BaseHTTPRequestHandler):
         # разбирательства, а карточка работает всегда, и делить одно состояние на две ручки с
         # разным сроком жизни значит потерять цифры кэша, как только дамп выключат.
         usage_карточки, prefill = {}, None
+
+        def отдать(кусок):
+            if кусок:  # пустой кусок в chunked-кодировке — это конец ответа, его шлём отдельно
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(кусок), кусок))
+                self.wfile.flush()
+
+        # Блок <ccs-preserved> — только в успешный ответ сжатия, кто бы его ни писал (облако
+        # или фолбэк на локаль). Ответ-ошибку не трогаем: клиент должен увидеть её как есть.
+        вставка, выход = None, отдать
+        if сохранённое is not None and resp.status == 200:
+            вид = resp.getheader("Content-Type") or ""
+            сжат = (resp.getheader("Content-Encoding") or "identity").lower() != "identity"
+            текст = "\n\n" + сохранённое
+            if сжат:
+                _preserve_failed("ответ", RuntimeError("ответ сжат Content-Encoding"))
+            elif "text/event-stream" in вид:
+                вставка = ВставкаБлока(отдать, текст)
+            elif "application/json" in вид:
+                вставка = ВставкаВJson(отдать, текст)
+            else:
+                _preserve_failed("ответ", RuntimeError(f"непонятный Content-Type {вид!r}"))
+            if вставка is not None:
+                выход = вставка.усвоить
+        # Нормализация usage — только локальный ответ: облачный (MiniMax) уже в семантике
+        # Anthropic, и его не трогаем. Ставится до реле: реле и его повтор идут через него.
+        нормализатор = None
+        if первый is None:
+            sse = "text/event-stream" in (resp.getheader("Content-Type") or "")
+            нормализатор = НормализаторUsage(выход, sse)
+            выход = нормализатор.усвоить
+        # Предохранитель — только на потоке локальной модели: облако (автосжатие) не петляет,
+        # а ответы-ошибки и не-SSE идут как раньше, байт в байт.
+        реле = None
+        if ((LOOP_GUARD == "on" or JUNK_GUARD == "on") and первый is None and resp.status == 200
+                and "text/event-stream" in (resp.getheader("Content-Type") or "")):
+            реле = РелеПотока(выход, петли=LOOP_GUARD == "on",
+                              детектор_мусора=ДетекторМусора() if JUNK_GUARD == "on" else None)
+        итог_петли = {"петли": 0, "повторён": False, "conn": None}
+        сработка = None  # мета для дампа сработки предохранителя
         try:
             if первый:  # кусок, прочитанный ради fail-closed, отдаём первым
                 prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, первый)
-                self.wfile.write(b"%x\r\n%s\r\n" % (len(первый), первый))
-                self.wfile.flush()
+                выход(первый)
             while True:
                 chunk = resp.read1(65536)
                 if not chunk:
@@ -1261,13 +2844,47 @@ class Handler(BaseHTTPRequestHandler):
                 if prefill is None:  # первый байт ответа: замер того, что человек ждал
                     prefill = time.monotonic() - начало
                 merge_usage(usage_карточки, chunk)
-                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-                self.wfile.flush()
+                if реле is None:
+                    выход(chunk)
+                elif реле.усвоить(chunk):
+                    break
+            if реле is not None and (реле.мусор or реле.петля):
+                # Мета — на момент сработки, а запись — в finally: диск не должен задерживать
+                # обрыв генерации, каждая лишняя доля секунды — токены впустую.
+                сработка = dict(
+                    path=self.path, guard="мусор" if реле.мусор else "петля",
+                    reason=(реле.детектор_мусора.причина if реле.мусор
+                            else " ".join(реле.детектор.петля or ())),
+                    block=реле.петля_в, usage=dict(usage_карточки),
+                    ttfbSeconds=None if prefill is None else round(prefill, 3))
+            if реле is not None and реле.мусор:
+                self._после_срыва("junk", реле, conn, body, headers, сессия, итог_петли)
+            elif реле is not None and реле.петля:
+                self._после_петли(реле, conn, body, headers, сессия, итог_петли)
+            elif реле is not None:
+                реле.дослать()
+            if вставка is not None:
+                вставка.дослать()
+            if нормализатор is not None:
+                нормализатор.дослать()
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass  # клиент ушёл (прерывание хода) — upstream закроется вместе с conn
         finally:
+            if итог_петли["conn"] is not None:
+                итог_петли["conn"].close()
+            if сработка is not None:
+                dump_guard(body, сессия, сработка)
+            # Карточка «петля перехвачена»: blocks — сколько петель поймали (2 — и повтор
+            # петлял, ответ усечён), resultBlocks — был ли повтор, thinkingBlocks — петля в
+            # размышлениях. Поля общие с карточкой обрезки: ручка бэкенда одна.
+            if итог_петли["петли"] and сессия:
+                send_event({"sessionId": сессия, "kind": "loop_guard",
+                            "tokensBefore": 0, "tokensAfter": 0,
+                            "blocks": итог_петли["петли"], "resultBlocks": int(итог_петли["повторён"]),
+                            "inputBlocks": 0, "thinkingBlocks": int(реле.петля_в == "thinking"),
+                            "prefillSeconds": None, "cacheReadTokens": None, "promptTokens": None})
             if дамп is not None:
                 дамп.записать()  # оборванный ход: мета без usage, зато тело в дампе осталось
             # Карточка уходит ПО КОНЦУ ответа, а не по первому байту: цифры кэша роутер vLLM
@@ -1281,7 +2898,146 @@ class Handler(BaseHTTPRequestHandler):
             if событие is not None:
                 self._отправить_событие(событие, prefill, usage_карточки)
                 событие = None
+            if отпечаток is not None:
+                attribute_miss(self.headers.get(EVENT_SESSION_HEADER), отпечаток, usage_карточки, prefill)
             conn.close()
+
+    def _после_срыва(self, kind, реле, conn, body, headers, сессия, итог):
+        """Общий хвост после срыва (петля/мусор): гасим генерацию, закрываем блок и один раз
+        повторяем запрос — мимо испорченного prefix cache.
+
+        Закрытие соединения — и есть остановка: vLLM снимает запрос по обрыву клиента, расход
+        GPU прекращается сразу. Поток повтора приклеивается к тому же ответу клиенту. Срыв и
+        в повторе (или повтор не удался) — пометка отдельным текстовым блоком и штатный хвост.
+
+        Повтор идёт с солью карантина (q-<сессия>-<ns>): vLLM не берёт для неё чужие блоки
+        prefix cache, а сессия и дальше ходит со своей солью (parse_body подставляет её в
+        каждый запрос). Петля дополнительно сдвигает сэмплинг (локальная стохастика); мусор —
+        нет (S0, факт 3). Повторный запрос, закрытие блока, пометка и штатный хвост — общие;
+        счётчики, логи и текст пометки различаются по виду срыва.
+        """
+        петля = kind == "loop"
+        conn.close()
+        if петля:
+            итог["петли"] = 1
+            with lock:
+                stats["loops_detected"] += 1
+            print(f"петля в потоке ({реле.петля_в}, {реле.детектор.всего} слов): "
+                  f"{' '.join(реле.детектор.петля or ())!r}", file=sys.stderr, flush=True)
+        else:
+            д = реле.детектор_мусора
+            with lock:
+                stats["junk_aborts"] += 1
+                stats["junk_words_max_ratio"] = round(д.доля, 3)
+            print(f"мусор в потоке ({д.всего} слов, {д.причина}) — ответ оборван",
+                  file=sys.stderr, flush=True)
+        реле.закрыть_блок()
+        # Повтор: петля — сдвиг сэмплинга (всегда, если LOOP_RETRY), мусор — только при
+        # карантине. Соль карантина (q-<сессия>-<ns>) — обоим: повтор уходит в чистое
+        # пространство, а сессия и дальше ходит со своей солью. Петля в уже засоленной
+        # сессии соль не меняет (берёт существующую); мусор — новую на каждый срыв.
+        повтор_вкл = (LOOP_RETRY if петля else CACHE_QUARANTINE) == "on"
+        тело = (retry_body(body) if петля else body) if повтор_вкл and body else None
+        if CACHE_QUARANTINE == "on" and body and тело is not None:
+            повтор_соль = None  # соль, которой сессия уже ходит (петля в засоленной сессии)
+            if петля and сессия:
+                # Петля: сессия уже ходит с солью — повтор берёт её, новую не выдаёт:
+                # ещё один полный префилл (~70 с на 95K) и брошенный KV прежней соли —
+                # то, чего избегали, убирая uuid4-соль.
+                with lock:
+                    соль = _карантин.get(сессия)
+                    if соль is None:
+                        соль = f"q-{сессия[:40]}-{time.time_ns()}"
+                        _карантин[сессия] = соль
+                    else:
+                        повтор_соль = соль
+                        stats["quarantine_loop_reused"] += 1
+            else:
+                # Мусор (или петля без заголовка сессии): новая соль на каждый срыв —
+                # испорченный кэш мог появиться и в уже засоленном пространстве.
+                соль = f"q-{(сессия or 'nosess')[:40]}-{time.time_ns()}"
+                if сессия:
+                    with lock:
+                        _карантин[сессия] = соль
+            тело = salted_body(тело, соль)
+            print(f"карантин сессии {сессия or '(без заголовка)'}: повтор мимо кэша "
+                  f"{'с прежней солью' if повтор_соль else 'с солью'}",
+                  file=sys.stderr, flush=True)
+        причина = "повтор выключен" if тело is None else None
+        if тело is not None:
+            if not петля:
+                # Мусор: перед повтором — пометка, что ответ пересчитывается заново.
+                реле.пометка("\n\n[прокси: модель выдала мусор из испорченного кэша — ответ "
+                             "пересчитывается заново]\n\n")
+            заголовки = dict(headers, **{"Content-Length": str(len(тело))})
+            c2 = итог["conn"] = http.client.HTTPConnection(UP_HOST, UP_PORT, timeout=None)
+            try:
+                c2.request(self.command, self.path, body=тело, headers=заголовки)
+                r2 = c2.getresponse()
+            except OSError as e:
+                r2, причина = None, f"upstream недоступен: {e!r}"
+                if not петля:
+                    # Мусор: текст master — оператор видит, почему повтор не ушёл.
+                    print(f"карантин: повтор не ушёл ({e!r})", file=sys.stderr, flush=True)
+            if r2 is not None and r2.status != 200:
+                причина = f"повтор ответил HTTP {r2.status}"
+                if not петля:
+                    print(f"карантин: повтор ответил HTTP {r2.status}", file=sys.stderr, flush=True)
+            elif r2 is not None:
+                if петля:
+                    итог["повторён"] = True
+                    with lock:
+                        stats["loops_retried"] += 1
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True)
+                else:
+                    реле2 = РелеПотока(реле.отдать, сдвиг=реле.следующий, повтор=True,
+                                       петли=LOOP_GUARD == "on", детектор_мусора=ДетекторМусора())
+                while True:
+                    chunk = r2.read1(65536)
+                    if not chunk or реле2.усвоить(chunk):
+                        break
+                if not (реле2.мусор or реле2.петля):
+                    реле2.дослать()
+                    if not реле2.завершён and not реле2.сквозной:
+                        # Повтор оборвался без message_stop — клиенту всё равно целое сообщение.
+                        реле2.закрыть_блок()
+                        реле2.хвост()
+                    if not петля:
+                        with lock:
+                            stats["quarantine_retries"] += 1
+                    return
+                c2.close()
+                if петля:
+                    итог["петли"] = 2
+                    with lock:
+                        stats["loops_detected"] += 1
+                    print(f"петля и в повторе ({реле2.детектор.всего} слов) — ответ усечён",
+                          file=sys.stderr, flush=True)
+                else:
+                    print("карантин: мусор или петля и в повторе — ответ оборван",
+                          file=sys.stderr, flush=True)
+                реле2.закрыть_блок()
+                реле = реле2
+            if not петля:
+                # Повтор мусора не ушёл (не 200, обрыв, или мусор/петля и в повторе) — счётчик.
+                with lock:
+                    stats["quarantine_failed"] += 1
+        if петля:
+            if причина:
+                print(f"петля: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
+            with lock:
+                stats["loops_truncated"] += 1
+            реле.пометка("\n\n[прокси: ответ усечён — модель зациклилась"
+                         + (", повтор запроса тоже" if итог["повторён"] else "") + "]")
+        else:
+            if причина:
+                print(f"мусор: ответ усечён без повтора ({причина})", file=sys.stderr, flush=True)
+            реле.пометка("\n\n[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]")
+        реле.хвост()
+
+    def _после_петли(self, реле, conn, body, headers, сессия, итог):
+        """Петля поймана: общий хвост срыва — повтор, сдвиг сэмплинга, соль карантина (S2a)."""
+        self._после_срыва("loop", реле, conn, body, headers, сессия, итог)
 
     def handle_one_request(self):
         try:
@@ -1313,7 +3069,17 @@ if __name__ == "__main__":
           + (f", автосжатие -> {COMPACT_MODEL} на {COMPACT_UPSTREAM} (порог "
              f"{COMPACT_MIN_CONTEXT_TOKENS // 1000}k ток)" if COMPACT_UPSTREAM
              else ", автосжатие в облако выкл")
+          + (", сохранение дословного при сжатии вкл" if COMPACT_PRESERVE == "on"
+             else ", сохранение дословного при сжатии выкл")
           + (f", карточка сдвига границы -> {BACKEND_EVENTS_URL}" if BACKEND_EVENTS_URL
-             else ", карточка сдвига границы выкл"), flush=True)
+             else ", карточка сдвига границы выкл")
+          + (f", предохранитель петли вкл ({LOOP_NGRAM}-грамма x{LOOP_REPEATS} в {LOOP_WINDOW} "
+             f"словах, повтор {LOOP_RETRY})" if LOOP_GUARD == "on" else ", предохранитель петли выкл")
+          + (f", предохранитель мусора вкл (доля {JUNK_RATIO} в {JUNK_WINDOW} словах, цепочка {JUNK_RUN})"
+             if JUNK_GUARD == "on" else ", предохранитель мусора выкл")
+          + (f", прунинг картинок вкл (свежих {IMAGE_KEEP}, потолок {IMAGE_MAX})"
+             if IMAGE_PRUNE == "on" else ", прунинг картинок выкл")
+          + (f", дамп сработок -> {GUARD_DUMP_DIR} (свежих {GUARD_DUMP_KEEP})" if GUARD_DUMP_DIR else ""),
+          flush=True)
     prepare_dump_dir()  # сообщит в журнал, включён дамп или каталог не годится
     srv.serve_forever()

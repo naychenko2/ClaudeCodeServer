@@ -131,6 +131,11 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
     /// FileSystemWatcher перечня нет — дерево там наблюдает ядро.</summary>
     internal IReadOnlyCollection<string> Subscribed => _backend?.Subscribed ?? [];
 
+    /// <summary>Номер inotify-дескриптора экземпляра (для тестов и диагностики): по нему
+    /// считают слежки именно этого экземпляра, не всего процесса. У не-Linux-ветки
+    /// дескриптора нет — -1.</summary>
+    internal int FdForTests => (_backend as InotifyBackend)?.FdForTests ?? -1;
+
     private void Emit(string path, DirectoryWatchKind kind)
     {
         try { _onEvent(path, kind); }
@@ -422,10 +427,14 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     if (_stopping) return;
                     if (_excludeDirs.Contains(Path.GetFileName(sub))) continue;
                     if (IsSymlink(sub)) continue; // по ссылкам не ходим: петли и выход за корень
+                    // Каталог с собственным .git (worktree/вложенный репозиторий) — полная
+                    // копия чужого дерева: слежка на его корень стоит, но вглубь не идём,
+                    // иначе бюджет inotify ушёл бы на чужую копию (TreeExcludes.HasOwnGit).
+                    var ownGit = TreeExcludes.HasOwnGit(sub);
                     switch (TryAddWatch(sub))
                     {
                         case WatchAdd.Added:
-                            queue.Enqueue(sub);
+                            if (!ownGit) queue.Enqueue(sub);
                             // Каталог появился уже после старта — потребителю дерева он нужен
                             // так же, как файлы внутри него.
                             if (emitExistingFiles && _includeDirectories)
@@ -596,10 +605,14 @@ public sealed class RecursiveDirectoryWatcher : IDisposable
                     // Появление каталога отдаётся ДО подписки и независимо от её исхода:
                     // в дереве файлов он уже есть, даже если слежку на него завести не удалось.
                     if (_includeDirectories) _emit(subdir, DirectoryWatchKind.Created);
+                    // Каталог с собственным .git, появившийся уже после старта (git worktree
+                    // add во время работы): слежка на его корень стоит, но вглубь не идём —
+                    // иначе копирование чужого дерева разрастало бы подписки дальше.
+                    var ownGit = TreeExcludes.HasOwnGit(subdir);
                     switch (TryAddWatch(subdir))
                     {
                         case WatchAdd.Added:
-                            AddSubtree(subdir, emitExistingFiles: true);
+                            if (!ownGit) AddSubtree(subdir, emitExistingFiles: true);
                             break;
                         case WatchAdd.Alias:
                             WarnOnce("alias-watch",

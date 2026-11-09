@@ -313,6 +313,7 @@ public class ProjectBackgroundBackfillTests : IDisposable
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -334,10 +335,8 @@ public class ProjectBackgroundBackfillTests : IDisposable
             }
         }
 
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            throw new NotImplementedException();
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
             object? jsonFormat = null, CancellationToken ct = default) => throw new NotImplementedException();

@@ -6,8 +6,6 @@ import { C, FONT, R, SHADOW, SP, FS } from '../../lib/design';
 import { stripRoot } from '../../lib/paths';
 import { ChatProjectContext, useAssistantName } from './contexts';
 import { MarkdownContent } from './MarkdownContent';
-import { VoiceMicButton } from './VoiceMicButton';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useSlotItem } from '../../lib/subsystems/registry';
 import type { PlanButtonCtx } from '../../lib/subsystems/registryCore';
 import { PlanRemarks } from '../../features/plan/PlanRemarks';
@@ -68,11 +66,6 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 }) {
   // Кнопка «В заметку» — вклад слота plan-action (ноль прямых импортов фичи Notes).
   const planButton = useSlotItem<PlanButtonCtx>('plan-action', 'plan-button');
-  const [rejecting, setRejecting] = useState(false);
-  const [feedback, setFeedback] = useState('');
-  const feedbackRef = useRef<HTMLTextAreaElement>(null);
-  // Идёт запись голоса — поле замещается рядом индикации (ряд рисует VoiceMicButton)
-  const [recording, setRecording] = useState(false);
   // Количество неотправленных замечаний в PlanRemarks. При > 0 акцент
   // кнопок карточки меняется: согласование становится второстепенным с
   // честной подписью про потерю замечаний (задача про молча теряемые
@@ -83,7 +76,6 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
   // Фича «Визуальный разворот плана»: контекстные замечания к разделам.
   // Под флагом — кнопка "Отклонить" заменяется на раздел замечаний: счётчик,
   // список заметок, отправка через тот же onRespond(requestId, false, feedback)
-  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
   // В тексте плана пути показываем относительно корня проекта
   const plan = stripRoot(item.plan, project?.rootPath);
   const planBodyRef = useRef<HTMLDivElement>(null);
@@ -151,7 +143,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
     const el = planBodyRef.current;
     if (!el) return;
     setOverflowing(el.scrollHeight - el.clientHeight > 8);
-  }, [plan, rejecting, schemeView]);
+  }, [plan, schemeView]);
 
   // === Решённое состояние: одобрено → компактная шапка выполнения ===
   if (item.resolved && item.approved) {
@@ -245,41 +237,39 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
       </div>
 
       <div style={{ position: 'relative', margin: '12px 0' }}>
-        {visualPlanEnabled && (
-          // Переключатель «Схемой / Текстом» — сегмент над телом карточки. Сборка
-          // карты ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое открытие
-          // плана сразу дёргало бы модель. Сюда же вынесена кнопка «Собрать
-          // схему», чтобы не терялась за переключателем.
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs, flexWrap: 'wrap',
-          }}>
-            <InlineSegmented
-              value={schemeView}
-              onChange={handleSchemeViewChange}
-              options={[
-                { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
-                  tone: { bg: C.plan, fg: C.onAccent } },
-                { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
-                  tone: { bg: C.plan, fg: C.onAccent } },
-              ]}
-            />
-            {schemeView === 'scheme' && schemeStatus !== 'ready' && (
-              <Button
-                variant="ghostFilled"
-                size="sm"
-                loading={schemeStatus === 'building'}
-                onClick={buildScheme}
-                leftIcon={schemeStatus === 'building'
-                  ? <Loader2 size={12} />
-                  : <Network size={12} />}
-              >
-                {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
-              </Button>
-            )}
-          </div>
-        )}
+        {/* Переключатель «Схемой / Текстом» — сегмент над телом карточки. Сборка
+           карты ТОЛЬКО по кнопке (вики-план часть B §4): иначе любое открытие
+           плана сразу дёргало бы модель. Сюда же вынесена кнопка «Собрать
+           схему», чтобы не терялась за переключателем. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs, flexWrap: 'wrap',
+        }}>
+          <InlineSegmented
+            value={schemeView}
+            onChange={handleSchemeViewChange}
+            options={[
+              { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+                tone: { bg: C.plan, fg: C.onAccent } },
+              { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+                tone: { bg: C.plan, fg: C.onAccent } },
+            ]}
+          />
+          {schemeView === 'scheme' && schemeStatus !== 'ready' && (
+            <Button
+              variant="ghostFilled"
+              size="sm"
+              loading={schemeStatus === 'building'}
+              onClick={buildScheme}
+              leftIcon={schemeStatus === 'building'
+                ? <Loader2 size={12} />
+                : <Network size={12} />}
+            >
+              {schemeStatus === 'building' ? 'Собираю схему…' : 'Собрать схему'}
+            </Button>
+          )}
+        </div>
 
-        {schemeView === 'scheme' && visualPlanEnabled ? (
+        {schemeView === 'scheme' ? (
           schemeStatus === 'ready' && map ? (
             // Схема в карточке ленты — с maxHeight и fade снизу (как у текста
             // плана): иначе длинная карта растягивала бы карточку на весь чат.
@@ -338,7 +328,7 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
             {/* При отказе сборки — плашка над текстом, а не вместо него.
                 Вид уже на «Текстом» (см. buildScheme/handleSchemeViewChange),
                 человек видит и сообщение, и сам план — расхождения нет. */}
-            {visualPlanEnabled && schemeStatus === 'failed' && (
+            {schemeStatus === 'failed' && (
               <div style={{
                 marginBottom: SP.xs,
                 background: C.warningBg, border: `1px solid ${C.border}`, borderRadius: R.lg,
@@ -377,8 +367,8 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
 
       {!online ? (
         <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
-      ) : visualPlanEnabled ? (
-        // Под флагом visualPlan — кнопка одобрения + слой замечаний (PlanRemarks)
+      ) : (
+        // Кнопка одобрения + слой замечаний (PlanRemarks)
         // с кнопкой «Отправить на доработку (N)». Когда замечаний нет, одобрение —
         // единственный primary; когда есть — PlanRemarks рисует свою primary-кнопку
         // отправки на доработку, а одобрение становится второстепенным с честной
@@ -421,87 +411,20 @@ export function PlanReviewView({ item, online, onRespond, version, showBadge, sh
           >
             Одобрить и выполнить
           </Button>
-        )
-      ) : rejecting ? (
-        <div>
-          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: SP.xs }}>
-            {asstName} учтёт это и предложит новый план
-          </div>
-          {/* Запись голоса: поле прячется (но остаётся в DOM — по ref в него приезжает
-              распознанное), на его месте — ряд индикации от VoiceMicButton */}
-          <div style={{ position: 'relative', marginBottom: SP.xs }}>
-            <textarea
-              autoComplete="off"
-              value={feedback}
-              onChange={e => setFeedback(e.target.value)}
-              autoFocus
-              placeholder="Что поправить в плане? (необязательно)"
-              rows={3}
-              ref={feedbackRef}
-              style={{
-                display: recording ? 'none' : undefined,
-                width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
-                border: `1px solid ${C.border}`, background: C.bgWhite,
-                padding: '8px 36px 8px 10px', fontSize: FS.sm, color: C.textHeading,
-                fontFamily: 'inherit', resize: 'none', outline: 'none',
-              }}
-            />
-            <VoiceMicButton inputRef={feedbackRef} variant="suffix" recordingRow onListeningChange={setRecording} />
-          </div>
-          <div style={{ display: 'flex', gap: SP.xs }}>
-            <Button
-              fullWidth
-              variant="primary"
-              size="md"
-              onClick={() => onRespond(item.requestId, false, feedback.trim() || undefined)}
-            >
-              Переработать план
-            </Button>
-            <Button
-              variant="ghostFilled"
-              size="md"
-              onClick={() => { setRejecting(false); setFeedback(''); }}
-            >
-              Назад
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: SP.xs }}>
-          <Button
-            fullWidth
-            variant="primary"
-            size="md"
-            glow
-            onClick={() => onRespond(item.requestId, true)}
-            leftIcon={<Check size={16} color={C.onAccent} strokeWidth={2.6} />}
-          >
-            Одобрить и выполнить
-          </Button>
-          <Button
-            variant="ghostAccent"
-            size="md"
-            onClick={() => setRejecting(true)}
-            style={{ color: C.planText, borderColor: C.planBorder }}
-          >
-            Отклонить
-          </Button>
-        </div>
+          )
       )}
       {/* Слой замечаний: рендерится ВСЕГДА у pending-плана, чтобы кнопки у
           заголовков жили вне ленточной прокрутки; сам по себе компонент ничего
-          не рисует, если status!='pending' или флаг выключен */}
-      {visualPlanEnabled && (
-        <PlanRemarks
-          contentRef={planBodyRef}
-          planText={plan}
-          containerToken={schemeView}
-          status="pending"
-          onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
-          onCountChange={setRemarksCount}
-          externalRequest={remarkRequest}
-        />
-      )}
+          не рисует, если status!='pending' */}
+      <PlanRemarks
+        contentRef={planBodyRef}
+        planText={plan}
+        containerToken={schemeView}
+        status="pending"
+        onSubmit={feedback => onRespond(item.requestId, false, feedback || undefined)}
+        onCountChange={setRemarksCount}
+        externalRequest={remarkRequest}
+      />
     </div>
   );
 }

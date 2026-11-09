@@ -45,5 +45,10 @@ public interface IImageEditSaver
         string projectRoot, string? folder, string? fileName, string extension);
 }
 
-// Что запуск по ревизии знает о своей котировке: операция раскладывает входы, ревизия — сверка
-public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision);
+// Что запуск по ревизии знает о своей котировке: операция раскладывает входы, ревизия — сверка,
+// Provider — ключ поставщика (для проверки «только local» при подстановке на лицо),
+// FacePasses — число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка,
+// InputCaps — возможности модели котировки с лимитами входа (ImageEditCatalog.WithInputLimits): до них
+// сборщик подстановки на лицо уменьшает кроп (Д5); null — лимиты неизвестны
+public sealed record ImageEditQuoteInfo(ImageEditOp Op, long? ContextRevision, string? Provider = null, int? FacePasses = null,
+    ImageEditCaps? InputCaps = null);

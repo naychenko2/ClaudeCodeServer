@@ -237,7 +237,9 @@ public class LocalMediaServiceTests : IDisposable
     [Fact]
     public void Клиент_ПозицияВОчереди()
     {
-        var queue = new ComfyQueueState(["a"], ["b", "c"]);
+        var queue = new ComfyQueueState(
+            [new ComfyQueueItem("a", null, [])],
+            [new ComfyQueueItem("b", null, []), new ComfyQueueItem("c", null, [])]);
         queue.PositionOf("a").Should().Be(0);
         queue.PositionOf("c").Should().Be(2);
         queue.PositionOf("zzz").Should().BeNull();
@@ -315,6 +317,44 @@ public class LocalMediaServiceTests : IDisposable
 
         var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.EditImage,
             Prompt: "x", Images: [path]), default);
+
+        result.Error.Should().Contain("вне папки проекта");
+        _comfy.Uploads.Should().BeEmpty();
+        _comfy.Prompts.Should().BeEmpty();
+    }
+
+    // F2-P2e: чужесть private судится по вызывающему (ActorId), а не по арендатору (OwnerId)
+    private void WritePrivateImage(string author)
+    {
+        var dir = Path.Combine(_root, ".cc-attachments", "private", author, "g1");
+        Directory.CreateDirectory(dir);
+        File.WriteAllBytes(Path.Combine(dir, "pic.png"), LocalMediaTestImages.Png(10, 10));
+    }
+
+    [Fact]
+    public async Task Вход_ПриватныйЧатУчастника_СвоёВложениеЧитается()
+    {
+        WritePrivateImage("user-b");
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.EditImage,
+            Prompt: "x", Images: [".cc-attachments/private/user-b/g1/pic.png"], ActorId: "user-b"), default);
+
+        result.Error.Should().BeNull();
+        _comfy.Uploads.Should().ContainSingle();
+    }
+
+    [Theory]
+    [InlineData(Owner, "user-b")]
+    [InlineData("user-c", "user-b")]
+    [InlineData("user-b", null)]
+    public async Task Вход_ЧужоеPrivate_Отказ_БезРаскрытияНаличия(string author, string? actor)
+    {
+        WritePrivateImage(author);
+        var (service, _) = Build();
+
+        var result = await service.SubmitAsync(new LocalMediaRequest(Owner, ProjectId, null, LocalMediaOps.EditImage,
+            Prompt: "x", Images: [$".cc-attachments/private/{author}/g1/pic.png"], ActorId: actor), default);
 
         result.Error.Should().Contain("вне папки проекта");
         _comfy.Uploads.Should().BeEmpty();

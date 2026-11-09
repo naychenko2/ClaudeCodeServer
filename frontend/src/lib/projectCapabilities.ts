@@ -95,6 +95,13 @@ function handsAvailable(project: Project | null | undefined): boolean {
   return project?.handsRefusal === null;
 }
 
+// Плагины (ADR-031) в группы тоже не входят: доступность считает capabilities.plugins
+// (ProjectPluginsCapability). Поля нет (старый бэк) — трактуем как доступно: старый бэк
+// это серверный проект, а плагины выключены только у локальных.
+function pluginsAvailable(project: Project | null | undefined): boolean {
+  return project?.capabilities?.plugins?.available ?? true;
+}
+
 // В какой группе живёт ключ. Возвращает группу или null для незнакомого ключа.
 // Сторож G10 разрешает в этом файле ВСЕ формы обращения к deviceId — потому проверки
 // локальности тут, а в панелях только host/features/reason из матрицы.
@@ -111,6 +118,7 @@ function findGroup(cap: ProjectCapabilitiesView, feature: ProjectFeatureKey): Pr
 // списка ключей на бэке).
 export function isFeatureAvailable(project: Project | null | undefined, feature: ProjectFeatureKey): boolean {
   if (feature === ProjectFeature.Hands) return handsAvailable(project);
+  if (feature === ProjectFeature.Plugins) return pluginsAvailable(project);
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return false;
@@ -121,6 +129,7 @@ export function isFeatureAvailable(project: Project | null | undefined, feature:
 // tooltip к скрытой панели/кнопке.
 export function featureReason(project: Project | null | undefined, feature: ProjectFeatureKey): string | null {
   if (feature === ProjectFeature.Hands) return handsAvailable(project) ? null : project?.handsRefusal ?? HANDS_UNKNOWN_REASON;
+  if (feature === ProjectFeature.Plugins) return pluginsAvailable(project) ? null : project?.capabilities?.plugins?.reason ?? null;
   const cap = getProjectCapabilities(project);
   const group = findGroup(cap, feature);
   if (!group) return 'Возможность недоступна в этой версии';

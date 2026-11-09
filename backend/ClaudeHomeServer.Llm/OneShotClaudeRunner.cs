@@ -39,13 +39,15 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     UserModelTierResolver? userTiers = null,
     ClaudeSubscriptionPool? subscriptionPool = null,
     SubscriptionActivityTracker? activity = null,
-    ILogger<OneShotClaudeRunner>? logger = null) : IOneShotRunner
+    ILogger<OneShotClaudeRunner>? logger = null,
+    LocalEngineBusyTracker? localGate = null) : IOneShotRunner
 {
     public static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(120);
 
     // Рубильник на случай CLI старее флага --no-session-persistence (см. BuildArgs): CLI
-    // валидирует аргументы и падает с кодом 1 на незнакомом, а образ песочницы может нести
-    // версию старее хостовой. true — вернуть прежнее поведение с записью транскриптов.
+    // валидирует аргументы и падает с кодом 1 на незнакомом, а в песочнице при выключенном
+    // Sandbox:UseHostCli (или без каталога версий хоста) CLI берётся из образа и может быть
+    // старее хостового. true — вернуть прежнее поведение с записью транскриптов.
     private readonly bool _persistSessions = config.GetValue("Claude:PersistOneShotSessions", false);
     private int _spendNullWarned;
 
@@ -132,11 +134,20 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         string? ownerId = null, string? effort = null, string? label = null) =>
         RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label);
 
+    // Вызов с картинками на входе (разметка фото, ADR-027 §4): сообщение уходит в stdin как
+    // stream-json с image-блоками. Способность модели видеть картинки проверяет вызывающий
+    // (ImageLabeler) — раннер её не знает.
+    public Task<OneShotResult> RunWithImagesAsync(string prompt, IReadOnlyList<ImageLabelInput> images,
+        string? model = null, TimeSpan? timeout = null, CancellationToken ct = default,
+        string? ownerId = null, string? label = null) =>
+        RunCliAsync(prompt, model, timeout, ct, ownerId, null, label, images);
+
     // Формат всегда json: раньше текстовый путь шёл без него, но аналитике расхода нужен
     // usage КАЖДОГО вызова, а его отдаёт только json-ответ. Потребители RunAsync по-прежнему
     // получают чистый текст (result из json).
     private async Task<OneShotResult> RunCliAsync(string prompt, string? model,
-        TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, string? label)
+        TimeSpan? timeout, CancellationToken ct, string? ownerId, string? effort, string? label,
+        IReadOnlyList<ImageLabelInput>? images = null)
     {
         var launcher = launchers.ForOwner(ownerId);
         var workDir = Path.Combine(launcher.HostTempDir, "claude-oneshot");
@@ -156,7 +167,12 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // метод оставался чистой функцией от аргументов. Точка подмены одна — LlmProviderRegistry.
         effort = llmProviders.EffortFor(model, effort);
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
-            safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort);
+            safeMode: !launcher.IsSandboxed, persistSessions: !withFlag, model, effort, streamInput: images is { Count: > 0 });
+
+        // Второй путь CLI к локальному провайдеру берёт ТОТ ЖЕ счётчик, что и ходы, но без
+        // ожидания: нет свободного слота — отказ, и вызывающий идёт по своей цепочке (то же
+        // «не лезем в занятый движок», что и LocalActionRouter.LocalBlockedByTurn).
+        using var localSlot = TryEnterLocal(model);
 
         var (env, poolSubKey) = ResolveEnv(model);
 
@@ -189,7 +205,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             var stdoutTask = process.StandardOutput.ReadToEndAsync(cts.Token);
             var stderrTask = process.StandardError.ReadToEndAsync(cts.Token);
 
-            await process.StandardInput.WriteAsync(prompt.AsMemory(), cts.Token);
+            var stdinText = images is { Count: > 0 } ? BuildStreamInput(prompt, images) : prompt;
+            await process.StandardInput.WriteAsync(stdinText.AsMemory(), cts.Token);
             process.StandardInput.Close();
 
             await process.WaitForExitAsync(cts.Token);
@@ -213,7 +230,10 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
                     Console.Error.WriteLine(
                         "[OneShotClaudeRunner] CLI не знает --no-session-persistence — повторяю без него. " +
                         "Транскрипты one-shot снова будут копиться; лечится обновлением claude в образе песочницы");
-                    return await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label);
+                    // Повтор сам берёт слот — свой отпускаем (Dispose идемпотентен), иначе при
+                    // потолке 1 повтор отказал бы сам себе.
+                    localSlot?.Dispose();
+                    return await RunCliAsync(prompt, model, timeout, ct, ownerId, effort, label, images);
                 }
                 if (detail.Length > 500) detail = detail[..500] + "…";
                 throw new InvalidOperationException(
@@ -222,7 +242,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
 
             // Время меряем по своим часам, а не по duration_ms от CLI: пользователь ждёт
             // весь вызов вместе со стартом процесса (~5-15 с), а не только запрос к API
-            var result = ParseJsonResult(stdout, model, started.ElapsedMilliseconds);
+            var result = ParseJsonResult(
+                images is { Count: > 0 } ? LastResultLine(stdout) : stdout, model, started.ElapsedMilliseconds);
             RecordSpend(result, model, ownerId, label, poolSubKey);
             return result;
         }
@@ -242,6 +263,16 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             launcher.Kill(process, turnId);
             throw new LlmTimeoutException(TimeoutMessage(timeout, started.Elapsed));
         }
+    }
+
+    // Слот локального движка для one-shot на локальном провайдере: null — модель не локальная
+    // (или гейта нет), LocalEngineBusyException — свободного слота нет.
+    private IDisposable? TryEnterLocal(string? model)
+    {
+        if (localGate is null || llmProviders.ResolveByModel(model) is not { IsLocal: true } provider)
+            return null;
+        return localGate.TryEnter(provider.Key, provider.MaxConcurrentTurns)
+            ?? throw new LocalEngineBusyException(provider.Key);
     }
 
     // Сообщение отказа по времени: применённый лимит + сколько фактически ждали.
@@ -264,11 +295,20 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     // хосте; скиллы one-shot не зовет). Нужны и при safeMode: в песочнице флага нет, а
     // хуки отключить все равно надо.
     internal static List<string> BuildArgs(IEnumerable<string> hooksOffArgs,
-        bool safeMode, bool persistSessions, string? model, string? effort)
+        bool safeMode, bool persistSessions, string? model, string? effort, bool streamInput = false)
     {
-        // Формат всегда json: usage нужен аналитике расхода на КАЖДОМ вызове
-        var args = new List<string> { "--print", "--output-format", "json" };
+        // Формат всегда json: usage нужен аналитике расхода на КАЖДОМ вызове. С картинками
+        // вход — stream-json, а CLI требует парный stream-json на выходе (и --verbose)
+        var args = streamInput
+            ? new List<string> { "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose" }
+            : new List<string> { "--print", "--output-format", "json" };
         args.AddRange(hooksOffArgs);
+        // Явный режим прав: CLI ≥ 2.1.2xx при -p на сторонних провайдерах (env-оверрайд)
+        // без явного режима стартует в auto mode (авто-одобрение). One-shot — чистая
+        // генерация, режиму «default» это соответствует: не авто-одобряет и не планирует.
+        // ClaudeSession передаёт --permission-mode по Info.Mode; у one-shot режима нет —
+        // всегда default, поэтому флаг постоянный и входит в сигнатуру детерминированно.
+        args.AddRange(["--permission-mode", ClaudeMode.Default.ToCliFlag()]);
         // Транскрипт one-shot мертв с рождения: --resume по нему никто не делает, а CLI
         // писал по файлу на вызов (замер: ~287 файлов за сутки на одном инстансе) и держал
         // их до своей плановой уборки (~30 дней). Флаг работает только вместе с --print —
@@ -283,7 +323,8 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // пользователя протекали в тон продуктовых текстов. CLAUDE_CONFIG_DIR так не
         // умеет (память CLI грузит мимо него), --bare ломает OAuth-авторизацию
         // (пропускает чтение кредов). Только локально: флаг появился в CLI 2.1.169,
-        // песочница может нести версию старее — там не рискуем.
+        // песочница с npm-копией образа (UseHostCli выключен или каталога версий хоста нет) может
+        // нести версию старее — там не рискуем.
         if (safeMode) args.Add("--safe-mode");
         // --strict-mcp-config без --mcp-config = ни одного MCP-сервера, в ОБЕИХ средах.
         // safe-mode MCP тоже отсекает, но его нет в песочнице: там CLI подхватил бы серверы
@@ -317,6 +358,42 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         return args;
     }
 
+    // Одно user-сообщение stream-json: текст + image-блоки base64 (образец — ClaudeSession).
+    // Заканчивается переводом строки: CLI читает вход построчно.
+    internal static string BuildStreamInput(string prompt, IReadOnlyList<ImageLabelInput> images)
+    {
+        var blocks = new List<object> { new { type = "text", text = prompt } };
+        foreach (var img in images)
+            blocks.Add(new
+            {
+                type = "image",
+                source = new { type = "base64", media_type = img.ContentType, data = Convert.ToBase64String(img.Bytes) },
+            });
+        return JsonSerializer.Serialize(new
+        {
+            type = "user",
+            message = new { role = "user", content = blocks },
+        }) + "\n";
+    }
+
+    // Из потока stream-json нужна последняя строка type=result: в ней тот же { result, usage, … },
+    // что отдаёт --output-format json. Нет такой строки — отдаём вывод как есть.
+    internal static string LastResultLine(string stdout)
+    {
+        foreach (var line in stdout.Split('\n').Reverse())
+        {
+            var t = line.Trim();
+            if (t.Length == 0 || t[0] != '{') continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(t);
+                if (doc.RootElement.TryGetProperty("type", out var ty) && ty.GetString() == "result") return t;
+            }
+            catch (JsonException) { }
+        }
+        return stdout;
+    }
+
     // Запись расхода one-shot вызова в аналитику. Источник — one-shot; модель ":free"
     // (агрегатор через CLI) выделяется источником free. Ошибка записи вызов не роняет.
     // poolSubKey — ключ аккаунта пула подписок, которым реально ходили (см. RunCliAsync);
@@ -337,12 +414,14 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             // аналитика должна знать, КАКОЙ аккаунт подписки потратил токены, а не всегда "claude".
             var provider = SpendSources.NormalizeProvider(poolSubKey ?? llmProviders.ProviderKey(model));
             var usedModel = llmProviders.ResolveModelOrDefault(u.Model ?? model, provider);
+            // Локальный провайдер (IsLocal) — свой движок без подписки: его one-shot тоже бесплатный
+            var isLocal = llmProviders.GetByKey(provider)?.IsLocal == true;
             spend.Record(new SpendRecord
             {
                 OwnerId = ownerId ?? "",
                 Provider = provider,
                 Model = usedModel,
-                Source = SpendSources.IsFree(provider, usedModel)
+                Source = SpendSources.IsFree(provider, usedModel, isLocal)
                     ? SpendSources.Free : SpendSources.OneShot,
                 InputTokens = u.InputTokens,
                 OutputTokens = u.OutputTokens,

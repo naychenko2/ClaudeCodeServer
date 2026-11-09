@@ -25,7 +25,7 @@ public class ImagePrefsController(
     public IActionResult Get(string projectId)
     {
         if (!gate.TryProject(UserId, projectId, out var project, out var denied)) return denied;
-        return Ok(prefs.Get(UserId, ImageEditScope.Of(project)));
+        return Ok(prefs.Get(ImageEditScope.TenantOf(project), ImageEditScope.Of(project)));
     }
 
     [HttpPut]
@@ -34,6 +34,6 @@ public class ImagePrefsController(
         if (!gate.TryProject(UserId, projectId, out var project, out var denied)) return denied;
         if (ImageProjectPrefsService.Validate(req) is { } error)
             return StatusCode(StatusCodes.Status400BadRequest, new { error, code = ImageEditErrorCodes.InvalidRequest });
-        return Ok(await prefs.SetAsync(UserId, ImageEditScope.Of(project), req!));
+        return Ok(await prefs.SetAsync(ImageEditScope.TenantOf(project), ImageEditScope.Of(project), req!));
     }
 }

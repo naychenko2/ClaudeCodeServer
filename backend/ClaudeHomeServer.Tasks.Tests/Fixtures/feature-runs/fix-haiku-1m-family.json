@@ -1,0 +1,48 @@
+[
+ {
+  "id": "epic-haiku-1m-family",
+  "title": "ClaudeModelFamily: haiku с окном 1M (алиас ведёт на claude-haiku-5-5)",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-14T22:57",
+  "completed": "2026-10-14T23:12",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "fix/haiku-1m-family",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "hmf-s1",
+  "title": "Денис: ClaudeModelFamily — haiku с окном 1M",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:57",
+  "completed": "2026-10-14T23:06",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-haiku-1m-family",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "hmf-r1",
+  "title": "Денис: доработка по ревью Александра — вернуть Supports1M=false, убрать исключение по имени",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T23:07",
+  "completed": "2026-10-14T23:12",
+  "kind": "rework",
+  "role": "rework",
+  "featureId": "epic-haiku-1m-family",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

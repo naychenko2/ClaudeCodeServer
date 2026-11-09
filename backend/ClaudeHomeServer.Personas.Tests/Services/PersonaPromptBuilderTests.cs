@@ -1,0 +1,324 @@
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Prompts;
+using FluentAssertions;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Сборка системного промпта персоны: секции контракта (P1) + дисциплина провайдера (P2)
+public class PersonaPromptBuilderTests
+{
+    private static Persona MakePersona(PersonaContract? contract = null, string? systemPrompt = null,
+        string? greeting = null) => new()
+        {
+            Name = "Марк",
+            Role = "Ревьюер",
+            Description = "строгая проверка кода",
+            SystemPrompt = systemPrompt,
+            Contract = contract,
+            Greeting = greeting,
+        };
+
+    private static string Build(Persona p, string providerKey = "claude",
+        bool switched = false, bool greeted = false) =>
+        PersonaPromptBuilder.BuildCore(p, providerKey, switched, greeted);
+
+    [Fact]
+    public void БезКонтракта_LegacySystemPrompt_ЕдинымБлоком()
+    {
+        var prompt = Build(MakePersona(systemPrompt: "Ты строг, но справедлив."));
+
+        prompt.Should().StartWith("Ты — Ревьюер по имени Марк, строгая проверка кода.");
+        prompt.Should().Contain("Ты строг, но справедлив.");
+        prompt.Should().NotContain("## Характер");
+    }
+
+    [Fact]
+    public void Контракт_ПриоритетнееLegacySystemPrompt()
+    {
+        var persona = MakePersona(
+            contract: new PersonaContract { Character = "Ты дотошный и въедливый." },
+            systemPrompt: "СТАРЫЙ ТЕКСТ ХАРАКТЕРА");
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Характер\nТы дотошный и въедливый.");
+        prompt.Should().NotContain("СТАРЫЙ ТЕКСТ ХАРАКТЕРА");
+    }
+
+    [Fact]
+    public void ПустойКонтракт_ЭквивалентенLegacy()
+    {
+        var persona = MakePersona(
+            contract: new PersonaContract { Character = "  ", MustDo = ["", " "] },
+            systemPrompt: "Legacy-характер.");
+
+        Build(persona).Should().Contain("Legacy-характер.");
+    }
+
+    [Fact]
+    public void ПустыеСлоты_СекцииПропускаются()
+    {
+        var persona = MakePersona(contract: new PersonaContract { Character = "Ты краток." });
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Характер");
+        prompt.Should().NotContain("## Тон");
+        prompt.Should().NotContain("## Всегда");
+        prompt.Should().NotContain("## Никогда");
+        prompt.Should().NotContain("## Формат ответов");
+        prompt.Should().NotContain("## Примеры твоих реплик");
+    }
+
+    [Fact]
+    public void ВсеСлоты_КаждыйВСвоейСекции()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            Tone = "сухо и по делу",
+            MustDo = ["Выноси вердикт первым", "Сортируй замечания по важности"],
+            MustNot = ["Не переписывай чужую работу"],
+            OutputFormat = "Вердикт, затем до трёх замечаний.",
+            SpeechExamples = ["Принято. Одно замечание по краевому случаю."],
+        });
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Тон\nсухо и по делу");
+        prompt.Should().Contain("## Всегда\n- Выноси вердикт первым\n- Сортируй замечания по важности");
+        prompt.Should().Contain("## Никогда\n- Не переписывай чужую работу");
+        prompt.Should().Contain("## Формат ответов\nВердикт, затем до трёх замечаний.");
+        prompt.Should().Contain("## Примеры твоих реплик\n> Принято. Одно замечание по краевому случаю.");
+        prompt.Should().Contain("образцы стиля, а не готовые ответы");
+    }
+
+    [Fact]
+    public void Инструкция_ОтдельнойСекциейПослеОстальныхСлотов()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            Instructions = "### Протокол\n1. Прочитай план.\n2. Вынеси вердикт.",
+        });
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Инструкция\n### Протокол\n1. Прочитай план.\n2. Вынеси вердикт.");
+        prompt.IndexOf("## Инструкция").Should().BeGreaterThan(prompt.IndexOf("## Характер"));
+    }
+
+    [Fact]
+    public void ТолькоИнструкция_КонтрактНеПустой()
+    {
+        // Контракт из одной инструкции — не legacy-режим: SystemPrompt игнорируется
+        var persona = MakePersona(
+            contract: new PersonaContract { Instructions = "Полный регламент роли." },
+            systemPrompt: "СТАРЫЙ ТЕКСТ");
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("## Инструкция\nПолный регламент роли.");
+        prompt.Should().NotContain("СТАРЫЙ ТЕКСТ");
+    }
+
+    [Theory]
+    [InlineData(false, "Привет! Что проверить?", false)] // greeted=false — секции нет
+    [InlineData(true, null, false)]                      // приветствие пустое — секции нет
+    [InlineData(true, "Привет! Что проверить?", true)]   // оба условия — секция есть
+    public void GreetedСекция_ТолькоПриGreetedИНепустомПриветствии(bool greeted, string? greeting, bool expected)
+    {
+        var prompt = Build(MakePersona(greeting: greeting), greeted: greeted);
+
+        prompt.Contains("не здоровайся повторно").Should().Be(expected);
+        if (expected) prompt.Should().Contain("«Привет! Что проверить?»");
+    }
+
+    [Fact]
+    public void Switched_ДобавляетОговоркуПроЧужиеОтветы()
+    {
+        Build(MakePersona()).Should().NotContain("другой собеседник");
+        Build(MakePersona(), switched: true)
+            .Should().Contain("мог отвечать другой собеседник");
+    }
+
+    [Fact]
+    public void Дисциплина_Claude_КраткостьИПрагматизм()
+    {
+        var prompt = Build(MakePersona(), providerKey: "claude");
+
+        prompt.Should().Contain(PersonaPromptBuilder.Brevity);
+        prompt.Should().Contain(PersonaPromptBuilder.LeastChange);
+        prompt.Should().NotContain(PersonaPromptBuilder.Verification);
+        prompt.Should().NotContain(PersonaPromptBuilder.NeverRules);
+        prompt.Should().NotContain(PersonaPromptBuilder.AntiSlop);
+        prompt.Should().NotContain(PersonaPromptBuilder.FiveFailures);
+    }
+
+    [Fact]
+    public void Дисциплина_DeepSeek_ПолныйНаборССамопроверкой()
+    {
+        var prompt = Build(MakePersona(), providerKey: "deepseek");
+
+        prompt.Should().Contain(PersonaPromptBuilder.Brevity);
+        prompt.Should().Contain(PersonaPromptBuilder.Verification);
+        prompt.Should().Contain(PersonaPromptBuilder.SelfCheck);
+        prompt.Should().Contain(PersonaPromptBuilder.TurnIntent);
+        prompt.Should().Contain(PersonaPromptBuilder.NeverRules);
+        prompt.Should().Contain(PersonaPromptBuilder.AntiSlop);
+        prompt.Should().NotContain(PersonaPromptBuilder.LeastChange);
+    }
+
+    [Fact]
+    public void Дисциплина_Glm_КалибровкаБезДостоверности()
+    {
+        var prompt = Build(MakePersona(), providerKey: "glm");
+
+        prompt.Should().Contain(PersonaPromptBuilder.Brevity);
+        prompt.Should().NotContain(PersonaPromptBuilder.Verification);
+        prompt.Should().Contain(PersonaPromptBuilder.FiveFailures);
+        prompt.Should().Contain(PersonaPromptBuilder.OutcomeFirst);
+        prompt.Should().Contain(PersonaPromptBuilder.NeverRules);
+        prompt.Should().Contain(PersonaPromptBuilder.AntiSlop);
+    }
+
+    [Fact]
+    public void Дисциплина_НеизвестныйПровайдер_КраткостьИГраницы()
+    {
+        var prompt = Build(MakePersona(), providerKey: "someprovider");
+
+        prompt.Should().Contain(PersonaPromptBuilder.Brevity);
+        prompt.Should().NotContain(PersonaPromptBuilder.Verification);
+        prompt.Should().Contain(PersonaPromptBuilder.NeverRules);
+        prompt.Should().NotContain(PersonaPromptBuilder.AntiSlop);
+    }
+
+    [Fact]
+    public void Идентификатор_ПерсоныВыводитсяВПромпт()
+    {
+        var persona = MakePersona();
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("идентификатор персоны (personaId)")
+            .And.Contain(persona.Id)
+            .And.Contain("не разыскивая себя через personas_list");
+    }
+
+    [Fact]
+    public void БезРоли_ПредставлениеТолькоПоИмени()
+    {
+        var persona = new Persona { Name = "Ада" };
+
+        Build(persona).Should().StartWith("Ты — Ада.");
+    }
+
+    // --- Пол персоны (Gender): сигнал рода в промпте ---
+
+    [Fact]
+    public void Build_FemalePersona_InsertsFemalePhrase()
+    {
+        var persona = new Persona { Name = "Кира", Gender = PersonaGender.Female };
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("женщина");
+        prompt.Should().Contain("женском роде");
+    }
+
+    [Fact]
+    public void Build_MalePersona_InsertsMalePhrase()
+    {
+        var persona = new Persona { Name = "Марк", Gender = PersonaGender.Male };
+
+        var prompt = Build(persona);
+
+        prompt.Should().Contain("мужчина");
+        prompt.Should().Contain("мужском роде");
+    }
+
+    [Fact]
+    public void Build_UnspecifiedPersona_NoGenderSignal()
+    {
+        // Gender не задан (дефолт) и явный Unspecified — сигнал рода в промпт не попадает
+        var unspecified = new Persona { Name = "Марк" };
+        var explicitUnspecified = new Persona { Name = "Марк", Gender = PersonaGender.Unspecified };
+
+        foreach (var p in new[] { unspecified, explicitUnspecified })
+        {
+            var prompt = Build(p);
+            prompt.Should().NotContain("женщина");
+            prompt.Should().NotContain("мужчина");
+        }
+    }
+
+    // Мутационный: точная родовая фраза обязана попасть в вывод; убрать/изменить вставку — красный
+    [Fact]
+    public void Build_FemalePersona_Mutation_ExactPhrasePresent()
+    {
+        var persona = new Persona { Name = "Кира", Gender = PersonaGender.Female };
+
+        Build(persona).Should().Contain("Ты отвечаешь как женщина: о себе говори в женском роде.");
+    }
+
+    // --- Голосовой режим (voiceMode) ---
+
+    [Fact]
+    public void VoiceMode_ОговоркаПоследнимБлокомСлоя()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            OutputFormat = "Вердикт, затем до трёх замечаний.",
+        });
+
+        var prompt = PersonaPromptBuilder.BuildCore(persona, "claude",
+            switched: false, greeted: false, voiceMode: true);
+
+        // Оговорка обязана стоять ПОСЛЕДНЕЙ: ниже «Формата ответов» и блока personaId,
+        // иначе формат персоны перебьёт голосовое правило
+        prompt.Should().EndWith(VoicePrompts.PersonaOverride);
+        prompt.IndexOf(VoicePrompts.PersonaOverride)
+            .Should().BeGreaterThan(prompt.IndexOf("## Формат ответов"));
+    }
+
+    [Fact]
+    public void БезVoiceMode_ОговоркиНет()
+    {
+        Build(MakePersona()).Should().NotContain(VoicePrompts.PersonaOverride);
+    }
+
+    // Стиль digest: формат персоны НЕ отменяется — коротко только внутри блока <voice>.
+    // Перепутать оговорки нельзя: talk-версия заставила бы отвечать коротко и на экране
+    [Fact]
+    public void VoiceStyleDigest_СвояОговоркаВместоРазговорной()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            OutputFormat = "Вердикт, затем до трёх замечаний.",
+        });
+
+        var prompt = PersonaPromptBuilder.BuildCore(persona, "claude",
+            switched: false, greeted: false, voiceMode: true,
+            voiceStyle: ClaudeHomeServer.Models.VoiceStyles.Digest);
+
+        prompt.Should().EndWith(VoicePrompts.DigestPersonaOverride);
+        prompt.Should().NotContain(VoicePrompts.PersonaOverride);
+        prompt.IndexOf(VoicePrompts.DigestPersonaOverride)
+            .Should().BeGreaterThan(prompt.IndexOf("## Формат ответов"));
+    }
+
+    // Пустой и битый стиль — разговор: старые чаты ведут себя как раньше
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("shout")]
+    public void VoiceStyleПустойИлиМусор_ЭтоРазговорнаяОговорка(string? style)
+    {
+        var prompt = PersonaPromptBuilder.BuildCore(MakePersona(), "claude",
+            switched: false, greeted: false, voiceMode: true, voiceStyle: style);
+
+        prompt.Should().EndWith(VoicePrompts.PersonaOverride);
+    }
+}

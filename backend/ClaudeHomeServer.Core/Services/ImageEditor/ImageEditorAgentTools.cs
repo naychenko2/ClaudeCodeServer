@@ -13,6 +13,7 @@ public static class ImageEditorAgentTools
         "mcp__image-editor__image_focus",
         "mcp__image-editor__image_new",
         "mcp__image-editor__image_generate",
+        "mcp__image-editor__image_find_faces",
         "mcp__image-editor__image_cancel",
         "mcp__image-editor__image_suggest_prompt",
     ];

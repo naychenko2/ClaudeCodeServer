@@ -83,16 +83,10 @@ describe('запуск действия картинки', () => {
     expect(quoted[0]).toMatchObject({ op: 'edit', count: 3, sessionId: S, contextRevision: 7 });
   });
 
-  it('«Дорисовать»: пропорции из вопроса уходят аспектом запуска', async () => {
-    await imageKindApi.launch!(CTX, { op: 'outpaint', text: '', params: { aspect: '9:16', variants: 1 }, contextRevision: 8 });
-    expect(started[0]).toMatchObject({ contextRevision: 8, aspectRatio: '9:16' });
-    expect(quoted[0]).toMatchObject({ op: 'outpaint', contextRevision: 8 });
-  });
-
-  it('«Нарисовать» у черновика: «авто» пропорций не уходит, число вариантов — из параметров', async () => {
+  it('«Нарисовать» у черновика: пропорции не уходят, число вариантов — из параметров', async () => {
     __applyThreads(S, P, { focus: 'd1', revision: 2, threads: [thread({ id: 'd1', file: null, draftFolder: '' })] });
     __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
-    await imageKindApi.launch!(CTX, { op: 'generate', text: 'маяк', params: { variants: 2, aspect: 'авто' }, contextRevision: 9 });
+    await imageKindApi.launch!(CTX, { op: 'generate', text: 'маяк', params: { variants: 2 }, contextRevision: 9 });
     expect(started[0]).toMatchObject({ contextRevision: 9, aspectRatio: undefined, threadId: 'd1' });
     expect(quoted[0]).toMatchObject({ op: 'generate', count: 2 });
   });
@@ -175,7 +169,7 @@ describe('цена, «Чем» и параметры', () => {
     expect(imageKindApi.executors!(CTX, 'нет-такого')).toBeNull();
   });
 
-  it('параметры: варианты у «Изменить» и «Дорисовать», у «Убрать фон» и «Увеличить» их нет; пропорции только у «Нарисовать»', () => {
+  it('параметры: варианты у «Изменить» и «Дорисовать», у «Убрать фон» и «Увеличить» их нет; у «Нарисовать» только варианты', () => {
     expect(imageKindApi.params!(CTX, 'edit').map(p => p.kind)).toEqual(['variants']);
     expect(imageKindApi.params!(CTX, 'outpaint').map(p => p.kind)).toEqual(['variants']);
     expect(imageKindApi.params!(CTX, 'removeBg')).toEqual([]);
@@ -183,8 +177,7 @@ describe('цена, «Чем» и параметры', () => {
     __applyThreads(S, P, { focus: 'd1', revision: 2, threads: [thread({ id: 'd1', file: null, draftFolder: '' })] });
     __applyChatContext(S, { ...context(9), primary: { ...context(9).primary!, ref: { threadId: 'd1' } } });
     const draw = imageKindApi.params!(CTX, 'draw');
-    expect(draw.map(p => p.kind)).toEqual(['variants', 'aspect']);
-    expect(draw[1]).toMatchObject({ options: ['авто', '16:9', '9:16', '1:1'], value: 'авто' });
+    expect(draw.map(p => p.kind)).toEqual(['variants']);
   });
 
   it('действия: у нити с файлом — пять чипов; нить не найдена — действий нет (остаётся «Чат | Картинка»)', () => {

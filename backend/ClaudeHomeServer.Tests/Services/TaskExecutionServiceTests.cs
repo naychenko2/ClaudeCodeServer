@@ -29,6 +29,40 @@ public class TaskExecutionServiceTests
         TaskExecutionService.IsSuccess(Result(subtype)).Should().Be(expected);
     }
 
+    // ─── Гейты запуска эпика фичи (шаг 1.4) ──────────────────────────────────
+    // Эпик — контейнер фичи, а не работа: исполнителем не запускается. Два гейта:
+    // Role=feature без FeatureId — противоречие данных; Role=feature — эпик, вести
+    // фичу задачами шага/ревью/проверки. Оба возвращают текст отказа, null — не эпик.
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_РольFeatureБезFeatureId_ПротиворечиеДанных()
+    {
+        var task = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, FeatureId = null };
+
+        TaskExecutionService.FeatureEpicLaunchRefusal(task)
+            .Should().Be("Эпик фичи без привязки к фиче: у задачи роль feature, но FeatureId пуст.");
+    }
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_РольFeatureСFeatureId_ЭпикНеЗапускается()
+    {
+        var task = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, FeatureId = "epic-1" };
+
+        TaskExecutionService.FeatureEpicLaunchRefusal(task)
+            .Should().Be("Эпик фичи не запускается исполнителем; чтобы вести задачи фичи, " +
+                       "заведите задачу шага/ревью/проверки через tasks_create.");
+    }
+
+    [Fact]
+    public void FeatureEpicLaunchRefusal_НеЭпик_ЗапускНеОтказывается()
+    {
+        // Задача фичи (шаг) — исполнителем запускается; гейт на неё не срабатывает
+        var step = new TaskItem { Title = "шаг", Role = TaskRoles.Step, FeatureId = "epic-1" };
+        TaskExecutionService.FeatureEpicLaunchRefusal(step).Should().BeNull();
+        // Задача вообще без роли фичи
+        TaskExecutionService.FeatureEpicLaunchRefusal(new TaskItem { Title = "обычная" }).Should().BeNull();
+    }
+
     // ─── Модель исполнителя: задача → персона → место ────────────────────────
 
     [Fact]
@@ -312,6 +346,22 @@ public class TaskExecutionServiceTests
         template.Should().Contain("{{TIER_LEVELS}}").And.Contain("{{CATEGORY_PROFILES}}");
     }
 
+    // Запрет фоновых сборок и тестов: фоновая команда переживает закрытие задачи, а её
+    // «убито по таймауту» будит завершённого исполнителя новым ходом. Правило обязано быть
+    // в шаблоне и в обоих встроенных фолбэках (с персоной и без), причём одной строкой.
+    [Fact]
+    public void ЗапретФоновыхСборок_ЕстьВШаблонеИВОбоихФолбэках()
+    {
+        const string rule = "- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests`; " +
+            "`run_in_background`, Monitor и фоновые " +
+            "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.";
+
+        TaskExecutionService.ReadRulesTemplate(projectRoot: null).Should().Contain(rule);
+        TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" }, new Persona { Name = "Вера" })
+            .Should().Contain(rule);
+        TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" }).Should().Contain(rule);
+    }
+
     // Механика подстановки: значения встают на место плейсхолдеров, а пустые убирают СТРОКУ
     // целиком — иначе в постановке остаётся пустая строка там, где у владельца нет алиасов
     // тиров или справочник категорий недоступен.
@@ -375,6 +425,42 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("blocker", "признак «работа встала» будит постановщика сразу");
         prompt.Should().Contain("Застрял", "у застревания должен быть явный выход, кроме молчания");
         prompt.Should().Contain("не завершай", "эскалация не подменяет завершение задачи");
+    }
+
+    // Контракт исполнителя (Ш3): шаг с собственным деревом получает правило порядка
+    // «закоммить → pregate → tasks_complete» — без него ревьюер не увидит вердикта предгейта.
+    // Задача без своего дерева правила не получает: предгейт к ней не применяется.
+    [Theory]
+    [InlineData(true)]   // с персоной — 6-секционный контракт
+    [InlineData(false)]  // без персоны — короткий формат
+    public void BuildPrompt_ШагСДеревом_ЕстьПорядокПредгейта(bool withPersona)
+    {
+        var step = new TaskItem { Title = "t", Role = TaskRoles.Step, WorktreePath = Path.Combine(Path.GetTempPath(), "tree") };
+
+        var prompt = TaskExecutionService.BuildPrompt(step, withPersona ? new Persona { Name = "Вера" } : null);
+
+        prompt.Should().Contain("pregate", "правило порядка «закоммить → pregate → tasks_complete»");
+        prompt.Should().Contain("tasks_complete");
+        prompt.Should().Contain("закоммить");
+
+        var plain = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t", Role = TaskRoles.Step }, withPersona ? new Persona { Name = "Вера" } : null);
+        plain.Should().NotContain("pregate", "у задачи без своего дерева предгейт не применяется");
+    }
+
+    // Рабочая ветка постановки — шаблон правил (SystemPrompts/task-executor-rules.md): серверный
+    // дефолт есть всегда, значит почти каждый шаг идёт именно туда. Правило предгейта обязано
+    // доезжать и в ней — иначе шаг не получит контракт «закоммить → pregate → tasks_complete».
+    [Fact]
+    public void BuildPrompt_СШаблономПравил_ЕстьПорядокПредгейта()
+    {
+        var step = new TaskItem { Title = "t", Role = TaskRoles.Step, WorktreePath = Path.Combine(Path.GetTempPath(), "tree") };
+
+        var prompt = TaskExecutionService.BuildPrompt(step, new Persona { Name = "Вера" },
+            rulesTemplate: "## ПРАВИЛА\n- правило проекта\n");
+
+        prompt.Should().Contain("## ПРЕДГЕЙТ", "правило предгейта обязано быть и в ветке с шаблоном правил");
+        prompt.Should().Contain("pregate").And.Contain("tasks_complete").And.Contain("закоммить");
     }
 
     [Fact]
@@ -600,6 +686,28 @@ public class TaskExecutionServiceTests
 
         text.Should().StartWith(TaskExecutionService.DelegationReportMarker + "Починить сборку");
         text.Should().Contain("Собрал, тесты зелёные.");
+    }
+
+    [Fact]
+    public void BuildDelegationReportText_СКритериями_СодержитТаблицуКритерийСвидетельство()
+    {
+        var task = new TaskItem { Title = "Шаг", ResultMarkdown = "Готово." };
+        task.Acceptance.AddRange([new("c1", "кнопка ≥ 40 на 360"), new("c2", "ui_probe без находок")]);
+        task.Evidence.Add(new("c1", "ui_probe 360", "высота 44, ширина 48"));
+
+        var text = TaskExecutionService.BuildDelegationReportText(task);
+
+        text.Should().Contain("| Критерий | Свидетельство |");
+        text.Should().Contain("| c1. кнопка ≥ 40 на 360 | ui_probe 360 — высота 44, ширина 48 |");
+        text.Should().Contain("| c2. ui_probe без находок | _нет свидетельства_ |");
+    }
+
+    [Fact]
+    public void BuildDelegationReportText_БезКритериев_БезТаблицы()
+    {
+        var text = TaskExecutionService.BuildDelegationReportText(new TaskItem { Title = "Т", ResultMarkdown = "Ок" });
+
+        text.Should().NotContain("Критерий");
     }
 
     // B3: пустой итог объясняется человеку, а не скобочной пометкой

@@ -1,0 +1,71 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Architecture (шаг 3.9, пачка F). По образцу TestRuns.Tests (3.7)
+         и ChatContext.Tests (3.8): SDK=Web ради FrameworkReference Microsoft.AspNetCore.App
+         (ILogger/IServiceCollection/TestHost/WebApplication — на них опираются тесты, поднимающие
+         хост: ArchitectureModuleEndpointTests и ArchitectureStaticBranchWiringTests), OutputType=Library
+         ради отсутствия Main.
+         Architecture — ДИНАМИЧЕСКИЙ модуль (Viaduct 10.2): Main тянет его с
+         ReferenceOutputAssembly="false", поэтому типы вертикали (Services.Architecture) не приходят
+         транзитно — нужна прямая ссылка, как в монолите (ClaudeHomeServer.Tests.csproj). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Монолит (ClaudeHomeServer.Tests) в переходный период (до финальной чистки) тянет эту
+         сборку как ProjectReference: допуск internals Architecture.Tests монолиту, как в
+         TestRuns.Tests (3.7) / ChatContext.Tests (3.8). -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models (Project/Session/Persona), на которые ссылаются using'и
+         перенесённых тестов. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Main: Services (IProjectManager/IPersonaResolver/IMcpSessionAccessor/IPersonaServerToolGate),
+         Services.Composition, Services.DynamicModules (ModuleLoader/ModuleRegistry) и
+         Services.Mcp.Http (McpToolCallContext/McpToolCallResult), на которые опираются
+         Architecture-тесты. Main транзитно подтягивает CodeGraph и Tasks (ReferenceOutputAssembly=true),
+         которые используют ArchitectureAgentBuildTests/ArchitecturePathFoldingTests. -->
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <!-- TestKit — Core-only хелперы (namespace ClaudeHomeServer.Tests.Helpers),
+         используемые Architecture-тестами. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <!-- TestKit.Host — Main-зависимые хелперы (TestWebApplicationFactory),
+         используемые ArchitectureModuleEndpointTests. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
+    <!-- Architecture — продуктовая сборка вертикали (динамический модуль). Main тянет её с
+         ReferenceOutputAssembly="false", поэтому прямая ссылка, как в монолите. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Architecture\ClaudeHomeServer.Architecture.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+  </ItemGroup>
+
+  <!-- Architecture — динамический модуль (тот же паттерн, что в монолите ClaudeHomeServer.Tests.csproj
+       и Knowledge.Tests): TestWebApplicationFactory стартует хост с AppContext.BaseDirectory = OutDir;
+       ModuleLoader грузит dll по относительному `modules/architecture/ClaudeHomeServer.Architecture.dll`,
+       поэтому dll должна лежать в OutDir/modules/architecture. Без неё ArchitectureModuleEndpointTests
+       и ArchitectureStaticBranchWiringTests (Загрузка_через_ModuleLoader) не найдут модуль. -->
+  <Target Name="CopyArchitectureModuleForTests" AfterTargets="Build">
+    <Copy SourceFiles="..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll"
+          DestinationFolder="$(OutDir)modules\architecture" SkipUnchangedFiles="true"
+          Condition="Exists('..\ClaudeHomeServer.Architecture\bin\$(Configuration)\net10.0\ClaudeHomeServer.Architecture.dll')" />
+  </Target>
+
+</Project>

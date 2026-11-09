@@ -99,6 +99,9 @@ public static class DeviceAgentRoutes
         new("POST", "files/upload"),
         new("POST", "files/save-from-url"),
         new("POST", "files/changed-by"),
+        // Пакетный резолв по worktree проекта (шаг B2b): у локального проекта trees нет,
+        // фронт locate не зовёт (разрез bc27cbee §3)
+        new("POST", "files/locate"),
         // OnlyOffice живёт рядом с сервером и тянет файл по адресу сервера
         new("GET", "files/office-download"),
         new("GET", "files/office-config"),

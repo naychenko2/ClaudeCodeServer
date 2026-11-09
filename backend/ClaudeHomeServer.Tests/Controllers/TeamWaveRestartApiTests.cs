@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // tasks/{taskId}/restart, /restart, /restart-turn. Состояние готовим серверными сервисами
 // фабрики (как TeamWaveSnapshotApiTests), REST проверяет контракты ответов, гейты и
 // изоляцию по владельцу. Механику (перевыдача, kill+resume) гоняют юнит-тесты сервисов.
+[Trait("Category", "Host")]
 public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;

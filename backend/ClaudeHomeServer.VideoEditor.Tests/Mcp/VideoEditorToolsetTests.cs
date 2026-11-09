@@ -65,15 +65,12 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Fact]
-    public async Task Чужой_чат_чужой_владелец_и_выключенный_флаг_дают_пустой_состав_и_отказ()
+    public async Task Чужой_чат_и_чужой_владелец_дают_пустой_состав_и_отказ()
     {
         using var w = new AgentWorld();
         w.Toolset.ToolsFor(w.Ctx(owner: "stranger")).Should().BeEmpty();
         w.Toolset.ToolsFor(w.Ctx(chat: "no-such-chat")).Should().BeEmpty();
         (await w.Toolset.CallAsync(ToolState, new JsonObject(), w.Ctx(owner: "stranger"), default)).IsError.Should().BeTrue();
-
-        using var off = new AgentWorld(flagOn: false);
-        off.Toolset.ToolsFor(off.Ctx()).Should().BeEmpty("флаг video-editor выключен у владельца");
     }
 
     // ── Основной объект контекста: агент видит выбор человека, а не запись нити ──
@@ -275,21 +272,36 @@ public sealed class VideoEditorToolsetTests
     }
 
     [Fact]
-    public async Task Ожидание_идущей_съёмки_укладывается_в_потолок_и_даёт_allDone_false()
+    public async Task Ожидание_идущей_съёмки_завершается_и_даёт_allDone_false()
     {
         using var w = new AgentWorld(blocking: true);
         var scene = w.NewScene();
         var started = await w.Call(ToolShoot, new JsonObject { ["sceneId"] = scene.SceneId });
         var jobId = System.Text.Json.Nodes.JsonNode.Parse(started.Text)!["jobId"]!.GetValue<string>();
 
-        var watch = System.Diagnostics.Stopwatch.StartNew();
-        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 });
-        watch.Stop();
+        // Съёмка заблокирована и сама не кончится: вызов обязан вернуться по бюджету timeoutSeconds, а не зависнуть;
+        // страховка 30 с только оборвёт зависание. Скорость по стене не мерим; сам потолок — в тесте ниже.
+        var result = await w.Call(ToolWait, new JsonObject { ["timeoutSeconds"] = 1 }).WaitAsync(TimeSpan.FromSeconds(30));
 
         System.Text.Json.Nodes.JsonNode.Parse(result.Text)!["allDone"]!.GetValue<bool>().Should().BeFalse();
-        watch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(10), "потолок ожидания — секунды, а не минуты съёмки");
         await w.Call(ToolCancel, new JsonObject { ["jobId"] = jobId });
         await w.WaitJobsAsync();
+    }
+
+    [Fact]
+    public void Потолок_ожидания_video_wait_совпадает_со_схемой_инструмента()
+    {
+        using var w = new AgentWorld();
+
+        var ceiling = (int)typeof(VideoEditorToolset)
+            .GetField("WaitMaxSeconds", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!
+            .GetRawConstantValue()!;
+        var tool = w.Toolset.ToolsFor(w.Ctx()).Single(t => t.Name == ToolWait);
+        var timeout = tool.InputSchema["properties"]!["timeoutSeconds"]!;
+
+        ceiling.Should().Be(15);
+        timeout["maximum"]!.GetValue<int>().Should().Be(ceiling);
+        tool.Description.Should().Contain($"не больше {ceiling} с");
     }
 
     [Fact]
@@ -320,7 +332,7 @@ public sealed class VideoEditorToolsetTests
         AgentWorld.Parse(second)["path"]!.GetValue<string>().Should().Be("video/утро/scene-01.v2.mp4", "перезаписи нет");
         ProjectFiles(w).Should().Contain(["video/утро/scene-01.mp4", "video/утро/scene-01.v2.mp4", "video/утро/утро.film"]);
         ProjectFiles(w).Should().OnlyContain(f => f.StartsWith("video/") || f.StartsWith("music/"));
-        w.F.Service.State(w.Owner, w.F.Scope, "video/утро/утро.film").Value!.Marks.Should().Contain(m => m.Claude,
+        w.F.Service.State(w.Owner, w.Owner, w.F.Scope, "video/утро/утро.film").Value!.Marks.Should().Contain(m => m.Claude,
             "строка фильма, добавленная агентом, помечена «✦ Claude»");
     }
 

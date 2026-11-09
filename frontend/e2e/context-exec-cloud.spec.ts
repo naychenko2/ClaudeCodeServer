@@ -37,7 +37,7 @@ async function register(page: Page) {
 
 async function openWithCatalog(page: Page, o: { noGit?: boolean } = {}) {
   newWorld({
-    imageCatalog: CATALOG, imageRemote: PROD, noGit: o.noGit, threads: [heroThread()], flags: { 'image-editor': true, 'local-media-default': true },
+    imageCatalog: CATALOG, imageRemote: PROD, noGit: o.noGit, threads: [heroThread()], flags: {},
     ctx: { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) },
   });
   await openChat(page, { vp: D });

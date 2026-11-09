@@ -45,7 +45,7 @@ PUT                 /api/feature-flags/{key}          { enabled } → { values{}
 GET                 /api/subsystem-modules            → { items[{ id, remoteUrl, exposedModule }] }  (MF-remote подсистем; remoteUrl с ?v={хеш remoteEntry.js на диске} — меняется с каждой сборкой модуля, сам remoteEntry.js отдаётся no-cache, /{имя}-remote/assets/** — immutable)
 GET                 /api/modules                      → { items[] }  (внешние YARP-модули; remoteEntry с ?v= — хеш файла из нашей статики, иначе версия манифеста)
 PUT                 /api/auth/timezone                { timeZone }  (IANA-зона устройства — для напоминаний)
-GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=  (все задачи владельца с фильтрами; personaId — поручения персоне)
+GET                 /api/tasks                        ?from=&to=&q=&status=&priority=&assignee=&projectId=&personal=&personaId=&doneDays=  (все задачи владельца с фильтрами; personaId — поручения персоне; doneDays=N — закрытые только за N дней по CompletedAt, 0 — без закрытых, не задан — все)
 POST                /api/tasks/{id}/execute           → Task  (запуск Claude-исполнителя; personaId у задачи → от лица персоны)
 GET                 /api/push/vapid-public-key        → { publicKey }
 POST                /api/push/subscribe|unsubscribe   { endpoint, p256dh?, auth? }  (web-push подписки устройств)
@@ -82,7 +82,6 @@ POST                /api/personas/ask                  { handle, question, conte
 POST                /api/chats/group                   { personaIds[], mode?, name? } → Session  (групповой чат, флаг persona-group-chats)
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
-POST                /api/chats/{id}/handoff            { warm? } → { chatId, projectId, draft, warm }  (перенос в новый чат: warm=true — записку пишет сам чат видимым ходом, при невыполненном предусловии сервер тихо идёт холодным путём — записка по транскрипту местом chat-handoff; warm в ответе — какой путь сработал; чат-преемник без истории; draft — в черновик, не отправляется. 404 чужой/нет, 409 отказ (группа, штаб, worktree, пустой чат, место на локали) или перенос уже идёт, 502 записка не собралась (ошибка/обрыв/таймаут хода, модель не ответила); работает и для проектных сессий; docs/features/chat-handoff.md)
 PUT                 /api/chats/{id}/read               → 204  (отметка прочтения: Session.lastReadAt, синк непрочитанности между устройствами; не двигает updatedAt; работает и для проектных сессий)
 GET                 /api/watchdogs                     → { sessions[], projects[] }  (id чатов и проектов владельца с АКТИВНЫМИ сторожами; смена состава приходит событием watchdogs_changed)
 PUT/DELETE          /api/admin/local-actions/{key}     { enabled } → { key, enabled, source }  (маршрут фонового действия локаль/claude; только admin; DELETE — сброс к конфигу/дефолту)
@@ -105,8 +104,8 @@ GET                 /api/knowledge/{id}/search?q=&topK=&method=semantic|fulltext
 ## Редактор картинок (модуль `imageeditor`)
 
 Ручки модуля [ClaudeHomeServer.ImageEditor](../../backend/ClaudeHomeServer.ImageEditor/CLAUDE.md),
-решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: флаг
-`image-editor` выключен или проект чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
+решения — [ADR-019](../adr/ADR-019-image-editor-v3-in-chat.md). Гейт у всех один: проект
+чужой — `404`; модуль выключен конфигом — ручек нет (`404`).
 Ошибки — `{ error, code }`.
 
 ```
@@ -170,8 +169,8 @@ initiator, baseVersionId } }` — один на запуск; его верси�
 
 Ручки модуля [ClaudeHomeServer.AudioEditor](../../backend/ClaudeHomeServer.AudioEditor/CLAUDE.md),
 решения — [ADR-021](../adr/ADR-021-audio-editor-and-generation-panel.md). Гейт один на все
-(`AudioEditScopeGate`): флаг `audio-editor` выключен, проект или чат чужой — `404`; модуль выключен
-конфигом — ручек нет (`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
+(`AudioEditScopeGate`): проект или чат чужой — `404`; модуль выключен конфигом — ручек нет
+(`404`). Ошибки — `{ error, code }`; коды: `invalid_request` — 400,
 `provider_unavailable`, `name_taken`, `revision_conflict`, `voice_clone_stale`, `voice_clone_missing` —
 409 (у протухшего клона ещё `recreate` — котировка пересоздания), `quote_not_found`, `thread_not_found`,
 `version_not_found`, `file_not_found`, `voice_not_found` — 404, `too_many_jobs`, `heavy_busy` — 429,
@@ -239,8 +238,8 @@ GET                 …/voices/{slug}/files/{file}       образец или �
 
 Ручки модуля [ClaudeHomeServer.VideoEditor](../../backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), решения —
 [ADR-022](../adr/ADR-022-video-editor.md), описание фичи — [video-editor.md](../features/video-editor.md). Гейт один на все
-(`VideoEditScopeGate`): флаг `video-editor` выключен, проект или чат чужой — `404`; модуль выключен конфигом — ручек
-нет (`404`). Ошибки — `{ error, code }` (константы `VideoEditorErrors`): `invalid_request`, `outside_allowed_folders`,
+(`VideoEditScopeGate`): проект или чат чужой — `404`; модуль выключен конфигом — ручек нет
+(`404`). Ошибки — `{ error, code }` (константы `VideoEditorErrors`): `invalid_request`, `outside_allowed_folders`,
 `personal_scope_no_films`, `local_unavailable_personal`, `project_local_unsupported` — 400, `provider_unavailable`,
 `name_taken`, `revision_conflict` — 409, `quote_not_found`, `scene_not_found`, `version_not_found`, `job_not_found`,
 `file_not_found`, `chat_not_found` — 404, `film_invalid`, `film_schema_unsupported` — 422, `too_many_jobs`,
@@ -296,7 +295,7 @@ variant, count, initiator, percent? }`. `percent` (0..1) необязателе�
 (по WebSocket `/ws`, шкала монотонна и до конца задачи не доходит до 1), fal — только если статус очереди отдаёт
 `progress`/`percent`, Higgsfield — не даёт. Нет данных — поля нет, клиент считает долю по `etaSeconds`.
 
-**Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца при флаге).
+**Агент** — MCP-сервер `video-editor` (`POST /mcp/video-editor/{sessionId}`, любой чат владельца).
 Всегда: `video_state`, `video_focus`, `video_new`, `video_scene_set`, `video_suggest_prompt`; при
 `VideoEditor:AgentLaunch` ещё `video_shoot`, `video_cancel`, `video_wait`, `video_save_scene`, `video_film_edit`,
 `video_film_build`. Каждый инструмент зовёт тот же сервис, что ручка выше, и пишет ту же карточку в ленту с
@@ -322,6 +321,185 @@ GET     /api/chats/{sid}/context/saved-files           → [{path, threadKind, s
 `role_not_accepted`, `kind_not_primary`, `refs_limit`. `saved-files` склеивают `IChatSavedFiles` вертикалей
 (картинки и звуки): следы сохранений лежат в самих нитях. Событие в группу владельца — `chat_context_changed`
 (полный DTO). Агенту — MCP-сервер `turn-context`: [mcp-servers.md](mcp-servers.md).
+
+## Статистика локальных моделей (флаг `local-model-stats`)
+
+Панель «Локальные модели» и живые метрики чата ([ADR-029](../adr/ADR-029-local-model-stats.md),
+[local-model-stats.md](../features/local-model-stats.md)). Источник правды —
+[LocalModelStatsController.cs](../../backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs) и
+[SessionLocalModelController.cs](../../backend/ClaudeHomeServer/Controllers/SessionLocalModelController.cs).
+Все времена — unix-мс числом. Доли (`usagePerc`, `prefixHitPerc`, `cacheHitPerc` …) — 0..1. Поле, которого
+движок не дал, — `null`. Выключенная подсистема Llm или images — `200 { configured: false }`, а не 500.
+Серверный флаг пользователя ручки не проверяют: его проверяет фронт.
+
+```
+GET  /api/local-model/stats        ?window=5m|15m|1h&since=<unix ms>   (только admin; иначе 403)
+     → { configured, engine?, model?, tensorParallel?, status: working|busy|down|notConnected, downSince?, running?, waiting?,
+         othersCount?, cleanStepMs?,
+         speed: { genPerStream?, prefillPerStream?, speculativeSpeedup? },
+         kv: { usagePerc?, ramTierPerc?, prefixHitPerc?, ramTierHitPerc?, preemptions15m? },
+         gpus: [{ index, name, utilPerc?, memUsedMb?, memTotalMb?, tempC?, powerW?, powerLimitW? }] | null,
+         history: [{ t, genThroughput?, waiting?, running?, kvUsage?, prefixHits?, prefixQueries?, ramHits?, ramQueries?, preemptions?, genTokens?, itlSeconds?, itlCount?, cleanStepMs? (база шага ЭТОЙ точки: по уровню running у батч-движка, иначе общая, v2.6), prefillSeconds?, queueSeconds?, promptTokens? }],
+         chats: [{ own, sessionId?, projectId?, title?, phase, genTps? }], unsupported: string[] }
+     window по умолчанию 15m; белый список 5m/15m/1h, иное — 400; since — только хвост истории новее момента.
+     history: точки не чаще 5 с при любой частоте опроса, genThroughput — среднее за шаг (ток/с).
+     history серии кэша (v2.1): kvUsage — доля 0..1, МАКСИМУМ vllm:kv_cache_usage_perc по опросам с прошлой
+     точки; prefixHits/prefixQueries (токены), ramHits/ramQueries (чанки), preemptions (штуки) — ПРИРАЩЕНИЕ
+     счётчика с прошлой точки (не с предыдущего опроса). null — нет прошлой точки, метрика не отдана или
+     счётчик упал (рестарт); отрицательных значений нет. Долю за интервал фронт считает из сумм.
+     history скорость генерации на поток (главная линия графика): genTokens (vllm:generation_tokens_total),
+     itlSeconds (vllm:inter_token_latency_seconds_sum, сек), itlCount (vllm:inter_token_latency_seconds_count,
+     число шагов декодирования), prefillSeconds (vllm:request_prefill_time_seconds_sum, сек), queueSeconds
+     (vllm:request_queue_time_seconds_sum, сек) и promptTokens (vllm:prompt_tokens_total, токены) — ПРИРАЩЕНИЕ
+     счётчиков с прошлой точки, правило null то же, что у серий кэша. Фронт сводит точки в интервалы и считает
+     скорость генерации на поток: ΣgenTokens/ΣitlSeconds (ток/с) — измерение vLLM, та же формула «генерации на
+     поток» (ADR-029). Поле «Куда уходит время агентов» графика (v2.3, вместо «Шаг модели» и «Агентов в
+     генерации»): составная полоса 100 % — генерирует (ΣitlCount×чистый шаг), читает промпт (ΔprefillSeconds),
+     ждёт соседа (max(0, ΣitlSeconds−генерирует)), в очереди (ΔqueueSeconds); «чистый шаг» берётся из
+     cleanStepMs (ADR-029, v2.5). genThroughput с графика убран (v2.2), но в истории
+     остался (вторая линия «выдано стендом» и детект разрыва); «пик» в графике — по главной линии (скорость на
+     поток), не по genThroughput. Поля busySeconds больше нет.
+     cleanStepMs (v2.5) — стабильная база шага декода, мс: 10-й перцентиль времени шага
+     (ΔitlSeconds/ΔitlCount) по кольцу точек за час, опубликованный с гистерезисом (не меняется, пока
+     новое значение отличается меньше чем на 10 %). Одно число на ВСЕ окна (1m/5m/15m/1h) — клиент
+     не выбирает базу из своего окна (раньше выбирал, и полоса «Куда уходит время агентов» прыгала:
+     58 мс на окне 1 мин, 455 мс на окне 5 мин). null — данных ещё нет (клиент показывает долю
+     «генерирует» без разделения на «ждёт соседа»). В history то же значение во всех точках.
+     speed: genPerStream/prefillPerStream — Δсчётчика/Δсуммы времени за окно ~60 с (как чувствует чат);
+     prefillPerStream — ток/с чтения промпта С ОЖИДАНИЕМ очереди шагов (знаменатель — время prefill
+     запроса от старта до первого токена), поэтому величина ниже реальной скорости вычисления;
+     genPerStream = Δgeneration_tokens/Δinter_token_latency (inter_token_latency пишется на каждом шаге,
+     в отличие от decode_time, который растёт только при завершении запроса: «—» не бывает при идущей генерации).
+     speculativeSpeedup (v2.3) — «ускорение угадыванием ×N»: Δgeneration_tokens/ΔitlCount за окно ~60 с (во сколько
+     раз черновая модель DFlash/MTP ускоряет генерацию; null — шагов не было).
+     (2026-10-16: avgGenTps/avgPromptTps — средняя на поток за окно графика — убраны из DTO и GetAverageSpeed:
+     дубль «среднее/пик за окно» под KPI карточки «Скорость» удалён, среднее и пик теперь только в графике; ADR-029 п.11.)
+     chats: у чужого чата sessionId/projectId null, title «Чат другого пользователя»; ownerId не отдаётся.
+     othersCount = max(0, running + waiting − живые чаты шлюза). gpus null — нет nvidia-smi;
+     иначе — ВСЕ карты хоста (ADR-029 п.7: всё, что видит nvidia-smi, — «текст»).
+     tensorParallel? — из секции Stats провайдера (vLLM --tensor-parallel-size); null — фронт
+     показывает число карт (gpus.length)
+GET  /api/local-model/hardware     ?window=1m|5m|15m|1h   (только admin: роль на действии, не-админ — 403; флаг local-model-stats, без него 404)
+     → { at, status: ok|stale, staleSince?, level: ok|warn|danger,
+         gpus: [{ index, uuid, name, roles: ["text"], utilPerc?, memUsedMb?, memTotalMb?, memBusPerc?, coreTempC?, memTempC?,
+                  hotspotTempC?, fanPerc?, clockMhz?, clockMaxMhz?, memClockMhz?, powerW?, powerLimitW?,
+                  throttle: { powerCap, thermal }, pstate?, pcie: { gen?, width? }, busId, level,
+                  levels: { mem, core, hotspot: ok|warn|danger|none } }],
+         nodes: [{ key, kind: gpu|cpu|vrm|chipset|water|disk|ram, name, tempC?, sensor: ok|none|nodata, level: ok|warn|danger|none,
+                   warnC?, dangerC?, detail: { ccdC?, fanRpm?, role?: system|kv, temp2C?, critC?, usedGb?, totalGb?, usedPerc? },
+                   spark15m: (number|null)[90] }],
+         caseFans: [{ label, rpm }], series: [{ key, family: mem|core|hotspot|cpu|chipset|disk, gpuIndex?, label, points: (number|null)[] }],
+         stepMs }
+     window по умолчанию 15m, иное — 400. Шаг бакета: 1m → 2 с (30 точек), 5m → 5 с, 15m → 10 с, 1h → 30 с;
+     в бакете МАКСИМУМ, шаг без данных — null (разрыв, не 0). История — кольцо 1 ч в памяти, снимок раз в 2 с.
+     Узлы идут в фиксированном порядке: карты, cpu, vrm, chipset, диск кэша, системный диск, ram; нет источника
+     (чужая машина) — узла нет, ответ status:"ok" с пустыми списками, не 500.
+     Уровни считает бэкенд (HardwareThresholds): память карты 95/105, ядро 85/92, hotspot —/100, Tctl 85/95, VRM 90/105,
+     чипсет 85/95, диск от critC (−10/−3 °C), без предела 70/80. При status:"stale" (снимок старше 10 с) всё "ok", а
+     staleSince — момент последнего живого снимка. memTempC/hotspotTempC — из файла помощника ccs-gddr6 (метка старше 10 с
+     или файла нет — null); плитка карты берёт память, нет — ядро. Узел ram: tempC null, sensor "none".
+     В stats и stats/media ТОЛЬКО админу добавляется hardware?: { level, gpus: [{ uuid, memTempC?, level, powerCap, thermal }] }
+     (для строки-ссылки и точки на вкладке); у не-админа (scope "self") поля нет. Подробнее — ADR-029, «Решения: вкладка «Железо»».
+GET  /api/local-model/stats/media  ?since=<unix ms>   (аутентифицированный; ADR-030 §9)
+     → { scope: "all"|"self", queueAhead: number|null,
+         configured, comfy: { status: working|busy|down|disabled, downSince?, version? },
+         slots: { used, limit }, gpus: [{ uuid, index, name, roles: ["media"], utilPerc?, memUsedMb?,
+         memTotalMb?, tempC?, powerW?, powerLimitW?, mediaMemMb? }] | null, loadedModels: string[] | null,
+         running: [{ kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, steps?: { step, total, stage? },
+                     percent?, percentExact, etaSeconds?, remainingSeconds?, startedAt? }],
+         queue:   [{ position, kind, op, heavy, own, sessionId?, projectId?, title?, foreign?, etaSeconds?, startInSeconds? }],
+         lastHour:[{ kind, op, own, outcome: completed|failed|cancelled, runSeconds?, etaSeconds?, finishedAt }],
+         unsupported: string[] }
+     scope: "all" — админ (все строки, gpus на месте, флаг local-model-stats как раньше);
+     "self" — не-админ: running/queue/lastHour только свои (OwnerId == sub, не Foreign), gpus null,
+     queueAhead — задач в ПОЛНОЙ очереди перед первой своей (нет своих — null); флаг не требуется,
+     доступ даёт рубильник LocalModelStats:MediaForUsers (false → 404, как будто функции нет).
+     gpus/loadedModels — с маршрута узла /ccs/stats; null — узел не сообщает. foreign — instance|transcription|external.
+     Чужой прогон: sessionId/projectId null, title «Чат другого пользователя»; у своего title null — фронт берёт
+     название по sessionId. since фильтрует только lastHour
+     (lastHour уходит вместе с блоком «Последний час», его заменяет /history — ADR-030)
+GET  /api/sessions/{id}/local-model   (владелец чата; чужая или неизвестная — 404)
+     → { lastTurn: { genTps?, prefillTps?, ttftMs?, queueMsApprox?, cacheHitPerc?, outTokens? } | null }
+     null — ходов на локальной модели не было или сервер перезапущен (счётчик в памяти). prefillTps пока всегда null
+```
+
+**История медиа-генераций** ([ADR-030](../adr/ADR-030-local-media-history.md)) — журнал за 7 дней с диска.
+Обе ручки — `[Authorize]` (аутентифицированный, ADR-030 §9): **админ** — серверный флаг `local-model-stats`
+(без него `404`), видит все записи (`scope: "all"`, логин владельца раскрывается); **не-админ** — только свои
+записи (`scope: "self"`): фильтр `OwnerId == sub` на уровне запроса к индексу (не пост-фильтр), параметр
+`login` игнорируется, поле логина владельца не заполняется, чужая запись → `404` (не `403`); доступ даёт
+рубильник `LocalModelStats:MediaForUsers` (без него `404`), флаг не требуется.
+
+```
+GET  /api/local-model/history   ?kind=image|audio|video|train&outcome=completed|cancelled|failed|interrupted
+                                &model=<имя>&owner=<логин>&period=today|24h|7d&cursor=<непрозрачная строка>&limit=50
+     → { scope: "all"|"self", items: [{ id, kind, op, model?, ownerLogin, own, outcome, error?,
+                   enqueuedAt, startedAt?, finishedAt?, waitSeconds?, runSeconds?, etaSeconds?,
+                   count, prompt?, params?: { width?, height?, durationSec?, frames?, steps?, seed?, engine?, fast?, lora? },
+                   card?: { index?, name? }, hasResult }],
+         nextCursor: string | null, total, totalFiltered,
+         summary: { completed, cancelled, failed, interrupted },
+         facets?: { models: string[], owners: string[] } }
+     scope: "all" — админ (ownerLogin раскрывается); "self" — не-админ (только свои, ownerLogin не заполнен).
+     Сортировка — по времени desc (finishedAt, у прерванных — enqueuedAt), затем по id; курсор непрозрачный,
+     кодирует (время, id) последней записи страницы; nextCursor null — конец ленты. limit 1..50, по умолчанию 50.
+     Все фильтры необязательны, незнакомое значение kind/outcome/period — 400. period задаёт окно:
+     `today` — с начала «сегодня», `24h`/`7d` — назад от текущего момента (по умолчанию 7d). «Сегодня»
+     считается по локальному дню сервера: фронт группирует по дням в своём (браузерном) локальном
+     поясе, который серверу неизвестен, поэтому сервер берёт свой локальный день как ближайший прокси.
+     Явные `from`/`to` перекрывают окно period (явное сильнее).
+     id — prompt_id записи. ownerLogin — логин владельца (у своей записи own: true); названия чата и проекта,
+     sessionId и projectId НЕ отдаются ни у чужих, ни у своих записей. interrupted — есть enqueued, нет finished
+     и prompt_id нет в живом реестре (рестарт). waitSeconds null — ожидание неизвестно (рестарт между событиями).
+     error — недоверенный текст ComfyUI, ≤ 500 символов. card null — узел карту не сообщает.
+     params.lora — имя LoRA как у владельца (ADR-026 §14). facets — уточнить после шага 3 (есть ли счётчики).
+GET  /api/local-model/history/{id}/file   ?n=0&size=thumb|full
+     → 200 файл: Content-Type по сигнатуре, Content-Disposition: inline, X-Content-Type-Options: nosniff,
+       Range для звука и видео. thumb — webp 256 px (картинка; у видео — кадр из середины), строится лениво
+       и кэшируется; у звука thumb нет — 404, фронт его не запрашивает. full — оригинал, потолок 50 МБ.
+       У train n — номер фото обучения, у остальных — номер варианта (0..count−1).
+     404 — нет доступа (не-админ без MediaForUsers), нет записи, чужая запись у не-админа (ADR-030 §9),
+     неверный id (в т. ч. с «..») или n вне диапазона;
+     410 { reason } — запись есть, файла нет:
+       expired          истёк срок рабочей папки редактора или задачи стора
+       missing          файла нет на месте
+       project_gone     проект удалён
+       local_project    проект на устройстве (ProjectCapabilities.FilesOnServer = false), диск не трогается
+       source_disabled  подсистема источника выключена (нет реализации IMediaHistoryResultSource)
+       no_result        исход не completed — результата не было
+     Список причин открытый: незнакомую фронт показывает как «Файл недоступен». Путь с клиента не принимается
+     никогда — только id записи и n; путь собирает сервер (SafePath.Join для проектов и lora-training).
+```
+
+События хаба `/hubs/session` (тип `message`, дискриминатор `type`) уходят только в группу сессии и только
+при живых зрителях чата. Оба **эфемерные**: в `history.json` и ленту не пишутся.
+
+```
+local_model_live        { sessionId, phase: queued|prefill|generating, genTps?, waitingTotal? }
+                        не чаще 1 Гц, пока у сессии есть запрос к локальной модели в работе;
+                        waitingTotal — всего ждущих у движка (номера в очереди нет);
+                        genTps — приближение: дельты SSE (≈ токен) в скользящем окне ~3 с,
+                        null при отсутствии приращения (не 0)
+local_model_turn_stats  { sessionId, genTps?, prefillTps?, ttftMs?, queueMsApprox?, cacheHitPerc?, outTokens? }
+                        итог хода по TurnCompleted, по точному usage; та же форма, что lastTurn выше;
+                        queueMsApprox — мс, округлено вверх до целой секунды
+```
+
+Ожидание хода в очереди допуска к локальной модели — отдельное событие, **вне флага** `local-model-stats`
+(человек обязан видеть, что ход ждёт, а не «виснет молча»); тоже эфемерное, в `history.json` не пишется:
+
+```
+local_turn_queue        { sessionId, position, active, limit }
+                        position — место в очереди (1 — следующий), «заняты active из limit»;
+                        position = 0 — ожидание кончилось (допуск, отказ или «Стоп»): строку снять
+```
+
+Карточки редакторов отдельных событий не получают: снимок очереди GPU `gpu` (`LocalGpuQueueInfo`:
+`ahead?, startInSeconds?, steps?: { step, total, stage? }, percent?, percentExact, remainingSeconds?,
+busy?: { kind, heavy, remainingSeconds? }, downSince?, running`) едет необязательным полем в уже существующих
+событиях и DTO прогресса картинки, звука и видео. `running: true` — задача идёт, `ahead` у неё `null`;
+ждущая — `running: false` и `ahead` = сколько впереди. Стенд лежит — `downSince` (unix-мс) и `running: false`,
+остальные поля `null`. Ошибка сборки снимка опрос задачи не роняет.
 
 ## SignalR-хаб `/hubs/session`
 

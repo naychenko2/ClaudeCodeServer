@@ -303,8 +303,8 @@ internal sealed class TeamDecisionService
             // (раньше кнопка слала его обычным сообщением).
             var editTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             await _history.AppendAsync(sessionId,
-                new StoredUserMessage(feedback.Trim(), timestamp: editTs),
-                new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs));
+                new StoredUserMessage(feedback.Trim(), timestamp: editTs, senderUserId: userId),
+                new UserMessageMessage(feedback.Trim(), null, null, false, Timestamp: editTs, SenderUserId: userId));
 
             var nextVersion = team.PlanVersion + 1;
             _run.WithTeamState(sessionId, t =>
@@ -515,7 +515,7 @@ internal sealed class TeamDecisionService
     // addBudget расширяет потолки, runNext раздаёт следующую волну, resume снимает «Стоп»,
     // retryPlan повторяет планирование по сохранённой вводной (без хода координатору).
     public async Task<bool> RespondTeamEscalationAsync(string sessionId, string escalationId,
-        string? actionId, string? comment = null, string? userId = null)
+        string? actionId, string? comment = null, string? userId = null, string? actorUserId = null)
     {
         if (_sessions.GetById(sessionId) is not { } session) return false;
         var ownerId = _sessions.ResolveOwnerId(session);
@@ -718,7 +718,7 @@ internal sealed class TeamDecisionService
         await _intake.SendOrEnqueueAsync(sessionId,
             TeamImplementPrompts.EscalationResolvedTurn(escalation, actionId, label, comment),
             senderPersonaId: null, silent: true, suppressTasksExecute: true,
-            staffNote: TeamStaffNotes.EscalationResolved);
+            staffNote: TeamStaffNotes.EscalationResolved, senderUserId: actorUserId);
         return true;
     }
 

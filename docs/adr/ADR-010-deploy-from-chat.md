@@ -83,6 +83,107 @@
   аварий: «не собралось» перестаёт быть инцидентом прода, а окно недоступности падает
   с минут до секунд.
 
+## Контур Linux
+
+Windows-контур остаётся прежним (см. выше). На Linux — отдельные путь и договорённости:
+платформа другая, итого — другой exec, лок, формат побудки; логика, формат журнала и
+грабли фаз те же. Детали скриптов — [scripts/ops/README.md](../../scripts/ops/README.md),
+раздел «Linux: выкатка через deploy_start»; ниже — только то, что отличает контур и
+почему он такой.
+
+**Побудка — `systemd-run --user`, не `schtasks` и не `nohup`/`setsid`.**
+Сервер запускает one-shot юнит и сразу возвращается:
+
+```
+systemd-run --user --collect --quiet --unit=ccs-deploy-<id> \
+  -p ManagedOOMPreference=avoid \
+  --setenv=CCS_RELEASES_DIR=<ReleasesDir> \
+  <AgentDir>/scripts/ops/deploy-linux.sh
+```
+
+argv фиксированный: ни одного параметра заявки, никаких полей `current.request` в
+командной строке — заявка целиком лежит в журнале. `<id>` — UTC-штамп вида
+`YYYYMMDD-HHMMSS[-(N)]`, проверяется белым списком `^[A-Za-z0-9._-]{1,64}$`
+(`DeployValidation.IsValidBuildId` → `BuildIdPattern`) до подстановки в имя
+юнита, иначе CR/LF стал бы инъекцией.
+
+**Почему НЕ `setsid`/`nohup`.** Инцидент 2026-09-28 08:59 (лог 085902): `setsid`
+сменил сессию, но не cgroup; оркестратор жил в scope `ccs-agents.slice` и умер на
+шаге `stop ccs.service` (бэкенд при остановке гасит весь slice, а вместе с ним —
+все идущие ходы). Switch остался посреди `stop`, прод лёг, никто не откатил.
+Инцидент повторился 12.10. `systemd-run --user --collect` поднимает процесс в
+СВОЁМ юните (по сути — `ccs-deploy-<id>.service`), к `ccs-agents.slice` он не
+привязан: ccs.service останавливается, а юнит выкатки живёт дальше и доводит
+swap до конца.
+
+**`ManagedOOMPreference=avoid`** — вытащить сборку из-под `systemd-oomd`:
+на той же машине рядом крутится vLLM, и при пиковой сборке фреймворка нельзя
+быть первой жертвой нехватки памяти. У `ccs.service` стоит `omit`, что тоже
+значимо (он первым не падает). На общий потолок `ccs-agents.slice` не
+опираемся — оркестратор вне slice, лимиты cgroup его не действуют.
+
+**Лок — файловый `flock -x`, не именованный мьютекс.** Один файл
+`<ReleasesDir>/deploy.lock` держит оркестратор всё время работы; ручной запуск
+`switch-release.sh` и `deploy_start` из чата сериализуются на нём. `flock`
+реентерабелен через fork, но bash при `exec 9>file` на уже открытый fd считает
+redirect noop'ом (тот же OFD уже залочен оркестратором) и второй `flock -n`
+получает EAGAIN — поэтому номер fd передаётся в `switch-release.sh` через
+переменную `CCS_DEPLOY_LOCK_FD`, и тот не переоткрывает лок.
+
+Сервер ловит занятость на той же стороне через `IDeployAgentLock.TryAcquireDeploy`:
+на Linux это `FileShare.None` на том же `deploy.lock`, .NET под капотом делает
+`flock(LOCK_EX|LOCK_NB)` и EWOULDBLOCK превращается в исключение с HResult
+`0x0000000B` — единственный случай, который `DeployAgentLockAdapter` маскирует
+как «агент жив»; остальные IOException (нет прав, нет каталога, ENOSPC) и
+`UnauthorizedAccessException` пробрасываются, чтобы `DeployService` ответил
+честным отказом (`DeployStartStatus.LaunchFailed`), а не «другая выкатка идёт».
+
+**Формат шагов и фаз.** Журнал `<ReleasesDir>/deploy-state.json` ведётся по
+общему контракту ADR-010: фазы `queued → building → switching → verifying →
+succeeded | rolled_back | failed`, шаги `build / snapshot / stop / swap /
+start / health`, каждый шаг несёт длительность в мс (`DeployStep.Ms`). Имена
+camelCase, история — 30 записей, `releases` отдельно, `current.request` агент
+НЕ трогает.
+
+**Один писатель журнала — `deploy-journal.py`.** Со стороны оркестратора
+журнал правит ТОЛЬКО этот хелпер (атомарный `tmp + os.replace`), вызывается
+через явный `python3 -I deploy-journal.py …` (на Linux `/usr/bin/env python3`
+не пробрасывает флаги в shebang, поэтому env shebang — лазейка для
+site-packages/user-site). Команды: `set-phase`, `set-step <name> <status> [ms]`,
+`set-sha`, `set-rollback-target`, `finalize <status> [message] [releaseId]`.
+Сервер пишет только заявку (`current` до побудки); отметка «доложено» — на
+Linux хранится отдельным файлом `reported-<deployId>` в `ReleasesDir` по той же
+причине, что и на Windows (общая запись двух процессов в `deploy-state.json`
+теряется: переписывание журнала оркестратором во время `finalize` либо
+затирало бы `result` агента, либо затирало бы отметку доклада).
+
+**Отказ отката из чата — `Unsupported`.** `deploy_rollback` на Linux сознательно
+не сделан: снимки живут в `/opt/ccs/releases/<метка>/`, автооткат внутри
+`switch-release.sh` уже работает (ветка `health fail` возвращает предыдущий
+снимок), а ручной кейс проще выполнить скриптом с явной меткой, чем тащить
+состояние в чат. `DeployService.RollbackAsync` на `IsLinux=true` отвечает
+`DeployStartStatus.Unsupported` («Откат из чата на Linux пока не поддержан —
+откат вручную из /opt/ccs/releases (автооткат внутри switch-release.sh работает)»)
+ДО записи в журнал — иначе карточка хода осталась бы «идущей» без агента.
+Когда появится — раздел «Откат» ниже дополнится отдельным разделом.
+
+## Что сознательно вынесено за рамки Linux-контура
+
+- **Откат из чата на Linux.** См. предыдущий раздел: `DeployStartStatus.Unsupported`
+  до записи в журнал; автооткат внутри `switch-release.sh` остаётся штатным.
+- **Детализация шагов сборки внутри `publish-linux.sh`.** Скрипт сборки-в-staging
+  отдельный (BUILD_FRONTEND/PUBLISH_DIR), оркестратор его зовёт одной строкой
+  и пишет шаг `build` с ms; что именно `publish-linux.sh` делает (deps, фронт,
+  бэк, mcp-dify, релиз агента устройства) — отдельный документ, и его шаги в
+  журнал не лезут.
+- **Сериализация отметки «доложено» на уровне ОС.** Файл-маркер — общая схема
+  для Windows и Linux; кросс-процессная синхронизация через flock уже даёт
+  нужное «один писатель» для самого журнала, отметка живёт рядом и пишется
+  сервером, а не оркестратором — коллизий нет.
+- **Полигон.** Тестовый контур есть (песочница с шимами `systemctl`/`systemd-run`),
+  но в этой версии ещё не оформлен отдельным deploy-linux-test.md — пока живёт
+  в [scripts/ops/README.md](../../scripts/ops/README.md).
+
 ## Контракт
 
 ### REST (все — `[Authorize]` + admin)
@@ -208,3 +309,6 @@ health ещё раз, пишет `rolled_back`. Не удалось и это �
 - `backend/ClaudeHomeServer.Tray/Program.cs` — супервизор, стоп/старт/бэкап/восстановление
 - `backend/ClaudeHomeServer/Services/Backup/` — `BackupCli`, `InstanceLock`, `PostRestoreHook`
 - [docs/operations/docker.md](../operations/docker.md) — контейнерный путь (вне scope)
+- [docs/operations/release-linux.md](../operations/release-linux.md) — ручная выкатка Linux-прода и серверный сторож `watch_start`
+- [docs/operations/deploy-linux.md](../operations/deploy-linux.md) — включение контура выкатки из чата на Linux: секция `Deploy` в `appsettings.Local.json` и порядок включения
+- [scripts/ops/README.md](../../scripts/ops/README.md), раздел «Linux: выкатка через `deploy_start`» — детали оркестратора, `deploy-journal.py`, лок, песочница для тестов

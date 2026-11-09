@@ -12,6 +12,8 @@ type AgentHubHandler = (msg: ServerMessage) => void;
 const handlers = new Set<AgentHubHandler>();
 const pending = new Map<string, Promise<signalR.HubConnection>>();
 const live = new Map<string, signalR.HubConnection>();
+// Поколение сбрасывается при resetAgentHubs: старт, начатый до сброса, в live не попадает
+let generation = 0;
 
 function build(projectId: string, url: string): signalR.HubConnection {
   const conn = new signalR.HubConnectionBuilder()
@@ -51,12 +53,19 @@ export async function agentHub(projectId: string): Promise<signalR.HubConnection
   }
   let p = pending.get(projectId);
   if (!p) {
-    p = (async () => {
+    const gen = generation;
+    const started: Promise<signalR.HubConnection> = (async () => {
       const conn = build(projectId, await agentHubUrl(projectId));
       await conn.start();
+      if (gen !== generation) {
+        // Сброс случился во время старта: билет прежнего пользователя в live не пускаем
+        await conn.stop().catch(() => {});
+        throw new Error('Хаб агента сброшен');
+      }
       live.set(projectId, conn);
       return conn;
-    })().finally(() => pending.delete(projectId));
+    })().finally(() => { if (pending.get(projectId) === started) pending.delete(projectId); });
+    p = started;
     pending.set(projectId, p);
   }
   return p;
@@ -73,6 +82,16 @@ export function agentHubIfConnected(projectId: string): signalR.HubConnection | 
 export function onAgentHubMessage(handler: AgentHubHandler): () => void {
   handlers.add(handler);
   return () => { handlers.delete(handler); };
+}
+
+// Смена аккаунта / 401: билеты хабов выданы прежнему пользователю, живые соединения к хабам
+// его локальных проектов гасим. Подписчиков (handlers) не трогаем — они живут дольше сессии.
+export async function resetAgentHubs(): Promise<void> {
+  generation++;
+  const conns = [...live.values()];
+  live.clear();
+  pending.clear();
+  await Promise.allSettled(conns.map(c => c.stop()));
 }
 
 // Для тестов

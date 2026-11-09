@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Состояние задачи для GET jobs/{jobId} (добавлено после КТ-1). Status — VideoJobStatuses.*: файлы вариантов в рабочей папке читаются ручкой версии сцены
@@ -19,12 +21,20 @@ public sealed record VideoJobDto(
     string? ChatSessionId,
     string? SceneId,
     string Initiator,
-    string License);
+    string License,
+    int? UpscaleEtaSeconds = null,
+    int? Variant = null,
+    // Снимок очереди GPU ComfyUI (шаг 30): живой, только отображение; null — поставщик не знает
+    // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 public static class VideoJobStatuses
 {
     public const string Queued = "queued";
     public const string Running = "running";
+    // Вторая тяжёлая задача GPU: латентный апскейл «Макс» local H3 после съёмки (ADR-025, решение 1)
+    public const string Upscaling = "upscaling";
     public const string Downloading = "downloading";
     public const string Completed = "completed";
     public const string Failed = "failed";

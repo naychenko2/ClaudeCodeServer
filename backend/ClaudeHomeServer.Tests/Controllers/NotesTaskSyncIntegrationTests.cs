@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // + TaskManager целиком (юниты покрывают только парсер). Номера строк и контент
 // читаем обратно через API — тест устойчив к трансформациям контента при создании.
 [Trait("Category", "Integration")]
+[Trait("Category", "Host")]
 public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
@@ -95,6 +96,24 @@ public class NotesTaskSyncIntegrationTests : IClassFixture<TestWebApplicationFac
         // и задача попала в общий список
         var all = await (await _client.GetAsync("/api/tasks")).Content.ReadFromJsonAsync<JsonElement>();
         all.EnumerateArray().Should().Contain(t => t.GetProperty("id").GetString() == taskId);
+    }
+
+    // Автор (S2b-1, доработка 2): ручной промут человеком из UI — человеческий путь, автор —
+    // тот, кто промоутил. Мутация: убрать createdByHuman: true в NotesController.PromoteTask
+    // (или не передать признак в TaskBridge) — createdByUserId станет null, тест краснеет.
+    [Fact]
+    public async Task Promote_ЧеловекИзUI_АвторомСтановитсяПромоутер()
+    {
+        var id = await CreateNoteAsync("Дела автор", "- [ ] Полить цветы");
+        var line = (await NoteTasksAsync(id))[0].GetProperty("line").GetInt32();
+        var me = await _client.GetFromJsonAsync<JsonElement>("/api/auth/me");
+
+        var taskId = await PromoteAsync(id, line);
+
+        // null в ответе не сериализуется — отсутствие свойства и есть «автора нет»
+        var task = await GetTaskAsync(taskId);
+        (task.TryGetProperty("createdByUserId", out var author) ? author.GetString() : null)
+            .Should().Be(me.GetProperty("userId").GetString());
     }
 
     [Fact]

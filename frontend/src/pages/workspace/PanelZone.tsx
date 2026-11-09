@@ -23,7 +23,7 @@
 // высоту по весам, там же живёт хендл ресайза. Колонки разной длины посреди зоны
 // читались бы как рваная раскладка, поэтому одиночную «по контенту» держим лишь у
 // самого центра. Ширину колонок делит сплиттер между ними (colFlex).
-import { Fragment, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode } from 'react';
 import { Pin } from 'lucide-react';
 import { C, ISLAND, SHADOW, PANEL_ANIM, Z } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
@@ -33,8 +33,8 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
-  isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
+  PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
+  isPluginPanelKey, keyAllowed, panelMetaResolved, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
 import { compactStack, genPanelInZone } from './genPanelPlacement';
@@ -59,12 +59,6 @@ const GAP = ISLAND.gap; // зазор между карточками — та �
 // окна — мучение. Полоса живёт только пока панель тащат.
 const EMPTY_DROP_W = 28;
 
-// Группа, внутри которой кнопку разрешено переставлять (null — ключ не из рельсы).
-// Состав групп — RAIL_GROUPS из реестра панелей: тот же список задаёт и порядок
-// кнопок, и место панели в раскладке, и его же читает стор (см. railSequence).
-
-const railGroupOf = (k: PanelKey): readonly PanelKey[] | null => RAIL_GROUPS.find(g => g.includes(k)) ?? null;
-
 // Попап-превью панели по наведению на иконку рельсы временно выключен: механика
 // готова (panelPeek + peek в PanelRail), но пока живём без неё. Флаг — чтобы
 // вернуть одним значением, а не восстанавливать вырезанный код.
@@ -82,6 +76,10 @@ interface Props {
   // primary — основной, secondary — второй (серый; незапушенные коммиты на «Изменениях»),
   // hint — расшифровка в тултипе. sessionPanels (plan/agents) перекрывают своими.
   railBadges?: Partial<Record<PanelKey, RailBadgeInfo>>;
+  // Ярлык шапки рельсы («шапка») и его тултип: по умолчанию «Панели»/«Панели инструментов»;
+  // на экранах со своим содержимым (раздел «Заметки» — вики) задаётся пропом.
+  hat?: string;
+  hatTitle?: string;
   // Инстанс стора зон: каждый экран держит НЕЗАВИСИМУЮ раскладку
   panelStack?: PanelZonesStore;
   // Какие панели вообще доступны на этом экране. У воркспейса это инструменты
@@ -109,14 +107,42 @@ interface Props {
   // Человек закрыл панель — крестиком в шапке или повторным кликом по рельсе. Хост
   // ставит по нему признак «закрыта в этом чате» панели генерации (ADR-021 §3)
   onUserClose?: (k: PanelKey) => void;
+  // Мета панелей плагинов (итерация 2): заголовок и иконка каждой панели плагина.
+  // Передаётся пропсом из WorkspacePage (а не через глобальный реестр),
+  // чтобы рендер был чистым. Без неё — panelMetaResolved (fallback).
+  pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
 }
 
 export function PanelZone({
-  side, panels, railBadges, panelStack,
+  side, panels, railBadges, hat, hatTitle, panelStack,
   allowedKeys: allowedKeysProp, hideWhenEmpty, compact, sessionPanels,
-  railFooter, floating, centerFileOpen, onUserClose,
+  railFooter, floating, centerFileOpen, onUserClose, pluginPanelMeta,
 }: Props) {
   const allowedKeys = allowedKeysProp ?? WORKSPACE_KEYS;
+  // Итерация 2: мета плагинов — пропсом (а не глобальный реестр). Для ключей plugin:*
+  // проп имеет приоритет; для статических — panelMetaResolved (как раньше).
+  const resolveMeta = (k: PanelKey): { title: string; Icon: import('lucide-react').LucideIcon } => {
+    if (isPluginPanelKey(k) && pluginPanelMeta && pluginPanelMeta[k]) {
+      return pluginPanelMeta[k];
+    }
+    return panelMetaResolved(k);
+  };
+  // S5: динамические ключи плагинов. RAIL_GROUPS статичен, а plugin:* — нет, поэтому
+  // текущие plugin:* (те, что разрешены экраном и имеют контент) добираем к ПЕРВОЙ
+  // группе (PROJECT_KEYS): панели плагинов — содержимое проекта, как файлы/знания.
+  // Из effectiveRailGroups считается и порядок (railSeq), и группы (groups), и пределы
+  // перестановки (railGroupOf) — карточка плагина ведёт себя как обычная панель.
+  const pluginKeys = useMemo<PanelKey[]>(() => {
+    const out: PanelKey[] = [];
+    for (const k of Object.keys(panels) as PanelKey[]) {
+      if (isPluginPanelKey(k) && keyAllowed(k, allowedKeys)) out.push(k);
+    }
+    return out;
+  }, [panels, allowedKeys]);
+  const effectiveRailGroups = useMemo<readonly (readonly PanelKey[])[]>(
+    () => RAIL_GROUPS.map((g, i) => (i === 0 ? [...g, ...pluginKeys] : g)),
+    [pluginKeys],
+  );
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, releaseCompactSide, registerOpener, moveTo, registerZoneKeys, zoneKeys } = usePanels();
   const zoneState = zones[side];
@@ -200,7 +226,9 @@ export function PanelZone({
   // Панель доступна на этом экране: ключ разрешён экраном (allowedKeys) и у панели
   // есть контент (у сессионных он всегда есть).
   const keyAvailable = (k: PanelKey): boolean => {
-    if (!allowedKeys.includes(k)) return false;
+    // keyAllowed, а не includes: ключи плагинов разрешает СЕМЕЙСТВО (маркер
+    // pluginPanels в allowedKeys), а не перечисление каждого plugin:* (S3/S5).
+    if (!keyAllowed(k, allowedKeys)) return false;
     // Панель генерации на узком планшете рисует шторкой полоса над полем ввода
     if (!genPanelInZone(k, !!compact, windowWidth)) return false;
     return content(k) != null;
@@ -231,7 +259,7 @@ export function PanelZone({
   // tabletPanels — это очередь вытеснения (FIFO, третья панель выбивает самую
   // старую), и пересортировав её, мы закрывали бы не ту панель.
   const sortByRail = (keys: PanelKey[]): PanelKey[] => {
-    const seq = railSequence(zones.railOrder);
+    const seq = railSequence(zones);
     const rank = (k: PanelKey) => { const i = seq.indexOf(k); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
     return [...keys].sort((a, b) => rank(a) - rank(b));
   };
@@ -416,7 +444,7 @@ export function PanelZone({
   // тем же способом, что и сами кнопки (см. railGroup): группы подряд, внутри
   // группы — пользовательский порядок railOrder. Разойдись эти два фильтра,
   // обещание рельсы разъехалось бы с её собственным видом.
-  const railSeq = RAIL_GROUPS.flatMap(g => sortRail(
+  const railSeq = effectiveRailGroups.flatMap(g => sortRail(
     zones.railOrder,
     g.filter(k => (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))),
   ));
@@ -814,7 +842,7 @@ export function PanelZone({
       // В большом плейсхолдере показываем иконку той панели, которую тащат: место
       // размером в полколонки без опознавательных знаков читается как «что-то
       // сломалось», а не как «панель встанет сюда»
-      icon={dnd.from ? PANEL_META[dnd.from].Icon : undefined}
+      icon={dnd.from ? resolveMeta(dnd.from).Icon : undefined}
       {...dnd.guideProps(`row:${vi}:${ri}`, from => {
         // Кнопку вытащили ИЗ ЯЩИКА прямо в раскладку — это и возврат кнопки на
         // рельсу, и открытие панели одним жестом
@@ -861,8 +889,8 @@ export function PanelZone({
     const bd: RailBadgeInfo | null = sessionPanels?.railBadge(k) ?? railBadges?.[k] ?? null;
     return {
     key: k,
-    title: PANEL_META[k].title,
-    Icon: PANEL_META[k].Icon,
+    title: resolveMeta(k).title,
+    Icon: resolveMeta(k).Icon,
     active: openKeys.includes(k),
     badge: bd?.primary ?? null,
     badgeTone: bd?.primaryTone,
@@ -949,7 +977,7 @@ export function PanelZone({
   // ряды не у центра) — на всю высоту с делением по весам. В компактном режиме
   // колонок нет (vi не передан) — там стек из двух панелей делит высоту, как и был.
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
-    const { title, Icon } = PANEL_META[k];
+    const { title, Icon } = resolveMeta(k);
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
@@ -1027,8 +1055,8 @@ export function PanelZone({
   const peekFull = openKeys.length > 0;
   const peekCard = peek && (
     <PanelShell
-      icon={(() => { const { Icon } = PANEL_META[peek]; return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
-      title={PANEL_META[peek].title}
+      icon={(() => { const { Icon } = resolveMeta(peek); return <Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />; })()}
+      title={resolveMeta(peek).title}
       badge={sessionPanels?.headerBadge(peek) ?? null}
       // Закрепить — той же механикой, что закрытие у обычных панелей: иконка в
       // шапке под курсором становится булавкой. Отдельная кнопка справа была бы
@@ -1064,8 +1092,8 @@ export function PanelZone({
       side={side}
       // Обе зоны держат ОДИН набор панелей (панель переносится с края на край),
       // поэтому подпись у левой и правой рельсы одна и та же
-      hat="Панели"
-      hatTitle="Панели инструментов"
+      hat={hat ?? 'Панели'}
+      hatTitle={hatTitle ?? 'Панели инструментов'}
       visible={showRail}
       peek={peekCard ? {
         node: peekCard,
@@ -1077,7 +1105,7 @@ export function PanelZone({
       // Состав групп — RAIL_GROUPS: тот же список задаёт и пределы перестановки
       // кнопок, поэтому он один на оба применения. Разделители PanelRail рисует сам и
       // убирает вместе с пустой группой — выключенные инструменты уносят и свою черту.
-      groups={RAIL_GROUPS.map(g => railGroup(g))}
+      groups={effectiveRailGroups.map(g => railGroup(g))}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
       // Зазор до центра обычно даёт сама зона (её сплиттер/крайняя направляющая), но
@@ -1133,7 +1161,7 @@ export function PanelZone({
             key: railDrop,
             // Знак на месте вставки: крестик — только когда дроп ЗАКРОЕТ панель
             // (своя рельса); иначе иконка панели — «встанет сюда»
-            icon: railWillClose ? undefined : PANEL_META[railDrop].Icon,
+            icon: railWillClose ? undefined : resolveMeta(railDrop).Icon,
             onInsert: pos => { railInsert.current = pos; },
             ...dnd.guideProps('rail', from => {
               // Порядок кнопки в столбце — ПЕРВЫМ: он про место, всё остальное ниже
@@ -1141,9 +1169,9 @@ export function PanelZone({
               // отдаёт соседом; своей группы у ключа может и не быть на экране —
               // тогда переставлять нечего.
               const pos = railInsert.current;
-              const group = railGroupOf(from);
+              const group = effectiveRailGroups.find(g => g.includes(from)) ?? null;
               railInsert.current = null;
-              if (pos && group) reorder(group, from, isPanelKey(pos.before) ? pos.before : null);
+              if (pos && group) reorder(group, from, keyAllowed(pos.before as PanelKey, allowedKeys) ? pos.before as PanelKey : null);
               // Кнопку вернули из ящика на рельсу: панель не открываем — возвращают
               // именно кнопку (открытие — это дроп в раскладку)
               if (dnd.fromTucked) untuck(side, from);
@@ -1385,6 +1413,9 @@ export function PanelZone({
           position: 'absolute', top: GAP, maxHeight: `calc(100% - ${GAP * 2}px)`, zIndex: 15,
           ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),
           width: 'min(85vw, 380px)', display: 'flex', flexDirection: 'column', boxShadow: SHADOW.modal,
+          // Растянутая панель (делит высоту либо просит её сама) имеет flex-basis 0: у drawer'а
+          // с высотой «по контенту» она схлопывалась до PANEL_MIN_H. Нужна определённая высота.
+          ...(multiInCol || tabletKeys.some(k => !!fillWanted[k]) ? { height: `calc(100% - ${GAP * 2}px)` } : {}),
         }}>
           {stack}
         </div>

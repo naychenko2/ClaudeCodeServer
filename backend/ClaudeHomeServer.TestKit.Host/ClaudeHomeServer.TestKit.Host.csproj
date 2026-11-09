@@ -1,0 +1,84 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Библиотека тестовых хелперов, которым нужны типы Main (шаг 1.2), а НЕ тест-проект:
+         vstest её не поднимает, хелперы здесь без [Fact]. IsTestProject=false явный, чтобы
+         slnx/CI не пытались «прогнать» её как набор тестов. В отличие от TestKit (шаг 1.1,
+         только Core) эта сборка ссылается на Main и нужные модули: модульные тест-проекты
+         в шаге 1.3 будут тянуть её только там, где реально нужен хост. -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Спинка: Core — те же Core-типы, что и у TestKit (Session/User/TaskItem/
+         IFeatureFlagGate/RelayProtocol/IDeviceExecChannel и др.). Main — ради чего
+         проект и создан: SessionManager/UserStore/TaskExecutionService/Program и т.д.
+         Llm — FakeLlmSessionAdapter/TestSpecialtyStore/TestWebApplicationFactory
+         (ILlmSessionAdapter/ILlmSessionAdapterFactory/SpecialtySettingsStore).
+         Devices — AgentReleaseFixture (AgentReleaseCatalog/DiskAgentReleaseFileSystem)
+         и LoopbackRelayChannel (DeviceExecStream). Images — LocalMediaFakes
+         (ILocalMediaProjectAccess/MediaHistoryProjectProbe). CodeGraph —
+         FakeCodeGraphProvider (ICodeGraphProvider/CodeGraph). DeviceAgent —
+         LoopbackRelayChannel (ExecLink/IExecSocketConnector — internal, Main его
+         не тянет, поэтому ссылка прямая). TestKit — наследуем общие Core-хелперы
+         (FakeHostEnvironment/TestSessionBroadcaster/TestFs/FakeProjectDeviceGate/
+         TestLauncherFactory). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Llm\ClaudeHomeServer.Llm.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Devices\ClaudeHomeServer.Devices.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
+    <!-- ImageEditor (шаг 1.3): FakeImageEditor (IImageEditor/ImageEditModelInfo) — Main
+         тянет эту вертикаль с ReferenceOutputAssembly="false", поэтому транзитом не видна;
+         ссылка прямая. -->
+    <ProjectReference Include="..\ClaudeHomeServer.ImageEditor\ClaudeHomeServer.ImageEditor.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.CodeGraph\ClaudeHomeServer.CodeGraph.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.DeviceAgent\ClaudeHomeServer.DeviceAgent.csproj" />
+    <!-- Notes — динамический модуль: Main тянет его с ReferenceOutputAssembly="false"
+         (только порядок сборки и копирование dll в modules/), поэтому типы Notes
+         (NotesService/NotesKnowledgeService для DeviceWaitTestHost) Main-транзитом
+         не видны — ссылка прямая, как в монолите (ClaudeHomeServer.Tests). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Пакеты переезжают вместе с хелперами: TestWebApplicationFactory стоит на
+         Mvc.Testing (WebApplicationFactory) и Data.Sqlite (ClearAllPools при Dispose),
+         DeviceWaitTestHost — на Moq (Mock&lt;IHttpClientFactory&gt;/Mock&lt;IServer&gt;/
+         Mock&lt;ILlmSessionAdapter&gt;) и FluentAssertions (using в файле).
+         Версии — те же, что в монолите (ClaudeHomeServer.Tests). -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Internal-хелперы этой сборки (LoopbackRelayChannel/FakeDeviceStatus/
+         SessionManagerTestAccess/FakeLlmSessionAdapter/FakeLlmSessionAdapterFactory)
+         используют тесты монолита: допуск ровно тому, кто их потребляет. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- ImageEditor.Tests (шаг 1.3): FakeImageEditor (internal, зависит от вертикали
+         ImageEditor) перенесён сюда из монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.ImageEditor.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): FakeLlmSessionAdapterFactory (internal) используется
+         ProjectSessionPersonaLayerGuardTests. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): TestsToolsetTests использует internal SessionManagerTestAccess
+         (расширение AccumulatorOf → TurnAccumulator) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+</Project>

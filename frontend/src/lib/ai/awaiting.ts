@@ -10,7 +10,9 @@
 import { useSyncExternalStore } from 'react';
 import type { HomeSessionInfo } from '../../types';
 import { api } from '../api';
+import { readStoredUserId } from '../offline';
 import { onMessage, onReconnected, joinUser } from '../signalr';
+import { startVisiblePoll } from '../visiblePoll';
 
 export interface AiAwaitingRec {
   chatId: string;
@@ -34,7 +36,7 @@ const emit = () => listeners.forEach(l => l());
 // Членство в user_{userId} — туда бэк шлёт status_changed по всем чатам владельца.
 // Повторный JoinUser для того же соединения безопасен (образец — lib/tasks.ts).
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 
@@ -132,7 +134,9 @@ function wireRealtime() {
   // а status_changed не несёт ни имени, ни projectId. Поэтому периодически пересчитываем
   // состав и meta-кэш из сводки — она единственно достоверно видит все проекты и чаты.
   // Тот же эндпоинт, что у дашборда «Домой» (прецедент — lib/agentBoard).
-  setInterval(() => { void loadFromSummary(); }, POLL_MS);
+  // Пауза на скрытой вкладке + догон: вечный опрос не должен жечь сеть в фоне.
+  // Стор живёт на модуле и не гаснет — stop не храним.
+  startVisiblePoll(() => { void loadFromSummary(); }, POLL_MS);
 }
 
 // Первичная загрузка + запуск реалтайм-подписки. Вызывается из AiLauncher при монтировании

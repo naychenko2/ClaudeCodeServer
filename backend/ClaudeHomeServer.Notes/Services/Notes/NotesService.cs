@@ -1,14 +1,21 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
 // Obsidian-совместимая база заметок. Источник правды — .md файлы на диске:
-//   • личный vault пользователя:  {dataDir}/notes/{userId}/
-//   • notes/ внутри каждого проекта, которым владеет пользователь
-// Единый per-owner граф агрегирует все источники владельца (Модель 3 из плана).
+//   • личный vault смотрящего:  {dataDir}/notes/{userId}/
+//   • notes/ внутри каждого проекта, к которому у смотрящего есть право чтения:
+//     своего или общего (участник — через точку доступа, S1-3b)
+//   • вики смотрящего:          {dataDir}/wiki/{userId}/pages/ — только чтение,
+//     появляется только когда заведена (есть pages/_schema.md), ADR-035, решение 1
+// Единый граф строится по смотрящему (Модель 3 из плана): чужой личный vault в него не
+// попадает ни с одной стороны — участник не видит «Личный» владельца, владелец — его «Личный».
 // Класс не хранит состояние заметок — сканирует файлы на каждый запрос
 // (заметок немного; кэш-инвалидация — возможная оптимизация позже).
 public sealed partial class NotesService : ClaudeHomeServer.Services.Composition.INoteSummaryReader, INoteAccessor
@@ -16,15 +23,46 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly IProjectManager _projects;
     private readonly ILogger<NotesService> _logger;
     private readonly IProjectEventLogService? _events;
+    // Точка доступа к проекту-источнику (Core-контракт, S1-3b): в ней роль по членству и
+    // гейт «рубильник + флаг» общих проектов. НЕ параметр конструктора: прямая зависимость
+    // замыкает DI-цикл NotesService → IProjectAccess → ProjectAccessService → ISessionDirectory
+    // → SessionManager → PersonaBindingsService → INoteAccessor → форвардер (NotesSubsystem.cs:71)
+    // → NotesService — на повторном GetOrAdd того же синглтона StartAsync хоста виснет
+    // навсегда (бисект 2026-10-29: все тесты с WebApplicationFactory). Тот же приём, что
+    // с реестром тулсетов в SessionManager (SessionManager.cs:829): в конструкторе — провайдер,
+    // точка доступа — лениво при первом обращении, когда создание синглона уже завершено
+    // и ре-энтри нет.
+    // Вне DI (тестовые конструирования) точка передаётся напрямую internal-конструктором
+    // или не передаётся вовсе — ProjectScope остаётся на владении, fail-closed.
+    private readonly IServiceProvider? _services;
+    private IProjectAccess? _access;
+    // Гейт фич-флагов (Core-шов Composition): нужен одной проверке в SourcesFor — источник
+    // wiki отдаётся агенту только при включённом llm-wiki (хвост ревью S2e). null — флаг
+    // считается выключенным (fail-closed): без источника безопаснее, чем без флагов.
+    private readonly Composition.IFeatureFlagGate? _flags;
     private readonly string _dataDir;
+    // S3-3c1: журнал правок человека (S3-3) — зовётся из *Core после УСПЕШНОЙ записи/удаления/
+    // переименования заметки общего проекта человеком (byHuman). В DI он всегда (Program.cs:621-622);
+    // опциональным оставлен как остальные необязательные зависимости: бесхостовые тесты собирают
+    // сервис напрямую и подставляют фейк.
+    private readonly Composition.IHumanEditJournal? _humanEdits;
 
     private const string PersonalKey = "personal";
     private const string PersonalLabel = "Личный";
+
+    // Отдельный источник вики (ADR-035, решение 1): корень data/wiki/{ownerId}/pages/,
+    // только чтение — пишет в него один Хранитель. Ключ internal: той же константой
+    // сравнивает источник побочный писатель NoteTaskSyncService (пропуск страниц вики).
+    internal const string WikiKey = "wiki";
+    private const string WikiLabel = "Вики";
 
     // [[Target]] | [[Target|подпись]] | [[Target#заголовок]] | [[Папка/Target]]
     private static readonly Regex WikiLink = new(@"\[\[([^\[\]]+?)\]\]", RegexOptions.Compiled);
     // Inline-тег #тег (не заголовок «# » — требуется хотя бы один символ сразу за #)
     private static readonly Regex InlineTag = new(@"(?<=^|\s)#([\p{L}\p{N}_][\p{L}\p{N}_/-]*)", RegexOptions.Compiled);
+    // Inline-код `…` (без бэктика и перевода строки внутри): как и ```-заборы, «глушит»
+    // ссылки/теги внутри — пример синтаксиса в коде не связь и не тег (Obsidian)
+    private static readonly Regex InlineCode = new(@"`[^`\n]+`", RegexOptions.Compiled);
 
     // Кэш построенной модели per-owner: сканирование всех файлов дорого, а за один
     // ход UI дёргает список/деталь/граф подряд. TTL короткий — внешние правки (Obsidian)
@@ -32,55 +70,218 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly ConcurrentDictionary<string, (Model Model, DateTime At)> _cache = new();
     private static readonly TimeSpan CacheTtl = TimeSpan.FromSeconds(2);
 
+    // Счётчик построений модели (S3-1): точка — сам Build, считается любое настоящее
+    // построение (из кэш-пути GetModel и мимо кэша, через BuildFresh). Нужен тесту
+    // «два снимка при живом кэше → одно построение». internal: виден только тестам.
+    private long _modelBuilds;
+    internal long ModelBuildCount => System.Threading.Volatile.Read(ref _modelBuilds);
+
+    // Поколение инвалидации per-owner — guard против гонки check-then-act на кэше моделей (дефект S2c-4):
+    // модель, собранная сканом, кладётся в кэш только если за скан поколение не сдвинулось — т.е. ни
+    // одна запись не пришла, пока список источников перечислялся. Без guard'а скан, начатый до чужой
+    // записи, кладёт устаревшую модель поверх свежей: её запись попадает в окно между чужим Invalidate
+    // и чужим TryGetValue (в Create это время _events.Append), пострадавший читает чужую модель,
+    // не видит свою только что записанную заметку и Create падает 500 «Заметка создана, но не
+    // читается». Воспроизведение — NotesConcurrentCreateTests. Себе вернутую модель guard не
+    // отменяет: скан всегда идёт после своей записи, своя заметка в модели есть всегда.
+    private readonly ConcurrentDictionary<string, long> _generation = new();
+
+    // Замок записи заметок — ОДНА система на весь сервис (S2c-2 К8 → S2c-5 → S2c-11 → S2c-12).
+    // Ключ — id заметки (Update/Delete — «сравнить и записать»; Move — ещё и на id перемещаемой:
+    // гонка переноса с удалением той же заметки, и на целевой путь: гонка двух переносов в одну
+    // цель; LinkMention/SetAnnotationStatus/Repin — правка
+    // той же заметки; Annotate/Repin — ещё на id заметки-документа, куда пишется ^id) или ключ
+    // источника (Create — коллизия имени файла; MoveFolder/CreateFolder/DeleteFolder — структура
+    // папок источника; MoveFolder/DeleteFolder — ещё id всех заметок папки: их правка держит
+    // замок своего id, а не источника — без этих ключей гонка «папка ↔ заметка внутри» не
+    // сериализована, F-6a). Многозаметочные каскады (RemoveWikilinksTo, RewriteAnnotationTargets)
+    // берут по замку на каждую правимую заметку, ключи — по возрастанию, одним вызовом
+    // (WithWriteGates): две операции не разойдутся по кругу. Вложенного WithWriteGates нет нигде:
+    // внутренний вызов каскада из-под чужого замка (Update/Move/MoveFolder →
+    // RewriteAnnotationTargets) идёт нелocking-ядром под уже взятым замком вызывающего.
+    // Единственная запись заметочного файла мимо замка — GetOrCreateDaily: дневниковая заметка
+    // личного vault (get-or-create своего файла, чужого писателя у него нет). Замок живёт, пока
+    // сервис: заметок немного; после переименования старый ключ остаётся безвредным остатком
+    // (сам id исчезает вместе со старым файлом).
+    private readonly ConcurrentDictionary<string, object> _writeGates = new();
+
+    /// <summary>
+    /// Тестовый шов (F-6a доработка 1): вызывается под замком id сразу после проверки файла,
+    /// до его чтения и записи — точка, в которую тест ставит гонку «перенос ↔ правка»
+    /// детерминированно (NotesFolderWriteGatesTests). null — обычного пути нет: поле читается
+    /// один раз на правку; в проде (через DI) не выставляется никогда.
+    /// </summary>
+    internal Action? TestProbeAfterFileExists;
+
     public NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
-        IProjectEventLogService? events = null)
+        IProjectEventLogService? events = null, IServiceProvider? services = null,
+        // S3-3c1: журнал правок человека — опционален по той же причине, что events/services:
+        // бесхостовые тесты конструируют сервис напрямую.
+        Composition.IHumanEditJournal? humanEdits = null,
+        // Гейт фич-флагов (llm-wiki): источник вики в SourcesFor; null — флаг выключен.
+        Composition.IFeatureFlagGate? flags = null)
     {
         _projects = projects;
         _logger = logger;
         _events = events;
+        _services = services;
+        _humanEdits = humanEdits;
+        _flags = flags;
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
+
+    // Тестовое конструирование вне DI: точка доступа передаётся напрямую, без провайдера.
+    // internal — виден только тестовым сборкам (InternalsVisibleTo); DI выбирает публичный
+    // конструктор, этот для него не кандидат.
+    internal NotesService(IProjectManager projects, IConfiguration config, ILogger<NotesService> logger,
+        IProjectEventLogService? events, IProjectAccess access,
+        Composition.IHumanEditJournal? humanEdits = null, Composition.IFeatureFlagGate? flags = null)
+        : this(projects, config, logger, events, (IServiceProvider?)null, humanEdits, flags)
+    {
+        _access = access;
+    }
+
+    // Внутренний шов к Хранителю для системной операции relink (ADR-035, решения 2 и 6):
+    // переименование или истечение заметки, на которую ссылаются страницы вики, правит не
+    // NotesService (у вики один писатель), а Хранитель — под блокировкой раздела и с записью
+    // в журнал. Наведён свойством, а не конструктором: WikiKeeper строится поверх NotesService,
+    // конструкторная зависимость замкнула бы цикл DI; ставит его регистрация вертикали
+    // (NotesSubsystem.Register, factory WikiKeeper). null — Хранителя нет: файл вики
+    // пропускается, как в S1a.
+    internal IWikiRelink? WikiRelink { get; set; }
 
     private Model GetModel(string userId)
     {
         if (_cache.TryGetValue(userId, out var e) && DateTime.UtcNow - e.At < CacheTtl)
             return e.Model;
+        var gen = _generation.TryGetValue(userId, out var g) ? g : 0L;
         var model = Build(userId);
-        _cache[userId] = (model, DateTime.UtcNow);
+        // Скан шёл без чужих записей (поколение не сдвинулось) — модель свежая, кладём её в кэш.
+        // Сдвинулось — она собрана до чужой записи и в кэше перетёрла бы свежую; себе возвращаем
+        // как есть: своя заметка в ней есть всегда — скан начался после своей записи.
+        if ((_generation.TryGetValue(userId, out var cur) ? cur : 0L) == gen)
+            _cache[userId] = (model, DateTime.UtcNow);
         return model;
     }
 
-    private void Invalidate(string userId) => _cache.TryRemove(userId, out _);
+    // internal (не private): нужен Хранителю (та же сборка) — после записи страницы граф
+    // обязан видеть её сразу, а не по истечении TTL (ADR-035, решение 4, шаг 6). Поколение
+    // сдвигается и здесь: запись Хранителя — такая же чужая запись для идущего скана (S2c-4).
+    internal void Invalidate(string userId)
+    {
+        _cache.TryRemove(userId, out _);
+        _generation.AddOrUpdate(userId, 1, (_, v) => v + 1);
+    }
 
-    // --- Источники владельца ---
+    // Построение модели МИМО кэша (ADR-035, решение 4, шаг 1 применения): Хранитель проверяет
+    // пакет по фактическому состоянию диска, а не по кэшу с TTL 2 с — файл, записанный им
+    // только что, обязан быть виден. Кэш этот вызов не трогает: обычный читательский путь
+    // (GetModel) остаётся, свежая модель отдаётся вызывающему. internal: нужен Хранителю
+    // (та же сборка) и его тестам; публичного контракта здесь нет — модель внутренняя.
+    internal Model BuildFresh(string ownerId) => Build(ownerId);
+
+    /// <summary>
+    /// Инвалидация после записи в источник (S2c-11): свой ключ — как раньше, плюс ключ
+    /// владельца-арендатора проекта (RequestScope.TenantOwnerId, не вызывающий): файлы notes/
+    /// проекта читает и владелец, и без его ключа его модель per-user (TTL 2 с) держала бы
+    /// снимок ДО правки редактора — владелец видел бы чужую запись с задержкой до TTL.
+    /// Личный vault — только свой ключ: чужого арендатора у него нет.
+    /// </summary>
+    private void InvalidateWrite(string userId, string sourceKey)
+    {
+        Invalidate(userId);
+        if (sourceKey == PersonalKey) return;
+        var tenant = ProjectScope(userId, sourceKey, ProjectRight.Read)?.TenantOwnerId;
+        if (!string.IsNullOrEmpty(tenant)) Invalidate(tenant!);
+    }
+
+    /// <summary>
+    /// Критическая секция записи под замками _writeGates по названным ключам (id заметки /
+    /// ключ источника). Многоключевые операции берут их в фиксированном порядке — по возрастанию
+    /// ключа: если две операции спорят за одну пару ключей, обе идут к ней в одном порядке,
+    /// цикла ожидания нет. Тело выполняется под всеми взятыми замками; исключение тела
+    /// отпускает замки как обычно.
+    /// </summary>
+    private T WithWriteGates<T>(Func<T> body, params string[] keys)
+    {
+        var ordered = keys.Distinct(StringComparer.Ordinal).OrderBy(k => k, StringComparer.Ordinal).ToArray();
+        return Take(0);
+
+        T Take(int i)
+        {
+            if (i == ordered.Length) return body();
+            var gate = _writeGates.GetOrAdd(ordered[i], _ => new object());
+            lock (gate) { return Take(i + 1); }
+        }
+    }
+
+    // Ключ замка источника: проект — его id (тот же ключ, что в id его заметок), личный vault —
+    // id владельца: «personal» один на всех, а личное ключается личным id (как корень в
+    // ResolveRoot) — чужая личная папка не должна ждать чужой записи.
+    private static string SourceGateKey(string userId, string sourceKey) =>
+        sourceKey == PersonalKey ? userId : sourceKey;
+
+    // --- Источники смотрящего ---
 
     // ProjectRoot — корень проекта-источника (null у личного vault): по нему
-    // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта)
-    private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null);
+    // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта).
+    // ReadOnly — источник только чтения: его страницы видны в графе, поиске и резолве
+    // [[…]] как у любого другого источника, но в «куда создать» он не предлагается,
+    // а прямая запись в него режется EnsureNotWiki (ADR-035, решение 2).
+    private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null,
+        bool ReadOnly = false);
 
-    private IReadOnlyList<Source> SourcesFor(string userId)
+    // Источники, к которым у вызывающего есть право <right>. Read — то, что человек видит
+    // (список, граф, папки, вложения): свои проекты плюс общие, где он участник при
+    // включённом гейте. Write — то, в чём он может менять файлы: в S1 это только своё
+    // (участник общего проекта читает, не пишет — право на запись откроют S2a/S2c).
+    private IReadOnlyList<Source> SourcesFor(string userId, ProjectRight right)
     {
         var list = new List<Source>
         {
             new(PersonalKey, PersonalLabel, Path.Combine(_dataDir, "notes", userId)),
         };
         // Заметки проекта лежат в его папке: у локального проекта она на устройстве, сервер
-        // её не читает — такой источник в списке не участвует (ADR-016 §4, search_unified)
-        foreach (var p in _projects.GetByOwner(userId))
+        // её не читает — такой источник в списке не участвует (ADR-016 §4, search_unified).
+        // Право на чужой проект решает точка доступа (ProjectScope): в общем проекте участник
+        // видит его заметки только при роли и включённом гейте (S1-2). Список строится по
+        // вызывающему: личный vault другого человека сюда не попадает ни с одной стороны.
+        foreach (var p in _projects.GetAll())
             if (!string.IsNullOrWhiteSpace(p.RootPath)
-                && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound))
+                && Composition.ProjectCapabilityGuard.Allows(p, Composition.ProjectCapabilityArea.FileBound)
+                && ProjectScope(userId, p.Id, right) is not null)
                 list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes"), p.RootPath));
+        // Вики владельца — отдельный источник графа рядом с личным vault и notes/ проектов
+        // (ADR-035, решение 1). Признак — признак на диске (pages/_schema.md), а не
+        // фич-флаг: не заведена — источника нет, заведённая — работает всегда (fail-closed).
+        // Флаг llm-wiki гейтит отдачу источника агенту (хвост ревью S2e): до включения —
+        // «флаг прячет UI и инструменты», источника в графе нет. Одна проверка, в одной
+        // точке. Гейт записи от флага НЕ зависит: EnsureNotWiki бьёт по каноническому пути,
+        // и заведённая вика закрыта чужим писателям даже с выключенным флагом.
+        // Ссылки [[…]] между заметками человека и страницами вики резолвятся обычным
+        // образом: тот же ByName, без отдельного резолвера (резолв префикса раздела — S2c).
+        // Вики только для чтения: в источники с правом записи (уборка истёкших и прочие
+        // Write-обходы) она не попадает — её файлы правит один Хранитель.
+        if (right == ProjectRight.Read
+            && WikiPaths.IsInitialized(_dataDir, userId) && _flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) == true)
+            list.Add(new(WikiKey, WikiLabel, WikiPaths.Pages(_dataDir, userId), ReadOnly: true));
         return list;
     }
 
-    // Источники для выбора «куда создать заметку»
+    // Источники, которые человек видит: они же подсказка «куда создать». Источник,
+    // доступный только на чтение (общий проект для участника), в списке остаётся —
+    // его заметки человек видит; отказ на запись придёт из Create (403), а не из исчезновения
+    // источника из списка. Исключение — read-only вики: создание в неё отказывает всегда
+    // (wiki_readonly), поэтому в «куда создать» её нет; её страницы при этом видны в
+    // списке, графе и резолве как страницы любого источника.
     public IReadOnlyList<NoteSourceDto> GetSources(string userId) =>
-        SourcesFor(userId).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
+        SourcesFor(userId, ProjectRight.Read).Where(s => !s.ReadOnly).Select(s => new NoteSourceDto(s.Key, s.Label)).ToList();
 
     // --- Сканирование и парсинг ---
 
-    private sealed class RawNote
+    // internal (не private) вместе с Model: их видит Хранитель и его тесты через BuildFresh.
+    internal sealed class RawNote
     {
         public required string Id;
         public required string SourceKey;
@@ -104,7 +305,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private List<RawNote> Scan(string userId)
     {
         var notes = new List<RawNote>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Read))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             IEnumerable<string> files;
@@ -120,12 +321,23 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 var rel = NormalizeRel(Path.GetRelativePath(src.RootDir, full));
                 // templates/ — шаблоны, не заметки: в список/граф не попадают
                 if (rel.StartsWith("templates/", StringComparison.OrdinalIgnoreCase)) continue;
+                // Служебные файлы раздела вики (_schema/_index/_log/_health) — не заметки,
+                // тот же смысл, что templates/ для остальных источников (ADR-035, реш. 1 и 8:
+                // _schema — признак заведённости, проекции не участвуют ни в графе, ни в индексе)
+                if (src.Key == WikiKey && WikiPaths.IsProjection(rel)) continue;
                 var fm = ParseFrontmatter(text, Path.GetFileNameWithoutExtension(full));
                 var tags = fm.Tags;
-                // Inline-теги #тег из тела + теги из frontmatter (без дублей)
-                foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
+                // Inline-теги #тег из тела + теги из frontmatter (без дублей).
+                // Тег в коде (`#x` в `…`/```-блоке) и чисто числовой (#807) — не тег.
+                var mask = CodeMask(text);
+                foreach (Match m in InlineTag.Matches(text))
+                {
+                    if (InCode(mask, m.Index)) continue;
+                    var it = m.Groups[1].Value;
+                    if (it.All(char.IsDigit)) continue;
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
-                var links = ParseLinks(text);
+                }
+                var links = ParseLinks(text, mask);
                 // Привязка к файлу проекта: у личного vault поля нет (ProjectRoot null),
                 // у проектной проверяем существование файла (аналог docMissing у комментариев).
                 // SafeJoinPublic отсекает traversal — мусорный путь считается отсутствующим.
@@ -260,11 +472,39 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return new NoteAnnotationInfo(scope, path, st, blockId, quote, heading);
     }
 
-    private static List<(string, string)> ParseLinks(string text)
+    // Маска «вне кода»: true — позиция i внутри кода. Код = ```-забор (CommonMark,
+    // через MarkdownFence — та же ограда, что у Docs) + inline-код `…`. Ссылка/тег/
+    // упоминание в коде не считаются (Obsidian): иначе примеры синтаксиса дают «призраки»
+    // графа и ложные теги, а переименование переписывает [[…]] внутри кода.
+    internal static bool[] CodeMask(string text)
+    {
+        var mask = new bool[text.Length];
+        var fence = new MarkdownFence();
+        var offset = 0;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            if (fence.Consume(line) || fence.InFence)
+                for (var i = 0; i < raw.Length && offset + i < mask.Length; i++)
+                    mask[offset + i] = true;
+            offset += raw.Length + 1;   // +1 — на '\n', на котором резали
+        }
+        foreach (Match m in InlineCode.Matches(text))
+            for (var i = m.Index; i < m.Index + m.Length && i < mask.Length; i++)
+                mask[i] = true;
+        return mask;
+    }
+
+    // Позиция совпадения внутри кода (по маске); вне диапазона — не код.
+    internal static bool InCode(bool[] mask, int index) =>
+        index >= 0 && index < mask.Length && mask[index];
+
+    private static List<(string, string)> ParseLinks(string text, bool[] mask)
     {
         var result = new List<(string, string)>();
         foreach (Match m in WikiLink.Matches(text))
         {
+            if (InCode(mask, m.Index)) continue;
             var inner = m.Groups[1].Value;
             // Отрезаем подпись [[Target|подпись]] и якорь [[Target#heading]]
             var target = inner.Split('|')[0].Split('#')[0].Trim();
@@ -286,7 +526,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // --- Модель графа (строится один раз из скана) ---
 
-    private sealed class Model
+    // internal (не private): её отдаёт BuildFresh — Хранителю (та же сборка) и тестам
+    // валидации применения пакета (ADR-035, решение 4).
+    internal sealed class Model
     {
         public required List<RawNote> Notes;
         public required Dictionary<string, RawNote> ById;
@@ -312,6 +554,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private Model Build(string userId)
     {
+        System.Threading.Interlocked.Increment(ref _modelBuilds);
         var now = DateTime.UtcNow;
         var notes = Scan(userId);
         // Истёкшие заметки исключаем из модели — они не видны в списке/графе,
@@ -327,6 +570,25 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             var key = Norm(n.Title);
             if (!byName.TryGetValue(key, out var l)) byName[key] = l = new();
             l.Add(n);
+        }
+
+        // Алиасы страниц вики пополняют тот же индекс (ADR-035, решение 3): [[Алиас]] резолвится
+        // в страницу; при коллизии алиаса с заголовком Resolve предпочитает заголовок
+        // (см. Resolve). Шапка вики разбирается строгим парсером страницы — терпимый
+        // ParseFrontmatter aliases не отдаёт; нечитаемая шапка — просто нет алиасов,
+        // страница остаётся в индексе по заголовку.
+        foreach (var n in notes)
+        {
+            if (n.SourceKey != WikiKey) continue;
+            var aliases = WikiFrontmatter.Parse(n.Content).Model?.Aliases;
+            if (aliases is null) continue;
+            foreach (var alias in aliases)
+            {
+                var key = Norm(alias);
+                if (key.Length == 0) continue;
+                if (!byName.TryGetValue(key, out var l)) byName[key] = l = new();
+                if (!l.Contains(n)) l.Add(n); // алиас = собственный заголовок: уже индексирована
+            }
         }
 
         var outLinks = new Dictionary<string, List<NoteLinkDto>>();
@@ -376,12 +638,13 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         {
             var linked = new HashSet<string>(outLinks[n.Id].Where(l => l.Resolved).Select(l => l.TargetId));
             var lower = n.Content.ToLowerInvariant();
+            var mask = CodeMask(lower);
             foreach (var m in notes)
             {
                 if (m.Id == n.Id || linked.Contains(m.Id)) continue;
                 var t = Norm(m.Title);
                 if (t.Length < 3) continue;
-                var at = FindWord(lower, t);
+                var at = FindWord(lower, t, mask);
                 if (at < 0) continue;
                 if (!unlinked.TryGetValue(n.Id, out var lst)) unlinked[n.Id] = lst = new();
                 lst.Add(new NoteBacklinkDto(m.Id, m.Title, m.SourceKey, m.SourceLabel, SnippetAround(n.Content, at)));
@@ -401,14 +664,16 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         };
     }
 
-    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1
-    private static int FindWord(string haystack, string needle)
+    // Индекс вхождения needle как отдельного слова (границы — не буквы/цифры), иначе -1.
+    // Вхождения внутри кода (по маске) не считаются упоминанием.
+    internal static int FindWord(string haystack, string needle, bool[] mask)
     {
         var from = 0;
         while (true)
         {
             var i = haystack.IndexOf(needle, from, StringComparison.Ordinal);
             if (i < 0) return -1;
+            if (InCode(mask, i)) { from = i + 1; continue; }
             var before = i == 0 || !char.IsLetterOrDigit(haystack[i - 1]);
             var afterIdx = i + needle.Length;
             var after = afterIdx >= haystack.Length || !char.IsLetterOrDigit(haystack[afterIdx]);
@@ -420,16 +685,40 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Разрешение коллизий имён: 1 кандидат — берём; несколько — по namespace
     // (источник в записи [[Проект/Заметка]]), иначе предпочитаем тот же источник.
     // Разрешение [[Имя]] и [[Префикс/Имя]]. Префикс — источник («Проект»), папка
-    // внутри источника («Идеи/Черновики», как в Obsidian) или «Источник/Папка».
+    // внутри источника («Идеи/Черновики», как в Obsidian), «Источник/Папка» или
+    // раздел вики («Сферы/{id}», «Общее» — ADR-035, решение 1: резолв префикса раздела
+    // делает код; кандидат вне раздела не рассматривается, в разделе пусто — ссылка
+    // неразрешена). Коллизия алиаса с заголовком — в пользу заголовка (решение 3):
+    // кандидат, попавший в индекс только алиасом, не рассматривается, когда под ключом
+    // есть страница с этим заголовком; для чистых заголовков фильтр — no-op (ключ индекса
+    // и есть нормализованный заголовок).
     private static RawNote? Resolve(Dictionary<string, List<RawNote>> byName, string key, string? ns, RawNote? from)
     {
         if (!byName.TryGetValue(key, out var candidates) || candidates.Count == 0) return null;
-        if (candidates.Count == 1) return candidates[0];
+
+        List<RawNote> pool;
+        if (ns is not null && WikiSections.Parse(ns) is { } section)
+        {
+            // Префикс-раздел вики: цель — страница этого раздела. Префикс раздела —
+            // единственный смысл такого префикса: ни одна заметка под ним не резолвится.
+            pool = candidates.Where(c => c.SourceKey == WikiKey &&
+                WikiSections.Parse(c.RelPath) == section).ToList();
+        }
+        else
+        {
+            // «В пользу заголовка» — порядок предпочтения, а не отказ: алиас резолвится,
+            // пока под его ключом нет страницы с таким заголовком.
+            var byTitle = candidates.Where(c => Norm(c.Title) == key).ToList();
+            pool = byTitle.Count > 0 ? byTitle : candidates;
+        }
+
+        if (pool.Count == 0) return null;
+        if (pool.Count == 1) return pool[0];
 
         if (ns is not null)
         {
             var p = Norm(ns);
-            var byNs = candidates.FirstOrDefault(c =>
+            var byNs = pool.FirstOrDefault(c =>
             {
                 var dir = Norm(DirOf(c.RelPath));
                 var label = Norm(c.SourceLabel);
@@ -439,7 +728,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             });
             if (byNs is not null) return byNs;
         }
-        var sameSource = from is null ? null : candidates.FirstOrDefault(c => c.SourceKey == from.SourceKey);
+        var sameSource = from is null ? null : pool.FirstOrDefault(c => c.SourceKey == from.SourceKey);
         return sameSource; // null → неоднозначно, считаем неразрешённой
     }
 
@@ -496,9 +785,11 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     }
 
     // Абсолютный путь вложения (картинки и т.п.) внутри vault источника — для отдачи
-    // в <img>; владение источником проверяет ResolveRoot, traversal — SafeJoin.
+    // в <img>: право ЧТЕНИЯ источника проверяет ResolveRoot, traversal — SafeJoin.
+    // Участник общего проекта видит картинку из notes/ проекта, которую ему показал его
+    // ![[…]] в прочитанной заметке проекта.
     public string ResolveAttachmentPath(string userId, string sourceKey, string relativePath) =>
-        SafePath.Join(ResolveRoot(userId, sourceKey), relativePath);
+        SafePath.Join(ResolveRoot(userId, sourceKey, ProjectRight.Read), relativePath);
 
     // --- Публичное API ---
 
@@ -631,11 +922,45 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return new NoteGraph(nodes, edges);
     }
 
+    // Внутренний снимок графа (S3-1): берёт УЖЕ построенную модель из кэша — тот же
+    // GetModel, что у списка/детали/графа; при живом кэше граф заново не строится.
+    // Данные заморожены копированием: мутация графа после выдачи (запись → Invalidate →
+    // перестроение) выданный снимок не меняет; элементы — неизменяемые record-ы.
+    // Потокобезопасно: читается запись кэша, новых общих состояний не заводим.
+    // В отличие от GetGraph ничего не фильтрует (полный граф, включая комментарии):
+    // это шов линтера (S3-2), публичного контракта у снимка нет — для UI остаёт GetGraph.
+    internal NotesGraphSnapshot GetGraphSnapshot(string ownerId)
+    {
+        var model = GetModel(ownerId);
+
+        var nodes = new List<NotesGraphSnapshotNode>(model.Notes.Count + model.Ghosts.Count);
+        foreach (var n in model.Notes)
+            nodes.Add(new NotesGraphSnapshotNode(n.Id, n.Title, n.SourceKey, n.SourceLabel, false));
+        foreach (var (gid, name) in model.Ghosts)
+            nodes.Add(new NotesGraphSnapshotNode(gid, name, "", "", true));
+
+        var edges = new List<NotesGraphSnapshotEdge>(model.Edges.Count);
+        foreach (var (s, t) in model.Edges)
+            edges.Add(new NotesGraphSnapshotEdge(s, t));
+
+        var backlinks = new Dictionary<string, IReadOnlyList<NoteBacklinkDto>>(model.Backlinks.Count);
+        foreach (var (id, bl) in model.Backlinks)
+            backlinks[id] = bl.ToArray(); // NoteBacklinkDto — record: копия элементов не нужна
+
+        return new NotesGraphSnapshot(nodes, edges, new Dictionary<string, string>(model.Ghosts), backlinks);
+    }
+
     // Папка внутри источника: сегменты чистятся по одному, traversal исключён.
     // "Идеи/Черновики" → "Идеи/Черновики"; пусто/мусор → "" (корень).
     internal static string SanitizeFolder(string? folder)
     {
         if (string.IsNullOrWhiteSpace(folder)) return "";
+        // Быстрый путь: чистый относительный путь — тот, где общий путь ничего не меняет
+        // (результат = NormalizeRel). Проверка — один проход строки, без аллокаций на сегмент:
+        // ключ целевого пути в Move считается до взятия замка, и аллокация на сегмент глубокой
+        // папки там дороже окна параллельной операции над файлом (замер: ~300 мкс на 300 сегментов
+        // против ~100 мкс Exists+Delete такой же папки).
+        if (IsCleanRelativePath(folder)) return NormalizeRel(folder);
         var segments = folder.Replace('\\', '/').Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(SanitizeFileName)
             .Where(s => s.Length > 0 && s != "." && s != "..")
@@ -643,10 +968,50 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         return string.Join('/', segments);
     }
 
-    public NoteDetail Create(string userId, CreateNoteRequest req)
+    // Ровно те случаи, где общий путь — тождество: нет обратных слэшей, ведущего/замыкающего
+    // слэша, пустых сегментов и сегментов, начинающихся/кончающихся пробелом или точкой
+    // (это же отсекает "." и ".."), недопустимых символов имени внутри сегментов. Всё остальное
+    // — общий путь. Консервативно: «чистый» тут ⊆ «общий путь ничего не меняет».
+    private static bool IsCleanRelativePath(string path)
+    {
+        if (path.IndexOf('\\') >= 0 || path[0] == '/' || path[^1] == '/') return false;
+        var start = 0;
+        for (var i = 0; i <= path.Length; i++)
+        {
+            if (i < path.Length && path[i] != '/') continue;
+            if (i == start) return false;
+            if (path[start] == ' ' || path[start] == '.' || path[i - 1] == ' ' || path[i - 1] == '.') return false;
+            for (var j = start; j < i; j++)
+                if (Array.IndexOf(InvalidFileNameChars, path[j]) >= 0) return false;
+            start = i + 1;
+        }
+        return true;
+    }
+
+    public NoteDetail Create(string userId, CreateNoteRequest req, bool byHuman = false)
     {
         var sourceKey = string.IsNullOrWhiteSpace(req.Source) ? PersonalKey : req.Source!;
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-11: создание — под замком источника: окно «проверить коллизию имени → записать
+        // файл» не остаётся открытым для чужой записи того же файла. Журнал событий и чтение
+        // созданной заметки — ЗА замком: Append — чужой код, способный стоять на внешнем
+        // барьере (в тесте гонки — подменный журнал), а под замком такой стоп не держат:
+        // барьер и замок на одном источнике дают цикл ожидания.
+        var id = WithWriteGates(() => CreateCore(userId, req, sourceKey, byHuman), SourceGateKey(userId, sourceKey));
+        // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
+        if (sourceKey != PersonalKey)
+            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Создана заметка «{req.Title}»", id);
+        return GetDetail(userId, id)
+            ?? throw new InvalidOperationException("Заметка создана, но не читается");
+    }
+
+    // Файловая часть создания под замком источника: коллизия имени, запись, инвалидация.
+    // Возвращает id созданной заметки.
+    private string CreateCore(string userId, CreateNoteRequest req, string sourceKey, bool byHuman)
+    {
+        // S2c-7: дверь заметки — на WriteContent: редактор общего проекта создаёт заметку
+        // в notes/ проекта; читатель — 403, посторонний — 404 (тот же разбор, что у ResolveRoot)
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
 
         var baseName = SanitizeFileName(req.Title);
         if (baseName.Length == 0) baseName = "Без названия";
@@ -654,6 +1019,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         var prefix = folder.Length > 0 ? folder + "/" : "";
         var relPath = prefix + baseName + ".md";
         var full = SafePath.Join(rootDir, relPath);
+        EnsureNotWiki(full); // корень источника может лежать под data/wiki/ — там же все варианты коллизии
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         // Разрешаем коллизию имени файла суффиксом
         var n = 2;
@@ -677,15 +1043,12 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
         if (!string.IsNullOrWhiteSpace(req.File) && sourceKey != PersonalKey)
             content = InjectFileField(content, NormalizeRel(req.File!.Trim()));
         File.WriteAllText(full, content, new UTF8Encoding(false));
+        // S3-3c1: запись состоялась — итоговый путь (после разрешения коллизии имени) в журнал
+        // правок человека, под замком источника: журнал обязан видеть тот же порядок, что файл.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
 
-        Invalidate(userId);
-        var id = EncodeId(sourceKey, NormalizeRel(relPath));
-        // P1-4: лог note_changed в проектный лог (только для заметок проекта, не личных)
-        if (sourceKey != PersonalKey)
-            _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
-                $"Создана заметка «{req.Title}»", id);
-        return GetDetail(userId, id)
-            ?? throw new InvalidOperationException("Заметка создана, но не читается");
+        InvalidateWrite(userId, sourceKey);
+        return EncodeId(sourceKey, NormalizeRel(relPath));
     }
 
     // --- Шаблоны и daily notes ---
@@ -740,13 +1103,26 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     // «Связать» несвязанное упоминание: обернуть первое словесное вхождение заголовка
     // в [[…]]; при отличии регистра исходный текст сохраняется как алиас.
-    public NoteDetail? LinkMention(string userId, string id, string targetTitle)
+    // S2c-12: это правка содержимого заметки — под тем же замком на её id, что Update/Delete:
+    // гонка «связать» с правкой той же заметки сериализована, потерянной правки нет.
+    public NoteDetail? LinkMention(string userId, string id, string targetTitle, bool byHuman = false) =>
+        WithWriteGates(() => LinkMentionCore(userId, id, targetTitle, byHuman), id);
+
+    private NoteDetail? LinkMentionCore(string userId, string id, string targetTitle, bool byHuman)
     {
+        // Право записи — как в Move/Update: ResolveRoot с правым WriteContent (S2c-7).
+        // Без этой проверки «связать» переписывало файл проекта, видимого читателю лишь
+        // на чтение (отказ ловит NotesController → 403).
+        var (sourceKey, _) = DecodeId(id);
+        ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
+
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note)) return null;
+        EnsureNotWiki(note.FullPath);
 
         var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
-        var at = FindWord(content.ToLowerInvariant(), Norm(targetTitle));
+        var lower = content.ToLowerInvariant();
+        var at = FindWord(lower, Norm(targetTitle), CodeMask(lower));
         if (at < 0) return GetDetail(userId, id);   // упоминание уже исчезло — не ошибка
 
         var original = content.Substring(at, targetTitle.Length);
@@ -755,24 +1131,65 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             : $"[[{targetTitle}|{original}]]";
         content = content[..at] + replacement + content[(at + targetTitle.Length)..];
         File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): «связать» — правка содержимого заметки,
+        // под её замком — в журнал; исчезнувшее упоминание (выход выше, без записи) — молчит.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, note.FullPath);
 
-        Invalidate(userId);
+        // S2c-11: это правка содержимого чужой заметки — сбрасывает и модель арендатора
+        InvalidateWrite(userId, sourceKey);
         return GetDetail(userId, id);
     }
 
     // Перенос заметки: в папку и/или другой источник (личный vault ↔ notes/ проекта).
     // Ссылки [[…]] не трогаем — они резолвятся по заголовку и переезд переживают;
     // меняется только id (источник + путь).
-    public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null)
+    public NoteDetail? Move(string userId, string id, string? folder, string? targetSource = null, bool byHuman = false)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-11: замок на id перемещаемой заметки — тот же ключ, что у Update/Delete: гонка
+        // переноса редактора с удалением той же заметки сериализована, полуреального состояния
+        // («исходный файл удалён, целевой создан») нет. Плюс замок на затронутые источники:
+        // целевое место и структура папок. F-6a: и замок на целевой путь (тот же ключ, что
+        // стоит на Update/Delete заметки в нём) — перенос в занятую цель сериализован с
+        // операцией на этой цели, а не только с источником. Целевой id считается здесь же, по
+        // тем же SanitizeFolder/NormalizeRel, что MoveCore: имена замка и файла расходятся
+        // только при невалидном id (ArgumentException из DecodeId — до любой записи).
+        // Ключи берутся в фиксированном порядке по возрастанию (WithWriteGates) — две
+        // многоключевые операции не разойдутся по кругу.
+        var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
+        var fileName = Path.GetFileName(relPath);
+        var target = SanitizeFolder(folder);
+        var newRel = NormalizeRel(target.Length > 0 ? $"{target}/{fileName}" : fileName);
+        var keys = new List<string> { id, EncodeId(newSource, newRel) };
+        keys.Add(SourceGateKey(userId, sourceKey));
+        if (newSource != sourceKey) keys.Add(SourceGateKey(userId, newSource));
+        return WithWriteGates(() => MoveCore(userId, id, folder, targetSource, byHuman), [.. keys]);
+    }
+
+    private NoteDetail? MoveCore(string userId, string id, string? folder, string? targetSource, bool byHuman)
+    {
+        var (sourceKey, relPath) = DecodeId(id);
+        // S2c-7: перенос ВНУТРИ источника — обычная дверь заметки, WriteContent: редактор
+        // перекладывает свои заметки по папкам проекта
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        EnsureNotWiki(full); // сторона источника
 
-        // Целевой источник: пусто = текущий; владение проверяет ResolveRoot
+        // Целевой источник: пусто = текущий
         var newSource = string.IsNullOrWhiteSpace(targetSource) ? sourceKey : targetSource!;
-        var newRootDir = ResolveRoot(userId, newSource);
+        // S2c-5: перенос МЕЖДУ источниками — решение владельца: обе стороны проверяются
+        // owner-Write. Дверь Move внутри источника (выше и ниже) — на WriteContent (S2c-7),
+        // эта проверка остаётся на Write: редактор не вынесет заметку проекта в свой vault
+        // и не внесёт свою в чужой проект.
+        if (newSource != sourceKey)
+        {
+            EnsureSourceWrite(userId, sourceKey);
+            ResolveRoot(userId, newSource, ProjectRight.Write);
+        }
+        var newRootDir = newSource == sourceKey
+            ? rootDir
+            : ResolveRoot(userId, newSource, ProjectRight.Write);
 
         var fileName = Path.GetFileName(relPath);
         var target = SanitizeFolder(folder);
@@ -781,6 +1198,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             return GetDetail(userId, id);   // уже там
 
         var newFull = SafePath.Join(newRootDir, newRel);
+        EnsureNotWiki(newFull); // сторона цели
         if (File.Exists(newFull))
             throw new InvalidOperationException($"В папке «{(target.Length > 0 ? target : "корень")}» уже есть «{fileName}»");
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
@@ -792,9 +1210,25 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             File.Delete(full);
         }
 
-        Invalidate(userId);
-        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней
-        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+        // S3-3c2: человеческий перенос — в журнал ОБА пути переезда: старый (его файла больше
+        // нет) и новый, каждый со root СВОЕГО источника-проекта (личный бок отсекает сам
+        // RecordHumanEdit: vault вне журнала). Вызов под замком переноса и только после
+        // состоявшегося File.Move: сюда не доходят ни отказанный перенос («уже есть», 404 —
+        // проигравший не пишет ни одного пути), ни no-op «уже там» (правки файла не было).
+        if (byHuman)
+        {
+            RecordHumanEdit(userId, sourceKey, full);
+            RecordHumanEdit(userId, newSource, newFull);
+        }
+
+        // S2c-11: переезд между источниками — запись для обоих арендаторов: сбрасываются
+        // исходный и целевой источники (свой ключ + ключ арендатора каждого)
+        InvalidateWrite(userId, sourceKey);
+        if (newSource != sourceKey) InvalidateWrite(userId, newSource);
+        // Комментарии, привязанные к перенесённой заметке-документу, переезжают вместе с ней.
+        // S2c-12: Inner — без своего замка: он был бы вложенным в только что взятый замок
+        // переноса и сломал общий порядок ключей; правка комментариев идёт под ним.
+        RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
             newSource, DocPathOf(newSource, newRel));
         return GetDetail(userId, EncodeId(newSource, newRel));
     }
@@ -802,9 +1236,54 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Переименование/перенос папки целиком (Directory.Move — атомарно, вложения
     // переезжают вместе). Ссылки [[…]] не трогаем (резолв по заголовку).
     // Возвращает маппинг id заметок старый → новый (id содержит путь).
-    public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath)
+    public IReadOnlyList<MovedNoteId> MoveFolder(string userId, string sourceKey, string path, string newPath, bool byHuman = false)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-11: перенос папки меняет id всех её заметок — под замком источника: гонка с
+        // переносом отдельной заметки или созданием файла в той же папке сериализована.
+        // F-6a (хвост 565100e3 п.6): плюс замки всех заметок папки — Update/Delete/Move заметки
+        // внутри держат замок на её id, а не на источник: без этих замков гонка «перенос папки ↔
+        // правка заметки внутри» не сериализована — правка уходит в «не найдена» или теряется
+        // под переездом. Заметки папки перечисляются сканом диска ДО замка (поиск — только
+        // чтение, замок не держится во время скана); их id и ключ источника берутся одним
+        // WithWriteGates по возрастанию — тот же набор ключей при любом порядке запросов даёт
+        // ту же очередь, цикла нет. Заметка, созданная между сканом и взятием замка, закрыта
+        // замком источника: Create его берёт всегда.
+        var oldFolder = SanitizeFolder(path);
+        var noteIds = oldFolder.Length == 0
+            ? []
+            : FolderNoteIds(userId, sourceKey, oldFolder);
+        return WithWriteGates(() => MoveFolderCore(userId, sourceKey, path, newPath, byHuman),
+            [SourceGateKey(userId, sourceKey), .. noteIds]);
+    }
+
+    // id всех .md-заметок папки по скану диска (тот же EncodeId, что у id заметок модели):
+    // ключи замка и маппинга id. Зовётся ДО взятия замка; под замком состав папки проверяется
+    // Directory.Exists — повторный скан не нужен. Нечитаемый файл — не заметка: его переносит
+    // Directory.Move, ключа замка у него нет (тот же разбор, что у пропуска битых файлов в Scan).
+    private List<string> FolderNoteIds(string userId, string sourceKey, string folder)
+    {
+        var result = new List<string>();
+        string rootDir;
+        try { rootDir = ResolveRoot(userId, sourceKey, ProjectRight.Read); }
+        catch { return result; }   // нет права/источника — отказ придёт из Core под замком
+        var full = SafePath.Join(rootDir, folder);
+        if (!Directory.Exists(full)) return result;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories))
+            {
+                try { File.ReadAllText(file); } catch { continue; }
+                result.Add(EncodeId(sourceKey, NormalizeRel(Path.GetRelativePath(rootDir, file))));
+            }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Перечисление заметок папки {Dir}", full); }
+        return result;
+    }
+
+    private IReadOnlyList<MovedNoteId> MoveFolderCore(string userId, string sourceKey, string path, string newPath, bool byHuman)
+    {
+        // S2c-7: перенос папки — дверь содержимого заметок проекта, WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var oldFolder = SanitizeFolder(path);
         var newFolder = SanitizeFolder(newPath);
         if (oldFolder.Length == 0) throw new ArgumentException("Не задана папка");
@@ -816,21 +1295,45 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
         var oldFull = SafePath.Join(rootDir, oldFolder);
         var newFull = SafePath.Join(rootDir, newFolder);
+        EnsureNotWiki(oldFull); EnsureNotWiki(newFull); // обе стороны переноса
         if (!Directory.Exists(oldFull)) throw new KeyNotFoundException("Папка не найдена");
         if (Directory.Exists(newFull) || File.Exists(newFull))
             throw new InvalidOperationException($"«{newFolder}» уже существует");
 
-        // Заметки папки до переезда — для маппинга id
-        var before = GetModel(userId).Notes
-            .Where(n => n.SourceKey == sourceKey &&
-                        (n.RelPath.StartsWith(oldFolder + "/", StringComparison.OrdinalIgnoreCase)))
-            .Select(n => n.RelPath).ToList();
+        // Заметки папки — по скану диска под замком: после взятия замка источника их никто не
+        // создаёт и не удаляет, а их id уже взяты (список выше) — состав под замком стабилен.
+        // F-6a: не через модель — модель могла не увидеть заметку, созданную до этого окна;
+        // маппинг обязан соответствовать тому, что реально переезжает. Нечитаемый .md — не
+        // заметка и не в маппинге (тот же пропуск, что у модели и у списка замков выше).
+        var before = new List<string>();
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(oldFull, "*.md", SearchOption.AllDirectories))
+            {
+                try { File.ReadAllText(file); } catch { continue; }
+                before.Add(NormalizeRel(Path.GetRelativePath(rootDir, file)));
+            }
+        }
+        catch (Exception ex) { _logger.LogWarning(ex, "Сканирование переносимой папки {Dir}", oldFull); }
 
         Directory.CreateDirectory(Path.GetDirectoryName(newFull)!);
         Directory.Move(oldFull, newFull);
-        Invalidate(userId);
-        // Привязки комментариев к документам внутри перенесённой папки — по префиксу
-        RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
+        // S3-3c2: человеческий перенос папки — старый и новый путь КАЖДОГО её файла (тот же
+        // порядок, что S3-3b в FilesController.RecordRenamedDir: путь папки в журнал не идёт —
+        // её pathspec затянул бы чужую работу). Список берётся из скана под замком источника ДО
+        // переноса; вызов — после состоявшегося Directory.Move: отказанный перенос (404 /
+        // «уже существует») сюда не доходит — проигравший не пишет ни одного пути.
+        if (byHuman)
+            foreach (var rel in before)
+            {
+                RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, rel));
+                RecordHumanEdit(userId, sourceKey, SafePath.Join(rootDir, newFolder + rel[oldFolder.Length..]));
+            }
+        // S2c-11: содержимое папки переезжает — модель арендатора источника обязана быть сброшена
+        InvalidateWrite(userId, sourceKey);
+        // Привязки комментариев к документам внутри перенесённой папки — по префиксу.
+        // S2c-12: Inner — без своего замка (вложенный сломал бы порядок), под замком источника.
+        RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, oldFolder),
             sourceKey, DocPathOf(sourceKey, newFolder), prefix: true);
 
         return before.Select(rel =>
@@ -848,7 +1351,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     public IReadOnlyList<NoteFolderDto> GetFolders(string userId)
     {
         var result = new List<NoteFolderDto>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Read))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             IEnumerable<string> dirs;
@@ -871,40 +1374,109 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // Создать физическую папку (идемпотентно — дубликат не ошибка).
     public NoteFolderDto CreateFolder(string userId, string sourceKey, string path)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        // S2c-11: папка — структура содержимого источника: под замком источника вместе с
+        // созданием/переносом его заметок
+        return WithWriteGates(() => CreateFolderCore(userId, sourceKey, path), SourceGateKey(userId, sourceKey));
+    }
+
+    private NoteFolderDto CreateFolderCore(string userId, string sourceKey, string path)
+    {
+        // S2c-7: папка — структура содержимого заметок проекта, дверь на WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
+        EnsureNotWiki(full);
         if (File.Exists(full))
             throw new InvalidOperationException($"«{folder}» — уже файл, не папка");
         Directory.CreateDirectory(full);
-        Invalidate(userId);
+        InvalidateWrite(userId, sourceKey);
         return new NoteFolderDto(sourceKey, folder);
     }
 
     // Удалить физическую папку рекурсивно (пустую или с заметками/вложениями).
     // Возвращает число удалённых .md-заметок.
-    public int DeleteFolder(string userId, string sourceKey, string path)
+    public int DeleteFolder(string userId, string sourceKey, string path, bool byHuman = false)
     {
-        var rootDir = ResolveRoot(userId, sourceKey);   // проверка владения
+        // S2c-11: та же дверь и тот же замок источника, что у CreateFolder.
+        // F-6a (хвост 565100e3 п.6): плюс замки всех заметок папки — правка/удаление заметки
+        // внутри (замок на её id) с удалением папки не сериализованы: правка могла писать в
+        // файл под его удалением. Порядок захвата — тот же: одним WithWriteGates по возрастанию.
+        var folder = SanitizeFolder(path);
+        var noteIds = folder.Length == 0
+            ? []
+            : FolderNoteIds(userId, sourceKey, folder);
+        return WithWriteGates(() => DeleteFolderCore(userId, sourceKey, path, byHuman),
+            [SourceGateKey(userId, sourceKey), .. noteIds]);
+    }
+
+    private int DeleteFolderCore(string userId, string sourceKey, string path, bool byHuman)
+    {
+        // S2c-7: та же дверь, что у CreateFolder: WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var folder = SanitizeFolder(path);
         if (folder.Length == 0) throw new ArgumentException("Не задана папка");
         var full = SafePath.Join(rootDir, folder);
+        EnsureNotWiki(full);
         if (!Directory.Exists(full)) throw new KeyNotFoundException("Папка не найдена");
-        int mdCount;
-        try { mdCount = Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories).Count(); }
-        catch { mdCount = 0; }
+        // S3-3c2: список файлов папки снимается ДО удаления (после него старых путей уже нет) —
+        // тот же порядок, что S3-3b в FilesController: журналу идут ЕЁ ФАЙЛЫ, не путь папки.
+        // Скан — под замком источника: после его взятия состав папки не меняется (те же
+        // замки id, что список замков в DeleteFolder).
+        List<string> mdFiles;
+        try { mdFiles = [.. Directory.EnumerateFiles(full, "*.md", SearchOption.AllDirectories)]; }
+        catch { mdFiles = []; }
         Directory.Delete(full, recursive: true);
-        Invalidate(userId);
-        return mdCount;
+        // S3-3c2: человеческий снос папки — каждый её файл своим путём, после состоявшегося
+        // Directory.Delete: отказанный снос (404) сюда не доходит — проигравший не пишет путей.
+        if (byHuman)
+            foreach (var f in mdFiles) RecordHumanEdit(userId, sourceKey, f);
+        // S2c-11: вместе с папкой удалены её заметки — модель арендатора обязана быть сброшена
+        InvalidateWrite(userId, sourceKey);
+        return mdFiles.Count;
     }
 
-    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req)
+    // S2c-2 (К8): сохранение с If-Match — оптимистичная конкурентность. «Сравнить и записать»
+    // целиком под замком на id заметки (вместе с инвалидацией кэша сводок в UpdateCore): окно
+    // между проверкой хеша и записью не остаётся. Без If-Match — как раньше.
+    public NoteDetail? Update(string userId, string id, UpdateNoteRequest req, string? ifMatch = null, bool byHuman = false) =>
+        WithWriteGates(() => UpdateCore(userId, id, req, ifMatch, byHuman), id);
+
+    private NoteDetail? UpdateCore(string userId, string id, UpdateNoteRequest req, string? ifMatch, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: правка содержимого заметки — дверь WriteContent (редактор общего проекта)
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        EnsureNotWiki(full); // и с переименованием, и без: цель та же — файл под data/wiki/
+        // S3-3c1: пути, которые ЭТА правка действительно записала (для журнала правок человека):
+        // переименование даёт СТАРЫЙ и НОВЫЙ путь (старого файла больше нет — журнал обязан
+        // увидеть и его), запись содержимого/срока — текущий путь. Один вызов на путь: журнал
+        // заменяет запись по пути сам, но список вызывающей стороны не должен расти от второй
+        // записи того же файла в одной операции (содержимое + срок). Пусто — правки файла не
+        // было (no-op Update), журналу нечего сообщать.
+        List<string>? edited = null;
+        void Touched(string path)
+        {
+            edited ??= [];
+            if (!edited.Contains(path)) edited.Add(path);
+        }
+        // Тестовый шов (F-6a доработка 1): под замком id, до чтения файла — см. поле.
+        TestProbeAfterFileExists?.Invoke();
+
+        // If-Match сверяется с фактическим хешом содержимого до любой правки (в т.ч. до
+        // переименования файла): расхождение — NoteConflictException, заметка на диске не тронута.
+        // Принимается quoted/слабая форма ETag (RFC 9110); «*» — «если существует» (существование
+        // файла только что проверено). Без If-Match — прежнее поведение.
+        if (ifMatch is { Length: > 0 } raw)
+        {
+            var token = UnquoteETag(raw);
+            var currentText = File.ReadAllText(full, Encoding.UTF8);
+            var currentHash = ContentSha256(currentText);
+            if (token != "*" && !string.Equals(token, currentHash, StringComparison.OrdinalIgnoreCase))
+                throw new NoteConflictException(currentText, currentHash, SafeTime(() => File.GetLastWriteTimeUtc(full)));
+        }
 
         // Заголовок, по которому на заметку ссылаются сейчас (для авто-обновления ссылок)
         var model = GetModel(userId);
@@ -924,10 +1496,14 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
                 if (!File.Exists(newFull))
                 {
                     File.Move(full, newFull);
+                    Touched(full);   // старый путь: его больше нет — правка удаления тоже факт
                     full = newFull;
+                    Touched(full);   // новый путь: сюда же сольётся запись содержимого ниже
                     effectiveId = EncodeId(sourceKey, newRel);
-                    // Комментарии на переименованную заметку-документ следуют за ней
-                    RewriteAnnotationTargets(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
+                    // Комментарии на переименованную заметку-документ следуют за ней.
+                    // S2c-12: Inner — без своего замка (вложенный сломал бы порядок), под
+                    // замком переименовываемой заметки.
+                    RewriteAnnotationTargetsInner(userId, sourceKey, DocPathOf(sourceKey, NormalizeRel(relPath)),
                         sourceKey, DocPathOf(sourceKey, newRel));
                 }
             }
@@ -944,18 +1520,35 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             if (curFm.Annotation is not null &&
                 ParseFrontmatter(newContent, "").Annotation is null)
                 newContent = ReinjectAnnotationFields(newContent, curFm.Annotation);
-            File.WriteAllText(full, newContent, new UTF8Encoding(false));
+            // S3-3c3: тот же узор, что у no-op срока ниже: равное содержимое — не запись.
+            // No-op правки (галочка уже в нужном состоянии, тот же срок) не должна плодить
+            // запись нетронутого файла: git затем не находит изменений —
+            // «Коммит правок человека не удался» (та же причина, что у no-op срока).
+            if (!string.Equals(newContent, curText, StringComparison.Ordinal))
+            {
+                File.WriteAllText(full, newContent, new UTF8Encoding(false));
+                Touched(full);
+            }
         }
 
         // Время жизни: -1 (по умолчанию) — не менять; null — снять; N — установить
         if (req.ExpiresAfterMinutes != -1)
         {
             var current = File.ReadAllText(full, Encoding.UTF8);
-            if (req.ExpiresAfterMinutes is null)
-                current = RemoveExpiresField(current);
-            else if (req.ExpiresAfterMinutes > 0)
-                current = InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"));
-            File.WriteAllText(full, current, new UTF8Encoding(false));
+            var updated = req.ExpiresAfterMinutes is null
+                ? RemoveExpiresField(current)
+                : req.ExpiresAfterMinutes > 0
+                    ? InjectExpiresField(current, DateTime.UtcNow.AddMinutes(req.ExpiresAfterMinutes.Value).ToString("o"))
+                    : current;
+            // S3-3c1 доработка 1 (minor, вердикт ea994f7c): снятие несуществующего срока или
+            // срок 0 оставляют контент ровно тем же — файла нет, и в журнал с ним не идёт
+            // ничего: no-op не должен плодить запись нетронутого файла (git затем не находит
+            // изменений и пишет «Коммит правок человека не удался»).
+            if (!string.Equals(updated, current, StringComparison.Ordinal))
+            {
+                File.WriteAllText(full, updated, new UTF8Encoding(false));
+                Touched(full);
+            }
         }
 
         // Авто-обновление входящих ссылок при смене заголовка: во всех заметках,
@@ -964,63 +1557,184 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             && model.Backlinks.TryGetValue(id, out var inbound))
         {
             var sources = inbound.Select(b => b.SourceId).Distinct();
+            var wikiInbound = false;
             foreach (var srcId in sources)
             {
                 if (srcId == id || !model.ById.TryGetValue(srcId, out var srcNote)) continue;
+                // Писатель побочный: файл под data/wiki/ не трогаем — его правит только Хранитель.
+                // Вместо правки — системная операция relink Хранителя (ADR-035, решения 2 и 6):
+                // она меняет цель [[…]] под блокировкой раздела и с записью в журнал.
+                if (WikiPaths.IsWikiPath(srcNote.FullPath, _dataDir)) { wikiInbound = true; continue; }
+                // S2c-5: авто-обновление ссылок при переименовании — тот же фильтр каскада:
+                // только источники с WriteContent у вызывающего
+                if (!CanWriteContentIn(userId, srcNote.SourceKey)) continue;
                 try
                 {
-                    var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!);
+                    // Файл — обычная заметка, не страница вики: своего раздела нет (null).
+                    var updated = RewriteLinks(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), oldTitle, req.Title!, null);
                     File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
                 }
                 catch (Exception ex) { _logger.LogWarning(ex, "Обновление ссылок в {File}", srcNote.FullPath); }
             }
+            if (wikiInbound) RelinkWiki(userId, oldTitle, req.Title);
         }
 
-        Invalidate(userId);
+        // S3-3c1: запись состоялась — затронутые пути в журнал правок человека, ПОД замком id:
+        // порядок вызовов Record обязан совпадать с порядком записей файла, иначе автором
+        // последней правки журнала окажется проигравший гонку (краснеет на мутации «Record
+        // после выхода из WithWriteGates»).
+        if (byHuman && edited is not null)
+            foreach (var p in edited) RecordHumanEdit(userId, sourceKey, p);
+
+        InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
                 $"Изменена заметка «{req.Title ?? oldTitle}»", effectiveId);
         return GetDetail(userId, effectiveId);
     }
 
-    // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Папка/Старый]]
-    // на [[Новый…]] с сохранением подписи и якоря; не-совпадающие ссылки не трогает.
-    private static string RewriteLinks(string content, string oldTitle, string newTitle)
+    // Квалификатор цели ссылки: всё до последнего «/» в имени — префикс раздела вики
+    // («Общее», «Сферы/s1», «Проекты/{id}»), источник или папка («projects/p1»,
+    // «Идеи/Черновики»). Пустой — ссылка без квалификатора.
+    private static string QualifierOf(string name)
+    {
+        var i = name.LastIndexOf('/');
+        return i < 0 ? "" : name[..i].Trim();
+    }
+
+    // Разобрать запись ссылки: имя цели (до первой «|» или «#») и её хвост — подпись/якорь,
+    // которые сохраняются побайтно.
+    private static (string Name, string Tail) SplitLink(string inner)
+    {
+        var cut = inner.Length;
+        var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
+        var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
+        return (inner[..cut], inner[cut..]);
+    }
+
+    // Совпадение имени ссылки с целью relink — один смысл для отбора, замены и разворота:
+    // их расхождение и есть M2 (страница попала в кандидаты, но не была изменена).
+    // Последний сегмент — имя цели. Квалификатор — часть цели: распознанный префикс раздела
+    // вики называет страницу этого раздела (тот же смысл, что у Resolve:551-557), и для
+    // переименованной/истёкшей заметки это посторонняя сущность — ссылка не наша. Внутри
+    // своего раздела тот же префикс — избыточная запись локальной ссылки (ADR-035,
+    // решение 1: «внутри раздела ссылка пишется голой, между разделов — с префиксом
+    // раздела»), поэтому она наша. Нераспознанный префикс (источник, папка) — штатная
+    // форма той же цели: совпадение по последнему сегменту, префикс сохраняется.
+    private static bool LinkTargets(string name, string targetNorm, string? ownSectionKey)
+    {
+        if (Norm(name.Split('/')[^1].Trim()) != targetNorm) return false;
+        var qualifier = QualifierOf(name);
+        if (qualifier.Length == 0) return true;
+        var section = WikiSections.Parse(qualifier);
+        return section is null || section == ownSectionKey;
+    }
+
+    // Заменяет [[Старый]] / [[Старый|подпись]] / [[Старый#якорь]] / [[Префикс/Старый…]]
+    // на тот же текст с новым последним сегментом: квалификатор цели, подпись и якорь
+    // сохраняются — меняется только цель ссылки (ADR-035, решение 6). Не-совпадающие
+    // ссылки, ссылки на страницы чужого раздела и ссылки внутри кода (`…`/```-блока)
+    // не трогает.
+    // internal static: та же операция нужна Хранителю для relink (ADR-035, решение 6) —
+    // второй реализации «замены цели ссылки» в вертикали быть не должно.
+    // ownSectionKey — раздел файла, в котором стоит ссылка (null — файл не страница вики):
+    // без него квалифицированная своим же разделом ссылка осталась бы чужой.
+    internal static string RewriteLinks(string content, string oldTitle, string newTitle, string? ownSectionKey)
     {
         var oldNorm = Norm(oldTitle);
+        var mask = CodeMask(content);
         return WikiLink.Replace(content, m =>
         {
-            var inner = m.Groups[1].Value;
-            var cut = inner.Length;
-            var pipe = inner.IndexOf('|'); if (pipe >= 0) cut = Math.Min(cut, pipe);
-            var hash = inner.IndexOf('#'); if (hash >= 0) cut = Math.Min(cut, hash);
-            var name = inner[..cut];
-            var rest = inner[cut..];               // подпись/якорь сохраняем
-            var lastSeg = name.Split('/')[^1].Trim();
-            return Norm(lastSeg) == oldNorm ? $"[[{newTitle}{rest}]]" : m.Value;
+            if (InCode(mask, m.Index)) return m.Value;
+            var (name, rest) = SplitLink(m.Groups[1].Value);
+            if (!LinkTargets(name, oldNorm, ownSectionKey)) return m.Value;
+            var i = name.LastIndexOf('/');
+            // Квалификатор цели — побайтно как написан, меняется только последний сегмент.
+            var prefix = i < 0 ? "" : name[..(i + 1)];
+            return $"[[{prefix}{newTitle}{rest}]]";
         });
     }
 
-    public bool Delete(string userId, string id)
+    // Есть ли в тексте ссылка на эту цель — тот же смысл совпадения, что у RewriteLinks и
+    // UnlinkTo (отбор и правка не расходятся). internal: нужен Хранителю для отбора
+    // кандидатов relink до записи (тот же критерий, что у самой замены).
+    internal static bool HasWikiLinkTo(string content, string title, string? ownSectionKey)
+    {
+        var targetNorm = Norm(title);
+        var mask = CodeMask(content);
+        foreach (Match m in WikiLink.Matches(content))
+        {
+            if (InCode(mask, m.Index)) continue;
+            if (LinkTargets(SplitLink(m.Groups[1].Value).Name, targetNorm, ownSectionKey)) return true;
+        }
+        return false;
+    }
+
+    // Разворот ссылки на несуществующую цель в любой форме записи: [[Цель]] и
+    // [[Префикс/Цель]], [[Цель#якорь]] → Цель (заголовок цели), [[Цель|алиас]] → алиас
+    // (то, что видел человек). Квалификатор и якорь в текст не выписываем: цель больше
+    // нет, её раздел и якорь не о чём. Та же нормализация совпадения, что у HasWikiLinkTo
+    // и RewriteLinks. Ссылки в коде (`…`/```-блок) не трогаем. Та же операция, что делал
+    // RemoveWikilinksTo in-line: вынесена, чтобы relink Хранителя (ADR-035, решение 6)
+    // разворачивал ссылку тем же кодом, а не второй реализацией.
+    internal static string UnlinkTo(string content, string targetTitle, string? ownSectionKey)
+    {
+        var targetNorm = Norm(targetTitle);
+        var mask = CodeMask(content);
+        return WikiLink.Replace(content, m =>
+        {
+            if (InCode(mask, m.Index)) return m.Value;
+            var (name, rest) = SplitLink(m.Groups[1].Value);
+            if (!LinkTargets(name, targetNorm, ownSectionKey)) return m.Value;
+            return rest.StartsWith('|') ? rest[1..] : targetTitle;
+        });
+    }
+
+    // S2c-5 (Конкурентность): удаление — под тем же замком на id заметки, что и Update (S2c-2).
+    // Без него фоновая уборка истёкших и запись той же заметки переплетаются: правка
+    // возрождает уже удалённый файл (File.Delete прошёл, WriteAllText создал заново).
+    public bool Delete(string userId, string id, bool byHuman = false) =>
+        WithWriteGates(() => DeleteCore(userId, id, byHuman), id);
+
+    private bool DeleteCore(string userId, string id, bool byHuman)
     {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: удаление заметки — дверь WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return false;
+        EnsureNotWiki(full);
         File.Delete(full);
-        Invalidate(userId);
+        // S3-3c1: удаление — правка пути (журнал принимает несуществующий путь: удаление тоже
+        // правка), под замком id — тот же порядок, что у записи.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
+        InvalidateWrite(userId, sourceKey);
         if (sourceKey != PersonalKey)
             _events?.Append(sourceKey, userId, ProjectEventTypes.NoteChanged, "user",
                 $"Удалена заметка «{Path.GetFileNameWithoutExtension(relPath)}»", id);
         return true;
     }
 
+    // Явные реализации Core-шва INoteAccessor (Create/Update): шов объявлен под прежними
+    // сигнатурами, и его вызывающие — спина и фоновые службы (PersonaMemoryService,
+    // SessionSummaryService, ChatDigestService, DailyBriefingService) — это агентский путь:
+    // он никогда не бывает правкой человека, поэтому byHuman здесь всегда false и журнал
+    // молчит. Расширять сам шов нечем: у byHuman нет потребителя за пределами вертикали
+    // (человеческий путь — NotesController, он зовёт NotesService напрямую).
+    NoteDetail INoteAccessor.Create(string ownerId, CreateNoteRequest request) => Create(ownerId, request);
+    NoteDetail? INoteAccessor.Update(string ownerId, string noteId, UpdateNoteRequest request, string? ifMatch) =>
+        Update(ownerId, noteId, request, ifMatch);
+
     // Возвращает истёкшие заметки пользователя (expiresAt в прошлом).
     // Не инвалидирует кэш — чистая проверка на скане.
     public IReadOnlyList<(string Id, string Title)> GetExpiredNotes(string userId, DateTime nowUtc)
     {
+        // Уборка истёкших — это запись: только по Write-источникам. Иначе участник с
+        // истёкшей заметкой общего проекта получил бы 403 посреди фоновой уборки и
+        // остановил бы очистку своих собственных заметок (NoteExpiryService ловит
+        // исключение сразу над всем списком пользователя).
         var result = new List<(string, string)>();
-        foreach (var src in SourcesFor(userId))
+        foreach (var src in SourcesFor(userId, ProjectRight.Write))
         {
             if (!Directory.Exists(src.RootDir)) continue;
             try
@@ -1053,35 +1767,73 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     }
 
     // Убирает [[wikilinks]] из всех заметок пользователя, указывающие на заданный заголовок.
-    // [[Заголовок]] → Заголовок, [[Заголовок|алиас]] → алиас
+    // [[Заголовок]] → Заголовок, [[Заголовок|алиас]] → алиас.
+    // S2c-12: каскад правит сразу много заметок — по замку на каждую правимую, ключи
+    // WithWriteGates берёт по возрастанию (как в Move): две чистки или чистка с правкой той же
+    // заметки не разойдутся по кругу и не переплетутся в полуреальном состоянии. Модель
+    // снимается ДО замка (поиск целей — только чтение), под замком — запись файлов и
+    // InvalidateWrite по затронутым источникам (сбрасывает и модель арендатора).
     public void RemoveWikilinksTo(string userId, string targetTitle, string targetId)
     {
         // Перестраиваем модель, чтобы получить входящие ссылки на цель
         var model = GetModel(userId);
         if (!model.Backlinks.TryGetValue(targetId, out var backlinks)) return;
 
-        var sources = backlinks.Select(b => b.SourceId).Distinct();
-        foreach (var srcId in sources)
+        // S2c-5: каскад правит только те источники, где у вызывающего есть WriteContent;
+        // read-only проект (участник-читатель) остаётся нетронутым. Страницы вики (ADR-035,
+        // решения 2 и 6) побочный писатель не правит вовсе: вместо правки — системная relink
+        // Хранителя, истёкшая цель — newTitle null, ссылка разворачивается в текст. Отбор вики —
+        // до фильтра права: источник вики не проект, право записи на него не выдаётся никому.
+        var targets = new List<string>();
+        var wikiInbound = false;
+        foreach (var srcId in backlinks.Select(b => b.SourceId).Distinct())
+        {
+            if (!model.ById.TryGetValue(srcId, out var n)) continue;
+            if (WikiPaths.IsWikiPath(n.FullPath, _dataDir)) { wikiInbound = true; continue; }
+            if (CanWriteContentIn(userId, n.SourceKey)) targets.Add(srcId);
+        }
+
+        if (targets.Count > 0)
+        {
+            var ids = targets.ToArray();
+            WithWriteGates(() => RemoveWikilinksCore(model, userId, targetTitle, ids), ids);
+        }
+        // relink — вне замков заметок: у Хранителя своя блокировка раздела
+        if (wikiInbound) RelinkWiki(userId, targetTitle, null);
+    }
+
+    private int RemoveWikilinksCore(Model model, string userId, string targetTitle, string[] targetIds)
+    {
+        var touched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var srcId in targetIds)
         {
             if (!model.ById.TryGetValue(srcId, out var srcNote)) continue;
             try
             {
-                var content = File.ReadAllText(srcNote.FullPath, Encoding.UTF8);
-                // Заменяем [[TargetTitle]] → TargetTitle, [[TargetTitle|alias]] → alias
-                var updated = Regex.Replace(content,
-                    @"\[\[" + Regex.Escape(targetTitle) + @"(\|[^\[\]]*?)?\]\]",
-                    m => m.Groups[1].Success
-                        ? m.Groups[1].Value.TrimStart('|')
-                        : targetTitle,
-                    RegexOptions.IgnoreCase);
+                // Тот же смысл, что у правки при переименовании: файл — обычная заметка, раздела нет.
+                var updated = UnlinkTo(File.ReadAllText(srcNote.FullPath, Encoding.UTF8), targetTitle, null);
                 File.WriteAllText(srcNote.FullPath, updated, new UTF8Encoding(false));
+                touched.Add(srcNote.SourceKey);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Удаление ссылок на {Title} в {File}", targetTitle, srcNote.FullPath);
             }
         }
-        Invalidate(userId);
+        foreach (var sourceKey in touched) InvalidateWrite(userId, sourceKey);
+        return touched.Count;
+    }
+
+    // Системная relink Хранителя вместо побочной правки файла вики (ADR-035, решения 2 и 6).
+    // Sync-вызов из sync-путей заметок (Update/RemoveWikilinksTo): блокировка раздела —
+    // SemaphoreSlim, SyncContext у этих путей нет — зависания нет. Сбой relink не роняет
+    // правку заметки: ссылка в вики остаётся до следующего случая (тот же приём, что у
+    // RewriteLinks в цикле выше).
+    private void RelinkWiki(string userId, string oldTitle, string? newTitle)
+    {
+        if (WikiRelink is null) return;
+        try { WikiRelink.RelinkAsync(userId, oldTitle, newTitle).GetAwaiter().GetResult(); }
+        catch (Exception ex) { _logger.LogWarning(ex, "relink вики «{OldTitle}» → «{NewTitle}»", oldTitle, newTitle); }
     }
 
     // Вставляет поле expires в frontmatter (или создаёт новый frontmatter, если его нет).
@@ -1151,20 +1903,110 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
             n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId, n.Annotation,
             n.FileRef, n.FileMissing);
 
-    // --- Разрешение источника и валидация владения ---
+    // --- Разрешение источника и права к нему ---
 
-    private string ResolveRoot(string userId, string sourceKey)
+    /// <summary>
+    /// Область вызывающего к проекту-источнику или null — доступа нет. Решает её
+    /// <see cref="IProjectAccess"/>: роль по членству и гейт «рубильник и флаг» (S1-2) живут
+    /// там, собственной таблицы прав здесь нет. Точка доступа резолвится при первом обращении
+    /// (см. комментарий поля _services): к этому моменту синглтон NotesService уже создан и
+    /// резолв не ре-ентрит в свой ключ. Без точки доступа (тестовое конструирование сервиса
+    /// вне DI или непробужденный провайдер) остаётся собственное владение: для чужого проекта
+    /// тот же отказ, что при выключенном гейте — fail-closed, а не «разрешили на всякий случай».
+    /// </summary>
+    private RequestScope? ProjectScope(string userId, string projectId, ProjectRight right)
+    {
+        // Гонка первой резолва безопасна: GetService отдаёт тот же синглтон, лишняя запись
+        // идемпотентна. GetService, не GetRequiredService: непробужденный провайдер (тест вне
+        // DI) — не ошибка, а путь к запасной ветке владения.
+        var access = _access ??= _services?.GetService<IProjectAccess>();
+        if (access is not null) return access.Resolve(userId, projectId, right);
+        var own = _projects.GetById(projectId);
+        if (own is null || own.OwnerId != userId) return null;
+        return new RequestScope(userId, own.OwnerId!, ProjectRole.Owner);
+    }
+
+    /// <summary>
+    /// S2c-5: боковые пути записи заметок (мост «чекбокс → задача», перенос между источниками)
+    /// проверяются owner-Write ЯВНО, здесь, а не через право основной двери заметки: двери
+    /// Create/Update/Delete/Move внутри источника переведены на WriteContent (S2c-7), а эти пути
+    /// остались закрытыми для не-владельца. Отказ тот же, что у ResolveRoot: чужой проект без
+    /// права записи — UnauthorizedAccessException → 403.
+    /// </summary>
+    public void EnsureSourceWrite(string userId, string sourceKey) => _ = ResolveRoot(userId, sourceKey, ProjectRight.Write);
+
+    // S2c-5: каскад ссылок (удаление/переименование заметки) пишет только в источниках, где у
+    // вызывающего есть WriteContent: его личный vault и проекты, где он владелец или редактор.
+    // Read-only источник пропускается: каскад не правит чужой проект руками того, кто удаляет
+    // или переименоывает свою заметку.
+    private bool CanWriteContentIn(string userId, string sourceKey) =>
+        sourceKey == PersonalKey || ProjectScope(userId, sourceKey, ProjectRight.WriteContent) is not null;
+
+    /// <summary>
+    /// Корень источника заметок. Личный vault — папка самого вызывающего (личное ключается
+    /// личным id, карта S0-3 §3 «сверх перечня»). Проектный источник — notes/ самого проекта:
+    /// папка одна на всех и лежит она у арендатора, поэтому корень берётся из проекта,
+    /// к которому вызывающего допустила точка доступа (RequestScope.TenantOwnerId), а не
+    /// выводится из id вызывающего: иначе участник и владелец читали бы разные файлы
+    /// об одном проекте.
+    /// Отказы: нет права чтения (посторонний, выключенный флаг или рубильник, проекта нет) —
+    /// KeyNotFoundException → 404, «чужое» и «несуществующее» не различаем, как в IProjectAccess;
+    /// право чтения есть, а нужного права нет (читатель не пишет; с S2c-7 редактор пишет
+    /// содержимое через WriteContent, а owner-двери вроде переноса между источниками ему закрыты) —
+    /// UnauthorizedAccessException → 403.
+    /// </summary>
+    // Единственная точка отказа записи в вики (ADR-035, решение 2): файлы под data/wiki/
+    // принадлежат Хранителю. Проверка — по каноническому пути: корень проекта может оказаться
+    // предком data/, а сам data/ — зацепленным ссылкой. Побочные писатели (RewriteLinks,
+    // RemoveWikilinksTo, ^id в ResolveDoc) вызывают не это, а пропускают файл: их системная
+    // замена — relink (S2c).
+    private void EnsureNotWiki(string absPath)
+    {
+        if (WikiPaths.IsWikiPath(absPath, _dataDir))
+            throw new WikiReadOnlyException();
+    }
+
+    private string ResolveRoot(string userId, string sourceKey, ProjectRight right = ProjectRight.Write)
     {
         if (sourceKey == PersonalKey)
             return Path.Combine(_dataDir, "notes", userId);
 
+        // Источник вики — тот же корень и тот же признак «заведена», что в графе: без
+        // pages/_schema.md источника нет (KeyNotFoundException → 404), а не «пустой корень».
+        // С самим записыванием разберётся EnsureNotWiki: любой путь под data/wiki/ — отказ.
+        if (sourceKey == WikiKey)
+            return WikiPaths.IsInitialized(_dataDir, userId)
+                ? WikiPaths.Pages(_dataDir, userId)
+                : throw new KeyNotFoundException("Вики не заведена");
+
+        if (ProjectScope(userId, sourceKey, ProjectRight.Read) is null)
+            throw new KeyNotFoundException($"Источник {sourceKey} не найден");
+        if (right != ProjectRight.Read && ProjectScope(userId, sourceKey, right) is null)
+            throw new UnauthorizedAccessException("Нет права на это действие в проекте");
+
         var project = _projects.GetById(sourceKey)
             ?? throw new KeyNotFoundException($"Источник {sourceKey} не найден");
-        if (project.OwnerId != userId)
-            throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
         return Path.Combine(Composition.ProjectCapabilityGuard.ServerRoot(project), "notes");
+    }
+
+    /// <summary>
+    /// S3-3c1 (по образцу S3-3b, FilesController.RecordHumanEdit): УСПЕШНАЯ правка заметки
+    /// общего проекта человеком — в журнал правок (S3-3). Корень — RootPath проекта, а не его
+    /// notes/: путь в журнале = «notes/<файл>.md», тот же, что рисует git и ключ file_uncommitted.
+    /// Личный vault — вне журнала (у него нет общего проекта и git-репозитория). Отбирать общий
+    /// проект, репозиторий и автора-участника — правило самого журнала (HumanEditCommitter.Record),
+    /// здесь не повторяем его. Вызывается ВНУТРИ замка *Core: порядок записей в журнале обязан
+    /// совпадать с порядком записей файла (иначе автором последней правки окажется проигравший).
+    /// </summary>
+    private void RecordHumanEdit(string userId, string sourceKey, string full)
+    {
+        if (_humanEdits is null || sourceKey == PersonalKey) return;
+        var project = _projects.GetById(sourceKey);
+        if (project is null || string.IsNullOrWhiteSpace(project.RootPath)) return;
+        _humanEdits.Record(sourceKey, project.RootPath,
+            Path.GetRelativePath(project.RootPath, full).Replace('\\', '/'), userId);
     }
 
     // --- Утилиты ---
@@ -1192,12 +2034,15 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
 
     private static string Norm(string s) => s.Trim().ToLowerInvariant();
 
+    // Список недопустимых символов неизменяем — он не пересоздаётся на каждый сегмент:
+    // SanitizeFolder зовёт SanitizeFileName на каждый сегмент глубокого пути.
+    private static readonly char[] InvalidFileNameChars = Path.GetInvalidFileNameChars();
+
     private static string SanitizeFileName(string title)
     {
-        var invalid = Path.GetInvalidFileNameChars();
         var sb = new StringBuilder();
         foreach (var ch in title.Trim())
-            sb.Append(Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+            sb.Append(Array.IndexOf(InvalidFileNameChars, ch) >= 0 ? '_' : ch);
         return sb.ToString().Trim().TrimEnd('.');
     }
 
@@ -1205,4 +2050,50 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     {
         try { return f().ToString("o"); } catch { return DateTime.UtcNow.ToString("o"); }
     }
+
+    // Хеш содержимого заметки (К8): SHA-256 по UTF-8-байтам текста так, как его видит сервис
+    // (File.ReadAllText). Одно и то же правило служит ETag в GET/PUT и сравнению в If-Match —
+    // второго определения хеша нет. Заметки пишутся без BOM (UTF8Encoding(false)), поэтому
+    // хеш по строке совпадает с хешом байтов файла на диске.
+    internal static string ContentSha256(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
+
+    // Токен If-Match: снять кавычки и маркер слабого ETag «W/» (RFC 9110).
+    private static string UnquoteETag(string value)
+    {
+        var v = value.Trim();
+        if (v.StartsWith("W/", StringComparison.OrdinalIgnoreCase)) v = v[2..];
+        return v.Trim('"').Trim();
+    }
+}
+
+// Расхождение If-Match и фактического хеша содержимого (S2c-2, К8): заметка на диске не тронута,
+// контроллер отвечает 409 note_changed с актуальным состоянием (хеш, содержимое, время правки).
+public sealed class NoteConflictException : Exception
+{
+    public string Content { get; }     // фактическое содержимое на диске
+    public string Sha256 { get; }      // его хеш
+    public string ChangedAt { get; }   // время последней записи файла (ISO 8601)
+
+    public NoteConflictException(string content, string sha256, string changedAt)
+        : base("Заметка изменилась с момента чтения")
+    {
+        Content = content;
+        Sha256 = sha256;
+        ChangedAt = changedAt;
+    }
+}
+
+// Отказ записи в вики (ADR-035, решение 2): Code — контракт для MCP и REST (wiki_readonly),
+// текст подсказывает, какую операцию звать вместо прямой правки. Наследует
+// InvalidOperationException: NotesToolset уже отдаёт его текст агенту; контроллер сделает
+// из типа 409 (S2e).
+public sealed class WikiReadOnlyException : InvalidOperationException
+{
+    public const string ErrorCode = "wiki_readonly";
+    public const string ErrorText = "В вики пишет только Хранитель: факт — wiki_add_fact, источник — wiki_ingest";
+
+    public WikiReadOnlyException() : base(ErrorText) { }
+
+    public string Code => ErrorCode;
 }

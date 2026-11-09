@@ -21,6 +21,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
     // Сведение родного Claude к семейству на записи; без реестра (юнит-тесты) — по форме id
     private readonly Llm.LlmProviderRegistry? _providers;
+    private readonly ILogger<UserStore> _logger;
 
     // Файл NT-хэшей для NTLM WebDAV (вне data/). Пишется ТОЛЬКО отсюда — в моменты, когда
     // открытый пароль виден; null — юнит-тесты и стенды без NTLM
@@ -30,10 +31,9 @@ public class UserStore : IForgejoAccountStore, IUserStore
         Llm.LlmProviderRegistry? providers = null, WebDav.NtlmUserFile? ntlm = null)
     {
         _providers = providers;
+        _logger = logger;
         _ntlm = ntlm;
-        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
-        var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
-        _filePath = Path.Combine(dataDir, "users.json");
+        _filePath = ResolveUsersFilePath(config);
 
         // DevPassword — мастер-пароль для всех аккаунтов; допустим ТОЛЬКО в Development.
         // В проде игнорируем, даже если задан в конфиге (иначе один пароль открывает всё).
@@ -49,6 +49,14 @@ public class UserStore : IForgejoAccountStore, IUserStore
         Load(logger); // конструктор однопоточен — отдельный лок не нужен
         // Пользователи, удалённые при остановленном сервере, не должны входить по NTLM
         _ntlm?.Retain(_users.Select(u => u.Username));
+    }
+
+    /// <summary>Путь users.json экземпляра: рядом с projects.json из DataPath. Им же метится файл NTLM-хэшей.</summary>
+    internal static string ResolveUsersFilePath(IConfiguration config)
+    {
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        var dataDir = Path.GetDirectoryName(dataPath) ?? Path.Combine(AppContext.BaseDirectory, "data");
+        return Path.Combine(dataDir, "users.json");
     }
 
     private void Load(ILogger logger)
@@ -349,9 +357,16 @@ public class UserStore : IForgejoAccountStore, IUserStore
 
             (user.FeatureFlags ??= new())[key] = enabled;
             Save();
-            return true;
         }
+        // Вне лока: подписчики ходят в другие сторы и не должны держать замок пользователей
+        // Сбой подписчика не должен ронять переключение флага: оно уже сохранено
+        try { OnFeatureFlagChanged?.Invoke(id, key, enabled); }
+        catch (Exception ex) { _logger.LogWarning(ex, "Подписчик OnFeatureFlagChanged упал (флаг {Key})", key); }
+        return true;
     }
+
+    /// <summary>Флаг пользователя переключён явно (userId, key, enabled).</summary>
+    public event Action<string, string, bool>? OnFeatureFlagChanged;
 
     /// <summary>
     /// Сохраняет IANA-таймзону пользователя (для планировщика напоминаний).
@@ -627,7 +642,7 @@ public class UserStore : IForgejoAccountStore, IUserStore
     }
 
     /// <summary>
-    /// Устанавливает per-user порог «кэш скоро остынет» (null — сброс к дефолтам).
+    /// Устанавливает per-user порог «кэш скоро остынет» (null — сброс к дефолтам фронта).
     /// Возвращает false если пользователь не найден.
     /// </summary>
     public bool SetCacheWarnThresholds(string id, CacheWarnThresholds? thresholds)

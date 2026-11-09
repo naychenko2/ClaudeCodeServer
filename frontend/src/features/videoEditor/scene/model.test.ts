@@ -55,13 +55,12 @@ describe('причины «Снять» (тексты макета v7)', () => {
 
 describe('исполнитель и цена', () => {
   it('личный чат: local под замком, недоступный поставщик и модель без кадра B — серые с причиной', () => {
-    const rows = executorRows(CATALOG, true, '16:9', '');
+    const rows = executorRows(CATALOG, true, '');
     const local = rows.find(r => r.id === 'local|minimax-h3')!;
     expect(local).toMatchObject({ disabled: true, locked: true, reason: PERSONAL_LOCAL_REASON, group: 'local' });
     expect(rows.find(r => r.id === 'higgsfield|kling3_0')).toMatchObject({ disabled: true, reason: 'Нет доступа к Higgsfield' });
     expect(rows.find(r => r.id === 'fal|no-last')).toMatchObject({ disabled: true, reason: 'Не умеет «кадр A → кадр B»' });
     expect(rows.find(r => r.id === 'fal|seedance-2.5')!.disabled).toBeUndefined();
-    expect(executorRows(CATALOG, false, '9:16', '').find(r => r.id === 'fal|seedance-2.5')).toMatchObject({ reason: 'Не снимает в пропорциях 9:16' });
   });
   it('цена в две строки: итог и расшифровка; local — бесплатно с очередью', () => {
     expect(priceLines(QUOTE, 2, 8)).toEqual(['≈ $3.20', '2 × $1.60 за 8 с']);
@@ -77,5 +76,36 @@ describe('«изменено после съёмки»', () => {
     const stale = { text: false, frameA: false, frameB: true, versionId: 'ver-1' };
     expect(staleNotes(scene('s1', { stale }))).toEqual([]);
     expect(staleNotes(scene('s1', { stale, versions: [version(1)] }))).toEqual(['Кадр B изменён после съёмки — переснимите']);
+  });
+});
+
+describe('«Формат» сцены: желание и рамка кадров', () => {
+  const wish = { mode: 'aspect' as const, aspect: '9:16', tier: 'max' as const, by: 'human' as const, at: '2026-10-07T00:00:00Z' };
+
+  it('желание: правка старше сцены, сцена старше префов; в PUT уходят format и зеркало aspect', () => {
+    const base = scene('s1');
+    const r = resolveScene({ ...base, settings: { ...base.settings, format: { ...wish, aspect: '16:9' } } }, { format: wish, aspect: '9:16' }, PREFS, CATALOG);
+    expect(r.format?.aspect).toBe('9:16');
+    expect(r.aspect).toBe('9:16');
+    expect(settingsOf(r)).toMatchObject({ format: wish, aspect: '9:16' });
+  });
+
+  it('без желания format в PUT не появляется, рамка по умолчанию — центр и в PUT не пишется', () => {
+    const r = resolveScene(scene('s1'), null, PREFS, CATALOG);
+    expect(r.format).toBeNull();
+    expect(r.frameAnchor).toBe('center');
+    const out = settingsOf(r);
+    expect(out).not.toHaveProperty('format');
+    expect(out).not.toHaveProperty('frameFit');
+  });
+
+  it('рамка подрезки кадров едет в PUT, когда не по центру', () => {
+    const base = scene('s1');
+    const r = resolveScene({ ...base, settings: { ...base.settings, frameFit: { anchor: 'left' } } }, null, PREFS, CATALOG);
+    expect(settingsOf(r).frameFit).toEqual({ anchor: 'left' });
+  });
+
+  it('«Чем»: пропорции не серят модели (перевод на ближайшую делает «Формат»)', () => {
+    expect(executorRows(CATALOG, false, '').find(x => x.id === 'fal|veo-3.1')?.disabled).toBeUndefined();
   });
 });

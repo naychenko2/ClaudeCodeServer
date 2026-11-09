@@ -25,6 +25,8 @@ public sealed class TestRunStages(Func<long> clock)
         // Подъём дев-стенда (start_stand): запуск процесса и ожидание порта, затем «готов»
         "start" => "запуск",
         "ready" => "готов",
+        // Замер интерфейса стенда (ui_probe)
+        "probe" => "замер",
         _ => stage,
     };
 

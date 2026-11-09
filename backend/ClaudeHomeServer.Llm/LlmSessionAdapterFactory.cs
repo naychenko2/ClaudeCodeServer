@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Turn;
+using Microsoft.Extensions.Options;
 
 // Швы из Core, оставшиеся в namespace ClaudeHomeServer.Services.Skills после выноса
 // SkillsService в отдельную вертикаль: используются полным именем, чтобы Llm не тащил
@@ -78,6 +79,16 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Серверный ход провайдера с NormalizeToolInputArrays через шлюз LLM (ADR-016 §2). null —
     // тесты без DI: ход провайдера идёт напрямую, как раньше.
     private readonly Gateway.ServerTurnGateway? _serverGateway;
+    // Тумблер статистики локальной модели (LocalModelStats:Enabled) — ход локальной модели
+    // идёт через шлюз, когда метрики включены (счётчику хода нужна копия потока).
+    private readonly IOptionsMonitor<LocalModelStatsOptions>? _localModelStats;
+    // Шов утечки вызова инструмента в текст: ClaudeSession сообщает о детекте, счётчик хода
+    // локальной модели (LocalModelTurnMeter) копит. null — тесты/без DI: счётчик не копит.
+    // Lazy<> — разрыв DI-цикла (ADR-014, подраздел «DI-цикл через фабрики»): LocalModelTurnMeter
+    // (реализация шва) тянет ISessionDirectory = SessionManager, а SessionManager строит эту
+    // фабрику — прямой резолв в конструкторе замыкал цикл. Ленивый резолв переносит его в
+    // Create() (во время хода, когда SessionManager уже построен).
+    private readonly Lazy<IToolCallLeakSink>? _leakSink;
 
     public LlmSessionAdapterFactory(IConfiguration config, IAgentPromptSource agentPrompt,
         IWorkspaceDatasetLookup workspaceStore, LlmProviderRegistry providers,
@@ -93,9 +104,13 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ILoggerFactory? loggerFactory = null,
         ICommandExpansion? commandExpansion = null,
         ISkillSnapshotSource? skillSnapshot = null,
-        Gateway.ServerTurnGateway? serverGateway = null)
+        Gateway.ServerTurnGateway? serverGateway = null,
+        IOptionsMonitor<LocalModelStatsOptions>? localModelStats = null,
+        Lazy<IToolCallLeakSink>? leakSink = null)
     {
         _serverGateway = serverGateway;
+        _localModelStats = localModelStats;
+        _leakSink = leakSink;
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
@@ -137,6 +152,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // пустая session.Model означает «по назначению места», и если назначение указывает
         // на стороннего провайдера, проверку настроенности надо проходить по нему.
         // Ключ места — как в ClaudeSession.UsageKey (исполнитель задач → персона → чат).
+        // Ключ владельца — владелец хода (context.OwnerId), а не session.OwnerId: у проектной
+        // сессии тот пуст по контракту, и резолв по нему шёл на общий слот инстанса, тогда как
+        // сам ClaudeSession резолвит модель по _turnOwnerId (DEC-FALLBACK 3f2f33fb). Разъезд
+        // концов и есть инцидент 14.08: модель из личного слота владельца × провайдер из общего.
+        var turnOwnerId = context.OwnerId ?? session.OwnerId;
         LlmProviderConfig? provider = null;
         if (!string.IsNullOrEmpty(session.Provider) && session.Provider != "claude")
             provider = _providers.GetByKey(session.Provider);
@@ -144,7 +164,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             : !string.IsNullOrWhiteSpace(session.PersonaId) ? LocalActionCatalog.ChatPersona
             : LocalActionCatalog.ChatNew;
         provider ??= _providers.ResolveByModel(
-            _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model);
+            _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model);
 
         // Guard согласованности пары «модель × провайдер»: модель — единственный источник
         // правды (см. комментарий ResolveByModel), поле Provider вторично. Инцидент 14.08.2026:
@@ -154,7 +174,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         // (self-heal и старых записей), с warning — молча такое проглатывать нельзя.
         if (provider is not null)
         {
-            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model;
+            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, turnOwnerId) ?? session.Model;
             var byModelKey = _providers.ProviderKey(effectiveModel);
             if (provider.Key != byModelKey)
             {
@@ -182,7 +202,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _agentPrompt,
             _commandExpansion, _skillSnapshot, _workspaceStore, _disallowedTools, _providers,
             _subscriptionPool, _fileWatcherOptions, _bgLingerTimeout, _falMcpApiKey,
-            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway);
+            _glifMcpToken, _assignments, _fileChangeAttributor, _log, _sessionLog, _serverGateway,
+            _localModelStats, _leakSink?.Value);
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
@@ -191,9 +212,12 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             _capacity, BuildContextEstimate(claudeSession),
             context.EnqueueBypass, context.OrchestrationDone,
             contextSource: BuildContextSource(claudeSession),
+            cliRetryStats: () => claudeSession.CliRetryStats(),
             egress: _egress, events: context.Events,
             localProbe: _localProbe,
-            transcriptOnServer: context.TranscriptOnServer);
+            transcriptOnServer: context.TranscriptOnServer,
+            turnOwnerId: claudeSession.TurnOwnerId,
+            localGate: context.LocalEngineBusy ?? LocalEngineBusyTracker.Instance);
         return fallback;
     }
 

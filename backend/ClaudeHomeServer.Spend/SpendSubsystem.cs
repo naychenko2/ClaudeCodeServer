@@ -37,6 +37,12 @@ public sealed class SpendSubsystem : IAppSubsystem
 
         services.AddSingleton<SpendAnalyticsService>();
 
+        // Шов расхода по фиче (обзор фич, волна 3, шаг Б9a): читает тот же SpendStore.
+        // Регистрация здесь, а не в Main: при выключенной подсистеме (гейт
+        // Subsystems:spend:Enabled) Register не вызывается, шов не зарегистрирован,
+        // и потребитель (TasksController, шаг Б9b) берёт его опциональным.
+        services.AddSingleton<ISpendFeatureReader, SpendFeatureReader>();
+
         // Замеры размера постановки задач по секциям (разрез «Задача» в аналитике).
         services.AddSingleton<TaskPromptMetricsStore>();
 

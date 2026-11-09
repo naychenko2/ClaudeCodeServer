@@ -11,6 +11,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Проверяет:
 //   - адаптер зарегистрирован в Program.cs (резолвится как UserStoreAdapter);
 //   - мутационная проверка: Stub-адаптер возвращает «нет данных» по всем 3 методам.
+[Trait("Category", "Host")]
 public class UserStoreAdapterTests
 {
     [Fact]

@@ -5,8 +5,17 @@ namespace ClaudeHomeServer.Services.Turn;
 // гейтит по наличию привязок и секций.
 //
 // IsEnabled: есть персона (PersonaPromptProvider раньше давал бы её), есть владелец,
-// personaId сессии задан. Сам PersonaBindingsService внутри возвращает null, если
-// привязок нет или они все Off — BuildAsync отдаст null и секция не добавится.
+// personaId сессии задан, рамка широкая. Сам PersonaBindingsService внутри возвращает
+// null, если привязок нет или они все Off — BuildAsync отдаст null и секция не добавится.
+//
+// Гейт по рамке (доработка S2a-4 по ревью R-S2a-4, Major 1): Always-привязки типа
+// Notes/Knowledge кладут в блок ВЫЖИМКУ содержимого личных заметок/баз знаний владельца
+// (PersonaBindingsService.ExtractAsync, до Persona:BindingsSnippetMaxChars символов), а
+// секция нестабильная — при Narrow она ехала хвостом ТЕКСТА ХОДА, который видит участник
+// общего проекта. Разделить проектные и личные привязки на этом контрибьюторе нельзя
+// (тот же приём, что у NotesRecallContributor.cs:45-51), поэтому при Narrow блок не
+// строится вовсе — fail-closed: личное пространство арендатора не попадает ни в
+// системный блок, ни в текст хода.
 public sealed class PersonaBindingsContributor : IPromptSectionContributor
 {
     // Узкий шов IPersonaBindingsSource вместо корневого PersonaBindingsService (Этап 5):
@@ -30,7 +39,12 @@ public sealed class PersonaBindingsContributor : IPromptSectionContributor
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is not null
         && sessionContext.Persona is not null
-        && !string.IsNullOrEmpty(sessionContext.Session.PersonaId);
+        && !string.IsNullOrEmpty(sessionContext.Session.PersonaId)
+        // Доработка S2a-4 по ревью R-S2a-4 (Major 1): в узкой рамке общего проекта блок
+        // привязок не строится вовсе — его Always-выжимки несут личное содержимое
+        // владельца, а текст хода при Narrow видит его целиком (тот же приём, что
+        // NotesRecallContributor.IsEnabled).
+        && sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Wide;
 
     public async Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)
@@ -44,7 +58,7 @@ public sealed class PersonaBindingsContributor : IPromptSectionContributor
             // Пустой список — честное «смонтированных секций нет», null был бы миной.
             var block = await _bindings.BuildTurnBlockAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, turnText,
-                sessionContext.WorkspaceSections ?? []);
+                sessionContext.WorkspaceSections ?? [], sessionContext.Session.ProjectId);
             if (string.IsNullOrWhiteSpace(block)) return null;
             return new PromptSectionContribution([new PromptSection(Key, block)]);
         }

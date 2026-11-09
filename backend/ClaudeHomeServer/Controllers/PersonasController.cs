@@ -44,6 +44,7 @@ public class PersonasController(
     PersonaAutomationService automation,
     PersonaDraftService drafts,
     PersonasCrudService crud,
+    PersonaAvatarThumbService avatarThumbs,
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
@@ -65,6 +66,7 @@ public class PersonasController(
     private readonly PersonaAutomationService _automation = automation;
     private readonly PersonaDraftService _drafts = drafts;
     private readonly PersonasCrudService _crud = crud;
+    private readonly PersonaAvatarThumbService _avatarThumbs = avatarThumbs;
     private readonly IConfiguration _config = config;
     private readonly ILogger<PersonasController> _log = log;
     private readonly IHubContext<SessionHub> _hub = hub;
@@ -75,6 +77,12 @@ public class PersonasController(
     // вызовы из чата (онбординг-предохранители) от рукотворного REST
     private string? CallerSessionId() =>
         Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
+
+    // Запись фактов консультации в память персоны закрыта, если чат-вызыватель приватный ИЛИ
+    // не определён (нет заголовка, чужая или несуществующая сессия): fail-closed, ответ отдаётся
+    private bool AskCallerIsPrivateOrUnknown(string? callerSessionId) =>
+        callerSessionId is null || _sessions.GetOwnedVisible(callerSessionId, UserId) is not { } caller
+        || caller.PrivateToUserId is not null;
 
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
@@ -226,7 +234,15 @@ public class PersonasController(
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
-        var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
+        // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
+        // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
+        // (contextProjectId, SessionManager.cs:4378) и чата вне проекта: ClaudeSessionId =
+        // resumeSessionId (:4390/:4415) — ключ истории (HistoryKeyOf) и транскрипта CLI.
+        // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
+        // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
+        var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
             var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name,
@@ -234,6 +250,9 @@ public class PersonasController(
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
+        // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -269,7 +288,7 @@ public class PersonasController(
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
         var safe = Path.GetFileName(file);   // защита от path-traversal
-        var full = Path.Combine(_personas.AssetsDir, id, "candidates", safe);
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, "candidates", safe));
         if (!System.IO.File.Exists(full)) return NotFound();
         return ImageAssetHelper.PhysicalFileByExt(full);
     }
@@ -280,19 +299,48 @@ public class PersonasController(
         _crud.SelectAvatarAsync(UserId, id, req);
 
     // Отдать картинку аватара. JWT принимается и в query access_token (браузерный <img>).
+    // size — размер показа (device px): сервер отдаёт миниатюру ближайшей ступени
+    // (64/128/256, генерируется один раз и лежит рядом с оригиналом); без параметра —
+    // оригинал (нужен для перекропа и большого вида).
     [HttpGet("{id}/avatar")]
-    public IActionResult Avatar(string id)
+    public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
         var persona = _personas.Get(id, UserId);
         if (persona is null || persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.ImageFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.ImageFile));
+        if (!System.IO.File.Exists(full)) return NotFound();
+
+        var step = ImageAssetHelper.AvatarThumbStep(size);
+        if (step is null)
+        {
+            // Оригинал (большой вид): имя файла в URL (v) меняется при каждой смене аватара —
+            // кэш браузера может быть долгим и immutable (тот же приём, что у картинки-иконки
+            // проекта, ADR-009 §8)
+            Response.Headers.CacheControl = "private, max-age=604800, immutable";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        var thumb = await _avatarThumbs.GetOrGenerateAsync(persona, full, step.Value);
+        if (thumb is null)
+        {
+            // Фолбэк на оригинал: миниатюра не получилась (гонка/сбой генерации) — отдаём
+            // оригинал, но БЕЗ долгого кэша (no-cache), чтобы следующий запрос получил
+            // миниатюру, а не держал оригинал на этом URL неделю (дефект: 1,5 МБ PNG с
+            // immutable на size=64)
+            Response.Headers.CacheControl = "no-cache";
+            return ImageAssetHelper.PhysicalFileByExt(full);
+        }
+
+        // Миниатюра: имя стабильно до смены аватара — кэш долгий и immutable
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(thumb);
     }
 
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
+    // v в URL — имя файла оригинала: меняется при повторной загрузке, кэш — как у аватара.
     [HttpGet("{id}/avatar/original")]
     public IActionResult AvatarOriginal(string id)
     {
@@ -300,8 +348,11 @@ public class PersonasController(
         if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return NotFound();
 
-        var full = Path.Combine(_personas.AssetsDir, id, persona.Avatar.OriginalFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
+        var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, persona.Avatar.OriginalFile));
+        if (!System.IO.File.Exists(full)) return NotFound();
+
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        return ImageAssetHelper.PhysicalFileByExt(full);
     }
 
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа (JSON).
@@ -324,12 +375,12 @@ public class PersonasController(
 
         var cropState = ImageAssetHelper.ParseCrop(crop);
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(original, SafePath.Join(dir, originalName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
         await Broadcast("updated", id);
@@ -351,10 +402,10 @@ public class PersonasController(
         var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
         if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
 
-        var dir = Path.Combine(_personas.AssetsDir, id);
+        var dir = SafePath.Join(_personas.AssetsDir, id);
         Directory.CreateDirectory(dir);
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
+        await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
         var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
         await Broadcast("updated", id);
@@ -1546,7 +1597,7 @@ public class PersonasController(
         try
         {
             var answer = await _ask.AskAsync(UserId, persona, req.Question, req.Context,
-                HttpContext.RequestAborted);
+                HttpContext.RequestAborted, AskCallerIsPrivateOrUnknown(CallerSessionId()));
             return Ok(new { handle = persona.Handle, name = persona.Name, role = persona.Role, answer });
         }
         catch (Exception ex)
@@ -1611,6 +1662,8 @@ public record CreatePersonaRequest(
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
     bool? LightContext = null,
+    // Явный пол (дефолт Unspecified — сигнал рода в промпт не подставляется)
+    PersonaGender? Gender = null,
     // Сфера для Scope.Sphere: обязательна и должна быть сферой владельца; при другом scope сбрасывается
     string? SphereId = null,
     // Голос (валидация как у PUT /voice). null — подобрать по характеру после создания
@@ -1653,10 +1706,12 @@ public record UpdatePersonaRequest(
     // Облегчённый контекст (краткая карта, урезанные инструменты и MCP); null — не менять
     // (при создании — выключен)
     bool? LightContext = null,
+    // Явный пол; null — не менять, "unspecified" — сбросить сигнал рода
+    PersonaGender? Gender = null,
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
     string? SphereId = null);
 
-public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
+public record CreatePersonaChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);

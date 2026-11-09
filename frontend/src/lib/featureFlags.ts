@@ -10,53 +10,25 @@ import { api } from './api';
 // приходят с сервера — здесь только ключи.
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
-  changeDossiersRecall: 'change-dossiers-recall',
-  specialtyPromptSections: 'specialty-prompt-sections',
-  // Автоправило архивации чатов (план «Архив чатов» v4, шаг 6): фоновый сервис
-  // раз в час убирает в архив чаты без активности дольше порога. Флаг закрывает
-  // ТОЛЬКО автоправило и его настройки; ручной архив, раздел «Архив» и сводка
-  // карточки работают без флага.
-  chatAutoArchive: 'chat-auto-archive',
-  // Визуальный разворот плана: контекстные замечания к разделам (часть A).
-  // Слой маркеров у заголовков и отправка обратной связи существующим
-  // контрактом onRespond; сама разметка картой живёт под этим же флагом.
-  visualPlan: 'visual-plan',
-  // Каталог MCP-серверов (волна 1, задача 9fa075ec): поиск по реестру и предзаполнение
-  // формы из черновика записи. Флаг — на вход в раздел; ручной путь «Добавить» работает
-  // всегда.
-  mcpCatalog: 'mcp-catalog',
-  chatContext: 'chat-context',
-  // Ветвление чата (docs/research/chat-branching-2026-09.md, §7): новый чат с копией
-  // истории оригинала до выбранного шага.
-  chatBranch: 'chat-branch',
-  // Уборка карты проекта (CLAUDE.md), фронтовая часть: аккордеон в настройках проекта
-  // и модалка с фактами сканера (мёртвые ссылки, длинные секции, вложенные карты).
-  // Тумблер скрывает и секцию, и модалку; review/apply под ним закрыты на сервере 404.
-  projectMapHygiene: 'project-map-hygiene',
-  // Редактор картинок в проекте (ADR-017): вход «Редактировать» / «Нарисовать картинку»
-  // и сам экран. Серверные ручки image-editor/* под этим же флагом отвечают 404.
-  imageEditor: 'image-editor',
-  // Локальные проекты (ADR-016): проект на устройстве владельца, ход идёт через агента.
-  // Что доступно у такого проекта, решает матрица capabilities из DTO проекта, а не флаг.
-  localProjects: 'local-projects',
-  // Локальная модель по умолчанию для картинок и видео (MCP local-media).
-  localMediaDefault: 'local-media-default',
-  // Модуль «Звук» (ADR-021): озвучка, музыка и правка звука проекта.
-  audioEditor: 'audio-editor',
-  // Модуль «Видео»: сцены и фильм (ADR-022) — съёмка по кадрам A и B, сборка фильма без ИИ.
-  videoEditor: 'video-editor',
-// MIDI-просмотрщик: ноты из .mid в файлах и в редакторе звука.
-  midiEditor: 'midi-editor',
   // Сферы: группы проектов с общей командой персон и хартией; зона персоны «Сфера».
   spheres: 'spheres',
-  // Панель «Картинки» v5 «Создать / Править»: режим на чат и выбор по режиму. Выключен —
-  // картинки ведут себя побайтно как раньше.
-  imagePanelV5: 'image-panel-v5',
+  // Плагины (ADR-031): установка пакетов владельца, skills/команды, панели.
+  pluginsMvp: 'plugins-mvp',
+  // Плагины (ADR-031): build-it-yourself — агент собирает пакет (черновики) через MCP-тулсет.
+  pluginsBuildYourself: 'plugins-build-yourself',
+  sharedProjects: 'shared-projects',
+  // LLM-wiki (ADR-035/036): база знаний, которую ведёт Хранитель. Флаг прячет UI (вкладку
+  // «Вики») и источник wiki от агентов; гейт записи в заведённую вику от него не зависит.
+  // Dark launch, выключено по умолчанию. Ключ дублирует бэковый FeatureFlagCatalog.
+  llmWiki: 'llm-wiki',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];
 
 let _flags: Record<string, boolean> = {};
+// Флаги пришли с сервера (setAllFlags/mergeFlags). Пока false — getFlag читает «выключено»,
+// но это «ещё не загружено», а не «загружено и выключено» — разницу видит __test.isLoaded.
+let _loaded = false;
 const _listeners = new Set<() => void>();
 
 function emit() {
@@ -66,6 +38,7 @@ function emit() {
 // Заменить весь набор флагов (на старте/после логина из ответа me)
 export function setAllFlags(flags: Record<string, boolean>) {
   _flags = { ...flags };
+  _loaded = true;
   emit();
 }
 
@@ -74,10 +47,12 @@ export function setAllFlags(flags: Record<string, boolean>) {
 export function mergeFlags(flags: Record<string, boolean> | null | undefined) {
   if (!flags) return;
   _flags = { ..._flags, ...flags };
+  _loaded = true;
   emit();
 }
 
-// Оптимистичное локальное обновление одного флага (для мгновенной реакции тумблера)
+// Оптимистичное локальное обновление одного флага (для мгновенной реакции тумблера).
+// Тумблер крутят только после загрузки каталога, поэтому _loaded здесь не трогаем.
 export function setFlagLocal(key: string, value: boolean) {
   _flags = { ..._flags, [key]: value };
   emit();
@@ -95,6 +70,13 @@ export function subscribeFlags(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
 }
+
+// Тестовые швы: сброс в «не загружено» (сценарии, где флаги приходят позже разбора
+// адреса) и прямой доступ к состоянию.
+export const __test = {
+  reset() { _flags = {}; _loaded = false; },
+  isLoaded() { return _loaded; },
+};
 
 // Подписка компонента на конкретный флаг. Возвращает true, если фича включена.
 export function useFeature(key: FlagKey): boolean {

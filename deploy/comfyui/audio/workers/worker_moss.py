@@ -12,7 +12,7 @@ import numpy as np
 import soundfile as sf
 import torch
 
-from ccs_common import MODELS, fail, load_job
+from ccs_common import MODELS, emit_progress, fail, load_job
 
 LANGS = {
     "zh": "Chinese", "yue": "Cantonese", "en": "English", "ar": "Arabic", "cs": "Czech", "da": "Danish",
@@ -65,7 +65,9 @@ def main():
 
     pieces = []
     tmp_ref = None
-    for k, part in enumerate(chunks(text)):
+    parts = chunks(text)
+    emit_progress(0, len(parts))
+    for k, part in enumerate(parts):
         msg = processor.build_user_message(text=part, language=LANGS[lang], reference=[ref] if ref else None)
         batch = processor([[msg]], mode="generation")
         with torch.no_grad():
@@ -80,6 +82,7 @@ def main():
             sf.write(tmp_ref, wav, sr)
             job.files.remove(os.path.basename(tmp_ref))
             ref = tmp_ref
+        emit_progress(k + 1, len(parts))
     audio = np.concatenate(pieces)
     job.lap("infer")
     if tmp_ref:

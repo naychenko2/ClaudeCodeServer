@@ -15,24 +15,38 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // Ручка правок без ИИ POST …/image-editor/transform и шаги истории (ADR-018 §9): флаг гейтит
 // её так же, как остальные; путь базы — только внутри проекта и не через ссылку; в проект она
 // не пишет никогда; dryRun шага не создаёт; шаги складываются в ленту с родителем.
-public class ImageEditorTransformTests : IDisposable
+[Trait("Category", "Host")]
+public class ImageEditorTransformTests : IClassFixture<ImageEditorTransformTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-
-    public void Dispose()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Шаги истории — общее изменяемое состояние хоста: они живут в рабочей папке
+    /// {TempDir}/image-editor (ImageEditWorkspace.FromConfig — рядом с DataPath), поэтому
+    /// накапливаются между тестами класса. Перед каждым тестом конструктор тест-класса
+    /// сносит эту папку целиком: «StepFiles() пуст» тогда значит поведение этого теста,
+    /// а не порядок прогона. Проект каждый тест-экземпляр заводит сам (уникальные GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+
+    public ImageEditorTransformTests(Hosts hosts)
+    {
+        _factory = hosts;
+        // Шаги предыдущих тестов в общем workspace — изменяемое состояние класса:
+        // сносим их, чтобы тест не зависел от того, что оставил предыдущий
+        var root = _factory.Services.GetRequiredService<ImageEditWorkspace>().Root;
+        if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
     }
 
     private string Root(string projectId) => $"/api/projects/{projectId}/image-editor";
 
-    private (string ProjectId, string Dir) CreateProject(bool enableFlag = true)
+    private (string ProjectId, string Dir) CreateProject()
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        // Флаг включён по умолчанию — «выключен» задаём override'ом пользователя
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, enableFlag).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "img_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         var id = _factory.Services.GetRequiredService<ProjectManager>()
@@ -45,22 +59,6 @@ public class ImageEditorTransformTests : IDisposable
         @base,
         ops = new object[] { new { type = "rotate", degrees = 90 } },
     };
-
-    [Fact]
-    public async Task Флаг_выключен_transform_и_шаг_404()
-    {
-        var (projectId, dir) = CreateProject(enableFlag: false);
-        await File.WriteAllBytesAsync(Path.Combine(dir, "hero.png"), Png(40, 20));
-        var client = _factory.CreateAuthenticatedClient();
-
-        var transform = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path = "hero.png" }));
-        var dry = await client.PostAsJsonAsync($"{Root(projectId)}/transform?dryRun=true", Rotate(new { path = "hero.png" }));
-        var step = await client.GetAsync($"{Root(projectId)}/steps/{new string('a', 32)}");
-
-        transform.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        dry.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        step.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
 
     [Theory]
     [InlineData("../outside.png")]
@@ -131,6 +129,41 @@ public class ImageEditorTransformTests : IDisposable
 
         Hash(file).Should().Be(before, "оригинал в проекте не меняется");
         Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Should().Equal(file);
+    }
+
+    // F2-P2: private участника не читается через transform даже владельцем проекта (общий предикат
+    // PrivateAttachments.IsForeignResolved); свой private и обычные файлы читаются как раньше
+    [Fact]
+    public async Task Transform_чужой_private_400_корень_проекта_400_свой_private_и_обычный_файл_200()
+    {
+        var (projectId, dir) = CreateProject();
+        var userId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var foreign = Path.Combine(dir, ".cc-attachments", "private", "other-user", "g1");
+        var own = Path.Combine(dir, ".cc-attachments", "private", userId, "g1");
+        Directory.CreateDirectory(foreign);
+        Directory.CreateDirectory(own);
+        await File.WriteAllBytesAsync(Path.Combine(foreign, "secret.png"), Png(8, 8));
+        await File.WriteAllBytesAsync(Path.Combine(own, "mine.png"), Png(8, 8));
+        await File.WriteAllBytesAsync(Path.Combine(dir, "hero.png"), Png(8, 8));
+        var client = _factory.CreateAuthenticatedClient();
+
+        foreach (var path in new[]
+                 {
+                     ".cc-attachments/private/other-user/g1/secret.png",
+                     ".cc-attachments/PRIVATE/other-user/g1/../g1/secret.png",
+                     ".",
+                 })
+        {
+            var denied = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path }));
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest, path);
+        }
+        StepFiles().Should().BeEmpty("чужие байты не прочитаны и шаг не создан");
+
+        foreach (var path in new[] { $".cc-attachments/private/{userId}/g1/mine.png", "hero.png" })
+        {
+            var ok = await client.PostAsJsonAsync($"{Root(projectId)}/transform", Rotate(new { path }));
+            ok.StatusCode.Should().Be(HttpStatusCode.OK, path + await ok.Content.ReadAsStringAsync());
+        }
     }
 
     [Fact]

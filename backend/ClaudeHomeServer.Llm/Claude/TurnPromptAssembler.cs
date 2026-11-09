@@ -54,6 +54,22 @@ public static class TurnPromptAssembler
     // ["--append-system-prompt", combined] уже ПОСЛЕ вызова ApplyBudget, и в args её нет.
     private const string AppendSystemPromptFlag = "--append-system-prompt";
 
+    // Файловая форма того же флага (CLI ≥ 2.1.306): в argv едет только путь, а не текст.
+    // Лимит командной строки перестаёт зависеть от размера промпта (инцидент 21.10: 32 814
+    // символов при бюджете 32 767 уронили три хода).
+    public const string AppendSystemPromptFileFlag = "--append-system-prompt-file";
+
+    // Мягкий потолок текста промпта в файловом режиме, символов. Командной строки он не
+    // касается — это сторож бесконечного роста: без него секция, разросшаяся втрое, молча
+    // съела бы окно контекста. 200 000 ≈ 50–60 тыс. токенов — на порядок выше нынешних
+    // самых тяжёлых ходов (≈33 тыс. символов) и заметно ниже окна модели. Превышение режется
+    // тем же TruncationOrder, затем отказ.
+    public const int PromptFileLimit = 200_000;
+
+    // Длина пути файла промпта для оценки командной строки: реальный путь появляется позже
+    // (Guid-имя в HostTempDir), берём с запасом — оценка остаётся верхней.
+    private static readonly string PromptFilePathPlaceholder = new('x', 260);
+
     // Приоритеты срезки в указанном порядке. Каждое имя — ключ секции (PromptSectionDto.Key),
     // которую ClaudeSession добавляет через Add("...", ...).
     //
@@ -124,8 +140,14 @@ public static class TurnPromptAssembler
         string? personaLayer,
         IReadOnlyList<string> args,
         Func<IReadOnlyList<string>, int> cmdlineLength,
-        int threshold = BudgetThreshold)
+        int threshold = BudgetThreshold,
+        int? promptFileLimit = null)
     {
+        // Файловый режим: текст промпта в argv не едет (там путь), поэтому командную строку
+        // считаем с короткой парой «флаг + путь», а размер самого текста держит отдельный
+        // потолок promptFileLimit. null — прежний режим: промпт аргументом.
+        var viaFile = promptFileLimit is not null;
+
         // ВЕРХНЯЯ оценка длины командной строки. Делегирована раннеру: только он знает свою
         // обвязку (Local — ничего, Docker — docker exec с -i/-w/-e/контейнером/скриптом).
         // Тестовая подделка суммирует ArgCost по списку.
@@ -138,17 +160,25 @@ public static class TurnPromptAssembler
             // --append-system-prompt уже после возврата ApplyBudget. Поэтому оба слагаемых
             // (имя флага и его значение) считаем здесь руками, иначе самый длинный аргумент
             // хода остался бы неучтённым.
-            full.Add(AppendSystemPromptFlag);
-            full.Add(combined);
+            full.Add(viaFile ? AppendSystemPromptFileFlag : AppendSystemPromptFlag);
+            full.Add(viaFile ? PromptFilePathPlaceholder : combined);
             return cmdlineLength(full);
         }
+
+        // Срезку запускает и командная строка (порог), и размер файла (потолок); отказ —
+        // лимит командной строки либо тот же потолок файла.
+        bool OverThreshold(string combined, int cmdline) =>
+            cmdline > threshold || (viaFile && combined.Length > promptFileLimit);
+        bool OverLimit(string combined, int cmdline) =>
+            cmdline >= CmdlineLimit || (viaFile && combined.Length > promptFileLimit);
 
         var initialCombined = Combine(sections, personaLayer);
         var initialTotal = Estimate(initialCombined);
 
         // Ниже порога срезки — обычный ход, ничего не трогаем.
-        if (initialTotal <= threshold)
-            return new PromptBudgetResult(initialCombined, [], initialTotal, false, sections.ToList());
+        if (!OverThreshold(initialCombined, initialTotal))
+            return new PromptBudgetResult(initialCombined, [], initialTotal, false, sections.ToList(),
+                initialCombined.Length);
 
         // Превышаем порог — срезаем в порядке TruncationOrder. Копию sections делаем потому,
         // что входной список менять нельзя (вызывающий может иметь свою модель памяти; на
@@ -176,7 +206,7 @@ public static class TurnPromptAssembler
             currentCombined = Combine(pool, personaLayer);
             var totalAfter = Estimate(currentCombined);
 
-            if (totalAfter <= threshold)
+            if (!OverThreshold(currentCombined, totalAfter))
             {
                 // Срезка УСПЕШНА: ключ из TruncationOrder был в пуле, после удаления
                 // влезли в бюджет. В truncated кладём ровно одну запись с пометкой
@@ -186,7 +216,8 @@ public static class TurnPromptAssembler
                 // TruncationOrder, и ApplyBudget не должен ничего про них писать).
                 if (removed > 0)
                     truncated.Add(MakeTruncatedNote(key, totalAfter, threshold, false, removedChars));
-                return new PromptBudgetResult(currentCombined, truncated, totalAfter, false, pool);
+                return new PromptBudgetResult(currentCombined, truncated, totalAfter, false, pool,
+                    currentCombined.Length);
             }
 
             // Ещё не влезло. Секция действительно срезана (RemoveAll > 0) — пишем
@@ -210,7 +241,8 @@ public static class TurnPromptAssembler
         // отказывается — оставлять последний символ в зоне риска мы не вправе.
         var finalTotal = Estimate(currentCombined);
         return new PromptBudgetResult(
-            currentCombined, truncated, finalTotal, finalTotal >= CmdlineLimit, pool);
+            currentCombined, truncated, finalTotal, OverLimit(currentCombined, finalTotal), pool,
+            currentCombined.Length);
     }
 
     // Прокси к общей формуле в Services.Execution.CmdlineEstimate. Оставлено здесь
@@ -265,5 +297,7 @@ public sealed record PromptBudgetResult(
     IReadOnlyList<PromptSectionDto> TruncatedSections,
     int TotalCmdlineChars,
     bool Overflowed,
-    IReadOnlyList<PromptSectionDto> Sections);
+    IReadOnlyList<PromptSectionDto> Sections,
+    // Длина склеенного текста промпта: в файловом режиме именно она сверяется с потолком файла
+    int PromptChars = 0);
 

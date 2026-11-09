@@ -293,7 +293,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
                   // Клик по файлу в ленте → оверлей; только у колонок с проектом
                   // (FileViewer требует project; оверлей относится к фокусу, а клик
                   // в колонке фокусирует её capture-фазой раньше обработчика)
-                  onOpenFile={proj ? path => setOverlay({ kind: 'file', path }) : undefined}
+                  onOpenFile={proj ? (path, sessionId) => setOverlay({ kind: 'file', path, sessionId }) : undefined}
                 />
               );
             })
@@ -318,6 +318,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
                 onClose={() => setOverlay(null)}
                 initialTab={overlay.diffMode ? 'diff' : undefined}
                 gitStagePath={overlay.gitStagePath}
+                sessionId={overlay.sessionId}
                 fullscreen
               />
             )}

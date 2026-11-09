@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
@@ -14,13 +15,13 @@ using Moq;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Тесты шага 6 плана «Архив чатов» (v4): автоправило за флагом chat-auto-archive.
+// Тесты шага 6 плана «Архив чатов» (v4): автоправило архивации.
 // Порог/исключения отбора уже покрыты ChatArchivedEventTests (MatchesArchiveRule +
 // GetArchiveRuleCandidates) — здесь проходы сервиса: идемпотентность TickAsync(nowUtc),
-// потолок 200, выключенный флаг, гейт первого прохода (кнопка «Применить сейчас»),
+// потолок 200, гейт первого прохода (кнопка «Применить сейчас»),
 // наследование порога проекта, откат пачки по ArchiveBatchId и агрегированное
 // уведомление. Ожиданий на час вперёд нет — nowUtc всегда параметром.
-public class ChatArchiveServiceTests : IDisposable
+public class ChatArchiveServiceTests : IClassFixture<ChatArchiveServiceTests.Fixture>
 {
     private const string TestUserId = "test-user-id";
     private const string TestUsername = "test-user";
@@ -29,23 +30,117 @@ public class ChatArchiveServiceTests : IDisposable
     private readonly SessionManager _sessions;
     private readonly ProjectManager _projects;
     private readonly UserStore _users;
-    private readonly FeatureFlagService _flags;
     private readonly NotificationStore _notifStore;
     private readonly ChatArchiveService _sut;
 
-    public ChatArchiveServiceTests()
+    public ChatArchiveServiceTests(Fixture fx)
     {
-        _tempDir = Path.Combine(Path.GetTempPath(), "chat_archive_rule_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(_tempDir);
-        (_sessions, _projects, _users, _flags, _notifStore) = BuildSut(_tempDir);
-        _sut = new ChatArchiveService(_sessions, _projects, _users, _flags,
-            BuildNotifications(_tempDir, _projects, _notifStore), NullLogger<ChatArchiveService>.Instance);
+        _tempDir = fx.TempDir;
+        _sessions = fx.Sessions;
+        _projects = fx.Projects;
+        _users = fx.Users;
+        _notifStore = fx.NotifStore;
+        _sut = fx.Sut;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Граф на класс: SessionManager с окружением поднимается один раз на весь класс, а не
+    /// на экземпляр теста (~0,13–0,35 с на тест уходило на BuildSut). Разделение состояния
+    /// между тестами — построением, а не сбросом: каждый тест работает со своим новым
+    /// пользователем (EnableRule/CreateUser) и своими каталогами проектов, а все чтения
+    /// скоупятся владельцем/проектом; и потолок TickAsync — на владельца
+    /// (ArchiveCandidatesAsync: candidates → Take(MaxBatchSize)), залежи соседнего теста
+    /// в ассерты текущего не попадают. Сбрасывать в общем графе нечего — чужой тест
+    /// в него не пишет ничего, что читает этот.
+    /// </summary>
+    public sealed class Fixture : IDisposable
     {
-        _sessions.Dispose();
-        Helpers.TestFs.DeleteDirectoryResilient(_tempDir);
+        public readonly string TempDir;
+        public readonly SessionManager Sessions;
+        public readonly ProjectManager Projects;
+        public readonly UserStore Users;
+        public readonly NotificationStore NotifStore;
+        public readonly ChatArchiveService Sut;
+
+        public Fixture()
+        {
+            TempDir = Path.Combine(Path.GetTempPath(), "chat_archive_rule_" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(TempDir);
+            (Sessions, Projects, Users, _, NotifStore) = BuildSut(TempDir);
+            Sut = new ChatArchiveService(Sessions, Projects, Users,
+                BuildNotifications(TempDir, Projects, NotifStore), NullLogger<ChatArchiveService>.Instance);
+        }
+
+        public void Dispose()
+        {
+            Sessions.Dispose();
+            Helpers.TestFs.DeleteDirectoryResilient(TempDir);
+        }
+
+        private static (SessionManager Sessions, ProjectManager Projects, UserStore Users,
+            FeatureFlagService Flags, NotificationStore NotifStore) BuildSut(string tempDir)
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+                // Автосейв выключен (как в SessionManagerTests): фоновая запись стора не
+                // вмешивается между правкой и ассертами
+                ["Session:AutoSaveSeconds"] = "0",
+                ["DefaultProjectsPath"] = Path.Combine(tempDir, "homes"),
+                ["ClaudeUserProfileDir"] = Path.Combine(tempDir, "claude-profile"),
+            }).Build();
+
+            var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+            var appSettings = new AppSettingsService(config);
+            var projects = new ProjectManager(config, users, appSettings);
+            var history = new ChatHistoryService(config);
+
+            var broadcaster = new TestSessionBroadcaster();
+
+            var llmProviders = new LlmProviderRegistry(config);
+            var subPool = new ClaudeSubscriptionPool(config);
+            var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
+                new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
+            var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
+            var usage = new UsageService(config);
+            var jwt = new JwtService(config, users, NullLogger<JwtService>.Instance);
+            var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
+            server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
+            var wkStore = new WorkspaceKnowledgeStore(config);
+            var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+                Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+            var flags = new FeatureFlagService(users);
+            var notesSvc = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+            var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
+                NullLogger<NotesKnowledgeService>.Instance);
+            var personas = new PersonaManager(config);
+            var bindings = new PersonaBindingsService(personas, projects, wkStore,
+                knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
+            var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
+                NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
+
+            var sessions = new SessionManager(projects, history, config, adapters, falCost,
+                usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
+                bindings, subPool, NullLogger<SessionManager>.Instance,
+                TestLauncherFactory.Instance, sandbox, broadcaster: broadcaster);
+            var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
+            return (sessions, projects, users, flags, notifStore);
+        }
+
+        private static NotificationService BuildNotifications(string tempDir, ProjectManager projects,
+            NotificationStore notifStore)
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(tempDir, "projects.json"),
+            }).Build();
+            var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+            var push = new PushService(config,
+                new PushSubscriptionStore(config), new JwtService(config, users, NullLogger<JwtService>.Instance),
+                NullLogger<PushService>.Instance);
+            return new NotificationService(notifStore, new TestSessionBroadcaster(), push, new PersonaManager(config), projects,
+                NullLogger<NotificationService>.Instance);
+        }
     }
 
     // --- Прохождение порога ---
@@ -83,19 +178,43 @@ public class ChatArchiveServiceTests : IDisposable
         stalePersonal.IsArchived.Should().BeFalse("личный порог не задан — чаты вне проектов не трогаем");
     }
 
-    // --- Гейты тика ---
-
+    // S2d-4h: автоправило не архивирует приватные чаты — ни чужой, ни свой свой;
+    // общий чат проекта архивируется как раньше. Свой приватный автор убирает ручкой.
     [Fact]
-    public async Task Тик_ФлагВыключен_НичегоНеАрхивирует()
+    public async Task Тик_ПриватныеЧатыПравилоНеТрогает_ОбщийАрхивируется()
     {
-        var owner = CreateUser(flagsOn: false);
-        _users.SetArchiveAfterDays(owner.Id, 7);
-        _users.SetArchiveRuleFirstRunAt(owner.Id, DateTime.UtcNow);
-        var stale = NewStaleChat(_sessions, owner.Id, ageDays: 30);
+        var owner = EnableRule(days: null, firstRun: true);
+        var project = NewProject(owner.Id, "proj-private-rule", days: 7);
+        var editor = CreateUser();
+        _projects.SetMembers(project.Id, [new ProjectMember { UserId = editor.Id, Role = ProjectRole.Editor, AddedBy = owner.Id }]);
+        var common = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        CoolDown(common, ageDays: 10);
+        var foreignPrivate = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sessions.GetById(foreignPrivate.Id)!.PrivateToUserId = editor.Id;
+        CoolDown(foreignPrivate, ageDays: 10);
+        var ownPrivate = await _sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sessions.GetById(ownPrivate.Id)!.PrivateToUserId = owner.Id;
+        CoolDown(ownPrivate, ageDays: 10);
 
         await _sut.TickAsync(DateTime.UtcNow);
 
-        stale.IsArchived.Should().BeFalse("флаг chat-auto-archive выключен — тик владельца ничего не делает");
+        common.IsArchived.Should().BeTrue("общий чат — кандидат правила, как раньше");
+        foreignPrivate.IsArchived.Should().BeFalse("чужой приватный — правило не действует над чужими данными");
+        ownPrivate.IsArchived.Should().BeFalse("свой приватный — тоже: только ручная архивация автора");
+    }
+
+    // --- Гейты тика ---
+
+    // Главная защита от «включилось у всех»: без заданного порога правило не архивирует ничего
+    [Fact]
+    public async Task Тик_ПорогНеЗадан_НичегоНеАрхивирует()
+    {
+        var owner = EnableRule(days: null, firstRun: true);
+        var stale = NewStaleChat(_sessions, owner.Id, ageDays: 365);
+
+        await _sut.TickAsync(DateTime.UtcNow);
+
+        stale.IsArchived.Should().BeFalse("порог не задан — правило не настроено, чаты не трогаем");
     }
 
     [Fact]
@@ -135,6 +254,10 @@ public class ChatArchiveServiceTests : IDisposable
             "повторный тик с тем же nowUtc не создаёт новую пачку — архивный чат не кандидат");
     }
 
+    // Ожиданий здесь нет вовсе: nowUtc всегда параметром, фоновый ритм (TickInterval,
+    // FirstTickDelay) в юнит-тестах не прогоняется. Метка Slow стояла по замеру 19.10 под
+    // нагрузкой параллельного прогона; в изолированном прогоне класса тест 1,66 с (< 2 с),
+    // порог пачки 200 — это объём данных, а не пауза.
     [Fact]
     public async Task Тик_Потолок200ЗаПроход()
     {
@@ -188,7 +311,7 @@ public class ChatArchiveServiceTests : IDisposable
         var (_, batchId) = await _sut.RunNowAsync(owner.Id, DateTime.UtcNow);
         chat.IsArchived.Should().BeTrue();
 
-        var stranger = CreateUser(flagsOn: false);
+        var stranger = CreateUser();
         var restored = await _sessions.RestoreArchiveBatchAsync(stranger.Id, batchId!);
 
         restored.Should().Be(0, "батч чужого владельца не возвращает чужие чаты");
@@ -308,20 +431,6 @@ public class ChatArchiveServiceTests : IDisposable
         stale.IsArchived.Should().BeFalse();
     }
 
-    [Fact]
-    public async Task RunNowForProject_ФлагВыключен_НичегоНеАрхивирует()
-    {
-        var owner = CreateUser(flagsOn: false);
-        _users.SetArchiveAfterDays(owner.Id, 7);
-        var project = NewProject(owner.Id, "proj-flag-off", days: 7);
-        var stale = await NewStaleProjectChat(project.Id, ageDays: 30);
-
-        var (archived, _) = await _sut.RunNowForProjectAsync(owner.Id, project.Id, DateTime.UtcNow);
-
-        archived.Should().Be(0, "флаг chat-auto-archive выключен — защита от вызова без проверки");
-        stale.IsArchived.Should().BeFalse();
-    }
-
     // --- Плюрализация текста уведомления ---
 
     [Theory]
@@ -338,24 +447,17 @@ public class ChatArchiveServiceTests : IDisposable
 
     // --- Помощники ---
 
-    // Пользователь с флагом; days/firstRun — состояние правила (гейт первого прохода)
+    // Пользователь; days/firstRun — состояние правила (гейт первого прохода)
     private User EnableRule(int? days, bool firstRun = true)
     {
-        var owner = CreateUser(flagsOn: true);
+        var owner = CreateUser();
         _users.SetArchiveAfterDays(owner.Id, days);
         if (firstRun) _users.SetArchiveRuleFirstRunAt(owner.Id, DateTime.UtcNow);
         return owner;
     }
 
-    private User CreateUser(bool flagsOn)
-    {
-        var user = _users.Add("user_" + Guid.NewGuid().ToString("N"), "pass12345", "user");
-        if (flagsOn) user.FeatureFlags = new Dictionary<string, bool>
-        {
-            [FeatureFlagKeys.ChatAutoArchive] = true,
-        };
-        return user;
-    }
+    private User CreateUser() =>
+        _users.Add("user_" + Guid.NewGuid().ToString("N"), "pass12345", "user");
 
     // Проект владельца со своим порогом (null — наследовать личный)
     private Project NewProject(string ownerId, string dirName, int? days)
@@ -383,69 +485,4 @@ public class ChatArchiveServiceTests : IDisposable
     }
 
     private static void CoolDown(Session chat, int ageDays) => chat.UpdatedAt = DateTime.UtcNow - TimeSpan.FromDays(ageDays);
-
-    private static (SessionManager Sessions, ProjectManager Projects, UserStore Users,
-        FeatureFlagService Flags, NotificationStore NotifStore) BuildSut(string tempDir)
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
-            // Автосейв выключен (как в SessionManagerTests): фоновая запись стора не
-            // вмешивается между правкой и ассертами
-            ["Session:AutoSaveSeconds"] = "0",
-            ["DefaultProjectsPath"] = Path.Combine(tempDir, "homes"),
-            ["ClaudeUserProfileDir"] = Path.Combine(tempDir, "claude-profile"),
-        }).Build();
-
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var appSettings = new AppSettingsService(config);
-        var projects = new ProjectManager(config, users, appSettings);
-        var history = new ChatHistoryService(config);
-
-        var broadcaster = new TestSessionBroadcaster();
-
-        var llmProviders = new LlmProviderRegistry(config);
-        var subPool = new ClaudeSubscriptionPool(config);
-        var adapters = new LlmSessionAdapterFactory(config, new AgentPromptSourceAdapter(new SkillsService()),
-            new WorkspaceDatasetLookup(new WorkspaceKnowledgeStore(config)), llmProviders, subPool);
-        var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
-        var usage = new UsageService(config);
-        var jwt = new JwtService(config, users, NullLogger<JwtService>.Instance);
-        var server = new Mock<Microsoft.AspNetCore.Hosting.Server.IServer>();
-        server.Setup(s => s.Features).Returns(new Microsoft.AspNetCore.Http.Features.FeatureCollection());
-        var wkStore = new WorkspaceKnowledgeStore(config);
-        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
-            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
-        var flags = new FeatureFlagService(users);
-        var notesSvc = new NotesService(projects, config, NullLogger<NotesService>.Instance);
-        var notesKb = new NotesKnowledgeService(knowledge, notesSvc, users, config,
-            NullLogger<NotesKnowledgeService>.Instance);
-        var personas = new PersonaManager(config);
-        var bindings = new PersonaBindingsService(personas, projects, wkStore,
-            knowledge, new SkillsService(), users, config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
-        var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
-            NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-
-        var sessions = new SessionManager(projects, history, config, adapters, falCost,
-            usage, appSettings, users, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster: broadcaster);
-        var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
-        return (sessions, projects, users, flags, notifStore);
-    }
-
-    private static NotificationService BuildNotifications(string tempDir, ProjectManager projects,
-        NotificationStore notifStore)
-    {
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["DataPath"] = Path.Combine(tempDir, "projects.json"),
-        }).Build();
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var push = new PushService(config,
-            new PushSubscriptionStore(config), new JwtService(config, users, NullLogger<JwtService>.Instance),
-            NullLogger<PushService>.Instance);
-        return new NotificationService(notifStore, new TestSessionBroadcaster(), push, new PersonaManager(config), projects,
-            NullLogger<NotificationService>.Instance);
-    }
 }

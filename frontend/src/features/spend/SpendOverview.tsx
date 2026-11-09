@@ -2,11 +2,12 @@
 // источникам, пунктир — граница детального окна) + карточки-топы разрезов.
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
+import { Lock } from 'lucide-react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
-import { C, FONT, R, SHADOW, SP } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
-  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
-  nodeName, sourceColor, sourceLabel,
+  DIM_LABELS, SPEND_TIERS, TIER_KEYS, dayColumn, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,
+  isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel,
 } from './spendModel';
 import type { SpendDim, SpendFilter } from '../../lib/spendContract';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
@@ -16,8 +17,9 @@ export interface OverviewOpenCtx {
   filter?: SpendFilter; preset?: string; pivotDim?: string; day?: string; turnId?: string;
 }
 
-// Порядок серий в стеке дня (fal токенов не даёт — в стек не входит)
-const STACK_SOURCES = ['chat-turn', 'one-shot', 'free'];
+// Порядок серий в стеке дня задаётся классами (см. TIER_KEYS): разбивка по
+// источникам в столбике не показывается (решение владельца), но карточка
+// «Источники» внизу остаётся.
 
 function Card({ title, more, onMore, col, isMobile, isTablet, children }: {
   title: string; more?: string; onMore?: () => void; col: number; isMobile: boolean; isTablet?: boolean; children: ReactNode;
@@ -49,11 +51,12 @@ function Card({ title, more, onMore, col, isMobile, isTablet, children }: {
 }
 
 // Строка топа: ранг, иконка, имя, полоса-доля, значение
-function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, isTablet, onClick }: {
-  rank: number; icon: ReactNode; name: string; meta?: string | null; share: number;
+function TopRow({ rank, icon, name, meta, sub, share, value, valueColor, barColor, isTablet, onClick }: {
+  rank: number; icon: ReactNode; name: string; meta?: string | null; sub?: ReactNode; share: number;
   value: string; valueColor: string; barColor: string; isTablet?: boolean; onClick: () => void;
 }) {
   return (
+    <>
     <div
       onClick={onClick}
       style={{ display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px ${SP.xs}px` : '6px 4px', borderRadius: R.md, cursor: 'pointer' }}
@@ -73,6 +76,10 @@ function TopRow({ rank, icon, name, meta, share, value, valueColor, barColor, is
         {value}
       </span>
     </div>
+    {sub && (
+      <div style={{ paddingLeft: 36, marginTop: -2, marginBottom: 4, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans }}>{sub}</div>
+    )}
+    </>
   );
 }
 
@@ -93,12 +100,13 @@ function topCard(opts: {
       {rows.map((r, i) => {
         const name = nodeName(opts.dim, r.key, r.name);
         // Строка только из генераций медиа (fal/glif): токенов нет — значение счётчиком,
-        // цветом серии (у fal — plan, у glif — warning), а не акцентом токенов
+        // цветом серии (у fal — plan, у glif — rose), а не акцентом токенов
         const genOnly = r.tokens.total === 0 && r.falGenerations > 0;
         const isFree = opts.dim === 'source' && r.key === 'free';
         const isGen = opts.dim === 'source' && isGenSource(r.key);
         const genColor = opts.dim === 'source' ? sourceColor(r.key) : C.planText;
-        const barColor = opts.dim === 'source' ? sourceColor(r.key) : C.accent;
+        // Полоса по моделям/провайдерам красится по ценовому классу строки
+        const barColor = opts.dim === 'source' ? sourceColor(r.key) : rowBarColor(opts.dim, r);
         return (
           <TopRow
             key={r.key || '·'}
@@ -106,6 +114,9 @@ function topCard(opts: {
             icon={nodeIcon(opts.dim, name, r.meta, opts.dim === 'source' ? sourceColor(r.key) : undefined)}
             name={opts.dim === 'source' ? sourceLabel(r.key) : name}
             meta={opts.dim === 'chat' ? (r.meta === 'task' ? 'задача' : null) : null}
+            sub={opts.dim === 'user' && r.privateChats ? (
+              <><Lock size={FS.xs} style={{ verticalAlign: -1, marginRight: 4 }} />{`из них приватные чаты (${r.privateChats.count}) — ${fmtTok(r.privateChats.tokens)}`}</>
+            ) : null}
             share={genOnly || isGen ? 0 : r.tokens.total / max}
             value={genOnly || isGen
               ? `${r.falGenerations} ${opts.dim === 'source' ? genUnit(r.key) : 'ген.'}`
@@ -163,10 +174,12 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
   let sepDone = false;
   for (const d of data.byDay) {
     if (!sepDone && !d.aggregated && hasAgg) {
-      bars.push(<div key="sep" style={{ width: 0, borderLeft: `2px dashed ${C.warning}`, alignSelf: 'stretch', margin: '0 2px' }} />);
+      bars.push(<div key="sep" style={{ width: 0, borderLeft: `2px dashed ${C.textMuted}`, alignSelf: 'stretch', margin: '0 2px' }} />);
       sepDone = true;
     }
     const clickable = !d.aggregated && d.total > 0;
+    // Столбик дня: сегменты по ценовым классам и их высоты (правило — в spendModel)
+    const col = dayColumn(d, dayMax, chartH);
     bars.push(
       <div
         key={d.date}
@@ -180,13 +193,19 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
       >
         {d.total === 0
           ? <i style={{ display: 'block', height: 2, background: C.track, borderRadius: 1 }} />
-          : STACK_SOURCES.filter(k => (d.bySource[k] ?? 0) > 0).map(k => (
-              <i key={k} style={{
+          : col.segments.length > 0
+            ? col.segments.map(sg => (
+              <i key={sg.key} data-tier={sg.key} style={{
                 display: 'block', borderRadius: 1,
-                height: Math.max(2, Math.round((d.bySource[k] ?? 0) / dayMax * (chartH - 12))),
-                background: sourceColor(k),
+                height: sg.height,
+                background: sg.color,
               }} />
-            ))}
+            ))
+            : <i data-neutral="1" style={{
+              display: 'block', borderRadius: 1,
+              height: col.height,
+              background: C.track,
+            }} />}
       </div>,
     );
   }
@@ -291,9 +310,9 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
               </div>
             )}
             <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 8, alignItems: 'center' }}>
-              {STACK_SOURCES.map(k => (
+              {[...TIER_KEYS].reverse().map(k => (
                 <span key={k} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
-                  <Dot color={sourceColor(k)} />{SPEND_SOURCES[k].label}
+                  <Dot color={SPEND_TIERS[k].color} />{SPEND_TIERS[k].label}
                 </span>
               ))}
               {genRows.length > 0
@@ -317,7 +336,7 @@ export function SpendOverview({ data, showUsers, isMobile, isTablet = false, emp
         </div>
       </div>
 
-      {showUsers && t('user', DIM_LABELS.user + 'и', data.cards.users, 4)}
+      {showUsers && t('user', data.allUsers ? DIM_LABELS.user + 'и' : 'Участники', data.cards.users, 4)}
       {t('project', data.allUsers ? 'Проекты' : 'Мои проекты', data.cards.projects, 4)}
       {t('model', data.allUsers ? 'Модели' : 'Мои модели', data.cards.models, 4)}
       {!showUsers && t('source', 'Источники', data.cards.sources, 4)}

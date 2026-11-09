@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Plugins.Mcp;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Xunit;
 
@@ -118,5 +120,24 @@ public class McpInstructionsLengthGuardTests
         if (instructions is null) return;
 
         instructions.Length.Should().BeLessOrEqualTo(MaxInstructionsLength);
+    }
+
+    /// <summary>
+    /// Справочник шима (ccsPlugin) для агента — поле instructions ответа initialize у C#-тулсета
+    /// plugins (не node-процесс, как personas/tasks, а свойство тулсета, которое контроллер кладёт
+    /// в initialize): сводка API + правило высоты + набор классов + ссылка на полный документ.
+    /// Тот же потолок ~1950: CLI усекает instructions на ~2 КБ, падаем заранее.
+    /// </summary>
+    [Fact]
+    public void PluginsServer_InstructionsВПределахЗапаса()
+    {
+        // Instructions — instance-свойство (интерфейс IMcpInstructionalToolset): экземпляр
+        // создаём, обязательные зависимости не используем (null!)
+        // Шов рамки обязателен (fail-closed, R-S2a-3b); здесь читается только instructions
+        var toolset = new PluginsToolset(null!, null!, new WideTurnFrame());
+        var instructions = toolset.Instructions;
+        instructions.Should().NotBeNull("справочник шима обязан быть в поле instructions");
+        instructions!.Length.Should().BeLessOrEqualTo(MaxInstructionsLength,
+            "claude CLI усекает instructions за пределами ~2 КБ — запас на будущие правки исчерпан");
     }
 }

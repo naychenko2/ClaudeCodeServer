@@ -1,7 +1,7 @@
 // Параметры, цена и запуск действия картинки (ADR-023 §Д2, §Д2.1): тонкий слой над существующими
 // котировкой (`api.quote`) и запуском в нить (`launchThread`) — своей логики запуска здесь нет.
 
-import { etaTicker, getChatContextState, ReportedError, showToast } from 'aihome_shell/kit';
+import { etaTicker, FORMAT_TEXT, getChatContextState, objectKey, presetAction, ReportedError, showToast } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditCatalog, type ImageEditOp } from '../api';
 import type { ActionQuote, ContextKindCtx, LaunchHandle, LaunchParam, LaunchRequest } from 'aihome_shell/kit';
 import { isRemovalPrompt, priceSum } from '../format';
@@ -16,8 +16,9 @@ import { getThreadMarks, isWholeImage, openEditor } from '../thread/threadStore'
 import { launchThread, resolveModel } from '../thread/useThreadLaunch';
 import { sharedQuote } from '../useQuote';
 import { contextInputCounts } from './samples';
-import { ASPECT_AUTO, ASPECT_OPTIONS } from './actions';
 import { settingsOf } from './executors';
+import { editAspectOf, editOf, resetEdit, wishForQuote } from './formatChoice';
+import { prefsSettled } from '../thread/prefs';
 import { threadOfPrimary } from './state';
 
 // Параметры панели: варианты — у всех операций с несколькими вариантами; пропорции — только у «Нарисовать»
@@ -28,18 +29,12 @@ export function paramsFor(catalog: ImageEditCatalog | null, settings: { provider
   const { m } = resolveModel(catalog, { ...settings, matchSourceSize: true });
   const max = Math.max(1, m?.caps?.maxCount ?? catalog?.limits.maxCount ?? 4);
   const out: LaunchParam[] = [{ kind: 'variants', min: 1, max, value: 1 }];
-  if (op === 'generate') out.push({ kind: 'aspect', options: [ASPECT_AUTO, ...ASPECT_OPTIONS], value: ASPECT_AUTO });
   return out;
 }
 
 const countOf = (req: LaunchRequest, fallback: number) =>
   typeof req.params.variants === 'number' ? req.params.variants : fallback;
 
-// Пропорции запуска: у новой картинки «авто» — как решит модель
-export function aspectOf(req: LaunchRequest): string | null {
-  const v = req.params.aspect;
-  return typeof v === 'string' && v !== ASPECT_AUTO ? v : null;
-}
 
 // Нить основного объекта чата и область картинок; нет её (контекст сменился) — запуск и цена отказывают
 function currentThread(ctx: ContextKindCtx) {
@@ -74,6 +69,7 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
     hasImage, marks, withMask: eff === 'inpaint' && hasMask, removal: eff === 'inpaint' && isRemovalPrompt(req.text),
     ...(own ? { references: 0, hasCharacter: false } : contextInputCounts(ctx.sessionId)),
     size, context: { sessionId: ctx.sessionId, contextRevision: req.contextRevision },
+    ...(eff === 'generate' ? { format: wishForQuote(scope) } : null),
   });
   const q = await sharedQuote(imageEditorApi(), scope, body);
   const e = q.estimate;
@@ -89,15 +85,34 @@ export async function quoteAction(ctx: ContextKindCtx, req: LaunchRequest): Prom
 export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Promise<LaunchHandle> {
   const { thread, scope } = currentThread(ctx);
   const settings = settingsOf(scope, thread, req.op as ImageEditOp);
+  // Дорисовка: пропорции берутся из «Формата»; без них запуска нет
+  let aspect: string | null = null;
+  if (req.op === 'outpaint') {
+    aspect = editAspectOf(thread.id);
+    if (!aspect) { showToast(FORMAT_TEXT.outpaintNeedsFormat, '', 'error'); throw new ReportedError(FORMAT_TEXT.outpaintNeedsFormat); }
+  }
+  // Другие пропорции выбраны, а способ — нет: правка модели их не применит (она пропорции не тянет и не режет)
+  if ((req.op === 'edit' || req.op === 'inpaint') && editAspectOf(thread.id) && editOf(thread.id).how === null) {
+    showToast(FORMAT_TEXT.pendingChoice, '', 'error');
+    throw new ReportedError(FORMAT_TEXT.pendingChoice);
+  }
+  // Формат считает сервер по сохранённому желанию: запуск ждёт, пока последняя правка формата дойдёт до него
+  await prefsSettled(scope);
   let jobId: string | null = null;
   const watcher = jobWatcher(ctx.sessionId, thread.id, scope);
   const ok = await launchThread(scope, ctx.sessionId, thread, { kind: 'prompt', prompt: req.text }, {
     ctx: {
-      op: req.op as ImageEditOp, count: countOf(req, settings.count), aspect: aspectOf(req),
+      op: req.op as ImageEditOp, count: countOf(req, settings.count), aspect,
       contextRevision: req.contextRevision, onJob: id => { jobId = id; watcher.attach(id); },
     },
   });
   if (!ok || !jobId) { watcher.dispose(); throw new ReportedError('Генерация не запущена'); }
+  // Дорисовка ушла: выбор «других пропорций» прожил одну правку, действие возвращается к «Изменить»
+  if (req.op === 'outpaint') {
+    resetEdit(thread.id);
+    const primary = getChatContextState(ctx.sessionId).primary;
+    if (primary) presetAction(ctx.sessionId, objectKey(primary), { actionId: 'edit' });
+  }
   return { id: jobId, watch: watcher.watch, cancel: watcher.cancel };
 }
 

@@ -12,26 +12,33 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Кнопка «Подобрать под персону»: три обычных голоса плюс отдельный живой (LiveTTS),
 // «Подобрать ещё» без уже показанных. Автоподбор при создании при этом живого голоса
 // не подставляет никогда — он по-прежнему ходит через PickVoiceAsync.
-public class PersonaVoiceCandidatesTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonaVoiceCandidatesTests : IClassFixture<PersonaVoiceCandidatesTests.Hosts>
 {
-    private readonly VoiceCheap _cheap = new();
+    private readonly VoiceCheap _cheap;
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public PersonaVoiceCandidatesTests()
+    // Хост на КЛАСС: конфигурация одна — заглушка one-shot. Её состояние каждый тест
+    // начинает заново (тесты класса xunit гонит последовательно)
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s => s.AddSingleton<ICheapTextRunner>(_cheap),
-        };
+        public VoiceCheap Cheap { get; } = new();
+        public Hosts() => ExtraServices = s => s.AddSingleton<ICheapTextRunner>(Cheap);
+    }
+
+    public PersonaVoiceCandidatesTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _cheap = hosts.Cheap;
+        _cheap.Reset();
         _client = _factory.CreateAuthenticatedClient();
     }
 
-    public void Dispose() => _factory.Dispose();
-
     // Заглушка one-shot: на подбор голоса — управляемый ответ, промпт запоминается
-    private sealed class VoiceCheap : ICheapTextRunner
+    public sealed class VoiceCheap : ICheapTextRunner
     {
+        public void Reset() { VoiceAnswer = ""; VoiceFails = false; LastPrompt = null; VoiceCalls = 0; }
         public string VoiceAnswer { get; set; } = "";
         public bool VoiceFails { get; set; }
         public string? LastPrompt;
@@ -39,6 +46,7 @@ public class PersonaVoiceCandidatesTests : IDisposable
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -50,10 +58,8 @@ public class PersonaVoiceCandidatesTests : IDisposable
                 ? Task.FromException<string>(new InvalidOperationException("модель недоступна"))
                 : Task.FromResult(VoiceAnswer);
         }
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>("[]");
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>("[]");
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

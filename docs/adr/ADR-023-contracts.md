@@ -104,28 +104,15 @@
 
 ## Событие `chat_context_changed`
 
-`sessionId` — базовое поле `ServerMessage` (чат-владелец); тело контекста — тот же DTO.
+`sessionId` — базовое поле `ServerMessage` (чат-владелец). Событие — только сигнал с ревизией (решение
+CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одного субъекта, поэтому карточек в ней нет — клиент
+при сигнале перечитывает карточки по REST под своим субъектом. Ничего другого в событии быть не должно.
 
 ```json event
 {
   "type": "chat_context_changed",
   "sessionId": "c1",
-  "context": {
-    "revision": 9,
-    "primary": {
-      "id": "ci_10",
-      "kind": "audio",
-      "ref": { "threadId": "a2" },
-      "role": null,
-      "by": "agent",
-      "addedAt": "2026-10-03T10:00:00Z",
-      "label": "утро.mp3",
-      "version": "v1",
-      "thumb": null,
-      "missing": false
-    },
-    "refs": []
-  }
+  "revision": 9
 }
 ```
 
@@ -156,13 +143,20 @@
   "hasAnnotations": false,
   "removal": false,
   "sessionId": "c1",
-  "contextRevision": 7
+  "contextRevision": 7,
+  "format": null,
+  "resolved": null,
+  "faceTarget": null,
+  "characterSlug": null
 }
 ```
 
+Поля `format` (желание формата, `MediaFormat`) и `resolved` (действующий формат; считает сервер, из тела игнорируется) — «Формат»
+[ADR-025](ADR-025-media-format.md); `null` — «Как у модели».
+
 ### Ответ `quote`: строки исполнителей
 
-`executors` — строки «Чем» для `op` запроса; их читает строка контекста и панель (решение Р2). `group` — `auto` | `local` |
+`format` — действующий формат запуска (`ResolvedFormat`, ADR-025), `null` — «Как у модели». `executors` — строки «Чем» для `op` запроса; их читает строка контекста и панель (решение Р2). `group` — `auto` | `local` |
 `cloud`; у строки «Авто» `sub` несёт «сейчас: …»; серая строка — `disabled: true` и `reason` вместо `sub`.
 Цена — полями: `free`, `amount` + `unit` — валюта (`free` | `usd` | `credits` | `rub`; у бесплатных `amount: null`; единица тарификации поставщика `chars`/`sec`/`min` в `unit` не попадает — исполнитель переводит её в `usd`); `amount` — цена за единицу из `PriceHint` модели (за штуку, секунду и т. п., подпись `price` называет единицу), а не за весь запуск с `count`, `etaSeconds` (у локальных); `price` — готовая подпись для показа, фронт её не разбирает. `badges` — `[{label, tone}]` (`tone`: `neutral` | `good` | `warn` | `info`): RU / без RU, лицензия, «тяжёлая». Id строки — `поставщик|модель` (в id моделей бывают слеши и двоеточия), «Авто» — `auto`. Строки наполняются при `ContextRevision` в запросе: картинки — 2б-3, звук — 2б-4 («Авто», по строке на каждую модель каталога, умеющую операцию, серая — с `reason`); без ревизии, у котировки пересоздания клона и там, где вертикаль не наполняет, `executors` — `null`. Образец с диска: `POST …/image-editor/uploads` (multipart, поле `file`) → `201 {uploadId}`, затем `attachRef({kind: 'image', ref: {upload}})`; образец живёт в рабочей папке модуля, как задачи (TTL 7 дней).
 
@@ -174,6 +168,7 @@
   "estimate": { "amount": null, "unit": "free", "approx": false, "source": "catalog", "etaSeconds": 40, "queueLength": 0 },
   "expiresAt": "2026-10-03T11:00:00Z",
   "expectedSeconds": 40,
+  "format": null,
   "executors": [
     { "id": "auto", "group": "auto", "name": "Авто", "sub": "сейчас: локально · Qwen-Image Edit", "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }], "disabled": false, "locked": false, "reason": null },
     { "id": "local|qwen-image-edit", "group": "local", "name": "Qwen-Image Edit", "sub": null, "price": "бесплатно · ~40 с", "free": true, "amount": null, "unit": "free", "etaSeconds": 40, "badges": [{ "label": "без RU", "tone": "warn" }, { "label": "apache-2.0", "tone": "neutral" }], "disabled": false, "locked": false, "reason": null },
@@ -186,7 +181,7 @@
 
 `multipart/form-data` на `POST …/image-editor/jobs`; здесь — поля формы как JSON-объект. С ревизией `source`,
 `references`, `referencePaths`, `characterSlug`, `threadId`, `versionId` не нужны; остаются `quoteId`, `prompt`, `marks`,
-`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `baseStepId` — клиент шлёт их по месту (маска, аннотации, роли референсов, шаг истории).
+`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `characterPhotos`, `baseStepId`, `faceTarget` — клиент шлёт их по месту (маска, аннотации, роли референсов, фото персонажа, шаг истории, подстановка на лицо).
 
 ```json image-job-form
 {
@@ -360,7 +355,8 @@
   "durationSec": 5,
   "aspect": null,
   "sound": null,
-  "contextRevision": 12
+  "contextRevision": 12,
+  "format": null
 }
 ```
 

@@ -21,6 +21,8 @@
          По паттерну вертикалей (Reader/Video/Yandex) хелперы скопированы в Helpers/
          с тем же namespace `ClaudeHomeServer.Tests.Helpers`, чтобы изолировать тесты
          вертикали от Main.Tests и не множить тестовые сборки. -->
+    <!-- Шаг 2.2: Main проверен и остаётся — без него не компилируется
+         TestWebApplicationFactory<Program> (Program) и Llm-типы (ILlmSessionAdapter). -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
   </ItemGroup>
 

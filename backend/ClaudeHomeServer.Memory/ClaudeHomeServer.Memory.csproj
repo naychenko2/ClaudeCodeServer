@@ -23,6 +23,16 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Memory.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Personas.Tests (шаг 3.4): PersonaMemoryAutolearnService/PersonaMemoryConsolidationService
+         — internal-члены Parse/AutolearnItem/FilterOps/ParseOps. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Personas.Tests</_Parameter1>
+    </AssemblyAttribute>
+    <!-- Team.Tests (шаг 3.5): TeamMemoryAutolearnService.Parse и
+         TeamMemoryConsolidationService.ParseOps/FilterOps — internal-члены. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Team.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

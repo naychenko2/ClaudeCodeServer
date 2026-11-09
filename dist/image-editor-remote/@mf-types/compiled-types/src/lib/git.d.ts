@@ -1,0 +1,68 @@
+import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo, ChangedBySession } from '../types';
+export interface GitProjectState {
+    status: GitStatus | null;
+    statusLoaded: boolean;
+    log: GitLogEntry[];
+    logLoaded: boolean;
+    unpushed: GitLogEntry[];
+    unpushedLoaded: boolean;
+    branches: GitBranchInfo[];
+    stashes: GitStashEntry[];
+    remote: GitRemoteInfo | null;
+    error: string | null;
+    diverged: boolean;
+    conflictFiles: string[];
+    busy: boolean;
+    changedBy: Map<string, ChangedBySession[]>;
+    myChangedPaths: Set<string> | undefined;
+    dirtySessionIds: Set<string> | undefined;
+}
+export declare function ensureGit(projectId: string, refresh?: boolean): void;
+export declare function loadGitStatus(projectId: string): Promise<void>;
+export declare function setActiveSessionForChangedBy(projectId: string, sessionId: string | null): void;
+export declare function loadGitLog(projectId: string, limit?: number): Promise<void>;
+export declare function loadUnpushedLog(projectId: string, limit?: number): Promise<void>;
+export declare function loadGitBranches(projectId: string): Promise<void>;
+export declare function loadGitStash(projectId: string): Promise<void>;
+export declare function loadGitRemote(projectId: string): Promise<void>;
+export declare const gitStage: (projectId: string, path: string) => Promise<boolean>;
+export declare const gitUnstage: (projectId: string, path: string) => Promise<boolean>;
+export declare const gitStageAll: (projectId: string) => Promise<boolean>;
+export declare const gitDiscard: (projectId: string, path: string) => Promise<boolean>;
+export declare const gitDiscardAll: (projectId: string) => Promise<boolean>;
+export declare const gitCheckout: (projectId: string, branch: string) => Promise<boolean>;
+export declare const gitCreateBranch: (projectId: string, name: string, from?: string) => Promise<boolean>;
+export declare const gitStashPush: (projectId: string, message?: string) => Promise<boolean>;
+export declare const gitStashPop: (projectId: string, index: number) => Promise<boolean>;
+export declare const gitStashDrop: (projectId: string, index: number) => Promise<boolean>;
+export declare const gitFetch: (projectId: string) => Promise<boolean>;
+export declare const gitPull: (projectId: string) => Promise<boolean>;
+export declare const gitPush: (projectId: string) => Promise<boolean>;
+export declare const gitSync: (projectId: string) => Promise<boolean>;
+export declare const gitRestoreFile: (projectId: string, sha: string, path: string) => Promise<boolean>;
+export declare function gitSaveNow(projectId: string): Promise<boolean>;
+export declare function gitCommit(projectId: string, message: string, amend?: boolean): Promise<boolean>;
+export declare function gitRevertCommit(projectId: string, sha: string): Promise<string | null>;
+export declare function gitInit(projectId: string): Promise<{
+    ok: boolean;
+    htmlUrl: string | null;
+    error?: string;
+}>;
+export declare const gitSetRemote: (projectId: string, url: string) => Promise<boolean>;
+export declare const gitCreateServerRepo: (projectId: string) => Promise<boolean>;
+export declare function gitSetAutoCommit(projectId: string, enabled: boolean, push: boolean): Promise<boolean>;
+export declare function clearGitError(projectId: string): void;
+export declare function workingDiffStat(status: GitStatus | null): {
+    added: number;
+    deleted: number;
+    files: number;
+};
+export type GitStripTone = 'changes' | 'ahead' | 'clean';
+export declare function gitStripStatus(status: GitStatus | null, unpushed: number): {
+    text: string;
+    tone: GitStripTone;
+};
+export declare function useGitState(projectId: string): GitProjectState;
+export declare function getGitState(projectId: string): GitProjectState;
+export declare function isGitStripAvailable(projectId: string): boolean;
+export declare function useGitStripAvailable(projectId: string | null): boolean;

@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // чатов» (v4): гейт живости (409 на ходе в полёте и живых фоновых агентах), выдача
 // архивного из GET /api/chats/{id} (не фильтруется никогда) и счётчик превью,
 // совпадающий с отбором тика правила (одной функцией GetArchiveRuleCandidates).
+[Trait("Category", "Host")]
 public class ChatsArchivedEndpointTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
@@ -218,9 +219,7 @@ public class ChatsArchivedEndpointTests(TestWebApplicationFactory factory)
         body.GetProperty("archiveAfterDays").ValueKind.Should().Be(JsonValueKind.Null);
         body.GetProperty("hasFirstRun").GetBoolean().Should().BeFalse();
 
-        // Запись порога (за флагом) отражается в чтении
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.ChatAutoArchive}",
-            new { enabled = true })).StatusCode.Should().Be(HttpStatusCode.OK);
+        // Запись порога отражается в чтении
         (await _client.PutAsJsonAsync("/api/chats/archive-days", new { days = 30 }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 

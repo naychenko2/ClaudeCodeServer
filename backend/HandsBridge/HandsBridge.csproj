@@ -41,6 +41,7 @@
   <ItemGroup>
     <ProjectReference Include="..\HandsBridge.Policy\HandsBridge.Policy.csproj" />
     <ProjectReference Include="..\HandsBridge.Browser\HandsBridge.Browser.csproj" />
+    <ProjectReference Include="..\HandsBridge.Scanning\HandsBridge.Scanning.csproj" />
   </ItemGroup>
 
   <!-- Публикация в каталог версии агента (ClaudeHomeServer.DeviceAgent.csproj): агент передаёт

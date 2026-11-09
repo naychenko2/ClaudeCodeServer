@@ -1,6 +1,7 @@
-import { lucideIcon } from '../../lib/lucideIcon';
+import { lucideGlyphName } from '../../lib/lucideIcon';
 import { C } from '../../lib/design';
-import { ICON_PROPS, ICON_SIZE } from './icons';
+import { GlyphIcon, ICON_PROPS, ICON_SIZE } from './icons';
+import { Blank } from '../../lib/projectGlyphs';
 
 interface Props {
   // Имя lucide-компонента из Session.topic (PascalCase: Cat, Bug, User). Пустой или
@@ -17,15 +18,14 @@ interface Props {
  * Незнакомое имя (модель промахнулась / бэк ушёл вперёд) молча не рисуется — чат не ломается.
  */
 export function ChatTopicIcon({ topic, size = ICON_SIZE.xs, color = C.textMuted }: Props) {
-  const Icon = lucideIcon(topic);
-  if (!Icon) return null;
-  // Каталога подписей больше нет — tooltip показывает само имя компонента
+  const name = lucideGlyphName(topic);
+  if (!name) return null;
+  // Каталога подписей больше нет — tooltip показывает само имя компонента.
+  // Пока чанк значка едет, обёртка держит его размер (minWidth/minHeight) — строка не прыгает
   return (
-    <span title={topic ?? undefined} aria-label={topic ?? undefined} style={{ display: 'flex', flexShrink: 0, color }}>
-      {/* Компонент не создаётся, а ВЫБИРАЕТСЯ из готового набора lucide по имени: состояния
-          у иконки нет, терять при пересоздании нечего */}
-      {/* eslint-disable-next-line react-hooks/static-components */}
-      <Icon {...ICON_PROPS} size={size} />
+    <span title={topic ?? undefined} aria-label={topic ?? undefined}
+      style={{ display: 'flex', flexShrink: 0, color, minWidth: size, minHeight: size }}>
+      <GlyphIcon name={name} fallback={Blank} {...ICON_PROPS} size={size} />
     </span>
   );
 }
@@ -43,8 +43,8 @@ export function ChatTopicIcon({ topic, size = ICON_SIZE.xs, color = C.textMuted 
 export function ChatTopicBackdrop({ topic, size = 48, opacity = 0.1, align = 'left' }: {
   topic?: string | null; size?: number; opacity?: number; align?: 'left' | 'right';
 }) {
-  const Icon = lucideIcon(topic);
-  if (!Icon) return null;
+  const name = lucideGlyphName(topic);
+  if (!name) return null;
   return (
     <div aria-hidden style={{
       // Край карточки (align): слева — за кромкой состояния, справа — на месте персоны,
@@ -55,9 +55,7 @@ export function ChatTopicBackdrop({ topic, size = 48, opacity = 0.1, align = 'le
       display: 'flex', alignItems: 'flex-start',
       justifyContent: align === 'right' ? 'flex-end' : 'flex-start',
     }}>
-      {/* см. ChatTopicIcon выше: иконка выбирается из набора lucide, а не создаётся */}
-      {/* eslint-disable-next-line react-hooks/static-components */}
-      <Icon {...ICON_PROPS} size={size} />
+      <GlyphIcon name={name} fallback={Blank} {...ICON_PROPS} size={size} />
     </div>
   );
 }

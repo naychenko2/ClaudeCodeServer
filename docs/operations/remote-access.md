@@ -170,7 +170,7 @@ net use P: \\<хост>@SSL\DavWWWRoot\projects\<проект> /user:<логин
 ```
 Можно и через «Подключить сетевой диск» в Explorer с тем же адресом и галкой
 «Использовать другие учётные данные». Если логин не проходит, введите его с доменом:
-`WORKGROUP\<логин>` или `<ИМЯ-ХОСТА>\<логин>` (см. «Домены» ниже).
+`WORKGROUP\<логин>` или `<ИМЯ-ХОСТА>\<логин>` заглавными (см. «Домены» ниже).
 
 ### Настройка NTLM на Linux (gss-ntlmssp)
 
@@ -182,6 +182,8 @@ net use P: \\<хост>@SSL\DavWWWRoot\projects\<проект> /user:<логин
    Тот же путь положите в `WebDav:NtlmUserFile` в `appsettings.Local.json` боевой машины: сервер
    пишет файл **только** по этому ключу. Переменную наследуют дочерние процессы, в том числе
    дев-стенды из ходов, и по одной переменной такой стенд писал бы в боевой файл.
+   Ключ в `Local.json` дев-стенда (его часто копируют с боя) больше не опасен, но и не нужен: файл
+   привязан к хозяину (см. ниже «Владелец файла»).
 4. `WebDav:NtlmMapWindowsNames: true` в `appsettings.Local.json`. Это opt-in сопоставления имени
    из Type3 с пользователем приложения. На Linux имя берётся из нашего же файла, и пароль к этому
    моменту уже проверен, но гейт один на обе платформы.
@@ -193,15 +195,40 @@ net use P: \\<хост>@SSL\DavWWWRoot\projects\<проект> /user:<логин
 Пока нет механизма, переменной, совпадения путей или самого файла, сервер предлагает только
 Basic. Иначе Mini-Redirector цепляется за Negotiate и крутит обречённое рукопожатие по кругу.
 
+### Владелец файла
+
+В шапке файла лежит строка `# owner: <путь users.json>` — каноничный путь `users.json` экземпляра,
+который файл ведёт. При старте: метки нет (старый формат) — экземпляр считает себя хозяином и
+ставит свою; метка совпала — работа как обычно; метка **чужая** — файл не читается и не пишется
+вообще (ни `Load`, ни `Retain`, ни `Record`, ни `Remove`), в лог идёт `ERROR` с обоими путями, а
+`NegotiateAvailable=false`, то есть этот экземпляр предлагает только Basic. Так дев-стенд с
+копией боевого `Local.json` не стирает строки боевых пользователей и не кладёт хэш дев-пароля под
+боевой логин (`admin`). Перенос данных на другой путь `users.json` отдаёт файл «чужому»: удалите
+строку `# owner:` (или файл) и перезапустите сервис, строки вернутся при следующих входах.
+
 ### Домены
 
 Домен из Type3 входит в NTLMv2-хэш **с учётом регистра**, а gss-ntlmssp берёт первую строку, где
-домен совпал без учёта регистра. Поэтому на каждого пользователя пишется строка на каждый домен
-из `WebDav:NtlmDomains` (по умолчанию `WORKGROUP` и имя хоста заглавными) и строка без домена
-последней. Какой домен прислал клиент, видно в логе: неудачный Type3 пишет предупреждение
-`NTLM отклонён: домен '…', пользователь '…'`, успешный — `WebDAV: NTLM-вход ДОМЕН\имя`.
-Если домена клиента нет в списке, добавьте его в `WebDav:NtlmDomains` и войдите в веб, чтобы
-файл переписался.
+домен совпал **без учёта** регистра (`ntlm_casecmp` в `gss_creds.c`), и дальше не ищет. Поэтому на
+каждого пользователя пишется строка на каждый домен из `WebDav:NtlmDomains` и строка без домена
+последней. По умолчанию (список пуст): `.`, `WORKGROUP` и имя хоста заглавными. Что шлёт клиент:
+
+| Ввод на Windows | Домен в Type3 | Строка файла |
+|---|---|---|
+| `andrey` (голый логин) | пустой или `.` (зависит от стека) | без домена / `.\andrey` |
+| `WORKGROUP\andrey` | `WORKGROUP` | `WORKGROUP\andrey` |
+| `AI\andrey` | `AI` | строка из `NtlmDomains` |
+| `workgroup\andrey` | `workgroup` | **не поддерживается** |
+
+Регистровые двойники (`workgroup` после `WORKGROUP`) недостижимы: первая совпавшая строка уже
+посчитана с другим регистром, хэш не сойдётся (проверено живым Windows 2026-10-08, отказ
+`GenericFailure`). Вводить домен надо в том написании, что стоит в списке. Дубли убираются только
+по точному написанию, регистр списка сохраняется. Какой домен прислал клиент, видно в логе:
+неудачный Type3 пишет предупреждение `NTLM отклонён: домен '…', пользователь '…'`, успешный —
+`WebDAV: NTLM-вход ДОМЕН\имя`. Если домена клиента нет в списке, добавьте его в
+`WebDav:NtlmDomains` и перезапустите сервис: при старте набор доменов в файле сверяется с
+конфигом, расхождение переписывает файл целиком (чужой экземпляр по метке владельца файл не
+трогает).
 
 ### Неверный пароль
 
@@ -226,27 +253,38 @@ Basic. Иначе Mini-Redirector цепляется за Negotiate и крут�
 2. Type2 всегда нёс `MsvAvFlags=0`. Windows SSPI правит эту пару в своей копии CHALLENGE_MESSAGE на месте
    (`|= MIC_PRESENT`) и считает MIC по изменённому Type2, поэтому подпись не сходилась. Без этой пары
    Windows считает MIC по Type2 с провода, как и клиенты по спецификации.
+3. Домен входит в NTLMv2-хэш в написании клиента, а Windows шлёт его непредсказуемо (`.`, имя клиентской
+   машины, в другом регистре). Строка без домена считалась с пустым доменом, строка с доменом — с написанием из
+   файла, поэтому чужой домен и `workgroup` вместо `WORKGROUP` давали `GenericFailure` (бой 2026-10-08, `VIDEO\anna`).
 
-**Патчи** (проверка MIC не ослаблена, меняется только выбор ключа и состав Type2):
+**Патчи** (проверка MIC и NTProofStr не ослаблена, меняются выбор ключа, состав Type2 и домен в хэше):
 [ntlm-key-exch-requires-sign-seal.diff](../../deploy/gss-ntlmssp/ntlm-key-exch-requires-sign-seal.diff) (`+ccs1`) и
-[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`).
-Пакет `1.2.0-1build5+ccs2` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
+[ntlm-no-empty-msvavflags-in-type2.diff](../../deploy/gss-ntlmssp/ntlm-no-empty-msvavflags-in-type2.diff) (`+ccs2`) и
+[ntlm-domainless-row-uses-client-domain.diff](../../deploy/gss-ntlmssp/ntlm-domainless-row-uses-client-domain.diff) (`+ccs3`):
+`gssntlm_srv_auth` пробует NTOWFv2 с доменом строки файла, затем с доменом из Type3 в точном написании клиента,
+затем без домена — строка без домена принимает любой домен клиента, `workgroup` проходит по строке `WORKGROUP`.
+Каждая попытка сверяется по NTProofStr, неверный пароль отказывает при любом домене.
+Пакет `1.2.0-1build5+ccs3` (Ubuntu 26.04) собирает [build-deb.sh](../../deploy/gss-ntlmssp/build-deb.sh) в контейнере;
 готовый .deb лежит в `deploy/gss-ntlmssp/out/` (в git не коммитится), тесты матрицы флагов — `build-deb.sh --test`.
-Пакет правит только акцептор (`gss_sec_ctx.c`). `+ccs1` Windows не пускает: нужен `+ccs2` или новее.
+Пакет правит только акцептор (`gss_sec_ctx.c`, `gss_auth.c`). `+ccs1` Windows не пускает, `+ccs2` не принимает произвольный домен клиента: нужен `+ccs3` или новее. Откат с `+ccs3` на `+ccs2` безопасен: строки `.`/`WORKGROUP`/`AI` и голая в файле остаются, как работали.
 
 **Установка (делает человек, на хосте с боевым `ccs.service`).** Пакет:
-`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb`, sha256
-`ea89f8576e721462da21e49c8801fa56a9cec7b4a9bc28eb4ebb512b1ec426e6` (`gssntlmssp.so` внутри — sha256
-`3f2c5b9803469985a801663eca9f7819918122cc8501e331e4ef2ab73f38ed97`; повторная сборка даёт ту же `.so`, но другой
-sha256 самого `.deb`).
+`/home/an/ccs-packages/gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb`, sha256
+`bc92de5799fbb59e732152c4551a24ae7173179ab20f20658b79a728bfe49d7e` (`gssntlmssp.so` внутри — sha256
+`04b388420b46db2a32193d4aa9f36ccac600cd48edf81e155353fa6c27933a92`; повторная сборка даёт ту же `.so`, но другой
+sha256 самого `.deb`). Прежний `+ccs2` (sha256 `ea89f857…26e6`) лежит рядом для отката.
 
 ```bash
-sha256sum gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb   # сверить с суммой выше
-sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs2_amd64.deb
+sha256sum gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb   # сверить с суммой выше
+sudo dpkg -i gss-ntlmssp_1.2.0-1build5+ccs3_amd64.deb
 sudo apt-mark hold gss-ntlmssp
 sudo systemctl restart ccs.service
 deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на месте
 ```
+
+**Проверка `+ccs3` (2026-10-08, стенд `192.168.7.83:5443`, `.so` с sha256 `04b38842…`).** Живой Windows: 200 на голый
+логин, `VIDEO\`, `ANYTHING\`, `workgroup\`, `WORKGROUP\`, `.\`; 401 на неверный пароль (`VIDEO\andrey`, голый). На `+ccs2`
+те же домены, кроме голого, давали `GenericFailure`.
 
 **Проверка.** Живой Windows (curl.exe `--negotiate`, Word по WebDAV) и бой 2026-10-06: `200`, в логе
 `WebDAV: NTLM-вход WORKGROUP\andrey`, неверный пароль — `401`. Воспроизведение без боевого сервера —
@@ -255,9 +293,9 @@ deploy/gss-ntlmssp/check-gss-ntlmssp.sh        # exit 0: патч и hold на �
 Трассировка gss-ntlmssp — `Environment=GSSNTLMSSP_DEBUG=/tmp/gssntlm.log` в юните (после проверки убрать).
 
 **Сторож отката.** `apt upgrade` без hold молча вернёт оригинал. Защиты две: hold и проверка
-[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs2` или новее, exit 2 —
+[check-gss-ntlmssp.sh](../../deploy/gss-ntlmssp/check-gss-ntlmssp.sh) (exit 1 — версия без `+ccs3` или новее, exit 2 —
 нет hold; печатает `WARNING` в stderr; добавьте вызов в `/opt/ccs/check-release.sh` или cron). Плюс сервер при
-старте пишет warning `gss-ntlmssp … без патча '+ccs2' или новее` (`NtlmUserFile`), если читает
+старте пишет warning `gss-ntlmssp … без патча '+ccs3' или новее` (`NtlmUserFile`), если читает
 `/var/lib/dpkg/status` и версия без суффикса.
 
 **Откат:** `sudo apt-mark unhold gss-ntlmssp && sudo apt install --reinstall gss-ntlmssp=1.2.0-1build5`

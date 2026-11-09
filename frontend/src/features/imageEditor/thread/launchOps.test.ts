@@ -17,14 +17,12 @@ vi.stubGlobal('window', win);
 const toasts: string[] = [];
 win.addEventListener('cc-local-toast', e => toasts.push((e as CustomEvent<{ title: string }>).detail.title));
 
-const { setFlagLocal, FLAGS } = await import('../../../lib/featureFlags');
 const { imageEditorApi } = await import('../api');
-const { pickOp } = await import('../format');
 const { __resetPrefs, ensurePrefs, prefsApi } = await import('./prefs');
 const { __applyThreads, __resetThreadStore, isWholeImage, setThreadMarks, setWholeImage } = await import('./threadStore');
 const { __resetImageModes, setImageMode } = await import('./modeState');
 const { launchThread } = await import('./useThreadLaunch');
-const { __resetPanelChoice, setCreateRatio, setPanelChoice } = await import('../context/ops');
+const { __resetPanelChoice } = await import('../context/ops');
 import type { ImageEditJobInput, ImageEditQuoteRequest } from '../api';
 import type { Mark } from '../marks';
 import type { ProjectPrefs } from './prefs';
@@ -66,72 +64,11 @@ beforeEach(async () => {
 });
 afterEach(() => {
   toasts.length = 0;
-  setFlagLocal(FLAGS.imagePanelV5, false);
   vi.restoreAllMocks();
 });
 
-describe('без режима (флаг image-panel-v5 выключен)', () => {
-  it.each([[false], [true]])('«Авто» уходит операцией pickOp (отметки %s)', async mask => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    if (mask) setThreadMarks(t.id, [MASK], { w: 100, h: 100 });
-    // Маску в node не нарисовать (нет canvas) — операцию и маску проверяем по котировке
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'сделай небо розовым' });
-    expect(quotes.at(-1)?.op).toBe(pickOp(true, mask));
-    expect(quotes.at(-1)?.hasMask).toBe(mask);
-    expect(quotes.at(-1)?.mode).toBe('auto');
-  });
-
-  it('режим подбора уходит в котировку у модели «Авто»', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setPanelChoice(P, { mode: 'photoreal' });
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'сделай небо розовым' });
-    expect(quotes.at(-1)?.mode).toBe('photoreal');
-  });
-
-  it('выбранная операция без промпта: один вариант', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setPanelChoice(P, { op: 'removeBackground' });
-    await launchThread(P, S, t, { kind: 'prompt', prompt: '' });
-    expect(quotes.at(-1)).toMatchObject({ op: 'removeBackground', count: 1 });
-    expect(started).toBe(1);
-    expect(toasts).toEqual([]);
-  });
-
-  it('недоступная операция не запускается', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setPanelChoice(P, { op: 'inpaint' });
-    expect(await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' })).toBe(false);
-    expect(started).toBe(0);
-    expect(toasts).toEqual(['Отметьте место кистью в редакторе картинки']);
-  });
-
-  it('«Вся картинка» запуск не меняет', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setThreadMarks(t.id, [MASK], { w: 100, h: 100 });
-    setWholeImage(t.id, true);
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'x' });
-    expect(quotes.at(-1)).toMatchObject({ op: 'inpaint', hasMask: true });
-  });
-
-  it('«По тексту» прежняя: пропорций «Создать» не берёт', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setCreateRatio(P, '9:16');
-    setPanelChoice(P, { op: 'generate' });
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(quotes.at(-1)?.op).toBe('generate');
-    expect(jobs.at(-1)?.aspectRatio).toBeUndefined();
-  });
-});
-
-describe('с режимом (флаг image-panel-v5)', () => {
+describe('с режимом', () => {
   beforeEach(async () => {
-    setFlagLocal(FLAGS.imagePanelV5, true);
     vi.spyOn(prefsApi, 'subscribe').mockImplementation(() => () => {});
     vi.spyOn(prefsApi, 'put').mockImplementation(async (_p, v) => v);
     localStorage.setItem(`cc-image-prefs-migrated:${P}`, '1');
@@ -160,22 +97,5 @@ describe('с режимом (флаг image-panel-v5)', () => {
     setWholeImage(t.id, false);
     await launchThread(P, S, t, { kind: 'prompt', prompt: 'небо розовое' });
     expect(quotes.at(-1)).toMatchObject({ op: 'inpaint', hasMask: true });
-  });
-
-  it('пропорции новой картинки уходят только с генерацией в «Создать»', async () => {
-    const t = thread();
-    __applyThreads(S, P, state(t));
-    setCreateRatio(P, '9:16');
-    setImageMode(S, 'create');
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(quotes.at(-1)?.op).toBe('generate');
-    expect(jobs.at(-1)?.aspectRatio).toBe('9:16');
-    setImageMode(S, 'edit');
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(jobs.at(-1)?.aspectRatio).toBeUndefined();
-    setImageMode(S, 'create');
-    setCreateRatio(P, null);
-    await launchThread(P, S, t, { kind: 'prompt', prompt: 'кот' });
-    expect(jobs.at(-1)?.aspectRatio).toBeUndefined();
   });
 });

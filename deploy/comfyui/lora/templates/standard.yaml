@@ -1,0 +1,62 @@
+# Пресет standard (ADR-026): константы ручного прогона v1 (~/lora/config/andreyk.yaml на GPU-машине,
+# 2000 шагов, ≈2,3 с/шаг). Правка значений — только через ADR новой версией пресета.
+# Плейсхолдеры <...> подставляет worker_lora.py: пути машины — из env семейства в workers.json,
+# прогон — из провода. С провода в yaml не попадает ничего, кроме slug, runId и триггера.
+job: extension
+config:
+  name: "<name>"
+  process:
+    - type: "sd_trainer"
+      training_folder: "<training_folder>"
+      device: cuda:0
+      # триггер уже в подписях («photo of ТРИГГЕР, head shot»), trigger_word не нужен — как в v1
+      network:
+        type: "lora"
+        linear: 16
+        linear_alpha: 16
+      save:
+        dtype: float16
+        save_every: 250
+        # финальный чекпоинт — шаг 1750 (ADR-026 §5.1); после него сохраняется только итог без номера
+        max_step_saves_to_keep: 1
+      datasets:
+        - folder_path: "<dataset_dir>"
+          caption_ext: "txt"
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [512, 768, 1024]
+      train:
+        batch_size: 1
+        cache_text_embeddings: true
+        steps: <steps>
+        gradient_accumulation: 1
+        train_unet: true
+        train_text_encoder: false
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        timestep_type: "shift"
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16
+        # пробные картинки в продукте выключены (ADR-026): +4 мин на каждые 250 шагов
+        disable_sampling: true
+      model:
+        name_or_path: "<base_weights>"
+        extras_name_or_path: "<extras_dir>"
+        arch: "qwen_image_2"
+        quantize: true
+        qtype: "convrot8"
+        quantize_te: true
+        qtype_te: "convrot8"
+        low_vram: true
+        model_kwargs:
+          rgba: false
+      sample:
+        sampler: "flowmatch"
+        sample_every: 1000000
+        prompts: []
+        seed: 42
+meta:
+  name: "[name]"
+  version: "1.0"

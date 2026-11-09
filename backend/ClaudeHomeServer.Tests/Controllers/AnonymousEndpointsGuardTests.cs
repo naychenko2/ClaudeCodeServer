@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 //  - эндпоинты, которые хост заводит только в Production (или по конфигу, которого в тестовом
 //    хосте нет).
 // Анонимность такой ветки проверяется её собственными тестами, а не этим списком.
+[Trait("Category", "Host")]
 public class AnonymousEndpointsGuardTests
 {
     // Запись — «владелец: МЕТОДЫ маршрут»; владелец — имя контроллера или «minimal» у минимальных API
@@ -69,6 +70,8 @@ public class AnonymousEndpointsGuardTests
         "minimal: ANY /gw/t/{turnId}/egress",
         "minimal: ANY /gw/t/{turnId}/llm/{**path}",
         "minimal: ANY /gw/t/{turnId}/mcp/{name}/{**tail}",
+        // OCR рук локального проекта — тот же TurnTokenEndpointFilter, что у остальных ручек шлюза
+        "minimal: POST /gw/t/{turnId}/ocr",
         "minimal: GET /.well-known/aihome-modules/jwks.json",
         // Раздача фронта (SPA)
         "minimal: GET,HEAD {*path:nonfile}",

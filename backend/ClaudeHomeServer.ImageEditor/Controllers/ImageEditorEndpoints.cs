@@ -1,8 +1,10 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
+using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
 using ClaudeHomeServer.Services.Media;
@@ -15,7 +17,7 @@ namespace ClaudeHomeServer.Services.ImageEditor.Controllers;
 // только проходят свой гейт и зовут методы отсюда. Всё, что читает диск проекта, берёт
 // scope.Project и у личной области отказывает до обращения к RootPath.
 //
-// Гейты по порядку: флаг и область (404, у наследника) → поставщик доступен (409
+// Гейты по порядку: область (404, у наследника) → поставщик доступен (409
 // provider_unavailable) → исполнитель задач подключён (503). Всё, что приходит из отключаемых
 // подсистем, — nullable (ADR-014): без Images нет растра, и transform с jobs отвечают 503
 // raster_unavailable, а не 500.
@@ -52,15 +54,63 @@ public abstract class ImageEditorEndpoints(
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
         var heavy = config?.GetValue("ImageEditor:HeavyFileMb", DefaultHeavyFileMb) ?? DefaultHeavyFileMb;
         var limits = ImageEditCatalog.DefaultLimits with { HeavyFileMb = heavy > 0 ? heavy : DefaultHeavyFileMb };
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, PreferLocal());
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, limits, preferLocal: true);
         // Без растра (подсистема картинок выключена) редактор не работает: ответ остаётся 200,
         // чтобы фронт показал причину, а не общий сбой
         if (jobs is null || raster is null) catalog = catalog with { Reason = ImageEditCatalogReasons.SubsystemDisabled };
         return Ok(catalog);
     }
 
+    private ImageProjectPrefsService? PrefsService => HttpContext?.RequestServices.GetService<ImageProjectPrefsService>();
+
+    // Формат проекта для генерации без явного формата в теле (ADR-025: умолчание — желание из префов)
+    private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(scope.Tenant, scope).Format;
+
+    // GET …/format?provider&model&op — состояние чипа «Формат»: всё посчитано на сервере (ADR-025 §3), у
+    // каждой ступени своя цена из той же котировки, что на кнопке запуска
+    protected async Task<IActionResult> FormatIn(ImageEditScope scope, string? provider, string? model, string? op, CancellationToken ct)
+    {
+        var editor = ImageEditCatalog.FindAvailable(editors, provider);
+        if (editor is null)
+            return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
+                ImageEditCatalog.UnavailableError(editors, provider));
+        var operation = Enum.TryParse<ImageEditOp>(op, ignoreCase: true, out var parsed) ? parsed : ImageEditOp.Generate;
+        var info = string.Equals(model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(model)
+            ? editor.PickModel(operation, EditMode.Auto, new EditTraits(false, 0, false))
+            : editor.Models.FirstOrDefault(m => string.Equals(m.Id, model.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (info is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                $"Модели «{model}» нет у поставщика {editor.Label}");
+
+        // Желание проекта относится к генерации; правка — «Как у исходника» на один запуск
+        var wish = operation == ImageEditOp.Generate ? StoredFormat(scope) : null;
+        var state = MediaFormatResolver.State(info.Caps.Format, wish);
+        if (jobs is null || info.Caps.Format is null || operation != ImageEditOp.Generate) return Ok(state);
+
+        var tiers = new List<FormatTierOption>();
+        foreach (var tier in state.Tiers)
+        {
+            if (tier.DisabledReason is not null) { tiers.Add(tier); continue; }
+            var probe = new ImageEditQuoteRequest(editor.Key, info.Id, EditMode.Auto, operation, 1, false,
+                Format: new MediaFormat(FormatModes.Aspect, state.Resolved.Aspect, tier.Tier, null, null,
+                    ClaudeHomeServer.Services.ChatContext.ContextActor.Human, DateTime.UtcNow));
+            var quoted = await jobs.QuoteAsync(scope.Tenant, scope.Key, probe, ct);
+            FormatPrice? price = quoted.Value?.Estimate is { Amount: { } amount } e ? new FormatPrice(amount, e.Unit, e.Approx) : null;
+            tiers.Add(tier with { Price = price });
+        }
+        return Ok(state with { Tiers = tiers });
+    }
+
     protected async Task<IActionResult> QuoteIn(ImageEditScope scope, ImageEditQuoteRequest req, CancellationToken ct)
     {
+        // Resolved считает только сервер; генерация без формата в теле берёт формат проекта
+        req = req with { Resolved = null };
+        // Желание в теле проходит те же белые списки, что и сохраняемое: «пропорции» без пропорций не маскируется под «как у модели»
+        if (req.Format is { } given && ImageProjectPrefsService.ValidateFormat(given) is { } badFormat)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, badFormat);
+        // Формат из префов (✦ агента) подставляется в генерацию человека, не дающую явного формата:
+        // ступень и цену генерации человек видит в котировке
+        if (req.Format is null && req.Op == ImageEditOp.Generate) req = req with { Format = StoredFormat(scope) };
         var editor = ImageEditCatalog.FindAvailable(editors, req.Provider);
         if (editor is null)
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
@@ -74,16 +124,31 @@ public abstract class ImageEditorEndpoints(
                 $"Число вариантов — от 1 до {maxCount}");
         if (jobs is null) return JobsUnavailable();
 
+        // Подстановка персонажа на лицо (ADR-028, этап 2): проверки a, b; детекция — только на запуске
+        if (req.FaceTarget is not null)
+        {
+            if (scope.Project is null)
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Подстановка персонажа на лицо — только в проекте");
+            // Персонаж задаётся внутри faceTarget.faces: верхний слаг вместе с faceTarget — двусмысленный вход
+            if (req.CharacterSlug is { Length: > 0 })
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "При подстановке на лицо персонаж задаётся в faceTarget.faces");
+            if (editor.Key != "local")
+                return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Подставлять персонажа можно только локальными моделями");
+        }
+
         // По ревизии контекста (ADR-023 §Д2.1): образцы, персонаж и размер — из стора, поля тела игнорируются
         ImageContextLaunch.Inputs? byContext = null;
         if (req.ContextRevision is { } revision)
         {
             if (context is null) return JobsUnavailable();
-            var resolved = context.Resolve(UserId, scope, req.SessionId, revision, req.Op);
+            var resolved = context.Resolve(scope.Tenant, scope, req.SessionId, revision, req.Op);
             if (resolved.ErrorCode is not null) return Map(resolved, _ => Ok());
             var (inputs, _, sessionId) = resolved.Value;
             byContext = inputs;
-            var size = await context.BaseSizeAsync(UserId, scope, sessionId, inputs, ct);
+            var size = await context.BaseSizeAsync(scope.Tenant, UserId, scope, sessionId, inputs, ct);
             req = req with
             {
                 References = inputs.ReferenceCount,
@@ -93,7 +158,7 @@ public abstract class ImageEditorEndpoints(
             };
         }
 
-        var quoted = await jobs.QuoteAsync(UserId, scope.Key, req, ct);
+        var quoted = await jobs.QuoteAsync(scope.Tenant, scope.Key, req, ct);
         if (byContext is null) return Map(quoted, Ok);
         // Строки «Чем» по операции запроса: источник один для строки контекста и панели (КТ-3)
         return Map(quoted, q => Ok(q with { Executors = ExecutorRows(req.Op, byContext.BaseHasImage, req.HasMask) }));
@@ -104,19 +169,24 @@ public abstract class ImageEditorEndpoints(
         var place = ImagePlaceKeys.ImageEditor;
         var adminProvider = placeSettings?.ProviderFor(place);
         var adminModel = adminProvider is null ? null : placeSettings?.ModelFor(place, adminProvider);
-        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: PreferLocal());
-        // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без флага
-        if (PreferLocal() && !ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
+        var catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel, preferLocal: true);
+        // Свою видеокарту «Авто» берёт только под операцию, которую она умеет; иначе — как без неё
+        if (!ImageExecutorRows.LocalCan(catalog, op, hasImage, hasMask))
             catalog = ImageEditCatalog.Build(editors, adminProvider, adminModel);
         return ImageExecutorRows.Build(catalog, editors, op, hasImage, hasMask);
     }
 
-    // Флаг local-media-default владельца (ADR-021 §2): «Авто» сначала пробует локальную модель
-    private bool PreferLocal() =>
-        HttpContext?.RequestServices.GetService<IFeatureFlagGate>()?.IsEnabled(UserId, FeatureFlagKeys.LocalMediaDefault) == true;
-
     protected async Task<IActionResult> StartIn(ImageEditScope scope, StartJobForm form, CancellationToken ct)
     {
+        // faceTarget: прислано, но не разбилось — явный отказ, не «обычная правка»
+        var (faceTarget, faceTargetAbsent) = ParseFaceTarget(form.FaceTarget);
+        if (!faceTargetAbsent && faceTarget is null)
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Не удалось разобрать faceTarget");
+        // Персонаж задаётся внутри faceTarget.faces: верхний слаг вместе с faceTarget — двусмысленный вход
+        if (faceTarget is not null && form.CharacterSlug is { Length: > 0 })
+            return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                "При подстановке на лицо персонаж задаётся в faceTarget.faces");
+
         // Проверки и сборка входа — в общем ImageEditLaunchAssembler (ADR-018 §2): тем же путём
         // пойдёт запуск агентом. Здесь только multipart → байты. Пути и персонаж у личной области
         // сборщик отвергает сам, до диска проекта
@@ -141,15 +211,17 @@ public abstract class ImageEditorEndpoints(
             ThreadSessionId: form.SessionId,
             ThreadId: form.ThreadId,
             VersionId: form.VersionId,
-            ContextRevision: form.ContextRevision);
+            ContextRevision: form.ContextRevision,
+            CharacterPhotos: form.CharacterPhotos,
+            FaceTarget: faceTarget);
 
-        var started = await launcher.LaunchAsync(UserId, scope, request, ct);
+        var started = await launcher.LaunchAsync(scope.Tenant, UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
     }
 
     // Образец с диска → рабочая папка модуля → uploadId для ref {upload}. Не картинку и слишком тяжёлый
     // файл отвергаем здесь, до записи на диск
-    protected async Task<IActionResult> UploadIn(IFormFile? file, CancellationToken ct)
+    protected async Task<IActionResult> UploadIn(ImageEditScope scope, IFormFile? file, CancellationToken ct)
     {
         if (context is null) return JobsUnavailable();
         if (file is null || file.Length == 0)
@@ -160,25 +232,25 @@ public abstract class ImageEditorEndpoints(
         var bytes = await ReadAsync(file, ct);
         if (ImageFormatSniffer.DetectExtension(bytes) is null)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Образец должен быть картинкой: png, jpeg, webp или gif");
-        return StatusCode(StatusCodes.Status201Created, new { uploadId = context.SaveUpload(UserId, bytes) });
+        return StatusCode(StatusCodes.Status201Created, new { uploadId = context.SaveUpload(scope.Tenant, bytes) });
     }
 
     protected IActionResult JobIn(ImageEditScope scope, string jobId)
     {
-        var job = jobs?.Get(UserId, scope.Key, jobId);
+        var job = jobs?.Get(scope.Tenant, scope.Key, jobId);
         return job is null ? JobNotFound() : Ok(job);
     }
 
     protected async Task<IActionResult> CancelIn(ImageEditScope scope, string jobId, CancellationToken ct)
     {
         if (jobs is null) return JobNotFound();
-        var job = await jobs.CancelAsync(UserId, scope.Key, jobId, ct);
+        var job = await jobs.CancelAsync(scope.Tenant, scope.Key, jobId, ct);
         return job is null ? JobNotFound() : Ok(job);
     }
 
     protected IActionResult VariantIn(ImageEditScope scope, string jobId, int variant)
     {
-        var image = jobs?.OpenVariant(UserId, scope.Key, jobId, variant);
+        var image = jobs?.OpenVariant(scope.Tenant, scope.Key, jobId, variant);
         return image is null ? JobNotFound() : File(image.Bytes, image.ContentType);
     }
 
@@ -195,7 +267,7 @@ public abstract class ImageEditorEndpoints(
             if (scope.Project is not { } project)
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "У чата вне проекта нет файлов проекта: правка — только от шага");
-            if (!TryJoinInside(project.RootPath, rel, out var full))
+            if (!TryJoinInside(project.RootPath, rel, out var full) || PrivateAttachments.IsForeignResolved(project.RootPath, rel, UserId))
                 return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                     "Путь вне папки проекта или идёт через символическую ссылку");
             var info = new FileInfo(full);
@@ -208,12 +280,12 @@ public abstract class ImageEditorEndpoints(
                 await System.IO.File.ReadAllBytesAsync(full, ct));
         }
 
-        return Map(steps.Transform(UserId, scope.Key, req, file, dryRun), Ok);
+        return Map(steps.Transform(scope.Tenant, scope.Key, req, file, dryRun), Ok);
     }
 
     protected IActionResult StepIn(ImageEditScope scope, string stepId)
     {
-        if (steps?.Open(UserId, scope.Key, stepId) is not { } found)
+        if (steps?.Open(scope.Tenant, scope.Key, stepId) is not { } found)
             return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
         return File(found.Image.Bytes, found.Image.ContentType);
     }
@@ -237,6 +309,8 @@ public abstract class ImageEditorEndpoints(
         public List<string>? ReferencePathRoles { get; set; }
         // Подключённый персонаж проекта (characters/<slug>/)
         public string? CharacterSlug { get; set; }
+        // Явный список фото персонажа (ADR-027 §8): имена файлов манифеста, порядок значим
+        public List<string>? CharacterPhotos { get; set; }
         // Возврат размера оригинала после скачивания; не передано — true (ADR-018 §9)
         public bool? MatchSourceSize { get; set; }
         // Шаг истории, с которого запущена правка: родитель шагов из её вариантов
@@ -252,6 +326,12 @@ public abstract class ImageEditorEndpoints(
         // Ревизия контекста чата (ADR-023 §Д2.1): с ней входы берутся из стора, а Source, References,
         // ReferencePaths, CharacterSlug, ThreadId и VersionId тела игнорируются; не совпала — 409 context_changed
         public long? ContextRevision { get; set; }
+        // Подстановка персонажа на лицо (ADR-028, этап 3): JSON-строка
+        // {versionId, facesKey, faces: [{face, characterSlug}]}. Пустая строка (поле прислано, но
+        // пустое) — не «нет поля»: ConvertEmptyStringToNull=false, чтобы её отличить от отсутствия
+        // и отвергнуть как «Не удалось разобрать faceTarget», а не проглотить как обычную правку
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
+        public string? FaceTarget { get; set; }
     }
 
     // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)
@@ -276,23 +356,35 @@ public abstract class ImageEditorEndpoints(
     protected IActionResult JobNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена");
 
+    // Единый контракт: provider_unavailable — 409 везде; busy — 503
     protected IActionResult Map<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok)
     {
         if (result.ErrorCode is null && result.Value is not null) return ok(result.Value);
         var code = result.ErrorCode ?? ImageEditErrorCodes.InvalidRequest;
         var status = code switch
         {
-            ImageEditErrorCodes.ProviderUnavailable or ImageEditErrorCodes.NameTaken
-                or ImageEditErrorCodes.ContextChanged => StatusCodes.Status409Conflict,
+            ImageEditErrorCodes.NameTaken or ImageEditErrorCodes.ContextChanged
+                or ImageEditErrorCodes.FacesChanged or ImageEditErrorCodes.ProviderUnavailable
+                => StatusCodes.Status409Conflict,
             ImageEditErrorCodes.QuoteNotFound or ImageEditErrorCodes.JobNotFound
                 or ImageEditErrorCodes.CharacterNotFound or ImageEditErrorCodes.StepNotFound
-                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound => StatusCodes.Status404NotFound,
+                or ImageEditErrorCodes.ThreadNotFound or ImageEditErrorCodes.VersionNotFound =>StatusCodes.Status404NotFound,
             ImageEditErrorCodes.TooManyJobs => StatusCodes.Status429TooManyRequests,
-            ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable => StatusCodes.Status503ServiceUnavailable,
+            ImageEditErrorCodes.Unavailable or ImageEditErrorCodes.RasterUnavailable
+                or ImageEditErrorCodes.Busy => StatusCodes.Status503ServiceUnavailable,
             _ => StatusCodes.Status400BadRequest,
         };
-        // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата
-        if (result.Payload is { } payload) return StatusCode(status, payload);
+        // context_changed несёт свежий контекст: тело то же, что у ручек контекста чата;
+        // отказ по лицу — FaceRefusalResponse {error, code, face}
+        if (result.Payload is { } payload)
+        {
+            // faces_changed: свежий список лиц плюс явные code и error (ADR-028, этап 3).
+            // Текст — константа, не result.Error: ассемблер (чужой файл) может его сменить, а
+            // контракт HTTP обязан быть стабильным
+            if (code == ImageEditErrorCodes.FacesChanged && payload is ImageThreadFacesResponse faces)
+                return StatusCode(status, FacesChangedResponse.From(faces, "Картинка изменилась — лица найдены заново"));
+            return StatusCode(status, payload);
+        }
         return Error(status, code, result.Error ?? "Запрос не выполнен");
     }
 
@@ -301,6 +393,45 @@ public abstract class ImageEditorEndpoints(
         && Enum.TryParse<ReferenceRole>(roles[index], ignoreCase: true, out var role)
             ? role
             : ReferenceRole.Object;
+
+    // JSON-строка {versionId, facesKey, faces: [{face, characterSlug}]} → FaceTarget.
+    // Возвращает (цель, absent): absent=true — поля нет (обычная правка); absent=false и цель null —
+    // прислано, но не разбилось (не-JSON, "{}", "null", неверные типы) → явный отказ, не «обычная правка».
+    // Разбор безопасный: любой неверный тип — отказ, а не 500 (GetInt32/GetString на чужом типе бросают).
+    private static (FaceTarget? Target, bool Absent) ParseFaceTarget(string? json)
+    {
+        if (json is null) return (null, true);
+        if (string.IsNullOrWhiteSpace(json)) return (null, false);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != System.Text.Json.JsonValueKind.Object) return (null, false);
+            if (!root.TryGetProperty("versionId", out var vid) ||
+                !root.TryGetProperty("facesKey", out var key) ||
+                !root.TryGetProperty("faces", out var facesArr)) return (null, false);
+            if (vid.ValueKind != System.Text.Json.JsonValueKind.String ||
+                key.ValueKind != System.Text.Json.JsonValueKind.String) return (null, false);
+            if (facesArr.ValueKind != System.Text.Json.JsonValueKind.Array) return (null, false);
+            var faces = new List<FaceAssignment>();
+            foreach (var el in facesArr.EnumerateArray())
+            {
+                if (el.ValueKind != System.Text.Json.JsonValueKind.Object) return (null, false);
+                if (!el.TryGetProperty("face", out var face) ||
+                    !el.TryGetProperty("characterSlug", out var slug)) return (null, false);
+                if (face.ValueKind != System.Text.Json.JsonValueKind.Number ||
+                    !face.TryGetInt32(out var faceNum)) return (null, false);
+                // characterSlug: строка; null — пустой (обязательность проверит FaceTargetRules)
+                string slugStr;
+                if (slug.ValueKind == System.Text.Json.JsonValueKind.String) slugStr = slug.GetString()!;
+                else if (slug.ValueKind == System.Text.Json.JsonValueKind.Null) slugStr = "";
+                else return (null, false);
+                faces.Add(new FaceAssignment(faceNum, slugStr));
+            }
+            return (new FaceTarget(vid.GetString()!, key.GetString()!, faces), false);
+        }
+        catch (System.Text.Json.JsonException) { return (null, false); }
+    }
 
     protected static async Task<byte[]> ReadAsync(IFormFile file, CancellationToken ct)
     {

@@ -26,6 +26,8 @@ public class TaskStoreWriteTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
+    private static readonly JsonSerializerOptions Web = new(JsonSerializerDefaults.Web);
+
     private string StorePath => Path.Combine(_dir, "tasks.json");
 
     // debounceMs: null — дефолт продукта, 0 — синхронная запись, N — окно дебаунса
@@ -39,6 +41,128 @@ public class TaskStoreWriteTests : IDisposable
         var manager = new TaskManager(new ConfigurationBuilder().AddInMemoryCollection(settings).Build());
         _created.Add(manager);
         return manager;
+    }
+
+    // ─── Голос фичи (B3): совместимость формата ──────────────────────────────
+
+    // Мутация (c1): сделать Note обязательным/переименовать — старый JSON не читается, тест краснеет.
+    [Fact]
+    public void Note_СтарыйJsonБезNote_Читается()
+    {
+        var back = JsonSerializer.Deserialize<TaskItem>("{\"title\":\"старая\"}", Web)!;
+
+        back.Title.Should().Be("старая");
+        back.Note.Should().BeNull();
+    }
+
+    [Fact]
+    public void Note_КруговаяСериализация_ДаетТотЖеОбъект()
+    {
+        var note = new FeatureNote("голос", new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc),
+            "sess", false, "review", "running");
+        var item = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, Note = note };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+
+        back.Note.Should().Be(note);
+    }
+
+    // Оценка оркестратора в голосе: круговая сериализация; запись старого формата (без estimate) читается
+    // с Estimate = null — стор и бэкап не мигрируем.
+    [Fact]
+    public void Note_ОценкаКруговаяСериализацияИСтарыйФорматБезОценки()
+    {
+        var at = new DateTime(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
+        var estimate = new FeatureEstimate(["ревью", "финал"], 90, "дольше всех — фронт");
+        var item = new TaskItem
+        {
+            Title = "эпик", Role = TaskRoles.Feature, InitialEtaMinutes = 240,
+            Note = new FeatureNote("голос", at, "sess", false, "review", "running", estimate),
+        };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+
+        back.Note!.Estimate.Should().BeEquivalentTo(estimate);
+        back.InitialEtaMinutes.Should().Be(240);
+
+        const string old = """{"title":"эпик","role":"feature","note":{"text":"голос","at":"2026-10-25T12:00:00Z","bySessionId":"s","byUser":false,"stageAtWrite":"review","stateAtWrite":"running"}}""";
+        var legacy = JsonSerializer.Deserialize<TaskItem>(old, Web)!;
+        legacy.Note!.Text.Should().Be("голос");
+        legacy.Note.Estimate.Should().BeNull();
+        legacy.InitialEtaMinutes.Should().BeNull();
+
+        // Запись с оценкой старого формата (done/total/…): читается без исключения, срок сохраняется.
+        const string oldEstimate = """{"title":"эпик","role":"feature","note":{"text":"голос","at":"2026-10-25T12:00:00Z","bySessionId":"s","byUser":false,"stageAtWrite":"review","stateAtWrite":"running","estimate":{"done":4,"total":9,"inProgress":3,"percent":60,"remaining":["финал"],"etaMinutes":160,"why":null}}}""";
+        var withOld = JsonSerializer.Deserialize<TaskItem>(oldEstimate, Web)!;
+        withOld.Note!.Estimate!.EtaMinutes.Should().Be(160);
+        withOld.Note.Estimate.Remaining.Should().Equal("финал");
+    }
+
+    // Голос переживает перезагрузку стора с диска.
+    [Fact]
+    public void Note_ПереживаетПерезагрузкуСтора()
+    {
+        var sut = NewManager();
+        var epic = sut.Create("proj-1", "user-1", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        sut.SetFeatureNote(epic.Id, "жив", "sess", false, "prod", "running");
+
+        var reloaded = NewManager();
+
+        reloaded.GetById(epic.Id)!.Note!.Text.Should().Be("жив");
+    }
+
+    // ─── S2b-1: автор и исполнитель (совместимость формата) ───────────────────
+
+    // Старый JSON без новых полей читается как null (мутация: сделать поля обязательными
+    // или переименовать — старый файл не читается, тест красный).
+    [Fact]
+    public void ПоляИсполнителя_СтарыйJsonБезНих_ЧитаетсяКакNull()
+    {
+        var back = JsonSerializer.Deserialize<TaskItem>("{\"title\":\"старая\"}", Web)!;
+
+        back.AssigneeUserId.Should().BeNull();
+        back.CreatedByUserId.Should().BeNull();
+    }
+
+    // WhenWritingNull: null-поля не входят в файл стора — агентская задача (ни автора,
+    // ни исполнителя) пишется ровно как до правки.
+    [Fact]
+    public void ПоляИсполнителя_Null_ВФайлНеПишутся()
+    {
+        var sut = NewManager();
+        sut.Create("proj-1", "user-1", new CreateTaskRequest("агентская", SourceSessionId: "sess-1"));
+
+        var json = File.ReadAllText(StorePath);
+
+        json.Should().NotContain("AssigneeUserId").And.NotContain("CreatedByUserId");
+    }
+
+    // Автор человеческой записи переживает перезагрузку стора.
+    [Fact]
+    public void CreatedByUserId_ПереживаетПерезагрузкуСтора()
+    {
+        var sut = NewManager();
+        var task = sut.Create("proj-1", "user-1", new CreateTaskRequest("из UI", CreatedByHuman: true));
+
+        var reloaded = NewManager();
+
+        reloaded.GetById(task.Id)!.CreatedByUserId.Should().Be("user-1");
+    }
+
+    // Старый файл на диске (без новых ключей) читается штатно, «Me» в нём резолвится
+    // владельцу: старые задачи исполнителя не меняют.
+    [Fact]
+    public void СтарыйФайлБезНовыхПолей_ЧитаетсяMeРезолвитсяВладельцем()
+    {
+        File.WriteAllText(StorePath,
+            """[{"Id":"legacy-1","OwnerId":"owner-1","ProjectId":"proj-1","Title":"старая","Assignee":0}]""");
+
+        var sut = NewManager();
+
+        var task = sut.GetById("legacy-1");
+        task.Should().NotBeNull();
+        task!.CreatedByUserId.Should().BeNull("старая запись без автора — поле остаётся null");
+        TaskManager.ResolveMeUserId(task).Should().Be("owner-1");
     }
 
     // ─── Формат записи ───────────────────────────────────────────────────────

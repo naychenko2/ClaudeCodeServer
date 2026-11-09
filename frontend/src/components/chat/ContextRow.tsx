@@ -1,6 +1,6 @@
 // Строка контекста хода: связка стора контекста (lib/chatContext) и git-чипа с отрисовкой
 // ContextRowView. Открытость правой панели сюда не приходит: строка от неё не зависит.
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { memo, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { File as FileIcon } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { useContainerWidth } from '../../hooks/useContainerWidth';
@@ -35,19 +35,24 @@ interface Props {
   onCommitAll: () => void;
   // Открыть объект в правой панели «Контекст»; по умолчанию — revealContextPanel
   onOpenPrimary?: () => void;
+  // Полоса-подсказка над строкой (ContinueHint): прокидывается в ContextRowView.notice
+  notice?: ReactNode;
 }
 
 const iconOf = (kind: string): ReactNode =>
   getKindApi(kind)?.icon(kind) ?? <FileIcon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
 
-export function ContextRow(props: Props) {
+// memo: пропсы (session, project, turnTree, onCommit*) держат стабильные ссылки, пока
+// содержимое не изменилось (ChatPanel: turnTree — стабильный ref, commit-обработчики —
+// useCallback) — строка не перерисовывается на дельты ленты, а только на смену контекста.
+export const ContextRow = memo(function ContextRow(props: Props) {
   return (
     <>
       <ContextRowBody {...props} />
       <ContextSheet session={props.session} project={props.project} />
     </>
   );
-}
+});
 
 function ContextRowBody(props: Props) {
   const { session, onCommitOwn, onCommitAll } = props;
@@ -96,7 +101,7 @@ function WithGit(props: Props & { project: Project }) {
   );
 }
 
-function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
+function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
   const sessionId = session.id;
   // Клик по чипу объекта открывает панель «Контекст», а открытую мигает карточкой «С чем»
   const onOpenPrimary = onOpenPrimaryProp ?? (() => { revealContextPanel(sessionId); });
@@ -118,6 +123,8 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
   // а в зависимости мемо он не входит. Цену вызова держит контракт (types.ts): вид отдаёт стабильную модель
   const sel = primary ? selectRowAction(getKindApi(primary.kind), kindCtx, primary, refs) : null;
   const action: ContextAction | null = sel?.action ?? null;
+  // Чип «Формат» (ADR-025): у вида с `format`, в том числе в «Чате» (action = null)
+  const format = primary ? getKindApi(primary.kind)?.format?.(kindCtx, action?.id ?? null) ?? null : null;
   const exec: RowExec | null = sel?.executors
     ? {
         rows: sel.executors.rows, value: sel.executors.value, onChange: sel.executors.onChange,
@@ -134,6 +141,8 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
         primary={primary}
         refs={refs}
         exec={exec}
+        format={format}
+        projectName={project?.name ?? null}
         actionLabel={action?.label ?? null}
         actionOp={action?.op ?? null}
         iconOf={iconOf}
@@ -143,6 +152,7 @@ function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp,
         onOpenPrimary={onOpenPrimary}
         onDetach={id => { void detachRef(sessionId, id); }}
         onClear={() => { void clearContext(sessionId); }}
+        notice={notice}
       />
     </div>
   );

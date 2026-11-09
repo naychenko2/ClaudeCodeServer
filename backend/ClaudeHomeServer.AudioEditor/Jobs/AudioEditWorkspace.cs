@@ -24,6 +24,24 @@ public sealed class AudioEditWorkspace(string root)
     public string JobDir(string ownerId, string jobId) =>
         Path.Combine(Root, Safe(ownerId), Safe(jobId));
 
+    // Числа вариантов задачи (подпапки {n}) — для истории (ADR-030): сколько файлов результата есть
+    public IReadOnlyList<int> VariantNumbers(string ownerId, string jobId)
+    {
+        var dir = JobDir(ownerId, jobId);
+        if (!Directory.Exists(dir)) return [];
+        var result = new List<int>();
+        foreach (var sub in Directory.EnumerateDirectories(dir))
+            if (int.TryParse(Path.GetFileName(sub), out var n)) result.Add(n);
+        return result.OrderBy(n => n).ToList();
+    }
+
+    // Основной файл роли main варианта (результат); нет — null
+    public string? MainFile(string ownerId, string jobId, int variant)
+    {
+        var dir = Path.Combine(JobDir(ownerId, jobId), variant.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return Directory.Exists(dir) ? Directory.EnumerateFiles(dir, "main*").FirstOrDefault() : null;
+    }
+
     // Файл варианта: {jobId}/{variant}/{роль}{расширение}; стем «stem:vocals» ложится как stem-vocals.
     // Возвращает путь от папки задачи через «/» — его хранит версия нити
     public string SaveFile(string ownerId, string jobId, int variant, string role, byte[] bytes, string extension)

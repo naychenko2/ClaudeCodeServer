@@ -29,9 +29,22 @@ export interface ImageThreadVersion {
   steps: string[];
   currentStepId: string | null;
   createdAt: string;
+  // Сходство лица с эталоном персонажа (косинус); нет поля — не считалось или лицо не найдено (это видно по соседям запуска)
+  similarity?: number | null;
+  // Самая похожая среди версий своего запуска
+  mostSimilar?: boolean;
 }
 
 export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
+
+// Какие фото персонажа ушли драйверу и почему (ADR-027 §8). Photos — имена файлов манифеста
+// в порядке отправки (до 3). Pick: auto — подобрано по сцене, manual — явный список, fallback — порядок.
+export interface ImageThreadCharacter {
+  slug: string;
+  photos: string[];
+  pick: 'auto' | 'manual' | 'fallback';
+  scene: { angle: string | null; pitch: string | null; emotion: string | null } | null;
+}
 
 // Запуск ИИ в нить: его якорь в ленте — запись image_launch_versions с тем же jobId
 export interface ImageThreadLaunch {
@@ -42,6 +55,26 @@ export interface ImageThreadLaunch {
   status: ImageThreadLaunchStatus;
   initiator: 'human' | 'agent';
   prompt: string | null;
+  // Персонаж запуска; null — подбор не работал (старые нити)
+  character?: ImageThreadCharacter | null;
+  // Операция запуска (generate / edit / inpaint / outpaint / …); null — старые нити
+  // и запуски без операции (обрезка, local-media)
+  op?: string | null;
+  // Подстановка персонажа на лицо (ADR-028, этап 2): номер лица, bbox и slug персонажа
+  // для подписи карточки «{Имя} → лицо {n}»; null — запуск без подстановки (старые нити)
+  faceTarget?: { n: number; bBox?: number[]; characterSlug: string } | null;
+  // Подстановка нескольких персонажей (ADR-028, этап 3): по элементу на лицо в порядке проходов;
+  // similarity — сходство лица (null — не считалось), status — итог прохода (нет — запуск идёт).
+  // Старый одиночный faceTarget читается рядом — на случай ответа старого сервера
+  faceTargets?: ImageThreadFaceTarget[] | null;
+}
+
+export interface ImageThreadFaceTarget {
+  n: number;
+  bBox?: number[];
+  characterSlug: string;
+  similarity?: number | null;
+  status?: 'done' | 'failed' | 'cancelled' | null;
 }
 
 export interface ImageThreadSettings {
@@ -112,7 +145,12 @@ const one = (projectId: string, sessionId: string, threadId: string) =>
 const post = <T>(url: string, body: unknown, method = 'POST') =>
   request<T>(url, { method, body: JSON.stringify(body) });
 
+// «Обрезать» из «Формата» (ADR-025 §4): новая версия нити без ИИ; dryRun — только размер результата
+export interface ThreadCropResponse { width: number; height: number; aspect: string; versionId: string | null; state: ImageThreadsState }
+
 export const threadsApi = {
+  crop: (projectId: string, sessionId: string, threadId: string, body: { aspect: string; anchor: string; versionId?: string | null; dryRun?: boolean }) =>
+    request<ThreadCropResponse>(`${one(projectId, sessionId, threadId)}/crop`, { method: 'POST', body: JSON.stringify(body), timeoutMs: 60_000 }),
   get: (projectId: string, sessionId: string) =>
     request<ImageThreadsState>(base(projectId, sessionId), { live: true }),
   // file — взять файл проекта в работу; draftFolder — черновик «Новая картинка»

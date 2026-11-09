@@ -16,6 +16,27 @@ public class LlmProviderRegistry
     // Служебный ключ секции: общий профиль облегчённого контекста, а не провайдер
     public const string LightProfileKey = "LightProfile";
 
+    // Служебный ключ секции: потолки внутренних повторов CLI (429/529), а не провайдер.
+    // Читается отдельно от провайдеров (см. конструктор) и применяется на КАЖДОМ запуске,
+    // включая родной Claude — это глобальная политика, а не свойство провайдера.
+    public const string RetryKey = "Retry";
+
+    // Имена env-ручек внутренних повторов CLI (2.1.246+). Ставятся на каждом запуске, чтобы
+    // 429/529 доходил до TurnErrorClassifier за десятки секунд, а не минуты (ADR-007 §4).
+    public const string EnvOverloadedRetryBaseDelayMs = "CLAUDE_CODE_OVERLOADED_RETRY_BASE_DELAY_MS";
+    public const string EnvOverloadedRetryMaxDelayMs = "CLAUDE_CODE_OVERLOADED_RETRY_MAX_DELAY_MS";
+    public const string EnvRetryWatchdogMaxWaitMs = "CLAUDE_CODE_RETRY_WATCHDOG_MAX_WAIT_MS";
+    public const string EnvNonStreamingTimeoutRetries = "CLAUDE_CODE_NONSTREAMING_TIMEOUT_RETRIES";
+
+    // Встроенные дефолты «короткого backoff»: применяются, когда значение в конфиге 0/отсутствует.
+    // Десятки секунд, не минуты: базовый повтор 2 с, потолок между повторами 10 с, watchdog 30 с,
+    // non-streaming не больше 2 повторных отправок. Значения — в конфиге LlmProviders:Retry,
+    // здесь только fail-open запас, чтобы политика держалась, даже если секцию не заполнили.
+    internal const int DefaultOverloadedRetryBaseDelayMs = 2000;
+    internal const int DefaultOverloadedRetryMaxDelayMs = 10000;
+    internal const int DefaultRetryWatchdogMaxWaitMs = 30000;
+    internal const int DefaultNonStreamingTimeoutRetries = 2;
+
     // Заглушка токена для локального провайдера (vLLM/llama.cpp). Локальный сервер
     // авторизацию игнорирует, но claude CLI требует непустой ANTHROPIC_AUTH_TOKEN —
     // иначе отбивает «Not logged in» ещё до запроса. Говорящее значение: при разборе
@@ -35,6 +56,9 @@ public class LlmProviderRegistry
     // Проба локального эндпоинта для подстановки живого max_model_len (см. BuildCliEnv).
     // null — старый конструктор без DI (тесты без проб); fail-open, поведение прежнее.
     private readonly ILocalEndpointProbe? _localProbe;
+    // Потолки внутренних повторов CLI (LlmProviders:Retry). null — секция не задана,
+    // RetryCeilings/RetryWatchdogMaxWaitMs подставят встроенные дефолты.
+    private readonly LlmRetryPolicy? _retry;
 
     public LlmProviderRegistry(IConfiguration config, ILocalEndpointProbe? localProbe = null)
     {
@@ -43,11 +67,16 @@ public class LlmProviderRegistry
         foreach (var child in config.GetSection(Section).GetChildren())
         {
             if (string.Equals(child.Key, LightProfileKey, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(child.Key, RetryKey, StringComparison.OrdinalIgnoreCase)) continue;
             var cfg = child.Get<LlmProviderConfig>();
             if (cfg is null) continue;
             cfg.Key = child.Key.ToLowerInvariant();
             _providers[cfg.Key] = cfg;
         }
+
+        // Потолки внутренних повторов CLI: секция LlmProviders:Retry. null — секция не задана,
+        // RetryCeilings/RetryWatchdogMaxWaitMs подставят встроенные дефолты (см. константы выше).
+        _retry = config.GetSection($"{Section}:{RetryKey}").Get<LlmRetryPolicy>();
 
         _lightProfile = config.GetSection($"{Section}:{LightProfileKey}").Get<LightProfile>()
             ?? new LightProfile { KeepMcpServers = ["tasks", "memory", "codegraph", "websearch", "watch"] };
@@ -75,6 +104,41 @@ public class LlmProviderRegistry
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
+
+    // Env-ручки внутренних повторов CLI, выставленные на каждом запуске. Глобальная
+    // политика (не свойство провайдера): ClaudeSession склеивает её в envOverrides для
+    // любого хода — и родного Claude, и стороннего. Значения из LlmProviders:Retry, 0/нет
+    // → встроенные дефолты (см. DefaultRetry*). Словарь всегда с четырьмя ключами: «выключить
+    // потолок» — не наш случай, у нас он всегда «короткий».
+    public IReadOnlyDictionary<string, string> RetryCeilings
+    {
+        get
+        {
+            return new Dictionary<string, string>
+            {
+                [EnvOverloadedRetryBaseDelayMs] =
+                    RetryValue(_retry?.OverloadedRetryBaseDelayMs, DefaultOverloadedRetryBaseDelayMs).ToString(CultureInfo.InvariantCulture),
+                [EnvOverloadedRetryMaxDelayMs] =
+                    RetryValue(_retry?.OverloadedRetryMaxDelayMs, DefaultOverloadedRetryMaxDelayMs).ToString(CultureInfo.InvariantCulture),
+                [EnvRetryWatchdogMaxWaitMs] =
+                    RetryValue(_retry?.RetryWatchdogMaxWaitMs, DefaultRetryWatchdogMaxWaitMs).ToString(CultureInfo.InvariantCulture),
+                [EnvNonStreamingTimeoutRetries] =
+                    RetryValue(_retry?.NonStreamingTimeoutRetries, DefaultNonStreamingTimeoutRetries).ToString(CultureInfo.InvariantCulture),
+            };
+        }
+    }
+
+    // Потолок ожидания retry-watchdog, применённый к запуску (для паспорта хода: «насколько
+    // долго CLI мог переждать 429/529 внутри процесса, прежде чем отдать ход нам»). Всегда
+    // число (встроенный дефолт, если секция конфига не задана) — паспорт не зависит от наличия
+    // секции: политика «короткий backoff» держится по умолчанию.
+    public int RetryWatchdogMaxWaitMs =>
+        RetryValue(_retry?.RetryWatchdogMaxWaitMs, DefaultRetryWatchdogMaxWaitMs);
+
+    // Значение из конфига (0/отсутствует → встроенный дефолт). int? потому что _retry?.X —
+    // null, когда секция LlmProviders:Retry не задана.
+    private static int RetryValue(int? configured, int fallback) =>
+        configured is > 0 ? configured.Value : fallback;
 
     // Пользовательский .claude.json (сосед папки ~/.claude) — источник user-scope
     // MCP-серверов (claude mcp add), которые изолированный профиль провайдера не видит
@@ -159,6 +223,7 @@ public class LlmProviderRegistry
     //    сменили без ведома человека, и полный контекст на ней он не выбирал;
     //  • чат без персоны — как раньше, решает провайдер модели: у него свой профиль
     //    (BareMode/Trim/KeepMcpTools/RecallInTurnText) или его нет;
+    //  • RecallInTurnText при этом читается и отдельно, мимо профиля — RecallInTurnTextFor;
     //  • иначе в чате с персоной решает Persona.LightContext, в том числе на локальной модели,
     //    выбранной человеком (модель чата, персоны, слот): выкл → null; вкл → профиль провайдера
     //    модели, а у модели без своего профиля (Opus/Sonnet) — общая секция LightProfile.
@@ -170,11 +235,19 @@ public class LlmProviderRegistry
         var provider = ResolveByModel(model);
         var own = provider is { BareMode: true } or { TrimMcpServers: true } or { RecallInTurnText: true }
             or { KeepMcpTools.Count: > 0 }
-            ? LightProfile.FromProvider(provider!) : null;
+            ? LightProfile.FromProvider(provider!, provider!.FindModel(model)) : null;
         if (forcedBySubstitution && own is not null && provider!.IsLocal) return own;
         if (persona is null) return own;
         return persona.LightContext == true ? own ?? _lightProfile : null;
     }
+
+    // Хвостовой recall (RecallInTurnText) — свойство ПРОВАЙДЕРА модели, а не облегчённого
+    // контекста: ручка про механику prefix cache движка (нестабильные секции рвут кэш в
+    // середине системного блока), и рвут они его одинаково при полном и облегчённом контексте.
+    // Поэтому её читают мимо LightProfileFor: у персоны с выключенным LightContext на
+    // local-qwen профиль null, а recall всё равно обязан ехать хвостом (замер 2026-10-09:
+    // смена рабочего фокуса/recall персоны между чатами — 50 с первого входа вместо 1 с).
+    public bool RecallInTurnTextFor(string? model) => ResolveByModel(model)?.RecallInTurnText == true;
 
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";
@@ -267,6 +340,8 @@ public class LlmProviderRegistry
     // иначе CLI подставит свой дефолт (напр. «high» у qwen3.8-27b через vLLM → 400).
     // Для родного Claude и провайдеров с пустым SupportedEfforts (glm/kimi/minimax) — null,
     // флаг --effort не ставится: пусть CLI берёт свой дефолт, как было до подмены.
+    // Исключение — модель каталога с DefaultEffort: при пустом запросе берётся он
+    // (MiniMax-M3.1-Flash на дефолтном high CLI тонет в рассуждениях).
     //
     // Непустой effort — обычная подмена: EffortMap приоритетнее SupportedEfforts (конфиг
     // доверенный), затем точное совпадение, иначе ближайший снизу по шкале.
@@ -279,9 +354,13 @@ public class LlmProviderRegistry
 
         if (string.IsNullOrWhiteSpace(effort))
         {
-            // Пустой effort: для провайдера с SupportedEfforts — самый лёгкий уровень;
-            // иначе null (флаг не ставится).
-            return supported.Count > 0 ? PickLightestSupported(supported) : null;
+            // Пустой effort: у модели каталога с DefaultEffort — он (дальше через ту же
+            // подмену, что и выбор человека); иначе для провайдера с SupportedEfforts —
+            // самый лёгкий уровень; иначе null (флаг не ставится).
+            var modelDefault = p?.FindModel(model)?.DefaultEffort;
+            if (string.IsNullOrWhiteSpace(modelDefault))
+                return supported.Count > 0 ? PickLightestSupported(supported) : null;
+            effort = modelDefault.Trim();
         }
 
         // Непустой effort: родной Claude (провайдер не нашёлся) — отдать как есть,
@@ -376,6 +455,9 @@ public class LlmProviderRegistry
         HasBalance = !string.IsNullOrWhiteSpace(p.Balance)
             && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl)),
         Configured = p.Enabled,
+        // Признак локальности — из конфига: фронт по нему узнаёт, что провайдер
+        // локальный, даже если его ключ (например «local-qwen») фронту неизвестен.
+        IsLocal = p.IsLocal,
         TierStrong = p.TierStrong,
         TierMedium = p.TierMedium,
         TierWeak = p.TierWeak,
@@ -403,10 +485,20 @@ public class LlmProviderRegistry
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "ANTHROPIC_DEFAULT_FABLE_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", // форс модели сабагента на ВСЕХ (см. BuildCliEnv)
+        "CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS", // потолок параллельных агентов Workflow
+        "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL", // модель субагентов Workflow
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
         "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
         "MAX_THINKING_TOKENS", // лимит токенов на блок thinking (см. BuildCliEnv)
         "ANTHROPIC_CUSTOM_HEADERS", // заголовки к запросам API, ставим сами (id сессии для прокси)
+        "CLAUDE_CODE_GATEWAY_HINT_HEADERS", // подсказочные заголовки шлюзу (ADR-029), ставим на запусках через шлюз
+        // Потолки внутренних повторов CLI (429/529): ставим сами на каждом запуске (RetryCeilings),
+        // глобально заданное значение на машине вычищаем, чтобы маршрут/повторы определяли мы.
+        EnvOverloadedRetryBaseDelayMs,
+        EnvOverloadedRetryMaxDelayMs,
+        EnvRetryWatchdogMaxWaitMs,
+        EnvNonStreamingTimeoutRetries,
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true
@@ -454,7 +546,22 @@ public class LlmProviderRegistry
             // ушёл бы на эндпоинт провайдера id модели Anthropic
             ["ANTHROPIC_DEFAULT_FABLE_MODEL"] = main,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
+            // Форс: булев флаг, значение "1" (CLI 2.1.299 разбирает переменную как bool:
+            // истина только 1/true/yes/on — id модели молча выключает форс). Включённый форс
+            // гонит ВСЕ сабагентов на CLAUDE_CODE_SUBAGENT_MODEL (= small), игнорируя model:
+            // во frontmatter агента и per-spawn override; CLI при этом убирает параметр model
+            // из схемы инструмента Agent. Без него пин чужой модели (opus/конкретный id)
+            // уедет на эндпоинт провайдера и даст 401. У родного Claude (BuildCliEnv = null)
+            // форс не нужен: пин haiku/sonnet агентом легален (реальные модели Anthropic).
+            ["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] = "1",
         };
+        // Потолок параллельных агентов Workflow: только локальным провайдерам (vLLM), где
+        // N>3 prefill душит decode соседей (замер 23.09: три потока по 63k → 12 ток/с).
+        // Облачные не трогаем — CLI решает сам. Значение из конфига провайдера, не хардкод.
+        if (p.WorkflowMaxConcurrentAgents is int wmc && wmc is > 0 and <= 256)
+            env["CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS"] = wmc.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(p.WorkflowSubagentModel))
+            env["CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL"] = p.WorkflowSubagentModel;
         // Реальное окно контекста модели. Id сторонних моделей CLI не знает и тогда считает
         // окно равным 200k, запуская auto-compact на ~167k при реальном окне до 1M; сам он об
         // этом и предупреждает: «"kimi-k3" is not a model this version of Claude Code
@@ -477,7 +584,11 @@ public class LlmProviderRegistry
             && _localProbe.TryGetKnownContextWindow(p.Key, out var liveWindow)
             && liveWindow > 0)
         {
-            contextWindow = liveWindow;
+            // Каталог МЕНЬШЕ живого — намеренный лимит записи, а не устаревшее число: один
+            // стенд (Strata, 512K) обслуживает две записи каталога с разным окном —
+            // 256K для исполнителей и 512K для оркестратора (22.10.2026). Берём меньшее:
+            // живое по-прежнему режет завышенный каталог, а заниженный каталог остаётся лимитом.
+            contextWindow = contextWindow > 0 ? Math.Min(contextWindow, liveWindow) : liveWindow;
             liveWindowUsed = true;
         }
         // vLLM сверяет prompt + max_tokens ≤ max_model_len ДО генерации, поэтому
@@ -608,6 +719,7 @@ public class LlmProviderRegistry
 
         var seededCount = SeedDefaultWorkflows(profileDir, manifest);
         EnsureInstalledPluginsEnabled(profileDir);
+        EnsureClaudeAiSyncOff(profileDir);
 
         if (delivered > 0 || seededCount > 0)
             ProfileSyncManifestStore.Save(profileDir, manifest);
@@ -1026,6 +1138,40 @@ public class LlmProviderRegistry
     }
 
     private static readonly JsonSerializerOptions SettingsJsonOptions = new() { WriteIndented = true };
+
+    // Выключить синк скиллов/плагинов аккаунта claude.ai (CLI ≥ 2.1.2xx тянет их в каждую
+    // сессию с подписочным логином: docx/pptx/canvas-design и др. входят в системный блок
+    // каждого хода и съедают контекст). Для container-владельцев --settings не передаётся
+    // (HooksOffArgs), поэтому единственный канал — settings.json профиля CLI, который CLI
+    // читает как CLAUDE_CONFIG_DIR. Ключи ставим false всегда; MergeSettingsInto выше мог
+    // принести хостовое значение, поэтому эта запись идёт ПОСЛЕ него и побеждает.
+    private static void EnsureClaudeAiSyncOff(string profileDir)
+    {
+        try
+        {
+            var settingsPath = Path.Combine(profileDir, "settings.json");
+            JsonObject? settings = null;
+            if (File.Exists(settingsPath))
+                try { settings = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject; }
+                catch (JsonException) { }
+            settings ??= [];
+
+            var changed = false;
+            foreach (var key in new[] { "syncClaudeAiSkills", "syncClaudeAiPlugins" })
+            {
+                if (settings[key] is JsonValue v && v.GetValueKind() == JsonValueKind.False) continue;
+                settings[key] = false;
+                changed = true;
+            }
+            if (!changed) return;
+
+            File.WriteAllText(settingsPath, settings.ToJsonString(SettingsJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Выключение синка claude.ai в профиле {profileDir} не удалось: {ex.Message}");
+        }
+    }
 
     // Синк settings.json — НЕ копия файла, а мерж по ключам. Профильный settings.json
     // не копия хостового: в нём живут собственные значения профиля — env маршрута

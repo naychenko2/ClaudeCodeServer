@@ -14,6 +14,9 @@ interface Props {
   title: string;
   summary?: string;
   summaryTone?: AccordionSummaryTone;
+  // Кружок-счётчик (CountBadge) справа, перед текстовой сводкой: «N требует внимания».
+  // Опционально — большинство секций обходятся текстовой summary.
+  badge?: ReactNode;
   defaultOpen?: boolean;
   children: ReactNode;
 }
@@ -28,7 +31,7 @@ interface Props {
 // должны читать актуальное состояние без раскрытия. Условный рендер тела
 // сломал бы эту загрузку и оставил бы заголовки без сводок до первого клика.
 export function AccordionSection({
-  icon: Icon, title, summary, summaryTone = 'neutral', defaultOpen = false, children,
+  icon: Icon, title, summary, summaryTone = 'neutral', badge, defaultOpen = false, children,
 }: Props) {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(defaultOpen);
@@ -75,16 +78,24 @@ export function AccordionSection({
         }}>
           {title}
         </span>
-        {summary && (
-          <span
-            title={summary}
-            style={{
-              marginLeft: 'auto', flex: '0 1 auto', minWidth: 0, textAlign: 'right',
-              fontSize: FS.sm, color: sumColor, fontWeight: summaryTone === 'err' ? 600 : 400,
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            }}
-          >
-            {summary}
+        {(badge || summary) && (
+          <span style={{
+            marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6,
+            flex: '0 1 auto', minWidth: 0,
+          }}>
+            {badge}
+            {summary && (
+              <span
+                title={summary}
+                style={{
+                  textAlign: 'right',
+                  fontSize: FS.sm, color: sumColor, fontWeight: summaryTone === 'err' ? 600 : 400,
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }}
+              >
+                {summary}
+              </span>
+            )}
           </span>
         )}
         <ChevronDown size={14} strokeWidth={ICON_STROKE}

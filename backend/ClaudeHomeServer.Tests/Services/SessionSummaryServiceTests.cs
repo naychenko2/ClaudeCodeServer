@@ -1,6 +1,7 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
@@ -16,7 +17,9 @@ using Moq;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Тесты чистой логики «Итога сессии»: сборка транскрипта из StoredMessage и заголовок.
-// Полный пайплайн (one-shot claude) требует claude.exe и здесь не гоняется.
+// Полный пайплайн с настоящим claude.exe здесь не гоняется, но пайплайн разбора доступа и
+// адреса заметки — гоняется: вместо LLM подменный ICheapTextRunner, заметки — настоящий
+// NotesService на временном дереве (его и проверяют тесты S2d-6a: куда легла сводка).
 public class SessionSummaryServiceTests
 {
     // ─── BuildTranscript ─────────────────────────────────────────────────────
@@ -123,9 +126,9 @@ public class SessionSummaryServiceTests
                 ctx.Broadcaster, ctx.Notif, ctx.Config,
                 NullLogger<SessionSummaryService>.Instance,
                 notes: null, kb: null); // ← подсистема Notes выключена
-            var chat = NewProjectChatWithHistory(ctx);
+            var setup = NewProjectChatWithHistory(ctx);
 
-            var act = () => sut.SummarizeAsync(ctx.OwnerId, chat.Id, CancellationToken.None);
+            var act = () => sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
 
             // SummaryUnavailableException → контроллер мапит в 503 + reason="notes_disabled"
             // (см. SessionSummaryController) — тот же контракт, что у «Утреннего брифа».
@@ -137,7 +140,7 @@ public class SessionSummaryServiceTests
                 "при выключенной Notes платный LLM-вызов не должен случаться — " +
                 "конспект некуда сохранить, и это известно ещё до первого токена");
             // inFlight снимается в finally, иначе следующий клик получит 409 навсегда
-            var second = () => sut.SummarizeAsync(ctx.OwnerId, chat.Id, CancellationToken.None);
+            var second = () => sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
             // второй вызов должен дойти до той же проверки (а не 409 inFlight),
             // поэтому кидаем и его — runner.Calls всё ещё 0
             await second.Should().ThrowExactlyAsync<SummaryUnavailableException>();
@@ -149,11 +152,205 @@ public class SessionSummaryServiceTests
         }
     }
 
+    // ─── SummarizeAsync: приватный чат — только автору и в его личный vault (S2d-6a) ──
+    //
+    // Инвариант: ни один вызов «Итога сессии» не пишет сводку приватного чата в notes/
+    // проекта и не отдаёт её никому, кроме автора. Проверяется местом файла на диске
+    // (notes/ проекта vs личный vault) — это то наблюдаемое состояние, ради которого
+    // весь разбор и делается.
+
+    [Fact]
+    public async Task Summarize_ВладелецПроектаНаЧужомПриватном_404ИНиОдногоПлатногоВызова()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_priv_foreign_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new CountingRunner("сводка");
+            var sut = BuildSut(ctx, runner);
+            var setup = NewProjectChatWithHistory(ctx, createdBy: ctx.EditorId, privateTo: ctx.EditorId);
+
+            var act = () => sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
+
+            // Чужой приватный чат для владельца проекта не существует: KeyNotFound → 404,
+            // а не 403 — приватность не различает «чужое» и «несуществующее» (тот же разбор,
+            // что у read-ручек чатов и ResolveRoot NotesService).
+            await act.Should().ThrowExactlyAsync<KeyNotFoundException>();
+            runner.Calls.Should().Be(0,
+                "отказ обязан быть ДО платного LLM-вызова: чужую приватную ленту не сводит никто");
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(0,
+                "сводка чужого приватного чата не имеет права появиться в notes/ проекта");
+            NotesChangedRecipients(ctx).Should().BeEmpty();
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Summarize_АвторПриватногоИзУчастников_ЗаметкаВЕгоЛичномVault()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_priv_author_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new CountingRunner("сводка");
+            var kb = new Mock<INoteSemanticIndex>();
+            var sut = BuildSut(ctx, runner, kb);
+            var setup = NewProjectChatWithHistory(ctx, createdBy: ctx.EditorId, privateTo: ctx.EditorId);
+
+            var note = await sut.SummarizeAsync(ctx.EditorId, setup.Chat.Id, CancellationToken.None);
+
+            // Автор своего приватного чата проходит без права на проект: заметка — его
+            // личный vault (Source «personal»), а не notes/ проекта, где он не владелец.
+            note.Source.Should().Be("personal");
+            note.Title.Should().StartWith("Итог:");
+            NoteFiles(PersonalVault(ctx, ctx.EditorId)).Should().Be(1);
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(0,
+                "инвариант S2d-6a: сводка приватного чата не появляется в notes/ проекта");
+            ctx.Sessions.GetById(setup.Chat.Id)!.SummaryNoteId.Should().Be(note.Id,
+                "повторный вызов обязан обновлять эту же заметку автора, а не плодить дубль");
+            // Оплата LLM не менялась: её платит владелец проекта, не автор
+            runner.LastOwnerId.Should().Be(ctx.OwnerId);
+            // Переиндексация и событие — автору (его личный vault, его лента)
+            kb.Verify(x => x.QueueSync(ctx.EditorId), Times.Once);
+            NotesChangedRecipients(ctx).Should().BeEquivalentTo(new[] { ctx.EditorId });
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Summarize_ВладелецНаСвоёмПриватном_ЗаметкаВЕгоЛичномVaultАНеВNotesПроекта()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_priv_own_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new CountingRunner("сводка");
+            var sut = BuildSut(ctx, runner);
+            var setup = NewProjectChatWithHistory(ctx, createdBy: ctx.OwnerId, privateTo: ctx.OwnerId);
+
+            var note = await sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
+
+            // Тот же инвариант для автора-владельца: приватный чат своего же проекта —
+            // сводка в его личный vault, в notes/ проекта она не ложится ни при каком вызове.
+            note.Source.Should().Be("personal");
+            NoteFiles(PersonalVault(ctx, ctx.OwnerId)).Should().Be(1);
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(0);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Summarize_ОбщийЧат_ЗаметкаВNotesПроекта_КакПрежняя()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_shared_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new CountingRunner("сводка");
+            var sut = BuildSut(ctx, runner);
+            var setup = NewProjectChatWithHistory(ctx); // общий чат владельца, приватности нет
+
+            var note = await sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
+
+            // Общий чат и чат вне проекта — без изменений: путь владельца (owner-гейт +
+            // notes/Сессии проекта) остался тем же, что до S2d-6a.
+            note.Source.Should().Be(setup.ProjectId);
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(1);
+            NoteFiles(PersonalVault(ctx, ctx.OwnerId)).Should().Be(0);
+            NotesChangedRecipients(ctx).Should().BeEquivalentTo(new[] { ctx.OwnerId });
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Summarize_ПустаяПриватность_404ИВладельцуИЛюбомуДругому()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_priv_empty_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new CountingRunner("сводка");
+            var sut = BuildSut(ctx, runner);
+            // PrivateToUserId = "" — «не видит никто» (fail-closed, как в SessionManager.CreateAsync):
+            // пустая строка не нормализуется в null и не совпадает ни с одним userId.
+            var setup = NewProjectChatWithHistory(ctx, createdBy: ctx.OwnerId, privateTo: "");
+
+            var asOwner = () => sut.SummarizeAsync(ctx.OwnerId, setup.Chat.Id, CancellationToken.None);
+            var asOther = () => sut.SummarizeAsync(ctx.EditorId, setup.Chat.Id, CancellationToken.None);
+
+            await asOwner.Should().ThrowExactlyAsync<KeyNotFoundException>();
+            await asOther.Should().ThrowExactlyAsync<KeyNotFoundException>();
+            runner.Calls.Should().Be(0);
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(0);
+            NoteFiles(PersonalVault(ctx, ctx.OwnerId)).Should().Be(0);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    // Гонка: приватность снимают посреди платной генерации. Решение сервиса принято по
+    // снимку на входе (PrivateToUserId читается один раз), поэтому заметка всё равно уходит
+    // автору. Обратный переход закрыт самим чатом (chat_has_messages), поэтому исход один.
+    [Fact]
+    public async Task Summarize_ПриватностьСнятаПосредиГенерации_ЗаметкаВсёРавноАвтору()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "summary_priv_race_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var ctx = BuildPipeline(tempDir);
+            var runner = new BlockingRunner("сводка");
+            var sut = BuildSut(ctx, runner);
+            var setup = NewProjectChatWithHistory(ctx, createdBy: ctx.EditorId, privateTo: ctx.EditorId);
+
+            var task = sut.SummarizeAsync(ctx.EditorId, setup.Chat.Id, CancellationToken.None);
+            // Ждём, пока генерация реально в полёте (не по таймеру — по входу раннера в RunAsync)
+            var arrived = await Task.WhenAny(runner.Arrived.Task, Task.Delay(10_000));
+            arrived.Should().BeSameAs(runner.Arrived.Task, "LLM-вызов обязан быть в полёте до снятия приватности");
+
+            ctx.Sessions.SetChatVisibility(setup.Chat.Id, ctx.EditorId, false)
+                .Outcome.Should().Be(ChatVisibilityOutcome.Ok, "тест бессмысленен, если приватность не снялась");
+
+            runner.Release();
+            var note = await task;
+
+            note.Source.Should().Be("personal");
+            NoteFiles(PersonalVault(ctx, ctx.EditorId)).Should().Be(1);
+            NoteFiles(ProjectNotes(ctx, setup)).Should().Be(0,
+                "снимок, а не состояние на момент записи: снятая посреди генерации приватность " +
+                "не переносит сводку автора в notes/ проекта");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     // ─── Сборка графа для теста SummarizeAsync ──────────────────────────────
 
     private sealed record Pipeline(
         SessionManager Sessions, ProjectManager Projects,
-        string OwnerId, IConfiguration Config, TestSessionBroadcaster Broadcaster,
+        string OwnerId, string EditorId, NotesService Notes,
+        IConfiguration Config, TestSessionBroadcaster Broadcaster,
         NotificationService Notif);
 
     private static Pipeline BuildPipeline(string tempDir)
@@ -208,15 +405,34 @@ public class SessionSummaryServiceTests
             NullLogger<NotificationService>.Instance);
 
         var owner = users.GetFirst()!;
-        return new Pipeline(sessions, projects, owner.Id, config, broadcaster, notif);
+        // Второй пользователь — автор своих приватных чатов (S2d-6a): на нём проверяется,
+        // что сводку приватного чата определяет автор, а не владелец проекта.
+        var editor = users.Add("summary-editor", "pwd", "user");
+
+        return new Pipeline(sessions, projects, owner.Id, editor.Id, notesSvc, config, broadcaster, notif);
     }
 
-    private static Session NewProjectChatWithHistory(Pipeline ctx)
+    private static SessionSummaryService BuildSut(Pipeline ctx, ICheapTextRunner runner,
+        Mock<INoteSemanticIndex>? kb = null) =>
+        new SessionSummaryService(
+            ctx.Sessions, ctx.Projects, runner, ctx.Broadcaster, ctx.Notif, ctx.Config,
+            NullLogger<SessionSummaryService>.Instance, notes: ctx.Notes, kb: kb?.Object);
+
+    // Чат с лентой в свежем проекте: createdBy/privateTo — автор и приватность чата
+    private sealed record ChatSetup(Session Chat, string ProjectId, string ProjectRoot);
+
+    private static ChatSetup NewProjectChatWithHistory(Pipeline ctx,
+        string? createdBy = null, string? privateTo = null)
     {
         var dir = Directory.CreateDirectory(Path.Combine(
             (string)ctx.Config["DefaultProjectsPath"]!,
             "proj_" + Guid.NewGuid().ToString("N"))).FullName;
         var project = ctx.Projects.Create("Проект", dir, ctx.OwnerId, "user");
+        // Проект общий (с участником): приватный чат возможен только в общем проекте,
+        // поэтому общий проект здесь — настоящий, а не мнимый. Право участника на проект
+        // «Итог сессии» не использует: для приватного чата единственный гейт — авторство.
+        ctx.Projects.SetMembers(project.Id,
+            [new ProjectMember { UserId = ctx.EditorId, Role = ProjectRole.Editor, AddedBy = ctx.OwnerId }]);
         // История обязана лежать на диске ДО создания чата: StartNewSessionAsync читает её
         // один раз в Accumulator и с диска больше не перечитывается
         var csid = "summary_hist_" + Guid.NewGuid().ToString("N");
@@ -226,9 +442,31 @@ public class SessionSummaryServiceTests
             new StoredUserMessage("Сделай X"),
             new StoredTextMessage("Готово, X сделано"),
         ]).GetAwaiter().GetResult();
-        return ctx.Sessions.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid)
-            .GetAwaiter().GetResult();
+        var chat = ctx.Sessions.CreateAsync(project.Id, ClaudeMode.Auto, resumeSessionId: csid,
+            createdByUserId: createdBy, privateToUserId: privateTo).GetAwaiter().GetResult();
+        return new ChatSetup(chat, project.Id, dir);
     }
+
+    // ── Где живёт заметка: observed-состояние, которым проверяются тесты S2d-6a ──
+
+    // notes/ проекта = корень проекта (NotesService.ResolveRoot → ProjectCapabilityGuard.ServerRoot)
+    private static string ProjectNotes(Pipeline ctx, ChatSetup setup) =>
+        Path.Combine(setup.ProjectRoot, "notes");
+
+    // Личный vault = <папка DataPath>/notes/<userId> (NotesService.ResolveRoot, PersonalKey)
+    private static string PersonalVault(Pipeline ctx, string userId) =>
+        Path.Combine(Path.GetDirectoryName((string)ctx.Config["DataPath"]!)!, "notes", userId);
+
+    private static int NoteFiles(string root) =>
+        Directory.Exists(root)
+            ? Directory.GetFiles(root, "*.md", SearchOption.AllDirectories).Length
+            : 0;
+
+    // Кому ушло событие NotesChangedMessage (адрес, а не текст: адрес и есть контракт)
+    private static IEnumerable<string> NotesChangedRecipients(Pipeline ctx) =>
+        ctx.Broadcaster.Owner
+            .Where(m => m.Message is NotesChangedMessage)
+            .Select(m => m.OwnerId);
 
     // Стаб раннера: считает вызовы, помнит параметры последнего
     private sealed class CountingRunner(string answer) : ICheapTextRunner
@@ -240,6 +478,7 @@ public class SessionSummaryServiceTests
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -251,11 +490,41 @@ public class SessionSummaryServiceTests
             return Task.FromResult(Answer);
         }
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(Answer);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(Answer);
 
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+    }
+
+    // Стаб раннера для теста гонки: вход в RunAsync замечен (Arrived), сам вызов держится
+    // до Release — тест успевает снять приватность посреди генерации.
+    private sealed class BlockingRunner(string answer) : ICheapTextRunner
+    {
+        public int Calls;
+        public readonly TaskCompletionSource Arrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _gate.TrySetResult();
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+
+        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            Arrived.TrySetResult();
+            await _gate.Task;
+            return answer;
+        }
+
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer);
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,

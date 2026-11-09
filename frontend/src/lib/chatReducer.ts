@@ -51,6 +51,11 @@ export interface ChatState {
   isCompacting: boolean;
   // Мягкое уведомление о последнем компакте (например «нечего сжимать») — не ошибка
   compactNote?: string;
+  // Живое заполнение контекста посреди хода (событие context_usage после каждого ответа
+  // модели): кольцо контекста в шапке двигается по ходу, а не раз в конце. Сбрасывается
+  // на result (итог хода — в result.contextTokens) и на compact_boundary (после сжатия
+  // прежняя цифра неверна). Транзитное — в историю не персистится.
+  liveContextTokens?: number;
   // Live-состояние цикла «до готово» (событие work_loop, флаг work-loop).
   // undefined — событий ещё не было (UI берёт значение из Session.workLoop)
   workLoop?: WorkLoopState;
@@ -102,6 +107,8 @@ export interface PendingChatMessage {
   // Ждёт устройство локального проекта (ADR-016): лежит отдельно от обычной очереди и уйдёт
   // в работу, когда устройство выйдет на связь, а не по концу текущего хода
   waitingForDevice?: boolean;
+  // Кто поставил сообщение человека в очередь общего проекта; нет у агентских и старых
+  senderUserId?: string;
 }
 
 // Команда композеру подставить прерванное сообщение (событие composer_restore).
@@ -335,6 +342,43 @@ export function resolveCardsFromHistory(serverItems: ChatItem[], prevItems: Chat
   return changed ? next : null;
 }
 
+// Завершён ли ход: последний содержательный элемент серверной истории — result или error.
+// fal_cost дописывается асинхронно уже после конца хода, на признак не влияет. Пока ход
+// идёт, хвостом истории всегда что-то из хода (user_message пишется в аккумулятор сразу
+// при отправке) — ложного «завершён» это не даёт. Служит только лечению залипшего isWaiting
+// (useSession): подмена ленты (adoptServerHistory ниже) держится более полного
+// turnAlreadyEnded — у прерванного «Стопом» хода result нет, а лечение здесь вне его.
+export function historyTurnFinished(items: ChatItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const kind = items[i].kind;
+    if (kind === 'fal_cost') continue;
+    return kind === 'result' || kind === 'error';
+  }
+  return false;
+}
+
+// Подмена ленты серверной историей: сохранить в новой ленте нерешённые карточки
+// permission_request из прежней, для которых в истории нет пары по requestId.
+// Хаб реплеит их при JoinSession (SessionHub), но в history.json не пишет (их нет в
+// PERSISTED_KINDS) — без переноса первая же подмена уносит карточку с кнопками, а CLI
+// ждёт ответа до таймаута (дефект «карточка разрешения пропадает после F5»).
+// Перенос только пока ход в истории не кончен; конец хода — те же маркеры, что у
+// turnAlreadyEnded (result / error / interrupted / session_ended): один общий предикат,
+// третьей копии нет. Прерванный «Стопом» или аварийный ход ответа уже не ждёт: выжившая
+// карточка — зомби, сервер его ответ проигнорирует (IsStaleInteractionAnswer), а клиент
+// оптимистично покрасит «разрешено». Решённые не переносим: вердикт живёт только в живой
+// ленте, пары в истории нет — «решённая» карточка без ответа показала бы ложное «отвечено».
+// Остаточный риск прежний: середина хода, ответ пришёл с другого устройства,
+// interaction_resolved прошёл мимо — карточка висит до конца хода.
+export function adoptServerHistory(serverItems: ChatItem[], prevItems: ChatItem[]): ChatItem[] {
+  if (turnAlreadyEnded(serverItems)) return serverItems;
+  const known = new Set<string>();
+  for (const it of serverItems) if (it.kind === 'permission_request') known.add(it.requestId);
+  const carry = prevItems.filter(it =>
+    it.kind === 'permission_request' && !it.resolved && !known.has(it.requestId));
+  return carry.length ? [...serverItems, ...carry] : serverItems;
+}
+
 // Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
 // (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
 function lastKnownModel(items: ChatItem[]): string | null {
@@ -455,6 +499,17 @@ export function retryableInterruptedIndex(items: ChatItem[]): number {
   return -1;
 }
 
+// Снимает строку «ход ждёт слот локальной модели». Обычно её снимает само событие
+// (position=0 при допуске/отказе/остановке), но строка принадлежит только своему ходу:
+// оборванный WS или потерянное событие не должны оставлять её в закончившемся ходе —
+// конец хода (result/error/exited) снимает её как failsafe. Без строки возвращает
+// тот же массив (подписчиков не будит лишний раз).
+function dropLocalTurnQueue(items: ChatItem[]): ChatItem[] {
+  return items.some(it => it.kind === 'local_turn_queue')
+    ? items.filter(it => it.kind !== 'local_turn_queue')
+    : items;
+}
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.
@@ -509,6 +564,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.auto ? { auto: true } : {}),
         ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
         ...(msg.imageSnapshot ? { imageSnapshot: msg.imageSnapshot } : {}),
+        ...(msg.senderUserId ? { senderUserId: msg.senderUserId } : {}),
       }]);
     }
 
@@ -755,7 +811,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // иначе живая лента и перезагрузка расходились бы). Границей хода назад служит
       // предыдущий result; сабагентские тексты (parentToolUseId) пропускаем — они
       // могли идти другой моделью.
-      const items = prev.items.slice();
+      // Строка ожидания слота относится только к этому ходу: position=0 снимает её обычно
+      // раньше, но до конца хода она точно не переживёт (failsafe, см. dropLocalTurnQueue)
+      const items = dropLocalTurnQueue(prev.items.slice());
       if (msg.usageModel) {
         for (let i = items.length - 1; i >= 0; i--) {
           const it = items[i];
@@ -765,7 +823,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         }
       }
       items.push({ kind: 'result', subtype: msg.subtype, durationMs: msg.durationMs, numTurns: msg.numTurns, usage: msg.usage, totalCostUsd: msg.totalCostUsd, apiErrorStatus: msg.apiErrorStatus, permissionDenials: msg.permissionDenials, contextTokens: msg.contextTokens, durationApiMs: msg.durationApiMs, promptCache: msg.promptCache });
-      return { ...prev, isWaiting: false, items };
+      return { ...prev, isWaiting: false, items, liveContextTokens: undefined };
     }
 
     case 'fal_cost':
@@ -806,12 +864,16 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         },
       };
 
+    case 'context_usage':
+      return msg.contextTokens > 0 ? { ...prev, liveContextTokens: msg.contextTokens } : prev;
+
     case 'compact_boundary':
-      // Успешное сжатие — сбрасываем note о «нечего сжимать»
+      // Успешное сжатие — сбрасываем note о «нечего сжимать» и живую цифру контекста
       return {
         ...prev,
         isCompacting: false,
         compactNote: undefined,
+        liveContextTokens: undefined,
         items: [...prev.items, { kind: 'compact_boundary', trigger: msg.trigger, preTokens: msg.preTokens, postTokens: msg.postTokens }],
       };
 
@@ -837,6 +899,8 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.prefillSeconds !== undefined ? { prefillSeconds: msg.prefillSeconds } : {}),
         ...(msg.cacheReadTokens !== undefined ? { cacheReadTokens: msg.cacheReadTokens } : {}),
         ...(msg.promptTokens !== undefined ? { promptTokens: msg.promptTokens } : {}),
+        // Картинки — только когда их вырезали: у прочих карточек полей нет вовсе
+        ...(msg.imageBlocks ? { imageBlocks: msg.imageBlocks, imageTokens: msg.imageTokens ?? 0 } : {}),
       }]);
 
     case 'image_launch': {
@@ -891,7 +955,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched).
         // action — признак предлагаемого действия под карточкой (window-1m-drop): проброс
         // без сравнения с текстом, чтобы смена формулировки на бэке не сломала UI молча
-        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
+        // Отказ после ожидания (в т.ч. «движок не отвечает») — финальная красная карточка;
+        // её собственный индикатор ожидания (если был) снят: красный исход его перебивает
+        items: [...dropLocalTurnQueue(prev.items), { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}), ...(msg.action ? { action: msg.action } : {}) }],
       };
 
     case 'exited': {
@@ -908,7 +974,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         bgClosed = true;
         return { ...item, bgDone: true, bgAborted: true };
       });
-      const base = bgClosed ? items : prev.items;
+      const base = dropLocalTurnQueue(bgClosed ? items : prev.items);
       // Компакция, оборванная смертью процесса, результата уже не пришлёт — иначе «Сжимаю…»
       // и заблокированная кнопка висели бы до перезагрузки страницы
       return { ...prev, isWaiting: false, isCompacting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };
@@ -1136,6 +1202,25 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // только остановка на устройстве — она объясняет, почему ход оборвался
       const line = handsStatusFeedLine(msg);
       return line ? withItems([...prev.items, { kind: 'hands_notice', text: line, tone: 'warning' }]) : prev;
+    }
+
+    case 'local_turn_queue': {
+      // Ход ждёт свободный слот локальной модели (гейт допуска). Строка live-only и единственная
+      // на ход: сдвиг позиции обновит стоящую строку (второй под тем же смыслом не плодится),
+      // position=0 снимает её (допущен/отказан/остановлен).
+      // Человек обязан видеть ожидание, а не «виснет молча».
+      if (msg.position <= 0) {
+        return prev.items.some(it => it.kind === 'local_turn_queue')
+          ? withItems(prev.items.filter(it => it.kind !== 'local_turn_queue'))
+          : prev;
+      }
+      const at = prev.items.findLastIndex(it => it.kind === 'local_turn_queue');
+      if (at >= 0) {
+        const items = prev.items.slice();
+        items[at] = { kind: 'local_turn_queue', position: msg.position, active: msg.active, limit: msg.limit };
+        return withItems(items);
+      }
+      return withItems([...prev.items, { kind: 'local_turn_queue', position: msg.position, active: msg.active, limit: msg.limit }]);
     }
 
     case 'prompt_suggestion':

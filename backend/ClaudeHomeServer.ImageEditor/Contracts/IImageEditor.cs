@@ -42,12 +42,20 @@ public interface IImageEditor
 // EnhanceFaces — быстрое действие «Улучшить лица» (локальные модели: FaceDetailer)
 public enum ImageEditOp { Generate, Edit, Inpaint, Outpaint, RemoveBackground, Upscale, EnhanceFaces }
 
+// camelCase-имя операции (generate / edit / inpaint / …). Нейтральный дом (шаг 28): рядом с
+// ImageEditOp, чтобы и драйвер (Providers/) и исполнитель задач (Jobs/) не тянули друг на друга
+public static class ImageEditOpNames
+{
+    public static string OpName(ImageEditOp op) => System.Text.Json.JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
+}
+
 // «Авто / Быстрая / Точная правка / Фотореализм»; режим имеет смысл только при модели «Авто»
 public enum EditMode { Auto, Fast, Precise, Photoreal }
 
 // Канал маски у модели: Native — настоящий инпейнт, AsReference — маска уходит образцом
-// с подписью «Точность границ ниже», None — модель маску не принимает
-public enum MaskSupport { None, Native, AsReference }
+// с подписью «Точность границ ниже», Veil — место правки закрашивается серой вуалью на копии
+// холста (модель маски не видит, ADR-028), None — модель маску не принимает
+public enum MaskSupport { None, Native, AsReference, Veil }
 
 public enum ReferenceRole { Character, Style, Object }
 
@@ -77,9 +85,18 @@ public record ImageEditCaps(
     int? MaxInputSide = null,
     double? MaxInputMegapixels = null,
     double? MaxInputMb = null,
+    // Потолок веса холста при подстановке на лицо (кроп) (ADR-028, Ш3): модель видит только кроп,
+    // поэтому холст не пережимается до общего потолка загрузки. null — использовать MaxInputMb
+    double? MaxCanvasMb = null,
     // Сколько фото персонажа модель берёт как ОДНОГО человека; null — все. Qwen-Image рисует по
     // человеку на каждое фото, и текст запроса это не лечит (живой прогон 2026-09-26)
-    int? MaxCharacterPhotos = null);
+    int? MaxCharacterPhotos = null,
+    // То же при подстановке на лицо (кроп, ADR-028); null — как MaxCharacterPhotos. Klein подстановку
+    // отдаёт Qwen-Image, а тот по пяти фото нарисовал бы пять человек
+    int? MaxFaceCropPhotos = null,
+    // Выходные пропорции, ступени и «Точно…» модели (ADR-025); null — модель размеров не сообщает:
+    // «Как у модели», текущее поведение
+    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);
@@ -133,7 +150,9 @@ public record OutpaintSpec(int Left, int Top, int Right, int Bottom)
     private static OutpaintSpec Split(int dx, int dy) => new(dx / 2, dy / 2, dx - dx / 2, dy - dy / 2);
 }
 
-public record CharacterRef(string Slug, string Name, string? Description);
+public record CharacterRef(string Slug, string Name, string? Description, [property: System.Text.Json.Serialization.JsonIgnore] CharacterLora? Lora = null,
+    // Все фото персонажа (не больше 10) для центроида сходства лица; в JSON не уходит
+    [property: System.Text.Json.Serialization.JsonIgnore] IReadOnlyList<byte[]>? FacePhotos = null);
 
 // MaskPass — предварительная правка по маске одним вариантом (ImageEditCaps.SeparateMaskPass):
 // её результат становится исходником этого запроса. Instruction — просьба человека как есть, без
@@ -150,9 +169,26 @@ public record ImageEditRequest(
     string Model,
     CharacterRef? Character,
     ImageEditRequest? MaskPass = null,
-    string? Instruction = null);
+    string? Instruction = null,
+    // Действующий формат (ADR-025): ступень и размер, которые драйвер переводит в параметры модели;
+    // AspectRatio остаётся производным от него (откат и старые вызовы)
+    ClaudeHomeServer.Services.Media.ResolvedFormat? Format = null,
+    // Кроп вокруг цели (ADR-028, решение 12): модель видит кроп, а не маску; null — обычный путь
+    LocalImageCrop? FaceCrop = null,
+    // Маска «вне маски вернуть исходник» (ADR-028, решение 12): явный канал подстановки на лицо;
+    // null — драйвер берёт её из References по метке mask, как раньше
+    ImageBytes? KeepMask = null,
+    // Метка происхождения прогона (шаг 28): владелец, чат и тяжёлый ли — для LocalJobOrigin;
+    // заполняет исполнитель (ImageEditJobService) из задачи, драйверы без задачи (тесты) — null
+    string? OwnerId = null,
+    string? SessionId = null,
+    bool Heavy = false,
+    // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
+    string? ProjectId = null,
+    string? SourceJobId = null);
 
-public record EditedImage(byte[] Bytes, string ContentType);
+// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
+public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);
 
 // Сумма в единицах поставщика (ImageEditPriceUnits.*)
 public record EditCost(double Amount, string Unit);
@@ -160,9 +196,13 @@ public record EditCost(double Amount, string Unit);
 // Run/Runs — номер текущего прогона (с 1) и их число, EtaSeconds — ожидаемое время прогона;
 // заполняет только драйвер, который это знает (local), остальные оставляют null.
 // Ready — варианты, готовые прямо сейчас (скачан прогон): исполнитель отдаёт их в нить, не дожидаясь
-// остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку
+// остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку.
+// Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, в статус запуска, траты
+// и журналы не идёт; null — поставщик не знает или задача вне локальных моделей, заполняет
+// драйвер, который его знает (local)
 public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
-    int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null);
+    int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null,
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

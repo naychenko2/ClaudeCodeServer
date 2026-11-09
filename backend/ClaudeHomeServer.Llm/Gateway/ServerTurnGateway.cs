@@ -23,4 +23,8 @@ public sealed class ServerTurnGateway(UpstreamSelector selector, TurnTokenServic
     // Токен ещё принимается шлюзом: его мог снять потолок жизни TurnTokenService, пока процесс
     // жив, — такому процессу следующий ход не отдаём, иначе он получил бы 401
     public bool IsAlive(string gatewayTurnId, string token) => tokens.Validate(gatewayTurnId, token) is not null;
+
+    // Текущий маршрут живого токена (с учётом ротации аккаунта посреди хода): для учётки хода —
+    // куда прогон ушёл на самом деле. null — токен не найден или отозван.
+    public GatewayRoute? CurrentRoute(string gatewayTurnId) => tokens.FindGrant(gatewayTurnId)?.Route;
 }

@@ -67,6 +67,12 @@ run install -m 0644 "$REPO_ROOT/deploy/systemd/ccs-agents.slice.d/50-memory-limi
 run install -m 0644 "$REPO_ROOT/deploy/systemd/ccs-agents.slice.d/50-oom-preference.conf" \
   "$USER_DIR/ccs-agents.slice.d/50-oom-preference.conf"
 
+# Уборка /tmp: скрипт в ~/.local/bin (путь зашит в unit), юниты — в user-каталог.
+run install -d -m 0755 "$HOME/.local/bin"
+run install -m 0755 "$REPO_ROOT/deploy/systemd/ccs-tmp-cleanup.sh" "$HOME/.local/bin/ccs-tmp-cleanup.sh"
+run install -m 0644 "$REPO_ROOT/deploy/systemd/ccs-tmp-cleanup.service" "$USER_DIR/ccs-tmp-cleanup.service"
+run install -m 0644 "$REPO_ROOT/deploy/systemd/ccs-tmp-cleanup.timer" "$USER_DIR/ccs-tmp-cleanup.timer"
+
 # 3. daemon-reload — иначе user/ не подхватится.
 run systemctl --user daemon-reload
 
@@ -106,6 +112,9 @@ run systemctl --user reenable ccs.service
 if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]]; then
   echo "ВНИМАНИЕ: linger выключен — ccs.service не стартует без входа пользователя. Включить: sudo loginctl enable-linger $USER" >&2
 fi
+
+# 5b. Таймер уборки /tmp (идемпотентно, сам юнит oneshot — ничего не прерывает).
+run systemctl --user enable --now ccs-tmp-cleanup.timer
 
 # 6. Рестарт — только по явному флагу: скрипт применяется и во время обычной
 #    выкатки, и как отдельная задача, и прерывать прод ради настройки лимитов

@@ -124,16 +124,23 @@ internal sealed class FilmWorld : IDisposable
     public sealed class RecordingBroadcaster : ISessionBroadcaster
     {
         public List<ServerMessage> Sent { get; } = [];
+        public List<(string OwnerId, ServerMessage Message)> ToOwnerCalls { get; } = [];
+        public List<(string ProjectId, ServerMessage Message)> ToProjectCalls { get; } = [];
 
         public Task ToOwner(string ownerId, ServerMessage message)
         {
-            lock (Sent) Sent.Add(message);
+            lock (Sent) { Sent.Add(message); ToOwnerCalls.Add((ownerId, message)); }
             return Task.CompletedTask;
         }
 
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message)
+        {
+            lock (Sent) { Sent.Add(message); ToProjectCalls.Add((projectId, message)); }
+            return Task.CompletedTask;
+        }
+
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 }

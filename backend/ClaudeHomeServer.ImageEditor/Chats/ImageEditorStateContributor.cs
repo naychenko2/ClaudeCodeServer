@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Services.Turn;
@@ -23,7 +22,6 @@ namespace ClaudeHomeServer.Services.ImageEditor.Chats;
 // системном блоке обнуляла бы prefix cache всей истории у любого провайдера, а не только у
 // провайдера с RecallInTurnText (ADR-018 §10.4, риск 1 плана v2).
 public sealed class ImageEditorStateContributor(
-    IFeatureFlagGate flags,
     IImageEditJobs? jobs = null,
     ImageThreadStore? threads = null,
     Prefs.ImageProjectPrefsService? prefs = null,
@@ -42,7 +40,6 @@ public sealed class ImageEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.ImageEditor)
         && (PersonalAlways(sessionContext.Session)
             || HasThreads(ownerId, sessionContext.Session) || HasSavedPrefs(ownerId, sessionContext.Session));
 
@@ -146,6 +143,10 @@ public sealed class ImageEditorStateContributor(
                 sb.AppendLine("  - " + VersionLine(t, v));
             if (ai.Count > shown.Count) sb.AppendLine($"  - (ещё {ai.Count - shown.Count} раньше — полный список в image_state)");
         }
+        // Взятые фото персонажа — у запусков, чьи версии показаны, и у идущих (ADR-027 §8)
+        foreach (var l in t.Launches.Where(l => l.Character is not null
+                     && (l.Status == ImageThreadLaunchStatus.Running || t.Versions.Any(v => v.JobId == l.JobId && (shown.Contains(v) || v.IsOrigin)))))
+            sb.AppendLine("  " + CharacterPhotosText(l.Character!));
         foreach (var l in t.Launches.Where(l => l.Status == ImageThreadLaunchStatus.Running))
             sb.AppendLine($"  рисуется: «{l.Prompt}», от: {(t.Version(l.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходника")}"
                 + Outcome(job(l.JobId)));
@@ -164,14 +165,62 @@ public sealed class ImageEditorStateContributor(
         if (v.IsOrigin) return head + editsText;
         var prompt = t.Launches.FirstOrDefault(l => l.JobId == v.JobId)?.Prompt;
         var from = t.Version(v.BaseVersionId) is { } b ? ImageThread.Label(b) : "исходник";
-        return $"{head} — вариант {v.Variant}{(prompt is null ? "" : $" запуска «{prompt}»")}, от: {from}{editsText}";
+        var similarity = SimilarityText(t, v);
+        return $"{head} — вариант {v.Variant}{(prompt is null ? "" : $" запуска «{prompt}»")}, от: {from}"
+            + (similarity is null ? "" : ", " + similarity) + editsText;
+    }
+
+    // «сходство с персонажем 0,77 — самый похожий в запуске» / «сходство с персонажем 0,64»; у версии без числа,
+    // когда у соседей по запуску оно есть — «лицо не найдено» (то же правило, что sim в VersionCards.tsx);
+    // null — в запуске сходство не считалось (число всегда с запятой и двумя знаками, независимо от культуры сервера)
+    public static string? SimilarityText(ImageThread t, ImageThreadVersion v) =>
+        v.Similarity is { } s
+            ? "сходство с персонажем " + s.ToString("0.00", System.Globalization.CultureInfo.GetCultureInfo("ru-RU"))
+              + (v.MostSimilar ? " — самый похожий в запуске" : "")
+            : v.JobId is { } job && t.Versions.Any(x => x.JobId == job && x.Similarity is not null)
+                ? "сходство с персонажем не посчитано (лицо не найдено)"
+                : null;
+
+    // «Фото персонажа «anya»: a.jpg, b.jpg — подобраны под сюжет (в профиль, улыбка)» / «— выбраны человеком» /
+    // «— обычный порядок». Имя в нити не хранится, поэтому slug. Схемы MCP не затронуты: это только текст хода
+    public static string CharacterPhotosText(ImageThreadCharacter c)
+    {
+        var head = $"Фото персонажа «{c.Slug}»: {string.Join(", ", c.Photos)} — ";
+        switch (c.Pick)
+        {
+            case CharacterPhotoPick.Auto:
+                var traits = SceneTraits(c.Scene);
+                return head + "подобраны под сюжет" + (traits.Count > 0 ? $" ({string.Join(", ", traits)})" : "");
+            case CharacterPhotoPick.Manual:
+                return head + "выбраны человеком";
+            default:
+                return head + "обычный порядок";
+        }
+    }
+
+    private static List<string> SceneTraits(CharacterScene? scene)
+    {
+        var traits = new List<string>();
+        if (scene is null) return traits;
+        if (scene.Angle is { } angle && CharacterScene.IsKnown(angle))
+            traits.Add(angle switch { "profile" => "в профиль", "three-quarter" => "вполоборота", "front" => "анфас", _ => angle });
+        if (scene.Pitch is { } pitch && CharacterScene.IsKnown(pitch) && pitch != "level")
+            traits.Add(pitch switch { "up" => "голова поднята", "down" => "голова опущена", _ => pitch });
+        if (scene.Emotion is { } emotion && CharacterScene.IsKnown(emotion))
+            traits.Add(emotion switch
+            {
+                "smile" => "улыбка", "laugh" => "смех", "neutral" => "нейтральное лицо", "serious" => "серьёзное лицо",
+                "sad" => "грусть", "surprised" => "удивление", _ => emotion,
+            });
+        return traits;
     }
 
     // Исполнитель в «Чем» хвоста «Контекст хода» — выбор человека, а персонаж и образцы берутся из контекста
     // чата (в префах проекта персонаж не читается)
     public const string ChoiceRule =
         "Исполнитель и модель в «Чем» контекста хода — выбор человека: не передавай provider/model в image_generate, "
-        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай.";
+        + "если он сам не просил сменить. Персонаж и образцы бери из контекста хода, а не придумывай. "
+        + "Формат (aspect, quality, width, height) в «Формат:» контекста хода — тоже выбор человека: не передавай его без просьбы.";
 
     // Выбор остаётся с прошлых сообщений, человек его мог и не обновлять: без оговорки агент принимал любую
     // следующую просьбу за правку картинки из «С чем» (баг 30.09)
@@ -187,10 +236,16 @@ public sealed class ImageEditorStateContributor(
         + "только когда просьба явно про неё и нового сюжета не описывает: «поправь», «ещё вариант», "
         + "«сделай ярче», «убери фон», «как вторую, но…». Сомневаешься — новая картинка.";
 
+    // Слово «локально» не отправляет агента в сырой local-media: иначе нет карточки в ленте, формата и ✦ (QA Веры, Б2.4)
+    public const string LocalMeansEditorRule =
+        "Просьба нарисовать локально / нашими моделями / на своей видеокарте / бесплатно — это image_generate с provider local "
+        + "(правка — image_generate с нужным op), а НЕ local_generate_image и не local_edit_image.";
+
     // Выбор человека важнее правила проекта о сервисе для картинок (решение Андрея, план 21492bb8)
     public const string PriorityRule =
         "Картинки в этом проекте рисуй через image_new → image_generate: они уважают выбор человека в строке контекста "
-        + "(включая local — свою видеокарту) и цену. Этот выбор важнее правил проекта о сервисе для картинок. "
+        + "и цену. Этот выбор важнее правил проекта о сервисе для картинок. "
+        + LocalMeansEditorRule + " "
         + "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — сервис и provider выбирай по нему; без него "
         + "fal-ai, glif, higgsfield и local-media для картинок — только если человек в своей просьбе прямо назвал этот сервис. "
         + "Видео, аудио и музыка — как раньше.\n" + NewOrContinueRule;
@@ -210,12 +265,15 @@ public sealed class ImageEditorStateContributor(
     // «Править» — правка (у картинки из «С чем» — её настройки). Персонаж — реф контекста, не префы проекта
     public static string ChoiceText(Prefs.ImageProjectPrefs prefs, ImageThreadSettings? focused)
     {
-        if (!prefs.HasModes) return "Выбор человека в строке контекста: " + SettingsText(focused ?? prefs.EditSettings());
+        var format = prefs.Format is { } f && f.Mode != Media.FormatModes.Model
+            ? $"; формат картинок проекта — {Media.MediaFormatText.Wish(f)}{(f.By == ClaudeHomeServer.Services.ChatContext.ContextActor.Agent ? " (✦ поставил Claude)" : "")}"
+            : "";
+        if (!prefs.HasModes) return "Выбор человека в строке контекста: " + SettingsText(focused ?? prefs.EditSettings()) + format;
         var edit = SettingsText(focused ?? prefs.EditSettings());
         var op = prefs.Edit?.Op is { } o ? $", операция {o}" : "";
         return "Выбор человека в строке контекста: "
             + $"новая картинка (генерация по тексту) — {SettingsText(prefs.CreateSettings())}; "
-            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}";
+            + $"правка{(focused is null ? "" : " картинки в работе")} — {edit}{op}" + format;
     }
 
     private static string SettingsText(ImageThreadSettings settings) =>

@@ -12,7 +12,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 // dense — узкие поля по бокам (6 вместо 10): тесный ряд, где каждый пиксель отдан подписи.
 export function Chip({
   children, onClick, selected, dashed, title, maxW, touch, leading, onRemove,
-  variant = 'soft', large, dense, removeLabel,
+  variant = 'soft', large, dense, removeLabel, keyboard, minHeight, disabled,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -27,6 +27,15 @@ export function Chip({
   variant?: 'soft' | 'toggle';
   large?: boolean;
   dense?: boolean;
+  // Кликабельный soft-чип доступен с клавиатуры: role=button, Tab, Enter/Space, кольцо фокуса
+  keyboard?: boolean;
+  // Минимальная высота (тач-цель на мобиле): не меняет шрифт/подпись, только
+  // гарантирует досягаемость пальцем. Не задано — высота по padding+контенту.
+  minHeight?: number;
+  // Доступное «отключено» (aria-disabled) для toggle-кнопки: чип с нулём фич —
+  // не только прозрачностью, но и состоянием, которое слышит скринридер. Клик не
+  // блокируем (aria-disabled, а не disabled): фильтр можно выбрать, просто фич нет.
+  disabled?: boolean;
 }) {
   const body = maxW !== undefined
     ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
@@ -44,6 +53,7 @@ export function Chip({
       <button
         onClick={onClick}
         title={title}
+        aria-disabled={disabled ? 'true' : undefined}
         style={{
           padding: large ? '7px 13px' : '4px 10px',
           borderRadius: R.pill,
@@ -54,6 +64,7 @@ export function Chip({
           fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer',
           display: 'inline-flex', alignItems: 'center', gap: SP.xs,
           transition: 'background 0.12s, border-color 0.12s',
+          ...(minHeight !== undefined ? { minHeight, boxSizing: 'border-box' as const } : null),
           ...(maxW !== undefined ? { maxWidth: maxW, overflow: 'hidden' } : null),
         }}
       >
@@ -66,6 +77,7 @@ export function Chip({
     <span
       onClick={onClick}
       title={title}
+      {...(keyboard && onClick ? chipKeyboardProps(onClick) : null)}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: FS.xs,
         padding: `${touch ? SP.sm : 3}px ${dense ? 6 : 10}px`,
@@ -81,6 +93,23 @@ export function Chip({
       {content}
     </span>
   );
+}
+
+export const CHIP_FOCUS_CLASS = 'cc-chip-kb';
+// Свойства фокусируемого чипа: Enter и Space работают как клик
+export function chipKeyboardProps(onClick: () => void) {
+  return {
+    role: 'button' as const, tabIndex: 0, className: CHIP_FOCUS_CLASS,
+    onKeyDown: (e: { key: string; preventDefault: () => void }) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); }
+    },
+  };
+}
+if (typeof document !== 'undefined' && !document.getElementById('cc-chip-kb-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-chip-kb-style';
+  el.textContent = `.${CHIP_FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
 }
 
 // Кольцо фокуса крестика с клавиатуры — инжектим один раз, как у IconButton

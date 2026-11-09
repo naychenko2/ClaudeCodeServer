@@ -18,7 +18,6 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import type { ChatItem } from '../../../types';
 import { getSlotItem, registerSubsystem, type ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import { setAllSubsystems } from '../../../lib/subsystems';
-import { setAllFlags } from '../../../lib/featureFlags';
 import type { AudioCatalog, AudioThread } from '../api';
 import { manifest } from '../manifest';
 import { __applyThreads, __resetAudioStore, __setScopeData } from '../thread/threadStore';
@@ -254,13 +253,10 @@ describe('служебные: audio_state, audio_voices, audio_cancel', () => {
   });
 });
 
-describe('флаг audio-editor', () => {
-  it('без флага вкладов в ленте нет, с флагом — на каждый инструмент', () => {
+describe('вклады в ленту', () => {
+  it('на каждый инструмент audio_* есть карточка', () => {
     registerSubsystem(manifest);
     setAllSubsystems(['audioeditor']);
-    setAllFlags({ 'audio-editor': false });
-    expect(getSlotItem('chat-item-tool', AUDIO_TOOL('audio_generate'))).toBeUndefined();
-    setAllFlags({ 'audio-editor': true });
     for (const t of ['audio_state', 'audio_focus', 'audio_new', 'audio_voices', 'audio_generate', 'audio_concat', 'audio_suggest_prompt', 'audio_cancel']) {
       expect(getSlotItem('chat-item-tool', AUDIO_TOOL(t))?.render, t).toBeTypeOf('function');
     }

@@ -146,14 +146,15 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     {
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        // false — как в тестовом хосте раньше: без движка/выбора исполнителя маршрута нет,
+        // фоновые действия (темы чатов, ранжир) в тесте выключены, не зовут модель
+        public bool HasRoute(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => Task.FromResult(answer);
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(answer);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

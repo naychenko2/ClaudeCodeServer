@@ -9,7 +9,10 @@
 // Мок повторяет контракт целиком, включая SignalR-события задачи.
 
 import { request, readStoredToken, onMessage } from 'aihome_shell/kit';
-import { projectBase, scopeBase } from './scope';
+import type { MediaFormatState, MediaFormatWish } from 'aihome_shell/kit';
+import type { LocalGpuQueueInfo } from '../../types/localGpuQueue';
+import { mockFormatState, mockTierFactor } from './mockFormat';
+import { isPersonalScope, projectBase, scopeBase, threadsBase } from './scope';
 import { transformedSize } from './transforms';
 
 export type ImageEditOp = 'generate' | 'edit' | 'inpaint' | 'outpaint' | 'removeBackground' | 'upscale' | 'enhanceFaces';
@@ -31,6 +34,9 @@ export interface ImageEditCaps {
   maxCount: number;
   faceByReferences: boolean;
   separateMaskPass?: boolean;
+  // Сколько фото персонажа модель берёт в один запуск (ADR-027): local (Qwen-Image) — 1,
+  // не задан — обычный лимит персонажа (photosPerRequest)
+  maxCharacterPhotos?: number | null;
   // Лимиты входа модели для автоуменьшения (ADR-018 §9); null — лимита нет
   maxInputSide?: number | null;
   maxInputMegapixels?: number | null;
@@ -87,6 +93,12 @@ export interface ImageEditQuoteRequest {
   // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
   sessionId?: string | null;
   contextRevision?: number | null;
+  // Формат генерации (ADR-025): желание проекта; без него сервер берёт сохранённое, но общий кэш котировок
+  // ключуется телом, поэтому выбранный формат уходит явно
+  format?: MediaFormatWish | null;
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки; персонажи живут в faces,
+  // верхнеуровневого characterSlug нет; с ней ContextRevision не едет
+  faceTarget?: FaceTarget | null;
 }
 
 export interface ImageEditEstimate {
@@ -107,6 +119,8 @@ export interface ImageEditQuote {
   estimate: ImageEditEstimate;
   expiresAt: string;
   expectedSeconds?: number | null;
+  // Число проходов подстановки (ADR-028, этап 3): N = число лиц в faceTarget; у обычной правки поля нет
+  facePasses?: number | null;
 }
 
 export interface EditCost { amount: number; unit: string }
@@ -137,6 +151,9 @@ export interface ImageEditJob {
   runs?: number | null;
   etaSeconds?: number | null;
   runElapsedSeconds?: number | null;
+  // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+  // или задача вне локальных моделей
+  gpu?: LocalGpuQueueInfo | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -152,6 +169,9 @@ export interface ImageEditJobInput {
   annotated?: Blob;
   // Подключённый персонаж проекта: сервер добавит его фото образцами с ролью Character
   characterSlug?: string;
+  // Явный список фото персонажа (имена файлов манифеста, до photosPerRequest): «Заменить» в
+  // блоке «Фото персонажа» (ADR-027, шаг 18); без него сервер сам подбирает/берёт по порядку
+  characterPhotos?: string[];
   // Образцы с компьютера (байты) и из проекта (путь от корня) — у каждого своя роль
   references?: ImageEditUploadedReference[];
   referencePaths?: ImageEditProjectReference[];
@@ -169,6 +189,10 @@ export interface ImageEditJobInput {
   versionId?: string;
   // Ревизия контекста чата (ADR-023 §Д2.1): сервер берёт входы из стора, не совпала — 409 context_changed
   contextRevision?: number;
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки; персонажи живут в faces,
+  // верхнеуровневый characterSlug при подстановке не едет; с ней contextRevision/mask/annotated
+  // и референсы контекста в тело не кладутся (сборка — buildQuoteBody/buildJobBody)
+  faceTarget?: FaceTarget | null;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -185,7 +209,10 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.source) form.append('source', input.source, 'source');
   if (input.mask) form.append('mask', input.mask, 'mask.png');
   if (input.annotated) form.append('annotated', input.annotated, 'annotated.png');
-  if (input.characterSlug) form.append('characterSlug', input.characterSlug);
+  // «Подставить персонажа» (ADR-028, этап 3): персонажи живут в faceTarget.faces, поэтому
+  // верхнеуровневого characterSlug рядом с faceTarget не едет (иначе сервер видит двусмысленный вход)
+  if (input.characterSlug && !input.faceTarget) form.append('characterSlug', input.characterSlug);
+  for (const f of input.characterPhotos ?? []) form.append('characterPhotos', f);
   for (const r of input.references ?? []) {
     form.append('references', r.file, r.name);
     form.append('referenceRoles', r.role);
@@ -202,11 +229,24 @@ export function jobForm(input: ImageEditJobInput): FormData {
   if (input.baseStepId) form.append('baseStepId', input.baseStepId);
   if (input.versionId) form.append('versionId', input.versionId);
   if (input.contextRevision != null) form.append('contextRevision', String(input.contextRevision));
+  // «Подставить персонажа» (ADR-028, этап 3): цель подстановки — объект
+  // {versionId, facesKey, faces: [{face, characterSlug}]}, уходит JSON-строкой (как photoLabels);
+  // сервер десериализует в FaceTarget
+  if (input.faceTarget) form.append('faceTarget', JSON.stringify(input.faceTarget));
   return form;
 }
 
 // Персонаж — папка characters/<slug>/ в проекте (ADR-017, раздел 10)
-export interface ImageEditCharacterPhoto { file: string; primary?: boolean | null; angle?: string | null }
+// Метки фото (ADR-027 §1): angle/pitch/emotion — словари бэкенда, labelSource — кто разметил.
+// pitch/emotion/labelSource в JSON отсутствуют (а не null), когда метки нет или флаг выключен.
+export interface ImageEditCharacterPhoto {
+  file: string;
+  primary?: boolean | null;
+  angle?: string | null;
+  pitch?: string | null;
+  emotion?: string | null;
+  labelSource?: string | null;
+}
 
 export interface ImageEditCharacter {
   slug: string;
@@ -215,8 +255,18 @@ export interface ImageEditCharacter {
   // Папка персонажа от корня проекта: characters/<slug>
   path: string;
   photos: ImageEditCharacterPhoto[];
+  // LoRA для локальной модели; null — не задана
+  local?: { lora: string; trigger: string; strength: number } | null;
   createdAt: string;
+  // Сколько фото уходит в один запрос (лимит окна выбора)
+  photosPerRequest?: number | null;
 }
+
+// trained — дата обучения своих LoRA (полное имя → ISO), если бэкенд её отдаёт
+export interface ImageEditLoras { available: boolean; items: string[]; trained?: Record<string, string> }
+
+// Метка одного фото (ADR-027 §1): null в поле — не менять. Ключ — имя файла из манифеста.
+export interface CharacterPhotoLabelEdit { angle?: string | null; pitch?: string | null; emotion?: string | null }
 
 export interface ImageEditCharacterInput {
   name: string;
@@ -224,6 +274,10 @@ export interface ImageEditCharacterInput {
   // Имена уже лежащих фото, которые убрать (только при правке)
   removePhotos?: string[];
   photos: Blob[];
+  // не задано — LoRA не трогаем; 'remove' — снять
+  lora?: { name: string; trigger: string; strength: number } | 'remove';
+  // Метки фото : имя файла → {angle, pitch, emotion}
+  photoLabels?: Record<string, CharacterPhotoLabelEdit>;
 }
 
 // next-version — hero.v2.png рядом с исходником; as — «Сохранить как…» (ADR-018 §5)
@@ -319,7 +373,9 @@ interface ImageEditEventOrigin { chatSessionId?: string | null; initiator?: Imag
 
 export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null;
-      run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null }
+      run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null;
+      // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+      gpu?: LocalGpuQueueInfo | null }
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 
@@ -341,9 +397,96 @@ export function nameTakenSuggestion(e: unknown): string | null {
   return body?.code === 'name_taken' && typeof body.suggestion === 'string' ? body.suggestion : null;
 }
 
+// ── «Подставить персонажа» на лицо (этап 2 · шаг 10a) ─────────────────────────
+// Лицо, найденное на картинке версии. n — номер с 1 слева направо; bbox — рамка
+// [x1, y1, x2, y2] в пикселях картинки; small — мелкое лицо (короче 64 px), выбрать нельзя
+export interface DetectedFace {
+  n: number;
+  bbox: [number, number, number, number];
+  score: number;
+  small: boolean;
+}
+
+// Ответ «найти лица»: геометрия и facesKey — ключ ревизии, по которому сервер сверит выбор
+// лица при запуске (сменилась картинка — 409 faces_changed со свежим списком)
+export interface FacesResponse {
+  facesKey: string;
+  width: number;
+  height: number;
+  faces: DetectedFace[];
+}
+
+// Назначение персонажа на лицо (ADR-028, этап 3): номер лица (с 1) и персонаж, которого ставят на него
+export interface FaceAssignment {
+  face: number;
+  characterSlug: string;
+}
+
+// Цель подстановки персонажей (ADR-028, этап 3): версия, ключ ревизии лиц и назначения «лицо → персонаж».
+// Уходит в котировку и запуск; вместе с ним ContextRevision/Mask/Annotated/референсы не едут
+export interface FaceTarget {
+  versionId: string;
+  facesKey: string;
+  faces: FaceAssignment[];
+}
+
+// Коды ошибок «найти лица»: различимо типизированы, чтобы экран назвал причину отказа
+export type FacesErrorCode =
+  | 'busy'                  // 503: видеокарта занята долгой задачей
+  | 'provider_unavailable'  // локальные модели выключены / ComfyUI недоступен
+  | 'faces_changed'         // 409: картинка изменилась, в теле свежий список лиц
+  | 'version_not_found'
+  | 'not_found'             // 404: личная область (ручки нет) или нить/версия не найдены
+  | 'other';
+
+export interface FacesError {
+  code: FacesErrorCode;
+  // 409 faces_changed: свежий список лиц (тот же формат) — экран обновляет рамки и сбрасывает выбор
+  faces?: FacesResponse | null;
+}
+
+// Разбор отказа «найти лица» по коду/статусу. faces_changed (409) отдаёт свежий список
+// в теле — прикладываем его; прочий отказ — код по body.code, иначе по статусу
+export function facesError(e: unknown): FacesError {
+  const err = e as { status?: number; body?: { code?: unknown; faces?: unknown } } | null;
+  const code = typeof err?.body?.code === 'string' ? err.body.code : null;
+  const faces = parseFacesResponse(err?.body?.faces);
+  if (code === 'busy' || code === 'provider_unavailable' || code === 'faces_changed'
+    || code === 'version_not_found' || code === 'not_found') {
+    return { code, ...(code === 'faces_changed' && faces ? { faces } : null) };
+  }
+  if (code) return { code: 'other' };
+  if (err?.status === 404) return { code: 'not_found' };
+  if (err?.status === 503) return { code: 'busy' };
+  return { code: 'other' };
+}
+
+// Тело 409 faces_changed: свежий список лиц в том же формате
+function parseFacesResponse(v: unknown): FacesResponse | null {
+  const r = v as FacesResponse | null | undefined;
+  if (!r || typeof r !== 'object') return null;
+  if (typeof r.facesKey !== 'string' || !Array.isArray(r.faces)) return null;
+  return r;
+}
+
+// «Найти лица» (этап 2 · шаг 10a): POST {threadsBase}/{threadId}/versions/{versionId}/faces.
+// Только проектная область: в личной области персонажей нет по построению → типизированный
+// отказ not_found без сетевого запроса. Отказ — типизированный FacesError (facesError)
+export function findFaces(scope: string, sessionId: string, threadId: string, versionId: string): Promise<FacesResponse> {
+  if (isPersonalScope(scope)) {
+    return Promise.reject(Object.assign(new Error('not_found'), { status: 404, body: { code: 'not_found' } }));
+  }
+  return request<FacesResponse>(
+    `${threadsBase(scope, sessionId)}/${encodeURIComponent(threadId)}/versions/${encodeURIComponent(versionId)}/faces`,
+    { method: 'POST' },
+  );
+}
+
 export interface ImageEditorApi {
   catalog(projectId: string): Promise<ImageEditCatalog>;
   quote(projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote>;
+  // Состояние чипа «Формат» (ADR-025): возможности модели, желание, действующий формат, ступени с ценой
+  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp }): Promise<MediaFormatState>;
   startJob(projectId: string, input: ImageEditJobInput): Promise<{ jobId: string }>;
   // Образец с диска человека в рабочую папку модуля; дальше он встаёт в контекст чата ref'ом {upload}
   uploadSample(projectId: string, file: Blob, name: string): Promise<{ uploadId: string }>;
@@ -357,6 +500,7 @@ export interface ImageEditorApi {
   createCharacter(projectId: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
   updateCharacter(projectId: string, slug: string, input: ImageEditCharacterInput): Promise<ImageEditCharacter>;
   deleteCharacter(projectId: string, slug: string): Promise<void>;
+  loras(projectId: string): Promise<ImageEditLoras>;
   characterPhotoUrl(projectId: string, slug: string, file: string): string;
   saveCheck(projectId: string, req: SaveCheckRequest): Promise<SaveCheckResponse>;
   // dryRun — только посчитать вес: шаг не пишется, stepId = null
@@ -375,13 +519,111 @@ const withToken = (url: string) => {
 function characterForm(input: ImageEditCharacterInput): FormData {
   const form = new FormData();
   form.append('name', input.name);
-  if (input.description) form.append('description', input.description);
+  if (input.description !== undefined) form.append('description', input.description);
   input.removePhotos?.forEach(f => form.append('removePhotos', f));
   input.photos.forEach((b, i) => form.append('photos', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+  // Метки фото уходят JSON-строкой {файл: {angle, pitch, emotion}} (ADR-027 §1); бэк читает её как PhotoLabels
+  if (input.photoLabels) form.append('photoLabels', JSON.stringify(input.photoLabels));
+  if (input.lora === 'remove') form.append('removeLora', 'true');
+  else if (input.lora) {
+    form.append('loraName', input.lora.name);
+    form.append('loraTrigger', input.lora.trigger);
+    form.append('loraStrength', input.lora.strength.toString());
+  }
   return form;
 }
 
 const charBase = (projectId: string) => `${projectBase(projectId)}/characters`;
+
+// ── Обучение LoRA персонажа (ADR-026 §7–8) ────────────────────────────────────
+export type LoraRunStatus = 'training' | 'ready' | 'failed' | 'cancelled';
+export type LoraTrainJobStatus = 'queued' | 'running';
+export type TrainingPhotoRejectReason = 'format' | 'too_big' | 'too_small' | 'duplicate' | 'limit';
+
+export interface TrainingPhoto { name: string; bytes: number; width: number; height: number }
+export interface TrainingPhotosDto { items: TrainingPhoto[]; count: number; min: number; max: number; photosHash: string }
+export interface TrainingPhotosAddResultDto {
+  photos: TrainingPhotosDto;
+  rejected: { fileName: string; reason: TrainingPhotoRejectReason }[];
+}
+
+export interface LoraTrainCurrent {
+  runId: string; jobId: string; status: LoraTrainJobStatus
+  step?: number; totalSteps?: number; etaSeconds?: number; queuePosition?: number | null; startedAt?: string
+}
+export interface LoraTrainStateDto {
+  enabled: boolean; available: boolean
+  gpu: { busy: boolean; mine: boolean; busyUntil?: string }
+  current: LoraTrainCurrent | null
+  defaultTrigger: string; presets: { key: 'standard'; etaSeconds: number }[]; photosChanged: boolean
+}
+export interface LoraTrainStartRequest { preset: 'standard'; trigger?: string; confirm: true }
+export interface LoraTrainStartResponse { runId: string; jobId: string; queuePosition: number; etaSeconds: number }
+
+export type LoraRejectReason = 'no_face' | 'many_faces' | 'small_face' | 'unreadable';
+export interface LoraVersionDto {
+  runId: string; status: LoraRunStatus; title?: string | null; createdAt?: string; trainedAt?: string
+  photosCount: number; photosKept?: number; trigger?: string; connected: boolean
+  rejected?: { name: string; reason: LoraRejectReason }[]
+  error?: { code: string; message: string }
+}
+export interface LoraVersionsDto { items: LoraVersionDto[]; own: { lora: string; trainedAt?: string | null } | null; limit: number; used: number }
+
+// Занятость видеокарты на уровне инстанса (ADR-026 §7.4); jobId приходит только админу
+export interface LoraActiveDto { busy: boolean; mine: boolean; busyUntil?: string; jobId?: string }
+
+export interface LoraTrainApi {
+  photos(projectId: string, slug: string): Promise<TrainingPhotosDto>;
+  addPhotos(projectId: string, slug: string, files: Blob[]): Promise<TrainingPhotosAddResultDto>;
+  deletePhoto(projectId: string, slug: string, name: string): Promise<void>;
+  photoUrl(projectId: string, slug: string, name: string): string;
+  trainState(projectId: string, slug: string): Promise<LoraTrainStateDto>;
+  startTrain(projectId: string, slug: string, req: LoraTrainStartRequest): Promise<LoraTrainStartResponse>;
+  cancelTrain(projectId: string, slug: string): Promise<void>;
+  active(): Promise<LoraActiveDto>;
+  cancelActive(): Promise<void>;
+  versions(projectId: string, slug: string): Promise<LoraVersionsDto>;
+  connectVersion(projectId: string, slug: string, runId: string): Promise<ImageEditCharacter>;
+  renameVersion(projectId: string, slug: string, runId: string, title: string): Promise<LoraVersionDto>;
+  deleteVersion(projectId: string, slug: string, runId: string): Promise<{ status: 'deleting'; disconnected: boolean }>;
+}
+
+const charUrl = (projectId: string, slug: string) => `${charBase(projectId)}/${encodeURIComponent(slug)}`;
+
+export const loraTrainApi: LoraTrainApi = {
+  photos: (projectId, slug) =>
+    request<TrainingPhotosDto>(`${charUrl(projectId, slug)}/training-photos`, { live: true }),
+  addPhotos: (projectId, slug, files) => {
+    const form = new FormData();
+    files.forEach((b, i) => form.append('files', b, b instanceof File ? b.name : `photo-${i + 1}.jpg`));
+    return request<TrainingPhotosAddResultDto>(`${charUrl(projectId, slug)}/training-photos`,
+      { method: 'POST', body: form, timeoutMs: 120_000 });
+  },
+  deletePhoto: (projectId, slug, name) =>
+    request<void>(`${charUrl(projectId, slug)}/training-photos/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+  photoUrl: (projectId, slug, name) =>
+    withToken(`/api${charUrl(projectId, slug)}/training-photos/${encodeURIComponent(name)}`),
+  trainState: (projectId, slug) =>
+    request<LoraTrainStateDto>(`${charUrl(projectId, slug)}/lora-train`, { live: true }),
+  startTrain: (projectId, slug, req) =>
+    request<LoraTrainStartResponse>(`${charUrl(projectId, slug)}/lora-train`,
+      { method: 'POST', body: JSON.stringify(req) }),
+  cancelTrain: (projectId, slug) =>
+    request<void>(`${charUrl(projectId, slug)}/lora-train`, { method: 'DELETE' }),
+  active: () => request<LoraActiveDto>('/image-editor/lora-train/active', { live: true }),
+  cancelActive: () => request<void>('/image-editor/lora-train/active', { method: 'DELETE' }),
+  versions: (projectId, slug) =>
+    request<LoraVersionsDto>(`${charUrl(projectId, slug)}/lora-versions`, { live: true }),
+  connectVersion: (projectId, slug, runId) =>
+    request<ImageEditCharacter>(`${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}/connect`,
+      { method: 'POST' }),
+  renameVersion: (projectId, slug, runId, title) =>
+    request<LoraVersionDto>(`${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}`,
+      { method: 'PATCH', body: JSON.stringify({ title }) }),
+  deleteVersion: (projectId, slug, runId) =>
+    request<{ status: 'deleting'; disconnected: boolean }>(
+      `${charUrl(projectId, slug)}/lora-versions/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
+};
 
 const IMAGE_EDIT_EVENTS = new Set(['image_edit_progress', 'image_edit_completed', 'image_edit_failed']);
 
@@ -389,6 +631,8 @@ const liveApi: ImageEditorApi = {
   catalog: projectId => request<ImageEditCatalog>(`${base(projectId)}/catalog`, { live: true }),
   quote: (projectId, req) =>
     request<ImageEditQuote>(`${base(projectId)}/quote`, { method: 'POST', body: JSON.stringify(req), timeoutMs: 60_000 }),
+  format: (projectId, q) =>
+    request<MediaFormatState>(`${base(projectId)}/format?${new URLSearchParams(q)}`, { live: true, timeoutMs: 60_000 }),
   startJob: (projectId, input) =>
     request<{ jobId: string }>(`${base(projectId)}/jobs`, { method: 'POST', body: jobForm(input), timeoutMs: 120_000 }),
   uploadSample: (projectId, file, name) => {
@@ -416,6 +660,7 @@ const liveApi: ImageEditorApi = {
       { method: 'PUT', body: characterForm(input), timeoutMs: 120_000 }),
   deleteCharacter: (projectId, slug) =>
     request<void>(`${charBase(projectId)}/${encodeURIComponent(slug)}`, { method: 'DELETE' }),
+  loras: projectId => request<ImageEditLoras>(`${base(projectId)}/loras`, { live: true }),
   characterPhotoUrl: (projectId, slug, file) =>
     withToken(`/api${charBase(projectId)}/${encodeURIComponent(slug)}/photos/${encodeURIComponent(file)}`),
   saveCheck: (projectId, req) => {
@@ -450,10 +695,12 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'soul_2', label: 'Soul', caps: caps(['generate', 'edit'], 'none'), priceHint: { amount: 3, unit: 'credits', per: 'image' } },
     { id: 'nano_banana_2', label: 'Nano Banana', caps: caps(ALL_EDIT, 'none'), priceHint: { amount: 1, unit: 'credits', per: 'image' } },
   ] },
-  // Как LocalImageEditor на сервере: Qwen-Image без своего канала маски и FaceDetailer
+  // Как LocalImageEditor на сервере: FLUX 3 Klein (умолчание), Qwen-Image без своего канала маски и FaceDetailer
   { key: 'local', label: 'Локальные модели', priceUnit: 'free', available: true, models: [
     AUTO_ITEM,
-    { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'qwen-image-2.1-turbo', label: 'Qwen-Image 2.1 Turbo — быстро', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'flux3-klein', label: 'FLUX 3 Klein — текст и точная правка', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
   ] },
 ];
@@ -531,6 +778,12 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       limits: { maxFileMb: 20, maxReferences: 6, maxCount: 4, heavyFileMb: 5 },
       reason: providers.length ? null : 'no_provider_configured',
     }),
+    format: async (projectId, q) => {
+      // Желание мок читает из кэша префов устройства: запись префов оптимистична и пишет туда сразу
+      let wish: MediaFormatWish | null = null;
+      try { wish = (JSON.parse(localStorage.getItem(`cc-image-prefs:${projectId}`) ?? 'null') as { format?: MediaFormatWish | null } | null)?.format ?? null; } catch { /* мусор в хранилище */ }
+      return delay(mockFormatState(q.model, q.op, wish), 80);
+    },
     quote: async (_projectId, req) => {
       const p = providers.find(x => x.key === req.provider);
       if (!p) throw Object.assign(new Error('Поставщик рисования не настроен'), { status: 409, body: { code: 'provider_unavailable' } });
@@ -542,7 +795,7 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
         quoteId: `q${++seq}`, provider: p.key, model: m.id,
         estimate: free
           ? { amount: 0, unit: 'free', approx: false, source: 'provider', etaSeconds: seconds, queueLength: localQueue }
-          : { amount: Math.round(per * req.count * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
+          : { amount: Math.round(per * req.count * mockTierFactor(m.id, req.op, req.format) * 100) / 100, unit: p.priceUnit, approx: true, source: 'catalog' },
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         expectedSeconds: seconds,
       };
@@ -685,13 +938,14 @@ export function createMockApi(mode: 'fal' | 'all'): ImageEditorApi {
       const e = characters.find(c => c.character.slug === slug);
       if (!e) throw Object.assign(new Error('Персонаж не найден'), { status: 404 });
       const kept = e.character.photos.filter(p => !input.removePhotos?.includes(p.file));
-      e.character = mockCharacter(slug, input, kept, e.urls);
+      e.character = mockCharacter(slug, input, kept, e.urls, e.character.local);
       return delay(e.character, 300);
     },
     deleteCharacter: async (_projectId, slug) => {
       characters = characters.filter(c => c.character.slug !== slug);
       return delay(undefined);
     },
+    loras: () => delay({ available: true, items: ['anna_face_v1.safetensors', 'anna_face_v2.safetensors'] }),
     characterPhotoUrl: (_projectId, slug, file) =>
       characters.find(c => c.character.slug === slug)?.urls.get(file) ?? '',
   };
@@ -711,7 +965,8 @@ export function characterSlug(name: string): string {
   return s || 'character';
 }
 
-function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: ImageEditCharacterPhoto[], urls: Map<string, string>): ImageEditCharacter {
+function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: ImageEditCharacterPhoto[], urls: Map<string, string>,
+  prevLocal: ImageEditCharacter['local'] = null): ImageEditCharacter {
   const photos = [...kept];
   let n = 0;
   for (const blob of input.photos) {
@@ -724,6 +979,8 @@ function mockCharacter(slug: string, input: ImageEditCharacterInput, kept: Image
   return {
     slug, name: input.name.trim(), description: input.description?.trim() || null,
     path: `characters/${slug}`, photos, createdAt: new Date().toISOString(),
+    local: input.lora === 'remove' ? null
+      : input.lora ? { lora: input.lora.name, trigger: input.lora.trigger, strength: input.lora.strength } : prevLocal,
   };
 }
 

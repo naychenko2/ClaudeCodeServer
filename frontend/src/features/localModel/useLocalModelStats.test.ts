@@ -1,0 +1,354 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { OfflineError } from '../../lib/offline';
+import { mockEngineStats, mockLocalModelStats } from './localModel.fixtures';
+import {
+  configuredFetch,
+  createStatsPoller,
+  getLocalModelConfigured,
+  isLocalModelPanelVisible,
+  makeStatsFetch,
+  setLocalModelConfigured,
+  subscribeLocalModelConfigured,
+} from './useLocalModelStats';
+
+// Блокёр: окно из UI доходит до fetch. makeStatsFetch читает windowRef.current на
+// каждый вызов; мутация «захватить окно при создании poller» краснеет.
+const { fetchLocalModelStats, fetchLocalModelMedia } = vi.hoisted(() => ({
+  fetchLocalModelStats: vi.fn(),
+  fetchLocalModelMedia: vi.fn(),
+}));
+vi.mock('./api', () => ({ fetchLocalModelStats, fetchLocalModelMedia }));
+
+describe('isLocalModelPanelVisible: видимость панели', () => {
+  it('configured: true — показывается', () => {
+    expect(isLocalModelPanelVisible(true)).toBe(true);
+  });
+  it('configured: false — нет', () => {
+    expect(isLocalModelPanelVisible(false)).toBe(false);
+  });
+  it('configured: null — сервер ещё не ответил, нет', () => {
+    expect(isLocalModelPanelVisible(null)).toBe(false);
+  });
+});
+
+describe('configuredFetch: не-админ (/stats/media) /stats не трогает', () => {
+  it('media → fetchLocalModelMedia; /stats не вызван', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockResolvedValue({ configured: true });
+    await configuredFetch('media')();
+    expect(vi.mocked(fetchLocalModelMedia)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchLocalModelStats)).not.toHaveBeenCalled();
+  });
+  it('stats → fetchLocalModelStats; /stats/media не вызван', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    vi.mocked(fetchLocalModelMedia).mockReset();
+    vi.mocked(fetchLocalModelStats).mockResolvedValue({ configured: true });
+    await configuredFetch('stats')();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchLocalModelMedia)).not.toHaveBeenCalled();
+  });
+});
+
+describe('createStatsPoller: 2-с опрос', () => {
+  const mock = mockLocalModelStats();
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const make = () => {
+    const fetch = vi.fn(async () => mock);
+    const p = createStatsPoller(fetch, 2000, (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id));
+    return { fetch, p };
+  };
+
+  it('закрытая панель — таймера нет, опроса нет', async () => {
+    const { fetch, p } = make();
+    p.setActive(false, true);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('открытая панель и видимая вкладка — опрос сразу и каждые 2 с', async () => {
+    const { fetch, p } = make();
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(1); // первый ответ сразу
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(fetch).toHaveBeenCalledTimes(4);
+    p.dispose();
+    expect(vi.getTimerCount()).toBe(0); // dispose — без утечки таймера
+  });
+
+  it('вкладка не видима — опрос стоит; снова видима — продолжается', async () => {
+    const { fetch, p } = make();
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    p.setActive(true, false); // скрыли вкладку
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    p.setActive(true, true); // вернули: немедленный fetch (данные могли устать) + таймер
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('снапшот: данные после первого ответа, loading гаснет', async () => {
+    const { p } = make();
+    p.setActive(true, true);
+    expect(p.getSnapshot().data).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    const snap = p.getSnapshot();
+    expect(snap.data).toEqual(mock);
+    expect(snap.loading).toBe(false);
+  });
+
+  it('сбой опроса не роняет: прежние данные, loading гаснет', async () => {
+    const fetch = vi.fn(async () => mock);
+    const p = createStatsPoller(fetch, 2000, (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id));
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mock);
+    fetch.mockImplementationOnce(async () => { throw new Error('offline'); });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(p.getSnapshot().data).toEqual(mock); // прежние данные
+    expect(p.getSnapshot().loading).toBe(false);
+  });
+
+  it('getSnapshot: два подряд вызова без событий — один объект; после fetch — новый', async () => {
+    const { p } = make();
+    const s1 = p.getSnapshot();
+    const s2 = p.getSnapshot();
+    expect(s1).toBe(s2); // === : кэш, а не новый объект на каждый вызов
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    const s3 = p.getSnapshot();
+    expect(s3).not.toBe(s1); // после завершения fetch — пересобранный снимок
+  });
+});
+
+// Ревью Ф1 (MAJOR 1-2): поллер знает движок каждого запроса — поздний ответ
+// старого движка не затирает данные нового; смена движка сбрасывает чужой снимок.
+// Мутация «убрать проверку движка в .then» краснеет в первом тесте, «убрать
+// сброс при несовпадении движков» — во втором.
+describe('createStatsPoller: движок снимка (MAJOR 1-2)', () => {
+  const mainData = mockLocalModelStats(); // данные основной (vLLM)
+  const engineData = mockEngineStats('ready'); // данные стенда второй движок
+
+  const timers = (fn: () => void, ms: number) => setInterval(fn, ms);
+  const untimer = (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('поздний ответ старого движка не затирает данные нового', async () => {
+    const engine = { current: 'main' as 'main' | 'gemma' };
+    let resolveMain: (v: typeof mainData) => void = () => {};
+    const mainPromise = new Promise<typeof mainData>((r) => { resolveMain = r; });
+    const fetch = vi.fn<() => Promise<typeof mainData>>();
+    fetch.mockImplementationOnce(() => mainPromise); // запрос main отложен
+    fetch.mockImplementationOnce(async () => engineData); // gemma приходит первым
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true); // первый тик — запрос main
+    engine.current = 'gemma'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос gemma (как эффект смены движка в хуке)
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(engineData);
+    resolveMain(mainData); // поздний ответ main
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(engineData); // снимок остаётся gemma
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+
+  it('смена движка сбрасывает снимок; отказ нового движка не оставляет чужих данных', async () => {
+    const engine = { current: 'main' as 'main' | 'gemma' };
+    const fetch = vi.fn<() => Promise<typeof mainData>>().mockResolvedValue(mainData);
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mainData); // данные main показаны
+    engine.current = 'gemma';
+    fetch.mockImplementationOnce(async () => { throw new Error('gemma offline'); });
+    p.refetch(); // смена движка → немедленный запрос нового
+    expect(p.getSnapshot().data).toBeNull(); // чужой снимок сброшен сразу
+    expect(p.getSnapshot().loading).toBe(true);
+    await vi.advanceTimersByTimeAsync(0); // отказ нового движка
+    expect(p.getSnapshot().data).toBeNull(); // не данных предыдущего стенда
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+});
+
+// Ф10: признак сбоя в снимке — вкладка без данных объясняет причину, а не молчит.
+// Мутация «не ставить error в catch» краснит первый тест; «не гасить error при
+// успехе» — его вторую половину; «не различать OfflineError» — второй тест.
+describe('createStatsPoller: error в снимке (Ф10)', () => {
+  const mock = mockLocalModelStats();
+  const timers = (fn: () => void, ms: number) => setInterval(fn, ms);
+  const untimer = (id: unknown) => clearInterval(id as ReturnType<typeof setInterval>);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('OfflineError — error: offline без данных; следующий успех гасит его', async () => {
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockRejectedValueOnce(new OfflineError());
+    fetch.mockResolvedValue(mock);
+    const p = createStatsPoller(fetch, 2000, timers, untimer);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toBeNull(); // данных ещё никогда не было
+    expect(p.getSnapshot().error).toBe('offline');
+    expect(p.getSnapshot().loading).toBe(false);
+    await vi.advanceTimersByTimeAsync(2000); // следующий тик успешен
+    expect(p.getSnapshot().data).toEqual(mock);
+    expect(p.getSnapshot().error).toBeNull();
+    p.dispose();
+  });
+
+  it('прочий сбой — error: failed (не offline)', async () => {
+    const fetch = vi.fn<() => Promise<typeof mock>>().mockRejectedValue(new Error('500'));
+    const p = createStatsPoller(fetch, 2000, timers, untimer);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().error).toBe('failed');
+    p.dispose();
+  });
+
+  it('смена движка гасит error вместе со снимком: он относился к старому стенду', async () => {
+    const engine = { current: 'main' as 'main' | 'gemma' };
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockResolvedValueOnce(mock); // main ответил
+    fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн (данные остаются)
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос gemma «в пути»
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mock);
+    await vi.advanceTimersByTimeAsync(2000); // следующий тик — отказ main
+    expect(p.getSnapshot().data).toEqual(mock); // прежние данные показаны
+    expect(p.getSnapshot().error).toBe('offline');
+    engine.current = 'gemma';
+    p.refetch(); // смена движка → немедленный запрос нового
+    expect(p.getSnapshot().data).toBeNull();
+    expect(p.getSnapshot().error).toBeNull(); // чужая причина под новым выбором не показывается
+    p.dispose();
+  });
+
+  // Ревью Ф10 (Глеб): тот же guard движка, что у .then, обязан быть и в catch —
+  // поздний отказ чужого движка не трогает снимок текущего. Мутация «убрать
+  // guard в catch» краснит первый тест; «сброс только при данных (не помнить
+  // движок отказа)» — второй.
+  it('поздний отказ чужого движка не трогает снимок текущего', async () => {
+    const engine = { current: 'main' as 'main' | 'gemma' };
+    let rejectMain: (e: unknown) => void = () => {};
+    const mainPromise = new Promise<typeof mock>((_, rej) => { rejectMain = rej; });
+    let resolveEngine: (v: typeof mock) => void = () => {};
+    const enginePromise = new Promise<typeof mock>((r) => { resolveEngine = r; });
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockImplementationOnce(() => mainPromise); // запрос main в пути
+    fetch.mockImplementationOnce(() => enginePromise); // запрос gemma тоже в пути
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true); // первый тик — запрос main
+    engine.current = 'gemma'; // пользователь переключился, main всё ещё в пути
+    p.refetch(); // запрос gemma (как эффект смены движка в хуке)
+    rejectMain(new OfflineError()); // отказ старого движка пришёл позже
+    await vi.advanceTimersByTimeAsync(0);
+    const mid = p.getSnapshot();
+    expect(mid.error).toBeNull(); // чужой отказ не выставил error текущему
+    expect(mid.loading).toBe(true); // ждём ответ нового движка
+    expect(mid.data).toBeNull();
+    resolveEngine(mock); // ответ нового движка
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().data).toEqual(mock);
+    expect(p.getSnapshot().error).toBeNull();
+    expect(p.getSnapshot().loading).toBe(false);
+    p.dispose();
+  });
+
+  it('отказ без данных не остаётся при программной смене движка', async () => {
+    const engine = { current: 'main' as 'main' | 'gemma' };
+    const fetch = vi.fn<() => Promise<typeof mock>>();
+    fetch.mockRejectedValueOnce(new OfflineError()); // main офлайн, данных никогда не было
+    fetch.mockImplementationOnce(() => new Promise<typeof mock>(() => {})); // запрос gemma «в пути»
+    const p = createStatsPoller(fetch, 2000, timers, untimer, engine);
+    p.setActive(true, true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p.getSnapshot().error).toBe('offline'); // причина текущего выбора показана
+    engine.current = 'gemma';
+    p.refetch(); // смена движка без данных — прежний сброс (при данных) не сработал бы
+    expect(p.getSnapshot().error).toBeNull(); // чужая причина гасится при любой смене
+    expect(p.getSnapshot().loading).toBe(true);
+    p.dispose();
+  });
+});
+
+describe('стор configured: лёгкий опрос для значка', () => {
+  it('null до первого ответа, значение обновляется и подписчики видят смену', () => {
+    expect(getLocalModelConfigured()).toBeNull();
+    const seen: (boolean | null)[] = [];
+    const unsub = subscribeLocalModelConfigured(() => { seen.push(getLocalModelConfigured()); });
+    setLocalModelConfigured(true);
+    setLocalModelConfigured(true); // повторное значение — без дубля
+    setLocalModelConfigured(false);
+    unsub();
+    setLocalModelConfigured(null);
+    expect(seen).toEqual([true, false]);
+    expect(getLocalModelConfigured()).toBeNull();
+  });
+});
+
+describe('makeStatsFetch: окно доходит до запроса (блокер)', () => {
+  it('fetch читает ТЕКУЩЕЕ окно: 15m → 1h, смена ref меняет следующий запрос', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const ref = { current: '15m' as const };
+    const fetch = makeStatsFetch(ref);
+
+    await fetch();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('15m');
+
+    ref.current = '1h'; // переключатель на «1 ч»
+    await fetch();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('1h');
+  });
+
+  it('движок: без engineRef и с main — прежний вызов (без параметра engine)', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const win = { current: '5m' as const };
+    await makeStatsFetch(win)();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+    await makeStatsFetch(win, { current: 'main' })();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+  });
+
+  it('смена движка в ref меняет запрос со следующего тика поллера', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(fetchLocalModelStats).mockReset();
+      vi.mocked(fetchLocalModelStats).mockResolvedValue(mockLocalModelStats());
+      const engine = { current: 'main' as 'main' | 'gemma' };
+      const p = createStatsPoller(
+        makeStatsFetch({ current: '5m' }, engine), 2000,
+        (fn, ms) => setInterval(fn, ms), (id) => clearInterval(id as ReturnType<typeof setInterval>),
+      );
+      p.setActive(true, true); // первый тик — main
+      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+      engine.current = 'gemma'; // выбор переключили между тиками
+      await vi.advanceTimersByTimeAsync(2000); // следующий тик
+      expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m', undefined, 'gemma');
+      p.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('5m → 5m (не 15m по умолчанию): мутация «окно не пробрасывается» краснеет', async () => {
+    vi.mocked(fetchLocalModelStats).mockReset();
+    const ref = { current: '5m' as const };
+    await makeStatsFetch(ref)();
+    expect(vi.mocked(fetchLocalModelStats)).toHaveBeenLastCalledWith('5m');
+  });
+});

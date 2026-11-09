@@ -58,6 +58,8 @@ public class WorkspaceToolsetParityTests
         psi.Environment["WORKSPACE_PROJECT_ID"] = "proj-1";
         psi.Environment["WORKSPACE_SECTIONS"] = sections;
         psi.Environment["WORKSPACE_WRITE"] = "1";
+        // context_list у stdio-ветки гейтится флагом; http-тулсет отдаёт его всегда
+        psi.Environment["WORKSPACE_CHAT_CONTEXT"] = "1";
 
         System.Diagnostics.Process? proc;
         try { proc = System.Diagnostics.Process.Start(psi); }

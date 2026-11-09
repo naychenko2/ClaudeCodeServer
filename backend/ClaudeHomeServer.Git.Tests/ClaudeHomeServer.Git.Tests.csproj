@@ -25,6 +25,8 @@
          зависимость Main->Git разрешится через Main в этой сборке.
          Прецедент — ClaudeHomeServer.CodeGraph.Tests, у которой ровно так же
          есть ProjectReference на Main ради доступа к интеграционным типам Main. -->
+    <!-- Шаг 2.2: Main проверен и остаётся — без него не компилируется
+         DossierBranch (Dossiers ещё не вынесены в отдельную сборку). -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
   </ItemGroup>
 

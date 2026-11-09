@@ -31,6 +31,10 @@ public sealed record CheapProfileSpec(
 // Agentic — место запускает агентную сессию claude CLI (не one-shot): локаль и
 // direct:-модели ему недоступны, маршрут резолвится ModelAssignmentResolver'ом,
 // а не CheapTextRunner'ом.
+// Input — что место получает на вход: текст или ещё и картинки (ADR-027 §2). Для мест с
+// картинками локаль, direct:-модели, пресеты и модели без зрения недоступны — как Agentic.
+// FacePose — место умеет считать ракурс лица не LLM-ом (значение стора face-pose; его
+// форма — шаг 12б, сейчас признак только описывает место).
 // Tier — слот по умолчанию, когда админ ничего не выбирал; null = вычислить из Profile
 // (Small/Text → слабая, Large → средняя): см. EffectiveDefaultTier.
 // CloudTimeoutMs — пер-местный потолок ожидания ОБЛАЧНОГО шага вместо потолка профиля:
@@ -42,7 +46,10 @@ public sealed record CheapProfileSpec(
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
-    int? CloudNumPredict = null);
+    int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false);
+
+// Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
+public enum ActionInput { Text, Images }
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -70,6 +77,13 @@ public static class LocalActionCatalog
     public const string NoteTitle = "note-title";
     public const string NoteToc = "note-toc";
     public const string NoteTranslate = "note-translate";
+    // LLM-wiki (ADR-035 §7; Ф2 — решения 12, 12а): места Хранителя — ingest источника
+    // (два прохода: утверждения, затем план), одиночный факт по заявке агента и ночная
+    // работа: отбор чатов для разбора (wiki-triage) и разбор отобранных чатов (wiki-nightly).
+    public const string WikiIngest = "wiki-ingest";
+    public const string WikiFact = "wiki-fact";
+    public const string WikiNightly = "wiki-nightly";
+    public const string WikiTriage = "wiki-triage";
     public const string ChatTitle = "chat-title";
     public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
@@ -91,16 +105,27 @@ public static class LocalActionCatalog
     public const string TaskClassify = "task-classify";
     public const string TaskNormalizeTitle = "task-normalize-title";
     public const string TaskDedup = "task-dedup";
+    // Авторезюме фичи по кнопке (W4-ANB, разрез §4): вход — детерминированная выжимка
+    // FeatureRun (≤4000 симв.), ответ — короткий markdown. По умолчанию локаль: цена
+    // одного короткого вызова, исполнителя выбирает админ в «Поставщиках моделей».
+    public const string FeatureSummary = "feature-summary";
     public const string SkillSuggest = "skill-suggest";
     public const string SessionSummary = "session-summary";
     // Сводка карточки архива чата (шаг 5 плана «Архив чатов» v4): 2–3 предложения по кнопке
     // «Собрать сводку», кэшируется в Session.ArchiveSummary. Не путать с SessionSummary —
     // «Итогом сессии», который выносится заметкой и трогать который нельзя
     public const string ChatDigest = "chat-digest";
-    // Перенос в новый чат (холодный путь, docs/features/chat-handoff.md): передаточная
-    // записка по транскрипту чата — новый чат стартует с неё в черновике, а не платит
-    // холодную перезапись всей истории
+    // Передаточная записка для переноса разговора в новый чат (фича «Индикатор prompt cache
+    // и перенос в новый чат», шаг B-4): вызывается только холодным путём ChatHandoffService
+    // (тёплый путь пишет сам чат своим ходом). Не путать с ChatContinue — «Продолжить в новом
+    // чате», где записку пишет сам чат служебным промптом.
     public const string ChatHandoff = "chat-handoff";
+    // Умный подбор фото персонажа (ADR-027, §6): ракурс и эмоция из текста запроса.
+    // Только бесплатная цепочка (RunFreeAsync), платный claude не используется
+    public const string CharacterSceneParse = "character-scene-parse";
+    // Разметка фото персонажа (ADR-027, §2): модель смотрит на картинки, поэтому Input = Images
+    public const string CharacterPhotoAngle = "character-photo-angle";
+    public const string CharacterPhotoEmotion = "character-photo-emotion";
     // Темы чатов проекта: раскладка верхнеуровневых чатов проекта по
     // реестру тем. Только локальная модель
     public const string ChatSubjects = "chat-subjects";
@@ -186,7 +211,30 @@ public static class LocalActionCatalog
         new(NoteTitle, "Заголовок заметки", "Заметки", CheapProfile.Small, DefaultLocal: true),
         new(NoteToc, "Оглавление заметки", "Заметки", CheapProfile.Text, DefaultLocal: true),
         new(NoteTranslate, "Перевод заметки", "Заметки", CheapProfile.Large, DefaultLocal: true),
-        new(ChatTitle, "Заговолок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
+        // LLM-wiki (ADR-035 §7): Хранитель, два прохода по выдержке источника (утверждения,
+        // затем план). Large: в промпт идут выдержка источника и каталог раздела — на Text
+        // num_ctx молча обрезал бы хвост выдержки, и модель не увидела бы того, что должна
+        // была назвать. Слот medium — явный, как задано в ADR-035 §7 (не из профиля).
+        // DefaultLocal: true — ночной и явный разбор начинается с локали (политика A),
+        // облако — только с согласия человека (решение 9).
+        new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: true, Tier: ModelTier.Medium),
+        // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
+        // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
+        // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
+        new(WikiFact, "Факт для вики", "Заметки", CheapProfile.Text,
+            DefaultLocal: true, Tier: ModelTier.Weak),
+        // Ночной разбор чатов (Ф2, ADR-035 решение 12): ночь разбирает дельту чата тем же
+        // путём, что и кнопка «Разобрать». Large: на вход идёт дельта реплик человека —
+        // меньший профиль молча обрезал бы хвост (num_ctx Ollama). Слот medium — явный.
+        new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: true, Tier: ModelTier.Medium),
+        // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
+        // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
+        // маленький JSON. Слот weak — явный.
+        new(WikiTriage, "Отбор чатов для вики", "Заметки", CheapProfile.Small,
+            DefaultLocal: true, Tier: ModelTier.Weak),
+        new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
         // Разбор промпта хода («что тут лишнее»): вызывается человеком по кнопке, не фоном.
@@ -235,23 +283,38 @@ public static class LocalActionCatalog
         new(TaskClassify, "Приоритет и метки задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskNormalizeTitle, "Нормализация заголовка задачи", "Задачи", CheapProfile.Small, DefaultLocal: true),
         new(TaskDedup, "Поиск дублей задач", "Задачи", CheapProfile.Small, DefaultLocal: true),
+        // Резюме фичи (W4-ANB): Text — выжимка ≤4000 симв. и короткий ответ; Small не годится
+        // (256 токенов вывода обрежут резюме), Large избыточен. Локаль по умолчанию — по
+        // политике A: один дешёвый вызов по кнопке, облачный выбор остаётся правом админа.
+        new(FeatureSummary, "Резюме фичи", "Задачи", CheapProfile.Text, DefaultLocal: true),
         new(SkillSuggest, "Подбор навыка", "Навыки", CheapProfile.Small, DefaultLocal: true),
         new(SessionSummary, "Сводка сессии", "Сессии", CheapProfile.Large, DefaultLocal: true),
         // Сводка карточки архива: сырьё то же (транскрипт чата), а ответ — 2–3 предложения
         // для карточки списка, поэтому Small вместо Large «Сводки сессии»: переплачивать
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
-        // Передаточная записка: вход — транскрипт до 60k символов, выход — связный текст из
-        // семи разделов. Large ради окна; локаль выключена и вовсе отказывает (сервис не
-        // зовёт модель, если место назначено на локаль): окно 16k и 1024 токена вывода
-        // записку не вывозят, а обрезанная передача хуже честного отказа. 4096 токенов
-        // вывода облака хватает записке с запасом и не держат лишний max_tokens Large.
-        new(ChatHandoff, "Перенос в новый чат", "Сессии", CheapProfile.Large, DefaultLocal: false,
-            CloudNumPredict: 4096),
+        // Перенос в новый чат: вход — транскрипт до 60k символов (голова+хвост), ответ —
+        // структурированная записка из семи разделов. Large обязателен: Text/Small молча
+        // обрежут промпт (num_ctx Ollama) и записка потеряет середину разговора. Локаль
+        // выключена по той же причине: окна локали записка не вывозит, и сервис честно
+        // отказывает, не зовя модель (ChatHandoffService.LocalRouteRefusal). Пер-местный
+        // потолок вывода 4096 ниже профильного 8192: записка — семь коротких списков,
+        // большего не требуется.
+        new(ChatHandoff, "Перенос в новый чат", "Сессии", CheapProfile.Large,
+            DefaultLocal: false, CloudNumPredict: 4096),
+        new(CharacterSceneParse, "Разбор сюжета для подбора фото", "Персонажи", CheapProfile.Small, DefaultLocal: true),
+        // Места с картинками на входе: локаль слепая, поэтому DefaultLocal: false, Tier — слабая
+        // (Small → weak по умолчанию). CheapTextRunner их не обслуживает
+        new(CharacterPhotoAngle, "Ракурс фото персонажа", "Персонажи", CheapProfile.Small,
+            DefaultLocal: false, Input: ActionInput.Images, FacePose: true),
+        new(CharacterPhotoEmotion, "Выражение лица на фото", "Персонажи", CheapProfile.Small,
+            DefaultLocal: false, Input: ActionInput.Images),
         // Темы чатов проекта: пачка чатов (название + реплики человека) → JSON назначений.
         // Text, а не Small: 256 токенов вывода Small — ~8 назначений без запаса на новую тему.
-        // Ходит ТОЛЬКО в локальную модель (ChatSubjectSweeper зовёт RunLocalOnlyAsync, не
-        // RunFreeAsync): реплики чатов в облако не уходят, без локали чаты остаются без темы.
+        // По умолчанию ходит в локальную модель (ChatSubjectSweeper зовёт RunLocalOrChosenAsync:
+        // без облачного фолбэка, когда маршрут = локаль): реплики чатов в облако не уходят
+        // молча. Явный выбор облака/слота/модели админом = согласие, цепочка полная;
+        // без локали чаты остаются без темы.
         new(ChatSubjects, "Темы чатов проекта", "Сессии", CheapProfile.Text, DefaultLocal: true),
         // Карта плана: вход — markdown-план до 35 КБ, выход — структурный JSON, тот же класс
         // задачи, что у планировщика (прецедент в шапке профиля Large: потолок вывода на

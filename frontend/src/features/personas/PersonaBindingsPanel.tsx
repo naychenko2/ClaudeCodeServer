@@ -21,6 +21,7 @@ import {
 import { useBindingLabels } from './useBindingLabels';
 import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
+import { PluginTargetPicker } from './PluginTargetPicker';
 import { ownProjectId } from '../../lib/personaZone';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
@@ -56,6 +57,8 @@ interface AddPanelState {
   notesSource?: { id: string; label: string } | null;
   condition: string;
   mode: PersonaBindingMode;
+  // Ошибка сохранения (POST bindings): текст в степпере, панель не закрывается
+  error?: string;
 }
 
 // Типы привязок «Сотрудничество с другими проектами» — показываются отдельной секцией
@@ -361,12 +364,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     }
   };
 
-  // Добавление из панели-степпера
+  // Добавление из панели-степпера. Плагин (ADR-031) бэку открывается как Skill-биндинг:
+  // тип «plugin» UI-маркер пикера, на сервер уходит type 'skill' + target plugin:{id}/{skill}
+  // (PersonaBindingType бэка типа plugin не знает — иначе 400 «Неизвестный тип привязки»).
   const commitPanel = async () => {
     if (!panel?.type || !panel.targetId) return;
     try {
       const created = await api.personas.addBinding(persona.id, {
-        type: panel.type,
+        type: panel.type === 'plugin' ? 'skill' : panel.type,
         target: panel.targetId,
         path: panel.path || undefined,
         condition: panel.condition.trim(),
@@ -376,7 +381,8 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       setPanel(null);
       flash([created.id]);
     } catch (e) {
-      showToast('Умения', e instanceof Error ? e.message : 'Не удалось добавить привязку.');
+      // Ошибка в степпере (не только тост): панель остаётся открытой, текст виден
+      setPanel(p => p ? { ...p, error: e instanceof Error ? e.message : 'Не удалось добавить привязку.' } : p);
     }
   };
 
@@ -1136,9 +1142,9 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
         steps={[{ n: 1, label: 'Тип' }, { n: 2, label: 'Цель' }, { n: 3, label: 'Правило' }]}
         onStep={s => {
           if (s >= panel.step) return;
-          // Возврат назад: на шаг «Тип» — сброс цели; на «Цель» — сброс правила
-          if (s === 1) onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null });
-          else onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null });
+          // Возврат назад: на шаг «Тип» — сброс цели; на «Цель» — сброс правила; ошибка сбрасывается
+          if (s === 1) onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null, error: undefined });
+          else onChange({ ...panel, step: 2, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null, error: undefined });
         }} />
 
       {panel.step === 1 && (
@@ -1148,7 +1154,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
             return (
               <button
                 key={t}
-                onClick={() => onChange({ ...panel, step: 2, type: t, notesSource: null })}
+                onClick={() => onChange({ ...panel, step: 2, type: t, notesSource: null, error: undefined })}
                 onMouseEnter={e => { e.currentTarget.style.borderColor = accent; e.currentTarget.style.background = C.bgCard; }}
                 onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.background = C.bgWhite; }}
                 style={{
@@ -1198,6 +1204,16 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
             options={MODE_OPTIONS}
           />
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>{MODE_HINT[panel.mode]}</div>
+          {/* Ошибка сохранения (400/сеть/5xx): текст сервера, панель не закрывается */}
+          {panel.error && (
+            <div style={{
+              marginTop: 12, padding: '8px 12px', borderRadius: R.lg,
+              background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
+              fontSize: 12.5, color: C.dangerText, lineHeight: 1.5,
+            }}>
+              {panel.error}
+            </div>
+          )}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 14 }}>
             <Button variant="ghost" size="sm" onClick={onClose}>Отмена</Button>
             <Button variant="primary" size="sm" onClick={onCommit}>Добавить привязку</Button>
@@ -1239,8 +1255,9 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
   const notesSource = panel.notesSource ?? null;
 
   useEffect(() => {
-    // У инструментов свой пикер с собственной загрузкой (нужен personaId в запросе)
-    if (type === 'tool') return;
+    // У инструментов и плагинов свои пикеры с собственной загрузкой (tool — нужен
+    // personaId в запросе; plugin — цель составная, не каталог бэка)
+    if (type === 'tool' || type === 'plugin') return;
     let alive = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка каталога целей при смене типа цели
     setItems(null);
@@ -1263,6 +1280,20 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
           bindings={toolPicker.bindings}
           onSetMode={toolPicker.onSetMode}
           onOpenRule={toolPicker.onOpenRule}
+        />
+      </>
+    );
+  }
+
+  // Плагин (ADR-031) — пикер «плагин → навык»: цель — составная строка plugin:{id}/{skill}
+  if (type === 'plugin') {
+    return (
+      <>
+        <Crumb onClick={() => onChange({ ...panel, step: 1, type: undefined, targetId: undefined, targetLabel: undefined, path: undefined, pathLabel: undefined, notesSource: null })}>
+          {BINDING_ICONS[type](13)} {BINDING_TYPE_META[type].name}
+        </Crumb>
+        <PluginTargetPicker
+          onCommit={(target, label) => onChange({ ...panel, step: 3, targetId: target, targetLabel: label, path: undefined })}
         />
       </>
     );

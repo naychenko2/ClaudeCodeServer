@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// из claim sub), состав по осям хвоста (personal/team/dossier) и живые вызовы сервисов.
 /// </summary>
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -52,6 +53,33 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         var answer = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
         return answer.GetProperty("result").GetProperty("tools").EnumerateArray()
             .Select(t => t.GetProperty("name").GetString()!).ToList();
+    }
+
+    /// <summary>
+    /// Клиент «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    /// вызов без него считается узким (fail-closed). Тестам личной памяти нужен живой чат
+    /// личного проекта тестового пользователя — там рамка широкая и поведение прежнее.
+    /// </summary>
+    private async Task<HttpClient> AsChatOfAsync(string projectId)
+    {
+        var resp = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        resp.EnsureSuccessStatusCode();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(
+            await resp.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var client = _factory.CreateAuthenticatedClient();
+        client.DefaultRequestHeaders.Add("X-Caller-Session-Id", sessionId);
+        return client;
+    }
+
+    private async Task<JsonElement> RpcAsync(HttpClient client, string url, string method,
+        object? @params = null, int id = 1)
+    {
+        var body = @params is null
+            ? new { jsonrpc = "2.0", id, method }
+            : (object)new { jsonrpc = "2.0", id, method, @params };
+        var resp = await client.PostAsJsonAsync(url, body);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
     }
 
     private async Task<(string PersonaId, string ProjectId)> SeedAsync(bool projectScopedPersona = true)
@@ -92,14 +120,14 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 
         tools.Should().Contain("memory_remember").And.Contain("memory_recall");
         tools.Should().Contain("team_memory_remember").And.Contain("team_memory_list");
-        // Флаг change-dossiers-recall по умолчанию выключен — секции паспортов нет
-        tools.Should().NotContain("dossier_lookup").And.NotContain("dossier_get");
-        tools.Count.Should().Be(15);
+        // Секция паспортов есть всегда (флаг change-dossiers-recall снят)
+        tools.Should().Contain("dossier_lookup").And.Contain("dossier_get");
+        tools.Count.Should().Be(17);
     }
 
     /// <summary>
     /// Приёмка: чат БЕЗ персоны (обычный проектный чат) получает только командные
-    /// инструменты — как сегодня при пустом MEMORY_PERSONA_ID у stdio-сервера.
+    /// инструменты и паспорта (dossier_*) — как сегодня при пустом MEMORY_PERSONA_ID у stdio-сервера.
     /// </summary>
     [Fact]
     public async Task ToolsList_ЧатБезПерсоны_ТолькоИнструментыКоманды()
@@ -107,8 +135,8 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         var (_, projectId) = await SeedAsync();
         var tools = await ToolNamesAsync(MemoryUrl("-", projectId));
 
-        tools.Should().OnlyContain(t => t.StartsWith("team_memory_", StringComparison.Ordinal));
-        tools.Count.Should().Be(5, "пять командных инструментов, ни одного personal");
+        tools.Should().OnlyContain(t => t.StartsWith("team_memory_", StringComparison.Ordinal) || t.StartsWith("dossier_", StringComparison.Ordinal));
+        tools.Count.Should().Be(7, "пять командных инструментов и два паспорта, ни одного personal");
     }
 
     [Fact]
@@ -119,27 +147,6 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
 
         tools.Should().OnlyContain(t => t.StartsWith("memory_", StringComparison.Ordinal));
         tools.Count.Should().Be(10);
-    }
-
-    /// <summary>
-    /// Секция dossier_* — по флагу ВЛАДЕЛЬЦА change-dossiers-recall (этап 2, ADR-004 §5):
-    /// решается по владельцу токена, а не по ходу — инвариант стабильности состава.
-    /// </summary>
-    [Fact]
-    public async Task ToolsList_DossierСекция_ПоФлагуВладельца()
-    {
-        var (personaId, projectId) = await SeedAsync();
-        var owner = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
-            .FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        owner.FeatureFlags = new Dictionary<string, bool> { ["change-dossiers-recall"] = true };
-
-        var tools = await ToolNamesAsync(MemoryUrl(personaId, projectId));
-        tools.Should().Contain("dossier_lookup").And.Contain("dossier_get");
-        tools.Count.Should().Be(17);
-
-        // Флаг погашен — секция исчезает (состав зависит от владельца, не от хода)
-        owner.FeatureFlags = new Dictionary<string, bool> { ["change-dossiers-recall"] = false };
-        (await ToolNamesAsync(MemoryUrl(personaId, projectId))).Count.Should().Be(15);
     }
 
     /// <summary>
@@ -209,15 +216,18 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task MemoryRemember_ИRecall_РаботаютЧерезТулсет()
     {
-        var (personaId, _) = await SeedAsync(projectScopedPersona: false);
-        var remember = await RpcAsync(MemoryUrl(personaId, "-"), "tools/call", new
+        var (personaId, projectId) = await SeedAsync(projectScopedPersona: false);
+        // Личная память глобальной персоны открыта только в широкой рамке: вызов от лица
+        // чата личного проекта (S2a-3)
+        var chat = await AsChatOfAsync(projectId);
+        var remember = await RpcAsync(chat, MemoryUrl(personaId, "-"), "tools/call", new
         {
             name = "memory_remember",
             arguments = new { type = "semantic", text = "Мой рабочий стек — ASP.NET Core" },
         });
         remember.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
 
-        var recall = await RpcAsync(MemoryUrl(personaId, "-"), "tools/call", new
+        var recall = await RpcAsync(chat, MemoryUrl(personaId, "-"), "tools/call", new
         {
             name = "memory_recall",
             arguments = new { query = "какой у меня рабочий стек" },
@@ -320,17 +330,20 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
     [Fact]
     public async Task ЛичнаяПамятьПерсоны_НедоступнаЧерезХвостДругойПерсоныТогоЖеВладельца()
     {
-        var (personaA, _) = await SeedAsync(projectScopedPersona: false);
+        var (personaA, projectId) = await SeedAsync(projectScopedPersona: false);
         var (personaB, _) = await SeedAsync(projectScopedPersona: false);
+        // Все вызовы — от лица чата личного проекта: личная память глобальных персон открыта
+        // только в широкой рамке (S2a-3)
+        var chat = await AsChatOfAsync(projectId);
 
-        var remember = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        var remember = await RpcAsync(chat, MemoryUrl(personaA, "-"), "tools/call", new
         {
             name = "memory_remember",
             arguments = new { type = "semantic", text = "Личный секрет персоны A: пароль от сейфа" },
         });
         remember.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();
 
-        var list = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        var list = await RpcAsync(chat, MemoryUrl(personaB, "-"), "tools/call", new
         {
             name = "memory_list",
             arguments = new { },
@@ -338,7 +351,7 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         var listText = list.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
         listText.Should().NotContain("сейфа", "хвост B — память B, а не окно в память соседа");
 
-        var recall = await RpcAsync(MemoryUrl(personaB, "-"), "tools/call", new
+        var recall = await RpcAsync(chat, MemoryUrl(personaB, "-"), "tools/call", new
         {
             name = "memory_recall",
             arguments = new { query = "пароль от сейфа" },
@@ -347,7 +360,7 @@ public class MemoryHttpTransportTests : IClassFixture<TestWebApplicationFactory>
         recallText.Should().NotContain("сейфа");
 
         // Память A при этом цела — изоляция не уничтожила её
-        var own = await RpcAsync(MemoryUrl(personaA, "-"), "tools/call", new
+        var own = await RpcAsync(chat, MemoryUrl(personaA, "-"), "tools/call", new
         {
             name = "memory_list",
             arguments = new { },

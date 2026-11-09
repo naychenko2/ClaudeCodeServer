@@ -1,4 +1,8 @@
+using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Plugins;
+using ClaudeHomeServer.Services.Tasks.Journal;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
@@ -54,16 +58,49 @@ public sealed class TasksSubsystem : IAppSubsystem
         // Microsoft DI порядок регистраций не учитывает при резолве, но singleton-резолв
         // случается лениво — на первом обращении из контроллера либо hosted-сервиса;
         // к тому моменту DI гарантирует все зависимости.
+        // Читатель коммита дерева для гейта предгейта (NC-P1b); без него TaskManager закрывает шаги как раньше
+        services.AddSingleton<ClaudeHomeServer.Services.Composition.IWorktreeHeadReader, GitWorktreeHeadReader>();
         services.AddSingleton<TaskManager>();
+        // Шов «чат привязан к фиче?» для SessionManager (S2d-7b-2): живёт рядом с TaskManager
+        services.AddSingleton<ClaudeHomeServer.Services.IFeatureChatLinks, FeatureChatLinks>();
         // Форвардер, а не вторая регистрация: иначе второй экземпляр `TaskManager`
         // перезаписывает статические резолверы на `Session` и иерархия чатов для новых задач
         // отмирает (см. DuplicateSingletonRegistrationTests).
         services.AddSingleton<ITaskStatusReader>(sp => sp.GetRequiredService<TaskManager>());
         services.AddSingleton<TaskAiService>();
+        services.AddSingleton<MyTasksQuery>();
         services.AddSingleton<BoardService>();
+        // Агрегат фичи (режим «Исполнение фичи»): чистая проекция TaskItem'ов в FeatureRun.
+        // Зависимость только на TaskManager (тот же singleton, что выше) — нового шва нет.
+        services.AddSingleton<FeatureProjector>();
+        // Напоминание оркестратору об устаревшем голосе фичи — хвост хода ключевого чата (InTurnTail).
+        services.AddPromptSectionContributor<FeatureVoiceReminderContributor>();
+        // Счётчик локальных исполнителей в хвосте хода оркестратора (InTurnTail) и серверный пинок
+        // при их простое. Шовы ILocalExecutorRoster / IKeyChatCardSender (Core) реализует Main.
+        services.AddPromptSectionContributor<LocalExecutorsContributor>();
+        services.AddGatedHostedService<LocalIdleNudgeService>(config, "tasks");
+        // Журнал событий фичи (волна 3, Б8a): append-only JSONL, источник точной статистики.
+        // Зависимость только на IConfiguration (DataPath) — новых швов нет.
+        services.AddSingleton<FeatureJournalStore>();
+        // Авторезюме фичи по кнопке (W4-ANB, разрез §4): кэш LRU в памяти процесса, single-flight.
+        // Шов Tasks → Llm (ICheapTextRunner) уже declared — тот же, что у TaskAiService.
+        services.AddSingleton<FeatureSummaryService>();
+        // Журнал ходов фичи (волна 3, Б8c): подписчик TurnCompleted пишет строку kind=turn
+        // для ходов сессий, привязанных к задаче фичи. IHostedService (Tasks, не Main —
+        // граница подсистем держится): явная регистрация, НЕ побочный эффект TaskSchedulerService
+        // (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст). Запись диска —
+        // в фоне (очередь), не на потоке завершения хода.
+        services.AddGatedHostedService<FeatureTurnJournalSubscriber>(config, "tasks");
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).
         services.AddGatedHostedService<TaskSchedulerService>(config);
+        // Обработчик права tasks:read моста панели (ADR-031 §2.4, §3.4, шаг 3.5):
+        // операция tasks.list. Регистрирует сама вертикаль-владелец (направление
+        // Tasks → Core ← Plugins, прямой ссылки на Plugins нет). Мост (Plugins)
+        // резолвит IEnumerable<IPluginCapability> и находит этот обработчик по
+        // домену «tasks». Гейт подсистемы — структурный: при Subsystems:Tasks:Enabled=false
+        // Register не зовётся, шва в DI нет, и tasks:read → unavailable (503) у моста.
+        services.AddSingleton<IPluginCapability, TasksPluginCapability>();
     }
 }

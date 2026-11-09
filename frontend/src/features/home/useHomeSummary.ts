@@ -3,6 +3,7 @@ import type { HomeSummaryResponse } from '../../types';
 import { api } from '../../lib/api';
 import { onMessage, onReconnected } from '../../lib/signalr';
 import { refreshAgentBoard } from '../../lib/agentBoard';
+import { startVisiblePoll, throttleRefetch } from '../../lib/visiblePoll';
 
 // Интервал страховочного пуллинга: статусы ПРОЕКТНЫХ сессий не приходят в user-группу
 // SignalR (только в группы session/project), поэтому дашборд добирает их опросом.
@@ -26,22 +27,26 @@ export function useHomeSummary(): { data: HomeSummaryResponse | null; failed: bo
     };
     fetchSummary();
 
-    const timer = setInterval(() => {
+    // Пауза на скрытой вкладке + догон: страховочный поллинг сводки не должен
+    // жечь сеть в фоне (lib/visiblePoll)
+    const stop = startVisiblePoll(() => {
       fetchSummary();
       refreshAgentBoard();
     }, POLL_MS);
 
-    // Мгновенный рефетч по событиям чатов (дебаунс не нужен — события редкие)
+    // Рефетч по событиям чатов — с троттлингом: пачка status_changed — один fetch
+    const [fetchThrottled, disposeThrottle] = throttleRefetch(fetchSummary, 1000);
     const offMessage = onMessage(msg => {
-      if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchSummary();
+      if (msg.type === 'status_changed' || msg.type === 'chat_deleted') fetchThrottled();
     });
     const offReconnected = onReconnected(fetchSummary);
 
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stop();
       offMessage();
       offReconnected();
+      disposeThrottle();
     };
   }, []);
 

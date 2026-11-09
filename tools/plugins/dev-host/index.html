@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Хост-эмулятор панелей плагинов</title>
+<!--
+  Хост-эмулятор (шаг A2 плана «Погода», доработка R1): гоняет панель плагина в браузере
+  БЕЗ установки. Это инструмент разработки в репозитории: живёт в tools/plugins/dev-host/
+  и раздаётся статическим сервером из корня репозитория. В прод он не попадает: frontend/
+  public/ уходит в dist → wwwroot, а эмулятор должен оставаться вне сборки.
+
+  Верхнее окно эмулятора играет хост:
+  - двухуровневый фрейм и srcdoc — точная копия сборки хоста (panelSrcdoc.ts):
+    оболочка с PANEL_CSP + внутренний iframe sandbox="allow-scripts";
+  - шим кита (plugin-kit.js + theme.css + font.css + controls.css) берётся из
+    frontend/public/plugin-kit/ — тот же, что вживую;
+  - токены --cc-*: эмулятор подключает frontend/src/lib/theme.css себе, ставит
+    data-theme и читает computed --c-* по копии CC_TOKEN_MAP (panelTokens.ts);
+  - сообщения моста: ready → init; call net.fetch → fetch с credentials: 'omit'
+    (куки и токен origin не уходят) или фикстура; отказ по праву — текстом сервера
+    (PluginBridge / PluginNetProxy), и плашка «Нет права …» над панелью;
+  - вызовы storage.* — через общую реализацию хоста, модуль
+    frontend/src/features/plugins/hostOps/storage.js: result, тексты отказа и
+    тихость отказа по storage — те же, что на боевом хосте (C3-д);
+  - гейты хоста воспроизведены: e.origin === 'null', не более 8 вызовов в полёте,
+    64 КиБ на args, таймаут ready 3 с (bridge_timeout), высота по resize (кламп 48..20000);
+  - panel= и fixtures= — только пути внутри репозитория (без схемы, без «..»):
+    чужая страница не может прочитать превью и отправить результат на свой сервер.
+
+  Платформенный код не меняется — здесь только его минимальная переносимая копия.
+-->
+<style>
+  /* UI эмулятора — на токенах темы приложения (--c-*), которые эмулятор сам
+     подключает из frontend/src/lib/theme.css. Сырого hex в интерфейсе нет. */
+  body { margin: 0; background: var(--c-bg-main); color: var(--c-text-primary); font-family: system-ui, sans-serif; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 12px; background: var(--c-bg-panel); border-bottom: 1px solid var(--c-border); }
+  .toolbar label { font-size: 11px; color: var(--c-text-muted); }
+  .toolbar select, .toolbar input { font: inherit; font-size: 12px; padding: 4px 6px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-card); color: var(--c-text-primary); }
+  .toolbar button { font: inherit; font-size: 12px; padding: 4px 10px; border: 1px solid var(--c-border); border-radius: 6px; background: var(--c-bg-card); color: var(--c-text-primary); cursor: pointer; }
+  .status { font-size: 11px; color: var(--c-text-muted); font-family: monospace; }
+  .stage { padding: 16px; }
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 8px; overflow: hidden; }
+  /* UA-рамка iframe (2 px) съедает ширину кадра — в хосте border:'none'. */
+  .card iframe { border: 0; }
+  .notice { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--c-bg-selected); border-bottom: 1px solid var(--c-warning); color: var(--c-warning-text); font-size: 12px; }
+  /* display:flex базового правила перебивает UA-стиль [hidden]; скрытие должно побеждать. */
+  .notice[hidden] { display: none; }
+  .scroll { overflow: auto; padding: 4px 12px 16px; }
+  .log { padding: 12px 16px; font-family: monospace; font-size: 11px; color: var(--c-text-muted); }
+  .log p { margin: 2px 0; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <label>панель <input id="in-panel" size="34"></label>
+    <label>права (net:хосты или storage, через запятую) <input id="in-grant" size="28"></label>
+    <label>сбой
+      <select id="in-fail">
+        <option value="">нет</option>
+        <option value="upstream">upstream</option>
+        <option value="timeout">timeout</option>
+        <option value="dns_failed">dns_failed</option>
+        <option value="limit">limit</option>
+        <option value="unavailable">unavailable</option>
+        <option value="not_found">not_found</option>
+        <option value="invalid">invalid</option>
+        <option value="status400">HTTP 400</option>
+      </select>
+    </label>
+    <label>задержка <input id="in-delay" type="number" min="0" step="100" style="width:70px"></label>
+    <label>фикстуры (пути через запятую) <input id="in-fixtures" size="30"></label>
+    <label>ширина
+      <select id="in-width">
+        <option value="rail">рельс</option>
+        <option value="320">320</option>
+        <option value="390">390</option>
+      </select>
+    </label>
+    <button id="btn-theme" type="button">тема</button>
+    <span class="status" id="status"></span>
+  </div>
+
+  <div class="stage">
+    <div class="card" id="card">
+      <div class="notice" id="notice" hidden>Нет права …</div>
+      <div class="scroll"><iframe id="frame" sandbox="allow-scripts" title="Панель плагина"></iframe></div>
+    </div>
+  </div>
+
+  <div class="log" id="log"></div>
+
+<script type="module">
+'use strict';
+
+/* === Общая реализация storage.* === */
+
+// Тот же модуль, что подключает боевой хост (PluginFrame.tsx): логика storage
+// пишется один раз и эмулятор не держит свою копию — result и тексты отказа
+// совпадают с боевым хостом по построению (инвариант 12, C3-д). Эмулятор
+// раздаётся статическим сервером из корня репозитория, поэтому путь достижим.
+import { handleStorageCall } from '/frontend/src/features/plugins/hostOps/storage.js';
+
+/* === Копии платформенных констант (panelSrcdoc.ts, panelTokens.ts, bridge.ts) === */
+
+// CSP оболочки и панели (ADR-031 §3.1) — дословно из panelSrcdoc.ts.
+const PANEL_CSP =
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+  "img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; " +
+  "base-uri 'none'; frame-src 'none'";
+
+// Стили оболочки (panelSrcdoc.ts SHELL_STYLE).
+const SHELL_STYLE =
+  'html,body{margin:0;height:100%;overflow:hidden}' +
+  ' iframe{display:block;border:0;width:100%;height:100%}';
+
+// --cc-* → --c-* (panelTokens.ts CC_TOKEN_MAP) — копия для эмулятора.
+const CC_TOKEN_MAP = {
+  '--cc-bg':            '--c-bg-card',
+  '--cc-fg':            '--c-text-primary',
+  '--cc-fg-muted':      '--c-text-muted',
+  '--cc-accent':        '--c-accent',
+  '--cc-accent-fg':     '--c-on-accent',
+  '--cc-accent-soft':   '--c-accent-soft',
+  '--cc-border':        '--c-border',
+  '--cc-bg-inset':      '--c-bg-inset',
+  '--cc-bg-panel':      '--c-bg-panel',
+  '--cc-bg-selected':   '--c-bg-selected',
+  '--cc-surface':       '--c-bg-white',
+  '--cc-success':       '--c-success',
+  '--cc-warning':       '--c-warning',
+  '--cc-danger':        '--c-danger',
+  '--cc-info':          '--c-info',
+  '--cc-success-text':  '--c-success-text',
+  '--cc-warning-text':  '--c-warning-text',
+  '--cc-danger-text':   '--c-danger-text',
+  '--cc-danger-border': '--c-danger-border',
+};
+
+// Гейты моста хоста (PluginFrame.tsx, bridge.ts): потолок одновременных вызовов,
+// размер args, таймаут ready и его текст — дословно как на сервере/фронте.
+const MAX_INFLIGHT_CALLS = 8;
+const MAX_ARGS_BYTES = 64 * 1024;
+const READY_TIMEOUT_MS = 3000;
+const BRIDGE_TIMEOUT_TEXT = 'Мост не получил ответа за 3 с.'; // bridge.ts BRIDGE_ERROR_TEXT
+// Типичная сетевая ошибка боевого хоста (PluginNetProxy отдаёт ex.Message upstream).
+const UPSTREAM_TEXT = 'Connection refused';
+
+// Кламп высоты контента (bridge.ts clampContentHeight).
+function clampContentHeight(h) {
+  return Math.min(20000, Math.max(48, Math.round(h)));
+}
+
+// Экранирование srcdoc (panelSrcdoc.ts escapeSrcdoc).
+function escapeSrcdoc(s) {
+  return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+}
+
+// <style> токенов панели (panelSrcdoc.ts buildTokensStyle).
+function buildTokensStyle(tokens) {
+  const names = Object.keys(tokens);
+  if (names.length === 0) return '';
+  const rules = names.map(n => '  ' + n + ': ' + tokens[n] + ';').join('\n');
+  return ':root {\n' + rules + '\n}';
+}
+
+// Сборка документа оболочки — как buildPanelSrcdoc в хосте.
+function buildShell(panelHtml, theme, shimJs, shimCss, tokens) {
+  const themeAttr = theme === 'dark' ? ' data-cc-theme="dark"' : '';
+  const tokensStyle = buildTokensStyle(tokens);
+  const inner =
+    '<!doctype html><html' + themeAttr + '><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + shimCss + '</style>' +
+    (tokensStyle ? '<style id="cc-tokens">' + tokensStyle + '</style>' : '') +
+    // <\/script> — экранированный закрывающий тег: HTML-парсер оборвал бы этот
+    // скрипт на первом неэкранированном «/script-теге» внутри строки.
+    '<script>' + shimJs + '<\/script>' +
+    '</head><body>' + panelHtml + '</body></html>';
+  return (
+    '<!doctype html><html><head>' +
+    '<meta http-equiv="Content-Security-Policy" content="' + PANEL_CSP + '">' +
+    '<style>' + SHELL_STYLE + '</style>' +
+    '</head><body>' +
+    '<iframe sandbox="allow-scripts" srcdoc="' + escapeSrcdoc(inner) + '"></iframe>' +
+    '</body></html>'
+  );
+}
+
+/* === Paths только внутри репозитория === */
+
+// Статический сервер раздаёт корень репозитория, поэтому panel= и fixtures= —
+// относительные пути от него. Чужая страница не допускается: ссылка в один клик
+// «?panel=https://evil/…&grant=<origin>,evil» заставила бы чужую панель прочитать
+// превью и отправить результат на свой сервер. Отбрасываем схему, protocol-relative
+// и «..» за пределы корня. null — путь не наш.
+function repoPath(raw) {
+  if (!raw) return null;
+  let s = String(raw).trim();
+  if (s.startsWith('//')) return null;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(s)) return null;
+  s = s.replace(/^\/+/, '');
+  if (!s || s.split('/').some(part => part === '..')) return null;
+  return '/' + s;
+}
+
+/* === Конфигурация из URL: всё задаётся параметрами, ничего не вшито === */
+
+const params = new URLSearchParams(location.search);
+const listParam = (name) => (params.get(name) || '').split(',').map(s => s.trim()).filter(Boolean);
+
+const rawPanel = params.get('panel');
+const cfg = {
+  // Панель — исходник пакета (копии нет: она бы расходилась с оригиналом).
+  // panel= с чужим URL не принимается вовсе (не подменяется дефолтом).
+  panel: rawPanel === null ? '/tools/plugins/weather/panel/index.html' : repoPath(rawPanel),
+  // grant= — права: net:хосты (префикс необязателен) или storage; пусто — ни одного.
+  // Это имитация согласия: реальные права выдаёт сервер при установке. Формат
+  // granted — тот же, что на боевом хосте: сырые строки «net:{host}» и «storage».
+  // Всё, начинается с «storage», идёт как есть (C5-д, minor): хост отказывает
+  // неизвестное право («storageX» ≠ «storage») — так проверяется «denied» по
+  // хранилищу, когда панель право видит, а хост его не даёт.
+  grant: listParam('grant').map(p => p.startsWith('storage') ? p : 'net:' + p.replace(/^net:/, '').toLowerCase()),
+  fail: ['upstream', 'timeout', 'dns_failed', 'limit', 'unavailable', 'not_found', 'invalid', 'status400'].includes(params.get('fail')) ? params.get('fail') : '',
+  delay: Math.max(0, parseInt(params.get('delay') || '0', 10) || 0),
+  // fixtures= — пути к файлам-фикстурам внутри репозитория; основной режим — фикстуры.
+  // Необязательный «|match» — подстрока URL запроса: фикстура привязана к запросу,
+  // а не к порядку вызовов; необязательный «|delay» — задержка этого ответа, мс
+  // (сценарию гонки нужна реальная гонка и устойчивая привязка, minor M2).
+  fixtures: listParam('fixtures').map(function (s) {
+    const parts = s.split('|');
+    const p = repoPath(parts[0]);
+    if (!p) return null;
+    const delay = parts.length > 2 ? Math.max(0, parseInt(parts[2], 10) || 0) : null;
+    return { path: p, match: parts[1] || '', delay };
+  }).filter(Boolean),
+  theme: params.get('theme') === 'dark' ? 'dark' : 'light',
+  width: ['rail', '320', '390'].includes(params.get('width')) ? params.get('width') : 'rail',
+  selftest: params.get('selftest') === '1',
+};
+
+/* === Идентификаторы для префикса storage === */
+
+// Префикс ccs.plugin.<ownerId>.<pluginId>. собирает общая реализация из host-параметров.
+// Грамматика pluginId боевого хоста — publisher/slug ([a-z0-9-]/[a-z0-9-]): путь панели
+// приводится к безопасному слагу. Владелец условный: авторизации в эмуляторе нет, id
+// нужен только для устойчивости префикса.
+function pluginIdOf(path) {
+  const slug = String(path || '').replace(/^\/+/, '').split('/')
+    .map(s => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-')).filter(Boolean).join('-');
+  return 'local-dev/' + (slug || 'panel');
+}
+const PLUGIN_ID = pluginIdOf(cfg.panel);
+const OWNER_ID = 'local-dev';
+
+/* === Хост: чтение токенов текущей темы === */
+
+function hostTokens() {
+  const cs = getComputedStyle(document.documentElement);
+  const tokens = {};
+  for (const cc of Object.keys(CC_TOKEN_MAP)) {
+    const v = cs.getPropertyValue(CC_TOKEN_MAP[cc]).trim();
+    if (v) tokens[cc] = v;
+  }
+  return tokens;
+}
+
+/* === Мост: сообщения хоста ↔ панели === */
+
+const frame = document.getElementById('frame');
+const notice = document.getElementById('notice');
+const logEl = document.getElementById('log');
+
+function panelWindow() {
+  return frame.contentWindow ? frame.contentWindow.frames[0] : null;
+}
+
+function postToPanel(msg) {
+  const win = panelWindow();
+  if (!win) return;
+  msg.source = 'ccs-host';
+  msg.v = 1;
+  win.postMessage(msg, '*');
+}
+
+function logLine(text) {
+  const p = document.createElement('p');
+  p.textContent = new Date().toLocaleTimeString('ru-RU') + '  ' + text;
+  logEl.prepend(p);
+}
+
+function showDenied(message) {
+  // Ключ достаём так же, как фронтовый deniedKeyOf (bridge.ts): только из формата
+  // «Нет права: {key}»; формат не совпал — показываем сырой текст отказа как есть.
+  const prefix = 'Нет права: ';
+  const i = message.indexOf(prefix);
+  const key = i < 0 ? '' : message.slice(i + prefix.length).trim();
+  notice.textContent = key ? 'Нет права ' + key : message;
+  notice.hidden = false;
+}
+
+function hostOf(url) {
+  try { return new URL(url).hostname.toLowerCase(); } catch (e) { return ''; }
+}
+
+let readyReceived = false;
+
+window.addEventListener('message', (e) => {
+  const d = e.data;
+  if (!d || typeof d !== 'object' || d.source !== 'ccs-plugin' || d.v !== 1) return;
+  // Origin sandbox-фрейма без allow-same-origin — строка 'null' (bridge.ts
+  // OPAQUE_ORIGIN). Любой другой origin — не сообщение панели.
+  if (e.origin !== 'null') return;
+  if (e.source !== panelWindow()) return; // сообщения только из окна панели
+
+  if (d.type === 'ready') {
+    // Боевой PluginFrame (PluginFrame.tsx:389) отвечает init только на ПЕРВЫЙ
+    // ready за жизнь фрейма; повторные игнорирует. Эмулятор повторяет гейт,
+    // иначе сценарии с перезапуском панели врут.
+    if (readyReceived) {
+      logLine('· повторный ready проигнорирован (как на боевом хосте)');
+      return;
+    }
+    readyReceived = true;
+    window.__emulator = window.__emulator || {};
+    window.__emulator.initCount = (window.__emulator.initCount || 0) + 1;
+    postToPanel({
+      type: 'init',
+      // Идентификатор «плагина» для эмулятора — условный: он нужен панели только
+      // для показа версии (A1) и совпадает с id, из которого строится префикс
+      // storage. Реальные права — из параметра grant.
+      plugin: { id: PLUGIN_ID, version: 'dev' },
+      slot: 'sidebar',
+      context: { projectId: null },
+      theme: cfg.theme,
+      locale: 'ru',
+      granted: cfg.grant,
+      tokens: hostTokens(),
+    });
+  } else if (d.type === 'call') {
+    handleCall(d.id, d.op, d.args || {});
+  } else if (d.type === 'resize') {
+    // Высота контента — как в хосте: кламп 48..20000, фрейм растягивается под неё.
+    const h = clampContentHeight(d.height);
+    frame.style.height = h + 'px';
+    if (d.height > 20000) logLine('× высота панели ' + Math.round(d.height) + ' px обрезана до 20000 px');
+  } else if (d.type === 'selftest') {
+    // Самопроверка (selftest=1): панель сама сообщает результат тестовых вызовов.
+    window.__emulator = window.__emulator || {};
+    window.__emulator.selftest = d.data;
+    logLine('selftest: ' + JSON.stringify(d.data));
+  }
+});
+
+/* === net.fetch: права, гейты, сбои, фикстуры, сеть === */
+
+const fixtureCache = new Map();
+let callSeq = 0;
+let inflight = 0;
+
+async function fetchText(path) {
+  const r = await fetch(path, { credentials: 'omit' });
+  if (!r.ok) throw new Error(path + ': HTTP ' + r.status);
+  return r.text();
+}
+
+async function fixtureText(path) {
+  if (!fixtureCache.has(path)) fixtureCache.set(path, await fetchText(path));
+  return fixtureCache.get(path);
+}
+
+// Выбор фикстуры: с «|match» — по подстроке URL запроса (привязка к запросу, а не
+// к порядку вызовов); без него — одна для всех или по порядку вызовов (как раньше).
+function fixtureSpecFor(url) {
+  if (cfg.fixtures.length === 0) return null;
+  const u = String(url || '');
+  const byMatch = cfg.fixtures.find((f) => f.match && u.includes(f.match));
+  if (byMatch) return byMatch;
+  if (cfg.fixtures.length === 1) return cfg.fixtures[0];
+  return cfg.fixtures[callSeq++ % cfg.fixtures.length];
+}
+
+function respond(id, res, counted, quiet, delayMs, url) {
+  const send = () => {
+    if (counted) inflight--;
+    // «←» пишется в момент реальной доставки ответа панели и называет запрос —
+    // тест может ждать это событие, а не стенку времени (minor M2).
+    logLine(res.ok
+      ? '← ' + (res.data.status !== undefined ? res.data.status + ' (' + (res.data.body || '').length + ' bytes)' : 'ok') + (url ? ' ' + url : '')
+      : '← ' + res.error.code + ': ' + res.error.message);
+    if (res.ok) {
+      postToPanel({ type: 'result', id, ok: true, data: res.data });
+      // Сигнал для автопроверок: пишется ПОСЛЕ postToPanel, т.е. ответ уже отправлен панели.
+      logLine('⇢ доставлено' + (url ? ' ' + url : ''));
+    } else {
+      postToPanel({ type: 'result', id, ok: false, error: res.error });
+      // Отказ по storage — тихий (решение Софьи, 22.10, как на боевом хосте):
+      // панель работает дальше, плашки «Нет права …» нет. Отказы по net: и прочим
+      // доменам — плашку дают, как раньше.
+      if (res.error.code === 'denied' && !quiet) showDenied(res.error.message);
+    }
+  };
+  if (delayMs > 0) setTimeout(send, delayMs); else send();
+}
+
+async function handleCall(id, op, args) {
+  logLine('→ ' + op + (args.url ? ' ' + args.url : ''));
+  let res;
+  let counted = false;
+  let delayMs = cfg.delay;
+
+  // Гейты хоста (PluginFrame.handleCall): потолок одновременных вызовов и размер args.
+  if (inflight >= MAX_INFLIGHT_CALLS) {
+    res = { ok: false, error: { code: 'limit', message: 'Слишком много одновременных вызовов' } };
+  } else {
+    try {
+      if (JSON.stringify(args).length > MAX_ARGS_BYTES) {
+        res = { ok: false, error: { code: 'limit', message: 'Аргументы слишком большие' } };
+      }
+    } catch (e) {
+      // Как хост: нечитаемые args — пустой объект, вызов идёт дальше.
+      args = {};
+    }
+  }
+
+  if (!res) {
+    inflight++;
+    counted = true;
+    if (op.startsWith('storage.')) {
+      // storage.* — через общую реализацию хоста (hostOps/storage.js): result и
+      // тексты отказа совпадают с боевыми по построению, второй копии логики нет.
+      // Подделанные панелью granted/pluginId/ownerId в args игнорируются — право,
+      // id и владелец берутся только из состояния эмулятора (как в PluginFrame).
+      try {
+        res = handleStorageCall({
+          op: op.slice('storage.'.length),
+          args,
+          granted: cfg.grant,
+          ownerId: OWNER_ID,
+          pluginId: PLUGIN_ID,
+          store: localStorage,
+        });
+      } catch (e) {
+        // M2 (ревью R2-д): «store: localStorage» вычисляется на месте вызова, и
+        // SecurityError геттера (хранилище отключено) бросается ДО внутренней
+        // обёртки handleStorageCall: без этой обёртки вызов теряется и промис
+        // панели висит. Ответ — тот же отказ, что отдаёт общая реализация для
+        // недоступного хранилища (hostOps/storage.js, ветка SecurityError).
+        res = { ok: false, error: { code: 'unavailable', message: 'Хранилище недоступно' } };
+      }
+    } else if (op !== 'net.fetch') {
+      // Текст — как у сервера (PluginBridge.DispatchAsync).
+      res = { ok: false, error: { code: 'unavailable', message: 'Обработчик не зарегистрирован: ' + String(op).split('.')[0] } };
+    } else {
+      // Отказ по праву и тексты — ровно как у сервера (PluginBridge.DeniedError /
+      // PluginNetProxy): сначала мост проверяет права (до валидации url в обработчике),
+      // при отказе называет хост из url аргументов, а если его не вытащить — текст по домену.
+      const url = typeof args.url === 'string' ? args.url : '';
+      const netRights = cfg.grant.filter(g => g.startsWith('net:'));
+      if (netRights.length === 0) {
+        // Нет ни одного net:права — отказ на уровне моста: хост из url вызова;
+        // url нечитаем — «Нет права на сетевые запросы» (не «Нет права: net:»).
+        const host = hostOf(url);
+        res = host
+          ? { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } }
+          : { ok: false, error: { code: 'denied', message: 'Нет права на сетевые запросы' } };
+      } else if (!url) {
+        res = { ok: false, error: { code: 'invalid', message: 'Не задан url' } };
+      } else if (!/^https?:\/\//i.test(url)) {
+        res = { ok: false, error: { code: 'invalid', message: 'Некорректный url: ' + url } };
+      } else {
+        // Точный хост из granted — как PluginNetProxy: право net:{host} должно
+        // совпадать с хостом url (порт из права не несём).
+        const host = hostOf(url);
+        // Правило боя (PluginNetProxy.HostOf): порт отрезается по ПОСЛЕДНЕМУ двоеточию,
+        // сравнение без учёта регистра.
+        const rightHost = (g) => {
+          const h = g.slice(4);
+          const i = h.lastIndexOf(':');
+          return (i >= 0 ? h.slice(0, i) : h).toLowerCase();
+        };
+        if (!netRights.some(g => rightHost(g) === host)) {
+          res = { ok: false, error: { code: 'denied', message: 'Нет права: net:' + host } };
+        }
+      }
+
+      if (!res) {
+        if (cfg.fail === 'upstream') res = { ok: false, error: { code: 'upstream', message: UPSTREAM_TEXT } };
+        else if (cfg.fail === 'timeout') res = { ok: false, error: { code: 'timeout', message: 'Таймаут запроса' } };
+        else if (cfg.fail === 'dns_failed') res = { ok: false, error: { code: 'dns_failed', message: 'DNS: имя не разрешилось' } };
+        else if (cfg.fail === 'limit') res = { ok: false, error: { code: 'limit', message: 'Превышено число запросов на плагин в минуту' } };
+        else if (cfg.fail === 'unavailable') res = { ok: false, error: { code: 'unavailable', message: 'Плагин выключен' } };
+        else if (cfg.fail === 'not_found') res = { ok: false, error: { code: 'not_found', message: 'Не найдено' } };
+        else if (cfg.fail === 'invalid') res = { ok: false, error: { code: 'invalid', message: 'Некорректный запрос' } };
+        else if (cfg.fixtures.length > 0) {
+          // Фикстура по запросу (или по порядку вызовов); её «|delay» — задержка
+          // этого ответа (minor M2).
+          const spec = fixtureSpecFor(url);
+          if (spec.delay !== null) delayMs = spec.delay;
+          const body = await fixtureText(spec.path);
+          if (cfg.fail === 'status400') {
+            // Ошибочный HTTP — как успех net.fetch: {status, headers, body} (см. §1 плана).
+            res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body } };
+          } else {
+            res = { ok: true, data: { status: 200, headers: { 'content-type': 'application/json' }, body } };
+          }
+        } else if (cfg.fail === 'status400') {
+          // Ошибочный HTTP без фикстуры — тело валидное по форме (сценарий 4c).
+          res = { ok: true, data: { status: 400, headers: { 'content-type': 'application/json' }, body: '{"error":true,"reason":"Некорректный запрос"}' } };
+        } else {
+          try {
+            // Сеть: только http(s) (проверено выше), без куков и токена origin.
+            const r = await fetch(url, { method: (args.method || 'GET').toUpperCase(), headers: args.headers || {}, credentials: 'omit' });
+            res = { ok: true, data: { status: r.status, headers: Object.fromEntries(r.headers.entries()), body: await r.text() } };
+          } catch (e) {
+            res = { ok: false, error: { code: 'upstream', message: e.message } };
+          }
+        }
+      }
+    }
+  }
+
+  respond(id, res, counted, op.startsWith('storage.'), delayMs, args.url);
+}
+
+/* === Тема и ширина === */
+
+function setTheme(theme) {
+  cfg.theme = theme;
+  document.documentElement.setAttribute('data-theme', theme);
+  params.set('theme', theme);
+  history.replaceState(null, '', location.pathname + '?' + params.toString());
+  postToPanel({ type: 'theme', theme, tokens: hostTokens() });
+  updateStatus();
+}
+
+function applyWidth() {
+  const card = document.getElementById('card');
+  const frame = document.getElementById('frame');
+  if (cfg.width === 'rail') {
+    // Как в хосте (PluginFrame.tsx): кадр тянется на всю ширину карточки.
+    card.style.maxWidth = '420px';
+    frame.style.width = '100%';
+  } else {
+    // width= задаёт ширину панели (кадра), а не карточки: кадр ставим явно,
+    // карточку расширяем на рамку (2 px) и отступы .scroll (24 px), чтобы кадр
+    // не вылезал за неё и внешняя прокрутка не появлялась.
+    frame.style.width = cfg.width + 'px';
+    card.style.width = (Number(cfg.width) + 26) + 'px';
+  }
+}
+
+function updateStatus() {
+  document.getElementById('status').textContent =
+    'права: ' + (cfg.grant.join(', ') || 'нет') +
+    ' · тема: ' + cfg.theme + ' · ширина: ' + cfg.width +
+    (cfg.fixtures.length ? ' · фикстуры' : '') + (cfg.delay ? ' · задержка ' + cfg.delay + ' мс' : '');
+}
+
+/* === Самопроверка (selftest=1): тестовый скрипт, добавляемый в документ панели === */
+
+const SELFTEST_JS =
+  '(function(){' +
+  '  function report(o){ try { (window.top||window.parent).postMessage({source:"ccs-plugin",v:1,type:"selftest",data:o},"*"); } catch(e){} }' +
+  '  var out = {};' +
+  '  window.ccsPlugin.call("net.fetch", {url:"https://api.open-meteo.com/v1/forecast?latitude=57.62987&longitude=39.87368&timezone=auto"})' +
+  '    .then(function(r){ out.forecast = {status: r.status, bytes: (r.body||"").length}; })' +
+  '    .catch(function(e){ out.forecast = {code: e.code, message: e.message}; });' +
+  '  window.ccsPlugin.call("net.fetch", {url:"https://geocoding-api.open-meteo.com/v1/search?name=%D0%AF%D1%80%D1%86&count=10&language=ru&format=json"})' +
+  '    .then(function(r){ out.geocode = {status: r.status, bytes: (r.body||"").length}; })' +
+  '    .catch(function(e){ out.geocode = {code: e.code, message: e.message}; });' +
+  '  fetch("https://api.open-meteo.com/v1/forecast?latitude=57.62987&longitude=39.87368&timezone=auto")' +
+  '    .then(function(r){ out.directFetch = "ok " + r.status; })' +
+  '    .catch(function(e){ out.directFetch = "fail: " + e.message; });' +
+  '  setTimeout(function(){ out.granted = window.ccsPlugin.state.granted; out.theme = window.ccsPlugin.state.theme; report(out); }, 1500);' +
+  '})();';
+
+/* === Запуск === */
+
+async function main() {
+  if (!cfg.panel) {
+    logLine('× panel= — только путь внутри репозитория (без схемы и «..»): ' + rawPanel);
+    return;
+  }
+  // Тема хоста: тот же theme.css, что у приложения; data-theme — как в themeMode.ts.
+  const hostThemeCss = await fetchText('/frontend/src/lib/theme.css');
+  const st = document.createElement('style');
+  st.textContent = hostThemeCss;
+  document.head.appendChild(st);
+  document.documentElement.setAttribute('data-theme', cfg.theme);
+
+  // Шим кита — те же файлы, что подставляет хост (bridge.ts): theme + font + controls.
+  const shimJs = await fetchText('/frontend/public/plugin-kit/plugin-kit.js');
+  const shimCss = [
+    await fetchText('/frontend/public/plugin-kit/theme.css'),
+    await fetchText('/frontend/public/plugin-kit/font.css'),
+    await fetchText('/frontend/public/plugin-kit/controls.css'),
+  ].join('\n');
+
+  let panelHtml = await fetchText(cfg.panel);
+  if (cfg.selftest) {
+    panelHtml = panelHtml.replace('</body>', '<script>' + SELFTEST_JS + '<\/script></body>');
+  }
+
+  frame.srcdoc = buildShell(panelHtml, cfg.theme, shimJs, shimCss, hostTokens());
+  applyWidth();
+
+  // Таймаут ready (bridge.ts READY_TIMEOUT_MS): панель, не приславшая ready за 3 с,
+  // — «не отвечает»; хост показывает bridge_timeout.
+  setTimeout(() => {
+    if (!readyReceived) logLine('× ' + BRIDGE_TIMEOUT_TEXT);
+  }, READY_TIMEOUT_MS);
+
+  document.getElementById('in-panel').value = cfg.panel;
+  document.getElementById('in-grant').value = cfg.grant.join(',');
+  document.getElementById('in-fail').value = cfg.fail;
+  document.getElementById('in-delay').value = cfg.delay;
+  document.getElementById('in-fixtures').value = cfg.fixtures.join(',');
+  document.getElementById('in-width').value = cfg.width;
+  document.getElementById('btn-theme').textContent = cfg.theme === 'dark' ? 'светлая' : 'тёмная';
+  updateStatus();
+
+  window.__emulator = { cfg, granted: cfg.grant, initCount: 0 };
+  logLine('хост-эмулятор: панель ' + cfg.panel + ' · права: ' + (cfg.grant.length ? cfg.grant.join(', ') : 'нет'));
+}
+
+/* Переключатели: всё, кроме темы, перезагружает страницу с новым URL. */
+function reload(next) {
+  const p = new URLSearchParams(location.search);
+  for (const [k, v] of Object.entries(next)) {
+    if (v === '' || v === null) p.delete(k); else p.set(k, v);
+  }
+  location.search = p.toString();
+}
+
+document.getElementById('in-panel').addEventListener('change', e => reload({ panel: e.target.value }));
+document.getElementById('in-grant').addEventListener('change', e => reload({ grant: e.target.value }));
+document.getElementById('in-fail').addEventListener('change', e => reload({ fail: e.target.value }));
+document.getElementById('in-delay').addEventListener('change', e => reload({ delay: e.target.value }));
+document.getElementById('in-fixtures').addEventListener('change', e => reload({ fixtures: e.target.value }));
+document.getElementById('in-width').addEventListener('change', e => reload({ width: e.target.value }));
+document.getElementById('btn-theme').addEventListener('click', () => setTheme(cfg.theme === 'dark' ? 'light' : 'dark'));
+
+main().catch(e => logLine('× ' + e.message));
+</script>
+</body>
+</html>

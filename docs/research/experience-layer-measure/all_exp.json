@@ -1,0 +1,3007 @@
+[
+{
+"src": "T000",
+"task": "Добавление нового типа/сервиса/причины остановки в бэкенд CCS (Core, Prompts, ExecutorStopClassifier) с архитектурными сторожами",
+"search_keys": [
+"Architecture тесты",
+"CoreAllowedRootTypes",
+"RootAllowedExactTypes",
+"ExecutorStopClassifier IsTerminal",
+"DeliveryCause",
+"новый тип в Core"
+],
+"solution": "Новый статический класс в ClaudeHomeServer.Core надо внести в CoreAllowedRootTypes, новый класс в Prompts/SubagentPrompts (напр. директива повтора) - в RootAllowedExactTypes (сторожа ClaudeHomeServer.Architecture), иначе архитектурные тесты краснеют. Новую причину остановки в ExecutorStopClassifier обязательно отнести в IsTerminal (терминальная) или нет. Новый вид доставки сообщения - значение в DeliveryCause.",
+"boundary": "Не про фронтовые или Python-части; не про типы вне Core/Prompts.",
+"confidence": 0.6,
+"evidence": "Итог: 'Швы/allow-list'ы: DeliveryCause.ToolCallLeakNudge, ToolCallLeakDetector->CoreAllowedRootTypes, SubagentPrompts->RootAllowedExactTypes'; ExecutorStopClassifier tool_call_leak_stuck в IsTerminal.",
+"id": "E000"
+},
+{
+"src": "T000",
+"task": "Запуск dotnet test по TaskExecution/SessionManager после правок интерфейса ILlmSessionAdapter или SendMessageAsync",
+"search_keys": [
+"TaskExecutionServiceDeviceWaitTests",
+"DeviceWaitTestHost.StubProcess",
+"ILlmSessionAdapter SendMessageAsync",
+"turnModelOverride",
+"предсуществующие падения"
+],
+"solution": "На базе master падают 5 тестов TaskExecutionServiceDeviceWaitTests: мок DeviceWaitTestHost.StubProcess написан под 4-параметровый SendMessageAsync, а в ILlmSessionAdapter.cs 5-й параметр turnModelOverride (дефект bbca33f2). Это не твоя регрессия - сравнивай с базой, не чини в чужой задаче.",
+"boundary": "Только пока дефект bbca33f2 не закрыт; если падают другие тесты - это уже твои.",
+"confidence": 0.5,
+"evidence": "Итог: 'dotnet test ... 310 passed, 5 failed, 3 skipped; все 5 - предсущественные TaskExecutionServiceDeviceWaitTests'.",
+"id": "E001"
+},
+{
+"src": "T001",
+"task": "Инцидент выкатки/деплоя CCS: понять, упала ли выкатка, жив ли прод, где логи, как проверить итог",
+"search_keys": [
+"выкатка rolled_back",
+"health fail",
+"deploy_status",
+"/opt/ccs/releases",
+"api/health",
+"journalctl --user ccs.service"
+],
+"solution": "Прод слушает :80/:443, не :5000. Health: curl -H 'Host: localhost' http://127.0.0.1/api/health (204=ок). Логи выкаток: /opt/ccs/releases/deploy-<id>.log (в /opt/ccs/deploy-*.log пусто); журнал сервиса: journalctl --user -u ccs.service -o cat (фильтруй dbug). Версия на проде: /opt/ccs/app/build-id.txt. deploy_start перезапускает сервер и обрывает чат - перед ним всё доложи, итог проверяй потом через deploy_status + build-id + health.",
+"boundary": "Только прод-хост CCS с pipeline switch-release.sh; не для dev-стенда.",
+"confidence": 0.9,
+"evidence": "Постановка называла :5000 и /opt/ccs/deploy-*.log, оба неверны; нашёл лог в /opt/ccs/releases/deploy-20261017-093706.log и health 204 на :80 с Host: localhost.",
+"id": "E002"
+},
+{
+"src": "T001",
+"task": "Сервер .NET CCS после новой сборки не открывает порт (старт висит, CPU 0, лог обрывается после 'Реестр модулей: загружено 0')",
+"search_keys": [
+"старт сервера виснет",
+"DI цикл",
+"dotnet-stack",
+"start_stand таймаут 120",
+"LlmSubsystem",
+"порт не слушается"
+],
+"solution": "Запусти собранный dll вручную на свободном порту: ASPNETCORE_ENVIRONMENT=Development ASPNETCORE_URLS=http://127.0.0.1:5601 setsid nohup dotnet bin/Debug/net10.0/ClaudeHomeServer.dll > /tmp/stand.log &, возьми PID самого dotnet (не pgrep-обёртки bash, иначе ServerNotAvailableException), затем ~/.dotnet/tools/dotnet-stack report -p PID: главный поток покажет цепочку резолва DI (цикл между singleton'ами). mcp__dev__start_stand в этом случае просто падает по таймауту 120 с.",
+"boundary": "Если процесс падает с исключением на старте - смотри лог, стек не нужен.",
+"confidence": 0.85,
+"evidence": "dotnet-stack зависшего стенда на :5601 показал цикл LocalModelTurnMeter -> SessionManager -> LlmSessionAdapterFactory -> IToolCallLeakSink -> LocalModelTurnMeter; start_stand: 'Таймаут 120 с'.",
+"id": "E003"
+},
+{
+"src": "T001",
+"task": "Разбор падения выкатки/регрессии по описанию 'единственное изменение - мелкая правка'",
+"search_keys": [
+"git diff --stat",
+"что реально вошло в выкатку",
+"неточная постановка",
+"merge в master",
+"регрессия после выкатки"
+],
+"solution": "Не верь описанию состава выкатки: сравни git diff --stat <зелёный_sha> <упавший_sha> и git log --oneline между ними. В инциденте 'убранный TODO' оказался merge 22 файлов, включая чужой коммит с DI-циклом. Причину ищи в большом диффе (Program.cs, LlmSubsystem, фабрики DI), а не в заявленной мелочи.",
+"boundary": "Когда состав диффа уже подтверждён вручную.",
+"confidence": 0.6,
+"evidence": "Итог: 'Постановка была неточной: в 675b66c1 вошли 22 файла, не одна строка'; шаги git diff --stat fc08d262 675b66c1.",
+"id": "E004"
+},
+{
+"src": "T002",
+"task": "Поднять изолированный dev-стенд CCS из worktree и засеять тестовые задачи/чаты для QA UI",
+"search_keys": [
+"dev-стенд worktree",
+"DataPath",
+"tasks.json corrupt bak",
+"FrontendDistPath",
+"dotnet run Development",
+"засеять задачи"
+],
+"solution": "Стенд руками: cd <worktree>/backend/ClaudeHomeServer && ASPNETCORE_ENVIRONMENT=Development DataPath=/tmp/<qa>/data/projects.json FrontendDistPath=<worktree>/frontend/dist dotnet run (порт 5000). Папка проекта для POST /api/projects должна существовать. tasks.json, засеянный в чужом формате (энумы), молча переименовывается в tasks.json.corrupt-*.bak и сервер стартует пустым; после правки файла сервер нужно перезапустить - TaskManager читает его на старте. Проверку агрегата делай REST: GET /api/tasks/features?sessionId=.",
+"boundary": "Не про прод и не про mcp__dev__start_stand (на этом проекте не работает).",
+"confidence": 0.55,
+"evidence": "Сервер 'завершился сразу'; в data/ появился tasks.json.corrupt-20261017-105250.bak; после нормализации status_map и kill/restart GET /api/tasks/features вернул 200 с 3 эпиками.",
+"id": "E005"
+},
+{
+"src": "T003",
+"task": "Слить ветку и выкатить прод: проверка перед deploy_start, тесты через MCP-инструменты",
+"search_keys": [
+"mcp__tests__run_tests потолок 540",
+"мутационная проверка в рабочем дереве",
+"deploy_start dirty",
+"git checkout -- файл",
+"merge --no-ff"
+],
+"solution": "mcp__tests__run_tests обрывается потолком 540 с, если ему надо пересобрать проект (0 из 1): сначала mcp__dev__build, потом run_tests с узким filter. Мутацию (временно вернуть старый файл) делай коротко и сразу откатывай git checkout -- <файл>; перед deploy_start проверь git status --short - выкатка собирает рабочее дерево как есть и грязное дерево отклоняется.",
+"boundary": "Не про изолированные worktree, где деплоя нет.",
+"confidence": 0.65,
+"evidence": "run_tests: 'прогон оборван серверным потолком 540 с через 9:00 на 0 из 1... Раздели прогон аргументом filter'; затем git checkout -- LlmSessionAdapterFactory.cs и git status перед deploy_start.",
+"id": "E006"
+},
+{
+"src": "T003",
+"task": "Исполнитель получает задачу 'влить ветку и выкатить', а состояние репозитория могло уже измениться",
+"search_keys": [
+"merge-tree",
+"git branch --contains",
+"ветка уже влита",
+"git worktree list",
+"проверка состояния перед merge"
+],
+"solution": "Перед merge проверь: git worktree list, git merge-base --is-ancestor master <ветка>, git merge-tree --write-tree master <ветка> (чистота слияния без побочек), git branch --contains <sha>. Другая сессия могла уже влить/удалить ветку; тогда merge не нужен, остаётся выкатка. Merge с авторством исполнителя: git merge --no-ff -m '...' с трейлером Co-Authored-By.",
+"boundary": "Если постановщик явно запретил merge.",
+"confidence": 0.45,
+"evidence": "Шаги: git merge-tree --write-tree master fix/llm-di-cycle, git merge --no-ff, git branch -d; в T001 параллельно выяснялось, что ветка уже в master.",
+"id": "E007"
+},
+{
+"src": "T004",
+"task": "Добавить фич-флаг (backend FeatureFlagCatalog + frontend FLAGS) в CCS",
+"search_keys": [
+"FeatureFlagCatalog.All",
+"FeatureFlagKeys",
+"turn-plan-feature-mode",
+"Неизвестный фич-флаг",
+"FeatureFlagServiceTests",
+"dark-launch"
+],
+"solution": "Флаг должен быть в трёх местах: константа в FeatureFlagKeys и запись в FeatureFlagCatalog.All (Core/Models/FeatureFlag.cs; Default=false, Stage=\"dev\") и ключ в frontend/src/lib/featureFlags.ts (FLAGS). Без записи в каталоге GetEffective не отдаёт флаг: PUT /api/feature-flags/<key> даёт 400 'Неизвестный фич-флаг', в /api/auth/me ключа нет и UI-гейт мёртв. В FeatureFlagServiceTests обнови явный список ожидаемых ключей и добавь тест конвенции; проверка: dotnet test --filter FullyQualifiedName~FeatureFlagService.",
+"boundary": "Не для флагов, управляемых конфигом (appsettings), а не каталогом.",
+"confidence": 0.85,
+"evidence": "T002/T004: флаг есть на фронте, нет в каталоге - 'PUT ... 400 Неизвестный фич-флаг'; Денис правил FeatureFlag.cs и обновил список в тесте 'иначе тест упадёт'; мутация Default:true ловится.",
+"id": "E008"
+},
+{
+"src": "T005",
+"task": "План/работа в отдельном worktree по документу-разрезу, на который ссылается постановка",
+"search_keys": [
+"worktree",
+"untracked документ",
+"docs/research",
+"разрез не найден",
+"git status ??",
+"No such file in worktree"
+],
+"solution": "Если документ из постановки (docs/research/*-cut-*.md) не найден в worktree - проверь основной checkout: cd /home/an/Sources/ClaudeCodeServer && git status --short <путь>. Часто он лежит неотслеженным (??) там и в ветке его нет, а другие исполнители в worktree его не увидят. Скопируй в worktree и закоммить вместе с результатом, отметив это в итоге.",
+"boundary": "Когда документ уже закоммичен в ветку.",
+"confidence": 0.7,
+"evidence": "wc -l docs/research/tests-by-module-cut-2026-10.md -> No such file; в основном checkout он '??'; скопирован и закоммичен в b30d96baa.",
+"id": "E009"
+},
+{
+"src": "T006",
+"task": "UI-QA режима 'Исполнение фичи' (фича-флаг, чат с фичами) на dev-стенде через Playwright",
+"search_keys": [
+"флаг per-user",
+"PUT feature-flags",
+"OwnerId sessions.json",
+"sourceSessionId при создании",
+"Playwright cc_token",
+"hash-роут чата"
+],
+"solution": "Фич-флаг включается на пользователя: включай через PUT /api/feature-flags/<key> под тем же логином, под которым входишь в браузер. Чат с фичей должен принадлежать этому пользователю (OwnerId в sessions.json), иначе #/chats/<id> пустой. sourceSessionId эпика через PUT не выставился - создавай эпик сразу с ним (POST /api/tasks), а не правь потом. Токен веб-клиента лежит в sessionStorage 'cc_token'; вход через форму, не через подмену fetch.",
+"boundary": "Только стенд с локальной аутентификацией; не прод.",
+"confidence": 0.45,
+"evidence": "Для admin флага не было, после 'enable flag for andrey' и входа под andrey: {user:andrey, flag:true}; эпик с sourceSessionId пришлось удалить и создать заново.",
+"id": "E010"
+},
+{
+"src": "T007",
+"task": "Ревью фронта: модульный стор/хук, используемый в ChatPanel (Стена, несколько чатов на экране)",
+"search_keys": [
+"WallColumn",
+"useSyncExternalStore стор по sessionId",
+"task_changed",
+"lib/featureRuns.ts",
+"общий модульный стор",
+"Стена"
+],
+"solution": "ChatPanel монтируется на Стене (features/wall/WallColumn.tsx) по экземпляру на колонку, поэтому любой модульный стор в frontend/src/lib/*.ts должен быть разделён по sessionId (Map<sessionId, T>, стабильная ссылка среза), иначе последний fetch затирает остальные чаты. Живое обновление - подписка на task_changed через lib/signalr onMessage (как lib/tasks.ts), с дебаунсом и гейтом флага.",
+"boundary": "Для стора, не зависящего от чата (глобальные настройки, задачи пользователя).",
+"confidence": 0.7,
+"evidence": "Вердикт returned, 2 major: 'Стор агрегатов не разделён по sessionId - на Стене пилюля чата A показывает фичи чата B' и 'нет перезапроса по task_changed'.",
+"id": "E011"
+},
+{
+"src": "T008",
+"task": "Снять эталон списка тестов dotnet test --list-tests по slnx и сохранить в файл",
+"search_keys": [
+"dotnet test --list-tests",
+"CLR error 0x80131506",
+"эталон тестов",
+"exit 134",
+"извлечение имён тестов",
+"ClaudeHomeServer.slnx"
+],
+"solution": "Сначала mcp__dev__build по backend/ClaudeHomeServer.slnx. dotnet test ... --no-build --list-tests может упасть 'Fatal error. Internal CLR error 0x80131506' (exit 134) - просто повтори. Имена тестов в выводе - строки с 4-пробельным отступом (grep -E '^    [^ ]'); заголовки проектов с колонки 0. Сортируй LC_ALL=C. Не режь строки регэкспом без проверки: потом сверяй число с fresh-прогоном.",
+"boundary": "Только .NET-часть; для vitest/pytest свой формат.",
+"confidence": 0.7,
+"evidence": "Первый прогон: 'Аварийный останов, Fatal error. Internal CLR error (0x80131506), exit=134'; повтор дал 15318 строк, из них 15198 тестов.",
+"id": "E012"
+},
+{
+"src": "T008",
+"task": "Посчитать частоту правок вертикали по git log --since=1.month --name-only (коммиты и уникальные файлы)",
+"search_keys": [
+"git log --format",
+"pretty format @@",
+"уникальные файлы в правках",
+"частота правок",
+"git log --name-only --format="
+],
+"solution": "--format='@@COMMIT@@' и --format='COMMITMARK' git трактует как именованный/некорректный формат - вывод пуст (ошибку скрывает 2>/dev/null, смотри 2>&1). Рабочий вариант: коммиты - git log --since=1.month --format=%H -- <пути> | wc -l; файлы - git log --since=1.month --name-only --format= -- <пути> | sort -u | wc -l. Для проверки задавай точную дату (--since=2026-09-17).",
+"boundary": "Не про подсчёт строк кода и не про blame.",
+"confidence": 0.75,
+"evidence": "Цикл вернул нули для всех 8 вертикалей; причина - маркер '@@' в --format; после перехода на %H и --format= цифры совпали со свежим пересчётом ревьюера.",
+"id": "E013"
+},
+{
+"src": "T009",
+"task": "Исполнитель в отдельном git worktree: сборка и тесты через MCP-инструменты dev/tests",
+"search_keys": [
+"mcp__tests__run_tests worktree",
+"mcp__dev__build master",
+"Путь в files не найден",
+"worktreePath",
+"npx vitest run worktree"
+],
+"solution": "mcp__dev__build и mcp__tests__run_tests резолвят корень в ГЛАВНЫЙ checkout (master): новых файлов из worktree не видят ('Путь ... в files не найден', 'target выходит за пределы проекта'). Гоняй в worktree через Bash: cd <worktree>/backend && dotnet test <Проект> --filter \"FullyQualifiedName~X\"; cd <worktree>/frontend && npx vitest run <файл>; npx tsc -b; npm run lint:design. Каждый вызов Bash начинай с cd в worktree; Read/Edit делай по путям worktree, а не master.",
+"boundary": "Для задач в основном checkout инструменты работают.",
+"confidence": 0.9,
+"evidence": "run_tests: 'Путь frontend/src/lib/featureRuns.test.ts в files не найден', файл есть только в ClaudeCodeServer-feature-projector; в T007 'target выходит за пределы проекта'.",
+"id": "E014"
+},
+{
+"src": "T009",
+"task": "Написать vitest-тесты модульного стора с useSyncExternalStore, подпиской на сообщения и дебаунсом во frontend CCS",
+"search_keys": [
+"vitest node окружение",
+"vi.useFakeTimers",
+"тестовые швы __test",
+"стабильная ссылка useSyncExternalStore",
+"debounce тест",
+"мутация toBe"
+],
+"solution": "vitest-окружение - node, без jsdom: эффекты и хуки не исполняются, тестируй логику стора через экспортированные тестовые швы (например __test.snapshotFor/pending). Для дебаунса нужен vi.useFakeTimers() ДО vi.advanceTimersByTime, иначе таймер не сработает. Стабильность ссылки проверяй toBe (не toEqual); обязательно мутируй: spread вместо возврата того же массива должен краснить тест.",
+"boundary": "Для компонентных тестов с DOM окружение другое.",
+"confidence": 0.7,
+"evidence": "Первый вариант теста использовал advanceTimersByTime без fake timers - переписан; мутация snapshotFor со spread упала на toBe ('serializes to the same string').",
+"id": "E015"
+},
+{
+"src": "T009",
+"task": "Правка фронта CCS: сырые значения стилей и проверка npm run lint:design",
+"search_keys": [
+"lint:design",
+"design/no-raw-color",
+"шкалы SP FS",
+"lib/design.ts",
+"сырой hex"
+],
+"solution": "npm run lint:design - только правило design/no-raw-color (запрещены hex-цвета в src/**/*.tsx), сырые числа (marginTop: 11, fontSize: 12) он НЕ ловит. Но ревью требует шкал из frontend/src/lib/design.ts: SP (xxs=2, sm=8, md=12), FS (sm=12), C, R, SHADOW, FONT - подставляй их руками, не полагаясь на линтер.",
+"boundary": "Файлы из списка RAW_COLOR_ALLOWED в eslint.config.js.",
+"confidence": 0.6,
+"evidence": "Читал eslint.design.config.js/eslint.config.js: 'rules: { design/no-raw-color: error }'; 'lint:design ловит только no-raw-color (hex), не сырые числа'.",
+"id": "E016"
+},
+{
+"src": "T010",
+"task": "Сверить свежий dotnet test --list-tests с сохранённым эталоном (сумма и набор имён) в проекте tests-by-module",
+"search_keys": [
+"comm -23 comm -13",
+"LC_ALL=C sort",
+"склеенные FQN",
+"эталон list-tests",
+"sort panic",
+"baseline-tests.txt"
+],
+"solution": "Сравнивай без шапки: grep -v '^#' baseline | LC_ALL=C sort -u против свежего списка (grep -E '^    [A-Za-z]' | sed 's/^    //' | LC_ALL=C sort -u), затем comm -23 / comm -13. sort по файлу с кириллической шапкой на этой машине падал паникой (uutils sort SendError) - всегда убирай шапку и ставь LC_ALL=C. Эталон может содержать строки с 2 FQN, склеенными через 4+ пробела: нормализуй split по \\s{2,}, иначе расхождение 15198 vs 15213. Пути к файлам - абсолютные: cwd мог остаться в backend/.",
+"boundary": "Когда эталон снят с тем же фильтром и без склеек.",
+"confidence": 0.65,
+"evidence": "Ревью вернуло major: в baseline 7 строк со склеенными FQN, fresh=15213 vs 15198; 'sort: thread panicked ... SendError' на файле с шапкой; comm показал 16 vs 31 расхождений до нормализации.",
+"id": "E017"
+},
+{
+"src": "T013",
+"task": "Фикс в бэкенде, при прогоне тестов красные тесты вне зоны правки",
+"search_keys": [
+"pre-existing падения тестов",
+"git diff patch откат",
+"dotnet test фильтр",
+"DeviceWaitTests",
+"tasks_complete defect"
+],
+"solution": "Падение в смежном наборе проверять откатом: `git diff > /tmp/x.patch; git checkout -- <свои файлы>`; прогнать упавший фильтр на чистом master; вернуть `git apply /tmp/x.patch` (не git stash). Если падает так же - завести отдельный defect, не чинить в своей задаче.",
+"boundary": "Если упавший тест использует код, который вы правили - откат ничего не докажет",
+"confidence": 0.7,
+"evidence": "5 падений TaskExecutionServiceDeviceWaitTests (мок SendMessageAsync на 4 параметра); откат файлов через /tmp/denis.patch -> те же 5 падений на master -> defect 5a438963",
+"id": "E018"
+},
+{
+"src": "T013",
+"task": "Закрытие задачи kind=defect через tasks_complete",
+"search_keys": [
+"tasks_complete",
+"defect",
+"Verification",
+"closedWithoutCheck",
+"закрыть дефект"
+],
+"solution": "tasks_complete для kind=defect без verification отказывает («нельзя закрывать без Verification»). Если отдельного QA нет - повторить вызов с `outcome: \"closedWithoutCheck\"` и тем же resultMarkdown; либо передать verification{verdict,notes}.",
+"boundary": "Для обычных задач (kind=task) параметр не нужен",
+"confidence": 0.75,
+"evidence": "tasks_complete -> «Дефект нельзя закрывать без Verification...», повтор с outcome closedWithoutCheck прошёл",
+"id": "E019"
+},
+{
+"src": "T015",
+"task": "Сборка и проверка из git worktree фичи (backend .NET + frontend)",
+"search_keys": [
+"git worktree",
+"dotnet build slnx",
+"mcp__dev__build",
+"CLR 0x80131506",
+"npm ci tsc -b"
+],
+"solution": "В корне репо нет .sln: собирать `dotnet build backend/ClaudeHomeServer.slnx` из каталога worktree через Bash (mcp__dev__build привязан к основному дереву). Фронт: `cd frontend && npm ci && npx tsc -b`. Перед отчётом сверить `git rev-parse master feat/..`: master может сдвинуться параллельно.",
+"boundary": "Для сборки в основном дереве достаточно mcp__dev__build",
+"confidence": 0.7,
+"evidence": "`dotnet build` в корне worktree -> MSB1003; slnx лежит в backend/; master сдвинулся 22ead0dd1 -> 655098b14 во время работы",
+"id": "E020"
+},
+{
+"src": "T015",
+"task": "Сборка dotnet падает с «Fatal error. Internal CLR error. (0x80131506)», exit 134",
+"search_keys": [
+"CLR 0x80131506",
+"dotnet build crash",
+"exit 134",
+"транзиторный сбой"
+],
+"solution": "Это транзиторный сбой рантайма, не ошибка кода: просто перезапустить ту же `dotnet build` (инкрементально, быстрее); при необходимости писать вывод в лог (`> /tmp/build.log`) и смотреть `Ошибок:`. Не искать причину в своих правках.",
+"boundary": "Если крах воспроизводится стабильно 3 раза подряд - проверять версию SDK/память",
+"confidence": 0.6,
+"evidence": "T015: первый прогон Fatal error 0x80131506 exit 134, повтор exit 0, 0 ошибок; такой же краш повторился в T023 и сняли повтором",
+"id": "E021"
+},
+{
+"src": "T015",
+"task": "Работа в общем worktree фичи, где параллельно пишут другие исполнители",
+"search_keys": [
+"общий worktree",
+"git status не чистый",
+"untracked чужой файл",
+"feat ветка"
+],
+"solution": "В общем worktree чужие untracked-файлы и коммиты появляются в ходе работы: не удалять и не коммитить чужое, смотреть mtime/`git log -1 <sha>^` и автора; в отчёте указывать SHA ответвления и текущий tip отдельно, перед финалом перепроверить `git status` и rev-parse.",
+"boundary": "Если worktree только ваш - достаточно одного git status",
+"confidence": 0.45,
+"evidence": "В worktree появился untracked docs/adr/ADR-031-plugins.md, затем его закоммитили (feat/plugins ушла на 291253594), git status стал чистым",
+"id": "E022"
+},
+{
+"src": "T016",
+"task": "Добавление параметра хода (глубина/агентский флаг) в SendMessageAsync / ограничение по делегированию",
+"search_keys": [
+"AgentDepth",
+"DeliverPendingAsync",
+"DeviceWaitMessage",
+"очередь сообщений",
+"SessionManager.SendMessageAsync"
+],
+"solution": "Атрибут хода должен протягиваться по всем путям: прямой SendMessageAsync->SendDirectAsync, доставка из очереди DeliverPendingAsync (раньше стартовала с depth 0), парковка DeviceWaitMessage (два места создания - проверить grep `new DeviceWaitMessage`), аккумулятор (viaAgent). Иначе ограничение обходится через очередь.",
+"boundary": "Для правок, не связанных с жизненным циклом хода в SessionManager",
+"confidence": 0.65,
+"evidence": "DeliverPendingAsync звал SendMessageAsync без глубины; DeviceWaitMessage создавался без глубины в одном из двух мест; 17.10 запуск прошёл через очередь вопреки гейту",
+"id": "E023"
+},
+{
+"src": "T016",
+"task": "Изменение семантики гейта/константы в бэкенде, нужно не сломать старые тесты",
+"search_keys": [
+"SessionManagerTests",
+"ГейтЗапуска",
+"DelegatedTurnGate",
+"McpToolsetStabilityTests",
+"мутация"
+],
+"solution": "После правки SessionManager.cs гонять весь `FullyQualifiedName~SessionManagerTests` (560), а не только новые: старый тест `ГейтЗапуска_ДелегированныйХодВЧатеСЦиклом` был на старой семантике (глубина 1 = запрет) и упал - его переводят на глубину 2. Мутацию: правка -> mcp__dev__build Tests -> run_tests no_build:true -> откат.",
+"boundary": "Не применять к правкам вне SessionManager/гейта",
+"confidence": 0.55,
+"evidence": "SessionManagerTests: FAILED 1 из 560 (ГейтЗапуска_ДелегированныйХодВЧатеСЦиклом), после обновления 560/560; мутации краснили Очередь_ДоставкаАгентскогоГлубины1",
+"id": "E024"
+},
+{
+"src": "T017",
+"task": "Живая проверка поведения Claude CLI (--plugin-dir, init, hooks) через stream-json",
+"search_keys": [
+"claude --print stream-json",
+"system init",
+"--verbose",
+"effort medium",
+"reasoning effort",
+"hook_started"
+],
+"solution": "`claude --plugin-dir D --print --output-format stream-json --verbose \"...\"`: stream-json требует --verbose; первая строка не init (идут hook_started) - искать JSON с type=system,subtype=init. На локальной qwen-модели при «API Error 400 Unexpected reasoning effort high» добавить `--effort medium`. Исполнение hook доказывать файлом-маркером в /tmp.",
+"boundary": "На облачной модели Anthropic ошибки effort нет",
+"confidence": 0.7,
+"evidence": "ТЕСТ 1: «API Error: 400 Unexpected reasoning effort high» -> повтор с --effort medium прошёл; hook писал /tmp/ccs-spike-hook-proof.txt; init искали по циклу строк",
+"id": "E025"
+},
+{
+"src": "T017",
+"task": "Проверка чего-то внутри sandbox-контейнера (cc-sandbox) с CLI",
+"search_keys": [
+"cc-sandbox",
+"docker exec claude",
+"DockerPathMapper",
+"/projects",
+"claude-host versions"
+],
+"solution": "Положить тестовый каталог в хост-путь, маппящийся на /projects (для cc-sandbox: /tmp/vera-lora-qa/sandbox-fake), запускать `docker exec -e ANTHROPIC_API_KEY=... cc-sandbox claude ...`; CLI версий лежат в /opt/claude-host/versions/<ver>/. Exit 141 при `| head` - SIGPIPE, не ошибка. data/plugins в контейнер не монтируется.",
+"boundary": "Прод-контейнер cc-sandbox-prod и его маунты отличаются",
+"confidence": 0.55,
+"evidence": "docker inspect cc-sandbox: маунты /projects,/sandbox-profiles,/turn-tmp,/opt/claude-host/versions; плагин из /projects/spike-plugin загружен; «Exit 141 = SIGPIPE»",
+"id": "E026"
+},
+{
+"src": "T017",
+"task": "Валидатор/доставка плагинов Claude CLI: что опасно в пакете плагина",
+"search_keys": [
+"plugin hooks RCE",
+"plugin agents",
+"plugin .mcp.json",
+"bin settings.json",
+"allow-list плагина"
+],
+"solution": "Факт замера CLI 2.1.301: hooks/ исполняются (RCE), agents/ добавляют сабагентов, .mcp.json регистрирует MCP в обход allow-list; bin/ сам не запускается, settings.json модель не переопределил. Валидатор: allow-list plugin.json, skills/**/SKILL.md, commands/*.md, panel/**. skill с user-invocable:false вызывается только агентом через Skill-тул.",
+"boundary": "Для других версий CLI перемерить",
+"confidence": 0.6,
+"evidence": "hook SPIKE-HOOK-RAN сработал и в контейнере; agents -> spike2:my-agent в init; bin/ proof-файла нет",
+"id": "E027"
+},
+{
+"src": "T018",
+"task": "Перенос/коммит файлов (png, скриншоты, макеты) в репо, часть файлов не попадает в git add",
+"search_keys": [
+"gitignore *.png",
+"git add не добавил",
+"макеты docs/mockups",
+"untracked из master",
+"git check-ignore"
+],
+"solution": "Если после `git add dir/` в индексе не все файлы - `git check-ignore -v <файл>`: в .gitignore есть глобальное `*.png` (стр.76) с точечными исключениями. Добавить рядом `!docs/mockups/<имя>/*.png` (в стиле соседних), а не `git add -f`. Untracked-файлы из другого дерева копировать `cp -r`, git mv не сработает.",
+"boundary": "Если нужные файлы не png/не игнорируются",
+"confidence": 0.7,
+"evidence": "В индекс попали 3 из 19 файлов; check-ignore -> .gitignore:76 `*.png`; добавлено `!docs/mockups/plugins/*.png`, staged 20 файлов",
+"id": "E028"
+},
+{
+"src": "T019",
+"task": "Добавление флага в FeatureFlagCatalog + экспериментальный бейдж на фронте",
+"search_keys": [
+"FeatureFlagCatalog",
+"featureFlags.ts",
+"FeatureFlagServiceTests",
+"STAGE_COLOR",
+"lint:design"
+],
+"solution": "Новый флаг трогает: FeatureFlag.cs (All), frontend/src/lib/featureFlags.ts (FLAGS), тип stage в types/index.ts и STAGE_COLOR в FeatureFlagsModal.tsx (если stage новый), и хардкод-список в FeatureFlagServiceTests.СнятыеФлаги_... (иначе красный). Проверка фронта: `cd frontend && npx tsc -b && npm run lint:design`.",
+"boundary": "Если stage уже один из dev/beta/stable - типы фронта не трогать",
+"confidence": 0.7,
+"evidence": "FAILED FeatureFlagServiceTests.СнятыеФлаги_ОтсутствуютВКаталоге (ожидалось 7 флагов); тип stage был 'dev'|'beta'|'stable'",
+"id": "E029"
+},
+{
+"src": "T019",
+"task": "Новые тесты должны попасть под заданный в задаче dotnet test --filter по имени",
+"search_keys": [
+"FullyQualifiedName~",
+"namespace тестов",
+"dotnet test filter",
+"тесты не запустились"
+],
+"solution": "Фильтр `FullyQualifiedName~Plugins` сопоставляется с полным именем (namespace.класс): класс PluginManifestTests в namespace ...Tests.Models фильтр НЕ ловит (нет «Plugins»). Размещать тест в папке/namespace `ClaudeHomeServer.Tests.Plugins` и проверять, что число прогнанных тестов выросло.",
+"boundary": "Фильтры по имени класса (~PluginManifestTests) работают без переноса",
+"confidence": 0.65,
+"evidence": "«FQN ...Models.PluginManifestTests не содержит Plugins» -> git mv в Tests/Plugins и namespace ClaudeHomeServer.Tests.Plugins, затем 89 зелёных",
+"id": "E030"
+},
+{
+"src": "T019",
+"task": "Написание новых моделей/тестов в Core на C# (FluentAssertions, коллекции)",
+"search_keys": [
+"IReadOnlyList Add",
+"collection expression",
+"BeSingle",
+"HaveCount(1)",
+"FluentAssertions"
+],
+"solution": "В этом репо у FluentAssertions нет `.BeSingle()` - использовать `.HaveCount(1)`. Поле `IReadOnlyList<T> = []` неизменяемо: для накопления держать внутренний List<T> и отдавать как IReadOnlyList (иначе CS1929 на .Add).",
+"boundary": "Если версия FluentAssertions обновлена",
+"confidence": 0.4,
+"evidence": "CS1061 'GenericCollectionAssertions<PluginPanel>' нет BeSingle; CS1929 IReadOnlyList не содержит Add",
+"id": "E031"
+},
+{
+"src": "T020",
+"task": "Создание новой вертикали backend (ClaudeHomeServer.<Name>) с IAppSubsystem",
+"search_keys": [
+"новая вертикаль",
+"SubsystemBoundaryTests",
+"AddSubsystems",
+"CoreAllowedNamespaces",
+"ProjectReference"
+],
+"solution": "Чек-лист: csproj (Sdk.Web), backend/ClaudeHomeServer.slnx, ProjectReference в Main и Tests, Program.cs AddSubsystems, assembly в static ctor SubsystemBoundaryTests и SubsystemBoundaryCoverageTests + запись Boundaries. Новый namespace шва в Core.dll - в CoreAllowedNamespaces (иначе красный CoreDll_...Неймспейсы). Фильтр: SubsystemBoundary|IlBoundaryRegression|ProjectMapHygiene.",
+"boundary": "Не для правок внутри существующей вертикали",
+"confidence": 0.75,
+"evidence": "FAILED SubsystemBoundaryTests.CoreDll_СодержитТолькоРазрешённыеНеймспейсы после добавления Core.Services.Plugins; после правки 70/70 зелёных",
+"id": "E032"
+},
+{
+"src": "T020",
+"task": "Правка корневого CLAUDE.md, ProjectMapHygieneGuardTests (лимит строк)",
+"search_keys": [
+"CLAUDE.md лимит 530",
+"ProjectMapHygieneGuardTests",
+"карта проекта",
+"запас строк"
+],
+"solution": "Корневой CLAUDE.md ограничен 530 строками (было 529, запас 1): новые разделы не заводить, а переписывать существующую секцию тем же числом строк; проверять `wc -l CLAUDE.md` и ProjectMapHygieneGuardTests.",
+"boundary": "Лимит из этого репо; в других проектах другой",
+"confidence": 0.55,
+"evidence": "«wc -l CLAUDE.md = 529, верхний предел 530 - ровно одна строка запаса»; правка внутри секции «Плагины»",
+"id": "E033"
+},
+{
+"src": "T021",
+"task": "Снятие эталонного списка тестов `dotnet test --list-tests` по slnx",
+"search_keys": [
+"--list-tests",
+"baseline тестов",
+"wc -l",
+"data-driven тесты",
+"grep -oE"
+],
+"solution": "Использовать `dotnet test backend/ClaudeHomeServer.slnx --no-build --list-tests 2>/dev/null | grep -E '^[[:space:]]' | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u` -> 15203. Вариант `grep -oE '...[^[:space:]]*'` режет имя по первому пробелу и схлопывает data-driven тесты (11732). Проверка склеек `grep -cP '[^[:space:]] {2,}[A-Z]'` даёт 10 ложных на параметрах - фильтровать по .Tests. дважды.",
+"boundary": "Если число тестов в репо изменилось - ориентир 15203 неактуален",
+"confidence": 0.8,
+"evidence": "Команда из постановки -> 11732 вместо ~15203; полная строка -> 15203, детерминированно; 10 ложных срабатываний в параметрах line:",
+"id": "E034"
+},
+{
+"src": "T021",
+"task": "Rework/ревью, где команда из постановки даёт неожиданный результат",
+"search_keys": [
+"команда из постановки",
+"расхождение с критерием",
+"ложные срабатывания",
+"обоснование в шапке"
+],
+"solution": "Если буквальная команда из постановки даёт число, не совпадающее с критерием (11732 vs 15203), не подгонять: разобрать сырой вывод, найти причину (категории строк, cat -A), взять рабочий вариант и явно записать отклонение и причину в шапку файла и в resultMarkdown.",
+"boundary": "Когда команда из постановки даёт ожидаемый результат",
+"confidence": 0.45,
+"evidence": "Исполнитель разобрал raw 15318 строк по категориям, обосновал в шапке отклонение от команды ревью",
+"id": "E035"
+},
+{
+"src": "T022",
+"task": "Фронт-тесты vitest в этом репо (новый компонент в components/chat/feature)",
+"search_keys": [
+"vitest run_tests",
+"files путь frontend/src",
+"@testing-library нет",
+"stagePhases",
+"lint:design no-raw-color"
+],
+"solution": "mcp__tests__run_tests kind=vitest target=frontend: files указывать от корня проекта (`frontend/src/.../X.test.ts`), иначе «Путь не найден». Тесты - чистые функции в .test.ts (без @testing-library), логику выносить в экспортируемую функцию (stagePhases). Цвета только токены C/FS/SP/R из lib/design (правило design/no-raw-color); затем `npx tsc -b` и `npm run lint:design`.",
+"boundary": "Если в проект добавлен @testing-library",
+"confidence": 0.6,
+"evidence": "«Путь src/components/chat/feature/PipelineStages.test.ts в files не найден (пути от корня проекта...)»; повтор с frontend/src/... -> 13/13",
+"id": "E036"
+},
+{
+"src": "T023",
+"task": "Ревью: сверка списка тестов свежим --list-tests с эталоном",
+"search_keys": [
+"сверка baseline",
+"--list-tests нестабилен",
+"параллельный вывод vstest",
+"comm -23",
+"24 тестовых проекта"
+],
+"solution": "Вывод `--list-tests` по всей slnx (24 тест-проекта) может перемешиваться из-за параллельных testhost: снимать 2-3 раза и сравнивать `comm -23/-13` с эталоном; при расхождении сверять по отдельным проектам (`dotnet test <Project> --no-build --list-tests`). Читать 2МБ-файл эталона через grep/offset, Read отказывает >256КБ.",
+"boundary": "Для одиночного тест-проекта вывод детерминирован",
+"confidence": 0.4,
+"evidence": "Исполнитель снял fresh/fresh2/run2/run3, сравнивал comm, затем team_memory: «методика не устойчива к параллельному выводу vstest при 24 тес[тах]»",
+"id": "E037"
+},
+{
+"src": "T024",
+"task": "Валидатор пакета/каталога на .NET: детект symlink и выхода за корень",
+"search_keys": [
+"symlink",
+"ReparsePoint",
+"within-root",
+"GetRelativePath",
+"EnumerateFiles",
+"FileInfo.HasLink"
+],
+"solution": "FileInfo.HasLink не существует (CS1061). Symlink детектить через File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint) — работает и для файла, и для каталога. Directory.EnumerateFiles+Path.GetRelativePath никогда не даёт «..» (symlink-каталог даёт escape/secret.md), поэтому within-root проверять отдельно: цель symlink вне корня. Symlink с именем «..» создать нельзя.",
+"boundary": "Не про Windows-junction/NTFS; не про проверку строковых путей из архива (там «..» реально бывает).",
+"confidence": 0.8,
+"evidence": "Пробы в /tmp/wtest*: HasLink не компилируется, symlink-каталог даёт rel=escape/secret.md без «..», ln -s ... sub/.. невозможен; within-root переделан через цель symlink.",
+"id": "E038"
+},
+{
+"src": "T024",
+"task": "Мутационная проверка тестов (убрать проверку → тест должен краснеть) через sed/скрипт",
+"search_keys": [
+"мутация",
+"sed",
+"mutation test",
+"cp .bak",
+"восстановить",
+"git diff"
+],
+"solution": "Мутацию через sed подтверждай: после правки grep/git diff, что строка реально изменилась, иначе зелёный тест = ложное «мутация выжила». Скрипт не делает cd в чужой каталог перед cp/sed — работай по абсолютным путям. Бэкап .bak, после серии: восстановить и git diff на артефакты (X, // MUT), потом финальный прогон.",
+"boundary": "Для мутаций правкой через Edit (оно само падает при несовпадении) важно меньше.",
+"confidence": 0.7,
+"evidence": "deny-hooks и deny-mcp-json остались зелёными — sed не совпал по пробелам; скрипт сломал cwd, файл остался с deny-hooksX, пришлось восстанавливать из .bak.",
+"id": "E039"
+},
+{
+"src": "T024",
+"task": "Быстрая проверка поведения .NET API на Linux-стенде (пробный код вне репозитория)",
+"search_keys": [
+"dotnet script",
+"scratch проект",
+"probeapp",
+"net10.0",
+"TargetFramework"
+],
+"solution": "dotnet-script нет. Создай консольный проект в /tmp (dotnet new console), sed-ом выставь TargetFramework=net10.0 (дефолт SDK иной), код пробы в Program.cs, dotnet run. Не грузи DLL из nuget runtime-пакета win-x64 через Assembly.LoadFrom — BadImageFormatException на Linux.",
+"boundary": "Если вопрос решается чтением исходников/доков, проект не нужен.",
+"confidence": 0.5,
+"evidence": "«dotnet script нет, пробую csc», затем sed TFM net10.0 в probeapp.csproj; в T027 загрузка win-x64 Mvc.Core.dll дала BadImageFormatException.",
+"id": "E040"
+},
+{
+"src": "T025",
+"task": "Сверка числа тестов решения (--list-tests) после рефакторинга проектов",
+"search_keys": [
+"--list-tests",
+"склейки",
+"15203",
+"per-project",
+"testhost",
+"сверка числа тестов"
+],
+"solution": "`dotnet test slnx --no-build --list-tests` целиком недетерминирован: параллельные testhost склеивают FQN (14891/15027 вместо 15203; признак — две FQN через 4+ пробела в строке). Считай per-project: цикл по тест-проектам, `dotnet test <csproj> --no-build --list-tests | grep ^space | sed | sort -u`, сумма и diff с эталоном. Скрипт в файл и в фон, ~1-2 мин.",
+"boundary": "Если эталон снят тем же недетерминированным способом и нужна лишь грубая оценка.",
+"confidence": 0.85,
+"evidence": "Прогон по slnx: 15027 (176 склеек), 14891 (211); per-project скрипт /tmp/count_tests.sh дал TOTAL=15203.",
+"id": "E041"
+},
+{
+"src": "T025",
+"task": "Остановка зависшего/лишнего dotnet-процесса на общем сервере со стендом",
+"search_keys": [
+"pkill",
+"kill",
+"block-process-kill",
+"dotnet test",
+"ps -eo pid,args",
+"хук"
+],
+"solution": "pkill/killall/xargs kill блокируются хуком (боевой сервер и дев-стенд — один бинарь). Найди PID своего процесса: `ps -eo pid,args | grep \"[d]otnet test backend/...slnx\"`, затем `kill <PID>`. Не запускай серией 5 полных `dotnet test slnx --list-tests` — каждый ~минуты и 24 testhost.",
+"boundary": "Не применимо к процессам, запущенным не тобой.",
+"confidence": 0.7,
+"evidence": "PreToolUse hook: «Заблокировано: убийство процессов по имени или шаблону»; затем ps ... | awk и `kill 1116381` прошли.",
+"id": "E042"
+},
+{
+"src": "T025",
+"task": "Работа с карточками задач через tasks_* в чате исполнителя",
+"search_keys": [
+"tasks_add_subtask",
+"не найдена",
+"полный id",
+"UUID",
+"tasks_get"
+],
+"solution": "tasks_add_subtask/toggle принимают только полный UUID задачи; короткий префикс (825030df) даёт «не найдена или недоступна», хотя tasks_get по префиксу отработал. Бери полный id из ответа tasks_get.",
+"boundary": "Если задача в другом проекте/контексте — другая причина отказа.",
+"confidence": 0.5,
+"evidence": "6 вызовов tasks_add_subtask с 825030df подряд упали; с 825030df-86dc-4022-9041-f27b3e9e0958 прошли.",
+"id": "E043"
+},
+{
+"src": "T026",
+"task": "Запуск vitest фронта через mcp__tests__run_tests",
+"search_keys": [
+"run_tests",
+"vitest",
+"files",
+"путь не найден",
+"frontend/src"
+],
+"solution": "В mcp__tests__run_tests параметр files — пути от корня проекта с префиксом frontend/ (frontend/src/.../X.test.ts), даже если target=frontend. Без префикса: «Путь ... в files не найден». lint:design и tsc -b запускай Bash-ом из frontend/ (npm run lint:design; npx tsc -b).",
+"boundary": "Для kind=dotnet параметры другие (target=csproj/slnx, filter).",
+"confidence": 0.9,
+"evidence": "files=[src/components/...] → ошибка «пути — относительно корня проекта, например frontend/src/lib/x.test.ts»; с префиксом 13/13 зелёных.",
+"id": "E044"
+},
+{
+"src": "T026",
+"task": "Тесты и дизайн-линт React-компонента фронта (SVG, адаптив) в проекте AI Home",
+"search_keys": [
+"renderToStaticMarkup",
+"useIsMobile",
+"no-raw-color",
+"C.* токены",
+"vitest node",
+"SVG stroke"
+],
+"solution": "Тесты компонентов — окружение node: renderToStaticMarkup, useIsMobile() в SSR = false (проверяется десктоп-раскладка). Правило no-raw-color ловит hex в строках/шаблонах: в SVG fill/stroke брать только из C.* (lib/design.ts), размеры из SP/FS/R. Чистую логику (подсчёты, толщины) выноси в экспортируемые функции и тестируй отдельно.",
+"boundary": "Мобильную ветку SSR-тестом не проверить.",
+"confidence": 0.6,
+"evidence": "Прочитан breakpoints.ts: «useIsMobile → false в SSR»; eslint no-raw-color; FeatureRunView.test.ts использует renderToStaticMarkup.",
+"id": "E045"
+},
+{
+"src": "T027",
+"task": "Юнит-тесты MVC-контроллера без WebApplicationFactory (ASP.NET Core, .NET 10)",
+"search_keys": [
+"IActionResult",
+"StatusCode(403",
+"ObjectResult",
+"ConflictObjectResult",
+"Forbid",
+"FluentAssertions"
+],
+"solution": "У IActionResult нет .Result — не меняй сигнатуры ради тестов (ActionResult тоже не помог). StatusCode(403, obj) возвращает ObjectResult, Conflict(obj) — ConflictObjectResult, а не StatusCodeResult: кастуй к ObjectResult и проверяй StatusCode/Value (сериализуй в JSON для причины). Forbid(object)/Forbidden(object) не годятся — используй StatusCode(403, new {...}).",
+"boundary": "Если тест идёт через HttpClient/TestWebApplicationFactory — получаешь HTTP-ответ, касты не нужны.",
+"confidence": 0.8,
+"evidence": "Серия CS1061 'IActionResult/ActionResult has no Result', затем InvalidCastException ObjectResult→StatusCodeResult в 5 тестах; фикс — каст к ObjectResult.",
+"id": "E046"
+},
+{
+"src": "T027",
+"task": "Правка нескольких одинаковых сигнатур через Edit replace_all",
+"search_keys": [
+"replace_all",
+"Edit",
+"пробел съеден",
+"trailing space",
+"ActionResultList"
+],
+"solution": "Завершающие пробелы в old_string/new_string обрезаются: замена «public IActionResult » на «public ActionResult » склеила тип с именем (ActionResultList()). Для replace_all бери якорь без хвостового пробела (например, с именем метода или с префиксом и открывающей скобкой) и сразу Grep по результату.",
+"boundary": "Замены внутри одной строки без краевых пробелов безопасны.",
+"confidence": 0.7,
+"evidence": "Grep после replace_all показал «public ActionResultList()» и т.п.; потом 14 отдельных Edit для восстановления пробелов.",
+"id": "E047"
+},
+{
+"src": "T027",
+"task": "Контроллер в вертикальном модуле (Plugins/Spend), которому нужны флаг и тип токена",
+"search_keys": [
+"IFeatureFlagGate",
+"FeatureFlagService",
+"SubsystemGate",
+"вертикаль ссылается на Core",
+"JwtBearer",
+"SpendControllerTests"
+],
+"solution": "Модуль-вертикаль ссылается только на Core: FeatureFlagService/UserStore живут в Main, поэтому флаг проверяй через Core-шов IFeatureFlagGate (+ SubsystemGate.IsEnabled(config,...)), а claim'ы читай литералами (нужен using System.Security.Claims для FindFirstValue). Внешние эффекты (привязки, слоты) — через новый Core-шов с no-op реализацией. Образец — SpendControllerTests.",
+"boundary": "Контроллеры, лежащие в самом Main, могут брать FeatureFlagService напрямую.",
+"confidence": 0.6,
+"evidence": "«FeatureFlagService живёт в Main, а вертикаль Plugins ссылается только на Core — нужен Core-шов»; найден IFeatureFlagGate в Core.",
+"id": "E048"
+},
+{
+"src": "T028",
+"task": "CS0246 'type not found' при выносе тестовых хелперов в новый проект, ссылающийся на Main",
+"search_keys": [
+"ReferenceOutputAssembly",
+"динамические модули",
+"CS0246",
+"транзитивно",
+"ProjectReference",
+"Notes"
+],
+"solution": "Main тянет часть вертикалей (Notes, ImageEditor...) с ReferenceOutputAssembly=\"false\" — их типы НЕ видны транзитивно через ссылку на Main. Найди: grep 'ReferenceOutputAssembly=\"false\"' в ClaudeHomeServer.csproj; для каждого используемого модуля добавь прямую ProjectReference в новый проект. Остальные (Devices, Llm, CodeGraph, Images) видны транзитом.",
+"boundary": "Если тип лежит в Core или в модуле со штатной ссылкой.",
+"confidence": 0.9,
+"evidence": "Сборка: 'NotesService could not be found' в DeviceWaitTestHost; grep показал ReferenceOutputAssembly=false для Notes; прямая ссылка → 78/78.",
+"id": "E049"
+},
+{
+"src": "T028",
+"task": "Перенос internal-хелперов в новую сборку (CS0122 inaccessible)",
+"search_keys": [
+"InternalsVisibleTo",
+"CS0122",
+"internal",
+"DeviceExecStream",
+"TurnAccumulator",
+"новая сборка"
+],
+"solution": "Монолит видел internal-типы модулей через их IVT на ClaudeHomeServer.Tests; новая сборка IVT не имеет. До сборки проверь видимость используемых типов (grep 'internal sealed class X'), добавь <InternalsVisibleTo> в csproj владельцев (Main, Devices, DeviceAgent, TestKit) на новую сборку и от неё — на потребителей internal-хелперов.",
+"boundary": "Если все используемые типы public (Program в Main — public partial).",
+"confidence": 0.8,
+"evidence": "CS0122 'DeviceExecStream is inaccessible'; добавлены IVT Devices→TestKit.Host, Main/DeviceAgent/TestKit→TestKit.Host.",
+"id": "E050"
+},
+{
+"src": "T028",
+"task": "Красные тесты после рефакторинга: отличить регрессию от предсуществующего падения",
+"search_keys": [
+"git worktree add",
+"предсуществующий",
+"pre-existing",
+"Moq callback",
+"defect",
+"baseline"
+],
+"solution": "Прогони тот же filter на чистом HEAD: `git worktree add /tmp/ccs-pre HEAD`, dotnet build csproj, dotnet test --no-build --filter ...; идентичное падение = предсуществующее. Заведи карточку дефекта (tasks_create kind=defect), worktree удали (`git worktree remove`), в шаге не чини.",
+"boundary": "Если нет чистого коммита для сравнения или падение зависит от переноса.",
+"confidence": 0.8,
+"evidence": "6 DeviceWait-тестов упали (Moq callback arity 4 vs 5); в /tmp/ccs-pre12 на HEAD те же 6 — дефект e0a32a3f.",
+"id": "E051"
+},
+{
+"src": "T029",
+"task": "Работа по UI-макету (HTML-макет в docs/mockups): реализация или ревью компонента",
+"search_keys": [
+"макет v2",
+"docs/mockups",
+"постановка расходится с макетом",
+"conveyor()",
+"drawArcs",
+"3 возврата"
+],
+"solution": "Источник правды — исходник макета, а не пересказ в постановке. Прочитай CSS и JS-функции отрисовки (sed -n по строкам, grep conveyor|drawArcs|COL), выпиши формулы (толщины, цвета, смещения) и сверь с постановкой до кода; расхождение — сразу сообщи постановщику.",
+"boundary": "Если макета нет или он помечен устаревшим.",
+"confidence": 0.6,
+"evidence": "Постановка 2.9 говорила «две вертикальные колонки», в макете одна рельса и горизонтальные полосы — три UI-возврата подряд.",
+"id": "E052"
+},
+{
+"src": "T029",
+"task": "Запуск lint:design фронта из инструментов агента",
+"search_keys": [
+"lint:design",
+"mcp__dev__build npm",
+"npm-cli.js not found",
+"eslint.design.config.js",
+"код 127"
+],
+"solution": "mcp__dev__build kind=npm script=lint:design падает (код 127: «npm-cli.js not found next to node /usr/bin/node»). Запусти напрямую Bash-ом: cd frontend && node node_modules/eslint/bin/eslint.js --config eslint.design.config.js <файлы> (или npm run lint:design обычным Bash).",
+"boundary": "Если dev__build npm на стенде исправлен.",
+"confidence": 0.7,
+"evidence": "mcp__dev__build npm lint:design → код 127; затем Bash с node node_modules/eslint/bin/eslint.js --config eslint.design.config.js ...",
+"id": "E053"
+},
+{
+"src": "T030",
+"task": "Дизайн-линт и tsc во фронте при правке компонента и тестов",
+"search_keys": [
+"no-raw-color",
+"#000",
+"TS6133",
+"noUnusedLocals",
+"lint:design",
+"тестовые фикстуры"
+],
+"solution": "no-raw-color ловит сырой hex и в *.test.ts (фикстура color: '#000'): подставляй токен C.* (sed -i \"s/color: '#000'/color: C.warning/g\"). tsc -b с noUnusedLocals ругается TS6133 на неиспользуемый импорт (например RING) — удаляй или реально используй. Гоняй tsc -b и npm run lint:design до коммита.",
+"boundary": "Файлы из исключений для сырого hex (список в eslint.config.js).",
+"confidence": 0.6,
+"evidence": "lint:design: «Сырой цвет #000» в PipelineFlow.test.ts:202; tsc: TS6133 'RING' declared but never read.",
+"id": "E054"
+},
+{
+"src": "T031",
+"task": "Пересчёт тестов по всем тест-проектам решения (эталон из baseline)",
+"search_keys": [
+"Microsoft.NET.Test.Sdk",
+"HandsBridge.Policy.Tests",
+"per-project list-tests",
+"glob проектов",
+"14160"
+],
+"solution": "Список тест-проектов собирай не glob'ом ClaudeHomeServer.*, а find по всем csproj с Microsoft.NET.Test.Sdk (исключая obj/bin): в backend есть HandsBridge.Policy.Tests (1043 теста). Затем per-project --list-tests, конкатенация, sort -u, diff с эталоном. Полный slnx --list-tests даёт 15202/15158 — не используй.",
+"boundary": "Если эталон снят по другому набору проектов.",
+"confidence": 0.8,
+"evidence": "Glob дал 14160 уникальных FQN; diff показал недостающий HandsBridge.Policy.Tests; 26 проектов → 15203 побайтно.",
+"id": "E055"
+},
+{
+"src": "T031",
+"task": "Замена ProjectReference тест-проектов с монолита на общие TestKit-проекты",
+"search_keys": [
+"ProjectReference",
+"TestKit",
+"CS0246",
+"name-grep",
+"вестигиальная ссылка",
+"ImageEditorFakes"
+],
+"solution": "Name-grep не находит всех зависимостей — итеративно собирай backend/ClaudeHomeServer.slnx и читай CS0246: типы Notes/ImageEditor нужны прямой ссылкой, FakeComfy/FakeProjectAccess лежат в TestKit.Host. Namespace ClaudeHomeServer.Tests.Services в тестах — их собственное имя, не импорт: ссылка на монолит у таких проектов вестигиальна. Fakes на Core → TestKit, на вертикаль → TestKit.Host.",
+"boundary": "Если хелперы уже разнесены и список зависимостей известен.",
+"confidence": 0.6,
+"evidence": "Сборка: IImageEditor, FakeComfy, NotesRecallContributor не найдены; Tasks/Memory не используют ни одного ClaudeHomeServer.Tests.* using.",
+"id": "E056"
+},
+{
+"src": "T031",
+"task": "Guard-проверка git grep по csproj (должно быть пусто)",
+"search_keys": [
+"git grep",
+"guard",
+"комментарии csproj",
+"ClaudeHomeServer.Tests.csproj"
+],
+"solution": "git grep -l 'ClaudeHomeServer.Tests.csproj' 'backend/*/*.csproj' ловит и XML-комментарии, а не только ProjectReference. Если в csproj остался пояснительный комментарий с таким литералом — перефразируй (убери «.csproj» из текста), иначе критерий «пусто» не выполнится.",
+"boundary": "Если guard проверяет только теги ProjectReference.",
+"confidence": 0.5,
+"evidence": "После правок guard выдавал TestKit.Host.csproj только из-за комментариев в строках 39 и 49; после перефразирования пусто.",
+"id": "E057"
+},
+{
+"src": "T032",
+"task": "Проверки фронта в свежем git worktree (tsc, lint:design, vitest)",
+"search_keys": [
+"npm ci",
+"node_modules",
+"worktree",
+"TS6133",
+"неиспользуемый параметр",
+"_avg"
+],
+"solution": "В новом worktree нет frontend/node_modules (ls node_modules/.bin/tsc → not found): сначала `cd frontend && npm ci` (укладывается в 300000 мс), затем npx tsc -b, npm run lint:design, npx vitest run src/features/<папка>/. Параметр функции, ставший неиспользуемым, переименуй в _name (иначе TS6133).",
+"boundary": "Основное дерево с уже установленными зависимостями.",
+"confidence": 0.8,
+"evidence": "Нет node_modules в /home/an/Sources/ClaudeCodeServer-panel-tidy/frontend → npm ci; tsc: 'avg is declared but its value is never read' → _avg.",
+"id": "E058"
+},
+{
+"src": "T035",
+"task": "Правка файла в общем основном дереве, пока другие исполнители тоже его меняют",
+"search_keys": [
+"changed on disk",
+"String to replace not found",
+"git show HEAD",
+"параллельные правки",
+"merge"
+],
+"solution": "Файл может меняться под тобой, а HEAD сдвигаться merge'ем. При «String to replace not found» перечитай файл (Read), сделай git status и git diff, а git show HEAD:file | grep -n <маркер>, чтобы понять, что уже закоммичено. Коммить только свои пути (git add <файлы>), чужие незакоммиченные правки отметь в отчёте.",
+"boundary": "Если работа идёт в отдельном worktree.",
+"confidence": 0.7,
+"evidence": "Два Edit подряд: «String to replace not found»; дифф разросся (viewBox, FONT.mono), HEAD оказался с новым merge 8f91bc2cd, уже включавшим часть 2.12.",
+"id": "E059"
+},
+{
+"src": "T035",
+"task": "Тест геометрии стилей React-компонента во фронте без jsdom",
+"search_keys": [
+"getBoundingClientRect",
+"jsdom",
+"parseFloat",
+"NaN",
+"renderToStaticMarkup",
+"style"
+],
+"solution": "В frontend нет jsdom/happy-dom — getBoundingClientRect недоступен. Геометрию проверяй по SSR-разметке: вытащи style нужного тега regexp'ом (match(/top:([^;]+)/)) и приводи значения через parseFloat, а не Number('5px') (даёт NaN, «expected NaN to be ≤ 1»). Для среза тега бери весь открывающий тег, а не кусок из середины.",
+"boundary": "Если в проект добавят jsdom/browser-режим vitest.",
+"confidence": 0.6,
+"evidence": "Проверка package.json: jsdom нет; тест Stages_РельсаНепрерывна упал «expected NaN to be less than or equal to 1»; фикс — parseFloat.",
+"id": "E060"
+},
+{
+"src": "T036",
+"task": "Запуск Claude CLI с --plugin-dir внутри песочницы-контейнера (cc-sandbox) для проверки поведения плагинов",
+"search_keys": [
+"cc-sandbox",
+"docker exec claude",
+"plugin-dir container",
+"claude-host versions",
+"ANTHROPIC_API_KEY local-no-auth"
+],
+"solution": "Каталог плагина кладите в хостовую папку, смонтированную как /projects (напр. /tmp/vera-lora-qa/sandbox-fake/<plugin>) и указывайте --plugin-dir /projects/<plugin>. Бинарь: /opt/claude-host/versions/2.1.301 — это ФАЙЛ, путь .../2.1.301/bin/claude даёт OCI 'not a directory'. Ключ: docker exec -e ANTHROPIC_API_KEY=local-no-auth cc-sandbox <бинарь> --plugin-dir ... --print ...",
+"boundary": "Контейнер без сети/DNS до api.anthropic.com не ответит модели; проверка только регистрации плагина.",
+"confidence": 0.55,
+"evidence": "'stat /opt/claude-host/versions/2.1.301/bin/claude: not a directory'; затем рабочий вызов с -e ANTHROPIC_API_KEY=local-no-auth; curl api.anthropic.com из контейнера проверяли (сеть/DNS проблемы).",
+"id": "E061"
+},
+{
+"src": "T036",
+"task": "Запись большого файла (отчёт/документ 30+ КБ с кодом и кавычками) через Write или Bash heredoc",
+"search_keys": [
+"InputValidationError",
+"could not be parsed as JSON",
+"Write большой файл",
+"python3 textwrap.dedent",
+"ENDOFFILE heredoc"
+],
+"solution": "Если Write/Bash с ~30 КБ контента падает с 'called with input that could not be parsed as JSON' (и heredoc тоже) — не повторяйте тот же вызов. Пишите короче/по частям или собирайте файл через python3 -c с textwrap.dedent и тройными кавычками, сократив содержимое отчёта.",
+"boundary": "Не для маленьких файлов; ошибка парсинга JSON может быть и от обрыва ответа прокси — тогда просто повторить ход.",
+"confidence": 0.5,
+"evidence": "Write (34560 байт) и Bash heredoc (32033 байт) оба: InputValidationError ... could not be parsed as JSON; третья попытка через python3 -c textwrap.dedent прошла.",
+"id": "E062"
+},
+{
+"src": "T037",
+"task": "Запуск vitest фронта через mcp__tests__run_tests с указанием файлов",
+"search_keys": [
+"run_tests vitest",
+"files не найден",
+"frontend/src путь",
+"mcp tests vitest",
+"относительно корня проекта"
+],
+"solution": "В mcp__tests__run_tests для vitest пути в files указывать от КОРНЯ проекта с префиксом frontend/: ['frontend/src/components/.../X.test.ts'] при target:'frontend'. Путь 'src/...' даёт ошибку 'Путь ... не найден'. Фильтр по имени теста — параметр filter.",
+"boundary": "Если запускаете через Bash npx vitest run из каталога frontend, пути уже относительные к frontend.",
+"confidence": 0.85,
+"evidence": "'Путь «src/components/chat/feature/PipelineFlow.test.ts» в files не найден (пути — относительно корня проекта, например frontend/src/lib/x.test.ts)' — дважды, потом с frontend/ ок.",
+"id": "E063"
+},
+{
+"src": "T038",
+"task": "Тесты SVG-оверлея PipelineFlow (viewBox, font-токены, геометрия дуг) через renderToStaticMarkup",
+"search_keys": [
+"PipelineFlow",
+"ArcsOverlay SSR",
+"renderToStaticMarkup",
+"viewBox тест",
+"ARCS_W",
+"vitest chai every"
+],
+"solution": "ArcsOverlay в SSR (renderToStaticMarkup) возвращает null — нет измеренных координат, поэтому viewBox/font в разметке не проверить. Тестируйте экспортированные константы/токены напрямую (экспортируйте ARCS_W, импортируйте FONT) и ловите мутацией. В chai нет .every: используйте Array.every(...) + toBe(true); для строк Number.isFinite(Number(p)).",
+"boundary": "Когда оверлей реально монтируется с замером (jsdom/браузер) — проверять разметку напрямую.",
+"confidence": 0.65,
+"evidence": "'ArcsOverlay (viewBox + FONT.mono) в SSR возвращает null'; ошибки 'Invalid Chai property: every' и 'Number.isFinite' не приводит строку; мутация ARCS_W='46' ловится.",
+"id": "E064"
+},
+{
+"src": "T039",
+"task": "Guard-тест (архитектурный сторож) на ссылки между csproj/slnx в ClaudeHomeServer.Tests",
+"search_keys": [
+"guard тест csproj",
+"ProjectReference XDocument",
+"InternalsVisibleTo ложное срабатывание",
+"slnx guard",
+"CorePackageReferenceGuardTests"
+],
+"solution": "Парсить csproj/slnx через XDocument.Load и фильтровать по Name.LocalName (Reference/ProjectReference/Project), НЕ File.ReadAllText().Contains: 'ClaudeHomeServer.Tests' сидит в ~50 csproj как InternalsVisibleTo и в комментариях. Образец: Tests/Services/CorePackageReferenceGuardTests.cs. Проверять мутацией + git checkout и комментарием с литералом (должен остаться зелёным).",
+"boundary": "Не нужно для проверок, где допустим текстовый поиск (например, имена файлов).",
+"confidence": 0.75,
+"evidence": "Grep показал 'ClaudeHomeServer.Tests' в ~50 csproj, но ссылки нет; guard 1 остался зелёным при комментарии с литералом 'ClaudeHomeServer.Tests.csproj'.",
+"id": "E065"
+},
+{
+"src": "T040",
+"task": "Запуск tsc/vitest/lint:design во фронте в свежем git worktree без node_modules",
+"search_keys": [
+"node_modules worktree",
+"symlink node_modules",
+"npx vitest run",
+"run_tests симлинк",
+"dev__build npm нет node_modules"
+],
+"solution": "В новом worktree нет node_modules (mcp__dev__build npm откажет). Если package.json/lock идентичны основному чекауту — ln -s <main>/frontend/node_modules ./node_modules, затем npx tsc -b, npm run lint:design, npx vitest run src/<папка> из frontend/ напрямую. mcp__tests__run_tests с симлинком не работает ('ведёт символической ссылкой за пределы проекта').",
+"boundary": "Если package-lock отличается — делать npm ci в worktree. Симлинк не коммитить.",
+"confidence": 0.8,
+"evidence": "'Ни в «frontend», ни выше до корня проекта нет node_modules'; затем run_tests: 'vitest.mjs ведёт символической ссылкой за пределы проекта'; npx vitest run после симлинка дал 347/347.",
+"id": "E066"
+},
+{
+"src": "T041",
+"task": "Тест через TestServer (UseTestServer / WebApplication) для контроллера в ClaudeHomeServer.Tests",
+"search_keys": [
+"UseTestServer",
+"CS0246 WebApplication",
+"TestServer тест контроллера",
+"OcrGatewayEndpointTests",
+"PluginsRouteTests"
+],
+"solution": "Не гадайте usings: при CS0246 'WebApplication' и CS1061 'UseTestServer' возьмите usings и способ подъёма хоста из backend/ClaudeHomeServer.Tests/Services/Gateway/OcrGatewayEndpointTests.cs (grep -rln UseTestServer backend/ClaudeHomeServer.Tests). Контроллеры плагинов подцепляются ApplicationPart из Main, поэтому тестовый хост регистрирует их вручную.",
+"boundary": "Для юнит-тестов контроллера напрямую (new Controller(...)) TestServer не нужен.",
+"confidence": 0.5,
+"evidence": "Сборка упала: 'WebApplication could not be found', затем 'ConfigureWebHostBuilder does not contain UseTestServer'; после grep usings в OcrGatewayEndpointTests сборка зелёная.",
+"id": "E067"
+},
+{
+"src": "T041",
+"task": "Мутационная проверка теста белого списка/валидации входа (источник установки, пути) в .NET-тестах",
+"search_keys": [
+"мутация тест не краснеет",
+"whitelist источник установки",
+"ParseSource",
+"Install_ПроизвольныйПуть",
+"mutation testing"
+],
+"solution": "Чтобы мутация 'убрать проверку' краснила тест, фикстура должна быть ВАЛИДНОЙ во всём остальном: положите полноценный пакет по произвольному пути. Иначе запрос падает по другой причине (400 по манифесту), и тест зелёный даже без проверки. Также проверьте, что мутируемая строка не закомментирована и реально на пути вызова.",
+"boundary": "Не применимо, если проверяется чистая функция без побочных путей отказа.",
+"confidence": 0.6,
+"evidence": "'Мутация 3 не сработала для контроллера (строка \"path\" => param закомментирована)'; затем 'realDir пустой → 400 по манифесту, не по whitelist' — тест переписан с полным пакетом.",
+"id": "E068"
+},
+{
+"src": "T042",
+"task": "Проверка регрессии после рефакторинга тестовых проектов: сравнение с baseline-коммитом и подсчёт числа тестов",
+"search_keys": [
+"git worktree add baseline",
+"list-tests подсчёт",
+"15206 тестов",
+"Internal CLR error 0x80131506",
+"сверка числа тестов"
+],
+"solution": "Регрессию подтверждать в отдельном worktree: git worktree add ../X <sha>, dotnet build slnx, тот же --filter. Первый build может упасть 'Internal CLR error (0x80131506)' — повторить. Эталонный счёт тестов: dotnet test slnx --no-build --list-tests | grep -E '^[[:space:]]' | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u | wc -l; grep -c по проектам завышает (15216 вместо 15206).",
+"boundary": "Полный прогон монолита ~5 минут; для точечных регрессий достаточно фильтра по классу.",
+"confidence": 0.6,
+"evidence": "Baseline-worktree: первая сборка 'Fatal error. Internal CLR error (0x80131506)', повтор прошёл; '15206' по sort -u против 15216 у grep -c в T045.",
+"id": "E069"
+},
+{
+"src": "T043",
+"task": "Повторный прогон dotnet-тестов после отката мутации через mcp__tests__run_tests",
+"search_keys": [
+"no_build true устаревшая сборка",
+"run_tests no_build",
+"откат мутации",
+"ложные падения после revert"
+],
+"solution": "После отката мутации не запускайте run_tests с no_build:true — берётся старая сборка с мутацией и тесты красные. Сначала пересоберите (mcp__dev__build) или запускайте run_tests без no_build. no_build:true годится только для серии прогонов без правок кода между ними.",
+"boundary": "Когда код не менялся с последней сборки — no_build безопасен и ускоряет.",
+"confidence": 0.8,
+"evidence": "Финальный прогон с no_build:true: FAILED 11 (мутация ещё в сборке); 'no_build взял устаревшую сборку' — пересборка дала 57/57 зелёные.",
+"id": "E070"
+},
+{
+"src": "T043",
+"task": "Написание C#-тестов с JSON в интерполированных raw-строках; перенос типа в другой namespace",
+"search_keys": [
+"CS9007 raw string",
+"interpolated raw string $\"\"\"",
+"CS0234 namespace Models.Plugins",
+"перенос типа namespace тесты"
+],
+"solution": "JSON с '}}' в $\"\"\"...\"\"\" даёт CS9007 — используйте $$\"\"\" или обычную конкатенацию. После переноса публичного типа в другой namespace (Models.Plugins → Services.Plugins) сразу grep 'using ClaudeHomeServer.Models.Plugins' по тестам (CS0234) и проверьте SubsystemBoundaryTests: сторож сканирует только Services-namespace подсистем.",
+"boundary": "Только для C# 11+ raw string literals.",
+"confidence": 0.55,
+"evidence": "'error CS9007: interpolated raw string literal does not start with enough $ characters'; 'CS0234 ... Plugins does not exist in namespace ClaudeHomeServer.Models' в PluginPackageValidatorTests.",
+"id": "E071"
+},
+{
+"src": "T044",
+"task": "Удаление секций/компонентов из React-файла фронта (JSX, helper-функции) с проверкой tsc -b",
+"search_keys": [
+"noUnusedLocals",
+"tsconfig.app.json",
+"tsc -b мёртвый код",
+"удаление секции FeatureRunView",
+"неиспользуемые импорты"
+],
+"solution": "В frontend/tsconfig.app.json включены noUnusedLocals/noUnusedParameters: при удалении секций нужно вычистить ставшие мёртвыми локальные функции, типы и импорты (FeatureTask и т.п.), иначе npx tsc -b упадёт. Проверка: grep по имени в файле после правки, затем npx tsc -b и npm run lint:design.",
+"boundary": "Не касается экспортируемых функций/модулей — их tsc не считает неиспользуемыми.",
+"confidence": 0.65,
+"evidence": "'noUnusedLocals/noUnusedParameters включены — значит мёртвый код придётся чистить'; после правок grep нашёл FeatureTask только в импорте и он удалён; tsc -b чистый.",
+"id": "E072"
+},
+{
+"src": "T046",
+"task": "Поиск мёртвых (осиротевших) модулей фронта после удаления потребителей компонента",
+"search_keys": [
+"сирота модуль",
+"orphan Rounds.tsx",
+"dead code экспорт",
+"grep импортов",
+"lint:design не замечает"
+],
+"solution": "tsc -b (noUnused*) и lint:design НЕ ловят целиком неиспользуемые экспортированные файлы. После удаления потребителя grep -rn \"from './Имя'\" frontend/src и по экспортам (RING, roundVerdictLabel) — если потребителей нет, файл мёртв; также проверяйте комментарии, ссылающиеся на него (они могут врать, напр. что PipelineFlow берёт stroke из RING — на деле SOURCE_TINT).",
+"boundary": "Файлы, подключаемые динамически или по строковому пути, grep по import может не найти.",
+"confidence": 0.6,
+"evidence": "grep на './Rounds', RING, roundVerdictLabel по frontend/src — ни одного потребителя; tsc -b зелёный при orphan-файле на 84 строки.",
+"id": "E073"
+},
+{
+"src": "T045",
+"task": "Падение e2e-тестов со SidecarHost: 'Call UseKestrelHttpsConfiguration() on IWebHostBuilder' (HttpsConfigurationService.EnsureInitialized)",
+"search_keys": [
+"UseKestrelHttpsConfiguration",
+"SidecarHost",
+"CreateSlimBuilder",
+"ASPNETCORE_ENVIRONMENT Production",
+"appsettings.Production.json Kestrel",
+"RemoteProcessRunnerDeviceAgentE2ETests"
+],
+"solution": "Причина: slim builder (DeviceAgent/Sidecar/SidecarHost.cs) берёт environment из ASPNETCORE_ENVIRONMENT; при Production грузится appsettings.Production.json с Kestrel:Endpoints:Https, а slim не вызывает UseKestrelHttpsConfiguration. Проверка: ASPNETCORE_ENVIRONMENT=Testing dotnet test. Фикс: CreateSlimBuilder(new WebApplicationOptions{EnvironmentName=\"Testing\"}).",
+"boundary": "Для full builder (CreateBuilder в Program.cs) HTTPS-конфиг вызывается явно, проблемы нет.",
+"confidence": 0.8,
+"evidence": "Тест с ASPNETCORE_ENVIRONMENT=Testing: 0/9→9/9; CS1929 на builder.UseEnvironment; 'NotSupportedException: The environment changed from Production'; фикс через WebApplicationOptions дал 9 passed.",
+"id": "E074"
+},
+{
+"src": "T047",
+"task": "Добавление нового файла секретов в бэкап/реестр секретных файлов проекта (ClaudeHomeServer)",
+"search_keys": [
+"InstanceSecretFiles",
+"BackupPaths.SecretFileNames",
+"plugin-secrets.json",
+"BackupRoundTripTests",
+"McpSecretStore"
+],
+"solution": "Путь в постановке (Configuration/BackupPaths.cs) неверный: BackupPaths — backend/ClaudeHomeServer/Services/Backup/BackupPaths.cs; список секретных файлов — Core/Services/InstanceSecretFiles.cs (Names), имя файла добавлять туда. Тест утечки секретов в архив — Tests/Services/BackupRoundTripTests.cs (не Tests/Backup/); образец стора — Core/Services/Mcp/McpSecretStore.cs.",
+"boundary": "Только для секретных файлов уровня инстанса, не для per-project конфигов.",
+"confidence": 0.6,
+"evidence": "'File does not exist' для Configuration/BackupPaths.cs; найден Services/Backup/BackupPaths.cs; правка InstanceSecretFiles → BackupPaths.SecretFileNames; BackupRoundTripTests лежит в Services/.",
+"id": "E075"
+},
+{
+"src": "T047",
+"task": "Добавление обязательной зависимости в конструктор PluginUninstall/PluginsController или ужесточение PluginDirSource",
+"search_keys": [
+"PluginSecretsStore DI",
+"Unable to resolve service",
+"PluginsRouteTests",
+"конструктор PluginUninstall",
+"Directory.Exists PluginDirSource"
+],
+"solution": "После новой зависимости в конструкторе (PluginSecretsStore) правьте все тестовые хосты Plugins: PluginUninstallTests, PluginsControllerTests, PluginsRouteTests (там ручной DI — иначе 'Unable to resolve service'). После добавления Directory.Exists в PluginDirSource тесты GetPluginDirs_* в PluginStoreTests должны создавать каталог пакета на диске. Прогон: filter 'FullyQualifiedName~Tests.Plugins.'.",
+"boundary": "Если зависимость опциональна (default null) тесты менять не нужно.",
+"confidence": 0.45,
+"evidence": "CS7036 'no argument for parameter cascade'; 'Unable to resolve service for type PluginSecretsStore' в PluginsRouteTests; GetPluginDirs_* упали из-за Directory.Exists.",
+"id": "E076"
+},
+{
+"src": "T048",
+"task": "Архитектурный разбор/планирование доработок guard-ов (loop/junk) thinking-strip-proxy: что делает прокси при сработке",
+"search_keys": [
+"_после_петли",
+"_после_мусора",
+"loop_guard",
+"message_stop",
+"thinking-strip-proxy",
+"LOOP_RETRY"
+],
+"solution": "Не верь описанию поведения прокси в постановке — сверяй с proxy.py (~стр. 2490–2570). Обе ветки (_после_петли/_после_мусора) НЕ рвут SSE: после пометки отдают штатный end_turn + message_stop, CLI видит обычный finished. Retry есть только у loop (LOOP_RETRY=on), у junk его нет. Карточка в чат: BACKEND_EVENTS_URL, LlmProxyEventsController.KnownKinds (junk там не было).",
+"boundary": "Не применимо к изменениям вне tools/thinking-strip-proxy и событиям guard-ов.",
+"confidence": 0.55,
+"evidence": "Итог: «Ключевая поправка к постановке: прокси SSE не рвёт — обе ветки уже отдают штатный message_stop после пометки»; проверено grep/sed по proxy.py и LlmProxyEventsController.cs.",
+"id": "E077"
+},
+{
+"src": "T049",
+"task": "Воспроизвести/переиграть дамп запроса, на котором сработал guard прокси (junk/loop), напрямую против vLLM",
+"search_keys": [
+"GUARD_DUMP_DIR",
+"dump_guard",
+"переигрыш дампа",
+"thinking_delta",
+"meta.json",
+"vLLM :18020"
+],
+"solution": "Дампы: /var/lib/thinking-strip-proxy/guard/<HHMMSS>-<seq>-<sess8>.req.json.gz (zcat) + .meta.json. Слать на vLLM :18020/v1/messages напрямую, не через прокси :18021. При малом max_tokens всё уходит в thinking_delta: в разборе SSE собирай thinking_delta + text_delta, иначе ответ пустой. Мусор стохастичен, на холодном реплее не воспроизводится: нужно ≥3 прогонов.",
+"boundary": "Не для замеров через прокси и не для дампов без thinking.",
+"confidence": 0.8,
+"evidence": "Реплей дал 3×200 с chars=0; raw SSE: 375 thinking_delta и ни одного text_delta; сэмпл 6 реплеев — цепочка 40× backtick не воспроизвелась ни с солью, ни без.",
+"id": "E078"
+},
+{
+"src": "T049",
+"task": "Проверка prefix-cache/cache_salt на vLLM через /v1/messages (Anthropic-совместимый эндпоинт)",
+"search_keys": [
+"cache_salt",
+"prefix cache",
+"cache_read_input_tokens",
+"vLLM /v1/messages",
+"salt probe"
+],
+"solution": "vLLM :18020/v1/messages принимает поле cache_salt в корне тела (200). Та же соль (или без соли) → повторный запрос получает cache_read (в замере 1792), другая соль → cache_read=0 (miss). Для замера: stream:false, фиксированный префикс ~1500+ токенов, меняй только cache_salt, смотри usage.cache_read_input_tokens/cache_creation_input_tokens.",
+"boundary": "Факт для стенда hyperqwen/vLLM текущей версии; не гарантирует, что соль лечит вырождение вывода.",
+"confidence": 0.75,
+"evidence": "Таблица замера: без соли 0→1792, salt=A 0→1792 на повторе, salt=B miss; все status 200.",
+"id": "E079"
+},
+{
+"src": "T050",
+"task": "Фронтовые vitest-тесты интерактива React-компонента (клик, aria-expanded) в проекте без jsdom",
+"search_keys": [
+"fakeDom",
+"installFakeDom",
+"reactProps",
+"findNodeByAttr",
+"act",
+"vitest node environment"
+],
+"solution": "jsdom нет: интерактив тестируют через fake-DOM — components/chat/__tests__/fakeDom.ts (installFakeDom в beforeAll/afterAll на уровне describe; findNodeByAttr; reactProps(node).onClick() в act). Эталон — ContinueHintBehavior.test.ts. SSR — renderToStaticMarkup. Контейнер ищи по атрибуту id, не подстрокой (совпадёт с aria-controls). Время в ассертах — regex /\\d{2}:\\d{2}/ (getHours зависит от TZ).",
+"boundary": "Только frontend vitest; для визуальной проверки (поворот шеврона, CSS) не подходит.",
+"confidence": 0.7,
+"evidence": "Два падения: getHours зависит от TZ; stage-details-review совпал с aria-controls. beforeAll/afterAll пришлось вынести из it на уровень describe.",
+"id": "E080"
+},
+{
+"src": "T051",
+"task": "Живой UI-тест фронта на dev-стенде через Playwright (логин, deep-link, чат)",
+"search_keys": [
+"playwright-core",
+"channel chrome",
+"localStorage token",
+"LoginPage",
+"button type submit",
+"dev stand"
+],
+"solution": "Playwright: mkdir /tmp/vera-qa && npm i playwright-core; chromium.launch({channel:'chrome',headless:true}) (/usr/bin/google-chrome). «Войти» НЕ button[type=submit] — ищи по тексту. Токен пишется в localStorage только при чекбоксе «Запомнить», иначе deep-link даёт 401. Токен для REST: POST /api/auth/login (admin/12345). Проект создаётся только с существующей папкой.",
+"boundary": "Dev-стенд с учёткой admin/12345; не для прод-стенда.",
+"confidence": 0.7,
+"evidence": "step6: Timeout waiting for locator('button[type=\"submit\"]'); TOKEN_LOCAL: null до клика по remember; create project: «Папка не найдена: /tmp/qa-feature».",
+"id": "E081"
+},
+{
+"src": "T051",
+"task": "Запуск dev-стенда (mcp__dev__start_stand) из git worktree для ручного/QA-прогона",
+"search_keys": [
+"mcp__dev__start_stand",
+"EnterWorktree",
+"worktree isolated",
+"dev-стенд",
+"target относительно корня"
+],
+"solution": "start_stand/run_tests принимают target ОТНОСИТЕЛЬНО корня проекта (backend/ClaudeHomeServer/ClaudeHomeServer.csproj), абсолютный путь отвергается. Чтобы cwd был в нужном worktree, сначала EnterWorktree(path). В worktree-изолированной сессии сложные bash-команды (длинные heredoc с cd) отвергаются как «too complex» — разбивай на простые отдельные команды, скрипты кладя файлами через Write.",
+"boundary": "Только сессии с worktree-изоляцией и mcp__dev__*.",
+"confidence": 0.65,
+"evidence": "«target — путь ОТНОСИТЕЛЬНО корня проекта… не абсолютный»; затем EnterWorktree и успех; «too complex to verify that it stays inside the worktree. Refusing to run it».",
+"id": "E082"
+},
+{
+"src": "T051",
+"task": "UI-приёмка фичи, требующей живого хода агента (TurnPlanPill, режим «Исполнение фичи»)",
+"search_keys": [
+"TurnPlanPill",
+"OAuth CLI token",
+"ход не стартует",
+"блокер стенда",
+"feature mode",
+"QA"
+],
+"solution": "Карточка фичи/TurnPlanPill рендерится только при активном ходе. Перед длинным прогоном проверь, стартует ли ход на стенде (отправь «Привет» по API; статус сессии error = CLI/OAuth-токен протух). Если нет — сразу репорт блокера (chats_report_up blocker), а не 20+ playwright-шагов; серверную часть проверяй REST: GET /api/tasks/features?sessionId=…, PUT /api/feature-flags/turn-plan-feature-mode.",
+"boundary": "Если у стенда живой токен CLI — ход стартует и проверка избыточна.",
+"confidence": 0.6,
+"evidence": "После ~26 playwright-шагов: «блокер (OAuth), пилюля не показывается без активного хода»; status: error после «Привет, проверка конвейера»; 16 из 20 точек NA.",
+"id": "E083"
+},
+{
+"src": "T052",
+"task": "Снять диагностический снимок thinking-strip-proxy (журнал, счётчики, дампы guard, состояние vLLM)",
+"search_keys": [
+"journalctl thinking-strip-proxy",
+"/__proxy/stats",
+"loops_detected",
+"junk_aborts",
+"loop_guard_errors",
+"guard dump"
+],
+"solution": "Юнит thinking-strip-proxy.service: journalctl -u thinking-strip-proxy --since '1 hour ago' --no-pager > файл. Счётчики: curl -s http://127.0.0.1:18021/__proxy/stats (loops_detected, junk_aborts, loop_guard_errors, events_failed). Дампы: /var/lib/thinking-strip-proxy/guard/. vLLM: curl :18020/health. «предохранитель петли выключен ... ConnectionResetError» — это loop_guard_errors, не петля.",
+"boundary": "Только стенд на хосте ai; не гонять новые запросы — исказят счётчики.",
+"confidence": 0.7,
+"evidence": "Снимок: 9 строк журнала, stats JSON, 3 дампа сессии cfd1b895; в журнале ConnectionResetError записан как «предохранитель петли выключен».",
+"id": "E084"
+},
+{
+"src": "T053",
+"task": "Запуск Python-тестов tools/thinking-strip-proxy/test_proxy.py (unittest) при правках proxy.py",
+"search_keys": [
+"test_proxy.py",
+"python3 -m unittest",
+"run_tests dotnet",
+"thinking-strip-proxy тесты",
+"ModuleNotFoundError test_proxy"
+],
+"solution": "test_proxy.py — чистый unittest, run_tests kind dotnet не работает (MSB1003). Запуск: cd tools/thinking-strip-proxy && python3 -m unittest -v test_proxy.<Класс>.<тест> (из корня репо — ModuleNotFoundError). Весь файл: python3 -m unittest discover -s . -p test_proxy.py (~70 с, 218 тестов). Классы: РелеПотокаTests (юниты), ПетляСквознаяTests, МусорСквознойTests (сквозные).",
+"boundary": "Только Python-часть прокси; бэкенд-тесты идут через run_tests/dotnet.",
+"confidence": 0.8,
+"evidence": "run_tests dotnet: «MSB1003 Specify a project»; unittest из корня: «No module named 'test_proxy'»; полный прогон «Ran 218 tests in 72.6s».",
+"id": "E085"
+},
+{
+"src": "T053",
+"task": "Падает флейковый тест в proxy-тестах (assertion «оборваны» / первая генерация остановлена обрывом): отличить регрессию от гонки",
+"search_keys": [
+"флейк",
+"test_петля_в_тексте_перехвачена_и_повтор_приклеен",
+"оборваны",
+"гонка",
+"master vs ветка"
+],
+"solution": "ПетляСквознаяTests.test_петля_в_тексте_перехвачена_и_повтор_приклеен (assertEqual(оборваны, [1])) — гонка по времени, падает и на master (≈4/10). Не лечи в чужой задаче: прогони тест 10 раз в цикле на своей ветке и на основной копии репо (git worktree add ... master невозможен — master занят: запускай из /home/an/Sources/ClaudeCodeServer/tools/thinking-strip-proxy) и сравни частоту; заведи дефект.",
+"boundary": "Если тест падает 10/10 на ветке и 0/10 на master — это регрессия.",
+"confidence": 0.8,
+"evidence": "На ветке сначала 3/3 падений, затем 10 прогонов: ветка 1/10, master 4/10; git worktree add master → «'master' is already used by worktree».",
+"id": "E086"
+},
+{
+"src": "T057",
+"task": "Рефакторинг guard-логики в proxy.py (loop/junk) с проверкой «поведение не изменилось»",
+"search_keys": [
+"_после_срыва",
+"retry_body",
+"ДетекторМусораTests",
+"мутация параметра",
+"py_compile"
+],
+"solution": "Быстрый регресс (~31 тест): python3 -m unittest test_proxy.РелеПотокаTests test_proxy.ПетляСквознаяTests test_proxy.МусорСквознойTests test_proxy.ДетекторМусораTests + python3 -m py_compile proxy.py. Сначала зафиксируй базу: тесты на «оборваны» флейкуют, прогони 3 раза. Мутация сдвиг=False красит тест петли ((0.7,1.0) вместо (0.8,1.5)).",
+"boundary": "Только Python-прокси; сдвиг сэмплинга и cache_salt в retry_body — по текущей версии.",
+"confidence": 0.65,
+"evidence": "База: 24/26 зелёные, 2 флейка «оборваны» (прогон 1 OK, 2 FAILED); после правки 31/31; мутация дала «(0.7, 1.0) != (0.8, 1.5)».",
+"id": "E087"
+},
+{
+"src": "T054",
+"task": "Падают e2e-тесты Sidecar/DeviceAgent (RemoteProcessRunnerDeviceAgentE2ETests) из-за подхвата чужого appsettings",
+"search_keys": [
+"SidecarHost",
+"CreateSlimBuilder",
+"EnvironmentName Testing",
+"appsettings.Production.json",
+"Kestrel Https сертификат",
+"RemoteProcessRunnerDeviceAgentE2ETests"
+],
+"solution": "Причина красных 9 e2e: CreateSlimBuilder() в SidecarHost подхватывает appsettings.Production.json из bin главного сервера (Kestrel:Endpoints:Https с продовым сертификатом). Фикс: CreateSlimBuilder(new WebApplicationOptions { EnvironmentName = \"Testing\" }); в appsettings.Testing.json нет Kestrel. Проверка: run_tests filter FullyQualifiedName~RemoteProcessRunnerDeviceAgentE2ETests → 9/9.",
+"boundary": "Только когда падение связано с конфигом Kestrel/окружением; другие причины e2e не покрывает.",
+"confidence": 0.6,
+"evidence": "Ревью: appsettings.Production.json содержит Kestrel:Endpoints:Https (C:\\certs\\naychenko) — «это и есть источник падения»; после правки 9/9 зелёные за 36 с.",
+"id": "E088"
+},
+{
+"src": "T054",
+"task": "Прогон полного монолита ClaudeHomeServer.Tests (≈10k тестов) и разбор падений: что считать предсуществующим",
+"search_keys": [
+"ClaudeHomeServer.Tests полный прогон",
+"run_tests filter !~",
+"DeviceWaitTestHost",
+"Moq Invalid callback",
+"предсуществующие падения"
+],
+"solution": "Монолит идёт ~5 мин: дроби фильтром FullyQualifiedName~ClaudeHomeServer.Tests&FullyQualifiedName!~RemoteProcessRunnerDeviceAgentE2ETests. Предсуществующие падения (~11): DeviceWait-тесты TaskExecutionService/PersonaAutomationService (Moq Invalid callback, TestKit.Host/DeviceWaitTestHost.cs:128), KeepMcpToolsConfigTests, ChatContextContractsTests, PromptBenchTests.",
+"boundary": "Список актуален на дату ревью (2026-10-17); после починки StubProcess изменится.",
+"confidence": 0.6,
+"evidence": "FAILED 11, passed 9804, skipped 31 из 9846 за 5:11; причина 6 падений — Moq Invalid callback в DeviceWaitTestHost.StubProcess.",
+"id": "E089"
+},
+{
+"src": "T056",
+"task": "React: компоненту нужен «ключ» как данные (key={...} в списке/строке), а внутри он оказывается undefined",
+"search_keys": [
+"React key prop",
+"key не попадает в props",
+"stageKey",
+"StageDetails",
+"undefined props"
+],
+"solution": "`key` — служебный проп React, в props компонента НЕ попадает: <StageDetails key={s.key}> даёт внутри key === undefined, условие вида key !== 'prod' молча рендерит null. Передавай значение отдельным пропом (stageKey={s.key}). Симптом: aria-expanded=true, а блока деталей в SSR-разметке нет, TypeScript молчит.",
+"boundary": "Если ключ нужен только для реконсиляции, а не как данные — не требуется.",
+"confidence": 0.9,
+"evidence": "5 падений vitest: деталей нет при aria-expanded=true; нашёл: «key — спец-проп React, в props не попадает… переименовываю в stageKey» → 50/50 зелёные.",
+"id": "E090"
+},
+{
+"src": "T056",
+"task": "Фронт: показать имя персоны вместо GUID в компоненте и покрыть vitest-ом",
+"search_keys": [
+"getPersonaById",
+"lib/personas.ts",
+"vi.mock personas",
+"vi.hoisted",
+"personaName",
+"GUID вместо имени"
+],
+"solution": "Резолв имени персоны на фронте: getPersonaById из frontend/src/lib/personas.ts (модульный стор, паттерн useSyncExternalStore); fallback при отсутствии — на имя статуса, не на id. В vitest подменяй через vi.mock('../../../lib/personas') с картой из vi.hoisted (vi.mock поднимается выше импортов). Мутация «who = personaId» должна красить тест.",
+"boundary": "Если нужны данные, которых нет в сторе персон (например чужой проект) — требуется запрос.",
+"confidence": 0.55,
+"evidence": "Поиск: lib/personas.ts со стором, getPersonaById; тест Step_Who_ОтображаетИмяПерсоны + мутация показала fake-id вместо «Кирилл».",
+"id": "E091"
+},
+{
+"src": "T056",
+"task": "Отладка падающих vitest-тестов SSR-разметки, когда ассерт обрезает HTML, а console.log не виден",
+"search_keys": [
+"vitest console.log проглочен",
+"renderToStaticMarkup отладка",
+"writeFileSync dbg",
+"mcp__tests__run_tests files путь"
+],
+"solution": "vitest через run_tests глотает console.log, а AssertionError обрезает разметку. Временный _dbg.test.ts рядом с компонентом: renderToStaticMarkup(...) → writeFileSync('/tmp/dbg_full.html', html), затем grep -o по файлу (aria-expanded, id=...). Удали _dbg.test.ts перед коммитом. В run_tests files пути — от корня проекта (frontend/src/...), без префикса frontend получишь «Путь не найден».",
+"boundary": "Только vitest-прогон через mcp__tests__run_tests.",
+"confidence": 0.65,
+"evidence": "«console.log глотается vitest. Пишу результат в файл»; ошибка «Путь src/components/... в files не найден (пути — относительно корня проекта)».",
+"id": "E092"
+},
+{
+"src": "T058",
+"task": "Отвязать модульный *.Tests проект от ссылки на Main (ClaudeHomeServer.csproj) в backend/*.Tests",
+"search_keys": [
+"ProjectReference Main",
+"TestKit.Host",
+"TestKit",
+"TestWebApplicationFactory",
+"FakeHostEnvironment",
+"отвязка тестов от монолита"
+],
+"solution": "TestKit.Host сам ссылается на Main: у Knowledge/Spend/Dossiers.Tests прямую ссылку на Main можно убрать (TestWebApplicationFactory, FakeFeatureFlagGate в TestKit.Host). Memory.Tests — без Main. Notes/Tasks/Turn.Tests конструируют типы Main (ProjectManager, UserStore, PersonaManager, Controllers) — Main нужен. Метод: убрать у всех, собрать slnx (mcp__dev__build), вернуть Main упавшим.",
+"boundary": "Состояние на 2026-10-17; новые тесты могут снова потребовать Main.",
+"confidence": 0.65,
+"evidence": "Сборка без ссылок: упали только Notes, Tasks, Turn (CS0234 'Controllers'); после возврата Main — 78/78.",
+"id": "E093"
+},
+{
+"src": "T058",
+"task": "Сверка числа тестов (dotnet test --list-tests) с baseline 15203/15216 после изменений csproj",
+"search_keys": [
+"--list-tests",
+"baseline тестов",
+"15216",
+"нестабильный подсчёт",
+"tests-by-module-baseline"
+],
+"solution": "dotnet test backend/ClaudeHomeServer.slnx --no-build --list-tests НЕСТАБИЛЕН (14077–15206 между запусками: data-driven, склейки FQN в строке) — не подгоняй под 15216. Доказательство «набор не изменился»: git diff --stat только .csproj, без .cs; методология — docs/research/tests-by-module-baseline-*.md, максимум из нескольких запусков.",
+"boundary": "Если менялись .cs тесты, нужен полноценный diff имён против baseline.",
+"confidence": 0.65,
+"evidence": "Три запуска: 15177/15194/14077; пять запусков, максимум 15201; «Удалено 454» оказалось артефактом склеек в сыром выводе.",
+"id": "E094"
+},
+{
+"src": "T058",
+"task": "Работа в worktree *-tests-by-module по путям из постановки задачи",
+"search_keys": [
+"worktree путь",
+"ClaudeCodeServer-tests-by-module",
+"File does not exist",
+"путь в постановке неверный"
+],
+"solution": "Путь в постановке может быть опечаткой: /home/an/Sources/ClaudeHomeServer-tests-by-module не существует, реальный worktree — /home/an/Sources/ClaudeCodeServer-tests-by-module. Перед чтением 7 файлов сделай pwd и git worktree list, а не серию Read по путям из текста.",
+"boundary": "Применимо, когда в постановке путь worktree дан явно и Read возвращает «File does not exist».",
+"confidence": 0.5,
+"evidence": "7 подряд Read по ClaudeHomeServer-tests-by-module: «File does not exist. Note: your current working directory is /home/an/Sources/ClaudeCodeServer-tests-by-module».",
+"id": "E095"
+},
+{
+"src": "T059",
+"task": "Написание xUnit-тестов C# с многострочными raw string literals (YAML-фронтматтер, JSON) в тестах",
+"search_keys": [
+"raw string literal",
+"CS8997 Unterminated raw string",
+"\"\"\" на отдельной строке",
+"frontmatter тест"
+],
+"solution": "Многострочный raw string \"\"\" : открывающие кавычки должны стоять на отдельной строке, содержимое — со следующей, закрывающие \"\"\" — на своей строке с отступом не больше содержимого. Запись var s = \"\"\"--- ...  в одной строке даёт CS8997 «Unterminated raw string literal» и роняет сборку всего тестового проекта (44/45).",
+"boundary": "C# 11+; для однострочных строк не нужно.",
+"confidence": 0.7,
+"evidence": "Сборка Tests упала: «PluginPackageValidatorTests.cs(292,23): error CS8997: Unterminated raw string literal»; «открывающий \"\"\" должен быть на отдельной строке».",
+"id": "E096"
+},
+{
+"src": "T059",
+"task": "Правка кода и тестов .NET с прогоном через mcp__tests__run_tests и параметром no_build",
+"search_keys": [
+"no_build",
+"run_tests stale build",
+"тест не видит правки",
+"DirectoryNotFoundException symlink тест"
+],
+"solution": "После правки ТЕСТОВОГО кода не передавай no_build=true: прогон идёт по старой сборке и воспроизводит старое падение (тот же DirectoryNotFoundException после исправления). Сначала mcp__dev__build target backend/ClaudeHomeServer.Tests (или без no_build). При создании symlink в тесте предварительно создай родительский каталог (panel/), иначе DirectoryNotFound.",
+"boundary": "no_build=true уместен только когда исходники и тесты не менялись с последней сборки.",
+"confidence": 0.7,
+"evidence": "Исправление теста, повторный прогон дал ту же ошибку: «no_build=true использовал старую сборку. Пересобираю и запускаю» → 81/81 зелёные.",
+"id": "E097"
+},
+{
+"src": "T060",
+"task": "Прогон/проверка правок в tools/thinking-strip-proxy (proxy.py, test_proxy.py)",
+"search_keys": [
+"thinking-strip-proxy",
+"test_proxy.py",
+"unittest",
+"python3 -m unittest",
+"pytest"
+],
+"solution": "Тесты прокси — unittest, не pytest. Каталог: cd <worktree>/tools/thinking-strip-proxy. Класс: python3 -m unittest test_proxy.ИмяTests -v. Весь набор: python3 -m unittest discover -s . -p test_proxy.py 2>&1 | tail. Новые тесты проверяй мутацией: временно верни старый код, тест должен покраснеть, потом верни правку.",
+"boundary": "Не про dotnet/vitest-тесты других вертикалей.",
+"confidence": 0.7,
+"evidence": "Прогон 'python3 -m unittest test_proxy.ОбрывКлиентаTests -v'; мутация без правки дала loop_guard_errors=1 вместо 0, затем 220/220; в T061 pytest-прогон заменён на unittest.",
+"id": "E098"
+},
+{
+"src": "T060",
+"task": "Падение одного теста прокси при полном прогоне (подозрение на регресс)",
+"search_keys": [
+"флейк",
+"ПетляСквознаяTests",
+"test_петля_в_тексте_перехвачена_и_повтор_приклеен",
+"race",
+"git stash"
+],
+"solution": "ПетляСквознаяTests.test_петля_в_тексте_перехвачена_и_повтор_приклеен гоночный: падает ~1 из 5-10 запусков и на master. Не считай регрессом: прогони его одного 5-10 раз в цикле (for i in 1..10; python3 -m unittest test_proxy.ПетляСквознаяTests.<тест>), при желании то же под git stash, затем перезапусти полный набор.",
+"boundary": "Если падает стабильно каждый раз или падает другой тест — это уже не флейк.",
+"confidence": 0.7,
+"evidence": "Тест падал 1 из 3 запусков; 'git stash' + 10 прогонов: Run 2 FAILED=1, остальные 0; повторный полный прогон 220/220.",
+"id": "E099"
+},
+{
+"src": "T061",
+"task": "Rebase ветки с конфликтом в одном файле (proxy.py) на ушедший вперёд master с последующим rework",
+"search_keys": [
+"git rebase master",
+"конфликт слияния",
+"backup branch",
+"GIT_EDITOR=true",
+"rebase --continue",
+"маркеры конфликта"
+],
+"solution": "Перед rebase: git branch backup/<имя> <ветка>. Маркеры: grep -n '^<<<<<<<\\|^=======\\|^>>>>>>>' файл. Если Edit не находит блок с маркерами — замени по номерам строк питоном (readlines, срез, запись). На промежуточном коммите оставь самодостаточное состояние (не тяни rework), потом GIT_EDITOR=true git rebase --continue; после проверки — git branch -D backup.",
+"boundary": "Не нужно при rebase без конфликтов.",
+"confidence": 0.6,
+"evidence": "Edit на блоке <<<<<<< дал 'String to replace not found'; помог python-скрипт по строкам 2615..2626; затем 'GIT_EDITOR=true git rebase --continue', 225 тестов зелёные.",
+"id": "E100"
+},
+{
+"src": "T061",
+"task": "Серия Bash-вызовов в worktree, где команды падают с 'No such file' на относительных путях",
+"search_keys": [
+"cd в подкаталог",
+"рабочий каталог",
+"No such file or directory",
+"worktree",
+"абсолютные пути"
+],
+"solution": "После 'cd tools/thinking-strip-proxy' каталог Bash сохраняется между вызовами, и git/grep с путями от корня репо ломаются. Начинай каждую команду с 'cd /абсолютный/путь/worktree && ...' или используй абсолютные пути; pwd проверяй при первой же ошибке 'Нет такого файла'.",
+"boundary": "Если все команды идут из одного каталога, не актуально.",
+"confidence": 0.6,
+"evidence": "'grep tools/thinking-strip-proxy/proxy.py' -> Нет такого файла; pwd показал .../tools/thinking-strip-proxy; 'Я в подкаталоге. Использую абсолютные пути' (то же в T063).",
+"id": "E101"
+},
+{
+"src": "T062",
+"task": "Проверка фронтенда (lint:design, tsc, vitest) когда mcp__dev__build не работает",
+"search_keys": [
+"lint:design",
+"npm-cli.js not found",
+"tree-busy",
+"npx tsc -b",
+"vitest",
+"mcp__dev__build"
+],
+"solution": "mcp__dev__build npm lint:design может упасть (код 127 'npm-cli.js not found next to node') или отказать из-за tree-busy; скрипта tsc в package.json нет. Рабочее: cd <repo>/frontend && npx eslint --config eslint.design.config.js <файлы> ; npx tsc -b. Тесты: mcp__tests__run_tests kind=vitest target=frontend filter=<ИмяФайла/теста> (~45 с).",
+"boundary": "Если mcp__dev__build npm отрабатывает штатно — используй его.",
+"confidence": 0.7,
+"evidence": "lint:design -> 'Сборка упала (код 127)... npm-cli.js not found'; 'В package.json нет скрипта tsc'; затем npx eslint и npx tsc -b прошли без замечаний.",
+"id": "E102"
+},
+{
+"src": "T062",
+"task": "Закрытие задачи tasks_complete/tasks_get по короткому id (8 символов) из постановки",
+"search_keys": [
+"tasks_complete",
+"не найдена или недоступна",
+"короткий id",
+"uuid",
+"tasks_get"
+],
+"solution": "tasks_complete с коротким id (например '0ab54cf0') отвечает 'не найдена или недоступна в этом контексте'. Сначала вызови tasks_get с коротким id, возьми из ответа полный UUID и передай его в tasks_complete.",
+"boundary": "Если id в постановке уже полный UUID, шаг не нужен.",
+"confidence": 0.8,
+"evidence": "tasks_complete {id:'0ab54cf0'} -> 'Задача 0ab54cf0 не найдена'; tasks_get вернул полный id, повторный complete с полным UUID прошёл (то же в T063 с 3382532d).",
+"id": "E103"
+},
+{
+"src": "T064",
+"task": "Отвязка тест-проектов .Tests от ProjectReference на Main (ClaudeHomeServer) в backend",
+"search_keys": [
+"ProjectReference Main",
+"TestKit.Host",
+"отвязать от Main",
+"slnx",
+"CS0246 PersonaManager"
+],
+"solution": "Не угадывай по коду: удали Main из всех целевых csproj разом, собери mcp__dev__build backend/ClaudeHomeServer.slnx — список CS0246 покажет, кому Main нужен (PersonaManager, UserStore, SessionManager, ProjectManager, DossierBranch, Program/TestWebApplicationFactory); верни Main только им. Main приходит транзитно через TestKit.Host, поэтому проекты с TestKit.Host часто собираются без явной ссылки.",
+"boundary": "Для проектов без TestKit.Host транзитивности нет.",
+"confidence": 0.65,
+"evidence": "Сборка без Main: 74 из 78, пали ровно Prompts/Git/Video/CodeGraph (PersonaManager, DossierBranch, UserStore, Program); Images и Devices собрались через TestKit.Host.",
+"id": "E104"
+},
+{
+"src": "T064",
+"task": "Сборка dotnet slnx через mcp__dev__build падает странным сбоем",
+"search_keys": [
+"Internal CLR error",
+"0x80131506",
+"Fatal error",
+"mcp__dev__build",
+"slnx"
+],
+"solution": "'Fatal error. Internal CLR error. (0x80131506)' на 0 из N проектов за ~1.5 с с пустым логом — транзитный краш процесса, не ошибка кода. Просто повтори тот же mcp__dev__build без правок; прошло со второго раза (78/78).",
+"boundary": "Если сбой повторяется 2-3 раза подряд, ищи реальную причину.",
+"confidence": 0.6,
+"evidence": "Сборка 'код 134, 1,5 с: 0 из 78', console.log с одной строкой Fatal error; повтор — 78/78 зелёная.",
+"id": "E105"
+},
+{
+"src": "T065",
+"task": "Старт задачи исполнителем: поиск контекста через memory/dossier инструменты",
+"search_keys": [
+"memory_recall",
+"dossier_lookup",
+"team_memory_remember",
+"No such tool",
+"цикл вызовов"
+],
+"solution": "mcp__dossier__dossier_lookup и mcp__memory__team_memory_remember в окружении отсутствуют ('No such tool available'). Не зови mcp__memory__memory_recall в цикле одним и тем же запросом: один вызов, при пустом результате иди читать код (Read/Grep) сразу.",
+"boundary": "Если memory_recall вернул содержательные записи — используй их.",
+"confidence": 0.5,
+"evidence": "dossier_lookup -> No such tool; затем ~40 подряд одинаковых memory_recall без прогресса; в T068 team_memory_remember -> No such tool.",
+"id": "E106"
+},
+{
+"src": "T067",
+"task": "Работа в самостоятельно созданном git worktree: сборка и тесты через mcp__dev__build / mcp__tests__run_tests",
+"search_keys": [
+"git worktree add",
+"mcp__tests__run_tests",
+"no_build",
+"устаревшая сборка",
+"dotnet test --no-build"
+],
+"solution": "Если worktree создан самим исполнителем, mcp-сборка/тесты могут идти по основному дереву: число тестов не растёт, лог в .cc-attachments основного репо. Проверяй, что новые тесты в списке. Обход: bash -c 'cd <worktree> && dotnet build backend/X.Tests && dotnet test backend/X.Tests --filter \"FullyQualifiedName~Y\" --no-build'. Сначала build, потом test --no-build.",
+"boundary": "Когда сессия стартовала уже в worktree (T064, T069), mcp-инструменты работают с ним корректно.",
+"confidence": 0.6,
+"evidence": "12 тестов вместо 18 после 5 новых; лог в /home/an/Sources/ClaudeCodeServer/.cc-attachments; 'MCP-инструменты работают в main-проекте, не в worktree'; прямой dotnet в worktree дал 18/18.",
+"id": "E107"
+},
+{
+"src": "T068",
+"task": "Создание нового модульного тест-проекта (Llm.Tests) и перенос тестов из монолита ClaudeHomeServer.Tests",
+"search_keys": [
+"git mv тестов",
+"TestCollections",
+"InternalsVisibleTo",
+"новый csproj Tests",
+"TestKit xunit",
+"guard монолит"
+],
+"solution": "Образец csproj — Turn.Tests (Web SDK, Library, IsPackable false) + GlobalUsings.cs; добавь в slnx. Нужен InternalsVisibleTo для нового проекта в продуктовом csproj (иначе CS0117 на internal). Хелперы монолита референсить нельзя (guard 1.4): TestCollections.cs перенеси в TestKit, добавь PackageReference xunit и 'using Xunit;'. ProjectManager.* требует ref на Main.",
+"boundary": "Не про вертикали, тесты которых не используют хелперы монолита.",
+"confidence": 0.65,
+"evidence": "CS0103 'TestCollections' в Llm.Tests, затем CS0246 CollectionDefinitionAttribute; мутация без IVT -> 20+ CS0117; итог 79/79 и 133/133.",
+"id": "E108"
+},
+{
+"src": "T068",
+"task": "Сверка общего числа тестов (--list-tests) с эталоном baseline в фиче 'тесты по модулям'",
+"search_keys": [
+"--list-tests",
+"baseline-tests.txt",
+"15216",
+"15203",
+"склейки FQN",
+"сверка числа тестов"
+],
+"solution": "Число в постановке (15216) считает строки файла, а не FQN: настоящий baseline 15203 = grep -vEc '^[[:space:]]*#' по tests-by-module-baseline-tests.txt (16 строк шапки). Считай per-project последовательно: dotnet test <proj> --no-build --list-tests (по slnx параллельно строки склеиваются по 2 FQN), затем sort -u и diff с baseline. +3 — MonolithReferenceGuardTests, не потеря.",
+"boundary": "Актуально только пока эталонный baseline не пересобран.",
+"confidence": 0.6,
+"evidence": "Per-project сумма 15206 = 15203 + 3 guard; 'в baseline, не в моём: 0'; в T064 slnx-замер давал склейки и 15208 после de-merge.",
+"id": "E109"
+},
+{
+"src": "T069",
+"task": "Правки C# в FeatureProjector/тестах FluentAssertions: неочевидные ошибки компиляции и ассертов",
+"search_keys": [
+"CS1002 ref",
+"CS0173 collection expression",
+"BeEquivalentTo",
+"FluentAssertions because",
+"FeatureProjector"
+],
+"solution": "Переменная 'ref' — контекстное слово, даёт CS1002: назови key/stepRef. Тернарник с коллекциями '? [x] : []' даёт CS0173 — задай явный тип (new List<TaskItem>{..} / typed var). В BeEquivalentTo(params ...) строка-причина попадает в коллекцию как элемент — передавай ожидаемое массивом: BeEquivalentTo(new[]{..}, \"причина\").",
+"boundary": "Только C#/FluentAssertions; не про TypeScript.",
+"confidence": 0.6,
+"evidence": "'ref — контекстное ключевое слово. Переименовываю в key'; CS0173 на 'final is not null ? [final]'; 'BeEquivalentTo принял сообщение как элемент коллекции'.",
+"id": "E110"
+},
+{
+"src": "T071",
+"task": "Запуск одного теста прокси по имени класса с кириллицей (python3 -m unittest test_proxy.Класс.тест)",
+"search_keys": [
+"unittest кириллица",
+"AttributeError has no attribute",
+"имя класса теста",
+"vars(test_proxy)"
+],
+"solution": "Не набирай кириллические имена классов вручную: опечатка (КараинСессииTests вместо КарантинСессииTests) даёт AttributeError, и повтор той же команды не помогает. Копируй имя из 'grep -n \"^class \" test_proxy.py' или загрузи класс через python3 -c: cls=[v for k,v in vars(test_proxy).items() if 'Сессии' in k][0].",
+"boundary": "Для латинских имён неактуально.",
+"confidence": 0.5,
+"evidence": "Трижды подряд 'module test_proxy has no attribute КараинСессииTests. Did you mean: КарантинСессииTests?'; обошли через vars(test_proxy).",
+"id": "E111"
+},
+{
+"src": "T071",
+"task": "Рефакторинг дедупликации хвостов срыва в proxy.py (слияние двух функций в общий хелпер)",
+"search_keys": [
+"строки журнала stderr",
+"print карантин",
+"redirect_stderr",
+"дедупликация функций",
+"потерянные логи"
+],
+"solution": "Тесты не видят текст stderr-журнала, поэтому при слиянии функций сверяй print(...) старой и новой версии построчно (git show master:файл | sed -n) — журнал читают при разборе инцидентов. Для проверки добавь в тест захват: buf=io.StringIO(); with contextlib.redirect_stderr(buf): ...; assertIn(строка, buf.getvalue()) и мутацию строки.",
+"boundary": "Не нужно, если логи не меняются и не критичны для разбора.",
+"confidence": 0.55,
+"evidence": "Ревью T070 нашло потерянную строку 'мусор и в повторе' и форматы логов отказа повтора; T071 вернул их и добавил тест через redirect_stderr, мутация краснит.",
+"id": "E112"
+},
+{
+"src": "T073",
+"task": "Задачи про состояние исполнителя в трекере: сбрасывается ли ExecutorStoppedAt/метки остановки при перезапуске исполнителя",
+"search_keys": [
+"ExecutorStoppedAt",
+"MarkClaudeStarted",
+"перезапуск исполнителя",
+"tasks_run_executor",
+"TaskManager"
+],
+"solution": "ExecutorStoppedAt обнуляется в TaskManager.MarkClaudeStarted (backend/ClaudeHomeServer.Tasks/TaskManager.cs ~стр.643); его зовёт TaskExecutionService.cs ~стр.337 при execute/run_executor. Отдельно сбрасывать не нужно. Для защиты от гонки в проекции добавляют условие ExecutorStoppedAt > ClaudeStartedAt.",
+"boundary": "Номера строк плывут; при правках TaskManager перепроверь grep MarkClaudeStarted.",
+"confidence": 0.6,
+"evidence": "Grep по ExecutorStoppedAt/MarkClaudeStarted -> TaskManager.cs:643 ставит ExecutorStoppedAt = null; вызов из TaskExecutionService.cs:337",
+"id": "E113"
+},
+{
+"src": "T073",
+"task": "Тесты FluentAssertions в .NET: сравнение упорядоченных коллекций с сообщением-причиной (because)",
+"search_keys": [
+"FluentAssertions",
+"Equal",
+"params",
+"because",
+"Should().Equal"
+],
+"solution": "Не передавай строку-сообщение последним аргументом в .Should().Equal(a, b, c, \"msg\") — params T[] примет её как ещё один ожидаемый элемент, тест красный с непонятным diff. Передавай ожидаемое одним массивом/списком, а сообщение — отдельным параметром because.",
+"boundary": "Если коллекция не строковая, ошибки типов проявятся на компиляции.",
+"confidence": 0.5,
+"evidence": "Красный OrderRuns_...: Expected ordered.Select(...) to be equal to {epic-a,...,\"1) ждёт (A) → ...\"} — сообщение попало 5-м элементом",
+"id": "E114"
+},
+{
+"src": "T077",
+"task": "Прогон .NET-тестов через mcp__tests__run_tests после правки кода или после отката мутации",
+"search_keys": [
+"run_tests",
+"no_build",
+"мутация",
+"устаревший DLL",
+"mcp__dev__build"
+],
+"solution": "no_build:true запускает старый DLL: после любой правки исходников (в том числе после отката мутации) сначала mcp__dev__build (или run_tests без no_build), иначе увидишь красный/зелёный результат от прошлой сборки. Порядок мутации: правка -> build -> тест красный -> откат -> build -> тест зелёный.",
+"boundary": "Если исходники не менялись с последней сборки, no_build безопасен.",
+"confidence": 0.85,
+"evidence": "После отката мутации run_tests no_build=true всё ещё падал (DLL из мутационной сборки); пересборка -> 40/40 зелёные. То же в T073: правка теста, no_build -> тот же красный",
+"id": "E115"
+},
+{
+"src": "T074",
+"task": "Изменение поведения в tools/thinking-strip-proxy (карантин, счётчики stats) с обновлением тестов test_proxy.py",
+"search_keys": [
+"thinking-strip-proxy",
+"test_proxy.py",
+"stats",
+"quarantine",
+"setUp сброс счётчиков"
+],
+"solution": "Новый ключ в словаре stats (proxy.py ~стр.403-412) сам попадает в /__proxy/stats (_stats сериализует весь dict) — обработчик не трогай. Но добавь ключ в списки сброса в setUp тестовых классов. Тест в чужом классе (ПетляСквознаяTests.test_повтор_несёт_соль...) мог закреплять старое поведение: прогони весь набор и поправь ожидание по смыслу.",
+"boundary": "Не про поведение детекторов и пороги; для чисто прокси без счётчиков неактуально.",
+"confidence": 0.65,
+"evidence": "Падал test_повтор_несёт_соль_а_исходное_тело_нет (старое «новая соль на вторую петлю»); stats-ключи добавлены в два списка сброса; grep показал _stats сериализует весь stats",
+"id": "E116"
+},
+{
+"src": "T074",
+"task": "Полный прогон python3 -m unittest discover для tools/thinking-strip-proxy: красный тест петли, не связанный с правкой",
+"search_keys": [
+"bfd0cb2c",
+"флейк",
+"test_петля_в_тексте_перехвачена_и_повтор_приклеен",
+"unittest discover",
+"ПетляСквознаяTests"
+],
+"solution": "test_петля_в_тексте_перехвачена_и_повтор_приклеен (ПетляСквознаяTests) в полном прогоне периодически падает («[] != [1] генерация остановлена обрывом») — известный флейк bfd0cb2c. Проверка: python3 -m unittest test_proxy.ПетляСквознаяTests.test_петля_в_тексте_перехвачена_и_повтор_приклеен 3-4 раза подряд в изоляции; зелёный -> флейк, не твоя правка; затем повтори полный прогон.",
+"boundary": "Если он падает стабильно и в изоляции — это реальная регрессия.",
+"confidence": 0.7,
+"evidence": "Полный прогон: 3 падения, одно — этот тест; в изоляции 4/4 OK; повторный полный прогон 231 OK. В T076 тот же тест красный в групповом прогоне",
+"id": "E117"
+},
+{
+"src": "T076",
+"task": "Запуск одного теста в tools/thinking-strip-proxy/test_proxy.py по имени (python-unittest)",
+"search_keys": [
+"unittest",
+"AttributeError",
+"_FailedTest",
+"test_proxy.Класс.test",
+"grep def test"
+],
+"solution": "Перед запуском одиночного теста найди его класс: grep -n 'def test_<имя>' tools/thinking-strip-proxy/test_proxy.py и просмотри ближайший выше class. Неверный класс даёт «AttributeError: type object ... has no attribute» (_FailedTest), а не красный тест. Запуск из tools/thinking-strip-proxy: python3 -m unittest test_proxy.<Класс>.<тест>.",
+"boundary": "Для запуска класса целиком достаточно test_proxy.<Класс>.",
+"confidence": 0.5,
+"evidence": "AttributeError: type object 'КарантинСессииTests' has no attribute 'test_повтор_несёт_...' (тест в ПетляСквознаяTests); повтор у T079 с ПетляСквознаяTests.test_повторная_петля_...",
+"id": "E118"
+},
+{
+"src": "T078",
+"task": "Фронт-проверки (tsc, vitest, lint:design) в свежем git worktree проекта",
+"search_keys": [
+"npm ci",
+"node_modules",
+"worktree",
+"tsc -b",
+"lint:design",
+"frontend"
+],
+"solution": "В новом worktree нет frontend/node_modules и в корне нет package.json. Из frontend/ (cd в той же команде): npm ci --no-audit --no-fund, затем npx tsc -b и npm run lint:design. Запуск из корня worktree даёт «ENOENT package-lock.json»/пустой tsc; проверяй pwd.",
+"boundary": "Если frontend/node_modules уже есть (другой исполнитель поставил в тот же worktree), npm ci не нужен.",
+"confidence": 0.8,
+"evidence": "ls: cannot access node_modules / package-lock.json из корня; npm ci из frontend/ прошёл, tsc -b EXIT 0 по 4 проектам",
+"id": "E119"
+},
+{
+"src": "T078",
+"task": "Юнит-тесты фронтовых хуков/стора и React-компонентов (vitest) в проекте без @testing-library",
+"search_keys": [
+"vitest",
+"renderHook",
+"@testing-library/react",
+"__test швы",
+"renderToString",
+"fakeDom"
+],
+"solution": "@testing-library/react в frontend не установлен. Логику стора (lib/featureRuns.ts) тестируй через экспортируемые __test-швы, как в существующем featureRuns.test.ts; компоненты — серверным рендером в строку и проверкой подстрок HTML (см. chat/__tests__/ChatItemView.test.ts, fakeDom.ts рядом). Не пытайся ставить библиотеку.",
+"boundary": "Если нужен реальный DOM-ивент/эффект — этого подхода не хватит.",
+"confidence": 0.6,
+"evidence": "node -e проверка devDependencies: нет @testing-library/react -> тесты через __test-швы; в T081/T082 тесты ChatItemView проверяют HTML-строку",
+"id": "E120"
+},
+{
+"src": "T079",
+"task": "Живая проверка thinking-strip-proxy на стенде: переиграть дамп петли (guard seq 2/3) и увидеть loops_detected",
+"search_keys": [
+"THINKING_MODE",
+"петля не воспроизвелась",
+"дамп петли",
+"режим размышлений off",
+"replay"
+],
+"solution": "Запускай свой прокси с THINKING_MODE=budget (LISTEN_PORT=18041 UPSTREAM_HOST=127.0.0.1 UPSTREAM_PORT=18020 THINKING_MODE=budget CACHE_QUARANTINE=on LOOP_GUARD=on LOOP_RETRY=on JUNK_GUARD=on GUARD_DUMP_DIR=/tmp/..). Без него баннер «режим размышлений off»: модель отвечает коротко без thinking, петли нет, тяжёлые запросы зря. Сверь баннер stderr до первого тяжёлого запроса.",
+"boundary": "Петля стохастична: и при budget может не воспроизвестись; тогда опирайся на юнит-тесты.",
+"confidence": 0.7,
+"evidence": "T079: баннер «режим размышлений off», 4/4 запроса «No response requested.» за 1-23 с, петли нет. T072: THINKING_MODE=budget (бюджет 512) -> петля с первого прогона seq 2, loops_detected=1",
+"id": "E121"
+},
+{
+"src": "T079",
+"task": "Погасить свой отдельный процесс (прокси на нестандартном порту) рядом с боевым без pkill",
+"search_keys": [
+"kill по PID",
+"lsof LISTEN",
+"pkill заблокирован",
+"pgrep proxy.py",
+"setsid"
+],
+"solution": "pkill/killall/xargs kill блокирует PreToolUse-хук (боевой бинарь и dev — общие). pgrep -f proxy.py вернёт и боевые прокси. Надёжно: PID=$(lsof -nP -iTCP:18041 -sTCP:LISTEN -t | head -1); сохрани в /tmp/*.pid, затем kill $PID; проверь, что порт свободен (ss -tln | grep 18041). Парсинг ss -ltnp через awk/grep может вернуть пусто.",
+"boundary": "Нужен lsof; без него ss -ltnp | grep ':PORT' | grep -oE 'pid=[0-9]+' (сработало в T072).",
+"confidence": 0.75,
+"evidence": "T072: хук «Заблокировано: убийство процессов по имени или шаблону (pkill...)»; T079: pgrep -> не тот PID, ss+awk пусто, lsof -t -> REAL_PID=2295061 рабочий",
+"id": "E122"
+},
+{
+"src": "T080",
+"task": "Тест на TOCTOU/гонку (источник изменился между чтением и копированием) в PluginInstaller и проверка мутацией",
+"search_keys": [
+"TOCTOU",
+"мутация проходит",
+"PluginInstaller",
+"фоновый поток",
+"File.Move атомарно"
+],
+"solution": "Простой тест проходит и при мутации (источник==staging). Нужен конкурентный писатель: фон-поток в плотном цикле без Thread.Yield меняет id в манифесте источника: пишет файл во ВНЕШНЕМ temp-каталоге и File.Move в источник (иначе CopyDirectory видит .tmp -> FileNotFoundException). Окно чтение->копия ~7,6 мс. Проверь мутацией (чтение из sourceDir) — красный.",
+"boundary": "Тест вероятностный: на медленном CI может не поймать; не ослабляй, увеличивай цикл.",
+"confidence": 0.55,
+"evidence": "Мутация read-from-source: тест зелёный при 100 мс задержке и с Thread.Yield; красный только после tight loop + move из внешнего каталога",
+"id": "E123"
+},
+{
+"src": "T080",
+"task": "Тест «ссылка/файл есть в источнике, но не такой в staging-копии» для установщика плагина с символьными ссылками",
+"search_keys": [
+"symlink",
+"ResolveLinkTarget",
+"CopyDirectoryNoSymlinks",
+"CreateSymlink",
+"staging"
+],
+"solution": "Не строй расхождение источник/staging на симлинке: FileInfo.ResolveLinkTarget(false) отдаёт абсолютный путь, пересозданная в staging ссылка остаётся валидной и манифест читается. Для расхождения используй подмену содержимого файла (фон-поток) или другой механизм.",
+"boundary": "Относится к симлинкам, воссоздаваемым по абсолютному target.",
+"confidence": 0.5,
+"evidence": "Тест с манифестом-симлинком упал: ожидали «манифест не найден», получили «Пакет не прошёл валидацию»; диагностика в /tmp/symtest показала абсолютный путь",
+"id": "E124"
+},
+{
+"src": "T081",
+"task": "Запуск vitest через mcp__tests__run_tests (kind: vitest, target: frontend)",
+"search_keys": [
+"run_tests vitest",
+"files путь",
+"frontend/src",
+"путь не найден"
+],
+"solution": "В files пути даются от корня проекта: frontend/src/components/chat/feature/FeatureRunView.test.ts, а не src/... (иначе «Путь ... в files не найден»). Каталог целиком тоже допустим (frontend/src/components/chat/feature).",
+"boundary": "Для прямого npx vitest run пути другие (от frontend/), см. отдельную запись.",
+"confidence": 0.8,
+"evidence": "Ошибка: Путь «src/components/...» в files не найден (пути — относительно корня проекта, например frontend/src/lib/x.test.ts); с префиксом frontend/ — 59 зелёных",
+"id": "E125"
+},
+{
+"src": "T082",
+"task": "Vitest-тесты React-компонентов, зависящих от useIsMobile/matchMedia: десктоп- и мобильный кейсы в одном файле",
+"search_keys": [
+"matchMedia",
+"useIsMobile",
+"утечка состояния между тестами",
+"window",
+"vitest"
+],
+"solution": "window.matchMedia общий на файл: мобильный тест, поставивший matches:true, ломает следующий «десктоп» (слово «фича» пропало). В каждом тесте задавай matchMedia явно (и для десктопа matches:false), либо восстанавливай в afterEach.",
+"boundary": "Если useIsMobile мокается на уровне модуля через vi.mock — не актуально.",
+"confidence": 0.6,
+"evidence": "Упал «десктоп: слово «фича» присутствует» после мобильного теста; починено явным matchMedia в обоих",
+"id": "E126"
+},
+{
+"src": "T083",
+"task": "Прямой запуск npx vitest run для фронта в worktree (ревью/проверка)",
+"search_keys": [
+"npx vitest run",
+"aihome_shell/kit",
+"Cannot find package",
+"cwd frontend",
+"cd .."
+],
+"solution": "Запускай из frontend/ с путями вида src/lib/x.test.ts: cd frontend && npx vitest run src/... . Из корня worktree падает «Cannot find package aihome_shell/kit» (vitest другой версии, нет конфигурации) в тестах с registry. cwd Bash может сохраняться между вызовами: после cd .. команды git/npx идут не оттуда — проверяй pwd.",
+"boundary": "Через mcp__tests__run_tests cwd задавать не нужно.",
+"confidence": 0.7,
+"evidence": "Из корня: 'Cannot find package aihome_shell/kit' в ChatItemView.test.ts; cd frontend && npx vitest run ... -> 64 зелёных; 'Could not access master..HEAD' после cd ..",
+"id": "E127"
+},
+{
+"src": "T089",
+"task": "Запуск тестов/типов/линта фронта проекта (vitest, tsc, lint:design) через MCP и Bash",
+"search_keys": [
+"mcp__tests__run_tests",
+"vitest files путь",
+"Путь не найден",
+"npx tsc -b",
+"lint:design",
+"cd frontend"
+],
+"solution": "mcp__tests__run_tests: files только с префиксом корня проекта (frontend/src/...), иначе «Путь ... в files не найден»; можно каталог и filter по имени теста. В Bash сначала cd в frontend (cwd между вызовами сохраняется, повторный cd frontend упадёт): npx vitest run src/..., npx tsc -b, npm run lint:design. Из корня vitest не находит пакеты, npx tsc пишет «not the tsc command».",
+"boundary": "Бэкенд (dotnet) гоняется через kind:dotnet и другой target.",
+"confidence": 0.9,
+"evidence": "T086/T089/T091: «Путь src/components/chat/feature/... не найден»; T092: из корня «Cannot find package aihome_shell», npx tsc → «not the tsc command»; T095: «cd: frontend: Нет такого файла»",
+"id": "E128"
+},
+{
+"src": "T095",
+"task": "Форматирование времени/даты в UI и тесты на него (часовые пояса)",
+"search_keys": [
+"getUTCHours",
+"часовой пояс",
+"TZ=Europe/Moscow",
+"featureTime hhmm",
+"детерминированный тест времени"
+],
+"solution": "Показывать время в локальном поясе пользователя (МСК): getHours/getMinutes/getDate, не getUTC*. Нельзя «чинить» зависимый от пояса тест переходом на getUTC* (так было в Ф4 и откатывалось в Ф9.2). В тесте ожидание считать теми же локальными геттерами от той же Date; проверять TZ=Europe/Moscow npx vitest run ... и TZ=UTC .... Общий форматтер: feature/featureTime.ts (hhmm, dateTimeLabel).",
+"boundary": "Если в постановке явно требуется UTC-представление.",
+"confidence": 0.85,
+"evidence": "T084: падение теста даты → UTC-геттеры; T095: «Показывать пользователю UTC ради детерминированных тестов нельзя», 125 тестов зелёные в двух поясах, мутация getUTCHours краснеет при TZ=Moscow",
+"id": "E129"
+},
+{
+"src": "T091",
+"task": "Отладка рендера React-компонента фронта ad-hoc скриптом / проверка поведения при пустых полях",
+"search_keys": [
+"ERR_MODULE_NOT_FOUND react",
+"временный тест",
+"renderToStaticMarkup отладка",
+"chk.test.ts",
+"мутационный тест"
+],
+"solution": "Скрипт .mjs в /tmp или корне падает «Cannot find package 'react'». Для разовой проверки HTML положи временный файл *.test.ts рядом с компонентом внутри frontend/src (vi.mock нужных lib + renderToStaticMarkup + console.log/expect), запусти npx vitest run <путь> из frontend, затем удали файл и проверь git status.",
+"boundary": "Не оставляй временные тесты в коммите; для постоянных проверок пиши обычный *.test.ts.",
+"confidence": 0.7,
+"evidence": "T091: /tmp/chk.mjs → ERR_MODULE_NOT_FOUND react, затем src/components/chat/feature/.chk.test.ts; T087 то же через _mutation.test.ts",
+"id": "E130"
+},
+{
+"src": "T089",
+"task": "Юнит-тесты компонентов фронта, использующих lib/personas (PersonaAvatar, имена исполнителей)",
+"search_keys": [
+"vi.mock lib/personas",
+"importOriginal",
+"personaInitials",
+"usePersonasVersion",
+"ensurePersonasLoaded wireRealtime"
+],
+"solution": "Не мокай lib/personas целиком голым объектом: компоненты тянут personaInitials, usePersonasVersion, getPersonaById, ensurePersonasLoaded. Делай vi.mock('../../../lib/personas', async importOriginal => ({...await importOriginal(), getPersonaById: ...})). Без мока ensurePersonasLoaded в node-окружении падает в wireRealtime (personas.ts:32, нет window/localStorage).",
+"boundary": "Тесты, где персоны не рендерятся.",
+"confidence": 0.8,
+"evidence": "T089: «No personaInitials export is defined on the mock» → importOriginal; T091: мок без usePersonasVersion; T092: падение из wireRealtime personas.ts:32",
+"id": "E131"
+},
+{
+"src": "T092",
+"task": "Интерактивные тесты компонентов фронта (клик, всплытие, скролл, меню/модалки) через fakeDom",
+"search_keys": [
+"fakeDom",
+"installFakeDom",
+"requestAnimationFrame stub",
+"scrollIntoView",
+"stopPropagation тест",
+"portal document.body"
+],
+"solution": "Нет jsdom: разметка — renderToStaticMarkup, интерактив — components/chat/__tests__/fakeDom.ts (installFakeDom, mount, findNodeByAttr). В fakeDom нет rAF (стабь на globalThis, не на window), scrollIntoView (no-op), querySelector куцый (расширь под [attr=\"v\"]). Modal/Menu — порталом в document.body. Тест stopPropagation должен имитировать реальное всплытие до карточки, иначе мутация не краснеет.",
+"boundary": "Чистые SSR-проверки разметки не требуют fakeDom.",
+"confidence": 0.8,
+"evidence": "T092: «код зовёт глобальный requestAnimationFrame, не fake window»; мутация stopPropagation краснеет только с тестом на всплытие; T094: «el.scrollIntoView is not a function»; T089: Modal — портал",
+"id": "E132"
+},
+{
+"src": "T094",
+"task": "Скролл/фокус/поиск узла в компоненте, который может быть смонтирован дважды (карточка плана в ленте и меню пилюли)",
+"search_keys": [
+"document.getElementById дубликат id",
+"scrollIntoView",
+"data-step-ref",
+"rootRef querySelector",
+"PipelineFlow два экземпляра"
+],
+"solution": "Не ставь id={`step-row-${ref}`} и не ищи через document.getElementById: PipelineFlow одной фичи монтируется и в ленте, и в меню пилюли, getElementById вернёт первый. Ставь data-step-ref и ищи rootRef.current?.querySelector('[data-step-ref=\"D1\"]') от корня своего экземпляра; в тесте смонтируй два экземпляра и проверь, что каждый скроллит свой узел.",
+"boundary": "Для узлов, которые гарантированно в единственном экземпляре.",
+"confidence": 0.8,
+"evidence": "T093: ревью Глеба — дубль id step-row-{ref}; T094: правка на data-step-ref + rootRef, мутация getElementById краснит тест «два PipelineFlow»",
+"id": "E133"
+},
+{
+"src": "T085",
+"task": "Удаление/переписывание больших кусков компонента фронта (рефакторинг файла в сотни строк)",
+"search_keys": [
+"TS6133 declared but never read",
+"noUnusedLocals",
+"tsc -b после рефакторинга",
+"мёртвые константы",
+"тесты не проверяются tsc"
+],
+"solution": "В tsconfig включены noUnusedLocals/noUnusedParameters: после удаления кода tsc -b падает на оставшихся константах, импортах, неиспользуемых компонентах и параметрах map (DOT_CY, SHADOW, LaneBar, i). Гоняй npx tsc -b сразу после правки и чисти. Тесты из tsc исключены (ошибки типов в них видит только vitest). Критерий «grep по удалённым именам пуст» ловит и комментарии: перефразируй их.",
+"boundary": "Не про бэкенд.",
+"confidence": 0.8,
+"evidence": "T085: TS6133 'DOT_CY'; T091: TS6133 'SHADOW', 'LaneBar', 'i'; grep по arcSpecs нашёл комментарий и пришлось перефразировать",
+"id": "E134"
+},
+{
+"src": "T089",
+"task": "Вёрстка по токенам дизайн-системы фронта (радиусы, размеры кнопок, шрифты)",
+"search_keys": [
+"R.full R.max",
+"border-radius 50%",
+"Button size sm md",
+"FONT.mono",
+"пилюля эллипс"
+],
+"solution": "R.full='50%' считается по каждой стороне — только для кругов; у пилюль, бейджей, бусин и тонких дорожек R.max (999). Button minHeight: xs 24, sm 32, md 40; тач-цель мобилы — md (TB.iconHitMobile). FONT.mono — литеральный стек ('JetBrains Mono', ..., monospace), не CSS-var: в regex тестов ищи monospace. Размеры шрифта числами не пиши: FS.*, нестандартные — именованной константой.",
+"boundary": "Если макет явно задаёт иной токен и ревьюер подтвердил.",
+"confidence": 0.8,
+"evidence": "T089: Майя — «R.full=50% даёт эллипс, в макете 999px = R.max», «sm=32, 40 даёт md»; T094: FONT.mono не var(--font-mono), правка regex",
+"id": "E135"
+},
+{
+"src": "T086",
+"task": "Анимация пульса и prefers-reduced-motion в компонентах фичи",
+"search_keys": [
+"feature-pulse",
+"prefers-reduced-motion",
+"usePrefersReducedMotion",
+"index.css анимация"
+],
+"solution": "Класс .feature-pulse в frontend/src/index.css уже обрабатывает prefers-reduced-motion (animation:none, opacity .5): просто вешай его, не дублируй reduced-логику инлайном и не заводи новую анимацию. Вешай на внешнее кольцо глифа, а не на весь svg с подложкой bgWhite (сквозь точку видна рельса). hover/фокус строк делай CSS-классом в index.css (.cc-stage-row), не инлайн.",
+"boundary": "Новые виды анимации, которых нет в index.css.",
+"confidence": 0.65,
+"evidence": "T086: «feature-pulse в CSS уже обрабатывает reduced-motion — убираю инлайн-reduced»; T089: Майя — пульс перенесён на кольцо r6.5",
+"id": "E136"
+},
+{
+"src": "T088",
+"task": "Сборка и тесты бэкенда проекта (.NET, вертикаль Tasks, FeatureProjector, GetFeatures)",
+"search_keys": [
+"mcp__dev__build",
+"dotnet test filter",
+"FeatureProjectorTests",
+"GetFeatures тесты",
+"ClaudeHomeServer.Tasks.Tests"
+],
+"solution": "Сборка: mcp__dev__build kind:dotnet target:backend/ClaudeHomeServer.Tasks. Тесты проектора: mcp__tests__run_tests kind:dotnet target:backend/ClaudeHomeServer.Tasks.Tests filter FullyQualifiedName~FeatureProjector. Тесты ручки GetFeatures лежат в ДРУГОМ проекте: target backend/ClaudeHomeServer.Tests, filter FullyQualifiedName~GetFeatures. Мутацию проверяй узким filter по имени теста.",
+"boundary": "Фронтенд-тесты (vitest).",
+"confidence": 0.8,
+"evidence": "T088: build Tasks 0 ошибок; FeatureProjector 46/46 в Tasks.Tests; GetFeatures 2/2 в ClaudeHomeServer.Tests; T093 повторяет target Tasks.Tests",
+"id": "E137"
+},
+{
+"src": "T088",
+"task": "Правка контракта агрегата фичи на бэке (поля FeatureRun/FeatureStage) и его JSON",
+"search_keys": [
+"FeatureStage",
+"FeatureProjector.Build",
+"TaskFeatureConstants",
+"camelCase FeatureRun",
+"GetFeatures TasksController"
+],
+"solution": "backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs, логика FeatureProjector.cs (Build), тесты FeatureProjectorTests.cs. TaskItem и константы TaskRoles/TaskVerdicts — backend/ClaudeHomeServer.Core/Models/ (TaskItem.cs, TaskFeatureConstants.cs), не ClaudeHomeServer.Models. GetFeatures (Controllers/TasksController.cs) отдаёт camelCase: новые поля — аддитивно.",
+"boundary": "Если структура проекта изменилась после ветки feature-mode-polish.",
+"confidence": 0.7,
+"evidence": "T090: Grep по backend/ClaudeHomeServer.Models — «Path does not exist», нашли Core/Models/TaskFeatureConstants.cs; T088: GetFeatures → camelCase, поля Б5 аддитивно",
+"id": "E138"
+},
+{
+"src": "T094",
+"task": "Отображение исхода шага (FeatureStepChain.outcome) и длительности в конвейере фичи",
+"search_keys": [
+"chain.outcome pending returned",
+"ждёт ревью",
+"FeatureStepChain",
+"StepRow исход",
+"durationMinutes"
+],
+"solution": "Имена outcome обманчивы: по бэку (FeatureProjector.cs ~495–540) pending = «закрыт, ждёт ревью», returned = «закрыт без повторного ревью». Правило UI: running → пульс + длительность, pending → «ждёт ревью» и глиф без пульса, accepted/returned/withdrawn → справа только пружина без текста. Длительность брать из durationMinutes (тикать от неё), без обратного пересчёта через Date.now()−….",
+"boundary": "Если бэк поменяет семантику outcome.",
+"confidence": 0.8,
+"evidence": "T094: MAJOR Майи «исходы перепутаны», переписаны 4 ветки, мутация старой трактовки краснит 6 тестов; сверка с FeatureProjector.cs 470–560",
+"id": "E139"
+},
+{
+"src": "T087",
+"task": "Новый/правленый React-компонент, читающий поля агрегата FeatureRun из ответа бэка (старый ответ, кэш, тестовые фикстуры)",
+"search_keys": [
+"undefined steps length",
+"NaN% progress",
+"run.progress ?? 0",
+"stage.rounds undefined",
+"защита от старого ответа"
+],
+"solution": "Любое поле run может прийти undefined (старый ответ, кэш/SW, фикстуры тестов без stages/rounds): охраняй run.steps?.length ?? 0, run.progress ?? 0, stage.rounds ?? [], now/attention/summary/stages/lanes/returnsBySource. Проверяй временным тестом: render с удалённым полем, expect not.toThrow и not.toContain('NaN'). Добавь регрессионный тест на каждое защищённое поле.",
+"boundary": "Поля, которые типы объявляют обязательными и бэк гарантирует.",
+"confidence": 0.75,
+"evidence": "T087: run.steps===undefined → TypeError на stageHasDetails, progress undefined → «NaN%»; T091: «stage.rounds undefined в фикстурах» уронил 34 теста",
+"id": "E140"
+},
+{
+"src": "T092",
+"task": "Найти файлы фронта проекта при правке чата/плана хода/карточек задач",
+"search_keys": [
+"ChatPanel.tsx путь",
+"TaskCreatedView",
+"TurnPlanPill",
+"FeatureModeBody",
+"lib/featureRuns.ts"
+],
+"solution": "ChatPanel — frontend/src/components/ChatPanel.tsx (не в chat/); TaskCreatedView, TurnPlanPill, ChatItemView — components/chat/; режим фичи (FeatureModeBody, FeatureRunView, PipelineFlow, StepDetails, RoundChain, Rounds, FeatureGlyphs) — components/chat/feature/; тесты и fakeDom — components/chat/__tests__/; сторы — lib/featureRuns.ts, lib/tasks.ts, lib/personas.ts.",
+"boundary": "После переносов файлов; проверяй Glob.",
+"confidence": 0.7,
+"evidence": "T092: Read frontend/src/features/feature/FeatureModeBody.tsx и components/chat/ChatPanel.tsx — «File does not exist», нашли через Glob/Grep",
+"id": "E141"
+},
+{
+"src": "T084",
+"task": "Подключение действий в UI фронта (открыть чат, задачу, подставить в композер, перезапустить задачу, тост)",
+"search_keys": [
+"prefillComposer",
+"openTaskInSection",
+"openChatById",
+"api.tasks.execute",
+"showToast",
+"ConfirmDialog"
+],
+"solution": "Готовые функции вместо новых эндпоинтов: openTaskInSection — lib/tasks.ts; openChatById — lib/openChat.ts; prefillComposer — lib/ai/startChat.ts; api.tasks.execute — lib/api.ts; локальный тост showToast — lib/toast.ts; useIsMobile — lib/breakpoints.ts. Подтверждение через ui/ConfirmDialog, на время запроса блокируй кнопку (loading), ошибку показывай тостом, а не глотай catch{}.",
+"boundary": "Сигнатуры проверяй grep: пути выведены из прочитанных файлов.",
+"confidence": 0.55,
+"evidence": "T084: Grep prefillComposer|openTaskInSection|openChatById → Read openChat.ts, startChat.ts, tasks.ts; T087: catch{} глотает ошибку execute; T089: тост при сбое через lib/toast.ts",
+"id": "E142"
+},
+{
+"src": "T095",
+"task": "Нужно найти компонент в тесте, не меняя общий UI-компонент (меню, модалка)",
+"search_keys": [
+"role=menu",
+"data-testid",
+"findNodeByAttr",
+"общий Menu",
+"ложно зелёный тест"
+],
+"solution": "Не добавляй роль/атрибуты в общий components/ui/Menu.tsx ради тестов (role=menu меняет семантику всех меню и обещает menuitem). Ставь data-testid на свою обёртку (turn-plan-menu в TurnPlanPill) и ищи fakeDom.findNodeByAttr; поиск меню по подстроке заголовка в document.body даёт ложные зелёные.",
+"boundary": "Если роль действительно нужна по a11y.",
+"confidence": 0.75,
+"evidence": "T095: Ф9.1 добавила role=menu в Menu.tsx, откат git diff 98cba44b8 пуст, тест по data-testid; T093: bodyHasMenu по подстроке «План хода» мог зеленеть ложно",
+"id": "E143"
+},
+{
+"src": "T091",
+"task": "Тесты, где фикстуры привязаны к Date.now (длительности «N мин», runningSince)",
+"search_keys": [
+"Date.now фикстура",
+"граница минуты",
+"44 45 мин",
+"flaky длительность",
+"useMinuteTick"
+],
+"solution": "Фикстура вида runningSince = Date.now() − 45*60000 даёт «44 мин» из-за миллисекундного джиттера между созданием и рендером. Бери запас (+30 с) или фиксируй время (vi.useFakeTimers/setSystemTime), либо передавай длительность готовым полем (durationMinutes). Не проверяй точное число на границе минуты.",
+"boundary": "Тесты, не зависящие от текущего времени.",
+"confidence": 0.6,
+"evidence": "T091: «длительность на границе 44/45 мин из-за миллисекундного джиттера» — правка теста после падения",
+"id": "E144"
+},
+{
+"src": "T090",
+"task": "Детали шага/цепочки кругов во фронте: откуда брать данные исполнителя и времени звена",
+"search_keys": [
+"FeatureStepChain taskIds",
+"run.steps FeatureTask",
+"звено исполнителя",
+"startedAt completedAt",
+"цепочка кругов"
+],
+"solution": "Прежде чем возвращаться к бэку за полями: FeatureStepChain несёт только taskIds (+personaId/title первой задачи), но полные задачи (start/finish, title, personaId, role/kind) доезжают в run.steps (FeatureTask[]) — резолви по id оттуда. Безличные формы: step→«работа», rework→«доработка», kind=defect→«дефект заведён/исправлен». Нет задачи по id — пропусти звено, не падай.",
+"boundary": "Если run.steps перестанет отдаваться клиенту.",
+"confidence": 0.6,
+"evidence": "T090: задача велела вернуться с вопросом при отсутствии данных, но «полные данные я резолвлю по id из run.steps — они доходят до клиента»; tsc: FeatureTask | undefined из Map.get",
+"id": "E145"
+},
+{
+"src": "T094",
+"task": "Закрытие задачи трекера (mcp__tasks__tasks_complete) с очень длинным resultMarkdown",
+"search_keys": [
+"tasks_complete InputValidationError",
+"could not be parsed as JSON",
+"resultMarkdown длинный",
+"unparsedToolInput"
+],
+"solution": "tasks_complete с resultMarkdown ~30 КБ упал «InputValidationError: could not be parsed as JSON». Делай итог коротким (до нескольких КБ, без повторов и мусорных символов) и повтори вызов; это не повод откатывать работу: коммит уже сделан.",
+"boundary": "Обычные короткие отчёты.",
+"confidence": 0.55,
+"evidence": "T094: первый tasks_complete (30211 bytes) → InputValidationError, второй короткий прошёл",
+"id": "E146"
+},
+{
+"src": "T089",
+"task": "Локальный коммит в общем worktree проекта с трейлерами CCS-Session / Co-Authored-By",
+"search_keys": [
+"CCS-Session трейлер",
+"git commit -F",
+"git add только свои файлы",
+"index.lock",
+"session id"
+],
+"solution": "Формат коммита и трейлеров смотри в git log -5 --format='%B' ветки. Session-id для CCS-Session бери из окружения (env | grep -iE 'ccs|session'), не выдумывай. Длинное сообщение пиши в файл (.cc-attachments исключён из git) и git commit -F, потом удали файл. В общем worktree добавляй только свои пути (git add <файлы>), при index.lock подожди и повтори.",
+"boundary": "Если в постановке дан готовый трейлер.",
+"confidence": 0.5,
+"evidence": "T089: «Найду session-id», env | grep -iE 'ccs|session' → 5aed69eb...; T088: commit-msg-b5.txt в .cc-attachments, git commit -F",
+"id": "E147"
+},
+{
+"src": "T096",
+"task": "Сидирование данных трекера (фичи/задачи) на изолированном дев-стенде ClaudeHomeServer для браузерного прогона",
+"search_keys": [
+"сидирование tasks.json",
+"Verification VerifiedAt",
+"стенд DataPath",
+"POST /api/projects/{id}/tasks",
+"задачи молча пропускаются"
+],
+"solution": "Не править tasks.json руками: JsonFileStore при загрузке молча выбрасывает задачи с Verification без VerifiedAt (в логе стенда «запись … пропущена»). Создавай через API POST /api/projects/{projectId}/tasks (поля CreateTaskRequest — backend/ClaudeHomeServer.Tasks/TaskManager.cs ~938-1010) или заполняй VerifiedAt; после загрузки сверяй число задач в API и grep «пропущена» в логе.",
+"boundary": "Если нужны только задачи без Verification (шаги без вердиктов), ручной сид допустим.",
+"confidence": 0.7,
+"evidence": "Т096: «JsonFileStore не принимает мои ручные данные с полем Verification (повреждает стор)»; в T098 причина найдена: «молча выбрасывал 15 задач с VerifiedAt: null».",
+"id": "E148"
+},
+{
+"src": "T096",
+"task": "Поднять дев-стенд ClaudeHomeServer из git-worktree (сборка фронта, бэк на другом порту, изолированный DataPath)",
+"search_keys": [
+"стенд",
+"appsettings.Local.json",
+"mcp__dev__start_stand",
+"npm run build",
+"npm-cli.js not found",
+"DataPath"
+],
+"solution": "Фронт: если mcp__dev__build (npm) падает «npm-cli.js not found next to node /usr/bin/node» — Bash: cd frontend && PATH=/usr/local/bin:/usr/bin:$PATH npm run build. Бэк: положить appsettings.Local.json (DataPath, FrontendDistPath) в backend/ClaudeHomeServer/bin/Debug/net10.0/, запускать mcp__dev__start_stand {service: .csproj, port, health_path:/api/auth/me}. Каталог rootPath проекта должен существовать (mkdir -p), иначе «Папка не найдена».",
+"boundary": "Не про прод-инстанс (/opt/ccs/app) и не про сборку без worktree.",
+"confidence": 0.6,
+"evidence": "Т096: сборка npm упала код 127 с этой ошибкой, затем PATH=... npm run build прошёл; POST /api/projects вернул «Папка не найдена: …/projects/qa» до mkdir -p.",
+"id": "E149"
+},
+{
+"src": "T097",
+"task": "Остановка и перезапуск собственного дев-стенда/вспомогательного сервера, когда pkill запрещён хуком",
+"search_keys": [
+"pkill заблокирован",
+"kill по PID",
+"ss -ltnp",
+"стенд умер",
+"перезапуск стенда"
+],
+"solution": "pkill/killall/kill $(...) блокируются хуком (прод и стенд — один бинарь). Узнай PID по порту: ss -ltnp | grep :PORT, затем kill PID. Стенд может сам упасть между задачами (ERR_CONNECTION_REFUSED) — перед прогоном проверь curl и ps -p PID, перезапуск: cd backend/ClaudeHomeServer && ASPNETCORE_ENVIRONMENT=Development setsid nohup ./bin/Debug/net10.0/ClaudeHomeServer --urls http://localhost:PORT > лог 2>&1 &.",
+"boundary": "Не применимо к процессам, чей PID неизвестен и порт не слушается.",
+"confidence": 0.7,
+"evidence": "Т097: pkill -f «http.server 7777» → «Заблокировано: убийство процессов по имени…»; затем ss -ltnp, kill 2809305 сработал; стенд PID 2803769 оказался мёртв.",
+"id": "E150"
+},
+{
+"src": "T097",
+"task": "Браузерный прогон UI через Playwright MCP (клики по снимку, тёмная тема, устойчивые селекторы)",
+"search_keys": [
+"playwright browser_click ref",
+"does not match any elements",
+"Ref not found snapshot",
+"emulate_media colorScheme",
+"data-testid"
+],
+"solution": "В browser_click/type поле target — голый ref из последнего снимка (например f1e14), а не строка вида textbox \"Имя\" (даёт «does not match any elements»). После изменений DOM ref протухает («Ref … not found») — сделай browser_snapshot заново. Тёмная тема: browser_emulate_media {colorScheme:'dark'}. Для раскрываемых строк ищи data-testid (например step-row-Ш6) через evaluate.",
+"boundary": "Часовой пояс браузера через Playwright MCP не переключается.",
+"confidence": 0.6,
+"evidence": "Т097: fill_form/type с target textbox … → Error does not match any elements; click f1e1279 → Ref not found; ответ с getByTestId('step-row-Ш6'); T098: emulate_media colorScheme.",
+"id": "E151"
+},
+{
+"src": "T098",
+"task": "Не удаётся войти (401 / rate-limit) или токен отклоняется после перезапуска дев-стенда ClaudeHomeServer",
+"search_keys": [
+"401 Неверное имя пользователя",
+"admin 12345",
+"Auth:DevPassword",
+"jwt-secret.txt",
+"перезапуск стенда"
+],
+"solution": "Мастер-пароль 12345 работает только при Auth:DevPassword в Development: запускай стенд с ASPNETCORE_ENVIRONMENT=Development и тем же бинарём из worktree (backend/ClaudeHomeServer/bin/Debug/net10.0/ClaudeHomeServer, рядом appsettings.Local.json) — не из /tmp/…/bin, там его нет и процесс молча не стартует. Секрет подписи JWT лежит в <DataPath>/jwt-secret.txt; перебор паролей упирается в rate-limit логина.",
+"boundary": "Если пароль в users.json реально другой — Development-флаг не поможет.",
+"confidence": 0.45,
+"evidence": "Т098: запуск ./bin/Debug/... из /tmp/ccs-stand-polish (каталога нет), затем без Development логин 401 и блок rate-limit; UserStore.cs: «DevPassword … допустим ТОЛЬКО в Development»; рабочий секрет в data/jwt-secret.txt.",
+"id": "E152"
+},
+{
+"src": "T099",
+"task": "Юнит-тесты фронта (vitest) для React-компонента пилюли плана хода TurnPlanPill / режима фичи",
+"search_keys": [
+"TurnPlanPill тест",
+"__test.setRuns",
+"renderToStaticMarkup",
+"useTurnPlanMode",
+"vitest frontend"
+],
+"solution": "Режим пилюли берётся из среза стора (useTurnPlanMode → modeFor), а не из пропса runs: в тестах сначала __test.setRuns(sessionId, runs) (из lib/featureRuns), иначе молча рисуется режим «План хода» и ассерты падают. Окружение vitest — node, renderToStaticMarkup работает. Запуск: mcp__tests__run_tests {kind:vitest, target:frontend, files:[…pillModel.test.ts, TurnPlanPill.test.ts, featureRuns.test.ts]}.",
+"boundary": "Не про компоненты, не завязанные на стор featureRuns.",
+"confidence": 0.75,
+"evidence": "Т099: первый прогон 3 теста упали, кнопка показывала «Показать план хода»; после __test.setRuns 55/55 зелёные.",
+"id": "E153"
+},
+{
+"src": "T103",
+"task": "Правка документации docs/** и docs/architecture/features.md: какие проверки запускать и как читать огромный файл",
+"search_keys": [
+"docs/architecture/features.md",
+"ProjectMapHygieneGuardTests",
+"DocsIndexTests",
+"PlansControllerTests",
+"Read exceeds maximum size"
+],
+"solution": "features.md ~278 КБ — Read падает (>256 КБ): Grep по ^## и Read с offset/limit. Нового раздела он требует мало: PlansControllerTests читает реальный файл (>30 КБ, ≥2 заголовков ##); ProjectMapHygieneGuardTests смотрит только корневой CLAUDE.md (размер, мёртвые ссылки); DocsIndexTests работает во временной папке. Прогон: mcp__tests__run_tests {kind:dotnet, target:backend/ClaudeHomeServer.Tests, filter:\"FullyQualifiedName~ProjectMapHygieneGuardTests|…DocsIndexTests|…PlansControllerTests\"}.",
+"boundary": "Если правится корневой CLAUDE.md — гард размера/ссылок станет релевантным.",
+"confidence": 0.65,
+"evidence": "Т103: Read features.md → «File content (277.8KB) exceeds 256KB»; чтение трёх тестов, затем 252/252 зелёные.",
+"id": "E154"
+},
+{
+"src": "T104",
+"task": "Проверка инварианта «число тестов не изменилось» после переноса тестов между тестовыми проектами решения",
+"search_keys": [
+"--list-tests slnx",
+"число тестов инвариант",
+"перенос тестов",
+"дубли FQN",
+"per-project sort -u"
+],
+"solution": "dotnet test slnx --list-tests нестабилен (при параллельном обнаружении 15128–15205 между прогонами) и в моно/новом проекте остаются одинаковые FQN (namespace сохранён). Считай по проектам: dotnet test <proj>.csproj --no-build --list-tests | grep -E '^\\s' | sed 's/^\\s*//' | LC_ALL=C sort -u, и суммируй уникальные; сравнивай с baseline docs/research/tests-by-module-baseline-tests.txt.",
+"boundary": "Применимо только к проектам с тестами этого решения (ClaudeHomeServer.slnx).",
+"confidence": 0.7,
+"evidence": "Т104: slnx дал 15054/15204/15128–15205 при цели 15206; сумма по проектам = ровно 15206; найдено 10 дублирующихся FQN.",
+"id": "E155"
+},
+{
+"src": "T104",
+"task": "После git mv тестов в другой тестовый проект сборка падает: CS1061/CS0117 на internal-членах, нет SkippableFact, гард-тест краснеет",
+"search_keys": [
+"InternalsVisibleTo тесты",
+"CS1061 internal",
+"Xunit.SkippableFact",
+"ProjectCapabilitiesGuardTests",
+"TestKit.Host"
+],
+"solution": "Недоступные internal (SessionManager, FileWatcherService, TaskExecutionService) — добавить InternalsVisibleTo нового тестового проекта в backend/ClaudeHomeServer/ClaudeHomeServer.csproj (и TestKit.csproj); [SkippableFact] — PackageReference Xunit.SkippableFact. Общий хелпер, нужный и монолиту, вынести в ClaudeHomeServer.TestKit.Host; перенесённый из каталога *.Tests файл попадает под гард ProjectCapabilitiesGuardTests — допиши его в allow-list. Сводка ошибок: grep -oE 'error CS[0-9]+: [^;]+' build-runs/*/console.log | sort -u.",
+"boundary": "Не применимо, если тесты используют только public API.",
+"confidence": 0.65,
+"evidence": "Т104: первая сборка 78/79 с CS0117 'SessionManager does not contain MaxSubagentNudges'; после IVT 79/79; G10 краснел на GatewayTestKit.cs: 2 пока не добавили запись.",
+"id": "E156"
+},
+{
+"src": "T104",
+"task": "Отобрать, какие тесты монолита относятся к вертикали (Llm) при декомпозиции тестов по модулям",
+"search_keys": [
+"какие тесты переносить",
+"namespace ClaudeHomeServer.Services.Llm",
+"вертикаль Llm",
+"декомпозиция тестов"
+],
+"solution": "Отбирать не по using/namespace: ClaudeHomeServer.Services.Llm объявлен в нескольких сборках (в т.ч. Core/Services/Llm, например TitleExtraction, который остаётся). Строй карту «тип → сборка(и)» по public-типам продуктовых проектов скриптом python и переноси файл, если он использует типы только вертикали и не тянет типы монолита; спорные (McpHttpTransportConfig, KeepMcpServers) проверяй руками.",
+"boundary": "Для вертикалей с уникальным namespace достаточно grep по using.",
+"confidence": 0.5,
+"evidence": "Т104: серия python-скриптов по типам (215 public-типов Llm, 138→50→75 кандидатов), итог 72 файла; TitleExtraction найден в Core/Services/Llm.",
+"id": "E157"
+},
+{
+"src": "T105",
+"task": "Добавить аргумент/опцию запуска Claude CLI из продуктового кода (где собираются args и как пробросить опциональную зависимость)",
+"search_keys": [
+"аргументы CLI ClaudeSession",
+"LlmSessionContext",
+"BuildLaunchSignature",
+"SessionManager LlmSessionContext",
+"McpToolsetStabilityTests"
+],
+"solution": "Args собираются в ClaudeSession.cs (~3040–3450, блок --mcp-config; ~7400 строк — искать Grep по флагу, codegraph в worktree устаревший). Опциональная зависимость идёт SessionManager → record LlmSessionContext (backend/ClaudeHomeServer.Llm) → LlmSessionAdapterFactory → ClaudeSession; контекст строится в 3 точках SessionManager (старт ~4420, восстановление вне проекта ~6075 и проекта ~6160) — правь все. Интерфейс клади в Core (Llm видит только Core, SubsystemBoundaryTests). Сигнатура запуска — BuildLaunchSignature (~5630).",
+"boundary": "Устарело, если номера строк сместились; искать по именам.",
+"confidence": 0.55,
+"evidence": "Т105: 30+ Grep/Read по ClaudeSession, LlmSessionContext, SessionManager; правки в 3 точках new LlmSessionContext; codegraph_find вернул пусто («graph is stale in this worktree»).",
+"id": "E158"
+},
+{
+"src": "T105",
+"task": "Добавить bind-mount каталога в sandbox-контейнер (SandboxManager/DockerPathMapper) и протестировать",
+"search_keys": [
+"SandboxManager BuildRunArgsForHost",
+"ConfigHashForHost",
+"DockerPathMapper правило",
+"bind-mount sandbox",
+"SandboxManagerBareModeMountTests"
+],
+"solution": "Маунт и маппинг путей меняются одной правкой: SandboxManager.BuildRunArgsForHost (-v host:/path:ro, только если каталог существует) + ConfigHashForHost (иначе существующий контейнер не пересоздастся) + правило в DockerPathMapper. Оба метода internal static — тестируются напрямую; образец теста: ClaudeHomeServer.Tests/Services/SandboxManagerBareModeMountTests.cs, плюс DockerPathMapperTests. На устройство (RemoteProcessRunner.FileArgFlags) файловые флаги едут отдельно.",
+"boundary": "Не про локальный (не container) запуск CLI.",
+"confidence": 0.5,
+"evidence": "Т105: правки BuildRunArgsForHost/ConfigHashForHost/DockerPathMapper, новый SandboxManagerPluginsMountTests; мутация убрала mount — тест красный; 97 тестов зелёные.",
+"id": "E159"
+},
+{
+"src": "T106",
+"task": "Фронтовый тест с временем «ЧЧ:ММ» зависит от пояса машины (красный на MSK, зелёный в UTC)",
+"search_keys": [
+"TZ=Europe/Moscow vitest",
+"тест зависит от часового пояса",
+"featureTime hhmm",
+"localHHMM",
+"StepDetails.test"
+],
+"solution": "Ожидание считать независимым локальным хелпером (localHHMM/localDateTime на Date.getHours/getMinutes), а не через тот же hhmm из featureTime.ts — иначе мутация hhmm не краснит тест. Проверка обоих поясов через Bash (env у run_tests не умеет TZ): TZ=Europe/Moscow npx vitest run src/components/chat/feature src/lib; затем TZ=UTC. Хост по умолчанию UTC+3; метки с Z в lib/ обычно безопасны, локальные без Z — раунд-трип.",
+"boundary": "Не для серверных C#-тестов времени.",
+"confidence": 0.75,
+"evidence": "Т106: тест ждал 07:36–07:45, на МСК hhmm даёт 10:36; после правки 2546 тестов зелёные в обоих поясах; мутация getUTCHours краснит тест.",
+"id": "E160"
+},
+{
+"src": "T107",
+"task": "Работа в sibling git-worktree: mcp__dev__build и mcp__tests__run_tests собирают/гоняют не worktree, а основное дерево",
+"search_keys": [
+"worktree mcp__dev__build",
+"target выходит за пределы проекта",
+"run_tests основное дерево",
+"dotnet build worktree",
+"test still skipped"
+],
+"solution": "Если сессия запущена в основном дереве, а правки в sibling-worktree, mcp-инструменты работают с основным (target ../worktree/... отклоняется «выходит за пределы проекта»; артефакты .cc-attachments тоже в основном) — прогон идёт по НЕизменённому коду. Делай в Bash: cd worktree && dotnet build <один .csproj> -v q -nologo (несколько проектов — MSB1008), dotnet test <csproj> --no-build --filter …; полный текст падения — --logger \"console;verbosity=detailed\" (-v q режет).",
+"boundary": "Если cwd сессии и есть worktree (как в T099–T106), mcp-инструменты работают корректно.",
+"confidence": 0.8,
+"evidence": "Т107: «Ключевая находка: мои правки в worktree, а mcp-инструменты собирают основное дерево» — Skip, снятый в worktree, не применялся; Bash-прогон 32/32 зелёные.",
+"id": "E161"
+},
+{
+"src": "T107",
+"task": "Красные контрактные тесты после добавления события шины, поля DTO, MCP-сервера или модели: тест сверяет код с ADR/appsettings",
+"search_keys": [
+"TurnEventsMapContractTests",
+"ChatContextContractsTests",
+"KeepMcpToolsConfigTests",
+"ADR-013",
+"ADR-023-contracts"
+],
+"solution": "Эти тесты читают документы/конфиг: события из кода должны быть в таблице docs/adr/ADR-013-turn-event-bus.md; поля DTO — в JSON-примере и списке «остальные поля формы» docs/adr/ADR-023-contracts.md (round-trip падает от новых nullable-полей); белые списки KeepMcpTools в backend/ClaudeHomeServer/appsettings.json (профили LightProfile, local-qwen) — в эталонах KnownTools KeepMcpToolsConfigTests. Чини ADR/эталон под код, не удаляй из кода.",
+"boundary": "Если расхождение — реальный баг кода, а не отставшая документация.",
+"confidence": 0.65,
+"evidence": "Т107: session/continued дописан в ADR-013; faceTarget/characterSlug/characterPhotos — в ADR-023; tests/dev в эталонах KeepMcpTools; 6 тестов позеленели.",
+"id": "E162"
+},
+{
+"src": "T107",
+"task": "Закрыть задачу-дефект или QA-задачу через tasks_complete и получить отказ про Verification/verdict",
+"search_keys": [
+"tasks_complete defect",
+"closedWithoutCheck",
+"Дефект нельзя закрывать без Verification",
+"verification verdict qa"
+],
+"solution": "Для kind=defect tasks_complete без verification отклоняется («Дефект нельзя закрывать без Verification»): передай verification {verdict: accepted|accepted_with_remarks|returned|withdrawn} либо outcome: \"closedWithoutCheck\", если проверяющего нет. У задач роли qa вердикт тоже обязателен — добавляется через tasks_update verification после complete.",
+"boundary": "Обычные задачи (не дефекты, не qa) закрываются без вердикта.",
+"confidence": 0.65,
+"evidence": "Т107: ошибка «Дефект нельзя закрывать без Verification…», повтор с outcome closedWithoutCheck прошёл; T097: «добавляю verification.verdict (роль qa требует его)».",
+"id": "E163"
+},
+{
+"src": "T108",
+"task": "Мутационная проверка тестов (сломать код -> тест красный -> вернуть) перед сдачей шага",
+"search_keys": [
+"мутация",
+"мутационная проверка",
+"вернуть мутацию",
+"git diff перед коммитом",
+"критерий готовности мутации"
+],
+"solution": "Если мутация правит несколько мест (напр. две строки с SafePath.Join: installedFile и pkgDir), после возврата обязательно смотри `git diff <файл>` по ВСЕМУ файлу и перепрогоняй полный фильтр. Возврат только одной из мутированных строк оставляет мутацию в коммите. Мутировать лучше одной правкой на мутацию и сразу откатывать.",
+"boundary": "Не применимо, если мутация делается одной строкой и откатывается через git checkout файла.",
+"confidence": 0.65,
+"evidence": "Агент вернул installedFile, но в git diff увидел: «строка pkgDir всё ещё несёт мутацию 1 (я вернул только installedFile). Исправляю».",
+"id": "E164"
+},
+{
+"src": "T108",
+"task": "Задача в worktree с планом/контекстом, лежащим в трекере задач и заметках (ссылка вида b5215b40...)",
+"search_keys": [
+"план Егора",
+"tasks_get по префиксу id",
+"No such tool available",
+"mcp__wsp__files_search",
+"dossier_get"
+],
+"solution": "В этой среде нет mcp__wsp__files_search, mcp__notes__notes_search и mcp__memory__dossier_get (No such tool available) — не трать на них шаги. План/эпик читай через mcp__tasks__tasks_get (достаточно первых 8 символов id), код ищи Glob/Grep, дизайн — в docs/adr/ADR-0xx и docs/architecture/<фича>.md внутри worktree.",
+"boundary": "Список доступных MCP-инструментов может отличаться в другой конфигурации сессии.",
+"confidence": 0.5,
+"evidence": "Три вызова подряд дали tool_use_error «No such tool available» (files_search, notes_search, dossier_get); tasks_get {id:b5215b40} сработал.",
+"id": "E165"
+},
+{
+"src": "T109",
+"task": "Фронт-тесты (vitest) через mcp__tests__run_tests в монорепо с корнем проекта выше frontend/",
+"search_keys": [
+"run_tests vitest",
+"files не найден",
+"frontend/src",
+"путь относительно корня проекта",
+"vitest"
+],
+"solution": "Пути files в mcp__tests__run_tests {kind:vitest,target:frontend} задавай от КОРНЯ проекта: `frontend/src/lib/__tests__/design.test.ts`, не `src/lib/...` (иначе «Путь в files не найден»).",
+"boundary": "Если запускаешь vitest напрямую через Bash в каталоге frontend, пути относительные к нему.",
+"confidence": 0.7,
+"evidence": "files:[src/lib/__tests__/design.test.ts] -> «Путь не найден (пути — относительно корня проекта, например frontend/src/lib/x.test.ts)»; с префиксом frontend/ прошло.",
+"id": "E166"
+},
+{
+"src": "T109",
+"task": "Новый React-компонент/фича во фронте: чистый прогон tsc -b и lint:design",
+"search_keys": [
+"tsc -b",
+"lucide-react",
+"нет экспортируемого члена",
+"barrel index.ts",
+"lint:design"
+],
+"solution": "Запускай `cd frontend && npx tsc -b` сразу после написания компонентов, не в конце. Типичные ошибки: несуществующая иконка lucide-react (`Dots` нет, есть `MoreHorizontal`) — сначала grep по src, какие иконки уже импортируются; хук/компонент не добавлен в barrel `features/<x>/index.ts`; неиспользуемый импорт. Затем `npm run lint:design` (запрет сырых цветов, только токены C/FS/SP/R).",
+"boundary": "Не про бэкенд; и не про случаи, когда tsc уже зелёный.",
+"confidence": 0.6,
+"evidence": "tsc -b: «'lucide-react' has no exported member named 'Dots'», «useHasInstalledPlugins» не найден в баррел-файле; после MoreHorizontal и экспорта в index.ts tsc и lint:design зелёные.",
+"id": "E167"
+},
+{
+"src": "T109",
+"task": "Добавить новый тип привязки персоны (PersonaBindingType) с собственным выбором цели во фронте",
+"search_keys": [
+"PersonaBindingType",
+"bindingMeta.tsx",
+"PersonaBindingsPanel",
+"TargetPicker",
+"тип привязки персоны"
+],
+"solution": "Точки правки: types/index.ts (PersonaBindingType), features/personas/bindingMeta.tsx (иконка, мета, BINDING_TYPE_ORDER, bindingLabel), PersonaBindingsPanel.tsx (свой *TargetPicker + guard `if (type === 'tool' || type === 'plugin') return;` в useEffect загрузки каталога целей, как у 'tool'; иначе общая загрузка перетрёт пикер).",
+"boundary": "Для типов с обычным плоским списком целей отдельный пикер не нужен.",
+"confidence": 0.55,
+"evidence": "Правки bindingMeta.tsx, создан PluginTargetPicker.tsx, в PersonaBindingsPanel добавлен guard в useEffect («У инструментов свой пикер с собственной загрузкой»).",
+"id": "E168"
+},
+{
+"src": "T110",
+"task": "Прогон Llm.Tests / тест-проектов с общей коллекцией inotify: красные InotifyLeakRegressionTests при полном прогоне",
+"search_keys": [
+"InotifyLeakRegressionTests",
+"inotify",
+"флак",
+"Collection Inotify",
+"Llm.Tests"
+],
+"solution": "InotifyLeakRegressionTests падают под нагрузкой параллельной коллекции [Collection(TestCollections.Inotify)] (лимит inotify общий для ОС) — это не регрессия. Проверка: прогнать отдельно `filter: FullyQualifiedName~InotifyLeakRegressionTests` (проходит за секунды) и остальное `FullyQualifiedName!~InotifyLeakRegressionTests`; сложить результаты.",
+"boundary": "Если и в изоляции падают — это реальная регрессия.",
+"confidence": 0.6,
+"evidence": "Llm.Tests без Inotify: 2022 passed; сам InotifyLeakRegressionTests в изоляции проходит за 4 с — «флаки под нагрузкой параллельной коллекции».",
+"id": "E169"
+},
+{
+"src": "T110",
+"task": "Оценка красных в монолите ClaudeHomeServer.Tests при ревью/переносе тестов (какие падения предсуществующие)",
+"search_keys": [
+"предсуществующие падения",
+"DeviceWaitTestHost.StubProcess",
+"turnModelOverride",
+"Invalid callback Moq",
+"ClaudeHomeServer.Tests красные"
+],
+"solution": "Известный фон красных (не чинить): TaskExecutionServiceDeviceWaitTests и PersonaAutomationServiceDeviceWaitTests (Moq-callback на 4 арг. в TestKit.Host DeviceWaitTestHost.StubProcess, а SendMessageAsync получил 5-й turnModelOverride), PromptBenchTests.Экономия_*, ChatContextContractsTests x2, KeepMcpToolsConfigTests x2. Новые красные вне списка — регрессия. Прогон монолита ~4 мин.",
+"boundary": "Список снят 2026-10-18 на ветке feat/tests-by-module; после правок StubProcess устареет.",
+"confidence": 0.6,
+"evidence": "Монолит: «FAILED 11, passed 7788»; все 11 привязаны к старым коммитам (DeviceWait x5, PromptBench, ChatContext x2, KeepMcpToolsConfig x2); та же причина Moq в Personas.Tests.",
+"id": "E170"
+},
+{
+"src": "T111",
+"task": "Перенос тестов в новый .Tests-проект: сборка падает CS0117/CS0122 на internal-членах",
+"search_keys": [
+"InternalsVisibleTo",
+"CS0117",
+"CS0122",
+"новый Tests csproj",
+"вынос тестов из монолита"
+],
+"solution": "Не итерируй по одной ошибке: после сборки собери все CS0117/CS0122/CS0234, одним grep (`grep -rn 'class X' backend --include=*.cs`) найди сборку-владельца типа и добавь InternalsVisibleTo `ClaudeHomeServer.<N>.Tests` в ЕЁ csproj (Memory, Llm, Architecture, TestKit(.Host), не только Main) + ProjectReference. Образец: `grep -rl Llm.Tests backend --include=*.csproj`.",
+"boundary": "Типы public IVT не нужен; динамические модули — отдельная проблема (ссылка на Notes).",
+"confidence": 0.7,
+"evidence": "Шаг 3.4: четыре подряд упавшие сборки — FakeLlmSessionAdapterFactory (TestKit.Host), PersonaMemory*.Parse (Memory), ClaudeSession (Llm), ArchitectureToolset.AllTools (Architecture).",
+"id": "E171"
+},
+{
+"src": "T111",
+"task": "Bash-команды в ходе задачи: относительные пути (cd backend, git add backend/..., docs/research/...) внезапно не находятся",
+"search_keys": [
+"cd backend",
+"рабочий каталог сохраняется",
+"git add backend/backend",
+"файл не найден",
+"pwd"
+],
+"solution": "Рабочий каталог Bash сохраняется между вызовами: `cd backend && ...` в одной команде сдвигает cwd для следующих. Отсюда «backend/backend/», «docs/research/... нет файла», `cd: backend: нет такого`. Пиши абсолютные пути или каждый раз `cd /home/an/Sources/<worktree> && ...`; перед выводом «файла нет» проверь `pwd`. Не делай вывод о расхождении данных из-за ненайденного пути.",
+"boundary": "Не применимо, если все команды заданы абсолютными путями.",
+"confidence": 0.7,
+"evidence": "`git add backend/ClaudeHomeServer.Personas.Tests/` -> «не удалось открыть каталог backend/backend/»; baseline-файл «не найден» (агент ошибочно решил, что его нет в worktree).",
+"id": "E172"
+},
+{
+"src": "T112",
+"task": "Создание нового xUnit .Tests-проекта на Microsoft.NET.Sdk.Web для перенесённых тестов",
+"search_keys": [
+"GlobalUsings Xunit",
+"SkippableFact",
+"Notes ReferenceOutputAssembly",
+"Sdk.Web тест-проект",
+"csproj тестов"
+],
+"solution": "Чек-лист csproj (образец Personas.Tests): Sdk=Microsoft.NET.Sdk.Web, Library, IsPackable=false; GlobalUsings.cs с `global using Xunit; global using FluentAssertions;` (Web SDK не даёт); Xunit.SkippableFact 1.5.23 при [SkippableFact]; явный ProjectReference на Notes (Main тянет его с ReferenceOutputAssembly=false); Core, Main, TestKit, TestKit.Host.",
+"boundary": "Если исходный монолит-csproj ссылается иначе, копируй его набор пакетов.",
+"confidence": 0.65,
+"evidence": "Сборка 3.5: «SkippableFactAttribute could not be found»; Notes — «динамический модуль, Main тянет его с ReferenceOutputAssembly=false, транзитом не виден». В 3.6 то же для IAsyncLifetime.",
+"id": "E173"
+},
+{
+"src": "T112",
+"task": "dotnet build / mcp__dev__build slnx падает сразу с 0 из N проектов и Internal CLR error",
+"search_keys": [
+"Internal CLR error",
+"0x80131506",
+"код 134",
+"dotnet build транзиторный сбой",
+"повторить сборку"
+],
+"solution": "`Fatal error. Internal CLR error (0x80131506)`, код 134, «0 из 80 проектов» за 1,5 с — транзиторный сбой рантайма, не ошибка кода. Просто перезапусти ту же сборку; правки не нужны.",
+"boundary": "Если ошибка повторяется 2-3 раза подряд — смотри лог .cc-attachments/build-runs/*/console.log.",
+"confidence": 0.55,
+"evidence": "Сборка упала: «Fatal error. Internal CLR error (0x80131506)», 0 из 80 проектов; повтор без изменений дал 81/81, 0 ошибок.",
+"id": "E174"
+},
+{
+"src": "T113",
+"task": "Перенос каталогов тестов git mv в новый проект после rm -rf предсозданных папок",
+"search_keys": [
+"git mv каталог",
+"git mv не создаёт родителя",
+"mkdir -p Services",
+"перенос Services/Mcp"
+],
+"solution": "git mv не создаёт промежуточные каталоги: если назначение `NewTests/Services/Mcp` и `NewTests/Services` отсутствует (например, удалил заранее созданное rm -rf), команда молча падает. Сначала `mkdir -p <NewTests>/Services`, потом `git mv <Old>/Services/Mcp <New>/Services/Mcp` (целыми папками, пути абсолютные).",
+"boundary": "Для отдельных файлов в уже существующую папку не нужно.",
+"confidence": 0.55,
+"evidence": "git mv каталогов не сработал, «Причина: git mv не создаёт промежуточные каталоги — родитель Services был удалён. Создаю его и повторяю».",
+"id": "E175"
+},
+{
+"src": "T113",
+"task": "Перенесённые тесты читают файл-фикстуру из Fixtures/..., которая осталась в монолите и нужна обоим проектам",
+"search_keys": [
+"Fixtures",
+"DirectoryNotFoundException",
+"None Include Link",
+"CopyToOutputDirectory",
+"vllm-messages-stream.sse"
+],
+"solution": "Если после переноса тесты падают DirectoryNotFoundException на `Fixtures/...`, а фикстуру использует и монолит — не дублируй файл, добавь в новый csproj `<None Include=\"..\\ClaudeHomeServer.Tests\\Fixtures\\LocalStats\\x.sse\" Link=\"Fixtures/LocalStats/x.sse\" CopyToOutputDirectory=\"PreserveNewest\" />`. Кто ещё использует файл — проверь grep по имени.",
+"boundary": "Если фикстура принадлежит только переносимым тестам — перенеси её git mv.",
+"confidence": 0.65,
+"evidence": "Mcp.Tests: 9 упавших LlmGatewayObserverTests на Fixtures/LocalStats/vllm-messages-stream.sse; после <None Include ... Link> — 495/495.",
+"id": "E176"
+},
+{
+"src": "T113",
+"task": "Вынесли тестовый класс в новый проект, а другие тесты монолита вызывают его internal static-хелпер",
+"search_keys": [
+"полная сборка slnx",
+"internal static хелпер",
+"CS0117 монолит",
+"InternalsVisibleTo ClaudeHomeServer.Tests",
+"BuildSessionManager"
+],
+"solution": "Сборка одного нового тест-проекта может быть зелёной, а монолит ломается: его тест вызывает `TestsToolsetTests.BuildSessionManager` (internal) из переехавшего класса. Всегда собирай весь `backend/ClaudeHomeServer.slnx`; лечится `InternalsVisibleTo ClaudeHomeServer.Tests` в csproj нового Tests-проекта (+ временный ProjectReference монолит -> новый проект).",
+"boundary": "Если хелпер public или лежит в TestKit, IVT не нужен.",
+"confidence": 0.65,
+"evidence": "Сборка Mcp.Tests зелёная, а slnx: «SessionManagerToolStartedTests.cs: TestsToolsetTests does not contain a definition for BuildSessionManager»; добавили IVT -> 82/82.",
+"id": "E177"
+},
+{
+"src": "T114",
+"task": "QA на дев-стенде (mcp__dev__start_stand): нужны фича-флаг владельцу, второй пользователь, пересборка фронта",
+"search_keys": [
+"dev start_stand",
+"users.json FeatureFlags",
+"флаг выключен",
+"admin 12345",
+"npm-cli.js not found"
+],
+"solution": "Данные стенда: backend/ClaudeHomeServer/bin/Debug/net10.0/data/ (users.json). Флаг включается правкой FeatureFlags в users.json, UserStore кэширует: после правки mcp__dev__stop_stand + start_stand, затем reload страницы. Логин admin/12345. mcp__dev__build kind npm падает «npm-cli.js not found» — `cd frontend && npm run build` через Bash и перезапуск стенда.",
+"boundary": "Пароль/пути относятся к локальному стенду на этом хосте.",
+"confidence": 0.65,
+"evidence": "mcp__dev__build npm -> «npm-cli.js not found next to node»; после ручного снятия флага в users.json и рестарта: «Флаг plugins-mvp выключен»; admin/admin -> «Неверное имя пользователя».",
+"id": "E178"
+},
+{
+"src": "T114",
+"task": "Подготовка тестового плагина для установки «из папки» в UI Плагины",
+"search_keys": [
+"установка плагина из папки",
+"upload:",
+"draft:",
+"_uploads",
+"ccs-plugin.json"
+],
+"solution": "Источник установки — метка из белого списка, а не произвольный путь: `upload:diag` ищется в data/plugins/{ownerId}/_uploads/diag, `draft:diag` — в _drafts/diag (внутри каталога должны быть .claude-plugin/plugin.json, ccs-plugin.json, skills/*/SKILL.md, commands/*.md). Положи фикстуру в _uploads/<slug>, иначе установка падает. Смотри константы DraftPrefix/UploadPrefix в PluginInstaller.cs.",
+"boundary": "Только для текущей версии установщика плагинов (ADR-031).",
+"confidence": 0.55,
+"evidence": "Установка из _drafts/diag не прошла; grep PluginInstaller: «DraftPrefix=draft:, UploadPrefix=upload:». Агент: «Бэк ищет по upload:diag в _uploads/diag — поправлю фикстуру».",
+"id": "E179"
+},
+{
+"src": "T114",
+"task": "Изоляция данных между владельцами: проверка второго пользователя на стенде через API",
+"search_keys": [
+"второй пользователь",
+"изоляция владельцев",
+"curl api/plugins",
+"login токен",
+"userB"
+],
+"solution": "Для проверки изоляции A/B на стенде: получи JWT каждого через POST /api/auth/login, дергай REST (/api/plugins) curl-ом с Bearer, а не кликай UI. Второму пользователю флаг включай в users.json отдельно (иначе «Флаг plugins-mvp выключен» — это тоже проверка гейта) и рестарт стенда. Попытку установки от userB по чужому пути проверяй тем же curl.",
+"boundary": "Нужны реальные учётки в data/users.json стенда.",
+"confidence": 0.5,
+"evidence": "curl: «=== userB plugins === {error: Флаг plugins-mvp выключен}», после рестарта с флагом «userB plugins [] », admin видит local-c2c57765/diag.",
+"id": "E180"
+},
+{
+"src": "T115",
+"task": "Поднять изолированный стенд из master на нестандартном порту для QA/замеров, прод-юнита нет",
+"search_keys": [
+"стенд master порт 5555",
+"appsettings.Local.json Urls",
+"systemctl --user unit",
+"npm run build:quiet",
+"appsettings.Development.json 5000"
+],
+"solution": "Юнит мог не существовать (`systemctl --user list-unit-files | grep ccs`) — создай в ~/.config/systemd/user. Порт: appsettings.Development.json даёт 5000 — задай `{\"Urls\":\"http://localhost:5555\"}` в gitignored backend/ClaudeHomeServer/appsettings.Local.json. Фронт: `cd frontend && npm run build:quiet` (mcp__dev__build npm сломан). Стоп: `systemctl --user stop <unit>`.",
+"boundary": "Не гаси процессы по имени; данные стенда (DataPath) не затирай.",
+"confidence": 0.6,
+"evidence": "unit не найден в ~/.config/systemd/user; после старта «Порт не перебился — appsettings.Development.json задаёт 5000», правка appsettings.Local.json решила; фронт собрался через npm run build:quiet.",
+"id": "E181"
+},
+{
+"src": "T115",
+"task": "Playwright: выгрузить большой JSON с замерами (getComputedStyle для десятков элементов) из страницы",
+"search_keys": [
+"browser_evaluate превышает токены",
+"localStorage",
+"console.log дамп",
+"console-*.log playwright",
+"большой результат"
+],
+"solution": "browser_evaluate с результатом >25K токенов падает. Приём: копить замеры в window.__dump/localStorage, в отдельном evaluate `console.log('='+key+'='); console.log(JSON.stringify(v))`, затем python-ом разобрать .cc-attachments/playwright/console-<ts>.log. Из evaluate возвращай только счётчик.",
+"boundary": "Для небольших данных (<~20K символов) достаточно вернуть JSON напрямую.",
+"confidence": 0.65,
+"evidence": "Error: result (333,896 characters) exceeds maximum allowed tokens; затем console.log по ключам и python-парсер лога дал measure_raw.json на 16 снимков.",
+"id": "E182"
+},
+{
+"src": "T115",
+"task": "Playwright-замеры UI в обеих темах и на 360/1280: навигация к чату и переключение темы",
+"search_keys": [
+"dataset.theme",
+"смена темы playwright",
+"#/project/chat",
+"browser_resize 360",
+"hash-роут"
+],
+"solution": "URL чата: `http://localhost:<port>/#/project/<projectId>/chat/<chatId>` (`#/chats?project=` чат не открывает). Тема без UI: `document.documentElement.dataset.theme='dark'|'light'`, затем getComputedStyle; мобила — browser_resize 360x720 и повторный navigate. Селекторы ищи grep aria-label/data-testid в frontend/src/components/chat/feature/.",
+"boundary": "Если у темы есть иной механизм (класс на body), проверь theme.css.",
+"confidence": 0.5,
+"evidence": "navigate на #/chats?project=... не показал чат; после grep App.tsx открыли #/project/.../chat/...; замеры светлой/тёмной через dataset.theme и resize 360x720.",
+"id": "E183"
+},
+{
+"src": "T116",
+"task": "Запуск mcp__tests__run_tests / mcp__dev__build для .NET тест-проекта: «target не найден»",
+"search_keys": [
+"run_tests target не найден",
+"csproj путь",
+"backend/ClaudeHomeServer.X.Tests/",
+"target относительно корня проекта"
+],
+"solution": "target в mcp__tests__run_tests и mcp__dev__build — путь ОТ КОРНЯ проекта к csproj ВНУТРИ его папки: `backend/ClaudeHomeServer.Mcp.Tests/ClaudeHomeServer.Mcp.Tests.csproj`. Формы `backend/ClaudeHomeServer.Mcp.Tests.csproj` и `ClaudeHomeServer.Mcp.Tests/...csproj` дают «не найден». Абсолютные пути тоже нельзя.",
+"boundary": "Если чат открыт в worktree, корень проекта — этот worktree.",
+"confidence": 0.7,
+"evidence": "Пять вызовов подряд: «target ... не найден: нужен каталог или файл .csproj/.sln/.slnx/.slnf»; с backend/<Proj>/<Proj>.csproj заработали.",
+"id": "E184"
+},
+{
+"src": "T116",
+"task": "Проверка инварианта «число тестов не изменилось» (15206) при разносе монолита по .Tests-проектам",
+"search_keys": [
+"--list-tests",
+"15206",
+"per-project сумма",
+"sort -u",
+"склеенные строки",
+"baseline тестов"
+],
+"solution": "`dotnet test slnx --no-build --list-tests` целиком нестабилен (14948/14963/15005 вместо 15206: склеенные строки). Надёжно: цикл по проектам `dotnet test <P>/<P>.csproj --no-build --list-tests | grep -E '^[[:space:]]' | sed 's/^[[:space:]]*//' | LC_ALL=C sort -u`; сумма 15206; `comm -23` с baseline (без # строк) = ровно 3 guard-теста.",
+"boundary": "Числа привязаны к состоянию ветки feat/tests-by-module после пачки E.",
+"confidence": 0.7,
+"evidence": "slnx-уровень: 15005 и «расхождение»; per-project сумма 15206, diff с baseline = 3 строки MonolithReferenceGuardTests. Раньше (3.4, 3.6) тот же артефакт объясняли версией VSTest.",
+"id": "E185"
+}
+]

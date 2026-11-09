@@ -12,7 +12,6 @@ namespace ClaudeHomeServer.Services.Llm;
 public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
 
 // Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).
-// DossierText — блок паспортов изменений ОТДЕЛЬНО от Text (план «Секции промптов» этап 3,
-// флаг specialty-prompt-sections): секция dossier-recall клеится своим местом промпта;
-// null — флаг выключен/досье нет (тогда, если есть, оно уже внутри Text — как до фичи).
+// DossierText — блок паспортов изменений ОТДЕЛЬНО от Text: секция dossier-recall клеится
+// своим местом промпта; null — досье нет или вызов не разделял его (тогда оно внутри Text).
 public sealed record RecallBlock(string? Text, IReadOnlyList<RecallItem> Items, string? DossierText = null);

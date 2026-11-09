@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Mcp.Http;
 using FluentAssertions;
 
@@ -22,8 +23,9 @@ public class TasksToolsetParityTests
     private record StdioTool(string Name, JsonElement Schema);
 
     // tools/list живого stdio-сервера с заданным env: бэкенд не нужен (состав считается из
-    // env, в сеть сервер не ходит). null — node недоступен.
-    private static IReadOnlyList<StdioTool>? ListStdioTools(params (string Key, string Value)[] env)
+    // env, в сеть сервер не ходит). Недоступность не молчит: нет index.js — падение, нет node — явный
+    // skip с причиной в выводе (Skip.If бросает SkipException, результат «пропущен», а не «зелёный»).
+    private static IReadOnlyList<StdioTool> ListStdioTools(params (string Key, string Value)[] env)
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
         while (dir is not null)
@@ -32,7 +34,7 @@ public class TasksToolsetParityTests
             if (File.Exists(candidate)) break;
             dir = dir.Parent;
         }
-        Skip.If(dir is null, "mcp/tasks-server/index.js не найден");
+        dir.Should().NotBeNull("mcp/tasks-server/index.js обязан лежать в репозитории");
 
         var psi = new System.Diagnostics.ProcessStartInfo
         {
@@ -49,8 +51,8 @@ public class TasksToolsetParityTests
 
         System.Diagnostics.Process? proc;
         try { proc = System.Diagnostics.Process.Start(psi); }
-        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); return null; }
-        Skip.If(proc is null, "не удалось запустить node");
+        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); throw; }
+        Skip.If(proc is null, "не удалось запустить node: сверка со stdio-веткой невозможна");
 
         using (proc!)
         {
@@ -80,7 +82,6 @@ public class TasksToolsetParityTests
     public void Состав_СовпадаетСоStdioВеткой()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name).ToList();
         stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering(),
             "состав обязан совпадать с stdio-веткой отката");
@@ -99,7 +100,6 @@ public class TasksToolsetParityTests
     public void АварийнаяОсь_БезRunExecutor_СоставСовпадаетМинусОдин()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "0"));
-        if (stdio is null) return;
         var expected = TasksToolset.ProjectChatTools.Select(t => t.Name)
             .Where(n => n != "tasks_run_executor").ToList();
         stdio.Select(t => t.Name).Should().BeEquivalentTo(expected, options => options.WithStrictOrdering());
@@ -113,7 +113,6 @@ public class TasksToolsetParityTests
     public void RequiredНаборы_СовпадаютПосимвольно()
     {
         var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
-        if (stdio is null) return;
         var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
 
         foreach (var tool in stdio)
@@ -131,11 +130,124 @@ public class TasksToolsetParityTests
         }
     }
 
+    // Минор Глеба: сверка enum-значений. Имя свойства и required-набор совпали, а список
+    // значений enum разошёлся (http добавил значение, stdio — нет) — молчаливое расхождение:
+    // одна ветка принимает аргумент, который другая отклоняет. Для каждого свойства с enum в
+    // tasks_create/tasks_update/tasks_complete значения обязаны совпадать посимвольно, в том же
+    // порядке. Http-схема — JsonObject (McpToolSchema.InputSchema), stdio — JsonElement; оба
+    // приводим к JsonNode и идём по properties.*.enum.
+    private static Dictionary<string, List<string>> EnumValues(JsonNode? root)
+    {
+        var result = new Dictionary<string, List<string>>();
+        if (root is not JsonObject obj || obj["properties"] is not JsonObject props) return result;
+        foreach (var (name, prop) in props)
+        {
+            if (prop is JsonObject po && po["enum"] is JsonArray arr)
+                result[name] = arr.Select(v => v!.GetValue<string>()).ToList();
+        }
+        return result;
+    }
+
+    [SkippableFact]
+    public void EnumЗначения_СовпадаютПосимвольно()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var stdioByName = stdio.ToDictionary(t => t.Name);
+
+        // Минор 3: не хардкод create/update/complete, а ВСЕ инструменты, у которых есть enum,
+        // без исключений. tasks_list (status/priority/assignee/scope) раньше был мимо; паритет
+        // обязан ловиться на любом БУДУЩЕМ enum'е, а не на заведённом.
+        foreach (var (toolName, csharpTool) in byName)
+        {
+            var csharpEnums = EnumValues(csharpTool.InputSchema);
+            if (csharpEnums.Count == 0) continue; // без enum'ов — сравнивать нечего
+            stdioByName.Should().ContainKey(toolName, $"stdio-ветка обязана иметь {toolName}");
+            var stdioEnums = EnumValues(JsonNode.Parse(stdioByName[toolName].Schema.GetRawText()));
+
+            csharpEnums.Keys.Should().BeEquivalentTo(stdioEnums.Keys,
+                $"свойства с enum в {toolName} обязаны совпадать между ветками");
+
+            foreach (var name in csharpEnums.Keys)
+            {
+                csharpEnums[name].Should().BeEquivalentTo(stdioEnums[name],
+                    options => options.WithStrictOrdering(),
+                    $"enum-значения свойства {toolName}.{name} не должны расходиться между ветками");
+            }
+        }
+    }
+
+    // Провокация: сторож обязан покраснеть, если значение добавлено в http-схему, но не в
+    // stdio. Добавляю «provoked-role» только в http-список role и проверяю, что сравнение
+    // это видит (NotBeEquivalentTo). Без чувствительности к составу/порядку главный тест выше
+    // был бы ложно-зелёным.
+    [SkippableFact]
+    public void EnumЗначения_ПровокацияHttpДополнительноеЗначение_Краснеет()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var stdioByName = stdio.ToDictionary(t => t.Name);
+
+        var csharpEnums = EnumValues(byName["tasks_create"].InputSchema);
+        var stdioEnums = EnumValues(JsonNode.Parse(stdioByName["tasks_create"].Schema.GetRawText()));
+        csharpEnums.Should().ContainKey("role", "tasks_create.role — enum из TaskRoles");
+
+        csharpEnums["role"] = [.. csharpEnums["role"], "provoked-role"];
+
+        csharpEnums["role"].Should().NotBeEquivalentTo(stdioEnums["role"],
+            options => options.WithStrictOrdering(),
+            "значение, добавленное только в http, обязан поймать сторож парности enum");
+    }
+
+    // Вложенные схемы acceptance/evidence (items.required и items.properties) — верхнеуровневый
+    // required их не видит. Сверяем с ЖИВЫМ stdio-ответом во всех инструментах, где они есть.
+    [SkippableFact]
+    public void ВложенныеСхемы_AcceptanceИEvidence_СовпадаютСоStdio()
+    {
+        var stdio = ListStdioTools(("TASKS_PROJECT_ID", "proj-1"), ("TASKS_EXECUTE", "1"));
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        var checkedPairs = 0;
+
+        foreach (var tool in stdio)
+        {
+            var csharpProps = byName[tool.Name].InputSchema["properties"] as JsonObject;
+            var stdioProps = JsonNode.Parse(tool.Schema.GetRawText())!["properties"] as JsonObject;
+            foreach (var prop in new[] { "acceptance", "evidence", "verification" })
+            {
+                var inCsharp = csharpProps?[prop] is not null;
+                (stdioProps?[prop] is not null).Should().Be(inCsharp,
+                    $"{tool.Name}.{prop} должен быть в обеих ветках или ни в одной");
+                if (!inCsharp) continue;
+                checkedPairs++;
+                JsonNode.DeepEquals(csharpProps![prop], stdioProps![prop]).Should().BeTrue(
+                    $"вложенная схема {tool.Name}.{prop} разошлась между ветками");
+            }
+        }
+        checkedPairs.Should().BeGreaterThan(0, "сверка не должна проходить вакуумно");
+    }
+
     /// <summary>Хвост маршрута — та же точка правды, что у memory: форма не может разъехаться.</summary>
     [Fact]
     public void ХвостМаршрута_СтроитсяОднойФормой()
     {
         TasksToolset.EndpointFor("http://localhost:5000", "sess-1")
             .Should().Be("http://localhost:5000/mcp/tasks/sess-1");
+    }
+
+    /// <summary>
+    /// Честный прогресс фичи: аргумент planSteps (структурный список шагов плана) обязан быть
+    /// в схемах tasks_create/tasks_update http-ветки — иначе планировщик не заполнит знаменатель
+    /// «сколько всего». Статично, от хода не зависит (McpToolsetStabilityTests).
+    /// </summary>
+    [Fact]
+    public void PlanSteps_АргументВСхемахCreateAndUpdate()
+    {
+        var byName = TasksToolset.ProjectChatTools.ToDictionary(t => t.Name);
+        foreach (var toolName in new[] { "tasks_create", "tasks_update" })
+        {
+            var schema = byName[toolName].InputSchema;
+            var hasPlanSteps = schema["properties"] is JsonObject props && props["planSteps"] is not null;
+            hasPlanSteps.Should().BeTrue($"{toolName}: аргумент planSteps обязан быть в схеме");
+        }
     }
 }

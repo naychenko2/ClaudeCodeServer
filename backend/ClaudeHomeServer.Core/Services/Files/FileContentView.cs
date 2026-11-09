@@ -19,4 +19,10 @@ public sealed record FileContentView(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? DocKind = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? MimeType = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Base64 = null,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? FileSize = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] long? FileSize = null,
+    // W4-LINK-B (шаг B2a): дерево, из которого прочитан файл. Заполняется только на пути
+    // поиска по деревьям проекта (?sessionId=): branch — ветка найденного дерева (null для
+    // main), isAnchor — прочитано ли из заявленного дерева чата. Чип «из дерева <ветка>»
+    // строят именно из этих полей; вне поиска — null/false, чипа нет.
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Branch = null,
+    bool IsAnchor = false);

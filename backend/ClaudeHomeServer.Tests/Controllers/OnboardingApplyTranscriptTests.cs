@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Свежая фабрика на каждый тест: состояние OnboardingSessionId/AssistantPersonaId живёт в
 // общем UserStore синглтона, и тесты на нём зависели бы от порядка. Плюс своя ICheapTextRunner-заглушка,
 // отдающая готовый черновик: боевой раннер погнал бы claude.exe/Ollama в интеграционном тесте.
+[Trait("Category", "Host")]
 public class OnboardingApplyTranscriptTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory;
@@ -120,14 +121,13 @@ public class OnboardingApplyTranscriptTests : IDisposable
     {
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => Task.FromResult(answer);
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(answer);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer);
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

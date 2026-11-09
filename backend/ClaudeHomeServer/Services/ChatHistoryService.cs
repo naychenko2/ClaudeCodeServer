@@ -6,9 +6,13 @@ namespace ClaudeHomeServer.Services;
 public class ChatHistoryService
 {
     private readonly string _basePath;
+    // Строковый контракт enum'ов тот же, что на SignalR/MVC (Program.cs): PromptCacheMissReason
+    // в PromptCache обязан сериализоваться одинаково и в history.json, и в хабе — без конвертера
+    // история отдавала число. Числовые значения старых записий конвертер читает обратно.
     private static readonly JsonSerializerOptions _opts = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
     public ChatHistoryService(IConfiguration config)
@@ -141,7 +145,8 @@ public class ChatHistoryService
 
     // Время последней записи файла истории чата (для инвалидации кешей, построенных над
     // историей — см. ProjectFileSessionsIndex). null — истории ещё нет (файла не существует).
-    public DateTime? LastWriteUtc(string claudeSessionId)
+    // virtual — для тестов PrefixFingerprintCache: фейк управляет версией без реального файла.
+    public virtual DateTime? LastWriteUtc(string claudeSessionId)
     {
         var path = GetPath(claudeSessionId);
         return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
@@ -166,4 +171,35 @@ public class ChatHistoryService
     }
 
     private string GetPath(string id) => Path.Combine(_basePath, id, "history.json");
+
+    // pending.json — очередь отложенных сообщений занятого чата рядом с history.json:
+    // Delete выше сносит всю папку сессии, а значит и его. Пустая очередь — файла нет.
+    private static readonly JsonSerializerOptions _pendingOpts = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+    };
+
+    private string GetPendingPath(string id) => Path.Combine(_basePath, id, "pending.json");
+
+    public PendingQueueFile? LoadPending(string key) =>
+        JsonFileStore.Load<PendingQueueFile>(GetPendingPath(key), _pendingOpts);
+
+    // items пуст — файл удаляется (нечего восстанавливать); иначе атомарная запись
+    public void SavePending(string key, PendingQueueFile state)
+    {
+        var path = GetPendingPath(key);
+        if (state.Items.Count == 0)
+        {
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+            return;
+        }
+        JsonFileStore.Save(path, state, _pendingOpts);
+    }
 }
+
+// Содержимое pending.json: очередь по порядку и признак заморозки «Стоп»
+public sealed record PendingQueueFile(bool Frozen, List<SessionManager.QueuedMessage> Items);
+

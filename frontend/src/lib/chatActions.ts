@@ -8,11 +8,11 @@
 // диалогом), и склеивать эти реализации в один рантайм смысла нет.
 
 export type ChatActionKey =
-  | 'rename' | 'pin' | 'tags' | 'subject' | 'wall' | 'notify' | 'dossier' | 'expiry' | 'archive' | 'delete';
+  | 'rename' | 'pin' | 'tags' | 'subject' | 'wall' | 'notify' | 'dossier' | 'wiki' | 'expiry' | 'archive' | 'delete';
 
 // Порядок — канонический: в каком бы месте действие ни рисовалось, соседи те же
 export const CHAT_ACTION_ORDER: ChatActionKey[] = [
-  'rename', 'pin', 'tags', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive', 'delete',
+  'rename', 'pin', 'tags', 'subject', 'wall', 'notify', 'dossier', 'wiki', 'expiry', 'archive', 'delete',
 ];
 
 export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
@@ -24,6 +24,7 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
   wall: 'На стену',
   notify: 'Уведомления',
   dossier: 'Досье решений',
+  wiki: 'Вики',
   expiry: 'Срок хранения',
   archive: 'В архив',
   delete: 'Удалить',
@@ -42,7 +43,7 @@ export const CHAT_ACTION_LABELS: Record<ChatActionKey, string> = {
 // (см. ChatCard.quickButtons) — поэтому спрятавший действие человек всё равно
 // сможет вытащить чат обратно из карточки
 export const CARD_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
-  'rename', 'subject', 'wall', 'notify', 'dossier', 'expiry', 'archive',
+  'rename', 'subject', 'wall', 'notify', 'dossier', 'wiki', 'expiry', 'archive',
 ];
 
 // Шапка открытого чата: Теги · Срок хранения (у срока ещё и роль индикатора —
@@ -77,7 +78,6 @@ export const WALL_ACTIONS_HIDDEN_BY_DEFAULT: ChatActionKey[] = [
 //
 // Контекст и лимиты — одна кольцевая пилюля под ключом cost; прежнего отдельного ключа
 // context больше нет, сохранённые наборы переводит migrateRingPillHidden.
-// Кэш промпта живёт в той же пилюле (циферблат справа) — своего ключа у него нет.
 export type ChatBadgeKey = 'mechanic' | 'workflow' | 'cost' | 'fal' | 'glif' | 'spend'
   // мобильная кольцевая пилюля (RingPillBadge): тем же глазиком, но целиком
   | 'mobile-pills';
@@ -89,7 +89,7 @@ export const CHAT_BADGE_ORDER: ChatBadgeKey[] = [
 export const CHAT_BADGE_LABELS: Record<ChatBadgeKey, string> = {
   mechanic: 'Механика команды',
   workflow: 'Прогресс workflow',
-  cost: 'Контекст, лимиты и кэш',
+  cost: 'Контекст и лимиты',
   fal: 'Траты fal.ai',
   glif: 'Генерации glif',
   spend: 'Расход токенов',
@@ -116,6 +116,14 @@ export function migrateRingPillHidden(hidden: string[]): string[] {
 // вернуть в ряд можно тем же глазиком, повторно миграция не сработает (маркер)
 export function migrateCardSubjectHidden(hidden: string[]): string[] {
   return hidden.includes('subject') ? hidden : [...hidden, 'subject'];
+}
+
+// Перевод сохранённого набора плитки: кнопка «Вики» появится позже, и у тех, кто
+// успел тронуть глазик, её ключа в наборе нет — новая кнопка вылезала в ряд, хотя
+// по дефолту она в меню. Прячем её один раз; вернуть в ряд можно тем же глазиком,
+// повторно миграция не сработает (маркер)
+export function migrateCardWikiHidden(hidden: string[]): string[] {
+  return hidden.includes('wiki') ? hidden : [...hidden, 'wiki'];
 }
 
 // Пилюли по умолчанию показаны все — они и есть сводка состояния чата;

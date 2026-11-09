@@ -1,0 +1,205 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Notes;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Разовый скрипт базовой линии LLM-wiki (шаг S0b, п.1): снимок метрик графа заметок
+// ДО фикса парсера (7928ce94). Работает на той же модели графа, что и боевая NotesService:
+// GetSummaries + GetDetail + GetBacklinks. Ничего не пишет в базы — только читает.
+//
+// Пути задаются переменными окружения:
+//   BASELINE_PERSONAL_VAULT — личный vault (data/notes/{userId})
+//   BASELINE_PROJECT_ROOT  — корень проекта AI Home (в нём notes/)
+//   BASELINE_USER_ID       — ownerId
+//   BASELINE_OUT           — куда положить JSON со снимком
+public class BaselineMetricsScript
+{
+    // Пути снимка заданы по умолчанию; переопределяются переменными окружения.
+    private const string DefaultPersonalVault = "/srv/ccs/data/notes/a300cc8f-0074-47ab-865c-138cd39c2c18";
+    private const string DefaultProjectRoot = "/home/an/Sources/ClaudeCodeServer";
+    private const string DefaultUserId = "a300cc8f-0074-47ab-865c-138cd39c2c18";
+    private const string DefaultOut = "/tmp/llm-wiki-baseline/metrics-before-fix.json";
+
+    [Fact]
+    public void Снимок_Метрик_Графа()
+    {
+        var personalVault = Env("BASELINE_PERSONAL_VAULT", DefaultPersonalVault);
+        var projectRoot = Env("BASELINE_PROJECT_ROOT", DefaultProjectRoot);
+        var userId = Env("BASELINE_USER_ID", DefaultUserId);
+        var outPath = Env("BASELINE_OUT", DefaultOut);
+
+        // Реестр проектов — в tmp: боевой projects.json не трогаем.
+        var tmp = Path.Combine(Path.GetTempPath(), "llmwiki_baseline_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tmp);
+        try
+        {
+            var config = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["DataPath"] = Path.Combine(tmp, "projects.json"),
+                })
+                .Build();
+
+            // Личный vault сервиса = {dataDir}/notes/{userId}; dataDir — каталог DataPath.
+            // Поэтому кладём копию vault'а по пути, который выведет сервис.
+            var dataDir = tmp;
+            var vaultTarget = Path.Combine(dataDir, "notes", userId);
+            Directory.CreateDirectory(Path.GetDirectoryName(vaultTarget)!);
+            CopyDir(personalVault, vaultTarget);
+
+            var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
+                NullLogger<UserStore>.Instance);
+            var appSettings = new AppSettingsService(config);
+            var projects = new ProjectManager(config, users, appSettings);
+            var project = projects.Create("AI Home (baseline)", projectRoot, userId, "baseline");
+
+            var sut = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+
+            var summary = new List<NoteSummary>();
+            var all = sut.GetSummaries(userId, null, null);
+            summary.AddRange(all);
+
+            var bases = new List<(string Key, string Label, string? SourceKey)>
+            {
+                ("personal", "Личная база Андрея", "personal"),
+                ("project", "Заметки проекта AI Home", project.Id),
+                ("combined", "Обе базы вместе (единый граф владельца)", null),
+            };
+
+            var result = new
+            {
+                ts = DateTime.UtcNow.ToString("o"),
+                codeVersion = Environment.GetEnvironmentVariable("BASELINE_CODE_VERSION") ?? "unknown",
+                ownerId = userId,
+                graph = new
+                {
+                    nodes = sut.GetGraph(userId).Nodes.Count,
+                    edges = sut.GetGraph(userId).Edges.Count,
+                    ghostNodes = sut.GetGraph(userId).Nodes.Count(n => n.Ghost),
+                },
+                bases = bases.Select(b => Measure(sut, userId, summary, b.Key, b.Label, b.SourceKey)).ToList(),
+            };
+
+            var json = JsonSerializer.Serialize(result, new JsonSerializerOptions
+            {
+                WriteIndented = true,
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                DefaultIgnoreCondition = JsonIgnoreCondition.Never,
+            });
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+            File.WriteAllText(outPath, json);
+            Console.WriteLine("=== BASELINE ===");
+            Console.WriteLine(json);
+        }
+        finally
+        {
+            try { if (Directory.Exists(tmp)) Directory.Delete(tmp, recursive: true); }
+            catch { /* временная папка — не критично */ }
+        }
+    }
+
+    private static string Env(string name, string fallback) =>
+        Environment.GetEnvironmentVariable(name) is { Length: > 0 } v ? v : fallback;
+
+    private static void CopyDir(string src, string dst)
+    {
+        Directory.CreateDirectory(dst);
+        foreach (var f in Directory.EnumerateFiles(src, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(src, f);
+            var target = Path.Combine(dst, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(f, target, overwrite: true);
+        }
+    }
+
+    private static object Measure(NotesService sut, string userId, List<NoteSummary> all,
+        string key, string label, string? sourceKey)
+    {
+        var notes = sourceKey is null ? all : all.Where(n => n.Source == sourceKey).ToList();
+        var comments = notes.Where(n => n.Annotation is not null).ToList();
+        var plain = notes.Where(n => n.Annotation is null).ToList();
+        var journal = plain.Where(n => n.Path.StartsWith("Journal/", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        long links = 0, ghosts = 0, unlinked = 0, notesWithUnlinked = 0, incomingTotal = 0;
+        long linksToOtherBase = 0, linksToSameBase = 0;
+        var orphanIds = new List<string>();
+        var orphanIdsNoJournal = new List<string>();
+        var ghostTargets = new List<string>();
+
+        foreach (var n in plain)
+        {
+            var d = sut.GetDetail(userId, n.Id);
+            if (d is null) continue;
+            links += d.Links.Count;
+            ghosts += d.Links.Count(l => !l.Resolved);
+            ghostTargets.AddRange(d.Links.Where(l => !l.Resolved).Select(l => l.TargetTitle));
+            unlinked += d.UnlinkedMentions.Count;
+            if (d.UnlinkedMentions.Count > 0) notesWithUnlinked++;
+            incomingTotal += d.Backlinks.Count;
+            // Разрез ссылок по базе цели (цель — заметка, id = base64url(sourceKey|relPath))
+            foreach (var l in d.Links.Where(l => l.Resolved))
+            {
+                var targetSource = DecodeSourceKey(l.TargetId);
+                if (targetSource == n.Source) linksToSameBase++; else linksToOtherBase++;
+            }
+            if (d.Backlinks.Count == 0)
+            {
+                orphanIds.Add(n.Id);
+                if (!n.Path.StartsWith("Journal/", StringComparison.OrdinalIgnoreCase))
+                    orphanIdsNoJournal.Add(n.Id);
+            }
+        }
+
+        // Сироты: без Journal/ (по развезу §8 — «сироты считаем без Journal/»)
+        var orphans = orphanIds.Count;
+        var orphansNoJournal = orphanIdsNoJournal.Count;
+        var denominatorNoJournal = plain.Count - journal.Count;
+
+        return new
+        {
+            key,
+            label,
+            notes = plain.Count,
+            comments = comments.Count,
+            journalNotes = journal.Count,
+            notesNoJournal = denominatorNoJournal,
+            links,
+            ghosts,
+            ghostsShare = links == 0 ? 0 : Math.Round(100.0 * ghosts / links, 1),
+            distinctGhostTargets = ghostTargets.Distinct().Count(),
+            linksToSameBase,
+            linksToOtherBase,
+            incomingLinks = incomingTotal,
+            orphans,
+            orphansNoJournal,
+            orphansShareNoJournal = denominatorNoJournal == 0 ? 0 : Math.Round(100.0 * orphansNoJournal / denominatorNoJournal, 1),
+            orphansShareAll = plain.Count == 0 ? 0 : Math.Round(100.0 * orphans / plain.Count, 1),
+            unlinkedMentions = unlinked,
+            notesWithUnlinked,
+            unlinkedShareOfNotes = plain.Count == 0 ? 0 : Math.Round(100.0 * notesWithUnlinked / plain.Count, 1),
+            orphanSample = orphanIdsNoJournal.Take(10).ToList(),
+            ghostSample = ghostTargets.Distinct().Take(15).ToList(),
+        };
+    }
+
+    // id заметки = base64url(sourceKey|relPath) — по нему виден источник цели
+    private static string DecodeSourceKey(string noteId)
+    {
+        try
+        {
+            var s = noteId.Replace('-', '+').Replace('_', '/');
+            var padded = s.PadRight(s.Length + (4 - s.Length % 4) % 4, '=');
+            var bytes = Convert.FromBase64String(padded);
+            var text = System.Text.Encoding.UTF8.GetString(bytes);
+            var idx = text.IndexOf('|');
+            return idx > 0 ? text[..idx] : text;
+        }
+        catch { return "?"; }
+    }
+}

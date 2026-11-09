@@ -66,7 +66,6 @@ test.beforeAll(async ({ playwright, baseURL }) => {
   const request = await playwright.request.newContext({ baseURL });
   const token = await login(request);
   const headers = { Authorization: `Bearer ${token}` };
-  await request.put('/api/feature-flags/audio-editor', { headers, data: { enabled: true } });
 
   if (!fs.existsSync(path.join(ROOT, FILE))) tone(path.join(ROOT, FILE), 330);
   // Занятое имя для «Сохранить как…»

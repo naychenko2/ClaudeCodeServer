@@ -319,7 +319,11 @@ public sealed class AudioEditJobServiceTests : IDisposable
         var started = await LaunchAsync(svc, Speak("local"), input: new AudioJobInput("", Session, thread.Id));
         await svc.WhenDone(started.Value!.JobId);
 
-        _broadcaster.Owners.Should().OnlyContain(o => o == Owner);
+        // Фикстура без ISessionDirectory: по fail-closed (S2d-3f) событие с id чата идёт адресно
+        // владельцу, группе проекта — ничего. Маршрутировка по аудитории чата проверяет
+        // AudioEventAudienceTests; здесь — состав, порядок и адресат событий задачи.
+        _broadcaster.Owners.Should().NotBeEmpty().And.OnlyContain(o => o == Owner);
+        _broadcaster.Projects.Should().BeEmpty();
         _broadcaster.Of<AudioEditProgressMessage>().Should().NotBeEmpty();
         _broadcaster.Of<AudioThreadChangedMessage>().Should().HaveCountGreaterThanOrEqualTo(2)
             .And.OnlyContain(m => m.SessionId == Session);
@@ -329,6 +333,57 @@ public sealed class AudioEditJobServiceTests : IDisposable
         // Версии в нити раньше события completed
         _broadcaster.Messages.FindLastIndex(m => m is AudioThreadChangedMessage)
             .Should().BeLessThan(_broadcaster.Messages.FindIndex(m => m is AudioEditCompletedMessage));
+    }
+
+    // Шаг 29: снимок очереди GPU из отчёта прогресса едет в событие AudioEditProgressMessage;
+    // статус запуска, трата и подпись записи от него не зависят (Gpu — только отображение, не учёт)
+    [Fact]
+    public async Task СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят()
+    {
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 0, StartInSeconds: null, Steps: null, Percent: 50, PercentExact: true,
+            RemainingSeconds: 10, Busy: null, DownSince: null);
+        var engine = new FakeEngine("local") { Gpu = gpu };
+        var svc = Service(engine);
+
+        var started = await LaunchAsync(svc, Speak("local"), input: new AudioJobInput("", Text: "Привет"));
+        await svc.WhenDone(started.Value!.JobId);
+
+        var done = svc.Get(Owner, Scope.Key, started.Value.JobId)!;
+        done.Status.Should().Be(AudioEditJobStatus.Completed);
+        // Событие прогресса несёт живой снимок очереди GPU
+        _broadcaster.Of<AudioEditProgressMessage>().Should().Contain(m => m.Gpu == gpu);
+        // Трата по котировке (local — бесплатно), подпись записи — обычная: от Gpu не зависят
+        done.Cost.Should().Be(new AudioCost(0, AudioPriceUnits.Free));
+        var record = _spend.Should().ContainSingle().Subject;
+        record.Provider.Should().Be("local");
+        record.Label.Should().Be($"{FakeEngine.SpeakModel} · бесплатно");
+        record.Generations.Should().Be(1);
+    }
+
+    // Шаг 29: при Gpu=null ключ gpu не пишется ни в событие прогресса, ни в DTO карточки
+    // (JsonIgnore WhenWritingNull); заполненный снимок — пишется
+    [Fact]
+    public void GpuNull_НеПишетсяВJsonСобытияИDto()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var empty = new AudioEditProgressMessage("j", Scope.Key, AudioStage.Queued, 1, 5, 1, 1, null, null,
+            AudioEditInitiator.Human);
+        var emptyDto = new AudioJobDto("j", Scope.Key, AudioEditJobStatus.Queued, "local", "m", AudioOp.Speak, 1,
+            [], null, null, null, null, 1, 5, new DateTime(2026, 10, 1), null, null, AudioEditInitiator.Human, "Apache-2.0");
+        System.Text.Json.JsonSerializer.Serialize(empty, options).Should().NotContain("gpu", "null не пишется");
+        System.Text.Json.JsonSerializer.Serialize(emptyDto, options).Should().NotContain("gpu", "null не пишется");
+
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40, PercentExact: false,
+            RemainingSeconds: 20, Busy: null, DownSince: null);
+        var filled = new AudioEditProgressMessage("j", Scope.Key, AudioStage.Running, null, null, 1, 1, null, null,
+            AudioEditInitiator.Human, Gpu: gpu);
+        var filledDto = new AudioJobDto("j", Scope.Key, AudioEditJobStatus.Running, "local", "m", AudioOp.Speak, 1,
+            [], null, null, null, null, null, null, new DateTime(2026, 10, 1), null, null, AudioEditInitiator.Human,
+            "Apache-2.0", Gpu: gpu);
+        System.Text.Json.JsonSerializer.Serialize(filled, options).Should().Contain("gpu", "заполненный снимок пишется");
+        System.Text.Json.JsonSerializer.Serialize(filledDto, options).Should().Contain("gpu", "заполненный снимок пишется");
     }
 
     [Fact]
@@ -356,7 +411,8 @@ public sealed class AudioEditJobServiceTests : IDisposable
         var changed = _broadcaster.Of<AudioPrefsChangedMessage>().Should().ContainSingle().Subject;
         changed.Mode.Should().Be(AudioModes.Music);
         changed.Prefs.Count.Should().Be(2);
-        _broadcaster.Owners.Should().Equal(Owner);
+        _broadcaster.Projects.Should().Equal(Scope.Key);
+        _broadcaster.Owners.Should().BeEmpty();
     }
 
     // ── Подставки ────────────────────────────────────────────────────────────────
@@ -372,8 +428,11 @@ public sealed class AudioEditJobServiceTests : IDisposable
     {
         private readonly ConcurrentQueue<(string Owner, ServerMessage Message)> _sent = new();
 
-        public List<ServerMessage> Messages => [.. _sent.Select(s => s.Message)];
+        private readonly ConcurrentQueue<(string Project, ServerMessage Message)> _sentToProject = new();
+
+        public List<ServerMessage> Messages => [.. _sent.Select(s => s.Message), .. _sentToProject.Select(s => s.Message)];
         public List<string> Owners => [.. _sent.Select(s => s.Owner)];
+        public List<string> Projects => [.. _sentToProject.Select(s => s.Project)];
         public List<T> Of<T>() => [.. Messages.OfType<T>()];
 
         public Task ToOwner(string ownerId, ServerMessage message)
@@ -384,7 +443,13 @@ public sealed class AudioEditJobServiceTests : IDisposable
 
         public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
         public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
-        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+
+        public Task ToProject(string projectId, ServerMessage message)
+        {
+            _sentToProject.Enqueue((projectId, message));
+            return Task.CompletedTask;
+        }
+
         public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
@@ -402,6 +467,8 @@ public sealed class AudioEditJobServiceTests : IDisposable
         public AudioOutcome Outcome { get; init; } = AudioOutcome.Ok;
         public TaskCompletionSource Accepted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int Runs => _runs;
+        // Снимок очереди GPU, который драйвер репортит в каждом отчёте прогресса (шаг 29); null — не знает
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; init; }
 
         public void Release() => _release.TrySetResult();
 
@@ -427,11 +494,11 @@ public sealed class AudioEditJobServiceTests : IDisposable
         public async Task<AudioResult> RunAsync(AudioRequest req, IProgress<AudioProgress> progress, CancellationToken ct)
         {
             Interlocked.Increment(ref _runs);
-            progress.Report(new AudioProgress(AudioStage.Queued, 1, 5));
+            progress.Report(new AudioProgress(AudioStage.Queued, 1, 5, Gpu: Gpu));
             Accepted.TrySetResult();
             if (Hold) await _release.Task.WaitAsync(ct);
             if (Outcome != AudioOutcome.Ok) return AudioResult.Fail(Outcome, "поставщик не справился");
-            progress.Report(new AudioProgress(AudioStage.Running));
+            progress.Report(new AudioProgress(AudioStage.Running, Gpu: Gpu));
             List<AudioFile> files = req.Op == AudioOp.Separate
                 ? [new("main", [1], "audio/mpeg", ".mp3"), new("stem:vocals", [2], "audio/mpeg", ".mp3")]
                 : [new("main", [1], "audio/wav", ".wav")];

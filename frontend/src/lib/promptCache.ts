@@ -1,169 +1,167 @@
-import type { CacheWarnThresholds, ChatItem, PromptCacheInfo } from '../types';
+import type { ChatItem } from '../types';
 
-// Модель индикатора TTL prompt cache (шаг 2 плана «индикатор TTL prompt cache»).
-// Источник — result.promptCache: бэкенд кладёт его только для родного Claude (TTL из
-// ephemeral_*, якорь — приход message_start последнего вызова основного агента с кэшем,
-// причина промаха — diagnostics.cache_miss_reason первого вызова хода). Вёрстки здесь нет:
-// чистая функция над лентой, UI (чип в шапке, попап, подвал хода) строится поверх неё.
+// Фронтовый контракт prompt cache (фича «Индикатор prompt cache и перенос в новый чат»,
+// шаг F-1a). Форма полей повторяет бэкенд PromptCacheState из Protocol/ServerMessage.cs:
+// на проводе camelCase. Вёрстки здесь нет: чистая функция над лентой, UI шапки (F-1b)
+// строится поверх неё.
 
-export type PromptCacheStatus = 'warm' | 'expiring' | 'cold' | 'unknown';
+export type PromptCacheMissReason =
+  | 'none'
+  | 'systemChanged'
+  | 'messagesChanged'
+  | 'unavailable'
+  | 'previousMessageNotFound'
+  | 'modelChanged'
+  | 'toolsChanged';
 
-export interface PromptCacheMiss {
-  reason: string;
-  tokens?: number;
-  label: string;         // человеческий текст причины
+// Состояние кэша в result-сообщении хода (бэкенд PromptCacheState). null у поля — ход
+// без сигнала кэша (сторонний провайдер, локальный движок, история до появления поля).
+// anchorAtMs — серверное UTC-время (мс) прихода message_start последнего вызова
+// основного агента, касавшегося кэша; ttl — срок последней записи («1h» | «5m»),
+// null — записи за жизнь процесса ещё не видели.
+export interface PromptCacheWire {
+  readTokens: number;
+  writtenTokens: number;
+  anchorAtMs?: number;
+  ttl?: string;
+  missedTokens?: number;
+  missReason: PromptCacheMissReason;
 }
 
+// Состояние циферблата: тёплый / остывает / холодный. «Идёт ход» — не статус ленты,
+// его даёт вызывающий (isWaiting), хук кэш-данных за время хода не трогает.
+export type PromptCacheStatus = 'warm' | 'cooling' | 'cold';
+
+export interface PromptCacheMissInfo {
+  reason: PromptCacheMissReason;
+  tokens?: number;
+  label: string; // человеческая подпись причины
+}
+
+// null — индикатора нет: в ленте ещё не было result'а с данными кэша (см. promptCacheState).
 export interface PromptCacheState {
   status: PromptCacheStatus;
-  ttl?: '1h' | '5m';
-  anchorAtMs?: number;
-  expiresAt?: number;    // момент, после которого кэш считаем остывшим (с запасом, см. marginMs)
-  remainingMs?: number;  // сколько осталось до expiresAt; 0 — остыл
-  prefixTokens?: number; // сколько перепишет следующий ход, если кэш остыл
-  lastMiss?: PromptCacheMiss; // последний промах кэша в чате
-}
-
-// Кэш одного хода для подвала поста: чтение/запись из usage result и причина промаха
-// первого вызова хода (только у родного Claude)
-export interface TurnCacheInfo {
-  read: number;
-  creation: number;
-  miss?: { label: string; tokens?: number };
+  ttl: '1h' | '5m';
+  anchorAtMs: number;
+  expiresAt: number; // anchorAtMs + срок TTL; после — кэш остыл
+  remainingMs: number; // сколько осталось; 0 — остыл
+  readTokens: number; // чтение кэша последнего хода
+  writtenTokens: number; // запись кэша последнего хода
+  lastMiss?: PromptCacheMissInfo; // последний промах кэша в чате
 }
 
 const TTL_MS: Record<'1h' | '5m', number> = { '1h': 60 * 60_000, '5m': 5 * 60_000 };
 
-// Запас на время до первого токена: якорь — приход message_start, а кэш живёт от начала
-// запроса. Минута для часового кэша; у 5-минутного минута съела бы пятую часть срока,
-// поэтому запас не больше десятой доли TTL.
-export function marginMs(ttlMs: number): number {
-  return Math.min(60_000, ttlMs / 10);
+// Личный порог «остывает» (B-3): минуты остатка до остывания, отдельно для часового и
+// 5-минутного срока. Форма — та же, что поле cacheWarnThresholds в ответе /me.
+export interface CacheWarnThresholds {
+  warn1hMin?: number;
+  warn5mMin?: number;
 }
 
-// Порог «остывает»: 5 минут у часового кэша, пятая доля TTL у короткого (иначе 5m был бы
-// «остывающим» всю жизнь). prefSec — личная настройка (секунды до остывания), зажимается
-// в [30 с, весь видимый срок TTL − marginMs] — те же границы держит бэкенд
-// (CacheWarnThresholds в Core/Models/User.cs). Порог больше остатка после хода — чат
-// «остывающий» сразу, это осознанно.
-export const CACHE_WARN_MIN_SEC = 30;
-export function cacheWarnMaxSec(ttlMs: number): number {
-  return Math.round((ttlMs - marginMs(ttlMs)) / 1000);
-}
-export function expiringThresholdMs(ttlMs: number, prefSec?: number): number {
-  if (prefSec === undefined || !Number.isFinite(prefSec)) return Math.min(5 * 60_000, ttlMs / 5);
-  return Math.min(cacheWarnMaxSec(ttlMs), Math.max(CACHE_WARN_MIN_SEC, prefSec)) * 1000;
-}
-
-// Причины промаха из diagnostics.cache_miss_reason.type. Незнакомая причина показывается как есть.
-const MISS_LABELS: Record<string, string> = {
-  previous_message_not_found: 'истёк срок кэша',
-  system_changed: 'сменился системный промпт',
-  model_changed: 'смена модели',
-  tools_changed: 'сменились инструменты',
-  messages_changed: 'изменилась история сообщений',
-  unavailable: 'причина неизвестна',
+// Дефолт порога «остывает», пока личный не подключён: 5 минут у часового кэша, пятая
+// доля срока у короткого — иначе 5m был бы «остывающим» всю жизнь.
+export const EXPIRING_THRESHOLD_MS: Record<'1h' | '5m', number> = {
+  '1h': 5 * 60_000,
+  '5m': 60_000,
 };
 
-export function missReasonLabel(reason: string): string {
-  return MISS_LABELS[reason] ?? reason;
+// Запас на время до первого токена: якорь — приход message_start, а кэш живёт от начала
+// запроса: минута у часового, полминуты у 5-минутного (десятая доля срока). Личный порог
+// зажимается видимым сроком минус этот запас. Бэкенд (B-3) зажимает свой порог при чтении
+// users.json — до провода, поэтому границы у него другие (например, 4 мин против 4,5 мин
+// здесь у 5-минутного кэша): это зажим на источнике, а не копия его значений.
+function marginMs(ttlMs: number): number {
+  return Math.min(60_000, Math.floor(ttlMs / 10));
 }
 
-// Остаток кэша для чипа: минуты с округлением вверх — «1 мин» до самого остывания
-export function cacheLeftText(remainingMs: number): string {
-  return `${Math.max(1, Math.ceil(remainingMs / 60_000))} мин`;
+// Порог «остывает»: дефолт — константа; личный (минуты) зажимается в [30 с, срок − запас]
+// — меньше полминуты «остывание» мелькнуло бы, а порог не ниже срока означал бы
+// «остывающий» с момента записи. Значения вне диапазона с провода — зажать, не выбросить.
+export function expiringThresholdMs(ttl: '1h' | '5m', warn?: CacheWarnThresholds): number {
+  const prefMin = ttl === '1h' ? warn?.warn1hMin : warn?.warn5mMin;
+  if (prefMin === undefined || !Number.isFinite(prefMin)) return EXPIRING_THRESHOLD_MS[ttl];
+  const hi = TTL_MS[ttl] - marginMs(TTL_MS[ttl]);
+  return Math.min(hi, Math.max(30_000, prefMin * 60_000));
 }
 
-// Строка кэша в подсказке при наведении на пилюлю. Пока идёт ход — без остатка: он
-// считается от якоря прошлого хода (то же правило, что у лица пилюли и попапа)
-// label — подпись строки, value — значение в колонке справа (остаток), как у процентов
-export function cacheTipText(status: Exclude<PromptCacheStatus, 'unknown'>, isWaiting: boolean, remainingMs?: number): { label: string; value?: string } {
-  if (isWaiting) return { label: 'Кэш', value: 'идёт ход' };
-  if (status === 'cold') return { label: 'Кэш', value: 'остыл' };
-  const value = remainingMs !== undefined ? cacheLeftText(remainingMs) : undefined;
-  return { label: status === 'expiring' ? 'Кэш скоро остынет' : 'Кэш тёплый', value };
+// Статус по остатку: ноль — холодный, не выше порога — остывает, выше — тёплый.
+export function statusForRemaining(remainingMs: number, ttl: '1h' | '5m', warn?: CacheWarnThresholds): PromptCacheStatus {
+  return remainingMs <= 0 ? 'cold' : remainingMs <= expiringThresholdMs(ttl, warn) ? 'cooling' : 'warm';
 }
 
-// Подпись строки остывшего кэша в поповере: цена следующего хода. Короткая, чтобы влезть
-// в одну строку поповера (≈240px) и при миллионах токенов; оговорка «по API-тарифу» —
-// подсказкой строки, а не текстом. tokens/usd — уже отформатированные значения
-export function cacheRewriteText(tokens?: string, usd?: string): string {
-  if (!tokens) return 'следующий ход перепишет кэш';
-  return `перезапись ≈${tokens} токенов${usd ? ` · ≈${usd}` : ''}`;
+// Живое состояние на момент now: меняются только остаток и статус, остальное как было.
+// Считает циферблат (и поповер при открытии), не вся пилюля.
+export function liveState(state: PromptCacheState, now: number, warn?: CacheWarnThresholds): PromptCacheState {
+  const remainingMs = Math.max(0, state.expiresAt - now);
+  return { ...state, remainingMs, status: statusForRemaining(remainingMs, state.ttl, warn) };
 }
 
-// Множители тарифа Anthropic к базовой цене входа: выход ×5, чтение кэша ×0,1, запись
-// кэша ×1,25 на 5 минут и ×2 на час. Абсолютных цен фронт не знает — базу выводим из
-// фактической стоимости последнего хода этого же чата.
-const OUTPUT_MULT = 5;
-const READ_MULT = 0.1;
-const WRITE_MULT: Record<'1h' | '5m', number> = { '1h': 2, '5m': 1.25 };
+// Подписи причин промаха (там имена snake_case, на проводе camelCase — маппинг явный).
+// Все — именными фразами одного вида («смена модели», а не «сменилась модель»): в UI
+// читаются как «промах: …». «none» подписи не имеет: промаха не было. Незнакомая
+// причина — человекочитательная «другая причина»: сырой кода в строке нет, он
+// открывается в подсказке (title) — минор ревью F-2.
+const MISS_LABELS: Record<string, string> = {
+  systemChanged: 'смена системного промпта',
+  messagesChanged: 'изменение истории сообщений',
+  unavailable: 'неизвестная причина',
+  previousMessageNotFound: 'истечение срока кэша',
+  modelChanged: 'смена модели',
+  toolsChanged: 'смена инструментов',
+};
 
-// Примерная цена перезаписи остывшего кэша следующим ходом, $. undefined — оценить не по
-// чему (нет хода родного Claude со стоимостью и расходом). Расход хода суммирует и
-// сабагентов на других моделях, поэтому это ориентир, а не счёт.
-export function rewriteCostUsd(items: ChatItem[], ttl: '1h' | '5m', prefixTokens: number): number | undefined {
-  if (!(prefixTokens > 0)) return undefined;
-  for (let i = items.length - 1; i >= 0; i--) {
-    const it = items[i];
-    if (it.kind !== 'result' || !it.promptCache || !it.usage || !(it.totalCostUsd && it.totalCostUsd > 0)) continue;
-    const u = it.usage;
-    const write = WRITE_MULT[normTtl(it.promptCache.ttl) ?? ttl];
-    const units = u.inputTokens + OUTPUT_MULT * u.outputTokens + READ_MULT * u.cacheReadTokens + write * u.cacheCreationTokens;
-    if (!(units > 0)) continue;
-    return (it.totalCostUsd / units) * WRITE_MULT[ttl] * prefixTokens;
-  }
-  return undefined;
+export function missReasonLabel(reason: PromptCacheMissReason): string {
+  return MISS_LABELS[reason] ?? 'другая причина';
 }
 
-function normTtl(ttl: PromptCacheInfo['ttl']): '1h' | '5m' | undefined {
+// TTL с провода — только «1h»/«5m», всё остальное (в том числе null) — не срок
+export function normTtl(ttl?: string): '1h' | '5m' | undefined {
   return ttl === '1h' || ttl === '5m' ? ttl : undefined;
 }
 
-// warn — личный порог «скоро остынет» (null/undefined — дефолт)
-export function promptCacheState(items: ChatItem[], now: number, warn?: CacheWarnThresholds | null): PromptCacheState {
-  let anchor: PromptCacheInfo | undefined;
-  let ttl: '1h' | '5m' | undefined;
-  let lastMiss: PromptCacheMiss | undefined;
-
-  // Обратный проход по result'ам. Result без promptCache:
-  // - с contextTokens — настоящий ход, но не родного Claude (сторонний провайдер, локальный
-  //   движок) либо история до этого поля: про кэш Anthropic сказать нечего → стоп, unknown;
-  // - без contextTokens (компакт-ход, пустой ход) — пропускаем: якорь он не сбрасывает.
+// Состояние по последнему result'у ленты с данными кэша. Обратный проход: result'ы
+// без promptCache (сторонний провайдер, локальная модель, старая история) и без
+// якоря/срока пропускаются — индикатор берётся по последнему, который их несёт. Ход
+// на провайфере без сигнала кэша не гасит живой индикатор: кэш привязан к разговору,
+// не к провайдеру. Ни одного result с данными — пустое состояние.
+// warnThresholds — личный порог «остывает» (B-3, User.cacheWarnThresholds), применяется
+// по ttl; не задан — дефолты EXPIRING_THRESHOLD_MS.
+export function promptCacheState(items: ChatItem[], now: number, warnThresholds?: CacheWarnThresholds): PromptCacheState | null {
+  let lastMiss: PromptCacheMissInfo | undefined;
+  let state: PromptCacheState | null = null;
   for (let i = items.length - 1; i >= 0; i--) {
+    // Оба факта собраны — более старые result'ы уже не интересны.
+    if (state && lastMiss) break;
     const it = items[i];
     if (it.kind !== 'result') continue;
     const pc = it.promptCache;
-    if (!pc) {
-      if (!anchor && it.contextTokens && it.contextTokens > 0) break;
-      continue;
+    if (!pc) continue;
+    // Промах — из самого свежего result'а с причиной, даже без якоря/срока и даже
+    // старше решающего: он в ленте есть независимо от того, есть что показать.
+    if (!lastMiss && pc.missReason !== 'none') {
+      lastMiss = {
+        reason: pc.missReason,
+        tokens: pc.missedTokens ?? undefined,
+        label: missReasonLabel(pc.missReason),
+      };
     }
-    if (!lastMiss && pc.missReason)
-      lastMiss = { reason: pc.missReason, tokens: pc.missedTokens ?? undefined, label: missReasonLabel(pc.missReason) };
-    if (!anchor && typeof pc.anchorAtMs === 'number') anchor = pc;
-    // Вызов, который только читал кэш, TTL не несёт — наследуем от последней записи
-    if (anchor && !ttl) ttl = normTtl(pc.ttl);
-    if (anchor && ttl && lastMiss) break;
+    if (state) continue;
+    const ttl = normTtl(pc.ttl);
+    if (typeof pc.anchorAtMs !== 'number' || !ttl) continue;
+
+    const remainingMs = Math.max(0, pc.anchorAtMs + TTL_MS[ttl] - now);
+    const status = statusForRemaining(remainingMs, ttl, warnThresholds);
+
+    state = {
+      status,
+      ttl,
+      anchorAtMs: pc.anchorAtMs,
+      expiresAt: pc.anchorAtMs + TTL_MS[ttl],
+      remainingMs,
+      readTokens: pc.readTokens,
+      writtenTokens: pc.writtenTokens,
+    };
   }
-
-  if (!anchor || !ttl || typeof anchor.anchorAtMs !== 'number')
-    return { status: 'unknown', lastMiss };
-
-  const ttlMs = TTL_MS[ttl];
-  const expiresAt = anchor.anchorAtMs + ttlMs - marginMs(ttlMs);
-  const remainingMs = Math.max(0, expiresAt - now);
-  const status: PromptCacheStatus =
-    remainingMs <= 0 ? 'cold'
-    : remainingMs < expiringThresholdMs(ttlMs, warn ? (ttl === '1h' ? warn.warn1hSec : warn.warn5mSec) : undefined) ? 'expiring'
-    : 'warm';
-
-  return {
-    status,
-    ttl,
-    anchorAtMs: anchor.anchorAtMs,
-    expiresAt,
-    remainingMs,
-    prefixTokens: anchor.prefixTokens > 0 ? anchor.prefixTokens : undefined,
-    lastMiss,
-  };
+  return state ? { ...state, lastMiss } : null;
 }

@@ -9,7 +9,7 @@ describe('pendingChatOnPop', () => {
   };
 
   it('«назад» в чат другого проекта кладёт pending — его заберёт новый WorkspacePage', () => {
-    expect(pop(snap, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: null, task: null } });
+    expect(pop(snap, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: null, task: null }, keepFeature: false });
   });
 
   it('«назад» из раздела «Чаты» в чат «спящего» проекта — тоже pending', () => {
@@ -19,7 +19,12 @@ describe('pendingChatOnPop', () => {
 
   it('файл и задача снимка едут вместе с чатом — перемонтаж не подменит их сохранённым состоянием', () => {
     const withView = { ...snap, file: 'src/a|b.ts', task: 'T1' };
-    expect(pop(withView, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: 'src/a|b.ts', task: 'T1' } });
+    expect(pop(withView, 'B', 'projects')).toEqual({ pid: 'A', chatId: 'X', view: { file: 'src/a|b.ts', task: 'T1' }, keepFeature: false });
+  });
+
+  it('страница фичи из снимка едет меткой keepFeature; без неё метки нет', () => {
+    expect(pop({ ...snap, feature: 'f1' }, 'B', 'projects')).toMatchObject({ pid: 'A', chatId: 'X', keepFeature: true });
+    expect(pop({ ...snap, feature: null }, 'B', 'projects')).toMatchObject({ keepFeature: false });
   });
 
   it('внутри смонтированного проекта pending не нужен — снимок применит сам WorkspacePage', () => {
@@ -34,16 +39,23 @@ describe('pendingChatOnPop', () => {
 
 describe('parsePendingChat', () => {
   it('диплинк без вида — только чат', () => {
-    expect(parsePendingChat('A|X', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
-    expect(parsePendingChat(encodePendingChat('A', 'X'), 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
+    expect(parsePendingChat('A|X', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null, keepFeature: false });
+    expect(parsePendingChat(encodePendingChat('A', 'X'), 'P')).toEqual({ pid: 'A', chatId: 'X', view: null, keepFeature: false });
   });
 
   it('без «projectId|» значение относится к текущему проекту', () => {
-    expect(parsePendingChat('X', 'P')).toEqual({ pid: 'P', chatId: 'X', view: null });
+    expect(parsePendingChat('X', 'P')).toEqual({ pid: 'P', chatId: 'X', view: null, keepFeature: false });
+  });
+
+  it('метка keepFeature едет в значении и без вида; вид с меткой не теряется', () => {
+    expect(parsePendingChat(encodePendingChat('A', 'X', undefined, true), 'P')).toEqual({ pid: 'A', chatId: 'X', view: null, keepFeature: true });
+    expect(parsePendingChat(encodePendingChat('A', 'X', { file: 'f', task: null }, true), 'P'))
+      .toEqual({ pid: 'A', chatId: 'X', view: { file: 'f', task: null }, keepFeature: true });
+    expect(parsePendingChat(encodePendingChat('A', 'X', { file: 'f', task: null }), 'P').keepFeature).toBe(false);
   });
 
   it('битый вид не мешает восстановить чат', () => {
-    expect(parsePendingChat('A|X\n{не json', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null });
+    expect(parsePendingChat('A|X\n{не json', 'P')).toEqual({ pid: 'A', chatId: 'X', view: null, keepFeature: false });
   });
 });
 

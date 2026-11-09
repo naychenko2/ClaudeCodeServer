@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
+import type { Persona, Project, ProjectRoleView, Task, TeamImplementBudget, TeamPlanDecision } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях.
 // transcriptReason — почему недоступны механики транскрипта CLI (живой поток субагентов,
@@ -8,6 +8,8 @@ import type { Persona, Task, TeamImplementBudget, TeamPlanDecision } from '../..
 export const ChatProjectContext = createContext<{
   id: string; rootPath: string; transcriptReason?: string | null;
   local?: boolean; devicePlatform?: string | null;
+  // Общий проект: роль вызывающего и бывшие участники — для подписи автора над чужим пузырём
+  myRole?: ProjectRoleView; formerMembers?: Project['formerMembers'];
 } | null>(null);
 
 // Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют
@@ -106,6 +108,16 @@ export const MediaVisibilityContext = createContext<Map<string, import('./MediaB
 // ChatPanel считает его одним мемо, чтобы «кольцо» и «свет» не разъезжались.
 // null — озвучки нет либо говорит голос инстанса (лицо не резолвится, подсвечивать нечего).
 export const SpeakingItemContext = createContext<{ index: number; color: string } | null>(null);
+
+// Читалка документов фичи (W4-LINK-F): ссылки между документами фичи. openFile — открыть
+// файл дерева фичи (чтение через резолв featureId, W4-5B2); openDocument — открыть другой
+// документ фичи в той же читалке. null — вне читалки: поведение ссылок как раньше.
+export const FeatureLinkContext = createContext<{
+  featureId: string;
+  projectId: string;
+  openFile: (path: string) => void;
+  openDocument: (taskId: string) => void;
+} | null>(null);
 
 // Какие карточки инструментов без результата идут в живом ходе, а какие оборваны
 // (lib/toolTiming.ts, toolLiveness). Таймер «идёт M:SS» тикает только живым: у оборванного

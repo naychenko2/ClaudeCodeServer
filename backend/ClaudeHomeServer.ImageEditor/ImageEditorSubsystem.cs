@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.ChatContext;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Higgsfield;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -41,9 +42,21 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<HiggsfieldImageEditor>());
         // Локальные модели (ComfyUI): шов ILocalImageMedia регистрирует Images. Нет Images — шва нет,
         // драйвер получает null и скрыт в каталоге, а не роняет резолв
-        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>()));
+        // Шлюз IMediaGpuYieldGate регистрирует Llm: нет вертикали — null, задания уходят сразу
+        services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>(),
+            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
+        // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —
+        // очередь живёт вхолостую, поводы ничего не ставят
+        services.AddSingleton<CharacterPhotoLabeling>();
+        services.AddHostedService(sp => sp.GetRequiredService<CharacterPhotoLabeling>());
+        services.AddSingleton<CharacterTrainingPhotos>();
+        services.AddSingleton<IProjectTrainingPhotoCleaner>(sp => sp.GetRequiredService<CharacterTrainingPhotos>());
+        services.AddSingleton<CharacterLoraRuns>();
+        // Доводчик итогов обучения LoRA: шов ILocalLoraTrainer регистрирует Images; нет шва — круг пустой
+        services.AddSingleton<LoraTrainingFinisher>();
+        services.AddHostedService(sp => sp.GetRequiredService<LoraTrainingFinisher>());
         services.TryAddSingleton<IVersionedImageStore, VersionedImageStore>();
         services.AddSingleton<IImageEditSaver, ImageEditSaver>();
         // Шаги, на которые ссылаются нити картинок, чистка рабочей папки не трогает (ADR-019 §1)
@@ -54,9 +67,15 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             workspace.RetainedSteps = threads.ReferencedSteps;
             return workspace;
         });
+        // Источник результата для истории (ADR-030 §3): варианты задачи в рабочей папке data/image-editor
+        services.AddSingleton<IMediaHistoryResultSource, ImageEditorHistorySource>();
         // Траты пишутся в общий учёт ISpendCollector (вертикаль Spend); выключенный Spend —
         // null, исполнитель тогда только предупреждает в лог
-        services.AddSingleton<ImageEditJobService>();
+        // ISessionDirectory — это SessionManager, а он собирает контрибьюторов секций промпта,
+        // среди которых ImageEditorStateContributor → IImageEditJobs: прямая зависимость замыкает круг
+        // и хост на старте зависает. Каталог чатов исполнителю нужен только в момент рассылки события
+        services.AddSingleton(sp => ActivatorUtilities.CreateInstance<ImageEditJobService>(
+            sp, new LazySessionDirectory(sp)));
         services.AddSingleton<IImageEditJobs>(sp => sp.GetRequiredService<ImageEditJobService>());
         // Правки без ИИ и шаги истории (ADR-018 §9). Без растра шагов нет: фабрика отдаёт null,
         // и контроллер получает его вместо исключения резолва
@@ -65,9 +84,16 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
             : null!);
         // Общая сборка входа запуска и блок нитей хвостом хода: им же пользуется MCP-тулсет
         services.AddSingleton<ChatContext.ImageContextLaunch>();
+        // Разбор сюжета для подбора фото персонажа: без дешёвого раннера его нет, подбор тогда не работает
+        services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
+            ? new CharacterSceneParser(runner)
+            : null!);
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();
+        // Кэш детекции лиц (ADR-028, этап 2): повторный запрос на те же байты не дублирует
+        // прогон ComfyUI; в кэш — только успешные результаты
+        services.AddSingleton<Faces.FaceDetectionCache>();
         services.AddPromptSectionContributor<Chats.ImageEditorStateContributor>();
         // Нити картинок и фокус чата (ADR-019 §1): хранилище в data/image-threads, живёт и умирает
         // вместе с чатом по событиям шины session/deleted и session/branched
@@ -100,5 +126,23 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton<ClaudeHomeServer.Services.Mcp.Http.IMcpToolset, Mcp.ImageEditorToolset>();
         // Агент позвал local_* напрямую: картинка результата получает ту же карточку, что запуск через image_*
         services.AddSingleton<ClaudeHomeServer.Services.Media.ILocalMediaAdopter, Threads.LocalImageAdopter>();
+    }
+
+    // Отложенный резолв каталога чатов: см. регистрацию ImageEditJobService
+    private sealed class LazySessionDirectory(IServiceProvider sp) : ClaudeHomeServer.Services.ISessionDirectory
+    {
+        private ClaudeHomeServer.Services.ISessionDirectory Inner =>
+            sp.GetRequiredService<ClaudeHomeServer.Services.ISessionDirectory>();
+
+        public ClaudeHomeServer.Models.Session? GetById(string id) => Inner.GetById(id);
+
+        public IReadOnlyCollection<ClaudeHomeServer.Models.Session> GetAll() => Inner.GetAll();
+
+        public string? ResolveOwnerId(ClaudeHomeServer.Models.Session s) => Inner.ResolveOwnerId(s);
+
+        public Task<IReadOnlyList<ClaudeHomeServer.Protocol.StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Inner.GetHistoryAsync(sessionId);
+
+        public bool SetWikiMark(string sessionId, string? mark) => Inner.SetWikiMark(sessionId, mark);
     }
 }

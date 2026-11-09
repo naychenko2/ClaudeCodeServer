@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // у каждого пользователя); скиллы из каталога хоста в тестах недоступны — контракт
 // «отсутствующий скилл пропускается молча» проверяется на несуществующем имени.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -236,15 +237,15 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => Task.FromResult(actionKey == LocalActionCatalog.PersonaVoice ? "none"
                 : _call < answers.Length ? answers[_call++] : "[]");
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(_call < answers.Length ? answers[_call++] : "[]");
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult<string?>(_call < answers.Length ? answers[_call++] : "[]");
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -390,15 +391,14 @@ public class SpecialtyPromptSectionsControllerTests : IClassFixture<TestWebAppli
     {
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => throw new InvalidOperationException("имитация сбоя провайдера");
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default)
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
             => throw new InvalidOperationException("имитация сбоя провайдера");
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

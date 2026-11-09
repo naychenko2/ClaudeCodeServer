@@ -14,16 +14,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // шаблонный url держит), ранний отказ при создании и подтверждение пробы с полной
 // строкой запуска у stdio-записи local-владельца. Адреса в тестах — IP-литералы:
 // гейт и создание не должны ходить в DNS.
+[Trait("Category", "Host")]
 public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client = factory.CreateAuthenticatedClient();
-
-    private void EnableFlag()
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.GetFirst()!.Id, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
-    }
 
     private async Task<(string Id, JsonElement Body)> CreateAsync(object body)
     {
@@ -47,7 +42,6 @@ public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Create_каталожный_приватный_адрес_400()
     {
-        EnableFlag();
         var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>
         {
             ["key"] = "priv-" + Guid.NewGuid().ToString("N")[..6],
@@ -64,7 +58,6 @@ public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проба_каталожный_шаблонный_url_гейт_держит()
     {
-        EnableFlag();
         // Публичный IP-литерал с незаполненной переменной: создание проходит (адрес публичный),
         // проба обязана отказать до любого похода в сеть
         var (id, _) = await CreateAsync(new Dictionary<string, object?>
@@ -82,7 +75,6 @@ public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проба_изменённый_владельцем_адрес_гейт_снят()
     {
-        EnableFlag();
         var (id, _) = await CreateAsync(new Dictionary<string, object?>
         {
             ["key"] = "chg-" + Guid.NewGuid().ToString("N")[..6],
@@ -107,7 +99,6 @@ public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проба_каталожная_stdio_без_подтверждения_400_со_строкой_запуска()
     {
-        EnableFlag();
         var (id, _) = await CreateAsync(new Dictionary<string, object?>
         {
             ["key"] = "stdio-" + Guid.NewGuid().ToString("N")[..6],
@@ -126,7 +117,6 @@ public class McpServersCatalogProbeTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Проба_каталожная_stdio_с_подтверждением_идёт()
     {
-        EnableFlag();
         var (id, _) = await CreateAsync(new Dictionary<string, object?>
         {
             ["key"] = "conf-" + Guid.NewGuid().ToString("N")[..6],

@@ -203,6 +203,49 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
     }
 
     [Fact]
+    public async Task MigrateProvider_КлючПодпискиИСторонняяМодель_ТранскриптНайденВПрофилеПодписки()
+    {
+        // Класс чатов из находки ревью ccb3d43c: Provider — ключ пула, модель — стороннего провайдера
+        // (боевые 5adb6782, 338733c6). До SP1 подписочный env перетирал провайдерский CLAUDE_CONFIG_DIR,
+        // и транскрипт писался в профиль подписки sub-{key}. currentKey резолвит модель в провайдера,
+        // и поиск шёл только по провайдерскому корню — для таких чатов он не находил ничего, и перенос
+        // оставлял всю историю в профиле подписки. Теперь корни два: текущей пары и собственной подписки.
+        var (sut, _, llmProviders, users, projects) = BuildSut(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:acc-a:OAuthToken"] = "token-a",
+            ["LlmProviders:minimax:ApiKey"] = "sk-mm",
+            ["LlmProviders:minimax:AnthropicBaseUrl"] = "https://mm.test",
+            ["LlmProviders:minimax:Models:0:Id"] = "MiniMax-M2.1",
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.test",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
+        });
+        var user = users.Add("u19", "password123", "user");
+        var dir = MkProjectDir("submodel");
+        var project = projects.Create("SubModel", dir, user.Id, "u19");
+        const string claudeSessionId = "submodel123456";
+        var session = await sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            resumeSessionId: claudeSessionId, model: "sonnet");
+        session.Provider.Should().Be("acc-a");
+        session.Model = "MiniMax-M2.1"; // как в боевом чате: модель выбрана сторонняя, провайдер остался ключом пула
+
+        var srcDir = Path.Combine(llmProviders.GetProfileDir("sub-acc-a"), "projects",
+            TranscriptMigrator.FlattenCwd(dir));
+        Directory.CreateDirectory(srcDir);
+        await File.WriteAllTextAsync(Path.Combine(srcDir, claudeSessionId + ".jsonl"), "{}");
+
+        var updated = await sut.MigrateProviderAsync(session.Id, user.Id, "glm-5.2");
+
+        updated.Provider.Should().Be("glm");
+        var dstFile = Path.Combine(llmProviders.GetProfileDir("glm"), "projects",
+            TranscriptMigrator.FlattenCwd(dir), claudeSessionId + ".jsonl");
+        File.Exists(dstFile).Should().BeTrue(
+            "транскрипт найден в профиле подписки и скопирован в профиль целевого провайдера");
+        File.Exists(Path.Combine(srcDir, claudeSessionId + ".jsonl")).Should().BeTrue(
+            "исходник не трогается: копия, не перенос");
+    }
+
+    [Fact]
     public async Task MigrateProvider_АвтовыборАккаунтаПула_БезРазделителяВЛенте()
     {
         // Ротация подписок пула по договорённости тихая: маркер в ленте ставим только при
@@ -461,5 +504,39 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
         var updated = await sut.UpdateAsync(session.Id, user.Id, null, "opus", null);
 
         updated!.Provider.Should().Be("acc-a", "acc-b без Opus — уводим на способный аккаунт");
+    }
+
+    // --- Возврат финального ревью 892deb00 (П1): «эффективные» модели резолвились по
+    // entry.Info.OwnerId, пустому у проектной сессии по контракту, — то есть по общему слоту
+    // инстанса, тогда как следующий ход резолвит их по владельцу (тот же ключ, что у
+    // LlmSessionContext.OwnerId). Сброс на «По умолчанию» в чате проекта, живущем на стороннем
+    // провайдере из личного слота владельца, ложно считался переездом на claude. ---
+
+    [Fact]
+    public async Task Update_ПроектныйЧат_ПоУмолчанию_НеУводитСПровайдераСлотаВладельца()
+    {
+        var (sut, _, _, users, projects) = BuildSut(new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        });
+        var user = users.Add("u18", "password123", "user");
+        users.SetModelTiers(user.Id, "kimi-k3", null, null);
+        var project = projects.Create("OwnerSlot", MkProjectDir("ownerslot"), user.Id, "u18");
+
+        var session = await sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Model.Should().Be("kimi-k3", "старт чата проекта — по личному слоту его владельца");
+        session.Provider.Should().Be("kimi");
+
+        var updated = await sut.UpdateAsync(session.Id, user.Id, null, "", null);
+
+        // Тот же слот с обеих сторон → тот же провайдер: переносить транскрипт некуда.
+        // До правки «По умолчанию» резолвилось на общий слот инстанса (пустой) и уходило
+        // на claude с переносом транскрипта.
+        updated!.Model.Should().BeNull("сброс на «По умолчанию» не закрепляет модель");
+        updated.Provider.Should().Be("kimi", "effectiveNew и effectiveCur — один ключ, миграции нет");
+        _broadcaster.Session.Select(t => t.Message).OfType<ProviderSwitchedMessage>()
+            .Should().BeEmpty("переезда провайдера не было");
     }
 }

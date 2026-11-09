@@ -172,7 +172,7 @@ public sealed class AgentTicketTests : IDisposable
 
     // ---------- контроллер ----------
 
-    private DeviceAgentTicketController NewController(bool flagOn, bool online, bool serviceToken = false)
+    private DeviceAgentTicketController NewController(bool online, bool serviceToken = false)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -182,7 +182,6 @@ public sealed class AgentTicketTests : IDisposable
         Directory.CreateDirectory(_temp);
         var users = new UserStore(config, new Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var owner = users.Add("u_" + Guid.NewGuid().ToString("N")[..8], "pwd", "admin");
-        if (flagOn) owner.FeatureFlags = new() { [FeatureFlagKeys.LocalProjects] = true };
         var projects = new ProjectManager(config, users, new AppSettingsService(config));
         var local = projects.CreateLocal("Локальный", "/home/u/proj", owner.Id, Device);
         projects.Create("Серверный", Path.Combine(_temp, "srv"), owner.Id, "u", createDirectory: true);
@@ -196,8 +195,7 @@ public sealed class AgentTicketTests : IDisposable
 
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, owner.Id) };
         if (serviceToken) claims.Add(new Claim(JwtService.TokenKindClaim, JwtService.ServiceTokenKind));
-        return new DeviceAgentTicketController(projects, new AgentTicketService(pm.Object, _clock),
-            new FeatureFlagService(users), exec.Object)
+        return new DeviceAgentTicketController(projects, new AgentTicketService(pm.Object, _clock), exec.Object)
         {
             ControllerContext = new ControllerContext
             {
@@ -209,7 +207,7 @@ public sealed class AgentTicketTests : IDisposable
     [Fact]
     public void Контроллер_ВыдаётБилетНаЛокальныйПроект()
     {
-        var ctl = NewController(flagOn: true, online: true);
+        var ctl = NewController(online: true);
 
         var result = ctl.Issue(_projects["ctl-local"].Id);
 
@@ -217,11 +215,10 @@ public sealed class AgentTicketTests : IDisposable
     }
 
     [Fact]
-    public void Контроллер_Отказы_СервисныйТокенФлагОфлайнСерверныйПроект()
+    public void Контроллер_Отказы_СервисныйТокенОфлайнСерверныйПроект()
     {
-        (NewController(true, true, serviceToken: true).Issue(_projects["ctl-local"].Id) as ObjectResult)!.StatusCode.Should().Be(403);
-        (NewController(false, true).Issue(_projects["ctl-local"].Id) as ObjectResult)!.StatusCode.Should().Be(403);
-        (NewController(true, false).Issue(_projects["ctl-local"].Id) as ObjectResult)!.StatusCode.Should().Be(409);
-        NewController(true, true).Issue("nope").Should().BeOfType<NotFoundResult>();
+        (NewController(online: true, serviceToken: true).Issue(_projects["ctl-local"].Id) as ObjectResult)!.StatusCode.Should().Be(403);
+        (NewController(online: false).Issue(_projects["ctl-local"].Id) as ObjectResult)!.StatusCode.Should().Be(409);
+        NewController(online: true).Issue("nope").Should().BeOfType<NotFoundResult>();
     }
 }

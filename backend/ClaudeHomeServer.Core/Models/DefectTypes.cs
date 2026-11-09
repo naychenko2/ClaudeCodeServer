@@ -32,4 +32,10 @@ public class TaskVerification
     public DateTime VerifiedAt { get; set; }
     public string? PersonaId { get; set; }
     public string? Notes { get; set; }
+    // Исход витка: accepted · accepted_with_remarks · returned · withdrawn; null = старая
+    // семантика «проверено». Обобщение: у дефектов вердикт уже живёт здесь, у ревью — новое.
+    public string? Verdict { get; set; }
+    // Структурированная причина возврата из TaskReturnReasons; только при Verdict == returned,
+    // пусто = «причина не указана». Аддитивное nullable-поле: старые данные читаются как есть.
+    public string? ReturnReason { get; set; }
 }

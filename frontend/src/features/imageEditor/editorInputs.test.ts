@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AUTO_MODEL, jobForm, type ImageEditCatalog, type ImageEditModel, type ImageEditOp, type ImageEditProvider } from './api';
+import { AUTO_MODEL, jobForm, type FaceTarget, type ImageEditCatalog, type ImageEditModel, type ImageEditOp, type ImageEditProvider } from './api';
 import {
   actionTitle, applyAgentReferences, currentSrc, EMPTY_HISTORY, goToStep, maxSamples, panelJobInput, pushStep, quickPlan,
   fallbackLabel, quickAvailability, quickOffered, samplesToJobInput, stepLabel, type History, type HistoryStep, type Sample,
@@ -45,6 +45,23 @@ describe('образцы во вход задачи', () => {
     expect(maxSamples(6, null)).toBe(6);
     expect(maxSamples(6, 4)).toBe(4);
     expect(maxSamples(6, 10)).toBe(6);
+  });
+});
+
+describe('jobForm: faceTarget (ADR-028, этап 3)', () => {
+  const faceTarget: FaceTarget = { versionId: 'v1', facesKey: 'fk', faces: [{ face: 1, characterSlug: 'm' }] };
+
+  it('faceTarget — JSON-строка {versionId, facesKey, faces}; characterSlug рядом отбрасывается (мутация: не отбрасывать → краснеет)', () => {
+    const form = jobForm({ quoteId: 'q1', prompt: '', faceTarget, characterSlug: 'm' });
+    expect(form.get('faceTarget')).toBe(JSON.stringify(faceTarget));
+    // персонажи живут в faces; верхнеуровневого characterSlug рядом с faceTarget не едет
+    expect(form.has('characterSlug')).toBe(false);
+  });
+
+  it('без faceTarget: characterSlug едет как обычно (нет регрессии)', () => {
+    const form = jobForm({ quoteId: 'q1', prompt: '', characterSlug: 'm' });
+    expect(form.get('characterSlug')).toBe('m');
+    expect(form.has('faceTarget')).toBe(false);
   });
 });
 

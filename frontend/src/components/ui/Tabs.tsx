@@ -12,6 +12,9 @@ export interface TabItem<T extends string> {
   label: string;
   icon?: ReactNode;
   count?: number;        // счётчик рядом с подписью («Голоса 12»)
+  // Точка-индикатор «ждёт вашего ответа» (6, C.info) — после счётчика
+  // (страница фичи, волна 3; макет R-2).
+  dot?: boolean;
 }
 
 const FOCUS_CLASS = 'cc-tab';
@@ -22,14 +25,27 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-tab-style'))
   document.head.appendChild(el);
 }
 
-export function Tabs<T extends string>({ value, items, onChange, ariaLabel, transparent }: {
+// Размер вкладки: 'sm' — прежний (32, панель генерации); 'md' — страница фичи
+// (волна 3, макет R-1: 38, на мобиле 44; поля 0 10 / 0 12). Размер живёт в ките,
+// не литералом на странице.
+export type TabsSize = 'sm' | 'md';
+
+export function Tabs<T extends string>({ value, items, onChange, ariaLabel, transparent, size = 'sm', isMobile = false, className }: {
   value: T;
   items: TabItem<T>[];
   onChange: (v: T) => void;
   ariaLabel?: string;
   transparent?: boolean;   // без своей подложки: на карточке шторки bgInset читается полосой
+  size?: TabsSize;
+  isMobile?: boolean;
+  // Класс полосы (tablist): вызывающий может отключить видимую полосу прокрутки
+  // (страница фичи: горизонтальная прокрутка «без полосы»).
+  className?: string;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  // Геометрия по размеру: 'md' — выше и с полями макета (10/12).
+  const tabHeight = size === 'md' ? (isMobile ? 44 : 38) : 32;
+  const tabPadX = size === 'md' ? (isMobile ? 12 : 10) : SP.md;
 
   // Стрелки двигают выбор по кругу и переносят фокус на новую вкладку
   // (автоматическая активация по WAI-ARIA: содержимое лёгкое, ждать Enter незачем).
@@ -49,6 +65,7 @@ export function Tabs<T extends string>({ value, items, onChange, ariaLabel, tran
     <div
       role="tablist"
       aria-label={ariaLabel}
+      className={className}
       style={{
         display: 'flex', gap: SP.xxs, padding: `${SP.xs}px ${SP.sm}px 0`,
         background: transparent ? 'transparent' : C.bgInset, borderBottom: `1px solid ${C.borderLight}`,
@@ -70,7 +87,7 @@ export function Tabs<T extends string>({ value, items, onChange, ariaLabel, tran
             onKeyDown={e => onKeyDown(e, i)}
             style={{
               display: 'inline-flex', alignItems: 'center', gap: SP.xs + 2, flexShrink: 0,
-              height: 32, padding: `0 ${SP.md}px`, border: 'none',
+              height: tabHeight, padding: `0 ${tabPadX}px`, border: 'none',
               borderBottom: `2px solid ${active ? C.accent : 'transparent'}`,
               borderRadius: `${R.sm}px ${R.sm}px 0 0`,
               background: 'transparent', cursor: 'pointer', fontFamily: FONT.sans,
@@ -83,11 +100,18 @@ export function Tabs<T extends string>({ value, items, onChange, ariaLabel, tran
             {t.label}
             {t.count !== undefined && (
               <span style={{
-                fontSize: FS.xs, fontWeight: 600, color: C.textMuted,
+                // 'md' (страница фичи): активный счётчик — accent; 'sm' (панель генерации) — как раньше (muted).
+                fontSize: FS.xs, fontWeight: 600, color: size === 'md' && active ? C.accent : C.textMuted,
                 background: C.bgSelected, borderRadius: R.sm, padding: `0 ${SP.xs}px`,
               }}>
                 {t.count}
               </span>
+            )}
+            {t.dot && (
+              <span
+                aria-label="ждёт вашего ответа"
+                style={{ width: 6, height: 6, borderRadius: R.full, background: C.info, flexShrink: 0 }}
+              />
             )}
           </button>
         );

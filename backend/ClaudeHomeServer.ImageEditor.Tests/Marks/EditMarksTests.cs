@@ -14,6 +14,9 @@ public class EditMarksTests
     private static readonly ImageEditModelInfo ReferenceMask =
         new("asref", "AsRef", new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.AsReference, 3, 4, true));
 
+    private static readonly ImageEditModelInfo VeilModel =
+        new("veil", "Veil", new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Inpaint], MaskSupport.Veil, 3, 4, true));
+
     private static ImageEditJobInput Input(byte[] source, byte[]? mask = null, byte[]? annotated = null, string? marks = null) =>
         new("q", "убрать провод", marks, new ImageBytes(source, "image/png"),
             mask is null ? null : new ImageBytes(mask, "image/png"),
@@ -100,6 +103,133 @@ public class EditMarksTests
 
         result.Value.Should().BeNull();
         result.ErrorCode.Should().Be(ImageEditErrorCodes.InvalidRequest);
+    }
+
+    // Кроп вокруг цели (ADR-028, решение 12): маска не уходит образцом (модель видит кроп, а не
+    // маску), а явным каналом KeepMask; FaceCrop прокидывается в запрос. Мутация «вернуть маску
+    // в references» → красный
+    [Fact]
+    public void Кроп_Маска_ВКаналKeepMask_АНеВОбразцы()
+    {
+        var png = TestImages.Png(10, 10);
+        var input = Input(png, mask: png) with
+        {
+            FaceCrop = new LocalImageCrop(0, 0, 10, 10, 16, 16),
+        };
+
+        var req = EditRequestComposer.Compose(input, ImageEditOp.Edit, ReferenceMask, 1).Value!;
+
+        // Маска не среди образцов модели
+        req.References.Should().NotContain(r => r.Label == EditRequestComposer.MaskLabel,
+            "при кропе модель видит кроп, а не маску");
+        // Явный канал KeepMask доехал
+        req.KeepMask.Should().NotBeNull("маска — явный канал, не метка в References");
+        req.KeepMask!.Bytes.Should().Equal(png);
+        // Кроп прокинут
+        req.FaceCrop.Should().Be(new LocalImageCrop(0, 0, 10, 10, 16, 16));
+        // Роль «маска: белое — область, которую менять…» не написана
+        req.Prompt.Should().NotContain("белое — область, которую менять");
+    }
+
+    // Кисть (без кропа) не изменилась: маска по-прежнему образец, KeepMask из References, кропа нет
+    [Fact]
+    public void Кисть_БезКропа_МаскаОбразцом_КропаНет()
+    {
+        var png = TestImages.Png(10, 10);
+
+        var req = EditRequestComposer.Compose(Input(png, mask: png), ImageEditOp.Edit, ReferenceMask, 1).Value!;
+
+        req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.MaskLabel,
+            "кисть: маска — образец, как раньше");
+        req.KeepMask.Should().BeNull("кисть: явного канала KeepMask нет — драйвер возьмёт из References");
+        req.FaceCrop.Should().BeNull("кисть: кропа нет");
+    }
+
+    // Вуаль (ADR-028, решение 12): маска идёт каналом (как у Native), а не образцом — мутация
+    // «вернуть в references» → красный. KeepMask на уровне композитора null (драйвер возьмёт из канала)
+    [Fact]
+    public void Вуаль_МаскаВКанал_АНеВОбразцы()
+    {
+        var png = TestImages.Png(10, 10);
+
+        var req = EditRequestComposer.Compose(Input(png, mask: png), ImageEditOp.Edit, VeilModel, 1).Value!;
+
+        req.Mask.Should().NotBeNull("вуаль: маска — каналом, не образцом");
+        req.Mask!.Bytes.Should().Equal(png);
+        req.References.Should().NotContain(r => r.Label == EditRequestComposer.MaskLabel,
+            "вуаль: маски-образца нет — иначе Qwen-Image перерисует её в результат");
+        req.KeepMask.Should().BeNull("вуаль: явного канала KeepMask нет — драйвер возьмёт из канала");
+        req.Op.Should().Be(ImageEditOp.Inpaint, "у вуали с маской композитор переводит Edit в Inpaint, как у Native");
+    }
+
+    // Вуаль: промпт оборачивается VeilHead, строки «выделено кистью…» из пометок убираются
+    [Fact]
+    public void Вуаль_ПромптНачинаетсяСВуали_БезСтрокКисти()
+    {
+        var png = TestImages.Png(10, 10);
+        var marks = """[{"type":"brush","points":[]},{"type":"text","x":0.5,"y":0.5,"text":"сюда"}]""";
+
+        var req = EditRequestComposer.Compose(Input(png, mask: png, marks: marks), ImageEditOp.Edit, VeilModel, 1).Value!;
+
+        req.Prompt.Should().StartWith(EditRequestComposer.VeilHead,
+            "вуаль: текст человека оборачивается, модель знает, что серая заливка — место правки");
+        req.Prompt.Should().Contain("«сюда»", "пометки без кисти дошли");
+        req.Prompt.Should().NotContain("выделено кистью", "строки кисти из промпта убраны");
+        req.Prompt.Should().Contain(EditRequestComposer.VeilNote, "примечание о вуали дописано");
+    }
+
+    // Подстановка на лицо (FaceCrop) на модели с вуалью: маска уходит каналом KeepMask, а не в
+    // канал вуали, — промпт без VeilHead/VeilNote (ADR-028, Д3). Мутация «убрать !faceCrop» → красный
+    [Fact]
+    public void Вуаль_ПриКропеЛица_ПромптБезВуали()
+    {
+        var png = TestImages.Png(10, 10);
+        var input = Input(png, mask: png) with { FaceCrop = new LocalImageCrop(0, 0, 10, 10, 16, 16) };
+
+        var req = EditRequestComposer.Compose(input, ImageEditOp.Edit, VeilModel, 1).Value!;
+
+        req.KeepMask.Should().NotBeNull("при кропе маска — канал KeepMask");
+        req.Mask.Should().BeNull("при кропе канала вуали нет");
+        req.Prompt.Should().NotStartWith(EditRequestComposer.VeilHead, "заливки модель не видит — текст не оборачивается");
+        req.Prompt.Should().NotContain(EditRequestComposer.VeilNote, "примечания о серой заливке нет");
+    }
+
+    // Текст вуали — дословно из прогона Артёма 13.10 (вариант д2): на этих формулировках держится
+    // результат модели, перефразировка или урезание должны краснеть
+    [Fact]
+    public void Вуаль_ТекстДословноИзПрогона()
+    {
+        EditRequestComposer.VeilHead.Should().Be(
+            "На первой картинке место правки закрашено полупрозрачной серой заливкой. Что сделать с этим местом: ");
+        EditRequestComposer.VeilNote.Should().Be(
+            "Полупрозрачная серая заливка на первой картинке отмечает место правки; под ней видно, что там сейчас. " +
+            "Измени отмеченное место так, как просят, сохранив форму и детали того, что под заливкой. Серой дымки в результате " +
+            "остаться не должно. Всё вне отмеченного места оставь без изменений.");
+    }
+
+    // С размеченной копией вуаль не включается (драйвер даёт VeilMask = null): маска идёт образцом,
+    // как до вуали, а промпт без VeilHead/VeilNote. Живой прогон Артёма 13.10: маска в канале до
+    // модели не доходила, а промпт про серую заливку рисовал серый прямоугольник
+    [Fact]
+    public void Вуаль_СРазмеченнойКопией_МаскаОбразцом_БезВуали()
+    {
+        var png = TestImages.Png(10, 10);
+        var annotated = TestImages.Png(10, 10, tail: 2);
+        var marks = """[{"type":"brush","points":[[0.2,0.2],[0.4,0.4]]},{"type":"text","x":0.5,"y":0.5,"text":"сюда"}]""";
+
+        var req = EditRequestComposer.Compose(
+            Input(png, mask: png, annotated: annotated, marks: marks), ImageEditOp.Edit, VeilModel, 1).Value!;
+
+        req.Mask.Should().BeNull("с размеченной копией канала маски нет — драйвер его не отдал бы модели");
+        req.References.Should().Contain(r => r.Label == EditRequestComposer.AnnotatedLabel,
+            "размеченная копия — образцом");
+        req.References.Should().ContainSingle(r => r.Label == EditRequestComposer.MaskLabel,
+            "маска — образцом, как до вуали")
+            .Which.Bytes.Should().Equal(png);
+        req.Prompt.Should().NotStartWith(EditRequestComposer.VeilHead, "вуали нет — текст человека не оборачивается");
+        req.Prompt.Should().NotContain(EditRequestComposer.VeilNote, "вуали нет — примечания о серой заливке нет");
+        req.Prompt.Should().Contain("белое — область, которую менять", "роль маски-образца названа");
+        req.Prompt.Should().Contain("выделено кистью", "строки кисти на месте, как до вуали");
     }
 
     [Fact]

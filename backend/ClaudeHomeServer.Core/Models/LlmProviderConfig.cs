@@ -61,6 +61,25 @@ public class LlmProviderConfig
     // скрытие блока баланса, исключение из егресс-логики) повесит на него ещё три места.
     public bool IsLocal { get; set; }
 
+    // Локальный движок делит видеокарту с медиа-заданиями (ComfyUI на той же GPU под арбитром,
+    // например Gemma на Video): задание картинки, отданное посреди хода такого провайдера, выгрузило
+    // бы модель и оборвало ход. Локальный драйвер картинок ждёт конца таких ходов (IMediaGpuYieldGate).
+    public bool YieldsGpuToMedia { get; set; }
+
+    // Гейт допуска ходов к локальному движку (LocalEngineBusyTracker.AcquireAsync), только для
+    // IsLocal. Потолок строго меньше max_num_seqs движка: один ход шлёт параллельные запросы
+    // субагентами. Сверх потолка ход ждёт в очереди не дольше TurnQueueTimeout; очередь полна
+    // или время вышло — ход завершается ошибкой «движок занят». Значения машинно-специфичны —
+    // правятся в appsettings.Local.json.
+    public int MaxConcurrentTurns { get; set; } = 3;
+    public int MaxQueuedTurns { get; set; } = 8;
+    public TimeSpan TurnQueueTimeout { get; set; } = TimeSpan.FromMinutes(15);
+
+    // Секция статистики локального движка (фича «Статистика локальных моделей»):
+    // тип движка (vllm|llama-server|ollama) и URL /metrics. Пусто (null) — движок
+    // не задаётся, источник метрик = заглушка (NullEngineMetricsSource), автоугадывания нет.
+    public LlmProviderStatsConfig? Stats { get; set; }
+
     public bool Enabled =>
         (IsLocal || !string.IsNullOrWhiteSpace(ApiKey)) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
 
@@ -86,6 +105,17 @@ public class LlmProviderConfig
     // thinking из запроса, бюджет сервером не режется — длиной размышлений у Qwen3.8 на деле
     // управляет effort (см. EffortMap), а эта переменная только страхует от лишнего параметра.
     public int? MaxThinkingTokens { get; set; }
+
+    // Потолок параллельных агентов Workflow (env CLAUDE_CODE_WORKFLOW_MAX_CONCURRENT_AGENTS,
+    // 1–256). null/0 — CLI решает сам (облачные провайдеры не трогаем). Для локального vLLM
+    // ставим 3: три потока prefill по 63k душат decode соседей до 12 ток/с (замер 23.09),
+    // выше трёх отдача почти не растёт (max_num_seqs=4, пятый запрос в очередь).
+    public int? WorkflowMaxConcurrentAgents { get; set; }
+
+    // Модель для субагентов Workflow (env CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL). Пусто —
+    // CLI применяет CLAUDE_CODE_SUBAGENT_MODEL (см. BuildCliEnv). Задан — явная модель,
+    // которой Workflow ведёт всех своих агентов.
+    public string WorkflowSubagentModel { get; set; } = "";
 
     // Урезать состав MCP-серверов до минимума (false — обычный состав). Для провайдеров с
     // маленькимом окном (vLLM/llama.cpp, qwen3.8-27b на 65k) описания MCP-инструментов
@@ -175,6 +205,10 @@ public class LlmProviderConfig
     //
     // Дефолт false — облачные провайдеры не задеты: у них своя механика кэша
     // (cache_control), и менять ей порядок секций ради чужого выигрыша незачем.
+    //
+    // Действует на любом ходе провайдера, в том числе у персоны с выключенным облегчённым
+    // контекстом (Persona.LightContext = false): ручка — про кэш движка, а не про объём
+    // контекста (LlmProviderRegistry.RecallInTurnTextFor).
     public bool RecallInTurnText { get; set; }
 
     // Провайдер отдаёт массивы аргументов инструментов обёрткой {"item": [...]} (дефект
@@ -211,4 +245,46 @@ public class LlmModelConfig
     public double PriceInMissPer1M { get; set; }
     public double PriceInHitPer1M { get; set; }
     public double PriceOutPer1M { get; set; }
+    // Effort модели, когда человек уровень не выбрал (low…max). Без него CLI шлёт свой
+    // дефолт high, а MiniMax-M3.1-Flash на high уходит в многоминутные рассуждения
+    // (A/B 19.10.2026). Явный выбор человека не перебивает — поэтому поле каталога,
+    // а не env CLAUDE_CODE_EFFORT_LEVEL: тот перекрывает и --effort. Читает EffortFor.
+    public string? DefaultEffort { get; set; }
+
+    // Свой состав MCP у записи модели поверх провайдера (семантика — KeepMcpServers /
+    // KeepMcpTools провайдера). Нужен, когда один стенд обслуживает две записи с разным
+    // окном и разной ролью (22.10.2026: qwen3.8-27b на 256K — исполнителям, узкий состав;
+    // qwen3.8-flash-500k на 512K — ведущему фич, ему нужны tasks_run_executor и chats_send).
+    // Второй провайдер под это не годится: группа в списке моделей — провайдер, а модель
+    // одна. null/пусто — состав провайдера.
+    public string[]? KeepMcpServers { get; set; }
+    public Dictionary<string, string[]>? KeepMcpTools { get; set; }
+}
+
+// Секция статистики локального движка (фича «Статистика локальных моделей»).
+// Движок задаётся ЯВНО: пусто = заглушка (NullEngineMetricsSource), автоугадывания нет.
+// MetricsUrl задаётся явно (на деве/бое это http://127.0.0.1:18020/metrics: перед vLLM
+// стоит прокси, поэтому корень ApiBaseUrl для метрик не используется).
+public class LlmProviderStatsConfig
+{
+    // Тип движка: "vllm" | "llama-server" | "ollama". Пусто — заглушка.
+    public string Engine { get; set; } = "";
+    // URL Prometheus-метрик движка; пусто — источник не ходит в сеть.
+    public string MetricsUrl { get; set; } = "";
+    // Число карт тензор-параллелизма (vLLM --tensor-parallel-size). null — не задано:
+    // панель «Текст» покажет число карт хоста (gpus.length), а не это значение.
+    public int? TensorParallel { get; set; }
+
+    // Подписи основного стенда на панели — только показ, на выбор парсера не влияют. Нужны,
+    // когда Engine — формат метрик, а не сам движок: Strata за адаптером :18025 отдаёт метрики
+    // с именами vLLM, поэтому Engine = "vllm", а настоящие движок и раскладку пишут сюда.
+    // Model — название модели (иначе Id первой модели провайдера, а он бывает псевдонимом);
+    // EngineLabel — движок в подстроке статуса (иначе Engine); Topology — раскладка по картам
+    // вместо «TP=N» (например «разрез слоёв 26/22»).
+    public string? Model { get; set; }
+    public string? EngineLabel { get; set; }
+    public string? Topology { get; set; }
+    // Title — короткое название модели на вкладке панели «Локальные модели» (например «Flash-Next»);
+    // пусто — «Основная».
+    public string? Title { get; set; }
 }

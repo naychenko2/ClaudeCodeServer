@@ -47,7 +47,14 @@ internal sealed class UnixGroupProcess : TurnProcess
         return new UnixGroupProcess(process);
     }
 
-    public override void KillTree() => KillGroup(Id, leaderAlive: () => !Process.HasExited);
+    public override void KillTree()
+    {
+        // Компонент мог быть уже освобождён гонкой с Dispose конца хода: такого хода нет,
+        // бить некого — и обход остальных ходов в KillAll продолжается
+        var pid = SafeId();
+        if (pid == 0) return;
+        KillGroup(pid, leaderAlive: LeaderAlive);
+    }
 
     /// <summary>
     /// SIGKILL всей группе. Группы ещё нет (гонка со стартом setsid) — самому лидеру, но

@@ -37,6 +37,8 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 
 Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным `ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там `Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не чинит. Стенд :5000 раздаёт `frontend/dist` ПОСЛЕДНЕЙ сборки (`wwwroot` в репозитории не живёт). Разбор и фоновый запуск — [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
 
+Свежий worktree подготавливается скриптом `scripts/worktree-setup.sh` (symlink `frontend/node_modules` → primary checkout; без него `CodeGraph.Tests` падает). Чек-лист — [worktree.md](docs/operations/worktree.md).
+
 ## Среда исполнения пользователей (local / container)
 
 Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` | `container` (общая
@@ -156,9 +158,8 @@ one-shot действия и разговор с исполнителем «Ло
 - Нестабильные секции промпта (recall заметок и памяти, досье, привязки персоны, граф кода)
   при `RecallInTurnText` едут хвостом хода, а не системным блоком: иначе они обнуляют prefix
   cache всей истории следом за собой.
-- Слот (strong/medium/weak) разворачивает в модель только
-  `UserModelTierResolver.ModelFor(tier, ownerId)` — единственная точка склейки, дублировать
-  её логику нельзя.
+- Слот (strong/medium/weak) разворачивает в модель только `UserModelTierResolver.ModelFor(tier, ownerId)` — единственная точка склейки, дублировать её логику нельзя.
+- Системный промпт хода едет файлом `--append-system-prompt-file` (`Llm:SystemPromptViaFile`, дефолт `true`): лимит cmdline 32 767 его не ограничивает, потолок файла — `PromptFileLimit` (200 000).
 - **Фолбэк хода — только по цепочке**, автоподбора нет; `None` (неопознанная или
   содержательная ошибка) фолбэк НЕ запускает, но ход обязан завершиться `error`, а не штатным
   finished. Классификатор (`TurnErrorClassifier`) работает с СЫРЫМ текстом: по русской
@@ -178,18 +179,19 @@ one-shot действия и разговор с исполнителем «Ло
 модель админ выбирает отдельно для каждого места `ImagePlaces`: `persona-avatar` и `image-editor` (у
 редактора — лишь умолчание). **Явно выбранного провайдера не подменяем**, переход — только в
 «Автоматически»; не нарисовалось — инициалы, догоняет `ImageBackfillService` ([image-generation.md](docs/features/image-generation.md)).
-Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU, только по явной просьбе (с флагом `local-media-default` — по умолчанию, облако при отказе лишь с согласия);
+Локальная генерация (`Services/Images/LocalMedia`) — MCP-сервер `local-media`, ComfyUI на своей GPU; провайдера выбирает админ, облако при отказе — с согласия;
 **граф — только из шаблонов `ComfyWorkflows`**: произвольный граф = запись файлов хоста ([local-media.md](docs/features/local-media.md)).
 Аудио (музыка, голос, стемы) — там же, модели вне venv ComfyUI идут узлом `CcsAudioWorker` в общей очереди GPU1, веса — только при установке ([ADR-020](docs/adr/ADR-020-local-media-audio.md)).
+Обучение LoRA персонажа — op `lora_train` того же узла в общей очереди GPU, одно на инстанс, запуск только кнопкой человека (инструмента у агента нет), веса только в `loras/ccs/<владелец>/`, видимость — только `LoraNamespace.VisibleTo` ([ADR-026](docs/adr/ADR-026-character-lora-training.md)).
 
 ## Редактор картинок (ClaudeHomeServer.ImageEditor)
 
-Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом; за флагом `image-editor`.
+Динамический модуль правки картинок проекта: fal, Higgsfield, локальные модели, правки без ИИ, чат картинки с агентом.
 Инварианты и подробности — [backend/ClaudeHomeServer.ImageEditor/CLAUDE.md](backend/ClaudeHomeServer.ImageEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой.
 
 ## Редактор звука (ClaudeHomeServer.AudioEditor)
 
-Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент; за флагом `audio-editor` ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
+Динамический модуль озвучки, музыки и обработки звука в чате: fal, Higgsfield, Яндекс, локальные модели, монтаж и склейка без ИИ, «Голоса», агент ([ADR-021](docs/adr/ADR-021-audio-editor-and-generation-panel.md), [audio-editor.md](docs/features/audio-editor.md)).
 Инварианты и подробности — [backend/ClaudeHomeServer.AudioEditor/CLAUDE.md](backend/ClaudeHomeServer.AudioEditor/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
 ## Раздел «Видео» (Services/Video)
@@ -197,12 +199,24 @@ one-shot действия и разговор с исполнителем «Ло
 Эфиры телеканалов и лента подписок YouTube за общим `IVideoProvider`; живой кадр рисуется оверлеем над страницами (панель, центральный остров, плавающее окно).
 Инварианты и подробности — [backend/ClaudeHomeServer.Video/CLAUDE.md](backend/ClaudeHomeServer.Video/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
 
-**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` за флагом `video-editor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
+**Редактор видео** (сцены между двумя кадрами и фильм из них, `local` / fal / Higgsfield; выбор — вид `video-scene`/`video-film` строки контекста, эфир в рельсе — «Эфир») — отдельный динамический модуль `ClaudeHomeServer.VideoEditor` ([ADR-022](docs/adr/ADR-022-video-editor.md)); инварианты — [backend/ClaudeHomeServer.VideoEditor/CLAUDE.md](backend/ClaudeHomeServer.VideoEditor/CLAUDE.md), подхватывается сам при работе с папкой.
 
 ## Контекст хода (Services/ChatContext)
 
 Строка над полем ввода и панель «Контекст» вместо полос «Картинки»/«Звук»/«Видео»; флаг `composer-context-row` снят ([ADR-023](docs/adr/ADR-023-turn-context.md)). Стор — `Services.ChatContext` (Core, ревизия, `409 context_changed`), виды объявляют вертикали слотом `context-kind`, агент — MCP `turn-context`; панель `chatContext` открывает только человек (`revealContextPanel`).
 **Основной объект один на чат:** агент его по своей инициативе не меняет (тот же объект не трогает, другой — лишь по просьбе человека, с меткой ✦), усыновители `local_*` в контекст не пишут; выбор живёт в сторе, сырой `Focus` нити — только для `Sync` и засева. Тексты агенту — «строка контекста», без «полос».
+
+## Формат картинок и видео (Services/Media)
+
+Пропорции, ступень и «Точно…» результата, чип «Формат»; сквозная фича (Core, ImageEditor, VideoEditor, фронт) ([ADR-025](docs/adr/ADR-025-media-format.md), контракты — [ADR-025-contracts.md](docs/adr/ADR-025-contracts.md)).
+**Арифметика только в `MediaFormatResolver`** (Core), фронт её не повторяет; **хранится желание, а не подмена**; схемы MCP статичны (пропорции модели в `enum` не попадают). Кадры видео подрезаются только по явному формату.
+
+## Статистика локальных моделей
+
+Панель админа «Локальные модели» (текст — vLLM, медиа — ComfyUI), живая скорость и очередь в кольце Ctx, строка ожидания GPU в карточках редакторов; живое — ~1 ч в памяти, история медиа — 7 дней на диске ([ADR-029](docs/adr/ADR-029-local-model-stats.md), [ADR-030](docs/adr/ADR-030-local-media-history.md), [local-model-stats.md](docs/features/local-model-stats.md)).
+**Учёт за ход — только шлюз `/gw`** (`LocalModelStats:Enabled` плюс обязательный `LlmGateway:Enabled`, иначе ход идёт напрямую); **атрибуция медиа — только реестр prompt_id `ComfyPromptLedger`** с меткой `LocalJobOrigin` через швы Core.
+Чужие чаты — «Чат другого пользователя» без названия и перехода, в карточку — только агрегаты; исключение — медиа-история (ADR-030): админу при серверном флаге видны чужие промпты, результаты и LoRA, файл — только по id записи через шов `IMediaHistoryResultSource`, журнал пишет один реестр и в бэкап не едет; события `local_model_*` в `history.json` не пишутся.
+**Ответы vLLM, ComfyUI и узла — недоверенные:** исключение из их разбора не должно выходить из `BackgroundService` (по умолчанию .NET гасит весь хост).
 
 ## Сферы (Services/Spheres, Core/Models/PersonaZone)
 
@@ -216,7 +230,7 @@ one-shot действия и разговор с исполнителем «Ло
 
 ## Уборка карты проекта (Services/Docs)
 
-Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать; за флагом `project-map-hygiene`.
+Кнопка в настройках проекта проверяет корневой `CLAUDE.md` (размер, длинные секции, мёртвые ссылки, вложенные карты) и предлагает, что прибрать.
 Запись — только по явной отметке человека, а **вынос секции кнопкой не делается никогда** (цена ошибки — потеря знания, оплаченного инцидентами), регулярной автоматики тоже нет.
 Устройство двух фаз — [docs/features/project-map-hygiene.md](docs/features/project-map-hygiene.md), план — [project-map-hygiene-plan-2026-09.md](docs/research/project-map-hygiene-plan-2026-09.md).
 
@@ -224,6 +238,9 @@ one-shot действия и разговор с исполнителем «Ло
 
 C4-схема проекта в Viaduct (sandbox-iframe), модель — `docs/architecture/model.viaduct.json` под git; динамический модуль + MF-remote, фич-флага нет. **Код Viaduct здесь не правится.**
 Инварианты и подробности — [backend/ClaudeHomeServer.Architecture/CLAUDE.md](backend/ClaudeHomeServer.Architecture/CLAUDE.md): файл подхватывается сам при работе с этой папкой; при правках со стороны фронтенда открой его руками.
+
+## Плагины (ClaudeHomeServer.Plugins) — в работе
+Пакет владельца из существующих примитивов: навыки и команды — нативный формат CLI через `--plugin-dir`, панель — iframe без `allow-same-origin` с мостом v1, сеть — прокси `net:{host}`; флаги `plugins-mvp`, `plugins-build-yourself` ([ADR-031](docs/adr/ADR-031-plugins.md)). Пакеты — только в `data/plugins/{owner}`, не в общих каталогах CLI; ставит и выдаёт права только человек. Серверная вертикаль `ClaudeHomeServer.Plugins` (PluginStore, IPluginDirSource) — [CLAUDE.md](backend/ClaudeHomeServer.Plugins/CLAUDE.md); устройство и правила правок — [docs/architecture/plugins.md](docs/architecture/plugins.md).
 
 ## Внутренние подсистемы (Services/Composition)
 
@@ -316,17 +333,9 @@ WorkingDirectory = `project.RootPath`. Маппинг `stream-json` → `ServerM
 - **Не плодить однокоренные имена инструментов** с пересекающейся семантикой (`execute` vs
   `complete` — LLM путает).
 
-**Личный реестр MCP-серверов** (внешние серверы владельца) — **allow-list, единственная
-модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне чата; вне
-проекта — по `AllowOutsideProjects`. Каталог по официальному реестру (флаг `mcp-catalog`) —
-источник предложения, а не доверия: ссылка на него хранится как `McpCatalogRef`, а НЕ новым
-значением enum `Source` (откат кода унёс бы `mcp-servers.json` всех владельцев в `.corrupt`),
-и allow-list рантайм-флагов `uvx` ПУСТ — `--from`/`--with`/`--index*` подменяют источник пакета.
+**Личный реестр MCP-серверов** (внешние серверы владельца) — **allow-list, единственная модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне чата; вне проекта — по `AllowOutsideProjects`. Каталог по официальному реестру — источник предложения, а не доверия: ссылка на него хранится как `McpCatalogRef`, а НЕ новым значением enum `Source` (откат кода унёс бы `mcp-servers.json` всех владельцев в `.corrupt`), и allow-list рантайм-флагов `uvx` ПУСТ — `--from`/`--with`/`--index*` подменяют источник пакета.
 
-Состав инструментов, `websearch`, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed»
-у всех инструментов при живом бэкенде → явный `McpTasksApiUrl`) —
-[docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md); реестр, каталог и вход
-по OAuth — [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
+Состав инструментов, `websearch`, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md); реестр, каталог и вход по OAuth — [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
 
 ## Заметки и Знания (Dify RAG)
 
@@ -341,8 +350,7 @@ Dify-датасетов, и Dify тут источник истины. Ключ 
 
 ## Интеграция с мессенджерами (Max / Telegram) — не реализовано
 
-Полноценный чат с Claude через мессенджер делать **не надо** — он не отрендерит
-diff/артефакты/виджеты; оправдывает интеграцию только уведомление о завершении задач и ответ на permission-запросы. **Max для ботов закрыт** (только верифицированные юрлица РФ). Исследование и архитектура — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
+Полноценный чат с Claude через мессенджер делать **не надо** — он не отрендерит diff/артефакты/виджеты; оправдывает интеграцию только уведомление о завершении задач и ответ на permission-запросы. **Max для ботов закрыт** (только верифицированные юрлица РФ). Исследование и архитектура — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
 
 ## Персоны
 
@@ -410,11 +418,9 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 
 ## Реализовано
 
-Ядро: вход по паре `{username, password}` с JWT (раздел «REST API»), проекты, сессии, чат
-(вложения/голос/режимы ⚡📋❓), файловый менеджер с diff/revert, empty states.
+Ядро: вход по паре `{username, password}` с JWT (раздел «REST API»), проекты, сессии, чат (вложения/голос/режимы ⚡📋❓), файловый менеджер с diff/revert, empty states.
 
-Поверх ядра: виджеты в чате (sandbox-iframe + строгая CSP), артефакты сессии, продуктовая
-история «Что нового», плагин oh-my-claudecode, задачи v3, бэкапы каталога `data`, панель
+Поверх ядра: виджеты в чате (sandbox-iframe + строгая CSP), артефакты сессии, продуктовая история «Что нового», плагин oh-my-claudecode, задачи v3, бэкапы каталога `data`, панель
 «Документация», панель «Сервисы» (дев-серверы проекта в iframe через прокси `/preview/**` —
 **ключи и эндпоинты остались `preview`**, переименована только подпись), ридер ссылок
 ([ADR-005](docs/adr/ADR-005-link-reader-server.md)), голосовой режим чата и разговор без рук,
@@ -439,14 +445,9 @@ OpenTelemetry в двух режимах: dev → Aspire Dashboard, prod → Sig
 
 ## Фич-флаги (feature toggles)
 
-Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные
-функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All`
-([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у
-каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор
-[lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
-Перечня флагов карта не держит: он протухает быстрее всего остального.
-**Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода
-(ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
+Dark launch: фича коммитится выключенной и включается per-user в меню «Экспериментальные функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All` ([Models/FeatureFlag.cs](backend/ClaudeHomeServer.Core/Models/FeatureFlag.cs)), там же у каждого ключа title и описание; хранение — override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts), хук `useFeature(FLAGS.key)`.
+Перечня флагов карта не держит: он протухает быстрее всего остального. Активные (6) — `workspace-destructive`, `spheres`, `plugins-mvp`, `plugins-build-yourself`, `shared-projects`, `llm-wiki`; снятые (24): chat-context, chat-branch, visual-plan, specialty-prompt-sections, chat-auto-archive, mcp-catalog, project-map-hygiene, image-editor, local-projects, local-media-default, audio-editor, midi-editor, image-panel-v5, video-editor, media-format, а в ноябре 2026 ещё 9 — character-smart-photos, character-face-swap, local-model-stats, turn-plan-feature-mode, features-overview, prompt-cache, change-dossiers-recall, turn-auto-resume, notes-wiki-unified (последний сведён к `llm-wiki`).
+**Пометки «за флагом …» в доках — исторические**, актуальный состав только в каталоге кода (ADR-013, например, до сих пор описывает сторожей чатов как флажных — флаг снят 2026-09-01).
 
 Флаги, снятые после dark launch, работают у всех безусловно: ассистент по умолчанию и
 знакомство ([onboarding-intro.md](docs/architecture/onboarding-intro.md),
@@ -468,9 +469,9 @@ Dark launch: фича коммитится выключенной и включ�
 
 ## Агенты (.claude/agents/)
 
-Содержимое папки в .gitignore: туда `PersonaAgentFileSync` синкает персон-консультантов
-владельца (у каждого пользователя свои, между машинами конфликтуют). Версионируются только
-общие проектные агенты — точечные `!`-исключения в .gitignore:
+Персоны-консультанты едут в per-run JSON-файле `--agents` (CLI ≥ 2.1.281); механизм,
+откат (`Persona:AgentFiles`) и миграция — [personas.md](docs/architecture/personas.md#агенты--claudeagents).
+Версионируются только общие проектные агенты (точечные `!`-исключения в .gitignore):
 
 | Агент | Роль |
 |---|---|
@@ -492,7 +493,12 @@ Dark launch: фича коммитится выключенной и включ�
 - **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`), а разработка идёт на Windows — тесты
   обязаны быть платформонезависимыми: пути от `Path.GetTempPath()` + `Path.Combine`, ожидание
   **события** через `TaskCompletionSource`, а не `Task.Delay`. На итеративную правку —
-  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон перед коммитом/PR.
+  `dotnet test --filter "FullyQualifiedName~<Набор>"`, полный прогон — CI и гейт мержа (`docs/operations/testing.md`).
+- **Тесты — наборы и шарды:** Fast = исключение категорий `Host`/`Slow`/`Integration`/`Node`/`Bench`;
+  класс с `TestWebApplicationFactory` — `[Trait("Category","Host")]` (сторож), медленный метод без
+  хоста — `Slow`; монолит режется по классам (CI, `run_tests` с `TestRuns:MonolithShards`), коллекции
+  xunit определяются в самой тестовой сборке. Устройство и пределы — [testing.md](docs/operations/testing.md).
+- **Мутацию доказывай в копии `scripts/mutation-copy.sh create`, по окончании — `remove`**; дерево руками в `/tmp` не копировать (холодная сборка мимо гейта и мусор) — [testing.md](docs/operations/testing.md#мутации-в-копии).
 - **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
   датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
 - **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с

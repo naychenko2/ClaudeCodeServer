@@ -62,7 +62,9 @@ public sealed record LocalAudioRequest(
     IReadOnlyList<byte[]>? Clips = null,
     byte[]? VoiceModel = null,
     byte[]? VoiceIndex = null,
-    long? Seed = null);
+    long? Seed = null,
+    // Метка происхождения прогона (шаг 23): null — вызывающая сторона ещё не передаёт (шаги 28–30).
+    LocalJobOrigin? Origin = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: это «попробуй позже», а не ошибка запроса
 public sealed record LocalAudioSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -72,13 +74,15 @@ public sealed record LocalAudioSubmitted(string? Ticket, int? QueuePosition, int
 
 public enum LocalAudioState { Queued, Running, Completed, Failed }
 
-// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива
+// Warning — временный сбой опроса (ComfyUI не ответил), задача при этом жива; Gpu — снимок очереди
+// GPU (шаг 26; пока null)
 public sealed record LocalAudioPoll(
     LocalAudioState State,
     int? QueuePosition,
     IReadOnlyList<LocalAudioFile> Files,
     string? Error,
-    string? Warning = null);
+    string? Warning = null,
+    LocalGpuQueueInfo? Gpu = null);
 
 // Role — из LocalAudioRoles; Extension — с точкой («.mp3», «.srt»)
 public sealed record LocalAudioFile(string Role, byte[] Bytes, string ContentType, string Extension);

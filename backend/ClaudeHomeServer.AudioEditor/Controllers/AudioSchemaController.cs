@@ -8,12 +8,11 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Services.AudioEditor.Controllers;
 
 // Схема частных параметров модели для автоформы «Дополнительно» (ADR-021 §2): только модели из
-// каталога поставщика. Схема не зависит от проекта и чата — ручка вне области; выключенный флаг — 404,
-// как у остальных ручек модуля. Id модели fal содержит «/», поэтому всё — в query
+// каталога поставщика. Схема не зависит от проекта и чата — ручка вне области. Id модели fal содержит «/», поэтому всё — в query
 [ApiController]
 [Authorize]
 [Route("api/audio-editor/schema")]
-public sealed class AudioSchemaController(IFeatureFlagGate flags, AudioEditJobService jobs) : ControllerBase
+public sealed class AudioSchemaController(AudioEditJobService jobs) : ControllerBase
 {
     // Claim «sub» сервисного JWT; пакета System.IdentityModel у модуля нет (своих PackageReference не держим)
     private string UserId => User.FindFirstValue("sub")!;
@@ -22,8 +21,6 @@ public sealed class AudioSchemaController(IFeatureFlagGate flags, AudioEditJobSe
     public async Task<IActionResult> Get([FromQuery] string? provider, [FromQuery] string? model, [FromQuery] string? op,
         CancellationToken ct)
     {
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.AudioEditor))
-            return NotFound(new { error = "Модуль «Звук» выключен" });
         if (string.IsNullOrWhiteSpace(provider) || string.IsNullOrWhiteSpace(model) || string.IsNullOrWhiteSpace(op))
             return BadRequest(new { error = "Нужны provider, model и op", code = AudioEditErrorCodes.InvalidRequest });
 

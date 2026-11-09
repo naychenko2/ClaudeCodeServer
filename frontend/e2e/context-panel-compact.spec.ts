@@ -55,7 +55,7 @@ for (const { name, vp } of VPS) {
   for (const theme of ['light', 'dark'] as const) {
     test(`«Изменить» с облаком · ${name} · ${theme}: «Чем» одной строкой, меню с группами, всё влезает без прокрутки`, async ({ page }) => {
       newWorld({
-        imageCatalog: CATALOG, threads: [heroThread()], flags: { 'image-editor': true, 'local-media-default': true },
+        imageCatalog: CATALOG, threads: [heroThread()], flags: {},
         ctx: { primary: primary({ ref: { threadId: HERO, versionId: 'origin' } }) },
       });
       await openChat(page, { vp, theme });

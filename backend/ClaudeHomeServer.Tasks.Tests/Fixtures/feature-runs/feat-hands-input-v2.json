@@ -1,0 +1,1560 @@
+[
+  {
+    "id": "epic-hands-input-v2",
+    "title": "Руки без UIA: клавиши, мышь, OCR (без UIA)",
+    "persona": "Андрей",
+    "status": "done",
+    "created": "2026-10-15T06:58",
+    "completed": "2026-10-16T14:20",
+    "kind": "epic",
+    "role": "feature",
+    "featureId": null,
+    "worktreeBranch": "feat/hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h01",
+    "title": "Руки без UIA, шаг D1a",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T06:58",
+    "completed": "2026-10-15T07:18",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1a",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h02",
+    "title": "Ревью D1a",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T07:19",
+    "completed": "2026-10-15T07:41",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h01"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h03",
+    "title": "D1a, правки после ревью",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T07:42",
+    "completed": "2026-10-15T07:45",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1a",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h02"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h04",
+    "title": "Повторная проверка D1a",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T07:46",
+    "completed": "2026-10-15T07:49",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h03"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h05",
+    "title": "Руки без UIA, шаг D1b",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T07:49",
+    "completed": "2026-10-15T08:09",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1b",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h06",
+    "title": "Ревью D1b",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T08:10",
+    "completed": "2026-10-15T08:17",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h05"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h07",
+    "title": "Руки без UIA, шаг D1c",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T08:18",
+    "completed": "2026-10-15T08:35",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1c",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h08",
+    "title": "D1d: правки по ревью D1c",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T08:45",
+    "completed": "2026-10-15T08:59",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1c",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h09"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h09",
+    "title": "Проверка D1d",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T09:01",
+    "completed": "2026-10-15T09:07",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h08"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h10",
+    "title": "Руки без UIA, шаг SC",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T09:01",
+    "completed": "2026-10-15T09:22",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "SC",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h11",
+    "title": "D1e",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T09:08",
+    "completed": "2026-10-15T09:18",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D1e",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h12",
+    "title": "Проверка D1e",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T09:20",
+    "completed": "2026-10-15T09:28",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h11"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h13",
+    "title": "Руки без UIA, шаг D2b-1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T09:20",
+    "completed": "2026-10-15T10:14",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2b-1",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h14",
+    "title": "Восстановить D1e в истории ветки",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T09:23",
+    "completed": "2026-10-15T09:29",
+    "kind": "ops",
+    "role": "merge",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h15",
+    "title": "Ревью SC",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T09:29",
+    "completed": "2026-10-15T09:36",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h10"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h16",
+    "title": "SC2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T09:37",
+    "completed": "2026-10-15T11:03",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "SC2",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h17",
+    "title": "Ревью D2b-1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T10:15",
+    "completed": "2026-10-15T10:23",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h13"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h18",
+    "title": "D2b-1.1: усилить сторожей mouse_control",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T11:05",
+    "completed": "2026-10-15T11:17",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2b-1",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h17"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h19",
+    "title": "Проверка SC2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T11:05",
+    "completed": "2026-10-15T11:11",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h16"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h20",
+    "title": "Проверка D2b-1.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T11:18",
+    "completed": "2026-10-15T11:25",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h18"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h21",
+    "title": "Руки без UIA, шаг D2b-2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T11:18",
+    "completed": "2026-10-15T11:34",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2b-2",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h22",
+    "title": "Ревью D2b-2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T11:35",
+    "completed": "2026-10-15T11:43",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h21"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h23",
+    "title": "D2b-2.1: проверять результат возврата курсора при отказе конца drag",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T11:44",
+    "completed": "2026-10-15T12:10",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2b-2",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h22"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h24",
+    "title": "Руки без UIA, шаг A1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T11:44",
+    "completed": "2026-10-15T12:17",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A1",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h25",
+    "title": "Ревью D2b-2.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T12:12",
+    "completed": "2026-10-15T12:23",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h23"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h26",
+    "title": "Ревью A1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T12:17",
+    "completed": "2026-10-15T12:41",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h24"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h27",
+    "title": "D2b-2.2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T12:24",
+    "completed": "2026-10-15T12:35",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2b-2",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h25"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h28",
+    "title": "Повторное ревью D2b-2.2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T12:35",
+    "completed": "2026-10-15T12:39",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h27"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h29",
+    "title": "Руки без UIA, шаг A2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T12:42",
+    "completed": "2026-10-15T13:15",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A2",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h30",
+    "title": "Руки без UIA, шаг A3",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T12:42",
+    "completed": "2026-10-15T12:57",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A3",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h31",
+    "title": "Ревью A3",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T12:57",
+    "completed": "2026-10-15T13:02",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h30"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h32",
+    "title": "Ревью A2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T13:15",
+    "completed": "2026-10-15T13:24",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h29"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h33",
+    "title": "A2.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T13:24",
+    "completed": "2026-10-15T13:52",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A2",
+    "lane": "A · распознавание",
+    "reviewOf": [
+      "h32"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h34",
+    "title": "Руки без UIA, шаг D2d",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T13:56",
+    "completed": "2026-10-15T14:47",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2d",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h35",
+    "title": "Ревью A2.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T13:56",
+    "completed": "2026-10-15T14:10",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h33"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h36",
+    "title": "A2.2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T14:11",
+    "completed": "2026-10-15T14:35",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A2",
+    "lane": "A · распознавание",
+    "reviewOf": [
+      "h35"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h37",
+    "title": "Ревью A2.2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T14:35",
+    "completed": "2026-10-15T14:49",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h36"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h38",
+    "title": "Ревью D2d",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T14:47",
+    "completed": "2026-10-15T14:54",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h34"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h39",
+    "title": "D2d.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T14:54",
+    "completed": "2026-10-15T15:21",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2d",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h38"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h40",
+    "title": "Повторное ревью D2d.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T15:22",
+    "completed": "2026-10-15T15:26",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h39"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h41",
+    "title": "Руки без UIA, шаг A4",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T15:27",
+    "completed": "2026-10-15T16:03",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A4",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h42",
+    "title": "Ревью A4",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T16:04",
+    "completed": "2026-10-15T16:21",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h41"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h43",
+    "title": "A4.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T16:21",
+    "completed": "2026-10-15T16:34",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A4",
+    "lane": "A · распознавание",
+    "reviewOf": [
+      "h42"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h44",
+    "title": "Повторное ревью A4.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T16:34",
+    "completed": "2026-10-15T16:38",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h43"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h45",
+    "title": "Руки без UIA, шаг D3",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T16:39",
+    "completed": "2026-10-15T16:58",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D3",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h46",
+    "title": "Руки без UIA, шаг D4",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T16:39",
+    "completed": "2026-10-15T16:52",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D4",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h47",
+    "title": "Ревью Александра: документы этапа D",
+    "persona": "Александр",
+    "status": "done",
+    "created": "2026-10-15T16:56",
+    "completed": "2026-10-15T16:58",
+    "kind": "arch",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h46"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h48",
+    "title": "Ревью D3",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T16:58",
+    "completed": "2026-10-15T17:02",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h45"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h49",
+    "title": "D4.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T16:59",
+    "completed": "2026-10-15T17:04",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D4",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h47"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h50",
+    "title": "D3 (Марк): собрать мост",
+    "persona": "Марк",
+    "status": "done",
+    "created": "2026-10-15T17:03",
+    "completed": "2026-10-15T17:07",
+    "kind": "ops",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D3",
+    "lane": "ops",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h51",
+    "title": "Поднять дев-стенд",
+    "persona": "Марк",
+    "status": "done",
+    "created": "2026-10-15T17:10",
+    "completed": "2026-10-15T17:35",
+    "kind": "ops",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": "ops",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h52",
+    "title": "Руки без UIA, шаг D2a",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T18:22",
+    "completed": "2026-10-15T18:51",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2a",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h53",
+    "title": "Руки без UIA, шаг ocr-окна",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T18:22",
+    "completed": "2026-10-15T18:51",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A4",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h54",
+    "title": "Ревью D2a",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T18:51",
+    "completed": "2026-10-15T19:04",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h52"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h55",
+    "title": "Ревью: перечисление видимых окон",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T18:51",
+    "completed": "2026-10-15T19:00",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h53"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h56",
+    "title": "Руки без UIA, шаг A5",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T18:55",
+    "completed": "2026-10-15T19:41",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A5",
+    "lane": "A · распознавание",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h57",
+    "title": "Руки без UIA, шаг D2e",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T18:55",
+    "completed": "2026-10-15T20:00",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2e",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h58",
+    "title": "Ревью A5",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T19:42",
+    "completed": "2026-10-15T19:51",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h56"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h59",
+    "title": "A5.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T19:52",
+    "completed": "2026-10-15T20:35",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "A5",
+    "lane": "A · распознавание",
+    "reviewOf": [
+      "h58"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h60",
+    "title": "Ревью D2e",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T20:01",
+    "completed": "2026-10-15T20:05",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h57"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h61",
+    "title": "Руки без UIA, шаг C1-1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T20:36",
+    "completed": "2026-10-15T21:43",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-1",
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h62",
+    "title": "Руки без UIA, шаг D2f",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-15T21:44",
+    "completed": "2026-10-15T22:28",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2f",
+    "lane": "D · ввод",
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h63",
+    "title": "Ревью C1-1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T21:44",
+    "completed": "2026-10-15T21:48",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h61"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h64",
+    "title": "Ревью D2f",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-15T22:29",
+    "completed": "2026-10-15T22:35",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h62"
+    ],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h65",
+    "title": "C1-1.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T05:56",
+    "completed": "2026-10-16T06:44",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-1",
+    "lane": null,
+    "reviewOf": [
+      "h63"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h66",
+    "title": "D2f.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T05:56",
+    "completed": "2026-10-16T06:53",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "D2f",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h64"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h67",
+    "title": "Повторное ревью C1-1.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T06:46",
+    "completed": "2026-10-16T06:49",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h65"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h68",
+    "title": "Руки без UIA, шаг C1-2: scan_canvas (после 3-х ревью — снят с выкладки)",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T06:50",
+    "completed": "2026-10-16T07:28",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-2",
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": "withdrawn"
+    }
+  },
+  {
+    "id": "h69",
+    "title": "Ревью C1-2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T07:29",
+    "completed": "2026-10-16T07:39",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h68"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h70",
+    "title": "C1-2.1: scan_canvas — исправить геометрию склейки, декодер PNG, сторож",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T07:39",
+    "completed": "2026-10-16T08:56",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-2",
+    "lane": null,
+    "reviewOf": [
+      "h69"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h71",
+    "title": "Повторное ревью C1-2.1",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T08:58",
+    "completed": "2026-10-16T09:08",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h70"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h72",
+    "title": "C1-2.2: scan_canvas — перекрытие, калибровка, возврат в начало, отказ ввода",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T09:09",
+    "completed": "2026-10-16T10:53",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-2",
+    "lane": null,
+    "reviewOf": [
+      "h71"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h73",
+    "title": "Повторное ревью C1-2.2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T10:54",
+    "completed": "2026-10-16T11:01",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h72"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h74",
+    "title": "Архитектурное решение",
+    "persona": "Александр",
+    "status": "done",
+    "created": "2026-10-16T11:02",
+    "completed": "2026-10-16T11:08",
+    "kind": "arch",
+    "role": "consult",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h75",
+    "title": "M-E.1",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T11:02",
+    "completed": "2026-10-16T11:20",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "M-E",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h77"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h76",
+    "title": "Убрать scan_canvas из набора инструментов первой выкладки",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T11:21",
+    "completed": "2026-10-16T11:40",
+    "kind": "ops",
+    "role": "merge",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h76w",
+    "title": "Снятие C1-2 с выкладки (исход шага)",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T11:40",
+    "completed": "2026-10-16T11:40",
+    "kind": "decision",
+    "role": "merge",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "C1-2",
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h77",
+    "title": "Ревью: слой мыши M-E.1 и снятие scan_canvas",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T11:41",
+    "completed": "2026-10-16T11:45",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "M-E",
+    "lane": null,
+    "reviewOf": [
+      "h75",
+      "h76"
+    ],
+    "verification": {
+      "verdict": "returned"
+    }
+  },
+  {
+    "id": "h78",
+    "title": "M-E.2",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T11:46",
+    "completed": "2026-10-16T12:27",
+    "kind": "build",
+    "role": "step",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "M-E",
+    "lane": "D · ввод",
+    "reviewOf": [
+      "h77"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h79",
+    "title": "Повторное ревью M-E.2",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T12:28",
+    "completed": "2026-10-16T12:32",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": null,
+    "lane": null,
+    "reviewOf": [
+      "h78"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  },
+  {
+    "id": "h80",
+    "title": "ФИНАЛЬНОЕ РЕВЬЮ",
+    "persona": "Александр",
+    "status": "done",
+    "created": "2026-10-16T12:32",
+    "completed": "2026-10-16T12:38",
+    "kind": "arch",
+    "role": "final",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "Ш_final",
+    "lane": null,
+    "reviewOf": [],
+    "verification": {
+      "verdict": "accepted_with_remarks"
+    }
+  },
+  {
+    "id": "h81",
+    "title": "Финальные правки А",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T12:39",
+    "completed": "2026-10-16T14:11",
+    "kind": "build",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "Ш_final",
+    "lane": null,
+    "reviewOf": [
+      "h80"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h82",
+    "title": "Финальные правки Б",
+    "persona": "Денис",
+    "status": "done",
+    "created": "2026-10-16T12:39",
+    "completed": "2026-10-16T13:41",
+    "kind": "rework",
+    "role": "rework",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "Ш_final",
+    "lane": null,
+    "reviewOf": [
+      "h80"
+    ],
+    "verification": {
+      "verdict": null
+    }
+  },
+  {
+    "id": "h83",
+    "title": "Ревью финальных правок А и Б",
+    "persona": "Глеб",
+    "status": "done",
+    "created": "2026-10-16T14:12",
+    "completed": "2026-10-16T14:20",
+    "kind": "review",
+    "role": "review",
+    "featureId": "epic-hands-input-v2",
+    "stepRef": "Ш_final",
+    "lane": null,
+    "reviewOf": [
+      "h81",
+      "h82"
+    ],
+    "verification": {
+      "verdict": "accepted"
+    }
+  }
+]

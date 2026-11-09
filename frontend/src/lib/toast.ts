@@ -20,6 +20,7 @@ export interface LocalToast {
 }
 
 export function showToast(title: string, body: string, kind: ToastKind = 'info', action?: ToastAction) {
+  if (typeof window === 'undefined') return;   // вне браузера показывать некому
   window.dispatchEvent(new CustomEvent<LocalToast>('cc-local-toast', {
     detail: { title, body, kind, ...(action ? { action } : {}) },
   }));

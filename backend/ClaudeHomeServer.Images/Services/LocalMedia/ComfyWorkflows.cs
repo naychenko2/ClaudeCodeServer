@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor;
 
 namespace ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -22,6 +23,9 @@ public static partial class ComfyWorkflows
     public const int MinSteps = 4;
     public const int MaxSteps = 40;
     public const int DefaultSteps = 25;
+
+    // Turbo-дистиллят: 8 шагов при cfg 1 (замер 2026-10-13, 3090: генерация 8 с против 22 с)
+    public const int TurboSteps = 8;
     public const int MaxCount = 4;
     public const int MaxEditImages = 16;
     public const int MaxPromptLength = 4000;
@@ -56,8 +60,16 @@ public static partial class ComfyWorkflows
         return n + (((5 - n % 17) % 17) + 17) % 17;
     }
 
-    private const string QwenUnet = "qwen_image_2.1_bf16.safetensors";
-    private const string QwenClip = "qwen3vl_8b_bf16.safetensors";
+    // int8 convrot + SageAttention: на 3090 картинка 1328² за ~20–23 с вместо ~47–50 с у bf16,
+    // на пейзаже и портрете с надписью разница видна только при наложении (замер 2026-10-08)
+    private const string QwenUnet = "qwen_image_2.1_int8_convrot.safetensors";
+    private const string QwenUnetTurbo = "qwen_image_2.1_turbo_int8_convrot.safetensors";
+
+    // Unet варианта по id из LocalImageModels (null — «качественно»); шаги Turbo — TurboSteps
+    public static bool IsTurbo(string? model) => model == LocalImageModels.Turbo;
+
+    public static int StepsFor(string? model) => IsTurbo(model) ? TurboSteps : DefaultSteps;
+    private const string QwenClip = "qwen3vl_8b_int8_convrot.safetensors";
     private const string QwenVae = "qwen_image_2.1_vae_bf16.safetensors";
 
     // Промпт доводки лиц — из run_facedetail.py: он описывает ЛИЦО, а не сцену
@@ -66,9 +78,9 @@ public static partial class ComfyWorkflows
         + "sharp detailed eyes, natural relaxed expression, realistic soft lighting, subtle film grain.";
 
     public static JsonObject GenerateImage(string prompt, string negativePrompt, int width, int height,
-        long seed, int steps, int count, string filenamePrefix)
+        long seed, int steps, int count, string filenamePrefix, string? model = null)
     {
-        var wf = QwenLoaders();
+        var wf = QwenLoaders(model);
         wf["enc"] = Node("TextEncodeQwenImage21", new JsonObject
         {
             ["clip"] = Link("clip"),
@@ -88,14 +100,29 @@ public static partial class ComfyWorkflows
     }
 
     // Первая картинка — основная (холст по ней), остальные — дополнительные референсы.
-    // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере)
+    // Без размера холст берётся из энкодера (resolution 0 — каждый референс в своём размере).
+    // crop (ADR-028, решение 12) — только вместе с mask: модель видит кроп вокруг цели,
+    // а не всю первую картинку; без crop граф байт-в-байт прежний
     public static JsonObject EditImage(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
-        long seed, string filenamePrefix)
+        long seed, string filenamePrefix, (string Name, double Strength)? lora = null,
+        IReadOnlyList<string>? faceReferences = null, string? mask = null, LocalImageCrop? crop = null,
+        string? modelCanvas = null, string? model = null)
     {
         if (images.Count is < 1 or > MaxEditImages)
             throw new ArgumentOutOfRangeException(nameof(images), "Нужно от 1 до 16 картинок");
 
-        var wf = QwenLoaders();
+        var wf = QwenLoaders(model);
+        if (lora is { } l)
+        {
+            // Персонаж: LoRA применяется к модели перед sage (как узел "lora" стека H3)
+            wf["lora"] = Node("LoraLoaderModelOnly", new JsonObject
+            {
+                ["model"] = Link("unet"),
+                ["lora_name"] = l.Name,
+                ["strength_model"] = l.Strength,
+            });
+            wf["sage"]!["inputs"]!["model"] = Link("lora");
+        }
         var enc = new JsonObject
         {
             ["clip"] = Link("clip"),
@@ -108,6 +135,38 @@ public static partial class ComfyWorkflows
         {
             wf[$"img{k}"] = Node("LoadImage", new JsonObject { ["image"] = images[k - 1] });
             enc[$"images.image_{k}"] = Link($"img{k}");
+        }
+        if (crop is { } c)
+        {
+            // Подстановка на лицо: модель видит только кроп вокруг цели (в нём одно лицо,
+            // указатель не нужен), а не всю первую картинку. Маску модели не показываем:
+            // белую маску-образец она перерисовывает в результат (ореол, диагностика f0e09907)
+            wf["crop"] = Node("ImageCrop", new JsonObject
+            {
+                ["image"] = Link("img1"),
+                ["width"] = c.Width,
+                ["height"] = c.Height,
+                ["x"] = c.X,
+                ["y"] = c.Y,
+            });
+            // Масштаб до ScaledWidth×ScaledHeight (размер считает C#, кратно 16): мелкий кроп
+            // увеличивается — на нём Qwen-Image рисует кашу, крупнее лимита модели — уменьшается
+            wf["crop_scale"] = Node("ImageScale", new JsonObject
+            {
+                ["image"] = Link("crop"),
+                ["upscale_method"] = "lanczos",
+                ["width"] = c.ScaledWidth,
+                ["height"] = c.ScaledHeight,
+                ["crop"] = "disabled",
+            });
+            enc["images.image_1"] = Link("crop_scale");
+        }
+        if (modelCanvas is { } mc)
+        {
+            // Вуаль (ADR-028, решение 12): модель видит копию холста с серой заливкой места правки,
+            // а не чистый холст. Склейка «вне маски — исходник» ниже идёт по img1 (чистому холсту)
+            wf["img1_veil"] = Node("LoadImage", new JsonObject { ["image"] = mc });
+            enc["images.image_1"] = Link("img1_veil");
         }
         wf["enc"] = Node("TextEncodeQwenImage21", enc);
 
@@ -126,8 +185,72 @@ public static partial class ComfyWorkflows
         {
             latent = Link("enc", 2);
         }
-        wf["ks"] = KSampler(latent, seed, DefaultSteps);
+        wf["ks"] = KSampler(latent, seed, StepsFor(model));
         AddDecodeAndSave(wf, filenamePrefix);
+        if (mask is { } m)
+        {
+            // Склейка вне маски: модель меняет 8–14 % пикселей и вне маски, поэтому вне неё
+            // возвращаем исходный холст (img1). resize_source: ComfyUI растянет сгенерированное
+            // до размера холста до наложения → результат графа ровно размера холста
+            wf["mask"] = Node("LoadImageMask", new JsonObject { ["image"] = m, ["channel"] = "red" });
+            AddMaskSoftening(wf);
+            if (crop is { } oc)
+            {
+                // Склейка в месте кропа: выход модели приводится к размеру кропа, а мягкая маска
+                // вырезается тем же прямоугольником (CropMask). Вне кропа холст не трогается вовсе
+                // (resize_source = false, x/y — место кропа); внутри кропа вне маски — исходник
+                wf["dec_fit"] = Node("ImageScale", new JsonObject
+                {
+                    ["image"] = Link("dec"),
+                    ["upscale_method"] = "lanczos",
+                    ["width"] = oc.Width,
+                    ["height"] = oc.Height,
+                    ["crop"] = "disabled",
+                });
+                wf["mask_crop"] = Node("CropMask", new JsonObject
+                {
+                    ["mask"] = Link("mask_soft"),
+                    ["width"] = oc.Width,
+                    ["height"] = oc.Height,
+                    ["x"] = oc.X,
+                    ["y"] = oc.Y,
+                });
+                wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+                {
+                    ["destination"] = Link("img1"),
+                    ["source"] = Link("dec_fit"),
+                    ["x"] = oc.X,
+                    ["y"] = oc.Y,
+                    ["resize_source"] = false,
+                    ["mask"] = Link("mask_crop"),
+                });
+            }
+            else
+            {
+                wf["overlay"] = Node("ImageCompositeMasked", new JsonObject
+                {
+                    ["destination"] = Link("img1"),
+                    ["source"] = Link("dec"),
+                    ["x"] = 0,
+                    ["y"] = 0,
+                    ["resize_source"] = true,
+                    ["mask"] = Link("mask_soft"),
+                });
+            }
+            wf["save"]!["inputs"]!["images"] = Link("overlay");
+        }
+        if (faceReferences is { Count: > 0 })
+        {
+            // Сходство лица с эталоном: оценивается та же картинка, что уходит в SaveImage
+            var sim = new JsonObject
+            {
+                ["image"] = wf["save"]!["inputs"]!["images"]!.DeepClone(),
+                ["references"] = string.Join("\n", faceReferences),
+            };
+            if (mask is not null)
+                sim["mask"] = Link("mask");
+            wf["sim"] = Node("CcsFaceSimilarity", sim);
+        }
         return wf;
     }
 
@@ -146,7 +269,7 @@ public static partial class ComfyWorkflows
         wf["fd"] = Node("FaceDetailer", new JsonObject
         {
             ["image"] = Link("img"),
-            ["model"] = Link("unet"),
+            ["model"] = Link("sage"),
             ["clip"] = Link("clip"),
             ["vae"] = Link("vae"),
             ["guide_size"] = 768,
@@ -357,20 +480,7 @@ public static partial class ComfyWorkflows
     private static void AddSourceOverlay(JsonObject wf, int length)
     {
         wf.Remove("adec");
-        wf["mask_grow"] = Node("GrowMask", new JsonObject
-        {
-            ["mask"] = Link("mask"),
-            ["expand"] = InpaintMaskGrow,
-            ["tapered_corners"] = true,
-        });
-        wf["mask_img"] = Node("MaskToImage", new JsonObject { ["mask"] = Link("mask_grow") });
-        wf["mask_blur"] = Node("ImageBlur", new JsonObject
-        {
-            ["image"] = Link("mask_img"),
-            ["blur_radius"] = InpaintMaskBlurRadius,
-            ["sigma"] = InpaintMaskBlurSigma,
-        });
-        wf["mask_soft"] = Node("ImageToMask", new JsonObject { ["image"] = Link("mask_blur"), ["channel"] = "red" });
+        AddMaskSoftening(wf);
         wf["src_frames"] = Node("ImageFromBatch", new JsonObject
         {
             ["image"] = Link("src_parts"),
@@ -390,6 +500,27 @@ public static partial class ComfyWorkflows
         video["images"] = Link("overlay");
         video["fps"] = Link("src_parts", 2);
         video["audio"] = Link("src_parts", 1);
+    }
+
+    // Мягкий шов: исходная маска (узел "mask") расширяется и размывается, результат — узел
+    // "mask_soft". Имена узлов и константы общие с инпейнтом видео (InpaintVideo), поэтому
+    // граф видео остаётся байт-в-байт прежним; используется и в склейке EditImage
+    private static void AddMaskSoftening(JsonObject wf)
+    {
+        wf["mask_grow"] = Node("GrowMask", new JsonObject
+        {
+            ["mask"] = Link("mask"),
+            ["expand"] = InpaintMaskGrow,
+            ["tapered_corners"] = true,
+        });
+        wf["mask_img"] = Node("MaskToImage", new JsonObject { ["mask"] = Link("mask_grow") });
+        wf["mask_blur"] = Node("ImageBlur", new JsonObject
+        {
+            ["image"] = Link("mask_img"),
+            ["blur_radius"] = InpaintMaskBlurRadius,
+            ["sigma"] = InpaintMaskBlurSigma,
+        });
+        wf["mask_soft"] = Node("ImageToMask", new JsonObject { ["image"] = Link("mask_blur"), ["channel"] = "red" });
     }
 
     public const int InpaintMaskGrow = 8;
@@ -628,11 +759,11 @@ public static partial class ComfyWorkflows
         });
     }
 
-    private static JsonObject QwenLoaders() => new()
+    private static JsonObject QwenLoaders(string? model = null) => new()
     {
         ["unet"] = Node("UNETLoaderMultiGPU", new JsonObject
         {
-            ["unet_name"] = QwenUnet,
+            ["unet_name"] = IsTurbo(model) ? QwenUnetTurbo : QwenUnet,
             ["weight_dtype"] = "default",
             ["device"] = "cuda:0",
         }),
@@ -643,12 +774,18 @@ public static partial class ComfyWorkflows
             ["device"] = "cuda:0",
         }),
         ["vae"] = Node("VAELoader", new JsonObject { ["vae_name"] = QwenVae }),
+        ["sage"] = Node("PathchSageAttentionKJ", new JsonObject
+        {
+            ["model"] = Link("unet"),
+            ["sage_attention"] = "auto",
+            ["allow_compile"] = false,
+        }),
     };
 
     private static JsonObject KSampler(JsonArray latent, long seed, int steps) =>
         Node("KSampler", new JsonObject
         {
-            ["model"] = Link("unet"),
+            ["model"] = Link("sage"),
             ["positive"] = Link("enc"),
             ["negative"] = Link("enc", 1),
             ["latent_image"] = latent,

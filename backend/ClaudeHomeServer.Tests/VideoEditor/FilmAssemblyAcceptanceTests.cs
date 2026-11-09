@@ -68,6 +68,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public async Task Фильм_из_трёх_клипов_собирается_а_пересборка_даёт_film_v2()
     {
         var dsp = new FfmpegVideoDsp(new ConfigurationBuilder().Build(), NullLogger<FfmpegVideoDsp>.Instance,
@@ -95,7 +96,7 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
         var assembler = new FilmAssembler(service, registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance, dsp);
         var scope = VideoEditScope.Of(new Project { Id = "p1", OwnerId = Owner, RootPath = _root });
 
-        assembler.Start(Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         var status = registry.Get(Owner, "p1", "video/a/a.film")!;
@@ -103,12 +104,12 @@ public sealed class FilmAssemblyAcceptanceTests : IDisposable
         status.File.Should().Be("video/a/film.mp4");
         var info = await dsp.ProbeAsync(Path.Combine(_root, "video", "a", "film.mp4"), default);
         info.Should().NotBeNull();
-        (info!.Width, info.Height).Should().Be((1280, 720), "три клипа разного размера приведены к 16:9");
+        (info!.Width, info.Height).Should().Be((320, 240), "фильм собирается в формате первой сцены (ADR-025), клипы другого размера получают полосы");
         info.HasAudio.Should().BeTrue();
         info.Seconds.Should().BeApproximately(7.5, 0.4, "3 + 3 − 0,5 наплыва + 2");
         service.List(scope).Value!.Single().Stale.Should().BeFalse();
 
-        assembler.Start(Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        assembler.Start(Owner, Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
         await assembler.WhenIdleAsync();
 
         File.Exists(Path.Combine(_root, "video", "a", "film.v2.mp4")).Should().BeTrue("пересборка не затирает film.mp4");

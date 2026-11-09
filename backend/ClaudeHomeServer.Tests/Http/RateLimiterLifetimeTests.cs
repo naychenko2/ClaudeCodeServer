@@ -14,6 +14,7 @@ namespace ClaudeHomeServer.Tests.Http;
 /// Тест же сторожит внутренние поля ASP.NET Core, которые читает
 /// <see cref="RateLimiterOwner"/>: после их переименования опека молча пустеет.
 /// </summary>
+[Trait("Category", "Host")]
 public class RateLimiterLifetimeTests
 {
     [Fact]

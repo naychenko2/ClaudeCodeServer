@@ -228,3 +228,22 @@ describe('плитка иконки и перенос второй строки 
     expect(hint).not.toContain('nowrap');
   });
 });
+
+describe('InlineSegmented: компактный размер sm (шапка панели)', () => {
+  it('size="sm" на десктопе: кнопка 20 (итого 24, вровень с шапкой), поля 2px 8px', () => {
+    const bs = buttons(html(createElement(InlineSegmented<string>, { value: 'a', options: ab, onChange: noop, size: 'sm' })));
+    expect(bs.length).toBe(2);
+    for (const b of bs) {
+      expect(b).toContain('min-height:20px');
+      expect(b).toContain('padding:2px 8px');
+    }
+  });
+  it('size="sm" на телефоне: тач-цель 40', () => {
+    const bs = buttons(html(createElement(InlineSegmented<string>, { value: 'a', options: ab, onChange: noop, size: 'sm', isMobile: true })));
+    for (const b of bs) expect(b).toContain('min-height:40px');
+  });
+  it('без size — прежние 32 (дефолт md не тронут)', () => {
+    const bs = buttons(html(createElement(InlineSegmented<string>, { value: 'a', options: ab, onChange: noop })));
+    for (const b of bs) expect(b).toContain('min-height:32px');
+  });
+});

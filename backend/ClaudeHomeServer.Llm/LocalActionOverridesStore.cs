@@ -21,6 +21,8 @@ public sealed class LocalActionOverridesStore
     public const string LocalRoute = "local";
     public const string ClaudeRoute = "claude";
     public const string DefaultRoute = "default";
+    // Локальный расчёт ракурса лица (InsightFace, ADR-027 §3): только для места с FacePose
+    public const string FacePoseRoute = "face-pose";
     // Слоты тиров (v2): "tier:strong|medium|weak" — ссылка на именованную модель инстанса
     // (AppSettings.ModelTier*). Легаси-значения ClaudeRoute/DefaultRoute при чтении маршрута
     // трактуются как tier:medium (LocalActionRouter.Parse) — сам стор их не переписывает.

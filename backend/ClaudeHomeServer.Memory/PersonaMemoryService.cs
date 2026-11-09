@@ -474,9 +474,8 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // личных hits: это чужой тип данных (TeamMemoryEntry, не PersonaMemoryHit), без scoring.
     // DossierHits — паспорта изменений (этап 2, ADR-004 §5), третий кусок того же блока.
     // DossierText — блок паспортов ОТДЕЛЬНО от Text: заполнен только при splitDossier=true
-    // (план «Секции промптов» этап 3, флаг specialty-prompt-sections) — секция dossier-recall
-    // вклеивается своим местом в промпте, рядом с секцией «история»; при splitDossier=false
-    // (дефолт, persona_ask и выключенный флаг) досье остаётся ВНУТРИ Text, как до фичи.
+    // (ход чата: секция dossier-recall вклеивается своим местом в промпте, рядом с секцией
+    // «история»); при splitDossier=false (дефолт, persona_ask, REST, MCP) досье остаётся ВНУТРИ Text.
     public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
         IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits,
         string? DossierText = null, IReadOnlyList<TeamMemoryEntry>? SphereHitsOrNull = null)
@@ -497,28 +496,34 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
     // dossierRequest — контекст паспортов изменений (проект чата + якоря хода); null —
     // вызов вне проектного контекста (REST-проверка, persona_ask), секции паспортов нет.
     // splitDossier — вынести блок досье в PersonaRecallResult.DossierText вместо инлайна
-    // в Text (см. комментарий записи выше); false (дефолт) — поведение «как до фичи».
+    // в Text (см. комментарий записи выше); false (дефолт) — досье внутри общего блока.
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
         int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null,
-        bool splitDossier = false, string? sessionProjectId = null)
+        bool splitDossier = false, string? sessionProjectId = null,
+        // S2a-4 (разрез И.3, решение 29.10): false — узкая рамка общего хода. Личная часть блока
+        // (рабочий фокус, полка персоны, командная память и память сферы как часть блока «что
+        // персона помнит») не читается и не строится — остаётся только досье проекта.
+        bool personalMemory = true)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || !persona.MemoryEnabled) return null;
 
-        PersonaWorkingFocus? focus;
-        lock (_saveLock) focus = GetState(personaId).Focus;
+        PersonaWorkingFocus? focus = null;
+        IReadOnlyList<PersonaMemoryHit> hits = [];
+        if (personalMemory)
+        {
+            lock (_saveLock) focus = GetState(personaId).Focus;
 
-        IReadOnlyList<PersonaMemoryHit> hits;
-        // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
-        var q = KnowledgeQueryUtilities.TrimQuery(query);
-        if (q.Length == 0) hits = [];
-        else
-            try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
-                hits = [];
-            }
+            // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
+            var q = KnowledgeQueryUtilities.TrimQuery(query);
+            if (q.Length > 0)
+                try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
+                    hits = [];
+                }
+        }
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
 
@@ -532,7 +537,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
                 && PersonaZone.VisibleIn(persona, sessionProjectId, _spheres)
                 ? sessionProjectId
                 : null);
-        if (_teamMemory is not null && teamProjectId is not null)
+        if (personalMemory && _teamMemory is not null && teamProjectId is not null)
         {
             try
             {
@@ -548,7 +553,7 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant, 
         // включая глобальных, а персона сферы S1 в проекте сферы S2 не должна получить полку S1.
         string? sphereBlock = null;
         IReadOnlyList<TeamMemoryEntry> sphereHits = [];
-        if (_sphereMemory is not null && _spheres is not null && sessionProjectId is not null
+        if (personalMemory && _sphereMemory is not null && _spheres is not null && sessionProjectId is not null
             && _spheres.SphereOf(ownerId, sessionProjectId) is { } sphereId)
         {
             try

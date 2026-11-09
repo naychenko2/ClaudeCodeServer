@@ -12,6 +12,7 @@ public enum DeployStartStatus
     NoRelease,       // откатывать не на что
     GitFailed,       // guard не смог отработать — ехать вслепую нельзя
     LaunchFailed,    // задача планировщика не запустилась
+    Unsupported,     // действие не поддержано на этой ОС (откат из чата на Linux)
 }
 
 /// <summary>Заявка на выкатку — ровно поля контракта ADR-010.</summary>
@@ -100,7 +101,16 @@ public sealed class DeployService(
                 // Заявка могла остаться висеть в «queued» навсегда: агент не приступил
                 // (не стартовала задача планировщика, сработал его собственный guard) и итог
                 // не записал. Без TTL такой призрак отвечает 409 на всё следующее.
-                if (CloseStaleQueued(running, DateTime.UtcNow) is not { } reloaded)
+                DeployState? reloaded;
+                try { reloaded = CloseStaleQueued(running, DateTime.UtcNow); }
+                catch (Exception ex)
+                {
+                    // Лок-файл недоступен (нет прав, нет каталога) — не «агент жив»,
+                    // а сбой системы: честный отказ, а не «другая выкатка идёт».
+                    return new DeployStartResult(DeployStartStatus.LaunchFailed, running.Id,
+                        $"Не удалось проверить статус агента выкатки: {ex.Message}");
+                }
+                if (reloaded is null)
                     return new DeployStartResult(DeployStartStatus.AlreadyRunning, running.Id,
                         $"Выкатка {running.Id} уже идёт (фаза «{running.Phase}»)");
                 state = reloaded;
@@ -126,6 +136,14 @@ public sealed class DeployService(
 
             if (kind == DeployKinds.Rollback)
             {
+                // Откат из чата на Linux пока не поддержан: снимки живут в /opt/ccs/releases,
+                // а автооткат внутри switch-release.sh работает. Честный отказ ДО проверки
+                // снимков: журнал не пишем и агента не будим (на Linux он бы нашёл откатывать
+                // не на что, а карточка хода осталась бы висеть «идущей»).
+                if (Options.IsLinux)
+                    return new DeployStartResult(DeployStartStatus.Unsupported,
+                        Error: "Откат из чата на Linux пока не поддержан — откат вручную из "
+                            + "/opt/ccs/releases (автооткат внутри switch-release.sh работает)");
                 // Откатываться некуда: снимков ещё нет (первая выкатка их и создаёт)
                 if (state.Releases.Count == 0)
                     return new DeployStartResult(DeployStartStatus.NoRelease,
@@ -158,7 +176,9 @@ public sealed class DeployService(
             state.Current = record;
             Save(state);
 
-            if (await host.WakeAgentAsync(Options, ct) is { } launchError)
+            // id выкатки — тот, что сервер только что записал в журнал (record.Id): на Linux
+            // он уходит в имя systemd-юнита, на Windows в argv не едет.
+            if (await host.WakeAgentAsync(Options, record.Id, ct) is { } launchError)
             {
                 // Агент не стартовал: заявка не должна остаться висеть «в очереди» —
                 // иначе следующая попытка получит 409 от призрака
@@ -200,9 +220,10 @@ public sealed class DeployService(
         var age = utcNow - (running.StartedAt ?? utcNow);
         if (age < TimeSpan.FromMinutes(Options.StaleQueuedMinutes)) return null;
 
-        // Свободный мьютекс и есть доказательство, что агента больше нет: он берёт его первым
-        // делом и держит до конца работы
-        using var lease = host.TryLockAgent();
+        // Свободный лок и есть доказательство, что агента больше нет: он берёт его первым
+        // делом и держит до конца работы. releasesDir — из конфига: на Linux лок — файл
+        // deploy.lock в каталоге релизов, на Windows — именованный мьютекс (путь не важен).
+        using var lease = host.TryLockAgent(Options.ReleasesDir);
         if (lease is null) return null;
 
         // Под мьютексом перечитываем: агент мог дописать журнал, пока мы решали

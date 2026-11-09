@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Crown, Folder, GitBranch, Lock, Sparkles, X } from 'lucide-react';
-import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
+import { Crown, Folder, GitBranch, Info, Lock, Sparkles, X } from 'lucide-react';
+import type { Project, ProjectGroup, ProjectMember, PermissionRule, SystemPromptPart } from '../../../types';
 import { ProjectFeature } from '../../../types';
 import { useProjectFeature } from '../../../lib/projectCapabilities';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { FLAGS, useFeature } from '../../../lib/featureFlags';
-import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
+import { Modal, ModalActions, TextArea, Field, Button, Toggle, Notice } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useMe } from '../../../lib/defaultPersona';
@@ -18,7 +18,10 @@ import { GroupSelect } from '../GroupSelect';
 import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
+import { ProjectIcon } from '../ProjectIcon';
+import { MembersSection } from '../members/MembersSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { PluginsProjectSection } from '../../plugins/PluginsProjectSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
 import { LocalHandsSection } from '../../localHands/LocalHandsSection';
 import { ProjectMapSection } from './ProjectMapSection';
@@ -235,30 +238,24 @@ interface Props {
   // повторное открытие диалога показывало состояние до клика (устаревший project prop)
   onProjectUpdated?: (updated: Project) => void;
   onClose: () => void;
+  // Раскрыть секцию «Участники» (вход по стопке аватаров в шапке проекта)
+  openMembers?: boolean;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose, openMembers }: Props) {
   const online = useOnline();
   // Фон проекта — только владельцу: участник без прав владельца фон менять не может
   // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
   // условием, чтобы не показывать недоступное действие.
-  // Локальные проекты (ADR-016 §3.4): секция привязки к устройству — за флагом.
-  // Без флага секция не рисуется — ручка PUT /projects/{id}/device закрыта на бэке 404
-  const localProjectsEnabled = useFeature(FLAGS.localProjects);
-  // Автоправило архива (флаг chat-auto-archive): закрывает ТОЛЬКО настройку правила
-  // и запускаемый ею проход. Ручной архив, режим «Архивные» и сводка карточки
-  // работают без тумблера — гейт скрывает лишь блок ArchiveSettings.
-  const autoArchiveEnabled = useFeature(FLAGS.chatAutoArchive);
-  // Уборка карты проекта (флаг project-map-hygiene): аккордеон в настройках проекта
-  // с фактами скана. review/apply под этим же флагом закрыты на сервере (404),
-  // так что эндпоинты не провисают при выключенной фиче
-  const mapHygieneEnabled = useFeature(FLAGS.projectMapHygiene);
   const gitAvail = useProjectFeature(project, ProjectFeature.Git);
   const mapAvail = useProjectFeature(project, ProjectFeature.MapHygiene);
   const me = useMe();
-  const isOwner = !project.ownerId || project.ownerId === me.userId;
+  const isOwner = project.ownerId === me.userId;
+  // Вид участника общего проекта: роль приходит с бэка (myRole); без неё — обычный вид
+  const isParticipant = project.myRole === 'editor' || project.myRole === 'reader';
+  const sharedEnabled = useFeature(FLAGS.sharedProjects);
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [groupId, setGroupId] = useState(project.groupId ?? '');
@@ -266,11 +263,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [autoImportDossiers, setAutoImportDossiers] = useState(project.autoImportDossiers ?? false);
-  // Автоимпорт на бэкенде гейтится флагом change-dossiers-recall (DossierAutoImporter):
-  // без флага включённый тумблер ничего не делает, и обещание «загружать автоматически»
-  // оборачивается тишиной. Прячем строку тем же хуком и флагом, что DossierHistoryPanel —
-  // тогда PUT уносит серверное значение (стейт не менялся).
-  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   // Строка «Руководитель проекта» (п.5.3) — у проекта с назначенным руководителем
   // секции нет вовсе
@@ -299,7 +291,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [archiveDays, setArchiveDays] = useState<number | null>(null);
   const [archiveLoaded, setArchiveLoaded] = useState(false);
   useEffect(() => {
-    if (!autoArchiveEnabled || archiveLoaded) return;
+    if (archiveLoaded) return;
     let cancelled = false;
     archiveRuleApi.getSettings()
       .then(r => {
@@ -309,7 +301,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       })
       .catch(() => { if (!cancelled) setArchiveLoaded(true); });
     return () => { cancelled = true; };
-  }, [autoArchiveEnabled, archiveLoaded]);
+  }, [archiveLoaded]);
 
   const handleConfirm = async () => {
     setError('');
@@ -495,6 +487,64 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
     );
   }
 
+  // Список участников изменился — проект в сторе узнаёт о них (метка «общий» в списках).
+  // project.members — сводка формы бэка (ProjectMembersSummary: count + первые трое),
+  // полный список MembersSection к нам и приходит — сводим к сводке здесь.
+  const handleMembersChanged = (members: ProjectMember[]) =>
+    onProjectUpdated?.({
+      ...project,
+      members: {
+        count: members.length,
+        first: members.slice(0, 3).map(({ userId, username, displayName }) => ({ userId, username, displayName })),
+      },
+    });
+
+  if (isParticipant) {
+    const ownerName = project.ownerDisplayName?.trim();
+    return (
+      <Modal
+        title={ownerName ? `Проект ${ownerName}` : 'Общий проект'}
+        width={500}
+        onClose={onClose}
+        footer={<Button variant="secondary" size="md" fullWidth onClick={onClose}>Закрыть</Button>}
+      >
+        <Notice tone="info" icon={Info}>
+          Ходы здесь идут по настройкам владельца проекта и за его счёт.
+        </Notice>
+        {/* Значок, имя и путь — только чтение: менять проект может владелец */}
+        <div style={{
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden',
+        }}>
+          <SettingsRow>
+            <div style={{ display: 'flex', alignItems: 'center', gap: SP.md, minWidth: 0 }}>
+              <ProjectIcon project={project} size={36} />
+              <span style={{
+                fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {project.name}
+              </span>
+            </div>
+          </SettingsRow>
+          <SettingsRow last title={project.rootPath}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
+              <span style={{
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 12.5, color: C.textSecondary,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {project.rootPath}
+              </span>
+            </div>
+          </SettingsRow>
+        </div>
+        <MembersSection project={project} mode="member"
+          onMembersChanged={handleMembersChanged}
+          onLeft={() => { invalidateProjectsCache(); onClose(); }} />
+      </Modal>
+    );
+  }
+
   return (
     <Modal
       title="Редактировать проект"
@@ -556,15 +606,13 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
             поведения проекта, а не фич-флаг. Пояснение под заголовком: «решения» в пользовательских
             текстах (см. ADR-004 §3.2), с указанием имени ветки, чтобы человек понимал, откуда
             приедут новые записи. */}
-        {recallEnabled && (
-          <SettingsRow title="Загружать историю решений из репозитория автоматически">
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
-              <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
-            </div>
-            <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
-          </SettingsRow>
-        )}
+        <SettingsRow title="Загружать историю решений из репозитория автоматически">
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>Загружать историю решений из репозитория автоматически</div>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.4 }}>Новые записи из ветки ccs/dossiers/v1 появятся сами после git pull</div>
+          </div>
+          <Toggle checked={autoImportDossiers} onChange={setAutoImportDossiers} ariaLabel="Загружать историю решений из репозитория автоматически" />
+        </SettingsRow>
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений
@@ -578,18 +626,30 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         </SettingsRow>
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
+      {/* Участники (shared-projects, S1-F3): приглашать и менять роли — только владелец
+          и только за флагом «Общие проекты» */}
+      {isOwner && sharedEnabled && (
+        <MembersSection project={project} mode="owner" defaultOpen={openMembers} onMembersChanged={handleMembersChanged} />
+      )}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
-      {/* Секция привязки к устройству (ADR-016 §3.4) — за флагом local-projects.
-          Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
+      {/* Плагины (ADR-031): секция сама решает, рисовать ли список (серверный проект)
+          или info-плашку «для локальных проектов пока недоступны»; без флага plugins-mvp — null */}
+      <PluginsProjectSection
+        project={project}
+        onUpdated={onProjectUpdated}
+        // «Править»/«Попросить агента исправить»: закрыть настройки и положить реплику в композер
+        onEdit={reply => { onClose(); window.dispatchEvent(new CustomEvent('cc-draft-reply', { detail: { project, reply } })); }}
+      />
+      {/* Секция привязки к устройству (ADR-016 §3.4). Внутри показ/скрытие деталей идёт через поле project.device (а не deviceId
           руками), иначе сторож G10 краснеет на каждом обращении */}
-      {localProjectsEnabled && <DeviceSection project={project} onUpdated={onProjectUpdated} />}
-      {/* Руки (ADR-016 §7) своего флага не имеют: они есть только у локального проекта */}
-      {localProjectsEnabled && <LocalHandsSection project={project} onUpdated={onProjectUpdated} />}
+      <DeviceSection project={project} onUpdated={onProjectUpdated} />
+      {/* Руки (ADR-016 §7): есть только у локального проекта */}
+      <LocalHandsSection project={project} onUpdated={onProjectUpdated} />
       {/* Секции по матрице возможностей (ADR-016 §4): у локального проекта с офлайн-
           устройством git недоступен, а карта проекта — серверный контент, которого у
           локального проекта нет вовсе. Пустая секция с ошибкой загрузки — хуже, чем никакой */}
       {gitAvail && <GitHistorySection project={project} />}
-      {mapHygieneEnabled && mapAvail && <ProjectMapSection project={project} />}
+      {mapAvail && <ProjectMapSection project={project} />}
       {/* Темы чатов: бэк отдаёт 404 чужому проекту, поэтому секция — только владельцу */}
       {isOwner && <ChatSubjectsSection project={project} online={online} />}
       {isOwner && (
@@ -601,12 +661,12 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         />
       )}
       <ProjectSyncToggle projectId={project.id} online={online} />
-      {/* Настройка автоправила архива (флаг chat-auto-archive). Порог и проход —
+      {/* Настройка автоправила архива. Порог и проход —
           по ЭТОМУ проекту; личный порог показываем лишь как унаследованный дефолт,
           пока у проекта нет своего. Рисуем только после загрузки настройки: иначе
           первоначальный null мелькает состоянием «правило выключено» до прихода
           ответа. Проход завершился — закрываем диалог. */}
-      {autoArchiveEnabled && archiveLoaded && (
+      {archiveLoaded && (
         <ArchiveSettings
           initialDays={project.archiveAfterDays ?? archiveDays}
           projectId={project.id}

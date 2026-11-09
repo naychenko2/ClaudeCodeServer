@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 // Без DOM: чипы строки читаем по data-атрибутам статической разметки
 
+import type { FormatModel } from '../../../lib/chatContext/formatTypes';
 import { ContextRowView, rowFacts, showsRow, type ContextRowViewProps, type RowExec, type RowGit } from '../ContextRowView';
 import type { ChatContextPrimary, ChatContextRef } from '../../../lib/chatContext/types';
 
@@ -129,6 +130,16 @@ describe('ContextRowView', () => {
     expect(h).toContain('feat/video-editor');
     // Тач-цель: чипы на телефоне 28px
     expect(h).toContain('height:28px');
+  });
+
+  it('телефон + формат: чип «Чем» голый — имя модели без бейджа цены', () => {
+    const format = { kind: 'generate', title: 'Формат', state: null, by: null, footer: () => '', onChange: () => {},
+      chip: { main: '16:9', tone: 'normal' } } as FormatModel;
+    const withFormat = html(props({ isMobile: true, width: 342, exec, format }));
+    expect(has(withFormat, 'exec')).toBe(true);
+    expect(withFormat).not.toContain('>бесплатно<');
+    // без строки «Формат» бейдж цены на месте
+    expect(html(props({ isMobile: true, width: 342, exec }))).toContain('>бесплатно<');
   });
 
   it('телефон: строки без содержимого нет — без объекта и референсов только «Где»', () => {

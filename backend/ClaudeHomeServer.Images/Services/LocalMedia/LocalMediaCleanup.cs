@@ -14,11 +14,15 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // Работает только из LocalMediaCollector (фон); сбой удаления — Warning, сбор не роняет.
 public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMediaCleanup> log)
 {
+    // Сколько дней держать файлы журнала истории (шаг 2): 7, как и задачи
+    public const int HistoryRetentionDays = 7;
+
     private bool _reportedDisabled;
 
     public void Run(LocalMediaOptions options, DateTime now)
     {
         var expired = store.Prune(TimeSpan.FromDays(Math.Max(1, options.JobRetentionDays)), now);
+        RotateHistory(now);
         if (!options.CleanupEnabled)
         {
             if (!_reportedDisabled)
@@ -34,6 +38,7 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
         var outputDir = options.ComfyOutputDir.Trim();
         foreach (var job in store.TerminalUncleaned())
         {
+            if (job.CleanAfter > now) continue;
             DeleteTransient(job, inputDir, outputDir, keepForUpscale: true);
             store.Update(job.Id, job.OwnerId, j => j.TransientCleaned = true);
         }
@@ -45,9 +50,31 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
         }
     }
 
+    // Ротация журнала истории (шаг 2): файлы дня (YYYY-MM-DD.jsonl) старше 7 дней. Каталог —
+    // data/local-media-history; сбой (диск, права) — Debug, сбор не роняет
+    private void RotateHistory(DateTime now)
+    {
+        try
+        {
+            var dir = Path.Combine(store.DataDir, ComfyRunHistory.DirName);
+            if (!Directory.Exists(dir)) return;
+            var cutoff = now.Date.AddDays(-HistoryRetentionDays);
+            foreach (var file in Directory.GetFiles(dir, "*.jsonl"))
+            {
+                var name = Path.GetFileNameWithoutExtension(file);
+                if (DateTime.TryParse(name, out var day) && day < cutoff)
+                    File.Delete(file);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogDebug(ex, "Ротация журнала истории медиа-генераций: сбой — {Error}", ex.Message);
+        }
+    }
+
     // Префиксы имён в input: подпапка наших загрузок и корень (копии латентов для LoadLatent)
-    private static readonly string[] InputPrefixes = [$"{ComfyClient.InputFolder}/", $"{ComfyClient.InputFolder}-"];
-    private static readonly string[] OutputPrefixes = [$"{ComfyWorkflows.OutputFolder}/", $"{ComfyWorkflows.OutputFolder}/latents/"];
+    internal static readonly string[] InputPrefixes = [$"{ComfyClient.InputFolder}/", $"{ComfyClient.InputFolder}-"];
+    internal static readonly string[] OutputPrefixes = [$"{ComfyWorkflows.OutputFolder}/", $"{ComfyWorkflows.OutputFolder}/latents/"];
 
     private void DeleteTransient(LocalMediaJob job, string inputDir, string outputDir, bool keepForUpscale)
     {
@@ -68,7 +95,7 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
     // Имя принадлежит задаче: {префикс}{jobId}{разделитель}{хвост}, хвост без каталогов
     public static bool IsOwnName(string name, string jobId, IReadOnlyList<string> prefixes, char separator)
     {
-        if (!LocalMediaService.LooksLikeJobId(jobId)) return false;
+        if (!LocalMediaService.LooksLikeJobId(jobId) && !LocalVideoMediaAdapter.LooksLikeShotId(jobId)) return false;
         foreach (var prefix in prefixes)
         {
             var head = prefix + jobId + separator;
@@ -79,7 +106,8 @@ public sealed class LocalMediaCleanup(LocalMediaJobStore store, ILogger<LocalMed
         return false;
     }
 
-    private void DeleteOwn(string root, string name, string jobId, IReadOnlyList<string> prefixes, char separator)
+    // Общий путь удаления «только своих файлов по точному имени»: зовёт и чистка задач стора, и адаптер видео
+    internal void DeleteOwn(string root, string name, string jobId, IReadOnlyList<string> prefixes, char separator)
     {
         if (!IsOwnName(name, jobId, prefixes, separator))
         {

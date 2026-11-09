@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Тестовая сборка вертикали Watchdog (шаг 3.13). По образцу Deploy.Tests (шаг 3.11) /
+         Team.Tests (шаг 3.5) / RemoteCommands.Tests (шаг 3.12): SDK=Web ради FrameworkReference
+         Microsoft.AspNetCore.App (Microsoft.Extensions.Configuration/Logging.Abstractions, на которые
+         ссылаются using'и перенесённых тестов), OutputType=Library ради отсутствия Main.
+         Watchdog — отдельная сборка (ClaudeHomeServer.Watchdog), не папка Main: её типы
+         (WatchdogService/WatchdogStore/WatchdogNotifier/WatchdogCommandRunner/IWatchdogEnvironment/
+         IWatchdogCommandRunner/IWatchdogAlarm/PollOutcome) приходят явной ссылкой на ClaudeHomeServer.Watchdog
+         (не транзитно через Main — Main-типов в перенесённых тестах нет, они гоняют только
+         интерфейсы + собственные фейки). Internal-члены WatchdogService (ShouldPoll/ClipOutput)
+         доступны через InternalsVisibleTo в ClaudeHomeServer.Watchdog.csproj (добавлен в этом шаге). -->
+    <OutputType>Library</OutputType>
+    <EnableDefaultContentItems>false</EnableDefaultContentItems>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Core — спинка: Models (Session/Project/WatchdogRecord/WatchdogStatus/WatchdogLimits),
+         Protocol (WatchdogsChangedMessage), Services (ShellCommandLine/IProjectManager) и
+         Services.Execution (ILauncherFactory/IProcessLauncher/ProcessSpec/DeviceExecRefusedException/
+         DeviceExecRefusal/LocalProcessRunner) — на которые ссылаются using'ы перенесённых тестов.
+         Все Execution-типы живут в Core (не в отдельной Execution-сборке), поэтому явной ссылки
+         на ClaudeHomeServer.Execution нет. -->
+    <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
+    <!-- Watchdog — отдельная сборка вертикали: WatchdogService/WatchdogStore/WatchdogNotifier/
+         WatchdogCommandRunner + интерфейсы IWatchdogEnvironment/IWatchdogCommandRunner/IWatchdogAlarm
+         + PollOutcome/PollOutcomeKind. Internal-члены (ShouldPoll/ClipOutput) доступны через
+         InternalsVisibleTo в ClaudeHomeServer.Watchdog.csproj (добавлен в этом шаге). -->
+    <ProjectReference Include="..\ClaudeHomeServer.Watchdog\ClaudeHomeServer.Watchdog.csproj" />
+    <!-- TestKit — Core-only хелперы: TestSessionBroadcaster (WatchdogPresenceTests собирает
+         watchdogs_changed-рассылку в три ConcurrentBag-канала). -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="FluentAssertions" Version="6.12.2" />
+    <!-- Moq: WatchdogCommandRunnerDeviceTests мокает IProcessLauncher/ILauncherFactory/IProjectManager. -->
+    <PackageReference Include="Moq" Version="4.20.72" />
+  </ItemGroup>
+
+</Project>

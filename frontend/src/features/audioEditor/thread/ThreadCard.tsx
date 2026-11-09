@@ -7,10 +7,10 @@
 import { useState, type ReactNode } from 'react';
 import { AudioLines, Download, Mic, Music, Save, Sparkles, Target, X } from 'lucide-react';
 import {
-  Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, FLAGS, isCardPick, useFeature,
+  Badge, Button, Dot, ProgressBar, C, FS, R, SHADOW, SP, ICON_SIZE, ICON_STROKE, isCardPick,
 } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
-import { audioApi, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
+import { audioApi, type AudioMode, type AudioOp, type AudioThread, type AudioThreadVersion } from '../api';
 import { opInfo } from '../ops';
 import { CardContextActions, useCardFill, useFocusedThreadId } from '../context/CardFill';
 import { audioScope, isPersonalScope } from '../scope';
@@ -22,6 +22,7 @@ import {
 import { recordOf, str } from './records';
 import { SaveAsDialog } from './SaveAsDialog';
 import { getJobsOf, useAudioThreads, type JobProgress } from './threadStore';
+import { GpuQueueBlock, showQueueLine } from './gpuCard';
 import { VersionBody } from './VersionBody';
 
 const ic = (I: typeof X, size: number = ICON_SIZE.xs) => <I size={size} strokeWidth={ICON_STROKE} />;
@@ -144,12 +145,11 @@ export function ThreadAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   // Личный чат вне проекта: ctx.projectId = null, область — personal
   const scope = audioScope(ctx.projectId);
   const state = useAudioThreads(scope, ctx.sessionId);
-  const on = useFeature(FLAGS.audioEditor);
   const focusId = useFocusedThreadId(ctx.sessionId ?? null);
   const threadId = str(rec?.data.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
-  if (!on || !ctx.sessionId || !thread) {
-    // Нить удалили или модуль выключен — якорь в истории остался; рисуем след
+  if (!ctx.sessionId || !thread) {
+    // Нить удалили — якорь в истории остался; рисуем след
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
   const focused = focusId === thread.id;
@@ -174,8 +174,11 @@ export function progressText(j: JobProgress | null): string {
   return `идёт${of}${j.etaSeconds != null ? ` · ещё ≈ ${eta(j.etaSeconds)}` : ''}`;
 }
 
-function RunningLine({ scope, sessionId, threadId, jobId }: { scope: string; sessionId: string; threadId: string; jobId: string }) {
-  const job = getJobsOf(sessionId, threadId).find(j => j.jobId === jobId) ?? null;
+function RunningLine({ scope, sessionId, thread, jobId, op, mode, count }: {
+  scope: string; sessionId: string; thread: AudioThread; jobId: string;
+  op: AudioOp | null; mode: AudioMode | null; count: number;
+}) {
+  const job = getJobsOf(sessionId, thread.id).find(j => j.jobId === jobId) ?? null;
   const [cancelling, setCancelling] = useState(false);
   const percent = job && job.count > 0 && job.stage !== 'queued' ? Math.round(((job.variant - 1) / job.count) * 100) : 0;
   return (
@@ -190,7 +193,10 @@ function RunningLine({ scope, sessionId, threadId, jobId }: { scope: string; ses
           {job?.stage === 'queued' ? 'Убрать из очереди' : 'Отменить'}
         </Button>
       </div>
-      <ProgressBar value={percent} transition="width .5s linear" />
+      {/* Собственная полоса: прячем, когда есть строка GPU (ровно одна полоса, не дубль) */}
+      {!showQueueLine(job?.gpu ?? null) && <ProgressBar value={percent} transition="width .5s linear" />}
+      <GpuQueueBlock scope={scope} sessionId={sessionId} thread={thread} job={job}
+        op={op} mode={mode} count={count} />
       <Note>Варианты появятся здесь по мере готовности.</Note>
     </div>
   );
@@ -229,7 +235,8 @@ export function LaunchCard({ scope, sessionId, thread, data, events }: {
             <License badge={licenseBadgeOf(str(data.license) ?? launch?.license)} />
             {prompt && <span style={{ color: C.textMuted, fontStyle: 'italic', overflowWrap: 'anywhere' }}>«{prompt}»</span>}
           </div>
-          <RunningLine scope={scope} sessionId={sessionId} threadId={thread.id} jobId={jobId} />
+          <RunningLine scope={scope} sessionId={sessionId} thread={thread} jobId={jobId}
+            op={op?.op ?? null} mode={op?.mode ?? null} count={count} />
         </Frame>
       )}
 
@@ -242,10 +249,9 @@ export function LaunchAnchor({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
   const scope = audioScope(ctx.projectId);
   const state = useAudioThreads(scope, ctx.sessionId);
-  const on = useFeature(FLAGS.audioEditor);
   const threadId = str(rec?.data.threadId);
   const thread = threadId ? state.threads.find(t => t.id === threadId) : undefined;
-  if (!on || !ctx.sessionId || !thread || !rec || !str(rec.data.jobId)) {
+  if (!ctx.sessionId || !thread || !rec || !str(rec.data.jobId)) {
     return rec?.fallback ? <Note>{rec.fallback}</Note> : null;
   }
   return <LaunchCard scope={scope} sessionId={ctx.sessionId} thread={thread} data={rec.data} events={state.events} />;

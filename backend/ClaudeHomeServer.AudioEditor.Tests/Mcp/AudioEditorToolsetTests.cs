@@ -66,7 +66,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
     private AudioEditorToolset Toolset(IAudioEngine[]? engines = null, bool agentLaunch = true, bool withGate = true,
         IAudioDsp? dsp = null, VoiceLibrary? library = null, bool withEdits = false,
-        AudioContextLaunch? context = null, string[]? extraFlags = null)
+        AudioContextLaunch? context = null, ClaudeHomeServer.Services.Access.ITurnActorRegistry? turnActors = null)
     {
         engines ??= [new FakeEngine("fal")];
         _ctxStore = new ChatContextStore(Path.Combine(_dir, "chat-context"),
@@ -81,18 +81,15 @@ public sealed class AudioEditorToolsetTests : IDisposable
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => _sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.AudioEditor)).Returns(true);
-        foreach (var key in extraFlags ?? []) flags.Setup(f => f.IsEnabled(It.IsAny<string>(), key)).Returns(true);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(new Project { Id = ProjectId, OwnerId = Owner, RootPath = _root });
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { [AudioEditorToolset.AgentLaunchKey] = agentLaunch ? "true" : "false" })
             .Build();
-        return new AudioEditorToolset(accessor.Object, flags.Object, projects.Object, engines, threads, _jobs, _prefs,
+        return new AudioEditorToolset(accessor.Object, projects.Object, engines, threads, _jobs, _prefs,
             _workspace, withGate ? _turnGate.Object : null, concat,
             edits: withEdits ? new AudioAgentEdits(new DspAudioEngine(threads, _workspace, NullLogger<DspAudioEngine>.Instance, dsp)) : null,
-            library: library, events: _bus, config: config, context: context);
+            library: library, events: _bus, config: config, context: context, turnActors: turnActors);
     }
 
     private static McpToolCallContext Ctx(string owner = Owner, string tail = ChatId) => new(owner, tail, tail);
@@ -109,6 +106,45 @@ public sealed class AudioEditorToolsetTests : IDisposable
 
     private string[] ProjectFiles() =>
         [.. Directory.GetFiles(_root, "*", SearchOption.AllDirectories).Select(f => Path.GetRelativePath(_root, f)).Order()];
+
+    // ── Актор приватности агентского пути (F2-P2j) ───────────────────────────
+
+    private sealed class FakeActors(string? actor) : ClaudeHomeServer.Services.Access.ITurnActorRegistry
+    {
+        public string? Actor(string sessionId, string ownerId) => actor;
+    }
+
+    private string PrivateAudio(string author)
+    {
+        var rel = $".cc-attachments/private/{author}/g1/voice.wav";
+        var full = Path.Combine(_root, rel.Replace('/', Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllBytes(full, [1, 2, 3]);
+        return rel;
+    }
+
+    // Арендатор чата — Owner, а ход запустил участник: «своё» судится по актору, не по арендатору
+    [Fact]
+    public async Task AudioFocus_ПриватныйФайл_ЧужестьСудитсяПоАвтору_НеПоАрендатору()
+    {
+        const string participant = "user-p";
+        var own = PrivateAudio(participant);
+        var tenants = PrivateAudio(Owner);
+        var other = PrivateAudio("user-x");
+
+        var withActor = Toolset(turnActors: new FakeActors(participant));
+        (await Call(withActor, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = own })).IsError
+            .Should().BeFalse("своё private участника читается, хотя арендатор чата — другой");
+
+        foreach (var foreign in new[] { tenants, other })
+            (await Call(withActor, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = foreign })).IsError
+                .Should().BeTrue($"чужое private ({foreign}) отказано по автору запроса");
+
+        var unknown = Toolset(turnActors: new FakeActors(null));
+        foreach (var path in new[] { own, tenants, other })
+            (await Call(unknown, AudioEditorToolset.ToolFocus, new JsonObject { ["file"] = path })).IsError
+                .Should().BeTrue($"актор неизвестен — {path} отказано (fail-closed)");
+    }
 
     // ── Состав ─────────────────────────────────────────────────────────────────
 
@@ -370,7 +406,7 @@ public sealed class AudioEditorToolsetTests : IDisposable
         store.AddRef(Owner, ChatId, new ContextItem("ci_voice", AudioContextKind.VoiceKind, new JsonObject { ["slug"] = slug },
             "voice", ContextActor.Human, DateTime.UtcNow), null);
         var engine = new FakeEngine("fal") { TakesLibraryVoices = true };
-        var toolset = Toolset([engine], library: library, context: launch, extraFlags: [FeatureFlagKeys.ChatContext]);
+        var toolset = Toolset([engine], library: library, context: launch);
 
         var result = await Call(toolset, AudioEditorToolset.ToolGenerate, Gen(Draft()));
         await WaitIdleAsync();

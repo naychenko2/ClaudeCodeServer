@@ -19,34 +19,38 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // неотличимо от несуществующего), ревизия сцен — 409, отдача клипа версии с Range, папки только внутри
 // video/, личный чат без local и без проектных путей, локальный проект отказывает до диска.
 // Поставщик — фейк в памяти поверх настоящего исполнителя съёмки.
-public class VideoEditorControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class VideoEditorControllerTests : IClassFixture<VideoEditorControllerTests.Host>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС (раньше — фабрика на каждый тест). Общего изменяемого состояния тесты не оставляют:
+    // проект, каталог и чат заводятся свои на тест (Guid), нити и очередь съёмок ключуются по чату.
+    public sealed class Host : TestWebApplicationFactory
+    {
+        public Host()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IVideoEngine>(new FakeEngine());
+                // Настоящий local-драйвер модуля с «живым» швом: в личном чате он обязан отказать
+                services.AddSingleton<ILocalVideoMedia>(new FakeLocalMedia());
+            };
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _projectRoot;
     private static readonly byte[] Clip = [.. Enumerable.Range(0, 64).Select(i => (byte)i)];
 
-    public VideoEditorControllerTests()
+    public VideoEditorControllerTests(Host factory)
     {
-        _factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IVideoEngine>(new FakeEngine());
-            // Настоящий local-драйвер модуля с «живым» швом: в личном чате он обязан отказать
-            services.AddSingleton<ILocalVideoMedia>(new FakeLocalMedia());
-        };
+        _factory = factory;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        EnableFlag(TestWebApplicationFactory.TestUsername);
         (_projectId, _projectRoot) = CreateProject(TestWebApplicationFactory.TestUsername);
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private sealed class FakeLocalMedia : ILocalVideoMedia
@@ -86,12 +90,6 @@ public class VideoEditorControllerTests : IDisposable
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
-
-    private void EnableFlag(string username)
-    {
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(username)!.Id, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
-    }
 
     private (string Id, string Root) CreateProject(string username)
     {
@@ -146,15 +144,9 @@ public class VideoEditorControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Без_флага_и_без_входа_ручки_закрыты()
+    public async Task Без_входа_ручки_закрыты()
     {
-        var chat = await ProjectChat();
         (await _factory.CreateClient().GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, false);
-
-        (await _client.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await _client.GetAsync($"{Chat(chat)}/state")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -233,7 +225,6 @@ public class VideoEditorControllerTests : IDisposable
         var sceneId = await AddScene(Chat(chat));
         var versionId = await Shoot(Root, chat, sceneId);
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        EnableFlag(TestWebApplicationFactory.SecondUsername);
 
         (await second.GetAsync($"{Root}/catalog")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.GetAsync($"{Chat(chat)}/state")).StatusCode.Should().Be(HttpStatusCode.NotFound);
@@ -242,6 +233,28 @@ public class VideoEditorControllerTests : IDisposable
         var (secondProject, _) = CreateProject(TestWebApplicationFactory.SecondUsername);
         var foreignChat = $"/api/projects/{secondProject}/video-editor/sessions/{chat}/state";
         (await second.GetAsync(foreignChat)).StatusCode.Should().Be(HttpStatusCode.NotFound, "чат другого проекта");
+    }
+
+    [Fact]
+    public async Task Повтор_увеличения_закрыт_входом_и_владельцем_и_отказывает_по_делу()
+    {
+        var chat = await ProjectChat();
+        var sceneId = await AddScene(Chat(chat));
+        var versionId = await Shoot(Root, chat, sceneId);
+        var url = $"{Chat(chat)}/scenes/{sceneId}/versions/{versionId}/upscale";
+
+        (await _factory.CreateClient().PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await second.PostAsync(url, null)).StatusCode.Should().Be(HttpStatusCode.NotFound, "чужой чат неотличим от несуществующего");
+
+        var healthy = await _client.PostAsync(url, null);
+        healthy.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Json(healthy)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.InvalidRequest);
+
+        var unknown = await _client.PostAsync($"{Chat(chat)}/scenes/{sceneId}/versions/нет-такой/upscale", null);
+        unknown.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Json(unknown)).GetProperty("code").GetString().Should().Be(VideoEditorErrors.VersionNotFound);
     }
 
     [Fact]

@@ -16,11 +16,18 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// гейт целевого проекта на записи, скоупы назначаемой персоны, пустое значение как
 /// очистка, гейт mentions на вызове и согласованность состава с отпечатком запуска.
 /// </summary>
-public class TasksToolsetScopesTests : IDisposable
+[Trait("Category", "Host")]
+public class TasksToolsetScopesTests : IClassFixture<TasksToolsetScopesTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Проекты, сессии и персоны каждый тест заводит свои (имена
+    // с Guid), off-привязка теста — на его собственной персоне; общего изменяемого состояния
+    // владельца класс не трогает. Второй владелец (тест «ЕдинственнаяПерсона…») один в классе,
+    // его состояние к моменту теста совпадает со свежим хостом.
+    public sealed class Hosts : TestWebApplicationFactory;
 
-    public void Dispose() => _factory.Dispose();
+    private readonly TestWebApplicationFactory _factory;
+
+    public TasksToolsetScopesTests(Hosts hosts) => _factory = hosts;
 
     private HttpClient Client => _factory.CreateAuthenticatedClient();
 
@@ -44,7 +51,7 @@ public class TasksToolsetScopesTests : IDisposable
     private static async Task<JsonElement> CallToolAsync(
         HttpClient client, string server, string sessionId, string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },
@@ -92,6 +99,44 @@ public class TasksToolsetScopesTests : IDisposable
         move.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
         ToolText(move).Should().Contain("Нет доступа к проекту",
             "перенос задачи в непривязанный проект — тот же гейт записи");
+    }
+
+    /// <summary>
+    /// Б-cl: перенос merge-задачи в другую фичу (tasks_update featureId), финал целевой фичи
+    /// не принят ⇒ isError (400); перенос запрещён в любую фичу. C#/REST-аналоги — TaskManagerTests / TasksControllerTests.
+    /// </summary>
+    [Fact]
+    public async Task Update_Merge_ПереносВДругуюФичу_ФиналНеПринят_IsError()
+    {
+        var project = await CreateProjectAsync(Client, "merge-move");
+        var sessionId = await CreateSessionAsync(Client, project);
+
+        // Фича A: эпик + финал (Done + accepted) + merge.
+        var epicA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "эпик A", role = "feature" });
+        var epicAId = epicA.GetProperty("id").GetString()!;
+        var finalA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "финал A", featureId = epicAId, role = "final" });
+        var finalAId = finalA.GetProperty("id").GetString()!;
+        await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
+            new { id = finalAId, status = "done", verification = new { verdict = "accepted" } });
+        var mergeA = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "мерж A", featureId = epicAId, role = "merge" });
+        var mergeAId = mergeA.GetProperty("id").GetString()!;
+
+        // Фича B: только эпик (финала нет → не Ready). Заводим из другого чата:
+        // правило «один чат — одна фича» не даёт вести два эпика из одной сессии.
+        var sessionBId = await CreateSessionAsync(Client, project);
+        var epicB = await ToolJsonAsync(Client, "tasks", sessionBId, "tasks_create",
+            new { title = "эпик B", role = "feature" });
+        var epicBId = epicB.GetProperty("id").GetString()!;
+
+        // Перенос merge-задачи в B ⇒ isError (финал B не принят). Зовём из чата фичи B,
+        // иначе гард привязки чата к фиче откажет раньше проверяемого правила.
+        var answer = await CallToolAsync(Client, "tasks", sessionBId, "tasks_update",
+            new { id = mergeAId, featureId = epicBId });
+        answer.GetProperty("result").GetProperty("isError").GetBoolean().Should().BeTrue();
+        ToolText(answer).Should().Contain("Роль merge привязана к своей фиче");
     }
 
     /// <summary>
@@ -220,6 +265,34 @@ public class TasksToolsetScopesTests : IDisposable
             new { id = noteId, content = "" });
         clearedNote.GetProperty("content").GetString().Should().Be("",
             "пустая строка content обязана стирать содержимое заметки");
+    }
+
+    /// <summary>
+    /// Разметка фичи: пустая строка stepRef/lane в tasks_update — ОЧИСТИТЬ (UpdateTaskRequest:
+    /// "" = сбросить), null = не менять. featureId/role при этом не трогаем — та же семантика,
+    /// что и у dueDate/worktreePath (ось 5).
+    /// </summary>
+    [Fact]
+    public async Task ФичаПоля_ПустоеЗначение_Очищает()
+    {
+        var project = await CreateProjectAsync(Client, "clear-feature");
+        var sessionId = await CreateSessionAsync(Client, project);
+
+        var epic = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "Эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var step = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_create",
+            new { title = "Шаг", featureId = epicId, role = "step", stepRef = "D1c", lane = "бэк" });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var cleared = await ToolJsonAsync(Client, "tasks", sessionId, "tasks_update",
+            new { id = stepId, stepRef = "", lane = "" });
+        cleared.GetProperty("stepRef").ValueKind.Should().Be(JsonValueKind.Null,
+            "пустая строка stepRef обязана очистить поле, а не «не менять»");
+        cleared.GetProperty("lane").ValueKind.Should().Be(JsonValueKind.Null,
+            "пустая строка lane обязана очистить поле");
+        cleared.GetProperty("featureId").GetString().Should().Be(epicId, "featureId не тронут");
+        cleared.GetProperty("role").GetString().Should().Be("step", "role не тронут");
     }
 
     /// <summary>

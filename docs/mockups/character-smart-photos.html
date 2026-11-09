@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>«Фото персонажа» в карточке версии и окно «Какие фото взять» · макет</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет открывался без сервера.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R / MODAL_W из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5; --c-accent-soft: #E8A990;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-dashed: #D0C6B4;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-modal: 0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    /* FS */ --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    /* SP */ --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    /* R  */ --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+    /* MODAL_W.form */ --modal-form: 440px;
+    /* Обвязка макета (не продукт) */
+    --doc-bg: #E9E4DA; --doc-card: #FBF8F2; --doc-line: #E0D7C8; --doc-text: #39332B; --doc-muted: #756B5E;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-on-dark: #FFFFFF;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C; --c-accent-soft: #9A5E48;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-dashed: #4A443B;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-modal: 0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --doc-bg: #171411; --doc-card: #24201C; --doc-line: #3D3830; --doc-text: #EDE6DB; --doc-muted: #B3A897;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 16px 60px; background: var(--doc-bg); color: var(--doc-text);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button { font: inherit; color: inherit; }
+  .doc-wrap { max-width: 1180px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 24px; margin: 0 0 6px; line-height: 1.25; }
+  p.lead { color: var(--doc-muted); margin: 0 0 10px; max-width: 900px; line-height: 1.55; }
+
+  /* ── Демо-управление (не продукт) ── */
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--doc-bg); padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+  @media (max-width: 700px) { .demo { position: static; } }
+  .demo .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--doc-muted); margin-right: 4px; min-width: 64px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--doc-line); background: var(--doc-card); border-radius: 10px; padding: 4px 9px; color: var(--doc-text); }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+  .dcard { background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 12px; padding: 10px 14px; line-height: 1.5; font-size: 12.5px; min-width: 0; }
+  .dcard h3 { margin: 0 0 4px; font-size: 14px; }
+  .dcard ul { margin: 4px 0 0; padding-left: 18px; }
+  .dcard code { font-family: 'JetBrains Mono', monospace; font-size: 11.5px; }
+
+  /* ── Рамка ленты: десктоп или 320 css-px ── */
+  .frame { position: relative; margin: 0 auto; background: var(--c-bg-main); border: 1px solid var(--doc-line); border-radius: 14px;
+    padding: var(--sp-lg); min-height: 720px; overflow: hidden; transition: width .2s; }
+  .frame.desk { width: 100%; max-width: 680px; }
+  .frame.mob { width: 320px; padding: var(--sp-sm); }
+  .feed { display: flex; flex-direction: column; gap: var(--sp-md); }
+  .user-msg { align-self: flex-end; max-width: 85%; background: var(--c-bg-selected); color: var(--c-text-primary);
+    border-radius: var(--r-xl); padding: var(--sp-sm) var(--sp-md); font-size: var(--fs-md); line-height: 1.45; }
+
+  /* ── Продукт: примитивы кита (упрощённые копии Button / Badge / IconButton) ── */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-xs); cursor: pointer; white-space: nowrap;
+    border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-primary); border-radius: var(--r-md);
+    font-weight: 500; transition: background .12s, border-color .12s, box-shadow .12s; }
+  .btn.xs { height: 24px; padding: 0 var(--sp-sm); font-size: var(--fs-sm); }
+  .btn.sm { height: 32px; padding: 0 var(--sp-md); font-size: var(--fs-base); border-radius: var(--r-lg); }
+  .btn.md { height: 36px; padding: 0 var(--sp-lg); font-size: var(--fs-md); border-radius: var(--r-xl); }
+  .btn.secondary:hover { background: var(--c-bg-selected); }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--c-text-secondary); }
+  .btn.ghost:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .btn.primary { border-color: transparent; background: var(--c-accent); color: var(--c-on-accent); box-shadow: var(--shadow-button); }
+  .btn.primary[disabled] { background: var(--c-accent-soft); box-shadow: none; cursor: not-allowed; }
+  .btn:focus-visible { outline: none; box-shadow: var(--shadow-focus); border-color: var(--c-accent); }
+  .btn:active:not([disabled]) { transform: translateY(1px); }
+  .grow { flex: 1; } .grow15 { flex: 1.5; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--r-sm);
+    font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .badge.neutral { background: var(--c-bg-inset); color: var(--c-text-muted); }
+  .badge.accent { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.success { background: var(--c-success-bg); color: var(--c-success-text); }
+  .ico { width: 12px; height: 12px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  .ico.sm { width: 14px; height: 14px; }
+
+  /* ── Продукт: карточка версии (VersionCard как есть) ── */
+  .vcard { width: 100%; padding: var(--sp-sm); display: flex; flex-direction: column; gap: var(--sp-xs);
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xl); }
+  .vcard.current { border-color: var(--c-accent); box-shadow: 0 0 0 3px var(--c-accent-light); }
+  .vhead { display: flex; align-items: center; gap: var(--sp-xs); min-width: 0; }
+  .vname { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vpic { aspect-ratio: 5 / 3; border-radius: var(--r-md); border: 1px solid var(--c-border-light); background: var(--c-bg-inset); overflow: hidden;
+    display: flex; align-items: center; justify-content: center; }
+  .vpic svg { width: 100%; height: 100%; }
+  .vmeta { font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vacts { display: flex; gap: var(--sp-xs); flex-wrap: wrap; align-items: center; }
+  .skel { aspect-ratio: 5 / 3; border-radius: var(--r-md); background: linear-gradient(90deg, var(--c-bg-inset), var(--c-bg-selected), var(--c-bg-inset)); background-size: 200% 100%; animation: sk 1.4s linear infinite; }
+  @keyframes sk { from { background-position: 200% 0 } to { background-position: -200% 0 } }
+  .running { display: flex; align-items: center; gap: var(--sp-xs); font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-accent); }
+
+  /* ══ НОВОЕ: блок «Фото персонажа» (CharacterPhotosStrip) ══ */
+  .cps { display: flex; flex-direction: column; gap: var(--sp-xs); padding: var(--sp-sm); background: var(--c-bg-inset); border-radius: var(--r-lg); min-width: 0; }
+  .cps-head { display: flex; align-items: center; gap: var(--sp-xs); flex-wrap: wrap; min-width: 0; }
+  .cps-title { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); }
+  .cps-name { font-size: var(--fs-sm); color: var(--c-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cps-scene { font-size: var(--fs-xs); color: var(--c-text-secondary); line-height: 1.4; overflow-wrap: anywhere; }
+  .cps-row { display: flex; align-items: center; gap: var(--sp-xs); }
+  .cps-row .push { margin-left: auto; }
+  /* На мобиле «Заменить» — Button size="sm" (32 под палец) */
+  .mob .cps-row .btn.xs { height: 32px; padding: 0 var(--sp-md); font-size: var(--fs-base); border-radius: var(--r-lg); }
+  .thumb { width: 40px; height: 40px; flex-shrink: 0; border-radius: var(--r-md); border: 1px solid var(--c-border-light); background: var(--c-bg-card); overflow: hidden;
+    display: flex; align-items: center; justify-content: center; color: var(--c-text-muted); }
+  .thumb svg.face { width: 100%; height: 100%; }
+  .cps-hint { display: flex; gap: var(--sp-xs); align-items: flex-start; font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.4; }
+  .cps-hint .ico { margin-top: 1px; }
+
+  /* ══ НОВОЕ: окно «Какие фото взять» (CharacterPhotosPicker) — Modal width=MODAL_W.form ══ */
+  .overlay { position: absolute; inset: 0; background: var(--c-overlay); display: none; align-items: center; justify-content: center; z-index: 50; padding: var(--sp-lg); }
+  .overlay.open { display: flex; }
+  .modal { width: var(--modal-form); max-width: 100%; max-height: calc(100% - 32px); display: flex; flex-direction: column;
+    background: var(--c-bg-card); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); overflow: hidden; }
+  .mob .overlay { align-items: flex-end; padding: 0; }
+  .mob .modal { width: 100%; max-height: 92%; border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); }
+  .grab { display: none; width: 36px; height: 4px; border-radius: var(--r-max); background: var(--c-dashed); margin: var(--sp-sm) auto 0; }
+  .mob .grab { display: block; }
+  .mhead { padding: var(--sp-lg) var(--sp-lg) var(--sp-sm); display: flex; gap: var(--sp-sm); align-items: flex-start; }
+  .mtitle { font-size: var(--fs-lg); font-weight: 600; color: var(--c-text-heading); }
+  .msub { font-size: var(--fs-sm); color: var(--c-text-secondary); line-height: 1.45; margin-top: var(--sp-xxs); }
+  .iconbtn { width: 28px; height: 28px; flex-shrink: 0; margin-left: auto; border: 0; background: transparent; border-radius: var(--r-md); color: var(--c-text-muted); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+  .iconbtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .mbody { padding: 0 var(--sp-lg) var(--sp-md); overflow: auto; display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .mfoot { padding: var(--sp-md) var(--sp-lg) var(--sp-lg); border-top: 1px solid var(--c-border-light); display: flex; gap: 10px; }
+  .mob .mfoot { padding-bottom: calc(var(--sp-lg) + env(safe-area-inset-bottom)); }
+  .counter { display: flex; align-items: center; gap: var(--sp-xs); font-size: var(--fs-sm); color: var(--c-text-secondary); min-height: 24px; }
+  .counter .push { margin-left: auto; }
+
+  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: var(--sp-sm); }
+  .pcell { display: flex; flex-direction: column; gap: var(--sp-xs); padding: 0; border: 0; background: transparent; text-align: left; cursor: pointer; min-width: 0; }
+  .pcell .ph { position: relative; aspect-ratio: 1; border-radius: var(--r-lg); border: 1px solid var(--c-border); background: var(--c-bg-inset); overflow: hidden; transition: border-color .12s, box-shadow .12s; }
+  .pcell .ph svg.face { width: 100%; height: 100%; display: block; }
+  .pcell:hover .ph { border-color: var(--c-accent-soft); }
+  .pcell:focus-visible { outline: none; }
+  .pcell:focus-visible .ph { box-shadow: var(--shadow-focus); border-color: var(--c-accent); }
+  .pcell[aria-pressed="true"] .ph { border: 2px solid var(--c-accent); box-shadow: var(--shadow-focus); }
+  .pcell[aria-disabled="true"] { cursor: not-allowed; }
+  .pcell[aria-disabled="true"] .ph { opacity: .45; }
+  .pcell .order { position: absolute; top: var(--sp-xs); left: var(--sp-xs); }
+  .pcell .order .badge { background: var(--c-accent); color: var(--c-on-accent); min-width: 18px; justify-content: center; }
+  .pcell .main { position: absolute; bottom: var(--sp-xs); left: var(--sp-xs); }
+  .cap { font-size: var(--fs-xs); line-height: 1.3; color: var(--c-text-secondary); overflow-wrap: anywhere;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cap.pending { color: var(--c-text-muted); font-style: italic; }
+  .cap.none { color: var(--c-text-muted); }
+  .pskel { aspect-ratio: 1; border-radius: var(--r-lg); background: var(--c-bg-inset); }
+  .cost { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.4; }
+  .notice { display: flex; gap: var(--sp-sm); align-items: flex-start; padding: var(--sp-sm) var(--sp-md); border-radius: var(--r-lg);
+    background: var(--c-danger-bg); color: var(--c-danger-text); border: 1px solid var(--c-danger-border); font-size: var(--fs-sm); line-height: 1.45; }
+  .notice .ico { width: 14px; height: 14px; margin-top: 1px; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">«Фото персонажа» в карточке результата</h1>
+  <p class="lead">Человек попросил «Андрей смеётся у окна, в профиль» — и сразу видит под картинкой, какие фото персонажа ушли модели и почему. Не нравится — «Заменить»: выбрал фото, «Перерисовать», и ниже в ленте появилась новая версия, а старая осталась. Блок — тихая утопленная плашка внутри карточки версии, между подписью и кнопками.</p>
+
+  <div class="demo" id="demo">
+    <div class="row"><span class="lbl">Тема</span>
+      <button class="tbtn" data-k="theme" data-v="light">Светлая</button>
+      <button class="tbtn" data-k="theme" data-v="dark">Тёмная</button></div>
+    <div class="row"><span class="lbl">Ширина</span>
+      <button class="tbtn" data-k="width" data-v="desk">Десктоп</button>
+      <button class="tbtn" data-k="width" data-v="mob">320 px</button></div>
+    <div class="row"><span class="lbl">Пометка</span>
+      <button class="tbtn" data-k="pick" data-v="auto">Подобраны под сюжет</button>
+      <button class="tbtn" data-k="pick" data-v="manual">Выбраны вами</button>
+      <button class="tbtn" data-k="pick" data-v="fallback">Обычный порядок</button>
+      <button class="tbtn" data-k="pick" data-v="single">Одно фото (empty)</button>
+      <button class="tbtn" data-k="pick" data-v="missing">Фото удалено</button></div>
+    <div class="row"><span class="lbl">Окно</span>
+      <button class="tbtn" data-k="win" data-v="ok">Обычное</button>
+      <button class="tbtn" data-k="win" data-v="loading">Фото грузятся</button>
+      <button class="tbtn" data-k="win" data-v="error">Ошибка запуска</button>
+      <button class="tbtn" id="openPicker" style="border-style:dashed">Открыть «Заменить»</button></div>
+  </div>
+
+  <div class="layout">
+    <div class="frame desk" id="frame">
+      <div class="feed" id="feed">
+        <div class="user-msg">Андрей смеётся у окна, в профиль</div>
+        <div id="cardSlot"></div>
+      </div>
+
+      <div class="overlay" id="overlay" role="presentation">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mt">
+          <div class="grab"></div>
+          <div class="mhead">
+            <div>
+              <div class="mtitle" id="mt">Какие фото взять</div>
+              <div class="msub">Первое фото важнее остальных. Локальная модель берёт только одно.</div>
+            </div>
+            <button class="iconbtn" title="Закрыть" aria-label="Закрыть" data-close>
+              <svg class="ico sm" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          </div>
+          <div class="mbody" id="mbody"></div>
+          <div class="mfoot">
+            <button class="btn md secondary grow" data-close>Отмена</button>
+            <button class="btn md primary grow15" id="redraw">Перерисовать</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <div class="dcard"><h3>Что смотреть</h3>
+        <ul>
+          <li>Пять видов блока — переключатель «Пометка». «Под сюжет: …» есть только у «Подобраны под сюжет».</li>
+          <li>«Заменить» → окно. Тап по фото ставит номер, повторный — снимает, номера сдвигаются. Больше трёх нельзя: остальные гаснут.</li>
+          <li>«Перерисовать» → окно закрывается, ниже исходной карточки идёт новый запуск, потом новая версия с пометкой «Выбраны вами».</li>
+          <li>Одно фото у персонажа — без «Заменить» и с подсказкой.</li>
+          <li>На 320 px окно — шторка снизу (это делает сам <code>Modal</code>).</li>
+        </ul></div>
+      <div class="dcard"><h3>Почему так</h3>
+        <ul>
+          <li>Утопленная плашка <code>C.bgInset</code> отделяет «из чего рисовали» от «что получилось», не споря с картинкой.</li>
+          <li>Пометка без оранжевого: «Подобраны» — <code>info</code>, остальные — <code>neutral</code>. Акцент в карточке уже занят бейджем «В работе».</li>
+          <li>Порядок — номерами в порядке нажатий: в выборе первого фото нет скрытой логики.</li>
+          <li>Миниатюры в карточке не нажимаются: смотреть фото крупно — дело панели персонажа, не ленты.</li>
+        </ul></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Данные демо ──
+  // angle: 0 анфас, 1 вполоборота, 2 в профиль; hue — тон подложки-заглушки (обвязка, не продукт)
+  const PHOTOS = [
+    { file: 'andrey-1.jpg', angle: 0, cap: 'Анфас · спокойное', main: true },
+    { file: 'andrey-2.jpg', angle: 1, cap: 'Вполоборота · улыбка' },
+    { file: 'andrey-3.jpg', angle: 2, cap: 'В профиль · смех' },
+    { file: 'andrey-4.jpg', angle: 2, cap: 'В профиль · спокойное', human: true },
+    { file: 'andrey-5.jpg', angle: 0, cap: 'Анфас · серьёзное' },
+    { file: 'andrey-6.jpg', angle: 1, cap: 'Размечаем…', pending: true },
+    { file: 'andrey-7.jpg', angle: 0, cap: 'Без меток', none: true },
+  ];
+  const LIMIT = 3; // PhotosPerRequest
+
+  const state = { theme: 'light', width: 'desk', pick: 'auto', win: 'ok' };
+  let order = [];       // выбор в окне — индексы PHOTOS по порядку
+  let extra = null;     // новая версия после «Перерисовать»
+
+  const face = (angle) => {
+    // Заглушка фото: голова повёрнута по ракурсу. Цвета — токены, чтобы заглушка жила в обеих темах
+    const dx = [0, 6, 12][angle];
+    return `<svg class="face" viewBox="0 0 40 40" aria-hidden="true">
+      <rect width="40" height="40" fill="var(--c-bg-selected)"/>
+      <path d="M6 40c2-9 8-12 14-12s12 3 14 12z" fill="var(--c-dashed)"/>
+      <ellipse cx="${20 + dx / 3}" cy="17" rx="${8 - angle}" ry="9.5" fill="var(--c-accent-muted)"/>
+      ${angle < 2 ? `<circle cx="${17 + dx / 2}" cy="16" r="1" fill="var(--c-text-secondary)"/>` : ''}
+      <circle cx="${23 + dx / 2}" cy="16" r="1" fill="var(--c-text-secondary)"/>
+    </svg>`;
+  };
+  const I = {
+    sparkles: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 3v4M17 5h4"/>',
+    hand: '<path d="M18 11V6a2 2 0 0 0-4 0v5M14 10V4a2 2 0 0 0-4 0v6M10 10.5V6a2 2 0 0 0-4 0v8a8 8 0 0 0 16 0v-2a2 2 0 0 0-4 0"/>',
+    list: '<path d="M10 6h11M10 12h11M10 18h11M4 6h1v4M4 10h2M6 18H4c0-1 2-2 2-3s-1-1.5-2-1"/>',
+    replace: '<path d="M14 4a2 2 0 0 1 2-2M16 10a2 2 0 0 1-2-2M20 2a2 2 0 0 1 2 2M22 8a2 2 0 0 1-2 2"/><path d="m3 7 3 3 3-3M6 10V5a3 3 0 0 1 3-3h1"/><rect x="2" y="14" width="8" height="8" rx="2"/>',
+    imageOff: '<path d="M2 2l20 20M10.4 5H19a2 2 0 0 1 2 2v8.6M21 21H5a2 2 0 0 1-2-2V5"/><path d="m21 15-3.1-3.1M6 17l5-5 4 4"/>',
+    imagePlus: '<path d="M16 5h6M19 2v6M21 11.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7.5"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/><circle cx="9" cy="9" r="2"/>',
+    expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+    save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7H7v7M7 3v4h7"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+    alert: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0zM12 9v4M12 17h.01"/>',
+  };
+  const ico = (k, cls = '') => `<svg class="ico ${cls}" viewBox="0 0 24 24">${I[k]}</svg>`;
+
+  // Пометка → бейдж (Badge size="xs")
+  const PICK = {
+    auto:     { tone: 'info',    icon: 'sparkles', text: 'Подобраны под сюжет' },
+    manual:   { tone: 'neutral', icon: 'hand',     text: 'Выбраны вами' },
+    fallback: { tone: 'neutral', icon: 'list',     text: 'Обычный порядок',
+                title: 'Подходящих под сюжет фото не нашлось — взяты по порядку, главное первым' },
+  };
+
+  function strip(kind, photos) {
+    const single = kind === 'single';
+    const pick = PICK[kind === 'missing' ? 'auto' : kind];
+    const thumbs = photos.map(i => i === -1
+      ? `<span class="thumb" title="Этого фото больше нет у персонажа">${ico('imageOff', 'sm')}</span>`
+      : `<span class="thumb" title="${PHOTOS[i].cap}">${face(PHOTOS[i].angle)}</span>`).join('');
+    return `<div class="cps" data-character-photos="${kind}">
+      <div class="cps-head">
+        <span class="cps-title">Фото персонажа</span><span class="cps-name">· Андрей</span>
+        ${single ? '' : `<span class="badge ${pick.tone}" ${pick.title ? `title="${pick.title}"` : ''}>${ico(pick.icon)}${pick.text}</span>`}
+      </div>
+      ${kind === 'auto' || kind === 'missing' ? '<div class="cps-scene">Под сюжет: в профиль, смех</div>' : ''}
+      <div class="cps-row">
+        ${thumbs}
+        ${single ? '' : `<button class="btn xs ghost push" data-replace>${ico('replace')}Заменить</button>`}
+      </div>
+      ${single ? `<div class="cps-hint">${ico('imagePlus')}<span>Добавьте фото в разных ракурсах — AI Home будет подбирать подходящее под сюжет.</span></div>` : ''}
+    </div>`;
+  }
+
+  function card({ n, current, kind, photos, meta }) {
+    return `<div class="vcard ${current ? 'current' : ''}">
+      <div class="vhead"><span class="vname">Андрей у окна · версия ${n}</span>
+        ${current ? `<span class="badge accent">${ico('target')}В работе</span>` : ''}
+        <span class="badge warning">черновик</span></div>
+      <div class="vpic">${face(2)}</div>
+      <div class="vmeta">${meta}</div>
+      ${strip(kind, photos)}
+      <div class="vacts">
+        <button class="btn xs secondary">${ico('expand')}Открыть</button>
+        <button class="btn xs secondary">${ico('save')}Сохранить в проект</button>
+      </div>
+    </div>`;
+  }
+
+  const PHOTOS_OF = { auto: [0, 2, 3], manual: [2, 1], fallback: [0, 1, 2], single: [0], missing: [0, -1, 3] };
+
+  function renderFeed() {
+    const kind = state.pick;
+    let html = card({ n: 2, current: !extra, kind, photos: PHOTOS_OF[kind], meta: 'вариант 1 из 1 · от исходника · сходство 0,78 · Nano Banana Pro' });
+    if (extra === 'running') {
+      html += `<div class="vcard"><div class="running"><span class="dot"></span>Рисуем… · Nano Banana Pro
+        <button class="btn xs ghost">Отменить</button></div><div class="skel"></div></div>`;
+    } else if (extra) {
+      html += card({ n: 3, current: true, kind: 'manual', photos: extra, meta: 'вариант 1 из 1 · от исходника · сходство 0,81 · Nano Banana Pro' });
+    }
+    document.getElementById('cardSlot').innerHTML = html;
+  }
+
+  function renderPicker() {
+    const body = document.getElementById('mbody');
+    const redraw = document.getElementById('redraw');
+    if (state.win === 'loading') {
+      body.innerHTML = `<div class="counter">Загружаем фото…</div>
+        <div class="pgrid">${'<div><div class="pskel skel" style="aspect-ratio:1"></div></div>'.repeat(6)}</div>`;
+      redraw.disabled = true; redraw.title = '';
+      return;
+    }
+    const full = order.length >= LIMIT;
+    const cells = PHOTOS.map((p, i) => {
+      const pos = order.indexOf(i);
+      const sel = pos >= 0;
+      const off = !sel && full;
+      return `<button class="pcell" data-i="${i}" aria-pressed="${sel}" ${off ? 'aria-disabled="true" title="Можно взять не больше 3 фото"' : ''}
+          aria-label="Фото ${i + 1}: ${p.cap}${sel ? `, ${pos + 1}-е по порядку` : ''}">
+        <span class="ph">${face(p.angle)}
+          ${sel ? `<span class="order"><span class="badge">${pos + 1}</span></span>` : ''}
+          ${p.main ? '<span class="main"><span class="badge neutral">Основное</span></span>' : ''}
+        </span>
+        <span class="cap ${p.pending ? 'pending' : p.none ? 'none' : ''}" ${p.human ? 'style="color:var(--c-text-primary)"' : ''}>${p.cap}</span>
+      </button>`;
+    }).join('');
+    body.innerHTML = `
+      ${state.win === 'error' ? `<div class="notice" role="alert">${ico('alert')}<span>Части фото больше нет у персонажа. Выберите заново.</span></div>` : ''}
+      <div class="counter">Выбрано ${order.length} из ${LIMIT}
+        ${order.length ? '<button class="btn xs ghost push" id="clear">Сбросить выбор</button>' : ''}</div>
+      <div class="pgrid">${cells}</div>
+      <div class="cost">Новый запуск: ≈ 4 ₽ · исходная версия останется</div>`;
+    redraw.disabled = order.length === 0;
+    redraw.title = order.length ? '' : 'Выберите хотя бы одно фото';
+  }
+
+  function openPicker() {
+    order = state.pick === 'manual' ? [2, 1] : PHOTOS_OF[state.pick === 'missing' ? 'auto' : state.pick].filter(i => i >= 0);
+    if (state.pick === 'missing') order = [0, 3];
+    renderPicker();
+    document.getElementById('overlay').classList.add('open');
+    setTimeout(() => document.querySelector('.pcell')?.focus(), 0);
+  }
+  const closePicker = () => document.getElementById('overlay').classList.remove('open');
+
+  function apply() {
+    document.documentElement.dataset.theme = state.theme;
+    const fr = document.getElementById('frame');
+    fr.className = 'frame ' + state.width;
+    document.querySelectorAll('.tbtn[data-k]').forEach(b => b.setAttribute('aria-pressed', String(state[b.dataset.k] === b.dataset.v)));
+    renderFeed();
+    if (document.getElementById('overlay').classList.contains('open')) renderPicker();
+  }
+
+  document.getElementById('demo').addEventListener('click', e => {
+    const b = e.target.closest('.tbtn[data-k]');
+    if (b) { state[b.dataset.k] = b.dataset.v; if (b.dataset.k === 'pick') extra = null; apply(); }
+  });
+  document.getElementById('openPicker').addEventListener('click', openPicker);
+  document.getElementById('feed').addEventListener('click', e => { if (e.target.closest('[data-replace]')) openPicker(); });
+  document.getElementById('overlay').addEventListener('click', e => {
+    if (e.target.id === 'overlay' || e.target.closest('[data-close]')) return closePicker();
+    if (e.target.closest('#clear')) { order = []; return renderPicker(); }
+    const c = e.target.closest('.pcell');
+    if (!c || c.getAttribute('aria-disabled') === 'true') return;
+    const i = +c.dataset.i, pos = order.indexOf(i);
+    if (pos >= 0) order.splice(pos, 1); else order.push(i);
+    renderPicker();
+    document.querySelector(`.pcell[data-i="${i}"]`)?.focus();
+  });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+  document.getElementById('redraw').addEventListener('click', () => {
+    if (!order.length) return;
+    const picked = [...order];
+    const btn = document.getElementById('redraw');
+    btn.disabled = true; btn.textContent = 'Запускаем…';
+    setTimeout(() => {
+      btn.textContent = 'Перерисовать';
+      closePicker();
+      extra = 'running'; renderFeed();
+      setTimeout(() => { extra = picked; renderFeed(); }, 1600);
+    }, 500);
+  });
+
+  apply();
+</script>
+</body>
+</html>

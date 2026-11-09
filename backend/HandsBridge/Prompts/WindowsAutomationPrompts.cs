@@ -22,10 +22,11 @@ public sealed class WindowsAutomationPrompts
         return
         [
             new(ChatRole.System,
-                "You are operating a Windows automation MCP server with focused tools for app launching and UI interaction. " +
+                "You are operating a Windows automation MCP server with focused tools for app launching, UI interaction, " +
+                "raw keyboard/mouse input, and screen reading. " +
                 "WORKFLOW: 1) Launch app with app(programPath='...') OR find existing window with window_management(action='find'), " +
-                "2) Use the returned handle with ui_click, ui_type, ui_read, or file_save tools. " +
-                "Use mouse_control and keyboard_control only as fallbacks. " +
+                "2) Use the returned handle with ui_click, ui_type, ui_read, or ocr/scan_document for windows without a UIA tree. " +
+                "Use mouse_control and keyboard_control when the window exposes no UI Automation elements (remote desktops, canvases, images). " +
                 "Browser automation is fully supported: Edge and Chrome page content (links, buttons, forms) is discoverable via ui_* tools using ARIA labels and visible text. " +
                 "Use the windows_mcp_browser_automation prompt for a browser-specific workflow."),
             new(ChatRole.User,
@@ -41,17 +42,13 @@ public sealed class WindowsAutomationPrompts
                 "• Click: ui_click(windowHandle='<handle>', nameContains='...') — click buttons, tabs, checkboxes\n" +
                 "• Type: ui_type(windowHandle='<handle>', controlType='Edit', text='...') — enter text\n" +
                 "• Read: ui_read(windowHandle='<handle>', nameContains='...') — get text content\n" +
-                "• Read table: ui_read_table(windowHandle='<handle>', automationId='...') — extract a grid/table/details-list into structured rows + headers in one call\n" +
-
-                "• Save: file_save(windowHandle='<handle>', filePath='...') — saves files, handles Save As dialogs automatically\n" +
-                "• Open: file_open(windowHandle='<handle>', filePath='...') — opens an existing file, handles Open dialogs automatically\n" +
-                "• Clipboard: clipboard(action='get') / clipboard(action='set', text='...') — fastest bulk text IO; pair with copy/paste hotkeys\n" +
-                "• Macro: ui_macro(action='save', name='...', steps='[...]') then ui_macro(action='run', name='...', windowHandle='<handle>') — record & replay a ui_batch sequence\n" +
+                "• Read a document: scan_document(windowHandle='<handle>') — pages a remote document and returns the recognized text\n" +
+                "• Read the screen: ocr(target='window', windowHandle='<handle>') — recognize text on a window or region\n" +
                 "\n" +
                 "If you don't know element names:\n" +
                 "• screenshot_control(target='window', windowHandle='<handle>') — see numbered elements; image stays omitted by default to save tokens\n" +
                 "\n" +
-                "Fallbacks (only if ui_* tools fail):\n" +
+                "Fallbacks (only if ui_* tools fail, or the window has no UIA tree):\n" +
                 "• mouse_control(action='click', windowHandle='<handle>', x=..., y=...) — use clickablePoint from find result\n" +
                 "• keyboard_control(action='press', key='s', modifiers='ctrl') — for hotkeys (ensure window is active)")
         ];
@@ -263,9 +260,9 @@ public sealed class WindowsAutomationPrompts
         ];
     }
 
-    /// <summary>Save a file using file_save tool. Handles Save As dialog automatically if filePath provided.</summary>
+    /// <summary>Save a file: trigger Ctrl+S, then drive the Save As dialog with ui_type/ui_click.</summary>
     /// <param name="windowTitle">Window title to find (partial match). Example: 'Word', 'Notepad', 'Visual Studio Code'.</param>
-    /// <param name="filePath">Optional: Full file path for Save As dialog (e.g., 'C:\temp\document.docx'). If omitted and Save As dialog appears, it returns a hint to interact manually.</param>
+    /// <param name="filePath">Optional: Full file path for the Save As dialog (e.g., 'C:\temp\document.docx').</param>
     /// <returns>A multi-message prompt template.</returns>
     [McpServerPrompt(Name = "windows_mcp_save_file")]
     public static IEnumerable<ChatMessage> SaveFile(
@@ -275,7 +272,7 @@ public sealed class WindowsAutomationPrompts
         return
         [
             new(ChatRole.System,
-                "Use file_save for saving files. It handles Save As dialogs automatically. " +
+                "Save a file by triggering Ctrl+S, then drive the Save As dialog with the semantic ui_* tools. " +
                 "Works universally across all Windows apps including Office, Notepad, and Electron apps. " +
                 "Pattern based on FlaUI and pywinauto modal window handling."),
             new(ChatRole.User,
@@ -285,23 +282,13 @@ public sealed class WindowsAutomationPrompts
                 "Step 1: Find the window:\n" +
                 $"window_management(action='find', title='{windowTitle}')\n" +
                 "\n" +
-                "Step 2: Save the file (using handle from step 1):\n" +
-                (string.IsNullOrWhiteSpace(filePath)
-                    ? "file_save(windowHandle='<handle>') — triggers Ctrl+S\n"
-                    : $"file_save(windowHandle='<handle>', filePath='{filePath}')\n") +
+                "Step 2: Trigger save (using handle from step 1):\n" +
+                "keyboard_control(action='press', key='s', modifiers='ctrl') — sends Ctrl+S to the focused window\n" +
                 "\n" +
-                "What happens:\n" +
-                "• Sends Ctrl+S to the focused window\n" +
-                "• Waits up to 2 seconds for a Save As dialog\n" +
-                "• If dialog appears AND filePath provided: auto-fills filename and confirms\n" +
-                "• Handles overwrite confirmation dialogs automatically\n" +
-                "\n" +
-                "MANUAL WORKFLOW if file_save fails:\n" +
-                "1) keyboard_control(action='press', key='s', modifiers='ctrl') — trigger Ctrl+S\n" +
-                "2) window_management(action='find', title='Save As') — discover Save As dialog\n" +
-                "3) Use modal window handle with ui_type, ui_click:\n" +
-                "   - ui_type(windowHandle='<modal_handle>', controlType='Edit', text='<filename>')\n" +
-                "   - ui_click(windowHandle='<modal_handle>', nameContains='Save')\n" +
+                "Step 3: If a Save As dialog appears, drive it:\n" +
+                "• window_management(action='find', title='Save As') — discover the dialog\n" +
+                "• ui_type(windowHandle='<modal_handle>', controlType='Edit', text='<filename>') — fill the filename\n" +
+                "• ui_click(windowHandle='<modal_handle>', nameContains='Save') — confirm\n" +
                 "\n" +
                 "IMPORTANT: Do NOT use keyboard_control for typing file paths! " +
                 "Use ui_type with the modal window handle to directly interact with the filename field.")

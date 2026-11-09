@@ -7,6 +7,7 @@ import {
   type ImageEditProjectReference, type ImageEditProvider, type ImageEditUploadedReference, type ImageTransformBase,
   type ReferenceRole,
 } from './api';
+import type { MediaFormatWish } from 'aihome_shell/kit';
 import { isFreeUnit, priceSum } from './format';
 
 // ── Образцы ──
@@ -97,6 +98,14 @@ export function quickPlan(action: QuickAction, ratio: OutpaintRatio): LaunchPlan
     case 'outpaint': return { op: 'outpaint', prompt: '', useMask: false, removal: false, aspectRatio: ratio };
     case 'enhanceFaces': return { op: 'enhanceFaces', prompt: '', useMask: false, removal: false };
   }
+}
+
+// Дорисовка из «Формата» (ADR-025): пропорции холста — любые читаемые W:H (4:3, 21:9…) — несёт желание котировки,
+// а не `aspectRatio` запуска: у него серверный белый список трёх значений правки. Вне строки
+// контекста — null, прежний путь через `aspectRatio`
+export function outpaintFormatWish(fromContext: boolean, plan: LaunchPlan, now = new Date()): MediaFormatWish | null {
+  if (!fromContext || plan.op !== 'outpaint' || !plan.aspectRatio) return null;
+  return { mode: 'aspect', aspect: plan.aspectRatio, by: 'human', at: now.toISOString() };
 }
 
 // «Улучшить лица» — модель одного действия: её подбирает сервер, выбранная модель

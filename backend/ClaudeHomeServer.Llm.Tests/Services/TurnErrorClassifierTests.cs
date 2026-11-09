@@ -1,0 +1,640 @@
+using ClaudeHomeServer.Services.Llm;
+using FluentAssertions;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Классификатор ошибок фолбэка (ADR «Порядок резолва модели…» §2): одна функция
+// с белым списком классов, неизвестная ошибка = None (фолбэк не запускается).
+public class TurnErrorClassifierTests
+{
+    private static TurnAttemptOutcome Result(string? status, string? text = null, string subtype = "success") => new()
+    {
+        HasResult = true,
+        Subtype = subtype,
+        ApiErrorStatus = status,
+        ErrorText = text,
+    };
+
+    [Theory]
+    [InlineData("429")]
+    [InlineData("rate_limit")]
+    public void ЛимитЗапросов_ЗапускаетФолбэк(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.RateLimit);
+
+    // Прод-кейс 2026-08-09 (qwen/alibabacloud): статус пришёл пустым, текст содержит и код
+    // 429, и «quota … exhausted». Исчерпание недельной квоты токен-плана — это UsageLimit
+    // (исчерпание биллингового цикла, а не секундное окно запросов), поэтому «quota exhausted»
+    // доминирует над цитатой 429: для стороннего провайдера это значит кулдаун, а не долбление
+    // каждый ход до конца цикла. Фолбэк запускается в обоих случаях — меняется только кулдаун.
+    [Fact]
+    public void ИсчерпаниеКвоты_ПустойСтатус_ТекстС429ИQuotaExhausted_КлассUsageLimit()
+        => TurnErrorClassifier.Classify(Result(null,
+                "API Error: Request rejected (429) · Your token-plan 1-week quota has been exhausted. The quota will reset at 08-11 07:55:00 UTC."))
+            .Should().Be(FallbackErrorClass.UsageLimit,
+                "«quota … exhausted» — исчерпание квоты (UsageLimit), доминирует над цитатой 429");
+
+    [Theory]
+    [InlineData("rate limit exceeded")]
+    [InlineData("Too Many Requests")]
+    [InlineData("Request rejected (429)")]
+    [InlineData("Error 429: slow down")]
+    [InlineData("HTTP 429")]
+    [InlineData("status 429 returned")]
+    public void ЛимитЗапросов_ПустойСтатус_ПоМаркерамВТексте(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.RateLimit);
+
+    // Цитата «429» в тексте без квалификатора — не RateLimit: голый код в разборе инцидента
+    // не должен запускать фолбэк. Узкие маркеры (error/status/http/rejected + 429) не срабатывают.
+    [Theory]
+    [InlineData("Разбираем инцидент: клиент получил 429 на соседнем сервисе")]
+    [InlineData("В логе мелькнул 429, но запрос прошёл успешно")]
+    public void Цитата429_ПустойСтатус_НеКлассифицируетсяКакRateLimit(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голое «429» в тексте — цитата, а не сам код ошибки");
+
+    [Fact]
+    public void RateLimitEventRejected_ПоОкнуИсчерпания_ЗапускаетФолбэк()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+        }).Should().Be(FallbackErrorClass.RateLimit);
+
+    // ===== ModelUnavailable: недоступность модели на подписке (не исчерпание лимита) =====
+
+    // Ловушка: «нет кредитов» приезжает как rate_limit_event status=rejected → RateLimitRejected
+    // был бы true, но это отдельный кошелёк кредитов модели, а НЕ лимит подписки. Текст ошибки
+    // смотрится ДО ветки RateLimitRejected, иначе подписка ложно помечалась бы исчерпанной.
+    [Fact]
+    public void ТребуютсяКредиты_ПриRateLimitRejected_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "Fable 5.1 requires usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage, to continue.",
+        }).Should().Be(FallbackErrorClass.ModelOutOfCredits,
+            "«requires usage credits» — кредиты модели, не исчерпание окна подписки");
+
+    [Fact]
+    public void ТребуютсяКредиты_ПустойСтатус_КлассModelOutOfCredits()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Fable 5.1 requires usage credits. Switch to another model to continue."))
+            .Should().Be(FallbackErrorClass.ModelOutOfCredits);
+
+    // «issue with the selected model» — подписка не имеет доступа к модели (обычно 404).
+    // Раньше это был None (fail-closed, без фолбэка): упавший ход не шёл на соседнюю модель.
+    // Теперь — ModelNoAccess с фолбэком: другая подписка/модель может иметь доступ.
+    [Theory]
+    [InlineData("There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it.")]
+    [InlineData("There's an issue with the selected model (opus[1m])")]
+    // Хвост фразы принимается и без головы, но только рядом со словом «model»
+    [InlineData("The model is unknown or you may not have access to it")]
+    public void НетДоступаКМодели_КлассModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Фраза «may not have access to it» сама по себе НЕ специфична: её возвращают в своих
+    // ошибках чужие инструменты и MCP-серверы (так выглядел инцидент P31). Принять такую
+    // ошибку за отказ по модели — значит пометить живую пару и увести ход с правильной
+    // подписки, поэтому без соседства со словом «model» класс не ставится.
+    [Theory]
+    [InlineData("Repository is private — you may not have access to it")]
+    [InlineData("mcp__github: resource not found, you may not have access to it")]
+    public void ФразаПроДоступБезКонтекстаМодели_НеModelNoAccess(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().NotBe(FallbackErrorClass.ModelNoAccess);
+
+    // 404 с текстом «нет доступа» — тоже ModelNoAccess (до белого списка статусов, иначе None).
+    [Fact]
+    public void НетДоступаКМодели_Статус404_КлассModelNoAccess()
+        => TurnErrorClassifier.Classify(Result("404",
+                "There's an issue with the selected model (fable[1m]). It may not exist or you may not have access to it."))
+            .Should().Be(FallbackErrorClass.ModelNoAccess);
+
+    // Настоящее исчерпание окна сессии — по-прежнему RateLimit, а не ModelOutOfCredits.
+    [Fact]
+    public void НастоящийЛимитСессии_ПриRateLimitRejected_ОстаётсяRateLimit()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            RateLimitRejected = true,
+            ErrorText = "You've hit your session limit · resets 9pm",
+        }).Should().Be(FallbackErrorClass.RateLimit,
+            "«session limit» — настоящее исчерпание окна, не кредиты модели");
+
+    [Theory]
+    [InlineData(FallbackErrorClass.ModelNoAccess, "model_no_access")]
+    [InlineData(FallbackErrorClass.ModelOutOfCredits, "model_out_of_credits")]
+    public void ModelUnavailable_WireName(FallbackErrorClass cls, string expected)
+        => TurnErrorClassifier.WireName(cls).Should().Be(expected);
+
+    [Theory]
+    [InlineData("500")]
+    [InlineData("502")]
+    [InlineData("503")]
+    [InlineData("504")]
+    [InlineData("507")]   // класс «5xx» целиком, не только знакомые коды
+    [InlineData("529")]
+    [InlineData("overloaded_error")]
+    public void ОшибкаПровайдера_5xx_ЗапускаетФолбэк(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.ProviderError);
+
+    // Паритет «статус ↔ текст»: 5xx/перегрузка при ПУСТОМ статусе распознаётся по тексту.
+    // Сценарий — CLI отдал код только в тексте (инциденты, где api_error_status пришёл null).
+    // Маркеры — канонические reason phrases/type, по одному на каждый 5xx + overloaded_error.
+    [Theory]
+    [InlineData("API Error: overloaded_error")]
+    [InlineData("Internal Server Error")]
+    [InlineData("Error 502 Bad Gateway")]
+    [InlineData("Service Unavailable")]
+    [InlineData("Gateway Timeout")]
+    public void ОшибкаПровайдера_ПустойСтатус_ПоМаркерамВТексте(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError);
+
+    // 5xx-код отдельным числом в тексте при ПУСТОМ статусе (CLI 2.1.246+ отдаёт 529/503 в
+    // api_error_status=null, когда код есть только в тексте). Паритет с TurnFailureText: 529 —
+    // та же перегрузка. Гейт: не кусок «1529»/«5000», и спрашивается только при пустом статусе.
+    [Theory]
+    [InlineData("API Error: 529 Overloaded, please retry.")]
+    [InlineData("API Error: (503) service unavailable")]
+    [InlineData("Error 500: internal error")]
+    public void ОшибкаПровайдера_ПустойСтатус_5xxКодВТексте_КлассProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError,
+            "5xx-код в тексте при пустом статусе — перегрузка провайдера, не цитата");
+
+    // 5xx-код БЕЗ контекста кода — цитата числа, не ошибка провайдера: «line 512», «took 503 ms»,
+    // «port 500». Без гейта по контексту такая ошибка кончалась бы ProviderError и запускала
+    // цепочку фолбэка, хотя должна была остаться None (инвариант «None фолбэк не запускает»).
+    [Theory]
+    [InlineData("line 512")]
+    [InlineData("took 503 ms")]
+    [InlineData("port 500")]
+    [InlineData("512 tokens in the prompt")]
+    public void Цитата5xxБезКонтекста_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голое 5xx-число без контекста кода (line/took/port) — цитата, не перегрузка");
+
+    // Цитата 5xx-кода в разборе инцидента при ЖИВОМ статусе не доходит до LooksProviderError
+    // (ветка статусов решает по коду раньше) — регрессия на ложный ProviderError.
+    [Fact]
+    public void Цитата529_ПриСтатусе429_ОстаётсяRateLimit()
+        => TurnErrorClassifier.Classify(Result("429", "Разбираем: клиент получил 529 на соседнем сервисе"))
+            .Should().Be(FallbackErrorClass.RateLimit,
+                "статус 429 решает по коду, 529 в тексте — цитата, не перегрузка");
+
+    // Гейт от ложных срабатываний: общие слова «server error»/«overloaded» НЕ входят в маркеры.
+    // Ход, ЦИТИРУЮЩИЙ их в разборе инцидента, не должен уезжать на другого провайдера — тот же
+    // приём, что у ContextOverflow (узкие формулировки) и RateLimit (429 с квалификатором).
+    [Theory]
+    [InlineData("Разбираем инцидент: у нас была server error на эндпоинте")]
+    [InlineData("В логах мелькнула server error, но запрос прошёл")]
+    [InlineData("Сервис был overloaded весь вчерашний день")]
+    public void ЦитатаServerError_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голые «server error»/«overloaded» слишком обычны в разборе — нужны точные reason phrases 5xx");
+
+    // Регрессия: статус 5xx решает по коду и не анализирует текст — даже цитата overflow
+    // не переключает класс (ветка статусов доходит до 5xx раньше ContextOverflow-проверки).
+    [Fact]
+    public void Статус500_ОстаётсяProviderError_ДажеПриOverflowТексте()
+        => TurnErrorClassifier.Classify(Result("500", "Разбираем «Prompt is too long» из прошлого"))
+            .Should().Be(FallbackErrorClass.ProviderError,
+                "статус 5xx решает по коду, текст не анализируется");
+
+    [Fact]
+    public void ОбрывПотока_БезResult_ЗапускаетФолбэк()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false })
+            .Should().Be(FallbackErrorClass.Unreachable,
+                "любой обрыв stream — в том числе посреди уже начатого ответа — ошибка доставки");
+
+    [Theory]
+    [InlineData("process_exit")]
+    [InlineData("ECONNREFUSED")]
+    [InlineData("ENOTFOUND")]
+    public void НедоступностьЭндпоинта_ПоСтатусу(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.Unreachable);
+
+    [Theory]
+    [InlineData("fetch failed")]
+    [InlineData("connect ECONNREFUSED 104.18.32.7:443")]
+    [InlineData("getaddrinfo ENOTFOUND api.example.com")]
+    [InlineData("socket hang up")]
+    public void НедоступностьЭндпоинта_ПоТекстуОшибки(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.Unreachable);
+
+    [Fact]
+    public void UsageLimit403_ЗапускаетФолбэк()
+        => TurnErrorClassifier.Classify(Result("403",
+                "Your usage limit has been reached. Resets at 5pm."))
+            .Should().Be(FallbackErrorClass.UsageLimit);
+
+    [Fact]
+    public void InvalidKey403_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result("403", "invalid_api_key: invalid x-api-key"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "неверный ключ — AuthFailure: подписка/провайдер негоден, лечит ротация пула или шаг цепочки (P29)");
+
+    // Прод-кейс 2026-08-11 (kimi, чат f9eebaaa): CLI не положил код в api_error_status —
+    // 403 остался только внутри текста ошибки. Ветка пустого статуса обязана спросить про
+    // usage limit, иначе класс выходит None и фолбэк не стартует (пользователь переключал
+    // модель руками). Текст — целиком, как пришёл в ленту.
+    [Fact]
+    public void UsageLimit_ПустойСтатус_ТекстИнцидента_КлассUsageLimit()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle..."))
+            .Should().Be(FallbackErrorClass.UsageLimit,
+                "фраза «usage limit» доминирует над «Failed to authenticate» — это исчерпание квоты, не auth (LooksUsageLimited спрашивается раньше LooksAuthFailure)");
+
+    // Ошибка аутентификации — AuthFailure: она не лечится сменой модели, НО лечится переходом
+    // на другую подписку пула (свой токен) или шаг цепочки (свой ключ). Поэтому это отдельный
+    // класс, а не None: оркестратор по нему эскалирует, а не обрывает ход (P29, инцидент
+    // 2026-08-13). «Failed to authenticate» без «usage limit» в тексте — auth, не квота.
+    [Fact]
+    public void ОшибкаКлюча_ПустойСтатус_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 401 invalid api key"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "неверный ключ — AuthFailure, ротация пула/шаг цепочки лечат");
+
+    // «quota» + «exhausted» — исчерпание квоты (UsageLimit), не RateLimit-окно: lived раньше
+    // в LooksRateLimited, но провайдер с такой формулировкой при пустом статусе уходил бы в
+    // RateLimit и не помечался в кулдауне — тот же инцидент, другая формулировка.
+    [Theory]
+    [InlineData("Your quota has been exhausted. Please upgrade your plan.")]
+    [InlineData("quota is exhausted")]
+    public void ИсчерпаниеКвоты_ПустойСтатус_QuotaExhausted_КлассUsageLimit(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.UsageLimit);
+
+    // Голое слово quota/exhausted по отдельности — НЕ UsageLimit (слишком обычны в текстах).
+    [Theory]
+    [InlineData("Your daily quota is 1000")]
+    [InlineData("resources exhausted")]
+    public void ГолаяQuota_Exhausted_НеКлассифицируется(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None);
+
+    // 429 по статусу остаётся RateLimit независимо от текста — ветка решает по статусу,
+    // до LooksUsageLimited/LooksRateLimited дело не доходит (Minor 3 ревью: проверка).
+    [Fact]
+    public void Статус429_ОстаётсяRateLimit_ДажеПриQuotaExhaustedВТексте()
+        => TurnErrorClassifier.Classify(Result("429",
+                "Your quota has been exhausted."))
+            .Should().Be(FallbackErrorClass.RateLimit,
+                "статус 429 решает по коду, текст не анализируется");
+
+    [Fact]
+    public void Auth403_БезТекста_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result("403")).Should().Be(FallbackErrorClass.AuthFailure,
+            "403 без признаков квоты — авторизационный отказ, AuthFailure");
+
+    // 401 и authentication_error — авторизация (AuthFailure: ротация пула/шаг цепочки лечат);
+    // 400/404 — содержательные ошибки запроса, auth-фон там ни при чём (None, fail-closed).
+    [Theory]
+    [InlineData("401")]
+    [InlineData("authentication_error")]
+    public void ОшибкиАвторизации_КлассAuthFailure(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.AuthFailure);
+
+    [Theory]
+    [InlineData("400")]
+    [InlineData("404")]
+    public void ОшибкиЗапроса_НеАвторизация_ОстаётсяNone(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.None);
+
+    // Переполнение контекста: «Prompt is too long» у Anthropic (видели на проде: kimi-k3 со
+    // заявленным окном 1M) и эквиваленты сторонних провайдеров. Класс отдельный от None —
+    // повторять ту же модель бессмысленно, но шагнуть по цепочке к бóльшему окну можно.
+    [Theory]
+    [InlineData("Prompt is too long: 210000 tokens > 200000 maximum.")]
+    [InlineData("input length exceeds 200000, max is 128000")]
+    [InlineData("This model's maximum context length is 128000 tokens.")]
+    [InlineData("context_length_exceeded")]
+    [InlineData("Your request is longer than the model's context window.")]
+    [InlineData("The input is too long for the model")]
+    public void ПереполнениеКонтекста_ПоТексту_КлассContextOverflow(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ContextOverflow);
+
+    [Fact]
+    public void ПереполнениеКонтекста_Статус400_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("400", "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "400 сам по себе — содержательная ошибка (None), но с overflow-текстом это ContextOverflow");
+
+    [Fact]
+    public void ПереполнениеКонтекста_Статус413_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("413", "context_length_exceeded"))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "413 — куда OpenAI-совместимые эндпоинты кладут overflow; с маркером в тексте это ContextOverflow");
+
+    // Страховка на провайдеров, кладущих в поле статуса не код, а ТИП ошибки (invalid_request_error,
+    // request_too_large) — при overflow-тексте это тот же класс. Видели на проде: в инциденте
+    // kimi-k3 статус пришёл пустым, а эта ветка ловит провайдеров, заполняющих поле типом ошибки.
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ПереполнениеКонтекста_ТипОшибкиВместоКода_КлассContextOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status, "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "некоторые провайдеры кладут в статус тип ошибки, а не HTTP-код; с overflow-текстом это ContextOverflow");
+
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ТипОшибкиВместоКода_БезOverflowТекста_ОстаётсяNone(string status)
+        => TurnErrorClassifier.Classify(Result(status, "malformed request body"))
+            .Should().Be(FallbackErrorClass.None,
+                "ярлык без overflow-маркера — содержательная ошибка, fail-closed сохраняется");
+
+    // Minor-review: overflow-фразы ищутся в тексте ошибки, поэтому ход, ЦИТИРУЮЩИЙ «Prompt is
+    // too long» (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно.
+    // Маркеры в тексте трактуем как overflow ТОЛЬКО при пустом статусе или 400/413 — куда
+    // провайдеры реально кладут эту ошибку. При прочих статусах цитата — не overflow.
+    [Theory]
+    [InlineData("418")]
+    [InlineData("404")]
+    [InlineData("200")]
+    public void ЦитатаOverflowПриЧужомСтатусе_НеКлассифицируетсяКакOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status,
+                "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
+            .Should().Be(FallbackErrorClass.None,
+                "overflow-маркеры в тексте при нерелевантном статусе — это цитата, а не сама ошибка переполнения");
+
+    // 401 решает по коду раньше overflow-проверки (как 429/5xx): даже если текст цитирует
+    // «Prompt is too long», статус 401 — это auth-отказ, а не переполнение контекста.
+    [Fact]
+    public void Статус401_ДоминируетНадЦитатойOverflow_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result("401",
+                "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "статус 401 решает по коду — auth-ошибка, overflow-цитата её не перекрывает");
+
+    [Fact]
+    public void ContextOverflow_WireNameДляМаркера()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.ContextOverflow)
+            .Should().Be("context_overflow");
+
+    [Fact]
+    public void Статус400_БезOverflowТекста_ОстаётсяNone()
+        => TurnErrorClassifier.Classify(Result("400", "invalid request body"))
+            .Should().Be(FallbackErrorClass.None, "обычный 400 — не переполнение контекста");
+
+    [Fact]
+    public void НеизвестнаяОшибка_ФолбэкНеЗапускает_FailClosed()
+        => TurnErrorClassifier.Classify(Result("418", "teapot"))
+            .Should().Be(FallbackErrorClass.None,
+                "лучше показать ошибку, чем молча жечь лимиты других аккаунтов о неопознанную проблему");
+
+    [Fact]
+    public void ОшибкаБезСтатусаИТекста_ФолбэкНеЗапускает()
+        => TurnErrorClassifier.Classify(Result(null, subtype: "error"))
+            .Should().Be(FallbackErrorClass.None);
+
+    [Fact]
+    public void InterruptПользователя_НеОшибкаДоставки()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome
+        {
+            HasResult = false,
+            InterruptedByUser = true,
+        }).Should().Be(FallbackErrorClass.None);
+
+    [Fact]
+    public void ErrorMaxTurns_СодержательнаяОшибка_ФолбэкНеЗапускает()
+        => TurnErrorClassifier.Classify(Result(null, subtype: "error_max_turns"))
+            .Should().Be(FallbackErrorClass.None, "это проблема содержания хода, а не доставки");
+
+    // P29, боевой инцидент 2026-08-13 (Claude OAuth): CLI отдал текст протухшего токена без кода
+    // в api_error_status — классификация только по тексту. AuthFailure запускает эскалацию по пулу
+    // и цепочке, а не обрывает ход (как делал None до правки).
+    [Fact]
+    public void OAuthExpired_ПустойСтатус_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate: OAuth session expired and could not be refreshed"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "протухший OAuth — AuthFailure, ход уходит на живую подписку пула");
+
+    [Theory]
+    [InlineData("authentication failed")]
+    [InlineData("invalid api key provided")]
+    public void AuthМаркеры_ПустойСтатус_КлассAuthFailure(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.AuthFailure);
+
+    // P31: голые «unauthorized» / «could not be refreshed» слишком широки — ErrorText собирается
+    // не только из is_error-текста CLI, но и из обычных ErrorMessage. Ход с MCP-сервером личного
+    // реестра с протухшим OAuth давал в тексте «401 Unauthorized» ЧУЖОГО API → ложный AuthFailure →
+    // MarkAuthDead на здоровую подписку Claude. Сужены до канонических формулировок провайдера;
+    // голое «unauthorized»/«401 unauthorized»/«could not be refreshed» больше не ловятся (по
+    // пустому статусу — статус 401 ловится отдельно по коду).
+    [Theory]
+    [InlineData("Unauthorized")]
+    [InlineData("401 Unauthorized")]
+    [InlineData("token could not be refreshed")]
+    public void СлишкомШирокиеАuthФразы_ПустойСтатус_НеКлассAuthFailure(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голые «unauthorized»/«could not be refreshed» — цитата чужого API, не отказ подписки Claude");
+
+    // Канонические формулировки провайдера остаются AuthFailure: «oauth session expired» покрывает
+    // боевой кейс протухшего OAuth (включая хвост «…and could not be refreshed»).
+    [Fact]
+    public void OAuthSessionExpired_ПустойСтатус_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result(null, "OAuth session expired and could not be refreshed"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "каноническая формулировка протухшего OAuth — auth, «oauth session expired» её ловит");
+
+    // P31: AuthFailure несёт причину в маркер смены провайдера (раньше WireName тут возвращал null —
+    // маркер уходил с Reason: null, стартовая подмена подставляла ?? "unreachable" → «Сервис не
+    // отвечает» при протухшем ключе).
+    [Fact]
+    public void AuthFailure_WireName_AuthFailure()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().Be("auth_failure");
+
+    // ===== PromptOverflow: Win32:206 ERROR_FILENAME_EXCED_RANGE (задача dc641949) =====
+
+    // Канал, по которому приходит сбой старта процесса: ClaudeSession бросает Win32Exception
+    // при Process.Start (или локальный PromptOverflowException до Start), маркирует
+    // Details префиксом "[Win32:206]" и через FallbackLlmSessionAdapter.NoteWin32Code
+    // пробрасывает в outcome.Win32ErrorCode. Классификатор должен выдать PromptOverflow,
+    // а не Unreachable — иначе локальная причина маскируется под мёртвый эндпоинт и фолбэк
+    // крутит 5 пар впустую (история инцидента 2026-09-07, чат 74f1c3d6).
+    [Fact]
+    public void Win32Error206_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Имя файла или его расширение имеет слишком большую длину.",
+            Win32ErrorCode = 206,
+        };
+        TurnErrorClassifier.Classify(outcome)
+            .Should().Be(FallbackErrorClass.PromptOverflow,
+                "Win32:206 (ERROR_FILENAME_EXCED_RANGE) — локальный сбой старта, не Unreachable");
+    }
+
+    // Тот же случай, но маркер не дошёл через поле Win32ErrorCode — fallback на текст.
+    // Стоит ДО "процесс умер без result → Unreachable", чтобы вторая ветка не выиграла.
+    [Fact]
+    public void Win32Marker_ВErrorText_HasResultFalse_КлассPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "[Win32:206]Имя файла или его расширение имеет слишком большую длину.",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.PromptOverflow,
+            "префикс \"[Win32:206]\" в ErrorText — тот же локальный сбой старта");
+    }
+
+    // Другой Win32-код — НЕ PromptOverflow. Идёт по общему правилу (Unreachable),
+    // потому что настоящая причина не та (например, ERROR_ACCESS_DENIED=5 на неверных
+    // правах к exe). Тест-фикстура на будущее: при появлении новых "локальных" классов
+    // мы добавим сюда свой, а PromptOverflow останется только под 206.
+    [Fact]
+    public void Win32Error5_AccessDenied_HasResultFalse_КлассНеPromptOverflow()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "Access is denied.",
+            Win32ErrorCode = 5,
+        };
+        TurnErrorClassifier.Classify(outcome).Should().NotBe(FallbackErrorClass.PromptOverflow,
+            "PromptOverflow — только Win32:206 ERROR_FILENAME_EXCED_RANGE");
+    }
+
+    // Регрессия: в обычной переписке чат может процитировать "[Win32:206]" — мы НЕ
+    // должны ложно классифицировать это как PromptOverflow. Защита держится на
+    // HasWin32Marker (проверяет StartWith, а не Contains) и на HasResult=true для
+    // успешного result. Этот тест ловит и противоположный регресс — что
+    // HasWin32Marker случайно расширили до Contains.
+    [Fact]
+    public void Win32Marker_ВнутриТекста_НеНачалоСтроки_HasResultTrue_КлассНеМеняется()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "success",
+            ErrorText = "обсуждали: \"[Win32:206]\" встречалось в соседнем логе",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "HasWin32Marker смотрит на StartWith, цитата в середине текста — не маркер старта");
+    }
+
+    [Fact]
+    public void PromptOverflow_WireName()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.PromptOverflow).Should().Be("prompt_overflow");
+
+    // ===== Исчерпание локальных ресурсов ОС (инцидент 2026-09-19) =====
+    // IOException лимита inotify из TurnFileWatcher.Start уходила в Unreachable (нет result),
+    // и фолбэк за 0,6 с сжёг три подписки. Локальная причина другой парой не лечится —
+    // None: честная ошибка хода без перебора цепочки.
+    [Theory]
+    [InlineData("The configured user limit (8192) on the number of inotify instances has been reached, or the per-process limit on the number of open file descriptors has been reached.")]
+    [InlineData("The configured user limit (65536) on the number of inotify watches has been reached, or the operating system failed to allocate a required resource.")]
+    [InlineData("The system limit on the number of inotify instances has been reached.")]
+    [InlineData("Too many open files")]
+    [InlineData("spawn claude EMFILE")]
+    [InlineData("ENFILE: file table overflow")]
+    public void ИсчерпаниеЛокальныхРесурсов_БезResult_НеUnreachable(string text)
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = text };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "лимит ОС на этой машине — не мёртвый эндпоинт, перебор цепочки его не лечит");
+    }
+
+    // Обрыв сети без result по-прежнему Unreachable: новая ветка не перехватывает чужое
+    [Fact]
+    public void СетевойОбрыв_БезResult_ОстаётсяUnreachable()
+        => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false, ErrorText = "fetch failed: ECONNRESET" })
+            .Should().Be(FallbackErrorClass.Unreachable);
+
+    // ===== Остановлен сервером (DisposeAsync): не oom-kill и не мёртвый эндпоинт =====
+    // Блокер (задача 9ef116dc): ProcessStoppedByServer без маркера уходил в ветку
+    // "!HasResult → Unreachable" и фолбэк подменял модель. Маркер [Process:stopped-by-server]
+    // первым токеном Details → класс None: фолбэк не запускается, ход завершается error.
+    // Тест красный, если убрать проверку маркера из Classify (ветка !HasResult выигрывает).
+    [Fact]
+    public void ОстановленСервером_БезResult_Маркер_КлассNone()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = $"{TurnErrorClassifier.ProcessStoppedByServerMarker} процесс агента остановлен сервером (перезапуск или восстановление чата)",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.None,
+            "маркер [Process:stopped-by-server] — свой Kill сервера, не Unreachable: фолбэк не запускается");
+    }
+
+    // Без маркера (маркер не дошёл) — по-прежнему Unreachable: ветка !HasResult не перехватывается.
+    [Fact]
+    public void ОстановленСервером_БезResult_БезМаркера_ОстаётсяUnreachable()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = "процесс агента остановлен сервером (перезапуск или восстановление чата)",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.Unreachable,
+            "без маркера — обычный обрыв без result, Unreachable");
+    }
+
+    // ===== Файл аргумента CLI не найден (инцидент 2026-10-16: Opus → MiniMax-M3 без спроса) =====
+    // Per-run файл --agents / --mcp-config пропал между записью и запуском: CLI падает с exit=1
+    // до первого события, stderr несёт «file not found». Локальная гонка, не мёртвый эндпоинт:
+    // смена пары «модель × подписка» не лечит (тот же процесс на той же машине), а повтор той же
+    // пары (CLI пересоберёт файлы) — лечит. ДО ветки "!HasResult → Unreachable", иначе пропавший
+    // файл маскировался бы под мёртвый эндпоинт и фолбэк жёл подписки.
+
+    // Маркер [Local:file-missing] (ставит ClaudeSession в Details) — основной канал.
+    [Fact]
+    public void FileNotFound_БезResult_Маркер_КлассLocalFileMissing()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = false,
+            ErrorText = $"{TurnErrorClassifier.LocalFileMissingMarker} Error: --agents file not found: /tmp/claude-agents-abc123.json",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.LocalFileMissing,
+            "маркер [Local:file-missing] — локальная гонка per-run файла, не Unreachable");
+    }
+
+    // Сырой «file not found» без маркера (маркер не дошёл) — запасной канал.
+    [Theory]
+    [InlineData("Error: --agents file not found: /tmp/claude-agents-abc123.json")]
+    [InlineData("Invalid MCP configuration: config file not found")]
+    [InlineData("--mcp-config /tmp/claude-mcp-xyz.json: file not found")]
+    public void FileNotFound_БезResult_СыройТекст_КлассLocalFileMissing(string text)
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = text };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.LocalFileMissing,
+            "«file not found» в stderr запуска — локальная гонка per-run файла, не Unreachable");
+    }
+
+    // Обрыв сети без result по-прежнему Unreachable: новая ветка не перехватывает чужое.
+    // «file not found» в тексте НЕ должно ложно сработать на сетевом обрыве.
+    [Fact]
+    public void СетевойОбрыв_БезFileNotFound_ОстаётсяUnreachable()
+    {
+        var outcome = new TurnAttemptOutcome { HasResult = false, ErrorText = "fetch failed: ECONNRESET" };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.Unreachable,
+            "обрыв сети без «file not found» — по-прежнему Unreachable");
+    }
+
+    // Ответ провайдера (result есть) с HTML 5xx, содержащим «file not found»: это ProviderError
+    // (5xx), а не локальная гонка per-run файла. Сырая ветка LooksLocalFileMissing по ErrorText
+    // ограничена случаем !HasResult: маркер (ставит ClaudeSession, только когда ход не стартовал)
+    // остаётся основным каналом. Мутация «убрать !HasResult из сырой ветки» обязана покрасить тест:
+    // цитата «file not found» в теле ответа провайдера ложно дала бы LocalFileMissing.
+    [Fact]
+    public void ОтветПровайдера_5xxHtmlСFileNotFound_ОстаётсяProviderError()
+    {
+        var outcome = new TurnAttemptOutcome
+        {
+            HasResult = true,
+            Subtype = "error",
+            ApiErrorStatus = "500",
+            ErrorText = "<html><head><title>500 Internal Server Error</title></head><body>file not found</body></html>",
+        };
+        TurnErrorClassifier.Classify(outcome).Should().Be(FallbackErrorClass.ProviderError,
+            "ответ провайдера (result есть) с 5xx — ProviderError; «file not found» в HTML — цитата, не локальная гонка");
+    }
+
+    [Fact]
+    public void LocalFileMissing_WireName()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.LocalFileMissing).Should().Be("local_file_missing");
+}

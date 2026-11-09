@@ -18,12 +18,50 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // импортированных записей с живым реестром. Инварианты: эндпоинт ОТДЕЛЬНЫЙ от списка
 // записей (лежащий реестр не роняет открытие раздела), проверяются только имена
 // владельца с CatalogRef (изоляция), плашка «отозван» — только явный статус.
-public class McpCatalogRevisionControllerTests
+[Trait("Category", "Host")]
+public class McpCatalogRevisionControllerTests : IClassFixture<McpCatalogRevisionControllerTests.Hosts>
 {
+    // Хост на КОНФИГУРАЦИЮ (ответ реестра), а не на тест: поднимаются лениво, гасятся вместе с
+    // фикстурой. Имена каталожных записей у каждого теста свои (кэш клиента ключуется по имени),
+    // счётчик вызовов реестра тест сбрасывает сам в начале
+    public sealed class Hosts : IDisposable
+    {
+        // Реестр отвечает «active, 2.0.0»
+        public RevisionFactory Active { get; } = new() { Fake = new FakeCatalogClient(LatestJson("active", "2.0.0")) };
+        // Реестр отвечает «deprecated»
+        public RevisionFactory Deprecated { get; } = new() { Fake = new FakeCatalogClient(LatestJson("deprecated", "1.0.0")) };
+        // Реестр лежит
+        public RevisionFactory Dead { get; } = new() { Thrower = new ThrowingCatalogClient() };
+        // Каталог не настроен
+        public RevisionFactory Disabled { get; } = new() { Fake = new FakeCatalogClient(LatestJson(), enabled: false) };
+        // Настоящий клиент поверх подменённых опций
+        public RevisionFactory Wired { get; } = new()
+        {
+            ExtraServices = services =>
+            {
+                services.RemoveAll<McpCatalogOptions>();
+                services.AddSingleton(new McpCatalogOptions { BaseUrl = "https://127.0.0.1:1" });
+            },
+        };
+
+        public void Dispose()
+        {
+            Active.Dispose();
+            Deprecated.Dispose();
+            Dead.Dispose();
+            Disabled.Dispose();
+            Wired.Dispose();
+        }
+    }
+
+    private readonly Hosts _hosts;
+
+    public McpCatalogRevisionControllerTests(Hosts hosts) => _hosts = hosts;
+
     // Фейковый транспорт: реальный путь ReviseAsync (кэш, разбор, статусы) поверх
     // заготовленных ответов versions/latest. Считает вызовы — «чужое имя не дошло
     // до реестра» проверяется по счётчику
-    private sealed class FakeCatalogClient(string latestJson = "{}", bool enabled = true)
+    public sealed class FakeCatalogClient(string latestJson = "{}", bool enabled = true)
         : McpCatalogClient(new StubFactory(), new McpCatalogOptions
         {
             BaseUrl = enabled ? "https://registry.example" : "",
@@ -33,12 +71,12 @@ public class McpCatalogRevisionControllerTests
 
         protected override Task<string> FetchLatestAsync(string name, CancellationToken ct)
         {
-            Fetches++;
+            Interlocked.Increment(ref Fetches);
             return Task.FromResult(latestJson);
         }
     }
 
-    private sealed class ThrowingCatalogClient : McpCatalogClient
+    public sealed class ThrowingCatalogClient : McpCatalogClient
     {
         public ThrowingCatalogClient() : base(new StubFactory(),
             new McpCatalogOptions { BaseUrl = "https://registry.example" }) { }
@@ -52,12 +90,12 @@ public class McpCatalogRevisionControllerTests
         public HttpClient CreateClient(string name) => new();
     }
 
-    private static string LatestJson(string status = "active", string version = "2.0.0") =>
+    public static string LatestJson(string status = "active", string version = "2.0.0") =>
         "{\"server\":{\"name\":\"x\",\"version\":\"" + version + "\"}," +
         "\"_meta\":{\"io.modelcontextprotocol.registry/official\":" +
         "{\"status\":\"" + status + "\",\"isLatest\":true}}}";
 
-    private sealed class RevisionFactory : TestWebApplicationFactory
+    public sealed class RevisionFactory : TestWebApplicationFactory
     {
         public IReadOnlyDictionary<string, string?>? Config { get; set; }
         public FakeCatalogClient? Fake { get; set; }
@@ -79,13 +117,6 @@ public class McpCatalogRevisionControllerTests
             });
         }
     }
-
-    private static string UserIdOf(TestWebApplicationFactory factory) =>
-        factory.Services.GetRequiredService<UserStore>().GetFirst()!.Id;
-
-    private static void EnableFlag(TestWebApplicationFactory factory) =>
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
 
     private static async Task<JsonElement> CreateCatalogServerAsync(HttpClient client,
         string name, string version)
@@ -113,8 +144,7 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Ревизия_возвращает_статус_и_флаг_новой_версии()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("active", "2.0.0")) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/one", "1.0.0");
 
@@ -131,8 +161,7 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Явный_deprecated_ставит_плашку()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("deprecated", "1.0.0")) };
-        EnableFlag(factory);
+        var factory = _hosts.Deprecated;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dep", "1.0.0");
 
@@ -145,8 +174,7 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Лежащий_реестр_проверить_не_удалось_но_не_отозван()
     {
-        using var factory = new RevisionFactory { Thrower = new ThrowingCatalogClient() };
-        EnableFlag(factory);
+        var factory = _hosts.Dead;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dead", "1.0.0");
 
@@ -162,17 +190,18 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Список_серверов_жив_при_лежащем_реестре()
     {
-        using var factory = new RevisionFactory { Thrower = new ThrowingCatalogClient() };
-        EnableFlag(factory);
+        var factory = _hosts.Dead;
         var client = factory.CreateAuthenticatedClient();
-        await CreateCatalogServerAsync(client, "io.github.o/alive", "1.0.0");
+        var created = await CreateCatalogServerAsync(client, "io.github.o/alive", "1.0.0");
+        var key = created.GetProperty("key").GetString();
 
         var resp = await client.GetAsync("/api/mcp/servers");
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var list = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
-        list.GetArrayLength().Should().BeGreaterThan(0);
+        // хост общий на класс, записи накапливаются между тестами — ищем свою по ключу
+        var mine = list.EnumerateArray().Single(e => e.GetProperty("key").GetString() == key);
         // и запись видна с её catalogRef — ревизия тут не участвует вовсе
-        list[0].TryGetProperty("catalogRef", out _).Should().BeTrue();
+        mine.TryGetProperty("catalogRef", out _).Should().BeTrue();
     }
 
     // --- фильтрация по владельцу ---
@@ -180,8 +209,8 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Чужие_имена_и_записи_без_CatalogRef_в_ревизию_не_попадают()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
+        factory.Fake!.Fetches = 0;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/mine", "1.0.0");
         // ручная запись того же владельца — без указателя на каталог
@@ -214,14 +243,11 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Изоляция_владельца_второй_юзер_видит_только_своё()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
         var first = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(first, "io.github.o/first", "1.0.0");
-        // флаг включается первому пользователю — второму включаем отдельно
         var users = factory.Services.GetRequiredService<UserStore>();
         var secondId = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
-        users.SetFeatureFlag(secondId, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
         factory.Services.GetRequiredService<McpRegistry>().Create(secondId, new McpServerRecord
         {
             Key = "second-" + Guid.NewGuid().ToString("N")[..8],
@@ -240,8 +266,8 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Две_записи_одного_имени_один_запрос_и_старшая_версия()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson("active", "2.0.0")) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
+        factory.Fake!.Fetches = 0;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/dup", "1.0.0");
         await CreateCatalogServerAsync(client, "io.github.o/dup", "2.0.0");
@@ -257,20 +283,9 @@ public class McpCatalogRevisionControllerTests
     // --- гейты запроса ---
 
     [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        var client = factory.CreateAuthenticatedClient();
-        var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision",
-            new { names = new[] { "io.github.o/x" } });
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
     public async Task Не_настроен_503()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson(), enabled: false) };
-        EnableFlag(factory);
+        var factory = _hosts.Disabled;
         var client = factory.CreateAuthenticatedClient();
         var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision",
             new { names = new[] { "io.github.o/x" } });
@@ -282,8 +297,7 @@ public class McpCatalogRevisionControllerTests
     [InlineData(null)]
     public async Task Пустой_список_имён_400(int? count)
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
         var client = factory.CreateAuthenticatedClient();
         var names = count is null
             ? null
@@ -295,8 +309,7 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Потолок_батча_400()
     {
-        using var factory = new RevisionFactory { Fake = new FakeCatalogClient(LatestJson()) };
-        EnableFlag(factory);
+        var factory = _hosts.Active;
         var client = factory.CreateAuthenticatedClient();
         var names = Enumerable.Range(0, 51).Select(i => "io.github.o/n" + i).ToArray();
         var resp = await client.PostAsJsonAsync("/api/mcp/catalog/revision", new { names });
@@ -313,13 +326,7 @@ public class McpCatalogRevisionControllerTests
     [Fact]
     public async Task Опции_регистрации_доезжают_до_клиента_через_DI()
     {
-        using var factory = new RevisionFactory();
-        factory.ExtraServices = services =>
-        {
-            services.RemoveAll<McpCatalogOptions>();
-            services.AddSingleton(new McpCatalogOptions { BaseUrl = "https://127.0.0.1:1" });
-        };
-        EnableFlag(factory);
+        var factory = _hosts.Wired;
         var client = factory.CreateAuthenticatedClient();
         await CreateCatalogServerAsync(client, "io.github.o/wired", "1.0.0");
 

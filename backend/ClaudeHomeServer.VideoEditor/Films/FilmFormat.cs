@@ -64,7 +64,8 @@ internal static class FilmFormat
         if (doc.Items.Count > MaxItems) return $"В фильме не больше {MaxItems} сцен.";
         if (doc.Cuts.Count != Math.Max(0, doc.Items.Count - 1))
             return "Склеек должно быть на одну меньше, чем сцен.";
-        if (AspectSize(doc.Aspect) is null) return $"Неизвестное соотношение сторон «{doc.Aspect}».";
+        // Фильм собирается в формате первой сцены (ADR-025 §11), поэтому пропорции — любое «W:H», а не пять известных
+        if (!ClaudeHomeServer.Services.Media.AspectCrop.TryParse(doc.Aspect, out _)) return $"Неизвестное соотношение сторон «{doc.Aspect}».";
         for (var i = 0; i < doc.Items.Count; i++)
         {
             var item = doc.Items[i];
@@ -105,7 +106,42 @@ internal static class FilmFormat
         return null;
     }
 
-    // Соотношение сторон → размер кадра сборки (чётные числа); null — неизвестное
+    public const int MaxAssembleSide = 4096;
+
+    // Малые пропорции, к которым прижимается размер первого клипа: 1344×768 — это «16:9», а не «7:4»
+    private static readonly string[] KnownAspects = ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9", "9:21", "3:2", "2:3"];
+
+    // Размер клипа → пропорции фильма: известные в пределах 2 %, иначе несократимое «W:H»
+    public static string AspectOfSize(int width, int height)
+    {
+        var ratio = (double)width / height;
+        foreach (var known in KnownAspects)
+            if (ClaudeHomeServer.Services.Media.AspectCrop.TryParse(known, out var r) && Math.Abs(ratio / r - 1) <= 0.02)
+                return known;
+        var a = width;
+        var b = height;
+        while (b != 0) (a, b) = (b, a % b);
+        return $"{width / a}:{height / a}";
+    }
+
+    // Размер кадра сборки — размер первого клипа (ADR-025 §11): чётные стороны, длинная не больше 4096 с теми же пропорциями
+    public static (int Width, int Height) AssembleSize(int width, int height)
+    {
+        var scale = Math.Max(width, height) > MaxAssembleSide ? (double)MaxAssembleSide / Math.Max(width, height) : 1;
+        static int Even(double v) => Math.Max(2, (int)Math.Floor(v / 2) * 2);
+        return (Even(width * scale), Even(height * scale));
+    }
+
+    // Таймаут растёт с площадью кадра относительно 1280×720, но не короче базового
+    public static TimeSpan ScaledTimeout(TimeSpan baseTimeout, int width, int height)
+    {
+        var factor = Math.Max(1.0, (double)width * height / (1280 * 720));
+        var minutes = Math.Clamp(baseTimeout.TotalMinutes * factor, 1, 240);
+        return TimeSpan.FromMinutes(minutes);
+    }
+
+    // Соотношение сторон → размер кадра НОВОГО фильма (чётные числа); null — неизвестное. Сборка берёт размер первого клипа,
+    // эта таблица нужна только для проверки пропорций при создании фильма
     public static (int Width, int Height)? AspectSize(string aspect) => aspect switch
     {
         "16:9" => (1280, 720),

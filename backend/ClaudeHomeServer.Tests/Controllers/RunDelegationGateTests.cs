@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// фоновых агентов прогона задаёт тест.
 /// Тест держится только ядра сессий и гейтов: вертикаль «Процессов» ему не нужна.
 /// </summary>
+[Trait("Category", "Host")]
 public class RunDelegationGateTests : IDisposable
 {
     private sealed class DepthAdapterFactory : ILlmSessionAdapterFactory
@@ -54,7 +55,7 @@ public class RunDelegationGateTests : IDisposable
 
         public Task StartAsync() => Task.CompletedTask;
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-            int agentDepth = 0, bool suppressTasksExecute = false) => Task.CompletedTask;
+            int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null) => Task.CompletedTask;
         public Task CompactAsync() => Task.CompletedTask;
         public void RespondPermission(string requestId, string behavior) { }
         public void AnswerQuestion(string toolUseId, string updatedInputJson) { }
@@ -96,10 +97,13 @@ public class RunDelegationGateTests : IDisposable
             await project.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
     }
 
+    // Вызов «от лица чата» (S2a-3a): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него — узкая рамка (fail-closed, SessionManager.GetTurnFrame) и отказ NarrowText
+    // ещё до проверяемого гейта делегированности. Конфиг хода в бою кладёт этот заголовок всегда.
     private static async Task<string> ToolTextAsync(HttpClient client, string server, string sessionId,
         string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/{server}/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },
@@ -149,8 +153,10 @@ public class RunDelegationGateTests : IDisposable
             "прогон делегированного хода делегирован, пока живы его фоновые агенты");
         (await ChatsSendAsync(client, sessionId, otherId)).Should().Contain("недоступно на делегированном ходу",
             "фоновый агент не пишет в третьи чаты");
-        (await RunExecutorAsync(client, sessionId)).Should().Contain("недоступно на делегированном ходу",
-            "и не запускает исполнителей");
+        // Запуск исполнителя на глубине 1 разрешён (RunExecutorAllowedDepth): фоновый агент
+        // хода глубины 1 вправе ровно то же, что сам ход, — гейт пропускает, отказ только по задаче
+        (await RunExecutorAsync(client, sessionId)).Should().Contain("не найдена")
+            .And.NotContain("делегированном", "глубина 1 — в пределах разрешённой для запуска исполнителя");
 
         // Авто-ход глубины 0 (автоматика, не человек) делегированность прогона не снимает
         await Sessions.SendOrEnqueueAsync(sessionId, "автоматика");

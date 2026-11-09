@@ -23,6 +23,11 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.ProjectServices.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- Mcp.Tests (шаг 3.6): DevToolsetTests использует internal DevServerLaunchPolicy
+         (Services/ProjectServices) — тот же шов, что у монолита. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Mcp.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

@@ -15,22 +15,35 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 // Гейт доезжает до хоста через UseSetting — механика и почему это не гонка разобраны в
 // шапке NotesDisabledTests. Ключ модуля совпадает с ключом подсистемы (imageeditor), поэтому
 // ModuleLoader читает ровно эту секцию: ключи конфигурации без учёта регистра.
-public class ImageEditorDisabledTests : IDisposable
+[Trait("Category", "Host")]
+public class ImageEditorDisabledTests : IClassFixture<ImageEditorDisabledTests.Hosts>
 {
-    private readonly DisabledFactory _disabled = new();
+    private readonly Hosts _hosts;
 
-    // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от гейта,
-    // а не от опечатки в маршруте
-    private readonly TestWebApplicationFactory _enabled = new();
+    public ImageEditorDisabledTests(Hosts hosts) => _hosts = hosts;
 
-    public void Dispose()
+    private DisabledFactory _disabled => _hosts.Disabled;
+    private TestWebApplicationFactory _enabled => _hosts.Enabled;
+
+    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой
+    public sealed class Hosts : IDisposable
     {
-        _disabled.Dispose();
-        _enabled.Dispose();
-        GC.SuppressFinalize(this);
+        public DisabledFactory Disabled { get; } = new();
+
+        // Контрольный хост: без оверрайда модуль грузится — значит пустота ниже от гейта,
+        // а не от опечатки в маршруте
+        public EnabledFactory Enabled { get; } = new();
+
+        public void Dispose()
+        {
+            Disabled.Dispose();
+            Enabled.Dispose();
+        }
     }
 
-    private sealed class DisabledFactory : TestWebApplicationFactory
+    public sealed class EnabledFactory : TestWebApplicationFactory;
+
+    public sealed class DisabledFactory : TestWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -70,8 +83,6 @@ public class ImageEditorDisabledTests : IDisposable
     [Fact]
     public void Выключенный_модуль_не_даёт_сервера_в_ход_чата_проекта()
     {
-        CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
-        CharacterEndpointsTests.EnableFlag(_enabled, TestWebApplicationFactory.TestUsername);
 
         ContextFor(_disabled).Should().BeNull("тулсета нет в реестре — сервер в ход не едет");
         ContextFor(_enabled).Should().NotBeNull("контроль: тот же чат при загруженном модуле сервер получает");
@@ -101,7 +112,6 @@ public class ImageEditorDisabledTests : IDisposable
     [InlineData("POST", "save")]
     public async Task Ручки_редактора_при_выключенном_модуле_404_а_не_500(string method, string tail)
     {
-        CharacterEndpointsTests.EnableFlag(_disabled, TestWebApplicationFactory.TestUsername);
         var (projectId, _) = CharacterEndpointsTests.CreateProject(_disabled, TestWebApplicationFactory.TestUsername);
         var client = _disabled.CreateAuthenticatedClient();
 

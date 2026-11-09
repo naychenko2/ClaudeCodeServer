@@ -15,15 +15,20 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main и Main.Tests: тесты догоняющей генерации поднимают
-         общий стек (PersonaManager, хелперы). Прецедент — Dossiers.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- Main (шаг 2.2): прямой ProjectReference убран — UserStore/PersonaManager,
+         которые используют тесты догоняющей генерации, приходят транзитно через
+         TestKit.Host (он ссылается на Main). Хост не поднимается. -->
+    <!-- TestKit (Core-only хелперы: FakeHostEnvironment/TestFs/TestSessionBroadcaster) +
+         TestKit.Host (FakeComfy/FakeProjectAccess из LocalMediaFakes) — шаг 1.3. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <!-- Эталоны графов стенда и снимок схемы нод для ComfyWorkflowsTests -->
     <None Update="Images\ComfyReference\*.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Пример ответа маршрута /ccs/stats узла ComfyUI (шаг 31) для ComfyCcsStatsTests -->
+    <None Update="Images\CcsStats\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

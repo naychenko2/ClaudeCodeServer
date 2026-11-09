@@ -17,7 +17,8 @@
 import {
   BookOpen, BookOpenText, ClipboardList, Contact, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, AppWindow, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
-  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic,
+  TableOfContents, Lightbulb, DraftingCompass, SlidersHorizontal, Mic, Cpu, Plug,
+  ArrowDownToLine, History, Activity, Settings,
   type LucideIcon,
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
@@ -26,6 +27,12 @@ import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
 export type Zone = 'left' | 'right';
+
+// Панели вики раздела «Заметки»: «Входящие», «Журнал»,
+// «Здоровье», «Настройки». Ключи живут в общем реестре сразу после графа заметок —
+// вики читается рядом с ними; домашняя зона — правая (см. PANEL_HOME), набор
+// выведен через shell-kit для вклада раздела.
+export const WIKI_PANEL_KEYS = ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings'] as const;
 
 // Все панели продукта. Порядок = порядок иконок в рельсе сверху вниз (внутри
 // своей группы, см. SESSION_KEYS). Какие из них доступны на конкретном экране,
@@ -41,6 +48,9 @@ export const PANEL_KEYS = [
   // Панели подсистем (слот workspace-panel-def): ключ зарезервирован здесь, тело и
   // доступность — у подсистемы; выключена подсистема — нет содержимого, нет и кнопки
   'characters',
+  // «Локальные модели»: только админ, значок — при
+  // настроенном локальном провайдере (условие — у фичи, см. manifest)
+  'localModel',
   // «Голоса» редактора звука: библиотека voices/ проекта отдельной панелью
   'voices',
   // Единая панель «Контекст» чата (ADR-023 §Д1): вместо прежних панелей генерации «Картинки», «Звук» и
@@ -52,10 +62,25 @@ export const PANEL_KEYS = [
   // (кнопка в шапке этой панели), потому что каналы выбирают по обложкам,
   // а в рельсе их не разглядеть.
   'video',
+  // Маркер семейства плагинов (ADR-031, S5): сам по себе панелью больше не
+  // является (упразднён, см. LEGACY_KEY_ALIASES) — у каждой панели плагина своя
+  // динамическая карточка plugin:*. Живёт в реестре, чтобы WORKSPACE_KEYS мог
+  // разрешить всё семейство plugin:* одним маркером (keyAllowed), а не перечислять
+  // каждый ключ.
+  'pluginPanels',
   // Панели разделов хаба
-  'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
+  'notesList', 'notesGraph', ...WIKI_PANEL_KEYS, 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
-export type PanelKey = typeof PANEL_KEYS[number];
+// Статические ключи реестра: все панели продукта, известные на момент компиляции
+export type StaticPanelKey = typeof PANEL_KEYS[number];
+// Ключ панели плагина (ADR-031, S3): `plugin:{publisher}/{slug}:{panelId}` —
+// ключ на ПАНЕЛЬ, а не на плагин: у каждой панели плагина своя карточка в
+// боковой колонке, и их можно раскладывать по зонам одновременно.
+// Версии в ключе НЕТ: при обновлении плагина ключ стабилен, карточка остаётся
+// на своём месте в раскладке.
+export type PluginPanelKey = `plugin:${string}`;
+// Все панели продукта: статические ключи + семейство плагинов (динамическое, S3)
+export type PanelKey = StaticPanelKey | PluginPanelKey;
 
 // Данные кружков-индикаторов на кнопке панели рельсы. Источник — WorkspacePage
 // (changes/tasks/terminal/preview), useSessionPanels (plan/agents) и ChatsPage
@@ -87,8 +112,10 @@ export interface RailBadgeInfo {
   hint?: RailHint;
 }
 
-// Иконка и заголовок панели — общие для обеих зон.
-export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
+// Иконка и заголовок панели — общие для обеих зон. pluginPanels исключён (R-Gleb,
+// minor 7): слот упразднён (S5), это маркер семейства, а не реальная панель — меты
+// у него нет (реальные карточки рисуются по динамическим ключам plugin:*).
+export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: string; Icon: LucideIcon }> = {
   chats:    { title: 'Чаты',      Icon: MessageCircle },
   files:    { title: 'Файлы',     Icon: FolderTree },
   // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево
@@ -129,6 +156,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // Ключ остался preview (он лежит в сохранённых раскладках), подпись — «Сервисы»
   preview:  { title: 'Сервисы',   Icon: AppWindow },
   video:    { title: 'Эфир',      Icon: MonitorPlay },
+  // pluginPanels (S5) исключён из меты: маркер семейства, не реальная панель
+  // (R-Gleb, minor 7) — реальные карточки рисуются по динамическим ключам plugin:*.
   plan:     { title: 'План',      Icon: ClipboardList },
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
@@ -139,6 +168,8 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   toc:      { title: 'Оглавление', Icon: TableOfContents },
   // Персонажи редактора картинок (модуль image-editor): люди с фото для генераций
   characters: { title: 'Персонажи', Icon: Contact },
+  // Локальные модели: статистика локального движка, только админ
+  localModel: { title: 'Локальные модели', Icon: Cpu },
   // Голоса редактора звука (модуль audio-editor): библиотека voices/ проекта
   voices: { title: 'Голоса', Icon: Mic },
   // Панели генерации: заголовок и иконку в рельсе отдаёт вклад, здесь — запасные
@@ -150,6 +181,14 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // проекта; notesGraph — граф ЗАМЕТОК, а graph — граф зависимостей кода.
   notesList:     { title: 'Заметки',  Icon: NotebookPen },
   notesGraph:    { title: 'Граф',     Icon: Network },
+  // Панели вики раздела «Заметки»: «Входящие» — очередь
+  // входящих разборов (ArrowDownToLine — входящее вниз, в очередь), «Журнал» —
+  // лента событий вики (History), «Здоровье» — состояние страниц (Activity —
+  // живой сигнал), «Настройки» — управление отбором (Settings).
+  wikiInbox:     { title: 'Входящие', Icon: ArrowDownToLine },
+  wikiJournal:   { title: 'Журнал',   Icon: History },
+  wikiHealth:    { title: 'Здоровье', Icon: Activity },
+  wikiSettings:  { title: 'Настройки', Icon: Settings },
   knowledgeList: { title: 'Базы',     Icon: Library },
   personasList:  { title: 'Персоны',  Icon: Users },
   projectGroups: { title: 'Группы',   Icon: FolderTree },
@@ -175,17 +214,26 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   // Справа, как «Сервисы»: слева живёт список чатов, а эфир рядом с ним отнимал бы
   // место у навигации — смотрят его сбоку от ленты, а не вместо неё
   video: 'right',
+  // Маркер семейства (S5): не панель, 'right' — домашняя зона реальных plugin:*
+  pluginPanels: 'right',
   preview: 'right',
   plan: 'right',
   agents: 'right',
   context: 'right',
   toc: 'right',
   characters: 'right',
+  localModel: 'right',
   voices: 'right',
   chatContext: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
+  // Панели вики: открытая вики живёт справа от списка
+  // заметок — туда и их дом
+  wikiInbox: 'right',
+  wikiJournal: 'right',
+  wikiHealth: 'right',
+  wikiSettings: 'right',
   knowledgeList: 'left',
   personasList: 'left',
   projectGroups: 'left',
@@ -194,11 +242,11 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'voices', 'chatContext',
+  'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext', 'pluginPanels',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
-export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph'];
+export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph', ...WIKI_PANEL_KEYS];
 export const KNOWLEDGE_KEYS: readonly PanelKey[] = ['knowledgeList'];
 export const PERSONAS_KEYS: readonly PanelKey[] = ['personasList'];
 export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
@@ -209,8 +257,20 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
-// Правая зона раздела «Чаты»: панели сессии плюс «Контекст» личного чата
-export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext'];
+// Правая зона раздела «Чаты»: панели сессии плюс «Контекст» личного чата.
+// «Локальные модели» (Ф6): это сервер, а не проект — ключ живёт здесь. Но в личном
+// чате панель показываем только админу (chatPanelDefAllowed): у не-админа своего
+// значка в рельсе чата быть не должно (решение Софьи по ревью Ф6; в проекте он
+// видит панель по-прежнему). Точка состояния на значке — там, где виден сам значок:
+// её даёт indicator фичи, и она молчит у не-админа (тот не спрашивает состояние).
+export const CHAT_RIGHT_KEYS: readonly PanelKey[] = [...SESSION_KEYS, 'chatContext', 'localModel'];
+
+// Панель подсистемы в правом рельсе личного чата: «Локальные модели» — только
+// админу (см. выше); остальное решает сама фича (isAvailable, которым ChatsPage
+// проверяет свой вклад в слоте).
+export function chatPanelDefAllowed(name: PanelKey, isAdmin: boolean): boolean {
+  return name !== 'localModel' || isAdmin;
+}
 
 // Панели генерации: в планшетной зоне они держат поток до GEN_PANEL_INLINE_MIN (genPanelPlacement).
 // Источник один — lib/genPanelKeys.ts, вторая копия в lib/genPanelDismissed.ts отдаёт тот же список
@@ -270,8 +330,79 @@ export const RAIL_GROUPS: readonly (readonly PanelKey[])[] = [
 // не от ключа, а от состояния самой панели («Документация» тянется до низа только с
 // включённой нижней зоной превью), поэтому её объявляет панель — см. panelFill.ts.
 
+// Синтаксис ключа плагина: `plugin:{publisher}/{slug}:{panelId}`. Алфавит
+// исключает ':' и '/' (разделители) и пробелы; ограничение длины защищает
+// формат хранилища от мусора.
+const PLUGIN_KEY_RE = /^plugin:[A-Za-z0-9@._-]+\/[A-Za-z0-9._-]+:[A-Za-z0-9._-]+$/;
+// Ключ — идентификаторы (npm-имя пакета {publisher}/{slug} + id панели). Потолок
+// 200, а не 64 (R-Gleb, minor 3): у длинного id (scoped-пакет + длинный slug) ключ
+// превышал 64 и карточка МОЛЧА не переживала перезапуск (isPluginPanelKey → false →
+// sanitizeLayout отбрасывал). 200 — запас на реальные длинные id; длиннее — мусор.
+const PLUGIN_KEY_MAX_LEN = 200;
+
+// Предикат ключа плагина: принимается по СИНТАКСИСУ, а не по списку установленных
+// плагинов — стор читает localStorage при импорте модуля, а список (асинхронный
+// GET) в этот момент ещё не известен. Иначе карточки молча выселялись бы из
+// раскладки: человек терял бы их место без единого сообщения.
+export function isPluginPanelKey(v: unknown): v is PluginPanelKey {
+  return typeof v === 'string' && v.length <= PLUGIN_KEY_MAX_LEN && PLUGIN_KEY_RE.test(v);
+}
+
+// isPanelKey принимает статические ключи плюс синтаксически валидный ключ
+// плагина: формат хранилища не меняется, старые раскладки читаются как есть
 export function isPanelKey(v: unknown): v is PanelKey {
-  return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);
+  return typeof v === 'string' && ((PANEL_KEYS as readonly string[]).includes(v) || isPluginPanelKey(v));
+}
+
+// Конструктор ключа плагина: pluginId — id пакета `{publisher}/{slug}`
+// (PluginInfo.id), panelId — id панели из манифеста (PluginPanelView.id)
+export function pluginPanelKey(pluginId: string, panelId: string): PluginPanelKey {
+  return `plugin:${pluginId}:${panelId}` as PluginPanelKey;
+}
+
+// Мета панели по ключу: статические — из реестра. Для ключа плагина — всегда
+// undefined: каталог о плагинах не знает, мету передаёт WorkspacePage пропсом
+// в PanelZone (из GET списка плагинов); без неё — panelMetaResolved.
+export function panelMeta(k: PanelKey): { title: string; Icon: LucideIcon } | undefined {
+  // pluginPanels — маркер семейства (S5), не реальная панель: меты у него нет
+  // (R-Gleb, minor 7) — реальные карточки читают meta по своим ключам plugin:*.
+  if (k === 'pluginPanels') return undefined;
+  return isPluginPanelKey(k) ? undefined : PANEL_META[k];
+}
+
+// Домашняя зона панели: статические — из реестра, ключи `plugin:` — 'right'
+// (как у прежней панели pluginPanels, S3)
+export function panelHome(k: PanelKey): Zone {
+  return isPluginPanelKey(k) ? 'right' : PANEL_HOME[k];
+}
+
+// Мета панели с запасным вариантом (S4): ключ плагина без записи в реестре (пока
+// S5 его не наполнил) даёт заголовок из имени панели и иконку по умолчанию — панель
+// не падает. Статические ключи мету всегда имеют, так что fallback нужен только
+// для plugin:*. Возвращает объект, а не undefined: потребитель не обязан проверять.
+export function panelMetaResolved(k: PanelKey): { title: string; Icon: LucideIcon } {
+  const m = panelMeta(k);
+  if (m) return m;
+  if (isPluginPanelKey(k)) {
+    // plugin:{publisher}/{slug}:{panelId} — имя панели (panelId) как запасной заголовок
+    const panelId = k.slice(k.lastIndexOf(':') + 1);
+    return { title: panelId, Icon: Plug };
+  }
+  // Статический ключ без меты — не должен встречаться, но не падаем
+  return { title: k, Icon: AppWindow };
+}
+
+// Разрешает ли экран панель: статические ключи — по перечню, ключи плагинов —
+// СЕМЕЙСТВОМ: экран разрешает всё семейство plugin:* (маркер — слот pluginPanels
+// в перечне, либо сам ключ, если экран уже знает установленные плагины), а не
+// перечень отдельных ключей. allowedKeys при этом остаётся статичным: экран
+// объявляет семейство, а стор раскрывает его для каждого ключа.
+export function keyAllowed(k: PanelKey, allowed: readonly PanelKey[]): boolean {
+  if (isPluginPanelKey(k)) {
+    const list = allowed as readonly string[];
+    return list.includes(k) || list.includes('pluginPanels');
+  }
+  return (allowed as readonly string[]).includes(k);
 }
 
 // Переименования ключей при чтении старых раскладок из localStorage. Синонимы
@@ -282,16 +413,22 @@ export function isPanelKey(v: unknown): v is PanelKey {
 // заменил док проектов второй левой рельсой (features/projects/ProjectRail).
 // Панели генерации «Картинки», «Звук» и «Видео» упразднены (ADR-023): в сохранённых раскладках их место
 // занимает «Контекст»; повтор в одной раскладке снимает санитайз (дубли), поэтому три ключа дают одну панель.
-const LEGACY_KEY_ALIASES: Record<string, PanelKey> = {
+const LEGACY_KEY_ALIASES: Record<string, PanelKey | null> = {
   personas: 'team',
   images: 'chatContext',
   sound: 'chatContext',
   videoEditor: 'chatContext',
+  // S5: единый слот pluginPanels упразднён — у каждой панели плагина теперь своя
+  // карточка (ключ plugin:*). Старая раскладка не переносится (null): карточки
+  // встают на своё место по правилам рельса, историческое место не восстанавливаем.
+  pluginPanels: null,
 };
 
 // Ключ старой раскладки → ключ реестра (null — панель упразднена).
+// Явный `null` в таблице (не «отсутствует») — упразднение: старый слот не
+// переносится, а его панели встают на своё место по правилам рельса.
 export function migrateLegacyKey(v: unknown): PanelKey | null {
   if (typeof v !== 'string') return null;
-  const aliased = LEGACY_KEY_ALIASES[v] ?? v;
-  return isPanelKey(aliased) ? aliased : null;
+  if (v in LEGACY_KEY_ALIASES) return LEGACY_KEY_ALIASES[v];
+  return isPanelKey(v) ? v : null;
 }

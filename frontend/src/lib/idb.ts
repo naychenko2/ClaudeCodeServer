@@ -36,26 +36,60 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore(name, keyPath ? { keyPath } : undefined);
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Смена версии из другой вкладки: закрываем своё соединение, чтобы
+      // upgrade-транзакция той вкладки смогла пройти (иначе она висит onblocked).
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
+    // onblocked: другая вкладка держит БД и ждёт смену версии — открытие зависнет
+    // вечно. Реджектим с причиной и сбрасываем промис, чтобы следующий вызов
+    // попробовал открыть заново, а не копил вызовы на этом вечно ждущем открытии.
+    req.onblocked = () => {
+      _dbPromise = null;
+      reject(new Error('IDB: открытие заблокировано (onblocked)'));
+    };
   });
   // Если открытие упало — сбрасываем промис, чтобы следующая попытка могла повториться
   _dbPromise.catch(() => { _dbPromise = null; });
   return _dbPromise;
 }
 
+// Итог транзакции, а не запроса. Успех запроса (req.onsuccess) НЕ означает, что
+// запись состоялась: commit случается позже, и на большом значении он может упасть
+// — квота IndexedDB при переполнении, прерывание при смене версии БД, onblocked
+// при чужой вкладке. Прежде резолв шёл по req.onsuccess, и такой сбой коммита
+// давал ЛОЖНЫЙ УСПЕХ: промис уже резолвился, а запись откатилась. Сам обрыв промис
+// НЕ оставлял висеть — по спеке IDB §5.5 запрос на прерванной транзакции получает
+// error, и старый req.onerror реджектил.
 function tx<T>(store: StoreName, mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return openDb().then(db => new Promise<T>((resolve, reject) => {
     const t = db.transaction(store, mode);
+    let result: T;
+    t.oncomplete = () => resolve(result);
+    // Прерывание и ошибка транзакции реджектят промис: иначе он остался бы
+    // нерешённым навсегда. Оба события по спеке означают откат, так что результат
+    // и не может оказаться применённым — реджект тут единственно честный исход.
+    t.onabort = () => reject(t.error ?? new DOMException('IDB: транзакция прервана', 'AbortError'));
+    t.onerror = () => reject(t.error ?? new Error('IDB: ошибка транзакции'));
     const req = fn(t.objectStore(store));
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => { result = req.result; };
     req.onerror = () => reject(req.error);
   }));
 }
 
 export interface CacheEntry<T = unknown> {
   data: T;
+  // «Данные по состоянию на»: при чтении не меняется никогда
   savedAt: number;
+  // Последний доступ — по нему вытесняется пассивный кэш (у старых записей поля нет — берётся savedAt)
+  usedAt?: number;
+  // Оценка веса записи (символов текста ответа). Нужна по-чатовому классу, где потолок
+  // по числу записей не ограничивает тяжёлые истории чата (до 2,5 МБ на чат).
+  // У старых записей поля нет — считаем нулём.
+  bytes?: number;
 }
 
 export function idbGet<T = unknown>(key: string): Promise<CacheEntry<T> | undefined> {
@@ -68,6 +102,31 @@ export function idbSet<T = unknown>(key: string, entry: CacheEntry<T>): Promise<
 
 export function idbDelete(key: string): Promise<undefined> {
   return tx('meta', 'readwrite', s => s.delete(key) as IDBRequest<undefined>);
+}
+
+// Диапазон ключей [lower, upper] включительно; upper обычно prefix + '\uffff'.
+export function idbCountRange(lower: string, upper: string): Promise<number> {
+  return tx('meta', 'readonly', s => s.count(IDBKeyRange.bound(lower, upper)));
+}
+
+// Метки времени записей диапазона (курсором, без выгрузки значений наружу).
+export function idbRangeStamps(lower: string, upper: string): Promise<{ key: string; savedAt: number; usedAt?: number; bytes?: number }[]> {
+  return openDb().then(db => new Promise<{ key: string; savedAt: number; usedAt?: number; bytes?: number }[]>((resolve, reject) => {
+    const t = db.transaction('meta', 'readonly');
+    const out: { key: string; savedAt: number; usedAt?: number; bytes?: number }[] = [];
+    t.oncomplete = () => resolve(out);
+    t.onabort = () => reject(t.error ?? new DOMException('IDB: транзакция прервана', 'AbortError'));
+    t.onerror = () => reject(t.error ?? new Error('IDB: ошибка транзакции'));
+    const req = t.objectStore('meta').openCursor(IDBKeyRange.bound(lower, upper));
+    req.onsuccess = () => {
+      const c = req.result;
+      if (!c) return;
+      const v = c.value as Partial<CacheEntry> | undefined;
+      out.push({ key: String(c.key), savedAt: v?.savedAt ?? 0, usedAt: v?.usedAt, bytes: v?.bytes });
+      c.continue();
+    };
+    req.onerror = () => reject(req.error);
+  }));
 }
 
 export function idbKeys(): Promise<string[]> {

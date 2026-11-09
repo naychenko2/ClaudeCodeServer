@@ -20,4 +20,4 @@ public sealed record VideoEditCallResult<T>(T? Value, string? ErrorCode, string?
 }
 
 
-public enum VideoEditJobStatus { Queued, Running, Downloading, Completed, Failed, Cancelled }
+public enum VideoEditJobStatus { Queued, Running, Upscaling, Downloading, Completed, Failed, Cancelled }

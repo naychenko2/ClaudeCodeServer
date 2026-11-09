@@ -20,7 +20,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// отказом и НЕ доходить до тулсета (fail-closed). Тулсет-стенд считает свои вызовы — это
 /// и есть доказательство «не выполнился», текста ответа для него мало.
 /// </summary>
-public class McpKeepToolsTests : IDisposable
+[Trait("Category", "Host")]
+public class McpKeepToolsTests : IClassFixture<McpKeepToolsTests.Hosts>
 {
     private const string Server = "test-keep";
 
@@ -32,7 +33,7 @@ public class McpKeepToolsTests : IDisposable
     private const string LocalModel = "keeptools-local-model";
 
     /// <summary>Тулсет-стенд: три инструмента и журнал фактических вызовов.</summary>
-    private sealed class DemoToolset : IMcpStaticToolset
+    public sealed class DemoToolset : IMcpStaticToolset
     {
         public List<string> Calls { get; } = [];
 
@@ -58,46 +59,61 @@ public class McpKeepToolsTests : IDisposable
         }
     }
 
-    private readonly DemoToolset _toolset = new();
-    private readonly TestWebApplicationFactory _factory;
-
-    public McpKeepToolsTests()
+    // Хост на класс: тулсет-стенд и четыре профиля провайдеров общие. Чат и персону каждый тест
+    // заводит сам, журнал вызовов стенда сбрасывается в начале теста
+    public sealed class Hosts : IDisposable
     {
-        _factory = new TestWebApplicationFactory
+        public DemoToolset Toolset { get; } = new();
+        public TestWebApplicationFactory Factory { get; }
+
+        public Hosts()
         {
-            ExtraConfig =
+            Factory = new TestWebApplicationFactory
             {
-                // Профиль с белым списком: из трёх инструментов стенда остаётся один
-                ["LlmProviders:keeptools-filtered:AnthropicBaseUrl"] = "https://example.invalid",
-                ["LlmProviders:keeptools-filtered:ApiKey"] = "sk-test",
-                ["LlmProviders:keeptools-filtered:Models:0:Id"] = FilteredModel,
-                [$"LlmProviders:keeptools-filtered:KeepMcpTools:{Server}:0"] = "demo_read",
+                ExtraConfig =
+                {
+                    // Профиль с белым списком: из трёх инструментов стенда остаётся один
+                    ["LlmProviders:keeptools-filtered:AnthropicBaseUrl"] = "https://example.invalid",
+                    ["LlmProviders:keeptools-filtered:ApiKey"] = "sk-test",
+                    ["LlmProviders:keeptools-filtered:Models:0:Id"] = FilteredModel,
+                    [$"LlmProviders:keeptools-filtered:KeepMcpTools:{Server}:0"] = "demo_read",
 
-                // Профиль без KeepMcpTools — прежнее поведение
-                ["LlmProviders:keeptools-plain:AnthropicBaseUrl"] = "https://example.invalid",
-                ["LlmProviders:keeptools-plain:ApiKey"] = "sk-test",
-                ["LlmProviders:keeptools-plain:Models:0:Id"] = PlainModel,
+                    // Профиль без KeepMcpTools — прежнее поведение
+                    ["LlmProviders:keeptools-plain:AnthropicBaseUrl"] = "https://example.invalid",
+                    ["LlmProviders:keeptools-plain:ApiKey"] = "sk-test",
+                    ["LlmProviders:keeptools-plain:Models:0:Id"] = PlainModel,
 
-                // Профиль, где в списке есть несуществующее имя: состав — пересечение,
-                // а не объединение, и ход от этого не падает
-                ["LlmProviders:keeptools-unknown:AnthropicBaseUrl"] = "https://example.invalid",
-                ["LlmProviders:keeptools-unknown:ApiKey"] = "sk-test",
-                ["LlmProviders:keeptools-unknown:Models:0:Id"] = UnknownModel,
-                [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:0"] = "demo_read",
-                [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:1"] = "demo_такого_нет",
+                    // Профиль, где в списке есть несуществующее имя: состав — пересечение,
+                    // а не объединение, и ход от этого не падает
+                    ["LlmProviders:keeptools-unknown:AnthropicBaseUrl"] = "https://example.invalid",
+                    ["LlmProviders:keeptools-unknown:ApiKey"] = "sk-test",
+                    ["LlmProviders:keeptools-unknown:Models:0:Id"] = UnknownModel,
+                    [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:0"] = "demo_read",
+                    [$"LlmProviders:keeptools-unknown:KeepMcpTools:{Server}:1"] = "demo_такого_нет",
 
-                // Локальный провайдер со своим профилем: опция персоны решает, пока модель
-                // выбрал человек, а на подмене фолбэком профиль включается принудительно
-                ["LlmProviders:keeptools-local:AnthropicBaseUrl"] = "http://127.0.0.1:18999",
-                ["LlmProviders:keeptools-local:IsLocal"] = "true",
-                ["LlmProviders:keeptools-local:Models:0:Id"] = LocalModel,
-                [$"LlmProviders:keeptools-local:KeepMcpTools:{Server}:0"] = "demo_read",
-            },
-        };
-        _factory.ExtraServices = s => s.AddSingleton<IMcpToolset>(_toolset);
+                    // Локальный провайдер со своим профилем: опция персоны решает, пока модель
+                    // выбрал человек, а на подмене фолбэком профиль включается принудительно
+                    ["LlmProviders:keeptools-local:AnthropicBaseUrl"] = "http://127.0.0.1:18999",
+                    ["LlmProviders:keeptools-local:IsLocal"] = "true",
+                    ["LlmProviders:keeptools-local:Models:0:Id"] = LocalModel,
+                    [$"LlmProviders:keeptools-local:KeepMcpTools:{Server}:0"] = "demo_read",
+                },
+            };
+            Factory.ExtraServices = s => s.AddSingleton<IMcpToolset>(Toolset);
+        }
+
+        public void Dispose() => Factory.Dispose();
     }
 
-    public void Dispose() => _factory.Dispose();
+    private readonly DemoToolset _toolset;
+    private readonly TestWebApplicationFactory _factory;
+
+    public McpKeepToolsTests(Hosts hosts)
+    {
+        _toolset = hosts.Toolset;
+        _factory = hosts.Factory;
+        lock (_toolset.Calls) _toolset.Calls.Clear();
+    }
 
     // Чат владельца с заданной моделью: провайдер профиля резолвится из НЕЁ (свойство сессии)
     private async Task<HttpClient> CallerAsync(string model) => (await CallerWithChatAsync(model, true)).Client;

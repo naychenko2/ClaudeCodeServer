@@ -21,12 +21,22 @@ public static class SpendSources
     // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
     public static bool IsTokenless(string source) => source is Fal or Glif or Tts or Higgsfield;
 
-    // Бесплатный исполнитель: локальная модель (Ollama или llama-server), прямой
-    // адаптер любого OpenAI-совместимого источника (провайдер заканчивается на "-direct")
-    // или модель ":free" через CLI.
-    public static bool IsFree(string provider, string? model) =>
-        provider is "ollama" or "llama-server"
-        || provider.EndsWith("-direct", StringComparison.OrdinalIgnoreCase)
+    // Провайдеры «freellm*» (в т.ч. «freellmapi» и «freellmapi-direct» — локальный прокси на
+    // свою GPU) бесплатны. Правило в одном месте Core: его зовут и IsFree (источник расхода),
+    // и SpendCostTiers (ценовой класс), иначе источник и класс разъедутся.
+    public static bool IsFreeProviderKey(string provider) =>
+        provider.StartsWith("freellm", StringComparison.Ordinal);
+
+    // Бесплатный исполнитель: локальный провайдер (флаг IsLocal в конфиге — свой движок
+    // на своей машине), локальная модель (Ollama или llama-server), провайдер «freellm*»
+    // (с «-direct» и без) или модель ":free" через CLI. Прямой адаптер платного провайдера
+    // («minimax-direct», «kimi-direct») бесплатным НЕ считается. Ключи локальных провайдеров
+    // машин-specific (напр. "local-qwen"), поэтому признак берётся из конфига, а не из
+    // перечисления здесь.
+    public static bool IsFree(string provider, string? model, bool isLocal = false) =>
+        isLocal
+        || provider is "ollama" or "llama-server"
+        || IsFreeProviderKey(provider)
         || (model is not null && model.EndsWith(":free", StringComparison.OrdinalIgnoreCase));
 
     // Дополнительные подписки Claude (sub-*) — тот же провайдер claude, отдельной осью не нужны
@@ -54,9 +64,20 @@ public sealed class SpendRecord
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
-    public string Provider { get; init; } = "claude";
+    // Кто подал ход (актор хода общего проекта, S2a-6b): null — запись до этого поля,
+    // серверный ход (one-shot, директива) или актор не известен. Ключ хранилища остаётся
+    // OwnerId (владелец-арендатор): ActorUserId — разрез, не ключ. В срезе чтения
+    // «нет поля → владелец» (тот же порядок, что у SenderUserId в К4): старые записи
+    // относятся владельцу. Аддитивное nullable-поле: старые turns-*.jsonl и daily.json
+    // читаются штатно, новый формат читается старым кодом — BackupSchema.Version не двигается.
+    public string? ActorUserId { get; init; }
+    // set (не init): разовый rekey-проход в SpendStore меняет провайдера записей,
+    // записанных с Claude-ключом и не-Claude моделью (см. RekeyNonClaudeModelsOnClaudeKeys)
+    public string Provider { get; set; } = "claude";
     public string? Model { get; init; }
-    public string Source { get; init; } = SpendSources.ChatTurn;
+    // set (не init): проход переклассификации в SpendStore меняет источник записей,
+    // записанных до учёта признака IsLocal (см. ReclassifyLocalAsFree)
+    public string Source { get; set; } = SpendSources.ChatTurn;
     public long InputTokens { get; init; }
     public long OutputTokens { get; init; }
     public long CacheReadTokens { get; init; }
@@ -97,9 +118,16 @@ public sealed class DailySpendRow
     public string? SessionId { get; init; }
     public string? TaskId { get; init; }
     public string? PersonaId { get; init; }
-    public string Provider { get; init; } = "";
+    // Тот же разрез, что у детальной записи (S2a-6b): без него свёрнутый день не даёт
+    // владельцу разбивку по участникам, а участнику — его записей за окном детального окна.
+    // Агрегаты до появления поля читаются с null и относятся владельцу (см. SpendRecord).
+    public string? ActorUserId { get; init; }
+    // set (не init): rekey-проход в SpendStore меняет провайдера агрегата
+    // (см. RekeyNonClaudeModelsOnClaudeKeys)
+    public string Provider { get; set; } = "";
     public string? Model { get; init; }
-    public string Source { get; init; } = "";
+    // set (не init): проход переклассификации в SpendStore меняет источник агрегата
+    public string Source { get; set; } = "";
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long CacheReadTokens { get; set; }

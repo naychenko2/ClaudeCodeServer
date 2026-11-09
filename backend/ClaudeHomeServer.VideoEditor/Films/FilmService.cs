@@ -44,7 +44,7 @@ public sealed class FilmService(
             ? FilmCallResult<Project>.Ok(project)
             : FilmCallResult<Project>.Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
 
-    public static FilmCallResult<Resolved> ResolveFilm(VideoEditScope scope, string? raw)
+    public static FilmCallResult<Resolved> ResolveFilm(VideoEditScope scope, string? raw, string? actorId)
     {
         var project = ProjectOf(scope);
         if (!project.IsOk) return FilmCallResult<Resolved>.Fail(project.ErrorCode!, project.Error!);
@@ -54,15 +54,15 @@ public sealed class FilmService(
             return FilmCallResult<Resolved>.Fail(
                 FilmPaths.IsAllowed(relative) ? VideoEditorErrors.InvalidRequest : VideoEditorErrors.OutsideAllowedFolders,
                 "Фильм — файл .film в папке video/<фильм>/");
-        return ResolveInside(project.Value!, relative);
+        return ResolveInside(project.Value!, relative, actorId);
     }
 
     // Путь внутри проекта (не через ссылку наружу), уже по allow-list video/** и music/**
-    public static FilmCallResult<Resolved> ResolveInside(Project project, string relative)
+    public static FilmCallResult<Resolved> ResolveInside(Project project, string relative, string? actor = null)
     {
         if (!FilmPaths.IsAllowed(relative))
             return FilmCallResult<Resolved>.Fail(VideoEditorErrors.OutsideAllowedFolders, "Писать можно только в video/ и music/");
-        return ProjectLinkGuard.ResolveInside(project.RootPath, relative) is { } full
+        return ProjectLinkGuard.ResolveInsideAs(project.RootPath, relative, actor) is { } full
             ? FilmCallResult<Resolved>.Ok(new Resolved(project, relative, full))
             : FilmCallResult<Resolved>.Fail(VideoEditorErrors.OutsideAllowedFolders,
                 "Путь идёт через символическую ссылку или вне проекта");
@@ -109,9 +109,9 @@ public sealed class FilmService(
 
     // ── Состояние ─────────────────────────────────────────────────────────────────
 
-    public FilmCallResult<FilmStateDto> State(string ownerId, VideoEditScope scope, string? path)
+    public FilmCallResult<FilmStateDto> State(string ownerId, string? actorId, VideoEditScope scope, string? path)
     {
-        var resolved = ResolveFilm(scope, path);
+        var resolved = ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmStateDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         return StateOf(ownerId, scope, resolved.Value!, films.ReadFile(resolved.Value!.Full));
     }
@@ -135,10 +135,12 @@ public sealed class FilmService(
             ledger.Spends.Where(s => s.Currency == "credits").Sum(s => s.Amount),
             ledger.Spends.Sum(s => s.LocalSeconds));
         var staleScenes = StaleSceneFiles(ownerId, scope);
+        var mismatched = MismatchedSceneFiles(ownerId, scope, doc.Aspect);
         var marks = doc.Items.Select((item, i) => new FilmItemMarkDto(i,
             ledger.ClaudeFiles.Contains(item.File),
             read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsUpdated(root, doc, item),
-            staleScenes.Contains(item.File))).ToList();
+            staleScenes.Contains(item.File),
+            i > 0 && mismatched.Contains(item.File) ? true : null)).ToList();
         var stale = read.Status == FilmStore.ReadStatus.Ok && FilmStaleness.IsStale(root, doc);
         return FilmCallResult<FilmStateDto>.Ok(new FilmStateDto(film.Relative, read.Revision, doc, spent, marks,
             builds.Get(ownerId, scope.Key, film.Relative), stale));
@@ -198,15 +200,27 @@ public sealed class FilmService(
         return files;
     }
 
+    // Файлы сцен, чьи пропорции не совпадают с фильмом: при склейке пойдут чёрные полосы. Сцена 1 формат задаёт — с ней сверять нечего
+    private HashSet<string> MismatchedSceneFiles(string ownerId, VideoEditScope scope, string filmAspect)
+    {
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (_, scene) in OwnerScenes(ownerId, scope))
+        {
+            if (VideoSceneFormat.AspectOf(scene.Settings) is not { } aspect || aspect == filmAspect) continue;
+            foreach (var saved in scene.SavedFiles) files.Add(saved.Path);
+        }
+        return files;
+    }
+
     // ── Новый фильм ───────────────────────────────────────────────────────────────
 
     // Отдельная операция, а не «первый патч по несуществующему пути»: патч всегда под ревизией и существующим
     // файлом, а создание — CreateNew (чужой фильм не затирается, занятое имя — name_taken). Файл пустой: items: []
-    public async Task<FilmCallResult<FilmStateDto>> CreateAsync(string ownerId, VideoEditScope scope,
+    public async Task<FilmCallResult<FilmStateDto>> CreateAsync(string ownerId, string? actorId, VideoEditScope scope,
         FilmCreateRequest? req, CancellationToken ct)
     {
         if (req is null) return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, "Не указан путь фильма");
-        var resolved = ResolveFilm(scope, req.Path);
+        var resolved = ResolveFilm(scope, req.Path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmStateDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         var film = resolved.Value!;
         var aspect = string.IsNullOrWhiteSpace(req.Aspect) ? "16:9" : req.Aspect.Trim();
@@ -228,12 +242,12 @@ public sealed class FilmService(
 
     // ── Правка патчем ─────────────────────────────────────────────────────────────
 
-    public async Task<FilmCallResult<FilmStateDto>> PatchAsync(string ownerId, VideoEditScope scope, string? path,
+    public async Task<FilmCallResult<FilmStateDto>> PatchAsync(string ownerId, string? actorId, VideoEditScope scope, string? path,
         FilmPatch? patch, string initiator, CancellationToken ct, string? sessionId = null)
     {
         if (patch is null || patch.Ops is null || patch.Ops.Count == 0 || string.IsNullOrWhiteSpace(patch.ExpectedRevision))
             return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, "Пустая правка: нужны ревизия и операции");
-        var resolved = ResolveFilm(scope, path);
+        var resolved = ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmStateDto>.Fail(resolved.ErrorCode!, resolved.Error!);
         var film = resolved.Value!;
 
@@ -245,13 +259,15 @@ public sealed class FilmService(
         var ops = new List<FilmPatchOp>();
         foreach (var op in patch.Ops)
         {
-            var prepared = await PrepareAsync(film.Project, op, ct);
+            var prepared = await PrepareAsync(film.Project, op, actorId, ct);
             if (!prepared.IsOk) return FilmCallResult<FilmStateDto>.Fail(prepared.ErrorCode!, prepared.Error!);
             ops.Add(prepared.Value!);
         }
         var applied = FilmPatcher.Apply(read.Document!, ops);
         if (applied.Document is null)
             return FilmCallResult<FilmStateDto>.Fail(VideoEditorErrors.InvalidRequest, applied.Error ?? "Правка не подходит фильму");
+        // doc.Aspect — кеш: формат фильма задаёт первая сцена, и когда на её место встал другой клип, кеш пересчитывается
+        applied = applied with { Document = await RefreshAspectAsync(film.Project, read.Document!, applied.Document, actorId, ct) };
 
         var written = films.WriteFile(film.Full, applied.Document, patch.ExpectedRevision, create: false);
         switch (written.Status)
@@ -268,6 +284,16 @@ public sealed class FilmService(
         await AfterWriteAsync(ownerId, scope, film, written.Current, ct);
         await RecordPatchAsync(ownerId, scope, film.Relative, ops, applied.Document, initiator, sessionId, ct);
         return StateOf(ownerId, scope, film, written.Current);
+    }
+
+    private async Task<FilmDocument> RefreshAspectAsync(Project project, FilmDocument before, FilmDocument after, string? actorId, CancellationToken ct)
+    {
+        if (dsp is not { Available: true } || after.Items.Count == 0 || before.Items.Count > 0 && before.Items[0].File == after.Items[0].File)
+            return after;
+        var clip = ResolveInside(project, after.Items[0].File, actorId);
+        if (!clip.IsOk || !File.Exists(clip.Value!.Full)) return after;
+        var info = await dsp.ProbeAsync(clip.Value.Full, ct);
+        return info is { Width: > 0, Height: > 0 } ? after with { Aspect = FilmFormat.AspectOfSize(info.Width, info.Height) } : after;
     }
 
     // Тихая строка правки фильма. ЕДИНСТВЕННАЯ точка записи ленты для правки — зовут и ручка человека, и тулсет
@@ -299,7 +325,7 @@ public sealed class FilmService(
 
     // Операция до патчера: файлы add и music существуют внутри проекта, у add без обрезки длина — по пробе клипа
     // (шов IVideoDsp) либо по снимку сцены
-    private async Task<FilmCallResult<FilmPatchOp>> PrepareAsync(Project project, FilmPatchOp op, CancellationToken ct)
+    private async Task<FilmCallResult<FilmPatchOp>> PrepareAsync(Project project, FilmPatchOp op, string? actorId, CancellationToken ct)
     {
         switch (op.Op)
         {
@@ -307,7 +333,7 @@ public sealed class FilmService(
             {
                 if (FilmPaths.Normalize(op.File) is not { } file)
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.InvalidRequest, "Не указан файл сцены");
-                var inside = ResolveInside(project, file);
+                var inside = ResolveInside(project, file, actorId);
                 if (!inside.IsOk) return FilmCallResult<FilmPatchOp>.Fail(inside.ErrorCode!, inside.Error!);
                 if (!File.Exists(inside.Value!.Full))
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.FileNotFound, $"Файл сцены не найден: {file}");
@@ -328,7 +354,7 @@ public sealed class FilmService(
             {
                 if (FilmPaths.Normalize(music.File) is not { } file)
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.InvalidRequest, "Не указан файл музыки");
-                var inside = ResolveInside(project, file);
+                var inside = ResolveInside(project, file, actorId);
                 if (!inside.IsOk) return FilmCallResult<FilmPatchOp>.Fail(inside.ErrorCode!, inside.Error!);
                 if (!File.Exists(inside.Value!.Full))
                     return FilmCallResult<FilmPatchOp>.Fail(VideoEditorErrors.FileNotFound, $"Файл музыки не найден: {file}");
@@ -398,8 +424,10 @@ public sealed class FilmService(
             var row = IndexOfSaved(doc, scene);
             var want = row >= 0 ? new VideoFilmRefDto(filmPath, row) : null;
             if (scene.FilmRef is { } have && have.Path != filmPath) continue;
-            if (scene.FilmRef == want) continue;
-            var written = threads.Store.SetFilmRef(ownerId, sessionId, scene.SceneId, want);
+            // Замок формата: сцена на позиции > 0 следует пропорциям фильма, сцена 1 их задаёт (ADR-025 §11)
+            var wantLock = row > 0 ? new VideoFormatLockDto(filmPath, doc.Aspect) : null;
+            if (scene.FilmRef == want && scene.LockedBy == wantLock) continue;
+            var written = threads.Store.SetFilmRef(ownerId, sessionId, scene.SceneId, want, wantLock);
             if (written.Status == VideoThreadWriteStatus.Ok)
                 await threads.BroadcastAsync(ownerId, scope.Key, sessionId, written.State);
         }
@@ -415,10 +443,10 @@ public sealed class FilmService(
     // ── Для других служб модуля ───────────────────────────────────────────────────
 
     // Запоминает нить звука, из которой фильм ждёт музыку: первая готовая версия станет music/<фильм>.mp3
-    public FilmCallResult<FilmPendingMusic> ExpectMusic(string ownerId, VideoEditScope scope, string? path,
+    public FilmCallResult<FilmPendingMusic> ExpectMusic(string ownerId, string? actorId, VideoEditScope scope, string? path,
         string sessionId, string threadId)
     {
-        var resolved = ResolveFilm(scope, path);
+        var resolved = ResolveFilm(scope, path, actorId);
         if (!resolved.IsOk) return FilmCallResult<FilmPendingMusic>.Fail(resolved.ErrorCode!, resolved.Error!);
         if (string.IsNullOrWhiteSpace(sessionId) || string.IsNullOrWhiteSpace(threadId))
             return FilmCallResult<FilmPendingMusic>.Fail(VideoEditorErrors.InvalidRequest, "Не указана нить звука");

@@ -18,17 +18,15 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Notes\ClaudeHomeServer.Notes.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main нужен ради ProjectManager/UserStore —
-         тесты Notes конструируют их напрямую (см. NotesServiceTests, NoteAnnotationTests,
-         NotesAiConsumerTests), иначе пришлось бы писать моки поверх IProjectManager.
-         Прецедент — Git.Tests, тоже ссылается на Main ради DossierBranch.
-         Цикла нет: Main → Notes → Notes.Tests → Main не возникает, Main не
-         ссылается на Tests. -->
+    <!-- Main (шаг 2.1, оставлен): ProjectManager/UserStore конструируются напрямую
+         (NotesServiceTests/NoteAnnotationTests/NotesAiConsumerTests), хост НЕ поднимается
+         (нет TestWebApplicationFactory) — прямая ссылка на Main обязательна, TestKit.Host
+         нет. -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <!-- ProjectReference на Main.Tests ради ClaudeHomeServer.Tests.Helpers (FakeHostEnvironment)
-         — используется в NotesServiceTests/NotesAiConsumerTests/NoteAnnotationTests для
-         конструирования UserStore в тестах. Без этого пришлось бы дублировать хелперы. -->
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit ради FakeHostEnvironment (Core-only хелпер) — используется в
+         NotesServiceTests/NotesAiConsumerTests/NoteAnnotationTests для конструирования
+         UserStore в тестах. Без этого пришлось бы дублировать хелперы. Шаг 1.3. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
   </ItemGroup>
 
   <ItemGroup>

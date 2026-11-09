@@ -1,0 +1,211 @@
+# Allow-list сторожа ProjectActionCallerKeyGuardTests (S1-3a, хвост M-11): места в точках доступа
+# (Controllers/Hubs, файлы с [ProjectScope] или IProjectAccess), где id ВЫЗЫВАЮЩЕГО (UserId,
+# userId, CallerUserId, CurrentUserId) передаётся аргументом вызова. В проектном действии ключ
+# хранилищ (задачи, заметки, память, досье, деревья git) — только TenantOwnerId из RequestScope;
+# оставшиеся места — личное (персоны, настройки, уведомления, устройства, личная группа SignalR)
+# или «до S4/S1-3a2/S1-3c». Формат строки: «путь|число» — по ФАЙЛУ со счётчиком строк (по номеру
+# строки снимок рассыпается). Счётчик в известном файле можно поднять только осознанно, с
+# вердиктом в дифе; стереть — когда место переведено на TenantOwnerId.
+# S2a-1 (доработка): TasksController +3 — UserId уходит в ExecuteAsync как актор хода исполнителя
+# (ActorUserId), а не ключ хранилищ: задача и её чат уже резолвлены по TenantOwnerId.
+# S2d-1e: в трёх шлюзах редакторов +2 (TryOptionalChat, TryArtifactChat) — id вызывающего уходит только в
+# проверку видимости чата (SessionAccess.CanSee), ключом хранилищ не служит: sessionId из тела/query и чат артефакта.
+# S1-3c: точка доступа вертикали Architecture — id вызывающего входит только в IProjectAccess
+# (запрошенное право, затем чтение, чтобы различить 403 и 404); ключом хранилищ здесь ничего
+# не стало: модель проекта берётся по id из маршрута, автор записи — человек-вызывающий.
+# S1-3a (шлюзы редакторов): в ImageEditScopeGate/AudioEditScopeGate/VideoEditScopeGate (по 3) id вызывающего
+# входит только в IProjectAccess.Resolve (запрошенное право), во внутренний TryProject и в
+# SessionAccess.CanSee (видимость чата); ключом хранилищ он не является — арендатор отдаётся по
+# Project.OwnerId.
+# S1-2b: ProjectsController — id вызывающего в сводке участников (роль вызывающего), списке доступных
+# проектов (GetAccessible), владельце создаваемого проекта, личных настройках (устройства, группа/сфера,
+# среда исполнения, правило архива, персона-вызывающий, подбор значка); ProjectMembersController — актёр
+# операций членства и роль вызывающего в представлении. Ключом хранилищ задач/заметок/памяти это не служит.
+# Мост плагинов: пакеты и флаг plugins-mvp — личные (data/plugins/{owner}, ADR-031), id вызывающего ключует
+# их по построению; в проектном действии он входит только в IProjectAccess.Resolve (право чтения слота).
+# S1-4 (реестр соединений): id соединения пишется в реестр под своим userId — это личная группа
+# SignalR (тот же класс мест, что user_{id} выше), а не ключ проектных хранилищ: выкидывание из
+# групп при отзыве доступа адресует соединения человека, арендатором проекта оно не становится.
+# FINAL-1 (доработка S1): SessionsController 6→8 — S1-7 добавил проверки авторства чата (GetOwned: личная
+# проверка «я автор», а не ключ проектных хранилищ); TurnRightExtensions 0→2 — резолв права RunTurn
+# вызывающего (IProjectAccess.ResolveSession), id уходит только в него; TasksController +1 — проверка
+# права Write на целевом проекте при переносе задачи; SpendController 8 — файл стал точкой доступа
+# (IProjectAccess в Badge), его CurrentUserId — фильтр личного расхода владельца (SpendAccess), расход
+# ключуется по userId записи хода, а не арендатором проекта; ключом проектных хранилищ ничто не служит.
+# S2a-10a: TurnRightExtensions 2→6 — три уровня отказа (RunTurn / автор хода / владелец) передают id
+# вызывающего только в IProjectAccess.ResolveSession и IsOwnerOrTurnAuthor; SessionMessagesController
+# 0→8 — файл стал точкой доступа (ProjectScopeAttribute.ErrorCode в отказе), его id вызывающего — проверки
+# права на чат (DenyTurn*, GetAccessible, GetOwned), актор хода и отправитель очереди; ключ чата для
+# отправки берётся арендатором (ResolveOwnerId), а не вызывающим. Ключом хранилищ ничто не служит.
+# S2a-10b: TurnRightExtensions остаётся 6 — «автор или владелец» для перебоя и отказ по праву
+# владельца для настроек идут теми же тремя уровнями: id вызывающего входит только в GetAccessible
+# (404/403), IsOwnerOrTurnAuthor и GetWithRight, новых мест не появилось. SessionsController 8→9 —
+# смена модели и усилия чата общего проекта идёт тем же гейтом владельца, что режим прав и
+# провайдер (DenyOwnerTurn): id вызывающего
+# только в проверке права, ключом хранилищ не служит. SessionMessagesController — вне снимка:
+# отказ «not_sender» больше не цитирует ProjectScopeAttribute, и по маркеру сторожа файл перестаёт
+# точкой доступа (как ChatsController, который в ней никогда не был). Все его id вызывающего — те же
+# проверки права через TurnRightExtensions/SessionManager (в снимке); ключ хранилищ — ResolveOwnerId.
+# Расширять маркер на файлы, решающие право через эти helper'ы, — решение не этого шага.
+# R-S2a-8: SessionsController 9→10 — проверка явной personaId при создании чата (personas.Get(req.PersonaId,
+# UserId)): id вызывающего только резолвит персону для проверки рамки EnsurePersonasVisibleInFrame, ключом
+# проектных хранилищ не служит (чужой id резолвится арендатором проекта, не вызывающим).
+# S2c-9: TasksController 81→82 — GET /api/tasks/{id} карточка чужой задачи участнику: id вызывающего
+# входит только в IProjectAccess.Resolve (запрошенное право Read для карточки участника); ключом
+# хранилищ ничто не стало: задача по-прежнему читается по id у арендатора, в списке проекта
+# «владелец или участник» берётся из RequestScope ([ProjectScope]), в календаре — из уже отобранного
+# MyTasksQuery, новых вызовов с id вызывающего эти ветки не добавили.
+# S2d-4b: TasksController 82→86 — четыре входа UserId в ChatAudience.Viewer(UserId) (список проекта,
+# календарь, карточка — ветки владельца и участника). id вызывающего входит только в решение о
+# видимости ССЫЛКИ на чат (TaskView.MaskForeignChats → ChatRefs.For → SessionAccess.CanSee): ни одна
+# из этих веток не читает и не пишет по нему данных — задачи выбираются по ProjectId (GetByProject),
+# по арендатору (MyTasksQuery) и по роли из RequestScope, ключ хранилищ не менялся (задача лежит у
+# арендатора). Тот же класс мест, что S2c-9 выше и BoardService.cs в S2d-4c: маска ссылки, не допуск
+# к данным.
+# S2c-6: словарь сторожа расширен на actorUserId|ActorUserId|authorUserId, область — на платформенные
+# MCP-тулсеты (Services/Mcp/Http/*Toolset*.cs, ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs).
+# Вердикт по каждой новой строке: новых совпадений нет — id актора в тулсеты приходит только значением
+# локальной переменной `actor` внутрь IActorRightGate.Denied → IProjectAccess.Resolve и в
+# IProjectAccess.ResolveSession (чат-адресат); ключом хранилищ он не служит (ключ — context.OwnerId из
+# токена арендатора), поэтому счётчики файлов не растут. Мутация проверена: id актора аргументом
+# вызова хранилища в TasksToolset.cs → сторож красный.
+# S2d-1d: у трёх гейтов редакторов 3→4 — id вызывающего второй раз входит только в SessionAccess.CanSee
+# (видимость приватного чата); ключом хранилищ он не служит, арендатор — Project.OwnerId.
+backend/ClaudeHomeServer.Architecture/Controllers/ArchitectureController.cs|2
+backend/ClaudeHomeServer.AudioEditor/Controllers/AudioEditScopeGate.cs|6
+backend/ClaudeHomeServer.ImageEditor/Controllers/ImageEditScopeGate.cs|6
+backend/ClaudeHomeServer.Plugins/Controllers/PluginBridgeController.cs|5
+backend/ClaudeHomeServer.Spend/Controllers/SpendController.cs|8
+backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|6
+# S2c-6 (доработка 2): в словарь добавлено имя `actor` (локальная переменная тулсетов). WorkspaceToolset|1 —
+# access.ResolveSession(actor, sid): id актора входит только в проверку права на чат-адресат, не ключ хранилищ.
+# ProjectsController 14→15 — GetEvents: `actor` здесь необязательный query-фильтр ленты событий, а не id
+# вызывающего; ключ хранилища в той же строке — TenantId, фильтр лишь сужает выборку.
+# FIN3-2 (FINAL-3, п. 2): ChatSubjectsController 0→1 — ручной перенос чата в тему закрывает чужой
+# приватный (ответ не несёт полей чата, тема не пишется): id вызывающего входит только в проверку
+# видимости чата (SessionManager.IsVisibleTo → SessionAccess.CanSee), тот же класс мест, что S2d-1d
+# и S2d-4a. Ключом хранилищ он не служит: тема пишется на чате по его id (ApplySubjects),
+# арендатор — Project.OwnerId.
+backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
+backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
+# S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
+# права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
+# не стало: файл и папка адресуются корнем проекта арендатора (GetRoot), как во всех соседних ветках.
+# S2d-4a (доработка 1): FilesController 6→7 — панель «Изменения» (changed-by): id вызывающего входит
+# только в видимость чата (SessionManager.IsVisibleTo → SessionAccess.CanSee), как в S2d-1d и S2d-4a.
+# Ключом хранилищ он не служит: индекс и его выдача адресуются projectId, записей по вызывающему нет,
+# машинная сторона индекса (GetSessionPathsAsync → CommitAttributionService) id вызывающего не видит.
+# S3-3b (разрез 4bc3d04f §3): FilesController 7→9 — RecordHumanEdit: id вызывающего из sub JWT
+# становится АВТОРОМ правки в журнале правок (IHumanEditJournal.Record) — это и есть смысл S3-3
+# (атрибуция человеческой правки), а не ключ хранилищ: буфер журнала адресован парой
+# (корень репозитория, относительный путь), вызывающий в него не входит. Вторая строка — та же
+# проверка emptiness перед вызовом. Ключи файловых хранилищ не изменились: все файловые вызовы
+# идут от GetRoot(projectId), как в S2c-8.
+# S2d-6b-2 (разрез 4bc3d04f §1 путь 19): FilesController 9→11 — читающие ручки закрывают чужое
+# private-вложение (S2d-6b-1): id вызывающего входит только в признак «чужой автор пути»
+# (PrivateAttachments.IsForeign → 404) и передаётся в FileService.Search как ЗРИТЕЛЬ выдачи.
+# Ключом хранилищ он не стал: файловые вызовы по-прежнему идут от GetRoot(projectId) (S2c-8),
+# хранилищ по вызывающему не появилось; для Search это фильтр видимости, а не адресация.
+backend/ClaudeHomeServer/Controllers/FilesController.cs|11
+# S3-1b: GitController 1→3 — AuthorOfRequestUser: id вызывающего берётся из sub JWT и входит только
+# в чтение своей записи пользователя (UserStore.GetById) и в конструирование автора коммита
+# (GitCommitAuthor: имя/логин для git-автора). Ключом хранилищ ничто не стало: git-операции идут
+# по Owner(p) (арендатору), а автор — это сам человек, ради которого фича и затевалась.
+# 3c531d5e8 (линия S2d-6b, ручка git/diff): GitController 3→4 — ForeignPrivateDenied: id вызывающего
+# входит только в общий предикат приватности PrivateAttachments.IsForeignResolved (чужое private →
+# 404, неотличимый от «нет такого файла»). Ключом хранилищ не стал: git-операции идут по Owner(p).
+backend/ClaudeHomeServer/Controllers/GitController.cs|4
+# S2d-6b-6 (хвост S2d-6b-5): KnowledgeController 0→3 — IndexFile/IndexFolder закрывают чужое private-
+# вложение (S2d-6b-1): id вызывающего входит только в признак «чужой автор пути»
+# (PrivateAttachments.IsForeign → 404 до индексации/обхода) и передаётся в FileService.Tree как
+# ЗРИТЕЛЬ обхода (тот же фильтр, что у читающих ручек, S2d-6b-2 доработка 1). Ключом хранилищ он
+# не стал: индексация адресована корнем проекта арендатора (GetScopedProject → GetById), записей
+# по вызывающему нет; тот же класс мест, что FilesController в S2d-6b-2.
+backend/ClaudeHomeServer/Controllers/KnowledgeController.cs|3
+backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
+# 94c2fd37 доработка 1: PersonasController 110→111 — AskCallerIsPrivateOrUnknown: id вызывающего входит
+# только в GetOwnedVisible (видит ли человек чат-вызыватель persona_ask) для признака «приватный или
+# неизвестный» (fail-closed: запись фактов консультации в память отключена). Ключом хранилищ не стал.
+# FIN3-2 (доработка по возврату ревью cea595f7): PersonasController 111→112 — гейт «resume только
+# для транскрипта, видимого вызывающему» при создании чата с персоной: id вызывающего входит только
+# в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
+# SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
+# служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|111
+backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
+backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
+backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
+backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
+# S2d-3e: SessionsController 10→14 — четыре новых входа по id вызывающего в решении о чате:
+# GetAccessible (чтение истории и состава контекста) и GetOwnedVisible (смена собеседника,
+# PUT контекста). id вызывающего входит только в IProjectAccess.ResolveSession /
+# SessionAccess.CanSee — это видимость и право на чат, а не ключ хранилищ: история и контекст
+# адресуются id чата, записывает их автор-арендатор (ResolveOwnerId), новых вызовов с ключом
+# владельца или участника эти ветки не добавили.
+# S2d-4a: SessionsController 14→15 — один новый вход по id вызывающего: GetVisibleByProject
+# (список чатов проекта). id вызывающего входит только в видимость чата (SessionAccess.CanSee
+# внутри SessionManager): список адресован projectId, ключом хранилищ id не служит, записи нет.
+# S2d-3f.1: SessionsController 15→17 — два новых входа по id вызывающего в решении о чате: GetAccessible
+# как гейт видимости в Update/Delete (развилка «постороннему — то же, что несуществующему» vs
+# «видимому участнику — 403»). id вызывающего входит только в IProjectAccess.ResolveSession /
+# SessionAccess.CanSee — это видимость, а не ключ хранилищ: переименование и удаление адресуются
+# id чата и остаются на авторе-арендаторе (ResolveOwnerId), новых вызовов с ключом владельца
+# или участника эти ветки не добавили.
+# QA-P1 (доработка, возврат Глеба a21170f7): SessionsController 17→18 — срок жизни, мьют уведомлений,
+# озвучка и opt-out в PUT сессии закрыты гейтом владельца DenyOwnerTurn: id вызывающего входит только
+# в него (GetWithRight/GetAccessible — право и видимость, тот же уровень, что у модели и режима).
+# Ключом хранилищ ничто не стало: эти поля пишутся на чате по его id (SetExpiry/SetNotificationsMuted/
+# SetVoiceMode/TrySetExcludeFromDossiers), а право на них — арендатора.
+# FIN3-2 (FINAL-3, п. 3): SessionsController 18→19 — гейт «resume только для транскрипта, видимого
+# вызывающему» при создании чата: id вызывающего входит только в проверку видимости ключа транскрипта
+# (IsTranscriptReservedForOthers → VisibleTo → SessionAccess.CanSee). Ключом хранилищ он не служит:
+# история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf), арендатор —
+# ResolveOwnerId; неизвестные ключи гейт не трогает (ветвление подаёт свой новый csid).
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|19
+backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
+# S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
+# merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,
+# что S2d-4b выше. id вызывающего входит только в решение о видимости ССЫЛКИ на чат
+# (TaskView.MaskForeignChats → ChatRefs.For → SessionAccess.CanSee); ключом хранилищ ничто не стало:
+# запись стора не правится (проецируется копия), задачи по-прежнему берутся по id и по арендатору.
+# S2d-4j: TasksController 92→94 — два вызова FeatureChatDoor.MaskRunChats (задачи run страницы фичи и
+# списка фич): id вызывающего входит только в решение о видимости ССЫЛКИ на чат, ключом хранилища
+# не стал; задачи по-прежнему берутся по id и по арендатору.
+# Мерж master 03.11: TasksController 94→95 — brief.queueStartEstimate карточки фичи
+# (features!.ProjectAll(UserId, snapshot)): тот же класс мест, что соседние FeatureTypical.Build(owner, UserId)
+# и journal.Read(UserId) — страница фичи строится по своим задачам вызывающего (GetByOwner);
+# ключом хранилища общего проекта id вызывающего не стал.
+# F2-T1 (57aa6c829, aa4bfbf47; разрез §2.1, вердикт ревью 713712c4): TasksController 95→97 —
+# двери записи/выполнения задачи переведены на явные гейты: «access?.Resolve(UserId, …)» (право
+# по IProjectAccess — intended-перевод сторожа) и «FeatureOwnerGate.Denied(access, UserId, …)»
+# (фичевые поля меряют вызывающего); маски write-ответов «TaskView.ForWrite(…, UserId)» — тот же
+# класс мест, что S2d-4i; актор берётся из реестра СВОЕГО чата-вызывателя (сессия проверена
+# ResolveOwnerId по вызывающему выше по телу). Снято ключевание по вызывающему:
+# «tasks.Create(…, UserId)» и «ToTaskBoard(UserId, …)» — ключ записи стал арендатор, адресат —
+# владелец записи; сторож посчитал это снижением.
+# F2-M2 (4686525fa; шаг M2, возврат финала db216f32): TasksController 97→98 — фичевые поля при
+# создании (role/featureId/planSteps/reviewOf) закрыты тем же FeatureOwnerGate, что дверь правки:
+# «FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, …)» — id вызывающего входит только в
+# проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
+# тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
+# гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|98
+# QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
+# архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
+# только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка
+# 403/404). Ключом хранилищ ничто не стало: запись чата адресована id чата и остаётся на
+# авторе-арендаторе (SetArchivedAsync/RetitleAsync зовутся с TenantOwnerId из RequestScope).
+backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|7
+backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
+backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
+# S2d-4b2: TasksToolset 0→1 — id актора хода (`actor`, неизвестный → пустая строка) входит только в
+# ChatAudience.Viewer для маски чужих приватных чатов в ответе MCP (ForActorMasked → ChatRefs.For →
+# SessionAccess.CanSee). Ключом хранилищ он не служит: записей по нему нет, задача лежит у арендатора
+# (context.OwnerId из токена), тот же класс мест, что S2d-4b в TasksController.
+backend/ClaudeHomeServer/Services/Mcp/Http/TasksToolset.cs|1
+backend/ClaudeHomeServer/Services/Mcp/Http/WorkspaceToolset.cs|1
+# R-F2-D1 (возврат ревью R-F2, мост «чекбокс → задача»): NotesToolset 0→1 — id актора хода (`actor`)
+# входит только в IProjectAccess.Resolve (запрошенное право Write на мост «чекбокс → задача»), тот же
+# класс мест, что вердикт S2c-6 выше. Ключом хранилищ он не служит: заметка и задача адресуются
+# context.OwnerId из токена арендатора (PromoteAsync вызывается им, как и раньше).
+backend/ClaudeHomeServer.Notes/Services/Mcp/NotesToolset.cs|1

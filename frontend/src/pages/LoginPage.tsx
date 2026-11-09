@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
-import { OfflineError } from '../lib/offline';
+import { OfflineError, invalidateTokenCache } from '../lib/offline';
 import { C, R, FONT, SHADOW } from '../lib/design';
 import { IconField, Toggle, Button, PageCanvas } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
@@ -12,6 +12,74 @@ interface LoginPageProps {
 }
 
 type PageState = 'idle' | 'loading' | 'error';
+
+// Завершение входа: /me → запись пары «токен + id» в одно хранилище. Без id вход не
+// завершается и в хранилище ничего не остаётся. Вынесено ради теста без рендера.
+export async function finishLogin(
+  result: { token: string; username: string; displayName?: string | null },
+  remember: boolean,
+  serverUrl: string,
+): Promise<AuthState> {
+  // Получаем роль сразу после логина — токен уже активен в request через storage
+  let role: string | undefined;
+  let userId: string | undefined;
+  let meError: unknown;
+  try {
+    // Временно кладём токен в sessionStorage чтобы request его подхватил
+    sessionStorage.setItem('cc_token', result.token);
+    const me = await api.auth.me({ live: true });
+    role = me.role;
+    userId = me.userId;
+  } catch (err) { meError = err; /* id ниже обязателен: падение /me приводит к отказу входа */ }
+
+  // Инвариант «токен в хранилище ⇒ id в том же хранилище»: без id вход не завершается,
+  // временный токен и призраки прошлого владельца убираем, ничего не пишем.
+  if (!userId) {
+    for (const store of [sessionStorage, localStorage]) {
+      store.removeItem('cc_token');
+      store.removeItem('cc_user_id');
+      store.removeItem('cc_role');
+    }
+    invalidateTokenCache();
+    // Обрыв сети — не проблема учётной записи: пробрасываем как есть, экран покажет «Нет соединения»
+    if (meError instanceof OfflineError) throw meError;
+    throw new Error('Не удалось определить учётную запись. Попробуйте войти ещё раз.');
+  }
+
+  if (remember) {
+    localStorage.setItem('cc_server_url', serverUrl);
+    localStorage.setItem('cc_token', result.token);
+    localStorage.setItem('cc_username', result.username);
+    if (result.displayName) localStorage.setItem('cc_display_name', result.displayName);
+    else localStorage.removeItem('cc_display_name');
+    if (role) localStorage.setItem('cc_role', role);
+    localStorage.setItem('cc_user_id', userId);
+    sessionStorage.removeItem('cc_token');
+    sessionStorage.removeItem('cc_role');
+    sessionStorage.removeItem('cc_user_id');
+  } else {
+    sessionStorage.setItem('cc_token', result.token);
+    if (role) sessionStorage.setItem('cc_role', role);
+    sessionStorage.setItem('cc_user_id', userId);
+    localStorage.removeItem('cc_token');
+    localStorage.removeItem('cc_server_url');
+    localStorage.removeItem('cc_username');
+    localStorage.removeItem('cc_display_name');
+    localStorage.removeItem('cc_role');
+    localStorage.removeItem('cc_user_id');
+  }
+  invalidateTokenCache();
+  return {
+    serverUrl, token: result.token, username: result.username,
+    displayName: result.displayName ?? undefined, role, id: userId,
+  };
+}
+
+// Текст ошибки входа для экрана; вынесено ради теста без рендера.
+export function loginErrorMessage(err: unknown): string {
+  if (err instanceof OfflineError) return 'Нет соединения с сервером. Проверьте подключение к интернету.';
+  return err instanceof Error ? err.message : 'Не удалось подключиться к серверу';
+}
 
 export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
   const serverUrl = window.location.origin;
@@ -30,48 +98,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
     setErrorMessage('');
     try {
       const result = await api.auth.login(username, password);
-      // Получаем роль сразу после логина — токен уже активен в request через storage
-      let role: string | undefined;
-      let userId: string | undefined;
-      try {
-        // Временно кладём токен в sessionStorage чтобы request его подхватил
-        sessionStorage.setItem('cc_token', result.token);
-        const me = await api.auth.me();
-        role = me.role;
-        userId = me.userId;
-      } catch { /* роль недоступна — не критично */ }
-
-      if (remember) {
-        localStorage.setItem('cc_server_url', serverUrl);
-        localStorage.setItem('cc_token', result.token);
-        localStorage.setItem('cc_username', result.username);
-        if (result.displayName) localStorage.setItem('cc_display_name', result.displayName);
-        else localStorage.removeItem('cc_display_name');
-        if (role) localStorage.setItem('cc_role', role);
-        if (userId) localStorage.setItem('cc_user_id', userId);
-        sessionStorage.removeItem('cc_token');
-        sessionStorage.removeItem('cc_role');
-        sessionStorage.removeItem('cc_user_id');
-      } else {
-        sessionStorage.setItem('cc_token', result.token);
-        if (role) sessionStorage.setItem('cc_role', role);
-        if (userId) sessionStorage.setItem('cc_user_id', userId);
-        localStorage.removeItem('cc_token');
-        localStorage.removeItem('cc_server_url');
-        localStorage.removeItem('cc_username');
-        localStorage.removeItem('cc_display_name');
-        localStorage.removeItem('cc_role');
-        localStorage.removeItem('cc_user_id');
-      }
-      onConnect({
-        serverUrl, token: result.token, username: result.username,
-        displayName: result.displayName ?? undefined, role, id: userId,
-      });
+      onConnect(await finishLogin(result, remember, serverUrl));
     } catch (err: unknown) {
-      const message = err instanceof OfflineError
-        ? 'Нет соединения с сервером. Проверьте подключение к интернету.'
-        : err instanceof Error ? err.message : 'Не удалось подключиться к серверу';
-      setErrorMessage(message);
+      setErrorMessage(loginErrorMessage(err));
       setPageState('error');
     }
   };

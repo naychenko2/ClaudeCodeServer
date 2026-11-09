@@ -42,6 +42,29 @@ public sealed class ImageEditWorkspace(string root)
         return new EditedImage(bytes, ContentTypeOf(ImageFormatSniffer.DetectExtension(bytes)));
     }
 
+    // Числа вариантов задачи (v{n}) — для истории (ADR-030): сколько файлов результата есть
+    public IReadOnlyList<int> VariantNumbers(string ownerId, string jobId)
+    {
+        var dir = JobDir(ownerId, jobId);
+        if (!Directory.Exists(dir)) return [];
+        var result = new List<int>();
+        foreach (var file in Directory.EnumerateFiles(dir, "v*.*"))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (name.Length > 1 && name[0] == 'v' && int.TryParse(name[1..], out var n))
+                result.Add(n);
+        }
+        return result.OrderBy(n => n).ToList();
+    }
+
+    // Путь файла варианта (v{n}); нет — null. Для истории: отдаём путь, не читаем байты
+    public string? VariantPath(string ownerId, string jobId, int variant)
+    {
+        var dir = JobDir(ownerId, jobId);
+        if (!Directory.Exists(dir)) return null;
+        return Directory.EnumerateFiles(dir, $"v{variant}.*").FirstOrDefault();
+    }
+
     public const string StepsDirName = "steps";
 
     private static readonly System.Text.Json.JsonSerializerOptions StepJson = new(System.Text.Json.JsonSerializerDefaults.Web);

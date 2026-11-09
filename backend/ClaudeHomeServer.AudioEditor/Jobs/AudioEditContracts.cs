@@ -152,4 +152,8 @@ public sealed record AudioJobDto(
     string? ChatSessionId,
     string? ThreadId,
     AudioEditInitiator Initiator,
-    string License);
+    string License,
+    // Снимок очереди GPU ComfyUI (шаг 29): живой, только отображение; null — поставщик не знает
+    // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);

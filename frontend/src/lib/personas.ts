@@ -7,6 +7,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Persona } from '../types';
 import { api } from './api';
+import { readStoredUserId } from './offline';
 import { joinUser, onMessage, onReconnected } from './signalr';
 
 let _personas: Persona[] = [];
@@ -22,7 +23,7 @@ function emit() {
 }
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 
@@ -100,4 +101,17 @@ export function personaInitials(name: string): string {
 export function personaTitleLines(p: { role?: string; name: string }): { primary: string; secondary?: string } {
   const role = p.role?.trim();
   return role ? { primary: role, secondary: p.name } : { primary: p.name };
+}
+
+// Ступень миниатюры аватара (64/128/256 device px): наименьшая ступень, покрывающая
+// размер показа с учётом devicePixelRatio; 0 — оригинал (показ больше 256 px:
+// большой вид, перекроп). Сетка та же, что на сервере (ImageAssetHelper.AvatarThumbSteps).
+export function avatarThumbStep(cssSize: number): number {
+  if (cssSize <= 0) return 0;
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  const px = Math.round(cssSize * dpr);
+  if (px <= 64) return 64;
+  if (px <= 128) return 128;
+  if (px <= 256) return 256;
+  return 0;
 }

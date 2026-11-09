@@ -16,7 +16,6 @@ namespace ClaudeHomeServer.Services.AudioEditor.Chats;
 // звало бы инструменты, которых у хода нет. Едет хвостом хода ВСЕГДА (InTurnTail): фокус и выбор
 // меняются от хода к ходу, в системном блоке секция обнуляла бы prefix cache всей истории.
 public sealed class AudioEditorStateContributor(
-    IFeatureFlagGate flags,
     IConfiguration? config = null) : IPromptSectionContributor
 {
     // Без audio_generate правило приоритета сослалось бы на несуществующий инструмент
@@ -32,8 +31,7 @@ public sealed class AudioEditorStateContributor(
 
     public bool IsEnabled(PromptSessionContext sessionContext) =>
         sessionContext.HasAudioEditorMcp
-        && sessionContext.OwnerId is { Length: > 0 } ownerId
-        && flags.IsEnabled(ownerId, FeatureFlagKeys.AudioEditor);
+        && sessionContext.OwnerId is { Length: > 0 };
 
     public Task<PromptSectionContribution?> BuildAsync(PromptSessionContext sessionContext, string? turnText)
     {

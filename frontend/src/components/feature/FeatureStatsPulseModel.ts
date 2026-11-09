@@ -1,0 +1,184 @@
+// «Пульс» вкладки «Статистика» (волна 5, ST-F3; записка docs/mockups/feature-stats-5.md §A,
+// макет feature-stats-5.html). Чистые функции: словарь видов времени, плитки, главные
+// потери. Бэк считает числа — фронт только раскладывает (тот же принцип, что в
+// FeatureStatsBits). Вид (FeatureStatsTiles / FeatureStatsLosses) читает эту модель;
+// цвета видов — из kindBackground (FeatureStatsBits), здесь их нет.
+
+import type {
+  FeatureRun, FeatureReturnsBySource, FeatureRoundVerdict, FeatureStage, FeatureStepChain,
+} from '../../types/featureRun';
+import type { FeatureStats } from '../../types/featureStats';
+import { stageLabel, minutesSince } from './FeatureStatsBits';
+
+// === Состав времени ===
+
+export type CompositionKind = 'work' | 'waiting' | 'idle' | 'error' | 'queued';
+
+// Словарь видов времени (Q5H-3): единый источник слов видов (в т.ч. слова очереди).
+// Слово queued читают отсюда два места: «Подробнее» (FeatureStatsTab) и мини-сводка (FeatureMiniSummary) — формулировка
+// очереди не плодится по компонентам (правило волны, ср. queueLabelParts в chatGroups.ts).
+// Значение закреплено тестом «сторож: слово очереди — единый источник» — смена слова
+// становится осознанным решением (лексика согласована: макет docs/mockups/feature-queue-1.md,
+// §«Подпись „в очереди · N из M“», таблица «Состояния»).
+export const COMP_LABEL: Record<CompositionKind, string> = {
+  work: 'работа',
+  waiting: 'ждали вас',
+  idle: 'простой',
+  queued: 'в очереди',
+  error: 'ошибки',
+};
+
+// === Плитки ===
+
+// Пометки витков для ряда ✓/↩: returned — ↩; принятые — ✓; withdrawn и running не показываются
+// (возврата не было, виток ещё идёт).
+export type RoundMark = 'ok' | 'ret';
+
+function roundMark(verdict: FeatureRoundVerdict): RoundMark | null {
+  if (verdict === 'returned') return 'ret';
+  if (verdict === 'accepted' || verdict === 'accepted_with_remarks') return 'ok';
+  return null;
+}
+
+// Пометки витков по цепочкам шагов; порядок витков даёт бэк — не пересортировывать.
+export function roundMarks(chains: FeatureStepChain[] | undefined): RoundMark[] {
+  const out: RoundMark[] = [];
+  for (const ch of chains ?? []) {
+    for (const r of ch.rounds ?? []) {
+      const m = roundMark(r.verdict);
+      if (m) out.push(m);
+    }
+  }
+  return out;
+}
+
+export type StatTile =
+  | { key: 'work'; label: 'Работали'; minutes: number; agentsSum: number | null }
+  | { key: 'waiting'; label: 'Ждали вас'; minutes: number | null; count: number | null; longest: number | null }
+  | { key: 'loops'; label: 'Возвраты'; loops: number; bySource: FeatureReturnsBySource | null; rounds: RoundMark[] }
+  | { key: 'spend'; label: 'Расход'; costUsd: number; tokens: number; costPartial: boolean };
+
+// Крупное число «Возвратов» — сумма разбивки по источникам (бэк считает витки, сумма равна
+// verdicts.loops): число и хвост плитки не расходятся. Без разбивки (старые ответы) — verdicts.loops.
+function returnsTotal(run: FeatureRun): number {
+  const by = run.returnsBySource;
+  if (!by) return run.verdicts?.loops ?? 0;
+  return by.review.count + by.qa.count + by.final.count;
+}
+
+// Три плитки — работа, ожидание, возвраты. Четвёртая (расход) — только если бэк дал spend;
+// без него «Расход» не стоит нулем, а просто отсутствует (макет §A, п. 3).
+export function tilesModel(run: FeatureRun, stats: FeatureStats): StatTile[] {
+  const t = stats.timeline.totals;
+  const tiles: StatTile[] = [
+    { key: 'work', label: 'Работали', minutes: t.workWallMinutes, agentsSum: t.agentsSumMinutes ?? null },
+    { key: 'waiting', label: 'Ждали вас', minutes: t.waitingMinutes ?? null, count: t.waitingCount ?? null, longest: t.longestWaitMinutes ?? null },
+    { key: 'loops', label: 'Возвраты', loops: returnsTotal(run), bySource: run.returnsBySource ?? null, rounds: roundMarks(run.stepChains) },
+  ];
+  const spend = stats.spend;
+  if (spend) {
+    const tokens = spend.inputTokens + spend.outputTokens + spend.cacheReadTokens + spend.cacheCreationTokens;
+    tiles.push({ key: 'spend', label: 'Расход', costUsd: spend.costUsd, tokens, costPartial: spend.costPartial });
+  }
+  return tiles;
+}
+
+// === Главные потери ===
+
+export type LossCard =
+  // 1. Ожидание: живая, если фича сейчас ждёт человека.
+  | { no: 1; kind: 'wait'; title: string; minutes: number | null; live: boolean; count: number | null }
+  // 2. Шаг с наибольшим числом возвратов.
+  | { no: 2; kind: 'loops'; title: string; stepRef: string; stepTitle: string; loops: number; rounds: RoundMark[]; durationMinutes: number }
+  // 3. Сейчас: задача, идущая дольше всех.
+  | { no: 3; kind: 'longest'; title: string; stepRef: string | null; personaId: string | null; minutes: number; tokens: number | null; share: number | null }
+  // 3. У закрытой фичи — самый долгий этап.
+  | { no: 3; kind: 'stage'; title: string; stageKey: string; stageLabel: string; minutes: number };
+
+export interface LossesModel {
+  // Нечего показать — пунктир «Потери появятся с первым ожиданием, возвратом или ошибкой».
+  empty: boolean;
+  cards: LossCard[];
+}
+
+// Три главные потери (макет §C, перенесён в A по записке §«Рекомендация»).
+// nowMs — текущее время: живая карточка 1 показывает длительность ТЕКУЩЕГО ожидания
+// (макет feature-stats-5.html:538 — attention.dur), тот же образец, что analysisLineState(run, nowMs).
+export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number): LossesModel {
+  const cards: LossCard[] = [];
+  const t = stats.timeline.totals;
+  const att = run.attention;
+  const live = att?.kind === 'wait';
+
+  // 1. Долше всего ждали вас; живая карточка — пока фича ждёт человека.
+  if (live) {
+    // Живая карточка — длительность текущего ожидания, а не прошлый максимум.
+    cards.push({
+      no: 1,
+      kind: 'wait',
+      title: 'Ждёт вас сейчас',
+      minutes: minutesSince(att!.since, nowMs),
+      live: true,
+      count: t.waitingCount ?? null,
+    });
+  } else if (t.longestWaitMinutes != null) {
+    cards.push({
+      no: 1,
+      kind: 'wait',
+      title: 'Дольше всего ждали вас',
+      minutes: t.longestWaitMinutes,
+      live: false,
+      count: t.waitingCount ?? null,
+    });
+  }
+
+  // 2. Шаг с максимальным loops; возвратов нет — карточки нет.
+  let bestChain: FeatureStepChain | null = null;
+  for (const ch of run.stepChains ?? []) {
+    if (ch.loops > 0 && (bestChain === null || ch.loops > bestChain.loops)) bestChain = ch;
+  }
+  if (bestChain) {
+    cards.push({
+      no: 2,
+      kind: 'loops',
+      title: 'Больше всего возвратов',
+      stepRef: bestChain.stepRef,
+      stepTitle: bestChain.title,
+      loops: bestChain.loops,
+      rounds: roundMarks([bestChain]),
+      durationMinutes: bestChain.durationMinutes,
+    });
+  }
+
+  // 3. Дольше всех сейчас; у закрытой фичи — самый долгий этап по approxMinutes.
+  const longest = stats.longestNow;
+  if (longest) {
+    cards.push({
+      no: 3,
+      kind: 'longest',
+      title: 'Дольше всех сейчас',
+      stepRef: longest.stepRef ?? null,
+      personaId: longest.personaId ?? null,
+      minutes: longest.minutes,
+      tokens: longest.tokens ?? null,
+      share: longest.share ?? null,
+    });
+  } else if (run.closed === true || run.state === 'merged' || run.state === 'closed') {
+    let bestStage: FeatureStage | null = null;
+    for (const s of run.stages ?? []) {
+      if (s.approxMinutes > 0 && (bestStage === null || s.approxMinutes > bestStage.approxMinutes)) bestStage = s;
+    }
+    if (bestStage) {
+      cards.push({
+        no: 3,
+        kind: 'stage',
+        title: 'Самый долгий этап',
+        stageKey: bestStage.key,
+        stageLabel: stageLabel(bestStage.key),
+        minutes: bestStage.approxMinutes,
+      });
+    }
+  }
+
+  return { empty: cards.length === 0, cards };
+}

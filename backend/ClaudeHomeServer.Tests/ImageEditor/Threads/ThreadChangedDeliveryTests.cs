@@ -15,6 +15,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 
 // Доставка image_thread_changed по настоящему SignalR до соединения в группе владельца:
 // запись нити через REST в личном чате и в чате проекта обязана долететь одинаково
+[Trait("Category", "Host")]
 public class ThreadChangedDeliveryTests : IAsyncLifetime
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -27,7 +28,6 @@ public class ThreadChangedDeliveryTests : IAsyncLifetime
     {
         _factory.ExtraServices = services =>
             services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
@@ -43,8 +43,9 @@ public class ThreadChangedDeliveryTests : IAsyncLifetime
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
 
-    // Соединение как у фронта: группа владельца через JoinUser, канал «message»
-    private async Task<Task<JsonElement>> ListenThreadChanged(string sessionId)
+    // Соединение как у фронта: группа владельца через JoinUser, у чата проекта ещё и группа проекта
+    // через JoinProject (проектные события идут ей), канал «message»
+    private async Task<Task<JsonElement>> ListenThreadChanged(string sessionId, string? joinProjectId)
     {
         var token = _factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
         _conn = new HubConnectionBuilder()
@@ -65,18 +66,19 @@ public class ThreadChangedDeliveryTests : IAsyncLifetime
         });
         await _conn.StartAsync();
         await _conn.InvokeAsync("JoinUser", _ownerId);
+        if (joinProjectId is not null) await _conn.InvokeAsync("JoinProject", joinProjectId);
         return got.Task;
     }
 
     private async Task AssertDelivered(string threadsUrl, string sessionId, string scope)
     {
-        var changed = await ListenThreadChanged(sessionId);
+        var changed = await ListenThreadChanged(sessionId, scope == "personal" ? null : scope);
 
         var resp = await _client.PostAsJsonAsync(threadsUrl, new { draftFolder = "", revision = 0 });
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
 
         (await Task.WhenAny(changed, Task.Delay(TimeSpan.FromSeconds(20)))).Should().BeSameAs(changed,
-            "событие image_thread_changed должно долететь до группы владельца");
+            "событие image_thread_changed должно долететь до группы владельца (личный чат) или проекта");
         var msg = await changed;
         msg.GetProperty("projectId").GetString().Should().Be(scope);
         msg.GetProperty("state").GetProperty("threads").GetArrayLength().Should().Be(1);

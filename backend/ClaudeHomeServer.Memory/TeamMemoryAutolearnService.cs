@@ -73,6 +73,19 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         // Только завершение хода в ПРОЕКТНОЙ сессии (обычной/групповой/совещании — все с ProjectId)
         if (msg is not ResultMessage || string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
 
+        // Приватный чат (S2d-5a, разрез 4bc3d04f §1 «S2d-5a», путь 17): его ход виден только
+        // автору, а извлеченное знание ушло бы в общую память команды — всем участникам
+        // проекта. Не запускается вовсе: ни чтения истории, ни LLM. Проверка — здесь, а не в
+        // AutolearnGate: автообучение персон (память проектной персоны — тоже общая полка)
+        // закрывает тот же признак своим шагом S2d-5b.
+        if (session.PrivateToUserId is not null)
+        {
+            var total = Interlocked.Increment(ref _skipped);
+            _log.LogDebug("team-autolearn: проект {Project}, сессия {Session} — пропуск (приватный чат), всего пропусков {Total}",
+                session.ProjectId, session.Id, total);
+            return Task.CompletedTask;
+        }
+
         // Владелец проектной сессии резолвится через проект (Session.OwnerId у проектных сессий = null)
         var ownerId = _projects.GetById(session.ProjectId)?.OwnerId;
         if (string.IsNullOrEmpty(ownerId)) return Task.CompletedTask;
@@ -152,7 +165,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
                 _consolidation.RequestConsolidation(ownerId, projectId);
 
             // Realtime: командный центр слушает team_memory_changed
-            await _broadcaster.ToOwner(ownerId,
+            await _broadcaster.ToProject(projectId,
                 new TeamMemoryChangedMessage("added", projectId, lastId));
 
             // Активность-лента проекта

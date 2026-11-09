@@ -18,6 +18,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // подменяет объект чата ответом одиночного эндпоинта, поэтому чат без parentSessionId
 // выпадал из дерева после любой правки настроек. Теперь поля дописывает конвертер типа
 // (SessionJsonConverter в опциях MVC) — проверяем это по ФАКТУ HTTP-ответа.
+[Trait("Category", "Host")]
 public class SessionLinkFieldsWireTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

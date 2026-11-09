@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // есть исходящая зависимость `McpSecretStore` (сознательная граница: секреты OAuth лежат
 // в общем сторе per-owner; см. CLAUDE.md и шапку VideoSubsystem.cs). Полный резолв
 // требует поднимать Mcp-подсистему — это не задача стража Video.
+[Trait("Category", "Host")]
 public class VideoSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig() =>

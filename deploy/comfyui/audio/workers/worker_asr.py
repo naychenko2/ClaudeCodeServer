@@ -7,7 +7,7 @@ import subprocess
 
 import numpy as np
 
-from ccs_common import load_job, fail
+from ccs_common import emit_progress, load_job, fail
 
 MODEL = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 
@@ -51,7 +51,15 @@ def main():
     model = WhisperModel(MODEL, device="cuda", compute_type="float16")
     job.lap("load")
     segments, info = model.transcribe(pcm, language=language, beam_size=5, vad_filter=True)
-    segments = [s for s in segments if s.text.strip()]
+    # segments — генератор: куски распознаются по мере чтения, шаг — секунды звука, дошедшие до распознавания
+    total = max(1, int(np.ceil(info.duration)))
+    emit_progress(0, total)
+    kept = []
+    for s in segments:
+        if s.text.strip():
+            kept.append(s)
+        emit_progress(s.end, total)
+    segments = kept
     job.lap("infer")
 
     with open(job.out("text.txt"), "w", encoding="utf-8") as f:

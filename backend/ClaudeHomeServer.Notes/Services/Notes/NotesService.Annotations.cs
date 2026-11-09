@@ -1,6 +1,8 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Notes.Wiki;
 
 namespace ClaudeHomeServer.Services.Notes;
 
@@ -33,7 +35,8 @@ public sealed partial class NotesService
     // `private`: зовётся только внутри самого NotesService (аннотации). Был `internal`
     // до выноса вертикали — снаружи не вызывался ни разу, проверено по репозиторию
     // (ревью 2026-09-08). Лишняя видимость требовала InternalsVisibleTo без нужды.
-    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath)
+    private (string FullPath, bool CanWriteBlockId) ResolveDoc(string userId, string scope, string relPath,
+        ProjectRight right = ProjectRight.WriteContent)
     {
         var rel = NormalizeRel(relPath);
         if (!rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase) &&
@@ -41,42 +44,106 @@ public sealed partial class NotesService
             throw new ArgumentException("Комментировать можно только markdown-документы");
 
         if (scope == PersonalKey)
-            return (SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel), true);
+        {
+            // Тот же гейт, что для project scope ниже (ревью S1a): ^id — никогда в файл
+            // под data/wiki/. Личный vault, сведённый символьной ссылкой в вику, делает
+            // любой путь под ним путём в вики — якорь в такую вику ставит только Хранитель.
+            var personalFull = SafePath.Join(Path.Combine(_dataDir, "notes", userId), rel);
+            return (personalFull, !WikiPaths.IsWikiPath(personalFull, _dataDir));
+        }
+
+        // S2c-7: документ общего проекта открыт тому, кто может писать комментарии этого
+        // проекта (WriteContent), а не только владельцу: комментарий — заметка в notes/
+        // проекта, ^id — в тот же notes/.
+        // F-8 (решение Андрея 01.11): требуемое право передаётся явным параметром, форма
+        // одна с ResolveRoot (NotesService.cs:1515): ЧТЕНИЕ документа (список комментариев,
+        // сиротский статус, DocMissing модели) открыт Read — читатель общего проекта видит
+        // комментарии к видимой ему заметке; ЗАПИСЬ комментария (Annotate/Repin) остаётся
+        // на WriteContent (значение по умолчанию). Отказ тот же, что у ResolveRoot: нет
+        // доступа — 404 («чужое» и «несуществующее» не различаем), есть чтение без записи — 403.
+        if (ProjectScope(userId, scope, ProjectRight.Read) is null)
+            throw new KeyNotFoundException($"Проект {scope} не найден");
+        if (right != ProjectRight.Read && ProjectScope(userId, scope, right) is null)
+            throw new UnauthorizedAccessException("Нет права на это действие в проекте");
 
         var project = _projects.GetById(scope)
             ?? throw new KeyNotFoundException($"Проект {scope} не найден");
-        if (project.OwnerId != userId)
-            throw new UnauthorizedAccessException("Проект не принадлежит пользователю");
         if (string.IsNullOrWhiteSpace(project.RootPath))
             throw new InvalidOperationException("У проекта нет корневой папки");
-        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase);
-        return (SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel), canWrite);
+        // ^id пишем только туда, где живут заметки, — и никогда в файл под data/wiki/:
+        // якорь в вики ставит только Хранитель (ADR-035, решение 2: побочные писатели пропускают вики).
+        var docFull = SafePath.Join(Composition.ProjectCapabilityGuard.ServerRoot(project), rel);
+        var canWrite = rel.StartsWith("notes/", StringComparison.OrdinalIgnoreCase)
+            && !WikiPaths.IsWikiPath(docFull, _dataDir);
+        return (docFull, canWrite);
     }
 
     // --- Создание комментария ---
 
-    public NoteDetail Annotate(string userId, AnnotateRequest req)
+    public NoteDetail Annotate(string userId, AnnotateRequest req, bool byHuman = false)
     {
         var scope = req.Doc.Scope.Trim();
         var relPath = NormalizeRel(req.Doc.Path);
         var (docFull, canWriteId) = ResolveDoc(userId, scope, relPath);
         if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
+        var title = !string.IsNullOrWhiteSpace(req.Title) ? req.Title!.Trim() : AutoTitle(req.Comment, relPath);
 
+        // S2c-12: ^id — запись в файл заметки-документа: под замком на её id (тот же ключ,
+        // что у Update/Delete этой заметки), плюс замок источника создаваемого комментария
+        // (как в Create). Оба — одним WithWriteGates по возрастанию; CreateCore вызывается
+        // напрямую: вложенный замок того же ключа сломал бы порядок. Комментарий и документ —
+        // один источник (sourceKey = scope): InvalidateWrite в CreateCore сбрасывает оба.
+        var docId = canWriteId ? DocNoteId(scope, relPath) : null;
+        var keys = docId is null
+            ? new[] { SourceGateKey(userId, scope) }
+            : new[] { docId, SourceGateKey(userId, scope) };
+        var id = WithWriteGates(() => AnnotateCore(userId, req, title, docFull, canWriteId, scope, relPath, byHuman), keys);
+
+        // журнал — за замком (тот же порядок, что у Create: Append — чужой код, способный
+        // стоять на внешнем барьере; под замком такой стоп не держат)
+        if (scope != PersonalKey)
+            _events?.Append(scope, userId, ProjectEventTypes.NoteChanged, "user",
+                $"Создана заметка «{title}»", id);
+        return GetDetail(userId, id)
+            ?? throw new InvalidOperationException("Комментарий создан, но не читается");
+    }
+
+    // Якорь (с записью ^id в файл документа — под взятым замком) и создание заметки-
+    // комментария той же файловой частью, что у Create, но без повторного замка (ключ
+    // уже взят). Возвращает id комментария.
+    private string AnnotateCore(string userId, AnnotateRequest req, string title, string docFull,
+        bool canWriteId, string scope, string relPath, bool byHuman)
+    {
         var anchor = ResolveSelectionAnchor(docFull, canWriteId, req.Selection);
+
+        // S3-3c1 доработка 1 (вердикт ea994f7c): маркер ^id — человеческая правка файла документа,
+        // его путь идёт в журнал раньше комментария: порядок Record следует порядку записей
+        // файла (сначала документ в ResolveSelectionAnchor, потом комментарий в CreateCore).
+        // Личный vault отсекает сам RecordHumanEdit; агентский вызов (byHuman=false) молчит.
+        if (byHuman && anchor.DocWritten) RecordHumanEdit(userId, scope, docFull);
 
         // Заметка-комментарий: источник = область документа, папка «Комментарии»
         var sourceKey = scope;                       // personal | projectId — совпадает с ключом источника
-        var title = !string.IsNullOrWhiteSpace(req.Title) ? req.Title!.Trim() : AutoTitle(req.Comment, relPath);
         var annotates = $"{scope}/{relPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
         var content = BuildAnnotationContent(title, annotates, anchor.Quote, anchor.Heading,
             req.Tags, req.Selection.Text ?? "", req.Comment);
-        var note = Create(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder));
-
-        Invalidate(userId);   // документ мог получить ^id — блочный якорь виден сразу
-        return note;
+        // S3-3c1 доработка 1: создание комментария — это Create заметки (комментарий живёт в
+        // notes/ проекта), и он идёт в журнал через CreateCore как есть. Прежнее обоснование
+        // «вне шага журнала» было неверно и снято по вердикту ревью.
+        return CreateCore(userId, new CreateNoteRequest(title, content, sourceKey, Folder: AnnotationsFolder), sourceKey, byHuman);
     }
 
-    private sealed record SelectionAnchor(string? BlockId, string? Heading, string Quote);
+    // id заметки-документа по его области и пути — тот же ключ замка, что у Update/Delete
+    // этой заметки. Для личного vault — путь внутри vault; для проекта — путь от корня
+    // проекта с снятым «notes/» (id заметки резолвится от notes-корня). Зовётся только там,
+    // где ^id вообще пишется (canWriteId), т.е. для проекта путь гарантированно в notes/.
+    private static string DocNoteId(string scope, string rel) =>
+        scope == PersonalKey ? EncodeId(PersonalKey, rel)
+        : EncodeId(scope, NormalizeRel(rel["notes/".Length..]));
+
+    // DocWritten — маркер ^id был ЗАПИСАН в файл документа именно здесь (новый; существующий
+    // не переписывает файл). По нему аннотация решает, звать ли журнал по пути документа.
+    private sealed record SelectionAnchor(string? BlockId, string? Heading, string Quote, bool DocWritten);
 
     // Резолв выделения в якорь: verify-before-write (посимвольная сверка, иначе
     // единственное вхождение; провал → 409 без порчи), якорный параграф, ^id
@@ -105,8 +172,8 @@ public sealed partial class NotesService
                 // [[вики|подписи]]) в DOM не видна. Третья ступень — канонизация «как
                 // рендер» с картой офсетов, единственное вхождение; selText заменяется
                 // РЕАЛЬНЫМ срезом документа. Провал → честный 409.
-                var (norm, map) = NormalizeForMatch(doc);
-                var q = NormalizeForMatch(selText).Norm;
+                var (norm, map) = QuoteMatcher.NormalizeForMatch(doc);
+                var q = QuoteMatcher.NormalizeForMatch(selText).Norm;
                 var idx = q.Length >= 3 ? norm.IndexOf(q, StringComparison.Ordinal) : -1;
                 if (idx >= 0 && norm.IndexOf(q, idx + 1, StringComparison.Ordinal) < 0)
                 {
@@ -126,6 +193,7 @@ public sealed partial class NotesService
 
         // ^id: в конце последней строки блока; существующий переиспользуем
         string? blockId = null;
+        var docWritten = false;
         var lastLineText = lines[blockLast].Text;
         var existing = BlockIdAtEol.Match(lastLineText);
         if (existing.Success) blockId = existing.Groups[1].Value;
@@ -135,17 +203,21 @@ public sealed partial class NotesService
             var insertAt = lines[blockLast].Start + lastLineText.TrimEnd('\r').Length;
             doc = doc[..insertAt] + " ^" + blockId + doc[insertAt..];
             File.WriteAllText(docFull, doc, new UTF8Encoding(false));
+            docWritten = true;
         }
 
         var heading = HeadingPathAbove(lines, selLine);
         var quote = NormalizeWs(selText);
         if (quote.Length > MaxQuoteStored) quote = quote[..MaxQuoteStored];
-        return new SelectionAnchor(blockId, heading, quote);
+        return new SelectionAnchor(blockId, heading, quote, docWritten);
     }
 
     // Перепривязка комментария к новому выделению («место изменилось»/«сирота» при
     // живом документе): пересчитывает ^id/заголовки/цитату, статус и тред не трогает.
-    public NoteDetail RepinAnnotation(string userId, string id, AnnotateSelection selection)
+    // S2c-12: repin пишет два файла — ^id в заметку-документ и frontmatter комментария.
+    // Оба под замком на свой id, одним WithWriteGates по возрастанию (вложенного нет):
+    // гонка repin с правкой/удалением той же заметки сериализована, потерянной правки нет.
+    public NoteDetail RepinAnnotation(string userId, string id, AnnotateSelection selection, bool byHuman = false)
     {
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(id, out var note))
@@ -154,10 +226,29 @@ public sealed partial class NotesService
             ?? throw new InvalidOperationException("Заметка не является комментарием к документу");
         if (ann.IsReply)
             throw new InvalidOperationException("Перепривязывается корневой комментарий, а не ответ");
+        // Файл комментария под data/wiki/ — не наш: отказ до любого чтения/записи, чтобы
+        // документ не получил ^id в половину операции (ревью S1a, MAJOR 3).
+        EnsureNotWiki(note.FullPath);
 
         var (docFull, canWriteId) = ResolveDoc(userId, ann.DocScope, ann.DocPath);
         if (!File.Exists(docFull)) throw new KeyNotFoundException("Документ не найден");
+
+        var docId = canWriteId ? DocNoteId(ann.DocScope, ann.DocPath) : null;
+        var keys = docId is null ? new[] { id } : new[] { id, docId };
+        return WithWriteGates(() => RepinAnnotationCore(userId, id, note, ann, docFull, canWriteId, selection, byHuman), keys);
+    }
+
+    private NoteDetail RepinAnnotationCore(string userId, string id, RawNote note, NoteAnnotationInfo ann,
+        string docFull, bool canWriteId, AnnotateSelection selection, bool byHuman)
+    {
         var anchor = ResolveSelectionAnchor(docFull, canWriteId, selection);
+        var (sourceKey, _) = DecodeId(id);
+
+        // S3-3c1 доработка 1 (вердикт ea994f7c): перепривязка пишет два файла — порядок
+        // Record следует порядку записей: сначала документ (новый ^id в ResolveSelectionAnchor),
+        // потом комментарий. Путь документа — по его собственному источнику (перенесённый
+        // комментарий мог разойтись с областью документа).
+        if (byHuman && anchor.DocWritten) RecordHumanEdit(userId, ann.DocScope, docFull);
 
         var annotates = $"{ann.DocScope}/{ann.DocPath}" + (anchor.BlockId is not null ? $"#^{anchor.BlockId}" : "");
         var content = File.ReadAllText(note.FullPath, Encoding.UTF8);
@@ -166,8 +257,13 @@ public sealed partial class NotesService
         if (!string.IsNullOrWhiteSpace(anchor.Heading))
             content = SetFrontmatterField(content, "anchor_heading", $"\"{Escape(anchor.Heading!)}\"");
         File.WriteAllText(note.FullPath, content, new UTF8Encoding(false));
+        if (byHuman) RecordHumanEdit(userId, sourceKey, note.FullPath);
 
-        Invalidate(userId);
+        // S2c-12: сброс по ключу арендатора, а не только своему: комментарий и документ —
+        // один источник (Annotate создаёт их в scope документа); перенесённый комментарий
+        // мог разойтись с ним — тогда сбрасываются оба.
+        InvalidateWrite(userId, sourceKey);
+        if (ann.DocScope != sourceKey) InvalidateWrite(userId, ann.DocScope);
         return GetDetail(userId, id)
             ?? throw new InvalidOperationException("Комментарий перепривязан, но не читается");
     }
@@ -206,11 +302,6 @@ public sealed partial class NotesService
     // Кавычки внутри значений frontmatter ломают наш простой парсер — заменяем
     private static string Escape(string s) => s.Replace('"', '\'').Replace("\n", " ");
 
-    // Сохранённая цитата прошла через Escape, документ — нет. Сверять их надо в
-    // одной нормализации, иначе выделение с двойными кавычками не находится
-    // никогда. Замена посимвольная — карта офсетов документа не съезжает.
-    private static string FoldQuotes(string s) => s.Replace('"', '\'');
-
     // Derived-поля комментариев при построении модели (не персистятся):
     // IsReply — annotates указывает на другую заметку-комментарий (тред);
     // DocMissing — документ-цель удалён (для ghost-узла в дереве).
@@ -235,7 +326,10 @@ public sealed partial class NotesService
             var isReply = annPaths.ContainsKey(key);
             if (!docExists.TryGetValue(key, out var exists))
             {
-                try { exists = File.Exists(ResolveDoc(userId, a.DocScope, a.DocPath).FullPath); }
+                // F-8: derived-состояние модели — чтение: чужой проект без права чтения
+                // тот же отказ, что раньше (KeyNotFound → «нет документа»); с правом чтения
+                // модель участника больше не считает живой документ «удалённым».
+                try { exists = File.Exists(ResolveDoc(userId, a.DocScope, a.DocPath, ProjectRight.Read).FullPath); }
                 catch { exists = false; }
                 docExists[key] = exists;
             }
@@ -246,7 +340,7 @@ public sealed partial class NotesService
 
     // --- Треды: ответы на комментарий (реплика = заметка с annotates на корневую) ---
 
-    public NoteDetail Reply(string userId, string rootId, ReplyRequest req)
+    public NoteDetail Reply(string userId, string rootId, ReplyRequest req, bool byHuman = false)
     {
         var model = GetModel(userId);
         if (!model.ById.TryGetValue(rootId, out var root))
@@ -274,7 +368,9 @@ public sealed partial class NotesService
         if (clean.Count > 0) sb.Append($"tags: [{string.Join(", ", clean)}]\n");
         sb.Append("---\n\n").Append(comment).Append('\n');
 
-        return Create(userId, new CreateNoteRequest(title, sb.ToString(), root.SourceKey, Folder: AnnotationsFolder));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): ответ в треде — заметка проекта, её создание —
+        // человеческий Create: byHuman проходит в Create как есть (запись — в CreateCore).
+        return Create(userId, new CreateNoteRequest(title, sb.ToString(), root.SourceKey, Folder: AnnotationsFolder), byHuman: byHuman);
     }
 
     public IReadOnlyList<NoteReplyDto> GetReplies(string userId, string rootId)
@@ -302,13 +398,37 @@ public sealed partial class NotesService
 
     // Переписывает annotates всех комментариев/ответов со старого пути документа на
     // новый (точечно или по префиксу — для переноса папки); ^id сохраняется.
+    // S2c-12: каскад правит сразу много комментариев — по замку на каждый правимый, ключи
+    // WithWriteGates берёт по возрастанию (как в RemoveWikilinksTo): две переписки или
+    // переписка с правкой того же комментария не разойдутся по кругу. Поиск целей — чтение
+    // модели ДО замка; под замком — запись файлов и InvalidateWrite по затронутым
+    // источникам (сбрасывает и модель арендатора).
     public int RewriteAnnotationTargets(string userId, string oldScope, string oldPath,
         string newScope, string newPath, bool prefix = false)
     {
+        var targets = FindAnnotationTargets(userId, oldScope, oldPath, newScope, newPath, prefix);
+        if (targets.Count == 0) return 0;
+        var ids = targets.Select(t => t.Id).ToArray();
+        return WithWriteGates(() => ApplyAnnotationTargets(userId, targets), ids);
+    }
+
+    // Тот же каскад без замка — для вызова из Update/Move/MoveFolder: они уже держат замок
+    // правимой/переносимой заметки, а отдельный замок на каждый комментарий был бы вложенным
+    // и сломал общий порядок ключей. Правка комментариев идёт под замком вызывающего.
+    private int RewriteAnnotationTargetsInner(string userId, string oldScope, string oldPath,
+        string newScope, string newPath, bool prefix = false) =>
+        ApplyAnnotationTargets(userId, FindAnnotationTargets(userId, oldScope, oldPath, newScope, newPath, prefix));
+
+    private sealed record AnnotationTarget(string Id, string SourceKey, string FullPath, string NewAnnotates);
+
+    // Какие комментарии переписываются и во что (чтение модели — без замка).
+    private List<AnnotationTarget> FindAnnotationTargets(string userId, string oldScope, string oldPath,
+        string newScope, string newPath, bool prefix)
+    {
         var oldRel = NormalizeRel(oldPath);
         var newRel = NormalizeRel(newPath);
-        if (oldScope == newScope && oldRel.Equals(newRel, StringComparison.OrdinalIgnoreCase)) return 0;
-        var changed = 0;
+        var result = new List<AnnotationTarget>();
+        if (oldScope == newScope && oldRel.Equals(newRel, StringComparison.OrdinalIgnoreCase)) return result;
         foreach (var n in GetModel(userId).Notes)
         {
             var a = n.Annotation;
@@ -318,18 +438,34 @@ public sealed partial class NotesService
             else if (prefix && a.DocPath.StartsWith(oldRel + "/", StringComparison.OrdinalIgnoreCase))
                 updatedPath = newRel + a.DocPath[oldRel.Length..];
             if (updatedPath is null) continue;
+            // Писатель побочный: файл комментария под data/wiki/ пропускаем пофайлово,
+            // как в RewriteLinks/RemoveWikilinksTo, — до try, чтобы не было полузаписи;
+            // обычный комментарий переписывается (ревью S1a, MAJOR 3).
+            if (WikiPaths.IsWikiPath(n.FullPath, _dataDir)) continue;
+            result.Add(new AnnotationTarget(n.Id, n.SourceKey, n.FullPath,
+                $"{newScope}/{updatedPath}" + (a.BlockId is not null ? $"#^{a.BlockId}" : "")));
+        }
+        return result;
+    }
 
-            var annotates = $"{newScope}/{updatedPath}" + (a.BlockId is not null ? $"#^{a.BlockId}" : "");
+    // Запись под замками (или под замком вызывающего — для Inner) + InvalidateWrite.
+    private int ApplyAnnotationTargets(string userId, List<AnnotationTarget> targets)
+    {
+        var changed = 0;
+        var touched = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in targets)
+        {
             try
             {
-                var content = File.ReadAllText(n.FullPath, Encoding.UTF8);
-                File.WriteAllText(n.FullPath, SetFrontmatterField(content, "annotates", $"\"{Escape(annotates)}\""),
+                var content = File.ReadAllText(t.FullPath, Encoding.UTF8);
+                File.WriteAllText(t.FullPath, SetFrontmatterField(content, "annotates", $"\"{Escape(t.NewAnnotates)}\""),
                     new UTF8Encoding(false));
                 changed++;
+                touched.Add(t.SourceKey);
             }
-            catch (Exception ex) { _logger.LogWarning(ex, "Перепись annotates в {File}", n.FullPath); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Перепись annotates в {File}", t.FullPath); }
         }
-        if (changed > 0) Invalidate(userId);
+        foreach (var sourceKey in touched) InvalidateWrite(userId, sourceKey);
         return changed;
     }
 
@@ -341,7 +477,8 @@ public sealed partial class NotesService
         string? doc = null;
         try
         {
-            var (docFull, _) = ResolveDoc(userId, scope, rel);
+            // F-8: список комментариев документа — ручка ЧТЕНИЯ: право Read
+            var (docFull, _) = ResolveDoc(userId, scope, rel, ProjectRight.Read);
             if (File.Exists(docFull)) doc = File.ReadAllText(docFull, Encoding.UTF8);
         }
         catch (ArgumentException) { /* не-markdown — комментариев нет */ }
@@ -394,8 +531,8 @@ public sealed partial class NotesService
         if (!string.IsNullOrEmpty(a.AnchorQuote) && a.AnchorQuote!.Length >= MinQuoteAnchor)
         {
             var (rawNorm, map) = NormalizeWithMap(doc);
-            var norm = FoldQuotes(rawNorm);
-            var q = FoldQuotes(NormalizeWs(a.AnchorQuote!));
+            var norm = QuoteMatcher.FoldQuotes(rawNorm);
+            var q = QuoteMatcher.FoldQuotes(NormalizeWs(a.AnchorQuote!));
             var first = norm.IndexOf(q, StringComparison.OrdinalIgnoreCase);
             if (first >= 0 && norm.IndexOf(q, first + 1, StringComparison.OrdinalIgnoreCase) < 0)
             {
@@ -430,7 +567,8 @@ public sealed partial class NotesService
         string? doc = null;
         try
         {
-            var (full, _) = ResolveDoc(userId, a.DocScope, a.DocPath);
+            // F-8: сиротский статус — часть списка заметок (чтение): право Read
+            var (full, _) = ResolveDoc(userId, a.DocScope, a.DocPath, ProjectRight.Read);
             if (File.Exists(full)) doc = File.ReadAllText(full, Encoding.UTF8);
         }
         catch { /* область недоступна → сирота */ }
@@ -439,22 +577,36 @@ public sealed partial class NotesService
 
     // --- Статус ---
 
-    public NoteDetail? SetAnnotationStatus(string userId, string id, string status)
+    // S2c-12: смена статуса — правка файла комментария: под тем же замком на его id, что
+    // Update/Delete (гонка «закрыть комментарий» с правкой той же заметки сериализована,
+    // статуса потерянного молча, нет), и сбрасывает модель арендатора, а не только свою.
+    public NoteDetail? SetAnnotationStatus(string userId, string id, string status, bool byHuman = false)
     {
         var st = status?.Trim().ToLowerInvariant();
         if (st is not ("open" or "resolved"))
             throw new ArgumentException("Статус должен быть open или resolved");
+        return WithWriteGates(() => SetAnnotationStatusCore(userId, id, st!, byHuman), id);
+    }
 
+    private NoteDetail? SetAnnotationStatusCore(string userId, string id, string st, bool byHuman)
+    {
         var (sourceKey, relPath) = DecodeId(id);
-        var rootDir = ResolveRoot(userId, sourceKey);
+        // S2c-7: статус комментария — правка заметки, дверь WriteContent
+        var rootDir = ResolveRoot(userId, sourceKey, ProjectRight.WriteContent);
         var full = SafePath.Join(rootDir, relPath);
         if (!File.Exists(full)) return null;
+        // Файл комментария под data/wiki/ — не наш: тот же жёсткий отказ, что у Create/Update/Delete
+        // (ревью S1a, MAJOR 3: «комментарий создаётся только через Create» защитой не является).
+        EnsureNotWiki(full);
 
         var content = File.ReadAllText(full, Encoding.UTF8);
         if (ParseFrontmatter(content, "").Annotation is null)
             throw new InvalidOperationException("Заметка не является комментарием к документу");
-        File.WriteAllText(full, SetFrontmatterField(content, "status", st!), new UTF8Encoding(false));
-        Invalidate(userId);
+        File.WriteAllText(full, SetFrontmatterField(content, "status", st), new UTF8Encoding(false));
+        // S3-3c1 доработка 1 (вердикт ea994f7c): frontmatter статуса — правка файла комментария,
+        // под его замком — в журнал; агентский вызов (byHuman=false) молчит.
+        if (byHuman) RecordHumanEdit(userId, sourceKey, full);
+        InvalidateWrite(userId, sourceKey);
         return GetDetail(userId, id);
     }
 
@@ -544,111 +696,6 @@ public sealed partial class NotesService
 
     private static readonly Regex Ws = new(@"\s+", RegexOptions.Compiled);
     internal static string NormalizeWs(string s) => Ws.Replace(s, " ").Trim();
-
-    // Канонизация текста «как рендер» — для сверки DOM-выделения с источником:
-    // markdown-ссылки и вики-ссылки заменяются видимым текстом, маркеры эмфазиса/кода
-    // выбрасываются, whitespace схлопывается. Карта — норм-индекс → исходный офсет.
-    private static readonly Regex RenderLinks = new(
-        @"\[\[(?<t>[^\]|]+)(?:\|(?<l>[^\]]+))?\]\]|!?\[(?<x>[^\]]*)\]\((?<u>[^)\s]*)\)",
-        RegexOptions.Compiled);
-    private static readonly char[] MarkupChars = ['*', '`', '_', '~', '\\'];
-
-    internal static (string Norm, List<int> Map) NormalizeForMatch(string doc)
-    {
-        // Шаг 1: ссылки → видимый текст (позиции символов подписи — исходные)
-        var buf = new StringBuilder(doc.Length);
-        var map1 = new List<int>(doc.Length);
-        var last = 0;
-        foreach (Match m in RenderLinks.Matches(doc))
-        {
-            for (var i = last; i < m.Index; i++) { buf.Append(doc[i]); map1.Add(i); }
-            var g = m.Groups["l"].Success ? m.Groups["l"] : m.Groups["t"].Success ? m.Groups["t"] : m.Groups["x"];
-            for (var i = 0; i < g.Length; i++) { buf.Append(doc[g.Index + i]); map1.Add(g.Index + i); }
-            last = m.Index + m.Length;
-        }
-        for (var i = last; i < doc.Length; i++) { buf.Append(doc[i]); map1.Add(i); }
-
-        // Шаг 2: whitespace collapse + дроп маркеров эмфазиса/кода (симметрично для
-        // обеих сторон сверки — подчёркивания в идентификаторах матчу не мешают) +
-        // вычищение построчных структурных маркеров (заголовки #, маркеры списков
-        // -/+/1., цитаты >): в рендере их не видно, DOM-выделение их не содержит, а
-        // без этого любое выделение, пересекающее такую границу, отбивалось ложным 409.
-        var sb = new StringBuilder(buf.Length);
-        var map = new List<int>(buf.Length);
-        var pendingSpace = false;
-        var atLineStart = true;
-        for (var i = 0; i < buf.Length; i++)
-        {
-            var ch = buf[i];
-            if (char.IsWhiteSpace(ch))
-            {
-                if (ch == '\n') atLineStart = true;   // индент-пробелы начало строки не сбрасывают
-                pendingSpace = sb.Length > 0;
-                continue;
-            }
-            if (atLineStart)
-            {
-                // Съедаем ведущие маркеры строки (в т.ч. вложенные: «> - пункт»)
-                int after;
-                while ((after = SkipLineMarkers(buf, i)) > i) i = after;
-                atLineStart = false;
-                if (i >= buf.Length) break;
-                ch = buf[i];
-            }
-            if (Array.IndexOf(MarkupChars, ch) >= 0) continue;
-            if (pendingSpace) { sb.Append(' '); map.Add(map1[i]); pendingSpace = false; }
-            sb.Append(ch); map.Add(map1[i]);
-        }
-        return (sb.ToString(), map);
-    }
-
-    // Ведущий структурный маркер строки, начиная с непробельной позиции i (первый
-    // контентный символ строки). Возвращает индекс за маркером и его хвостовыми
-    // пробелами, либо i, если маркера нет. «Как рендер»: заголовки/списки/цитаты
-    // теряют свой синтаксис, но не текст.
-    private static int SkipLineMarkers(StringBuilder s, int i)
-    {
-        var n = s.Length;
-        // ATX-заголовок: 1..6 '#' + пробел (без пробела — это #тег, не заголовок)
-        if (s[i] == '#')
-        {
-            var j = i; var cnt = 0;
-            while (j < n && s[j] == '#' && cnt < 6) { j++; cnt++; }
-            if (j < n && (s[j] == ' ' || s[j] == '\t'))
-            {
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-            return i;
-        }
-        // Цитата: один+ '>' с необязательными пробелами
-        if (s[i] == '>')
-        {
-            var j = i;
-            while (j < n && (s[j] == '>' || s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Маркированный список: -/+ + пробел ('*' и так дропается как эмфазис)
-        if ((s[i] == '-' || s[i] == '+') && i + 1 < n && (s[i + 1] == ' ' || s[i + 1] == '\t'))
-        {
-            var j = i + 1;
-            while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-            return j;
-        }
-        // Нумерованный список: цифры + ('.'|')') + пробел
-        if (char.IsDigit(s[i]))
-        {
-            var j = i;
-            while (j < n && char.IsDigit(s[j])) j++;
-            if (j + 1 < n && (s[j] == '.' || s[j] == ')') && (s[j + 1] == ' ' || s[j + 1] == '\t'))
-            {
-                j++;
-                while (j < n && (s[j] == ' ' || s[j] == '\t')) j++;
-                return j;
-            }
-        }
-        return i;
-    }
 
     // Нормализация whitespace с картой «нормализованный индекс → сырой индекс»
     internal static (string Norm, List<int> Map) NormalizeWithMap(string doc)

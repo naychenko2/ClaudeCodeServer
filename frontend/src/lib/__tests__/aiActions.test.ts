@@ -83,3 +83,40 @@ describe('rankedActions — доступность и ранжирование',
     expect(r.map(x => x.action.id)).toEqual(['note.links']);
   });
 });
+
+// Дефект 6d5f4b0a: «Сохранить как Markdown» пишет в корень — для файла не из корня пункта нет.
+// Мутация: заменить docWritableOpen на docOpen у file.toMarkdown → тест про fromRoot=false краснеет.
+describe('rankedActions — file.toMarkdown и файл не из корня', () => {
+  const nav = { screen: 'project' as const, file: 'docs/a.pdf' };
+  const ids = (file?: AiActionCtx['file']) => rankedActions(ctx({ nav, file })).map(x => x.action.id);
+
+  it('файл из корня или признак не выяснен — пункт есть', () => {
+    expect(ids()).toContain('file.toMarkdown');
+    expect(ids({ path: 'docs/a.pdf', fromRoot: true })).toContain('file.toMarkdown');
+  });
+
+  it('файл не из корня — пункта нет, чтение (summary) остаётся', () => {
+    const r = ids({ path: 'docs/a.pdf', fromRoot: false });
+    expect(r).not.toContain('file.toMarkdown');
+    expect(r).toContain('file.summary');
+  });
+
+  it('признак чужого файла не действует', () => {
+    expect(ids({ path: 'other.pdf', fromRoot: false })).toContain('file.toMarkdown');
+  });
+});
+
+describe('chat.retitle — право записи чата (QA-P1)', () => {
+  const ids = (myRole?: 'owner' | 'editor' | 'reader') => rankedActions(ctx({
+    nav: { screen: 'project', project: { id: 'p', myRole } as never },
+    chat: { active: true, hasMessages: true },
+  })).map(x => x.action.id);
+
+  // Бэк (f777c8460): retitle — DenyContentWrite, редактор и выше; читателю — нет
+  it('редактору, владельцу и проекту без роли — есть, читателю — нет', () => {
+    expect(ids('editor')).toContain('chat.retitle');
+    expect(ids('reader')).not.toContain('chat.retitle');
+    expect(ids('owner')).toContain('chat.retitle');
+    expect(ids(undefined)).toContain('chat.retitle');
+  });
+});

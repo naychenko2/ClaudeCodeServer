@@ -93,8 +93,12 @@ public static class HandsChatStates
     /// <summary>Руки отцепились от хода не по его концу: <c>Reason</c> — <see cref="HandsEndReason"/>.</summary>
     public const string Stopped = "stopped";
 
-    /// <summary>Состояния, которые присылает агент (<see cref="DeviceHandsReport"/>); прочие считает сервер.</summary>
-    public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped];
+    /// <summary>
+    /// Состояния, которые присылает агент (<see cref="DeviceHandsReport"/>); прочие считает сервер.
+    /// <see cref="Unavailable"/> агент шлёт только с <see cref="HandsEndReason.Busy"/>: действие
+    /// моста упёрлось в замок машины другого хода.
+    /// </summary>
+    public static readonly IReadOnlyList<string> FromDevice = [Active, Allowed, Stopped, Unavailable];
 }
 
 /// <summary>Мост рук на машине. Сервер его не видит и не правит.</summary>
@@ -110,8 +114,9 @@ public static class HandsFiles
 /// <summary>
 /// Программы, которые мост не запускает никогда (решение владельца 2б, 2026-09-27): белого
 /// списка нет, любая другая <c>.exe</c> по полному пути запускается. Здесь — интерпретаторы,
-/// оболочки и терминалы: каждый исполняет произвольные команды, поэтому и ввода (клика, текста)
-/// в окна их процессов у рук нет — читать и снимать их можно.
+/// оболочки, терминалы и запускалки оболочки («Пуск», поиск, диспетчер задач): каждый исполняет
+/// произвольные команды или ведёт в оболочку, поэтому и ввода (клика, текста) в окна их процессов
+/// у рук нет — читать и снимать их можно.
 /// Сравнение по имени файла без учёта регистра (и по имени без расширения); <c>python*</c> и
 /// <c>pwsh*</c> — по префиксу (сборки <c>pwsh-preview.exe</c>, <c>pwsh-7.4-preview.exe</c>).
 /// </summary>
@@ -126,6 +131,8 @@ public static class HandsForbiddenApps
         // оболочки и терминалы
         "bash.exe", "sh.exe", "wsl.exe", "wslhost.exe", "mintty.exe", "git-bash.exe",
         "wt.exe", "WindowsTerminal.exe", "OpenConsole.exe", "conhost.exe",
+        // запускалки оболочки: «Пуск», поиск, диспетчер задач, FAR
+        "StartMenuExperienceHost.exe", "SearchHost.exe", "SearchApp.exe", "Taskmgr.exe", "far.exe",
     ];
 
     public static readonly IReadOnlyList<string> NamePrefixes = ["python", "pwsh"];
@@ -156,11 +163,59 @@ public static class HandsBridgeArgs
     public const string ActivityEventPrefix = @"Local\AiHome.Hands.Acted.";
 
     /// <summary>
+    /// Именованное событие хода «руки заняты»: мост поднимает его, когда действие упёрлось в
+    /// <see cref="HandsMachineLock"/> другого хода, и агент доносит серверу «занято» для бейджа.
+    /// Имя создаёт агент (<see cref="BusyEventPrefix"/> + ход).
+    /// </summary>
+    public const string BusyEvent = "--busy-event";
+
+    /// <summary>Префикс имени события <see cref="BusyEvent"/>.</summary>
+    public const string BusyEventPrefix = @"Local\AiHome.Hands.Busy.";
+
+    /// <summary>
+    /// Именованное событие хода «ход окончен»: агент поднимает его, увидев в выводе CLI строку
+    /// <c>{"type":"result"}</c>, и мост отпускает <see cref="HandsMachineLock"/>. Процесс CLI при
+    /// этом живёт дальше; следующее действие рук берёт замок заново. Имя создаёт агент
+    /// (<see cref="TurnEndEventPrefix"/> + ход).
+    /// </summary>
+    public const string TurnEndEvent = "--turn-end-event";
+
+    /// <summary>Префикс имени события <see cref="TurnEndEvent"/>.</summary>
+    public const string TurnEndEventPrefix = @"Local\AiHome.Hands.TurnEnd.";
+
+    /// <summary>
     /// Префикс имени Job хода с руками. Мосту имя больше не передаётся (<c>--turn-job</c> снят вместе
     /// с границей «только свои окна», ADR-016 §7): Job хода нужен только агенту — <c>KillTree</c>
     /// по концу хода гасит всё, что ход открыл; имя остаётся для журнала.
     /// </summary>
     public const string TurnJobPrefix = @"Local\AiHome.Turn.";
+
+    /// <summary>
+    /// Эндпоинт OCR (этап A «руки без UIA»): мост шлёт сюда картинку страницы на распознавание
+    /// текста. Значение — адрес хода в сайдкаре с сегментом <c>ocr</c>; создаёт агент,
+    /// сервер и модель его не задают.
+    /// </summary>
+    public const string OcrEndpoint = "--ocr-endpoint";
+
+    /// <summary>
+    /// Путь корня проекта на устройстве (D2d «руки без UIA»): сюда мост пишет файлы, которые
+    /// модель попросила сохранить (<c>saveTo</c> снимка, нарезка скана). Задаёт только агент
+    /// (реальный каталог проекта на машине); сервер и модель его не задают. Без него любая
+    /// запись отказывает — корня, куда писать, нет.
+    /// </summary>
+    public const string ProjectRoot = "--project-root";
+}
+
+/// <summary>
+/// Контракт OCR «рук без UIA» (этап A): одна константа потолка картинки на сервер
+/// (<c>LocalOcrService</c>, <c>SidecarProxy</c>) и мост (<c>OcrClient</c>) — стороны не
+/// разойдутся. Ядро видно и мосту (сборка <c>HandsBridge.Policy</c> компилирует этот файл),
+/// и серверу (проектная ссылка).
+/// </summary>
+public static class HandsOcr
+{
+    /// <summary>Потолок картинки: 8 МБ.</summary>
+    public const long MaxImageBytes = 8L * 1024 * 1024;
 }
 
 /// <summary>
@@ -171,11 +226,23 @@ public static class HandsBridgeArgs
 public static class HandsVision
 {
     public static readonly IReadOnlyList<string> ImageTools = ["screenshot_control", "browser_screenshot"];
+
+    /// <summary>
+    /// Инструменты, которым замок машины (<see cref="HandsMachineLock"/>) не нужен: снимки
+    /// (<see cref="ImageTools"/>) и браузерные чтения через CDP — ни фокус, ни ввод они не трогают
+    /// и соседнему ходу не мешают.
+    /// </summary>
+    public static readonly IReadOnlyList<string> ReadOnlyTools =
+        [.. ImageTools, "browser_snapshot", "browser_query", "browser_wait"];
 }
 
 /// <summary>
-/// Одни руки на машину: второй ход с руками на той же машине (и в том же сеансе входа)
-/// получает честный отказ, а не делит мышь и клавиатуру с первым.
+/// Одни руки на машину: замок держится на время действий руками в пределах хода. Берёт его мост
+/// при первом действии ввода или управления окнами и программами, отпускает по концу хода
+/// (<see cref="HandsBridgeArgs.TurnEndEvent"/>) или смертью процесса — именованный мьютекс при
+/// смерти владельца становится брошенным и достаётся следующему. Действие второго хода на той же
+/// машине (и в том же сеансе входа) получает отказ инструмента, а не делит мышь и клавиатуру с первым.
+/// <see cref="BusyText"/> — отказ запуска хода агентом старой версии, который брал замок на старте.
 /// </summary>
 public static class HandsMachineLock
 {
@@ -196,9 +263,10 @@ public static class HandsEndReason
     public const string HandsDisabled = "disabled";
     public const string AgentStopping = "agent-stopping";
     /// <summary>
-    /// Ход не получил руки: их держит другой ход на этой машине (<see cref="HandsMachineLock"/>).
-    /// Приходит кодом отказа <see cref="DeviceExecExit.Refusal"/>, в чат — <c>Reason</c> у
-    /// <see cref="HandsChatStates.Unavailable"/>.
+    /// Руки держит другой ход на этой машине (<see cref="HandsMachineLock"/>). Нынешний агент
+    /// доносит это <see cref="DeviceHandsReport"/> с <see cref="HandsChatStates.Unavailable"/>, когда
+    /// действие моста упёрлось в замок; старый — кодом отказа запуска <see cref="DeviceExecExit.Refusal"/>.
+    /// В чат — <c>Reason</c> у <see cref="HandsChatStates.Unavailable"/>.
     /// </summary>
     public const string Busy = "busy";
 }
@@ -298,7 +366,7 @@ public sealed record HandsPipeMessage(
 /// <summary>Что показывает трей.</summary>
 /// <param name="Installed">Мост рук лежит в каталоге версии агента.</param>
 /// <param name="ActiveTurns">
-/// Ходы, к которым сейчас подключены руки (не больше одного — <see cref="HandsMachineLock"/>);
+/// Ходы, к которым сейчас подключены руки (действует из них в моменте один — <see cref="HandsMachineLock"/>);
 /// «ИИ управляет компьютером» — только у тех, где <see cref="HandsActiveTurn.IsActing"/>.
 /// </param>
 /// <param name="ServerOnline">Связь агента с сервером — «Стоп» работает и без неё.</param>

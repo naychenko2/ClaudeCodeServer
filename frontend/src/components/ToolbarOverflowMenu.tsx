@@ -2,7 +2,7 @@ import type { ReactNode, CSSProperties } from 'react';
 import { useEffect, useRef, useState, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { MoreHorizontal } from 'lucide-react';
-import { C, R, TB, FONT, SHADOW, Z } from '../lib/design';
+import { C, R, TB, FONT, FS, SHADOW, Z } from '../lib/design';
 import { ToolbarIconButton } from './Toolbar';
 
 // === Единый overflow-примитив тулбаров ===
@@ -22,6 +22,9 @@ export type OverflowItem = {
   icon?: ReactNode;
   label: string;
   sublabel?: string;
+  // Значение справа от подписи (моно): «Срок чата · осталось 2 ч». Цвет задаёт
+  // вызывающий (C.textSecondary / C.warningText) — строка только выравнивает и шрифт
+  value?: ReactNode;
   onClick?: () => void;
   // undefined — обычный пункт (клик закрывает меню); boolean — строка-переключатель
   // (клик переключает, меню остаётся открытым, справа рисуется свитч по значению).
@@ -29,6 +32,8 @@ export type OverflowItem = {
   dot?: boolean;        // точка-индикатор справа («живой» пункт)
   active?: boolean;     // текущий раздел — подсвечивается accent-цветом
   danger?: boolean;
+  // Предупреждающий тон (C.warningText): действие обратимо и ничего не ломает, но идёт в обход правила
+  warning?: boolean;
   disabled?: boolean;
   // Второе действие строки — кнопка-иконка справа (у пункта есть и основной клик,
   // и побочная команда: глазик видимости кнопки в ряду). Клик по ней НЕ выполняет
@@ -228,6 +233,8 @@ export function ToolbarOverflowMenu({
         {typeof indicator === 'number' && indicator > 0 && (
           <span style={countBadgeInline}>{indicator}</span>
         )}
+        {indicator === true && <span style={dotBadge} />}
+        {nodeIndicator(indicator)}
       </button>
     );
   } else {
@@ -240,6 +247,12 @@ export function ToolbarOverflowMenu({
         </ToolbarIconButton>
         {typeof indicator === 'number' && indicator > 0 && <span style={countBadge}>{indicator}</span>}
         {indicator === true && <span style={dotBadge} />}
+        {/* ReactNode — как есть (контракт пропа это обещал, иконочный триггер не рисовал):
+            вызывающий даёт свой тон и форму — accent у dotBadge закреплён за «что-то идёт
+            прямо сейчас», чужие состояния (напр. дежурство стенда) несут свой цвет.
+            Позиционируется внутри этого же relative-спана. Числа/булевы уже разобраны
+            выше; undefined/null/false в JSX и так ничего не рисуют */}
+        {typeof indicator !== 'number' && typeof indicator !== 'boolean' && indicator}
       </span>
     );
   }
@@ -282,6 +295,19 @@ export function ToolbarOverflowMenu({
   );
 }
 
+// === Индикатор-ReactNode на триггере ===
+// Контракт prop `indicator`: number>0 — счётчик-бейдж, true — точка, ReactNode — как есть.
+// Число и булев рисуют сами ветки триггера: в иконочной — absolute-бейдж/точка по углу
+// обёртки кнопки, в подписанной — inline-бейдж в строке и точка по углу кнопки. Здесь
+// только последняя ветка: всё, что не число/булево/пусто, отдаём как есть; positioning
+// несёт вызывающий (оба пути триггера — position:relative, точка-спан — absolute).
+// number/boolean здесь null — иначе тот же индикатор рисовался бы дважды.
+function nodeIndicator(indicator: number | boolean | ReactNode | undefined): ReactNode {
+  if (indicator == null) return null;
+  if (typeof indicator === 'boolean' || typeof indicator === 'number') return null;
+  return indicator;
+}
+
 // === Строка меню/шита ===
 function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: boolean; onDone: () => void }) {
   const isToggle = item.toggle !== undefined;
@@ -308,7 +334,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         border: 'none', background: 'transparent', cursor: item.disabled ? 'default' : 'pointer',
         borderRadius: R.lg, padding: isMobile ? '11px 12px' : '9px 10px',
         minHeight: isMobile ? 44 : undefined, fontFamily: FONT.sans,
-        color: item.danger ? C.dangerText : item.active ? C.accent : C.textHeading,
+        color: item.danger ? C.dangerText : item.warning ? C.warningText : item.active ? C.accent : C.textHeading,
         opacity: item.disabled ? 0.5 : 1,
         // При действии-спутнике фон и скругление рисует обёртка, иначе подсветка
         // обрывалась бы ровно перед кнопкой справа
@@ -320,7 +346,7 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
       {item.icon != null && (
         <span style={{
           width: 24, display: 'grid', placeItems: 'center', flex: 'none',
-          color: item.danger ? C.dangerText : item.active ? C.accent : C.textSecondary,
+          color: item.danger ? C.dangerText : item.warning ? C.warningText : item.active ? C.accent : C.textSecondary,
         }}>
           {item.icon}
         </span>
@@ -340,6 +366,10 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
         )}
         {item.sublabel && <span style={{ display: 'block', fontSize: 11.5, color: C.textMuted, fontWeight: 400 }}>{item.sublabel}</span>}
       </span>
+      {/* Значение справа (моно): подпись тянет flex:1, поэтому значение прижато к краю */}
+      {item.value != null && (
+        <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap' }}>{item.value}</span>
+      )}
       {isToggle && (
         <span style={{ ...switchTrack, background: item.toggle ? C.accent : C.track }}>
           <span style={{ ...switchThumb, transform: item.toggle ? 'translateX(16px)' : 'translateX(0)' }} />

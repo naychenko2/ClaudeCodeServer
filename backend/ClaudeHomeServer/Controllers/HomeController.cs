@@ -25,10 +25,11 @@ public class HomeController(SessionManager sessions, ProjectManager projects, IT
     public IActionResult GetSummary([FromQuery] int recent = 10)
     {
         recent = Math.Clamp(recent, 1, 50);
-        // Имена проектов владельца: id → Name (чужие проекты сюда не попадают по построению)
-        var projectNames = projects.GetByOwner(UserId).ToDictionary(p => p.Id, p => p.Name);
+        // Имена доступных проектов (свои и общие, где участник): id → Name; чужие без членства не попадают
+        var projectNames = projects.GetAccessible(UserId).ToDictionary(p => p.Id, p => p.Name);
 
-        var all = sessions.GetAllOwnedBy(UserId)
+        // Список человека (S2d-4a): чужой приватный чат в сводке не живёт — ни id, ни названием
+        var all = sessions.GetAllOwnedVisibleBy(UserId)
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 

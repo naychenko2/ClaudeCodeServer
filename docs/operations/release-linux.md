@@ -56,10 +56,24 @@
    `Monitor`/`run_in_background` умирает вместе с ходом чата и тут не
    работает.
 
-4. **Запустить `switch-release.sh`** — сам уходит в `systemd-run`,
-   сохраняет снимок текущего бинарника, стопит `ccs.service`, копирует
-   staging поверх `/opt/ccs/app/`, поднимает сервис, гоняет health-гейт.
-   При провале гейта — автооткат на снимок и рестарт.
+4. **Запустить `switch-release.sh`** — сам уходит в `systemd-run` и делает, в
+   порядке: **бэкап данных** (`dotnet ClaudeHomeServer.dll --backup` из текущего
+   прода, таймаут `BACKUP_TIMEOUT`, провал = отказ без изменений, как «не удалось
+   сохранить билд»), стоп `ccs.service`, **снести контейнер песочницы** (имя из
+   `Sandbox:ContainerName` прод-конфига, дефолт `cc-sandbox`; сервер поднимет его
+   заново из свежего образа), **снимок** текущего бинарника **и запись его в список
+   `releases` журнала** (материал отката, `deploy_status` его видит), копирование
+   staging поверх `/opt/ccs/app/` (без `appsettings.Local.json*`, `.mcp.json`,
+   `backups-secrets`, `logs/`, `data/` — машинные файлы app из staging не берутся;
+   проверка — `scripts/ops/test-switch-copy.sh`), **снести контейнер песочницы ещё
+   раз** (переход на новый образ), старт сервиса, health-гейт. При провале гейта —
+   автооткат на снимок и рестарт.
+
+   > **Образ песочницы.** Перед выкаткой пересоберите его, как Windows-агент:
+   > `docker build --target sandbox --build-arg APP_UID=$(id -u) -t claude-sandbox
+   > -f backend/ClaudeHomeServer/Dockerfile <relcheck>`. Без этого container-юзеры
+   > исполняют старый код MCP/CLI. Оркестратор `deploy-linux.sh` делает это сам (шаг
+   > `sandbox-image`); в ручной процедуре — командой выше.
 
 5. **После будильника сторожа** — прод на новой сборке, health зелёный
    (204 + `X-Build` = свежий `build-id.txt`). Лог выкатки в
@@ -89,7 +103,12 @@ bash -n /opt/ccs/switch-release.sh
 - при провале health (автооткат) и при отказе до остановки ротация **не запускается**;
   ошибка удаления выкатку не валит;
 - число меняется правкой константы `RELEASES_KEEP` в начале скрипта: окружение вызывающего в
-  `systemd-run`-юнит не попадает.
+  `systemd-run`-юнит не попадает;
+- каждый удалённый снимок убирается и из списка `releases` в `deploy-state.json`
+  (`deploy-journal.py drop-release`), иначе `deploy_status` предложил бы откат на
+  несуществующий каталог. Запись снимка в `releases` происходит сразу после `snapshot`
+  (`deploy-journal.py set-release`): id = метка, sha = из `build-id.txt` снимка, path =
+  каталог снимка.
 
 Разовый запуск без выкатки (в т. ч. для проверки):
 
@@ -106,6 +125,8 @@ CCS_RELEASES_DIR=/tmp/x CCS_RELEASES_KEEP=3 /opt/ccs/switch-release.sh --rotate 
 (процесс CLI закрывается вместе с бэкендом — он же запускал его). В этот
 момент человек ещё не знает, дошёл ли `publish-linux.sh` до swap. Monitor
 и `run_in_background` харнесса CLI тоже мертвы.
+
+На хосте для выкатки нужны `rsync`, `flock` и `python3`; без `rsync` `switch-release.sh` отказывает (exit 1) до остановки сервиса.
 
 Серверный сторож (ADR-013) исполняет `poll_command` **в бэкенде**, а не в
 процессе CLI — переживает stop, рестарт и смену хода. Условие — `exit 0`

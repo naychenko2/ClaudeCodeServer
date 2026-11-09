@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// ни состава, ни вызова: персона из чужого воркспейса не то что не редактируется —
 /// её существование не подтверждается.
 /// </summary>
+[Trait("Category", "Host")]
 public class PersonasHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -73,11 +74,18 @@ public class PersonasHttpOwnerIsolationTests : IDisposable
     {
         var sessionId = await CreateSessionAsync(Client);
 
-        var call = await Client.PostAsJsonAsync($"/mcp/personas/{sessionId}", new
+        // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id;
+        // без него вызов считался бы узким и scope=all отказал бы по рамке, а не по изоляции
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/personas/{sessionId}")
         {
-            jsonrpc = "2.0", id = 1, method = "tools/call",
-            @params = new { name = "personas_list", arguments = new { scope = "all" } },
-        });
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call",
+                @params = new { name = "personas_list", arguments = new { scope = "all" } },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var call = await Client.SendAsync(req);
         call.StatusCode.Should().Be(HttpStatusCode.OK);
         var answer = JsonSerializer.Deserialize<JsonElement>(await call.Content.ReadAsStringAsync());
         answer.GetProperty("result").TryGetProperty("isError", out _).Should().BeFalse();

@@ -1,13 +1,9 @@
-import { useState, useEffect, useRef, useMemo, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal } from 'lucide-react';
+import { useState, useEffect, useRef, useMemo, Fragment, type ReactNode } from 'react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare, BookOpen } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
-import { rewriteCostUsd, cacheLeftText, cacheRewriteText, cacheTipText, type PromptCacheState, type PromptCacheStatus } from '../../lib/promptCache';
-import { handoffAvailability, handoffWarm } from '../../lib/chatHandoff';
-import { takeExpiringCacheToast } from '../../lib/promptCacheToast';
-import { contextHandoffOffered, contextHandoffWarm, takeContextDangerToast } from '../../lib/contextHandoff';
-import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
-import { api } from '../../lib/api';
+import { api, chatFieldsErrorText } from '../../lib/api';
+import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName, useProviders } from '../../lib/models';
@@ -15,6 +11,7 @@ import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutButton } from './DossierOptOutButton';
+import { PrivateChatToggle } from './PrivateChatToggle';
 import { NotifyButton } from './NotifyButton';
 import { updateChatFields } from '../../lib/chatUpdate';
 import { isNotifySupported, useChatNotifyOn } from '../../lib/notify';
@@ -26,6 +23,12 @@ import { personaTitleLines } from '../../lib/personas';
 import { isProjectPersona, isSpherePersona, zoneLabel } from '../../lib/personaZone';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useWikiChatAvailable } from '../../hooks/useWikiChatAvailable';
+import { useLocalModelLive, type LocalModelLiveState } from '../../features/localModel/useLocalModelLive';
+import { useLocalModelAdmin } from '../../features/localModel/useLocalModelStats';
+import { localModelTail, localModelQueueText, formatTps } from '../../features/localModel/localModelTail';
+import { revealWorkspacePanel } from '../../lib/subsystems/registryCore';
+import { LOCAL_MODEL_PANEL } from '../../features/localModel/manifest';
 import { AGENT_COLORS, agentDotColor } from '../AgentSelector';
 import { type RateWindow, type RatePillSegment, type RingPillCandidate, RATE_COLORS, RING_WINDOWS, windowLabel, fmtReset, worstWindow, withAccountFallback, ratePillSegments, ratePillVisible, windowCandidates, ringPillHead, ringArcLength } from '../../lib/rateLimit';
 import { useAccountUsage, accountSnapshotsFor } from '../../lib/accountUsage';
@@ -38,11 +41,14 @@ import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoin
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
+import { FeatureBackChip } from './FeatureBackChip';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
+import { readStoredUserId } from '../../lib/offline';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { useSlotItem } from '../../lib/subsystems/registry';
-import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx } from '../../lib/subsystems/registryCore';
+import type { ChatHeaderSummaryCtx, ChatHeaderMenuItemCtx, ChatHeaderBadgeCtx, ChatWikiMenuCtx } from '../../lib/subsystems/registryCore';
 import type { ExtractedTaskCandidate } from '../../types';
 import { ChatOriginBadge } from '../ChatOriginBadge';
 import { CHAT_SWITCHER_MIN_W, ChatSwitcherTrigger } from '../../features/home/ChatSwitcherSheet';
@@ -53,8 +59,26 @@ import { projectDeviceBadge } from '../../lib/projectCapabilities';
 import { type GlifGenStats, fmtCredits } from './glifStats';
 import { useActionVisibility } from '../../hooks/useActionVisibility';
 import { usePrefersReducedMotion } from '../../hooks/usePrefersReducedMotion';
+import { usePromptCache, usePromptCacheItems } from '../../hooks/usePromptCache';
+import { CacheDial, CacheDialPip, CacheSpokenText, cacheLeftText, cacheStaticLabel, dialFrac } from '../ui/CacheDial';
+import { useLiveNow } from '../../hooks/useLiveNow';
+import { liveState, type PromptCacheState } from '../../lib/promptCache';
+import { useCacheWarnThresholds } from '../../lib/cacheWarnPrefs';
+import { CacheWarnDialog } from './CacheWarnDialog';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { CHAT_ACTION_ORDER, CHAT_BADGE_ORDER, CHAT_BADGE_LABELS, HEADER_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_COMPACT_HIDDEN_BY_DEFAULT, WALL_ACTIONS_HIDDEN_BY_DEFAULT, type ChatActionKey, type ChatBadgeKey } from '../../lib/chatActions';
 import { chatFilterScope, leaveChatArchiveView } from '../../lib/chatFilters';
+
+// Узкая шапка: < 340 CSS px «срок» уходит из ряда в меню «⋯», освобождая ~40 px
+// контейнеру бейджей — пилюля Ctx на 320 встаёт целиком, а не срезается. Порог —
+// matchMedia по ширине ОКНА, а не useIsMobile: мобильная раскладка начинается на 600,
+// а срез пилюли — уже на 340.
+const NARROW_QUERY = '(max-width: 339px)';
+// Меньше часа до конца срока — тревога: «срок» в «⋯» получает warning-цвет и точку
+const ONE_HOUR_MS = 3600_000;
+function useNarrowHeader(): boolean {
+  return useMediaQuery(NARROW_QUERY);
+}
 
 // Накопительная статистика стоимости/токенов по всем result-элементам ленты
 export interface CostStats {
@@ -175,9 +199,9 @@ function BadgeShell({ label, amount, title, tip, ariaLabel, isMobile, isCompact,
           display: 'flex', alignItems: 'center',
           gap: SP.xs,
           // Кольцевая — той же высоты, что соседние: вертикальный padding общий, высоту
-          // задаёт строка текста (иконка её не раздувает, см. MeterIcon); слева поуже —
-          // полоски прижаты к скруглению
-          padding: ring ? '3px 9px 3px 7px' : '3px 9px',
+          // задаёт строка текста (иконка её не раздувает, см. RingIcon); слева 2 — иконка
+          // прижата к скруглению
+          padding: ring ? '3px 9px 3px 2px' : '3px 9px',
           boxSizing: 'border-box',
           background: toneBg, border: `1px solid ${toneBorder}`, borderRadius: ring ? R.max : R.lg,
           cursor: 'pointer', fontFamily: FONT.mono, fontSize: FS.sm, fontWeight: 700, color: C.accent,
@@ -241,10 +265,8 @@ function hasClaudeCostInfo(stats: CostStats, windows: RateWindow[]): boolean {
 // Тело поповера стоимости Claude (лимиты подписки + свёрнутая разбивка токенов/ходов).
 // Вынесено отдельно: секция поповера кольцевой пилюли. Режим оплаты здесь только читается —
 // переключатель живёт в «Модели и расход» (настройка серверная, общая на всех).
-// afterWindows — строка сразу под окнами лимитов, до свёрнутого расхода (строка кэша:
-// на пилюле циферблат стоит последним, и в поповере кэш идёт последней строкой списка)
-function ClaudeCostPopoverBody({ stats, billing, windows, afterWindows }: {
-  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[]; afterWindows?: ReactNode;
+function ClaudeCostPopoverBody({ stats, billing, windows }: {
+  stats: CostStats; billing: ClaudeBilling; windows: RateWindow[];
 }) {
   const sub = billing === 'subscription';
   const [costOpen, setCostOpen] = useState(false);
@@ -278,9 +300,8 @@ function ClaudeCostPopoverBody({ stats, billing, windows, afterWindows }: {
       {ratePillSegments(windows).map(s => windows.find(w => w.limitType === s.limitType)!)
         .map((w, i) => (
           <RateRow key={w.limitType} w={w}
-            pip={i < RING_WINDOWS ? <MeterPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
+            pip={i < RING_WINDOWS ? <RingPip slot={(i + 1) as 1 | 2} level={w.level} /> : undefined} />
         ))}
-      {afterWindows}
       {/* Расход по API-тарифу — справка, свёрнута одной строкой под лимитами; расхода нет — нет и строки */}
       {stats.cost > 0 && <button type="button" onClick={() => setCostOpen(o => !o)} aria-expanded={costOpen}
         style={{
@@ -296,31 +317,45 @@ function ClaudeCostPopoverBody({ stats, billing, windows, afterWindows }: {
   );
 }
 
-// === Пилюля шапки «полоски» ===
-// Три полоски сверху вниз: контекст, 1-е окно, 2-е окно. Слоты не сдвигаются: нет
-// окна — на его месте пусто, нет оценки контекста — верхняя полоска одной дорожкой,
-// поэтому полоски не прыгают, когда появляется оценка. Справа через разделитель —
-// циферблат кэша промпта (CacheClockFace). Полоски вместо колец: длина читается
-// точнее дуги, а внутреннее кольцо в иконке 20×20 было почти точкой.
-interface MeterSlot { pct: number | null; level: RateWindow['level'] }
+// === Кольцевая пилюля шапки (вариант C2) ===
+// Спецификация — заметка «Шапка чата — пилюля «кольца» (C2), спецификация».
+// Три кольца снаружи внутрь: контекст, 1-е окно, 2-е окно. Слоты не сдвигаются: нет
+// окна — его кольца нет вовсе, нет оценки контекста — внешнее кольцо одной дорожкой,
+// поэтому кольца не прыгают, когда появляется оценка.
+interface RingSlot { pct: number | null; level: RateWindow['level'] }
 
-// Геометрия иконки: три полоски 22×3 с зазором 2 → 22×13
-const BAR_W = 22;
-const BAR_H = 3;
-const BAR_GAP = 2;
+// Радиусы колец (outer, mid, inner) в viewBox 20×20: полоса 2, зазор 1px, дырка Ø4
+const RING_BOX = 20;
+const RING_C = RING_BOX / 2;
+const RING_GEOMETRY = [9, 6, 3].map(r => ({ r, L: 2 * Math.PI * r }));
+const RING_STROKE = 2;
+
+// Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся.
+// round — скруглённые концы дуги; animate — дуга плавно дорастает до нового значения
+function RingCircle({ r, stroke, dash, round, animate }: { r: number; stroke: string; dash?: string; round?: boolean; animate?: boolean }) {
+  return (
+    <circle cx={RING_C} cy={RING_C} r={r} fill="none" strokeWidth={RING_STROKE} strokeLinecap={round ? 'round' : 'butt'}
+      strokeDasharray={dash} style={{ stroke, transition: animate ? 'stroke-dasharray 600ms cubic-bezier(.2,.8,.2,1)' : undefined }} />
+  );
+}
+
+// Дуга со скруглёнными концами: каждый конец выступает на полтолщины, поэтому штрих
+// короче на толщину — видимая длина остаётся ровно arc (и минимум 3px из ringArcLength)
+const roundArcDash = (arc: number, L: number) => `${Math.max(arc - RING_STROKE, 0.01)} ${L}`;
 
 const levelRank = (l: RateWindow['level']) => (l === 'danger' ? 2 : l === 'warn' ? 1 : 0);
 
-// Иконка пилюли. slots — [контекст, 1-е окно, 2-е окно]; undefined — слота нет (место
-// пустое), pct null — только дорожка. runTop — идёт сжатие: по верхней полоске бежит
-// отрезок акцента. forceReducedMotion — только для витрины (5.2r), в продукте решает ОС.
+// Иконка пилюли 20×20. slots — [outer, mid, inner]; undefined — слота нет (не рисуется),
+// pct null — только дорожка. spinOuter — идёт сжатие: внешнее кольцо становится спиннером.
+// forceReducedMotion — только для витрины (5.2r), в продукте решает настройка ОС.
 // Обёртка нулевой высоты: иконка центрируется по строке текста, но высоту пилюли не
 // задаёт — её задаёт текст, ровно как у соседних пилюль, и ряд стоит на одной высоте
-function MeterIcon({ slots, runTop, forceReducedMotion, resetKey }: {
-  slots: [MeterSlot, MeterSlot | undefined, MeterSlot | undefined]; runTop?: boolean; forceReducedMotion?: boolean;
+function RingIcon({ slots, spinOuter, forceReducedMotion, resetKey }: {
+  slots: [RingSlot, RingSlot | undefined, RingSlot | undefined]; spinOuter?: boolean; forceReducedMotion?: boolean;
   resetKey?: string;
 }) {
   const reducedMotion = usePrefersReducedMotion() || !!forceReducedMotion;
+  const outer = RING_GEOMETRY[0];
   // Толчок — только когда уровень вырос в ЭТОМ чате; смена чата лишь запоминает новый уровень
   const rank = Math.max(...slots.map(s => (s && s.pct !== null ? levelRank(s.level) : 0)));
   const prev = useRef({ rank, resetKey });
@@ -330,51 +365,49 @@ function MeterIcon({ slots, runTop, forceReducedMotion, resetKey }: {
     prev.current = { rank, resetKey };
   }, [rank, resetKey, reducedMotion]);
   return (
-    <span style={{ display: 'flex', alignItems: 'center', width: BAR_W, height: 0, flexShrink: 0 }}>
-      <span aria-hidden onAnimationEnd={() => setBump(false)} style={{
-        display: 'flex', flexDirection: 'column', gap: BAR_GAP, width: BAR_W, flexShrink: 0,
-        animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined,
-      }}>
+    <span style={{ display: 'flex', alignItems: 'center', width: RING_BOX, height: 0, flexShrink: 0 }}>
+    <svg width={RING_BOX} height={RING_BOX} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
+      onAnimationEnd={() => setBump(false)}
+      style={{ flexShrink: 0, display: 'block', transformOrigin: 'center', animation: bump ? 'cc-ring-bump 500ms ease-out' : undefined }}>
+      {/* Старт дуг сверху, по часовой */}
+      <g transform={`rotate(-90 ${RING_C} ${RING_C})`}>
         {slots.map((s, i) => {
-          const run = i === 0 && runTop;
+          if (!s || (i === 0 && spinOuter)) return null;
+          const { r, L } = RING_GEOMETRY[i];
+          const arc = ringArcLength(s.pct, L);
           return (
-            <span key={i} style={{
-              position: 'relative', display: 'block', height: BAR_H, borderRadius: R.max, overflow: 'hidden',
-              background: s ? C.progressTrack : undefined,
-            }}>
-              {/* Длина заливки — ringArcLength по ширине полоски: 1% не короче 3px, 99% ≠ 100% */}
-              {s && !run && <span style={{
-                position: 'absolute', left: 0, top: 0, bottom: 0, width: ringArcLength(s.pct, BAR_W),
-                borderRadius: R.max, background: RATE_COLORS[s.level].fill,
-                transition: reducedMotion ? undefined : 'width 600ms cubic-bezier(.2,.8,.2,1)',
-              }} />}
-              {/* Сжатие: бегущий отрезок; при reduced-motion — неподвижный посередине */}
-              {run && <span style={{
-                position: 'absolute', top: 0, bottom: 0, left: reducedMotion ? (BAR_W - 8) / 2 : 0, width: 8,
-                borderRadius: R.max, background: C.accent,
-                animation: reducedMotion ? undefined : 'cc-bar-run 1.1s ease-in-out infinite',
-              }} />}
-            </span>
+            <g key={i}>
+              <RingCircle r={r} stroke={C.progressTrack} />
+              {arc > 0 && <RingCircle r={r} stroke={RATE_COLORS[s.level].fill} dash={roundArcDash(arc, L)} round animate={!reducedMotion} />}
+            </g>
           );
         })}
-      </span>
+      </g>
+      {spinOuter && (
+        // Вращается только внешнее кольцо; при reduced-motion — неподвижная четверть
+        // поверх пунктирной дорожки, чтобы «идёт работа» читалось и без анимации
+        <g style={{ transformOrigin: `${RING_C}px ${RING_C}px`, animation: reducedMotion ? undefined : 'cc-spin 0.9s linear infinite' }}>
+          <RingCircle r={outer.r} stroke={C.progressTrack} dash={reducedMotion ? '2 2' : undefined} />
+          <RingCircle r={outer.r} stroke={C.accent} dash={roundArcDash(outer.L * 0.25, outer.L)} round />
+        </g>
+      )}
+    </svg>
     </span>
   );
 }
 
-// Пип строки поповера — мини-копия иконки 12×8: все три полоски дорожками, полоска этой
-// строки залита целиком цветом уровня. Просто цветная точка не годится: все окна в норме
-// дали бы одинаковые серые точки, а по месту в мини-иконке полоска узнаётся всегда
-function MeterPip({ slot, level }: { slot: 0 | 1 | 2; level: RateWindow['level'] }) {
+// Пип строки поповера — мини-копия иконки 12×12 (та же геометрия в масштабе 0.6): все три
+// слота дорожками, слот этой строки залит целиком цветом уровня. Просто цветная точка не
+// годится: все окна в норме дали бы одинаковые серые точки, а по месту в мини-иконке
+// кольцо узнаётся всегда
+function RingPip({ slot, level }: { slot: 0 | 1 | 2; level: RateWindow['level'] }) {
   return (
-    <span aria-hidden style={{ display: 'flex', flexDirection: 'column', gap: 1, width: 12, flexShrink: 0 }}>
-      {[0, 1, 2].map(i => (
-        <span key={i} style={{
-          display: 'block', height: 2, borderRadius: R.max,
-          background: i === slot ? RATE_COLORS[level].fill : C.progressTrack,
-        }} />
+    <svg width={12} height={12} viewBox={`0 0 ${RING_BOX} ${RING_BOX}`} aria-hidden shapeRendering="geometricPrecision"
+      style={{ flexShrink: 0, display: 'block' }}>
+      {RING_GEOMETRY.map(({ r }, i) => (
+        <RingCircle key={i} r={r} stroke={i === slot ? RATE_COLORS[level].fill : C.progressTrack} />
       ))}
-    </span>
+    </svg>
   );
 }
 
@@ -473,7 +506,7 @@ function ContextRow({ estimate, assistantName = 'Ассистент' }: { estima
   const c = RATE_COLORS[estimate.level];
   const hasPct = estimate.pct !== undefined;
   return (
-    <MeterRow pip={<MeterPip slot={0} level={estimate.level} />} label="Контекст"
+    <MeterRow pip={<RingPip slot={0} level={estimate.level} />} label="Контекст"
       fill={c.fill} valueColor={hasPct ? c.text : C.textMuted}
       value={hasPct ? `${estimate.pct}%` : estimate.fresh ? 'сжат' : '—'}
       pct={estimate.pct}
@@ -503,29 +536,19 @@ function ContextRow({ estimate, assistantName = 'Ассистент' }: { estima
   );
 }
 
-// Пустая лента для usePromptCache, когда кэша нет (стабильная ссылка — без лишних пересчётов)
-const NO_ITEMS: ChatItem[] = [];
-
-// Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст», при
-// warn/danger рядом «Перенести в новый чат» (две альтернативы «контекст распух») и «Пороги».
+// Действия с контекстом — один ряд под чертой в конце поповера: «Сжать контекст» и «Пороги».
 // Пояснение к сжатию — подсказкой кнопки, а не абзацем над ней.
-function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент', cacheItems, handoff }: {
+function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, online, assistantName = 'Ассистент' }: {
   estimate: ContextEstimate; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  assistantName?: string; cacheItems?: ChatItem[]; handoff?: HandoffControl;
+  assistantName?: string;
 }) {
   const [showThresholds, setShowThresholds] = useState(false);
   const hasPct = estimate.pct !== undefined;
-  // Статус кэша — повод предложить перенос наравне с порогом контекста; нет ленты кэша
-  // (сторонний провайдер) — unknown
-  const cache = usePromptCache(cacheItems ?? NO_ITEMS);
 
   // Кнопка сжатия недоступна: ход идёт, компакт идёт, оценки нет, контекст только что сжат,
   // или сжимать ещё нечего (слишком мало ходов — CLI вернёт «not enough messages»)
   const compactDisabled = isWaiting || isCompacting || !hasPct || estimate.fresh || !canCompact || !online;
-  // Перенос — одна кнопка на оба повода: контекст в warn/danger или кэш остывает/остыл
-  const cacheReason = !isWaiting && (cache.status === 'expiring' || cache.status === 'cold');
-  const offered = handoff && (contextHandoffOffered(estimate.level) || cacheReason) ? handoff : undefined;
   const compactTitle = !canCompact && !isWaiting && !isCompacting
     ? 'Пока нечего сжимать — слишком мало сообщений'
     : isWaiting && !isCompacting ? 'Дождитесь завершения текущего хода'
@@ -538,32 +561,112 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
           {compactNote}
         </div>
       )}
-      {/* Один ряд без переноса строки: при предложенном переносе «Сжать контекст» короче
-          («Сжать», полный смысл — в подсказке), «Пороги» — иконкой */}
-      <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'nowrap', gap: SP.xs + 2 }}>
-        <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}
-          style={{ flexShrink: 0 }}>
-          {isCompacting ? 'Сжимаю…' : offered ? 'Сжать' : 'Сжать контекст'}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+        <Button variant="ghost" size="xs" disabled={compactDisabled} loading={isCompacting} onClick={onCompact} title={compactTitle}>
+          {isCompacting ? 'Сжимаю…' : 'Сжать контекст'}
         </Button>
-        {/* Главное действие ситуации — выделено. Путь — по статусу кэша на момент клика;
-            нет кэша (сторонний провайдер) — холодный */}
-        {offered && (
-          <Button variant="primary" size="xs" disabled={!offered.enabled || isCompacting} loading={offered.busy}
-            onClick={() => offered.onClick(handoffWarm(cache.status))}
-            title={offered.enabled ? HANDOFF_HINT : offered.reason} style={{ flexShrink: 0 }}>
-            {HANDOFF_LABEL}
-          </Button>
-        )}
-        <IconButton size="xs" title="Пороги контекста и кэша" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto', flexShrink: 0 }}>
-          <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        <Button variant="ghost" size="xs" onClick={() => setShowThresholds(true)} style={{ marginLeft: 'auto' }}
+          leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+          Пороги
+        </Button>
       </div>
-      {/* Причину выключенного переноса пишем и текстом: на мобиле подсказки по наведению нет */}
-      {offered && !offered.enabled && offered.reason && (
-        <div style={{ ...meterSubStyle, marginTop: SP.xs, color: C.textMuted }}>{offered.reason}</div>
-      )}
       {showThresholds && <ContextThresholdsDialog onClose={() => setShowThresholds(false)} />}
     </div>
+  );
+}
+
+// Секция «Кэш промпта» в поповере кольцевой пилюли (шаг F-1b): после контекста и его
+// действий, перед fal/glif — порядок секций по макету prompt-cache-dial-v1. Состояние
+// берётся из хука usePromptCache, здесь только тексты и полоска. Секция монтируется,
+// когда поповер открыт: остаток и статус пересчитываются на момент открытия (тик
+// не перерисовывает всю пилюлю, F-1b-r), доля — готовая dialFrac, не свой счёт (F-1b-r).
+// Личный порог «остывает» (F-3): здесь он нужен — статус пересчитывается на момент
+// открытия поповера и на тике своих часов, по тому же личному порогу, что и на пилюле.
+function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
+  const warn = useCacheWarnThresholds();
+  const [showWarn, setShowWarn] = useState(false);
+  // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
+  // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
+  // черновик — в поле ввода (префилл тот же, что у «Попросить агента исправить»,
+  // без авто-сабмита). 409/502 несут человеческий текст с бэка — показываем его,
+  // а не «сбой»; клик можно повторить
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const runHandoff = async () => {
+    setHandoffBusy(true);
+    setHandoffError(null);
+    try {
+      const r = await api.chats.handoff(sessionId);
+      if (r.draft) sessionStorage.setItem('cc_pending_chat_prompt', r.draft);
+      // Тост успеха — только если переход состоялся (F-4r): пропавший чат называет сам
+      // openChatById. На провале черновик снимается — иначе он утечёт в следующий
+      // открытый чат.
+      const ok = await openChatById(r.chatId);
+      if (!ok) {
+        sessionStorage.removeItem('cc_pending_chat_prompt');
+        return;
+      }
+      showToast('Перенос чата', 'Новый чат открыт с передаточной запиской', 'info');
+    } catch (e) {
+      const err = e as Error & { status?: number };
+      // 404 без тела (страховка к бэковому B-4r3): statusText «Not Found» человек не
+      // прочитает — называем причину словами
+      setHandoffError(err.status === 404 && (!err.message || err.message === 'Not Found')
+        ? 'Чат не найден или удалён'
+        : err.message || 'Перенос не получился — попробуйте позже');
+    } finally {
+      setHandoffBusy(false);
+    }
+  };
+  // Те же часы, что у циферблата: пока поповер открыт, остаток живёт своей строкой,
+  // не перерисовывая всю пилюлю (F-1b-r)
+  const live = liveState(state, useLiveNow(state), warn);
+  const st = isWaiting ? 'turn' : live.status;
+  const ttlText = live.ttl === '1h' ? '1 час' : '5 минут';
+  const frac = dialFrac(live);
+  const val = st === 'turn' ? 'идёт ход' : st === 'cold' ? 'остыл' : cacheLeftText(live.remainingMs);
+  const valColor = st === 'turn' ? C.textMuted : st === 'cold' ? C.dangerText : st === 'cooling' ? C.warningText : C.textSecondary;
+  // Цена перезаписи кэша по фронту не известна (тарифов нет) — по предложению макета
+  // без цены sub холодный сокращается до короткой фразы
+  const sub = st === 'warm' ? `Срок ${ttlText}, каждый ход продлевает его заново.`
+    : st === 'cooling' ? `Ответьте до ${new Date(live.expiresAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })} — иначе следующий ход перепишет кэш по полной цене записи.`
+    : st === 'cold' ? 'Следующий ход перепишет кэш.'
+    : 'Срок продлится, когда придёт ответ.';
+  const miss = state.lastMiss
+    ? `${state.lastMiss.label}${state.lastMiss.tokens ? ` · ${fmtTokens(state.lastMiss.tokens)} ток.` : ''}`
+    : 'не было';
+  return (
+    <>
+      <div style={badgeTitleStyle}>Кэш промпта</div>
+      <MeterRow pip={<CacheDialPip state={state} isWaiting={isWaiting} warnThresholds={warn} />}
+        label={st === 'cold' ? 'Состояние' : 'Осталось'}
+        value={val} valueColor={valColor}
+        pct={st === 'warm' || st === 'cooling' ? Math.round(frac * 100) : undefined}
+        fill={st === 'warm' ? C.success : C.warning}
+        sub={<div style={{ ...meterSubStyle, ...(st === 'cold' ? { color: C.dangerText } : {}) }}>{sub}</div>} />
+      <BadgeRow k="В кэше" v={`${fmtTokens(live.readTokens)} токенов`} />
+      <BadgeRow k="Срок кэша" v={ttlText} />
+      <BadgeRow k="Последний промах" v={miss} />
+      <div style={{ marginTop: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
+          onClick={() => void runHandoff()}
+          title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
+          {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
+        </Button>
+        <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)} style={{ marginLeft: 'auto' }}
+          leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+          Когда предупреждать об остывании
+        </Button>
+      </div>
+      {/* Ошибка переноса — текст бэка как есть (409 «чат занят…», 502 «модель не дала
+          записку»), не «сбой»: его можно прочитать и повторить клик */}
+      {handoffError && (
+        <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.dangerBg, color: C.dangerText, borderRadius: R.md }}>
+          {handoffError}
+        </div>
+      )}
+      {showWarn && <CacheWarnDialog onClose={() => setShowWarn(false)} />}
+    </>
   );
 }
 
@@ -699,210 +802,83 @@ export function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenSt
   );
 }
 
-// === Индикатор TTL prompt cache ===
-// Данные — lib/promptCache.ts, таймер — usePromptCache: тикает только сам индикатор.
-// unknown (сторонний провайдер, локальный движок, история до поля) — индикатора нет вовсе.
-// Отдельного чипа нет: кэш — циферблат справа в пилюле шапки, детали — секцией её поповера.
-type KnownCacheStatus = Exclude<PromptCacheStatus, 'unknown'>;
-// Уровень строки кэша в поповере — в шкале строк лимитов (цвет значения и полосы)
-const CACHE_LEVEL: Record<KnownCacheStatus, RateWindow['level']> = { warm: 'normal', expiring: 'warn', cold: 'danger' };
-// Тёплый — нейтральный, как пипы и полосы строк в норме (кэш тёплый почти всё время, и
-// постоянный цвет в шапке был бы шумом без информации: остаток и так виден по сектору);
-// остывающий — тоном предупреждения, остывший — тревожным: следующий ход перепишет весь
-// кэш по полной цене записи. Цвет появляется, только когда есть что решать
-const CACHE_CLOCK_COLOR: Record<KnownCacheStatus, string> = { warm: RATE_COLORS.normal.fill, expiring: RATE_COLORS.warn.fill, cold: RATE_COLORS.danger.fill };
-const CACHE_TEXT_COLOR: Record<KnownCacheStatus, string> = { warm: C.textMuted, expiring: RATE_COLORS.warn.text, cold: RATE_COLORS.danger.text };
-
-// Циферблат 14×14 в viewBox 20: контур, тающий сектор остатка и стрелка на его кромке.
-// Стрелка идёт ВПЕРЁД (по часовой): её угол — прошедшая доля срока, а сектор остатка лежит
-// перед ней, от стрелки по часовой до 12; к остыванию стрелка приходит на 12, сектор
-// исчезает (стрелка назад читалась как перемотка). frac — доля оставшегося срока (0…1);
-// остывший — пунктирный контур и стрелка на нуле; spin — идёт ход: крутится одна стрелка
-const CLOCK_C = 10;
-const CLOCK_SECTOR_R = 7;
-const CLOCK_HAND_R = 6.5;
-function CacheClock({ frac, color, cold, spin, size = 14 }: { frac: number; color: string; cold?: boolean; spin?: boolean; size?: number }) {
-  const reducedMotion = usePrefersReducedMotion();
-  const a = 2 * Math.PI * (1 - Math.min(1, Math.max(0, frac)));
-  const pt = (r: number) => `${CLOCK_C + r * Math.sin(a)} ${CLOCK_C - r * Math.cos(a)}`;
-  const showSector = !cold && !spin && frac > 0;
-  const hand = spin || cold ? `${CLOCK_C} ${CLOCK_C - CLOCK_HAND_R}` : pt(CLOCK_HAND_R);
-  // Цвета — через style: C.* это var(--…), а в атрибутах stroke/fill CSS-переменные не резолвятся
-  return (
-    <svg width={size} height={size} viewBox="0 0 20 20" aria-hidden shapeRendering="geometricPrecision"
-      style={{ flexShrink: 0, display: 'block' }}>
-      <circle cx={CLOCK_C} cy={CLOCK_C} r={8.5} fill="none" strokeWidth={1.8}
-        strokeDasharray={cold ? '3 2.2' : undefined} style={{ stroke: color }} />
-      {showSector && (frac >= 0.999
-        ? <circle cx={CLOCK_C} cy={CLOCK_C} r={CLOCK_SECTOR_R} fillOpacity={0.35} style={{ fill: color }} />
-        : <path d={`M${CLOCK_C} ${CLOCK_C} L${pt(CLOCK_SECTOR_R)} A${CLOCK_SECTOR_R} ${CLOCK_SECTOR_R} 0 ${frac > 0.5 ? 1 : 0} 1 ${CLOCK_C} ${CLOCK_C - CLOCK_SECTOR_R} Z`}
-            fillOpacity={0.35} style={{ fill: color }} />)}
-      <g style={{ transformOrigin: `${CLOCK_C}px ${CLOCK_C}px`, animation: spin && !reducedMotion ? 'cc-spin 2.4s linear infinite' : undefined }}>
-        <path d={`M${CLOCK_C} ${CLOCK_C} L${hand}`} strokeWidth={1.8} strokeLinecap="round" style={{ stroke: color }} />
-      </g>
-      <circle cx={CLOCK_C} cy={CLOCK_C} r={1.3} style={{ fill: color }} />
-    </svg>
-  );
-}
-
-// Перенос в новый чат (docs/features/chat-handoff.md): кнопка в секции кэша поповера и
-// действие тоста «скоро остынет». Доступность считает lib/chatHandoff, сам перенос —
-// владелец экрана (ChatPanel), шапка лишь зовёт onClick
-export interface HandoffControl {
-  enabled: boolean;
-  reason?: string;
-  busy: boolean;
-  // warm — тёплый путь (lib/chatHandoff.handoffWarm по статусу кэша)
-  onClick: (warm: boolean) => void;
-}
-const HANDOFF_LABEL = 'Перенести в новый чат';
-const HANDOFF_HINT = 'Новый чат начнётся с записки о разговоре — без перезаписи всей истории в кэш';
-
-// Тост «Контекст почти заполнен» — один раз на чат при переходе контекста в danger, только у
-// шапки открытого чата (toastSessionId), не во время хода и сжатия (lib/contextHandoff).
-// Ничего не рисует: свой компонент, потому что пилюля выходит до хуков ранним return
-function ContextDangerToast({ level, isWaiting, isCompacting, toastSessionId, cacheItems, handoff }: {
-  level: ContextEstimate['level']; isWaiting: boolean; isCompacting: boolean;
-  toastSessionId?: string; cacheItems?: ChatItem[]; handoff?: HandoffControl;
-}) {
-  useEffect(() => {
-    if (!takeContextDangerToast(toastSessionId, level, isWaiting, isCompacting)) return;
-    showToast('Контекст почти заполнен',
-      'На длинном контексте ответы хуже. Можно сжать историю или перенести разговор в новый чат с запиской.',
-      'info', handoff?.enabled && !handoff.busy
-        ? { label: HANDOFF_LABEL, onClick: () => handoff.onClick(contextHandoffWarm(cacheItems)) }
-        : undefined);
-    // handoff и cacheItems — на момент показа: тост один на чат
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toastSessionId, level, isWaiting, isCompacting]);
-  return null;
-}
-
-// Доля оставшегося срока: от якоря до момента остывания
-function cacheFrac(state: PromptCacheState): number {
-  const { anchorAtMs, expiresAt, remainingMs } = state;
-  if (anchorAtMs === undefined || expiresAt === undefined || !remainingMs) return 0;
-  const life = expiresAt - anchorAtMs;
-  return life > 0 ? remainingMs / life : 0;
-}
-
-// Кэш на лице пилюли: разделитель, циферблат и подпись. Текст — только когда стоит
-// обратить внимание: остаток в минутах, пока остывает, и «остыл» (на узких раскладках —
-// без «остыл»: красного циферблата хватает, шапка мобилы не резиновая). Пока идёт ход,
-// якорь вот-вот сдвинется — остаток не показываем, крутится стрелка.
-// Свой компонент — чтобы по таймеру перерисовывался он один, а не вся пилюля.
-// Остывающий кэш пульсирует (кроме «уменьшить движение» в ОС) и один раз на якорь
-// напоминает тостом — только у шапки открытого чата (toastSessionId) и не во время хода
-function CacheClockFace({ items, isWaiting, isCompact, toastSessionId, handoff }: {
-  items: ChatItem[]; isWaiting: boolean; isCompact?: boolean; toastSessionId?: string; handoff?: HandoffControl;
-}) {
-  const state = usePromptCache(items);
-  const reducedMotion = usePrefersReducedMotion();
-  const { status, anchorAtMs, remainingMs } = state;
-  useEffect(() => {
-    if (!takeExpiringCacheToast(toastSessionId, { status, anchorAtMs }, isWaiting)) return;
-    // Действие тоста — тот же перенос, что кнопка попапа; выключенного переноса в тосте нет
-    showToast('Кэш промпта скоро остынет',
-      `Осталось ${cacheLeftText(remainingMs ?? 0)}. Ход до остывания прочитает кэш в 10 раз дешевле, после — перепишет его заново.`,
-      'info', handoff?.enabled && !handoff.busy ? { label: HANDOFF_LABEL, onClick: () => handoff.onClick(handoffWarm(status)) } : undefined);
-    // remainingMs в зависимостях не нужен: тост один на якорь, текст — на момент показа
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [toastSessionId, status, anchorAtMs, isWaiting]);
-  if (status === 'unknown') return null;
-  const text = isWaiting ? undefined
-    : status === 'expiring' ? cacheLeftText(remainingMs ?? 0)
-    : status === 'cold' && !isCompact ? 'остыл'
-    : undefined;
-  const pulse = !isWaiting && status === 'expiring' && !reducedMotion;
-  return (
-    <>
-      <span aria-hidden style={{ width: 1, height: 12, background: C.border, flexShrink: 0 }} />
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 'inherit', animation: pulse ? 'cc-cache-pulse 1.6s ease-in-out infinite' : undefined }}>
-        <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-          cold={!isWaiting && status === 'cold'} spin={isWaiting} />
-        {text && <span style={{ color: CACHE_TEXT_COLOR[status] }}>{text}</span>}
-      </span>
-    </>
-  );
-}
-
-// Строка кэша в подсказке пилюли при наведении: циферблат на месте пипа и состояние с
-// остатком. Свой компонент по той же причине, что CacheClockFace: тикает только он
-function CacheTipLine({ items, isWaiting }: { items: ChatItem[]; isWaiting: boolean }) {
-  const state = usePromptCache(items);
-  if (state.status === 'unknown') return null;
-  const { status, remainingMs } = state;
-  const { label, value } = cacheTipText(status, isWaiting, remainingMs);
-  return (
-    <TipRow label={label} value={value} icon={
-      <CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-        cold={!isWaiting && status === 'cold'} spin={isWaiting} size={12} />} />
-  );
-}
-
-// Строка подсказки пилюли — три ячейки сетки родителя (пип | подпись | значение), без
-// своей обёртки: так значения всех строк встают одной колонкой по правому краю
-function TipRow({ icon, label, value }: { icon: ReactNode; label: string; value?: string }) {
-  return (
-    <>
-      <span style={{ display: 'inline-flex', justifyContent: 'center' }}>{icon}</span>
-      <span>{label}</span>
-      <span style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{value ?? ''}</span>
-    </>
-  );
-}
-
-// Кэш промпта в поповере — обычная строка общего списка (как контекст и окна лимитов):
-// циферблат на месте пипа, остаток значением справа, полоса — доля оставшегося срока.
-// Строка только сообщает: остывает — чем выгоден ход сейчас, остыл — цена следующего хода.
-// Действие (перенос в новый чат) — в общем ряду действий внизу поповера (ContextActions).
-// Срок, промах и оговорка о цене — подсказкой строки. Пока идёт ход, остаток и прогноз
-// скрыты: они от якоря прошлого хода. Свой компонент — тикает по таймеру только он
-function PromptCacheRow({ items, billing, isWaiting }: {
-  items: ChatItem[]; billing: ClaudeBilling; isWaiting: boolean;
-}) {
-  const state = usePromptCache(items);
-  const { status, ttl, prefixTokens, lastMiss, remainingMs } = state;
-  const cold = status === 'cold';
-  const rewrite = useMemo(
-    () => (cold && !isWaiting && ttl && prefixTokens ? rewriteCostUsd(items, ttl, prefixTokens) : undefined),
-    [items, cold, isWaiting, ttl, prefixTokens]);
-  if (status === 'unknown') return null;
-
-  const level = isWaiting ? 'normal' : CACHE_LEVEL[status];
-  const value = isWaiting ? 'идёт ход' : cold ? 'остыл' : remainingMs !== undefined ? cacheLeftText(remainingMs) : '—';
-  const tokens = prefixTokens !== undefined ? fmtTokens(prefixTokens) : undefined;
-  // Подписи строки — со строчной и без точки, как «сброс через…» у окон лимитов
-  const sub = isWaiting ? 'обновится после хода'
-    : cold ? cacheRewriteText(tokens, rewrite !== undefined ? fmtUsd(rewrite) : undefined)
-    : status === 'expiring' ? 'ход до остывания — в 10 раз дешевле'
-    : tokens ? `${tokens} токенов в кэше` : undefined;
-  const title = [
-    cold && 'Следующий ход перепишет кэш заново',
-    rewrite !== undefined && `Цена — ориентир${billing === 'subscription' ? ' по API-тарифу' : ''}: сабагенты на других моделях могут её занижать`,
-    ttl && `Срок кэша — ${ttl === '1h' ? '1 час' : '5 минут'}, каждый ход продлевает его`,
-    lastMiss && `Последний промах: ${lastMiss.label}${lastMiss.tokens ? `, переписано ${fmtTokens(lastMiss.tokens)} токенов` : ''}`,
-  ].filter(Boolean).join('\n');
-
-  return (
-    <div title={title || undefined}>
-      <MeterRow
-        pip={<CacheClock frac={cacheFrac(state)} color={isWaiting ? C.textMuted : CACHE_CLOCK_COLOR[status]}
-          cold={!isWaiting && cold} spin={isWaiting} size={12} />}
-        label="Кэш" value={value} valueColor={RATE_COLORS[level].text}
-        pct={!isWaiting && !cold ? Math.round(cacheFrac(state) * 100) : undefined}
-        fill={RATE_COLORS[level].fill}
-        // Подпись — строго в одну строку: тексты подобраны под ширину поповера
-        sub={sub && <div style={{ ...meterSubStyle, whiteSpace: 'nowrap', color: level === 'normal' ? C.textMuted : RATE_COLORS[level].text }}>{sub}</div>} />
-    </div>
-  );
-}
-
 // Приоритет tone: danger важнее warn (для объединения подсветок контекста и стоимости)
 function worseTone(a?: 'warn' | 'danger', b?: 'warn' | 'danger'): 'warn' | 'danger' | undefined {
   if (a === 'danger' || b === 'danger') return 'danger';
   if (a === 'warn' || b === 'warn') return 'warn';
   return undefined;
+}
+
+// Тело поповера «Локальная модель»: живой статус (генерация/очередь) + итог последнего
+// хода. Показывается ПЕРВЫМ в поповере кольцевой пилюли (перед workflow/контекстом).
+// live=null — чат не на локальной модели (раздел не рисуется).
+function LocalModelPopoverBody({ live, isAdmin, sessionId }: {
+  live: LocalModelLiveState; isAdmin: boolean; sessionId?: string;
+}) {
+  // Генерация: живая скорость (если идёт), иначе скорость последнего хода, иначе «—»
+  const gen = (live.phase === 'generating' && live.genTps != null && live.genTps > 0)
+    ? live.genTps
+    : (live.lastTurn?.genTps != null && live.lastTurn.genTps > 0 ? live.lastTurn.genTps : null);
+  const genText = gen != null ? formatTps(gen) : '—';
+
+  // Чтение промпта: скорость prefill последнего хода
+  const prefill = live.lastTurn?.prefillTps != null && live.lastTurn.prefillTps > 0 ? live.lastTurn.prefillTps : null;
+  const prefillText = prefill != null ? formatTps(prefill) : '—';
+
+  // Попадание в кэш: доля 0..1 → процент (без пробела: «37%», как в RateRow)
+  const cache = live.lastTurn?.cacheHitPerc != null ? live.lastTurn.cacheHitPerc : null;
+  const cacheText = cache != null ? `${Math.round(cache * 100)}%` : '—';
+
+  // Ожидание: время в очереди (мс → сек); < 500 мс округляется к «≈ 1 с», не «≈ 0 с»
+  const queueMs = live.lastTurn?.queueMsApprox ?? null;
+  const queueText = localModelQueueText(queueMs);
+  const queueLabel = live.phase === 'queued' ? 'Ожидание' : 'Ждал в очереди';
+
+  // Атрибуция (ADR-029): разрез «основной ход / субагенты / компакция» по подсказочным
+  // заголовкам. Строки видны, когда в ходе были сабагенты или компакция; обычный ход
+  // (только main) их не показывает, чтобы не засорять поповер.
+  const lt = live.lastTurn;
+  const subN = lt?.subagentRequests ?? 0;
+  const compN = lt?.compactionRequests ?? 0;
+  const hasBreakdown = lt != null && (subN > 0 || compN > 0 || lt.compactionKind != null);
+  const breakdownText = lt
+    ? `${lt.mainRequests ?? 0} ход · ${subN} сабаг. · ${compN} компакт.`
+    : '';
+  const agentTypesText = lt?.agentTypes && lt.agentTypes.length > 0 ? lt.agentTypes.join(', ') : '';
+
+  // Утечки вызова инструмента в текст (vLLM qwen3_coder): одна строка, только когда в ходе
+  // были (иначе поповер засоряется). «целиком» — вызов ушёл текстом (tool_use не было),
+  // «хвост» — хвост после успешного tool_use (параметр мог потеряться).
+  const leakWhole = lt?.toolCallLeakWholeCall ?? 0;
+  const leakTail = lt?.toolCallLeakTail ?? 0;
+  const leakText = leakWhole > 0 || leakTail > 0
+    ? `${leakWhole} целиком · ${leakTail} хвост`
+    : '';
+
+  return (
+    <>
+      <div style={badgeTitleStyle}>Локальная модель</div>
+      <BadgeRow k="Генерация" v={genText} />
+      <BadgeRow k="Чтение промпта" v={prefillText} />
+      <BadgeRow k="Попадание в кэш" v={cacheText} />
+      <BadgeRow k={queueLabel} v={queueText} />
+      {hasBreakdown && <BadgeRow k="Состав хода" v={breakdownText} />}
+      {hasBreakdown && agentTypesText !== '' && <BadgeRow k="Сабагенты" v={agentTypesText} />}
+      {leakText !== '' && <BadgeRow k="Утечки вызова" v={leakText} />}
+      {isAdmin && (
+        <button
+          type="button"
+          onClick={() => revealWorkspacePanel(LOCAL_MODEL_PANEL, undefined, { sessionId })}
+          style={{
+            fontFamily: FONT.sans, fontSize: 12, color: C.accent, background: 'none',
+            border: 'none', padding: '4px 0', cursor: 'pointer', fontWeight: 600,
+          }}
+        >
+          Открыть панель модели →
+        </button>
+      )}
+    </>
+  );
 }
 
 // Кольцевая пилюля шапки — одна на все раскладки (вариант C2): иконка из трёх колец
@@ -926,21 +902,48 @@ export function RingPillBadge(props: {
   isCompact?: boolean;
   // Сброс поповера при смене чата
   resetKey?: string;
+  // Лента чата для индикатора кэша промпта (F-1b): состояние считает хук usePromptCache
+  items?: ChatItem[];
   // Только витрина: показать состояние 5.2r без смены настройки ОС
   forceReducedMotion?: boolean;
-  // Лента чата для индикатора кэша промпта: циферблат справа на пилюле и секция поповера
-  cacheItems?: ChatItem[];
-  // Чат, которому напоминать тостом «кэш скоро остынет»; нет — без тоста (превью, витрина)
-  cacheToastSessionId?: string;
-  // Перенос в новый чат: кнопка секции кэша и действие тоста; нет — ни того ни другого
-  handoff?: HandoffControl;
+  // id чата: для живых данных локальной модели (хвост + поповер «Локальная модель»)
+  sessionId?: string;
+  // Только витрина: форсировать состояние локальной модели (обходит хук)
+  forceLocalModel?: LocalModelLiveState;
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, isMobile, isCompact,
   } = props;
   const activeWorkflow = isCompact ? props.activeWorkflow : undefined;
-  const cacheItems = props.cacheItems;
   const wfActive = !!activeWorkflow;
+
+  // Кэш промпта (F-1b): состояние — целиком из хука F-1a, здесь ничего не пересчитывается.
+  // Во время хода лента заморожена: якорь двигает только result. До первого result'а с
+  // данными кэша state=null — циферблата и разделителя нет вовсе.
+  // Личный порог «остывает» (F-3): сидируется App.tsx из /auth/me; не настроен — дефолты
+  // индикатора. Стор подписочный — поздний засев сам обновит циферблат.
+  const warn = useCacheWarnThresholds();
+  const cache = usePromptCache(usePromptCacheItems(props.items, props.isWaiting), warn);
+
+  // Живые данные локальной модели: хвост + поповер «Локальная модель». Хуки — до раннего
+  // return (правило хуков). live=null — чат не на локальной модели (событий нет). Хвост —
+  // только на десктопе (мобильный вариант А — шаг 22) и при включённом флаге.
+  const hookLive = useLocalModelLive(props.sessionId ?? null);
+  // Витрина: форсированное состояние обходит хук (в витрине нет живых событий)
+  const live = props.forceLocalModel ?? hookLive;
+  const isAdmin = useLocalModelAdmin();
+  // Десктоп: хвост добавляется к лицу через « · »; мобила (вариант А): лицо
+  // ЗАМЕНЯЕТСЯ компактным словом состояния (≤ 7 знаков), тревога контекста побеждает.
+  const lmTail = !isMobile ? localModelTail(live) : null;
+  const lmTailCompact = isMobile ? localModelTail(live, true) : null;
+  // Мобила: лицо заменяется словом состояния, только пока контекст в норме (не тревога)
+  const lmMobileFace = lmTailCompact != null && estimate.level === 'normal' ? lmTailCompact : null;
+  // Раздел «Локальная модель» в поповере: живые данные есть и флаг включён
+  const lmActive = live != null;
+  // Что «озвучивается» в aria-label: на десктопе — хвост, на мобиле — слово-лицо
+  // (только когда оно реально заменит лицо, т.е. контекст в норме). Нет активного
+  // состояния — null (строку в aria-label не добавляем).
+  const lmSpoken = isMobile ? lmMobileFace?.text : lmTail?.text;
 
   // Что доступно к показу в каждой секции
   const showCtx = hasContextInfo(estimate);
@@ -949,8 +952,9 @@ export function RingPillBadge(props: {
     : hasClaudeCostInfo(cost, windows);
   const hasFal = !!isCompact && !isCliProvider && falCost.total > 0;
   const hasGlif = !!isCompact && !isCliProvider && glifCost.count > 0;
-  // Совсем нечего показывать — прячем пилюлю (но активный workflow держит её на экране)
-  if (!showCtx && !showCost && !hasFal && !hasGlif && !wfActive) return null;
+  // Совсем нечего показывать — прячем пилюлю (но активный workflow или локальная модель
+  // держат её на экране)
+  if (!showCtx && !showCost && !hasFal && !hasGlif && !wfActive && !lmActive) return null;
 
   // Квота подписки (GLM) — процентом в mid-кольце; денежный баланс (DeepSeek) процента
   // не имеет и кольца не получает, но в тревожном тоне выходит текстом на пилюлю
@@ -960,8 +964,8 @@ export function RingPillBadge(props: {
   const quotaPct = isQuota ? quotaUsedPct(balance) : null;
 
   const segs = isCliProvider ? [] : ratePillVisible(windows, RING_WINDOWS).segments;
-  const slot = (s?: RatePillSegment): MeterSlot | undefined => s && { pct: s.pct, level: s.level };
-  const slots: [MeterSlot, MeterSlot | undefined, MeterSlot | undefined] = [
+  const slot = (s?: RatePillSegment): RingSlot | undefined => s && { pct: s.pct, level: s.level };
+  const slots: [RingSlot, RingSlot | undefined, RingSlot | undefined] = [
     { pct: showCtx ? estimate.pct ?? null : null, level: estimate.level },
     isCliProvider ? (isQuota ? { pct: quotaPct, level: provLevel } : undefined) : slot(segs[0]),
     isCliProvider ? undefined : slot(segs[1]),
@@ -1005,7 +1009,7 @@ export function RingPillBadge(props: {
     // пилюлю на 1px — высоту пилюли задаёт строка основного шрифта
     <><span style={labelStyle}>Ctx</span> <span style={{ color: C.accent, lineHeight: 1 }}>✦</span></>
   ) : head.kind === 'calm' ? (
-    <span style={{ color: C.textSecondary }}>норм</span>
+    <span style={{ color: C.textSecondary }}>в норме</span>
   ) : head.kind === 'unknown' ? (
     <span style={{ color: C.textMuted }}>—</span>
   ) : (
@@ -1016,41 +1020,51 @@ export function RingPillBadge(props: {
   );
 
   // Подсказка и aria-label — всё полными подписями, доступно без клика. У строк, за
-  // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что
-  // Строка — подпись и значение: значения (проценты, остатки) идут своей колонкой по правому
-  // краю с моноширинными цифрами, чтобы 9% и 55% стояли друг под другом
-  const parts: { label: string; value?: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] } }[] = [];
-  if (wfActive) parts.push({ label: 'Workflow', value: activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт' });
-  if (apiCost) parts.push({ label: 'Claude по API-ключу', value: fmtUsd(cost.cost) });
+  // которыми стоит кольцо, — пип этого кольца (как в поповере): так видно, что есть что.
+  // Строка кэша — с мини-циферблатом вместо кольца (dial).
+  const parts: { text: string; pip?: { slot: 0 | 1 | 2; level: RateWindow['level'] }; dial?: boolean }[] = [];
+  if (wfActive) parts.push({ text: `Workflow ${activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'}` });
+  if (apiCost) parts.push({ text: `Claude по API-ключу ${fmtUsd(cost.cost)}` });
   const ctxPip = { slot: 0 as const, level: estimate.level };
-  if (isCompacting) parts.push({ label: 'Контекст', value: 'идёт сжатие', pip: ctxPip });
-  else if (showCtx) parts.push({ label: 'Контекст', value: estimate.pct !== undefined ? `${estimate.pct}%` : 'сжат', pip: ctxPip });
+  if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
+  else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
+  // Вторая точка входа переноса (F-4): окно почти полное — в подсказке предлагаем перенос.
+  // Только предложение: само действие — кнопка в поповере, за этим же флагом. То же
+  // условие, что и у секции кнопки — `cache` (F-4r): в чате без данных кэша обещание
+  // без действия — тупик.
+  if (showCtx && estimate.level === 'danger' && cache) {
+    parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
+  }
+  // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
+  // чтобы на мобиле скринридер не читал только «Ctx 61k», а и состояние модели.
+  // Нет активного состояния (idle без скорости / не локальный чат) — строки нет.
+  if (lmActive && lmSpoken) parts.push({ text: `Локальная модель: ${lmSpoken}` });
   if (isCliProvider) {
     if (balance) parts.push({
-      label: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'}`, value: providerPillLabel(balance),
+      text: `${providerName}: ${isQuota ? 'израсходовано' : 'остаток'} ${providerPillLabel(balance)}`,
       pip: isQuota ? { slot: 1, level: provLevel } : undefined,
     });
   } else {
     parts.push(...ratePillSegments(windows).map((s, i) => ({
-      label: `${windowLabel(s.limitType)}${s.stale ? ' (данные устарели)' : ''}`, value: s.text,
+      text: `${windowLabel(s.limitType)} ${s.text}${s.stale ? ' (данные устарели)' : ''}`,
       pip: i < RING_WINDOWS ? { slot: (i + 1) as 1 | 2, level: s.level } : undefined,
     })));
   }
-  const partText = (p: { label: string; value?: string }) => (p.value ? `${p.label} ${p.value}` : p.label);
-  const title = (parts.length > 0 ? parts.map(partText).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
+  // Тон пилюли кэш не перекрашивает — у циферблата свой цвет, строка только в подсказке.
+  if (cache) parts.push({ text: cacheStaticLabel(props.isWaiting), dial: true });
+  const title = (parts.length > 0 ? parts.map(p => p.text).join(' · ') : 'Контекст и расход сессии') + ' — нажмите для деталей';
   const tip = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs + 1 }}>
-      {/* Сетка «пип | подпись | значение»: строки без кольца держат пустую ячейку под пип */}
-      {(parts.length > 0 || cacheItems) && (
-        <div style={{ display: 'grid', gridTemplateColumns: '12px auto auto', alignItems: 'center', columnGap: SP.xs + 2, rowGap: SP.xxs + 1 }}>
-          {parts.map(p => (
-            <TipRow key={p.label} label={p.label} value={p.value}
-              icon={p.pip ? <MeterPip slot={p.pip.slot} level={p.pip.level} /> : null} />
-          ))}
-          {cacheItems && <CacheTipLine items={cacheItems} isWaiting={props.isWaiting} />}
+      {parts.length > 0 ? parts.map(p => (
+        <div key={p.text} style={{ display: 'flex', alignItems: 'center', gap: SP.xs + 2 }}>
+          {/* Строки без кольца — с пустым местом под пип, чтобы текст шёл одной колонкой */}
+          {p.dial && cache ? <CacheDialPip state={cache} isWaiting={props.isWaiting} warnThresholds={warn} />
+            : p.pip ? <RingPip slot={p.pip.slot} level={p.pip.level} /> : <span style={{ width: 12, flexShrink: 0 }} />}
+          {/* Строка кэша — с живыми минутами на часах самой подсказки: тик циферблата
+              не должен перерисовывать всю пилюлю (F-1b-r) */}
+          {p.dial && cache ? <CacheSpokenText state={cache} isWaiting={props.isWaiting} warnThresholds={warn} /> : <span>{p.text}</span>}
         </div>
-      )}
-      {parts.length === 0 && !cacheItems && <div>Контекст и расход сессии</div>}
+      )) : <div>Контекст и расход сессии</div>}
       <div style={{ color: C.textMuted, fontSize: FS.xs }}>Нажмите для деталей</div>
     </div>
   );
@@ -1058,28 +1072,36 @@ export function RingPillBadge(props: {
   const sectionDivider: React.CSSProperties = {
     marginTop: SP.md, paddingTop: SP.md, borderTop: `1px solid ${C.bgInset}`,
   };
-  // Строка кэша — последняя в общем списке поповера (под окнами лимитов)
-  const windowsList = showCost && !isCliProvider && windows.length > 0;
-  const cacheRow = cacheItems
-    ? <PromptCacheRow items={cacheItems} billing={billing} isWaiting={props.isWaiting} />
-    : null;
 
   return (
     <BadgeShell
       ring
       amount={<>
-        <MeterIcon slots={slots} runTop={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
+        <RingIcon slots={slots} spinOuter={isCompacting} forceReducedMotion={props.forceReducedMotion} resetKey={props.resetKey} />
         <span>
           {apiCost && <>
             <span style={{ color: C.textSecondary }}>{fmtUsd(cost.cost)}</span>
             {face && <span style={{ color: C.textMuted, fontWeight: 400 }}> · </span>}
           </>}
-          {face}
+          {lmMobileFace ? (
+            // Мобила, вариант А: лицо заменено компактным словом состояния (≤ 7 знаков)
+            <span style={{ color: lmMobileFace.tone === 'warn' ? C.warningText : C.textSecondary, fontWeight: 700 }}>
+              {lmMobileFace.text}
+            </span>
+          ) : (
+            <>
+              {face}
+              {lmTail && (
+                <span style={{ color: lmTail.tone === 'warn' ? C.warningText : lmTail.tone === 'dim' ? C.textMuted : C.textSecondary, fontWeight: 400 }}>
+                  {' '}· {lmTail.text}
+                </span>
+              )}
+            </>
+          )}
         </span>
-        {cacheItems && <CacheClockFace items={cacheItems} isWaiting={props.isWaiting} isCompact={isCompact}
-          toastSessionId={props.cacheToastSessionId} handoff={props.handoff} />}
-        <ContextDangerToast level={estimate.level} isWaiting={props.isWaiting} isCompacting={isCompacting}
-          toastSessionId={props.cacheToastSessionId} cacheItems={cacheItems} handoff={props.handoff} />
+        {/* Циферблат кэша — справа от лица, через разделитель; сам по себе не кнопка,
+            цель клика — вся пилюля (F-1b). Только  (дефект QA) */}
+        {cache && <CacheDial state={cache} isWaiting={props.isWaiting} isMobile={isMobile} warnThresholds={warn} />}
       </>}
       isMobile={isMobile}
       isCompact={isCompact}
@@ -1091,33 +1113,42 @@ export function RingPillBadge(props: {
       tip={tip}
       ariaLabel={title}
     >
-      {wfActive && (
+      {lmActive && (
         <div>
+          <LocalModelPopoverBody live={live!} isAdmin={isAdmin} sessionId={props.sessionId} />
+        </div>
+      )}
+      {wfActive && (
+        <div style={lmActive ? sectionDivider : undefined}>
           <div style={badgeTitleStyle}>Workflow</div>
           <BadgeRow k="Фаза" v={activeWorkflow!.phasesTotal > 0 ? `${activeWorkflow!.phasesDone}/${activeWorkflow!.phasesTotal}` : 'идёт'} />
         </div>
       )}
       {/* Строки идут в порядке колец пилюли: контекст (внешнее) → окна лимитов. У Claude с
           лимитами это один список без заголовков секций; у CLI-провайдера и оплаты по ключу
-          ниже идёт своя секция расхода */}
-      {(showCtx || windowsList) && (
+          ниже идёт своя секция расхода. Контекст — ContextRow (кольцо Ctx со slot 0),
+          индикатор локальной модели (LocalModelPopoverBody) — отдельной секцией выше */}
+      {(showCtx || (showCost && !isCliProvider && windows.length > 0)) && (
         <div style={wfActive ? sectionDivider : undefined}>
           {showCtx && <ContextRow estimate={estimate} assistantName={props.assistantName} />}
-          {windowsList
-            ? <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} afterWindows={cacheRow} />
-            : cacheRow}
+          {showCost && !isCliProvider && windows.length > 0 && <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
         </div>
       )}
-      {!showCtx && !windowsList && cacheRow && <div style={wfActive ? sectionDivider : undefined}>{cacheRow}</div>}
       {showCost && (isCliProvider || windows.length === 0) && (
         <div style={(wfActive || showCtx) ? sectionDivider : undefined}>
           {isCliProvider
             ? <ProviderCostPopoverBody providerName={providerName} stats={cost} balance={balance}
-                quotaPip={isQuota ? <MeterPip slot={1} level={provLevel} /> : undefined} />
+                quotaPip={isQuota ? <RingPip slot={1} level={provLevel} /> : undefined} />
             : <ClaudeCostPopoverBody stats={cost} billing={billing} windows={windows} />}
         </div>
       )}
       {showCtx && <ContextActions {...props} />}
+      {/* Секция «Кэш промпта» показывается всегда, когда с бэка пришли данные кэша (с кнопкой порогов) */}
+      {cache && (
+        <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
+          <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
+        </div>
+      )}
       {hasFal && (
         <div style={sectionDivider}>
           <FalPopoverBody stats={falCost} />
@@ -1150,9 +1181,9 @@ interface ChatHeaderBarProps {
   lastMechanic?: TeamMechanicId | null;
   onOpenSidebar?: () => void;
   ctxEstimate: ContextEstimate;
-  // Лента чата — источник индикатора кэша промпта (result.promptCache)
-  items: ChatItem[];
   isWaiting: boolean;
+  // Лента чата для индикатора кэша промпта (F-1b): без неё циферблата просто нет
+  items?: ChatItem[];
   isCompacting: boolean;
   canCompact: boolean;
   compactNote?: string;
@@ -1167,6 +1198,9 @@ interface ChatHeaderBarProps {
   participants?: Persona[] | null;
   // Состав группы изменён через поповер участников — родитель обновляет session
   onSessionUpdated?: (s: Session) => void;
+  // Карта переноса вложений (S2d-6b-4F3): тумблер приватности сообщает, какие пути бэк
+  // перенёс в private/… — родитель переписывает ими черновик композера
+  onAttachmentMoves?: (moves: Record<string, string>) => void;
   // «На стену» — набор стены живёт в воркспейсе; не задан — действия нет
   onAddToWall?: () => void;
   // Чат удалён из шапки: уйти из него и обновить список должен владелец экрана.
@@ -1180,10 +1214,16 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
-  // Перенос в новый чат: владелец экрана создаёт чат и уходит в него; warm — просить
-  // записку у самого чата (кэш тёплый, lib/chatHandoff.handoffWarm).
-  // Не задан — кнопки в секции кэша и действия в тосте нет
-  onHandoff?: (warm: boolean) => Promise<void>;
+  // Строка фичи этого чата (В2 «Трек», F2): вторая строка шапки, ПОД заголовком и НАД
+  // строкой контекста (макет feature-chat-header-row2-v3). Слот даёт только горизонталь
+  // поле (18 остров / padX тулбар) и не имеет своего фона: строка лежит на холсте, как
+  // шапка; нижний отступ строки (10) и её содержимое — дело самой FeatureBanner. В тулбарной
+  // линия «при прокрутке» переезжает на слот (линия остаётся одна, на нижней кромке шапки).
+  // Контракт «слот задан» = «в слоте есть строка»: НЕ задан (undefined/null) — шапка ровно
+  // как без строки фичи. Пустой чат НЕ передаёт <FeatureBanner/>: элемент truthy и для
+  // пустого рендера, и шапка приняла бы его за заполненный — гасила бы линию тулбара и
+  // ставила пустой div (ревью F2, major 2; решает ChatPanel).
+  featureBar?: ReactNode;
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
   // отделять нечего, и черта лежала бы поперёк пустого чата без причины
   scrolled?: boolean;
@@ -1191,7 +1231,7 @@ interface ChatHeaderBarProps {
 
 // «Обновить название чата» — запускается через AI-палитру (действие chat.retitle).
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
-function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
+function RetitleButton({ session, hasMessages, online, locked }: { session: Session; hasMessages: boolean; online: boolean; locked?: boolean }) {
   const [busy, setBusy] = useState(false);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
@@ -1205,7 +1245,7 @@ function RetitleButton({ session, hasMessages, online }: { session: Session; has
       .finally(() => { setBusy(false); endAiBusy(); });
   };
   useEffect(() => {
-    if (!online || !hasMessages) return;
+    if (!online || !hasMessages || locked) return;
     const onRun = (e: Event) => { if ((e as CustomEvent<{ action?: string }>).detail?.action === 'chat.retitle') run(); };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
@@ -1295,29 +1335,16 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, items, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAddToWall, onChatDeleted, island, compact, contextBar, scrolled, onHandoff }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
   const summaryAction = useSlotItem<ChatHeaderSummaryCtx>('chat-header-action', 'session-summary');
   const summaryMenuItem = useSlotItem<ChatHeaderMenuItemCtx>('chat-header-action', 'summary-menu-item');
+  // Меню «Вики» — вклад «Заметок» (WM-2). Доступность («Вики» есть в шапке вообще) считает
+  // useWikiChatAvailable; сам вклад — ОДИН экземпляр на шапку (в ряду либо headless у «⋯»)
+  const wikiMenu = useSlotItem<ChatWikiMenuCtx>('chat-header-action', 'wiki-chat-menu');
   const spendBadgeSlot = useSlotItem<ChatHeaderBadgeCtx>('chat-header-badge', 'spend-badge');
-  // Лента для индикатора кэша — замороженная до нового result или смены чата (см. usePromptCacheItems)
-  const cacheItems = usePromptCacheItems(items, session.id);
-  // Перенос в новый чат: запрос идёт до минуты и дольше (записку пишет модель или сам чат
-  // своим ходом) — кнопка крутится, повторный клик гасит сама занятость, а не только 409
-  // сервера. Путь (warm) выбирает место клика по статусу кэша, который оно и так знает
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const handoffAvail = handoffAvailability(session, isWaiting);
-  const handoff: HandoffControl | undefined = onHandoff ? {
-    ...handoffAvail,
-    busy: handoffBusy,
-    onClick: (warm: boolean) => {
-      if (handoffBusy || !handoffAvail.enabled) return;
-      setHandoffBusy(true);
-      onHandoff(warm).finally(() => setHandoffBusy(false));
-    },
-  } : undefined;
   // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
   // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
   // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
@@ -1332,6 +1359,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const ww = useWindowWidth();
   const isTablet = !isMobile && ww > MOBILE_MAX && ww < TABLET_WIDE_MIN;
   const isCompact = isMobile || isTablet;
+  // Узкая шапка (< 340): «срок» уходит в «⋯», освобождая место пилюле Ctx
+  const isNarrow = useNarrowHeader();
 
   // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
   // Локальная копия, чтобы создание тега сразу отражалось в меню без перезагрузки
@@ -1689,6 +1718,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <ChatSwitcherTrigger currentId={session.id}>{titleBlock}</ChatSwitcherTrigger>
     </div>
   ) : titleBlock;
+  // «← к фиче {название}» (Ф-pl-b): чат открыт переходом ИЗ страницы фичи — в шапке
+  // кнопка возврата на страницу фичи (на ту же вкладку: стор страницы её держит).
+  // Клик — cc-open-feature (fromChat=false: крошка страницы фичи ведёт в список, не в чат).
+  // useFeatureBackNav — useSyncExternalStore: вызов неусловный, порядок хуков стабилен.
+  const featureBackEl = <FeatureBackChip sessionId={session.id} projectId={session.projectId} isCompact={isCompact} />;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —
@@ -1703,14 +1737,26 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
   // приглушённая иконка. Клик открывает выбор срока прямо здесь (в офлайне менять
   // нечего — сохранение всё равно не пройдёт)
+  // «Срок чата · осталось 2 ч»: значение и тревога для пункта «⋯» на узкой шапке.
+  // formatTimeLeft отдаёт «через 2 ч» / «через 40 мин» / «скоро» — переводим в «осталось …»
+  const expiryLeft = formatTimeLeft(session);
+  const expiryValue = expiryLeft ? expiryLeft.replace(/^через /, 'осталось ') : null;
+  const expAt = expiresAt(session);
+  const expiryUrgent = !!expAt && expAt.getTime() - Date.now() < ONE_HOUR_MS;
+  // project — ради owner-гейта (QA-P1F): срок и досье — настройки владельца, кнопка
+  // гасится сама вне своей границы (тот же паттерн, что у PrivateChatToggle ниже)
   const expiryBadge = online ? (
-    <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <ExpiryButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
   // «Временем жизни» (тем же паттерном кнопки в шапке)
   const dossierBtn = project && online ? (
-    <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    <DossierOptOutButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
+  // Тумблер «Приватный чат» (S2d-F2): компонент сам гасится вне своей границы —
+  // только автор чата в общем проекте, не читатель; в личном проекте — нет вовсе
+  const privateBtn = <PrivateChatToggle session={session} project={project} hasMessages={hasMessages}
+    online={online} isMobile={isCompact} onSessionUpdated={onSessionUpdated} onAttachmentMoves={onAttachmentMoves} />;
   // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
   // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
   const workflowBadge = activeWorkflow && !isCompact ? (
@@ -1737,9 +1783,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       balance={provBalance} billing={billing} windows={limitWindows}
       activeWorkflow={activeWorkflow} isMobile={isMobile} isCompact={isCompact}
       resetKey={preview ? `menu-${session.id}` : session.id}
-      cacheItems={cacheItems}
-      cacheToastSessionId={preview ? undefined : session.id}
-      handoff={preview ? undefined : handoff}
+      sessionId={session.id}
+      items={items}
     />
   );
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
@@ -1765,18 +1810,25 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {badgeVisible('spend') && spendBadge}
     </>
   );
+  // Причина недоступности действия ЭТОМУ участнику (QA-P1, доработка QA-P1F): решение
+  // живёт в едином гейте (chatActionDeniedReason): rename/archive/tags — право записи
+  // чата (отказано только читателю), delete — автор чата и владелец, срок/мьют/досье —
+  // настройки владельца (отказаны и редактору, и читателю). myUserId — текущий человек
+  // из stored-пары
+  const myUserId = readStoredUserId();
+  const actionDenied = (key: string): string | null => chatActionDeniedReason(key, project, session, myUserId);
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
   const notifyBtn = online
-    ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
+    ? <NotifyButton session={session} project={project} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
   // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = summaryAction?.render?.({ session, hasMessages, online });
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
-  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
+  const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} locked={!!actionDenied('rename')} />;
 
   // === Видимость ряда действий ===
   // «⋯» стоит в ряду ВСЕГДА, а тумблеры внутри решают, что показывать рядом с ним.
@@ -1790,6 +1842,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // просто отключались, потому что ряд не вмещал их все. Теперь состав ряда
   // выбирает пользователь глазиком (по умолчанию наружу выведен только срок),
   // а «⋯» на месте всегда — значит прятать сами действия незачем
+  const wikiAvailable = useWikiChatAvailable(project?.id, !!actionDenied('wiki')) && online;
   const headerActionAvailable: Record<ChatActionKey, boolean> = {
     rename: online,
     pin: online && !session.projectId,
@@ -1799,6 +1852,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     wall: !!onAddToWall,
     notify: online && isNotifySupported(),
     dossier: !!project && online,
+    wiki: wikiAvailable,
     expiry: online,
     // Архив доступен и в узкой колонке «Стены»: сетевой клиент
     // PUT /api/chats/{id}/archived есть в любом онлайн-чате, а ряд от него не распухнет —
@@ -1810,21 +1864,45 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Порядок ряда — канонический: набор скрытых фильтрует ряд, сохраняя привычную
   // расстановку оставшихся действий относительно друг друга
   const visibleActions = headerActions.filter(k => headerVis.isVisible(k));
+  // Узкая шапка: «срок» не в ряду, а первым пунктом «⋯» — освобождает ~40 px пилюле Ctx
+  const rowActions = isNarrow ? visibleActions.filter(k => k !== 'expiry') : visibleActions;
 
   // Исполнение действий шапки. Часть уже живёт готовыми кнопками (у них свои
   // поповеры и состояния) — их узлы в rowNode; остальные исполняются здесь
   const [renameDialog, setRenameDialog] = useState<string | null>(null);
+  // Запрос «открой меню «Вики» по якорю» из строки «⋯» и правого клика; counter растёт на каждый запрос
+  // Запрос живёт один рендер: меню забирает его в своём эффекте, шапка тут же гасит — иначе
+  // переезд экземпляра между рядом и «⋯» (глазик) открыл бы свежесмонтированное меню заново.
+  // Номер запроса сквозной (ref): меню сравнивает его с последним обработанным
+  const wikiReqSeq = useRef(0);
+  const [wikiOpen, setWikiOpen] = useState<{ counter: number; anchor: DOMRect | null } | null>(null);
+  useEffect(() => { if (wikiOpen) setWikiOpen(null); }, [wikiOpen]);
+  const requestWikiOpen = (anchor: DOMRect | null) => setWikiOpen({ counter: ++wikiReqSeq.current, anchor });
+  // Смена чата закрывает меню: чат меняет session во вкладе, его попап сбрасывается по session.id
+  // ОДИН экземпляр вклада на шапку: рисуется либо в ряду (со своим триггером), либо headless
+  // рядом с «⋯» — иначе два опроса analyze-status на один чат
+  const wikiMenuNode = (headless: boolean): ReactNode => (
+    // key по чату: смена чата размонтирует меню — открытое меню и его опрос прежнего чата закрываются
+    <Fragment key={session.id}>
+      {wikiMenu?.render?.({ session, hasMessages, online, isMobile: isCompact || !!compact, headless, open: wikiOpen ?? undefined })}
+    </Fragment>
+  );
+  const wikiHeadless = wikiAvailable && !rowActions.includes('wiki') ? wikiMenuNode(true) : null;
   const [deleteAsk, setDeleteAsk] = useState(false);
   // Сохранение имени — одна точка на кнопку «Сохранить» и на Enter в поле
+  // Отказ бэка «только автор» (устаревшая роль на клиенте) показываем текстом ответа
+  const failToast = (title: string, fallback: string) => (e: unknown) =>
+    showToast(title, isNotChatAuthorError(e) ? (e as Error).message : fallback, 'info');
   const saveRename = () => {
     const next = (renameDialog ?? '').trim();
     setRenameDialog(null);
     if (!next || next === (session.name ?? '')) return;
     void updateChatFields(session, { name: next })
       .then(s => onSessionUpdated?.(s))
-      .catch(() => showToast('Чат', 'Не удалось переименовать чат', 'info'));
+      .catch(failToast('Чат', 'Не удалось переименовать чат'));
   };
   const runAction = (key: ChatActionKey, anchor?: DOMRect) => {
+    if (actionDenied(key)) return;
     switch (key) {
       case 'rename': setRenameDialog(session.name ?? ''); break;
       case 'pin':
@@ -1833,6 +1911,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           .catch(() => showToast('Чат', 'Не удалось изменить закрепление', 'info'));
         break;
       case 'tags': if (anchor) setTagMenu(anchor); break;
+      case 'wiki': requestWikiOpen(anchor ?? null); break;
       case 'wall': onAddToWall?.(); break;
       case 'notify':
         void updateChatFields(session, { notificationsMuted: notifyOn })
@@ -1842,7 +1921,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       case 'dossier':
         void updateChatFields(session, { excludeFromDossiers: !session.excludeFromDossiers })
           .then(s => onSessionUpdated?.(s))
-          .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+          .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
         break;
       case 'expiry': if (anchor) setExpiryMenu(anchor); break;
       case 'archive':
@@ -1861,7 +1940,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // где этого чата уже нет, значит прятать его от человека второй раз
             if (isArchivedChat(session) && !isArchivedChat(s)) leaveChatArchiveView(chatFilterScope(s));
           })
-          .catch(() => showToast('Архив', 'Не удалось изменить архив чата', 'info'));
+          .catch(failToast('Архив', 'Не удалось изменить архив чата'));
         break;
       case 'delete': setDeleteAsk(true); break;
     }
@@ -1894,6 +1973,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         icon: <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.excludeFromDossiers ? 'Досье: не сохраняются' : 'Досье: сохраняются',
       };
+      case 'wiki': return { icon: <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Вики' };
       case 'expiry': return {
         icon: <Hourglass size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
         label: session.expiresAfterMinutes != null ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения',
@@ -1917,12 +1997,15 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const rowNode = (key: ChatActionKey): ReactNode => {
     if (key === 'dossier') return dossierBtn;
     if (key === 'expiry') return expiryBadge;
+    if (key === 'wiki') return wikiMenuNode(false);
     if (key === 'notify') return notifyBtn;
     const m = actionMeta(key);
+    const denied = actionDenied(key);
     return (
       <ToolbarIconButton
         onClick={e => runAction(key, (e.currentTarget as HTMLElement).getBoundingClientRect())}
-        title={m.label}
+        title={denied ?? m.label}
+        disabled={!!denied}
         isMobile={isCompact}
         active={m.active}
         color={m.danger ? C.danger : undefined}
@@ -2005,31 +2088,57 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       },
     };
   });
+  // Пункты «⋯»: все действия чата. Узкая шапка: «срок» — первым, со значением
+  // «осталось 2 ч» (меньше часа — C.warningText); порядок остальных — канонический
+  const overflowActionItems: OverflowItem[] = headerActions.map(k => {
+    const m = actionMeta(k);
+    const denied = actionDenied(k);
+    const visible = headerVis.isVisible(k);
+    const it: OverflowItem = {
+      key: k,
+      icon: m.icon,
+      label: m.label,
+      danger: m.danger,
+      disabled: !!denied,
+      sublabel: denied ?? undefined,
+      // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
+      // вместе с меню, и её rect брать было бы неоткуда
+      onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
+      action: {
+        icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+        title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
+        onClick: () => headerVis.toggle(k),
+      },
+    };
+    if (isNarrow && k === 'expiry' && expiryValue) {
+      it.label = 'Срок чата';
+      it.value = <span style={{ color: expiryUrgent ? C.warningText : C.textSecondary }}>{expiryValue}</span>;
+    }
+    return it;
+  });
+  if (isNarrow) {
+    const i = overflowActionItems.findIndex(x => x.key === 'expiry');
+    if (i > 0) { const [e] = overflowActionItems.splice(i, 1); overflowActionItems.unshift(e); }
+  }
+  // «Продолжить в новом чате»: диалог живёт в ChatPanel, шапка шлёт ему событие по id чата.
+  // Нужны ответы агента (hasMessages) и связь; чат, который уже продолжили, не предлагаем
+  const canContinue = online && hasMessages && !session.continuedInSessionId;
+  const runContinue = () => window.dispatchEvent(new CustomEvent('cc-chat-continue', { detail: { sessionId: session.id } }));
   const headerOverflow = headerActions.length > 0 ? (
-    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact} items={[
-      ...headerActions.map(k => {
-        const m = actionMeta(k);
-        const visible = headerVis.isVisible(k);
-        return {
-          key: k,
-          icon: m.icon,
-          label: m.label,
-          danger: m.danger,
-          // Теги и срок открывают свои поповеры по якорю «⋯» — сама кнопка исчезнет
-          // вместе с меню, и её rect брать было бы неоткуда
-          onClick: () => runAction(k, overflowAnchorRef.current ?? undefined),
-          action: {
-            icon: visible ? <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : <EyeOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
-            title: visible ? 'Убрать в меню' : 'Показывать кнопкой в ряду',
-            onClick: () => headerVis.toggle(k),
-          },
-        };
-      }),
+    <ToolbarOverflowMenu title="Ещё" isMobile={isCompact}
+      items={[
+      ...overflowActionItems,
       // Запасной вход в AI-палитру на телефоне: ⌘K там нет, а круглешок прячется, когда
       // композер растянут во весь экран и места ему не осталось (placeFab, hidden)
       ...(isMobile ? [{
         key: 'ai-hub', icon: <Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'AI-действия',
+        disabled: !!actionDenied('rename'),
+        sublabel: actionDenied('rename') ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
+      }] : []),
+      ...(canContinue ? [{
+        key: 'continue-chat', icon: <MessageSquareShare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+        label: 'Продолжить в новом чате', onClick: runContinue,
       }] : []),
       ...badgeItems,
     ] as OverflowItem[]}
@@ -2039,17 +2148,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <span ref={el => {
           ref(el);
           if (el) overflowAnchorRef.current = el.getBoundingClientRect();
-        }}>
-          <ToolbarIconButton onClick={toggle} title="Ещё действия">
+        }} style={{ position: 'relative', display: 'inline-flex' }}>
+          {/* Имя для скринридера явное: svg у lucide aria-hidden, а title — лишь тултип */}
+          <ToolbarIconButton onClick={toggle} ariaLabel={isNarrow && expiryUrgent ? 'Ещё действия, срок чата истекает' : 'Ещё действия'}>
             <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </ToolbarIconButton>
+          {/* Узкая шапка + срок < часа: точка 6 px C.warning — сигнал, что срок ушёл в «⋯» */}
+          {isNarrow && expiryUrgent && (
+            <span aria-hidden style={{ position: 'absolute', top: 0, right: 0, width: 6, height: 6, borderRadius: R.full, background: C.warning, border: `1.5px solid ${C.bgPanel}`, pointerEvents: 'none' }} />
+          )}
         </span>
       )} />
   ) : null;
   // Ghost-заглушение ряда действий — только на десктопе (класс сам гасится вне
   // hover-media): компактные раскладки получают полную непрозрачность
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{headerOverflow}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{privateBtn}{rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}{wikiHeadless}{headerOverflow}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию). Ghost-класс
     // приглушает ряд в покое; «⋯» стоит ВНЕ него — это единственный путь к скрытым
@@ -2057,9 +2171,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     : (
       <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>
         <div className="cc-ghost-actions" style={{ display: 'flex', alignItems: 'center', gap: TB.gap }}>
-          {retitleBtn}{extractBtn}{summaryBtn}
-          {visibleActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
+          {retitleBtn}{extractBtn}{summaryBtn}{privateBtn}
+          {rowActions.map(k => <span key={k} style={{ display: 'flex', flexShrink: 0 }}>{rowNode(k)}</span>)}
         </div>
+        {wikiHeadless}
         {headerOverflow}
       </div>
     );
@@ -2108,6 +2223,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<Tags size={15} strokeWidth={2} />}
           label="Теги чата"
+          hint={actionDenied('tags') ?? undefined}
+          disabled={!!actionDenied('tags')}
           action={visAction('tags')}
           // Меню тегов открывается по тому же якорю: это меню уже закрылось бы,
           // и rect взять неоткуда — фиксируем якорь до закрытия (приём ChatCard)
@@ -2118,6 +2235,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
           label={notifyOn ? 'Уведомления: включены' : 'Уведомления: выключены'}
+          hint={actionDenied('notify') ?? undefined}
+          disabled={!!actionDenied('notify')}
           action={visAction('notify')}
           onClick={() => {
             setCtxMenu(null);
@@ -2131,21 +2250,40 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         <MenuItem
           icon={<History size={15} strokeWidth={2} />}
           label={dossierExcluded ? 'Досье: не сохраняются' : 'Досье: сохраняются'}
+          hint={actionDenied('dossier') ?? undefined}
+          disabled={!!actionDenied('dossier')}
           action={visAction('dossier')}
           onClick={() => {
             setCtxMenu(null);
             void updateChatFields(session, { excludeFromDossiers: !dossierExcluded })
               .then(s => onSessionUpdated?.(s))
-              .catch(() => showToast('История решений', 'Не удалось изменить настройку чата', 'info'));
+              .catch(e => showToast('История решений', chatFieldsErrorText(e), 'info'));
           }}
         />
       )}
       <MenuItem
         icon={<Hourglass size={15} strokeWidth={2} />}
         label={chatTemporary ? `Хранить: ${formatTimeLeft(session) ?? 'по сроку'}` : 'Срок хранения…'}
+        hint={actionDenied('expiry') ?? undefined}
+        disabled={!!actionDenied('expiry')}
         action={visAction('expiry')}
         onClick={() => { const a = ctxMenu; setCtxMenu(null); setExpiryMenu(a); }}
       />
+      {wikiAvailable && (
+        <MenuItem
+          icon={<BookOpen size={15} strokeWidth={2} />}
+          label="Вики"
+          action={visAction('wiki')}
+          onClick={() => { const a = ctxMenu; setCtxMenu(null); requestWikiOpen(a); }}
+        />
+      )}
+      {canContinue && (
+        <MenuItem
+          icon={<MessageSquareShare size={15} strokeWidth={2} />}
+          label="Продолжить в новом чате"
+          onClick={() => { setCtxMenu(null); runContinue(); }}
+        />
+      )}
       {online && hasMessages && (
         <>
           <MenuSep />
@@ -2155,6 +2293,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           <MenuItem
             icon={<Pencil size={15} strokeWidth={2} />}
             label="Переименовать по переписке"
+            hint={actionDenied('rename') ?? undefined}
+            disabled={!!actionDenied('rename')}
             onClick={() => { setCtxMenu(null); runAi('chat.retitle'); }}
           />
           <MenuItem
@@ -2216,7 +2356,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             // Уйти из удалённого чата и обновить список — дело владельца экрана
             return del
               .then(() => { setDeleteAsk(false); onChatDeleted?.(session.id); })
-              .catch(() => { setDeleteAsk(false); showToast('Чат', 'Не удалось удалить чат', 'info'); });
+              .catch(e => { setDeleteAsk(false); failToast('Чат', 'Не удалось удалить чат')(e); });
           }}
           onCancel={() => setDeleteAsk(false)}
         />
@@ -2279,9 +2419,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           }}
           style={{ position: 'relative', display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: TB.gap, padding: '12px 18px 10px' }}>
           {openBtn}
+          {featureBackEl}
           {heroTitle}
           {rightCluster}
         </div>
+        {/* Строка фичи — над контекстом, в том же поле острова: она часть шапки,
+            её полоса трекера и отделяет шапку от ленты (макет В2) */}
+        {featureBar && <div data-testid="chat-feature-bar" style={{ padding: '0 18px' }}>{featureBar}</div>}
         {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
             стоят над лентой, а не сбоку от неё */}
         {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
@@ -2297,7 +2441,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой. Линия снизу при этом
     // остаётся: она и отделяет шапку от ленты
-    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+    // Строка фичи под тулбаром — часть шапки: её линия (при прокрутке) становится
+    // нижней кромкой шапки, поэтому у тулбаря своя линия гасится — иначе она резала
+    // бы шапку пополам, над строкой фичи.
+    <Toolbar isMobile={isCompact} noBorder={island || featureBar != null} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -2308,34 +2455,54 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         // Линия к ленте — только когда лента прокручена, и тоном мягче обычной границы:
         // это разделитель ВНУТРИ одной поверхности, а не край панели. Место под неё
         // занято всегда (прозрачный цвет), поэтому шапка не дёргается по высоте.
-        // На острове (island) границу даёт сама карточка — там своей линии не рисуем
-        ...(island ? null : {
+        // На острове (island) границу даёт сама карточка — там своей линии не рисуем;
+        // при строке фичи линия переезжает на неё (нижняя кромка шапки — под строкой).
+        ...(island || featureBar != null ? null : {
           borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
           transition: 'border-color 0.18s ease-out',
         }),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
         ...(isCompact ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>
-      {openBtn}{titleEl}{rightCluster}
+      {openBtn}{featureBackEl}{titleEl}{rightCluster}
       {tagMenuEl}
       {ctxMenuEl}
       {ctxExpiryMenuEl}
       {actionDialogsEl}
     </Toolbar>
   );
-  if (!contextBar) return toolbarEl;
-  // Контекст чата — строкой под тулбаром, до ленты: фон свой не нужен (шапка уже
-  // отделена), линия снизу отбивает материалы от переписки
+  if (!featureBar && !contextBar) return toolbarEl;
+  // Строка фичи — первой под тулбаром: она часть шапки (своего фона не имеет, линия
+  // «при прокрутке» — её нижняя кромка, когда она последняя). Контекст чата — строкой
+  // ниже строки фичи, до ленты: фон свой не нужен (шапка уже отделена), линия снизу
+  // отбивает материалы от переписки.
   return (
     <>
       {toolbarEl}
-      <div style={{
-        flexShrink: 0, display: 'flex', alignItems: 'center',
-        padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
-        borderBottom: `1px solid ${C.border}`,
-      }}>
-        {contextBar}
-      </div>
+      {featureBar && (
+        <div
+          data-testid="chat-feature-bar"
+          style={{
+            flexShrink: 0,
+            padding: `0 ${isCompact ? TB.padXMobile : TB.padX}px`,
+            ...(contextBar ? null : {
+              borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
+              transition: 'border-color 0.18s ease-out',
+            }),
+          }}
+        >
+          {featureBar}
+        </div>
+      )}
+      {contextBar && (
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center',
+          padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
+          borderBottom: `1px solid ${C.border}`,
+        }}>
+          {contextBar}
+        </div>
+      )}
     </>
   );
 }

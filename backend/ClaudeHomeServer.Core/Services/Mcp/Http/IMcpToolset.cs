@@ -92,3 +92,17 @@ public interface IMcpParameterizedToolset : IMcpToolset
     /// </summary>
     IReadOnlyList<McpToolSchema> ToolsFor(McpToolCallContext context);
 }
+
+/// <summary>
+/// Тулсет с инструкциями сервера (поле <c>instructions</c> ответа initialize): развёрнутый
+/// справочник, который не дублируется в описаниях инструментов (описания лишь указывают на
+/// него, как <c>PersonasToolset.Schemas</c> — «см. инструкции сервера»). Поле отдельное от
+/// tools/list, поэтому не «раздувает» его состав и не зависит от хода (инвариант
+/// <c>McpToolsetStabilityTests</c>); потолок длины держит <c>McpInstructionsLengthGuardTests</c>
+/// (~1950: CLI усекает instructions на ~2 КБ).
+/// </summary>
+public interface IMcpInstructionalToolset : IMcpToolset
+{
+    /// <summary>Инструкции сервера для ответа initialize; null — поля нет.</summary>
+    string? Instructions { get; }
+}

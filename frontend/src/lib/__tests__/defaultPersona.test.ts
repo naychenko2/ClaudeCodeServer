@@ -72,6 +72,16 @@ describe('createChatWithContextPersona', () => {
     expect(api.chats.create).not.toHaveBeenCalled();
   });
 
+  it('без явного режима — режим не передаётся, умолчание решает сервер', async () => {
+    setMeFromServer(fakeMe('assistant-1'));
+    vi.mocked(api.personas.createChat).mockResolvedValue(fakeSession);
+
+    await createChatWithContextPersona(null);
+
+    expect(api.personas.createChat).toHaveBeenCalledWith('assistant-1',
+      { mode: undefined, name: undefined, projectId: undefined });
+  });
+
   it('в проекте с руководителем — создаёт сессию проекта от его лица', async () => {
     setMeFromServer(fakeMe('personal-default'));
     const project = { id: 'proj-1', defaultPersonaId: 'project-lead' } as Pick<Project, 'id' | 'defaultPersonaId'>;

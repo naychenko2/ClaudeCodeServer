@@ -245,6 +245,11 @@ public class RootSubsystemBoundaryTests
         // (static-метод, PersonaAgentFileGenerator.cs:148-149). IL-скан видит
         // declaring-тип. Точечный допуск на конкретный тип.
         "ClaudeHomeServer.Services.Prompts.OmcPersonaRouting",
+        // `TaskExecutionService` (root, НЕ в ExcludedRootTypes — в отличие от SessionManager)
+        // строит директиву повтора вызова, ушедшего в текст (локальная модель), через
+        // `SubagentPrompts.ResumeToolCallLeak(...)`. Тот же паттерн, что у OmcPersonaRouting:
+        // static-промпт-материал из Prompts, точечный допуск, не префикс.
+        "ClaudeHomeServer.Services.Prompts.SubagentPrompts",
         // `PersonaAutomationService` зовёт `Tasks.TaskDueCalculator.ResolveTimeZone(...)`
         // static-метод из тела метода. Точечный допуск.
         "ClaudeHomeServer.Services.Tasks.TaskDueCalculator",

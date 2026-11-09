@@ -1,0 +1,9 @@
+{"results": [
+{"id": 1, "name": "Заря", "latitude": 55.0006, "longitude": 37.0, "country": "Россия", "country_code": "RU", "admin1": "Тверская Область", "population": 900},
+{"id": 2, "name": "Заря", "latitude": 55.0004, "longitude": 37.0, "country": "Россия", "country_code": "RU", "admin1": "Тверская Область", "population": 800},
+{"id": 3, "name": "Луг", "latitude": 56.00125, "longitude": 37.5, "country": "Россия", "country_code": "RU", "admin1": "Тверская Область", "population": 700},
+{"id": 4, "name": "Луг", "latitude": 56.00055, "longitude": 37.5, "country": "Россия", "country_code": "RU", "admin1": "Тверская Область", "population": 600},
+{"id": 5, "name": "Спрингфилд", "latitude": 39.8, "longitude": -89.6, "country_code": "us", "population": 500},
+{"id": 6, "name": "Спрингфилд", "latitude": 37.2, "longitude": -93.3, "country_code": "us", "population": 400},
+{"id": 7, "name": "Лунд", "latitude": 55.7, "longitude": 13.2, "country_code": "se", "population": 300}
+], "generationtime_ms": 0.3}

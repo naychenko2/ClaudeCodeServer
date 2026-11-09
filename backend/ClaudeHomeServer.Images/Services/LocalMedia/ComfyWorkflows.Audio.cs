@@ -243,7 +243,7 @@ public static partial class ComfyWorkflows
     public static readonly IReadOnlySet<string> WorkerOps = new HashSet<string>(StringComparer.Ordinal)
     {
         "separate", "tts", "voice_clone", "tts_chatterbox", "tts_moss", "voice_convert", "rvc_convert", "rvc_train",
-        "audio_to_midi", "denoise", "upsample", "master", "music_edit", "transcribe",
+        "audio_to_midi", "denoise", "upsample", "master", "music_edit", "transcribe", "lora_train", "lora_delete",
     };
 
     // Префикс файлов воркера — jobId: результат ляжет как ccs-local-media/{jobId}_{хвост}

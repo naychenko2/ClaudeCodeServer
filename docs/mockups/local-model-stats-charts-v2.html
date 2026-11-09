@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Локальные модели · графики «Нагрузка и кэш» v2.1</title>
+<style>
+/* Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts */
+.light {
+  --c-bg-main:#F4F0E8; --c-bg-card:#FBF8F2; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-success:#5E8B4E; --c-info:#3E7CA6; --c-danger:#B4452F;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4;
+}
+.dark {
+  --c-bg-main:#201C18; --c-bg-card:#2E2A25; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-success:#7CB86A; --c-info:#5FA0CC; --c-danger:#E8785E;
+  --c-border:#3D3830; --c-border-light:#34302A;
+}
+body { margin:0; font-family:'Hanken Grotesk',-apple-system,'Segoe UI',sans-serif; background:#888; }
+.cols { display:flex; flex-wrap:wrap; }
+.theme { flex:1 1 400px; background:var(--c-bg-main); color:var(--c-text-heading); padding:24px; /* SP.xl */ }
+.theme h2 { font-family:'PT Serif',Georgia,serif; font-size:16px; /* FS.lg */ margin:0 0 4px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:0 0 16px; max-width:360px; }
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; /* R.xl */
+  padding:12px; /* SP.md */ margin-bottom:16px; box-sizing:border-box; }
+.w340 { width:340px; } .w300 { width:300px; }
+.head { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+.head h3 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); flex:1; }
+.seg { display:inline-flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; font-size:11px; }
+.seg span { padding:2px 8px; border-radius:8px; color:var(--c-text-secondary); }
+.seg .on { background:var(--c-bg-card); color:var(--c-text-heading); font-weight:600; }
+.sum { font-size:12px; /* FS.sm */ line-height:1.45; height:17.4px; color:var(--c-text-secondary);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:8px; }
+.sum b { font-family:'JetBrains Mono',monospace; color:var(--c-text-heading); }
+.sum.muted { color:var(--c-text-muted); }
+.lbl { display:flex; justify-content:space-between; font-size:11px; /* FS.xs */ font-weight:600; color:var(--c-text-secondary); margin-bottom:2px; }
+.lbl i { font-style:normal; font-weight:400; color:var(--c-text-muted); }
+.lbl b { font-family:'JetBrains Mono',monospace; color:var(--c-text-heading); }
+.leg { display:flex; gap:12px; /* SP.md */ font-size:11px; line-height:1.45; height:16px; color:var(--c-text-secondary); margin-top:2px; white-space:nowrap; overflow:hidden; }
+.leg span { display:inline-flex; align-items:center; gap:4px; }
+.leg b { font-family:'JetBrains Mono',monospace; color:var(--c-text-heading); }
+.dot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+.sq { width:8px; height:8px; display:inline-block; position:relative; border:1px solid var(--c-border); box-sizing:border-box; }
+.sq::before { content:''; position:absolute; inset:0; background:var(--c-text-muted); opacity:.18; }
+svg { display:block; overflow:visible; }
+.ax { font-family:'JetBrains Mono',monospace; font-size:11px; fill:var(--c-text-muted); }
+.gap8 { height:8px; }
+.time { display:flex; justify-content:space-between; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--c-text-muted); margin-top:2px; padding-right:28px; }
+.empty { height:168px; background:var(--c-bg-inset); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--c-text-muted); }
+.cap { font-size:11px; color:var(--c-text-muted); margin:-8px 0 16px; }
+</style>
+</head>
+<body>
+<div class="cols" id="root"></div>
+<script>
+// Синтетические интервалы: 60 штук; null — разрыв, undefined — до начала истории.
+// u — занято блоками (доля), hit — попадания prefix, ram — попадания RAM-тира,
+// hit=null при живом движке — запросов в интервале не было; pre — вытеснения.
+const busy = Array.from({length:60}, (_, i) => {
+  const t = 300 + 260*Math.sin(i/6) + 120*Math.sin(i/2.3);
+  const press = i > 36 && i < 47;                       // кэш забит: попадания падают, вытеснения
+  return { tp: Math.max(0, Math.round(t)),
+    u: press ? 0.93 + (i%3)*0.02 : 0.55 + 0.15*Math.sin(i/5),
+    hit: press ? 0.48 + (i%4)*0.05 : 0.86 + 0.06*Math.sin(i/3),
+    ram: press ? 0.30 + (i%3)*0.08 : 0.08 + 0.05*Math.sin(i/4),
+    pre: press && i%2 ? (i%3)+1 : 0 };
+});
+const short = Array.from({length:60}, (_, i) => {
+  if (i < 44) return { tp: undefined };                                // истории ещё нет
+  if (i === 51 || i === 52) return { tp: null, u: null, hit: null, ram: null, pre: null };  // рестарт движка
+  const idle = i >= 56;                                                // простой: запросов нет
+  return { tp: idle ? 0 : 380 + (i%4)*60, u: idle ? 0.12 : 0.62 + (i%3)*0.05,
+    hit: idle ? null : 0.80 + (i%2)*0.08, ram: idle ? null : 0.1, pre: 0 };
+});
+
+const PR = 28;                                       // колонка оси Y справа
+const niceTop = m => { if (m <= 10) return 10; const p = Math.pow(10, Math.floor(Math.log10(m)));
+  for (const k of [1,2,5,10]) if (k*p >= m) return k*p; };
+const fmtAx = v => v >= 1000 ? (v/1000).toString().replace(/\.0$/,'') + 'k' : String(v);
+const pct = v => v == null ? '—' : Math.round(v*100) + ' %';
+
+// непрерывные прогоны по условию → [[a,b), ...]
+const runsOf = (data, test) => { const r = []; data.forEach((d, i) => { if (test(d)) { const l = r[r.length-1];
+  if (l && l[1] === i) l[1] = i+1; else r.push([i, i+1]); } }); return r; };
+// отрезки линии: обрыв на null/undefined
+const segsOf = (data, key, x, y) => { const segs = []; let cur = [];
+  data.forEach((d, i) => { if (d[key] == null) { if (cur.length) segs.push(cur); cur = []; } else cur.push([x(i), y(d[key])]); });
+  if (cur.length) segs.push(cur); return segs; };
+const poly = (segs, color, w) => segs.map(s => `<polyline points="${s.map(p=>p.join(',')).join(' ')}" fill="none" stroke="var(${color})" stroke-width="${w}" stroke-linejoin="round" stroke-linecap="round"/>`).join('');
+const area = (segs, H, color, op) => segs.map(s => `<path d="M${s[0][0]},${H} L${s.map(p=>p.join(',')).join(' L')} L${s[s.length-1][0]},${H} Z" fill="var(${color})" opacity="${op}"/>`).join('');
+
+function charts(data, pw, hover) {
+  const n = data.length, bw = pw / n, cx = i => i*bw + bw/2;
+  const gapRuns = runsOf(data, d => d.tp == null);
+  const zones = h => gapRuns.map(([a,b]) => `<rect x="${a*bw}" y="0" width="${(b-a)*bw}" height="${h}" fill="var(--c-bg-inset)" opacity=".5"/>`).join('');
+  const breaks = h => data.map((d, i) => d.tp === null && i > 0 && data[i-1].tp != null
+    ? `<line x1="${i*bw}" x2="${i*bw}" y1="0" y2="${h}" stroke="var(--c-text-muted)" stroke-dasharray="2 2"/>` : '').join('');
+  const vline = h => hover >= 0 ? `<line x1="${cx(hover)}" x2="${cx(hover)}" y1="0" y2="${h}" stroke="var(--c-text-muted)"/>` : '';
+  const pt = (h, v, color) => hover >= 0 && v != null ? `<circle cx="${cx(hover)}" cy="${h - v}" r="3" fill="var(${color})" stroke="var(--c-bg-card)" stroke-width="2"/>` : '';
+  const yLab = (pw, y, t, dy) => `<text class="ax" x="${pw+PR}" y="${y+dy}" text-anchor="end">${t}</text>`;
+
+  // 1. Выработка
+  const vals = data.filter(d => d.tp != null).map(d => d.tp);
+  const top = niceTop(Math.max(0, ...vals)), H1 = 96, y1 = v => H1 - v/top*H1;
+  const busyVals = vals.filter(v => v > 0);
+  const avg = busyVals.length ? busyVals.reduce((a,b)=>a+b,0)/busyVals.length : null;
+  const firstIdx = data.findIndex(d => d.tp !== undefined);
+  const noData = firstIdx > 0 && firstIdx*bw >= 40 ? `<text class="ax" x="${firstIdx*bw/2}" y="${H1/2+4}" text-anchor="middle">данных нет</text>` : '';
+  const s1 = segsOf(data, 'tp', cx, y1);
+  const grid1 = [0,.5,1].map(f => `<line x1="0" x2="${pw}" y1="${H1-f*H1}" y2="${H1-f*H1}" stroke="var(${f===0?'--c-border':'--c-border-light'})"/>` + yLab(pw, H1-f*H1, fmtAx(top*f), f===1?9:f===0?0:4)).join('');
+  const ax0 = Math.max(0, data.findIndex(d => d.tp != null)) * bw;
+  const avgL = avg != null ? `<line x1="${ax0}" x2="${pw}" y1="${y1(avg)}" y2="${y1(avg)}" stroke="var(--c-text-secondary)" stroke-dasharray="4 3"/>
+    <text class="ax" x="${ax0+2}" y="${y1(avg)-3}" style="fill:var(--c-text-secondary)">ср.</text>` : '';
+  const svg1 = `<svg width="${pw+PR}" height="${H1}">${zones(H1)}${grid1}${area(s1,H1,'--c-accent',.12)}${poly(s1,'--c-accent',1.75)}${avgL}${noData}${breaks(H1)}${vline(H1)}${pt(H1, hover>=0?data[hover].tp/top*H1:null,'--c-accent')}</svg>`;
+
+  // 2. Кэш, % — шкала фиксированная 0–100
+  const H2 = 64, y2 = v => H2 - v*H2;
+  const grid2 = [0,.5,1].map(f => `<line x1="0" x2="${pw}" y1="${H2-f*H2}" y2="${H2-f*H2}" stroke="var(${f===0?'--c-border':'--c-border-light'})"/>` + yLab(pw, H2-f*H2, String(f*100), f===1?9:f===0?0:4)).join('');
+  const sU = segsOf(data, 'u', cx, y2), sH = segsOf(data, 'hit', cx, y2), sR = segsOf(data, 'ram', cx, y2);
+  const hv = hover >= 0 ? data[hover] : null;
+  const svg2 = `<svg width="${pw+PR}" height="${H2}">${zones(H2)}${grid2}${area(sU,H2,'--c-text-muted',.18)}${poly(sR,'--c-info',1.25)}${poly(sH,'--c-success',1.75)}${breaks(H2)}${vline(H2)}${pt(H2, hv?.ram!=null?hv.ram*H2:null,'--c-info')}${pt(H2, hv?.hit!=null?hv.hit*H2:null,'--c-success')}</svg>`;
+
+  // 3. Вытеснения
+  const pres = data.filter(d => d.pre != null).map(d => d.pre);
+  const preSum = pres.reduce((a,b)=>a+b,0), H3 = 32, pTop = Math.max(2, ...pres);
+  let bars = '';
+  data.forEach((d, i) => { if (d.pre > 0) { const h = d.pre/pTop*H3;
+    bars += `<rect x="${i*bw+0.5}" y="${H3-h}" width="${bw-1}" height="${h}" rx="1" fill="var(--c-danger)" opacity="${i===hover?1:.85}"/>`; } });
+  const svg3 = preSum > 0 ? `<svg width="${pw+PR}" height="${H3}">${zones(H3)}<line x1="0" x2="${pw}" y1="${H3}" y2="${H3}" stroke="var(--c-border)"/>${bars}${vline(H3)}
+    ${yLab(pw,0,pTop,9)}${yLab(pw,H3,0,0)}</svg>` : '';
+
+  // кэш за окно (в макете — среднее долей; в коде — из сумм приращений)
+  const hits = data.filter(d => d.hit != null).map(d => d.hit);
+  const hitAvg = hits.length ? hits.reduce((a,b)=>a+b,0)/hits.length : null;
+  return { svg1, svg2, svg3, avg, peak: vals.length ? Math.max(...vals) : null, hitAvg, preSum, hv };
+}
+
+function card({ win, data, hover = -1, width = 340, readout, timeLabels, narrow = false }) {
+  const pw = width - 24 - PR;
+  const c = charts(data, pw, hover);
+  const sum = readout ? `<div class="sum">${readout}</div>`
+    : c.avg != null ? `<div class="sum">в среднем <b>${Math.round(c.avg)} ток/с</b> · пик <b>${c.peak}</b>${c.hitAvg != null ? ` · кэш <b>${pct(c.hitAvg)}</b>` : ''}</div>`
+    : `<div class="sum muted">за период генерации не было</div>`;
+  const L = narrow ? ['попад.', 'RAM'] : ['попадания', 'из RAM'];
+  const v = k => c.hv ? ` <b>${pct(c.hv[k])}</b>` : '';
+  const legend = `<div class="leg"><span><i class="dot" style="background:var(--c-success)"></i>${L[0]}${v('hit')}</span>
+    <span><i class="dot" style="background:var(--c-info)"></i>${L[1]}${v('ram')}</span>
+    <span><i class="sq"></i>занято${v('u')}</span></div>`;
+  const preRight = c.preSum === 0 && !c.hv ? '<i>не было</i>'
+    : c.hv ? `<b>${c.hv.pre ?? '—'}</b>` : `<i>за окно</i>&nbsp;<b>${c.preSum}</b>`;
+  return `<div class="card" style="width:${width}px">
+    <div class="head"><h3>Нагрузка и кэш</h3><span class="seg"><span class="${win==='15m'?'on':''}">15 мин</span><span class="${win==='1h'?'on':''}">1 ч</span></span></div>
+    ${sum}
+    <div class="lbl">Выработка, ток/с</div>${c.svg1}
+    <div class="gap8"></div>
+    <div class="lbl">Кэш, %</div>${c.svg2}${legend}
+    <div class="gap8"></div>
+    <div class="lbl" style="padding-right:${PR}px"><span>Вытеснения</span><span>${preRight}</span></div>${c.svg3}
+    <div class="time" style="padding-right:${PR}px">${timeLabels.map(t=>`<span>${t}</span>`).join('')}</div>
+  </div>`;
+}
+
+const t15 = ['−15 мин','−10','−5','сейчас'], t1h = ['−1 ч','−45','−30','−15','сейчас'];
+const emptyCard = `<div class="card w340"><div class="head"><h3>Нагрузка и кэш</h3><span class="seg"><span class="on">15 мин</span><span>1 ч</span></span></div>
+  <div class="sum muted">за период генерации не было</div><div class="empty">Нет данных за период</div></div>`;
+const calm = busy.map(d => ({ ...d, pre: 0, hit: Math.max(d.hit, 0.8), u: Math.min(d.u, 0.75) }));
+
+document.getElementById('root').innerHTML = ['light','dark'].map(th => `
+  <div class="theme ${th}">
+    <h2>${th === 'light' ? 'Светлая тема' : 'Тёмная тема'}</h2>
+    <p class="note">v2.1: график очереди убран, под выработкой — «Кэш, %» и «Вытеснения» с общей осью времени. Спецификация — local-model-stats-charts-v2.md.</p>
+    ${card({ win:'15m', data:busy, timeLabels:t15 })}
+    <p class="cap">1. Давление на кэш, 15 мин: подложка «занято» у верха, зелёная линия попаданий проседает, вытеснения, выработка падает — одна вертикаль на всё.</p>
+    ${card({ win:'15m', data:busy, hover:41, timeLabels:t15,
+      readout:'<b>14:32:45</b> · <b>' + busy[41].tp + ' ток/с</b>' })}
+    <p class="cap">2. Наведение или касание: время и выработка — в строке сверху, значения кэша — в легенде и у «Вытеснений».</p>
+    ${card({ win:'15m', data:calm, timeLabels:t15 })}
+    <p class="cap">3. Спокойная работа: вытеснений не было — поле не рисуется, только строка.</p>
+    ${card({ win:'1h', data:short, timeLabels:t1h })}
+    <p class="cap">4. 1 ч, история короче окна, рестарт движка и простой в конце: на простое линии попаданий обрываются без фона «нет данных».</p>
+    ${emptyCard}
+    <p class="cap">5. Ни одной точки в окне.</p>
+    ${card({ win:'15m', data:busy, width:300, narrow:true, timeLabels:['−15 мин','сейчас'],
+      readout:'<b>14:32</b> · <b>' + busy[41].tp + '</b>', hover:41 })}
+    <p class="cap">6. Узкая ширина (&lt; 300 px, мобильный лист): крайние метки времени, короткое считывание и легенда.</p>
+  </div>`).join('');
+</script>
+</body>
+</html>

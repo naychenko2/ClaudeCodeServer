@@ -1,13 +1,14 @@
 // Элементы колонки статуса на Kanban-доске: заголовок с WIP-лимитом,
 // ячейка-droppable (lane × status) со списком карточек и быстрым добавлением.
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import type { Task } from '../../../types';
 import { C, FONT, R } from '../../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { Button } from '../../../components/ui/Button';
 import { setWip } from '../../../lib/boardControls';
 import { BoardCard } from './BoardCard';
 
@@ -88,18 +89,31 @@ function WipEditor({ wip, onWip }: { wip?: number; onWip: (v?: number) => void }
 }
 
 // Ячейка доски: конкретная колонка статуса в конкретной дорожке. Droppable + сортируемый список.
-export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, onQuickAdd, minEmptyHeight }: {
+// canDrag=false (читатель общего проекта, F2-Q3): карточки не активируются для броска и
+// подсказка «Перетащите сюда» не нужна — она обещала бы действие, которого нет.
+export function BoardCell({ cellId, cards, windowSize, projectNameOf, deviceNameOf, onOpen, onQuickAdd, canDrag = true, minEmptyHeight }: {
   cellId: string;
   cards: Task[];
+  // Окно отрисовки (колонка «Готово»): показываем первые windowSize карточек + «Показать ещё»
+  windowSize?: number;
   projectNameOf: (t: Task) => string | undefined;
   deviceNameOf?: (t: Task) => string | undefined;
   onOpen: (t: Task) => void;
   onQuickAdd?: (title: string) => void;   // undefined = без быстрого добавления (в режиме дорожек)
+  canDrag?: boolean;                      // false = карточки не перетаскиваются (право читателя)
   minEmptyHeight: number;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: cellId });
   const [adding, setAdding] = useState(false);
   const [title, setTitle] = useState('');
+  // В состоянии — только «сколько добавлено сверх окна»; сам лимит выводится из пропса,
+  // поэтому смена windowSize (смена категории колонки, переиспользование ячейки) не залипает
+  const [extra, setExtra] = useState(0);
+  const limit = windowSize === undefined ? Infinity : windowSize + extra;
+  const visible = useMemo(() => cards.length > limit ? cards.slice(0, limit) : cards, [cards, limit]);
+  // Стабильный список id: новая ссылка меняет контекст SortableContext и перерисовывает
+  // все BoardCard (useSortable), даже если сами карточки не менялись
+  const visibleIds = useMemo(() => visible.map(c => c.id), [visible]);
 
   const submit = () => {
     const t = title.trim();
@@ -120,13 +134,19 @@ export function BoardCell({ cellId, cards, projectNameOf, deviceNameOf, onOpen, 
         minHeight: cards.length === 0 ? minEmptyHeight : undefined,
       }}
     >
-      <SortableContext items={cards.map(c => c.id)} strategy={verticalListSortingStrategy}>
-        {cards.map(t => (
-          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={() => onOpen(t)} />
+      <SortableContext items={visibleIds} strategy={verticalListSortingStrategy}>
+        {visible.map(t => (
+          <BoardCard key={t.id} task={t} projectName={projectNameOf(t)} deviceName={deviceNameOf?.(t)} onOpen={onOpen} canDrag={canDrag} />
         ))}
       </SortableContext>
 
-      {cards.length === 0 && !adding && (
+      {windowSize !== undefined && cards.length > limit && (
+        <Button variant="secondary" size="sm" fullWidth onClick={() => setExtra(n => n + windowSize)}>
+          Показать ещё {Math.min(windowSize, cards.length - limit)}
+        </Button>
+      )}
+
+      {cards.length === 0 && !adding && canDrag && (
         <div style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, minHeight: 40,

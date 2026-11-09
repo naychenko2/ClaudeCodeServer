@@ -1,21 +1,28 @@
-﻿using System.Net;
+﻿using System.Diagnostics;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Images;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
     private readonly string _tempProjectDir;
+    private readonly TestWebApplicationFactory _factory;
 
     public ProjectsControllerTests(TestWebApplicationFactory factory)
     {
         _client = factory.CreateAuthenticatedClient();
+        _factory = factory;
         _tempProjectDir = Path.Combine(factory.TempDir, "projects");
         Directory.CreateDirectory(_tempProjectDir);
     }
@@ -89,6 +96,29 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var response = await _client.GetAsync("/api/projects/nonexistent-id");
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Контракт ревью F2: ответ проекта несёт ownerId — фронтовые гейты «только владелец»
+    // (EditDialog, ProjectIntroCard, FeaturePage) читают это поле. API отдаёт только
+    // проекты владельца, поэтому ownerId == id запросившего — наружу ничего не утекает.
+    [Fact]
+    public async Task ProjectResponse_CarriesOwnerId()
+    {
+        var userId = JsonSerializer.Deserialize<JsonElement>(
+            await _client.GetStringAsync("/api/auth/me")).GetProperty("userId").GetString()!;
+
+        var project = await CreateProjectAsync("OwnerIdContract");
+        var id = project.GetProperty("id").GetString()!;
+
+        project.GetProperty("ownerId").GetString().Should().Be(userId);
+
+        var detail = JsonSerializer.Deserialize<JsonElement>(
+            await _client.GetStringAsync($"/api/projects/{id}"));
+        detail.GetProperty("ownerId").GetString().Should().Be(userId);
+
+        var list = JsonSerializer.Deserialize<JsonElement>(await _client.GetStringAsync("/api/projects"));
+        var entry = list.EnumerateArray().First(e => e.GetProperty("id").GetString() == id);
+        entry.GetProperty("ownerId").GetString().Should().Be(userId);
     }
 
     [Fact]
@@ -184,6 +214,183 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         var response = await _client.GetAsync($"/api/projects/{id}");
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // W4-HOLD-N (хвост R-N п.3, критерий c3): дверь удаления проекта обходила страховку:
+    // сносимый вместе с проектом эпик на паузе уносил замороженные сроки своих шагов.
+    // Мутация: убрать обход RestoreFrozenChatsBeforeDelete до DeleteByProject — последний
+    // абзац краснеет (чат остаётся без срока).
+    [Fact]
+    public async Task DeleteProject_EpicOnPause_ReturnsFrozenExpiryToItsStep()
+    {
+        var project = await CreateProjectAsync("hold-del");
+        var projectId = project.GetProperty("id").GetString()!;
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var user = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        var epic = tm.Create(projectId, user.Id, new CreateTaskRequest("Фича на паузе", Role: "feature"));
+        var step = tm.Create(projectId, user.Id, new CreateTaskRequest("Шаг на паузе", Role: "step",
+            FeatureId: epic.Id, Status: TaskItemStatus.InProgress));
+        var chat = await sessions.CreateChatAsync(user.Id, ClaudeMode.AcceptEdits, name: "exec",
+            taskId: step.Id);
+        tm.MarkClaudeStarted(step.Id, chat.Id, DateTime.UtcNow);
+        sessions.SetExpiry(chat.Id, 10);
+
+        var set = await _client.PostAsJsonAsync($"/api/tasks/features/{epic.Id}/hold", new { reason = "manual" });
+        set.StatusCode.Should().Be(HttpStatusCode.OK);
+        sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().BeNull("пауза заморозила срок чата");
+
+        var del = await _client.DeleteAsync($"/api/projects/{projectId}");
+        del.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        sessions.GetById(chat.Id)!.ExpiresAfterMinutes.Should().Be(10,
+            "проект удалён вместе с эпиком на паузе: срок шага возвращён — чат не вечный");
+    }
+
+    // --- Удаление проекта: чьё worktree-дерево сносим, чужое/общее — нет ---
+    // Те же правила, что при удалении чата (SessionManager): своё (WorktreeOwned) сносим,
+    // привязанное (WorktreeOwned=false) и старое (без признака) — не трогаем.
+
+    // Git-репо с одним коммитом в temp-папке (проект создаётся на нём)
+    private async Task<string> MkGitRepoAsync(string name)
+    {
+        var dir = Path.Combine(_tempProjectDir, "git_" + name + "_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await RunGitAsync(dir, "init");
+        await RunGitAsync(dir, "config", "user.email", "test@test");
+        await RunGitAsync(dir, "config", "user.name", "Тест");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "один\n");
+        await RunGitAsync(dir, "add", "-A");
+        await RunGitAsync(dir, "commit", "-m", "начальный коммит");
+        return dir;
+    }
+
+    // Linked worktree репо на новой ветке (реальная папка на диске)
+    private async Task<string> MkWorktreeAsync(string repoDir, string name)
+    {
+        var worktree = Path.Combine(_tempProjectDir, name + "_" + Guid.NewGuid().ToString("N")[..8]);
+        await RunGitAsync(repoDir, "worktree", "add", "-b", "wt/тест", worktree);
+        return worktree;
+    }
+
+    private static async Task RunGitAsync(string cwd, params string[] args)
+    {
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = cwd,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var p = Process.Start(psi)!;
+        await p.WaitForExitAsync();
+    }
+
+    // Чат проекта: POST /api/projects/{projectId}/sessions
+    private async Task<string> CreateProjectChatAsync(string projectId)
+    {
+        var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        response.EnsureSuccessStatusCode();
+        var json = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        return json.GetProperty("id").GetString()!;
+    }
+
+    // Своё дерево (тумблер, WorktreeOwned=true) → при удалении проекта git worktree remove
+    [Fact]
+    public async Task Delete_ProjectWithOwnWorktree_RemovesWorktree()
+    {
+        var repoDir = await MkGitRepoAsync("own");
+        var project = await CreateProjectAsync("OwnWt", repoDir);
+        var id = project.GetProperty("id").GetString()!;
+        var chatId = await CreateProjectChatAsync(id);
+
+        var wtResp = await _client.PutAsJsonAsync($"/api/chats/{chatId}/worktree", new { enabled = true });
+        wtResp.EnsureSuccessStatusCode();
+        var wtJson = JsonSerializer.Deserialize<JsonElement>(await wtResp.Content.ReadAsStringAsync());
+        var worktreePath = wtJson.GetProperty("worktreePath").GetString()!;
+        Directory.Exists(worktreePath).Should().BeTrue();
+
+        await _client.DeleteAsync($"/api/projects/{id}");
+
+        Directory.Exists(worktreePath).Should().BeFalse("своё дерево сносится вместе с проектом");
+    }
+
+    // Удаление чата-владельца дерева волны уносит слоты ревью ЭТОГО дерева; слоты другой волны целы
+    [Fact]
+    public async Task DeleteChat_OwningWaveTree_RemovesItsReviewSlots_AndKeepsOtherWaveSlots()
+    {
+        var pool = _factory.Services.GetRequiredService<ReviewTreePool>();
+        var pm = _factory.Services.GetRequiredService<ProjectManager>();
+        var repoDir = await MkGitRepoAsync("rvwave");
+        var projectId = (await CreateProjectAsync("RvWave", repoDir)).GetProperty("id").GetString()!;
+        var project = pm.GetById(projectId)!;
+
+        var chatId = await CreateProjectChatAsync(projectId);
+        var wtResp = await _client.PutAsJsonAsync($"/api/chats/{chatId}/worktree", new { enabled = true });
+        wtResp.EnsureSuccessStatusCode();
+        var wave = JsonSerializer.Deserialize<JsonElement>(await wtResp.Content.ReadAsStringAsync())
+            .GetProperty("worktreePath").GetString()!;
+        var otherWave = await MkWorktreeAsync(repoDir, "rvwave_other");
+
+        var own = await pool.TryAcquireAsync(project.OwnerId, project, wave, "t-own");
+        var foreign = await pool.TryAcquireAsync(project.OwnerId, project, otherWave, "t-foreign");
+        Directory.Exists(own!.SlotPath).Should().BeTrue();
+        Directory.Exists(foreign!.SlotPath).Should().BeTrue();
+
+        (await _client.DeleteAsync($"/api/projects/{projectId}/sessions/{chatId}")).EnsureSuccessStatusCode();
+
+        Directory.Exists(wave).Should().BeFalse("дерево чата снесено");
+        Directory.Exists(own.SlotPath).Should().BeFalse("слот снесён вместе с деревом волны");
+        Directory.Exists(foreign.SlotPath).Should().BeTrue("слот другой волны цел");
+    }
+
+    // Слоты ревью проекта сносятся вместе с ним; слоты другого проекта того же владельца целы
+    [Fact]
+    public async Task Delete_Project_RemovesReviewSlots_AndKeepsSlotsOfOtherProject()
+    {
+        var pool = _factory.Services.GetRequiredService<ReviewTreePool>();
+        var pm = _factory.Services.GetRequiredService<ProjectManager>();
+
+        async Task<(string Id, string Slot)> MkProjectWithSlotAsync(string name)
+        {
+            var repoDir = await MkGitRepoAsync(name);
+            var id = (await CreateProjectAsync(name, repoDir)).GetProperty("id").GetString()!;
+            var wave = await MkWorktreeAsync(repoDir, name + "_wave");
+            var project = pm.GetById(id)!;
+            var lease = await pool.TryAcquireAsync(project.OwnerId, project, wave, "t-" + name);
+            lease.Should().NotBeNull();
+            Directory.Exists(lease!.SlotPath).Should().BeTrue();
+            return (id, lease.SlotPath);
+        }
+
+        var doomed = await MkProjectWithSlotAsync("RvDoomed");
+        var kept = await MkProjectWithSlotAsync("RvKept");
+
+        (await _client.DeleteAsync($"/api/projects/{doomed.Id}")).EnsureSuccessStatusCode();
+
+        Directory.Exists(doomed.Slot).Should().BeFalse("слот снесён вместе с проектом");
+        Directory.Exists(kept.Slot).Should().BeTrue("слот чужого проекта цел");
+    }
+
+    // Привязанное дерево (AttachWorktreeAsync, WorktreeOwned=false) → дерево НЕ сносится:
+    // его делят другие задачи фичи, удалять проект его работу не должен
+    [Fact]
+    public async Task Delete_ProjectWithAttachedWorktree_KeepsWorktree()
+    {
+        var repoDir = await MkGitRepoAsync("attach");
+        var worktree = await MkWorktreeAsync(repoDir, "attachwt");
+        var project = await CreateProjectAsync("AttachWt", repoDir);
+        var id = project.GetProperty("id").GetString()!;
+        var chatId = await CreateProjectChatAsync(id);
+
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        (await sessions.AttachWorktreeAsync(chatId, worktree)).Should().BeTrue();
+        Directory.Exists(worktree).Should().BeTrue();
+
+        await _client.DeleteAsync($"/api/projects/{id}");
+
+        Directory.Exists(worktree).Should().BeTrue("привязанное дерево не сносится");
     }
 
     // --- PUT /api/projects/{id}/tags (реестр общих тегов) ---
@@ -348,14 +555,13 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
             => Task.FromResult(ReplyFor(prompt));
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(pickReply);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -434,6 +640,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
@@ -445,10 +652,8 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
             if (!hintReached) return Task.FromResult("");
             return Task.FromResult(prompt.Contains("\"words\"") ? ModelWordsReply : ModelGlyphsReply);
         }
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(null);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)

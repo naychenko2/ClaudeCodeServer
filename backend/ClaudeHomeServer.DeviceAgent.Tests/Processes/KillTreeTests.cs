@@ -149,6 +149,27 @@ public class KillTreeTests
         act.Should().Throw<InvalidOperationException>().WithMessage("*cmd /c не проксирует stdin*");
     }
 
+    /// <summary>
+    /// Решение о запасном гашении — чистая булева логика, kernel32 не трогает: проверяется на
+    /// любой ОС, потому что сама Windows-ветка (Job Object) на Linux-CI пропущена.
+    /// Семантика исходной строки 81e7170eb: запасной путь нужен, когда job не сработал либо
+    /// лидер ещё жив — потомки, рождённые до посадки в job, не его члены, KILL_ON_JOB_CLOSE их не берёт.
+    /// </summary>
+    [Fact]
+    public void Запасное_гашение_нужно_когда_job_не_сработал_или_лидер_жив()
+    {
+#pragma warning disable CA1416 // предикат не обращается к kernel32: зовём windows-only тип на любой ОС намеренно
+        // job не сработал — запасной путь при любом состоянии лидера
+        WindowsJobProcess.NeedKillTreeFallback(terminated: false, leaderAlive: false).Should().BeTrue();
+        WindowsJobProcess.NeedKillTreeFallback(terminated: false, leaderAlive: true).Should().BeTrue();
+        // job сработал, но лидер жив: часть дерева успела родиться до посадки в job — её добивает запасной путь
+        WindowsJobProcess.NeedKillTreeFallback(terminated: true, leaderAlive: true).Should().BeTrue(
+            "потомки, рождённые до посадки в job, — не его члены; KILL_ON_JOB_CLOSE их не берёт");
+        // job сработал и лидера больше нет: всё дерево уже гаснет job'ом, бить некого
+        WindowsJobProcess.NeedKillTreeFallback(terminated: true, leaderAlive: false).Should().BeFalse();
+#pragma warning restore CA1416
+    }
+
     private static Dictionary<string, string> UnixEnv(string dir) => new()
     {
         ["PATH"] = "/usr/bin:/bin",

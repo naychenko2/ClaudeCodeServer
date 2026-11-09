@@ -33,7 +33,7 @@ public abstract class StoredMessage { }
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
     string? senderOrigin = null, string? senderChatName = null, string? staffNote = null,
-    long? timestamp = null, string? delegationTaskId = null) : StoredMessage
+    long? timestamp = null, string? delegationTaskId = null, string? senderUserId = null) : StoredMessage
 {
     // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
     public long? Timestamp { get; init; } = timestamp;
@@ -63,6 +63,13 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // Персона-отправитель (chats_send из чата персоны, авто-ход задачи) — для рендера
     // сообщения её лицом
     public string? SenderPersonaId { get; init; } = senderPersonaId;
+    // Человек-автор сообщения (id пользователя, S2a-6a): в общем проекте в один чат пишут
+    // несколько — по этому полю отличают автора поста. null — сообщение без человека-
+    // отправителя (агентское, служебное) либо история до этого поля; в JSON поля тогда нет
+    // вовсе (WhenWritingNull, как у StoredToolUseMessage.Result), старая история без поля
+    // десериализуется штатно.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SenderUserId { get; init; } = senderUserId;
     // Служебная директива механики цикла «до готово» (continuation/verification) — UI прячет
     // сырой текст за компактной плашкой вместо пузыря пользователя
     public bool? SystemDirective { get; init; } = systemDirective;
@@ -159,9 +166,9 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
     // примерно на каждом десятом шаге. null — история до этого поля (исторические чаты
     // так и ветвятся текстовым путём), транскрипт не найден либо хвост не прочитался.
     public string? TranscriptTailUuid { get; init; }
-    // Состояние prompt cache на конец хода — см. ResultMessage.PromptCache. Живёт в истории,
-    // чтобы индикатор TTL пережил F5; null — старые истории и сторонние провайдеры.
-    public PromptCacheInfo? PromptCache { get; init; }
+    // Состояние prompt cache хода — см. ResultMessage.PromptCache. Живёт в истории, чтобы
+    // индикатор пережил F5; null — истории до этого поля и ходы без сигнала кэша.
+    public PromptCacheState? PromptCache { get; init; }
 }
 
 public class StoredErrorMessage(string text) : StoredMessage
@@ -224,7 +231,8 @@ public class StoredCompactBoundaryMessage(string trigger, int? preTokens, int? p
 // одинаковым null схлопнулись бы в одну).
 public class StoredContextPrunedMessage(string kind, int tokensBefore, int tokensAfter, int blocks,
     int resultBlocks, int inputBlocks, int thinkingBlocks, double? prefillSeconds = null,
-    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null) : StoredMessage
+    int? cacheReadTokens = null, int? promptTokens = null, string? eventId = null,
+    int imageBlocks = 0, int imageTokens = 0) : StoredMessage
 {
     [JsonPropertyName("pruneKind")]
     public string Kind { get; init; } = kind;
@@ -238,6 +246,8 @@ public class StoredContextPrunedMessage(string kind, int tokensBefore, int token
     public double? PrefillSeconds { get; init; } = prefillSeconds;
     public int? CacheReadTokens { get; init; } = cacheReadTokens;
     public int? PromptTokens { get; init; } = promptTokens;
+    public int ImageBlocks { get; init; } = imageBlocks;
+    public int ImageTokens { get; init; } = imageTokens;
 }
 
 // Стоимость генерации fal.ai (фактически списанная), приходит вне хода — хранится отдельной записью

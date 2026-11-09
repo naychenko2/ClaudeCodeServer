@@ -7,7 +7,7 @@ import { onReconnected, showToast } from 'aihome_shell/kit';
 import type { Sample } from '../editorInputs';
 import type { Mark, Tool } from '../marks';
 import { conflictState, EMPTY_THREADS, threadsApi, type ImageThread, type ImageThreadsState } from './threadsApi';
-import { noteImageMode } from './modeState';
+import { setImageMode } from './modeState';
 
 // Ключ элемента выбора агента и черновиков — тот же, что IMAGES_PANEL в characters/panel
 const PANEL = 'images';
@@ -22,8 +22,9 @@ const _marks = new Map<string, { marks: Mark[]; size: { w: number; h: number } |
 // Образцы на проект: уходят в каждую генерацию, пока их не убрали (карточка настроек полосы)
 const _samples = new Map<string, Sample[]>();
 // Инструмент, с которым открывается редактор: кисть и пометки — или правка без ИИ
-// («Обрезать», «Повернуть и отразить», «Размер и формат» из списка операций панели)
-export type EditorTool = Tool | 'crop' | 'rotate' | 'resize';
+// («Обрезать», «Повернуть и отразить», «Размер и формат» из списка операций панели),
+// или «Подставить персонажа» (этап 2 · шаг 10b) — режим поверх холста, как обрезка
+export type EditorTool = Tool | 'crop' | 'rotate' | 'resize' | 'faceSwap';
 // Попап «Редактор»: какой чат, какая нить и какая версия открыты (null — текущая)
 let _editor: { sessionId: string; threadId: string; versionId: string | null; tool?: EditorTool } | null = null;
 // «Где менять: Вся картинка» при отметках (панель v5): маска нити не уходит. Новые отметки
@@ -53,8 +54,8 @@ function apply(sessionId: string, projectId: string, state: ImageThreadsState) {
   if (e?.loaded && e.state.revision > state.revision) return;
   const prevFocus = e?.loaded ? e.state.focus : null;
   _entries.set(sessionId, { projectId, state, loaded: true, loading: false });
-  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать», флаг image-panel-v5)
-  if (prevFocus && !state.focus) noteImageMode(sessionId, 'create');
+  // Выбор сняли — человек или агент: дальше рисуем новую (режим «Создать»)
+  if (prevFocus && !state.focus) setImageMode(sessionId, 'create');
   emit();
 }
 

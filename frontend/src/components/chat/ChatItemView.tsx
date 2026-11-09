@@ -1,6 +1,5 @@
 import { memo, useState, useCallback, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, Camera, MonitorSmartphone, DatabaseZap } from 'lucide-react';
-import type { TurnCacheInfo } from '../../lib/promptCache';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown, Ban, GitFork, GitBranch, MessageSquareShare, Camera, MonitorSmartphone, Hourglass } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
@@ -12,14 +11,16 @@ import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { TodoList } from './TodoList';
-import { C, FONT, SHADOW, R, FS, SP } from '../../lib/design';
+import { useFeatureRunsSnapshot } from '../../lib/featureRuns';
+import { C, FONT, SHADOW, R, FS, SP, TB } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { useSpheres } from '../../lib/useSpheres';
 import { isZoneRefusal, OPEN_COMPANION_PICKER_EVENT } from '../../lib/personaZone';
-import { prunedHeadline, prunedDetails } from '../../lib/contextPruned';
+import { prunedHeadline, prunedDetails, prunedIcon } from '../../lib/contextPruned';
 import { Button } from '../ui/Button';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useModelLabel } from '../../lib/models';
+import { MessageAuthorLine } from '../../features/projects/members/MessageAuthorLine';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
 import { relPathTree, stripRootTree } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
@@ -51,7 +52,7 @@ import { ToolUseView, HEAD_GAP, CHEVRON_W } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
 import { WidgetView, isWidgetShow } from './WidgetView';
-import { TaskCreatedView, isTasksCreate } from './TaskCreatedView';
+import { TaskRunExecutorView, isTasksCreate, isTasksRunExecutor } from './TaskCreatedView';
 import type { ActivityEntry } from './timeline';
 import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
@@ -59,6 +60,23 @@ import { TeamPlanView } from './TeamPlanView';
 import { TeamEscalationView } from './TeamEscalationView';
 import { teamPlanningDoneText } from '../../lib/teamImplement';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { missReasonLabel } from '../../lib/promptCache';
+
+// K-1/n-1 (360): поле справа у строки пилюли — по тач-размеру (TB.iconHitMobile, 40 px),
+// чтобы правый край строки не заходил под плавающий аватар (FAB) на 4 px.
+const PILL_ROW_RIGHT_PAD = TB.iconHitMobile;
+
+// Подвал хода: подтверждение в подсказке к строке про промах кэша (шаг F-2, кэш промпта). Формулировка — польза, не техника: человек понимает, что кэш
+// пересобирается сам и следующий ход снова тёплый — промах не поломка. Ключи —
+// те же причины, что в карте подписей lib/promptCache; незнакомая — общий текст.
+const CACHE_MISS_HINT: Record<string, string> = {
+  systemChanged: 'Системный промпт изменился — кэш собирается заново. Это нормально: следующий ход снова попадёт в кэш.',
+  messagesChanged: 'История сообщений изменилась — кэш пересобирается. Это нормально: следующий ход снова попадёт в кэш.',
+  previousMessageNotFound: 'Срок жизни кэша истёк — он соберётся заново на следующем ходе. Это нормально.',
+  toolsChanged: 'Набор инструментов изменился — кэш пересобирается. Это нормально: следующий ход снова попадёт в кэш.',
+  modelChanged: 'Сменилась модель — у каждой модели свой кэш. Это нормально: следующий ход соберёт его заново.',
+  unavailable: 'Причина промаха не определена. Кэш пересобирается сам — следующий ход снова тёплый.',
+};
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -66,27 +84,91 @@ function parseTodoWriteInput(input: unknown): TodoItem[] {
   return Array.isArray(t) ? (t as TodoItem[]) : [];
 }
 
-// Карточка плана задач — закрепленный чек-лист с прогрессом. Источник списка:
-// input TodoWrite либо агрегат TaskCreate/TaskUpdate (computeTodos)
-function TodoPlanView({ todos }: { todos: TodoItem[] }) {
+// Карточка плана задач. Решение Андрея 23.10: в чате с фичей живая карточка «План хода»
+// не показывается вовсе — статус и сигналы даёт баннер; в ленте остаются только
+// строки-снимки прошлых планов. Два вида:
+// 1. Живая (isCurrentPlan) + есть фичи → ничего (карточки нет).
+// 2. Живая (isCurrentPlan) + без фич → полный чек-лист (прежний вид, байт-в-байт).
+// 3. Прошлые (!isCurrentPlan) → строка-снимок «› ☑ План хода N/M · HH:MM · снимок»,
+//    раскрытие по клику (локальный state, aria-expanded), тело — TodoList того хода.
+function TodoPlanView({ todos, isMobile, isCurrentPlan, ts }: {
+  todos: TodoItem[];
+  isMobile: boolean;
+  isCurrentPlan: boolean;
+  ts?: number;
+}) {
+  const sessionId = useContext(ChatSessionContext);
+  const runs = useFeatureRunsSnapshot(sessionId);
+  const [expanded, setExpanded] = useState(false);
   if (todos.length === 0) return null;
   const done = todos.filter(t => t.status === 'completed').length;
+  const hasFeatures = runs.length > 0;
 
+  // 1. Живая + фичи: живой карточки нет вовсе (решение Андрея 23.10): статус и сигналы
+  //    даёт баннер; в ленте остаются только снимки прошлых планов (ветка 3 ниже).
+  if (isCurrentPlan && hasFeatures) return null;
+
+  // 2. Живая + без фич: прежний полный чек-лист (байт-в-байт).
+  if (isCurrentPlan) {
+    return (
+      <div style={{
+        border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
+        overflow: 'hidden', boxShadow: SHADOW.card,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
+          <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
+          <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+            {done}/{todos.length}
+          </span>
+        </div>
+        <div style={{ padding: '7px 13px 10px' }}>
+          <TodoList todos={todos} />
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Прошлая карточка: строка-снимок, раскрытие по клику.
+  const timeLabel = ts
+    ? new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : '';
   return (
     <div style={{
       border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite,
       overflow: 'hidden', boxShadow: SHADOW.card,
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 13px', borderBottom: `1px solid ${C.divider}` }}>
+      <button
+        onClick={() => setExpanded(e => !e)}
+        aria-expanded={expanded}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+          padding: '10px 13px', border: 'none', background: 'transparent', cursor: 'pointer',
+          minHeight: isMobile ? TB.iconHitMobile : undefined,
+        }}
+      >
+        <span style={{ fontSize: 14, color: C.textMuted, flexShrink: 0 }}>›</span>
         <SquareCheck size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
-        <span style={{ fontFamily: FONT.serif, fontSize: 14, fontWeight: 700, color: C.textHeading }}>План хода</span>
-        <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
+        <span style={{ fontFamily: FONT.serif, fontSize: 13, fontWeight: 600, color: C.textHeading, whiteSpace: 'nowrap' }}>
+          План хода
+        </span>
+        <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
           {done}/{todos.length}
         </span>
-      </div>
-      <div style={{ padding: '7px 13px 10px' }}>
-        <TodoList todos={todos} />
-      </div>
+        {timeLabel && (
+          <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+            · {timeLabel}
+          </span>
+        )}
+        <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+          · снимок
+        </span>
+      </button>
+      {expanded && (
+        <div style={{ padding: '7px 13px 10px', borderTop: `1px solid ${C.divider}` }}>
+          <TodoList todos={todos} />
+        </div>
+      )}
     </div>
   );
 }
@@ -290,7 +372,7 @@ function PostActionBar({ align = 'left', children }: {
 function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
   model?: string; ts?: number; promptSnapshotId?: string;
   turnContextTokens?: number | null;
-  turnCache?: TurnCacheInfo | null;
+  turnCache?: { read: number; creation: number } | null;
 }) {
   const label = useModelLabel(model);
   const time = formatPostTime(ts);
@@ -299,7 +381,7 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
   const project = useContext(ChatProjectContext);
   const [snapshotOpen, setSnapshotOpen] = useState(false);
   const canOpen = !!(promptSnapshotId && sessionId);
-  if (!model && !time && !canOpen && !turnCache?.miss) return null;
+  if (!model && !time && !canOpen) return null;
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
@@ -342,15 +424,6 @@ function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }:
           title={timeFull ?? undefined}>
           <Clock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
           {time}
-        </span>
-      )}
-      {/* Ход начался с промаха кэша — причину назвал сам API (diagnostics.cache_miss_reason) */}
-      {turnCache?.miss && (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}
-          title={`Кэш промпта переписан: ${turnCache.miss.label}`
-            + (turnCache.miss.tokens ? ` · ${turnCache.miss.tokens.toLocaleString('ru')} токенов` : '')}>
-          <DatabaseZap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>кэш переписан: {turnCache.miss.label}</span>
         </span>
       )}
     </span>
@@ -430,6 +503,19 @@ function BranchButton({ onClick, label }: { onClick: () => Promise<unknown>; lab
   );
 }
 
+// Кнопка «Продолжить в новом чате». Стоит только под последним ответом агента (в отличие от
+// ветвления, которое есть на любом сообщении) и не зависит от ProjectFeature.ChatBranch —
+// работает и в локальных проектах. Диалог и запрос — в ChatPanel.
+function ContinueButton({ onClick }: { onClick: () => void }) {
+  const label = 'Продолжить в новом чате';
+  return (
+    <button onClick={onClick} style={postIconBtn} title={label} aria-label={label}
+      data-testid="continue-chat-button" {...postIconHover}>
+      <MessageSquareShare size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+    </button>
+  );
+}
+
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
@@ -443,7 +529,6 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
   children: React.ReactNode;
 }) {
   const { tapped, handleTap } = usePostTap();
-  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
       style={{
@@ -455,7 +540,7 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
       {children}
       {/* Прижата вправо — по стороне, с которой стоит сам пузырь человека */}
       <PostActionBar align="right">
-        {branchEnabled && onBranch && (
+        {onBranch && (
           <BranchButton onClick={onBranch} label="Ветвление от этого сообщения" />
         )}
         <CopyButton text={text} label="Скопировать сообщение" />
@@ -467,11 +552,13 @@ function UserMessageBubble({ text, ts, onBranch, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
+function TextMessageView({ text, online, onRetry, onBranch, onContinue, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
   text: string; online: boolean; onRetry: () => void; onBranch?: () => Promise<unknown>;
+  // Продолжение в новом чате; передаётся только последнему ответу агента
+  onContinue?: () => void;
   streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
-  turnCache?: TurnCacheInfo | null;
+  turnCache?: { read: number; creation: number } | null;
   // Плавающий элемент над текстом (аватар автора в персон-чате): первые строки ответа
   // обтекают его справа, дальше текст идёт полной шириной — под аватаром не копится
   // пустая полоса на всю высоту длинного сообщения
@@ -486,7 +573,6 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
   const project = useContext(ChatProjectContext);
   const iconBtn = postIconBtn;
   const { tapped, handleTap } = usePostTap();
-  const branchEnabled = useFeature(FLAGS.chatBranch);
   return (
     // Обёртка нужна, чтобы строка действий висела ПОД пузырём: у самого пузыря
     // overflow:hidden (обрезает контент), и вылезающую наружу строку он бы срезал
@@ -514,9 +600,10 @@ function TextMessageView({ text, online, onRetry, onBranch, streaming, model, ts
         <PostActionBar>
           <CopyButton text={text} label="Скопировать ответ" />
           {saveNoteC?.render?.({ text, projectId: project?.id, online })}
-          {branchEnabled && onBranch && (
+          {onBranch && (
             <BranchButton onClick={onBranch} label="Ветвление от этого ответа" />
           )}
+          {onContinue && <ContinueButton onClick={onContinue} />}
           {online && (
             <button onClick={onRetry} style={iconBtn} title="Повторить последний запрос" aria-label="Повторить последний запрос"
               {...postIconHover}>
@@ -623,6 +710,10 @@ interface ItemProps {
   // Для kind='interrupted': отметка ещё хвост разговора (после неё не было сообщения
   // пользователя) — только тогда показываем «Повторить». Считает ChatPanel
   canRetryInterrupted?: boolean;
+  // Красный баннер обрыва хода (kind='error') избыточен, если сразу за ним в ленте идёт
+  // карточка work_loop_stopped с reason='server_restart' (авто-продолжение): синяя пилюля
+  // уже сообщает об обрыве и говорит, что ход продолжается. Соседство решает ChatPanel.
+  hideAbortBanner?: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -649,6 +740,8 @@ interface ItemProps {
   // ответом ассистента — include='turn'. undefined — кнопки нет (нет фичи, либо выше
   // этого элемента нет user_message, на который можно опереться)
   onBranch?: () => Promise<unknown>;
+  // «Продолжить в новом чате»: ChatPanel передаёт только последнему ответу агента
+  onContinue?: () => void;
   // Множество id чатов, загруженных на фронте — для плашки «Ветка от …». Если передан
   // и id оригинала НЕ в нём — плашка деградирует в обычный текст, без ссылки и без
   // клика: иначе клик по битой ссылке меняет URL-хеш на несуществующий чат молча
@@ -657,6 +750,9 @@ interface ItemProps {
   availableChatIds?: Set<string>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Текущая карточка плана (последняя пачка): живое тело (переключатель + выбор фичи +
+  // FeatureRunView/TodoList) рисуется только на ней; прошлые карточки — снимок TodoList.
+  isCurrentPlan?: boolean;
   // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
   // тогда она встаёт в один ряд с итогом хода, а не висит отдельной строкой ниже.
   // Пока ход идёт, пилюлю рисует ChatPanel рядом с индикатором ожидания.
@@ -666,7 +762,7 @@ interface ItemProps {
   // undefined — история до появления снимков либо пост сабагента: кнопки не будет
   promptSnapshotId?: string;
   turnContextTokens?: number | null;
-  turnCache?: TurnCacheInfo | null;
+  turnCache?: { read: number; creation: number } | null;
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
   // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
   // персона-вызовов Task)
@@ -935,7 +1031,7 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
 }
 
 // Строка «контекст обрезан» — прокси локальной модели сдвинул контекст: обрезал историю
-// хода либо увёл сжатие в облако. Тон и вид — как у карточки сжатия (compact_boundary):
+// хода либо увёл сжатие в облако; тот же вид у перехвата петли модели (↻). Тон и вид — как у карточки сжатия (compact_boundary):
 // служебная строка-разделитель, а не сообщение ассистента. Пауза в полторы минуты, которую
 // человек уже отсидел, объяснена задним числом; внимания строка не требует.
 // Подробности идут ВТОРОЙ строкой под разделителем: в линию с ✂ они не влезают на мобиле,
@@ -948,7 +1044,7 @@ export function ContextPrunedRow({ item }: { item: Extract<ChatItem, { kind: 'co
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.textMuted, fontSize: FS.xs }}>
         <div style={{ flex: 1, height: 1, background: C.border }} />
         <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, whiteSpace: 'nowrap' }}>
-          <span style={{ color: C.textMuted }}>✂</span>
+          <span style={{ color: C.textMuted }}>{prunedIcon(item)}</span>
           {prunedHeadline(item)}
         </span>
         <div style={{ flex: 1, height: 1, background: C.border }} />
@@ -1041,10 +1137,22 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, availableChatIds, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+// Красный баннер обрыва хода (kind='error') избыточен, если сразу за ним в ленте идёт
+// карточка work_loop_stopped с reason='server_restart' (авто-продолжение): синяя пилюля уже
+// сообщает об обрыве и говорит, что ход продолжается. Решение — по соседству записей, не по
+// тексту баннера (тексты могут меняться). next — следующая запись ленты (undefined — конец).
+export function shouldHideAbortBanner(item: ChatItem, next: ChatItem | undefined): boolean {
+  return item.kind === 'error'
+    && next?.kind === 'work_loop_stopped'
+    && next.reason === 'server_restart';
+}
+
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, hideAbortBanner, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, onDropWindow1M, onBranch, onContinue, availableChatIds, taskPlan, isCurrentPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
+  // Мобильная раскладка: тач-цель переключателя 40, заголовок «План хода» скрыт на 360 px.
+  const isMobile = useIsMobile();
   // Кто сейчас звучит (индекс реплики + цвет персоны) — им подсвечивается аватар
   const speakingItem = useContext(SpeakingItemContext);
   const asstName = useAssistantName();
@@ -1175,6 +1283,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
+          <MessageAuthorLine senderUserId={item.senderUserId} ts={item.ts} />
           <UserMessageBubble text={item.text} ts={item.ts} onBranch={onBranch}
           >
             {teamInfo ? (
@@ -1285,10 +1394,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
-          <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch} streaming={streaming}
+          <TextMessageView text={bodyText} online={online} onRetry={onRetry} onBranch={onBranch}
+            onContinue={onContinue} streaming={streaming}
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
-            turnContextTokens={turnContextTokens} turnCache={item.parentToolUseId ? undefined : turnCache}
+            turnContextTokens={turnContextTokens} turnCache={turnCache}
             lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined}
             // Выжимка для озвучки — она же краткое содержание ответа для глаз. Внутри
             // пузыря: это хвост ЭТОГО ответа, а не отдельная карточка ленты
@@ -1424,15 +1534,19 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // в своем input, для инкрементальных TaskCreate/TaskUpdate агрегат (taskPlan)
       // прокидывает ChatPanel — только на последний task-вызов ленты. Линию-коннектор для
       // дочерних вызовов субагента (parentToolUseId) рисует renderItems — единой полосой.
-      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} />;
-      if (taskPlan) return <TodoPlanView todos={taskPlan} />;
+      if (item.name === 'TodoWrite') return <TodoPlanView todos={parseTodoWriteInput(item.input)} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} ts={item.startedAt} />;
+      if (taskPlan) return <TodoPlanView todos={taskPlan} isMobile={isMobile} isCurrentPlan={!!isCurrentPlan} ts={item.startedAt} />;
       // Вопрос другой персоне (persona_ask) — фирменная карточка с идентичностью персоны
       if (isPersonaAsk(item.name)) return <PersonaAskView item={item} />;
       // HTML-виджет (widget_show) — рендер в sandbox-iframe
       if (isWidgetShow(item.name)) return <WidgetView item={item} />;
-      // Создание задачи (tasks_create) — карточка «Задача создана» с переходом к задаче
-      // (ошибка/непарсибельный ответ — фолбэк на ToolUseView внутри)
-      if (isTasksCreate(item.name)) return <TaskCreatedView item={item} online={online} onOpenFile={onOpenFile} />;
+      // Создание задачи (tasks_create) — карточку НЕ рисуем: задачи создаются заранее (все
+      // шаги фичи сразу в todo), и карточка засоряла ленту. Оставляем стандартную строку
+      // инструмента; карточка появится, когда задача будет отдана в исполнение (tasks_run_executor).
+      if (isTasksCreate(item.name)) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
+      // Задача отдана в исполнение (tasks_run_executor) — карточка «Задача создана» по задаче:
+      // полная задача добирается по id; пока грузится/ошибка/404 — обычная строка инструмента.
+      if (isTasksRunExecutor(item.name)) return <TaskRunExecutorView item={item} online={online} onOpenFile={onOpenFile} />;
       // Сабагент Task/Agent: subagent_type = handle персоны → карточка консультации
       // (несовпадение — обычный ToolUseView, фолбэк внутри PersonaTaskView)
       if (isAgentToolUse(item.name))
@@ -1654,6 +1768,20 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               <span title="входные · выходные токены">↑{fmtTok(u.inputTokens)} ↓{fmtTok(u.outputTokens)}</span>
             </>
           )}
+          {/* Промах кэша этого хода (F-2): короткая причина по карте
+              подписей lib/promptCache, в подсказке — что это нормально. Нет данных кэша
+              (сторонний провайдер, локальный движок) или промаха — строки нет вовсе.
+              Незнакомая причина в строке — «другая причина», сырой код — в подсказке
+              (минор ревью F-2). */}
+          {item.promptCache && item.promptCache.missReason !== 'none' && (
+            <>
+              {sep}
+              <span title={CACHE_MISS_HINT[item.promptCache.missReason]
+                ?? `Причина не распознана (${item.promptCache.missReason}). Кэш пересобирается сам — это нормально.`}>
+                кэш не помог: {missReasonLabel(item.promptCache.missReason)}
+              </span>
+            </>
+          )}
           {speed !== null && (
             <>
               {sep}
@@ -1680,10 +1808,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
-      // Пилюля плана — в ОДНОМ ряду с итогом: обе служебные, и держать их на разных
-      // строках значит гонять взгляд по вертикали за состоянием одного и того же хода
+      // Пилюля плана — в ОДНОМ ряду с итогом (десктоп): обе служебные, и держать их на
+      // разных строках значит гонять взгляд по вертикали за состоянием одного и того же хода.
+      // На мобиле (K-1) — пилюля отдельной строкой ПОД мета-строкой: мета-строка занимает
+      // всю ширину, и пилюля в правой распорке сжималась до 22 px под плавающим аватаром.
       return planPill
-        ? (
+        ? (isMobile ? (
+          // K-1 (360): пилюля отдельной строкой под мета-строкой, прижата вправо; правый
+          // край строки не заходит под плавающий аватар (поле справа — не меньше его ширины).
+          <div style={{ display: 'flex', flexDirection: 'column', width: '100%' }}>
+            <div style={{ alignSelf: 'center' }}>{meta}</div>
+            <div style={{
+              display: 'flex', justifyContent: 'flex-end', marginTop: SP.xs, maxWidth: '100%',
+              paddingRight: PILL_ROW_RIGHT_PAD,
+            }}>
+              {planPill}
+            </div>
+          </div>
+        ) : (
           // Итог хода остаётся ТОЧНО по центру ленты, как и без пилюли: держат его две
           // равные распорки по краям, а не justifyContent — иначе центр съезжал бы влево
           // ровно на ширину пилюли, и мета-строка «прыгала» бы при её появлении.
@@ -1695,7 +1837,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               {planPill}
             </div>
           </div>
-        )
+        ))
         : <div style={{ alignSelf: 'center' }}>{meta}</div>;
     }
 
@@ -1902,9 +2044,24 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     case 'work_loop_stopped': {
       // Остановка цикла «до готово» — вид зависит от причины (SessionManager.
       // AddWorkLoopStoppedNoticeAsync шлёт reason ∈ manual|error|blocked|limit|
-      // waiting_timeout|stuck_reset|team_restart), текст готов с сервера, не пересобираем.
+      // waiting_timeout|stuck_reset|team_restart|server_restart), текст готов с сервера, не пересобираем.
       // manual (и технические stuck_reset/team_restart) — нейтральное ожидаемое действие,
       // та же пилюля, что «Ход остановлен пользователем» (case 'interrupted')
+      if (item.reason === 'server_restart') {
+        // Сервер перезапустился, ход продолжен с того же места — штатная ситуация,
+        // информационная пилюля без кнопок
+        return (
+          <div style={{
+            alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'center',
+            background: C.infoBg, border: `1px solid ${C.info}`, borderRadius: 8, padding: '6px 12px',
+            fontSize: 12, color: C.info, textAlign: 'center',
+          }}>
+            <RotateCcw size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+            <span>{item.text}</span>
+          </div>
+        );
+      }
+
       if (item.reason === 'limit') {
         // Мягкое предупреждение — не критично, но стоит проверить результат.
         // Та же янтарная пилюля, что rate_limit/truncated
@@ -1981,6 +2138,28 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
     }
 
+    case 'local_turn_queue': {
+      // Ход ждёт свободный слот локальной модели (гейт допуска). Янтарная предупреждающая
+      // строка — намеренно НЕ красная карточка отказа (case 'error'): «занято» — нормальное
+      // ожидание очереди, «движок не отвечает» — поломка, и её тон остаётся за ошибкой.
+      // Снимается сама: position=0 или конец хода (редьюсер). «Стоп» — та же остановка хода,
+      // что кнопка композера (onInterrupt); после неё бэк шлёт position=0 и строка уходит.
+      return (
+        <div data-testid="local-turn-queue" style={{
+          alignSelf: 'center', maxWidth: '100%', display: 'flex', alignItems: 'center', gap: SP.sm,
+          justifyContent: 'center', flexWrap: 'wrap', textAlign: 'center', borderRadius: R.md,
+          padding: `${SP.sm}px ${SP.md}px`, fontSize: FS.base,
+          background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText,
+        }}>
+          <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          <span>Ход ждёт свободный слот локальной модели: {item.position}-й в очереди (заняты {item.active} из {item.limit})</span>
+          <Button variant="ghostFilled" size="md" dataTestId="local-turn-queue-stop" onClick={onInterrupt} style={{
+            border: `1px solid ${C.warning}`, color: C.warningText, whiteSpace: 'nowrap', flexShrink: 0,
+          }}>Стоп</Button>
+        </div>
+      );
+    }
+
     case 'truncated':
       return (
         <div style={{
@@ -2027,6 +2206,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
     }
 
     case 'error':
+      // Обрыв хода, за которым сразу идёт карточка server_restart (авто-продолжение):
+      // красный баннер «отправьте ещё раз» избыточен — синяя пилюля уже сообщает об
+      // обрыве и говорит, что ход продолжается. Соседство решает ChatPanel (hideAbortBanner).
+      if (hideAbortBanner) return null;
       return (
         <ErrorCard
           item={item}
@@ -2228,8 +2411,7 @@ function ErrorCard({ item, online, onRetry, onDropWindow1M }: {
   const showDrop = item.action === 'window-1m-drop' && !!onDropWindow1M && !dropResolved;
   // Ход локального проекта отказан: папка не под разрешёнными корнями агента — команда для машины
   const projectCtx = useContext(ChatProjectContext);
-  const localProjects = useFeature(FLAGS.localProjects);
-  const rootsHint = localProjects && !!projectCtx?.local && isRootNotAllowed(item.text);
+  const rootsHint = !!projectCtx?.local && isRootNotAllowed(item.text);
 
   const handleDrop = useCallback(async () => {
     if (!onDropWindow1M || dropLoading) return;
@@ -2338,3 +2520,6 @@ function formatErrorGroupDate(dayStart: number): string {
   const month = months[d.getMonth()];
   return sameYear ? `${day} ${month}` : `${day}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
+
+// Экспорт для тестов (TodoPlanCard.test.ts).
+export { TodoPlanView as TodoPlanViewForTest };

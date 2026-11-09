@@ -4,8 +4,7 @@ using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Turn;
 
-// Секции промпта специальности персоны (план «Секции промптов» этап 3, флаг
-// specialty-prompt-sections): сценарные инструкции «когда и как» по роли — история,
+// Секции промпта специальности персоны (план «Секции промптов» этап 3): сценарные инструкции «когда и как» по роли — история,
 // граф кода, процессы, правила роли. Позиция — между recall-memory и persona-layer
 // (контракт плана: «призыв и данные рядом»).
 //
@@ -14,21 +13,15 @@ namespace ClaudeHomeServer.Services.Turn;
 // специальностью, и сессия не групповая (контракт плана: секции только у персонных
 // сессий — в групповом чате секции по роли одного из участников сбивают остальных).
 //
-// Гейт по флагу specialty-prompt-sections идёт ВНУТРИ BuildAsync (переключение
-// действует сразу, как у dossier-trailer).
-//
 // Этап 5, шаг 4: разрыв цикла Turn → Llm через Core-шов `IPromptSectionProvider`.
 // Опциональность (`?`) сохранена — без DI секция не собирается, и это осознанное
 // поведение, а не недосмотр (см. комментарий в `Core/Services/Llm/IPromptSectionProvider.cs`).
 public sealed class PromptSectionsContributor : IPromptSectionContributor
 {
     private readonly IPromptSectionProvider? _sections;
-    private readonly IFeatureFlagGate _flags;
-
-    public PromptSectionsContributor(IPromptSectionProvider? sections, IFeatureFlagGate flags)
+    public PromptSectionsContributor(IPromptSectionProvider? sections)
     {
         _sections = sections;
-        _flags = flags;
     }
 
     public string Key => "prompt-sections";
@@ -49,9 +42,6 @@ public sealed class PromptSectionsContributor : IPromptSectionContributor
         PromptSessionContext sessionContext, string? turnText)
     {
         if (sessionContext.OwnerId is null || sessionContext.Persona is null || _sections is null)
-            return Task.FromResult<PromptSectionContribution?>(null);
-
-        if (!_flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections))
             return Task.FromResult<PromptSectionContribution?>(null);
 
         var sections = _sections.EffectivePromptSections(sessionContext.OwnerId, sessionContext.Persona.Specialty);

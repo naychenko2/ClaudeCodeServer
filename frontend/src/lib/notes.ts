@@ -8,7 +8,7 @@ import type { NoteSummary, NoteFolder } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
 import { clearResolveCache } from '../components/MarkdownViewer';
-import { isOnline, OfflineError, subscribeOnline } from './offline';
+import { isOnline, OfflineError, readStoredUserId, subscribeOnline } from './offline';
 import { isSubsystemEnabled } from './subsystems';
 import { drainNotesOutbox, overlayNotesList } from './notesOffline';
 
@@ -27,7 +27,7 @@ function emit() {
 }
 
 function joinUserGroup() {
-  const uid = localStorage.getItem('cc_user_id') || sessionStorage.getItem('cc_user_id');
+  const uid = readStoredUserId();
   if (uid) joinUser(uid).catch(() => {});
 }
 

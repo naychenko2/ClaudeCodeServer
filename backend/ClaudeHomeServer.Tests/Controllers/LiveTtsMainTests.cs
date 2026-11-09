@@ -14,17 +14,53 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // LiveTTS в Main: модель доступна всегда — в списке голосов, в прослушке, в валидации голоса
 // персоны и в описании MCP voice.
-public sealed class LiveTtsMainTests : IDisposable
+[Trait("Category", "Host")]
+public sealed class LiveTtsMainTests : IClassFixture<LiveTtsMainTests.Hosts>
 {
-    private readonly List<TestWebApplicationFactory> _factories = [];
+    private readonly Hosts _hosts;
 
-    public void Dispose()
+    public LiveTtsMainTests(Hosts hosts)
     {
-        foreach (var f in _factories) f.Dispose();
+        _hosts = hosts;
+        _hosts.SpeechKit.SpeechKitStub.Bodies.Clear();
+        lock (_hosts.SpeechKit.Spend.Records) _hosts.SpeechKit.Spend.Records.Clear();
+    }
+
+    // Хост на конфигурацию: обычный и с перехватом SpeechKit плюс учётом трат.
+    // Заглушки общие на класс — каждый тест очищает их в конструкторе
+    public sealed class Hosts : IDisposable
+    {
+        public PlainHost Plain { get; } = new();
+        public SpeechKitHost SpeechKit { get; } = new();
+
+        public void Dispose()
+        {
+            Plain.Dispose();
+            SpeechKit.Dispose();
+        }
+    }
+
+    public sealed class PlainHost : TestWebApplicationFactory;
+
+    public sealed class SpeechKitHost : TestWebApplicationFactory
+    {
+        public SpeechKitStub SpeechKitStub { get; } = new();
+        public SpendSink Spend { get; } = new();
+
+        public SpeechKitHost()
+        {
+            ExtraServices = s =>
+            {
+                s.AddHttpClient(YandexTtsService.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => SpeechKitStub);
+                s.AddSingleton<ISpendCollector>(Spend);
+            };
+            ExtraConfig["Yandex:SpeechKit:ApiKey"] = "key";
+            ExtraConfig["Yandex:SpeechKit:FolderId"] = "folder";
+        }
     }
 
     // Перехват запросов к SpeechKit: тело каждого запроса и ответ с аудио
-    private sealed class SpeechKitStub : HttpMessageHandler
+    public sealed class SpeechKitStub : HttpMessageHandler
     {
         public readonly List<string> Bodies = [];
 
@@ -40,32 +76,17 @@ public sealed class LiveTtsMainTests : IDisposable
         }
     }
 
-    private sealed class SpendSink : ISpendCollector
+    public sealed class SpendSink : ISpendCollector
     {
         public readonly List<SpendRecord> Records = [];
         public void Record(SpendRecord record) { lock (Records) Records.Add(record); }
     }
 
-    private (TestWebApplicationFactory Factory, HttpClient Client) Host(
-        SpeechKitStub? speechKit = null, SpendSink? spend = null)
-    {
-        var factory = new TestWebApplicationFactory
-        {
-            ExtraServices = s =>
-            {
-                if (speechKit is not null)
-                    s.AddHttpClient(YandexTtsService.HttpClientName).ConfigurePrimaryHttpMessageHandler(() => speechKit);
-                if (spend is not null) s.AddSingleton<ISpendCollector>(spend);
-            },
-        };
-        if (speechKit is not null)
-        {
-            factory.ExtraConfig["Yandex:SpeechKit:ApiKey"] = "key";
-            factory.ExtraConfig["Yandex:SpeechKit:FolderId"] = "folder";
-        }
-        _factories.Add(factory);
-        return (factory, factory.CreateAuthenticatedClient());
-    }
+    private (TestWebApplicationFactory Factory, HttpClient Client) Host() =>
+        (_hosts.Plain, _hosts.Plain.CreateAuthenticatedClient());
+
+    private (SpeechKitStub SpeechKit, SpendSink Spend, HttpClient Client) YandexHost() =>
+        (_hosts.SpeechKit.SpeechKitStub, _hosts.SpeechKit.Spend, _hosts.SpeechKit.CreateAuthenticatedClient());
 
     // --- GET /api/tts/voices ---
 
@@ -95,9 +116,7 @@ public sealed class LiveTtsMainTests : IDisposable
     [Fact]
     public async Task Прослушка_СофияСТемпом_200_ТемпНеУходит_ТратаПоМоделиLiveTts()
     {
-        var speechKit = new SpeechKitStub();
-        var spend = new SpendSink();
-        var (_, client) = Host(speechKit, spend);
+        var (speechKit, spend, client) = YandexHost();
 
         // Старая вкладка шлёт темп всегда: 400 увёл бы её на голос браузера
         var resp = await client.PostAsJsonAsync("/api/tts", new { text = "Привет", voice = "sofia", speed = 1.2 });
@@ -113,9 +132,7 @@ public sealed class LiveTtsMainTests : IDisposable
     [Fact]
     public async Task Прослушка_General_ТратаПрежнейФормы()
     {
-        var speechKit = new SpeechKitStub();
-        var spend = new SpendSink();
-        var (_, client) = Host(speechKit, spend);
+        var (speechKit, spend, client) = YandexHost();
 
         var resp = await client.PostAsJsonAsync("/api/tts", new { text = "Привет", voice = "zahar", speed = 1.2 });
 

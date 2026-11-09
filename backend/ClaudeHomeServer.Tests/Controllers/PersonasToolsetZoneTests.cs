@@ -10,14 +10,21 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // MCP personas_create/personas_update не расширяют зону персоны: неизвестный scope — отказ
 // (раньше молча становился Global), персона сферы не создаётся и не меняет зону через MCP.
-public class PersonasToolsetZoneTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonasToolsetZoneTests : IClassFixture<PersonasToolsetZoneTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Персону и проект (Guid) каждый тест заводит свои; счёт
+    // персон владельца читается сдвигом «до/после», общего изменяемого состояния нет
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public PersonasToolsetZoneTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public PersonasToolsetZoneTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private string OwnerId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -34,12 +41,20 @@ public class PersonasToolsetZoneTests : IDisposable
         return (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
+    // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него считается узким (fail-closed). Тесты зовут от лица своего личного чата —
+    // рамка широкая, поведение прежнее
     private async Task<JsonElement> CallAsync(string sessionId, string tool, object args)
     {
-        var resp = await _client.PostAsJsonAsync($"/mcp/personas/{sessionId}", new
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/personas/{sessionId}")
         {
-            jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
-        });
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var resp = await _client.SendAsync(req);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");
     }

@@ -17,33 +17,37 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 // Ручки фильма и сохранения сцены на собранном приложении (ADR-022 §2, блок 2): сохранение → фильм в списке и в
 // состоянии, правка под ревизией (409 со свежим состоянием), границы записи (video/**, ссылки наружу), личный чат —
 // personal_scope_no_films, чужое неотличимо от несуществующего. Съёмка — фейковый поставщик в памяти.
-public class FilmControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class FilmControllerTests : IClassFixture<FilmControllerTests.Host>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС (раньше — фабрика на каждый тест). Общего изменяемого состояния тесты не оставляют:
+    // проект, каталог и чат заводятся свои на тест (Guid), нити и очередь съёмок ключуются по чату.
+    public sealed class Host : TestWebApplicationFactory
+    {
+        public Host()
+        {
+            ExtraServices = services => services.AddSingleton<IVideoEngine>(new FakeEngine());
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _projectRoot;
     private static readonly byte[] Clip = [.. Enumerable.Range(0, 64).Select(i => (byte)i)];
 
-    public FilmControllerTests()
+    public FilmControllerTests(Host factory)
     {
-        _factory.ExtraServices = services => services.AddSingleton<IVideoEngine>(new FakeEngine());
+        _factory = factory;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "film_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
         _projectRoot = dir;
         _projectId = _factory.Services.GetRequiredService<ProjectManager>()
             .Create("film-" + Guid.NewGuid().ToString("N")[..6], dir, _ownerId, TestWebApplicationFactory.TestUsername).Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private sealed class FakeEngine : IVideoEngine
@@ -218,9 +222,6 @@ public class FilmControllerTests : IDisposable
         (await _client.GetAsync($"/api/video-editor/chats/{strangers.Id}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         var projectChat = await ProjectChat();
         (await _client.GetAsync($"/api/video-editor/chats/{projectChat}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound);
-
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, false);
-        (await _client.GetAsync($"{Root}/films")).StatusCode.Should().Be(HttpStatusCode.NotFound, "без флага ручки фильма закрыты");
     }
 
     [Fact]

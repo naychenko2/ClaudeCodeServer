@@ -5,20 +5,21 @@
 // (внутренний путь без отдельной Verification). Этим путём обычно снимаются
 // дефекты волной командной реализации или авто-правилом заметок.
 
-import { useState } from 'react';
+import { memo, useState } from 'react';
 import type { Task } from '../../types';
 // Иконки: Bug — дефект (волна 2 фичи карточек дефектов),
 // Check/SquareStack — контекстное меню «В контекст чата» (фича chat-context).
 // Объединяем импорты обеих веток.
-import { Bug, Check, Repeat, SquareStack, Unplug } from 'lucide-react';
+import { Bug, Check, Repeat, SquareStack, Unplug, type LucideIcon } from 'lucide-react';
 import { C, FONT, FS, SHADOW } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Menu, MenuItem } from '../../components/ui';
 import { useLongPress } from '../../hooks/useLongPress';
-import { deviceWaitDuration, executorStopText, isDeviceWaiting, projectColor } from '../../lib/tasks';
+import { deviceWaitDuration, executorStopVisual, isDeviceWaiting, isTerminalStop, projectColor } from '../../lib/tasks';
 import { useContextButton } from '../chatContext/useContextButton';
-import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
+import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SharedTaskChip, SubtaskCheck } from './bits';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
+import { TaskUserBadge } from './TaskUserBadge';
 
 interface Props {
   task: Task;
@@ -28,20 +29,36 @@ interface Props {
   compact?: boolean;
   // Имя проекта — показывается в кросс-проектных контекстах (календарь)
   projectName?: string;
+  // Задача чужого общего проекта — чип «Общие» (календарь)
+  shared?: boolean;
   // Имя устройства локального проекта — в плашке «ждёт устройство» (ADR-016)
   deviceName?: string;
 }
 
-// Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем»
-function StateChip({ tone, title, children }: { tone: 'warning' | 'danger'; title?: string; children: React.ReactNode }) {
+// Плашка состояния исполнителя: тон warning — «стоит и ждёт», danger — «встал насовсем».
+// Тон, текст и глиф для терминальной остановки приходят из executorStopVisual (W4-HOLD-F5)
+// — здесь только рендер триплета. Глиф по умолчанию Unplug — «связь не поднята», он
+// уместен для ожидания устройства; для остановки его явный передаёт функция.
+function StateChip({
+  tone,
+  title,
+  icon = Unplug,
+  children,
+}: {
+  tone: 'warning' | 'danger';
+  title?: string;
+  icon?: LucideIcon;
+  children: React.ReactNode;
+}) {
+  const Icon = icon;
   return (
-    <Badge tone={tone} size="xs" title={title} icon={<Unplug size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}>
+    <Badge tone={tone} size="xs" title={title} icon={<Icon size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}>
       {children}
     </Badge>
   );
 }
 
-export function TaskCard({ task, selected, onClick, compact, projectName, deviceName }: Props) {
+function TaskCardImpl({ task, selected, onClick, compact, projectName, shared, deviceName }: Props) {
   const color = projectColor(task.projectId);
   const done = task.status === 'done';
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -51,6 +68,14 @@ export function TaskCard({ task, selected, onClick, compact, projectName, device
   // Исполнитель ждёт устройство (запуска ещё не было) либо так его и не дождался
   const deviceWaiting = isDeviceWaiting(task);
   const deviceWaitExpired = !done && task.executorStopReason === 'device_wait_expired';
+  // Любая другая терминальная остановка — причина на карточке, а не только в уведомлении бэка
+  // (R-HOLD-J2): восстановимые обрывы (сабагент/утечки в пути) сюда не попадают.
+  const executorStopped = !done && isTerminalStop(task.executorStopReason) && !deviceWaitExpired;
+  // Вид плашки остановки (текст, тон, глиф) — из одной функции (W4-HOLD-F5), а не из
+  // параллельных веток: и «не дождалась устройства», и «встал насовсем» берут один триплет.
+  const stopVisual = (deviceWaitExpired || executorStopped)
+    ? executorStopVisual(task.executorStopReason, deviceName)
+    : null;
 
   // «В контекст чата» (фича chat-context) — контекстным меню карточки: hover-иконку
   // сюда не поставить, правый верхний угол занят значком исполнителя. Меню
@@ -110,24 +135,37 @@ export function TaskCard({ task, selected, onClick, compact, projectName, device
           </span>
           {/* Значок Claude/Я — только когда исполнитель не персона (персона
               переезжает в нижнюю строку чипов, чтобы не теснить заголовок) */}
-          {!task.personaId && (
+          {!task.personaId && !task.assigneeUserId && (
             <AssigneeBadge assignee={compact && task.assignee === 'me' ? undefined : task.assignee} />
           )}
         </div>
 
         {/* Нижняя строка: чипы + доп. плашка «Закрыт без проверки» для дефектов,
             снятых по Outcome=closedWithoutCheck (без отдельного Verification) */}
-        {(task.personaId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName) && (
+        {(task.personaId || task.assigneeUserId || task.dueDate || closedWithoutCheck || deviceWaiting || deviceWaitExpired || executorStopped || (!compact && (task.subtasks.length > 0 || task.labels.length > 0)) || projectName || shared) && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+            {shared && <SharedTaskChip />}
             {task.personaId && <TaskPersonaBadge personaId={task.personaId} />}
+            {task.assigneeUserId && <TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} />}
             {deviceWaiting && (
               <StateChip tone="warning" title={task.deviceWaitReason ?? 'Устройство проекта не в сети — задача запустится, когда оно выйдет на связь'}>
                 {deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}
               </StateChip>
             )}
             {deviceWaitExpired && (
-              <StateChip tone="danger" title={executorStopText(task.executorStopReason, deviceName)}>
+              <StateChip tone={stopVisual!.tone} icon={stopVisual!.icon} title={stopVisual!.text}>
                 Не запускалась: устройство не в сети
+              </StateChip>
+            )}
+            {executorStopped && (
+              // Причина — сам текст плашки, а не подсказка по ховеру: фраза переносится
+              // внутри чипа (Badge обрезал бы её многоточие на узкой карточке).
+              // Тон, текст и глиф — из executorStopVisual: пауза фичи — предупреждение
+              // и глиф Pause (W4-HOLD-F4/F5), остальное — danger и глиф по причине.
+              <StateChip tone={stopVisual!.tone} icon={stopVisual!.icon}>
+                <span style={{ whiteSpace: 'normal' }}>
+                  {stopVisual!.text}
+                </span>
               </StateChip>
             )}
             <DueChip task={task} />
@@ -189,3 +227,8 @@ export function TaskCard({ task, selected, onClick, compact, projectName, device
     </div>
   );
 }
+
+// memo: стор задач отдаёт новый массив на каждое task_changed, но ссылки неизменённых
+// задач сохраняются (upsert), поэтому карточки без изменений пропсов не перерисовываются.
+// Вызывающий обязан передавать стабильный onClick (useCallback), иначе memo бесполезен.
+export const TaskCard = memo(TaskCardImpl);

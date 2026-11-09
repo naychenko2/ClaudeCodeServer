@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Очередь локальной генерации в карточках чата · макет v1</title>
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE; --c-progress-track:#D8CFBE;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37; --c-progress-track:#5C544A;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+button { font-family:inherit; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.bar { position:sticky; top:0; z-index:500; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.tog { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.tog button { font-size:12px; padding:6px 14px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.tog button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1760px; margin:0 auto; padding:24px 24px 96px; }
+h2.sec { margin:40px 0 4px; font-size:20px; font-weight:600; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+h3.st { margin:28px 0 8px; font-size:14px; font-weight:700; color:var(--c-text-heading); }
+p.note { margin:0 0 14px; color:var(--c-text-secondary); max-width:100ch; }
+p.note code, td code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 6px; }
+.meas { font-size:11px; color:var(--c-text-muted); margin:4px 0 0; font-family:"JetBrains Mono",monospace; }
+.meas.bad { color:var(--c-danger-text); font-weight:700; }
+.row { display:flex; gap:20px; flex-wrap:wrap; align-items:flex-start; }
+.col { width:440px; }
+.feedcol { display:flex; flex-direction:column; gap:12px; }
+.phone { border:1px solid var(--c-border); border-radius:18px; background:var(--c-bg-main); padding:12px; }
+
+/* ===== Общие куски кита ===== */
+.ic { display:inline-flex; }
+.ic svg { width:14px; height:14px; }
+/* ui/Dot: точка 8 px */
+.dot { width:8px; height:8px; border-radius:50%; flex:0 0 8px; display:inline-block; }
+/* ui/ProgressBar: дорожка C.track 4 px, R.max; estimate — пунктир полным тоном (repeating-linear-gradient 6/3) */
+.pb { display:block; height:4px; border-radius:999px; background:var(--c-track); overflow:hidden; }
+.pb i { display:block; height:100%; border-radius:999px; background:var(--c-accent); transition:width .5s linear; }
+.pb i.est { background:repeating-linear-gradient(90deg, var(--c-text-muted) 0 6px, transparent 6px 9px); }
+.pb i.run { width:40%; animation:run 1.4s linear infinite; }
+@keyframes run { 0% { transform:translateX(-100%); } 100% { transform:translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .pb i.run { animation:none; } .skel::after { animation:none; opacity:0; } }
+body.still .pb i.run { animation:none; } body.still .skel::after { animation:none; opacity:0; }
+/* ui/Button: xs ghost / sm secondary / sm primary */
+.btn { display:inline-flex; align-items:center; gap:4px; border-radius:10px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.btn.xs { height:24px; padding:0 8px; font-size:12px; }
+.btn.sm { height:28px; padding:0 10px; font-size:12px; }
+.btn.ghost { background:transparent; border:none; color:var(--c-text-secondary); }
+.btn.ghost:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.btn.sec { background:var(--c-bg-white); border:1px solid var(--c-border); color:var(--c-text-primary); }
+.btn.sec:hover { background:var(--c-bg-selected); }
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.btn svg { width:13px; height:13px; }
+/* .cc-skel из index.css */
+.skel { position:relative; overflow:hidden; background:var(--c-bg-selected); border-radius:8px; aspect-ratio:5/3; max-height:60vh; }
+.skel::after { content:''; position:absolute; inset:0; background:linear-gradient(90deg, transparent 25%, var(--c-bg-card) 50%, transparent 75%);
+  background-size:200% 100%; animation:sk 1.4s linear infinite; }
+@keyframes sk { 0% { transform:translateX(-50%); } 100% { transform:translateX(50%); } }
+
+/* ===== Карточка картинки: VersionCards.tsx Shell — SP.sm, gap SP.xs, C.bgCard, C.border, R.xl, без тени ===== */
+.shell { width:100%; padding:8px; display:flex; flex-direction:column; gap:4px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; }
+/* ===== Карточка звука: ThreadCard.tsx Frame — SP.md, gap SP.sm, maxWidth 560, R.xl, SHADOW.card ===== */
+.frame { width:100%; max-width:560px; padding:12px; display:flex; flex-direction:column; gap:8px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-card); }
+/* ===== Карточка сцены: SceneCard.tsx — SP.md, gap SP.sm, CARD_MAX_W 560, R.xl, SHADOW.card ===== */
+.scene { width:100%; max-width:560px; padding:12px; display:flex; flex-direction:column; gap:8px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-card); min-width:0; }
+
+.head { display:flex; align-items:baseline; gap:4px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); }
+.head .ic { align-self:center; color:var(--c-text-muted); }
+.head b { color:var(--c-text-heading); }
+.head i { color:var(--c-text-muted); overflow-wrap:anywhere; }
+.shead { display:flex; align-items:center; gap:4px; min-width:0; }
+.shead .ic { color:var(--c-accent); }
+.shead .ic svg { width:16px; height:16px; }
+.shead b { font-size:13px; color:var(--c-text-heading); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.launch { font-size:12px; color:var(--c-text-secondary); }
+.note { font-size:12px; color:var(--c-text-muted); line-height:1.45; }
+
+/* Строка хода (RunningLine) — Dot + текст + кнопка, FS.sm C.textSecondary, flex-wrap */
+.run { display:flex; flex-direction:column; gap:4px; }
+.line { display:flex; align-items:center; gap:4px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); min-width:0; }
+.line .t { min-width:0; }
+.line .t .m { font-variant-numeric:tabular-nums; }
+.line.dz { color:var(--c-danger-text); font-weight:600; }
+.line.wn .t b { color:var(--c-warning-text); font-weight:600; }
+.acts { display:flex; gap:4px; flex-wrap:wrap; }
+
+/* Короткая форма текста на мобиле (контейнер уже 400): длинная прячется */
+.lng { display:inline; } .sht { display:none; }
+.narrow .lng { display:none; } .narrow .sht { display:inline; }
+
+table.sp { border-collapse:collapse; font-size:12px; margin:8px 0 0; max-width:1200px; }
+table.sp td, table.sp th { border:1px solid var(--c-border); padding:6px 10px; text-align:left; vertical-align:top; }
+table.sp th { background:var(--c-bg-panel); color:var(--c-text-heading); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Очередь локальной генерации в карточках чата · картинка, звук, видео · видят все</h1>
+  <div class="tog" id="theme"><button class="on" data-t="light">Светлая</button><button data-t="dark">Тёмная</button></div>
+  <div class="tog" id="motion"><button class="on" data-m="on">Анимация</button><button data-m="off">Без анимации</button></div>
+</div>
+
+<div class="wrap">
+<p class="note">Сценарий: человек попросил нарисовать картинку на своей видеокарте, а карточка в чате уже минуту крутит полосу и
+пишет «в очереди 2». Непонятно, сколько ждать и почему так долго. Отдельного чипа не заводим. Ожидание объясняет <b>сама карточка
+генерации</b>, в той же строке хода, где сегодня точка, текст и «Отменить». Меняются только текст строки, цвет точки и вид полосы,
+поэтому карточка по высоте не растёт. Новый блок появляется в одном случае — стенд недоступен.</p>
+<p class="note"><b>v3, решения Андрея.</b> В состоянии «Стенд недоступен» — кнопка «Сделать в облаке · ≈ $» с котировкой облачного
+исполнителя места (по умолчанию «Автоматически»); запуск только кликом. Нет облачного исполнителя — нет и кнопки (состояние 5б).
+Поведение самой задачи при упавшем стенде не меняется: карточка честно пишет «ждёт» и «недоступна с 14:32», старт не обещает.</p>
+<p class="note">Вид карточек повторяет код: картинка — <code>VersionCards.tsx</code> (<code>Shell</code> + <code>RunningLine</code> + заглушка
+<code>.cc-skel</code> 5:3), звук — <code>ThreadCard.tsx</code> (<code>Frame</code> + <code>RunningLine</code> + «Варианты появятся здесь…»),
+видео — <code>SceneCard.tsx</code> (шапка с <code>Clapperboard</code>, строка запуска, подпись хода + <code>ProgressBar</code>). Первая строка
+«Сегодня» — как карточки выглядят сейчас, для сравнения высоты. Под каждой карточкой её высота, замеренная в браузере, и разница с «Сегодня».</p>
+
+<h2 class="sec">1. Десктоп — шесть состояний × три карточки</h2>
+<div id="desk"></div>
+
+<h2 class="sec">2. Мобила 360 и 320</h2>
+<p class="note">Лента на телефоне — карточка на всю ширину минус поля 12. Если контейнер карточки уже 400 px, строка хода берёт
+<b>короткую форму</b> текста, и тогда она не переносится. Замер и проверка переполнения идут по каждой карточке.</p>
+<div id="mob"></div>
+
+<h2 class="sec">3. Спецификация для Киры</h2>
+<table class="sp">
+<tr><th>Состояние</th><th>Строка хода (длинная / короткая форма)</th><th>Точка и полоса</th><th>Кнопки и прочее</th></tr>
+<tr><td>1. В очереди</td><td>«В очереди · 2-я · старт ≈ через 4 мин» / «В очереди · 2-я · ≈ 4 мин». Без ETA — «В очереди · 2-я». Если сосед впереди тяжёлый — см. п. 3.</td><td><code>Dot</code> <code>C.textMuted</code> (ждёт, не работает). <code>ProgressBar tone="muted" estimate</code>, значение = прошло / (прошло + ETA очереди). Без ETA — пустая дорожка (value 0).</td><td>Как сегодня: у картинки и видео «Отменить», у звука «Убрать из очереди» (<code>Button xs ghost</code>, иконка X).</td></tr>
+<tr><td>2. Считается</td><td>«Шаг 12 из 25 · осталось ≈ 30 с» / «12 из 25 · ≈ 30 с». Числа <code>tabular-nums</code>, чтобы строка не дрожала. У нескольких вариантов впереди добавляется «Вариант 2 из 4 · » (короткая форма — «2/4 · »).</td><td><code>Dot</code> <code>C.accent</code>. <code>ProgressBar</code> accent, значение по шагам и вариантам: ((вариант − 1) · шагов + шаг) / (вариантов · шагов). Бесконечного спиннера и бегущего отрезка нет. <code>transition: width .5s linear</code>.</td><td>«Отменить».</td></tr>
+<tr><td>3. Впереди тяжёлая</td><td>«Карта занята видео 1440p · ≈ 12 мин» / «Карта занята: видео 1440p · ≈ 12 мин». Фраза «видео 1440p» берётся из вида и операции тяжёлой задачи, <b>без имени владельца и названия чата</b>. Без ETA — «Карта занята долгой задачей: видео 1440p».</td><td><code>Dot</code> <code>C.warning</code>, слова «Карта занята» — <code>C.warningText</code> 600. Полоса — как в очереди (muted estimate), ETA = остаток тяжёлой плюс задачи до нас.</td><td>«Отменить» / «Убрать из очереди».</td></tr>
+<tr><td>4. ETA не замерено</td><td>«Шаг 12 из 25 · время не замерено» / «12 из 25 · без оценки». Если неизвестны и шаги — «Идёт · 1:40 · время не замерено», где 1:40 — прошедшее время.</td><td>Со шагами — полоса accent по шагам. Без шагов — <code>ProgressBar indeterminate</code> (единственный случай с бегущим отрезком). Время не обещаем никогда.</td><td>«Отменить».</td></tr>
+<tr><td>5а. Стенд недоступен, облако есть</td><td>Вместо строки хода — иконка <code>AlertTriangle</code> и «Локальная генерация недоступна с 14:32» / «Локально недоступно с 14:32», <code>FS.sm</code> 600 <code>C.dangerText</code>. Под ней <code>Note</code> — <b>только то, что есть сейчас, без обещания старта</b>: «Задача ждёт в очереди. Можно сделать в облаке — локальная задача отменится.» Короткая форма: «Задача ждёт. В облаке — отменим локальную.» Поведение задачи не меняется: она ждёт, как и сегодня.</td><td>Полосы нет. Точки нет.</td><td><code>Button sm secondary</code> с иконкой <code>Cloud</code>: «Сделать в облаке · ≈ $0.04» — <b>одна подпись на все три карточки</b>, цена своя (картинка $0.04, звук $0.02, сцена $1.20). Цена — котировка облачного исполнителя этого места при выборе «Автоматически», моно-цифры <code>tabular-nums</code>. Запуск <b>только кликом</b>: клик отменяет локальную задачу и ставит облачную. Рядом <code>Button sm ghost</code> «Отменить». Котировка ещё грузится — кнопка видна, на месте цены «≈ …», кнопка <code>disabled</code>. Hover <code>C.bgSelected</code>, tap <code>SHADOW.press</code>, focus <code>SHADOW.focus</code>; на мобиле высота 28 сохраняется, хит-зона добирается паддингом ряда до 44. Это единственное состояние, где карточка вырастает: на строку <code>Note</code> и ряд кнопок.</td></tr>
+<tr><td>5б. Стенд недоступен, облака нет</td><td>Та же строка <code>C.dangerText</code>. <code>Note</code>: «Задача ждёт в очереди.» (короткая форма та же). Ни слова про облако.</td><td>Полосы нет. Точки нет.</td><td>Кнопки облака <b>нет совсем</b> (не <code>disabled</code>): облачного исполнителя у места нет — предлагать нечего. Остаётся <code>Button sm ghost</code> «Отменить» (у звука — «Убрать из очереди»).</td></tr>
+<tr><td>Общее</td><td colspan="3">Источник текста — одна функция на все три редактора (сегодня их три: <code>queueText</code>, <code>progressText</code>, подписи <code>useScene</code>), чтобы формулировки не расходились. Короткая форма включается по ширине контейнера карточки &lt; 400 px (<code>ResizeObserver</code>, у видео уже есть <code>useBoxWidth</code>), а не по <code>useIsMobile</code>: узкая карточка бывает и в узкой ленте на десктопе. Точка и текст — <code>aria-live="polite"</code> на строке, но озвучиваем только смену состояния, а не каждый шаг. Тёмная тема — те же токены (<code>C.textMuted</code>, <code>C.warning</code>, <code>C.accent</code>, <code>C.dangerText</code>), своих значений нет. Видео в режиме «Макс» показывает те же тексты внутри строки своей стадии.</td></tr>
+</table>
+</div>
+
+<script>
+const SV = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const I = {
+  sparkles: SV('<path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/>'),
+  x: SV('<path d="M18 6 6 18M6 6l12 12"/>'),
+  clap: SV('<path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3Z"/><path d="m6.2 5.3 3.1 3.9M12.4 3.4l3.1 4M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>'),
+  alert: SV('<path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3"/><path d="M12 9v4M12 17h.01"/>'),
+  cloud: SV('<path d="M17.5 19H9a7 7 0 1 1 6.7-9h1.8a4.5 4.5 0 1 1 0 9Z"/>'),
+};
+const ic = s => `<span class="ic">${s}</span>`;
+const L = (lng, sht) => `<span class="lng">${lng}</span><span class="sht">${sht ?? lng}</span>`;
+
+// Состояния: текст строки (длинный/короткий), точка, полоса
+const S = {
+  base:  { cap:'Сегодня (для сравнения)', dot:'var(--c-accent)', bar:{ v:0 },
+           img: L('Рисуем… · Qwen-Image 2.1 · в очереди 2'), aud: L('в очереди GPU · 2-я · старт ≈ через 4 мин'), vid: L('Рассвет: GPU, 2-я в очереди') },
+  queue: { cap:'1. В очереди', dot:'var(--c-text-muted)', bar:{ v:35, est:true },
+           txt: L('В очереди · 2-я · старт ≈ через <span class="m">4 мин</span>', 'В очереди · 2-я · ≈ <span class="m">4 мин</span>') },
+  run:   { cap:'2. Считается', dot:'var(--c-accent)', bar:{ v:48 },
+           txt: L('Шаг <span class="m">12 из 25</span> · осталось ≈ <span class="m">30 с</span>', '<span class="m">12 из 25</span> · ≈ <span class="m">30 с</span>') },
+  heavy: { cap:'3. Впереди тяжёлая', dot:'var(--c-warning)', bar:{ v:20, est:true }, wn:true,
+           txt: L('<b>Карта занята</b> видео 1440p · ≈ <span class="m">12 мин</span>', '<b>Карта занята:</b> видео 1440p · ≈ <span class="m">12 мин</span>') },
+  noeta: { cap:'4. ETA не замерено', dot:'var(--c-accent)', bar:{ v:48 },
+           txt: L('Шаг <span class="m">12 из 25</span> · время не замерено', '<span class="m">12 из 25</span> · без оценки') },
+  noeta2:{ cap:'4б. Нет ни ETA, ни шагов', dot:'var(--c-accent)', bar:{ run:true },
+           txt: L('Идёт · <span class="m">1:40</span> · время не замерено', 'Идёт · <span class="m">1:40</span> · без оценки') },
+  down:  { cap:'5а. Стенд недоступен, облако есть', down:true },
+  down2: { cap:'5б. Стенд недоступен, облака нет', down:true, noCloud:true },
+};
+const ORDER = ['base','queue','run','heavy','noeta','noeta2','down','down2'];
+
+const bar = b => b.run ? '<span class="pb" role="progressbar" aria-busy="true"><i class="run"></i></span>'
+  : `<span class="pb" role="progressbar" aria-valuenow="${b.v}"><i class="${b.est?'est':''}" style="width:${b.v}%"></i></span>`;
+// Цена — котировка облачного исполнителя места («Автоматически»); подпись одна на все карточки
+const price = { img:'$0.04', aud:'$0.02', vid:'$1.20' };
+const downBlock = (k, noCloud) => `<div class="run"><div class="line dz">${ic(I.alert)}<span class="t">${L('Локальная генерация недоступна с 14:32','Локально недоступно с 14:32')}</span></div>
+  <div class="note">${noCloud ? 'Задача ждёт в очереди.' : L('Задача ждёт в очереди. Можно сделать в облаке — локальная задача отменится.','Задача ждёт. В облаке — отменим локальную.')}</div>
+  <div class="acts">${noCloud ? '' : `<button class="btn sm sec">${ic(I.cloud)}Сделать в облаке · ≈ <span class="m">${price[k]}</span></button>`}<button class="btn sm ghost">${ic(I.x)}${k === 'aud' ? 'Убрать из очереди' : 'Отменить'}</button></div></div>`;
+
+function runLine(st, k, cancel) {
+  if (st.down) return downBlock(k, st.noCloud);
+  const text = st[k] ?? st.txt;
+  // видео (не «Макс»): подпись без точки и без кнопки, как в SceneCard
+  if (k === 'vid') return `<div class="run"><span class="line ${st.wn?'wn':''}"><span class="t">${text}</span></span>${bar(st.bar)}</div>`;
+  return `<div class="run"><div class="line ${st.wn?'wn':''}" aria-live="polite"><span class="dot" style="background:${st.dot}"></span><span class="t">${text}</span>
+    <button class="btn xs ghost">${ic(I.x)}${cancel}</button></div>${bar(st.bar)}</div>`;
+}
+
+function imgCard(st) {
+  return `<div class="shell" data-card="img">
+    <div class="head">${ic(I.sparkles)}<b>Генерация</b><span>Кот на подоконнике · Qwen-Image 2.1 · 2 варианта · бесплатно</span><i>«рыжий кот на подоконнике, утренний свет»</i></div>
+    ${runLine(st, 'img', 'Отменить')}
+    <div class="skel"></div></div>`;
+}
+function audCard(st, key) {
+  const cancel = (key === 'queue' || key === 'heavy' || key === 'base') ? 'Убрать из очереди' : 'Отменить';
+  return `<div class="frame" data-card="aud">
+    <div class="head">${ic(I.sparkles)}<b>Вы: озвучка</b><span>Приветствие · Qwen3-TTS · вариантов: 1 · бесплатно</span><i>«Добро пожаловать домой»</i></div>
+    ${runLine(st, 'aud', cancel)}
+    ${st.down ? '' : '<div class="note">Варианты появятся здесь по мере готовности.</div>'}</div>`;
+}
+function vidCard(st) {
+  return `<div class="scene" data-card="vid">
+    <div class="shead">${ic(I.clap)}<b>Рассвет</b></div>
+    <div class="launch">MiniMax H3 · локально · 5 с · бесплатно</div>
+    ${runLine(st, 'vid')}</div>`;
+}
+const cards = { img: imgCard, aud: audCard, vid: vidCard };
+const NAMES = { img:'Картинка', aud:'Звук', vid:'Сцена видео' };
+
+// Десктоп: строка на состояние, в ней три карточки
+document.getElementById('desk').innerHTML = ORDER.map(key => `<h3 class="st">${S[key].cap}</h3><div class="row">${
+  ['img','aud','vid'].map(k => `<div class="col"><p class="cap">${NAMES[k]}</p><div class="cw" data-k="${k}" data-s="${key}">${cards[k](S[key], key)}</div><p class="meas"></p></div>`).join('')
+}</div>`).join('');
+
+// Мобила: на каждую ширину — столбцы состояний, в столбце три карточки
+document.getElementById('mob').innerHTML = [360, 320].map(w => `<h3 class="st">${w} px</h3><div class="row">${
+  ORDER.map(key => `<div><p class="cap">${w} · ${S[key].cap}</p><div class="phone" style="width:${w}px"><div class="feedcol">${
+    ['img','aud','vid'].map(k => `<div><div class="cw" data-k="${k}" data-s="${key}">${cards[k](S[key], key)}</div><p class="meas"></p></div>`).join('')
+  }</div></div></div>`).join('')
+}</div>`).join('');
+
+// Короткая форма — по ширине контейнера карточки, как в спецификации
+function measure() {
+  const cws = [...document.querySelectorAll('.cw')];
+  cws.forEach(cw => cw.classList.toggle('narrow', cw.clientWidth < 400));
+  const base = new Map();
+  cws.forEach(cw => { if (cw.dataset.s === 'base') base.set(cw.dataset.k + ':' + cw.clientWidth, cw.firstElementChild.offsetHeight); });
+  let bad = 0;
+  cws.forEach(cw => {
+    const card = cw.firstElementChild, h = card.offsetHeight;
+    const b = base.get(cw.dataset.k + ':' + cw.clientWidth);
+    const over = [card, ...card.querySelectorAll('*')].some(el => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).overflow !== 'visible' && el.tagName !== 'svg')
+      || card.scrollWidth > cw.clientWidth + 1;
+    const d = b != null && cw.dataset.s !== 'base' ? ` · ${h - b >= 0 ? '+' : ''}${h - b} к «Сегодня»` : '';
+    const m = cw.nextElementSibling;
+    // «Заметно выросла» — больше 20 px, кроме недоступного стенда (там новый блок по спецификации)
+    const grew = b != null && !S[cw.dataset.s].down && h - b > 20;
+    m.textContent = `высота ${h} px${d}${over ? ' · ПЕРЕПОЛНЕНИЕ' : ''}`;
+    m.className = 'meas' + (over || grew ? ' bad' : '');
+    if (over || grew) bad++;
+  });
+  document.body.dataset.bad = bad;
+}
+document.fonts && document.fonts.ready.then(measure); window.addEventListener('load', measure); window.addEventListener('resize', measure); measure();
+
+document.querySelectorAll('#theme button').forEach(b => b.onclick = () => {
+  document.documentElement.dataset.theme = b.dataset.t;
+  document.querySelectorAll('#theme button').forEach(x => x.classList.toggle('on', x === b));
+});
+document.querySelectorAll('#motion button').forEach(b => b.onclick = () => {
+  document.body.classList.toggle('still', b.dataset.m === 'off');
+  document.querySelectorAll('#motion button').forEach(x => x.classList.toggle('on', x === b));
+});
+</script>
+</body>
+</html>

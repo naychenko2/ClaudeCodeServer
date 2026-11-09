@@ -19,28 +19,43 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Выбор человека в полосе «Картинки» проекта на собранном приложении: GET без файла — умолчания,
 // PUT сохраняет и рассылает image_prefs_changed владельцу, чужой проект — 404 и чужой выбор не
 // трогает, новая нить из ручки нитей наследует сохранённый выбор.
-public class ImagePrefsEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class ImagePrefsEndpointTests : IClassFixture<ImagePrefsEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly RecordingBroadcaster _broadcaster = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: подмена широки зарегистрирована один раз.
+    /// Журнал широки — общее состояние хоста: его обнуляет конструктор класса перед каждым
+    /// тестом (тест проверяет абсолютное число рассылок). Выбор проекта ключён (owner, project),
+    /// а проект каждый тест-экземпляр заводит свой (CreateProject — уникальный GUID).
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        internal readonly RecordingBroadcaster Broadcaster = new();
+
+        public Hosts()
+        {
+            ExtraServices = services => services.AddSingleton<ISessionBroadcaster>(Broadcaster);
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly RecordingBroadcaster _broadcaster;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
     private readonly string _root;
 
-    public ImagePrefsEndpointTests()
+    public ImagePrefsEndpointTests(Hosts hosts)
     {
-        _factory.ExtraServices = services => services.AddSingleton<ISessionBroadcaster>(_broadcaster);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
+        _factory = hosts;
+        _broadcaster = hosts.Broadcaster;
+        // Сброс перед каждым тестом: общий хост помнит рассылки чужих PUT
+        while (_broadcaster.ToOwnerCalls.TryDequeue(out _)) { }
+        // Выбор проекта рассылается в группу проекта (S1-5) — её журнал тоже общий на хост
+        while (_broadcaster.ToProjectCalls.TryDequeue(out _)) { }
         (_projectId, _root) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private string Prefs(string? projectId = null) => $"/api/projects/{projectId ?? _projectId}/image-editor/prefs";
@@ -78,9 +93,9 @@ public class ImagePrefsEndpointTests : IDisposable
         got.GetProperty("count").GetInt32().Should().Be(3);
         got.GetProperty("matchSourceSize").GetBoolean().Should().BeFalse();
 
-        var sent = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageProjectPrefsChangedMessage>()
+        var sent = _broadcaster.AllMessages.OfType<ImageProjectPrefsChangedMessage>()
             .Should().ContainSingle().Subject;
-        _broadcaster.ToOwnerCalls.Single(c => c.Message == sent).OwnerId.Should().Be(_ownerId);
+        _broadcaster.ToProjectCalls.Single(c => c.Message == sent).ProjectId.Should().Be(_projectId);
         sent.ProjectId.Should().Be(_projectId);
         sent.Prefs.Provider.Should().Be("fal");
     }
@@ -140,7 +155,6 @@ public class ImagePrefsEndpointTests : IDisposable
     {
         await _client.PutAsJsonAsync(Prefs(), Body());
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
 
         (await second.GetAsync(Prefs())).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.PutAsJsonAsync(Prefs(), Body(provider: "higgsfield"))).StatusCode.Should().Be(HttpStatusCode.NotFound);

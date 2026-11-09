@@ -40,6 +40,24 @@ internal abstract class TurnProcess : IDisposable
     /// <summary>Убить процесс хода и всех его потомков. Идемпотентно.</summary>
     public abstract void KillTree();
 
+    /// <summary>
+    /// pid лидера, 0 — если компонент уже освобождён. Гашение хода (<see cref="Exec.TurnExecutor.KillAll"/>
+    /// по живым, finally конца хода) может догнать процесс уже освобождённым его <c>using (process)</c>:
+    /// состояния такого процесса не спросить, бить некого — обход остальных ходов продолжается.
+    /// </summary>
+    protected int SafeId()
+    {
+        try { return Process.Id; }
+        catch (InvalidOperationException) { return 0; }
+    }
+
+    /// <summary>Жив ли лидер процесса; освобождённый компонент — мёртвый (тот же случай гонки).</summary>
+    protected bool LeaderAlive()
+    {
+        try { return !Process.HasExited; }
+        catch (InvalidOperationException) { return false; }
+    }
+
     public virtual void Dispose() => Process.Dispose();
 
     public static TurnProcess Start(TurnLaunch launch) =>

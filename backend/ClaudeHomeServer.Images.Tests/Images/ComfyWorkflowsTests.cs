@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 using FluentAssertions;
 
@@ -22,12 +23,18 @@ public class ComfyWorkflowsTests
         "ManualSigmas", "MMH3TemporalSplitParamsV10", "MMH3SpatialSplitParamsV10", "MMH3SplitUpscale",
         "ModelPatchLoader", "LoadVideo", "GetVideoComponents", "LoadImageMask", "MiniMaxH3FunControlNetApply",
         "MiniMaxH3ReferenceToVideo", "LoadAudio", "GrowMask", "MaskToImage", "ImageBlur", "ImageToMask",
-        "ImageFromBatch", "ImageCompositeMasked",
+        "ImageFromBatch", "ImageCompositeMasked", "ImageCrop", "ImageScale", "CropMask",
         // Аудио (ADR-020): музыка нативными нодами, остальное — узел CcsAudioWorker
         "ModelSamplingAuraFlow", "DualCLIPLoader", "TextEncodeAceStepAudio1.5", "ConditioningZeroOut",
         "EmptyAceStep1.5LatentAudio", "SaveAudioMP3", "CheckpointLoaderSimple", "YuE2GenerateABC", "YuE2GenerateMusic",
         "EmptyYuE2LatentAudio", "PreviewAny", "MiniMaxMusic3TextEncode", "EmptyMiniMaxMusic3LatentAudio",
-        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC",
+        "VAEDecodeAudioTiled", "CcsAudioWorker", "AudioEncoderLoader", "SheetSage2AudioToABC", "CcsFaceSimilarity",
+        "CcsFaceDetect",
+        // FLUX 3 Klein (2026-10-22): апсемплер промпта и диффузия по графам BFL — файлов хоста не касаются
+        "ModelSamplingFlux", "CLIPTextEncode", "EmptyFlux2LatentImage", "ReferenceMultiLatent", "TextGenerate",
+        "StringFormat", "BatchImagesNode",
+        // Персонаж на Klein (2026-10-22): образцы для апсемплера ужимаются
+        "ImageScaleToTotalPixels",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -37,12 +44,17 @@ public class ComfyWorkflowsTests
     [Fact]
     public void Генерация_СовпадаетСЭталономСтенда()
     {
-        // Эталон — ~/ComfyUI/qwen-image21-1gpu-api.json, правки — как в run_gen.py
+        // Эталон — ~/ComfyUI/qwen-image21-int8-1gpu-api.json, правки — как в run_gen.py;
+        // SageAttention между моделью и сэмплером (замер 2026-10-08: ×2 к bf16 без потери качества)
         var wf = ComfyWorkflows.GenerateImage("котик", "", 1328, 1328, 42, 25, 2, "ccs-local-media/job");
 
-        wf.Select(p => p.Key).Should().BeEquivalentTo(["unet", "clip", "vae", "enc", "lat", "ks", "dec", "save"]);
-        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_bf16.safetensors");
-        Inputs(wf, "clip")["clip_name"]!.GetValue<string>().Should().Be("qwen3vl_8b_bf16.safetensors");
+        wf.Select(p => p.Key).Should().BeEquivalentTo(["unet", "clip", "vae", "sage", "enc", "lat", "ks", "dec", "save"]);
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
+        Inputs(wf, "clip")["clip_name"]!.GetValue<string>().Should().Be("qwen3vl_8b_int8_convrot.safetensors");
+        Class(wf, "sage").Should().Be("PathchSageAttentionKJ");
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"unet\",0]");
+        Inputs(wf, "sage")["sage_attention"]!.GetValue<string>().Should().Be("auto");
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
         Inputs(wf, "clip")["type"]!.GetValue<string>().Should().Be("qwen_image");
         Inputs(wf, "vae")["vae_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_vae_bf16.safetensors");
         Class(wf, "enc").Should().Be("TextEncodeQwenImage21");
@@ -57,6 +69,46 @@ public class ComfyWorkflowsTests
         ks["scheduler"]!.GetValue<string>().Should().Be("simple");
         ks["negative"]!.ToJsonString().Should().Be("[\"enc\",1]");
         Inputs(wf, "save")["filename_prefix"]!.GetValue<string>().Should().Be("ccs-local-media/job");
+    }
+
+    [Fact]
+    public void Turbo_Генерация_ДругойUnetИВосемьШагов()
+    {
+        var wf = ComfyWorkflows.GenerateImage("x", "", 1328, 1328, 1, ComfyWorkflows.StepsFor(LocalImageModels.Turbo), 1, "p",
+            LocalImageModels.Turbo);
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_turbo_int8_convrot.safetensors");
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "ks")["cfg"]!.GetValue<double>().Should().Be(1.0);
+    }
+
+    [Fact]
+    public void Turbo_Правка_ДругойUnetИВосемьШагов_ЛораИзСтекаНеТеряется()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", lora: ("l.safetensors", 0.8), model: LocalImageModels.Turbo);
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_turbo_int8_convrot.safetensors");
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"lora\",0]");
+    }
+
+    [Fact]
+    public void КачественнаяМодель_ИБезМодели_ПрежнийГраф()
+    {
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p");
+        var quality = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", model: LocalImageModels.Quality);
+
+        quality.ToJsonString().Should().Be(plain.ToJsonString());
+        Inputs(plain, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
+        Inputs(plain, "ks")["steps"]!.GetValue<int>().Should().Be(25);
+    }
+
+    [Fact]
+    public void FaceDetail_НеЗависитОтTurbo()
+    {
+        var wf = ComfyWorkflows.FaceDetail("a.png", 1, "p");
+
+        Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
     }
 
     [Fact]
@@ -93,6 +145,280 @@ public class ComfyWorkflowsTests
     }
 
     [Fact]
+    public void Правка_БезЛоры_ГрафБайтВБайтКакДоПравки()
+    {
+        // Необязательный параметр: без lora граф не отличается от собранного старой сигнатурой
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p");
+
+        var expected = OldEditGraph("x", ["a.png"], null, 7, "p");
+        wf.ToJsonString().Should().Be(expected.ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_СЛорой_УзелМеждуМодельюИСэйджем()
+    {
+        // Имя — из списка object_info стенда, иначе граф не прошёл бы схему нод
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p",
+            ("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors", 0.8));
+
+        Class(wf, "lora").Should().Be("LoraLoaderModelOnly");
+        Inputs(wf, "lora")["model"]!.ToJsonString().Should().Be("[\"unet\",0]");
+        Inputs(wf, "lora")["lora_name"]!.GetValue<string>().Should()
+            .Be("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors");
+        Inputs(wf, "lora")["strength_model"]!.GetValue<double>().Should().Be(0.8);
+        Inputs(wf, "sage")["model"]!.ToJsonString().Should().Be("[\"lora\",0]");
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
+    }
+
+    [Fact]
+    public void Правка_СЭталоном_УзелСходстваСмотритНаТуЖеКартинку()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: ["r1.png", "r2.png"]);
+
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["references"]!.GetValue<string>().Should().Be("r1.png\nr2.png");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_ПустойСписокЭталона_ГрафБезУзлаСходства()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: []);
+
+        wf.ContainsKey("sim").Should().BeFalse();
+        wf.ToJsonString().Should().Be(OldEditGraph("x", ["a.png"], null, 7, "p").ToJsonString());
+    }
+
+    [Fact]
+    public void Правка_ЛораИЭталон_УзелСходстваТожеЕсть()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p",
+            ("minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors", 0.8), ["r1.png"]);
+
+        Class(wf, "lora").Should().Be("LoraLoaderModelOnly");
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+    }
+
+    [Fact]
+    public void Правка_СМаской_СклейкаВнеМаскиИСходник()
+    {
+        // Вне маски возвращаем исходный холст (img1): resize_source растягивает сгенерированное
+        // до размера холста, поэтому результат графа ровно размера холста; sim меряет то, что сохраняется
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", faceReferences: ["r1.png"], mask: "m.png");
+
+        // Цепочка маски: та же, что в инпейнте видео (общий помощник AddMaskSoftening)
+        Class(wf, "mask").Should().Be("LoadImageMask");
+        Inputs(wf, "mask")["channel"]!.GetValue<string>().Should().Be("red");
+        Inputs(wf, "mask_grow")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]");
+        Inputs(wf, "mask_img")["mask"]!.ToJsonString().Should().Be("[\"mask_grow\",0]");
+        Inputs(wf, "mask_blur")["image"]!.ToJsonString().Should().Be("[\"mask_img\",0]");
+        Inputs(wf, "mask_soft")["image"]!.ToJsonString().Should().Be("[\"mask_blur\",0]");
+
+        // Склейка: вне маски — исходный холст, внутри — сгенерированное
+        Class(wf, "overlay").Should().Be("ImageCompositeMasked");
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — загруженный холст");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]", "внутри маски — сгенерированное");
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeTrue();
+        Inputs(wf, "overlay")["mask"]!.ToJsonString().Should().Be("[\"mask_soft\",0]");
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]", "сохраняется результат склейки");
+
+        // Сходство лица: та же картинка, что сохраняется, плюс вход-маска
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+        Inputs(wf, "sim")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]");
+    }
+
+    [Fact]
+    public void Правка_СМаскойБезЭталона_СклейкаБезУзлаСходства()
+    {
+        // Маска без эталона лица: склейка есть, узла сходства нет
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]");
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]");
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeTrue();
+        wf.ContainsKey("sim").Should().BeFalse();
+    }
+
+    // Подстановка на лицо (ADR-028, решение 12): модель видит кроп вокруг цели, а не маску-образец;
+    // результат приводится к размеру кропа и вклеивается в его место по вырезанной мягкой маске
+    [Fact]
+    public void Правка_СКропом_МодельВидитКроп_СклейкаВМестеКропа()
+    {
+        var crop = new LocalImageCrop(8, 16, 64, 32, 128, 64);
+        var wf = ComfyWorkflows.EditImage("x", ["a.png", "b.png"], null, 7, "p",
+            faceReferences: ["r1.png"], mask: "m.png", crop: crop);
+
+        // Кроп режется из холста и увеличивается только вверх (размер считает C#, кратно 16)
+        Class(wf, "crop").Should().Be("ImageCrop");
+        Inputs(wf, "crop")["image"]!.ToJsonString().Should().Be("[\"img1\",0]");
+        Inputs(wf, "crop")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "crop")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "crop")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "crop")["height"]!.GetValue<int>().Should().Be(32);
+        Class(wf, "crop_scale").Should().Be("ImageScale");
+        Inputs(wf, "crop_scale")["image"]!.ToJsonString().Should().Be("[\"crop\",0]");
+        Inputs(wf, "crop_scale")["upscale_method"]!.GetValue<string>().Should().Be("lanczos");
+        Inputs(wf, "crop_scale")["width"]!.GetValue<int>().Should().Be(128);
+        Inputs(wf, "crop_scale")["height"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "crop_scale")["crop"]!.GetValue<string>().Should().Be("disabled");
+
+        // Энкодер: первая картинка — увеличенный кроп, остальные образцы не тронуты
+        Inputs(wf, "enc")["images.image_1"]!.ToJsonString().Should().Be("[\"crop_scale\",0]", "модель видит кроп, а не холст");
+        Inputs(wf, "enc")["images.image_2"]!.ToJsonString().Should().Be("[\"img2\",0]");
+
+        // Выход модели приводится к размеру кропа, мягкая маска вырезается тем же прямоугольником
+        Class(wf, "dec_fit").Should().Be("ImageScale");
+        Inputs(wf, "dec_fit")["image"]!.ToJsonString().Should().Be("[\"dec\",0]");
+        Inputs(wf, "dec_fit")["upscale_method"]!.GetValue<string>().Should().Be("lanczos");
+        Inputs(wf, "dec_fit")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "dec_fit")["height"]!.GetValue<int>().Should().Be(32);
+        Inputs(wf, "dec_fit")["crop"]!.GetValue<string>().Should().Be("disabled");
+        Class(wf, "mask_crop").Should().Be("CropMask");
+        Inputs(wf, "mask_crop")["mask"]!.ToJsonString().Should().Be("[\"mask_soft\",0]");
+        Inputs(wf, "mask_crop")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "mask_crop")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "mask_crop")["width"]!.GetValue<int>().Should().Be(64);
+        Inputs(wf, "mask_crop")["height"]!.GetValue<int>().Should().Be(32);
+
+        // Склейка в месте кропа: вне кропа холст не трогается вовсе (resize_source = false)
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — загруженный холст");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec_fit\",0]", "внутри кропа — сгенерированное");
+        Inputs(wf, "overlay")["x"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "overlay")["y"]!.GetValue<int>().Should().Be(16);
+        Inputs(wf, "overlay")["resize_source"]!.GetValue<bool>().Should().BeFalse();
+        Inputs(wf, "overlay")["mask"]!.ToJsonString().Should().Be("[\"mask_crop\",0]");
+        Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"overlay\",0]", "сохраняется результат склейки");
+
+        // Сходство — на всём холсте с полной маской: от кропа не зависит
+        Class(wf, "sim").Should().Be("CcsFaceSimilarity");
+        Inputs(wf, "sim")["image"]!.ToJsonString().Should().Be(Inputs(wf, "save")["images"]!.ToJsonString());
+        Inputs(wf, "sim")["mask"]!.ToJsonString().Should().Be("[\"mask\",0]", "полная маска, а не вырезанная");
+    }
+
+    // Без кропа граф байт-в-байт прежний: явный null не отличим от опущнутого параметра
+    [Fact]
+    public void Правка_КропNull_ГрафБайтВБайтБезКропа()
+    {
+        var withNull = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", crop: null);
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        withNull.ToJsonString().Should().Be(plain.ToJsonString());
+    }
+
+    // Вуаль (ADR-028, решение 12): модель видит копию холста с серой заливкой места правки,
+    // а не чистый холст; склейка «вне маски — исходник» идёт по чистому холсту (img1)
+    [Fact]
+    public void Правка_СВуалью_МодельВидитКопию_СклейкаПоЧистомуХолсту()
+    {
+        var wf = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: "veil.png");
+
+        // Энкодер: первая картинка — вуаль-копия, а не чистый холст
+        Inputs(wf, "enc")["images.image_1"]!.ToJsonString().Should().Be("[\"img1_veil\",0]", "модель видит вуаль-копию");
+        Class(wf, "img1_veil").Should().Be("LoadImage");
+        Inputs(wf, "img1_veil")["image"]!.GetValue<string>().Should().Be("veil.png");
+
+        // Склейка: фон — ЧИСТЫЙ холст (img1), а не вуаль-копия; внутри — сгенерированное
+        Inputs(wf, "overlay")["destination"]!.ToJsonString().Should().Be("[\"img1\",0]", "фон — чистый холст, а не вуаль");
+        Inputs(wf, "overlay")["source"]!.ToJsonString().Should().Be("[\"dec\",0]");
+    }
+
+    // Вуаль null — граф байт-в-байт прежний (явный null не отличим от опущнутого параметра)
+    [Fact]
+    public void Правка_ВуальNull_ГрафБайтВБайтБезВуали()
+    {
+        var withNull = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png", modelCanvas: null);
+        var plain = ComfyWorkflows.EditImage("x", ["a.png"], null, 7, "p", mask: "m.png");
+
+        withNull.ToJsonString().Should().Be(plain.ToJsonString());
+    }
+
+    // Сборка EditImage до правки: загрузчики Qwen-модели плюс те же ноды, что в текущей
+    // (QwenLoaders/KSampler/AddDecodeAndSave приватные, поэтому загрузчики собраны руками)
+    private static JsonObject OldEditGraph(string prompt, IReadOnlyList<string> images, (int Width, int Height)? size,
+        long seed, string prefix)
+    {
+        var wf = new JsonObject
+        {
+            ["unet"] = Node("UNETLoaderMultiGPU", new JsonObject
+            {
+                ["unet_name"] = "qwen_image_2.1_int8_convrot.safetensors",
+                ["weight_dtype"] = "default",
+                ["device"] = "cuda:0",
+            }),
+            ["clip"] = Node("CLIPLoaderMultiGPU", new JsonObject
+            {
+                ["clip_name"] = "qwen3vl_8b_int8_convrot.safetensors",
+                ["type"] = "qwen_image",
+                ["device"] = "cuda:0",
+            }),
+            ["vae"] = Node("VAELoader", new JsonObject { ["vae_name"] = "qwen_image_2.1_vae_bf16.safetensors" }),
+            ["sage"] = Node("PathchSageAttentionKJ", new JsonObject
+            {
+                ["model"] = Link("unet"),
+                ["sage_attention"] = "auto",
+                ["allow_compile"] = false,
+            }),
+        };
+        var enc = new JsonObject
+        {
+            ["clip"] = Link("clip"),
+            ["vae"] = Link("vae"),
+            ["prompt"] = prompt,
+            ["negative_prompt"] = "",
+            ["resolution"] = size is null ? 0 : 1024,
+        };
+        for (var k = 1; k <= images.Count; k++)
+        {
+            wf[$"img{k}"] = Node("LoadImage", new JsonObject { ["image"] = images[k - 1] });
+            enc[$"images.image_{k}"] = Link($"img{k}");
+        }
+        wf["enc"] = Node("TextEncodeQwenImage21", enc);
+
+        JsonArray latent;
+        if (size is { } s)
+        {
+            wf["lat"] = Node("EmptyLatentImage", new JsonObject
+            {
+                ["width"] = s.Width,
+                ["height"] = s.Height,
+                ["batch_size"] = 1,
+            });
+            latent = Link("lat");
+        }
+        else
+        {
+            latent = Link("enc", 2);
+        }
+        wf["ks"] = Node("KSampler", new JsonObject
+        {
+            ["model"] = Link("sage"),
+            ["positive"] = Link("enc"),
+            ["negative"] = Link("enc", 1),
+            ["latent_image"] = latent,
+            ["seed"] = seed,
+            ["steps"] = ComfyWorkflows.DefaultSteps,
+            ["cfg"] = 1.0,
+            ["sampler_name"] = "euler",
+            ["scheduler"] = "simple",
+            ["denoise"] = 1.0,
+        });
+        wf["dec"] = Node("VAEDecode", new JsonObject { ["samples"] = Link("ks"), ["vae"] = Link("vae") });
+        wf["save"] = Node("SaveImage", new JsonObject
+        {
+            ["images"] = Link("dec"),
+            ["filename_prefix"] = prefix,
+        });
+        return wf;
+    }
+
+    private static JsonObject Node(string classType, JsonObject inputs) =>
+        new() { ["class_type"] = classType, ["inputs"] = inputs };
+
+    private static JsonArray Link(string node, int output = 0) => new(node, output);
+
+    [Fact]
     public void ДоводкаЛиц_ПараметрыВыбранныеНаСтенде()
     {
         // Эталон — run_facedetail.py: denoise 0.65 и 16 шагов — выбор Андрея
@@ -103,9 +429,20 @@ public class ComfyWorkflowsTests
         fd["steps"]!.GetValue<int>().Should().Be(16);
         fd["guide_size"]!.GetValue<int>().Should().Be(768);
         fd["bbox_detector"]!.ToJsonString().Should().Be("[\"det\",0]");
+        fd["model"]!.ToJsonString().Should().Be("[\"sage\",0]");
         Inputs(wf, "det")["model_name"]!.GetValue<string>().Should().Be("bbox/face_yolov8m.pt");
         Inputs(wf, "enc")["prompt"]!.GetValue<string>().Should().Be(ComfyWorkflows.FacePrompt);
         Inputs(wf, "save")["images"]!.ToJsonString().Should().Be("[\"fd\",0]");
+    }
+
+    [Fact]
+    public void ДетекцияЛиц_ОдинУзел_ИмяФайлаВReferences()
+    {
+        var wf = ComfyWorkflows.FaceDetect("ccs-local-media/in.png");
+
+        wf.Select(p => p.Key).Should().BeEquivalentTo(["detect"]);
+        Class(wf, "detect").Should().Be("CcsFaceDetect");
+        Inputs(wf, "detect")["references"]!.GetValue<string>().Should().Be("ccs-local-media/in.png");
     }
 
     [Theory]
@@ -125,7 +462,20 @@ public class ComfyWorkflowsTests
             ("generate", ComfyWorkflows.GenerateImage("a", "", 1328, 1328, 1, 25, 1, "p")),
             ("edit", ComfyWorkflows.EditImage("a", ["x.png", "y.png"], null, 1, "p")),
             ("edit-size", ComfyWorkflows.EditImage("a", ["x.png"], (1664, 928), 1, "p")),
+            // Без эталона лица: склейка вне маски, но без узла сходства (он не в object_info)
+            ("edit-mask", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png")),
+            // Подстановка на лицо (ADR-028, решение 12): кроп вокруг цели, склейка в месте кропа
+            ("edit-crop", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png",
+                crop: new LocalImageCrop(8, 16, 64, 32, 128, 64))),
+            ("klein-generate", ComfyWorkflows.KleinGenerate("ёжик", 1664, 928, 1, 2, "p")),
+            ("klein-edit", ComfyWorkflows.KleinEdit("добавь лодку", ["x.png"], (1328, 1328), 1, "p")),
+            ("klein-multi", ComfyWorkflows.KleinEdit("сложи", Enumerable.Range(1, 10).Select(i => $"r{i}.png").ToList(),
+                (1104, 1472), 1, "p")),
+            // Персонаж на Klein: холст полным, образцы апсемплеру ужатыми (узел сходства — не в object_info)
+            ("klein-character", ComfyWorkflows.KleinEdit("сюда его", ["x.png", "f1.png", "f2.png"], (1328, 1328), 1, "p",
+                upsamplerMegapixels: ComfyWorkflows.KleinUpsamplerMegapixels, upsamplerKeep: 1)),
             ("face", ComfyWorkflows.FaceDetail("x.png", 1, "p")),
+            ("face-detect", ComfyWorkflows.FaceDetect("x.png")),
             ("t2v", ComfyWorkflows.TextToVideo("a", 1344, 768, 124, 1, false, "p", "l")),
             ("t2v-fast", ComfyWorkflows.TextToVideo("a", 768, 1344, 243, 1, true, "p", "l")),
             ("i2v", ComfyWorkflows.ImageToVideo("x.png", null, "a", 1344, 768, 124, 1, false, "p", "l")),

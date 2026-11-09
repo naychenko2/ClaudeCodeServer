@@ -7,6 +7,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
+[Trait("Category", "Host")]
 public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -141,33 +142,73 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var authed = _factory.CreateAuthenticatedClient();
 
-        var save = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 600, warn5mSec = 90 });
+        var save = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10, warn5mMin = 2 });
         save.StatusCode.Should().Be(HttpStatusCode.OK);
 
         var saved = (await MeBody(authed)).GetProperty("cacheWarnThresholds");
-        saved.GetProperty("warn1hSec").GetInt32().Should().Be(600);
-        saved.GetProperty("warn5mSec").GetInt32().Should().Be(90);
+        saved.GetProperty("warn1hMin").GetInt32().Should().Be(10);
+        saved.GetProperty("warn5mMin").GetInt32().Should().Be(2);
 
-        // Пустое тело — сброс на дефолты фронта: в /me снова null
+        // Пустое тело — сброс к дефолтам фронта: в /me снова null (поля нет)
         var reset = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
         reset.StatusCode.Should().Be(HttpStatusCode.OK);
         (await MeBody(authed)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Theory]
-    [InlineData(29, 90)]    // ниже нижней границы
-    [InlineData(3541, 90)]  // часовой больше видимого срока (TTL − запас)
-    [InlineData(600, 271)]  // 5-минутный больше видимого срока
-    [InlineData(600, null)] // половина пары
+    [InlineData(0, 2)]     // ниже нижней границы
+    [InlineData(60, 2)]    // часовой порог не меньше всего срока — кэш был бы «остывающим» с рождения
+    [InlineData(10, 5)]    // 5-минутный порог не меньше всего срока
+    [InlineData(10, null)] // половина пары
+    [InlineData(null, 2)]  // симметричная половина пары
     public async Task CacheThresholds_OutOfRange_Returns400AndKeepsValue(int? warn1h, int? warn5m)
     {
         var authed = _factory.CreateAuthenticatedClient();
         await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
 
-        var response = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = warn1h, warn5mSec = warn5m });
+        var response = await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = warn1h, warn5mMin = warn5m });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await MeBody(authed)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task CacheThresholds_ForeignBody_Returns400AndKeepsValue()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10, warn5mMin = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Опечатка в имени — не тихий сброс: запрос отвергается, сохранённая настройка остаётся
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMins = 10, warn5mMins = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn1hMin")
+            .GetInt32().Should().Be(10);
+
+        // Старые имена (секунды) на записи тоже не принимаются: единица — только минуты
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 600, warn5mSec = 300 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn5mMin")
+            .GetInt32().Should().Be(2);
+    }
+
+    [Fact]
+    public async Task CacheThresholds_NonNumericValues_Returns400AndKeepsValue()
+    {
+        var authed = _factory.CreateAuthenticatedClient();
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10, warn5mMin = 2 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Строка вместо числа — 400, а не тихий сброс: единица — минуты, «10» — не минута
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = "10", warn5mMin = "2" }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Дробь — тоже 400: порог — целое число минут
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 10.5, warn5mMin = 2.5 }))
+            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // Отвергнутый запрос не трогает сохранённую настройку
+        (await MeBody(authed)).GetProperty("cacheWarnThresholds").GetProperty("warn1hMin")
+            .GetInt32().Should().Be(10);
     }
 
     [Fact]
@@ -175,12 +216,34 @@ public class AuthControllerTests : IClassFixture<TestWebApplicationFactory>
     {
         var authed = _factory.CreateAuthenticatedClient();
 
-        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 3540, warn5mSec = 270 }))
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 59, warn5mMin = 4 }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
-        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hSec = 30, warn5mSec = 30 }))
+        (await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 1, warn5mMin = 1 }))
             .StatusCode.Should().Be(HttpStatusCode.OK);
 
         await authed.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+    }
+
+    [Fact]
+    public async Task CacheThresholds_PerOwner_OtherUserKeepsDefault()
+    {
+        var owner = _factory.CreateAuthenticatedClient();
+        (await owner.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 15, warn5mMin = 3 }))
+            .StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Другой владелец не видит чужой порог: ручка трогает только свой профиль
+        var other = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+        (await MeBody(other)).GetProperty("cacheWarnThresholds").ValueKind.Should().Be(JsonValueKind.Null);
+
+        // И настройка другого владельца не перезаписывает порог собственника
+        await other.PutAsJsonAsync("/api/auth/cache-thresholds", new { warn1hMin = 2, warn5mMin = 1 });
+        (await MeBody(owner)).GetProperty("cacheWarnThresholds").GetProperty("warn1hMin")
+            .GetInt32().Should().Be(15);
+
+        // Возвращаем обоих к дефолтам — фабрика общая для класса
+        await owner.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
+        await other.PutAsJsonAsync("/api/auth/cache-thresholds", new { });
     }
 
     private static async Task<JsonElement> MeBody(HttpClient client) =>

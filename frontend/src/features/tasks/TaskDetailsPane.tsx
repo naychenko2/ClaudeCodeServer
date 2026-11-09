@@ -3,7 +3,7 @@
 // сегмент статуса под шапкой (узкий контейнер) или закреплённый сегмент снизу
 // (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, SquareStack, Trash2, Unplug, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
@@ -13,21 +13,30 @@ import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
+import { listProjectSessions } from '../../lib/sessionsList';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import {
   NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, STATUS_DOT, STATUS_LABEL,
-  deleteTask, deviceWaitDuration, dueLabel, executorStopText, isDeviceWaiting, projectColor, projectInitial,
-  recurrenceLabel, reminderLabel, updateTask,
+  deleteTask, deviceWaitDuration, dueLabel, executorStopVisual, isDeviceWaiting, isTerminalStop, projectColor, projectInitial,
+  recurrenceLabel, reminderLabel, updateTask, useEnsureFullTask, useTasks,
 } from '../../lib/tasks';
 import {
   ClaudeBadge, DueChip, ExtBadge, LabelChip, MeBadge,
   PriorityFlag, SectionLabel, SubtaskCheck,
 } from './bits';
 import { useContextButton } from '../chatContext/useContextButton';
+import { FeatureBackChip } from '../../components/chat/FeatureBackChip';
+import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { TaskEditForm } from './TaskEditForm';
+import { AcceptanceBlock } from './AcceptanceBlock';
+import { PregateLine } from './PregateLine';
 import { TaskPersonaBadge } from './TaskPersonaBadge';
+import { CreatedByLine, FormerAssigneeLine, TaskUserBadge } from './TaskUserBadge';
 import { ensurePersonasLoaded, getPersonaById, personaLabel } from '../../lib/personas';
+import { canDeleteTask, taskWriteDeniedReason } from '../projects/members/participantGate';
+import { getCachedProject } from '../projects/useAllProjects';
+import { readStoredUserId } from '../../lib/offline';
 
 interface Props {
   task: Task;
@@ -51,9 +60,15 @@ const STATUS_SEQUENCE: TaskStatus[] = ['todo', 'inProgress', 'done'];
 // там рельс съедал больше трети ширины, поэтому статус уезжает сегментом под шапку.
 const STATUS_RAIL_MIN_WIDTH = 720;
 
+// S2d-4b (К5): подпись маскированного чата — бэк отдаёт её в linkedChat.title
+// (ChatRef.PrivateFormTitle), показываем как есть; это — запасной текст для ответа без title
+const PRIVATE_CHAT_LABEL = 'Приватный чат участника';
+
 // Сегментированный переключатель статуса: мобила (закреплён снизу) и узкий
-// десктопный контейнер (полоса под шапкой) — одна и та же разметка
-function StatusSegment({ status, onSelect }: { status: TaskStatus; onSelect: (s: TaskStatus) => void }) {
+// десктопный контейнер (полоса под шапкой) — одна и та же разметка; у читателя сегменты
+// выключены и не кликаются, с подсказкой, кто меняет задачи (F2-Q3)
+function StatusSegment({ status, onSelect, deniedTitle }: { status: TaskStatus; onSelect: (s: TaskStatus) => void; deniedTitle?: string | null }) {
+  const ro = !!deniedTitle;
   return (
     <div style={{ display: 'flex', gap: 3, background: C.bgSelected, borderRadius: R.lg, padding: 3 }}>
       {STATUS_SEQUENCE.map(s => {
@@ -62,9 +77,11 @@ function StatusSegment({ status, onSelect }: { status: TaskStatus; onSelect: (s:
           <button
             key={s}
             onClick={() => onSelect(s)}
+            disabled={ro}
+            title={deniedTitle ?? undefined}
             style={{
               flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-              padding: '9px 4px', border: 'none', borderRadius: R.lg - 2, cursor: 'pointer',
+              padding: '9px 4px', border: 'none', borderRadius: R.lg - 2, cursor: ro ? 'default' : 'pointer',
               background: active ? C.accent : 'transparent',
               color: active ? C.onAccent : C.textSecondary,
               fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
@@ -98,8 +115,56 @@ function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: 
   );
 }
 
-export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
-  const [editing, setEditing] = useState(!!startInEdit);
+// Панель всегда работает с ЖИВОЙ задачей из стора (родители WallPage/TaskDetailsModal держат
+// снимок) и с ПОЛНЫМ текстом: список приходит облегчённым (без Description/ResultMarkdown),
+// поэтому пока задача listItem, догружаем карточку по id и показываем заглушку.
+export function TaskDetailsPane(props: Props) {
+  const stored = useTasks().find(t => t.id === props.task.id);
+  // Стор новее снимка; исключение — снимок уже полный, а в сторе ещё облегчённая версия
+  const task = stored && (!stored.listItem || props.task.listItem) ? stored : props.task;
+  const { state, retry } = useEnsureFullTask(task);
+  if (state === 'ready') return <TaskDetailsPaneInner {...props} task={task} />;
+  return (
+    <div style={{
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      gap: 12, height: '100%', padding: 24, boxSizing: 'border-box',
+      fontFamily: FONT.sans, color: C.textMuted, fontSize: FS.sm, textAlign: 'center',
+    }}>
+      <div style={{ color: C.textPrimary, fontWeight: 600 }}>{task.title}</div>
+      {state === 'loading'
+        ? <div>Загружаю задачу…</div>
+        : (
+          <>
+            <div>Не удалось загрузить задачу</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button variant="secondary" size="sm" onClick={retry}>Повторить</Button>
+              {(props.onClose ?? props.onBack) && (
+                <Button variant="ghostFilled" size="sm" onClick={(props.onClose ?? props.onBack)!}>Закрыть</Button>
+              )}
+            </div>
+          </>
+        )}
+    </div>
+  );
+}
+
+function TaskDetailsPaneInner({ task, project, isMobile, startInEdit, onBack, onClose, onOpenSession, onOpenFile, onDeleted }: Props) {
+  // Право править задачу (F2-Q3, разрез CONSULT-TASK-RIGHTS): владелец и редактор — да;
+  // карточка читателя — только для чтения, контролы выключены с подсказкой
+  // taskWriteDeniedReason. Проект не под рукой (карточка с стены/календаря) — берём из
+  // общего кэша (он включает и собственные проекты владельца): у своего проекта myRole нет
+  // или 'owner' → canWriteTasks=true, поведение не меняется.
+  const scopeProject = project ?? (task.projectId ? getCachedProject(task.projectId) : undefined);
+  const deniedTitle = taskWriteDeniedReason(scopeProject);
+  const ro = deniedTitle !== null;
+  // Корзина (доработка F2-Q3, ревью 11716b9b): бэк разрешает удаление автору или владельцу
+  // задачи (TaskDeleteDenied, TasksController.cs:243-248); корзина редактора на чужой задаче —
+  // гарантированный 403 not_task_author, не обещаем её. Гейт покрывает и читателя (отказ
+  // до авторства), прежний !ro здесь не нужен: canDelete ⟹ не читатель.
+  const canDelete = canDeleteTask(scopeProject, task, readStoredUserId());
+  // startInEdit у читателя игнорируется: форма правки не открывается ни сразу,
+  // ни от скрытых здесь действий
+  const [editing, setEditing] = useState(!!startInEdit && !ro);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -115,7 +180,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   useEffect(() => {
     if (!task.linkedSessionId) return;
     if (project) {
-      api.sessions.list(project.id).then(setSessions).catch(() => {});
+      // Недавний список годится, если в нём уже есть чат задачи: переключение карточек не плодит запросы
+      listProjectSessions(project.id, { maxAgeMs: 10_000, mustContain: task.linkedSessionId }).then(setSessions).catch(() => {});
     } else {
       api.chats.get(task.linkedSessionId).then(s => setSessions([s])).catch(() => {});
     }
@@ -125,6 +191,26 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     () => sessions.find(s => s.id === task.linkedSessionId) ?? null,
     [sessions, task.linkedSessionId],
   );
+
+  // Дефект 4c4645e2: уход с задачи (закрыть или выбрать другую — панель перемонтируется
+  // по key={task.id}) гасит точку возврата так же, как у чата (обычный выбор чата гасит
+  // указатель в WorkspacePage.tsx:1453). Возврат чипом («← к фиче») гасит обработчик
+  // cc-open-feature в WorkspacePage (ветка !fromChat), и к unmount панели указателя уже нет.
+  // StrictMode (dev) сразу после монтирования гоняет cleanup и повторно ставит эффект:
+  // гасим в микрозадаче и только если эффект с тем же id не переподключился.
+  const mountedTaskId = useRef<string | null>(null);
+  useEffect(() => {
+    const id = task.id;
+    mountedTaskId.current = id;
+    return () => {
+      mountedTaskId.current = null;
+      queueMicrotask(() => {
+        if (mountedTaskId.current === id) return;
+        const back = getBackNav();
+        if (back && back.fromKind === 'feature' && back.to.kind === 'task' && back.to.id === id) clearBackNav();
+      });
+    };
+  }, [task.id]);
 
   const color = projectColor(project ? project.id : null);
   const doneSubs = task.subtasks.filter(s => s.isDone).length;
@@ -139,6 +225,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   };
 
   const toggleSubtask = (subtaskId: string) => {
+    // Читатель (ro): чекбокс виден, но не кликается — менять подзадачи может редактор (ревью 47fd9dd9)
+    if (ro) return;
     void updateTask(task.id, {
       subtasks: task.subtasks.map(s => s.id === subtaskId ? { ...s, isDone: !s.isDone } : s),
     }).catch(e => {
@@ -209,12 +297,25 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   // Ожидание устройства (ADR-016) — запуска ещё не было, «в работе» не показываем
   const deviceWaiting = isDeviceWaiting(task);
   const deviceName = project?.device?.name ?? null;
-  const deviceWaitExpired = task.status !== 'done' && task.executorStopReason === 'device_wait_expired';
-  const claudeRunning = !!task.claudeStartedAt && !task.claudeResult && task.status !== 'done' && !deviceWaiting;
+  // Вид терминальной остановки (текст, тон, глиф) — из одной функции, как на карточке
+  // (W4-HOLD-F5): панель не собирает триплет сама, иначе у причины текст, тон и глиф
+  // разъехались бы между карточкой и деталями.
+  const stopVisual = task.status !== 'done' && isTerminalStop(task.executorStopReason)
+    ? executorStopVisual(task.executorStopReason, deviceName)
+    : null;
+  // «Ход идёт сейчас» — тот же предикат, что бэк FeatureProjector.IsTurnRunning: не
+  // «запускался когда-то», а идёт теперь: InProgress, есть claudeStartedAt, нет результата,
+  // исполнитель не встал (executorStoppedAt) и не ждёт человека (awaitingHumanSince).
+  // Без этих меток остановленный паузой фичи шаг светился бы «AI работает» (R-F7).
+  const claudeRunning = task.status === 'inProgress' && !!task.claudeStartedAt && !task.claudeResult
+    && !task.executorStoppedAt && !task.awaitingHumanSince && !deviceWaiting;
 
   // AI-хаб: контекстные действия задачи из палитры/подсказки. «Выполнить» — тот же
   // обработчик, что и кнопка (со стейтом «Запуск…»); генерация — вход в правку + авто-запуск.
   useEffect(() => {
+    // У читателя панель не отзывается на AI-действия палитры (F2-Q3): они меняют задачу,
+    // а её меняет редактор. Слушатель не ставится вовсе.
+    if (ro) return;
     const onRun = (e: Event) => {
       const action = (e as CustomEvent<{ action?: string }>).detail?.action;
       if (action === 'task.execute') {
@@ -250,7 +351,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task.id, task.assignee, task.status, claudeRunning, executing]);
+  }, [task.id, task.assignee, task.status, claudeRunning, executing, ro]);
   // «В контекст чата» (фича chat-context) — перед главным действием карточки:
   // одна и та же иконка и та же подпись, что в шапках файла и статьи
   const chatContext = useContextButton('task', task.id, task.title);
@@ -263,7 +364,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     </IconButton>
   );
 
-  const executeButton = task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
+  const executeButton = !ro && task.assignee === 'claude' && task.status !== 'done' && !claudeRunning && (
     <Button
       variant="primary"
       size="sm"
@@ -281,7 +382,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     </Button>
   );
 
-  const editButton = (
+  const editButton = !ro && (
     <Button
       variant="ghostFilled"
       size="sm"
@@ -316,7 +417,10 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           isMobile={isMobile}
           onSave={handleSave}
           onCancel={() => { setEditing(false); setPendingAi(null); }}
-          onDelete={() => setConfirmDelete(true)}
+          // Корзина в тулбаре формы — тот же гейт canDeleteTask (доработка F2-Q3,
+          // ревью 54d79690): без пропа форма не рендерит кнопку (редактор на чужой
+          // задаче — бэковый 403 not_task_author, не обещаем её и в форме)
+          onDelete={canDelete ? () => setConfirmDelete(true) : undefined}
           pendingAi={pendingAi}
           onPendingConsumed={() => setPendingAi(null)}
         />
@@ -325,17 +429,19 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     );
   }
 
-  // Кнопка статуса в правой колонке (десктоп)
+  // Кнопка статуса в правой колонке (десктоп) — тот же гейт читателя, что у сегмента (F2-Q3)
   const statusRailButton = (s: TaskStatus) => {
     const active = task.status === s;
     return (
       <button
         key={s}
         onClick={() => setStatus(s)}
+        disabled={ro}
+        title={deniedTitle ?? undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 9,
           width: '100%', boxSizing: 'border-box',
-          padding: '12px 15px', cursor: 'pointer',
+          padding: '12px 15px', cursor: ro ? 'default' : 'pointer',
           border: `1px solid ${active ? C.accent : C.border}`,
           borderRadius: R.xl,
           background: active ? C.accent : C.bgWhite,
@@ -402,14 +508,16 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
-      {/* Исполнитель ждёт устройство локального проекта либо так его и не дождался */}
-      {(deviceWaiting || deviceWaitExpired) && (
+      {/* Исполнитель ждёт устройство локального проекта либо встал на терминальной причине */}
+      {(deviceWaiting || stopVisual) && (
         <Notice
-          tone={deviceWaiting ? 'warning' : 'danger'}
-          icon={Unplug}
+          // Тон и глиф — из того же триплета, что и текст (хвост R-F6): ожидание
+          // устройства — не остановка (причины ещё нет), у него warning и Unplug
+          tone={deviceWaiting ? 'warning' : stopVisual!.tone}
+          icon={deviceWaiting ? Unplug : stopVisual!.icon}
           title={deviceWaiting
             ? <>{deviceName ? `Ждёт устройство «${deviceName}»` : 'Ждёт устройство проекта'} · {deviceWaitDuration(task.deviceWaitSince!)}</>
-            : executorStopText(task.executorStopReason, deviceName)}
+            : stopVisual!.text}
           style={{ marginBottom: SP.md }}
         >
           {deviceWaiting && (
@@ -444,7 +552,14 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
             {recurrenceLabel(task.recurrence)}
           </HeaderChip>
         )}
-        {task.assignee && (
+        {task.assigneeUserId && (
+          <>
+            <HeaderChip><TaskUserBadge projectId={task.projectId} assigneeUserId={task.assigneeUserId} size={18} /></HeaderChip>
+            {/* Читателю (ro) onAssign не отдаём: «Назначить» не рендерится, форма правки не откроется */}
+            <FormerAssigneeLine projectId={task.projectId} assigneeUserId={task.assigneeUserId} onAssign={ro ? undefined : () => setEditing(true)} />
+          </>
+        )}
+        {task.assignee && !task.assigneeUserId && (
           <HeaderChip>
             {task.assignee === 'claude' ? <ClaudeBadge size={17} /> : <MeBadge size={17} />}
             {task.assignee === 'claude' ? 'AI' : 'Я'}
@@ -457,6 +572,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           </HeaderChip>
         )}
       </div>
+      <CreatedByLine projectId={task.projectId} createdByUserId={task.createdByUserId} createdAt={task.createdAt} />
 
       {/* Описание */}
       {task.description && (
@@ -488,7 +604,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
                 onClick={() => toggleSubtask(s.id)}
                 style={{
                   display: 'flex', alignItems: 'center', gap: 11,
-                  padding: '12px 15px', cursor: 'pointer',
+                  padding: '12px 15px', cursor: ro ? 'default' : 'pointer',
                   borderBottom: i < task.subtasks.length - 1 ? `1px solid ${C.borderLight}` : 'none',
                 }}
               >
@@ -583,6 +699,17 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
+      {/* Строка «Предгейт»: только у шага/доработки (роль проверяет сам компонент) */}
+      <PregateLine task={task} />
+
+      {/* Критерии приёмки: без acceptance секции нет */}
+      {(task.acceptance?.length ?? 0) > 0 && (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Критерии приёмки</SectionLabel>
+          <AcceptanceBlock task={task} />
+        </div>
+      )}
+
       {/* Метки */}
       {task.labels.length > 0 && (
         <div style={{ marginBottom: 26 }}>
@@ -593,8 +720,11 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         </div>
       )}
 
-      {/* Связанная сессия (чат Claude-исполнителя) */}
-      {task.linkedSessionId && (
+      {/* Связанная сессия (чат Claude-исполнителя). S2d-4b (К5): чужой приватный чат бэк
+          маскирует — linkedSessionId null, рядом форма linkedChat: нейтральная подпись
+          без кнопки перехода и без id (тот же блок, что и карточка видимого чата, но
+          неактивный: bgPanel вместо bgWhite, без шеврона и курсора). */}
+      {task.linkedSessionId ? (
         <div style={{ marginBottom: 26 }}>
           <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
           <button
@@ -622,7 +752,28 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
             <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
           </button>
         </div>
-      )}
+      ) : task.linkedChat ? (
+        <div style={{ marginBottom: 26 }}>
+          <SectionLabel style={{ marginBottom: 10 }}>Связанная сессия</SectionLabel>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 11,
+            width: '100%', boxSizing: 'border-box',
+            padding: '11px 14px',
+            background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: R.lg, flexShrink: 0,
+              background: C.bgSelected,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <MessageCircle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 700, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {task.linkedChat.title || PRIVATE_CHAT_LABEL}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Файлы (только у проектных задач) */}
       {project && task.linkedFiles.length > 0 && (
@@ -661,6 +812,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           <BackButton onClick={onBack ?? (() => {})} style={{ flex: 1, minWidth: 0 }} title="Назад к списку">
             {headerTitleBlock}
           </BackButton>
+          {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+          <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} isCompact />
           {chatContextButton}
           {executeButton}
           {editButton}
@@ -675,7 +828,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           borderTop: `1px solid ${C.divider}`, background: C.bgMain,
         }}>
           <SectionLabel style={{ marginBottom: 8 }}>Статус задачи</SectionLabel>
-          <StatusSegment status={task.status} onSelect={setStatus} />
+          <StatusSegment status={task.status} onSelect={setStatus} deniedTitle={deniedTitle} />
         </div>
 
         {deleteConfirmModal}
@@ -690,12 +843,16 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
+        {/* Дефект 4c4645e2: пришли с страницы фичи — тот же чип возврата, что в шапке чата. */}
+        <FeatureBackChip taskId={task.id} projectId={project?.id ?? null} />
         {chatContextButton}
         {executeButton}
         {editButton}
-        <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
-          <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        </IconButton>
+        {canDelete && (
+          <IconButton size="md" tone="danger" onClick={() => setConfirmDelete(true)} title="Удалить задачу">
+            <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
         {onClose && (
           <IconButton size="md" onClick={onClose} title="Закрыть">
             <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
@@ -709,7 +866,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           flexShrink: 0, padding: `${SP.sm}px ${SP.lg}px`,
           borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
         }}>
-          <StatusSegment status={task.status} onSelect={setStatus} />
+          <StatusSegment status={task.status} onSelect={setStatus} deniedTitle={deniedTitle} />
         </div>
       )}
 

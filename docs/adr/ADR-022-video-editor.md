@@ -261,7 +261,7 @@ JSON ниже — единственное описание формы для ф
 `project_local_unsupported`, `outside_allowed_folders`, `film_invalid`, `film_schema_unsupported`, а также общие
 `invalid_request`, `provider_unavailable`, `quote_not_found`, `too_many_jobs`, `heavy_busy`, `chat_not_found`,
 `scene_not_found`, `version_not_found`, `job_not_found`, `file_not_found`, `frame_unavailable`.
-События: `video_thread_changed`, `video_film_changed`, `video_edit_progress|completed|failed`.
+События: `video_thread_changed`, `video_film_changed`, `video_prefs_changed`, `video_edit_progress|completed|failed`.
 `recordType` ленты: `video_scene`, `video_launch_versions`, `video_saved`, `video_film_built`, `video_note`.
 
 #### FrameRef (image)
@@ -291,9 +291,14 @@ JSON ниже — единственное описание формы для ф
   "durationSec": 8,
   "aspect": "16:9",
   "sound": true,
-  "count": 2
+  "count": 2,
+  "format": { "mode": "aspect", "aspect": "16:9", "tier": "high", "by": "human", "at": "2026-10-06T12:00:00Z" },
+  "frameFit": { "anchor": "left" }
 }
 ```
+
+`format` — желание «Формата» ([ADR-025](ADR-025-media-format.md)); `aspect` остаётся зеркалом `format.aspect` (его пишут оба пути, читает `FilmSceneSaver`
+и старый фронт). `frameFit.anchor` — рамка подрезки кадров A/B под формат сцены (`left | center | right | top | bottom`, не указан — по центру).
 
 #### VideoClipVersionDto
 
@@ -312,9 +317,15 @@ JSON ниже — единственное описание формы для ф
   "cost": { "currency": "usd", "amount": 3.2 },
   "initiator": "human",
   "inputs": { "text": "Камера медленно приближается к окну", "frameA": "image:t-1:v-3", "frameB": "file:video/утро/кадры/кадр-3.png" },
-  "createdAt": "2026-10-02T15:00:00Z"
+  "createdAt": "2026-10-02T15:00:00Z",
+  "width": 2528,
+  "height": 1440
 }
 ```
+
+`width` и `height` — размер ролика, если драйвер его знает (local — всегда). Увеличение «Макс» local H3 не удалось (ошибка или отмена), версия — съёмка 768p как есть:
+`"width": 1344, "height": 768, "upscaleError": "Увеличение до 1440p не удалось: ComfyUI завершил задачу ошибкой"` — поле `upscaleError` и есть пометка «увеличение не удалось». Если увеличение отменил человек, рядом `"upscaleCancelled": true` (текст `upscaleError` — «Увеличение отменено»);
+у сбоя поля нет. Клиент различает «отменено» и «не удалось» по `upscaleCancelled`, а не по тексту. «Повторить увеличение» принимает версию с любым `upscaleError`.
 
 #### VideoLaunchDto
 
@@ -349,7 +360,7 @@ JSON ниже — единственное описание формы для ф
 #### VideoPrefsDto
 
 ```json
-{ "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1 }
+{ "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "standard", "by": "agent", "at": "2026-10-06T12:00:00Z" } }
 ```
 
 #### VideoCatalogDto
@@ -364,7 +375,15 @@ JSON ниже — единственное описание формы для ф
       "available": false,
       "reason": "Нет ключа fal",
       "models": [
-        { "id": "veo-3.1", "label": "Veo 3.1", "durations": [4, 6, 8], "aspects": ["16:9", "9:16"], "sound": true, "lastFrame": true, "license": "watermark" }
+        { "id": "veo-3.1", "label": "Veo 3.1", "durations": [4, 6, 8], "aspects": ["16:9", "9:16"], "sound": true, "lastFrame": true, "license": "watermark",
+          "format": {
+            "modelLabel": "Veo 3.1", "aspects": ["16:9", "9:16"],
+            "tiers": [
+              { "tier": "standard", "label": "720p", "sizes": { "16:9": { "w": 1280, "h": 720 }, "9:16": { "w": 720, "h": 1280 } }, "wireValue": "720p", "priceFactor": 1 },
+              { "tier": "high", "label": "1080p", "sizes": { "16:9": { "w": 1920, "h": 1080 }, "9:16": { "w": 1080, "h": 1920 } }, "wireValue": "1080p", "priceFactor": 1 }
+            ],
+            "wireParam": "resolution"
+          } }
       ]
     }
   ],
@@ -408,9 +427,16 @@ JSON ниже — единственное описание формы для ф
   "stale": { "text": false, "frameA": true, "frameB": false, "versionId": "ver-1" },
   "savedFiles": [ { "versionId": "ver-1", "path": "video/утро/scene-02.mp4" } ],
   "filmRef": { "path": "video/утро/утро.film", "position": 1 },
-  "createdAt": "2026-10-02T14:00:00Z"
+  "createdAt": "2026-10-02T14:00:00Z",
+  "lockedBy": { "filmPath": "video/утро/утро.film", "aspect": "16:9" },
+  "formatMismatch": true,
+  "framesCropped": { "aspect": "9:16", "frameA": "16:9", "anchor": "center" }
 }
 ```
+
+`lockedBy` — замок формата: сцена фильма на позиции > 0 следует пропорциям фильма (их задала сцена 1), смена без `force` — `409 film_format_locked`.
+`formatMismatch` — пропорции сцены не совпадают с фильмом (в склейке пойдут чёрные полосы; «Привести к 16:9» — смена формата сцены, переснимать или нет, решает человек).
+`framesCropped` — кадры ПОСЛЕДНЕЙ съёмки подрезали под формат сцены; `frameA`/`frameB` — пропорции исходных кадров, `null` — кадр не подрезался. Превью до съёмки — `frames/preview`.
 
 #### VideoThreadsStateDto
 
@@ -455,8 +481,39 @@ JSON ниже — единственное описание формы для ф
 #### VideoSceneSettingsRequest
 
 ```json
-{ "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "revision": 3 }
+{ "settings": { "frameA": { "kind": "file", "path": "a.png" }, "frameB": { "kind": "file", "path": "b.png" }, "text": "т", "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": true, "count": 1 }, "revision": 3, "force": true }
 ```
+
+#### VideoFormatLockedError
+
+```json
+{
+  "error": "Фильм «утро» — 16:9. Сцена в 9:16 даст чёрные полосы по бокам при склейке.",
+  "code": "film_format_locked",
+  "lockedBy": { "filmPath": "video/утро/утро.film", "aspect": "16:9" }
+}
+```
+
+Тело `409 film_format_locked`: ручка `scenes/{sceneId}/settings` и инструменты агента отвечают одинаково; с `force: true` («Всё равно 9:16») замок снимается для этого запроса.
+
+#### VideoFramesPreviewRequest
+
+```json
+{ "sessionId": "s-1", "sceneId": "scene-1", "aspect": "9:16", "anchor": "left" }
+```
+
+#### VideoFramesPreviewDto
+
+```json
+{
+  "aspect": "9:16",
+  "anchor": "left",
+  "frameA": { "sourceWidth": 1920, "sourceHeight": 1080, "sourceAspect": "16:9", "cropped": true, "resultWidth": 608, "resultHeight": 1080, "x": 0, "y": 0, "w": 0.3166667, "h": 1 },
+  "frameB": { "sourceWidth": 1080, "sourceHeight": 1920, "sourceAspect": "9:16", "cropped": false, "resultWidth": 1080, "resultHeight": 1920, "x": 0, "y": 0, "w": 1, "h": 1 }
+}
+```
+
+`frames/preview` — dryRun подрезки кадров A/B: тот же расчёт `AspectCrop.Rect`, что у съёмки, ничего не пишет и не тратит; не указаны `aspect` и `anchor` — берутся из сцены.
 
 #### VideoSceneCurrentRequest
 
@@ -471,25 +528,36 @@ JSON ниже — единственное описание формы для ф
   "jobId": "job-7", "scopeKey": "p-1", "status": "completed", "provider": "fal", "model": "veo-3.1", "count": 2,
   "variants": [1, 2], "cost": { "currency": "usd", "amount": 3.2 }, "outcome": "ok", "charged": true, "error": "нет",
   "queuePosition": 1, "etaSeconds": 120, "createdAt": "2026-10-02T15:00:00Z", "chatSessionId": "s-1", "sceneId": "scene-1",
-  "initiator": "human", "license": "watermark"
+  "initiator": "human", "license": "watermark", "upscaleEtaSeconds": 915, "variant": 1
 }
 ```
+
+`status` — `queued | running | upscaling | downloading | completed | failed | cancelled`. `upscaling` — вторая тяжёлая задача GPU: латентный апскейл «Макс» local H3
+(съёмка `full` 1344×768 → 2528×1440); `etaSeconds` и процент в событии `video_edit_progress` на этой стадии — свои, отдельные от съёмки. `upscaleEtaSeconds` — время
+апскейла, пока идёт съёмка («следом · ~15 мин»).
 
 #### VideoQuoteRequest
 
 ```json
-{ "sessionId": "s-1", "sceneId": "scene-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8, "aspect": "16:9", "sound": true }
+{ "sessionId": "s-1", "sceneId": "scene-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8, "aspect": "16:9", "sound": true, "format": { "mode": "aspect", "aspect": "9:16", "tier": "max", "by": "human", "at": "2026-10-06T12:00:00Z" } }
 ```
 
 #### VideoQuoteResponse
 
 ```json
 {
-  "quoteId": "q-1", "provider": "fal", "model": "veo-3.1", "count": 2, "durationSec": 8,
-  "price": { "amount": 3.2, "unit": "usd", "approx": true, "source": "pricing", "eta": 240, "queueLength": 1 },
-  "license": "watermark", "heavy": false, "expiresAt": "2026-10-02T15:10:00Z"
+  "quoteId": "q-1", "provider": "local", "model": "minimax-h3", "count": 1, "durationSec": 5,
+  "price": { "amount": 0, "unit": "free", "approx": false, "source": "provider", "eta": 1245, "queueLength": 0, "upscaleEta": 915, "postStep": "upscale", "shotEta": 330 },
+  "license": "watermark", "heavy": false, "expiresAt": "2026-10-02T15:10:00Z",
+  "format": { "mode": "aspect", "aspect": "9:16", "tier": "max", "width": 1440, "height": 2528, "wireValue": "full", "postStep": "upscale", "substituted": false, "rounded": false }
 }
 ```
+
+У «Макс» local H3 `price.eta` = съёмка + апскейл, `price.shotEta` и `price.upscaleEta` — его части (замеры отдельно, разность на клиенте не считается), `price.postStep = "upscale"`.
+Ролик, апскейл которого не замерен, — `eta` и `upscaleEta` без поля, `postStep` остаётся («время не замерено»); `shotEta` есть, если замерена съёмка.
+
+**Котировка ничего не пишет** ни в префы, ни в сцену. `format.by` и `format.at` в запросе котировки необязательны и игнорируются: чтобы узнать цену и время
+конкретной ступени, клиент шлёт `{ "format": { "mode": "aspect", "aspect": "16:9", "tier": "max" } }` — без автора и без времени.
 
 #### RetryQuote
 
@@ -529,6 +597,19 @@ JSON ниже — единственное описание формы для ф
   }
 }
 ```
+
+#### VideoUpscaleRetryResult
+
+```json
+{ "jobId": "job-8", "sourceVersionId": "ver-1" }
+```
+
+«Повторить увеличение»: `POST …/scenes/{sceneId}/versions/{versionId}/upscale` (проектный — с префиксом `sessions/{sessionId}/`), тело пустое, ответ `202`.
+Работает у версии с `upscaleError` («Макс» local H3, съёмка 768p сохранена, а увеличение упало или отменено): сервер повторяет только апскейл
+по живому тикету съёмки, без пересъёмки. Идёт стадия `upscaling` у **новой** задачи `jobId` (события `video_edit_*`, отмена — `DELETE jobs/{jobId}/upscale`),
+тяжёлая задача GPU через ту же очередь. Удачный итог — **новая версия 1440p** (без `upscaleError`), версия 768p остаётся как была; сбой или отмена версий не добавляют.
+Отказы — `{ "error", "code" }`: `409 upscale_retry_unavailable` «Повторить увеличение уже нельзя — переснимите сцену» (тикет съёмки недоступен: рестарт сервера или прошло
+больше 12 ч), `400 invalid_request` — у версии нет `upscaleError` (отменённая и упавшая версии принимаются одинаково) или у модели нет увеличения, `404 scene_not_found` / `version_not_found`, `429 heavy_busy` — GPU занят другой тяжёлой задачей.
 
 #### SaveSceneRequest
 
@@ -584,7 +665,7 @@ JSON ниже — единственное описание формы для ф
     "builds": []
   },
   "spent": { "usd": 6.4, "credits": 12, "gpuSeconds": 300 },
-  "marks": [ { "index": 0, "claude": true, "updated": true, "stale": false } ],
+  "marks": [ { "index": 0, "claude": true, "updated": true, "stale": false, "formatMismatch": true } ],
   "build": { "state": "running", "progress": 0.4, "file": "video/утро/film.mp4", "error": "нет", "startedAt": "2026-10-02T16:00:00Z" },
   "stale": true
 }
@@ -666,6 +747,40 @@ JSON ниже — единственное описание формы для ф
   }
 }
 ```
+
+#### VideoPrefsChangedMessage
+
+```json
+{
+  "type": "video_prefs_changed",
+  "sessionId": "",
+  "scopeKey": "p-1",
+  "prefs": { "provider": "fal", "model": "veo-3.1", "durationSec": 8, "aspect": "16:9", "sound": false, "count": 1, "format": { "mode": "aspect", "aspect": "16:9", "tier": "standard", "by": "human", "at": "2026-10-06T12:00:00Z" } }
+}
+```
+
+Уходит владельцу при любой записи префов области: ручка PUT человека и запись формата агентом. `sessionId` у этого события всегда пуст: событие на область, а не на чат.
+
+#### VideoEditProgressMessage
+
+```json
+{
+  "type": "video_edit_progress",
+  "sessionId": "s-1",
+  "jobId": "job-7",
+  "scopeKey": "p-1",
+  "sceneId": "scene-1",
+  "stage": "upscaling",
+  "etaSeconds": 915,
+  "variant": 1,
+  "count": 1,
+  "initiator": "human",
+  "percent": 0.4
+}
+```
+
+`stage` — `queued | running | upscaling | downloading` (`VideoProgressStages`). `upscaling` — латентный апскейл «Макс» local H3 после съёмки, отдельные `etaSeconds` и `percent`;
+во время съёмки того же запуска `upscaleEtaSeconds` говорит, сколько займёт увеличение следом.
 
 ## Отвергнуто
 

@@ -90,7 +90,8 @@ public sealed class VideoJobThreads(
     // Задача принята: запуск в сцене с лицензией модели на этот момент, настройки сцены, якорь запуска в
     // ленте и журнал для хода
     public async Task OnLaunchedAsync(string ownerId, string scopeKey, string sessionId, string sceneId, string jobId,
-        VideoQuoteResponse quote, string? prompt, string initiator, VideoSceneSettingsDto settings, CancellationToken ct)
+        VideoQuoteResponse quote, string? prompt, string initiator, VideoSceneSettingsDto settings, CancellationToken ct,
+        VideoFramesCroppedDto? framesCropped = null)
     {
         try
         {
@@ -102,7 +103,7 @@ public sealed class VideoJobThreads(
                     quote.Model, quote.Count, prompt?.Trim(), quote.License, null),
                 new VideoThreadEvent(store.Now(), VideoThreadEventKinds.Launched,
                     $"{(agent ? "Claude запустил" : "Вы запустили")}: {what} · {quote.Provider}/{quote.Model} · " +
-                    $"вариантов: {quote.Count}", sceneId, jobId));
+                    $"вариантов: {quote.Count}", sceneId, jobId), framesCropped);
             if (written.Status != VideoThreadWriteStatus.Ok) return;
 
             await RecordAsync(sessionId, VideoThreadRecordTypes.LaunchVersions,
@@ -177,7 +178,7 @@ public sealed class VideoJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId, new VideoFilmChangedMessage(scopeKey, path, state));
+            await broadcaster.ToProjectOrOwner(ownerId, VideoEditScope.ProjectIdOf(scopeKey), new VideoFilmChangedMessage(scopeKey, path, state));
         }
         catch (Exception ex)
         {
@@ -190,7 +191,7 @@ public sealed class VideoJobThreads(
         if (broadcaster is null) return;
         try
         {
-            await broadcaster.ToOwner(ownerId,
+            await broadcaster.ToChatAudience(directory, ownerId, VideoEditScope.ProjectIdOf(scopeKey), sessionId,
                 new VideoThreadChangedMessage(scopeKey, state.Revision, Dto(ownerId, sessionId, state)) { SessionId = sessionId });
         }
         catch (Exception ex)

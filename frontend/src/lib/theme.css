@@ -88,6 +88,8 @@
   --c-info-bg: #E7EFF5;
 
   /* Режим «План» */
+  --c-rose:        #B0527C;  /* серия «glif» в аналитике расхода; вне тройки цены */
+  --c-rose-text:   #8E3D62;  /* моноширинные значения glif на подложке */
   --c-plan:        #6C5CB0;
   --c-plan-light:  #EEEBF8;
   --c-plan-text:   #4E4196;
@@ -277,6 +279,8 @@
   --c-info-bg: #1E2A33;
 
   /* Режим «План» (индиго) */
+  --c-rose:        #D683A6;
+  --c-rose-text:   #E7A3C0;
   --c-plan:        #9385D8;
   --c-plan-light:  #2A2540;
   --c-plan-text:   #B0A4E6;

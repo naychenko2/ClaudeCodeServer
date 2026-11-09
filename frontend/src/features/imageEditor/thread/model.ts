@@ -146,8 +146,15 @@ export const launchVersions = (t: ImageThread, jobId: string) =>
 
 // Надпись под запуском, кончившимся не целиком. Отмена и перезапуск сервера с частью готовых
 // вариантов называются прямо: без надписи лента выглядит так, будто остальное недорисовалось
-export function launchEndNote(status: ImageThreadLaunch['status'], ready: number, count: number): string | null {
+// faces — число лиц подстановки (ADR-028): при двух и больше тексты из словаря v2-notes, при одном — прежние
+export function launchEndNote(status: ImageThreadLaunch['status'], ready: number, count: number, faces = 0): string | null {
   if (status === 'running' || status === 'done') return null;
+  if (faces >= 2 && status !== 'interrupted') {
+    // Отмена после первого лица: плашка частичного результата уже говорит всё — «готово 1 из 1» не нужна
+    if (ready > 0) return null;
+    return status === 'cancelled' ? 'Отменено — версия не создана'
+      : 'Не удалось подставить лица — версия не создана. Назначения можно повторить из редактора.';
+  }
   if (ready > 0) {
     const of = `готово ${ready} из ${Math.max(ready, count)}`;
     return status === 'cancelled' ? `Отменено — ${of}.`

@@ -4,17 +4,19 @@ import { Filter, Search, X, Pin, Clock, Users } from 'lucide-react';
 import type { Persona, Session } from '../types';
 import { C, R, FONT, FS, SHADOW, Z, SP } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { Modal, IconButton, Chip, usePanelElement, usePanelHeaderHold } from './ui';
+import { Modal, IconButton, Button, Chip, usePanelElement, usePanelHeaderHold } from './ui';
 import { clampPopupLeft } from './ui/Menu';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
 import { useListAutoFocus } from '../lib/listAutoFocus';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
-  ALL_ORIGINS, ALL_STATUS_CHIPS,
-  chatStatusOf, isDefaultFilters, defaultChatFiltersKeepingView,
-  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter,
+  ALL_ORIGINS, ALL_STATUS_CHIPS, DEFAULT_FEATURE_KINDS,
+  chatStatusOf, isDefaultFilters, isDefaultFeatureKinds, defaultChatFiltersKeepingView,
+  type ChatFilters, type ChatStatusChip, type ChatOnlyFilter, type FeatureKind,
 } from '../lib/chatFilters';
+import { FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../lib/chatGroups';
+import type { FeatureIndexFeature } from '../types/featureIndex';
 
 // === Фильтр списка чатов: IconButton-триггер с бейджем скрытых + поповер (десктоп)
 // или мобильная шторка (ui/Modal). Секции: поиск → статус → тип → персона → показать
@@ -50,6 +52,22 @@ const ORIGIN_OPTIONS: { value: Session['origin']; label: string }[] = [
   { value: 'automation', label: 'Автоматизация' },
 ];
 
+// Тон и форма точки kind в чипах «Фичи · что показывать» (записка
+// feature-state-filter-1.md, п. 2): форма несёт смысл — 'fill' заливка, 'ring' обводка
+// 1.5 px, 'dash' пунктир; тона — только токены C.* по таблице. Подписи — из
+// FEATURE_KIND_LABEL (chatGroups), порядок ряда — из DEFAULT_FEATURE_KINDS (chatFilters).
+const KIND_DOT: Record<FeatureKind, { tone: string; shape: 'fill' | 'ring' | 'dash' }> = {
+  waiting_you: { tone: C.info, shape: 'fill' },
+  error: { tone: C.danger, shape: 'fill' },
+  running: { tone: C.textHeading, shape: 'fill' },
+  queued: { tone: C.textMuted, shape: 'ring' },
+  paused: { tone: C.textMuted, shape: 'fill' },
+  draft: { tone: C.textMuted, shape: 'dash' },
+  idle: { tone: C.dashed, shape: 'ring' },
+  merged: { tone: C.success, shape: 'ring' },
+  closed: { tone: C.success, shape: 'fill' },
+};
+
 const POPOVER_W = 320;
 
 interface FilterBarProps {
@@ -64,6 +82,10 @@ interface FilterBarProps {
   // Размер триггера — ступень тулбара (sm на узких, md на широких, lg на мобиле,
   // xs в шапке панели: там весь ряд контролов высотой 24)
   triggerSize?: 'xs' | 'sm' | 'md' | 'lg';
+  // Индекс фич проекта (features[]): нужен секции «Фичи · что показывать» в режиме
+  // groupBy='features' для счётчиков по kind. Не задан — секция не рисуется
+  // (глобальный список фич не знает).
+  features?: FeatureIndexFeature[];
 }
 
 // Маркер-точка статуса: на активном чипе — onAccent, иначе — цвет статуса
@@ -80,6 +102,22 @@ function Count({ n }: { n: number }) {
   return <span style={{ fontFamily: FONT.mono, fontSize: 10, opacity: 0.8 }}>{n}</span>;
 }
 
+// Точка тона kind в чипе: на выбранном чипе — onAccent, иначе — цвет тона из KIND_DOT.
+// Форма из KIND_DOT: fill — заливка; ring/dash — обводка 1.5 px (solid/dashed), фон прозрачный.
+function FeatureDot({ kind, active }: { kind: FeatureKind; active: boolean }) {
+  const { tone, shape } = KIND_DOT[kind];
+  const color = active ? C.onAccent : tone;
+  if (shape === 'fill') {
+    return <span style={{ width: 6, height: 6, borderRadius: R.full, flexShrink: 0, background: color }} />;
+  }
+  return (
+    <span style={{
+      width: 6, height: 6, boxSizing: 'border-box', borderRadius: R.full, flexShrink: 0,
+      background: 'transparent', border: `1.5px ${shape === 'dash' ? 'dashed' : 'solid'} ${color}`,
+    }} />
+  );
+}
+
 function SectionTitle({ children, action }: { children: ReactNode; action?: ReactNode }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -94,6 +132,17 @@ function SectionTitle({ children, action }: { children: ReactNode; action?: Reac
   );
 }
 
+// Подзаголовок группы чипов («Открытые · N» / «Завершённые»): текст + линия 1 px до края
+// (записка feature-state-filter-1.md, раздел «Поповер / шторка»)
+function GroupSublabel({ text }: { text: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, marginTop: SP.sm, marginBottom: 6 }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>{text}</span>
+      <span style={{ flex: 1, height: 1, background: C.divider }} />
+    </div>
+  );
+}
+
 const linkBtnStyle: React.CSSProperties = {
   border: 'none', background: 'none', padding: 0, cursor: 'pointer',
   fontFamily: FONT.sans, fontSize: FS.xs, color: C.accent, fontWeight: 600,
@@ -103,13 +152,14 @@ const sectionStyle: React.CSSProperties = { marginBottom: SP.md };
 
 // === Содержимое фильтра (общее для поповера и мобильной шторки) ===
 function FilterContent({
-  sessions, filters, patch, allPersonas, large,
+  sessions, filters, patch, allPersonas, large, features,
 }: {
   sessions: Session[];
   filters: ChatFilters;
   patch: (p: Partial<ChatFilters>) => void;
   allPersonas: Persona[];
   large?: boolean;
+  features?: FeatureIndexFeature[];
 }) {
   // Счётчики по чипам — из полного списка области
   const counts = useMemo(() => {
@@ -181,6 +231,83 @@ function FilterContent({
           </button>
         )}
       </div>
+
+      {/* Фичи · что показывать: ось featureKinds (записка feature-state-filter-1.md, п. 2–4).
+          9 чипов: восемь открытых + «Закрытые». Умолчание (featureKinds=[]) — все открытые
+          выбраны, закрытые выключены; снятие последнего возвращает умолчание ([]). Нулевой и
+          не выбранный чип — aria-disabled, клик игнорируется; выбранный нулевой остаётся
+          кликабельным, чтобы его можно было снять. R-Ф1.3(а): «в индексе нет kind» (старый
+          ответ) неотличим от «нет фич» по нулевым счётчикам — признак берётся отдельно
+          (есть ли хоть один kind); без него чипы без чисел и кликабельны. Членство фронт
+          не считает: счётчики — featureKindCounts по отданному бэком kind. */}
+      {filters.groupBy === 'features' && features !== undefined && (() => {
+        const counts = featureKindCounts(features);
+        const kinds = filters.featureKinds;
+        // Видимый выбор: умолчание = все открытые («вид умолчания честно показывает, что видно»);
+        // «восемь открытых» — общий эталон DEFAULT_FEATURE_KINDS (chatFilters), не местное выражение
+        const sel = kinds.length === 0 ? DEFAULT_FEATURE_KINDS : kinds;
+        const showCounts = features.some(f => f.kind != null);
+        const notDefault = kinds.length > 0;
+        // «· N из M»: N — фичи, которые попадут в список при текущем выборе; M — открытые,
+        // плюс закрытые, когда «Закрытые» включены (записка, раздел «Поповер / шторка»)
+        const shownCount = features.filter(f => f.chatCount > 0 && featureMatchesKinds(f, kinds)).length;
+        const totalDrawn = features.filter(f => f.chatCount > 0 && (kinds.includes('closed') || f.kind !== 'closed')).length;
+        const openTotal = DEFAULT_FEATURE_KINDS.reduce((s, k) => s + counts[k], 0);
+        const clickKind = (k: FeatureKind) => {
+          if (showCounts && counts[k] === 0 && !sel.includes(k)) return; // нулевой и не выбран — клик игнорируется
+          const next = sel.includes(k) ? sel.filter(x => x !== k) : [...sel, k];
+          // R-Ф2.1 M2: выбор, равный умолчанию (восемь открытых без 'closed'), → [].
+          // То же правило и тот же эталон, что в chatFilters при чтении (isDefaultFeatureKinds
+          // и DEFAULT_FEATURE_KINDS — один источник): иначе «снял и вернул Черновики» оставит
+          // явный список из восьми, isDefaultFilters=false — триггер горит, в шторке «Сбросить»
+          // и «8 из 8».
+          patch({ featureKinds: isDefaultFeatureKinds(next) ? [] : next });
+        };
+        const kindChip = (k: FeatureKind) => {
+          const active = sel.includes(k);
+          const off = showCounts && counts[k] === 0 && !active;
+          return (
+            <span key={k} style={{ display: 'inline-flex', opacity: off ? 0.5 : 1 }}>
+              <Chip variant="toggle" selected={active} large={large} disabled={off}
+                minHeight={large ? 40 : undefined} onClick={() => clickKind(k)}
+              >
+                <FeatureDot kind={k} active={active} />
+                {FEATURE_KIND_LABEL[k]}
+                {showCounts && <Count n={counts[k]} />}
+              </Chip>
+            </span>
+          );
+        };
+        return (
+          <div style={sectionStyle}>
+            <SectionTitle action={notDefault && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.sm }}>
+                {showCounts && (
+                  <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>· {shownCount} из {totalDrawn}</span>
+                )}
+                <Button variant="ghost" size="xs" onClick={() => patch({ featureKinds: [] })}
+                  style={{ color: C.accent, border: 'none', ...(large ? { height: 40, minHeight: 40 } : null) }}
+                >
+                  Сбросить
+                </Button>
+              </span>
+            )}>
+              Фичи · что показывать
+            </SectionTitle>
+            <GroupSublabel text={showCounts ? `Открытые · ${openTotal}` : 'Открытые'} />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+              {DEFAULT_FEATURE_KINDS.map(kindChip)}
+            </div>
+            <GroupSublabel text="Завершённые" />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
+              {kindChip('closed')}
+            </div>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, marginTop: 6 }}>
+              Закрытые встают секцией внизу списка, на втором плане.
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Статус */}
       <div style={sectionStyle}>
@@ -284,6 +411,17 @@ function buildSummary(filters: ChatFilters, personaName: string | null): string 
   const parts: string[] = [];
   const q = filters.search.trim();
   if (q) parts.push(`«${q}»`);
+  // Ось фич (n1): сводка — из модели «Показаны» (та же формулировка, что строка в списке,
+  // записка п. 4), а не список выбранных kind: умолчание — не фильтр, его в сводке нет
+  if (filters.groupBy === 'features') {
+    const model = shownFiltersModel(filters.featureKinds);
+    if (model) {
+      // R-Ф2.1 M1: знак несёт сам префикс модели там, где он нужен ('Показаны:',
+      // 'Все открытые, кроме:'), а 'Показаны все открытые и' читается без знака —
+      // FilterBar добавляет только пробел: знак в сводке ровно один.
+      parts.push(`${model.prefix} ${model.chips.map(c => `${c.andBefore ? 'и ' : ''}${FEATURE_KIND_LABEL[c.kind]}`).join(', ')}`);
+    }
+  }
   const liveSel = (['active', 'waiting', 'error'] as ChatStatusChip[]).filter(s => filters.statuses.includes(s));
   if (liveSel.length < 3 && liveSel.length > 0) parts.push(liveSel.map(s => STATUS_SUMMARY[s]).join(', '));
   if (!filters.statuses.includes('done')) parts.push('без завершённых');
@@ -328,7 +466,7 @@ export function ChatFilterResetActions({ search, hasNonSearchFilters, onResetSea
 }
 
 export function FilterBar({
-  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm',
+  sessions, filters, patch, allPersonas, hiddenCount, isMobile, triggerSize = 'sm', features,
 }: FilterBarProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
@@ -435,7 +573,18 @@ export function FilterBar({
     </span>
   );
 
-  // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки)
+  // Футер: счётчик скрытых + сброс + готово (общий вид для поповера и шторки).
+  // На 360 в режиме фич — «Показать N фич» (md, 42 px, таблица §4) вместо «Готово»;
+  // N — то, что реально попадёт в список при текущем выборе оси: тот же отбор
+  // featureMatchesKinds, что в секции «Фичи · что показывать» и в SessionList
+  // (Ф-2.2), и то же правило «рисуется» (chatCount > 0), что у «N из M» выше и у
+  // счётчиков оси: фича без чатов в список не попадает — в футере её быть не должно (R-Ф2.2 m1).
+  // По bucket счёт не отражал выбор: при «только закрытые» он дал бы 0.
+  // Подвал общий с «Чатами», поэтому переключение только по groupBy + isMobile.
+  const isFeaturesMode = filters.groupBy === 'features';
+  const shownFeatureCount = isFeaturesMode && features ? features.filter(f => f.chatCount > 0 && featureMatchesKinds(f, filters.featureKinds)).length : 0;
+  const footerIsMobileFeatures = isMobile && isFeaturesMode;
+  const footerActionLabel = footerIsMobileFeatures ? `Показать ${shownFeatureCount} фич` : 'Готово';
   const footerRow = (
     <div style={{
       display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: SP.sm,
@@ -443,15 +592,19 @@ export function FilterBar({
       <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {hiddenCount > 0 ? `Скрыто ${hiddenCount}` : 'Все чаты показаны'}
         {hasFilters && (
-          <button onClick={resetAll} style={{ ...linkBtnStyle, marginLeft: 6 }}>Сбросить всё</button>
+          <button onClick={resetAll} style={{ ...linkBtnStyle, marginLeft: 6, ...(isMobile ? { minHeight: 40 } : null) }}>Сбросить всё</button>
         )}
       </span>
       <button onClick={() => setOpen(false)} style={{
-        padding: '5px 14px', borderRadius: R.md, border: 'none',
+        padding: footerIsMobileFeatures ? '11px 16px' : '5px 14px',
+        borderRadius: footerIsMobileFeatures ? R.xl : R.md,
+        border: 'none',
         background: C.accent, color: C.onAccent,
-        fontSize: FS.sm, fontWeight: 600, fontFamily: FONT.sans, cursor: 'pointer', flexShrink: 0,
+        fontSize: footerIsMobileFeatures ? FS.md : FS.sm, fontWeight: 600, fontFamily: FONT.sans,
+        cursor: 'pointer', flexShrink: 0,
+        ...(footerIsMobileFeatures ? { minHeight: 42 } : null),
       }}>
-        Готово
+        {footerActionLabel}
       </button>
     </div>
   );
@@ -476,7 +629,7 @@ export function FilterBar({
           borderRadius: R.xl, boxShadow: SHADOW.dropdown,
           padding: SP.md, zIndex: Z.dropdown,
         }}>
-          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} />
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} features={features} />
           <div style={{
             marginTop: SP.xs, paddingTop: SP.sm, borderTop: `1px solid ${C.borderLight}`,
           }}>
@@ -489,7 +642,7 @@ export function FilterBar({
       {/* Мобайл: шторка через ui/Modal (единый bottom-sheet с overlay/Esc/safe-area) */}
       {open && isMobile && (
         <Modal title="Фильтры" onClose={() => setOpen(false)} footer={footerRow}>
-          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} large />
+          <FilterContent sessions={sessions} filters={filters} patch={patch} allPersonas={allPersonas} large features={features} />
         </Modal>
       )}
     </div>

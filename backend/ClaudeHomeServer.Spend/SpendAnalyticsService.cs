@@ -10,26 +10,28 @@ namespace ClaudeHomeServer.Services.Spend;
 // Detailed=false — строка из свёрнутого дня, листьев-ходов под ней нет.
 public sealed record SpendSlice(
     DateOnly Date, string OwnerId, string? ProjectId, string? SessionId, string? TaskId,
-    string? PersonaId, string Provider, string? Model, string Source,
+    string? PersonaId, string? ActorUserId, string Provider, string? Model, string Source,
     long Input, long Output, long CacheRead, long CacheCreation,
-    double Cost, double Rub, int Generations, int Turns, bool Detailed);
+    double Cost, double Rub, int Generations, int Turns, bool Detailed,
+    string Tier = "");
 
 public sealed record SpendTokensDto(long Input, long Output, long CacheRead, long CacheCreation, long Total);
 
 public sealed record SpendDayDto(string Date, bool Aggregated, long Total,
-    Dictionary<string, long> BySource, int FalGenerations);
+    Dictionary<string, long> BySource, int FalGenerations,
+    Dictionary<string, long> ByTier);
 
 public sealed record SpendCardRowDto(string Key, string? Name, string? Meta,
-    SpendTokensDto Tokens, int Turns, int FalGenerations);
+    SpendTokensDto Tokens, int Turns, int FalGenerations, string? Tier);
 
 public sealed record SpendPivotNodeDto(string Key, string? Name, string? Meta,
-    SpendTokensDto Tokens, int Turns, int FalGenerations, bool HasDetail);
+    SpendTokensDto Tokens, int Turns, int FalGenerations, bool HasDetail, string? Tier);
 
 public sealed record SpendTurnDto(string Id, DateTime Timestamp, string OwnerId, string? UserName,
     string? SessionId, string? ChatName, string? ProjectId, string? ProjectName,
     string? TaskId, string? TaskTitle, string? PersonaId, string? PersonaName,
     string Provider, string? Model, string Source, string? Label,
-    SpendTokensDto Tokens, int Generations, long DurationMs, bool Own);
+    SpendTokensDto Tokens, int Generations, long DurationMs, bool Own, string Tier);
 
 public sealed record SpendTurnsPageDto(int Total, bool WindowClamped, IReadOnlyList<SpendTurnDto> Items);
 
@@ -78,15 +80,17 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         foreach (var r in store.DetailsBetween(from, to))
             if (Match(r, f))
                 result.Add(new SpendSlice(r.Date, r.OwnerId, r.ProjectId, r.SessionId, r.TaskId,
-                    r.PersonaId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
+                    r.PersonaId, r.ActorUserId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
                     r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
-                    r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true));
+                    r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true,
+                    Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model)));
         foreach (var d in store.DailyBetween(from, to))
             if (Match(d, f) && DateOnly.TryParse(d.Date, out var date))
                 result.Add(new SpendSlice(date, d.OwnerId, d.ProjectId, d.SessionId, d.TaskId,
-                    d.PersonaId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
+                    d.PersonaId, d.ActorUserId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
                     d.InputTokens, d.OutputTokens, d.CacheReadTokens, d.CacheCreationTokens,
-                    d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false));
+                    d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false,
+                    Tier: SpendCostTiers.Of(d.Source, d.Provider, d.Model)));
         return result;
     }
 
@@ -104,7 +108,9 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
         && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
-        && (f.Source is null || r.Source == f.Source);
+        && (f.Source is null || r.Source == f.Source)
+        && (f.Me is null || Owns(r, f.Me))
+        && (f.User is null || UserKey(r) == f.User);
 
     private bool Match(DailySpendRow r, SpendFilter f) =>
         (f.Owner is null || r.OwnerId == f.Owner)
@@ -114,7 +120,24 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
         && (f.Persona is null || (r.PersonaId ?? "") == f.Persona)
         && (f.Provider is null || r.Provider == f.Provider)
         && (f.Model is null || ResolveModel(r.Model, r.Provider) == f.Model)
-        && (f.Source is null || r.Source == f.Source);
+        && (f.Source is null || r.Source == f.Source)
+        && (f.Me is null || Owns(r, f.Me))
+        && (f.User is null || UserKey(r) == f.User);
+
+    // «Своя запись» человека (S2a-6b): он её арендатор (свой проект, включая чужие ходы в
+    // нём) или её актор (свой ход в чужом общем проекте). Записи без актора относятся
+    // владельцу — тот же порядок «нет поля → владелец», что у SenderUserId в К4.
+    private static bool Owns(SpendRecord r, string userId) =>
+        r.OwnerId == userId || r.ActorUserId == userId;
+
+    private static bool Owns(DailySpendRow r, string userId) =>
+        r.OwnerId == userId || r.ActorUserId == userId;
+
+    // Ключ оси «user»: актор, а без актора — владелец. Им же группировался этот уровень
+    // до общих проектов (актора не было никогда) — поведение старых записей не меняется.
+    private static string UserKey(SpendRecord r) => r.ActorUserId ?? r.OwnerId;
+
+    private static string UserKey(DailySpendRow r) => r.ActorUserId ?? r.OwnerId;
 
     // --- обзор ---
 
@@ -134,7 +157,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             var bySource = day.GroupBy(s => s.Source)
                 .ToDictionary(g => g.Key, g => g.Sum(TotalOf));
             byDay.Add(new SpendDayDto(d.ToString("yyyy-MM-dd"),
-                store.IsAggregated(d), day.Sum(TotalOf), bySource, day.Sum(s => s.Generations)));
+                store.IsAggregated(d), day.Sum(TotalOf), bySource, day.Sum(s => s.Generations),
+                ByTierOf(day)));
         }
 
         var cards = new Dictionary<string, IReadOnlyList<SpendCardRowDto>>();
@@ -181,8 +205,30 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     private IReadOnlyList<SpendCardRowDto> Card(List<SpendSlice> slices, string groupBy) =>
         GroupNodes(slices, groupBy)
             .Take(CardLimit)
-            .Select(n => new SpendCardRowDto(n.Key, n.Name, n.Meta, n.Tokens, n.Turns, n.FalGenerations))
+            .Select(n => new SpendCardRowDto(n.Key, n.Name, n.Meta, n.Tokens, n.Turns, n.FalGenerations, n.Tier))
             .ToList();
+
+    // Суммы токенов дня по ценовым классам. Ключи всегда полные (free/cheap/expensive):
+    // нулевой класс — это ноль, а не отсутствие ключа, иначе фронт различал бы «нет трат»
+    // и «траты нулевого класса» по-разному.
+    internal static Dictionary<string, long> ByTierOf(IEnumerable<SpendSlice> day)
+    {
+        var byTier = new Dictionary<string, long>
+        {
+            [SpendCostTiers.Free] = 0,
+            [SpendCostTiers.Cheap] = 0,
+            [SpendCostTiers.Expensive] = 0,
+        };
+        foreach (var s in day)
+        {
+            // Фолбэк на SliceTier обязателен: слайс с пустым Tier (Tier по умолчанию "") иначе
+            // дал бы ЧЕТВЁРТЫЙ ключ "" в ByTier — контракт «три ключа» ломался бы, а сумма ключей
+            // разошлась бы с дневным Total (фронт часть токенов потерял бы).
+            var tier = SliceTier(s);
+            byTier[tier] = byTier.GetValueOrDefault(tier) + TotalOf(s);
+        }
+        return byTier;
+    }
 
     // --- pivot ---
 
@@ -197,7 +243,7 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             .Select(n =>
             {
                 var (name, meta) = ResolveName(groupBy, n.Key);
-                return new SpendPivotNodeDto(n.Key, name, meta, n.Tokens, n.Turns, n.FalGenerations, n.HasDetail);
+                return new SpendPivotNodeDto(n.Key, name, meta, n.Tokens, n.Turns, n.FalGenerations, n.HasDetail, n.Tier);
             })
             .ToList();
 
@@ -214,14 +260,46 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
                 acc.Add(s);
                 hasDetail |= s.Detailed;
             }
-            nodes.Add(new SpendPivotNodeDto(g.Key, null, null, acc.Tokens(), acc.Turns, acc.Generations, hasDetail));
+            nodes.Add(new SpendPivotNodeDto(g.Key, null, null, acc.Tokens(), acc.Turns, acc.Generations,
+                hasDetail, TierOfGroup(g, groupBy)));
         }
         return [.. nodes.OrderByDescending(n => n.Tokens.Total + n.FalGenerations)];
     }
 
+    // Класс узла заполняется только для разрезов «провайдер» и «модель»: у них есть
+    // источник траты, из которого класс и считается. Остальные разрезы (пользователь,
+    // проект, чат, задача, персона, источник) — это разрезы по ЧЕМУ, а не по чему тратили,
+    // поэтому класс у них не заполняется.
+    //
+    // В группе могут смешаться классы (одна модель у нескольких провайдеров, чужие записи):
+    // класс узла — класс с наибольшей суммой токенов (SpendCostTiers.Dominant), при равенстве —
+    // более дорогой. Один процент записей другого класса строку не перекрашивает.
+    private static string? TierOfGroup(IEnumerable<SpendSlice> group, string groupBy)
+    {
+        if (!SpendCostTiers.AxisHasTier(groupBy)) return null;
+        var byTier = new Dictionary<string, long>();
+        foreach (var s in group)
+        {
+            var t = SliceTier(s);
+            byTier[t] = byTier.GetValueOrDefault(t) + TotalOf(s);
+        }
+        return SpendCostTiers.Dominant(byTier);
+    }
+
+    // Класс слайса: поле Tier заполняется в Slices() (там есть source/provider/model),
+    // а у слайсов, собранных руками в тестах, — считаем из полей среза тем же правилом.
+    // Пустое (или незнакомое) значение Tier — не класс: считаем по правилу, иначе в ByTier
+    // появился бы лишний ключ.
+    private static string SliceTier(SpendSlice s) =>
+        s.Tier is SpendCostTiers.Free or SpendCostTiers.Cheap or SpendCostTiers.Expensive
+            ? s.Tier
+            : SpendCostTiers.Of(s.Source, s.Provider, s.Model);
+
     private static string KeyOf(SpendSlice s, string groupBy) => groupBy switch
     {
-        "user" => s.OwnerId,
+        // Актор, а без актора — владелец (S2a-6b): разбивка «пользователь» для владельца
+        // общего проекта даёт его участников; старые записи (актора нет) остаются владельцу.
+        "user" => s.ActorUserId ?? s.OwnerId,
         "project" => s.ProjectId ?? "",
         "chat" => s.SessionId ?? "",
         "task" => s.TaskId ?? "",
@@ -301,7 +379,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     {
         var r = store.FindTurn(id);
         if (r is null) return null;
-        if (!isAdmin && r.OwnerId != currentUserId) return null;
+        // Свой ход — по тем же правам, что и список (S2a-6b): арендатор или актор
+        if (!isAdmin && (currentUserId is null || !Owns(r, currentUserId))) return null;
 
         var neighbors = new List<SpendNeighborDto>();
         if (r.SessionId is not null)
@@ -319,7 +398,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
     {
         var today = DateOnly.FromDateTime(DateTime.UtcNow);
         var weekAgo = today.AddDays(-6);
-        var f = new SpendFilter(Owner: userId);
+        // «Свои» записи (S2a-6b): свои проекты и свои ходы в чужих общих проектах
+        var f = new SpendFilter(Me: userId);
         var slices = Slices(weekAgo, today, f);
 
         var todayAcc = new Acc();
@@ -337,7 +417,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             byDay.Add(new SpendDayDto(d.ToString("yyyy-MM-dd"), store.IsAggregated(d),
                 day.Sum(TotalOf),
                 day.GroupBy(s => s.Source).ToDictionary(g => g.Key, g => g.Sum(TotalOf)),
-                day.Sum(s => s.Generations)));
+                day.Sum(s => s.Generations),
+                ByTierOf(day)));
         }
         return new SpendWidgetDto(todayAcc.Tokens(), weekAcc.Tokens(),
             todayAcc.Turns, weekAcc.Turns, weekAcc.Generations, byDay);
@@ -362,7 +443,10 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
 
     // --- общее ---
 
-    private static long TotalOf(SpendSlice s) => s.Input + s.Output + s.CacheRead + s.CacheCreation;
+    // Формула веса — общая с разбивкой фичи (SpendCostTiers.WeightOf): класс строки в обоих API
+    // считается по одной метрике токенов.
+    private static long TotalOf(SpendSlice s) =>
+        SpendCostTiers.WeightOf(s.Input, s.Output, s.CacheRead, s.CacheCreation);
 
     private SpendTurnDto ToTurnDto(SpendRecord r, string? currentUserId)
     {
@@ -379,7 +463,8 @@ public sealed class SpendAnalyticsService(SpendStore store, ISessionDirectory se
             new SpendTokensDto(r.InputTokens, r.OutputTokens, r.CacheReadTokens,
                 r.CacheCreationTokens, r.TotalTokens),
             r.Generations, r.DurationMs,
-            Own: currentUserId is not null && r.OwnerId == currentUserId);
+            Own: currentUserId is not null && Owns(r, currentUserId),
+            Tier: SpendCostTiers.Of(r.Source, r.Provider, r.Model));
     }
 
     private sealed class Acc

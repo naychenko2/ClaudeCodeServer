@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -15,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// тулсете, который возвращает свой ownerId, потому что в фазе 2 сюда переедет tasks, и
 /// анонимный или подменённый владелец означал бы чтение чужих задач.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpHttpOwnerIsolationTests : IDisposable
 {
     // Тулсет-эхо: единственный инструмент возвращает владельца, каким его увидел контроллер
@@ -54,6 +56,24 @@ public class McpHttpOwnerIsolationTests : IDisposable
         return answer.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!;
     }
 
+    /// <summary>
+    /// Живая сессия личного проекта того же владельца, что и токен: в бою X-Caller-Session-Id
+    /// ставит конфиг хода, и живая сессия личного проекта даёт вызову рамку Wide
+    /// (TurnFrame.Resolve). С синтетическим id актор хода неизвестен, и по правилу F2-O2 вызов
+    /// отвергается гейтом актора до тулсета — подмену владельца проверять было бы нечего.
+    /// </summary>
+    private static async Task<string> PersonalSessionAsync(HttpClient client)
+    {
+        var project = await client.PostAsJsonAsync("/api/projects", new { name = $"whoami-{Guid.NewGuid():N}" });
+        project.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(
+            await project.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+        var session = await client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await session.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+    }
+
     [Fact]
     public async Task РазныеТокены_РазныеВладельцы()
     {
@@ -73,6 +93,9 @@ public class McpHttpOwnerIsolationTests : IDisposable
     /// Подмена владельца снаружи невозможна: ни телом вызова, ни заголовком контекста.
     /// Заголовок X-Caller-Session-Id при http шлёт КЛИЕНТ, поэтому доверять ему как
     /// источнику прав нельзя — он влияет только на журнал и гейты по сессии.
+    /// Фикстура называет живые сессии (см. <see cref="PersonalSessionAsync"/>): со своим id
+    /// вызов доходит до тулсета и отвечает владельцем из токена, чужая сессия — отказом,
+    /// а не чужим владельцем (актор неизвестен, F2-O2).
     /// </summary>
     [Fact]
     public async Task ПодменаВладельца_ТеломИлиЗаголовком_НеРаботает()
@@ -83,7 +106,7 @@ public class McpHttpOwnerIsolationTests : IDisposable
         var ownerA = await WhoAmIAsync(a);
         var ownerB = await WhoAmIAsync(b);
 
-        a.DefaultRequestHeaders.Add("X-Caller-Session-Id", "чужая-сессия");
+        a.DefaultRequestHeaders.Add("X-Caller-Session-Id", await PersonalSessionAsync(a));
         a.DefaultRequestHeaders.Add("X-Owner-Id", ownerB);
         var viaHeaders = await WhoAmIAsync(a);
         var viaBody = await WhoAmIAsync(a, new
@@ -94,5 +117,12 @@ public class McpHttpOwnerIsolationTests : IDisposable
 
         viaHeaders.Should().Be(ownerA);
         viaBody.Should().Be(ownerA);
+
+        // Чужая сессия в заголовке — та же граница другим путём: она не принадлежит этому
+        // владельцу (GetOwned), актор хода неизвестен → отказ, а не подставленный владелец.
+        a.DefaultRequestHeaders.Remove("X-Caller-Session-Id");
+        a.DefaultRequestHeaders.Add("X-Caller-Session-Id", await PersonalSessionAsync(b));
+        (await WhoAmIAsync(a)).Should().Be(ActorRightGate.DeniedText,
+            "чужой id в заголовке не даёт ни чужого владельца, ни его прав");
     }
 }

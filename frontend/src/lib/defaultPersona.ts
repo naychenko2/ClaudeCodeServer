@@ -5,7 +5,7 @@
 import { useSyncExternalStore } from 'react';
 import type { Me, Project, Session } from '../types';
 import { api } from './api';
-import { OfflineError, RequestTimeoutError } from './offline';
+import { OfflineError, RequestTimeoutError, readStoredUserId } from './offline';
 import { onMessage } from './signalr';
 
 interface MeState {
@@ -13,6 +13,8 @@ interface MeState {
   // id текущего пользователя (== Project.ownerId бэка) — нужен гейтам «только владелец»
   // (например, смена фона проекта), без прокидывания auth пропсом через всё дерево
   userId: string | null;
+  // логин текущего пользователя — сравнение с owner записей истории («вы»)
+  username: string | null;
   defaultPersonaId: string | null;
   // Роль пользователя (копия Me.role) — нужна гейтам раздела «Персоны» (например,
   // видимость вкладки «Специальности» и admin-only слоёв), без отдельного auth/me-фетча
@@ -27,7 +29,7 @@ interface MeState {
 }
 
 let _me: MeState = {
-  loaded: false, userId: null, defaultPersonaId: null, role: '',
+  loaded: false, userId: null, username: null, defaultPersonaId: null, role: '',
   needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
 };
 const _listeners = new Set<() => void>();
@@ -58,6 +60,7 @@ export function setMeFromServer(me: Me): void {
   _me = {
     loaded: true,
     userId: me.userId ?? null,
+    username: me.username ?? null,
     defaultPersonaId: me.defaultPersonaId ?? null,
     role: me.role ?? '',
     needsOnboarding: !!me.needsOnboarding,
@@ -70,7 +73,7 @@ export function setMeFromServer(me: Me): void {
 // Сброс при разлогине — данные не должны протечь следующему аккаунту
 export function clearMe(): void {
   _me = {
-    loaded: false, userId: null, defaultPersonaId: null, role: '',
+    loaded: false, userId: null, username: null, defaultPersonaId: null, role: '',
     needsOnboarding: false, onboardingSessionId: null, executionEnvironment: null,
   };
   emit();
@@ -118,6 +121,16 @@ export async function refreshMe(): Promise<void> {
 
 export function getMeSnapshot(): MeState { return _me; }
 
+// «Одна вкладка — один владелец»: хранилище (readStoredUserId) называет того же
+// человека, чьи данные показывает вкладка (снимок /auth/me). Сравнивать нечем, пока
+// одно из значений неизвестно (/me ещё не пришёл, id не записан) — это не расхождение.
+export function isTabOwnerConsistent(): boolean {
+  const stored = readStoredUserId();
+  const mine = _me.userId;
+  if (!stored || !mine) return true;
+  return stored === mine;
+}
+
 export function useMe(): MeState {
   return useSyncExternalStore(
     fn => { _listeners.add(fn); return () => _listeners.delete(fn); },
@@ -160,15 +173,15 @@ export async function createChatWithContextPersona(
   const defaultId = getContextDefaultPersonaId(project);
   if (defaultId) {
     return api.personas.createChat(defaultId, {
-      mode: opts?.mode ?? 'auto',
+      mode: opts?.mode,
       name: opts?.name,
       projectId: project?.id,
     });
   }
   try {
     return project
-      ? await api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
-      : await api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
+      ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name)
+      : await api.chats.create(opts?.mode, undefined, opts?.name);
   } catch (e) {
     if ((e as Error & { status?: number }).status === 400) {
       throw new OnboardingRequiredError(project ? 'project' : 'user');

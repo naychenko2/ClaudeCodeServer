@@ -20,6 +20,7 @@ public sealed class ChatContextLifecycle(
         {
             events.OnNotification<SessionDeleted>(OnDeleted, "ChatContextLifecycle.Deleted");
             events.OnNotification<SessionBranched>(OnBranched, "ChatContextLifecycle.Branched");
+            events.OnNotification<SessionContinued>(OnContinued, "ChatContextLifecycle.Continued");
         }
         return Task.CompletedTask;
     }
@@ -43,21 +44,26 @@ public sealed class ChatContextLifecycle(
         return Task.CompletedTask;
     }
 
-    private Task OnBranched(SessionBranched e)
+    private Task OnBranched(SessionBranched e) => CopyState(e.Turn, e.SourceSessionId, "ветку");
+
+    // Продолжение в новом чате: контекст (закреплённые материалы) переезжает вместе с работой
+    private Task OnContinued(SessionContinued e) => CopyState(e.Turn, e.SourceSessionId, "продолжение");
+
+    private Task CopyState(TurnContext turn, string sourceSessionId, string target)
     {
-        if (e.Turn.OwnerId is { } owner)
+        if (turn.OwnerId is { } owner)
         {
             try
             {
-                var from = StatePath(owner, e.SourceSessionId);
+                var from = StatePath(owner, sourceSessionId);
                 if (File.Exists(from))
                 {
-                    var to = StatePath(owner, e.Turn.SessionId);
+                    var to = StatePath(owner, turn.SessionId);
                     Directory.CreateDirectory(Path.GetDirectoryName(to)!);
                     File.Copy(from, to, overwrite: true);
                 }
             }
-            catch (Exception ex) { logger.LogWarning(ex, "Контекст чата {Source} не скопирован в ветку {SessionId}", e.SourceSessionId, e.Turn.SessionId); }
+            catch (Exception ex) { logger.LogWarning(ex, "Контекст чата {Source} не скопирован в {Target} {SessionId}", sourceSessionId, target, turn.SessionId); }
         }
         return Task.CompletedTask;
     }

@@ -16,17 +16,22 @@ export function chatToRestore(snapshotChatId: string | null | undefined, activeC
 /** Файл и задача снимка истории, которые едут вместе с его чатом */
 export interface PendingChatView { file: string | null; task: string | null }
 
-export interface PendingChat { pid: string; chatId: string; view: PendingChatView | null }
+/** keepFeature — метка запасного перехода «← к фиче»: чат выбирается ПОД открытой страницей
+ *  фичи, и страницу закрывать не надо. Ставит только он; остальные писатели канала
+ *  (уведомление, диплинк, «ждёт ответа», инцидент) метку не несут — их выбор страницу закрывает */
+export interface PendingChat { pid: string; chatId: string; view: PendingChatView | null; keepFeature: boolean }
 
 // Вид снимка дописывается к «projectId|chatId» после перевода строки: в id его нет,
 // а значение остаётся одной строкой одного канала — страж поколений и возврат
 // незавершённого pending на перемонтаже StrictMode работают с ним как раньше
 const VIEW_SEP = '\n';
 
-/** Значение cc_pending_project_chat; view — вид снимка, который надо восстановить вместе с чатом */
-export function encodePendingChat(pid: string, chatId: string, view?: PendingChatView): string {
+/** Значение cc_pending_project_chat; view — вид снимка, который надо восстановить вместе с чатом,
+ *  keepFeature — метка «оставить страницу фичи» (см. PendingChat) */
+export function encodePendingChat(pid: string, chatId: string, view?: PendingChatView, keepFeature?: boolean): string {
   const base = `${pid}|${chatId}`;
-  return view ? `${base}${VIEW_SEP}${JSON.stringify(view)}` : base;
+  if (!view && !keepFeature) return base;
+  return `${base}${VIEW_SEP}${JSON.stringify(keepFeature ? { ...view, keepFeature: true } : view)}`;
 }
 
 /** Разбор cc_pending_project_chat; без «projectId|» значение относится к fallbackPid.
@@ -37,13 +42,18 @@ export function parsePendingChat(raw: string, fallbackPid: string): PendingChat 
   const sep = head.indexOf('|');
   const [pid, chatId] = sep === -1 ? [fallbackPid, head] : [head.slice(0, sep), head.slice(sep + 1)];
   let view: PendingChatView | null = null;
+  let keepFeature = false;
   if (viewAt !== -1) {
     try {
-      const v = JSON.parse(raw.slice(viewAt + 1)) as Partial<PendingChatView>;
-      view = { file: typeof v.file === 'string' ? v.file : null, task: typeof v.task === 'string' ? v.task : null };
+      const v = JSON.parse(raw.slice(viewAt + 1)) as Partial<PendingChatView> & { keepFeature?: unknown };
+      keepFeature = v.keepFeature === true;
+      // значение с одной меткой вида не несёт: файл и задачу из снимка тогда не трогаем
+      if ('file' in v || 'task' in v) {
+        view = { file: typeof v.file === 'string' ? v.file : null, task: typeof v.task === 'string' ? v.task : null };
+      }
     } catch { /* вид не разобрался — восстанавливаем только чат */ }
   }
-  return { pid, chatId, view };
+  return { pid, chatId, view, keepFeature };
 }
 
 /** Значение cc_pending_project_chat для «назад/вперёд» на снимок проектного чата, когда
@@ -53,14 +63,14 @@ export function parsePendingChat(raw: string, fallbackPid: string): PendingChat 
  *  сохранённого состояния, и «назад» вернул бы чат не с тем файлом в сплите.
  *  null — восстанавливать нечего или этим займётся смонтированный WorkspacePage сам. */
 export function pendingChatOnPop(
-  snapshot: { project?: { id: string } | null; chatId?: string | null; file?: string | null; task?: string | null },
+  snapshot: { project?: { id: string } | null; chatId?: string | null; file?: string | null; task?: string | null; feature?: string | null },
   openProjectId: string | null | undefined,
   hubTab: string,
 ): string | null {
   if (!snapshot.project || !snapshot.chatId) return null;
   const remount = openProjectId !== snapshot.project.id || hubTab !== 'projects';
   return remount
-    ? encodePendingChat(snapshot.project.id, snapshot.chatId, { file: snapshot.file ?? null, task: snapshot.task ?? null })
+    ? encodePendingChat(snapshot.project.id, snapshot.chatId, { file: snapshot.file ?? null, task: snapshot.task ?? null }, !!snapshot.feature)
     : null;
 }
 

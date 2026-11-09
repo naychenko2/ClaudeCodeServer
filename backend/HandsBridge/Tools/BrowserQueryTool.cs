@@ -38,7 +38,10 @@ public static partial class BrowserQueryTool
             return HandsGate.Deny(HandsTools.BrowserQuery, gate);
         }
 
-        HandsGate.Acted(HandsTools.BrowserQuery);
+        if (HandsGate.Acted(HandsTools.BrowserQuery) is { } busy)
+        {
+            return busy;
+        }
 
         var reply = await BrowserHost.Session.QueryAsync(selector, @ref, mode, limit, cancellationToken);
         return BrowserToolResult.From(HandsTools.BrowserQuery, reply);

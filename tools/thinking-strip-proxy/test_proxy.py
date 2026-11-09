@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # Тесты чистых функций прокси. Без сети и без поднятого vLLM:
 #   python3 -m unittest discover -s tools/thinking-strip-proxy
+import base64
 import contextlib
 import copy
+import gzip
 import http.client
 import io
 import json
@@ -12,6 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import diff_miss
@@ -66,6 +69,129 @@ P = dict(keep_tail_tokens=_в_токенах(20 * len(BIG)),
          step_tokens=_в_токенах(10 * len(BIG), вверх=True),
          min_chars=2000, min_tokens=_в_токенах(30000),
          min_context_tokens=оценка(history(120)) - ЗАПАС_НАД_ГЕЙТОМ)
+
+
+class СэмплингTests(unittest.TestCase):
+    def test_перебивает_температуру_cli_и_не_трогает_остальное(self):
+        with unittest.mock.patch.object(proxy, "SAMPLING", {"temperature": 0.7, "top_p": 0.8, "top_k": 20}):
+            doc = {"model": "m", "temperature": 1, "messages": []}
+            self.assertTrue(proxy.apply_sampling(doc))
+            self.assertEqual(doc, {"model": "m", "temperature": 0.7, "top_p": 0.8, "top_k": 20, "messages": []})
+            self.assertFalse(proxy.apply_sampling(doc))
+
+    def test_пустой_sampling_ничего_не_меняет(self):
+        with unittest.mock.patch.object(proxy, "SAMPLING", {}):
+            doc = {"temperature": 1}
+            self.assertFalse(proxy.apply_sampling(doc))
+            self.assertEqual(doc, {"temperature": 1})
+
+
+class ГибридTests(unittest.TestCase):
+    def _doc(self, last_content, output_config=True):
+        doc = {"model": "m", "messages": [{"role": "user", "content": "задача"},
+                                          {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}]},
+                                          {"role": "user", "content": last_content}]}
+        if output_config:
+            doc["output_config"] = {"effort": "low"}
+        return doc
+
+    def test_решение_по_последнему_сообщению(self):
+        self.assertEqual(proxy.thinking_decision({"messages": [{"role": "user", "content": "привет"}]}), "think")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])), "fast")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "boom", "is_error": True},
+                                                            {"type": "tool_result", "tool_use_id": "t2", "content": "ok"}])), "think")
+        self.assertEqual(proxy.thinking_decision(self._doc([{"type": "text", "text": "а теперь другое"}])), "think")
+        self.assertEqual(proxy.thinking_decision({"messages": []}), "think")
+        # служебные system-сообщения CLI в хвосте не считаются ходом
+        d = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+        d["messages"].append({"role": "system", "content": "<total_tokens>1000 tokens left</total_tokens>"})
+        d["messages"].append({"role": "system", "content": [{"type": "text", "text": "# Environment\n…"}]})
+        self.assertEqual(proxy.thinking_decision(d), "fast")
+        d["messages"][-3]["content"][0]["is_error"] = True
+        self.assertEqual(proxy.thinking_decision(d), "think")
+        self.assertEqual(proxy.thinking_decision({"messages": [{"role": "assistant", "content": "x"}]}), "think")
+
+    def test_v2_быстро_только_после_инструментов_чтения(self):
+        d = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+        self.assertEqual(proxy.thinking_decision(d), "fast")  # t1 — Read
+        d["messages"][1]["content"][0]["name"] = "Write"
+        self.assertEqual(proxy.thinking_decision(d), "think")
+        d["messages"][1]["content"] = [{"type": "tool_use", "id": "t1", "name": "Grep", "input": {}},
+                                       {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}]
+        d["messages"][2]["content"] = [{"type": "tool_result", "tool_use_id": "t1", "content": "a"},
+                                       {"type": "tool_result", "tool_use_id": "t2", "content": "b"}]
+        self.assertEqual(proxy.thinking_decision(d), "think")  # смешанный пакет — думать
+        d["messages"][2]["content"] = [{"type": "tool_result", "tool_use_id": "t9", "content": "a"}]
+        self.assertEqual(proxy.thinking_decision(d), "think")  # неизвестный id — думать
+
+    def test_hybrid_быстрый_шаг_режет_output_config_и_ставит_presence(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "hybrid"), \
+             unittest.mock.patch.object(proxy, "SAMPLING_FAST", {"presence_penalty": 1.5}):
+            doc = self._doc([{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, "fast"))
+            self.assertNotIn("output_config", doc)
+            self.assertEqual(doc["presence_penalty"], 1.5)
+            self.assertNotIn("thinking_token_budget", doc)
+
+    def test_hybrid_шаг_планирования_оставляет_размышления_с_бюджетом(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "hybrid"), \
+             unittest.mock.patch.object(proxy, "THINKING_BUDGET", 1024), \
+             unittest.mock.patch.object(proxy, "SAMPLING_FAST", {"presence_penalty": 1.5}):
+            doc = self._doc([{"type": "text", "text": "вопрос"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, "think"))
+            self.assertEqual(doc["output_config"], {"effort": "low"})
+            self.assertEqual(doc["thinking_token_budget"], 1024)
+            self.assertNotIn("presence_penalty", doc)
+
+    def test_прежние_режимы_не_изменились(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "off"), unittest.mock.patch.object(proxy, "SAMPLING_FAST", {}):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, None)); self.assertNotIn("output_config", doc)
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "budget"), unittest.mock.patch.object(proxy, "THINKING_BUDGET", 1024):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (True, None)); self.assertEqual(doc["thinking_token_budget"], 1024); self.assertIn("output_config", doc)
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "on"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            self.assertEqual(proxy.apply_thinking_mode(doc), (False, None)); self.assertIn("output_config", doc)
+
+    def test_подмена_усилия_только_при_размышлениях(self):
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "budget"), unittest.mock.patch.object(proxy, "EFFORT_OVERRIDE", "medium"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            proxy.apply_thinking_mode(doc)
+            self.assertEqual(doc["output_config"]["effort"], "medium")
+        with unittest.mock.patch.object(proxy, "THINKING_MODE", "off"), unittest.mock.patch.object(proxy, "EFFORT_OVERRIDE", "medium"):
+            doc = self._doc([{"type": "text", "text": "x"}])
+            proxy.apply_thinking_mode(doc)
+            self.assertNotIn("output_config", doc)
+
+    def test_снимок_префикса_только_первый_ход_и_обрезка_трейлера(self):
+        doc = {"model": "m", "tools": [{"name": "Read"}],
+               "system": [{"type": "text", "text": "карта\n"}, {"type": "text", "text": "правила\nCCS-Session: abc\nCCS-Task: t1\nхвост"}],
+               "messages": [{"role": "user", "content": "задача"}]}
+        body = proxy.prefix_snapshot_body(doc)
+        self.assertEqual([b["text"] for b in body["system"]], ["карта\n", "правила\n"])
+        self.assertEqual(body["tools"], [{"name": "Read"}])
+        doc2 = dict(doc, messages=doc["messages"] + [{"role": "assistant", "content": "ок"}, {"role": "user", "content": "ещё"}])
+        self.assertIsNone(proxy.prefix_snapshot_body(doc2))
+        doc4 = dict(doc, messages=doc["messages"] + [{"role": "system", "content": "<total_tokens>1 tokens left</total_tokens>"}])
+        self.assertIsNotNone(proxy.prefix_snapshot_body(doc4))  # хвостовое system-сообщение CLI — не ход
+        doc3 = dict(doc, system="строка без трейлера")
+        self.assertEqual(proxy.prefix_snapshot_body(doc3)["system"], [{"type": "text", "text": "строка без трейлера"}])
+        self.assertEqual(proxy.prefix_signature(body), proxy.prefix_signature(proxy.prefix_snapshot_body(dict(doc, messages=[{"role": "user", "content": "другая задача"}]))))
+
+    def test_снимок_префикса_пишется_в_каталог(self):
+        with tempfile.TemporaryDirectory() as d, unittest.mock.patch.object(proxy, "PREFIX_SNAPSHOT_DIR", d), \
+             unittest.mock.patch.object(proxy, "_prefix_snapshot_written", {}):
+            doc = {"model": "m", "tools": [{"name": "Read"}], "system": "карта", "messages": [{"role": "user", "content": "задача"}]}
+            self.assertTrue(proxy.save_prefix_snapshot(doc))
+            files = os.listdir(d); self.assertEqual(len(files), 1)
+            saved = json.load(open(os.path.join(d, files[0]), encoding="utf-8"))
+            self.assertEqual(saved["system"], [{"type": "text", "text": "карта"}]); self.assertNotIn("messages", saved)
+            self.assertFalse(proxy.save_prefix_snapshot(doc))  # повтор той же подписи раньше интервала — не пишем
+
+    def test_разбор_kv(self):
+        self.assertEqual(proxy._parse_kv("temperature=0.7,top_k=20,presence_penalty=1.5"), {"temperature": 0.7, "top_k": 20, "presence_penalty": 1.5})
+        self.assertEqual(proxy._parse_kv(""), {})
 
 
 class PruneTests(unittest.TestCase):
@@ -470,17 +596,25 @@ class МеркаTests(unittest.TestCase):
         self.assertAlmostEqual(выгода, 80_000, delta=80_000 * 0.02)
 
     def test_гейт_оставляет_запас_до_автосжатия_CLI(self):
-        """Неравенство, которым выбран гейт: пока прунинг молчит, usage не доедет до 232k.
+        """Неравенство, которым выбран гейт: пока прунинг молчит, usage не доедет до порога
+        автосжатия CLI — порога, а не базы окна 232k: на этом гейт 190k и промахнулся 15.10
+        (лимит вывода 20000 опустил порог до 199k, за 1116 запросов ни одной обрезки).
 
-        Слагаемых три: сам гейт, недосчёт огрубления системной части (оно занижает оценку, то
-        есть включает прунинг ПОЗЖЕ) и один большой `Read` (25k), который придёт следующим
-        ходом. Поднимешь гейт или огрубление, не пересчитав второе, — тест покраснеет.
+        Гейт растягивают два недосчёта — средней оценки (до 5.3 %, «Мерка контекста») и
+        огрубления системной части, оба включают прунинг ПОЗЖЕ, — а сверху ложится один большой
+        `Read` (25k), который придёт следующим ходом. Сменишь лимит вывода, окно или огрубление,
+        не пересчитав гейт, — тест покраснеет.
         """
-        недосчёт = proxy.SYSTEM_ROUNDING_CHARS / proxy.CHARS_PER_TOKEN_SYSTEM
+        база, лимит_вывода, запас_CLI = 232_000, 20_000, 13_000
+        порог = база - min(лимит_вывода, 20_000) - запас_CLI
+        недосчёт_оценки = 1.05
+        недосчёт_огрубления = proxy.SYSTEM_ROUNDING_CHARS / proxy.CHARS_PER_TOKEN_SYSTEM
         большой_read = 25_000
-        self.assertLess(proxy.PRUNE_MIN_CONTEXT_TOKENS + недосчёт + большой_read, 232_000)
+        self.assertLess(
+            proxy.PRUNE_MIN_CONTEXT_TOKENS * недосчёт_оценки + недосчёт_огрубления + большой_read,
+            порог)
         # …и гейт всё же не занижен до бессмыслицы: чат на 133k живёт без сжатия, резать там нечего
-        self.assertGreater(proxy.PRUNE_MIN_CONTEXT_TOKENS, 150_000)
+        self.assertGreater(proxy.PRUNE_MIN_CONTEXT_TOKENS, 133_000)
 
     def test_порог_распознавания_сжатия_не_привязан_к_гейту(self):
         """Гейт прунинга двигали трижды; утащив за собой порог распознавания сжатия, он молча
@@ -561,6 +695,39 @@ class КомпактРаспознаваниеTests(unittest.TestCase):
         большое = self.большая_история()
         большое.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
         self.assertEqual(proxy.compact_verdict(self.тело(большое))[0], "route")
+
+
+class _CI:
+    """Case-insensitive header dict: имитирует email.message.Message.get (реальные self.headers)."""
+
+    def __init__(self, d):
+        self._d = {k.lower(): v for k, v in d.items()}
+
+    def get(self, k):
+        return self._d.get(k.lower())
+
+
+class КомпактМаркерTests(unittest.TestCase):
+    """Заголовок-маркер сжатия — ГЛАВНЫЙ признак маршрута в облако (шлюз или сырой CLI)."""
+
+    def test_маркер_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "auto"})), "auto")
+
+    def test_сырой_cli_маркер_мимо_шлюза(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-claude-code-compaction": "manual"})), "manual")
+
+    def test_маркер_шлюза_имеет_приоритет(self):
+        h = _CI({"x-ccs-compaction": "auto", "x-claude-code-compaction": "reactive"})
+        self.assertEqual(proxy.compact_header_kind(h), "auto")
+
+    def test_мусорное_значение_не_маркер(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({"x-ccs-compaction": "banana"})))
+
+    def test_без_заголовка_маркера_нет(self):
+        self.assertIsNone(proxy.compact_header_kind(_CI({})))
+
+    def test_регистр_и_пробелы_нормализуются(self):
+        self.assertEqual(proxy.compact_header_kind(_CI({"x-ccs-compaction": "  AUTO "})), "auto")
 
 
 class КомпактТелоTests(unittest.TestCase):
@@ -805,6 +972,146 @@ class UsageИзОтветаTests(unittest.TestCase):
                 self.assertEqual(proxy.usage_totals(self.копилка(кусок)), (None, None))
 
 
+class НормализацияUsageTests(unittest.TestCase):
+    """`usage` локального ответа: итог, который CLI собирает из `message_start` и `message_delta`.
+
+    Формы СНЯТЫ ЖИВЬЁМ с vLLM (2026-10-18, README «Нормализация usage»): `message_start` несёт
+    `input_tokens` = ВЕСЬ промпт, `message_delta` — `input` мимо кэша + `cache_read` +
+    `cache_creation` (сумма = промпт). CLI берёт `input` дельты, только если он > 0 (иначе
+    остаётся старт) — поэтому модель CLI в тестах такая же (`_итог_cli`).
+    """
+
+    def setUp(self):
+        proxy.stats["usage_normalized"] = 0
+
+    # Снятые формы: (старт.input, дельта) — промпт во всех случаях равен сумме слагаемых дельты.
+    ПРОМАХ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                      "cache_creation_input_tokens": 20608, "cache_read_input_tokens": 0})
+    ПОПАДАНИЕ = (21440, {"input_tokens": 832, "output_tokens": 2,
+                         "cache_creation_input_tokens": 0, "cache_read_input_tokens": 20608})
+    ЧАСТИЧНО = (21749, {"input_tokens": 693, "output_tokens": 2,
+                        "cache_creation_input_tokens": 448, "cache_read_input_tokens": 20608})
+    # Сбой 15:06:20: дельта с input 0 — старт остаётся в итоге CLI целиком
+    ПОЛНОЕ_ПОПАДАНИЕ = (129024, {"input_tokens": 0, "output_tokens": 40,
+                                 "cache_creation_input_tokens": 896,
+                                 "cache_read_input_tokens": 128128})
+
+    @staticmethod
+    def _итог_cli(события):
+        """Итог usage по модели CLI: старт задаёт `input`, дельта переписывает его, если > 0."""
+        итог = {}
+        for e in события:
+            if e.get("type") == "message_start":
+                итог.update(e["message"]["usage"])
+            elif e.get("type") == "message_delta":
+                for k, v in e["usage"].items():
+                    if k != "input_tokens" or v > 0:
+                        итог[k] = v
+        return (итог.get("input_tokens", 0) + итог.get("cache_read_input_tokens", 0)
+                + итог.get("cache_creation_input_tokens", 0))
+
+    def _прогнать(self, старт, дельта):
+        """Поток старт+дельта+стоп через нормализатор; вернуть события, как их увидит CLI."""
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=True)
+        n.усвоить(self._sse({"input_tokens": старт, "output_tokens": 0}, "message_start"))
+        n.усвоить(self._sse(дельта))
+        n.усвоить(b"event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n")
+        n.дослать()
+        события = []
+        for кусок in собрано:
+            for строка in кусок.split(b"\n"):
+                if строка.startswith(b"data:"):
+                    события.append(json.loads(строка[5:]))
+        return события
+
+    def _sse(self, usage, тип="message_delta"):
+        if тип == "message_start":
+            data = {"type": "message_start", "message": {"usage": usage}}
+        else:
+            data = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": usage}
+        return ("event: " + тип + "\ndata: " + json.dumps(data) + "\n\n").encode()
+
+    def test_все_снятые_формы_дают_промпт_один_раз(self):
+        """Итог CLI = реальный промпт на промахе, попадании, частичном попадании и input 0."""
+        for имя, (старт, дельта) in [("промах", self.ПРОМАХ), ("попадание", self.ПОПАДАНИЕ),
+                                     ("частично", self.ЧАСТИЧНО),
+                                     ("input 0", self.ПОЛНОЕ_ПОПАДАНИЕ)]:
+            with self.subTest(имя):
+                события = self._прогнать(старт, дельта)
+                self.assertEqual(self._итог_cli(события), старт,
+                                 "итог CLI должен совпасть с реальным промптом")
+
+    def test_без_нормализатора_формы_удваиваются(self):
+        """Контроль модели CLI: сырые события (как до правки) дают удвоение на промахе и input 0."""
+        for старт, дельта in (self.ПОЛНОЕ_ПОПАДАНИЕ,):
+            события = [{"type": "message_start", "message": {"usage": {"input_tokens": старт}}},
+                       {"type": "message_delta", "usage": дельта}]
+            self.assertEqual(self._итог_cli(события), старт + 128128 + 896)
+
+    def test_старт_обнуляется_дельта_не_ломается(self):
+        события = self._прогнать(*self.ПРОМАХ)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], self.ПРОМАХ[1], "правильная дельта не трогается")
+        self.assertEqual(события[2]["type"], "message_stop")
+
+    def test_полная_форма_в_дельте_страхуется(self):
+        """Страховка: дельта, где input = весь промпт при ненулевом кэше, переписывается."""
+        полная = {"input_tokens": 21440, "cache_read_input_tokens": 20608,
+                  "cache_creation_input_tokens": 0, "output_tokens": 2}
+        события = self._прогнать(21440, полная)
+        self.assertEqual(события[1]["usage"]["input_tokens"], 832)
+        self.assertEqual(self._итог_cli(события), 21440)
+
+    def test_normalize_usage_без_промпта_старта_не_трогает(self):
+        u = {"input_tokens": 500, "cache_read_input_tokens": 100, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_без_кэша_не_трогает(self):
+        u = {"input_tokens": 500, "output_tokens": 4}
+        n, changed = proxy.normalize_usage(u, 500)
+        self.assertFalse(changed)
+        self.assertIs(n, u)
+
+    def test_normalize_usage_не_мутирует_вход(self):
+        u = {"input_tokens": 250, "cache_read_input_tokens": 200,
+             "cache_creation_input_tokens": 50}
+        n, changed = proxy.normalize_usage(u, 250)
+        self.assertTrue(changed)
+        self.assertEqual(n["input_tokens"], 0)
+        self.assertEqual(u["input_tokens"], 250)
+
+    def test_json_без_потока_проходит_как_есть(self):
+        """Не-SSE (снято живьём: одна верная форма `usage`) — тело байт в байт."""
+        тело = json.dumps({"type": "message", "usage": {
+            "input_tokens": 851, "output_tokens": 2, "cache_creation_input_tokens": 38976,
+            "cache_read_input_tokens": 0}}).encode()
+        собрано = []
+        n = proxy.НормализаторUsage(lambda c: собрано.append(c), sse=False)
+        n.усвоить(тело)
+        n.дослать()
+        self.assertEqual(b"".join(собрано), тело)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_облачный_ответ_minimax_не_ломается_нормализатором(self):
+        """Снятая форма MiniMax: старт input 0, дельта — слагаемые. Старт не растёт, дельта цела."""
+        дельта = {"input_tokens": 63043, "output_tokens": 3, "cache_read_input_tokens": 128}
+        события = self._прогнать(0, дельта)
+        self.assertEqual(события[0]["message"]["usage"]["input_tokens"], 0)
+        self.assertEqual(события[1]["usage"], дельта)
+        self.assertEqual(self._итог_cli(события), 63171)
+        self.assertEqual(proxy.stats["usage_normalized"], 0)
+
+    def test_мутация_обнуление_старта_красит(self):
+        """Сломать обнуление старта — итог CLI на промахе и при input 0 снова удвоен."""
+        with unittest.mock.patch.object(proxy.НормализаторUsage, "_событие",
+                                        lambda self, сырое: self.отдать(сырое)):
+            события = self._прогнать(*self.ПОЛНОЕ_ПОПАДАНИЕ)
+        self.assertNotEqual(self._итог_cli(события), self.ПОЛНОЕ_ПОПАДАНИЕ[0])
+
+
 class ОтправкаСобытияTests(unittest.TestCase):
     """Канал до бэкенда: выключен без адреса и без секрета, fail-open при любом отказе."""
 
@@ -934,7 +1241,8 @@ class КомпактСквознойTests(unittest.TestCase):
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
         proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
         proxy._compact_key = "sk-test"
-        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0)
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                            compact_routed_header=0, compact_cloud_retry=0)
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
@@ -945,12 +1253,14 @@ class КомпактСквознойTests(unittest.TestCase):
             с.shutdown()
             с.server_close()
 
-    def спросить(self, msgs):
+    def спросить(self, msgs, заголовки=None):
         тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
                            "messages": msgs}).encode()
+        h = {"Content-Type": "application/json", "Content-Length": str(len(тело))}
+        if заголовки:
+            h.update(заголовки)
         c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
-        c.request("POST", "/v1/messages", body=тело,
-                  headers={"Content-Type": "application/json", "Content-Length": str(len(тело))})
+        c.request("POST", "/v1/messages", body=тело, headers=h)
         ответ = c.getresponse().read()
         c.close()
         return ответ
@@ -1033,6 +1343,121 @@ class КомпактСквознойTests(unittest.TestCase):
         self.assertEqual((proxy.stats["compact_routed"], proxy.stats["compact_fallback"]), (0, 0))
 
 
+class МаршрутПоЗаголовкуTests(unittest.TestCase):
+    """Маршрут автосжатия по заголовку-маркеру (2026-10-18): главный признак — x-ccs-compaction
+    (шлюз) или x-claude-code-compaction (ход мимо шлюза) — тело любого размера в облако, без
+    порога; сигнатура + порог — запасной путь, когда заголовка нет. Ретрай облака при отказе."""
+
+    def setUp(self):
+        class Облако(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+
+        class Локальный(Заглушка):
+            метка = "локальный".encode()
+            принятые = []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+                          proxy._compact_key, proxy.COMPACT_PRESERVE, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_PRESERVE = "off"
+        proxy.stats.update(compact_routed=0, compact_fallback=0, compact_signature_small=0,
+                           compact_routed_header=0, compact_cloud_retry=0)
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM,
+         proxy._compact_key, proxy.COMPACT_PRESERVE, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, msgs, заголовки=None):
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192,
+                           "messages": msgs}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело,
+                  headers=dict({"Content-Type": "application/json",
+                                "Content-Length": str(len(тело))}, **(заголовки or {})))
+        ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def малое_сжатие(self):
+        """Сигнатура сжатия в маленьком теле: ниже порога, поэтому по сигнатуре — локаль."""
+        return [{"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."}]
+
+    def test_заголовок_малое_тело_идёт_в_облако(self):
+        """Главный признак: маркер шлёт в облако тело любого размера, без проверки порога."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_routed"],
+                           proxy.stats["compact_fallback"], proxy.stats["compact_signature_small"]),
+                         (1, 0, 0, 0), "маркер → облако (свой счётчик), порог не смотрим, сигнатура-малое не растёт")
+
+    def test_сырой_заголовок_мимо_шлюза_тоже_в_облако(self):
+        """Ход мимо шлюза несёт сырой x-claude-code-compaction — он тоже главный признак."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-claude-code-compaction": "manual"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(proxy.stats["compact_routed_header"], 1)
+
+    def test_без_заголовка_сигнатура_малое_тело_в_локаль(self):
+        """Запасной путь: без маркера маленькое тело с сигнатурой — локаль, как раньше."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие())
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [], "без маркера в облако не ходит")
+        self.assertEqual((proxy.stats["compact_signature_small"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"]), (1, 0, 0))
+
+    def test_маркер_с_мусором_игнорируется(self):
+        """Значение вне словаря — мусор: маршрут по нему не едет, запрос честно на локаль."""
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "banana"})
+        self.assertIn("локальный".encode(), ответ)
+        self.assertEqual(self.Облако.принятые, [])
+        self.assertEqual((proxy.stats["compact_routed_header"], proxy.stats["compact_signature_small"]),
+                         (0, 1), "мусорный маркер → запасной путь по сигнатуре")
+
+    def test_повтор_облака_при_первом_отказе(self):
+        """Первая попытка облака упала, ответ клиенту ещё не начат — повтор один раз, спасает ход."""
+        class ОблакоСРетраем(Заглушка):
+            метка = "облако".encode()
+            принятые = []
+            вызовы = 0
+
+            def do_POST(self):
+                type(self).вызовы += 1
+                if type(self).вызовы == 1:
+                    n = int(self.headers.get("Content-Length") or 0)
+                    self.rfile.read(n)
+                    self.send_response(500)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                super().do_POST()
+
+        облако = поднять(ОблакоСРетраем)
+        self.addCleanup(lambda: (облако.shutdown(), облако.server_close()))
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{облако.server_address[1]}"
+        with contextlib.redirect_stderr(io.StringIO()):
+            ответ = self.спросить(self.малое_сжатие(), {"x-ccs-compaction": "auto"})
+        self.assertIn("облако".encode(), ответ)
+        self.assertEqual(ОблакоСРетраем.вызовы, 2, "первый отказ + один повтор")
+        self.assertEqual((proxy.stats["compact_cloud_retry"], proxy.stats["compact_routed_header"],
+                           proxy.stats["compact_routed"], proxy.stats["compact_fallback"]),
+                         (1, 1, 0, 0), "повтор спас: header-routed, не fallback")
+
+
 class МодельЗаглушка(Заглушка):
     """vLLM-заглушка: отвечает SSE с `message_start`, помедлив — иначе prefill нечем мерить.
 
@@ -1107,7 +1532,10 @@ class СобытиеСквозноеTests(unittest.TestCase):
         self.прокси = поднять(proxy.Handler)
         self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
                           proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats),
-                          dict(proxy._boundaries))
+                          dict(proxy._boundaries), proxy.PRUNE_MIN_CONTEXT_TOKENS)
+        # Полосы history(120/150/160/200) подобраны под гейт 190k: тест про карточки, а не про
+        # гейт, поэтому смена дефолта гейта не должна двигать его геометрию.
+        proxy.PRUNE_MIN_CONTEXT_TOKENS = 190_000
         proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
         proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM = "on", ""
         proxy.BACKEND_EVENTS_URL = (f"http://127.0.0.1:{self.бэкенд.server_address[1]}"
@@ -1118,7 +1546,8 @@ class СобытиеСквозноеTests(unittest.TestCase):
 
     def tearDown(self):
         (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
-         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат, границы) = self.сохранено
+         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат, границы,
+         proxy.PRUNE_MIN_CONTEXT_TOKENS) = self.сохранено
         proxy.stats.clear()
         proxy.stats.update(стат)
         proxy._boundaries.clear()
@@ -1617,6 +2046,1843 @@ class DiffMissОтчётTests(unittest.TestCase):
         _, текст = self.отчёт(показать_все=True)
         self.assertIn("из кэша", текст)
         self.assertIn("99%", текст)
+
+
+# --- Предохранитель от петли ---------------------------------------------------------------
+
+# План из петли 15.10.2026 (чат спайка «хуки Claude Mods»): 50 слов, повторялся дословно.
+ПЛАН = ("The web search is the highest-value action here. Let me do it. Actually, let me "
+        "reconsider the approach and check the hooks documentation first. The hooks API changed "
+        "in the latest release, so I should verify the event names. Then I will write the spike "
+        "summary and commit the notes. ")
+ВСТУПЛЕНИЕ = ("I looked at the repository layout and the settings file to see how the mods are "
+              "wired into the harness today, and what the spike still has to answer. ")
+
+
+def по_кусочкам(текст, шаг=7):
+    """Режет текст как поток дельт: куски по `шаг` символов, слова рвутся где попало."""
+    return [текст[i:i + шаг] for i in range(0, len(текст), шаг)]
+
+
+def прогнать(текст, детектор=None, шаг=7):
+    """Сколько слов детектор успел увидеть до срабатывания; None — не сработал."""
+    д = детектор or proxy.ДетекторПетли()
+    for кусок in по_кусочкам(текст, шаг):
+        if д.усвоить(кусок):
+            return д.всего
+    д.новый_блок()
+    return None if д.петля is None else д.всего
+
+
+class ДетекторПетлиTests(unittest.TestCase):
+    def test_петля_плана_ловится_быстро_после_начала_повтора(self):
+        слов = прогнать(ВСТУПЛЕНИЕ + ПЛАН * 12)
+        self.assertIsNotNone(слов)
+        начало_повтора = len(ВСТУПЛЕНИЕ.split()) + len(ПЛАН.split())
+        self.assertLessEqual(слов - начало_повтора, 400, "перехват обязан уложиться в окно")
+        self.assertLess(слов, len((ВСТУПЛЕНИЕ + ПЛАН * 12).split()))
+
+    def test_петля_из_инцидента_с_перефразом(self):
+        """Текст сбоя 15.10 (чат 1428f5e9): повторы не дословны — «Actually, let me
+        reconsider» / «Let me also reconsider», «the changelog file» / «the changelog»."""
+        виток = ("The web search is the highest-value action here. Let me do it.\n"
+                 "{a}, let me reconsider whether to use web{b} at all. The task says the hooks "
+                 "came \"Из CLI 2.1.287\". The changelog file in the repo is the source. But it "
+                 "doesn't contain {c}2.1.287 section with mod hooks. Maybe the changelog{d} is a "
+                 "rolling window. Let me check the top of the changelog to see what version range "
+                 "it covers.\n\nLet me be efficient and do a batch:\n1. Read top of changelog "
+                 "(what version range)\n2. Check \"Из чатов\" folder\n3. Web search for {e}format "
+                 "(web)\n4. claude --help for plugin subcommands\n{f}\n")
+        варианты = [dict(a="Actually", b=" search", c="", d=" file", e="the ",
+                         f="Let me do the web search since it's most likely to give the concrete "
+                           "format, plus local checks."),
+                    dict(a="Let me also", b="", c="the ", d="", e="mod hook ", f="Let me batch."),
+                    dict(a="Actually", b="", c="the ", d="", e="mod hook ", f="Let me batch.")]
+        начало = ("- Let me also reconsider: maybe I should look at whether the CLI has a `claude "
+                  "plugin` subcommand that documents hooks, e.g. `claude plugin validate` or a "
+                  "schema. Let me check `claude --help` and any mod-related subcommands.\n")
+        текст = начало + "".join(виток.format(**варианты[i % 3]) for i in range(12))
+        слов = прогнать(текст)
+        self.assertIsNotNone(слов)
+        self.assertLessEqual(слов - len((начало + виток.format(**варианты[0])).split()), 400)
+
+    def test_короткая_петля_тоже_петля(self):
+        self.assertIsNotNone(прогнать(ВСТУПЛЕНИЕ * 3 + "I will check the config and then run the tests now. " * 40))
+
+    def test_два_повтора_это_ещё_не_петля(self):
+        """Модель вправе пересказать план дважды (вывод → итог); петля — от третьего раза."""
+        self.assertIsNone(прогнать(ВСТУПЛЕНИЕ * 3 + ПЛАН * 2 + "Done, the summary is committed."))
+
+    def test_повтор_в_начале_ответа_не_раньше_минимальной_длины(self):
+        д = proxy.ДетекторПетли(min_words=10_000)
+        self.assertIsNone(прогнать(ПЛАН * 8, д))
+
+    def test_цепочка_чтений_с_разными_файлами_не_петля(self):
+        текст = " ".join(f"Let me read the file src/m{i}.py to understand how it works."
+                         for i in range(80))
+        self.assertIsNone(прогнать(текст))
+
+    def test_нумерованный_список_однотипных_пунктов_не_петля(self):
+        текст = "\n".join(f"{i}. Добавить тест для модуля Module{i} в файл test_module{i}.py и "
+                          f"прогнать его локально перед коммитом в ветку feature/m{i}"
+                          for i in range(1, 60))
+        self.assertIsNone(прогнать(текст))
+
+    def test_таблица_с_одинаковыми_ячейками_не_петля(self):
+        шапка = "| Шаг | Статус | Сборка | Тесты | Линт | Ревью |\n|---|---|---|---|---|---|\n"
+        строки = "".join(f"| {i} | готово | да | да | да | да |\n" for i in range(1, 80))
+        таблица_одинаковых = "| готово | готово | готово | готово | готово |\n" * 80
+        self.assertIsNone(прогнать(шапка + строки))
+        self.assertIsNone(прогнать(таблица_одинаковых))
+
+    def test_код_в_заборе_не_считается(self):
+        код = ("Вот тест:\n```python\n" + "        self.assertEqual(proxy.stats['loops_detected'], "
+               "proxy.stats['loops_retried'] + 0)  # проверяем счётчик петли и повтора\n" * 60
+               + "```\nГотово.")
+        self.assertIsNone(прогнать(код))
+        # Забор, разорванный между дельтами, всё равно распознаётся
+        self.assertIsNone(прогнать(код, шаг=2))
+
+    def test_код_вне_забора_с_повтором_это_петля(self):
+        """Обратная сторона: та же строка ВНЕ забора — дословный повтор, предохранитель обязан."""
+        строка = ("self.assertEqual(proxy.stats loops detected, proxy.stats loops retried) "
+                  "проверяем счётчик петли и повтора в одном месте\n")
+        self.assertIsNotNone(прогнать(ВСТУПЛЕНИЕ * 2 + строка * 40))
+
+    def test_живой_документ_без_срабатываний(self):
+        """Длинная живая проза с кодом, списками и таблицами: README прокси целиком."""
+        with open(os.path.join(os.path.dirname(__file__), "README.md"), encoding="utf-8") as f:
+            self.assertIsNone(прогнать(f.read()))
+
+    def test_слова_без_букв_и_разметка_не_слова(self):
+        д = proxy.ДетекторПетли()
+        д.усвоить("| --- | ✅ | - * ## |\n")
+        self.assertEqual(д.всего, 0)
+
+
+def sse(тип, данные):
+    return f"event: {тип}\ndata: {json.dumps(данные, ensure_ascii=False)}\n\n".encode()
+
+
+def поток_ответа(блоки, stop_reason="end_turn", output_tokens=100, шаг=40):
+    """SSE-поток ответа vLLM: блоки — [(вид, текст)], вид thinking | text | tool_use."""
+    out = [sse("message_start", {"type": "message_start", "message": {
+        "id": "chatcmpl-x", "type": "message", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 50, "output_tokens": 0}}})]
+    for i, (вид, текст) in enumerate(блоки):
+        if вид == "tool_use":
+            out.append(sse("content_block_start", {"type": "content_block_start", "index": i,
+                           "content_block": {"type": "tool_use", "id": "t1", "name": "Bash",
+                                             "input": {}}}))
+            for кусок in по_кусочкам(текст, шаг):
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": "input_json_delta", "partial_json": кусок}}))
+        else:
+            out.append(sse("content_block_start", {"type": "content_block_start", "index": i,
+                           "content_block": {"type": вид, вид: ""}}))
+            поле, дельта = ("thinking", "thinking_delta") if вид == "thinking" else ("text", "text_delta")
+            for кусок in по_кусочкам(текст, шаг):
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": дельта, поле: кусок}}))
+            if вид == "thinking":
+                out.append(sse("content_block_delta", {"type": "content_block_delta", "index": i,
+                               "delta": {"type": "signature_delta", "signature": "abc"}}))
+        out.append(sse("content_block_stop", {"type": "content_block_stop", "index": i}))
+    out.append(sse("message_delta", {"type": "message_delta",
+                   "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                   "usage": {"output_tokens": output_tokens}}))
+    out.append(sse("message_stop", {"type": "message_stop"}))
+    return b"".join(out)
+
+
+def события(сырое):
+    """Разбор SSE-потока клиента в список (тип, данные)."""
+    итог = []
+    for событие in сырое.decode().split("\n\n"):
+        if not событие.strip():
+            continue
+        тип = данные = None
+        for строка in событие.split("\n"):
+            if строка.startswith("event:"):
+                тип = строка[6:].strip()
+            elif строка.startswith("data:"):
+                данные = json.loads(строка[5:])
+        итог.append((тип, данные))
+    return итог
+
+
+def события_клиента(сырое):
+    """То же, что `события`, но так, как ответ локальной модели видит клиент: прокси обнуляет
+    `input_tokens` в `message_start` (настоящую цифру CLI берёт из дельты; см.
+    НормализаторUsage), остальное — байт в байт."""
+    итог = события(сырое)
+    for тип, данные in итог:
+        if тип == "message_start":
+            usage = данные["message"].get("usage")
+            if isinstance(usage, dict) and usage.get("input_tokens"):
+                usage["input_tokens"] = 0
+    return итог
+
+
+def проверить_целостность(тест, список):
+    """Поток, который примет CLI: одно начало, блоки открыты-закрыты по порядку, конец в конце."""
+    типы = [т for т, _ in список]
+    тест.assertEqual(типы.count("message_start"), 1)
+    тест.assertEqual(типы[0], "message_start")
+    тест.assertEqual(типы[-1], "message_stop")
+    тест.assertEqual(типы.count("message_stop"), 1)
+    тест.assertEqual(типы.count("message_delta"), 1)
+    тест.assertEqual(типы[-2], "message_delta")
+    открыт, прежний = None, -1
+    for т, д in список:
+        if т == "content_block_start":
+            тест.assertIsNone(открыт, "блок открыт, не закрыв прежний")
+            тест.assertGreater(д["index"], прежний, "индексы блоков обязаны расти")
+            открыт = прежний = д["index"]
+        elif т == "content_block_delta":
+            тест.assertEqual(д["index"], открыт)
+        elif т == "content_block_stop":
+            тест.assertEqual(д["index"], открыт)
+            открыт = None
+    тест.assertIsNone(открыт)
+
+
+class РелеПотокаTests(unittest.TestCase):
+    def прогнать(self, сырое, шаг=97, **kw):
+        отдано = []
+        реле = proxy.РелеПотока(отдано.append, **kw)
+        петля = False
+        for i in range(0, len(сырое), шаг):
+            if реле.усвоить(сырое[i:i + шаг]):
+                петля = True
+                break
+        if not петля:
+            реле.дослать()
+        return реле, b"".join(отдано)
+
+    def test_без_петли_поток_байт_в_байт(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 3), ("text", "Готово.")])
+        реле, отдано = self.прогнать(сырое)
+        self.assertFalse(реле.петля)
+        self.assertEqual(отдано, сырое)
+
+    def test_json_вызова_инструмента_не_смотрим(self):
+        команда = json.dumps({"command": "echo " + "same same same same same " * 200})
+        сырое = поток_ответа([("text", "Запускаю."), ("tool_use", команда)], stop_reason="tool_use")
+        реле, отдано = self.прогнать(сырое)
+        self.assertFalse(реле.петля)
+        self.assertEqual(отдано, сырое)
+
+    def test_петля_в_размышлениях_обрывает_поток_и_закрывает_блок(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 20), ("text", "Ответ")])
+        реле, отдано = self.прогнать(сырое)
+        self.assertTrue(реле.петля)
+        self.assertEqual(реле.петля_в, "thinking")
+        список = события(отдано)
+        self.assertNotIn("text", [д["content_block"]["type"] for т, д in список
+                                  if т == "content_block_start"], "после петли ничего не отдано")
+        self.assertLess(отдано.decode().count("highest-value"), 4)
+
+    def test_сдвиг_индексов_и_начало_повтора_не_пересылается(self):
+        сырое = поток_ответа([("thinking", "short"), ("text", "Ответ")])
+        _, отдано = self.прогнать(сырое, сдвиг=3, повтор=True)
+        список = события(отдано)
+        self.assertNotIn("message_start", [т for т, _ in список])
+        self.assertEqual(sorted({д["index"] for т, д in список if т.startswith("content_block")}), [3, 4])
+
+    def test_чужой_формат_уходит_насквозь(self):
+        сырое = b"data: not json\n\n" + поток_ответа([("text", ПЛАН * 20)])
+        реле, отдано = self.прогнать(сырое)
+        self.assertTrue(реле.петля, "непонятное событие не выключает детектор на следующих")
+        сырое = b"data: x" * 200_000  # без разделителя: сдаёмся и отдаём как есть
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            реле, отдано = self.прогнать(сырое, шаг=65536)
+        self.assertTrue(реле.сквозной)
+        self.assertEqual(отдано, сырое)
+
+    def test_ошибка_детектора_не_ломает_ход(self):
+        class Сломанный(proxy.ДетекторПетли):
+            def усвоить(self, текст):
+                raise RuntimeError("баг детектора")
+
+        сырое = поток_ответа([("text", ПЛАН * 3)])
+        with contextlib.redirect_stderr(io.StringIO()):
+            реле, отдано = self.прогнать(сырое, детектор=Сломанный())
+        self.assertTrue(реле.сквозной)
+        self.assertEqual(отдано, сырое)
+
+    def test_тело_повтора_сдвигает_сэмплинг(self):
+        тело = json.dumps({"model": "m", "temperature": 0.7, "presence_penalty": 1.0,
+                           "messages": []}).encode()
+        doc = json.loads(proxy.retry_body(тело))
+        self.assertEqual((doc["temperature"], doc["presence_penalty"]), (0.8, 1.5))
+        doc = json.loads(proxy.retry_body(json.dumps({"presence_penalty": 1.8}).encode()))
+        self.assertEqual(doc["presence_penalty"], 2.0, "потолок vLLM")
+        self.assertEqual(doc["temperature"], 1.1, "без поля — от дефолта vLLM")
+        self.assertIsNone(proxy.retry_body(b"not json"))
+
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        тело = json.dumps({"model": "m", "messages": []}).encode()
+        self.assertNotIn("cache_salt", json.loads(тело), "исходное тело — как есть")
+        # Повтор: retry_body сдвигает сэмплинг, salted_body кладёт соль карантина.
+        # uuid4 на каждый повтор убран (сирота KV) — соль теперь из карантина сессии.
+        doc = json.loads(proxy.salted_body(proxy.retry_body(тело), "q-sess-1"))
+        self.assertEqual(doc["cache_salt"], "q-sess-1", "повтор несёт соль карантина")
+        # retry_body сам соль не добавляет: без salted_body cache_salt отсутствует.
+        self.assertNotIn("cache_salt", json.loads(proxy.retry_body(тело)))
+        # Тело не JSON — повтор не строится, соль не добавляется.
+        self.assertIsNone(proxy.retry_body(b"not json"))
+        self.assertIsNone(proxy.salted_body(b"not json", "q-sess-1"))
+
+
+class ОбрывКлиентаTests(unittest.TestCase):
+    """Обрыв клиента (BrokenPipe/ConnectionReset) не должен инкрементировать loop_guard_errors."""
+
+    def setUp(self):
+        self.сохранено = proxy.stats.get("loop_guard_errors", 0)
+        proxy.stats["loop_guard_errors"] = 0
+
+    def tearDown(self):
+        proxy.stats["loop_guard_errors"] = self.сохранено
+
+    def _прогнать_с_обрывом(self, ошибка, после_n=0):
+        """Прогоняет поток через РелеПотока, где отдать бросает `ошибка` после `после_n` вызовов."""
+        вызовы = [0]
+
+        def отдать(сырое):
+            вызовы[0] += 1
+            if вызовы[0] > после_n:
+                raise ошибка("клиент ушёл")
+
+        реле = proxy.РелеПотока(отдать)
+        сырое = поток_ответа([("text", "Привет")])
+        for i in range(0, len(сырое), 97):
+            try:
+                if реле.усвоить(сырое[i:i + 97]):
+                    break
+            except (BrokenPipeError, ConnectionResetError):
+                break
+        return реле
+
+    def test_connection_reset_на_первом_байте_не_считается(self):
+        """Upstream-поток: ConnectionResetError на первом байте — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(ConnectionResetError, после_n=0)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "ConnectionResetError на первом байте не должна инкрементировать loop_guard_errors")
+
+    def test_broken_pipe_после_первого_байта_не_считается(self):
+        """Клиент рвёт после отдачи первого события — loop_guard_errors не дёргается."""
+        реле = self._прогнать_с_обрывом(BrokenPipeError, после_n=1)
+        self.assertEqual(proxy.stats["loop_guard_errors"], 0,
+                         "BrokenPipeError после первого байта не должна инкрементировать loop_guard_errors")
+
+
+class ПетляЗаглушка(BaseHTTPRequestHandler):
+    """vLLM-заглушка: отдаёт по очереди заготовленные потоки (петля, нормальный ответ...)."""
+    протокол_версия = "HTTP/1.1"
+    ответы = []
+    принятые = []
+    оборваны = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).принятые.append(json.loads(self.rfile.read(n)))
+        номер = len(type(self).принятые)
+        поток = type(self).ответы.pop(0)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        try:
+            for i in range(0, len(поток), 4096):
+                self.wfile.write(поток[i:i + 4096])
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            type(self).оборваны.append(номер)
+        self.close_connection = True
+
+
+class ПетляСквознаяTests(unittest.TestCase):
+    """CLI → прокси → vLLM-заглушка с петлёй → повтор → валидный ответ клиенту и карточка."""
+
+    def setUp(self):
+        class Модель(ПетляЗаглушка):
+            ответы, принятые, оборваны = [], [], []
+
+        class Бэкенд(БэкендЗаглушка):
+            принятые = []
+
+        self.Модель, self.Бэкенд = Модель, Бэкенд
+        self.модель, self.бэкенд = поднять(Модель), поднять(Бэкенд)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+                          proxy.BACKEND_EVENTS_URL, proxy._event_secret, dict(proxy.stats),
+                          proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.SAMPLING)
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.модель.server_address[1]
+        proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM = "off", ""
+        proxy.BACKEND_EVENTS_URL = (f"http://127.0.0.1:{self.бэкенд.server_address[1]}"
+                                    "/api/internal/llm-proxy/events")
+        proxy._event_secret = "secret-from-config"
+        proxy.LOOP_GUARD, proxy.LOOP_RETRY = "on", "on"
+        proxy.SAMPLING = {"temperature": 0.7, "presence_penalty": 1.0}
+        for к in ("loops_detected", "loops_retried", "loops_truncated", "loop_guard_errors"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.PRUNE_MODE, proxy.COMPACT_UPSTREAM,
+         proxy.BACKEND_EVENTS_URL, proxy._event_secret, стат,
+         proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.SAMPLING) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.модель, self.бэкенд, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def спросить(self, сессия="sess-loop", ждать_карточку=True):
+        прежний = proxy._last_event_thread
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True,
+                           "messages": [{"role": "user", "content": "найди хуки"}]}).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("POST", "/v1/messages", body=тело, headers={
+            "Content-Type": "application/json", "Content-Length": str(len(тело)),
+            proxy.EVENT_SESSION_HEADER: сессия})
+        ответ = c.getresponse().read()
+        c.close()
+        срок = time.monotonic() + (5 if ждать_карточку else 0.3)
+        while time.monotonic() < срок and proxy._last_event_thread is прежний:
+            time.sleep(0.005)
+        if proxy._last_event_thread is not прежний and proxy._last_event_thread is not None:
+            proxy._last_event_thread.join(timeout=10)
+        return события(ответ)
+
+    def test_петля_в_тексте_перехвачена_и_повтор_приклеен(self):
+        self.Модель.ответы = [
+            # Петля длиннее буферов сокета: иначе заглушка успела бы дописать её до обрыва
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("thinking", "Search first."), ("text", "Нашёл хуки."),
+                          ("tool_use", '{"command": "ls"}')], stop_reason="tool_use",
+                         output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["tool_use"], "конец ответа — от повтора")
+        виды = [д["content_block"]["type"] for т, д in список if т == "content_block_start"]
+        self.assertEqual(виды, ["thinking", "text", "thinking", "text", "tool_use"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertLess(текст.count("highest-value action"), 4, "петля оборвана рано")
+        self.assertIn("Нашёл хуки.", текст)
+        self.assertEqual(len(self.Модель.принятые), 2)
+        повтор = self.Модель.принятые[1]
+        self.assertEqual((повтор["temperature"], повтор["presence_penalty"]), (0.8, 1.5))
+        self.assertEqual(self.Модель.оборваны, [1], "первая генерация остановлена обрывом")
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (1, 1, 0))
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["kind"], событие["sessionId"], событие["blocks"],
+                          событие["resultBlocks"], событие["thinkingBlocks"]),
+                         ("loop_guard", "sess-loop", 1, 1, 0))
+
+    def test_повтор_несёт_соль_а_исходное_тело_нет(self):
+        # Две последовательные петли той же сессии: повтор идёт с солью карантина,
+        # исходное тело первого запроса — как есть; сессия и дальше ходит со своей солью.
+        было = proxy.CACHE_QUARANTINE
+        proxy.CACHE_QUARANTINE = "on"
+        try:
+            self.Модель.ответы = [
+                поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+                поток_ответа([("text", "Нашёл хуки.")]),
+                поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+                поток_ответа([("text", "Готово.")])]
+            with contextlib.redirect_stderr(io.StringIO()):
+                список = self.спросить()
+                self.спросить()
+            проверить_целостность(self, список)
+            принятые = self.Модель.принятые
+            self.assertEqual(len(принятые), 4, "два запроса, каждый с повтором")
+            # [0] исходное тело первого запроса — без соли; [1] его повтор — с солью S_A.
+            self.assertNotIn("cache_salt", принятые[0], "исходное тело #0 — как есть")
+            соль_a = принятые[1]["cache_salt"]
+            self.assertIsInstance(соль_a, str) and self.assertTrue(соль_a)
+            # [2] второй запрос той же сессии: parse_body подставляет соль S_A из _карантин.
+            self.assertEqual(принятые[2].get("cache_salt"), соль_a,
+                             "сессия и дальше ходит со своей солью")
+            # [3] повтор второго запроса — та же соль S_A: петля в уже засоленной сессии
+            # соль не меняет, _карантин не перезаписан (новый префилл не тратится).
+            соль_b = принятые[3]["cache_salt"]
+            self.assertEqual(соль_b, соль_a, "повтор в засоленной сессии — та же соль")
+            self.assertEqual(proxy._карантин["sess-loop"], соль_a,
+                             "после второй петли _карантин держит прежнюю соль")
+        finally:
+            proxy.CACHE_QUARANTINE = было
+            proxy._карантин.clear()
+
+    def test_петля_в_размышлениях_закрыта_с_подписью(self):
+        self.Модель.ответы = [поток_ответа([("thinking", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", "Ответ.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        подписи = [д for т, д in список if т == "content_block_delta"
+                   and д["delta"]["type"] == "signature_delta" and д["index"] == 0]
+        self.assertEqual(len(подписи), 1, "оборванное размышление закрыто с подписью")
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual(событие["thinkingBlocks"], 1)
+
+    def test_петля_и_в_повторе_ответ_усечён_с_пометкой(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["end_turn"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("модель зациклилась, повтор запроса тоже", текст)
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (2, 1, 1))
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["blocks"], событие["resultBlocks"]), (2, 1))
+
+    def test_без_повтора_усечение_сразу(self):
+        proxy.LOOP_RETRY = "off"
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить()
+        проверить_целостность(self, список)
+        self.assertEqual(len(self.Модель.принятые), 1)
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("модель зациклилась]", текст)
+        self.assertEqual(proxy.stats["loops_truncated"], 1)
+
+    def test_выключатель_отдаёт_поток_как_есть(self):
+        proxy.LOOP_GUARD = "off"
+        сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
+        self.Модель.ответы = [сырое]
+        список = self.спросить(ждать_карточку=False)
+        self.assertEqual(список, события_клиента(сырое))
+        self.assertEqual(proxy.stats["loops_detected"], 0)
+        self.assertEqual(self.Бэкенд.принятые, [])
+
+    def test_обычный_ответ_без_изменений_и_карточки(self):
+        сырое = поток_ответа([("thinking", ВСТУПЛЕНИЕ * 2), ("text", "Сделано.")])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
+        self.assertEqual(len(self.Модель.принятые), 1)
+        self.assertEqual(self.Бэкенд.принятые, [])
+
+    def test_счётчики_видны_в_stats(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", "Ок.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual((отдано["loops_detected"], отдано["loops_retried"]), (1, 1))
+        self.assertTrue(отдано["loop_guard"].startswith("on"))
+
+
+# --- Предохранитель от мусорной генерации -----------------------------------------------------
+
+# Живой мусор из транскриптов 15.10.2026 (vLLM #60174, DFlash2 + prefix cache).
+МУСОР_1 = ("compressа应急arco1ács Vat�业务能力igel)compress国强ogaács Vat_VMelm压adium吐血戎elm真假 Wat可以放心\n"
+           "compressadiumcompress压0戎ona (emmaasha_TA国强�磕火烧粗暴�BUS逆变压wcs_VM大方的._TAelmcompress "
+           "Punch, Punch 应急arco�真假adiumarco压orius Vat� Vat 태磕火烧文化知识ule punching文化知识马蹄elm_VM "
+           "compression\"压\"炊�_TAonarise_TA牛的Tagfit_TAácsadiumитель磕业务能力�adium太过 "
+           "punchingács_TAcompress_TA\n")
+МУСОР_2 = ("戎国强iringluancompress/comcompress压adiumcompress/comång\"compressadiumadiumитель\"compressadium牛 "
+           "Tags: compress逆变ång\"compressadium逆变compressadium真假\"compresscompresscompress compression "
+           "PunchTransferTransferCompress吐血compresscompress\n")
+# Первый инцидент начался с осмысленных слов и деградировал постепенно.
+МУСОР_НАЧАЛО = "Charles enough to understandadium the "
+
+РУССКАЯ_ПРОЗА = (
+    "Я посмотрел, как прокси разбирает поток ответа, и нашёл место, где удобно поставить второй "
+    "предохранитель. Детектор петли уже режет дельты на слова, держит окно и не смотрит в код "
+    "внутри заборов, поэтому новый детектор повторяет ту же нарезку. Порог выбран с запасом: в "
+    "обычном ответе длинных склеек почти не бывает, а в мусоре их больше половины. Дальше прогоню "
+    "тесты, проверю, что README не даёт срабатываний, и опишу пороги рядом с разделом про петли. "
+    "Если что-то пойдёт не так, откат простой — выключатель в mode.conf и рестарт службы.\n")
+АНГЛИЙСКАЯ_ПРОЗА = (
+    "I traced the stream relay and found a natural place for the second guard. The loop detector "
+    "already splits deltas into words, keeps a sliding window and skips fenced code, so the new "
+    "detector reuses the same tokenisation. The threshold is generous: ordinary answers almost "
+    "never contain long glued tokens, while the garbage is more than half of them. Next I will run "
+    "the tests, make sure the README stays clean, and document the thresholds next to the loop "
+    "section. Rollback is a single switch in mode.conf followed by a service restart.\n")
+ПУТИ_И_ХЕШИ = "".join(
+    f"Файл C:\\Users\\naych\\.claude\\plans\\ClaudeCodeServer\\plan-2026-10-{i:02d}-junk-guard.md, "
+    f"копия https://github.com/example/ClaudeCodeServer/blob/master/tools/thinking-strip-proxy/proxy.py#L{i}, "
+    f"sha256 {'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'}, "
+    f"модуль ClaudeCodeServer.Llm, движок vLLM-0.31, под vLLM-ом, ключ API-ключ.\n" for i in range(1, 30))
+BASE64_В_КОДЕ = ("Вот картинка в base64:\n```\n"
+                 + "".join(base64.b64encode(bytes(range(i, i + 120))).decode() + "\n" for i in range(60))
+                 + "```\nГотово, файл сохранён.\n")
+JSON_ВЫЗОВА = ("Вызываю инструмент так:\n"
+               + json.dumps({"name": "Read", "input": {
+                   "file_path": "/home/an/Sources/ClaudeCodeServer/tools/thinking-strip-proxy/proxy.py",
+                   "offset": 1295, "limit": 260}}, ensure_ascii=False) + "\n") * 20
+КИТАЙСКИЙ = ("这是一个用于测试的中文句子，它不应该被认为是垃圾文本，因为每个词只使用一种文字。\n"
+             "模型在长上下文中有时会输出混乱的字符，但正常的中文段落没有空格也是完全正常的。\n") * 40
+
+
+def прогнать_мусор(текст, детектор=None, шаг=7):
+    """Сколько слов детектор мусора успел увидеть до срабатывания; None — не сработал."""
+    д = детектор or proxy.ДетекторМусора()
+    for кусок in по_кусочкам(текст, шаг):
+        if д.усвоить(кусок):
+            return д.всего
+    д.новый_блок()
+    return д.всего if д.сработал else None
+
+
+class ДетекторМусораTests(unittest.TestCase):
+    def test_образцы_инцидента_ловятся_за_окно(self):
+        вступление = ВСТУПЛЕНИЕ * 3
+        до_мусора = len(вступление.split())
+        for мусор in (МУСОР_1, МУСОР_2, МУСОР_НАЧАЛО + МУСОР_1 + МУСОР_2):
+            with self.subTest(мусор=мусор[:30]):
+                слов = прогнать_мусор(вступление + мусор * 40)
+                self.assertIsNotNone(слов)
+                self.assertLessEqual(слов - до_мусора, 80, "перехват обязан уложиться в окно")
+                # Мусор с первого слова — ровно на минимальной длине ответа
+                self.assertEqual(прогнать_мусор(мусор * 40), proxy.JUNK_MIN_WORDS)
+
+    def test_обычный_текст_не_мусор(self):
+        случаи = {"русская проза": РУССКАЯ_ПРОЗА * 8, "английская проза": АНГЛИЙСКАЯ_ПРОЗА * 8,
+                  "пути, URL, хеши, идентификаторы": ПУТИ_И_ХЕШИ, "base64 в коде": BASE64_В_КОДЕ,
+                  "JSON вызова": JSON_ВЫЗОВА, "китайский": КИТАЙСКИЙ,
+                  "петля — не мусор": ВСТУПЛЕНИЕ + ПЛАН * 20}
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertGreaterEqual(len(текст.split()), proxy.JUNK_MIN_WORDS, "проверка вакуумна")
+                self.assertIsNone(прогнать_мусор(текст))
+
+    def test_живой_документ_без_срабатываний(self):
+        with open(os.path.join(os.path.dirname(__file__), "README.md"), encoding="utf-8") as f:
+            self.assertIsNone(прогнать_мусор(f.read()))
+
+    def test_код_в_заборе_не_считается(self):
+        текст = РУССКАЯ_ПРОЗА + "```text\n" + МУСОР_1 * 20 + "```\n" + РУССКАЯ_ПРОЗА
+        self.assertIsNone(прогнать_мусор(текст))
+        self.assertIsNone(прогнать_мусор(текст, шаг=2), "забор, разорванный между дельтами")
+        # Тот же мусор вне забора — срабатывание: тест выше не вакуумный
+        self.assertIsNotNone(прогнать_мусор(текст.replace("```", "")))
+
+    def test_мусорное_слово(self):
+        мусор = ["compressа应急arco1ács", "Vat_VMelm压adium吐血戎elm真假", "Vat�", "\ufffd",
+                 "PunchTransferTransferCompress", "compresscompresscompresscompress."]
+        норма = ["ClaudeCodeServer.Llm", "vLLM-0.31", "vLLM-ом", "PR'а", "`ДетекторМусораTests`",
+                 "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                 "C:\\Users\\naych\\.claude\\plans\\ClaudeCodeServer\\plan.md",
+                 "https://github.com/example/ClaudeCodeServer", "这是一个用于测试的中文句子，它不应该被认为是垃圾文本。",
+                 "высокопроизводительный", "Punch,", "compression"]
+        for w in мусор:
+            self.assertTrue(proxy.мусорное_слово(w), w)
+        for w in норма:
+            self.assertFalse(proxy.мусорное_слово(w), w)
+
+
+# Ход 17.10 17:53, дословно до вырождения: дальше сотни строк из одного «-» до конца хода.
+ВЫРОЖДЕНИЕ = ("ImageEditor.Tests зависит-зависит от `FakeImageEditor` (monoлит, "
+              "`ImageEditor/FakeImageEditor.cs`) и `ImageEditorFakes.cs`. Про-типов. Про-ов-\nПроверя-\n")
+
+
+class ЦепочкаБезБуквTests(unittest.TestCase):
+    """Второй признак мусора: run одинаковых «слов» без букв и цифр подряд."""
+
+    def test_вырождение_инцидента_ловится(self):
+        текст = РУССКАЯ_ПРОЗА + ВЫРОЖДЕНИЕ + "-\n" * 150
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(текст, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN}×"), д.причина)
+        # Доля мусорных слов тут ни при чём: без второго признака детектор молчит
+        self.assertIsNone(прогнать_мусор(текст, proxy.ДетекторМусора(run=10 ** 6)))
+
+    def test_повтор_одного_слова_ловится(self):
+        # 17.10 22:38: размышление ушло в «like like like…» до среза бюджета, ответ — в тысячи «like»
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "Program.cs`-у`-у` " + "like " * 100, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN_WORD}× 'like'"), д.причина)
+        self.assertIsNotNone(прогнать_мусор("Like, LIKE like. " * 30), "без регистра и пунктуации")
+
+    def test_числа_и_обычные_повторы_не_цепочка(self):
+        for имя, текст in {"нули матрицы": "0 " * 300, "единицы": "1, " * 300,
+                           "очень-очень": (РУССКАЯ_ПРОЗА + " очень очень очень ") * 10}.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
+    def test_цепочка_короче_порога_не_мусор(self):
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "-\n" * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
+        # У «слов» без букв порог прежний: 12 разделителей подряд — ещё не вырождение
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "- " * (proxy.JUNK_RUN - 1) + РУССКАЯ_ПРОЗА))
+
+    def test_пробег_символов_инцидента_ловится_до_конца(self):
+        # 19.10 17:46: после «(сод-т-в-ог-д) … из-за-ог-ог-ог» ответ ушёл в 16 321 пятёрку до лимита
+        # вывода; 64 «слова» на 18 000 символов — доля и цепочка молчали, чат останавливал человек.
+        вступление = РУССКАЯ_ПРОЗА + "- **Com-тг**: `C3F3048F` — **как в оригинале** (сод-т-в-ог-д).\n"
+        for имя, мусор in {"пробег пятёрок": "5" * 16321,
+                           "узор -ог-": "- **Like-ог**: like-ог из-за" + "-ог" * 30 + " 199" + "9" * 120,
+                           "склейка слова": "like" * 30}.items():
+            with self.subTest(имя):
+                д = proxy.ДетекторМусора()
+                текст, увидел, сработал = вступление + мусор, 0, None
+                for кусок in по_кусочкам(текст, 7):
+                    увидел += len(кусок)
+                    if д.усвоить(кусок):
+                        сработал = увидел
+                        break
+                self.assertIsNotNone(сработал, "детектор не сработал")
+                # Обрыв ещё в начале мусора, а не по пробелу после 16 тысяч символов
+                self.assertLessEqual(сработал - len(вступление), 4 * proxy.JUNK_CHAR_RUN, д.причина)
+                self.assertTrue(д.причина.startswith(("пробег", "узор")), д.причина)
+
+    def test_цепочка_чисел_инцидента_ловится(self):
+        # 21.10 23:09 (Кира, размышление): «-1» сначала прилип к словам, затем 2743 строки «-1» до
+        # среза бюджета. Цепочка чисел раньше не считалась, петля «1» без букв не видит.
+        вырождение = ("либо подпиши как «до-1: label it as \"доля ре-1: add a comment/label "
+                      "clarifying it's \"доля\n-1 (fraction of review within the block). "
+                      "«ревью — вместе-1 вместе с производством» … «доля\n")
+        д = proxy.ДетекторМусора()
+        слов = прогнать_мусор(РУССКАЯ_ПРОЗА + вырождение + "-1\n" * 2743, д)
+        self.assertIsNotNone(слов)
+        self.assertEqual(д.причина, f"цепочка {proxy.JUNK_RUN_NUM}× '-1'")
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "-1\n" * 2743, proxy.ДетекторМусора(run_num=10 ** 6)),
+                          "доля и узор тут ни при чём: без порога чисел детектор молчит")
+
+    def test_цепочка_чисел_короче_порога_не_мусор(self):
+        for имя, текст in {"нули": "0 " * (proxy.JUNK_RUN_NUM - 1), "минус единицы": "-1\n" * (proxy.JUNK_RUN_NUM - 1),
+                           "разные числа": " ".join(str(i % 7) for i in range(3000))}.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + текст + РУССКАЯ_ПРОЗА))
+
+    def test_цепочка_слов_с_буквами_порог_ниже(self):
+        д = proxy.ДетекторМусора()
+        self.assertIsNotNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "like- " * proxy.JUNK_RUN_WORD + РУССКАЯ_ПРОЗА, д))
+        self.assertTrue(д.причина.startswith(f"цепочка {proxy.JUNK_RUN_WORD}×"), д.причина)
+        self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + "like " * (proxy.JUNK_RUN_WORD - 1) + РУССКАЯ_ПРОЗА))
+
+    def test_узор_не_путает_нормальный_текст(self):
+        случаи = {
+            "число с нулями": "итого 1000000000000 рублей и 0.000000000001 долей",
+            "base64 в тексте": "подпись AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= совпала",
+            "хеш": "коммит " + "a1b2c3d4e5f6" * 5 + " и ещё " + "0123456789abcdef" * 4,
+            "разделители": "─" * 80 + "\n" + "-" * 70 + "\n" + "=" * 60 + "\n" + "*" * 50,
+            "путь с ..": "/".join([".."] * 11) + "/x.cs",
+            "смех и дефисы": "ха-ха-ха-ха-ха, так-так-так, по-по-по",
+            "пробег в коде": "```\n" + "5" * 200 + "\n" + "ab" * 40 + "\n```\n" + РУССКАЯ_ПРОЗА,
+            "инлайн-код": "`" + "x" * 100 + "` и `" + "ab" * 30 + "`",
+        }
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(РУССКАЯ_ПРОЗА + текст + "\n" + РУССКАЯ_ПРОЗА), имя)
+
+    def test_разметка_не_цепочка(self):
+        строки = 3 * proxy.JUNK_RUN
+        случаи = {
+            "список": "".join(f"- пункт {i}\n" for i in range(строки)),
+            "таблица с пустыми ячейками": "| a | b | c |\n|---|---|---|\n" + "| - | - | - |\n" * строки,
+            "дерево": "".join(f"│   ├── файл{i}.cs\n" for i in range(строки)),
+            "разделители между абзацами": (РУССКАЯ_ПРОЗА + "\n---\n") * 10,
+            "цепочка в заборе кода": "```\n" + "-\n" * строки + "```\n" + РУССКАЯ_ПРОЗА,
+        }
+        for имя, текст in случаи.items():
+            with self.subTest(имя):
+                self.assertIsNone(прогнать_мусор(текст))
+
+
+class МусорСквознойTests(unittest.TestCase):
+    """CLI → прокси → vLLM-заглушка с мусором → обрыв без повтора, пометка и счётчики."""
+
+    спросить = ПетляСквознаяTests.спросить
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.мусор_был = proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP
+        proxy.JUNK_GUARD = "on"
+        self.дампы = os.path.join(tempfile.mkdtemp(), "guard")
+        proxy.GUARD_DUMP_DIR = self.дампы
+        proxy.stats["junk_aborts"], proxy.stats["junk_words_max_ratio"] = 0, 0.0
+        proxy.stats["guard_dumps"] = 0
+
+    def tearDown(self):
+        proxy.JUNK_GUARD, proxy.GUARD_DUMP_DIR, proxy.GUARD_DUMP_KEEP = self.мусор_был
+        shutil.rmtree(os.path.dirname(self.дампы), ignore_errors=True)
+        ПетляСквознаяTests.tearDown(self)
+
+    def файлы_дампа(self):
+        return sorted(os.listdir(self.дампы)) if os.path.isdir(self.дампы) else []
+
+    def мета_дампа(self):
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 1, self.файлы_дампа())
+        основа = os.path.join(self.дампы, тела[0][:-len(".req.json.gz")])
+        with gzip.open(основа + ".req.json.gz") as f:
+            тело = json.loads(f.read())
+        with open(основа + ".meta.json", encoding="utf-8") as f:
+            мета = json.load(f)
+        for путь in (основа + ".req.json.gz", основа + ".meta.json"):
+            self.assertEqual(os.stat(путь).st_mode & 0o777, 0o600, путь)
+        self.assertEqual(os.stat(self.дампы).st_mode & 0o777, 0o700)
+        return тело, мета
+
+    def test_дамп_сработки_мусора(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "в дампе ровно то, что ушло в движок")
+        self.assertEqual((мета["guard"], мета["path"], мета["session"]), ("мусор", "/v1/messages", "sess-loop"))
+        self.assertTrue(мета["reason"].startswith("доля"), мета["reason"])
+        self.assertEqual(proxy.stats["guard_dumps"], 1)
+
+    def test_дамп_сработки_вырождения(self):
+        self.Модель.ответы = [поток_ответа([("thinking", "Plan quickly."),
+                                            ("text", ВСТУПЛЕНИЕ + ВЫРОЖДЕНИЕ + "-\n" * 300000)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        _, мета = self.мета_дампа()
+        self.assertTrue(мета["reason"].startswith("цепочка"), мета["reason"])
+        self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
+
+    def test_дамп_сработки_петли(self):
+        self.Модель.ответы = [поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)]),
+                              поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        тело, мета = self.мета_дампа()
+        self.assertEqual(тело, self.Модель.принятые[0], "дамп первой попытки, не повтора")
+        self.assertEqual((мета["guard"], мета["block"]), ("петля", "text"))
+        self.assertTrue(мета["reason"])
+
+    def test_без_сработки_дампа_нет(self):
+        self.Модель.ответы = [поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.файлы_дампа(), [])
+        self.assertEqual(proxy.stats["guard_dumps"], 0)
+
+    def test_дамп_выключен_без_каталога(self):
+        proxy.GUARD_DUMP_DIR = ""
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        self.assertFalse(os.path.exists(self.дампы))
+        self.assertEqual(proxy.stats["junk_aborts"], 1, "обрыв работает и без дампа")
+
+    def test_хранятся_только_свежие(self):
+        proxy.GUARD_DUMP_KEEP = 2
+        for i in range(4):
+            proxy.dump_guard(json.dumps({"n": i}).encode(), "s", {"guard": "мусор"})
+            time.sleep(0.02)
+        тела = [f for f in self.файлы_дампа() if f.endswith(".req.json.gz")]
+        self.assertEqual(len(тела), 2)
+        self.assertEqual(len(self.файлы_дампа()), 4, "у каждого тела своя мета, сироты удалены")
+        номера = sorted(json.loads(gzip.open(os.path.join(self.дампы, f)).read())["n"] for f in тела)
+        self.assertEqual(номера, [2, 3])
+
+    def мусорный_поток(self):
+        # Мусор длиннее буферов сокета (~2,5 МБ): иначе заглушка успела бы дописать его до обрыва
+        return поток_ответа([("thinking", "Plan quickly."),
+                             ("text", ВСТУПЛЕНИЕ * 3 + МУСОР_НАЧАЛО + (МУСОР_1 + МУСОР_2) * 1000)],
+                            stop_reason="max_tokens", output_tokens=20000)
+
+    def test_мусор_оборван_без_повтора(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertEqual([д["delta"]["stop_reason"] for т, д in список if т == "message_delta"],
+                         ["end_turn"])
+        текст = "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        self.assertLess(текст.count("PunchTransfer"), 20, "мусор оборван рано")
+        self.assertEqual(len(self.Модель.принятые), 1, "повтора нет")
+        # Обрыв заглушка замечает на следующей записи в сокет — уже после ответа клиенту
+        срок = time.monotonic() + 5
+        while not self.Модель.оборваны and time.monotonic() < срок:
+            time.sleep(0.005)
+        self.assertEqual(self.Модель.оборваны, [1], "генерация остановлена обрывом")
+        self.assertEqual(proxy.stats["junk_aborts"], 1)
+        self.assertGreaterEqual(proxy.stats["junk_words_max_ratio"], proxy.JUNK_RATIO)
+        self.assertEqual(proxy.stats["loops_detected"], 0)
+
+    def test_счётчики_видны_в_stats(self):
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual(отдано["junk_aborts"], 1)
+        self.assertGreaterEqual(отдано["junk_words_max_ratio"], 0.35)
+        self.assertTrue(отдано["junk_guard"].startswith("on"))
+
+    def test_петля_без_своего_выключателя_не_ловится(self):
+        """JUNK_GUARD=on при LOOP_GUARD=off: реле есть, но детектор петли в нём выключен."""
+        proxy.LOOP_GUARD = "off"
+        сырое = поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 30)])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["junk_aborts"]), (0, 0))
+
+    def test_обычный_ответ_без_изменений(self):
+        # Без дословных повторов: предохранитель петли в этом наборе тоже включён
+        сырое = поток_ответа([("thinking", АНГЛИЙСКАЯ_ПРОЗА),
+                              ("text", РУССКАЯ_ПРОЗА + ПУТИ_И_ХЕШИ + BASE64_В_КОДЕ)])
+        self.Модель.ответы = [сырое]
+        self.assertEqual(self.спросить(ждать_карточку=False), события_клиента(сырое))
+        self.assertEqual((proxy.stats["junk_aborts"], proxy.stats["loops_detected"]), (0, 0))
+
+
+# --- Прунинг картинок ---------------------------------------------------------------------
+
+import base64
+import struct
+
+
+def png(w, h):
+    return b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", w, h) + b"\x08\x02\x00\x00\x00" + b"\x00" * 64
+
+
+def jpeg(w, h, exif=0, сегментов=1):
+    app1 = (b"\xff\xe1" + struct.pack(">H", exif + 2) + b"\x00" * exif) * сегментов
+    sof = b"\xff\xc0" + struct.pack(">HBHHB", 17, 8, h, w, 3) + b"\x00" * 9
+    return b"\xff\xd8" + app1 + b"\xff\xdb\x00\x04\x00\x00" + sof + b"\xff\xda"
+
+
+def webp_vp8(w, h):
+    return (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8 " + b"\x00" * 4 + b"\x00" * 3
+            + b"\x9d\x01\x2a" + struct.pack("<HH", w, h) + b"\x00" * 16)
+
+
+def webp_vp8l(w, h):
+    биты = (w - 1) | ((h - 1) << 14)
+    return b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8L" + b"\x00" * 4 + b"\x2f" + struct.pack("<I", биты) + b"\x00" * 16
+
+
+def webp_vp8x(w, h):
+    return (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"VP8X" + b"\x00" * 8
+            + (w - 1).to_bytes(3, "little") + (h - 1).to_bytes(3, "little") + b"\x00" * 16)
+
+
+def картинка(w=1920, h=1080, сырьё=None):
+    данные = base64.b64encode(сырьё if сырьё is not None else png(w, h)).decode()
+    return {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": данные}}
+
+
+def скриншот(i, w=1920, h=1080):
+    """Пара «Read скриншота → вывод с картинкой», как её шлёт CLI."""
+    return [{"role": "assistant", "content": [
+                {"type": "tool_use", "id": f"r{i}", "name": "Read", "input": {"file_path": f"/s{i}.png"}}]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": f"r{i}", "content": [картинка(w, h)]}]}]
+
+
+def чат_со_скриншотами(n, человек=None):
+    msgs = [{"role": "user", "content": [{"type": "text", "text": "проверь страницу"}]
+             + ([картинка(800, 600)] * человек if человек else [])}]
+    for i in range(n):
+        msgs += скриншот(i)
+    return msgs
+
+
+def картинок(msgs):
+    n = 0
+    for m in msgs:
+        for b in m["content"] if isinstance(m["content"], list) else []:
+            if b.get("type") == "image":
+                n += 1
+            elif b.get("type") == "tool_result" and isinstance(b.get("content"), list):
+                n += sum(1 for x in b["content"] if x.get("type") == "image")
+    return n
+
+
+class РазмерКартинкиTests(unittest.TestCase):
+    def test_png(self):
+        self.assertEqual(proxy.image_size(png(1920, 1080)), (1920, 1080))
+
+    def test_jpeg_с_exif(self):
+        self.assertEqual(proxy.image_size(jpeg(1024, 768, exif=500)), (1024, 768))
+
+    def test_jpeg_с_крупным_exif_за_пределами_префикса(self):
+        блок = картинка(сырьё=jpeg(640, 480, exif=65000, сегментов=2) + b"\x00" * 200000)
+        self.assertEqual(proxy._image_dims(блок), (640, 480))
+
+    def test_webp_все_три_вида(self):
+        self.assertEqual(proxy.image_size(webp_vp8(800, 600)), (800, 600))
+        self.assertEqual(proxy.image_size(webp_vp8l(1000, 700)), (1000, 700))
+        self.assertEqual(proxy.image_size(webp_vp8x(3000, 2000)), (3000, 2000))
+
+    def test_мусор_и_ссылка(self):
+        self.assertIsNone(proxy.image_size(b"not an image at all"))
+        self.assertIsNone(proxy._image_dims({"type": "image", "source": {"type": "url", "url": "x"}}))
+        self.assertIsNone(proxy._image_dims(картинка(сырьё=b"\x00" * 40)))
+
+    def test_оценка_токенов_по_замерам(self):
+        self.assertEqual(proxy.image_tokens((512, 512)), 256)    # замер 258
+        self.assertEqual(proxy.image_tokens((1024, 768)), 768)   # замер 770
+        self.assertEqual(proxy.image_tokens((1920, 1080)), 2040)  # замер 2042
+        self.assertEqual(proxy.image_tokens((4000, 3000)), proxy.IMAGE_TOKENS_CAP)
+        self.assertEqual(proxy.image_tokens(None), proxy.IMAGE_TOKENS_CAP)
+
+
+class ПрунингКартинокTests(unittest.TestCase):
+    def test_без_картинок_ничего_не_меняется(self):
+        msgs = history(30)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertIs(out, msgs)
+        self.assertEqual(сводка, {"pruned": 0, "kept": 0, "tokens": 0})
+
+    def test_картинок_не_больше_keep_ничего_не_меняется(self):
+        msgs = чат_со_скриншотами(4)
+        снимок = json.dumps(msgs)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertIs(out, msgs)
+        self.assertEqual(json.dumps(out), снимок)
+        self.assertEqual(сводка["kept"], 4)
+
+    def test_старые_вырезаются_свежие_остаются(self):
+        msgs = чат_со_скриншотами(10)
+        снимок = json.dumps(msgs)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(json.dumps(msgs), снимок, "вход не мутирован")
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (6, 4))
+        self.assertEqual(сводка["tokens"], 6 * 2040)
+        self.assertEqual(картинок(out), 4)
+        # старейшие — заглушки той же формы (текстовый блок внутри tool_result)
+        первый = out[2]["content"][0]
+        self.assertEqual(первый["type"], "tool_result")
+        self.assertEqual(первый["tool_use_id"], "r0")
+        self.assertEqual(первый["content"],
+                         [{"type": "text", "text": "[картинка 1920×1080, ~2040 токенов, вырезана "
+                                                   "прокси — открой заново, если нужна]"}])
+        # свежие — те же объекты, байт в байт
+        for i in range(6, 10):
+            self.assertIs(out[2 + 2 * i], msgs[2 + 2 * i])
+
+    def test_картинки_последнего_сообщения_человека_не_трогаются(self):
+        msgs = чат_со_скриншотами(10)
+        msgs.append({"role": "user", "content": [{"type": "text", "text": "а вот так?"},
+                                                  картинка(800, 600), картинка(800, 600)]})
+        out, сводка = proxy.prune_images(msgs, keep=1, max_images=12)
+        self.assertIs(out[-1], msgs[-1])
+        self.assertEqual(сводка["kept"], 2, "две картинки человека, свежайшая из них же")
+        self.assertEqual(сводка["pruned"], 10)
+
+    def test_человек_защищён_весь_ход_агента(self):
+        """Человек приложил картинку, дальше агент сделал шаги — она всё ещё «его»."""
+        msgs = [{"role": "user", "content": [{"type": "text", "text": "вот макет"}, картинка(800, 600)]}]
+        for i in range(8):
+            msgs += скриншот(i)
+        out, сводка = proxy.prune_images(msgs, keep=2, max_images=12)
+        self.assertIs(out[0], msgs[0])
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (6, 3))
+
+    def test_прошлое_сообщение_человека_не_защищено(self):
+        msgs = чат_со_скриншотами(0, человек=1)
+        for i in range(6):
+            msgs += скриншот(i)
+        msgs.append({"role": "user", "content": "дальше"})
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(out[0]["content"][1]["type"], "text")
+        self.assertEqual(сводка["pruned"], 3)
+
+    def test_потолок_режет_даже_картинки_человека(self):
+        msgs = чат_со_скриншотами(0, человек=20)
+        out, сводка = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(картинок(out), 12)
+        self.assertEqual((сводка["pruned"], сводка["kept"]), (8, 12))
+        # режутся старейшие: первые 8 картинок сообщения
+        блоки = out[0]["content"]
+        self.assertTrue(all(b["type"] == "text" for b in блоки[1:9]))
+        self.assertTrue(all(b["type"] == "image" for b in блоки[9:]))
+
+    def test_потолок_при_большом_keep(self):
+        out, сводка = proxy.prune_images(чат_со_скриншотами(40), keep=100, max_images=12)
+        self.assertEqual(картинок(out), 12)
+
+    def test_детерминизм_между_запросами(self):
+        """Вырезанное остаётся вырезанным: общий префикс двух соседних ходов совпадает байт в
+        байт до позиции, где вырезана новая картинка, — промах кэша один раз, а не каждый ход."""
+        прошлый, _ = proxy.prune_images(чат_со_скриншотами(10), keep=4, max_images=12)
+        текущий, _ = proxy.prune_images(чат_со_скриншотами(10), keep=4, max_images=12)
+        self.assertEqual(json.dumps(прошлый), json.dumps(текущий))
+        следующий, _ = proxy.prune_images(чат_со_скриншотами(11), keep=4, max_images=12)
+        # первые 6 скриншотов были вырезаны и остались вырезанными бит в бит
+        for i in range(1 + 2 * 6):
+            self.assertEqual(json.dumps(прошлый[i]), json.dumps(следующий[i]))
+        # уже вырезанная история не режется повторно и не меняется
+        ещё, сводка = proxy.prune_images(следующий, keep=4, max_images=12)
+        self.assertIs(ещё, следующий)
+        self.assertEqual(сводка["pruned"], 0)
+
+    def test_вывод_с_текстом_и_картинкой(self):
+        msgs = чат_со_скриншотами(5)
+        msgs[2]["content"][0]["content"].insert(0, {"type": "text", "text": "подпись"})
+        out, _ = proxy.prune_images(msgs, keep=4, max_images=12)
+        self.assertEqual(out[2]["content"][0]["content"][0], {"type": "text", "text": "подпись"})
+        self.assertEqual(out[2]["content"][0]["content"][1]["type"], "text")
+        self.assertEqual(msgs[2]["content"][0]["content"][1]["type"], "image", "вход не мутирован")
+
+
+class КартинкиСквозныеTests(unittest.TestCase):
+    """Тот же стенд, что у карточки: CLI → прокси → заглушка модели, событие на бэкенд."""
+    setUp_базовый = СобытиеСквозноеTests.setUp
+    tearDown_базовый = СобытиеСквозноеTests.tearDown
+    спросить = СобытиеСквозноеTests.спросить
+
+    def setUp(self):
+        self.setUp_базовый()
+        self.картинки_было = (proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX, dict(proxy._image_cuts))
+        proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX = "on", 4, 12
+        proxy._image_cuts.clear()
+        proxy.stats.update(images_pruned=0, images_kept=0, image_tokens_saved=0)
+
+    def tearDown(self):
+        proxy.IMAGE_PRUNE, proxy.IMAGE_KEEP, proxy.IMAGE_MAX, разрезы = self.картинки_было
+        proxy._image_cuts.clear()
+        proxy._image_cuts.update(разрезы)
+        self.tearDown_базовый()
+
+    def test_тело_без_картинок_уходит_байт_в_байт(self):
+        proxy.PRUNE_MODE = "off"
+        msgs = history(5)
+        тело = json.dumps({"model": "qwen3.8-27b", "max_tokens": 8192, "messages": msgs}).encode()
+        self.спросить(msgs, ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[-1][1], тело)
+
+    def test_чат_с_двадцатью_скриншотами(self):
+        self.спросить(чат_со_скриншотами(25))
+        _, тело, _ = self.Модель.принятые[-1]
+        self.assertEqual(картинок(json.loads(тело)["messages"]), 4)
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        _, событие, _ = self.Бэкенд.принятые[0]
+        self.assertEqual((событие["kind"], событие["imageBlocks"], событие["imageTokens"]),
+                         ("prune", 21, 21 * 2040))
+        self.assertEqual(событие["blocks"], 0)
+        self.assertEqual(proxy.stats["images_pruned"], 21)
+
+    def test_карточка_только_на_новом_вырезании(self):
+        self.спросить(чат_со_скриншотами(10))
+        self.спросить(чат_со_скриншотами(10), ждать_карточку=False)
+        self.assertEqual(len(self.Бэкенд.принятые), 1)
+        self.спросить(чат_со_скриншотами(11))
+        self.assertEqual(len(self.Бэкенд.принятые), 2)
+        self.assertEqual(self.Бэкенд.принятые[1][1]["imageBlocks"], 7)
+
+    def test_выключено_картинки_едут_как_есть(self):
+        proxy.IMAGE_PRUNE = "off"
+        self.спросить(чат_со_скриншотами(20), ждать_карточку=False)
+        _, тело, _ = self.Модель.принятые[-1]
+        self.assertEqual(картинок(json.loads(тело)["messages"]), 20)
+
+    def test_счётчики_в_stats(self):
+        self.спросить(чат_со_скриншотами(6))
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=10)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual((отдано["images_pruned"], отдано["images_kept"], отдано["image_tokens_saved"]),
+                         (2, 4, 2 * 2040))
+        self.assertTrue(отдано["image_prune"].startswith("on"))
+
+
+class СжатиеЗаглушка(BaseHTTPRequestHandler):
+    """Upstream ответа сжатия: отдаёт заготовленное тело с заданными статусом и типом."""
+    протокол_версия = "HTTP/1.1"
+    статус = 200
+    вид = "text/event-stream"
+    тело = b""
+    принятые = []
+    заголовки = []
+
+    def log_message(self, *a):
+        pass
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).принятые.append(json.loads(self.rfile.read(n)))
+        type(self).заголовки.append({k.lower(): v for k, v in self.headers.items()})
+        тело = type(self).тело
+        self.send_response(type(self).статус)
+        self.send_header("Content-Type", type(self).вид)
+        self.send_header("Content-Length", str(len(тело)))
+        self.end_headers()
+        # Мелкими кусками: событие режется посреди, вставка обязана склеивать.
+        try:
+            for i in range(0, len(тело), 97):
+                self.wfile.write(тело[i:i + 97])
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # прокси бросил ответ-ошибку облака, прочитав начало, — так и задумано
+
+
+def проверить_индексы(тест, список):
+    """Индексы блоков у клиента — 0, 1, 2… без дыр и повторов."""
+    индексы = [д["index"] for т, д in список if т == "content_block_start"]
+    тест.assertEqual(индексы, list(range(len(индексы))))
+
+
+def как_cli(список):
+    """Что CLI 2.1.301 положит в запись isCompactSummary из потока ответа сжатия.
+
+    Повторяет бинарник: поток раскладывается по блокам в отдельные сообщения; `KEe` берёт
+    последнее сообщение с текстом, где есть `<summary>` (иначе последнее с текстом); `QEe` —
+    первый текстовый блок, `trim`; `BWr` вырезает <analysis> и меняет <summary> на «Summary:».
+    """
+    import re
+    блоки, открыт = [], None
+    for т, д in список:
+        if т == "content_block_start":
+            открыт = dict(д["content_block"])
+            блоки.append(открыт)
+        elif т == "content_block_delta" and открыт is not None and открыт.get("type") == "text":
+            открыт["text"] = открыт.get("text", "") + д["delta"].get("text", "")
+        elif т == "content_block_stop":
+            открыт = None
+    тексты = [б["text"] for б in блоки if б.get("type") == "text"]
+    выбран = next((т for т in reversed(тексты) if "<summary>" in т), тексты[-1] if тексты else None)
+    if выбран is None or not выбран.strip():
+        return None
+    т = re.sub(r"<analysis>[\s\S]*?</analysis>", "", выбран.strip(), count=1)
+    т = re.sub(r"<summary>([\s\S]*?)</summary>", lambda m: "Summary:\n" + m.group(1).strip(), т,
+               count=1)
+    return re.sub(r"\n\n+", "\n\n", т).strip()
+
+
+class СохранениеДословногоTests(unittest.TestCase):
+    """COMPACT_PRESERVE: <ccs-preserved> в конце текстового блока модели со сводкой."""
+
+    def setUp(self):
+        class Облако(СжатиеЗаглушка):
+            принятые, заголовки = [], []
+
+        class Локальный(СжатиеЗаглушка):
+            принятые, заголовки = [], []
+
+        self.Облако, self.Локальный = Облако, Локальный
+        self.облако, self.локальный = поднять(Облако), поднять(Локальный)
+        self.прокси = поднять(proxy.Handler)
+        self.сохранено = (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM, proxy._compact_key,
+                          proxy.COMPACT_PRESERVE, proxy.PRUNE_MODE, proxy.LOOP_GUARD,
+                          proxy.JUNK_GUARD, proxy.SAMPLING, dict(proxy.stats))
+        proxy.UP_HOST, proxy.UP_PORT = "127.0.0.1", self.локальный.server_address[1]
+        proxy.COMPACT_UPSTREAM = f"http://127.0.0.1:{self.облако.server_address[1]}"
+        proxy._compact_key = "sk-test"
+        proxy.COMPACT_PRESERVE = "on"
+        proxy.PRUNE_MODE, proxy.LOOP_GUARD, proxy.JUNK_GUARD = "off", "off", "off"
+        proxy.SAMPLING = {}
+        for к in ("compact_routed", "compact_fallback", "compact_preserved",
+                  "compact_preserve_failed"):
+            proxy.stats[к] = 0
+        # Модель отвечает размышлением на index 0 и сводкой на index 1 — как MiniMax.
+        self.поток = поток_ответа([("thinking", "Let me analyze."),
+                                   ("text", "<analysis>a</analysis>\n<summary>сводка</summary>")])
+        self.Облако.тело = self.Локальный.тело = self.поток
+
+    def tearDown(self):
+        (proxy.UP_HOST, proxy.UP_PORT, proxy.COMPACT_UPSTREAM, proxy._compact_key,
+         proxy.COMPACT_PRESERVE, proxy.PRUNE_MODE, proxy.LOOP_GUARD, proxy.JUNK_GUARD,
+         proxy.SAMPLING, стат) = self.сохранено
+        proxy.stats.clear()
+        proxy.stats.update(стат)
+        for с in (self.облако, self.локальный, self.прокси):
+            с.shutdown()
+            с.server_close()
+
+    def запрос(self):
+        msgs = history(120)
+        msgs.append({"role": "user", "content": proxy.COMPACT_SIGNATURE + " Summarize."})
+        return {"model": "qwen3.8-27b", "max_tokens": 8192, "stream": True, "messages": msgs}
+
+    def спросить(self, doc, заголовки=None):
+        тело = json.dumps(doc).encode()
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        self.журнал = io.StringIO()
+        with contextlib.redirect_stderr(self.журнал):
+            c.request("POST", "/v1/messages", body=тело, headers=dict({
+                "Content-Type": "application/json", "Content-Length": str(len(тело))},
+                **(заголовки or {})))
+            ответ = c.getresponse().read()
+        c.close()
+        return ответ
+
+    def ожидаемый_блок(self, doc):
+        # Последнее сообщение в этих тестах — чистая инструкция сжатия: блок по истории без неё.
+        return "\n\n" + proxy.compactor.build_preserved(dict(doc, messages=doc["messages"][:-1]))
+
+    def проверить_вставку(self, ответ, блок, локаль=False):
+        """локаль=True — ответ идёт через локальный upstream: старт с обнулённым input."""
+        список = события(ответ)
+        проверить_целостность(self, список)
+        проверить_индексы(self, список)
+        модель = (события_клиента if локаль else события)(self.поток)
+        # Ровно одно лишнее событие — дельта с блоком перед стопом текстового блока (index 1).
+        self.assertEqual(len(список), len(модель) + 1)
+        стоп = список.index(("content_block_stop", {"type": "content_block_stop", "index": 1}))
+        self.assertEqual(список[стоп - 1], ("content_block_delta", {
+            "type": "content_block_delta", "index": 1,
+            "delta": {"type": "text_delta", "text": блок}}))
+        self.assertEqual(список[:стоп - 1] + список[стоп:], модель,
+                         "остальной поток модели — как есть, индексы не тронуты")
+        # Главное: блок доживает до записи сжатия CLI.
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nсводка"))
+        self.assertTrue(запись.endswith(блок.strip()))
+        self.assertIn("<ccs-preserved>", запись)
+
+    def последняя_реплика(self, принятое):
+        return принятое["messages"][-1]["content"]
+
+    def test_облако_блок_дописан_к_сводке(self):
+        doc = self.запрос()
+        блок = self.ожидаемый_блок(doc)
+        self.assertIn("<ccs-preserved>", блок)
+        ответ = self.спросить(doc)
+        self.проверить_вставку(ответ, блок)
+        self.assertEqual(proxy.stats["compact_routed"], 1)
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (1, 0))
+        реплика = self.последняя_реплика(self.Облако.принятые[-1])
+        self.assertEqual(реплика, proxy.COMPACT_SIGNATURE + " Summarize.\n\n"
+                         + proxy.compactor.instruction_addendum())
+        # Середина истории не тронута — в облако едет сырая история.
+        self.assertEqual(self.Облако.принятые[-1]["messages"][:-1], doc["messages"][:-1])
+
+    def test_инструкция_сжатия_не_попадает_в_блок(self):
+        """Живая проверка 2026-10-16: без вырезки инструкция CLI шла в «Реплики человека»."""
+        doc = self.запрос()
+        doc["messages"].pop()  # своя инструкция ниже — формой списка
+        doc["messages"].append({"role": "assistant", "content": "ок"})
+        doc["messages"].append({"role": "user", "content": "свежая реплика человека"})
+        doc["messages"].append({"role": "user", "content": [
+            {"type": "text", "text": proxy.COMPACT_SIGNATURE + " Your task is to create a summary."}]})
+        запись = как_cli(события(self.спросить(doc)))
+        блок = запись[запись.index("<ccs-preserved>"):]
+        self.assertNotIn(proxy.COMPACT_SIGNATURE, блок)
+        self.assertNotIn("Your task is to create", блок)
+        self.assertIn("свежая реплика человека", блок)
+
+    def test_вырезка_инструкции_оставляет_прочее(self):
+        msgs = [{"role": "user", "content": "задача"},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "t", "content": "вывод"},
+                    {"type": "text", "text": proxy.COMPACT_SIGNATURE + " x"}]}]
+        снимок = copy.deepcopy(msgs)
+        итог = proxy._без_инструкции_сжатия(msgs)
+        self.assertEqual(msgs, снимок, "вход не мутирует")
+        self.assertEqual(итог, [msgs[0], {"role": "user", "content": [msgs[1]["content"][0]]}])
+        self.assertEqual(proxy._без_инструкции_сжатия(
+            [{"role": "user", "content": proxy.COMPACT_SIGNATURE}]), [])
+
+    def test_сводка_во_втором_текстовом_блоке(self):
+        """CLI берёт блок с <summary>, а не первый текстовый — блок едет туда же."""
+        self.поток = поток_ответа([("thinking", "t"), ("text", "<analysis>a</analysis>"),
+                                   ("text", "<summary>сводка</summary>")])
+        self.Облако.тело = self.поток
+        doc = self.запрос()
+        список = события(self.спросить(doc))
+        проверить_целостность(self, список)
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nсводка"))
+        self.assertIn("<ccs-preserved>", запись)
+        вставки = [д["index"] for т, д in список if т == "content_block_delta"
+                   and "<ccs-preserved>" in д["delta"].get("text", "")]
+        self.assertEqual(вставки, [2])
+
+    def test_тег_summary_разрезан_дельтами(self):
+        self.поток = поток_ответа([("text", "<analysis>a</analysis><summary>сводка</summary>")],
+                                  шаг=3)
+        self.Облако.тело = self.поток
+        список = события(self.спросить(self.запрос()))
+        self.assertIn("<ccs-preserved>", как_cli(список))
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_ответ_без_сводки_как_есть_и_счётчик(self):
+        self.поток = поток_ответа([("text", "просто текст")])
+        self.Облако.тело = self.поток
+        self.assertEqual(self.спросить(self.запрос()), self.поток)
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 1))
+        self.assertIn("нет <summary>", self.журнал.getvalue())
+
+    def test_фолбэк_на_локаль_тоже_получает_блок(self):
+        self.Облако.статус = 401
+        doc = self.запрос()
+        блок = self.ожидаемый_блок(doc)
+        ответ = self.спросить(doc)
+        self.проверить_вставку(ответ, блок, локаль=True)
+        self.assertEqual(proxy.stats["compact_fallback"], 1)
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+        реплика = self.последняя_реплика(self.Локальный.принятые[-1])
+        self.assertTrue(реплика.endswith(proxy.compactor.instruction_addendum()))
+
+    def test_фолбэк_через_реле_без_петли(self):
+        """Реле предохранителя на пути не мешает вставке: поток через него приходит тот же."""
+        proxy.LOOP_GUARD = proxy.JUNK_GUARD = "on"
+        self.Облако.статус = 500
+        doc = self.запрос()
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
+
+    def test_фолбэк_петля_после_сводки_и_повтор(self):
+        """Петля после <summary> → обрыв, повтор; в запись CLI идёт сводка повтора с блоком."""
+        class Модель(ПетляЗаглушка):
+            ответы, принятые, оборваны = [], [], []
+        модель = поднять(Модель)
+        self.addCleanup(lambda: (модель.shutdown(), модель.server_close()))
+        proxy.UP_PORT = модель.server_address[1]
+        proxy.LOOP_GUARD = "on"
+        self.Облако.статус = 500
+        Модель.ответы = [
+            поток_ответа([("thinking", "t"), ("text", "<summary>первая</summary>\n" + ВСТУПЛЕНИЕ
+                                                   + ПЛАН * 400)]),
+            поток_ответа([("thinking", "t"), ("text", "<summary>повтор</summary>")])]
+        doc = self.запрос()
+        список = события(self.спросить(doc))
+        проверить_целостность(self, список)
+        self.assertEqual(len(Модель.принятые), 2, "петля поймана, запрос повторён")
+        self.assertTrue(Модель.принятые[1]["messages"][-1]["content"].endswith(
+            proxy.compactor.instruction_addendum()), "повтор несёт то же дополнение")
+        запись = как_cli(список)
+        self.assertTrue(запись.startswith("Summary:\nповтор"))
+        self.assertTrue(запись.endswith(self.ожидаемый_блок(doc).strip()))
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_accept_encoding_в_локаль_не_едет(self):
+        self.Облако.статус = 500
+        self.спросить(self.запрос(), {"Accept-Encoding": "gzip, br"})
+        # Своего заголовка нет — http.client сам ставит identity: сжатого ответа не будет.
+        self.assertEqual(self.Локальный.заголовки[-1].get("accept-encoding", "identity"), "identity")
+        proxy.COMPACT_PRESERVE = "off"
+        self.спросить(self.запрос(), {"Accept-Encoding": "gzip, br"})
+        self.assertEqual(self.Локальный.заголовки[-1]["accept-encoding"], "gzip, br",
+                         "без блока заголовки идут как раньше")
+
+    def test_без_облака_блок_тоже_вставляется(self):
+        proxy.COMPACT_UPSTREAM = ""
+        doc = self.запрос()
+        self.проверить_вставку(self.спросить(doc), self.ожидаемый_блок(doc), локаль=True)
+        self.assertEqual(self.Облако.принятые, [])
+
+    def test_выключено_поток_байт_в_байт(self):
+        proxy.COMPACT_PRESERVE = "off"
+        doc = self.запрос()
+        self.assertEqual(self.спросить(doc), self.поток)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 0))
+
+    def test_обычный_ход_не_трогается(self):
+        doc = self.запрос()
+        doc["messages"][-1] = {"role": "user", "content": "проверь сборку"}
+        self.assertEqual(события(self.спросить(doc)), события_клиента(self.поток))
+        self.assertEqual(self.Облако.принятые, [])
+
+    def test_исключение_compactor_запрос_проходит(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "build_preserved",
+                                        side_effect=RuntimeError("бах")):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(proxy.stats["compact_preserve_failed"], 1)
+        self.assertEqual(proxy.stats["compact_preserved"], 0)
+        self.assertEqual(proxy.stats["compact_routed"], 1)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.", "тело не тронуто")
+        self.assertIn("сохранение дословного: сборка блока не удалось", self.журнал.getvalue())
+
+    def test_исключение_в_добавке_тело_не_тронуто(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "instruction_addendum",
+                                        side_effect=ValueError("x")):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(proxy.stats["compact_preserve_failed"], 1)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+
+    def test_none_без_вставки(self):
+        doc = self.запрос()
+        with unittest.mock.patch.object(proxy.compactor, "build_preserved", return_value=None):
+            ответ = self.спросить(doc)
+        self.assertEqual(ответ, self.поток)
+        self.assertEqual(self.последняя_реплика(self.Облако.принятые[-1]),
+                         proxy.COMPACT_SIGNATURE + " Summarize.")
+        self.assertEqual((proxy.stats["compact_preserved"], proxy.stats["compact_preserve_failed"]),
+                         (0, 0))
+
+    def test_ответ_ошибка_не_трогается(self):
+        """Облако упало, локаль тоже ответила ошибкой — клиент видит её как есть."""
+        self.Облако.статус = 500
+        self.Локальный.статус, self.Локальный.вид = 400, "application/json"
+        self.Локальный.тело = b'{"type":"error","error":{"type":"x","message":"y"}}'
+        self.assertEqual(self.спросить(self.запрос()), self.Локальный.тело)
+        self.assertEqual(proxy.stats["compact_preserved"], 0)
+
+    def test_не_потоковый_ответ_блок_в_тексте_со_сводкой(self):
+        doc = self.запрос()
+        doc["stream"] = False
+        модель = {"id": "m", "type": "message", "role": "assistant", "content": [
+            {"type": "thinking", "thinking": "t", "signature": "s"},
+            {"type": "text", "text": "<summary>сводка</summary>"}], "stop_reason": "end_turn"}
+        self.Облако.вид = "application/json"
+        self.Облако.тело = json.dumps(модель).encode()
+        ответ = json.loads(self.спросить(doc))
+        self.assertEqual(ответ["content"][0], модель["content"][0])
+        self.assertEqual(ответ["content"][1], {"type": "text", "text": "<summary>сводка</summary>"
+                                               + self.ожидаемый_блок(doc)})
+        self.assertEqual(len(ответ["content"]), 2)
+        self.assertEqual(proxy.stats["compact_preserved"], 1)
+
+    def test_блок_списком_дописывается_в_последний_текст(self):
+        doc = self.запрос()
+        doc["messages"][-1] = {"role": "user", "content": [
+            {"type": "text", "text": proxy.COMPACT_SIGNATURE + " Summarize."},
+            {"type": "text", "text": "Additional: keep it short."}]}
+        self.спросить(doc)
+        реплика = self.последняя_реплика(self.Облако.принятые[-1])
+        self.assertEqual(реплика[0], doc["messages"][-1]["content"][0])
+        self.assertEqual(реплика[1]["text"], "Additional: keep it short.\n\n"
+                         + proxy.compactor.instruction_addendum())
+
+    def test_счётчики_в_stats(self):
+        исходный = self.сохранено[-1]
+        self.assertIn("compact_preserved", исходный)
+        self.assertIn("compact_preserve_failed", исходный)
+        self.спросить(self.запрос())
+        c = http.client.HTTPConnection("127.0.0.1", self.прокси.server_address[1], timeout=30)
+        c.request("GET", "/__proxy/stats")
+        отдано = json.loads(c.getresponse().read())
+        c.close()
+        self.assertEqual(отдано["compact_preserved"], 1)
+        self.assertEqual(отдано["compact_preserve"], "on")
+
+
+class ВставкаБлокаTests(unittest.TestCase):
+    """Вставка в поток без сокета: куски режут события где угодно."""
+
+    def прогнать(self, сырое, кусок):
+        out = []
+        в = proxy.ВставкаБлока(out.append, "БЛОК")
+        for i in range(0, len(сырое), кусок):
+            в.усвоить(сырое[i:i + кусок])
+        в.дослать()
+        return b"".join(out)
+
+    def test_любая_нарезка_даёт_тот_же_поток(self):
+        сырое = поток_ответа([("thinking", "a" * 300), ("text", "b" * 300 + "<summary>c</summary>"),
+                              ("tool_use", '{"x":1}')])
+        эталон = self.прогнать(сырое, len(сырое))
+        for кусок in (1, 7, 64, 1000):
+            with self.subTest(кусок):
+                self.assertEqual(self.прогнать(сырое, кусок), эталон)
+        список = события(эталон)
+        проверить_целостность(self, список)
+        проверить_индексы(self, список)
+        self.assertTrue(как_cli(список).endswith("БЛОК"))
+
+    def test_сводка_в_начальном_тексте_блока(self):
+        сырое = (sse("message_start", {"type": "message_start", "message": {}})
+                 + sse("content_block_start", {"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "text", "text": "<summary>с</summary>"}})
+                 + sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                 + sse("message_stop", {"type": "message_stop"}))
+        self.assertIn("БЛОК", self.прогнать(сырое, 11).decode())
+
+    def test_без_message_start_вставки_нет(self):
+        сырое = b'event: error\ndata: {"type":"error"}\n\n'
+        self.assertEqual(self.прогнать(сырое, 5), сырое)
+
+
+
+
+class КарантинСессииTests(unittest.TestCase):
+    """Мусор → повтор с cache_salt мимо испорченного кэша; сессия и дальше ходит со своей солью."""
+
+    спросить = ПетляСквознаяTests.спросить
+    мусорный_поток = МусорСквознойTests.мусорный_поток
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.было = proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, dict(proxy._карантин)
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE = "on", "on"
+        proxy._карантин.clear()
+        for к in ("junk_aborts", "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        proxy.JUNK_GUARD, proxy.CACHE_QUARANTINE, карантин = self.было
+        proxy._карантин.clear()
+        proxy._карантин.update(карантин)
+        ПетляСквознаяTests.tearDown(self)
+
+    def текст(self, список):
+        return "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+
+    def test_повтор_мимо_кэша_и_соль_сессии(self):
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)]),
+                              поток_ответа([("text", "второй ход")]), поток_ответа([("text", "чужой")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn(РУССКАЯ_ПРОЗА.strip()[:40], текст, "ответ повтора приклеен к тому же сообщению")
+        self.assertNotIn("Повтори ход", текст)
+        первый, повтор = self.Модель.принятые[:2]
+        self.assertNotIn("cache_salt", первый)
+        соль = повтор["cache_salt"]
+        self.assertEqual({k: v for k, v in повтор.items() if k != "cache_salt"}, первый,
+                         "повтор — то же тело, только с солью")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        # Следующий ход той же сессии — с той же солью: кэш работает, но в чистом пространстве
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[2]["cache_salt"], соль)
+        # Чужая сессия соли не получает
+        self.спросить(сессия="sess-other", ждать_карточку=False)
+        self.assertNotIn("cache_salt", self.Модель.принятые[3])
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"],
+                          proxy.stats["quarantine_salted"]), (1, 0, 1))
+
+    def test_мусор_в_засоленной_сессии_соль_новая(self):
+        # Мусор в сессии, которая уже ходит с солью: новая соль на каждый срыв,
+        # _карантин перезаписан (испорченный кэш мог появиться и в засоленном пространстве).
+        proxy._карантин["sess-loop"] = "q-sess-loop-предварительная"
+        self.Модель.ответы = [self.мусорный_поток(), поток_ответа([("text", РУССКАЯ_ПРОЗА)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        повтор = self.Модель.принятые[1]["cache_salt"]
+        self.assertNotEqual(повтор, "q-sess-loop-предварительная", "мусор берёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], повтор, "_карантин перезаписан новой солью")
+
+    def test_мусор_и_в_повторе_обрыв(self):
+        self.Модель.ответы = [self.мусорный_поток(), self.мусорный_поток()]
+        журнал = io.StringIO()
+        with contextlib.redirect_stderr(журнал):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        текст = self.текст(список)
+        self.assertIn("ответ пересчитывается заново", текст)
+        self.assertIn("[прокси: ответ оборван — модель выдаёт мусор. Повтори ход.]", текст)
+        # Оператор видит в журнале, что повтор тоже не ушёл: строка master.
+        self.assertIn("карантин: мусор или петля и в повторе — ответ оборван", журнал.getvalue())
+        self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
+        self.assertEqual((proxy.stats["quarantine_retries"], proxy.stats["quarantine_failed"]), (0, 1))
+
+    def test_без_карантина_повтора_нет(self):
+        proxy.CACHE_QUARANTINE = "off"
+        self.Модель.ответы = [self.мусорный_поток()]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        self.assertIn("Повтори ход", self.текст(список))
+        self.assertEqual(len(self.Модель.принятые), 1)
+        self.assertEqual(proxy._карантин, {})
+
+
+class КарантинLoopTests(unittest.TestCase):
+    """Петля → повтор с cache_salt мимо испорченного кэша; сессия и дальше ходит со своей солью.
+
+    Зеркало КарантинСессииTests, но для петли: повтор идёт с солью карантина (не uuid4),
+    и следующий ход той же сессии получает ту же соль через parse_body."""
+
+    спросить = ПетляСквознаяTests.спросить
+
+    def setUp(self):
+        ПетляСквознаяTests.setUp(self)
+        self.было = (proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE,
+                     dict(proxy._карантин))
+        proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE = "on", "on", "on"
+        proxy._карантин.clear()
+        for к in ("loops_detected", "loops_retried", "loops_truncated",
+                  "quarantine_retries", "quarantine_failed", "quarantine_salted",
+                  "quarantine_loop_reused"):
+            proxy.stats[к] = 0
+
+    def tearDown(self):
+        (proxy.LOOP_GUARD, proxy.LOOP_RETRY, proxy.CACHE_QUARANTINE, карантин) = self.было
+        proxy._карантин.clear()
+        proxy._карантин.update(карантин)
+        ПетляСквознаяTests.tearDown(self)
+
+    def текст(self, список):
+        return "".join(д["delta"].get("text", "") for т, д in список if т == "content_block_delta")
+
+    def test_повтор_мимо_кэша_и_соль_сессии(self):
+        # Петля → повтор с солью; сессия и дальше ходит со своей солью; чужая — нет.
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77),
+            поток_ответа([("text", "второй ход")]),
+            поток_ответа([("text", "чужой")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertIn("Нашёл хуки.", self.текст(список), "повтор приклеен к тому же сообщению")
+        первый, повтор = self.Модель.принятые[:2]
+        self.assertNotIn("cache_salt", первый, "исходное тело — как есть")
+        соль = повтор["cache_salt"]
+        self.assertIsInstance(соль, str) and self.assertTrue(соль, "повтор несёт соль карантина")
+        self.assertEqual(proxy._карантин["sess-loop"], соль, "повтор кладёт соль в _карантин")
+        # Следующий ход той же сессии — с той же солью: кэш работает, но в чистом пространстве.
+        self.спросить(ждать_карточку=False)
+        self.assertEqual(self.Модель.принятые[2]["cache_salt"], соль)
+        # Чужая сессия соли не получает.
+        self.спросить(сессия="sess-other", ждать_карточку=False)
+        self.assertNotIn("cache_salt", self.Модель.принятые[3])
+        self.assertEqual(proxy.stats["quarantine_salted"], 1, "подстановка соли в parse_body")
+
+    def test_повторная_петля_в_засоленной_сессии_соль_та_же(self):
+        # Две петли подряд в одной сессии: первый срыв выдаёт соль, второй — берёт её,
+        # новую не выдаёт и _карантин не перезаписывает (quarantine_loop_reused == 1).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77),
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertEqual(self.Модель.принятые[3]["cache_salt"], соль,
+                         "второй повтор — та же соль, что в _карантин")
+        self.assertEqual(proxy._карантин["sess-loop"], соль, "_карантин не перезаписан")
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 1,
+                         "повторная петля в засоленной сессии учтена")
+
+    def test_первая_петля_без_соли_повторное_поведение(self):
+        # Первая петля в сессии без соли: новая соль, как раньше (quarantine_loop_reused == 0).
+        self.Модель.ответы = [
+            поток_ответа([("thinking", "Plan quickly."), ("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Нашёл хуки.")], stop_reason="tool_use", output_tokens=77)]
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.спросить(ждать_карточку=False)
+        соль = self.Модель.принятые[1]["cache_salt"]
+        self.assertTrue(соль.startswith("q-sess-loop-"), "первая петля выдаёт новую соль")
+        self.assertEqual(proxy._карантин["sess-loop"], соль)
+        self.assertEqual(proxy.stats["quarantine_loop_reused"], 0,
+                         "первая петля — не переиспользование")
+
+    def test_петля_и_в_повторе_обрыв(self):
+        # Петля и в повторе: ответ усечён, соль всё равно в _карантин (сессия не ходит в испорченный кэш).
+        self.Модель.ответы = [
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertIn("модель зациклилась, повтор запроса тоже", self.текст(список))
+        self.assertEqual(len(self.Модель.принятые), 2, "повтор один")
+        self.assertEqual(self.Модель.принятые[1]["cache_salt"],
+                         proxy._карантин["sess-loop"], "соль повторения в _карантин")
+        self.assertEqual((proxy.stats["loops_detected"], proxy.stats["loops_retried"],
+                          proxy.stats["loops_truncated"]), (2, 1, 1))
+
+    def test_без_карантина_повтор_без_соли(self):
+        # CACHE_QUARANTINE=off: повтор петли идёт со сдвигом сэмплинга, но без cache_salt.
+        proxy.CACHE_QUARANTINE = "off"
+        self.Модель.ответы = [
+            поток_ответа([("text", ВСТУПЛЕНИЕ + ПЛАН * 400)]),
+            поток_ответа([("text", "Готово.")])]
+        with contextlib.redirect_stderr(io.StringIO()):
+            список = self.спросить(ждать_карточку=False)
+        проверить_целостность(self, список)
+        self.assertEqual(len(self.Модель.принятые), 2)
+        self.assertNotIn("cache_salt", self.Модель.принятые[1], "без карантина — без соли")
+        self.assertEqual(proxy._карантин, {})
+
+
+class АтрибуцияПромахаTests(unittest.TestCase):
+    """Атрибуция промахов prefix cache (2026-10-24): отпечатки без тел, причина по двум соседним."""
+
+    def _doc(self, n, system="s", tools=None):
+        return {"model": "m", "system": system, "tools": tools or [],
+                "messages": [{"role": "user" if i % 2 == 0 else "assistant", "content": f"m{i}"} for i in range(n)]}
+
+    def test_продолжение_истории_не_меняет_отпечаток_префикса(self):
+        a, b = proxy.fingerprint(self._doc(3)), proxy.fingerprint(self._doc(5))
+        self.assertEqual(a["system"], b["system"])
+        self.assertEqual(a["msgs"], b["msgs"][:3])
+        self.assertIn("история продолжает прошлую (3→5 сообщений)", proxy.miss_verdict(a, b, 100, 1000))
+        self.assertIn("вытеснены из кэша движка", proxy.miss_verdict(a, b, 100, 1000))
+
+    def test_смена_системной_части_называется(self):
+        a, b = proxy.fingerprint(self._doc(3)), proxy.fingerprint(self._doc(3, system="другая"))
+        вердикт = proxy.miss_verdict(a, b, 0, 1000)
+        self.assertIn("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ", вердикт)
+        self.assertNotIn("вытеснены", вердикт)
+
+    def test_расхождение_истории_указывает_на_сообщение(self):
+        a = proxy.fingerprint(self._doc(5))
+        d = self._doc(5); d["messages"][2]["content"] = "переписано"
+        b = proxy.fingerprint(d)
+        self.assertIn("разошлась на сообщении 3 из 5 (в прошлом 5, совпали первые 2)", proxy.miss_verdict(a, b, 0, 1000))
+
+    def test_короче_прошлого_тоже_расхождение(self):
+        a, b = proxy.fingerprint(self._doc(6)), proxy.fingerprint(self._doc(4))
+        self.assertIn("разошлась на сообщении 5 из 4", proxy.miss_verdict(a, b, 0, 1000))
+
+    def test_состав_после_расхождения_без_содержимого(self):
+        a = proxy.fingerprint(self._doc(4))
+        d = self._doc(1)
+        d["messages"] = [
+            {"role": "user", "content": [{"type": "text", "text": "сводка " * 5000}]},
+            {"role": "assistant", "content": [{"type": "tool_use", "name": "Read", "id": "t1", "input": {"file_path": "x"}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "y" * 20000}]},
+        ]
+        d["tools"] = [{"name": f"t{i}", "description": "d" * 1000} for i in range(50)]
+        b = proxy.fingerprint(d)
+        вердикт = proxy.miss_verdict(a, b, 0, 1000)
+        self.assertIn("разошлась на сообщении 1 из 3", вердикт)
+        self.assertIn("#1 user 35K [text]", вердикт)
+        self.assertIn("#2 assistant 0K [tool_use Read]", вердикт)
+        self.assertIn("#3 user 20K [tool_result]", вердикт)
+        self.assertIn("tools 51K", вердикт)
+        self.assertNotIn("сводка", вердикт, "содержимого в строке быть не должно")
+
+    def test_состав_обрезается_до_шести(self):
+        a = proxy.fingerprint(self._doc(2))
+        d = self._doc(10); d["messages"][0]["content"] = "другое"
+        вердикт = proxy.miss_verdict(a, proxy.fingerprint(d), 0, 1000)
+        self.assertIn("#6 ", вердикт)
+        self.assertNotIn("#7 ", вердикт)
+        self.assertIn("… ещё 4", вердикт)
+
+    def test_первый_запрос_сессии(self):
+        self.assertIn("не видел", proxy.miss_verdict(None, proxy.fingerprint(self._doc(1)), 0, 10))
+
+    def test_attribute_miss_пишет_только_при_промахе_и_помнит_сессию(self):
+        proxy._отпечатки.clear()
+        усп = {"input_tokens": 1000, "cache_read_input_tokens": 990}
+        пром = {"input_tokens": 1000, "cache_read_input_tokens": 10}
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s1", proxy.fingerprint(self._doc(3)), усп, 0.3)
+        self.assertEqual(out.getvalue(), "", "99 % из кэша — не промах, строки нет")
+        self.assertEqual(proxy._отпечатки["s1"]["prompt"], 1000)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s1", proxy.fingerprint(self._doc(3, system="новая")), пром, 12.34)
+        строка = out.getvalue()
+        self.assertIn("промах кэша: сессия s1: из кэша 10 из 1000 (1%), prefill 12.3 с", строка)
+        self.assertIn("СИСТЕМНАЯ ЧАСТЬ ИЗМЕНИЛАСЬ", строка)
+        self.assertIn("промпт 1000→1000", строка)
+
+    def test_attribute_miss_без_usage_молчит(self):
+        proxy._отпечатки.clear()
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            proxy.attribute_miss("s2", proxy.fingerprint(self._doc(1)), {}, None)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("s2", proxy._отпечатки)
 
 
 if __name__ == "__main__":

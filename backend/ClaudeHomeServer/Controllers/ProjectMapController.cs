@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Docs;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,11 +18,9 @@ namespace ClaudeHomeServer.Controllers;
 ///
 /// Отдельный контроллер, а не ручка в DocsController: гигиена карты — не часть
 /// корпуса документации (корневой CLAUDE.md в область панели по умолчанию даже не
-/// входит). <c>scan</c> открыт без гейта: ничего не меняет и работает у теста
-/// волны 1 (план §11: «не обязательно, решает исполнитель»). <c>review</c> и
-/// <c>apply</c> закрыты флагом — пока он выключен, для пользователя этой фичи
-/// не существует (NotFound, не Forbid). <c>apply</c> пишет в CLAUDE.md, и открытая
-/// ручка записи при выключенной фиче была бы лишним риском.
+/// входит). <c>apply</c> пишет в CLAUDE.md, но только то, что человек
+/// отметил: непустой <c>ApplyRequest.Ids</c> — единственный путь записи, пустой список
+/// означает «применять нечего» и файл не трогает.
 /// </summary>
 [ProjectCapability(ProjectCapabilityArea.ServerContent, ProjectKey = "id")]
 [ApiController]
@@ -31,8 +30,7 @@ public class ProjectMapController(
     ProjectManager projects,
     ProjectMapScanner scanner,
     ProjectMapReviewService review,
-    ProjectMapApplyService apply,
-    FeatureFlagService flags) : ControllerBase
+    ProjectMapApplyService apply) : ControllerBase
 {
     // BaseSha — отпечаток карты с момента скана: по нему видно, что человек смотрит на
     // тот же файл, который сейчас разбирает сервер
@@ -44,20 +42,15 @@ public class ProjectMapController(
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Гейт фичи — на ручках записи (review, apply). scan не гейтится (план §11: «не
-    // обязательно»), и тест волны 1 не предполагает флага — единообразие тут
-    // спорит с поведением существующего теста
-    private bool FeatureEnabled() =>
-        flags.IsEnabled(UserId, FeatureFlagKeys.ProjectMapHygiene);
-
-    // Чужой проект — 404, а не 403: подтверждать его существование незачем (как у соседей).
+    // Доступ к проекту проверяет [ProjectScope] (чужой — 404, а не 403: существование не подтверждаем).
     // ct — RequestAborted: скан обходит дерево проекта целиком, и ушедший клиент не должен
     // оставлять обход работать
     [HttpGet("scan")]
+    [ProjectScope(Key = "id")]
     public ActionResult Scan(string id, CancellationToken ct)
     {
         var project = projects.GetById(id);
-        if (project is null || project.OwnerId != UserId) return NotFound();
+        if (project is null) return NotFound();
 
         return Ok(scanner.Scan(project.RootPath, ct));
     }
@@ -76,14 +69,11 @@ public class ProjectMapController(
     /// находками. Отказ здесь дёшев: человек видит «файл изменился · Проверить заново».
     /// </summary>
     [HttpPost("review")]
+    [ProjectScope(Key = "id")]
     public async Task<ActionResult> Review(string id, [FromBody] ReviewRequest? body, CancellationToken ct)
     {
-        // Гейт раньше владения: при выключенной фиче ответ одинаков для своего и чужого
-        // проекта, и существование ручки наружу не подтверждается ничем
-        if (!FeatureEnabled()) return NotFound();
-
         var project = projects.GetById(id);
-        if (project is null || project.OwnerId != UserId) return NotFound();
+        if (project is null) return NotFound();
 
         var report = scanner.Scan(project.RootPath, ct);
         // Карты нет вовсе (удалили или переименовали, пока отчёт был открыт) — тот же 409
@@ -102,15 +92,11 @@ public class ProjectMapController(
     /// предмет правки ровно один, корневой CLAUDE.md проекта (Р4).
     /// </summary>
     [HttpPost("apply")]
+    [ProjectScope(Key = "id", Right = ProjectRight.Write)]
     public async Task<ActionResult> Apply(string id, [FromBody] ApplyRequest? body, CancellationToken ct)
     {
-        // Гейт раньше владения — как на review: при выключенной фиче ответ одинаков для
-        // своего и чужого проекта. Ручка ПИШЕТ в CLAUDE.md, и открытой при выключенной
-        // фиче быть не должна ни на одном этапе
-        if (!FeatureEnabled()) return NotFound();
-
         var project = projects.GetById(id);
-        if (project is null || project.OwnerId != UserId) return NotFound();
+        if (project is null) return NotFound();
 
         var result = await apply.ApplyAsync(project.RootPath, body?.BaseSha, body?.Ids ?? [], ct);
         // Отпечаток разошёлся (карту дописали или её не стало) — файл не тронут, человек

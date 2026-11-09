@@ -62,8 +62,8 @@ public sealed class AudioEditJobService : IDisposable
     private readonly AudioPrefsService? _prefs;
     private readonly ISpendCollector? _spend;
     private readonly ISessionBroadcaster? _broadcaster;
+    private readonly ISessionDirectory? _sessions;
     private readonly Voices.VoiceLibrary? _voices;
-    private readonly IFeatureFlagGate? _flags;
     private readonly ChatContext.AudioContextLaunch? _context;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
@@ -83,9 +83,10 @@ public sealed class AudioEditJobService : IDisposable
         ISessionBroadcaster? broadcaster = null,
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
-        IFeatureFlagGate? flags = null,
-        ChatContext.AudioContextLaunch? context = null)
+        ChatContext.AudioContextLaunch? context = null,
+        ISessionDirectory? sessions = null)
     {
+        _sessions = sessions;
         _context = context;
         _engines = engines;
         _workspace = workspace;
@@ -96,13 +97,7 @@ public sealed class AudioEditJobService : IDisposable
         _broadcaster = broadcaster;
         _time = time ?? TimeProvider.System;
         _voices = voices;
-        _flags = flags;
     }
-
-    // «Авто» сначала пробует локальные модели — по флагу владельца local-media-default (ADR-021 §2).
-    // Явно выбранного поставщика флаг не трогает никогда
-    public bool PrefersLocal(string ownerId) =>
-        _flags?.IsEnabled(ownerId, FeatureFlagKeys.LocalMediaDefault) == true;
 
     private sealed record Quote(
         string Id, string OwnerId, string ScopeKey, string Mode, AudioOp Op, string Provider, AudioModelInfo Model,
@@ -145,6 +140,8 @@ public sealed class AudioEditJobService : IDisposable
         public int Variant { get; set; } = 1;
         public int? QueuePosition { get; set; }
         public int? EtaSeconds { get; set; }
+        // Снимок очереди GPU ComfyUI (шаг 29): живой, обновляется каждым отчётом прогресса
+        public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         public List<AudioJobVariantDto> Variants { get; } = [];
         public AudioCost? Cost { get; set; }
         public AudioOutcome? Outcome { get; set; }
@@ -161,7 +158,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Котировка ────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioQuoteDto>> QuoteAsync(
-        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioQuoteRequest request, CancellationToken ct, string? actorId = null)
     {
         if (!AudioModes.IsValid(request.Mode))
             return Fail<AudioQuoteDto>(AudioEditErrorCodes.InvalidRequest, $"Неизвестный режим: {request.Mode}");
@@ -174,7 +171,7 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioQuoteDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, request.SessionId, revision);
+            var read = _context.Read(ownerId, scope, request.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioQuoteDto>();
             contextState = read.State;
             requestThreadId = ChatContext.AudioContextLaunch.Extract(scope, contextState!, null).ThreadId;
@@ -221,7 +218,7 @@ public sealed class AudioEditJobService : IDisposable
         }
         else
         {
-            var candidates = AudioCatalog.AutoCandidates(_engines, scope, PrefersLocal(ownerId));
+            var candidates = AudioCatalog.AutoCandidates(_engines, scope, true);
             foreach (var candidate in candidates) await RefreshModelsQuietly(candidate, ct);
             (engine, model) = candidates
                 .Select(e => (Engine: e, Model: Pick(e, op, modelId, voiceKind)))
@@ -247,7 +244,7 @@ public sealed class AudioEditJobService : IDisposable
         var quote = new Quote(NewId(), ownerId, scope.Key, request.Mode, op, engine.Key, model, count, voiceKind, price,
             fields, Now() + QuoteTtl, Input: Billed.Of(request.Text, request.Prompt, request.Lyrics, request.DurationSec),
             ContextRevision: request.ContextRevision,
-            Executors: ChatContext.AudioExecutorRows.Build(_engines, scope, op, voiceKind, engine, model, price, PrefersLocal(ownerId)));
+            Executors: ChatContext.AudioExecutorRows.Build(_engines, scope, op, voiceKind, engine, model, price, true));
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return AudioEditCallResult<AudioQuoteDto>.Ok(ToDto(quote));
@@ -326,7 +323,7 @@ public sealed class AudioEditJobService : IDisposable
     // ── Запуск ───────────────────────────────────────────────────────────────────
 
     public async Task<AudioEditCallResult<AudioJobCreatedDto>> StartAsync(
-        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct)
+        string ownerId, AudioEditScope scope, AudioJobInput input, CancellationToken ct, string? actorId = null)
     {
         if (!_quotes.TryGetValue(input.QuoteId, out var quote)
             || quote.OwnerId != ownerId || quote.ScopeKey != scope.Key || quote.ExpiresAt < Now())
@@ -337,10 +334,10 @@ public sealed class AudioEditJobService : IDisposable
         {
             if (_context is null)
                 return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.Unavailable, ChatContext.AudioContextLaunch.UnavailableText);
-            var read = _context.Read(ownerId, scope, input.SessionId, revision);
+            var read = _context.Read(ownerId, scope, input.SessionId, revision, actorId);
             if (!read.Ok) return read.Fail<AudioJobCreatedDto>();
             if (quote.ContextRevision != revision)
-                return _context.Stale(ownerId, scope, input.SessionId!).Fail<AudioJobCreatedDto>();
+                return _context.Stale(ownerId, scope, input.SessionId!, actorId).Fail<AudioJobCreatedDto>();
             // Нить, версия-основа и голос — из стора; одноимённые поля тела игнорируются
             var fromContext = ChatContext.AudioContextLaunch.Extract(scope, read.State!, OpName(quote.Op));
             input = input with { ThreadId = fromContext.ThreadId, BaseVersionId = fromContext.VersionId, Voice = fromContext.VoiceRef };
@@ -407,9 +404,14 @@ public sealed class AudioEditJobService : IDisposable
                     quote.Fields.DeepClone().AsObject(), quote.Count) { Inputs = thread.Settings?.Inputs?.DeepClone().AsObject() }, ct);
         }
 
+        // Метка происхождения прогона (шаг 29): владелец, чат и тяжёлый ли — из задачи;
+        // вид=звук и операция драйвер берут сами. Запросы без задачи (тесты) метку не несут.
+        // Связь с источником (шаг 2): проект (из области) и job_id задачи — для LocalJobOrigin
         var request = new AudioRequest(quote.Op, quote.Model.Id, scope, input.Text, input.Prompt, input.Lyrics,
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
-            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value);
+            input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value,
+            OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job),
+            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 
         _workspace.Sweep(Now());
@@ -628,7 +630,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 AudioEditJobStatus.Completed, variants, partialError);
-        await Broadcast(job.OwnerId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditCompletedMessage(job.Id, job.Scope.Key, [.. variants.Select(v => v.Variant)],
             cost, partialError, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -663,7 +665,7 @@ public sealed class AudioEditJobService : IDisposable
         if (job is { ChatSessionId: { } sessionId, ThreadId: { } threadId })
             await _threads!.OnFinishedAsync(job.OwnerId, job.Scope.Key, sessionId, threadId, job.Id,
                 cancelled ? AudioEditJobStatus.Cancelled : AudioEditJobStatus.Failed, variants, result.Error);
-        await Broadcast(job.OwnerId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
+        await Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditFailedMessage(job.Id, job.Scope.Key, result.Outcome, charged, result.Error,
             retry, job.ChatSessionId, job.ThreadId, job.Initiator));
     }
 
@@ -841,18 +843,20 @@ public sealed class AudioEditJobService : IDisposable
                 };
                 job.QueuePosition = value.QueuePosition;
                 job.EtaSeconds = value.EtaSeconds;
+                job.Gpu = value.Gpu;
             }
-            _ = owner.Broadcast(job.OwnerId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
-                value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator));
+            _ = owner.Broadcast(job.OwnerId, AudioEditScope.ProjectIdOf(job.Scope.Key), job.ChatSessionId, new AudioEditProgressMessage(job.Id, job.Scope.Key, value.Stage,
+                value.QueuePosition, value.EtaSeconds, variant, job.Quote.Count, job.ChatSessionId, job.ThreadId, job.Initiator,
+                Gpu: value.Gpu));
         }
     }
 
-    private async Task Broadcast(string ownerId, ServerMessage message)
+    private async Task Broadcast(string ownerId, string? projectId, string? chatSessionId, ServerMessage message)
     {
         if (_broadcaster is null) return;
         try
         {
-            await _broadcaster.ToOwner(ownerId, message);
+            await _broadcaster.ToChatAudience(_sessions, ownerId, projectId, chatSessionId, message);
         }
         catch (Exception ex)
         {
@@ -910,6 +914,10 @@ public sealed class AudioEditJobService : IDisposable
 
     private static bool IsLocalHeavy(Quote q) => q.Heavy && q.Provider == Engines.LocalAudioEngine.ProviderKey;
 
+    // Тяжёлый ли прогон (шаг 29): у звука тяжёлые операции реально держат GPU (обучение RVC, разбор
+    // на дорожки, ACE-Step) — метка едет в LocalJobOrigin и в снимок очереди (Busy)
+    private static bool HeavyOf(Job job) => job.Quote.Heavy;
+
     public static string OpName(AudioOp op) => JsonNamingPolicy.CamelCase.ConvertName(op.ToString());
 
     private static bool TryParseOp(string? name, out AudioOp op)
@@ -940,7 +948,8 @@ public sealed class AudioEditJobService : IDisposable
         lock (j.Gate)
             return new AudioJobDto(j.Id, j.Scope.Key, j.Status, j.Quote.Provider, j.Quote.Model.Id, j.Quote.Op, j.Quote.Count,
                 [.. j.Variants], j.Cost, j.Outcome, j.Charged, j.Error, j.QueuePosition, j.EtaSeconds, j.CreatedAt,
-                j.ChatSessionId, j.ThreadId, j.Initiator, j.Quote.License);
+                j.ChatSessionId, j.ThreadId, j.Initiator, j.Quote.License,
+                Gpu: j.Gpu);
     }
 
     private void PruneQuotes()

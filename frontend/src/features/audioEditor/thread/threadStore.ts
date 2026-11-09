@@ -10,6 +10,7 @@ import {
   type AudioThreadsState,
 } from '../api';
 import type { AudioSelection } from '../player/selection';
+import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 import { SOUND_PANEL } from './panelKey';
 
 export { SOUND_PANEL };
@@ -28,6 +29,8 @@ export interface JobProgress {
   etaSeconds: number | null;
   variant: number;
   count: number;
+  // Снимок очереди GPU ComfyUI (шаг 29): живой, только отображение; null — поставщик не знает
+  gpu: LocalGpuQueueInfo | null;
 }
 
 const _entries = new Map<string, Entry>();
@@ -85,6 +88,7 @@ export function handleEvent(ev: AudioEvent) {
       _jobs.set(ev.jobId, {
         jobId: ev.jobId, sessionId: ev.chatSessionId, threadId: ev.threadId, stage: ev.stage,
         queuePosition: ev.queuePosition, etaSeconds: ev.etaSeconds, variant: ev.variant, count: ev.count,
+        gpu: ev.gpu ?? null,
       });
       emit();
       return;

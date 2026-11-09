@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images.LocalMedia;
 
@@ -28,7 +29,9 @@ public sealed partial class LocalMediaToolset(
     // Из отключаемой вертикали Images: выключена — инструменты честно отказывают
     LocalMediaService? media = null,
     // Живой прогресс local_jobs_wait в ленту; нет — вызов работает без прогресса
-    ISessionBroadcaster? broadcaster = null) : IMcpParameterizedToolset
+    ISessionBroadcaster? broadcaster = null,
+    // Актор хода — субъект приватности вложений; нет реестра — актор неизвестен (fail-closed)
+    ITurnActorRegistry? turnActors = null) : IMcpParameterizedToolset
 {
     public const string ServerName = McpEndpoints.LocalMediaName;
 
@@ -46,6 +49,8 @@ public sealed partial class LocalMediaToolset(
             return Deny("Локальная генерация выключена на этом сервере — используй облачные генераторы.");
         if (!TryResolveProject(session, context.OwnerId, out var project, out error)) return Deny(error);
 
+        var actor = turnActors?.Actor(session.Id, context.OwnerId);
+
         switch (tool)
         {
             case "local_generate_image":
@@ -56,7 +61,7 @@ public sealed partial class LocalMediaToolset(
                     Aspect: StringArg(arguments, "aspect"),
                     Steps: IntArg(arguments, "steps"),
                     Count: IntArg(arguments, "count"),
-                    Seed: LongArg(arguments, "seed")), ct);
+                    Seed: LongArg(arguments, "seed"), ActorId: actor), ct);
 
             case "local_edit_image":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -64,13 +69,13 @@ public sealed partial class LocalMediaToolset(
                     Prompt: StringArg(arguments, "prompt"),
                     Aspect: StringArg(arguments, "aspect"),
                     Seed: LongArg(arguments, "seed"),
-                    Images: StringListArg(arguments, "images")), ct);
+                    Images: StringListArg(arguments, "images"), ActorId: actor), ct);
 
             case "local_face_detail":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
                     LocalMediaOps.FaceDetail,
                     Seed: LongArg(arguments, "seed"),
-                    Images: [StringArg(arguments, "image") ?? ""]), ct);
+                    Images: [StringArg(arguments, "image") ?? ""], ActorId: actor), ct);
 
             case "local_text_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -80,7 +85,7 @@ public sealed partial class LocalMediaToolset(
                     VideoSize: StringArg(arguments, "size"),
                     Orientation: StringArg(arguments, "orientation"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Fast: BoolArg(arguments, "fast")), ct);
+                    Fast: BoolArg(arguments, "fast"), ActorId: actor), ct);
 
             case "local_image_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -91,7 +96,7 @@ public sealed partial class LocalMediaToolset(
                     LastFrame: StringArg(arguments, "last_frame"),
                     VideoSize: StringArg(arguments, "size"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Fast: BoolArg(arguments, "fast")), ct);
+                    Fast: BoolArg(arguments, "fast"), ActorId: actor), ct);
 
             case "local_reference_to_video":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -104,14 +109,14 @@ public sealed partial class LocalMediaToolset(
                     VideoSize: StringArg(arguments, "size"),
                     Orientation: StringArg(arguments, "orientation"),
                     DurationSeconds: IntArg(arguments, "duration_seconds"),
-                    Identity: StringArg(arguments, "identity")), ct);
+                    Identity: StringArg(arguments, "identity"), ActorId: actor), ct);
 
             case "local_video_upscale":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
                     LocalMediaOps.VideoUpscale,
                     Seed: LongArg(arguments, "seed"),
                     SourceJobId: StringArg(arguments, "job_id"),
-                    UpscaleTarget: StringArg(arguments, "target")), ct);
+                    UpscaleTarget: StringArg(arguments, "target"), ActorId: actor), ct);
 
             case "local_video_inpaint":
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id,
@@ -119,13 +124,13 @@ public sealed partial class LocalMediaToolset(
                     Prompt: StringArg(arguments, "prompt"),
                     Seed: LongArg(arguments, "seed"),
                     Video: StringArg(arguments, "video"),
-                    Mask: StringArg(arguments, "mask")), ct);
+                    Mask: StringArg(arguments, "mask"), ActorId: actor), ct);
 
             case var audio when AudioOps.TryGetValue(audio, out var op):
                 return await SubmitAsync(new LocalMediaRequest(context.OwnerId, project.Id, session.Id, op,
                     Prompt: StringArg(arguments, "prompt"),
                     Seed: LongArg(arguments, "seed"),
-                    Args: (JsonObject)arguments.DeepClone()), ct);
+                    Args: (JsonObject)arguments.DeepClone(), ActorId: actor), ct);
 
             case "local_job_status":
             {
@@ -499,19 +504,30 @@ public sealed partial class LocalMediaToolset(
 
     // Первое предложение КАЖДОГО генерирующего инструмента: модель, только что звавшая local_* в
     // этом чате, иначе продолжает звать его и на «нарисуй» без «локально» (QA 1e099019, дефект 2).
-    // Правило хвоста (флаг local-media-default) переопределяет запрет; текст от флага не зависит —
+    // Правило хвоста переопределяет запрет; текст от настроек не зависит —
     // описания входят в сигнатуру запуска CLI и prefix cache
     internal const string ExplicitOnly =
         "Есть в ходе правило хвостовой секции «Картинки и видео: локальная модель по умолчанию» — вызывай по нему. "
         + "Без него — вызывай ТОЛЬКО если пользователь явно попросил локальную генерацию (локально / нашими моделями / "
         + "на своей видеокарте / бесплатно) в ТЕКУЩЕЙ просьбе; иначе используй glif/fal. ";
 
+    // Перенаправление в редактор — только у тех local_*, что редактор умеет заменить целиком: картинка по тексту,
+    // правка по образцам, доводка лиц и оживление картинки. У остального (референсы, маска, апскейл по job_id, звук,
+    // видео без первого кадра) редактора с такими входами нет: обещание «делай через provider local» было бы враньём
+    internal const string ImageEditorRedirect =
+        "Но если тебе доступен image_generate (редактор картинок) — «локально» для картинок делай им с provider local, "
+        + "а не этим инструментом: иначе нет карточки в ленте и не записан формат. ";
+
+    internal const string VideoEditorRedirect =
+        "Но если тебе доступен video_shoot (редактор видео) — «локально» для видео с первым кадром делай им с provider local, "
+        + "а не этим инструментом: иначе нет карточки в ленте и не записан формат. ";
+
     private static IEnumerable<McpToolSchema> Schemas()
     {
         var aspects = new JsonArray([.. ComfyWorkflows.ImageSizes.Keys.Select(k => (JsonNode)k)]);
 
         yield return Tool("local_generate_image",
-            ExplicitOnly + "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, "
+            ExplicitOnly + ImageEditorRedirect + "Сгенерировать картинку по тексту НАШЕЙ моделью Qwen-Image 2.1 на своей GPU (бесплатно, "
             + "асинхронно). Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
             {
@@ -546,7 +562,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_edit_image",
-            ExplicitOnly + "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: "
+            ExplicitOnly + ImageEditorRedirect + "Отредактировать картинку НАШЕЙ моделью Qwen-Image 2.1 на своей GPU по 1–16 референсам: "
             + "первая картинка — основная (холст), остальные — дополнительные референсы (персонаж, предмет, стиль). "
             + "Возвращает job_id; результат жди через local_jobs_wait.",
             new JsonObject
@@ -575,7 +591,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_face_detail",
-            ExplicitOnly + "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их "
+            ExplicitOnly + ImageEditorRedirect + "Довести лица на готовой картинке (FaceDetailer: находит лица и перерисовывает их "
             + "детальнее) НАШЕЙ моделью на своей GPU. Возвращает job_id.",
             new JsonObject
             {
@@ -608,7 +624,7 @@ public sealed partial class LocalMediaToolset(
             });
 
         yield return Tool("local_image_to_video",
-            ExplicitOnly + "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — "
+            ExplicitOnly + VideoEditorRedirect + "Оживить картинку в видео со звуком НАШЕЙ моделью MiniMax H3 на своей GPU: первый кадр — "
             + "картинка, необязательный last_frame — последний кадр; prompt описывает движение, камеру, речь и звук. "
             + "Долго (" + I2vEtaText + "). Результат можно потом увеличить local_video_upscale. Возвращает job_id; "
             + "жди через local_jobs_wait.",

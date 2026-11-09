@@ -16,6 +16,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 // Ключевой инвариант — `ISpendCollector` и `SpendStore` указывают на ОДИН инстанс
 // (`sp => sp.GetRequiredService<SpendStore>()`). Тест `Register_SpendCollector_IsSameInstanceAsStore`
 // ловит регрессию «поставили `AddSingleton<ISpendCollector, SpendStore>()` и завели второй стор».
+[Trait("Category", "Host")]
 public class SpendSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig(string dataPath) =>
@@ -55,6 +56,31 @@ public class SpendSubsystemRegistrationTests
         services.Should().Contain(s => s.ServiceType == typeof(ISpendCollector));
         services.Should().Contain(s => s.ServiceType == typeof(SpendAnalyticsService));
         services.Should().Contain(s => s.ServiceType == typeof(TaskPromptMetricsStore));
+        // Шов расхода по фиче (обзор фич, волна 3, шаг Б9a) — тоже в подсистеме.
+        services.Should().Contain(s => s.ServiceType == typeof(ISpendFeatureReader));
+    }
+
+    // Отключаемость (п.5 шага Б9a): при выключенной подсистеме Register не вызывается,
+    // шов не зарегистрирован — потребитель (TasksController, шаг Б9b) берёт его
+    // опциональным и показывает расход фичи «≈».
+    [Fact]
+    public void Register_ПодсистемаВыключена_ШовНеЗарегистрирован()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()),
+                ["Subsystems:spend:Enabled"] = "false",
+            })
+            .Build();
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.AddLogging();
+        services.AddSubsystems(config, new SpendSubsystem());
+
+        services.Should().NotContain(s => s.ServiceType == typeof(ISpendFeatureReader),
+            "выключенная подсистема не зовёт Register — шов расхода по фиче не регистрируется");
+        services.Should().NotContain(s => s.ServiceType == typeof(SpendStore));
     }
 
     [Fact]

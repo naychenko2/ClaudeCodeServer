@@ -12,6 +12,9 @@ public sealed record ComfyStepProgress(int Step, int Total, int Stage)
 {
     // Честный процент текущей ноды; потолок 99 — «готово» говорит только история
     public int Percent => (int)Math.Floor(Math.Min(99.0, Step * 100.0 / Total));
+
+    // Доля 0..0.99: единственный источник арифметики Percent/100 (видео-адаптер и LoRA)
+    public double Fraction => Percent / 100.0;
 }
 
 // Шаги прогонов по событиям WebSocket ComfyUI (progress / executing / execution_*). Держит
@@ -39,6 +42,11 @@ public sealed class ComfyProgressTracker(Func<string, bool> isOurs, TimeProvider
     private readonly TimeProvider _time = time ?? TimeProvider.System;
 
     public ComfyProgressTracker(LocalMediaJobStore store, TimeProvider? time = null) : this(store.IsActivePrompt, time) { }
+
+    // + реестр прогонов (шаг 7): шаги копятся и для prompt_id из ComfyPromptLedger (прогоны
+    // редакторов, которых нет в сторе), а не только для активных задач local_*/LoRA
+    public ComfyProgressTracker(LocalMediaJobStore store, ComfyPromptLedger ledger, TimeProvider? time = null)
+        : this(id => store.IsActivePrompt(id) || ledger.Contains(id), time) { }
 
     // Сообщение обработано или знание сброшено — тесты ждут это событие, а не спят
     internal event Action? Changed;
@@ -119,8 +127,14 @@ public sealed class ComfyProgressListener(
     ComfyProgressTracker tracker,
     LocalMediaJobStore store,
     IConfiguration config,
-    ILogger<ComfyProgressListener> log) : BackgroundService
+    ILogger<ComfyProgressListener> log,
+    // Реестр прогонов (шаг 7): сокет держится и по ним — прогоны редакторов живут не в сторе.
+    // Необязательный: старые вызовы/тесты без него не ломаются
+    ComfyPromptLedger? ledger = null) : BackgroundService
 {
+    // «Есть активные»: задачи в сторе или прогоны в реестре (редакторы)
+    private bool HasActive() => store.HasActive() || (ledger?.HasActive() ?? false);
+
     // Подключение к сокету; тесты подменяют его фейковым сервером
     internal Func<Uri, CancellationToken, Task<WebSocket>> Connect { get; set; } = ConnectAsync;
 
@@ -146,7 +160,7 @@ public sealed class ComfyProgressListener(
         while (!stoppingToken.IsCancellationRequested)
         {
             var options = LocalMediaOptions.Read(config);
-            if (!options.Enabled || !store.HasActive())
+            if (!options.Enabled || !HasActive())
             {
                 if (!await DelayAsync(IdleDelay, stoppingToken)) return;
                 continue;
@@ -233,7 +247,7 @@ public sealed class ComfyProgressListener(
     private async Task WatchActiveAsync(CancellationTokenSource session)
     {
         while (await DelayAsync(IdleDelay, session.Token))
-            if (!store.HasActive() || !LocalMediaOptions.IsEnabled(config))
+            if (!HasActive() || !LocalMediaOptions.IsEnabled(config))
             {
                 await session.CancelAsync();
                 return;

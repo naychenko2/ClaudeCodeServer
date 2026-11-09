@@ -12,14 +12,22 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // B3 «Сфер»: персона сферы видит задачи и файлы ВСЕХ проектов сферы и ни одного вне её;
 // состав зоны считается на каждый вызов — выход проекта из сферы снимает доступ сразу.
-public class SphereZoneWorkspaceTests : IDisposable
+[Trait("Category", "Host")]
+public class SphereZoneWorkspaceTests : IClassFixture<SphereZoneWorkspaceTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферу, проекты и персон каждый тест заводит свои (новая
+    // группа проектов с уникальным id), перечислений «всех» нет; флаг spheres владельца —
+    // единственное общее состояние, его выставляет ArrangeAsync в начале каждого теста
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public SphereZoneWorkspaceTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public SphereZoneWorkspaceTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     private T Svc<T>() where T : notnull => _factory.Services.GetRequiredService<T>();
 
@@ -68,13 +76,14 @@ public class SphereZoneWorkspaceTests : IDisposable
         var (_, in1, _, outside, persona) = await ArrangeAsync();
         var bindings = Svc<PersonaBindingsService>();
         var personas = Svc<PersonaManager>();
-        var scopes = bindings.BuildExternalTaskScopes(OwnerId, persona);
-        // без справочника сфер валидатор отказывает всегда (fail-closed) — передаём, как контроллер
         var spheres = Svc<ISphereDirectory>();
+        var scopes = bindings.BuildExternalTaskScopes(OwnerId, persona);
 
         TaskPersonaValidator.Error(personas, OwnerId, persona.Id, in1, scopes, spheres).Should().BeNull();
         TaskPersonaValidator.Error(personas, OwnerId, persona.Id, outside, scopes, spheres).Should().NotBeNull();
-        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, null).Should().NotBeNull();
+        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, null, null, spheres).Should().NotBeNull();
+        // Без справочника зону проверить нечем — fail-closed, даже для проекта сферы
+        TaskPersonaValidator.Error(personas, OwnerId, persona.Id, in1, scopes).Should().NotBeNull();
     }
 
     [Fact]
@@ -83,7 +92,7 @@ public class SphereZoneWorkspaceTests : IDisposable
         var (_, _, _, _, persona) = await ArrangeAsync();
         var scopes = Svc<PersonaBindingsService>().BuildExternalTaskScopes(OwnerId, persona);
 
-        TaskPersonaValidator.Error(Svc<PersonaManager>(), OwnerId, persona.Id, null, scopes)
+        TaskPersonaValidator.Error(Svc<PersonaManager>(), OwnerId, persona.Id, null, scopes, Svc<ISphereDirectory>())
             .Should().Be("Персона сферы может выполнять только задачи проектов своей сферы");
     }
 

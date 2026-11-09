@@ -1,25 +1,38 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ComponentProps } from 'react';
 import { MessageCircle, Plus } from 'lucide-react';
 import type { AuthState, NoteDetail, NoteSemanticHit, NoteSummary } from '../../types';
 import { NewNoteDialog } from './NewNoteDialog';
 import {
-  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, CHAT_MAX_W, FAB_CLEAR_PAD,
+  subsystemTabValue, HubHeader, PillSwitch, C, FONT, ISLAND, R, TB, CHAT_MAX_W, FAB_CLEAR_PAD,
   api, useNotes, ensureNotesLoaded, existingTitleSet, bumpNotes, isFavorite, FAVORITE_TAG,
   useOnline, OfflineError, createNoteOffline,
   parseHash, navPush, navReplace, getNav,
-  Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE,
+  Button, IslandScaffold, ConfirmDialog, PageCanvas, ICON_SIZE, Chip,
   PanelZone, notesPanels, zoneOf, NOTES_KEYS, useIsMobile, useWindowWidth, useListAutoFocus,
+  FLAGS, useFeature, useWikiOpenRequest, consumeOpenWikiPage, requestOpenWikiPage, useWikiTree,
+  useWikiReplacementDot,
 } from 'aihome_shell/kit';
-import type { NavSnapshot } from 'aihome_shell/kit';
+import type { NavSnapshot, WikiSectionDto } from 'aihome_shell/kit';
 import type { HubTabValue } from 'aihome_shell/kit';
 import { NotesList } from './NotesList';
 import { NoteView } from './NoteView';
 import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
+import { WikiTab, defaultSectionKey } from './wiki/WikiTab';
+import { WikiZonePanel } from './wiki/WikiUnifiedChrome';
+import { WIKI_SUBTAB_PANEL } from './wiki/wikiTabs';
+import { WikiEmpty } from './wiki/WikiEmpty';
+import { resolveWikiScope, useWikiPanelScope } from './wiki/wikiPanelScope';
+import { useWikiRailCounts } from './wiki/useWikiRailCounts';
+import { OVERRIDE_TEXT } from './wiki/wikiLabels';
+import { WikiUnifiedTree, useEnsureWikiTree } from './wiki/WikiUnifiedTree';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 
-type Mode = 'notes' | 'graph';
+type Mode = 'notes' | 'graph' | 'wiki';
+
+const NO_SECTIONS: WikiSectionDto[] = [];
 
 // --- Чипы-фильтры списка: патчат операторы (tag:/status:) в строке поиска ---
 
@@ -45,19 +58,6 @@ function toggleToken(query: string, token: string, exclusivePrefix?: string): st
   return parts.join(' ');
 }
 
-function FilterChip({ on, label, onClick }: { on: boolean; label: string; onClick: () => void }) {
-  return (
-    <button onClick={onClick} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      border: `1px solid ${on ? C.accent : C.border}`, borderRadius: 12,
-      padding: '2px 9px', fontSize: 11, cursor: 'pointer', fontFamily: FONT.sans,
-      background: on ? C.accentMuted : 'transparent',
-      color: on ? C.textHeading : C.textMuted, fontWeight: on ? 600 : 400,
-      maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-    }}>{label}</button>
-  );
-}
-
 const filterCap: React.CSSProperties = {
   fontSize: 10, fontWeight: 600, letterSpacing: '.05em', textTransform: 'uppercase',
   color: C.textMuted, fontFamily: FONT.sans, marginBottom: 4,
@@ -81,6 +81,12 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const online = useOnline();
+  // Вкладка «Вики» — только при флаге llmWiki (dark launch): при выключенном флаге
+  // страница заметок ровно такая, какой была — ни вкладки, ни переключателя на десктопе
+  const wikiEnabled = useFeature(FLAGS.llmWiki);
+  // Единая раскладка (ADR-038, F1): дерево слева, рельса и панель справа, шторки на 360;
+  // только вместе с вики
+  const wikiUnified = wikiEnabled;
   // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске).
   // Тег избранного среди них не показываем: у него свой чип над группой фильтров.
   const allTags = useMemo(() => {
@@ -96,6 +102,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Режим МОБИЛЬНОЙ ветки: там панелей нет, разделами по-прежнему рулит переключатель.
   // На десктопе режим задаёт открытая панель графа (см. graphPanelOpen ниже).
   const [mobileMode, setMobileMode] = useState<Mode>('notes');
+  // Десктопный режим «Вики»: граф на десктопе — панель (своего mode у него нет), поэтому
+  // второй режим — отдельный флаг, а не третье значение mobileMode
+  const [wikiOn, setWikiOn] = useState(false);
+  // Открытая в центре страница вики — для выделения строки единого дерева (ADR-038, F2)
+  const [openedWiki, setOpenedWiki] = useState<{ section: string; page: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   // Активные фильтры-операторы в запросе — бейдж на свёрнутой группе «Фильтры»
@@ -112,18 +123,56 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Раздел живёт на рельсе панелей: список заметок и настройки графа — две
   // отдельные панели. Ширина, сворачивание и раскладка — в состоянии зон
   // (прежние sidebarMode + общая на все разделы ширина больше не нужны).
-  const { zones, close: closePanel } = notesPanels.use();
+  const { zones, close: closePanel, openIn: openPanelIn } = notesPanels.use();
   // На десктопе режим раздела определяется тем, открыта ли панель графа: она и
   // есть «вход в граф», а центр показывает то, чем сейчас управляют слева.
   const graphPanelOpen = zoneOf(zones, 'notesGraph') != null;
+  // Единое дерево «заметки + вики» (ADR-038, F2): на десктопе заменяет и список заметок, и дерево
+  // разделов вики. Дерево вики грузим сами — центральный WikiTab смонтирован не всегда
+  const unifiedLeft = wikiUnified && !isMobile && !graphPanelOpen;
+  useEnsureWikiTree(unifiedLeft);
+  const wikiTree = useWikiTree();
+  // Панели вики — панели зон раздела (W3): рельсу, раскладку и ширину держит стор notesPanels,
+  // своего состояния открытости здесь нет. Раздел для follow — выбранный в дереве или в WikiTab,
+  // до этого — по умолчанию
+  const [wikiSection, setWikiSection] = useState<string | null>(null);
+  const wikiPanelsOn = wikiUnified && !isMobile;
+  const wikiSections = wikiTree?.sections ?? NO_SECTIONS;
+  const wikiStarted = wikiTree?.initialized === true && wikiSections.length > 0;
+  const wikiFollowKey = wikiSection ?? defaultSectionKey(wikiSections);
+  // Числа рельсы «Здоровья» считаются по тому же разделу, что показывает панель
+  const [healthScope] = useWikiPanelScope('wikiHealth');
+  const healthScoped = resolveWikiScope(healthScope, { followKey: wikiFollowKey, sectionKeys: wikiSections.map(x => x.key) });
+  const railCounts = useWikiRailCounts(healthScoped === 'all' ? null : healthScoped, wikiPanelsOn && wikiStarted);
+  const replacementDot = useWikiReplacementDot();
+  const railBadges = useMemo<ComponentProps<typeof PanelZone>['railBadges']>(() => {
+    if (!wikiPanelsOn || !wikiStarted) return undefined;
+    return {
+      ...(railCounts.inbox ? { wikiInbox: { primary: railCounts.inbox, primaryTone: 'accent' as const, hint: `${railCounts.inbox} ждут вашего решения` } } : null),
+      ...(railCounts.health ? { wikiHealth: { primary: railCounts.health, primaryTone: 'warning' as const, hint: `${railCounts.health} проблемы` } } : null),
+      ...(replacementDot ? { wikiJournal: { dot: 'info' as const, hint: OVERRIDE_TEXT.dotTitle } } : null),
+    };
+  }, [wikiPanelsOn, wikiStarted, railCounts.inbox, railCounts.health, replacementDot]);
 
-  // Уйти из графа обратно к заметкам: на мобиле это смена режима, на десктопе —
-  // закрытие панели графа (центр сам вернётся к заметке). Ссылка стабильна —
-  // функцию слушает эффект AI-хаба, и пересоздание переподписывало бы его каждый рендер.
-  const leaveGraph = useCallback(() => {
+  // Вернуться к заметкам из любого режима: снять панель графа, вкладку «Вики» и мобильный
+  // режим. Ссылка стабильна — функцию слушает эффект AI-хаба, и пересоздание
+  // переподписывало бы его каждый рендер.
+  const goToNotes = useCallback(() => {
     setMobileMode('notes');
+    setWikiOn(false);
     closePanel('notesGraph');
   }, [closePanel]);
+
+  // Выбор заметки открывает заметку независимо от активной вкладки: снимаем режим «Вики» —
+  // десктопный флаг и мобильный режим ветки (иначе центр продолжал бы рисовать WikiTab
+  // при выставленном selectedId — мёртвый клик, доработка S5d, major ревью). Стабильна
+  // (без deps): её слушает эффект диплинка, пересоздание переподписывало бы его каждый рендер.
+  const selectNote = useCallback((id: string) => {
+    setMobileMode('notes');
+    setWikiOn(false);
+    setOpenedWiki(null);
+    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
+  }, []);
 
   useEffect(() => { void ensureNotesLoaded(); }, []);
 
@@ -139,6 +188,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null;
       if (s?.screen === 'notes') {
+        // История указывает на заметку — показываем заметку: снимаем режим «Вики» тем же
+        // порядком, что selectNote (экран обязан совпадать с тем, на что указывает история)
+        if (s.note) { setMobileMode('notes'); setWikiOn(false); }
         setSelectedId(s.note ?? null);
         setMobileView(s.note ? 'note' : 'list');
       }
@@ -148,21 +200,23 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, []);
 
   // Открытие заметки по заголовку (из [[wikilink]] в файлах/чате). Заголовок в
-  // sessionStorage; ждём загрузки списка (deps: notes) и открываем по совпадению.
+  // sessionStorage; ждём загрузки списка (deps: notes, selectNote) и открываем по совпадению.
   useEffect(() => {
+    // Открытие заметки извне (чат/файл) — тем же selectNote: заметка открывается
+    // независимо от активной вкладки, тот же инвариант
     const consume = () => {
       // По id (из графа сайдбара FileViewer) — приоритетнее
       const id = sessionStorage.getItem('cc_pending_note_id');
-      if (id) { sessionStorage.removeItem('cc_pending_note_id'); setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id }); return; }
+      if (id) { sessionStorage.removeItem('cc_pending_note_id'); selectNote(id); return; }
       const title = sessionStorage.getItem('cc_pending_note_title');
       if (!title) return;
       const n = notes.find(x => x.title.trim().toLowerCase() === title.trim().toLowerCase());
-      if (n) { sessionStorage.removeItem('cc_pending_note_title'); setSelectedId(n.id); setMobileView('note'); navPush({ screen: 'notes', note: n.id }); }
+      if (n) { sessionStorage.removeItem('cc_pending_note_title'); selectNote(n.id); }
     };
     consume();
     window.addEventListener('cc-open-note', consume);
     return () => window.removeEventListener('cc-open-note', consume);
-  }, [notes]);
+  }, [notes, selectNote]);
 
   // Синхронизация офлайн-заметки сменила её id (localKey/старый serverId → серверный):
   // если открыта эта заметка — переключаемся на новый id.
@@ -191,13 +245,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   useEffect(() => {
     const onRun = (e: Event) => {
       if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'note.semantic') return;
-      leaveGraph();
+      goToNotes();
       if (semanticAvailable) setSearchMode('semantic');
       if (searchShouldFocus) setTimeout(() => searchInputRef.current?.focus(), 50);
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
-  }, [semanticAvailable, leaveGraph, searchShouldFocus]);
+  }, [semanticAvailable, goToNotes, searchShouldFocus]);
   useEffect(() => {
     const q = query.trim();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе
@@ -232,10 +286,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...s].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes]);
 
-  const selectNote = (id: string) => {
-    setSelectedId(id); setMobileView('note'); navPush({ screen: 'notes', note: id });
-  };
-
   // Возврат к списку (удаление/кнопка «назад» на мобилке): снимаем выбор и
   // откатываем запись истории с note к списку (детерминированно, как в «Чатах»).
   const clearNote = () => { setSelectedId(null); setMobileView('list'); if (getNav()?.note) navReplace({ screen: 'notes' }); };
@@ -267,7 +317,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const openDaily = () => {
     const d = new Date();
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    void api.notes.daily(iso).then(n => { bumpNotes(); leaveGraph(); selectNote(n.id); });
+    void api.notes.daily(iso).then(n => { bumpNotes(); goToNotes(); selectNote(n.id); });
   };
 
   const askClaude = (note: NoteDetail) => {
@@ -277,16 +327,46 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     onHubTab('chats');
   };
 
-  // Управление разделом. На десктопе список и граф — две панели рельсы, поэтому
-  // переключатель режима там не нужен: withModeSwitch остаётся только для мобилы,
-  // где панелей нет. listMode — показывать ли поиск и фильтры списка.
+  // Управление разделом. На мобиле панелей нет, и переключатель там полный:
+  // «Заметки | Вики | Граф» (макет llm-wiki-v2, 360). На десктопе список и граф — панели
+  // рельсы, граф не режим, поэтому десктопный переключатель — «Заметки | Вики» и только
+  // при включённом флаге. listMode — показывать ли поиск и фильтры списка.
+  const modeOptions: { value: Mode; label: string }[] = [
+    { value: 'notes', label: 'Заметки' },
+    // в spread контекст аннотации не доходит — значения приводятся к Mode явно
+    ...(wikiEnabled ? [{ value: 'wiki' as Mode, label: 'Вики' }] : []),
+    ...(isMobile ? [{ value: 'graph' as Mode, label: 'Граф' }] : []),
+  ];
+  // Значение переключателя на десктопе: при открытой панели графа — ни один сегмент
+  // (PillSwitch: value вне options не подсвечивает ничего — честная картина, «Заметки»
+  // не выглядят выбранными при открытом графе)
+  const switcherValue: Mode = isMobile ? mobileMode : graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes';
+  const switchMode = useCallback((v: Mode) => {
+    if (isMobile) { setMobileMode(v); return; }
+    setWikiOn(v === 'wiki');
+    // Центр показывает одно: вход в «Вики» или возврат к «Заметкам» закрывает панель графа
+    closePanel('notesGraph');
+  }, [isMobile, closePanel]);
+
+  // Запрос «Открыть хронику» из шапки чата (OPEN-1): страницу открывает сам WikiTab —
+  // запрос живёт в сторе вики до его монтирования. Задача страницы — переключить на
+  // «Вики»: при монтировании и по появлению запроса (тот же switchMode, что у клика по
+  // сегменту: на десктопе он ещё и закрывает панель графа — центр показывает одно).
+  // При выключенном флаге запрос снимается: вики на странице нет, и запрос не должен
+  // остаться, когда флаг включится позже.
+  const openWikiReq = useWikiOpenRequest();
+  useEffect(() => {
+    if (!openWikiReq) return;
+    if (!wikiEnabled) { consumeOpenWikiPage(); return; }
+    switchMode('wiki');
+  }, [openWikiReq, wikiEnabled, switchMode]);
   const sidebarControls = ({ withModeSwitch, listMode }: { withModeSwitch: boolean; listMode: boolean }) => (
     <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', gap: 8, flex: 'none' }}>
       {withModeSwitch && (
         <PillSwitch<Mode>
           fill
-          value={mobileMode} onChange={setMobileMode}
-          options={[{ value: 'notes', label: 'Заметки' }, { value: 'graph', label: 'Граф' }]}
+          value={switcherValue} onChange={switchMode}
+          options={modeOptions}
         />
       )}
       {listMode && (
@@ -318,11 +398,13 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           ради одного клика фича и делалась, за раскрытием «Фильтров» она бы потерялась */}
       {listMode && favoriteCount > 0 && (
         <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-          <FilterChip
-            on={hasToken(query, FAVORITE_TOKEN)}
-            label={`★ Избранное · ${favoriteCount}`}
+          <Chip
+            variant="toggle" large={isMobile} minHeight={isMobile ? 40 : undefined}
+            selected={hasToken(query, FAVORITE_TOKEN)}
             onClick={() => setQuery(toggleToken(query, FAVORITE_TOKEN))}
-          />
+          >
+            ★ Избранное · {favoriteCount}
+          </Chip>
         </div>
       )}
       {/* Фильтры списка — свёрнутая группа (бейдж показывает активные, когда закрыта).
@@ -351,13 +433,20 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                 {(tagsExpanded ? allTags : allTags.slice(0, TAGS_COLLAPSED)).map(([tag, count]) => {
                   const token = `tag:${tag}`;
                   return (
-                    <FilterChip key={tag} on={hasToken(query, token)} label={`#${tag} · ${count}`}
-                      onClick={() => setQuery(toggleToken(query, token))} />
+                    <Chip key={tag} variant="toggle" maxW="100%" large={isMobile} minHeight={isMobile ? 40 : undefined}
+                      selected={hasToken(query, token)}
+                      onClick={() => setQuery(toggleToken(query, token))}
+                    >
+                      #{tag} · {count}
+                    </Chip>
                   );
                 })}
                 {allTags.length > TAGS_COLLAPSED && (
-                  <FilterChip on={false} label={tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
-                    onClick={() => setTagsExpanded(v => !v)} />
+                  <Chip variant="toggle" selected={false} large={isMobile} minHeight={isMobile ? 40 : undefined}
+                    onClick={() => setTagsExpanded(v => !v)}
+                  >
+                    {tagsExpanded ? 'Свернуть' : `+${allTags.length - TAGS_COLLAPSED}`}
+                  </Chip>
                 )}
               </div>
             </div>
@@ -374,21 +463,29 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
                   ['status:resolved', 'Решённые', notes.filter(n => n.annotation && !n.annotation.isReply && n.annotation.status === 'resolved').length],
                   ['status:orphaned', 'Сироты', null],
                 ] as const).map(([token, label, count]) => (
-                  <FilterChip key={token} on={hasToken(query, token)}
-                    label={count != null && count > 0 ? `${label} · ${count}` : label}
-                    onClick={() => setQuery(toggleToken(query, token, 'status:'))} />
+                  <Chip key={token} variant="toggle" large={isMobile} minHeight={isMobile ? 40 : undefined}
+                    selected={hasToken(query, token)}
+                    onClick={() => setQuery(toggleToken(query, token, 'status:'))}
+                  >
+                    {count != null && count > 0 ? `${label} · ${count}` : label}
+                  </Chip>
                 ))}
               </div>
             </div>
           )}
         </CollapseGroup>
       )}
+      {/* Тач-цели на мобиле — не меньше TB.iconHitMobile (40 px): высота обеих кнопок,
+          ширина — иконочной («Дневниковая заметка»): без подписи её ширина держится
+          только на паддингах. На десктопе размеры те же, что и были */}
       <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => setNewDialog({})} style={{ ...newBtn, flex: 1, justifyContent: 'center' }}>
+        <button onClick={() => setNewDialog({})}
+          style={{ ...newBtn, flex: 1, justifyContent: 'center', ...(isMobile ? { minHeight: TB.iconHitMobile } : {}) }}>
           <IconPlus />Новая
         </button>
         <button onClick={openDaily} title="Дневниковая заметка на сегодня"
-          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}` }}>
+          style={{ ...newBtn, background: 'transparent', color: C.textSecondary, border: `1px solid ${C.border}`,
+            ...(isMobile ? { minWidth: TB.iconHitMobile, minHeight: TB.iconHitMobile, justifyContent: 'center' } : {}) }}>
           <IconCalendarDay />
         </button>
       </div>
@@ -448,9 +545,28 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Панели рельсы: «Заметки» (поиск, фильтры, список) и «Граф» (статистика и
   // настройки карты связей). Заголовок каждой рисует PanelShell.
   const zonePanels = {
-    notesList: (
+    notesList: unifiedLeft ? (
+      // Единая раскладка: одно дерево — заметки и страницы вики вперемешку, переключателя
+      // режимов нет; страница вики открывается в центре запросом в стор вики
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
         {sidebarControls({ withModeSwitch: false, listMode: true })}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <WikiUnifiedTree
+            sections={wikiTree?.sections ?? NO_SECTIONS} notes={listed} query={query}
+            selectedNoteId={wikiOn ? null : selectedId} selectedPage={wikiOn ? openedWiki : null}
+            // Чип панелей вики идёт за разделом выбранной заметки; у узла «Другие заметки» ключа
+            // нет (null) — раздел чипа не меняется
+            onSelectNote={(id, sectionKey) => { if (sectionKey) setWikiSection(sectionKey); selectNote(id); }}
+            onOpenPage={(section, page) => {
+              setOpenedWiki({ section, page });
+              requestOpenWikiPage({ section, path: page });
+            }}
+          />
+        </div>
+      </div>
+    ) : (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
+        {sidebarControls({ withModeSwitch: wikiEnabled && !wikiPanelsOn, listMode: true })}
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>{listPane}</div>
       </div>
     ),
@@ -459,18 +575,45 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         {graphSidebar}
       </div>
     ),
+    // Панели вики: без флага и на мобиле контента нет (null) — набор allowedKeys при этом
+    // статичный, а сохранённая раскладка (открытая панель) переживает выключение флага
+    ...Object.fromEntries((['inbox', 'journal', 'health', 'settings'] as const).map(tab => [
+      WIKI_SUBTAB_PANEL[tab],
+      wikiPanelsOn
+        ? <WikiZonePanel tab={tab} followKey={wikiFollowKey} sections={wikiSections} started={wikiStarted} />
+        : null,
+    ])),
   };
 
   // Центральная зона: заметка/пустое состояние или граф. Десктоп (hero-стиль
   // «как календарь и чаты»): центр без общего острова — заметка сама рисует
   // заголовок на холсте + тело-остров; граф оборачивается в остров здесь.
-  // Что показывать в центре: на мобиле — выбранный режим, на десктопе — граф,
-  // пока открыта его панель (она и есть вход в карту связей)
-  const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : 'notes');
-  const centerPane = mode === 'graph'
+  // Что показывать в центре: на мобиле — выбранный режим, на десктопе — граф, пока
+  // открыта его панель (она и есть вход в карту связей), иначе «Вики», если включён
+  // десктопный режим вкладки
+  const mode: Mode = isMobile ? mobileMode : (graphPanelOpen ? 'graph' : wikiOn ? 'wiki' : 'notes');
+  const centerPane = mode === 'wiki'
+    ? <WikiTab unified={wikiUnified} onSectionChange={setWikiSection}
+        // На 360 шторка показывает то же единое дерево, что левая зона десктопа; поиск и фильтры — над ним
+        drawerTree={wikiUnified && isMobile ? close => (
+          <>
+            {sidebarControls({ withModeSwitch: false, listMode: true })}
+            <WikiUnifiedTree
+              sections={wikiTree?.sections ?? NO_SECTIONS} notes={listed} query={query}
+              selectedNoteId={null} selectedPage={openedWiki}
+              onSelectNote={selectNote}
+              onOpenPage={(section, page) => {
+                setOpenedWiki({ section, page });
+                requestOpenWikiPage({ section, path: page });
+                close();
+              }}
+            />
+          </>
+        ) : undefined} />
+    : mode === 'graph'
     ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         ...(!isMobile ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}) }}>
-        <NotesGraph selectedId={selectedId} onSelectNode={id => { leaveGraph(); selectNote(id); }}
+        <NotesGraph selectedId={selectedId} onSelectNode={id => { goToNotes(); selectNote(id); }}
           maxNodes={isMobile ? 40 : undefined}
           settings={graphSettings} onSettingsChange={setGraphSettings}
           hidePanel={false} onStats={setGraphStats} />
@@ -484,6 +627,9 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           onDeleted={clearNote} />
       // Приветствие раздела — в стиле хаба «Персон»: заголовок как у Календаря,
       // кнопка создания — справа от него, общим Button (как «Проект» и «Задача»)
+      : wikiPanelsOn && wikiTree?.initialized === false
+      // Ничего не выбрано и вики пуста: вместо приветствия «Заметок» — пояснение, что вики наполнится сама
+      ? <WikiEmpty onOpenSettings={() => openPanelIn('right', 'wikiSettings')} />
       : <div style={{ height: '100%', overflowY: 'auto' }}>
           {/* Ширина колонки — как у центра раздела «Проекты» (CHAT_MAX_W) */}
           <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', padding: '28px 32px 60px' }}>
@@ -506,8 +652,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
         </div>;
 
   const body = isMobile ? (
-    // Мобайл: один экран за раз — сайдбар (список/фильтры+граф) ↔ заметка
-    mode === 'graph'
+    // Мобайл: один экран за раз — сайдбар (список/фильтры) ↔ граф ↔ «Вики» ↔ заметка
+    mode === 'graph' || mode === 'wiki'
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
           {sidebarControls({ withModeSwitch: true, listMode: false })}
           <div style={{ flex: 1, minHeight: 0, background: C.bgMain }}>{centerPane}</div>
@@ -523,7 +669,8 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     // гамбургера разделу больше не нужно.
     <IslandScaffold
       left={<PanelZone side="left" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
-      right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
+      right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels}
+        hat={wikiPanelsOn ? 'Вики' : undefined} hatTitle={wikiPanelsOn ? 'Панели вики' : undefined} railBadges={railBadges} />}
       centerBare
       // Компенсация перекоса зон — только для приветствия: у него колонка
       // фиксированной ширины, и без компенсации оно уезжает вслед за центром, стоит

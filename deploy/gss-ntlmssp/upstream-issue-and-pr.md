@@ -84,3 +84,35 @@ An offline recomputation of the MIC over Type2 with `MsvAvFlags = 0x2` reproduce
 
 Pass `NULL` instead of `&av_flags` to `ntlm_encode_target_info()` when `av_flags` is 0. The MIC verification is not
 weakened. Verification: see the live Windows check in the task result (patched `+ccs2` against a stand).
+
+## Третий дефект: домен для NTOWFv2 берётся из строки файла, а не от клиента (отдельный issue, патч [ntlm-domainless-row-uses-client-domain.diff](ntlm-domainless-row-uses-client-domain.diff))
+
+### Issue
+
+**Title:** Acceptor computes NTOWFv2 with the domain from the user-file entry (or an empty domain), so a client-supplied domain of another spelling never verifies
+
+**Body:**
+
+`gssntlm_srv_auth()` (`gss_auth.c`) computes the NTLMv2 key with `cred->cred.user.user.data.user.domain` and, on
+failure, once more with no domain. `get_user_file_creds()` (`gss_creds.c`) picks the file entry with a case-insensitive
+domain comparison, and an entry **without** a domain matches any client domain but leaves the credential's domain NULL.
+Per [MS-NLMP] 3.3.2 the client computes `NTOWFv2(Passwd, User, UserDom)` with `UserDom` in the exact spelling it sends in
+the AUTHENTICATE_MESSAGE, so:
+
+- an entry `user:...` (no domain) cannot verify a client that sends any domain, e.g. a Windows SSPI client
+  authenticating a bare local login: it sends `.` or the **client machine name**, which the server cannot predict;
+- an entry `WORKGROUP\user:...` matches a client that sends `workgroup`, but the hash is computed with the spelling from the
+  file, so the response never verifies (`GENERIC_FAILURE`, `GSSNTLMSSP_DEBUG` shows the response check failing).
+
+### Pull request
+
+**Title:** Verify NTLMv2 with the domain sent by the client as well
+
+In `gssntlm_srv_auth()` try, in order, the domain of the matched entry, the domain from `ctx->source_name` (the one the
+client sent, exact spelling) and no domain; equal tries are skipped. Every try is verified against NTProofStr by
+`ntlmv2_verify_nt_response()`, so a wrong password is still rejected with any domain, and the domain is not a secret.
+
+Verification: raw NTLMv2 client (Windows-like Type1/Type3, SPNEGO, CBT) against a GSSAPI acceptor with a
+user file `user` (no domain) and `WORKGROUP\user`: domains `''`, `VIDEO`, `ANYTHING`, `.`, `workgroup`, `WORKGROUP`
+authenticate, a wrong password is rejected with each; before the patch only `''` and the exact spelling of the entry pass.
+Suggested upstream test: an NTLMv2 acceptor case with a domain-less user-file entry and a client domain of its own.

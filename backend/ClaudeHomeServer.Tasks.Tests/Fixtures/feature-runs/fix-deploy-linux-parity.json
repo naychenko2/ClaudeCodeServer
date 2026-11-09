@@ -1,0 +1,33 @@
+[
+ {
+  "id": "epic-deploy-linux-parity",
+  "title": "Выкатка Linux: вернуть этапы Windows-агента — бэкап данных, образ песочницы, список снимков",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-15T05:38",
+  "completed": "2026-10-15T07:06",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "fix/deploy-linux-parity",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "dlp-s1",
+  "title": "Денис: switch-release.sh — бэкап данных, образ песочницы, снимки для отката",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-15T05:38",
+  "completed": "2026-10-15T07:06",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-deploy-linux-parity",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

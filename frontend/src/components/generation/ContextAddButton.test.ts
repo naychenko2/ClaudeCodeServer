@@ -2,6 +2,7 @@
 // плашка или переключатель, когда объект уже в контексте. Окружение node — рисуем в строку.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
+import { C } from '../../lib/design';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 vi.stubGlobal('window', Object.assign(new EventTarget(), {
@@ -25,7 +26,7 @@ const kindApi = (roles: { role: string; label: string }[]) => ({ kinds: ['image'
 const install = (roles: { role: string; label: string }[]) => registerSubsystem({
   key: 'add-button-test', title: 't', order: 1, noPill: true, core: true, slots: { 'context-kind': [{ name: 'image', action: kindApi(roles) as never }] },
 });
-const html = (toggle = false) => renderToStaticMarkup(createElement(ContextAddButton, { sessionId: S, projectId: 'p', candidate: file, toggle }));
+const html = (toggle = false, size?: 'lg') => renderToStaticMarkup(createElement(ContextAddButton, { sessionId: S, projectId: 'p', candidate: file, toggle, size }));
 const put = (p: typeof primary | null, refs: typeof inCtx[] = []) => __applyChatContext(S, { revision: 1, primary: p, refs });
 
 beforeEach(() => { __resetChatContextStore(); install([{ role: 'style', label: 'Как образец стиля' }]); });
@@ -67,5 +68,50 @@ describe('«В контекст ▾»', () => {
     const t = html(true);
     expect(t).toContain('Убрать из контекста');
     expect(t).not.toContain('образец стиля');
+  });
+});
+
+describe('размер lg', () => {
+  it('подписи «В контекст чата» / «В контексте» и иконки Plus / Check', () => {
+    put(primary);
+    const add = html(false, 'lg');
+    expect(add).toContain('В контекст чата');
+    expect(add).toContain('lucide-plus');
+    expect(add).toContain('data-context-add="add"');
+    put(primary, [inCtx]);
+    const inside = html(true, 'lg');
+    expect(inside).toContain('В контексте');
+    expect(inside).toContain('lucide-check');
+    expect(inside).toContain('Убрать из контекста');
+  });
+
+  it('«В контексте» — secondary (приглушённо), «В контекст чата» — primary с акцентом', () => {
+    put(primary);
+    expect(html(false, 'lg')).toContain(`background:${C.accent}`);
+    put(primary, [inCtx]);
+    const inside = html(true, 'lg');
+    expect(inside).toContain(`background:${C.bgPanel}`);
+    expect(inside).not.toContain(`background:${C.accent}`);
+  });
+
+  it('те же причины отказа: disabled', () => {
+    put(null);
+    const h = html(false, 'lg');
+    expect(h).toContain('disabled');
+    expect(h).toContain(NO_PRIMARY_REASON);
+    install([]);
+    put(primary);
+    expect(html(false, 'lg')).toContain(NO_ROLE_REASON);
+  });
+
+  it('несколько ролей — меню (стрелки нет, подсказка про выбор роли)', () => {
+    install([{ role: 'style', label: 'Как образец стиля' }, { role: 'object', label: 'Как объект' }]);
+    put(primary);
+    expect(html(false, 'lg')).toContain('Выбрать роль');
+  });
+
+  it('xs остаётся прежним: подписи «В контекст» без lg-текста', () => {
+    put(primary);
+    expect(html()).not.toContain('В контекст чата');
   });
 });

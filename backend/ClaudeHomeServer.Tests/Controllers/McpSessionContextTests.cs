@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// Сессия берётся из заголовка X-Caller-Session-Id (его ставит общий api() MCP-сервера),
 /// а не из параметра: иначе модель спросила бы состав чужого чата.
 /// </summary>
+[Trait("Category", "Host")]
 public class McpSessionContextTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;

@@ -82,10 +82,10 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
 
   async function pick(a: OllamaActionInfo, route: string) {
     setBusy(a.key); setError(null);
-    patch({ ...a, route, preset: null, routedToOllama: route === 'local', source: 'admin' });
+    patch({ ...a, route, preset: null, engine: null, routedToOllama: route === 'local', source: 'admin' });
     try {
       const res = await api.localActions.setRoute(a.key, route);
-      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, engine: res.engine ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       void loadModels();
       // Кэш effective-line ключуется по actionKey и сам по себе не видит смену маршрута —
@@ -99,7 +99,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
     setBusy(a.key); setError(null);
     try {
       const res = await api.localActions.reset(a.key);
-      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, engine: res.engine ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       invalidateEffectiveLines();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сбросить'); }
@@ -243,7 +243,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
 
   const triggerLabel = brokenPreset
     ? 'Цепочка удалена — по умолчанию'
-    : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels);
+    : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels, a.engine);
 
   return (
     <div className="cc-mprov-row" style={{
@@ -267,6 +267,14 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
         </div>
         {/* «Сейчас пойдёт» — серверный резолв места */}
         <EffectiveLine ctx={{ kind: 'action', actionKey: a.key }} />
+        {/* Голосовой чат: override на модели другого поставщика ломает транскрипт (CLI
+            стартует в чужом профиле с --resume), поэтому бэкенд применяет её, только к
+            чатам того же поставщика — подсказка, чтобы админ не ждал чуда. */}
+        {a.key === 'chat-voice' && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+            Модель другого поставщика применяется только к чатам того же поставщика.
+          </div>
+        )}
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
@@ -300,6 +308,9 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
           busy={busy}
           onChange={onPick}
           manual={{ models, presetIds: globalPresetIds }}
+          // Контекст места (ADR-027 §2): место с картинками прячет слепые маршруты,
+          // место ракурса показывает «Локально, InsightFace». Обычные места — как раньше.
+          place={{ input: a.input ?? 'text', facePose: !!a.facePose }}
         />
       </div>
     </div>

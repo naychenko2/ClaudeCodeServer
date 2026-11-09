@@ -2,6 +2,33 @@
 
 public enum SessionStatus { Starting, Working, Active, Waiting, Finished, Error, Orphaned }
 
+// Накопленный снимок cost-state CLI (записи {"type":"cost-state"} в транскрипте) на момент
+// последнего хода сессии: токены по каждой модели (modelUsage) + total_cost_usd. CLI с 24.09
+// восстанавливает эти итоги на --resume, поэтому result.modelUsage/total_cost_usd — НАКОПЛЁННЫЙ
+// итог сессии, а не расход одного хода. Расход хода = дельта между двумя такими снимками
+// (ClaudeSession); сам снимок живёт персистентно в Session.LastCostState (процесс CLI
+// перезапускается между ходами, а --resume восстанавливает итог).
+public sealed class ModelUsageSnapshot
+{
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadInputTokens { get; set; }
+    public long CacheCreationInputTokens { get; set; }
+}
+
+public sealed class SessionCostState
+{
+    // ClaudeSessionId, к которому относится снимок: CLI пишет cost-state под своим csid, а
+    // --resume восстанавливает накопленный итог именно этой csid. Дельта хода считается только
+    // внутри одной csid; смена csid (новый разговор/сброс/смена провайдера) — новый накопленный
+    // итог с нуля, и весь снимок = расход. null — csid из result не прочитан (сторона).
+    public string? ClaudeSessionId { get; set; }
+    // model → накопленные токены. Ключ — имя модели из modelUsage.
+    public Dictionary<string, ModelUsageSnapshot> Models { get; set; } = new();
+    // Накопленная стоимость (total_cost_usd). null — CLI поля не прислал.
+    public double? TotalCostUsd { get; set; }
+}
+
 // Происхождение чата — вычисляется из TaskId/AutomationRuleId (см. Session.Origin),
 // отдельно не хранится, чтобы не было второго источника истины.
 public enum ChatOrigin { Manual, Task, Automation }
@@ -316,6 +343,17 @@ public static class SessionContextTypes
     public static bool IsKnown(string? value) => value is File or Url or Task;
 }
 
+// Значения Session.WikiMark (ADR-035 §12а) — единственная точка, магических строк
+// "important"/"skip" в коде быть не должно.
+public static class WikiMarks
+{
+    // Разбирается всегда, минуя ступени 1 и 2 отбора (но не ступень 0 для чатов исполнения)
+    public const string Important = "important";
+    // Не разбирается никогда, в том числе бэклогом; ставится и при откате по источнику
+    // (ADR-035 §12г мера 5: откатанный чат иначе следующая ночь вернёт тот же разбор)
+    public const string Skip = "skip";
+}
+
 // Привязка чата картинки v2 к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/».
 // С v3 (ADR-019) поле только для чтения: новых чатов картинки нет, а старые sessions.json
 // обязаны читаться. Удалять класс и поле Session.ImageChat нельзя.
@@ -343,6 +381,29 @@ public class Session
     public string? ProjectId { get; set; }
     // Владелец project-less чата (JWT sub). Для проектных сессий null — владелец резолвится через проект
     public string? OwnerId { get; set; }
+    // Автор приватного чата (приватность чатов, правило И.2, S2d-1): проектный чат виден
+    // ТОЛЬКО автору — ни другим участникам, ни владельцу проекта (решение 28.10). null — чат
+    // общий (виден по доступу к проекту). Отдельное поле, а не OwnerId: владельца проектного
+    // чата резолвит проект, а приватность — ограничение видимости, не владения. Ставится
+    // тумблером видимости (S2d-7a, PUT /api/chats/{id}/visibility); читает её SessionAccess.CanSee. Аддитивное nullable-поле:
+    // старые записи sessions.json читаются с null, BackupSchema.Version не двигается
+    // (добавление поля с дефолтом формат не ломает — тот же приём, что у CommittedFilePaths).
+    public string? PrivateToUserId { get; set; }
+    // Автор чата — кто его создал (в общем проекте: владелец или участник). На видимость
+    // не влияет (S2d-1): приватность держит PrivateToUserId; поле нужно для атрибуции и
+    // следующих шагов. null — автор не зафиксирован (записи до появления поля).
+    // Аддитивное nullable-поле, тот же приём.
+    public string? CreatedByUserId { get; set; }
+    // Отметка «чат занят» (S2d-7a): в чат уже пытались записать сообщение или карточку, поэтому
+    // приватным его не сделать (chat_has_messages), а после приватного периода — тем более. Ставится
+    // под замком видимости SessionManager и ПЕРЕЖИВАЕТ рестарт: очередь отложенных сообщений и записи
+    // ленты тоже на диске. Аддитивное nullable-поле (null — не занят), BackupSchema.Version не двигается.
+    public bool? MessageClaimed { get; set; }
+    // Учёт вложений чата (S2d-6b-4): пути относительно рабочей папки, загруженные через Upload этого
+    // чата, в той раскладке, где они лежат сейчас. Нужен переносу при смене видимости: до перевода в
+    // приватный общие вложения переезжают в private/{автор}/…, при снятии приватности — обратно.
+    // Пишется ТОЛЬКО под VisibilityLock SessionManager. Аддитивное nullable-поле, BackupSchema.Version не двигается.
+    public List<string>? Attachments { get; set; }
     // Закреплён в списке чатов («Закреплённые»)
     public bool IsPinned { get; set; }
     public string? ClaudeSessionId { get; set; }
@@ -407,12 +468,23 @@ public class Session
     // Opt-out «Истории решений» (ADR-004 §6): true — паспорта изменений из этого чата не снимаются.
     // Уважается только на захвате; уже снятые паспорта не удаляются (решение ADR «ничего не удаляем»).
     public bool ExcludeFromDossiers { get; set; }
+    // Пометка человека для отбора чатов в вики (ADR-035 §12а): WikiMarks.Important —
+    // разбирается всегда, WikiMarks.Skip — не разбирается никогда. Ставится кнопкой в меню
+    // чата (Ф2) и откатом по источнику (§12г мера 5). null — пометки нет.
+    // Аддитивное nullable-поле: старые записи sessions.json читаются с null,
+    // BackupSchema.Version не двигается. Смена пометки — настройка чата, не активность:
+    // UpdatedAt не двигает (см. SessionManager.SetWikiMark).
+    public string? WikiMark { get; set; }
     // Момент, когда срок задали. Отсчёт идёт от него, если он ПОЗЖЕ последней активности:
     // иначе «1 час» на чате, неактивном пятый день, снёс бы его на ближайшем тике уборки.
     // Отдельное поле, а не сдвиг UpdatedAt: тот двигает чат в списке и метит его
     // непрочитанным, а смена настройки хранения — не активность. null — срока нет либо
     // состояние от версии до этого поля (тогда считаем от UpdatedAt, как раньше).
     public DateTime? ExpiryAnchor { get; set; }
+    // Срок, снятый паузой фичи (W4-HOLD-N, хвост R-HOLD-J п.3): значение ExpiresAfterMinutes
+    // на момент заморозки. Возвращается после снятия паузы — срок самого чата, а не задачи.
+    // Аддитивное поле с дефолтом формат не ломает (тот же приём, что у Context).
+    public int? HoldFrozenExpiresAfterMinutes { get; set; }
     // Момент последнего прочтения чата владельцем — синк непрочитанности между устройствами
     // (фронт держит и локальную отметку, непрочитанность = UpdatedAt > max из двух).
     // null — чат ни разу не отмечали прочитанным через API. Скаляр, а не per-user словарь:
@@ -514,12 +586,42 @@ public class Session
     // Аддитивное nullable-поле с дефолтом: старые записи sessions.json читаются штатно,
     // BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths/Context).
     public string? BranchedFromSessionId { get; set; }
+    // «Продолжить в новом чате»: ContinuedFromSessionId — чат, записку-передачу которого получил этот
+    // чат; ContinuedInSessionId — чат, в который перенесена работа ЭТОГО чата. Ссылки в обе стороны
+    // ставит ChatContinueService; сам старый чат не архивируется и не блокируется. Не путать с
+    // BranchedFromSessionId: ветка копирует историю, продолжение переносит только смысл (записку).
+    // Аддитивные nullable-поля: старые записи sessions.json читаются штатно, BackupSchema.Version
+    // не двигается.
+    public string? ContinuedFromSessionId { get; set; }
+    public string? ContinuedInSessionId { get; set; }
+    // Последний накопленный снимок cost-state CLI (по моделям + total_cost_usd) для расчёта
+    // дельты хода: расход хода = текущий снимок − этот (по каждой модели отдельно; при
+    // уменьшении — сам текущий снимок). Персистентно: процесс CLI перезапускается между ходами,
+    // а --resume восстанавливает накопленный итог, поэтому без него первый ход после рестарта
+    // засчитал бы всю историю сессии. null — снимка ещё нет (первый ход / история до поля).
+    // Форк чата (chat-branch) наследует снимок родителя (SessionManager.BranchAsync), иначе
+    // первый ход ветки засчитал бы всю историю родителя. Аддитивное nullable-поле: старые
+    // записи sessions.json читаются штатно, BackupSchema.Version не двигается.
+    public SessionCostState? LastCostState { get; set; }
     // Отдельное git worktree чата: рабочая папка сессии вместо project.RootPath.
     // Путь всегда ХОСТОВЫЙ (как Project.RootPath); в песочницу транслируется при запуске.
     // null — чат живёт в основном дереве проекта. Только для проектных сессий.
     public string? WorktreePath { get; set; }
     // Имя ветки worktree (для метки в git-баре); заполняется вместе с WorktreePath
     public string? WorktreeBranch { get; set; }
+    // Владеем ли отдельным деревом: true — чат сам создал его тумблером (SessionManager.SetWorktreeAsync),
+    // false — дерево привязано (AttachWorktreeAsync) либо запись старая (поля в sessions.json нет → false).
+    // При удалении чата/проекта дерево сносим git worktree remove только если true и ни один другой
+    // живой чат на тот же нормализованный путь не ссылается; иначе снимаем только codegraph/filewatcher
+    // (ReleaseWorktreeGraph) — дерево делят другие чаты. Аддитивное поле с дефолтом: старые записи
+    // sessions.json читаются штатно, BackupSchema.Version не двигается (тот же приём, что у CommittedFilePaths).
+    public bool WorktreeOwned { get; set; }
+    // Счётчик попыток auto-resume после прерывания: растёт при каждом запуске
+    // resume-цикла, сбрасывается на успешный result хода. Сторож crash-loop:
+    // значение ≥ 1 — ход уже возобновлялся, повторный захват получает отказ
+    // already_attempted (не «порог» — первый повтор уже не проходит). Аддитивное
+    // int-поле с дефолтом 0: старые записи читаются штатно.
+    public int RestartResumeAttempts { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Теги сессии (из реестра проекта) — per-owner изоляция
@@ -593,7 +695,8 @@ public sealed record DeviceWaitMessage(
     string? SenderChatName = null,
     string? StaffNote = null,
     IReadOnlyList<string>? AttachedPaths = null,
-    string? Mode = null)
+    string? Mode = null,
+    string? SenderUserId = null)
 {
     public const string RouteAuto = "auto";
     public const string RouteAgent = "agent";

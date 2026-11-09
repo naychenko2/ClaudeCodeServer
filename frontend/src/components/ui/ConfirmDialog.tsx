@@ -11,6 +11,8 @@ interface ConfirmDialogProps {
   confirmLabel?: string;
   confirmVariant?: ButtonVariant;   // primary | danger
   cancelLabel?: string;             // по умолчанию «Отмена» (дефолт ModalActions)
+  // Рвать длинный заголовок/подзаголовок (моноширинное имя, путь) — см. Modal.wrapTitle.
+  wrapTitle?: boolean;
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
 }
@@ -20,7 +22,7 @@ interface ConfirmDialogProps {
 // Асинхронный onConfirm показывает спиннер на кнопке до завершения.
 export function ConfirmDialog({
   title, subtitle, confirmLabel = 'Подтвердить', confirmVariant = 'primary',
-  cancelLabel, onConfirm, onCancel,
+  cancelLabel, wrapTitle, onConfirm, onCancel,
 }: ConfirmDialogProps) {
   const [busy, setBusy] = useState(false);
 
@@ -37,6 +39,7 @@ export function ConfirmDialog({
     <Modal
       title={title}
       subtitle={subtitle}
+      wrapTitle={wrapTitle}
       width={MODAL_W.confirm}
       onClose={onCancel}
       footer={

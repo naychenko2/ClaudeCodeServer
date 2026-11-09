@@ -127,7 +127,88 @@ public sealed class SkiaImageRaster : IImageRaster
             }
         });
 
+    // Вуаль (ADR-028, решение 12): белое на маске закрашивается полупрозрачным серым (128) на
+    // копии. Та же детекция, что у EraseMasked (яркость > половины); отличие — смешивание с
+    // исходным цветом, а не замена: p' = p·(1−α) + 128·α. Модель видит «здесь править», а не
+    // белую заливку, которую Qwen-Image перерисовывает в результат
+    public RasterOutcome VeilMasked(byte[] image, byte[] mask, double alpha) =>
+        Run(image, unpremul: false, (bitmap, _) =>
+        {
+            using (bitmap)
+            {
+                using var codec = CreateCodec(mask)
+                    ?? throw new RasterFailure(RasterError.Unsupported, "Формат маски не распознан");
+                var header = codec.Info;
+                if ((long)header.Width * header.Height > _maxPixels)
+                    throw new RasterFailure(RasterError.TooLarge,
+                        $"Маска слишком большая: {header.Width}×{header.Height}, потолок — {_maxPixels / 1_000_000} Мп");
+                var (maskWidth, maskHeight) = (int)codec.EncodedOrigin is >= 5 and <= 8
+                    ? (header.Height, header.Width)
+                    : (header.Width, header.Height);
+                if (maskWidth != bitmap.Width || maskHeight != bitmap.Height)
+                    throw new RasterFailure(RasterError.InvalidOp,
+                        $"Размер маски {maskWidth}×{maskHeight} не совпадает с картинкой {bitmap.Width}×{bitmap.Height}");
+                var decoded = Decode(codec, unpremul: true);
+                using var maskBitmap = Orient(decoded, codec.EncodedOrigin);
+                if (!ReferenceEquals(maskBitmap, decoded)) decoded.Dispose();
+
+                var pixels = bitmap.GetPixelSpan();
+                var marks = maskBitmap.GetPixelSpan();
+                for (var i = 0; i < marks.Length; i += 4)
+                {
+                    var lit = (marks[i] + marks[i + 1] + marks[i + 2]) / 3 * marks[i + 3] / 255;
+                    if (lit <= 127) continue;
+                    pixels[i] = (byte)(pixels[i] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 1] = (byte)(pixels[i + 1] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 2] = (byte)(pixels[i + 2] * (1 - alpha) + VeilGray * alpha);
+                    pixels[i + 3] = 255;
+                }
+                return Success(bitmap, ImageEncodeFormat.Png, MaxQuality);
+            }
+        });
+
     private const byte EraseGray = 128;
+    private const byte VeilGray = 128;
+
+    // Маска из эллипсов с вычитанием прямоугольников: непрозрачный PNG, чёрный фон, белые эллипсы
+    // без сглаживания, затем по ним чёрные прямоугольники. Не через Run: контракт — исключение
+    // ArgumentOutOfRangeException наружу и byte[] напрямую, а Run всё глотает в RasterOutcome.
+    public byte[] RenderMask(int width, int height, IReadOnlyList<MaskEllipse> ellipses, IReadOnlyList<MaskRect> excludeRects)
+    {
+        if (width < 1 || width > MaxSide)
+            throw new ArgumentOutOfRangeException(nameof(width), $"Ширина маски {width} вне 1–{MaxSide} px");
+        if (height < 1 || height > MaxSide)
+            throw new ArgumentOutOfRangeException(nameof(height), $"Высота маски {height} вне 1–{MaxSide} px");
+        // Потолок мегапикселей: 16384×16384 прошло бы проверку стороны, но дало бы канву ~1 ГБ
+        if ((long)width * height > _maxPixels)
+            throw new ArgumentOutOfRangeException(nameof(width),
+                $"Маска {width}×{height} больше потолка {_maxPixels / 1_000_000} Мп");
+
+        // Opaque: у маски нет прозрачности, альфа везде 255
+        using var bitmap = new SKBitmap(new SKImageInfo(width, height, SKColorType.Rgba8888, SKAlphaType.Opaque));
+        using (var canvas = new SKCanvas(bitmap))
+        {
+            canvas.Clear(SKColors.Black);
+            using var white = new SKPaint { Color = SKColors.White, IsAntialias = false };
+            using var black = new SKPaint { Color = SKColors.Black, IsAntialias = false };
+            foreach (var e in ellipses)
+            {
+                // Эллипс — вписанный в прямоугольник центр ± полуоси; вылезание за холст Skia обрежет
+                canvas.DrawOval(new SKRect((float)(e.Cx - e.Rx), (float)(e.Cy - e.Ry),
+                    (float)(e.Cx + e.Rx), (float)(e.Cy + e.Ry)), white);
+            }
+            foreach (var r in excludeRects)
+            {
+                // X2/Y2 — исключающие границы (правый нижний угол), как у SKRect: рисуется [X1, X2) × [Y1, Y2),
+                // поэтому пиксель в колонке X2 уже не закрашивается. Пустой прямоугольник (X2 <= X1 или Y2 <= Y1)
+                // — ничего не рисуем, без исключения.
+                if (r.X2 <= r.X1 || r.Y2 <= r.Y1) continue;
+                canvas.DrawRect(new SKRect(r.X1, r.Y1, r.X2, r.Y2), black);
+            }
+            canvas.Flush();
+        }
+        return EncodePixels(bitmap, ImageEncodeFormat.Png, MaxQuality);
+    }
 
     // Общая обвязка: семафор, заголовок, потолок, декодирование с AutoOrient
     private RasterOutcome Run(byte[] data, bool unpremul, Func<SKBitmap, ImageEncodeFormat?, RasterOutcome> body)

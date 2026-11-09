@@ -24,6 +24,15 @@ describe('estimateContext: оценка токенов', () => {
     expect(est).toMatchObject({ tokens: undefined, pct: undefined, fresh: false, level: 'normal', window: 200_000 });
   });
 
+  it('живая цифра посреди хода (liveTokens) перекрывает последний result, компакт в ленте её не гасит', () => {
+    const est = estimateContext([started('sonnet'), result(16_000)], undefined, undefined, 40_000);
+    expect(est.tokens).toBe(40_000);
+    expect(est.fresh).toBe(false);
+    expect(est.model).toBe('sonnet');
+    // liveTokens 0/undefined — как раньше, по ленте
+    expect(estimateContext([result(16_000)], undefined, undefined, 0).tokens).toBe(16_000);
+  });
+
   it('токены = contextTokens последнего result', () => {
     const est = estimateContext([result(16_000)]);
     expect(est.tokens).toBe(16_000);

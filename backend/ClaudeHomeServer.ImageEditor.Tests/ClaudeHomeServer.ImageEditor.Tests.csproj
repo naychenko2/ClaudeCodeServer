@@ -17,9 +17,11 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <!-- Images — ради настоящего SkiaImageRaster в тестах шагов и InputFitter -->
     <ProjectReference Include="..\ClaudeHomeServer.Images\ClaudeHomeServer.Images.csproj" />
-    <!-- Main.Tests — общие internal-фейки редактора (ImageEditor/Fakes), их делят с тестами
-         контроллера; допуск — InternalsVisibleTo в ClaudeHomeServer.Tests.csproj -->
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit (ImageEditorFakes: FakeHttp/FakeHiggsfieldAccess/RecordingBroadcaster/
+         MemorySpendStore/TestImages — internal, IVT) + TestKit.Host (FakeImageEditor —
+         internal, зависит от вертикали ImageEditor, IVT). Шаг 1.3: вместо монолита. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,0 +1,11 @@
+export declare const MOBILE_MAX = 600;
+export declare const MOBILE_QUERY = "(max-width: 600px)";
+export declare const TABLET_MAX = 1199;
+export declare const TABLET_QUERY = "(max-width: 1199px)";
+export declare const TABLET_WIDE_MIN = 1000;
+export declare const GEN_PANEL_INLINE_MIN = 800;
+export declare const PANEL_INLINE_MAX_SHARE: number;
+export declare function useIsMobile(): boolean;
+export declare const COARSE_QUERY = "(pointer: coarse)";
+export declare function useIsTouch(): boolean;
+export declare function useWindowWidth(): number;

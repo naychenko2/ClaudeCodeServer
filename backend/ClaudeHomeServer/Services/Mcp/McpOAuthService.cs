@@ -73,11 +73,14 @@ public class McpOAuthService(
     // и authorization server) — без своего таймаута на попытку общий таймаут одного запроса
     // (_timeout выше) складывается по недоступному хосту в минуты. Общий потолок на всю
     // цепочку — на случай, если кандидатов набежит больше, чем закладывались, по образцу
-    // Mcp:ProbeTimeoutSeconds у McpProbeService
-    private readonly TimeSpan _discoveryTimeout = TimeSpan.FromSeconds(
+    // Mcp:ProbeTimeoutSeconds у McpProbeService.
+    // internal-поля с прежними дефолтами конфигурации: тесты сокращают их и ждут события,
+    // а не реальных секунд (conventions.md, паттерн «интервал — опция, ожидание — событие»);
+    // продуктовые значения не меняются — их держит тест на дефолт.
+    internal TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(
         Math.Clamp(config.GetValue("Mcp:OAuthDiscoveryTimeoutSeconds", 5), 1, 30));
 
-    private readonly TimeSpan _discoveryOverallTimeout = TimeSpan.FromSeconds(
+    internal TimeSpan DiscoveryOverallTimeout = TimeSpan.FromSeconds(
         Math.Clamp(config.GetValue("Mcp:OAuthDiscoveryOverallTimeoutSeconds", 20), 5, 60));
 
     private readonly string? _publicBaseUrl = config["Mcp:PublicBaseUrl"]?.TrimEnd('/');
@@ -409,12 +412,12 @@ public class McpOAuthService(
         Uri serverUrl, McpOAuthConfig oauth, CancellationToken ct)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(_discoveryOverallTimeout);
+        cts.CancelAfter(DiscoveryOverallTimeout);
         var reach = new DiscoveryReach();
         var result = await DiscoverAsync(serverUrl, oauth, reach, cts.Token);
         if (!ct.IsCancellationRequested && cts.IsCancellationRequested)
             throw new McpOAuthException(
-                $"Сервер авторизации не отвечает (проверка адресов заняла больше {_discoveryOverallTimeout.TotalSeconds:0} с)",
+                $"Сервер авторизации не отвечает (проверка адресов заняла больше {DiscoveryOverallTimeout.TotalSeconds:0} с)",
                 McpOAuthFailure.Unreachable);
         if (!ct.IsCancellationRequested && !reach.Responded)
             throw new McpOAuthException(
@@ -709,11 +712,11 @@ public class McpOAuthService(
         return client;
     }
 
-    // Короткий таймаут одной попытки discovery — _discoveryTimeout, а не общий _timeout
+    // Короткий таймаут одной попытки discovery — DiscoveryTimeout, а не общий _timeout
     private HttpClient DiscoveryClient()
     {
         var client = httpFactory.CreateClient(HttpClientName);
-        client.Timeout = _discoveryTimeout;
+        client.Timeout = DiscoveryTimeout;
         return client;
     }
 

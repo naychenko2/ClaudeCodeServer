@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>«Формат» — размер и пропорции картинок и видео в строке контекста · макет v1</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет был самодостаточным.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R из lib/design.ts. */
+  :root {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px;
+    --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-sheet: 22px; --r-max: 999px;
+    /* Обвязка макета (не продукт) */
+    --doc-bg: #E9E4DA; --doc-card: #FBF8F2; --doc-line: #E0D7C8; --doc-text: #39332B; --doc-muted: #756B5E;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #454037;
+    --c-overlay: rgba(0, 0, 0, 0.58);
+    --c-success: #7CB86A; --c-success-bg: #1F2B1C; --c-success-text: #8FC47E;
+    --c-warning: #E0A955; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.5);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --doc-bg: #171411; --doc-card: #24201C; --doc-line: #3D3830; --doc-text: #EDE6DB; --doc-muted: #B3A897;
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 18px 16px 60px; background: var(--doc-bg); color: var(--doc-text);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button { font: inherit; color: inherit; }
+  input { font: inherit; }
+  .doc-wrap { max-width: 1480px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 26px; margin: 0 0 6px; }
+  p.lead { color: var(--doc-muted); margin: 0 0 10px; max-width: 1040px; line-height: 1.55; }
+  code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; background: var(--c-bg-inset); border-radius: 4px; padding: 0 4px; }
+
+  /* Демо-управление (не часть продукта) */
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--doc-bg); display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; padding: 8px 0 12px; }
+  .demo .grp { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+  .demo .lbl { font-size: 11px; color: var(--doc-muted); margin-right: 2px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--doc-line); background: var(--doc-card); border-radius: 10px; padding: 5px 10px; color: var(--doc-text); }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .scn-box { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; margin: 0 0 12px; }
+  .dcard { background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 12px; padding: 10px 14px; line-height: 1.5; min-width: 0; }
+  .dcard h3 { margin: 0 0 4px; font-size: 15px; }
+  .dcard .why { color: var(--doc-muted); font-size: 12.5px; margin: 0 0 6px; }
+  ol.steps { margin: 6px 0 0; padding-left: 0; list-style: none; counter-reset: s; }
+  ol.steps li { counter-increment: s; display: flex; gap: 8px; padding: 4px 6px; border-radius: 8px; cursor: pointer; font-size: 12.5px; }
+  ol.steps li::before { content: counter(s); flex: 0 0 20px; height: 20px; border-radius: 50%; background: var(--c-bg-inset); color: var(--doc-muted); font-size: 11px; font-weight: 700; display: grid; place-items: center; }
+  ol.steps li.done-row::before { content: '✓'; }
+  ol.steps li.cur { background: var(--c-accent-light); }
+  ol.steps li.cur::before { background: var(--c-accent); color: var(--c-on-accent); }
+  .payload { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; background: var(--c-bg-inset); border-radius: 8px; padding: 8px 10px; margin: 4px 0 0; color: var(--c-text-primary); word-break: break-word; }
+  .dcard .sub { font-size: 11px; color: var(--doc-muted); text-transform: uppercase; letter-spacing: .4px; font-weight: 600; margin: 10px 0 2px; }
+  .dcard .memo { font-size: 12px; color: var(--doc-muted); }
+  @media (max-width: 1180px) { .scn-box { grid-template-columns: 1fr; } }
+
+  .stage { display: flex; justify-content: center; }
+  .frame { background: var(--c-bg-main); color: var(--c-text-primary); border: 1px solid var(--c-border); border-radius: 14px; padding: 10px; width: 100%; max-width: 980px; }
+  .frame.mob { width: auto; padding: 10px; }
+  .frame .cap { font-size: 11px; color: var(--c-text-muted); margin: 0 0 8px; }
+
+  /* ── Раскладка приложения ── */
+  .app { position: relative; height: 640px; display: flex; flex-direction: column; background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: var(--r-xxl); box-shadow: var(--shadow-island); overflow: hidden; }
+  .app.mobile { width: 360px; height: 740px; border-radius: 22px; background: var(--c-bg-main); }
+  .ihead { height: 42px; flex: 0 0 42px; display: flex; align-items: center; gap: 8px; padding: 0 12px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-inset); font-weight: 600; color: var(--c-text-heading); }
+  .ihead .sub { font-size: var(--fs-xs); color: var(--c-text-muted); font-weight: 400; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .app.mobile .ihead { height: 44px; flex-basis: 44px; background: var(--c-bg-panel); }
+
+  /* Лента */
+  .feed { flex: 1; overflow: hidden; padding: 14px 18px 8px; min-height: 0; display: flex; flex-direction: column; gap: 9px; justify-content: flex-end; }
+  .app.mobile .feed { padding: 10px; gap: 8px; }
+  .msg { max-width: 560px; line-height: 1.5; font-size: var(--fs-base); flex: 0 0 auto; }
+  .msg.user { align-self: flex-end; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px 14px 4px 14px; padding: 8px 12px; }
+  .msg.agent b { color: var(--c-text-heading); }
+  .tool { flex: 0 0 auto; align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--c-text-secondary); background: var(--c-bg-inset); border-radius: var(--r-md); padding: 3px 8px; font-family: 'JetBrains Mono', ui-monospace, monospace; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .quiet { flex: 0 0 auto; align-self: flex-start; font-size: var(--fs-xs); color: var(--c-text-muted); display: inline-flex; gap: 6px; align-items: center; }
+  .quiet b { color: var(--c-text-secondary); font-weight: 600; }
+  .sim { flex: 0 0 auto; align-self: flex-start; border: 1.5px dashed var(--c-dashed); background: transparent; border-radius: var(--r-md); padding: 5px 10px; font-size: var(--fs-sm); color: var(--c-text-secondary); cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+  .icard { flex: 0 0 auto; background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: var(--r-xl); padding: 8px 10px; width: 420px; max-width: 100%; box-shadow: var(--shadow-card); display: flex; flex-direction: column; gap: 6px; }
+  .icard .t { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--c-text-secondary); min-width: 0; }
+  .icard .t b { color: var(--c-text-heading); white-space: nowrap; }
+  .icard .t .sub { min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .pics { display: flex; gap: 6px; align-items: flex-end; }
+  .pic { border-radius: var(--r-md); background: linear-gradient(135deg,#d9a27f,#8c6a9e 60%,#4a6d8c); flex: 0 0 auto; position: relative; }
+  .pic.cat { background: linear-gradient(160deg,#e8c39b 0%,#c98e5a 40%,#6d5a4a 75%,#3a3532 100%); }
+  .pic.mount { background: linear-gradient(180deg,#f2c79a 0%,#e59a6e 35%,#7a6f8f 62%,#3f5a6e 100%); }
+  .pic .lb { position: absolute; left: 4px; bottom: 4px; font-size: 10px; background: rgba(0,0,0,.45); color: #fff; border-radius: 4px; padding: 0 4px; }
+  .frow { display: flex; align-items: center; gap: 8px; padding: 5px 0; border-top: 1px solid var(--c-border-light); font-size: var(--fs-sm); min-width: 0; }
+  .frow .n { color: var(--c-text-muted); width: 16px; flex: 0 0 auto; }
+  .frow .tx { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .frow.stg { flex-wrap: wrap; row-gap: 4px; }
+  .frow.stg .tx { flex: 1 1 140px; }
+  .frow.stg.now .tx { color: var(--c-text-heading); font-weight: 600; }
+  /* Пометка макета (не продукт): текст ждёт решения */
+  .pend { align-self: flex-start; font-size: 10.5px; color: var(--doc-muted); border: 1px dashed var(--c-dashed); border-radius: 4px; padding: 0 5px; }
+  .frow.warn { background: var(--c-warning-bg); border-radius: var(--r-md); padding: 5px 6px; border-top-color: transparent; flex-wrap: wrap; }
+
+  /* Кирпичи UI-кита (имена — как в components/ui) */
+  svg.i { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+  svg.i.s { width: 13px; height: 13px; } svg.i.xs { width: 11px; height: 11px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--r-md);
+    border: 1px solid var(--c-border); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-sm); white-space: nowrap; color: var(--c-text-primary); }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn.pri { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; box-shadow: var(--shadow-button); font-weight: 600; }
+  .btn.ghost { background: transparent; border-color: transparent; color: var(--c-text-secondary); }
+  .btn.xs { height: 24px; padding: 0 8px; font-size: var(--fs-xs); border-radius: 7px; }
+  .app.mobile .btn { height: 36px; }
+  .app.mobile .btn.pri.run { height: 40px; }
+  .ib { width: 24px; height: 24px; border-radius: var(--r-md); border: none; background: transparent; color: var(--c-text-muted); display: inline-grid; place-items: center; cursor: pointer; flex: 0 0 auto; padding: 0; }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .app.mobile .ib { width: 36px; height: 36px; }
+  .badge { display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 6px; border-radius: var(--r-sm); font-size: 10.5px; font-weight: 600; white-space: nowrap; flex: 0 0 auto; }
+  .badge.ok { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.mut { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.acc { background: var(--c-accent-light); color: var(--c-accent); }
+  .hint { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1.45; }
+
+  /* Подсветка «куда нажать» на этом шаге */
+  .hl { outline: 2px solid var(--c-accent) !important; outline-offset: 1px; animation: hlp 1.4s ease-in-out infinite; }
+  @keyframes hlp { 0%,100% { outline-color: var(--c-accent); } 50% { outline-color: var(--c-accent-muted); } }
+
+  /* ── Строка контекста: 30 px, R.lg ── */
+  .rw { position: relative; margin: 0 12px 6px; }
+  .app.mobile .rw { margin: 0 8px 6px; }
+  .crow { display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px; background: var(--c-bg-panel); border: 1px solid var(--c-border);
+    border-radius: var(--r-lg); overflow: hidden; min-width: 0; }
+  .app.mobile .crow { height: 34px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; background: var(--c-bg-card); }
+  .app.mobile .crow::-webkit-scrollbar { display: none; }
+  .vsep { width: 1px; height: 16px; background: var(--c-divider); flex: 0 0 1px; }
+  .cx { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 7px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+    font-size: var(--fs-sm); color: var(--c-text-secondary); white-space: nowrap; cursor: pointer; flex: 0 0 auto; min-width: 0; }
+  .app.mobile .cx { height: 28px; }
+  .cx:hover { background: var(--c-bg-selected); }
+  .cx .nm { color: var(--c-text-heading); font-weight: 600; }
+  .cx .v { color: var(--c-text-muted); }
+  .cx .k { color: var(--c-text-muted); }
+  .cx b { color: var(--c-text-heading); font-weight: 600; }
+  .cx.obj { background: var(--c-bg-card); border-color: var(--c-accent-muted); padding-left: 3px; padding-right: 4px; }
+  .cx.ref { background: var(--c-bg-card); border-color: var(--c-border-light); border-radius: var(--r-max); padding-left: 2px; padding-right: 7px; }
+  .cx.fmt { border-color: var(--c-border); background: var(--c-bg-card); }
+  .cx.fmt.open { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .cx.fmt.warn { background: var(--c-warning-bg); border-color: transparent; color: var(--c-warning-text); }
+  .cx.fmt.warn b { color: var(--c-warning-text); }
+  .cx.fmt.dim { opacity: .7; }
+  .cx.fmt.lock .lk { color: var(--c-text-muted); }
+  .ag { border: none; background: var(--c-accent-light); color: var(--c-accent); font-size: 10px; font-weight: 700; height: 16px; min-width: 16px; border-radius: 4px; padding: 0 3px; flex: 0 0 auto; display: inline-grid; place-items: center; }
+  .th { width: 18px; height: 18px; border-radius: 4px; flex: 0 0 auto; border: 1px solid var(--c-border-light); }
+  .th.draft { background: transparent; border: 1.5px dashed var(--c-dashed); }
+  .th.round { border-radius: 50%; }
+  .ar { display: inline-block; border: 1.5px solid currentColor; border-radius: 2px; flex: 0 0 auto; }
+
+  /* Всплывашки над строкой */
+  .pop { position: absolute; bottom: calc(100% + 6px); z-index: 30; background: var(--c-bg-card); border: 1px solid var(--c-border);
+    border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: 4px 0; }
+  .pop.exec { left: 120px; width: 300px; }
+  .pop.fmt { left: 180px; width: 400px; max-height: 470px; overflow: auto; padding: 0; }
+  .pop .ph { padding: 8px 12px 6px; font-size: var(--fs-sm); color: var(--c-text-secondary); border-bottom: 1px solid var(--c-border-light); display: flex; align-items: center; gap: 6px; }
+  .pop .ph b { color: var(--c-text-heading); }
+  .mi { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 12px; border: none; background: transparent; text-align: left; cursor: pointer; font-size: var(--fs-sm); color: var(--c-text-primary); min-width: 0; }
+  .mi:hover { background: var(--c-bg-selected); }
+  .mi .tx { flex: 1; min-width: 0; }
+  .mi .tx small { display: block; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .mi.on { background: var(--c-accent-light); }
+  .radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--c-border); flex: 0 0 auto; }
+  .mi.on .radio { border: 4px solid var(--c-accent); }
+  .notice { position: absolute; bottom: calc(100% + 6px); left: 0; right: 0; z-index: 29; display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px;
+    border-radius: var(--r-lg); background: var(--c-bg-card); border: 1px solid var(--c-border); box-shadow: var(--shadow-dropdown); font-size: var(--fs-sm); }
+  .notice .tx { flex: 1; min-width: 0; line-height: 1.4; }
+  .notice.warn { background: var(--c-warning-bg); border-color: transparent; color: var(--c-warning-text); }
+  .notice.info { background: var(--c-info-bg); border-color: transparent; color: var(--c-info); }
+
+  /* ── Содержимое «Формата» (одно и то же во всплывашке и в шторке) ── */
+  .fbody { padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .flab { font-size: var(--fs-xs); font-weight: 600; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .4px; display: flex; align-items: center; gap: 6px; }
+  .flab .aside { margin-left: auto; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .asp { display: flex; flex-wrap: wrap; gap: 6px; }
+  .asp button { display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-width: 46px; height: 46px; padding: 4px 6px;
+    border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-xs); color: var(--c-text-secondary); position: relative; }
+  .app.mobile .asp button { min-width: 48px; height: 52px; }
+  .asp button:hover { background: var(--c-bg-selected); }
+  .asp button.on { border-color: var(--c-accent); background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+  .asp button.film::after { content: 'фильм'; position: absolute; top: -7px; right: -4px; font-size: 9px; background: var(--c-bg-card); border: 1px solid var(--c-border); color: var(--c-text-muted); border-radius: 4px; padding: 0 3px; font-weight: 600; }
+  .asp button.off { opacity: .45; }
+  .src { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 10px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-card); cursor: pointer; text-align: left; font-size: var(--fs-sm); }
+  .src.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .src .tx { flex: 1; min-width: 0; }
+  .src .tx b { color: var(--c-text-heading); }
+  .src .tx small { display: block; color: var(--c-text-muted); font-size: var(--fs-xs); }
+  .tiers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+  .tier { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 7px 8px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-card); cursor: pointer; text-align: left; min-width: 0; }
+  .tier:hover { background: var(--c-bg-selected); }
+  .tier b { font-size: var(--fs-sm); color: var(--c-text-heading); }
+  .tier span { font-size: var(--fs-xs); color: var(--c-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .tier em { font-style: normal; font-size: var(--fs-xs); color: var(--c-text-muted); white-space: nowrap; }
+  .tier.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .tier.on b { color: var(--c-accent); }
+  .tier.off { opacity: .5; cursor: default; background: transparent; border-style: dashed; }
+  .tier.off:hover { background: transparent; }
+  .lnk { border: none; background: transparent; color: var(--c-accent); cursor: pointer; padding: 0; font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 4px; }
+  .exact { border: 1px solid var(--c-border-light); border-radius: var(--r-md); padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--c-bg-panel); }
+  .wh { display: flex; align-items: center; gap: 6px; }
+  .wh input { width: 84px; height: 30px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-card); color: var(--c-text-heading); padding: 0 8px; font-variant-numeric: tabular-nums; }
+  .app.mobile .wh input { height: 40px; width: 96px; font-size: 16px; }
+  .wh input:focus { outline: none; border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .pres { display: flex; flex-wrap: wrap; gap: 4px; }
+  .pres button { height: 24px; padding: 0 7px; border: 1px solid var(--c-border-light); border-radius: var(--r-max); background: var(--c-bg-card); cursor: pointer; font-size: var(--fs-xs); color: var(--c-text-secondary); font-variant-numeric: tabular-nums; }
+  .app.mobile .pres button { height: 32px; }
+  .pres button.on { border-color: var(--c-accent); color: var(--c-accent); }
+  .outl { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+  .outl b { color: var(--c-text-heading); font-variant-numeric: tabular-nums; }
+  .alert { display: flex; gap: 8px; align-items: flex-start; padding: 7px 9px; border-radius: var(--r-md); font-size: var(--fs-sm); line-height: 1.4; }
+  .alert.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .alert.info { background: var(--c-info-bg); color: var(--c-info); }
+  .alert.mut { background: var(--c-bg-inset); color: var(--c-text-secondary); }
+  .alert .tx { flex: 1; min-width: 0; }
+  .alert .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .ffoot { padding: 7px 12px; border-top: 1px solid var(--c-border-light); font-size: var(--fs-xs); color: var(--c-text-muted); display: flex; gap: 6px; align-items: center; }
+  .seg { display: inline-flex; background: var(--c-bg-inset); border-radius: var(--r-lg); padding: 2px; gap: 2px; }
+  .seg button { border: none; background: transparent; color: var(--c-text-secondary); height: 24px; padding: 0 9px; border-radius: var(--r-md); font-size: var(--fs-xs); cursor: pointer; }
+  .app.mobile .seg button { height: 32px; }
+  .seg button.on { background: var(--c-bg-card); color: var(--c-accent); box-shadow: var(--shadow-card); font-weight: 600; }
+
+  /* Выбор «Дорисовать / Обрезать» */
+  .ask { border: 1px solid var(--c-accent-muted); border-radius: var(--r-md); padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--c-bg-card); }
+  .ask .q { font-size: var(--fs-sm); color: var(--c-text-heading); font-weight: 600; }
+  .opt { display: flex; gap: 10px; align-items: center; padding: 7px; border: 1px solid var(--c-border); border-radius: var(--r-md); background: var(--c-bg-card); cursor: pointer; text-align: left; width: 100%; }
+  .opt:hover { background: var(--c-bg-selected); }
+  .opt .tx { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+  .opt .tx b { color: var(--c-text-heading); display: block; }
+  .opt .tx small { color: var(--c-text-muted); font-size: var(--fs-xs); }
+  /* Превью: исходник в целевой рамке */
+  .pv { position: relative; flex: 0 0 auto; background: var(--c-bg-inset); border-radius: 4px; overflow: hidden; }
+  .pv .img { position: absolute; }
+  .pv .pad { position: absolute; background: repeating-linear-gradient(45deg, var(--c-track) 0 4px, transparent 4px 8px); }
+  .pv .shade { position: absolute; background: rgba(0,0,0,.5); }
+  .pv .fr { position: absolute; border: 1.5px solid var(--c-accent); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+  .pvrow { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  .pvrow .cap2 { font-size: 10.5px; color: var(--c-text-muted); text-align: center; margin-top: 2px; }
+
+  /* Поле ввода */
+  .composer { margin: 0 12px 12px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-xxl); padding: 8px 10px; position: relative; }
+  .app.mobile .composer { margin: 0 8px 8px; }
+  .acts-row { display: flex; gap: 4px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin-bottom: 6px; }
+  .acts-row::-webkit-scrollbar { display: none; }
+  .ach { height: 24px; padding: 0 9px; border-radius: var(--r-max); border: 1px solid var(--c-border-light); background: transparent; font-size: var(--fs-xs); color: var(--c-text-secondary); cursor: pointer; white-space: nowrap; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; }
+  .app.mobile .ach { height: 30px; }
+  .ach.on { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); font-weight: 600; }
+  .composer .ph { font-size: var(--fs-md); color: var(--c-text-muted); min-height: 32px; line-height: 1.4; }
+  .composer .ph.typed { color: var(--c-text-primary); }
+  .composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; min-width: 0; }
+  .composer .sp { flex: 1; }
+
+  /* Шторка телефона */
+  .sheet-ov { position: absolute; inset: 0; background: var(--c-overlay); z-index: 40; }
+  .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 41; max-height: 86%; display: flex; flex-direction: column; background: var(--c-bg-panel);
+    border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); overflow: hidden; }
+  .sheet .grab { display: flex; justify-content: center; padding: 8px 0 2px; }
+  .sheet .grab span { width: 36px; height: 4px; border-radius: 6px; background: var(--c-track); }
+  .sheet .sh { display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px 14px; font-weight: 600; color: var(--c-text-heading); font-size: var(--fs-md); }
+  .sheet .sbody { overflow: auto; flex: 1; min-height: 0; }
+  .sheet .fbody { padding: 4px 14px 14px; }
+  .sheet .sfoot { padding: 8px 14px 14px; border-top: 1px solid var(--c-border-light); background: var(--c-bg-card); }
+  .sheet .sfoot .btn { width: 100%; height: 44px; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">«Формат» — размер и пропорции картинок и видео</h1>
+  <p class="lead">Одно место для размера: чип <b>«Формат»</b> в строке контекста рядом с «Чем». Свёрнутый он читается сразу
+    («16:9 · 1792×1024», «9:16 · 720p»), раскрытый даёт пропорции кнопками, ступень качества с размером и ценой под выбранную
+    модель и «Точно…» с полями ширина × высота. Справа — что именно уйдёт в модель. Записка — <code>media-format-v1-proposal.md</code>.
+    Все цены и размеры в макете иллюстративные: настоящие придут из каталога моделей и котировки.</p>
+  <div class="demo" id="demo"></div>
+  <div class="scn-box">
+    <div class="dcard" id="scn"></div>
+    <div class="dcard" id="side"></div>
+  </div>
+  <div class="stage"><div class="frame" id="frame"></div></div>
+</div>
+
+<script>
+// ───────── Иконки (lucide, упрощённо) ─────────
+const P = {
+  down: '<path d="m6 9 6 6 6-6"/>', x: '<path d="M18 6 6 18M6 6l12 12"/>', check: '<path d="M20 6 9 17l-5-5"/>',
+  warn: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>',
+  ratio: '<rect x="3" y="6" width="18" height="12" rx="2"/>', send: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>', film: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M17 9h4M3 15h4M17 15h4"/>',
+  crop: '<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>', expand: '<path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>',
+  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/>',
+};
+const I = (n, c = '') => `<svg class="i ${c}" viewBox="0 0 24 24">${P[n]}</svg>`;
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+// ───────── Каталог моделей (иллюстративный) ─────────
+// aspects — что модель принимает; step/maxSide — сетка и потолок «Точно…»; tiers — ступени качества.
+const RATIO = { '1:1': 1, '16:9': 16 / 9, '9:16': 9 / 16, '4:3': 4 / 3, '3:4': 3 / 4, '3:2': 1.5, '2:3': 2 / 3 };
+const ALL_AR = ['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3'];
+const TIER_NAME = { std: 'Стандарт', hi: 'Высокое', max: 'Макс' };
+const round = (v, s) => Math.max(s, Math.round(v / s) * s);
+function bySize(mp, step, maxSide) {
+  return ar => {
+    const r = RATIO[ar]; let w = Math.sqrt(mp * 1e6 * r), h = w / r;
+    if (Math.max(w, h) > maxSide) { const k = maxSide / Math.max(w, h); w *= k; h *= k; }
+    return [round(w, step), round(h, step)];
+  };
+}
+const QWEN = { '1:1': [1328, 1328], '16:9': [1664, 928], '9:16': [928, 1664], '4:3': [1472, 1104], '3:4': [1104, 1472], '3:2': [1584, 1056], '2:3': [1056, 1584] };
+const GPT = { '1:1': [1024, 1024], '3:2': [1536, 1024], '2:3': [1024, 1536] };
+const IMG = {
+  flux: { label: 'FLUX.2 Pro', where: 'fal', aspects: ALL_AR, step: 64, maxSide: 2048, id: 'fal-ai/flux-2-pro',
+    tiers: { std: { size: bySize(1.0, 64, 2048), price: '$0.03' }, hi: { size: bySize(1.8, 64, 2048), price: '$0.08' }, max: { size: bySize(4.0, 64, 2048), price: '$0.12' } } },
+  gpt: { label: 'GPT Image', where: 'fal', aspects: ['1:1', '3:2', '2:3'], step: null, id: 'fal-ai/gpt-image',
+    exactOff: 'GPT Image рисует только три размера — 1024×1024, 1536×1024 и 1024×1536',
+    tiers: { std: { size: a => GPT[a], price: '$0.02', note: 'качество low' }, hi: { size: a => GPT[a], price: '$0.07', note: 'качество medium' }, max: { size: a => GPT[a], price: '$0.25', note: 'качество high' } } },
+  qwen: { label: 'Qwen-Image', where: 'локально', aspects: ALL_AR, step: 16, maxSide: 1664, free: true, id: 'qwen-image',
+    tiers: { std: { size: a => QWEN[a], price: 'бесплатно · ~40 с' }, hi: { off: 'Модель рисует один размер ~1,6 Мп' }, max: { off: 'Модель рисует один размер ~1,6 Мп' } } },
+  soul: { label: 'Soul', where: 'Higgsfield', caps: null, id: 'soul' },
+};
+const VID = {
+  seed: { label: 'Seedance Pro', where: 'fal', aspects: ['16:9', '9:16', '1:1'], id: 'fal-ai/seedance-pro',
+    tiers: { std: { res: '480p', price: '$0.12 / 5 с' }, hi: { res: '720p', price: '$0.26 / 5 с' }, max: { res: '1080p', price: '$0.62 / 5 с' } } },
+  h3: { label: 'MiniMax H3', where: 'локально', aspects: ['16:9', '9:16'], free: true, id: 'minimax-h3',
+    tiers: { std: { res: '480p', px: { '16:9': '864×480', '9:16': '480×864' }, price: 'бесплатно · ~1,5 мин', param: 'half' },
+      hi: { res: '768p', px: { '16:9': '1344×768', '9:16': '768×1344' }, price: 'бесплатно · ~5,5 мин', param: 'full' },
+      // «Макс» = съёмка full (~5,5 мин) + латентное увеличение до 1440p (~15 мин по замеру, local-media.md)
+      max: { res: '1440p', px: { '16:9': '2528×1440', '9:16': '1440×2528' }, price: 'бесплатно · ~21 мин', post: 'upscale', param: 'full + upscale 1440p' } } },
+};
+const VPX = { '480p': { '16:9': '854×480', '9:16': '480×854', '1:1': '480×480' }, '720p': { '16:9': '1280×720', '9:16': '720×1280', '1:1': '720×720' }, '1080p': { '16:9': '1920×1080', '9:16': '1080×1920', '1:1': '1080×1080' } };
+
+const OBJ = {
+  draft: { kind: 'image', label: 'Новая картинка', ver: '', draft: true },
+  cat: { kind: 'image', label: 'кот.png', ver: 'v1', src: [1600, 1200], srcAr: '4:3' },
+  dawn: { kind: 'video', label: 'Рассвет', ver: 'сцена', frames: true },
+  s2: { kind: 'video', label: 'Сцена 2', ver: 'утро-в-горах', frames: true, film: 'утро-в-горах' },
+};
+
+// ───────── Состояние ─────────
+const fresh = () => ({
+  obj: 'draft', action: 'draw', imodel: 'flux', vmodel: 'seed',
+  mem: { image: { aspect: '1:1', tier: 'std', exact: null, by: 'human' }, video: { aspect: '16:9', tier: 'hi', by: 'human' } },
+  edit: { mode: 'source', ask: null, cropAnchor: 'c', srcNow: null }, // правка: 'source' | 'outpaint' (+ aspect)
+  frameAnchor: 'c',
+  film: { aspect: '16:9', s2: null, warnAsk: null },
+  pop: null, exactOpen: false, notice: null, typed: '', feed: [],
+});
+let st = fresh();
+let ui = { theme: 'light', mob: false, scn: 's1', step: -1, hl: null };
+
+const isImg = () => OBJ[st.obj].kind === 'image';
+const curModel = () => isImg() ? IMG[st.imodel] : VID[st.vmodel];
+const memKey = () => isImg() ? 'image' : 'video';
+
+// Ближайшие пропорции из того, что умеет модель
+function nearestAr(ar, list) {
+  const t = Math.log(RATIO[ar]);
+  return list.slice().sort((a, b) => Math.abs(Math.log(RATIO[a]) - t) - Math.abs(Math.log(RATIO[b]) - t))[0];
+}
+function nearestTier(tier, m) {
+  const order = ['std', 'hi', 'max']; const ok = order.filter(t => !m.tiers[t].off);
+  if (ok.includes(tier)) return tier;
+  return ok.sort((a, b) => Math.abs(order.indexOf(a) - order.indexOf(tier)) - Math.abs(order.indexOf(b) - order.indexOf(tier)))[0];
+}
+// Точный размер → что модель реально нарисует + пометки
+function fitExact(w, h, m) {
+  const notes = []; let W = +w || 0, H = +h || 0;
+  if (!W || !H) return { w: 0, h: 0, notes: ['Укажите обе стороны'] };
+  if (Math.max(W, H) > m.maxSide) { const k = m.maxSide / Math.max(W, H); W = W * k; H = H * k; notes.push(`Модель рисует до ${m.maxSide} px по длинной стороне`); }
+  const rw = round(W, m.step), rh = round(H, m.step);
+  if (rw !== Math.round(W) || rh !== Math.round(H)) notes.push(`Модель рисует кратно ${m.step}`);
+  return { w: rw, h: rh, notes };
+}
+// Действующий формат = желание человека, приведённое к возможностям модели
+function eff() {
+  const m = curModel(), want = st.mem[memKey()];
+  if (isImg() && !m.aspects) return { none: true };
+  if (OBJ[st.obj].film && st.film.s2 === null) { /* сцена фильма без своего выбора следует за фильмом */ }
+  let aspect = OBJ[st.obj].film ? (st.film.s2 || st.film.aspect) : want.aspect;
+  if (!m.aspects.includes(aspect)) aspect = nearestAr(aspect, m.aspects);
+  const tier = nearestTier(want.tier, m);
+  if (isImg() && want.exact && m.step) { const f = fitExact(want.exact[0], want.exact[1], m); return { exact: true, w: f.w, h: f.h, notes: f.notes, aspect, tier }; }
+  if (isImg()) { const t = m.tiers[tier]; const [w, h] = t.size(aspect); return { aspect, tier, w, h, price: t.price, note: t.note }; }
+  const t = m.tiers[tier]; return { aspect, tier, res: t.res, px: (t.px && t.px[aspect]) || (VPX[t.res] || {})[aspect] || t.res, price: t.price, note: t.note, param: t.param };
+}
+
+// ───────── Тексты чипа ─────────
+function fmtChip() {
+  const o = OBJ[st.obj], m = curModel(), e = eff(), want = st.mem[memKey()];
+  const ag = want.by === 'agent' ? `<span class="ag" title="Формат поставил Claude · ручная правка снимет метку">✦</span>` : '';
+  const mob = ui.mob;
+  if (e.none) return { cls: 'dim', html: `${I('ratio', 's')}<span class="k">Формат</span><b>Как у модели</b>` };
+  if (o.kind === 'image' && !o.draft && st.action !== 'draw') {
+    if (st.action === 'upscale') return { cls: 'dim', html: `${I('ratio', 's')}<b>×2</b><span class="v">${mob ? '' : '· 3200×2400'}</span>` };
+    if (st.action === 'removeBg') return { cls: 'dim', html: `${I('ratio', 's')}<b>Как у исходника</b>` };
+    if (st.edit.mode === 'outpaint') { const [w, h] = outpaintSize(st.edit.aspect); return { cls: '', html: `${I('ratio', 's')}<b>${st.edit.aspect}</b><span class="v">· дорисовать${mob ? '' : ` · ${w}×${h}`}</span>${ag}` }; }
+    const src = srcNow();
+    return { cls: '', html: mob ? `${I('ratio', 's')}<b>${src.ar}</b>${ag}` : `${I('ratio', 's')}<b>Как у исходника</b><span class="v">· ${src.ar}</span>${ag}` };
+  }
+  if (o.kind === 'image') {
+    if (e.exact) return { cls: e.notes.length ? 'warn' : '', html: `${I('ratio', 's')}<b>${e.w}×${e.h}</b><span class="v">· точно</span>${ag}` };
+    return { cls: '', html: `${I('ratio', 's')}<b>${e.aspect}</b><span class="v">· ${mob ? e.w : `${e.w}×${e.h}`}</span>${ag}` };
+  }
+  // видео
+  const filmMismatch = o.film && st.film.s2 && st.film.s2 !== st.film.aspect;
+  const lock = o.film && !filmMismatch ? `<span class="lk" title="Как у фильма «${o.film}»">${I('lock', 'xs')}</span>` : '';
+  const framesWarn = o.frames && !o.film && e.aspect !== '16:9' ? `<span title="Кадры будут подрезаны">${I('warn', 'xs')}</span>` : '';
+  return { cls: filmMismatch ? 'warn' : (lock ? 'lock' : ''), html: `${I('ratio', 's')}<b>${e.aspect}</b><span class="v">· ${e.res}</span>${lock}${filmMismatch ? I('warn', 'xs') : ''}${framesWarn}${ag}` };
+}
+function srcNow() { const s = st.edit.srcNow || { w: 1600, h: 1200, ar: '4:3' }; return s; }
+function outpaintSize(ar) { const s = srcNow(); const r = RATIO[ar]; return s.w / s.h > r ? [s.w, Math.round(s.w / r)] : [Math.round(s.h * r), s.h]; }
+function cropSize(ar) { const s = srcNow(); const r = RATIO[ar]; return s.w / s.h > r ? [Math.round(s.h * r), s.h] : [s.w, Math.round(s.w / r)]; }
+
+// ───────── Действия поля ─────────
+function actions() {
+  const o = OBJ[st.obj];
+  if (o.kind === 'image' && o.draft) return [['chat', 'Чат'], ['draw', 'Нарисовать']];
+  if (o.kind === 'image') return [['chat', 'Чат'], ['edit', 'Изменить'], ['removeBg', 'Убрать фон'], ['upscale', 'Увеличить'], ['outpaint', 'Дорисовать']];
+  return [['chat', 'Чат'], ['shoot', 'Снять'], ['frameA', 'Кадр A ▾'], ['frameB', 'Кадр B ▾']];
+}
+function runLabel() {
+  const e = eff(), m = curModel();
+  if (st.action === 'chat') return 'Отправить';
+  if (st.action === 'draw') return `✦ Нарисовать · ${e.none ? '$0.06' : e.exact ? '~$0.10' : m.free ? 'бесплатно' : e.price}`;
+  if (st.action === 'edit') return `✦ Изменить · ${m.free ? 'бесплатно' : '$0.05'}`;
+  if (st.action === 'outpaint') return st.edit.mode === 'outpaint' ? `✦ Дорисовать · $0.04` : '✦ Дорисовать — выберите формат';
+  if (st.action === 'upscale') return '✦ Увеличить · $0.02';
+  if (st.action === 'removeBg') return '✦ Убрать фон · $0.01';
+  if (st.action === 'shoot') return `✦ Снять · ${e.price.replace(' / 5 с', '')}`;
+  return 'Отправить';
+}
+
+// ───────── Что уходит в модель ─────────
+function payload() {
+  const o = OBJ[st.obj], m = curModel(), e = eff();
+  if (st.action === 'chat') return { note: 'Сообщение уходит Claude. Агент по умолчанию берёт тот же формат проекта.', body: `// ${memKey() === 'image' ? 'картинки' : 'видео'} проекта: ${fmtPlain()}` };
+  if (e.none) return { note: 'Поставщик не сообщил размеры — размер не передаём, модель рисует своим.', body: `POST …/image-editor/jobs\n{ "op": "generate", "provider": "higgsfield", "model": "soul" }` };
+  if (o.kind === 'image' && o.draft) {
+    return { note: e.exact ? `Точный размер; ${e.notes.length ? e.notes.join('; ') + '.' : 'сетка модели совпала.'}` : `Ступень «${TIER_NAME[e.tier]}» у ${m.label}.`,
+      body: `POST …/image-editor/jobs\n{ "op": "generate",\n  "provider": "${m.where === 'локально' ? 'local' : 'fal'}", "model": "${m.id}",\n  "format": { "aspect": "${e.exact ? 'free' : e.aspect}", "quality": "${e.exact ? 'exact' : e.tier}",\n              "width": ${e.w}, "height": ${e.h} } }` };
+  }
+  if (o.kind === 'image') {
+    if (st.action === 'upscale') return { note: 'У «Увеличить» размер задаёт сама операция — «Формат» только показывает итог.', body: `{ "op": "upscale", "scale": 2 }` };
+    if (st.edit.mode === 'outpaint') { const [w, h] = outpaintSize(st.edit.aspect); const s = srcNow(); return { note: 'Дорисовать края выбрано явно — ИИ, цена котировки.', body: `{ "op": "outpaint",\n  "format": { "aspect": "${st.edit.aspect}", "width": ${w}, "height": ${h} },\n  "outpaint": { "top": ${(h - s.h) / 2}, "bottom": ${(h - s.h) / 2}, "left": ${(w - s.w) / 2}, "right": ${(w - s.w) / 2} } }` }; }
+    const s = srcNow();
+    if (st.action === 'outpaint') return { note: '«Дорисовать» ждёт пропорции из «Формата» — без них кнопка не запускает.', body: `{ "op": "outpaint", "format": null }   // выберите пропорции` };
+    return { note: '«Как у исходника» — это прежний matchSourceSize: модель работает своим размером, результат приводится к исходнику.', body: `{ "op": "${st.action === 'removeBg' ? 'removeBackground' : 'edit'}",\n  "format": { "mode": "source" },   // = matchSourceSize: true\n  // ${s.w}×${s.h}, ${s.ar}` };
+  }
+  return { note: o.frames && e.aspect !== '16:9' && !o.film ? 'Кадры 16:9 подрезаются ДО модели: модель получает кадры уже в пропорциях сцены.' : 'Пропорции — в поле Aspect, качество — в частный параметр модели.',
+    body: `POST …/video-editor/quote\n{ "sceneId": "${st.obj}", "aspect": "${e.aspect}",\n  "quality": "${e.tier}",   // ${st.vmodel === 'h3' ? `size: ${e.param}` : `resolution: ${e.res}`}\n  "frameFit": { "mode": "crop", "anchor": "${{ l: 'left', c: 'center', r: 'right' }[st.frameAnchor]}" } }` };
+}
+function fmtPlain() { const w = st.mem[memKey()]; return w.exact ? `${w.exact[0]}×${w.exact[1]}` : `${w.aspect} · ${TIER_NAME[w.tier]}`; }
+
+// ───────── Рисование ─────────
+function arGlyph(ar, size = 18) { const r = RATIO[ar]; const w = r >= 1 ? size : Math.round(size * r), h = r >= 1 ? Math.round(size / r) : size; return `<span class="ar" style="width:${w}px;height:${h}px"></span>`; }
+
+function rowHtml() {
+  const o = OBJ[st.obj], m = curModel();
+  const th = o.draft ? '<span class="th draft"></span>' : `<span class="th pic ${o.kind === 'image' ? 'cat' : 'mount'}"></span>`;
+  let h = `<button class="cx obj" data-k="obj">${th}<span class="nm">${o.label}</span>${(st.ver || o.ver) ? `<span class="v">· ${st.ver || o.ver}</span>` : ''}${st.objBy === 'agent' ? '<span class="ag">✦</span>' : ''}</button>`;
+  if (st.action !== 'chat') {
+    const price = m.free ? '<span class="badge ok">бесплатно</span>' : '';
+    h += `<span class="vsep"></span><button class="cx" data-k="exec">${ui.mob ? '' : '<span class="k">Чем:</span>'}<b>${m.label}</b><span class="v">· ${m.where}</span>${price}${I('down', 'xs')}</button>`;
+  }
+  const f = fmtChip();
+  h += `<button class="cx fmt ${f.cls} ${st.pop === 'fmt' ? 'open' : ''}" data-k="fmt" title="Формат: пропорции и размер">${f.html}${I('down', 'xs')}</button>`;
+  if (o.frames) {
+    h += `<span class="vsep"></span><span class="cx ref"><span class="th round pic mount"></span><span>Кадр A</span><span class="v">16:9</span></span><span class="cx ref"><span class="th round pic"></span><span>Кадр B</span><span class="v">16:9</span></span>`;
+  }
+  return h;
+}
+
+function execPop() {
+  const list = isImg() ? Object.entries(IMG) : Object.entries(VID);
+  const cur = isImg() ? st.imodel : st.vmodel;
+  const sub = (k, m) => {
+    if (isImg() && !m.aspects) return 'размеры не сообщает';
+    return `${m.where} · пропорции ${m.aspects.join(' ')}`;
+  };
+  return `<div class="pop exec" data-pop><div class="ph">Чем ${isImg() ? 'рисовать' : 'снимать'}</div>${list.map(([k, m]) =>
+    `<button class="mi ${k === cur ? 'on' : ''}" data-k="model-${k}"><span class="radio"></span><span class="tx">${m.label}<small>${sub(k, m)}</small></span>${m.free ? '<span class="badge ok">бесплатно</span>' : ''}</button>`).join('')}</div>`;
+}
+
+// Тело «Формата» — общее для всплывашки и шторки
+function fmtBody() {
+  const o = OBJ[st.obj], m = curModel(), e = eff(), want = st.mem[memKey()];
+  let h = '';
+  if (e.none) {
+    h += `<div class="src on"><span class="radio" style="border:4px solid var(--c-accent)"></span><span class="tx"><b>Как у модели</b><small>Higgsfield не сообщил, какие размеры умеет Soul, — рисуем её размером по умолчанию.</small></span></div>
+      <div class="alert mut">${I('info', 's')}<div class="tx">Пропорции и качество появятся, когда выберете модель с известными размерами.<div class="acts"><button class="btn xs" data-k="exec2">Сменить модель в «Чем»</button></div></div></div>`;
+    return h;
+  }
+  // ── Правка картинки ──
+  if (o.kind === 'image' && !o.draft) {
+    if (st.action === 'upscale') return `<div class="alert mut">${I('info', 's')}<div class="tx">У «Увеличить» размер задаёт сама операция: ×2 → 3200×2400. Пропорции не меняются.</div></div>`;
+    const s = srcNow(), srcOn = st.edit.mode === 'source' && !st.edit.ask;
+    h += `<button class="src ${srcOn ? 'on' : ''}" data-k="src"><span class="tx"><b>Как у исходника</b> · ${s.ar}<small>${s.w}×${s.h} — модель работает своим размером, результат вернётся к исходнику</small></span>${srcOn ? I('check', 's') : ''}</button>`;
+    h += `<div class="flab">Другие пропорции<span class="aside">${m.label}</span></div><div class="hint">Выберите пропорции — предложим дорисовать края или обрезать.</div><div class="asp">${m.aspects.filter(a => a !== s.ar).map(a => {
+      const on = (st.edit.ask === a) || (st.edit.mode === 'outpaint' && st.edit.aspect === a && !st.edit.ask);
+      return `<button class="${on ? 'on' : ''}" data-k="ear-${a}">${arGlyph(a)}<span>${a}</span></button>`; }).join('')}</div>`;
+    if (st.edit.ask) h += askHtml(st.edit.ask);
+    else if (st.edit.mode === 'outpaint') { const [w, hh] = outpaintSize(st.edit.aspect); h += `<div class="alert info">${I('expand', 's')}<div class="tx">Края дорисует ИИ: ${s.w}×${s.h} → <b>${w}×${hh}</b>. Кнопка поля — «Дорисовать · $0.04».</div></div>`; }
+    if (st.action === 'removeBg') h += `<div class="hint">У «Убрать фон» размер всегда как у исходника.</div>`;
+    return h;
+  }
+  // ── Фильм ──
+  if (o.film) {
+    const mism = st.film.s2 && st.film.s2 !== st.film.aspect;
+    h += `<div class="alert ${mism ? 'warn' : 'mut'}">${I(mism ? 'warn' : 'lock', 's')}<div class="tx">${mism
+      ? `Сцена в <b>${st.film.s2}</b>, а фильм «${o.film}» — <b>${st.film.aspect}</b>. При склейке пойдут чёрные полосы.<div class="acts"><button class="btn xs pri" data-k="film-fix">Привести к ${st.film.aspect}</button></div>`
+      : `Формат фильма «${o.film}» — <b>${st.film.aspect}</b>, его задала сцена 1. Остальные сцены следуют за ней, иначе при склейке пойдут чёрные полосы.`}</div></div>`;
+  }
+  // ── Пропорции ──
+  const showAr = isImg() ? m.aspects : m.aspects;
+  h += `<div class="flab">Пропорции<span class="aside">${m.label}</span></div><div class="asp">${showAr.map(a => {
+    const on = !e.exact && e.aspect === a; const film = o.film && a === st.film.aspect;
+    return `<button class="${on ? 'on' : ''} ${film ? 'film' : ''} ${e.exact ? 'off' : ''}" data-k="ar-${a}">${arGlyph(a)}<span>${a}</span></button>`; }).join('')}</div>`;
+  if (o.film && st.film.warnAsk) {
+    h += `<div class="alert warn">${I('warn', 's')}<div class="tx">Фильм «${o.film}» — ${st.film.aspect}. Сцена в ${st.film.warnAsk} даст чёрные полосы по бокам при склейке.<div class="acts"><button class="btn xs pri" data-k="film-keep">Оставить ${st.film.aspect}</button><button class="btn xs" data-k="film-force">Всё равно ${st.film.warnAsk}</button></div></div></div>`;
+  }
+  // ── Качество ──
+  h += `<div class="flab">Качество</div><div class="tiers">${['std', 'hi', 'max'].map(t => {
+    const tt = m.tiers[t];
+    if (tt.off) return `<div class="tier off" title="${tt.off}"><b>${TIER_NAME[t]}</b><span>нет у модели</span><em>&nbsp;</em></div>`;
+    const sz = isImg() ? (() => { const [w, hh] = tt.size(e.aspect); return `${w}×${hh}`; })() : `${tt.res} · ${(tt.px && tt.px[e.aspect]) || (VPX[tt.res] || {})[e.aspect] || ''}`;
+    return `<button class="tier ${!e.exact && e.tier === t ? 'on' : ''}" data-k="tier-${t}"><b>${TIER_NAME[t]}</b><span>${sz}</span><em>${tt.note ? tt.note + ' · ' : ''}${tt.price}</em></button>`; }).join('')}</div>`;
+  if (m.tiers.hi.off) h += `<div class="hint">${m.tiers.hi.off} — «Высокое» и «Макс» у неё недоступны.</div>`;
+  if (!isImg() && m.tiers.max.post && e.tier === 'max') { const [a, b] = e.aspect === '9:16' ? ['768×1344', '1440×2528'] : ['1344×768', '2528×1440'];
+    h += `<div class="hint">«Макс» — два прогона на вашей видеокарте: съёмка ${a} (~5,5 мин), затем увеличение до ${b} (~15 мин). Увеличение можно отменить.</div>`; }
+  if (!isImg() && o.film) h += `<div class="hint">Качество у сцен фильма может быть разным: склейка приводит их к размеру фильма без полос.</div>`;
+  // ── Кадры A/B у видео ──
+  if (!isImg() && o.frames && !o.film && e.aspect !== '16:9') h += framesWarn(e.aspect);
+  // ── Точно… ──
+  if (isImg()) {
+    if (m.exactOff) h += `<div class="hint">${I('info', 'xs')} «Точно…» недоступно: ${m.exactOff}.</div>`;
+    else if (!st.exactOpen && !e.exact) h += `<div><button class="lnk" data-k="exact-open">Точно… ширина × высота ›</button></div>`;
+    else h += exactHtml(e, m);
+  }
+  return h;
+}
+
+function exactHtml(e, m) {
+  const want = st.mem.image, w = want.exact ? want.exact[0] : (e.w || ''), hh = want.exact ? want.exact[1] : (e.h || '');
+  const presets = [[1920, 1080], [1080, 1920], [1080, 1080], [1280, 720], [2048, 2048]];
+  let r = `<div class="exact"><div class="flab">Точно<span class="aside"><button class="lnk" data-k="exact-close">${e.exact ? 'Вернуться к пропорциям' : 'Скрыть'}</button></span></div>
+    <div class="wh"><input data-k="ew" inputmode="numeric" value="${w}" aria-label="Ширина"><span>×</span><input data-k="eh" inputmode="numeric" value="${hh}" aria-label="Высота"><span class="hint">px</span></div>
+    <div class="pres">${presets.map(([a, b]) => `<button class="${want.exact && want.exact[0] === a && want.exact[1] === b ? 'on' : ''}" data-k="pre-${a}x${b}">${a}×${b}</button>`).join('')}</div>`;
+  if (e.exact) {
+    r += `<div class="outl">${I('send', 's')}<span>Уйдёт в модель:</span><b>${e.w}×${e.h}</b><span class="hint">~$0.10</span></div>`;
+    if (e.notes.length) r += `<div class="alert warn">${I('warn', 's')}<div class="tx">${e.notes.join('; ')}: <b>${e.w}×${e.h}</b>.</div></div>`;
+  }
+  return r + `</div>`;
+}
+
+// Превью: картинка src (ar) в целевой рамке target
+function pvHtml(srcAr, targetAr, mode, anchor = 'c', H = 64) {
+  const sr = RATIO[srcAr], tr = RATIO[targetAr];
+  if (mode === 'pad') { // дорисовать: рамка цели, внутри исходник, по краям — штриховка
+    const W = Math.round(H * tr); let iw, ih; if (sr > tr) { iw = W; ih = W / sr; } else { ih = H; iw = H * sr; }
+    const x = (W - iw) / 2, y = (H - ih) / 2;
+    return `<div class="pv" style="width:${W}px;height:${H}px"><div class="pad" style="inset:0"></div><div class="img pic cat" style="left:${x}px;top:${y}px;width:${iw}px;height:${ih}px;border-radius:0"></div></div>`;
+  }
+  // обрезать / подрезать: исходник целиком, тень вне рамки цели
+  const W = Math.round(H * sr); let fw, fh; if (sr > tr) { fh = H; fw = H * tr; } else { fw = W; fh = W / tr; }
+  const fx = anchor === 'l' ? 0 : anchor === 'r' ? W - fw : (W - fw) / 2, fy = (H - fh) / 2;
+  const cls = mode === 'frame' ? 'mount' : 'cat';
+  return `<div class="pv" style="width:${W}px;height:${H}px"><div class="img pic ${cls}" style="inset:0;border-radius:0"></div>
+    <div class="shade" style="left:0;top:0;width:${fx}px;height:${H}px"></div><div class="shade" style="left:${fx + fw}px;top:0;width:${W - fx - fw}px;height:${H}px"></div>
+    <div class="shade" style="left:${fx}px;top:0;width:${fw}px;height:${fy}px"></div><div class="shade" style="left:${fx}px;top:${fy + fh}px;width:${fw}px;height:${H - fy - fh}px"></div>
+    <div class="fr" style="left:${fx}px;top:${fy}px;width:${fw}px;height:${fh}px"></div></div>`;
+}
+function askHtml(ar) {
+  const s = srcNow(), [ow, oh] = outpaintSize(ar), [cw, ch] = cropSize(ar);
+  return `<div class="ask"><div class="q">${s.ar} → ${ar}. Как получить ${ar}?</div>
+    <button class="opt" data-k="ask-outpaint">${pvHtml(s.ar, ar, 'pad')}<span class="tx"><b>Дорисовать края</b><small>ИИ · FLUX.1 Fill · $0.04 · ${ow}×${oh}</small></span></button>
+    <button class="opt" data-k="ask-crop">${pvHtml(s.ar, ar, 'crop', st.edit.cropAnchor)}<span class="tx"><b>Обрезать</b><small>Без ИИ · бесплатно · ${cw}×${ch} · новой версией</small></span></button>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span class="hint">Рамка обрезки:</span><span class="seg">${[['l', 'Слева'], ['c', 'По центру'], ['r', 'Справа']].map(([k, l]) => `<button class="${st.edit.cropAnchor === k ? 'on' : ''}" data-k="canc-${k}">${l}</button>`).join('')}</span></div>
+    <div class="hint">Сама модель пропорции не тянет и не режет — только то, что выберете здесь. <button class="lnk" data-k="ask-cancel">Отмена</button></div></div>`;
+}
+function framesWarn(ar) {
+  return `<div class="alert warn">${I('warn', 's')}<div class="tx">Кадры A и B — 16:9, сцена — ${ar}: <b>кадры будут подрезаны</b> по бокам до модели.
+    <div class="pvrow" style="margin-top:6px"><div>${pvHtml('16:9', ar, 'frame', st.frameAnchor, 54)}<div class="cap2">Кадр A</div></div><div>${pvHtml('16:9', ar, 'frame', st.frameAnchor, 54)}<div class="cap2">Кадр B</div></div></div>
+    <div class="acts"><span class="seg">${[['l', 'Слева'], ['c', 'По центру'], ['r', 'Справа']].map(([k, l]) => `<button class="${st.frameAnchor === k ? 'on' : ''}" data-k="fanc-${k}">${l}</button>`).join('')}</span></div></div></div>`;
+}
+function fmtTitle() {
+  const o = OBJ[st.obj];
+  if (o.kind === 'image') return o.draft ? 'Формат новой картинки' : `Формат · ${o.label}`;
+  return o.film ? `Формат сцены · фильм «${o.film}»` : 'Формат сцены';
+}
+function fmtFoot() {
+  const o = OBJ[st.obj], want = st.mem[memKey()];
+  if (o.kind === 'image' && !o.draft) return 'Только для этой правки — исходник не меняется, пока не сохраните.';
+  if (o.film) return `Один формат на все сцены фильма «${o.film}».`;
+  return `Запомнится для ${o.kind === 'image' ? 'картинок' : 'видео'} проекта «AI Home»${want.by === 'agent' ? ' · поставил Claude ✦' : ''}.`;
+}
+function fmtPop() {
+  return `<div class="pop fmt" data-pop><div class="ph">${I('ratio', 's')}<b>${fmtTitle()}</b></div><div class="fbody">${fmtBody()}</div><div class="ffoot">${I('info', 'xs')}<span>${fmtFoot()}</span></div></div>`;
+}
+function noticeHtml() {
+  const n = st.notice; if (!n) return '';
+  return `<div class="notice ${n.kind || ''}">${I(n.kind === 'warn' ? 'warn' : 'info', 's')}<span class="tx">${n.text}</span>${n.act ? `<button class="btn xs" data-k="${n.act[0]}">${n.act[1]}</button>` : ''}<button class="ib" data-k="notice-x" aria-label="Закрыть">${I('x', 's')}</button></div>`;
+}
+
+function feedHtml() {
+  const o = OBJ[st.obj]; let h = '';
+  const sc = SCN[ui.scn];
+  if (sc.feed) h += sc.feed(st);
+  h += st.feed.map(f => f).join('');
+  if (st.shoot) h += shootCard(st);
+  return h;
+}
+function composerHtml() {
+  const acts = actions(), m = curModel();
+  const ph = st.typed ? `<div class="ph typed">${esc(st.typed)}</div>` : `<div class="ph">${st.action === 'chat' ? 'Сообщение Claude…' : st.action === 'draw' ? 'Что нарисовать…' : st.action === 'shoot' ? 'Что изменить в сцене (необязательно)…' : st.action === 'edit' ? 'Что изменить на картинке…' : 'Без текста — кнопкой'}</div>`;
+  return `<div class="composer"><div class="acts-row">${acts.map(([k, l]) => `<button class="ach ${st.action === k ? 'on' : ''}" data-k="act-${k}">${l}</button>`).join('')}</div>${ph}
+    <div class="bar"><span class="sp"></span><button class="btn pri run" data-k="run">${runLabel()}</button></div></div>`;
+}
+
+function appHtml() {
+  const o = OBJ[st.obj];
+  const pop = !ui.mob ? (st.pop === 'fmt' ? fmtPop() : st.pop === 'exec' ? execPop() : '') : '';
+  let sheet = '';
+  if (ui.mob && st.pop) {
+    const body = st.pop === 'fmt' ? `<div class="fbody">${fmtBody()}</div>` : execPop().replace('class="pop exec"', 'class=""').replace(/<div class="ph">.*?<\/div>/, '');
+    sheet = `<div class="sheet-ov" data-k="sheet-x"></div><div class="sheet"><div class="grab"><span></span></div>
+      <div class="sh">${st.pop === 'fmt' ? fmtTitle() : `Чем ${isImg() ? 'рисовать' : 'снимать'}`}<span style="flex:1"></span><button class="ib" data-k="sheet-x" aria-label="Закрыть">${I('x')}</button></div>
+      <div class="sbody">${body}</div>${st.pop === 'fmt' ? `<div class="sfoot"><div class="hint" style="margin-bottom:6px">${fmtFoot()}</div><button class="btn pri" data-k="sheet-done">Готово</button></div>` : ''}</div>`;
+  }
+  return `<div class="app ${ui.mob ? 'mobile' : ''}">
+    <div class="ihead">${ui.mob ? '‹' : ''}<span>Обложки для блога</span><span class="sub">· AI Home</span></div>
+    <div class="feed">${feedHtml()}</div>
+    <div class="rw">${noticeHtml()}${pop}<div class="crow" role="toolbar" aria-label="Контекст хода">${rowHtml()}</div></div>
+    ${composerHtml()}${sheet}</div>`;
+}
+
+// ───────── Сценарии ─────────
+const cardImg = (t, sub, pics) => `<div class="icard"><div class="t">${I('spark', 's')}<b>${t}</b><span class="sub">${sub}</span></div><div class="pics">${pics}</div></div>`;
+const picBox = (ar, h, cls = '', lb = '') => `<div class="pic ${cls}" style="height:${h}px;width:${Math.round(h * RATIO[ar])}px">${lb ? `<span class="lb">${lb}</span>` : ''}</div>`;
+// Съёмка «Макс» у local H3: две стадии на своей видеокарте
+function shootCard(s) {
+  const port = s.mem.video.aspect === '9:16', base = port ? '768×1344' : '1344×768', big = port ? '1440×2528' : '2528×1440';
+  const k = s.shoot, ok = `<span class="badge ok">${I('check', 'xs')}готово</span>`;
+  const r1 = k === 'shoot'
+    ? `<div class="frow stg now"><span class="n">1</span><span class="tx">Снимаем · ${base}…</span><span class="badge acc">~5,5 мин</span><button class="btn xs" data-k="shoot-cancel">Отменить</button></div>`
+    : `<div class="frow stg"><span class="n">1</span><span class="tx">Съёмка · ${base}</span>${ok}</div>`;
+  const r2 = {
+    shoot: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p · ${big}</span><span class="badge mut">следом · ~15 мин</span></div>`,
+    up: `<div class="frow stg now"><span class="n">2</span><span class="tx">Увеличиваем до 1440p…</span><span class="badge acc">ещё ~15 мин</span><button class="btn xs" data-k="up-cancel">Отменить увеличение</button></div>`,
+    done: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p · ${big}</span>${ok}</div>`,
+    fail: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p</span><span class="badge warn">${I('warn', 'xs')}не удалось</span></div>`,
+    cancel: `<div class="frow stg"><span class="n">2</span><span class="tx">Увеличение до 1440p</span><span class="badge mut">отменено</span></div>`,
+  }[k];
+  let tail = '';
+  if (k === 'shoot') tail = `<button class="sim" data-k="shoot-next">Симуляция: съёмка готова</button>`;
+  if (k === 'up') tail = `<div style="display:flex;gap:6px;flex-wrap:wrap"><button class="sim" data-k="up-done">Симуляция: готово</button><button class="sim" data-k="up-fail">Симуляция: сбой</button></div>`;
+  if (k === 'done') tail = `<div class="pics">${picBox(s.mem.video.aspect, port ? 110 : 62, 'mount', '1440p')}</div><div class="hint">Версия 1 · 1440p · ${big}</div>`;
+  if (k === 'fail') tail = `<div class="alert warn">${I('warn', 's')}<div class="tx">Увеличение до 1440p не удалось. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs pri" data-k="up-retry">Повторить</button></div></div></div>`;
+  if (k === 'cancel') tail = `<div class="alert mut">${I('info', 's')}<div class="tx">Увеличение отменено. Съёмка 768p сохранена версией 1 — в 1440p её нет.<div class="acts"><button class="btn xs" data-k="up-retry">Увеличить до 1440p</button></div></div></div>`;
+  return `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет · съёмка</b><span class="sub">MiniMax H3 · локально · ${s.mem.video.aspect} · 1440p · бесплатно</span></div>${r1}${r2}${tail}</div>`;
+}
+// Обрезка без ИИ — новая версия; строка и карточка одни для человека и для агента
+function cropFeed(s, by) {
+  const [w, h] = s.edit.srcNow ? [s.edit.srcNow.w, s.edit.srcNow.h] : [0, 0], ar = s.edit.srcNow.ar;
+  const who = by === 'agent' ? `<span class="ag">✦</span> Claude обрезал` : 'Вы обрезали';
+  return `<div class="quiet">${I('crop', 'xs')} ${who} без ИИ: <b>${w}×${h}</b> · ${ar} · бесплатно · версия 2</div>`
+    + cardImg('кот.png · v2', `${w}×${h} · ${ar} · обрезано без ИИ${by === 'agent' ? ' · ✦ Claude' : ''}`, picBox(ar, 84, 'cat'));
+}
+const filmCard = st2 => {
+  const mism = st2.film.s2 && st2.film.s2 !== st2.film.aspect, a2 = st2.film.s2 || st2.film.aspect;
+  return `<div class="icard"><div class="t">${I('film', 's')}<b>утро-в-горах.film</b><span class="sub">фильм · ${st2.film.aspect} · задала сцена 1</span></div>
+    <div class="frow"><span class="n">1</span>${picBox('16:9', 22, 'mount')}<span class="tx">Сцена 1 · рассвет над хребтом</span><span class="badge mut">16:9 · 720p</span></div>
+    <div class="frow ${mism ? 'warn' : ''}"><span class="n">2</span>${picBox(a2, 22, '')}<span class="tx">Сцена 2 · тропа</span><span class="badge ${mism ? 'warn' : 'acc'}">${mism ? I('warn', 'xs') : ''}${a2} · ${st2.film.s2 ? '720p' : 'как у фильма'}</span>
+      ${mism ? `<span style="flex-basis:100%;font-size:11px;color:var(--c-warning-text)">9:16 в фильме 16:9 — при склейке будут чёрные полосы. <button class="lnk" data-k="film-fix">Привести к 16:9</button></span>` : ''}</div></div>`;
+};
+
+const SCN = {
+  s1: { t: '1 · Новая картинка: 16:9 · Высокое', why: 'Чип «Формат» стоит рядом с «Чем» и сразу говорит, что уйдёт в модель. Раскрыли — пропорции кнопками и три ступени качества с размером и ценой под выбранную модель.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; },
+    feed: () => `<div class="msg user">Нужна обложка для поста про горы</div><div class="msg agent">Взял черновик <b>Новая картинка</b> — опишите, что нарисовать, и выберите формат в строке.</div>`,
+    steps: [
+      ['Открыть чип «Формат» (сейчас «1:1 · 1024×1024»)', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Пропорции: 16:9', 'ar-16:9', s => { s.mem.image.aspect = '16:9'; }],
+      ['Качество: «Высокое» — под ним «1792×1024 · $0.08»', 'tier-hi', s => { s.mem.image.tier = 'hi'; }],
+      ['Закрыть: чип «16:9 · 1792×1024», кнопка «Нарисовать · $0.08»', 'fmt', s => { s.pop = null; s.typed = 'Горный хребет на рассвете, туман в долине, тёплый свет'; }],
+      ['Нарисовать — карточка в ленте 16:9', 'run', s => { s.typed = ''; s.feed.push(`<div class="quiet">Вы запустили: <b>Нарисовать</b> · FLUX.2 Pro · 16:9 · 1792×1024</div>` + cardImg('Новая картинка · v1', '1792×1024 · FLUX.2 Pro', picBox('16:9', 84, 'mount'))); }],
+    ] },
+  s2: { t: '2 · Смена модели без нужных пропорций', why: 'У GPT Image нет 16:9 — формат переходит на ближайшие 3:2 и пишет об этом над строкой. Желание «16:9» помнится: вернётесь на модель, где 16:9 есть, — вернётся оно.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; s.mem.image.aspect = '16:9'; s.mem.image.tier = 'hi'; },
+    feed: () => `<div class="msg user">Нужна обложка для поста про горы</div>`,
+    steps: [
+      ['Чип «Чем»: открыть список моделей', 'exec', s => { s.pop = 'exec'; }],
+      ['Выбрать GPT Image (у неё только 1:1, 3:2, 2:3)', 'model-gpt', s => { pickModel(s, 'gpt'); }],
+      ['Открыть «Формат»: 16:9 нет, выбрано 3:2 · 1536×1024', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Вернуть FLUX.2 Pro — формат снова 16:9', 'exec', s => { s.pop = null; pickModel(s, 'flux'); }],
+    ] },
+  s3: { t: '3 · «Точно…»: 1920×1080 → 1920×1088', why: 'Точный размер — под ссылкой, по умолчанию его не видно. Чего модель не умеет, округляем до ближайшего и пишем почему: FLUX рисует кратно 64.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; s.mem.image.aspect = '16:9'; s.mem.image.tier = 'hi'; },
+    feed: () => `<div class="msg user">Нужен баннер ровно под шапку сайта, 1920×1080</div>`,
+    steps: [
+      ['Открыть «Формат»', 'fmt', s => { s.pop = 'fmt'; }],
+      ['«Точно… ширина × высота»', 'exact-open', s => { s.exactOpen = true; }],
+      ['Пресет 1920×1080 → уйдёт 1920×1088, предупреждение «кратно 64»', 'pre-1920x1080', s => { s.mem.image.exact = [1920, 1080]; }],
+      ['Ввести 2600×1400 — упёрлись в потолок 2048', 'ew', s => { s.mem.image.exact = [2600, 1400]; }],
+      ['«Вернуться к пропорциям» — снова 16:9 · Высокое', 'exact-close', s => { s.mem.image.exact = null; s.exactOpen = false; }],
+    ] },
+  s4: { t: '4 · Правка картинки: «Как у исходника» → 1:1', why: 'У правки по умолчанию «Как у исходника» (бывшая галочка «размер оригинала»). Другие пропорции — явный выбор: «Дорисовать края» (ИИ, цена) или «Обрезать» (бесплатно, с рамкой). Модель сама не тянет и не режет.',
+    init: s => { s.obj = 'cat'; s.action = 'edit'; },
+    feed: () => `<div class="icard"><div class="t">${I('spark', 's')}<b>кот.png</b><span class="sub">1600×1200 · 4:3 · исходник</span></div><div class="pics">${picBox('4:3', 84, 'cat')}</div></div><div class="quiet">Вы взяли в работу: <b>кот.png</b></div>`,
+    steps: [
+      ['Открыть «Формат»: выбрано «Как у исходника · 4:3»', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Выбрать 1:1 — вопрос «Как получить 1:1?»', 'ear-1:1', s => { s.edit.ask = '1:1'; }],
+      ['Путь А: «Дорисовать края» → действие «Дорисовать · $0.04», 1600×1600', 'ask-outpaint', s => { askOutpaint(s); }],
+      ['Запустить дорисовку', 'run', s => { runNow(s); }],
+      ['Путь Б: снова 1:1, рамка «Слева»', 'fmt', s => { s.feed = []; s.ver = null; s.action = 'edit'; s.edit = { mode: 'source', ask: '1:1', cropAnchor: 'l', srcNow: null }; s.pop = 'fmt'; }],
+      ['«Обрезать» — без ИИ, новая версия v2 в 1:1, поле — «Изменить»', 'ask-crop', s => { askCrop(s); }],
+    ] },
+  s5: { t: '5 · Видео-сцена: 9:16 · 720p, кадры 16:9', why: 'У видео тот же чип: пропорции и качество по возможностям модели. Кадры A/B в других пропорциях — предупреждение «будут подрезаны» с превью и якорем рамки.',
+    init: s => { s.obj = 'dawn'; s.action = 'shoot'; s.vmodel = 'seed'; },
+    feed: () => `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет</b><span class="sub">сцена · кадры 16:9</span></div><div class="pics">${picBox('16:9', 54, 'mount', 'A')}${picBox('16:9', 54, '', 'B')}</div></div>`,
+    steps: [
+      ['Открыть «Формат» (видео проекта: 16:9 · 720p)', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Пропорции 9:16 — предупреждение о кадрах с превью', 'ar-9:16', s => { s.mem.video.aspect = '9:16'; }],
+      ['Рамка «Справа» — превью сдвинулось', 'fanc-r', s => { s.frameAnchor = 'r'; }],
+      ['Закрыть: чип «9:16 · 720p ⚠», «Снять · $0.26»', 'fmt', s => { s.pop = null; }],
+      ['«Чем» → MiniMax H3 локально: ступени 480p / 768p / 1440p', 'exec', s => { pickModel(s, 'h3'); s.pop = 'fmt'; }],
+    ] },
+  s6: { t: '6 · Фильм: формат один на все сцены', why: 'Первая сцена задала фильму 16:9 — у второй формат подставлен и закреплён (замок). Попытка поставить 9:16 спрашивает явно; согласились — заметное предупреждение в строке и в фильме с «Привести к 16:9».',
+    init: s => { s.obj = 's2'; s.action = 'shoot'; s.vmodel = 'seed'; },
+    feed: s => filmCard(s),
+    steps: [
+      ['Сцена 2 фильма: чип «16:9 · 720p 🔒» — как у фильма', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Нажать 9:16 — «Оставить 16:9 / Всё равно 9:16»', 'ar-9:16', s => { s.film.warnAsk = '9:16'; }],
+      ['«Всё равно 9:16» — чип и строка фильма в предупреждении', 'film-force', s => { s.film.s2 = '9:16'; s.film.warnAsk = null; }],
+      ['«Привести к 16:9» — всё снова ровно', 'film-fix', s => { s.film.s2 = null; s.pop = null; }],
+    ] },
+  s7: { t: '7 · Формат сменил агент → «✦»', why: 'Агент задаёт формат теми же параметрами (aspect, quality, width/height) — и формат проекта меняется с меткой ✦ на чипе и тихой строкой в ленте. Любая ручная правка метку снимает.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; s.mem.image.aspect = '16:9'; s.mem.image.tier = 'hi'; },
+    feed: () => `<div class="msg user">Сделай вариант для сторис</div>`,
+    steps: [
+      ['Ход Claude: image_generate(aspect "9:16", quality "high")', 'fmt', s => { agentSets(s); }],
+      ['Открыть «Формат»: внизу «поставил Claude ✦»', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Ручная правка: «Макс» — метка снята', 'tier-max', s => { s.mem.image.tier = 'max'; s.mem.image.by = 'human'; }],
+    ] },
+  s8: { t: '8 · Телефон 360: чип в строке, формат в шторке', why: 'Строка прокручивается вбок, чип короче («16:9 · 1792»). Тап открывает шторку с тем же содержимым: кнопки 44 px, поля ввода 16 px (без зума iOS), «Готово» внизу.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; s.mem.image.aspect = '16:9'; s.mem.image.tier = 'hi'; }, mob: true,
+    feed: () => `<div class="msg user">Обложка для поста про горы</div>`,
+    steps: [
+      ['Тап по чипу «Формат» — шторка', 'fmt', s => { s.pop = 'fmt'; }],
+      ['Пропорции 9:16, «Стандарт»', 'tier-std', s => { s.mem.image.aspect = '9:16'; s.mem.image.tier = 'std'; }],
+      ['«Точно…» в шторке', 'exact-open', s => { s.exactOpen = true; }],
+      ['«Готово» — шторка закрыта, чип «9:16 · 768»', 'sheet-done', s => { s.pop = null; s.exactOpen = false; }],
+      ['Правка картинки на телефоне: «Как у исходника» → 1:1', 'fmt', s => { s.obj = 'cat'; s.action = 'edit'; s.pop = 'fmt'; s.edit.ask = '1:1'; }],
+    ] },
+  s9: { t: '9 · Модель не сообщила возможности', why: 'Пустое состояние: у Soul (Higgsfield) каталог не знает размеров. Чип — «Как у модели», в раскрытии одна строка с причиной и путь к «Чем». Размер в модель не уходит.',
+    init: s => { s.obj = 'draft'; s.action = 'draw'; s.mem.image.aspect = '16:9'; s.mem.image.tier = 'hi'; },
+    feed: () => `<div class="msg user">Портрет героини в стиле Soul</div>`,
+    steps: [
+      ['«Чем» → Soul (Higgsfield)', 'exec', s => { pickModel(s, 'soul'); }],
+      ['Открыть «Формат»: только «Как у модели» с причиной', 'fmt', s => { s.pop = 'fmt'; }],
+      ['«Сменить модель в «Чем»» → FLUX.2 Pro, формат вернулся 16:9', 'exec2', s => { pickModel(s, 'flux'); s.pop = 'fmt'; }],
+    ] },
+  s10: { t: '10 · Локальное видео «Макс»: съёмка + увеличение до 1440p', why: 'У MiniMax H3 «Макс» — 1440p в два прогона на своей видеокарте: съёмка 1344×768, затем латентное увеличение. Время — в подписи ступени, увеличение — отдельная стадия карточки, его можно отменить. 768p вместо 1440p молча не подставляем.',
+    init: s => { s.obj = 'dawn'; s.action = 'shoot'; s.vmodel = 'h3'; },
+    feed: () => `<div class="icard"><div class="t">${I('film', 's')}<b>Рассвет</b><span class="sub">сцена · кадры 16:9</span></div><div class="pics">${picBox('16:9', 54, 'mount', 'A')}${picBox('16:9', 54, '', 'B')}</div></div>`,
+    steps: [
+      ['Открыть «Формат»: MiniMax H3, ступени 480p / 768p / 1440p', 'fmt', s => { s.pop = 'fmt'; }],
+      ['«Макс» — «1440p · 2528×1440 · бесплатно · ~21 мин» и подсказка о двух прогонах', 'tier-max', s => { s.mem.video.tier = 'max'; }],
+      ['Закрыть: чип «16:9 · 1440p», кнопка «Снять · бесплатно · ~21 мин»', 'fmt', s => { s.pop = null; }],
+      ['Снять — карточка: стадия 1 «Снимаем», стадия 2 следом', 'run', s => { runNow(s); }],
+      ['Съёмка готова — «Увеличиваем до 1440p… ещё ~15 мин»', 'shoot-next', s => { s.shoot = 'up'; }],
+      ['«Отменить увеличение»', 'up-cancel', s => { s.shoot = 'cancel'; }],
+      ['«Увеличить до 1440p» — стадия 2 снова идёт', 'up-retry', s => { s.shoot = 'up'; }],
+      ['Сбой увеличения — «Повторить»', 'up-fail', s => { s.shoot = 'fail'; }],
+      ['«Повторить» → готово: версия 1 · 1440p', 'up-retry', s => { s.shoot = 'done'; }],
+    ] },
+  s11: { t: '11 · Агент обрезает: «обрежь до 1:1»', why: 'Обрезка без ИИ — новая версия картинки, а не шаг. Строка ленты и карточка те же, что у ручной «Обрезать» (сценарий 4), только «Вы» → «✦ Claude». Формат проекта обрезка не меняет.',
+    init: s => { s.obj = 'cat'; s.action = 'chat'; },
+    feed: () => `<div class="icard"><div class="t">${I('spark', 's')}<b>кот.png</b><span class="sub">1600×1200 · 4:3 · исходник</span></div><div class="pics">${picBox('4:3', 84, 'cat')}</div></div><div class="msg user">Обрежь до 1:1, кот по центру</div>`,
+    steps: [
+      ['Ход Claude: image_generate(op "crop", aspect "1:1", anchor "center") → версия 2', 'obj', s => { agentCrop(s); }],
+      ['Открыть «Формат»: «Как у исходника · 1:1», формат проекта не тронут', 'fmt', s => { s.pop = 'fmt'; }],
+    ] },
+};
+
+// ───────── Операции ─────────
+function pickModel(s, k) {
+  const prevOk = s === st; // в шаге сценария s — копия, логика та же
+  if (OBJ[s.obj].kind === 'image') {
+    s.imodel = k; const m = IMG[k], want = s.mem.image;
+    if (!m.aspects) s.notice = { kind: 'info', text: `${m.label} не сообщает размеры — рисуем как у модели.` };
+    else if (want.exact && !m.step) s.notice = { kind: 'warn', text: `Точный размер ${want.exact[0]}×${want.exact[1]} ${m.label} не умеет — взяли ${want.aspect}.` };
+    else if (!m.aspects.includes(want.aspect)) s.notice = { kind: 'warn', text: `${want.aspect} нет у ${m.label} — взяли ${nearestAr(want.aspect, m.aspects)}.`, act: ['notice-x', 'Понятно'] };
+    else if (m.tiers[want.tier].off) s.notice = { kind: 'warn', text: `«${TIER_NAME[want.tier]}» нет у ${m.label} — взяли «Стандарт».` };
+    else s.notice = null;
+  } else {
+    s.vmodel = k; const m = VID[k], want = s.mem.video;
+    s.notice = !m.aspects.includes(want.aspect) ? { kind: 'warn', text: `${want.aspect} нет у ${m.label} — взяли ${nearestAr(want.aspect, m.aspects)}.` }
+      : { kind: 'info', text: `У ${m.label} другие ступени: «${TIER_NAME[want.tier]}» — ${m.tiers[want.tier].res}.` };
+  }
+  s.pop = null;
+}
+function askOutpaint(s) { s.edit.mode = 'outpaint'; s.edit.aspect = s.edit.ask; s.edit.ask = null; s.action = 'outpaint'; }
+function askCrop(s) {
+  const ar = s.edit.ask; const save = st; st = s; const [w, h] = cropSize(ar); st = save;
+  s.edit = { mode: 'source', ask: null, cropAnchor: s.edit.cropAnchor, srcNow: { w, h, ar } }; s.action = 'edit'; s.pop = null; s.ver = 'v2';
+  s.feed.push(cropFeed(s, 'human'));
+}
+function runNow(s) {
+  const save = st; st = s; const lbl = runLabel(); st = save;
+  if (s.action === 'outpaint') { const save2 = st; st = s; const [w, h] = outpaintSize(s.edit.aspect); st = save2;
+    s.feed.push(`<div class="quiet">Вы запустили: <b>Дорисовать</b> · FLUX.1 Fill · ${s.edit.aspect} · ${w}×${h}</div>` + cardImg('кот.png · v2', `${w}×${h} · дорисовано`, `<div class="pv" style="width:84px;height:84px"><div class="pad" style="inset:0"></div><div class="img pic cat" style="left:0;top:10.5px;width:84px;height:63px;border-radius:0"></div></div>`));
+    s.edit.mode = 'source'; s.edit.srcNow = { w, h, ar: s.edit.aspect }; s.action = 'edit'; s.ver = 'v2';
+  } else if (s.action === 'draw') {
+    const save3 = st; st = s; const e = eff(); st = save3;
+    if (!e.none) s.feed.push(`<div class="quiet">Вы запустили: <b>Нарисовать</b> · ${IMG[s.imodel].label} · ${e.exact ? 'точно' : e.aspect} · ${e.w}×${e.h}</div>` + cardImg('Новая картинка · v1', `${e.w}×${e.h}`, picBox(e.exact ? '16:9' : e.aspect, 84, 'mount')));
+    else s.feed.push(`<div class="quiet">Вы запустили: <b>Нарисовать</b> · Soul · размер модели</div>`);
+  } else if (s.action === 'shoot') {
+    const save4 = st; st = s; const e = eff(); st = save4;
+    const up = VID[s.vmodel].tiers[e.tier].post;
+    s.feed.push(`<div class="quiet">Вы запустили: <b>Снять</b> · ${VID[s.vmodel].label} · ${e.aspect} · ${e.res}${up ? ' · съёмка + увеличение' : ''}</div>`);
+    if (up) s.shoot = 'shoot';
+  }
+  s.typed = ''; s.pop = null;
+}
+function agentCrop(s) {
+  s.edit = { mode: 'source', ask: null, cropAnchor: 'c', srcNow: { w: 1200, h: 1200, ar: '1:1' } }; s.ver = 'v2'; s.pop = null;
+  s.feed.push(`<div class="tool">image_generate(threadId: "t_41", op: "crop", aspect: "1:1", anchor: "center")</div>` + cropFeed(s, 'agent'));
+}
+function agentSets(s) {
+  s.mem.image = { aspect: '9:16', tier: 'hi', exact: null, by: 'agent' }; s.pop = null;
+  s.feed.push(`<div class="tool">image_generate(threadId: "t_41", aspect: "9:16", quality: "high")</div><div class="quiet"><span class="ag">✦</span> Claude сменил формат картинок проекта: <b>16:9 → 9:16</b></div>` + cardImg('Новая картинка · v2', '1024×1792 · FLUX.2 Pro · ✦ Claude', picBox('9:16', 92, 'mount')));
+}
+
+// ───────── Клики ─────────
+function onKey(k, el) {
+  const o = OBJ[st.obj];
+  const human = () => { st.mem[memKey()].by = 'human'; };
+  if (k === 'fmt') { st.pop = st.pop === 'fmt' ? null : 'fmt'; st.notice = null; if (st.action === 'outpaint' && st.edit.mode !== 'outpaint') { } }
+  else if (k === 'exec' || k === 'exec2') { st.pop = st.pop === 'exec' ? null : 'exec'; }
+  else if (k.startsWith('model-')) pickModel(st, k.slice(6));
+  else if (k === 'notice-x') st.notice = null;
+  else if (k === 'sheet-x' || k === 'sheet-done') { st.pop = null; }
+  else if (k.startsWith('ar-')) {
+    const a = k.slice(3);
+    if (o.film) { if (a === st.film.aspect) { st.film.s2 = null; st.film.warnAsk = null; } else st.film.warnAsk = a; }
+    else { st.mem[memKey()].aspect = a; st.mem.image.exact = isImg() ? null : st.mem.image.exact; human(); }
+  }
+  else if (k.startsWith('tier-')) { st.mem[memKey()].tier = k.slice(5); if (isImg()) st.mem.image.exact = null; human(); }
+  else if (k === 'exact-open') st.exactOpen = true;
+  else if (k === 'exact-close') { st.exactOpen = false; st.mem.image.exact = null; human(); }
+  else if (k.startsWith('pre-')) { const [w, h] = k.slice(4).split('x').map(Number); st.mem.image.exact = [w, h]; human(); }
+  else if (k === 'src') { st.edit = { ...st.edit, mode: 'source', ask: null }; if (st.action === 'outpaint') st.action = 'edit'; }
+  else if (k.startsWith('ear-')) st.edit.ask = k.slice(4);
+  else if (k === 'ask-outpaint') askOutpaint(st);
+  else if (k === 'ask-crop') askCrop(st);
+  else if (k === 'ask-cancel') st.edit.ask = null;
+  else if (k.startsWith('canc-')) st.edit.cropAnchor = k.slice(5);
+  else if (k.startsWith('fanc-')) st.frameAnchor = k.slice(5);
+  else if (k === 'shoot-next' || k === 'up-retry') st.shoot = 'up';
+  else if (k === 'up-done') st.shoot = 'done';
+  else if (k === 'up-fail') st.shoot = 'fail';
+  else if (k === 'up-cancel') st.shoot = 'cancel';
+  else if (k === 'shoot-cancel') st.shoot = null;
+  else if (k === 'film-keep') { st.film.warnAsk = null; st.film.s2 = null; }
+  else if (k === 'film-force') { st.film.s2 = st.film.warnAsk; st.film.warnAsk = null; }
+  else if (k === 'film-fix') { st.film.s2 = null; st.film.warnAsk = null; }
+  else if (k.startsWith('act-')) {
+    const a = k.slice(4); if (a === 'frameA' || a === 'frameB') return;
+    st.action = a;
+    if (a === 'outpaint' && st.edit.mode !== 'outpaint') { st.pop = 'fmt'; st.notice = { kind: 'info', text: '«Дорисовать»: выберите в «Формате» пропорции, до которых дорисовать.' }; }
+    if (a !== 'outpaint' && st.edit.mode === 'outpaint') st.edit.mode = 'source';
+  }
+  else if (k === 'run') { if (st.pop && ui.mob) st.pop = null; else if (st.action === 'outpaint' && st.edit.mode !== 'outpaint') { st.pop = 'fmt'; } else runNow(st); }
+  else if (k === 'obj' || k === 'ew' || k === 'eh') return;
+  render();
+}
+
+// ───────── Обвязка макета ─────────
+function applyScenario(name, step) {
+  const sc = SCN[name]; ui.scn = name; ui.step = step; ui.mob = ui.wOverride ? ui.wOverride === 'm' : !!sc.mob;
+  st = fresh(); sc.init(st);
+  for (let i = 0; i <= step; i++) sc.steps[i][2](st);
+  ui.hl = step + 1 < sc.steps.length ? sc.steps[step + 1][1] : null;
+  render();
+}
+function renderDemo() {
+  document.getElementById('demo').innerHTML = `
+    <div class="grp"><span class="lbl">Сценарий</span>${Object.keys(SCN).map(k => `<button class="tbtn" aria-pressed="${ui.scn === k}" data-scn="${k}">${k.slice(1)}</button>`).join('')}</div>
+    <div class="grp"><span class="lbl">Тема</span><button class="tbtn" aria-pressed="${ui.theme === 'light'}" data-theme-set="light">Светлая</button><button class="tbtn" aria-pressed="${ui.theme === 'dark'}" data-theme-set="dark">Тёмная</button></div>
+    <div class="grp"><span class="lbl">Ширина</span><button class="tbtn" aria-pressed="${!ui.mob}" data-w="d">Компьютер</button><button class="tbtn" aria-pressed="${ui.mob}" data-w="m">Телефон 360</button></div>
+    <div class="grp"><button class="tbtn" data-reset>↺ Сначала</button></div>`;
+}
+function render() {
+  document.documentElement.dataset.theme = ui.theme;
+  renderDemo();
+  const sc = SCN[ui.scn];
+  document.getElementById('scn').innerHTML = `<h3>${sc.t}</h3><p class="why">${sc.why}</p><ol class="steps">${sc.steps.map((s, i) =>
+    `<li class="${i < ui.step ? 'done-row' : ''} ${i === ui.step ? 'cur' : ''}" data-step="${i}">${s[0]}</li>`).join('')}</ol>
+    <div class="memo" style="margin-top:6px">Шаги кликаются по порядку или вразбивку; внутри макета всё нажимается и вручную. Подсвечено — куда нажать дальше.</div>`;
+  const p = payload(), w = st.mem;
+  document.getElementById('side').innerHTML = `<div class="sub" style="margin-top:0">Что уходит в модель</div><div class="memo">${p.note}</div><div class="payload">${esc(p.body)}</div>
+    <div class="sub">Память формата на проект «AI Home»</div><div class="memo">Картинки: <b>${w.image.exact ? w.image.exact.join('×') : `${w.image.aspect} · ${TIER_NAME[w.image.tier]}`}</b>${w.image.by === 'agent' ? ' ✦' : ''}<br>Видео: <b>${w.video.aspect} · ${TIER_NAME[w.video.tier]}</b>${w.video.by === 'agent' ? ' ✦' : ''}<br>Фильм «утро-в-горах»: <b>${st.film.aspect}</b> (задала сцена 1)</div>`;
+  const fr = document.getElementById('frame');
+  fr.className = 'frame' + (ui.mob ? ' mob' : '');
+  fr.innerHTML = `<div class="cap">${ui.mob ? 'Телефон 360 × 740' : 'Основной чат проекта · компьютер'}</div>${appHtml()}`;
+  if (ui.hl) { const t = fr.querySelector(`[data-k="${CSS.escape(ui.hl)}"]`); if (t) t.classList.add('hl'); }
+}
+document.addEventListener('click', ev => {
+  const t = ev.target.closest('[data-scn],[data-theme-set],[data-w],[data-reset],[data-step],[data-k]'); if (!t) {
+    if (st.pop && !ev.target.closest('[data-pop],.sheet')) { st.pop = null; render(); } return; }
+  if (t.dataset.scn) { ui.wOverride = null; applyScenario(t.dataset.scn, -1); }
+  else if (t.dataset.themeSet) { ui.theme = t.dataset.themeSet; render(); }
+  else if (t.dataset.w) { ui.wOverride = t.dataset.w; ui.mob = t.dataset.w === 'm'; render(); }
+  else if (t.hasAttribute('data-reset')) applyScenario(ui.scn, -1);
+  else if (t.dataset.step) applyScenario(ui.scn, +t.dataset.step);
+  else if (t.dataset.k) { ui.hl = null; onKey(t.dataset.k, t); }
+});
+document.addEventListener('change', ev => {
+  const k = ev.target.dataset && ev.target.dataset.k;
+  if (k === 'ew' || k === 'eh') {
+    const fr = ev.target.closest('.wh'); const [wi, hi] = fr.querySelectorAll('input');
+    st.mem.image.exact = [parseInt(wi.value, 10) || 0, parseInt(hi.value, 10) || 0]; st.mem.image.by = 'human';
+    // Перерисовка после перехода фокуса: иначе второе поле пропадёт из-под курсора
+    setTimeout(() => { const a = document.activeElement && document.activeElement.dataset && document.activeElement.dataset.k; render();
+      if (a === 'ew' || a === 'eh') { const n = document.querySelector(`[data-k="${a}"]`); if (n) { n.focus(); n.select(); } } }, 0);
+  }
+});
+applyScenario('s1', -1);
+</script>
+</body>
+</html>

@@ -1,0 +1,261 @@
+{
+ "chats": [
+  {
+   "chatId": "690b95fa-b689-43b9-a248-c831db4d8bfb",
+   "chatName": "MCP скриншоты и OCR",
+   "fixtureFiles": [
+    "feat-hands-input-v2.json",
+    "spike-vdi-ocr.json"
+   ]
+  },
+  {
+   "chatId": "85eee194-f8c1-4de1-a873-63bd557ce3cb",
+   "chatName": "Статистика локальной модели",
+   "fixtureFiles": [
+    "feat-local-media-history.json",
+    "fix-local-model-live-ctx-and-stream-speed.json",
+    "fix-local-model-busy-throughput.json"
+   ]
+  },
+  {
+   "chatId": "c869e4cc-d4e6-46a3-8d43-dcec33272021",
+   "chatName": "Ускорение разработки продукта",
+   "fixtureFiles": [
+    "feat-curator-console.json"
+   ]
+  },
+  {
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "chatName": "Новые фичи Claude Code",
+   "fixtureFiles": [
+    "feat-gw-hint-headers.json",
+    "feat-subagent-model-force.json",
+    "fix-haiku-1m-family.json",
+    "feat-cli-retry-policy.json",
+    "feat-personas-agents-json.json",
+    "fix-deploy-linux-parity.json"
+   ]
+  }
+ ],
+ "features": [
+  {
+   "id": "epic-hands-input-v2",
+   "branch": "feat/hands-input-v2",
+   "name": "Руки без UIA: клавиши, мышь, OCR (без UIA)",
+   "fixtureFile": "feat-hands-input-v2.json",
+   "chatId": "690b95fa-b689-43b9-a248-c831db4d8bfb",
+   "stepCount": 23,
+   "reviewCount": 36,
+   "reworkCount": 18,
+   "mergeCount": 3,
+   "consultCount": 1,
+   "finalCount": 1,
+   "loops": { "fromReview": 18, "fromQa": 0, "fromFinal": 1, "total": 19 },
+   "lanes": ["D · ввод", "A · распознавание", "ops"],
+   "withdrawnSteps": ["C1-2"],
+   "hasFinal": true,
+   "hasMerge": true,
+   "notes": [
+    "stepCount=23 включает шаги в линиях D и A (21 по факту) плюс 2 ops-задачи Марка (h50 сборка, h51 стенд). Proposal говорит '24 шага в линиях D и A' — моё расхождение.",
+    "reviewCount=36 vs proposal 37 — расхождение в одно ревью, возможно пропустил двойное ревью или архитектурный разбор как ревью.",
+    "loops.total=19 совпадает с proposal.",
+    "Шаг C1-2 имеет verdict=withdrawn после 3 возвратов и решения Александра снять с выкладки (отдельная merge-задача h76).",
+    "h76w — отдельная задача merge для решения о снятии C1-2 (операционная)."
+   ]
+  },
+  {
+   "id": "epic-spike-vdi-ocr",
+   "branch": "spike/vdi-ocr",
+   "name": "Спайк VDI-OCR: инструменты для ручной проверки на WORK",
+   "fixtureFile": "spike-vdi-ocr.json",
+   "chatId": "690b95fa-b689-43b9-a248-c831db4d8bfb",
+   "stepCount": 6,
+   "reviewCount": 5,
+   "loops": { "fromReview": 3, "fromQa": 0, "fromFinal": 0, "total": 3 },
+   "lanes": ["spike"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false
+  },
+  {
+   "id": "epic-local-media-history",
+   "branch": "feat/local-media-history",
+   "name": "История медиа-генераций на вкладке «Медиа»",
+   "fixtureFile": "feat-local-media-history.json",
+   "chatId": "85eee194-f8c1-4de1-a873-63bd557ce3cb",
+   "stepCount": 6,
+   "reviewCount": 5,
+   "loops": { "fromReview": 3, "fromQa": 2, "fromFinal": 1, "total": 6 },
+   "lanes": ["бэк", "фронт"],
+   "withdrawnSteps": [],
+   "hasFinal": true,
+   "hasMerge": true
+  },
+  {
+   "id": "epic-local-model-live-ctx-and-stream-speed",
+   "branch": "fix/local-model-live-ctx-and-stream-speed",
+   "name": "Живая скорость в кольце Ctx и «скорость на поток»",
+   "fixtureFile": "fix-local-model-live-ctx-and-stream-speed.json",
+   "chatId": "85eee194-f8c1-4de1-a873-63bd557ce3cb",
+   "stepCount": 4,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк", "фронт"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-local-model-busy-throughput",
+   "branch": "fix/local-model-busy-throughput",
+   "name": "Занятое время стенда и линия «всего по стенду»",
+   "fixtureFile": "fix-local-model-busy-throughput.json",
+   "chatId": "85eee194-f8c1-4de1-a873-63bd557ce3cb",
+   "stepCount": 2,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк", "фронт"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-curator-console",
+   "branch": "feat/curator-console",
+   "name": "Пульт куратора и режим «Исполнение фичи»",
+   "fixtureFile": "feat-curator-console.json",
+   "chatId": "c869e4cc-d4e6-46a3-8d43-dcec33272021",
+   "stepCount": 4,
+   "reviewCount": 3,
+   "loops": { "fromReview": 1, "fromQa": 0, "fromFinal": 0, "total": 1 },
+   "lanes": ["фронт", "тест"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false
+  },
+  {
+   "id": "epic-gw-hint-headers",
+   "branch": "feat/gw-hint-headers",
+   "name": "Атрибуция статистики по подсказочным заголовкам CLI",
+   "fixtureFile": "feat-gw-hint-headers.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-subagent-model-force",
+   "branch": "feat/subagent-model-force",
+   "name": "CLI 2.1.300: форс модели субагентов + потолок параллельных",
+   "fixtureFile": "feat-subagent-model-force.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-haiku-1m-family",
+   "branch": "fix/haiku-1m-family",
+   "name": "ClaudeModelFamily: haiku с окном 1M",
+   "fixtureFile": "fix-haiku-1m-family.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-cli-retry-policy",
+   "branch": "feat/cli-retry-policy",
+   "name": "CLI 2.1.300: политика повторов 429/529 — наша цепочка фолбэка",
+   "fixtureFile": "feat-cli-retry-policy.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-personas-agents-json",
+   "branch": "feat/personas-agents-json",
+   "name": "CLI 2.1.300: персоны-консультанты через --agents JSON",
+   "fixtureFile": "feat-personas-agents-json.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  },
+  {
+   "id": "epic-deploy-linux-parity",
+   "branch": "fix/deploy-linux-parity",
+   "name": "Выкатка Linux: этапы Windows-агента",
+   "fixtureFile": "fix-deploy-linux-parity.json",
+   "chatId": "b9739b6b-a751-41e4-899c-d05b4738fb30",
+   "stepCount": 1,
+   "reviewCount": 0,
+   "loops": { "fromReview": 0, "fromQa": 0, "fromFinal": 0, "total": 0 },
+   "lanes": ["бэк"],
+   "withdrawnSteps": [],
+   "hasFinal": false,
+   "hasMerge": false,
+   "reviewStage": "ревью не было"
+  }
+ ],
+ "totals": {
+  "features": 12,
+  "chats": 4,
+  "expectedStepCounts": {
+   "feat-hands-input-v2": 24,
+   "spike-vdi-ocr": 6,
+   "feat-local-media-history": 6,
+   "fix-local-model-live-ctx-and-stream-speed": 4,
+   "fix-local-model-busy-throughput": 2,
+   "feat-curator-console": 4,
+   "feat-gw-hint-headers": 1,
+   "feat-subagent-model-force": 1,
+   "fix-haiku-1m-family": 1,
+   "feat-cli-retry-policy": 1,
+   "feat-personas-agents-json": 1,
+   "fix-deploy-linux-parity": 1
+  },
+  "expectedLoops": {
+   "feat-hands-input-v2": 19,
+   "spike-vdi-ocr": 3,
+   "feat-local-media-history": 6,
+   "fix-local-model-live-ctx-and-stream-speed": 0,
+   "fix-local-model-busy-throughput": 0,
+   "feat-curator-console": 1,
+   "feat-gw-hint-headers": 0,
+   "feat-subagent-model-force": 0,
+   "fix-haiku-1m-family": 0,
+   "feat-cli-retry-policy": 0,
+   "feat-personas-agents-json": 0,
+   "fix-deploy-linux-parity": 0
+  }
+ }
+}

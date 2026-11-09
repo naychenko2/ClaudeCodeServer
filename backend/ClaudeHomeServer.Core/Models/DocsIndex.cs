@@ -168,3 +168,43 @@ public record DocsScopeInfo(
     // Роли, которыми можно красить значения выбора. Отдаёт сервер (как TypeGroups выше),
     // чтобы редактор типов строил палитру из ответа, а не хардкодом
     IReadOnlyList<string>? PropertyColors = null);
+
+// ---------- макеты фичи (каталог MockupCatalog, вертикаль Docs) ----------
+
+// Статус макета из шапки записки «**Статус:** …». Сериализуется строкой (camelCase):
+// "draft" | "approved" | "rejected". null — шапки нет или значение не распознано.
+public enum MockupStatus { Draft, Approved, Rejected }
+
+// Источник записи макета: шапка записки .md (Header) или linkedFiles задачи (LinkedFiles).
+// Сериализуется строкой: "header" | "linkedFiles". Шапка главнее: linkedFiles, уже
+// покрытый шапкой, не дублируется.
+public enum MockupSource { Header, LinkedFiles }
+
+// Дерево, где найден макет (волна 4, п.5.1): "feature" — проверенный worktree эпика (лежит
+// на диске и числится в `git worktree list` проекта), "main" — основное дерево проекта.
+// Один путь в обоих деревьях: запись дерева побеждает (ветка свежее); exists записи
+// "feature" проверяется по дереву фичи — читатель с ?featureId= читает ровно дерево, без
+// фолбэка на main (W4-R1). Записи "main" приходят только из main.
+public enum MockupTree { Main, Feature }
+
+// Файл макета (прототип .html, -tokens.md, …). Exists=false — файла нет в том дереве, на
+// которое указывает запись: для "feature" — нет в дереве эпика (даже если он есть в main),
+// для "main" — нет в main. При слиянии деревьев список Files — объединение путей: файл,
+// существующий только в main, не исчезает из каталога, но для записи дерева его exists=false.
+public record MockupFile(string Path, bool Exists);
+
+// Запись каталога макетов фичи (MockupCatalog.Find). Path — записка .md (Source=Header)
+// или сам файл (Source=LinkedFiles). Title — H1 записки; у LinkedFiles — имя файла без
+// расширения. TaskId/AuthorPersonaId ставит контроллер (Main) — каталог их не знает.
+// ModifiedAt=null, если файла на диске нет. Tree проставляет контроллер при слиянии
+// вызовов каталога (W4-5); каталог сам дерева не различает — дефолт Main.
+public record MockupEntry(
+    string Path,
+    string Title,
+    MockupStatus? Status,
+    IReadOnlyList<MockupFile> Files,
+    MockupSource Source,
+    DateTime? ModifiedAt,
+    string? TaskId = null,
+    string? AuthorPersonaId = null,
+    MockupTree Tree = MockupTree.Main);

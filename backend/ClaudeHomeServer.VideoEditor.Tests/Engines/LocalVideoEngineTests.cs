@@ -98,7 +98,12 @@ public class LocalVideoEngineTests
         caps.Sound.Should().BeTrue();
         caps.LastFrame.Should().BeTrue();
         caps.PriceUnit.Should().Be(VideoPriceUnits.Free);
-        engine.ParamNames(H3(engine)).Should().BeEquivalentTo(["size", "fast"]);
+        engine.ParamNames(H3(engine)).Should().BeEquivalentTo(["fast"], "size теперь задаёт формат");
+        caps.Format!.Tiers.Select(t => (t.Tier, t.Label, t.WireValue, t.PostStep)).Should().Equal(
+            (FormatTier.Standard, "480p", "half", null),
+            (FormatTier.High, "768p", "full", null),
+            (FormatTier.Max, "1440p", "full", FormatPostSteps.Upscale));
+        caps.Format.Tiers[2].Sizes["9:16"].Should().Be(new FormatSize(1440, 2528), "у портрета стороны меняются местами");
     }
 
     [Fact]
@@ -150,7 +155,12 @@ public class LocalVideoEngineTests
             });
         var engine = Fast(media.Object);
 
-        var request = Scene(VideoEditScope.Of(ServerProject)) with { Params = new JsonObject { ["size"] = "half", ["fast"] = false } };
+        // Размер съёмки задаёт ступень формата (half | full), а не частный параметр size
+        var request = Scene(VideoEditScope.Of(ServerProject)) with
+        {
+            Format = new ResolvedFormat(FormatModes.Aspect, "16:9", FormatTier.Standard, 864, 480, "half", null, false, false, null),
+            Params = new JsonObject { ["fast"] = false },
+        };
         var result = await engine.RunAsync(request, recorder, CancellationToken.None);
 
         result.Outcome.Should().Be(VideoOutcome.Ok);
@@ -338,5 +348,71 @@ public class LocalVideoEngineTests
         var act = () => engine.EstimateAsync(H3(engine), Scene(VideoEditScope.Of(ServerProject)), CancellationToken.None);
 
         await act.Should().ThrowAsync<VideoEngineUnavailableException>().WithMessage("*не отвечает*");
+    }
+
+    // Шаг 30: метка происхождения прогона (владелец, чат, вид=видео, операция, тяжёлый ли) заполняется
+    // при постановке, когда запрос несёт владельца; без владельца (тесты драйвера напрямую) — null
+    [Fact]
+    public void Compose_WithOwner_FillsOriginLabel()
+    {
+        var request = Scene(VideoEditScope.Of(ServerProject)) with
+        {
+            OwnerId = "user-a", SessionId = "chat-1", Heavy = true,
+        };
+
+        var composed = LocalVideoEngine.Compose(request)!;
+
+        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео", true,
+            ProjectId: null, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: null));
+    }
+
+    [Fact]
+    public void Compose_WithoutOwner_OriginNull()
+    {
+        var composed = LocalVideoEngine.Compose(Scene(VideoEditScope.Of(ServerProject)))!;
+
+        composed.Run!.Origin.Should().BeNull("без владельца — метка не заполняется");
+    }
+
+    // Шаг 30: «Макс» (PostStep=upscale) — операция «видео 1440p», размер не пересчитываем
+    [Fact]
+    public void Compose_WithOwner_MaxTier_FillsOriginWith1440p()
+    {
+        var request = Scene(VideoEditScope.Of(ServerProject)) with
+        {
+            OwnerId = "user-a", SessionId = "chat-1", Heavy = true,
+            Format = new ResolvedFormat(FormatModes.Aspect, "16:9", FormatTier.Max, 1440, 2528, "full", FormatPostSteps.Upscale, false, false, null),
+        };
+
+        var composed = LocalVideoEngine.Compose(request)!;
+
+        composed.Run!.Origin.Should().Be(new LocalJobOrigin("user-a", "chat-1", "video", "видео 1440p", true,
+            ProjectId: null, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: null));
+    }
+
+    // Шаг 30: живой снимок очереди GPU из опроса прокидывается в отчёт прогресса (не в статус/трату)
+    [Fact]
+    public async Task Run_RunningPoll_PropagatesGpuToProgressReport()
+    {
+        var gpu = new LocalGpuQueueInfo(Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40,
+            PercentExact: false, RemainingSeconds: 20, Busy: null, DownSince: null);
+        var media = new Mock<ILocalVideoMedia>();
+        media.Setup(m => m.SubmitAsync(It.IsAny<LocalVideoRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LocalVideoSubmitted("t-1", 0, 30, null));
+        // Первый опрос — Running с Gpu: срабатывает отчёт с Gpu; второй — Completed
+        var polls = new Queue<LocalVideoPoll>(new[]
+        {
+            new LocalVideoPoll(LocalVideoState.Running, 0, null, null, Gpu: gpu),
+            new LocalVideoPoll(LocalVideoState.Completed, null, Clip, null),
+        });
+        media.Setup(m => m.PollAsync("t-1", It.IsAny<CancellationToken>()))
+            .Returns((string _, CancellationToken _) => Task.FromResult(polls.Dequeue()));
+        var engine = Fast(media.Object);
+        var recorder = new Recorder();
+
+        var result = await engine.RunAsync(Scene(VideoEditScope.Of(ServerProject)), recorder, CancellationToken.None);
+
+        result.Outcome.Should().Be(VideoOutcome.Ok);
+        recorder.Events.Should().Contain(p => p.Gpu == gpu, "отчёт несёт живой снимок очереди GPU");
     }
 }

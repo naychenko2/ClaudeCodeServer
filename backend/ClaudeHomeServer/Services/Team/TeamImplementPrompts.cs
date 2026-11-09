@@ -581,6 +581,29 @@ public static class TeamImplementPrompts
             ? "Работа сделана и проверена фактическим прогоном (сборка/тесты), результат приложен к задаче."
             : subtask.DoneCriteria.Trim());
 
+        // Шаг 5.3 фичи «Модульные тесты»: отвязать от монолита и разнести по вертикалям.
+        // На итерации — только затронутые тест-проекты (scripts/tests-affected.sh, шаг 5.1),
+        // полный прогон — CI и гейт мержа, агентские сборки — с `-v q -clp:ErrorsOnly`.
+        // Имя скрипта синхронизировано с docs/processes/executor-task-template.md.
+        sb.AppendLine();
+        sb.AppendLine("## Тестирование");
+        sb.AppendLine("На итерации запускай **только** затронутые тест-проекты. " +
+                      "Определить их: `bash scripts/tests-affected.sh` (по `git diff` + графу " +
+                      "`ProjectReference`). Полный прогон решения не запускай: его делают CI и гейт мержа. " +
+                      "Монолит без `filter` `run_tests` сам режет на шарды. Новый класс с " +
+                      "`TestWebApplicationFactory` помечай `[Trait(\"Category\",\"Host\")]` на классе. " +
+                      "Метку `Slow` ставь только на метод без хоста и только с замером в сообщении коммита " +
+                      "(`testing.md`, «Правило новой метки»). Агентские сборки: " +
+                      "`dotnet build -v q -clp:ErrorsOnly` (минимум шума, максимум сигнала).");
+        sb.AppendLine();
+        sb.AppendLine("## Сверка числа тестов");
+        sb.AppendLine("Сверять число тестов через **trx-сводку** прогона " +
+                      "(`--logger \"trx;LogFileName=…\"`), не через stdout `--list-tests` " +
+                      "(stdout теряет строки при параллельном выводе testhost). " +
+                      "Эталон числа тестов: 15414 FQN (per-project `--list-tests`, `sort -u`; замер на 84856ba8c). " +
+                      "Исходный снимок шага 0.2 — 15203 FQN; разница и методика — " +
+                      "в docs/research/tests-by-module-baseline-2026-10.md.");
+
         sb.AppendLine();
         sb.AppendLine("## Контекст");
         if (!string.IsNullOrWhiteSpace(plan.Summary)) sb.AppendLine($"План команды: {plan.Summary.Trim()}");

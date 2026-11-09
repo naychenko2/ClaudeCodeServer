@@ -100,6 +100,37 @@ describe('доля хода съёмки: Percent поставщика или о
   });
 });
 
+describe('стадия upscaling: своя доля, свой отсчёт («Макс» local H3)', () => {
+  const prog = (extra: Record<string, unknown>) =>
+    handleEvent({ type: 'video_edit_progress', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', stage: 'running', variant: 1, count: 1, initiator: 'human', ...extra } as never);
+  const job = () => getJobsOf('c1', 's1')[0];
+
+  it('во время съёмки приходит upscaleEtaSeconds, на увеличении — свои etaSeconds и percent', () => {
+    prog({ etaSeconds: 330, upscaleEtaSeconds: 915, percent: 0.9 });
+    expect(job().stage).toBe('running');
+    expect(job().upscaleEtaSeconds).toBe(915);
+    prog({ stage: 'upscaling', etaSeconds: 915, percent: 0.1 });
+    expect(job().stage).toBe('upscaling');
+    expect(job().etaSeconds).toBe(915);
+    expect(jobFraction(job())).toBeCloseTo(0.1);
+  });
+
+  it('вход в увеличение начинает отсчёт заново: доля съёмки 90 % не тянется в полосу увеличения', () => {
+    prog({ percent: 0.9 });
+    expect(jobFraction(job())).toBeCloseTo(0.9);
+    prog({ stage: 'upscaling', etaSeconds: 900 });
+    const t0 = job().runStartedAt;
+    expect(jobFraction(job(), t0 + 90_000)).toBeCloseTo(0.1);
+  });
+});
+
+describe('стадия upscaling при нескольких вариантах', () => {
+  it('count=2, percent=0,5 на увеличении — доля 0,5, а не 0,25 «среди вариантов»', () => {
+    handleEvent({ type: 'video_edit_progress', sessionId: 'c1', scopeKey: 'p1', jobId: 'j1', sceneId: 's1', stage: 'upscaling', variant: 1, count: 2, percent: 0.5, initiator: 'human' } as never);
+    expect(jobFraction(getJobsOf('c1', 's1')[0])).toBeCloseTo(0.5);
+  });
+});
+
 describe('клик по карточке: панель следует за выбором с явной вкладкой', () => {
   it('открытая панель переключается на «Сцену» с ключом элемента', async () => {
     __applyThreads('c1', 'p1', threads(1, [scene('s1'), scene('s2')], { sceneId: 's1' }));

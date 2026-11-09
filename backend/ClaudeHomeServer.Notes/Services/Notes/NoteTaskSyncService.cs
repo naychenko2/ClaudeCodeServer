@@ -35,11 +35,21 @@ public sealed class NoteTaskSyncService(
     }
 
     // Промоут чекбокса в настоящую задачу. Повторный промоут той же строки — no-op
-    // (возвращает существующую задачу).
-    public async Task<NoteTaskRef> PromoteAsync(string userId, string noteId, int line)
+    // (возвращает существующую задачу). createdByHuman — обязательный явный признак пути:
+    // true только у ручного промута человеком (NotesController), агентный вызов и любая
+    // серверная синхронизация передают false ⇒ автора у задачи нет.
+    public async Task<NoteTaskRef> PromoteAsync(string userId, string noteId, int line, bool createdByHuman)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): мост «чекбокс → задача» — проверка ЯВНАЯ здесь, а не через право
+        // notes.Update: после S2c-7 заметку будет писать редактор (WriteContent), а задача из
+        // чекбокса редактора в общем проекте создана быть не должна. Возврат ревью R-F2-D1:
+        // здесь эта проверка остаётся дверью человека (REST UserId вызывающего); на агентском
+        // пути (MCP notes_promote_task) под параметром userId стоит токен арендатора, поэтому
+        // право по актору хода тем же Write мерится ДО вызова — в NotesToolset (ветка
+        // notes_promote_task), своей копии правила там нет.
+        notes.EnsureSourceWrite(userId, note.Source);
         var parsed = NoteTaskParser.Parse(note.Content).FirstOrDefault(l => l.Line == line)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
@@ -59,25 +69,34 @@ public sealed class NoteTaskSyncService(
             SourceNoteLine: line,
             Recurrence: parsed.Recurrence is null
                 ? null
-                : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant())));
+                : new NoteTaskRecurrence(parsed.Recurrence.Type.ToString().ToLowerInvariant()),
+            CreatedByHuman: createdByHuman));
 
-        await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id);
+        await notifier.BroadcastTaskChangedAsync(userId, "created", created.Id, created.ProjectId);
         log.LogInformation("Чекбокс заметки {NoteId}:{Line} промоутнут в задачу {TaskId}", noteId, line, created.Id);
         return created;
     }
 
     // Тоггл чекбокса из заметки: правит .md + синхронизирует связанную задачу.
-    public async Task<NoteDetail> ToggleAsync(string userId, string noteId, int line, bool done)
+    // S3-3c3: byHuman — явный признак человеческого пути (UI-чекбокс NotesController),
+    // проходит в Update для журнала правок; фоновые и агентские вызовы — false, журнал молчит.
+    public async Task<NoteDetail> ToggleAsync(string userId, string noteId, int line, bool done, bool byHuman = false)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): тоггл чекбокса проектной заметки — тоже owner-Write, явная проверка
+        // (после S2c-7 notes.Update будет на WriteContent и сама этот путь не закроет)
+        notes.EnsureSourceWrite(userId, note.Source);
         var updatedContent = NoteTaskParser.SetChecked(note.Content, line, done)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
-        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
+        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent), byHuman: byHuman)
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
+        // S2c-5 (д, дефект 540f8158): источник заметки = id проекта → событие уходит
+        // в группу проекта; личный vault — null, только владельцу (то же правило, что
+        // в NotesController.Broadcast)
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId, ProjectOf(saved.Source));
 
         var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
         if (linked is not null)
@@ -88,18 +107,21 @@ public sealed class NoteTaskSyncService(
 
     // Установить/убрать срок 📅 на строке-чекбоксе из UI (дейт-пикер в секции «Задачи из
     // заметки») — без ручного ввода эмодзи. Правит .md + синхронизирует срок связанной задачи.
-    // due=null/пусто — убрать срок.
-    public async Task<NoteDetail> SetDueAsync(string userId, string noteId, int line, string? due)
+    // due=null/пусто — убрать срок. S3-3c3: byHuman — тот же признак, что у ToggleAsync.
+    public async Task<NoteDetail> SetDueAsync(string userId, string noteId, int line, string? due, bool byHuman = false)
     {
         var note = notes.GetDetail(userId, noteId)
             ?? throw new KeyNotFoundException("Заметка не найдена");
+        // S2c-5 (а): срок на чекбоксе проектной заметки — тот же owner-Write путь
+        notes.EnsureSourceWrite(userId, note.Source);
         var updatedContent = NoteTaskParser.SetDue(note.Content, line, due)
             ?? throw new InvalidOperationException("На этой строке нет задачи-чекбокса");
 
-        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent))
+        var saved = notes.Update(userId, noteId, new UpdateNoteRequest(Content: updatedContent), byHuman: byHuman)
             ?? throw new InvalidOperationException("Заметка не обновилась");
         kb.QueueSync(userId);
-        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId);
+        // S2c-5 (д, дефект 540f8158): событие — в группу проекта (см. ToggleAsync)
+        await notifier.BroadcastNotesChangedAsync(userId, "updated", noteId, ProjectOf(saved.Source));
 
         // Синхронизируем срок связанной задачи (пусто → очистить).
         var linked = tasks.GetBySourceNote(userId, noteId).FirstOrDefault(t => t.SourceNoteLine == line);
@@ -107,7 +129,7 @@ public sealed class NoteTaskSyncService(
         {
             var updated = tasks.Update(userId, linked.Id,
                 new NoteTaskUpdateRequest(Status: linked.Status, DueDate: due));
-            if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
+            if (updated is not null) await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id, updated.ProjectId);
         }
         return saved;
     }
@@ -126,6 +148,13 @@ public sealed class NoteTaskSyncService(
         var note = notes.GetDetail(userId, task.SourceNoteId);
         if (note is null) return;
 
+        // Побочный писатель пропускает источник wiki (ADR-035, решение 2): галочку в страницу
+        // вики ставит только Хранитель. Здесь именно пропуск, а не отказ: это обратная запись
+        // уже совершившейся смены статуса задачи, она не должна ни ронять тот запрос, ни
+        // писать в вику. Прямые действия пользователя (toggle/set-due страницы вики) отказа
+        // не избегают: их правка идёт через NotesService.Update и режется EnsureNotWiki.
+        if (note.Source == NotesService.WikiKey) return;
+
         var done = task.Status == TaskItemStatus.Done;
         var updatedContent = NoteTaskParser.SetChecked(note.Content, task.SourceNoteLine.Value, done);
         if (updatedContent is null || updatedContent == note.Content) return; // строка сдвинулась/совпадает
@@ -136,7 +165,9 @@ public sealed class NoteTaskSyncService(
         {
             if (notes.Update(userId, task.SourceNoteId, new UpdateNoteRequest(Content: updatedContent)) is null) return;
             kb.QueueSync(userId);
-            await notifier.BroadcastNotesChangedAsync(userId, "updated", task.SourceNoteId);
+            // S2c-5 (д, дефект 540f8158): источник заметки известен из самой заметки —
+            // событие проектной заметки уходит в группу проекта
+            await notifier.BroadcastNotesChangedAsync(userId, "updated", task.SourceNoteId, ProjectOf(note.Source));
         }
         catch (Exception ex)
         {
@@ -144,6 +175,11 @@ public sealed class NoteTaskSyncService(
                 task.SourceNoteId, task.Id);
         }
     }
+
+    // S2c-5 (д, дефект 540f8158): id проекта-источника заметки для события. Источник
+    // проектной заметки — это и есть id проекта (EncodeId в NotesService); личный vault
+    // («personal») — null: событие только владельцу, как раньше.
+    private static string? ProjectOf(string source) => source != "personal" ? source : null;
 
     // Перевод связанной задачи в done/todo напрямую через bridge (не через контроллер —
     // чтобы не зациклить обратную запись). Регулярная задача при завершении спавнит следующую.
@@ -161,12 +197,12 @@ public sealed class NoteTaskSyncService(
         // DefectOutcome.ClosedWithoutCheck, для обычных — нет.
         var updated = tasks.Update(userId, task.Id, new NoteTaskUpdateRequest(newStatus));
         if (updated is null) return;
-        await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id);
+        await notifier.BroadcastTaskChangedAsync(userId, "updated", updated.Id, updated.ProjectId);
 
         if (!wasDone && done && updated.Recurrence is not null)
         {
             var next = tasks.SpawnNextOccurrence(userId, updated.Id);
-            if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id);
+            if (next is not null) await notifier.BroadcastTaskChangedAsync(userId, "created", next.Id, next.ProjectId);
         }
     }
 }

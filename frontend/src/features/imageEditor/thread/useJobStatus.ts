@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { onReconnected, showToast } from 'aihome_shell/kit';
+import type { LocalGpuQueueInfo } from '../../../types/localGpuQueue';
 import { imageEditorApi, type EditCost, type ImageEditJob } from '../api';
 
 export type JobPhase = 'run' | 'done' | 'cancel' | 'error' | 'lost';
@@ -26,9 +27,15 @@ export interface JobStatus {
   queuePosition: number | null;
   // ETA из котировки задачи — если прогон свой не сообщил
   fallbackEta: number | null;
+  // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
+  // или задача не на локальных моделях
+  gpu: LocalGpuQueueInfo | null;
 }
 
 const localStart = (elapsed: number | null | undefined) => (elapsed == null ? null : Date.now() - elapsed * 1000);
+
+// Повторные события по одной задаче могут дублировать варианты — схлопываем и сортируем
+export const dedupeVariants = (v: number[]) => [...new Set(v)].sort((a, b) => a - b);
 
 function statusOf(job: ImageEditJob): JobStatus {
   const base = {
@@ -37,6 +44,7 @@ function statusOf(job: ImageEditJob): JobStatus {
     run: job.run ?? null, runs: job.runs ?? null, eta: job.etaSeconds ?? null,
     runStartedAt: localStart(job.runElapsedSeconds), queuePosition: job.queuePosition ?? null,
     fallbackEta: job.estimate?.etaSeconds ?? null,
+    gpu: job.gpu ?? null,
   };
   switch (job.status) {
     case 'completed': return { ...base, phase: 'done' };
@@ -49,7 +57,7 @@ function statusOf(job: ImageEditJob): JobStatus {
 
 const LOST: JobStatus = {
   phase: 'lost', variants: [], count: 0, cost: null, charged: null, error: null, model: null, createdAt: null,
-  run: null, runs: null, eta: null, runStartedAt: null, queuePosition: null, fallbackEta: null,
+  run: null, runs: null, eta: null, runStartedAt: null, queuePosition: null, fallbackEta: null, gpu: null,
 };
 
 export function useJobStatus(projectId: string, jobId: string | null) {
@@ -78,10 +86,12 @@ export function useJobStatus(projectId: string, jobId: string | null) {
             // Скачивание — хвост того же прогона: отсчёт не сбрасываем
             runStartedAt: e.stage === 'running' ? localStart(e.runElapsedSeconds ?? 0)
               : e.stage === 'queued' ? null : prev.runStartedAt,
+            gpu: e.gpu ?? null,
           };
         });
       } else if (e.type === 'image_edit_completed') {
-        set(s => ({ ...(s ?? LOST), phase: 'done', variants: e.variants, count: e.variants.length, cost: e.cost ?? null }));
+        const variants = dedupeVariants(e.variants);
+        set(s => ({ ...(s ?? LOST), phase: 'done', variants, count: variants.length, cost: e.cost ?? null }));
       } else if (e.type === 'image_edit_failed') {
         set(s => ({ ...(s ?? LOST), phase: e.outcome === 'cancelled' ? 'cancel' : 'error', charged: e.charged ?? null, error: e.error ?? null }));
       }

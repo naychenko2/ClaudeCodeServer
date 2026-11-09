@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// - чужая сессия в хвосте — ни состава, ни вызова (fail-closed).
 /// Парные тесты: NotesHttpOwnerIsolationTests (волна 2), MemoryHttpTransportTests (волна 1).
 /// </summary>
+[Trait("Category", "Host")]
 public class WorkspaceHttpOwnerIsolationTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -50,7 +51,7 @@ public class WorkspaceHttpOwnerIsolationTests : IDisposable
     private static async Task<JsonElement> CallToolAsync(HttpClient client, string sessionId,
         string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call",
             @params = new { name = tool, arguments = args },

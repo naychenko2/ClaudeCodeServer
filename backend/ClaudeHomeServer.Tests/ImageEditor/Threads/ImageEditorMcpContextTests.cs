@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // есть, флаг владельца выключен — нет. Модуль выключен — тулсета нет в реестре и контекста тоже
 // (ImageEditorDisabledTests). Инструменты сервера идут без карточки разрешения — но только в
 // ходе, куда сервер действительно едет.
+[Trait("Category", "Host")]
 public class ImageEditorMcpContextTests : IDisposable
 {
     private readonly TestWebApplicationFactory _factory = new();
@@ -33,17 +34,11 @@ public class ImageEditorMcpContextTests : IDisposable
         ProjectId = projectId,
     };
 
-    private void SetFlag(bool on) =>
-        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(OwnerId, FeatureFlagKeys.ImageEditor, on)
-            .Should().BeTrue();
-
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
 
     [Fact]
     public void Любой_чат_проекта_получает_сервер_со_списком_авторазрешения()
     {
-        SetFlag(true);
-
         var context = Sessions.BuildImageEditorContext(OwnerId, Chat());
 
         context.Should().NotBeNull();
@@ -55,8 +50,6 @@ public class ImageEditorMcpContextTests : IDisposable
     [Fact]
     public void Чат_вне_проекта_тоже_получает_сервер()
     {
-        SetFlag(true);
-
         var context = Sessions.BuildImageEditorContext(OwnerId, Chat(projectId: null));
 
         context.Should().NotBeNull("в личном чате агент рисует через image_new → image_generate");
@@ -64,17 +57,8 @@ public class ImageEditorMcpContextTests : IDisposable
     }
 
     [Fact]
-    public void Выключенный_флаг_владельца_сервер_не_даёт()
-    {
-        SetFlag(false);
-
-        Sessions.BuildImageEditorContext(OwnerId, Chat()).Should().BeNull();
-    }
-
-    [Fact]
     public void Без_карточки_разрешения_только_инструменты_сервера_этого_хода()
     {
-        SetFlag(true);
         var context = Sessions.BuildImageEditorContext(OwnerId, Chat());
 
         ClaudeSession.IsImageEditorAutoAllowed(context, "mcp__image-editor__image_generate").Should().BeTrue();

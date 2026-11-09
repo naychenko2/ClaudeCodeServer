@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Plugins;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -38,9 +39,9 @@ public record NotesMcpContext(string ApiUrl, Func<string> TokenFactory, string? 
 // проектного чата — пишет ли персона в команду, решает бэкенд (TeamMemoryService.
 // WriteDeniedFor: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
 // состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
-// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
-// по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
-// состава tools/list); сама секция требует ещё и проектный чат.
+// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включена
+// всегда (не зависит от свойств хода — инвариант стабильности состава tools/list); сама секция
+// требует ещё и проектный чат.
 // SphereToolsEnabled — секция sphere_memory_*: гейт по флагу ВЛАДЕЛЬЦА spheres (не по членству
 // проекта и не по свойствам хода), входит в отпечаток состава сервера памяти.
 // TokenFactory, а не строка: контекст живёт столько же, сколько адаптер, а у чата старше
@@ -59,13 +60,9 @@ public record MemoryMcpContext(string ApiUrl, Func<string> TokenFactory, string 
 // на агентных ходах секции chats/destructive срезаются). Не Claude-специфичен.
 // TokenFactory/UseHttp — тот же идиом доставки токена и отката, что у tasks/notes (ADR-012,
 // волна 3): захваченный строкой JWT у чата старше ServiceTokenLifetime отдавал бы 401.
-// ChatContextEnabled — инструмент context_list (материалы, закреплённые за чатом): включается
-// по флагу ВЛАДЕЛЬЦА chat-context, как DossierToolsEnabled у памяти. Не по свойствам хода и
-// не по непустоте контекста — состав tools/list обязан быть постоянным в рамках сессии.
 public record WorkspaceMcpContext(string ApiUrl, Func<string> TokenFactory, string? ProjectId,
     IReadOnlyList<string> Sections, IReadOnlyList<string>? AllowedProjectIds = null,
-    string? SelfSessionId = null, int AgentDepth = 0, bool UseHttp = false,
-    bool ChatContextEnabled = false);
+    string? SelfSessionId = null, int AgentDepth = 0, bool UseHttp = false);
 
 // Контекст MCP-сервера персон: адрес API, сервисный токен владельца и проект сессии
 // (дефолтный projectId для создания проектных персон; null — глобальный контекст).
@@ -182,6 +179,11 @@ public sealed record AudioEditorMcpContext(string ApiUrl, Func<string> TokenFact
 // модуль не загружен. Свойства сессии, владельца и процесса, не хода.
 public sealed record VideoEditorMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
     IReadOnlyList<string>? AutoAllowTools = null);
+// Контекст MCP-сервера plugins (ADR-031, шаг 4.1): тулсет живёт в вертикали Plugins, сессия едет
+// хвостом URL (/mcp/plugins/{sessionId}), в любом чате владельца. null — подсистема plugins не
+// загружена (тулсета нет в реестре). Ограничения (флаг plugins-build-yourself, локальный проект) —
+// на вызове, не в составе. Свойства сессии, владельца и процесса, не хода.
+public sealed record PluginsMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp);
 // Контекст MCP-сервера «Контекст чата» (ADR-023 §3.2): тулсет живёт в Main, сессия едет хвостом URL
 // (/mcp/turn-context/{sessionId}), в любом чате владельца. null — тулсета нет в реестре. Свойства сессии и владельца, не хода: от содержимого контекста состав не зависит.
 public sealed record TurnContextMcpContext(string ApiUrl, Func<string> TokenFactory, bool UseHttp,
@@ -247,12 +249,30 @@ public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers
 public sealed record ConsultantMemoryServer(string ServerKey, string ApiUrl, Func<string> TokenFactory,
     string PersonaId, string? ProjectId = null, bool UseHttp = false);
 
+// Определение персоны-сабагента для per-run файла --agents (CLI ≥ 2.1.281): тот же
+// контент, что в .md-файле (description/промпт/tools/model/mcpServers/maxTurns/effort),
+// но в JSON-форме определения агента. omitClaudeMd — аналог BareMode для сабагента:
+// сессия без полной CLAUDE.md проекта (локальные модели) не должна тянуть её и в
+// контекст консультанта.
+public sealed record PersonaAgentDef(
+    string Name,
+    string Description,
+    string Prompt,
+    IReadOnlyList<string> Tools,
+    string? Model,
+    IReadOnlyList<string>? McpServers,
+    int MaxTurns,
+    string? Effort,
+    bool OmitClaudeMd = false);
+
 // Файловые сабагенты-персоны: папки для --add-dir хода
 // (внутри — .claude/agents/{handle}.md) + pmem-серверы смонтированных персон
-// + список имён (handle) для подсказки в системный промпт.
+// + список имён (handle) для подсказки в системный промпт + определения для
+// per-run JSON-файла --agents (CLI ≥ 2.1.281).
 public sealed record PersonaAgentsContext(IReadOnlyList<string> AddDirs,
     IReadOnlyList<ConsultantMemoryServer> MemoryServers,
-    IReadOnlyList<string> AgentHandles);
+    IReadOnlyList<string> AgentHandles,
+    IReadOnlyList<PersonaAgentDef> Agents);
 
 // Per-session контекст, общий для всех адаптеров — то, что SessionManager передаёт
 // при создании сессии независимо от провайдера. Claude-специфичные зависимости
@@ -314,6 +334,9 @@ public sealed record LlmSessionContext(
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
     bool BrowserEnabled = true,
+    // Системный промпт хода едет файлом --append-system-prompt-file, а не аргументом
+    // (Llm:SystemPromptViaFile, дефолт true; false — прежний путь аргументом).
+    bool SystemPromptViaFile = true,
     // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
     // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
     // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
@@ -363,7 +386,7 @@ public sealed record LlmSessionContext(
     // на КАЖДЫЙ ход — материал, добавленный в идущем разговоре, попадает в подсказку
     // следующего хода без пересоздания адаптера (обычные поля контекста мид-сессию не живут).
     // Влияет ТОЛЬКО на промпт: состав MCP-инструментов от содержимого контекста не зависит
-    // (гейт самого инструмента — WorkspaceMcpContext.ChatContextEnabled).
+    // (context_list в wsp-сервере есть всегда).
     // null — фича выключена или сессия без владельца.
     Func<IReadOnlyList<SessionContextEntry>>? ChatContextProvider = null,
     // Шина событий хода (этап 0 плана «Шина событий хода», ADR-013): единая точка, через
@@ -441,5 +464,32 @@ public sealed record LlmSessionContext(
     AudioEditorMcpContext? AudioEditorMcp = null,
     // MCP-сервер модуля «Видео» (ADR-022 §5): null — флаг video-editor выключен или модуль не загружен
     VideoEditorMcpContext? VideoEditorMcp = null,
+    // MCP-сервер plugins (ADR-031, шаг 4.1): null — подсистема plugins не загружена
+    PluginsMcpContext? PluginsMcp = null,
     // MCP-сервер «Контекст чата» (ADR-023 §3.2)
-    TurnContextMcpContext? TurnContextMcp = null);
+    TurnContextMcpContext? TurnContextMcp = null,
+    // Владелец хода (SessionManager.ResolveOwnerId); у проектной сессии Session.OwnerId пуст по контракту.
+    string? OwnerId = null,
+    // Каталоги плагинов владельца для --plugin-dir (ADR-031 §2.4/§2.5): набор считается
+    // ТОЛЬКО от свойств сессии (владелец, персона, проект), не от хода — установка/удаление/
+    // смена версии вступают в силу со следующего старта процесса CLI (инвариант 4). null —
+    // подсистема выключена (IPluginDirSource не в DI) или у владельца нет включённых пакетов.
+    IPluginDirSource? PluginDirSource = null,
+    // Проект чата (null — чат вне проекта): уходит в IPluginDirSource для проверки локальности
+    // (у локального проекта в MVP плагинов нет, ADR-016/ADR-031 §5.8).
+    Project? Project = null,
+    // Источник вердикта рамки хода (S2a-4): тот же шов ITurnFrameSource (S2a-1), которым
+    // рамку применяют платформенные тулсеты (S2a-3). ClaudeSession зовёт его на каждый ход
+    // и кладет вердикт в PromptSessionContext.Frame; вердикт — свойство проекта, а не хода:
+    // рамка входит в сигнатуру запуска (доработка по ревью R-S2a-4 Major 2) — пока она
+    // не менялась, живой процесс постоялен, смена рамки поднимает новый процесс с
+    // подборкой новой рамки. null (тесты без SessionManager) — рамка не применяется.
+    ClaudeHomeServer.Services.Access.ITurnFrameSource? FrameSource = null,
+    // Корень data/ из конфигурации сервера (тот же резолв, что у sessions.json в SessionManager).
+    // Нужен встроенному deny {data}/wiki/** для CLI-агента (ADR-035 §2): предикату WikiPaths в
+    // DecidePermissionAsync и статическому deny в настройках запуска CLI (ClaudeRuntimeSettings).
+    // Свойство инстанса, не сессии и не хода: состав deny-правил от хода не зависит — иначе
+    // путь --settings мерцал бы в сигнатуре прогона и живой CLI перезапускался бы между ходами.
+    // null — тесты/старый контракт: deny нет (у container-владельцев data/ в песочницу не
+    // монтируется, отказ там выполнен построением).
+    string? DataDir = null);

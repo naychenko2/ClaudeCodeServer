@@ -17,6 +17,9 @@
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
     <!-- ProjectReference на Main: тесты поднимают PersonaManager (OmoPantheonCatalog
          клонируется через PersonaManager.NormalizeContract). Прецедент — Images.Tests. -->
+    <!-- Шаг 2.2: Main проверен и остаётся — без него не компилируется
+         PersonaManager/OmoPantheonCatalog (тесты клонируют каталог через
+         PersonaManager.NormalizeContract). -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
   </ItemGroup>
 

@@ -26,7 +26,7 @@ export const WALL_PROJECT_KEYS: readonly PanelKey[] = ['files', 'docs', 'changes
 
 // Куда приземлился клик из панели (стейт оверлея держит WallPage)
 export type WallOverlayTarget =
-  | { kind: 'file'; path: string; diffMode?: boolean; gitStagePath?: string }
+  | { kind: 'file'; path: string; diffMode?: boolean; gitStagePath?: string; sessionId?: string }
   | { kind: 'commit'; sha: string }
   | { kind: 'task'; task: Task }
   | { kind: 'persona'; personaId: string | null; creating?: boolean }

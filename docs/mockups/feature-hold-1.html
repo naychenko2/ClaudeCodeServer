@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · страница фичи · пауза и черновик</title>
+<!--
+  Макет кнопок «Пауза» / «Снять паузу» / «Запустить фичу» и меток «на паузе» / «черновик».
+  Пояснение и спецификация для Киры — feature-hold-1.md. Код продукта не правится.
+  Привязка: эпик волны 4 «Обзор фич» featureId ba38ba28-d8a6-489d-a23a-1d6f153456a2,
+  задача макета 234cbc79; макетом пользуется шаг W4-HOLD-F2 (кнопки, lane=front).
+  Контракт: docs/research/feature-lifecycle-shared-chat-cut-2026-10.md, раздел 1.
+  Данные выдуманы, но сверены с моделью: state paused/draft, Hold { reason, since }.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*) и var(--shadow-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --c-scrim:rgba(42,37,31,.32);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --c-scrim:rgba(0,0,0,.5);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; cursor:pointer; text-align:left; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg { flex-shrink:0; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.wrap { max-width:1320px; margin:0 auto; padding:16px; }
+section { margin:0 0 32px; }
+section > h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; color:var(--c-text-heading); margin:4px 0 6px; }
+.brief { font-size:13px; color:var(--c-text-secondary); max-width:920px; margin:0 0 12px; }
+.brief b { color:var(--c-text-heading); }
+.rec { font-size:11px; font-weight:700; background:var(--c-success-bg); color:var(--c-success-text); border-radius:6px; padding:1px 7px; }
+.row { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 4px 2px; }
+.dk { width:860px; }
+.mb { width:360px; }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; position:relative; }
+.mb .isl { border-radius:22px; border:1px solid var(--c-border); box-shadow:none; min-height:420px; }
+.body { padding:12px 20px 18px; }
+.mb .body { padding:10px 12px 16px; }
+.note { font-size:12px; color:var(--c-text-secondary); margin:6px 2px 0; max-width:860px; }
+.note b { color:var(--c-text-heading); }
+
+/* ===== Компоненты продукта ===== */
+.ttl { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); margin:0; }
+.mb .ttl { font-size:18px; }
+.tbar { display:flex; align-items:center; gap:10px; padding:10px 20px; min-height:52px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); }
+.mb .tbar { padding:8px 8px 8px 6px; min-height:56px; gap:4px; }
+.tbar .ttl { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tib { width:32px; height:32px; border-radius:32px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.mb .tib { width:40px; height:40px; }
+.tib:hover { background:var(--c-bg-selected); }
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 12px; border-radius:8px; font-size:13px; font-weight:600; white-space:nowrap; }
+.mb .btn, .btn.tall { height:40px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(1.05); }
+.btn.sec { background:var(--c-bg-white); border:1px solid var(--c-border); color:var(--c-text-primary); }
+.btn.sec:hover, .btn.sec.hov { background:var(--c-bg-selected); }
+.btn.sec.foc { box-shadow:var(--shadow-focus); border-color:var(--c-accent); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); }
+.btn.load { opacity:.7; cursor:progress; }
+.btn.dis { opacity:.45; cursor:not-allowed; }
+.spin { width:12px; height:12px; border-radius:50%; border:2px solid currentColor; border-right-color:transparent; animation:sp 0.8s linear infinite; }
+@keyframes sp { to { transform:rotate(360deg); } }
+
+/* Тег статуса: 11/600, поля 1 7, R.sm, строка 16 */
+.tag { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; line-height:16px; padding:1px 7px; border-radius:6px; white-space:nowrap; flex-shrink:0; }
+.tag .dot { width:6px; height:6px; border-radius:50%; background:var(--c-info); }
+.t-run { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.t-wait, .t-merge { background:var(--c-info-bg); color:var(--c-text-primary); }
+.t-stop { background:var(--c-danger-bg); color:var(--c-danger-text); box-shadow:inset 0 0 0 1px var(--c-danger); }
+.t-loop { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.t-not { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-merged { background:var(--c-success-bg); color:var(--c-success-text); }
+/* НОВОЕ: на паузе — утопленная плашка с кромкой, глиф «‖»; черновик — пунктирная рамка без заливки */
+.t-hold { background:var(--c-bg-inset); color:var(--c-text-primary); box-shadow:inset 0 0 0 1px var(--c-border); }
+.t-draft { background:transparent; color:var(--c-text-secondary); border:1px dashed var(--c-text-muted); padding:0 6px; }
+
+.meta { display:flex; flex-wrap:wrap; align-items:center; gap:6px 12px; font-size:12px; color:var(--c-text-secondary); margin-bottom:6px; }
+.segs { display:flex; gap:6px; flex-wrap:wrap; }
+.seg { font-size:11px; color:var(--c-text-secondary); background:var(--c-bg-selected); border-radius:6px; padding:1px 7px; }
+.seg b { color:var(--c-text-heading); font-family:"JetBrains Mono",monospace; }
+
+/* Блок состояния (FeaturePageAlert) */
+.alarm { display:flex; gap:9px; align-items:flex-start; margin-top:12px; padding:10px 12px; border-radius:12px; font-size:13px; }
+.alarm b { color:var(--c-text-heading); }
+.a-info { background:var(--c-info-bg); }
+.a-hold { background:var(--c-bg-inset); border:1px solid var(--c-border); }
+.a-draft { background:transparent; border:1px dashed var(--c-text-muted); }
+.alarm .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.alarm .acts .btn { height:40px; }
+.ilist { margin:6px 0 0; padding:0; list-style:none; font-size:12px; color:var(--c-text-secondary); }
+.ilist li { display:flex; gap:6px; align-items:center; padding:1px 0; }
+
+.tabs { display:flex; gap:16px; border-bottom:1px solid var(--c-border-light); margin-top:14px; font-size:13px; color:var(--c-text-secondary); }
+.tabs span { padding:8px 0; }
+.tabs span.on { color:var(--c-text-heading); font-weight:600; box-shadow:inset 0 -2px 0 var(--c-accent); }
+.skel { height:10px; border-radius:6px; background:var(--c-bg-selected); margin:12px 0 0; }
+
+/* Меню ⋯ (дропдаун / шторка) */
+.menu { position:absolute; right:16px; top:48px; width:260px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:4px; z-index:5; }
+.menu .it { display:flex; gap:10px; align-items:center; width:100%; height:36px; padding:0 10px; border-radius:8px; font-size:13px; color:var(--c-text-primary); }
+.menu .it:hover, .menu .it.hov { background:var(--c-bg-selected); }
+.menu .it .ic { color:var(--c-text-secondary); display:inline-flex; }
+.menu .sep { height:1px; background:var(--c-border-light); margin:4px 6px; }
+.menu .hint { font-size:11px; color:var(--c-text-muted); padding:0 10px 6px 34px; margin-top:-4px; }
+.scrim { position:absolute; inset:0; background:var(--c-scrim); z-index:4; }
+.sheet { position:absolute; left:0; right:0; bottom:0; background:var(--c-bg-white); border-radius:22px 22px 0 0; padding:8px 8px 14px; z-index:5; }
+.sheet .grab { width:36px; height:4px; border-radius:4px; background:var(--c-border); margin:4px auto 8px; }
+.sheet .it { display:flex; gap:12px; align-items:center; width:100%; height:44px; padding:0 12px; border-radius:10px; font-size:14px; }
+.sheet .it .ic { color:var(--c-text-secondary); display:inline-flex; }
+.sheet .hint { font-size:12px; color:var(--c-text-muted); padding:0 12px 6px 40px; margin-top:-6px; }
+
+/* Модалка подтверждения (MODAL_W.confirm = 380) */
+.modal { position:absolute; left:50%; top:70px; transform:translateX(-50%); width:380px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:16px; box-shadow:var(--shadow-dropdown); padding:18px 20px; z-index:5; }
+.modal h4 { margin:0 0 8px; font-family:"PT Serif",Georgia,serif; font-size:17px; color:var(--c-text-heading); }
+.modal p { margin:0 0 8px; font-size:13px; }
+.modal .foot { display:flex; justify-content:flex-end; gap:8px; margin-top:14px; }
+
+/* Тост */
+.toast { display:inline-flex; gap:10px; align-items:flex-start; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:10px 12px; font-size:13px; max-width:340px; }
+.toast b { color:var(--c-text-heading); display:block; }
+.toast span { color:var(--c-text-secondary); font-size:12px; }
+
+/* Список фич: строка группы (FeatureGroupHeader) */
+.side { width:300px; background:var(--c-bg-panel); border-radius:14px; padding:10px; display:flex; flex-direction:column; gap:6px; }
+.mb .side { width:100%; border-radius:0; background:transparent; padding:0; }
+.fg { display:flex; gap:8px; align-items:flex-start; padding:8px 10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; }
+.mb .fg { min-height:56px; padding:10px 12px; }
+.fg.edge-wait { border-left:3px solid var(--c-info); }
+.fg.edge-stop { border-left:3px solid var(--c-danger); }
+.fg .nm { font-size:13px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.fg .st { font-size:12px; color:var(--c-text-secondary); }
+.st.wait { color:var(--c-info); font-weight:600; }
+.st.stop { color:var(--c-danger-text); font-weight:600; }
+.st.hold { color:var(--c-text-primary); font-weight:600; }
+.st.draft { color:var(--c-text-secondary); }
+.fg .g { padding-top:2px; display:inline-flex; }
+.grp-h { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:6px 2px 0; }
+
+.vocab { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:8px; max-width:1100px; }
+.vc { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; display:flex; gap:10px; align-items:center; }
+.vc small { color:var(--c-text-secondary); font-size:11.5px; }
+.vc.new { border-color:var(--c-accent-muted); }
+.newb { font-size:10px; font-weight:700; color:var(--c-accent); }
+</style>
+</head>
+<body>
+
+<div class="mk">
+  <h1>Пауза и черновик фичи · макет 1</h1>
+  <div class="grp"><span class="lbl">Тема</span>
+    <div class="pills" data-ctl="theme"><button class="on" data-v="light">Светлая</button><button data-v="dark">Тёмная</button></div></div>
+  <div class="grp"><span class="lbl">Вариант</span>
+    <div class="pills" data-ctl="variant"><button class="on" data-v="A">A · кнопка в шапке</button><button data-v="B">B · чип в мете</button></div></div>
+  <div class="grp"><span class="lbl">Состояние</span>
+    <div class="pills" data-ctl="state">
+      <button class="on" data-v="running">идёт (пауза off)</button>
+      <button data-v="paused">на паузе (on)</button>
+      <button data-v="draft">черновик</button>
+      <button data-v="merge">к мержу</button>
+      <button data-v="merging">мерж идёт</button>
+    </div></div>
+</div>
+
+<div class="wrap">
+
+<section>
+  <h2>1. Словарь тегов: старое и новое рядом</h2>
+  <p class="brief">Две новые плашки обязаны читаться с одного взгляда и не спорить с тревогами. «Ждёт вас» и «к мержу» — голубые с точкой: <b>человек должен действовать</b>. «Стоит» — красная: <b>сломалось</b>. «На паузе» — утопленная нейтральная плашка с кромкой и глифом «‖»: <b>человек сам остановил, тревоги нет</b>. «Черновик» — пустая плашка с пунктирной рамкой: <b>фича ещё не собрана до конца</b>, как пунктирные кнопки «создать». Форма дублирует цвет: глиф и рамка различимы даже без цвета.</p>
+  <div class="vocab" id="vocab"></div>
+</section>
+
+<section>
+  <h2>2. Страница фичи: шапка и блок состояния</h2>
+  <p class="brief" id="varBrief"></p>
+  <div class="row">
+    <div><div class="cap">1280 · остров центра</div><div class="dk" id="dk"></div></div>
+    <div><div class="cap">360 · мобила</div><div class="mb" id="mb"></div></div>
+  </div>
+  <p class="note" id="stateNote"></p>
+</section>
+
+<section>
+  <h2>3. Как ставится пауза: меню и подтверждение</h2>
+  <p class="brief">Пауза <b>прерывает идущие ходы сразу</b> — это дорогой клик, поэтому если сейчас что-то исполняется, сначала спрашиваем и называем, что прервётся. Нет идущих ходов — пауза ставится без вопроса, тостом. Снятие паузы и «Запустить фичу» подтверждения не требуют: они ничего не отнимают.</p>
+  <div class="row">
+    <div><div class="cap">1280 · подтверждение (идут 2 шага)</div><div class="dk" id="dkModal"></div></div>
+    <div><div class="cap">360 · шторка ⋯ (оба варианта)</div><div class="mb" id="mbSheet"></div></div>
+  </div>
+  <div class="row" style="margin-top:16px">
+    <div><div class="cap">Состояния кнопки «Пауза» (вариант A, 1280)</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:var(--c-bg-main);padding:12px;border-radius:12px" id="btnStates"></div></div>
+    <div><div class="cap">Тосты: успех и отказ 409</div>
+      <div style="display:flex;flex-direction:column;gap:8px" id="toasts"></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>4. Список фич (группа фичи в дереве чатов)</h2>
+  <p class="brief">Пауза и черновик — <b>не тревога</b>: у строки нет цветной кромки слева, статус нейтральный. Бэк кладёт обе в bucket <span class="mono">idle</span>, поэтому они уходят ниже работающих сами, отдельной группы не заводим. Фильтр «открытые» их показывает; новых чипов фильтра не добавляем — фич на паузе обычно одна-две.</p>
+  <div class="row">
+    <div><div class="cap">1280 · боковая панель</div><div id="listDk"></div></div>
+    <div><div class="cap">360 · список</div><div class="mb"><div class="isl"><div class="body" id="listMb"></div></div></div></div>
+  </div>
+</section>
+
+</div>
+
+<script>
+const I = {
+  back:'<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 3 5 8l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  more:'<svg width="16" height="16" viewBox="0 0 16 16"><circle cx="3.5" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="12.5" cy="8" r="1.4" fill="currentColor"/></svg>',
+  pause:'<svg width="14" height="14" viewBox="0 0 16 16"><rect x="4" y="3" width="2.6" height="10" rx="0.8" fill="currentColor"/><rect x="9.4" y="3" width="2.6" height="10" rx="0.8" fill="currentColor"/></svg>',
+  play:'<svg width="14" height="14" viewBox="0 0 16 16"><path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.4-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5Z" fill="currentColor"/></svg>',
+  draftIc:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 13h2.5L13 5.5 10.5 3 3 10.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+  branch:'<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><circle cx="4.5" cy="3.5" r="1.6" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12.5" r="1.6" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="5" r="1.6" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.1v5.8M11.5 6.6c0 3-7 2-7 4.3" stroke="currentColor" stroke-width="1.3"/></svg>',
+  list:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 4h7M6 8h7M6 12h7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="m2.5 4 .8.8L4.6 3.4M2.5 8l.8.8 1.3-1.4M2.5 12l.8.8 1.3-1.4" stroke="currentColor" stroke-width="1.2"/></svg>',
+  chat:'<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M2.5 13.5 3.6 10.6A5.5 5.5 0 1 1 5.6 12.5Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
+};
+// Глифы состояний 14 px. Новые: hold — два бруска C.textSecondary в утопленном круге; draft — пунктирное кольцо C.textMuted.
+const G = {
+  run:'<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="none" stroke="var(--c-accent)" stroke-width="1.5"/><circle cx="8" cy="8" r="3.5" fill="var(--c-accent)"/></svg>',
+  wait:'<svg width="14" height="14" viewBox="0 0 16 16"><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="var(--c-info)"/></svg>',
+  stopped:'<svg width="14" height="14" viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" fill="var(--c-danger)"/></svg>',
+  hold:'<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="var(--c-bg-inset)" stroke="var(--c-text-muted)" stroke-width="1"/><rect x="5.3" y="4.6" width="1.9" height="6.8" rx="0.6" fill="var(--c-text-secondary)"/><rect x="8.8" y="4.6" width="1.9" height="6.8" rx="0.6" fill="var(--c-text-secondary)"/></svg>',
+  draft:'<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2" fill="none" stroke="var(--c-text-muted)" stroke-width="1.5" stroke-dasharray="2.4 2"/></svg>',
+  closed:'<svg width="14" height="14" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="var(--c-bg-selected)" stroke="var(--c-text-muted)" stroke-width="1"/><path d="M5 8h6" stroke="var(--c-text-muted)" stroke-width="1.6" stroke-linecap="round"/></svg>',
+};
+
+const TAGS = {
+  running: { cls:'t-run', label:'идёт · Исполнение' },
+  paused:  { cls:'t-hold', label:'на паузе', icon:'pause' },
+  draft:   { cls:'t-draft', label:'черновик' },
+  merge:   { cls:'t-merge', label:'ждёт согласия на мерж', dot:true },
+  merging: { cls:'t-run', label:'мерж · идёт' },
+};
+function tag(t) {
+  const ic = t.icon === 'pause' ? '<svg width="10" height="10" viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/><rect x="9.5" y="2.5" width="3" height="11" rx="1" fill="currentColor"/></svg>' : '';
+  return `<span class="tag ${t.cls}">${t.dot ? '<span class="dot"></span>' : ''}${ic}${t.label}</span>`;
+}
+
+let S = { theme:'light', variant:'A', state:'running' };
+
+// Шапка + мета + блок состояния для одной ширины.
+function page(mob) {
+  const st = S.state, v = S.variant, t = TAGS[st];
+  const canPause = st === 'running' || st === 'merge';           // merging/merged/closed — 409, кнопки нет
+  // --- тулбар ---
+  let tb = `<div class="tbar"><button class="tib" aria-label="Назад">${I.back}</button><h3 class="ttl">Пауза и черновик фичи</h3>`;
+  if (!mob) {
+    tb += tag(t);
+    if (v === 'A' && canPause) tb += `<button class="btn sec">${I.pause}Пауза</button>`;
+    if (st === 'merge') tb += `<button class="btn pri">Мерж…</button>`;
+    if (st === 'paused') tb += `<button class="btn pri">${I.play}Снять паузу</button>`;
+    if (st === 'draft') tb += `<button class="btn pri">${I.play}Запустить фичу</button>`;
+  }
+  tb += `<button class="tib" aria-label="Ещё">${I.more}</button></div>`;
+  // --- мета ---
+  let meta = '<div class="meta">';
+  if (mob) meta += tag(t);
+  if (v === 'B' && canPause) meta += `<button class="btn sec" style="height:${mob?40:24}px;padding:0 ${mob?12:8}px;font-size:12px">${I.pause}Пауза</button>`;
+  meta += `<span style="display:inline-flex;gap:4px;align-items:center" class="mono">${I.branch}feat/feature-hold</span>`;
+  meta += st === 'draft' ? '<span>создана 3 ч назад</span>' : '<span>идёт 2 дн 4 ч</span>';
+  meta += `<span>${st === 'draft' ? '4 задачи' : '14 задач'}</span></div>`;
+  meta += st === 'draft'
+    ? '<div class="segs"><span class="seg"><b>0</b> общий</span><span class="seg"><b>0</b> принято</span><span class="seg"><b>3</b> не заведено</span></div>'
+    : '<div class="segs"><span class="seg"><b>9</b> общий</span><span class="seg"><b>5</b> принято</span><span class="seg"><b>1</b> на ревью</span><span class="seg"><b>' + (st==='paused'?0:2) + '</b> в работе</span></div>';
+  // --- блок состояния ---
+  let al = '';
+  if (st === 'paused') {
+    al = `<div class="alarm a-hold" role="status"><span style="padding-top:2px">${G.hold}</span><div><div><b>Фича на паузе 2 ч.</b> Поставили вы. Новые шаги не запускаются.</div>
+      <ul class="ilist"><li>${G.stopped.replace('var(--c-danger)','var(--c-text-muted)')}<span>Прервано 2 шага — продолжатся с того же места после снятия паузы:</span></li>
+      <li style="padding-left:20px">Денис · W4-HOLD-B &nbsp;·&nbsp; Кира · W4-HOLD-F2</li></ul>
+      ${mob ? `<div class="acts"><button class="btn pri">${I.play}Снять паузу</button></div>` : ''}</div></div>`;
+  } else if (st === 'draft') {
+    al = `<div class="alarm a-draft" role="status"><span style="padding-top:2px">${G.draft}</span><div><div><b>Черновик.</b> Шаги не запускаются — разрез, план и дизайн идут как обычно. Запустите фичу, когда план готов: куратор начнёт конвейер.</div>
+      ${mob ? `<div class="acts"><button class="btn pri">${I.play}Запустить фичу</button><button class="btn sec" style="background:var(--c-bg-white)">Открыть ключевой чат</button></div>` : ''}</div></div>`;
+  } else if (st === 'merge') {
+    al = `<div class="alarm a-info" role="status"><span style="padding-top:2px">${G.wait}</span><div><div><b>Мерж в master ждёт вашего согласия</b></div>
+      ${mob ? `<div class="acts"><button class="btn pri">Мерж…</button><button class="btn sec">задача</button></div>` : ''}</div></div>`;
+  }
+  const tabs = '<div class="tabs"><span class="on">Хронология</span><span>Планы и макеты</span><span>Задачи</span><span>Чаты</span></div><div class="skel" style="width:70%"></div><div class="skel" style="width:52%"></div><div class="skel" style="width:61%"></div>';
+  return `<div class="isl">${tb}<div class="body">${meta}${al}${tabs}</div></div>`;
+}
+
+const BRIEF = {
+  A: '<b>Вариант A — кнопка «Пауза» в шапке</b> <span class="rec">рекомендую</span>. Встаёт в тулбар между тегом и главным действием, вторичная (sec), с глифом «‖». Когда фича на паузе, на её месте главная кнопка «Снять паузу» — единственное, что человеку остаётся сделать. На 360 тулбар держит только ⋯ (правило страницы): «Поставить на паузу…» — первым пунктом шторки, «Снять паузу» — в блоке состояния. Плюс: тот же паттерн, что у «Мерж…», новых мест на странице нет.',
+  B: '<b>Вариант B — чип «Пауза» в мете под заголовком</b>. Одна и та же позиция на обеих ширинах (рядом с веткой), шапка не трогается. Минусы: мета — строка фактов, кнопка в ней ломает её смысл; на 360 чип 40 px раздувает строку до двух рядов; чип с рамкой рядом с тегом читается как ещё один тег. Снятие паузы и «Запустить» — так же, как в A (главное действие / блок).',
+};
+const NOTE = {
+  running: 'Пауза off. В A — вторичная кнопка «Пауза» в шапке; в B — чип в мете. Клик при идущих ходах открывает подтверждение (раздел 3).',
+  paused: 'Пауза on. Тег «на паузе» вытесняет тревоги (state paused стоит выше stopped): прерванные паузой шаги не красят страницу в красное. Главное действие — «Снять паузу», блок перечисляет прерванное.',
+  draft: 'Черновик. Тег с пунктиром, блок с пунктирной рамкой, главное действие — «Запустить фичу». Кнопки «Пауза» нет (manual поверх draft — 409). «Вернуть в черновик» — пункт ⋯, только пока ни один шаг не запускался.',
+  merge: 'К мержу. В A «Пауза» (sec) стоит левее «Мерж…» (pri): главное действие остаётся справа и цветным, перепутать по весу нельзя. Пауза на merge_pending разрешена контрактом.',
+  merging: 'Мерж идёт. Кнопки «Пауза» нет ни в A, ни в B, пункта в ⋯ тоже: ручка отвечает 409, а скрывать честнее, чем отказывать.',
+};
+
+function render() {
+  document.documentElement.dataset.theme = S.theme;
+  document.getElementById('dk').innerHTML = page(false);
+  document.getElementById('mb').innerHTML = page(true);
+  document.getElementById('varBrief').innerHTML = BRIEF[S.variant];
+  document.getElementById('stateNote').innerHTML = '<b>' + TAGS[S.state].label + ':</b> ' + NOTE[S.state];
+}
+document.querySelectorAll('[data-ctl]').forEach(g => g.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  S[g.dataset.ctl] = b.dataset.v; render();
+}));
+
+// --- статичные разделы ---
+document.getElementById('vocab').innerHTML = [
+  [TAGS.running, 'run · работа идёт', false],
+  [{cls:'t-wait',label:'ждёт вас',dot:true}, 'wait · нужен ответ человека', false],
+  [TAGS.merge, 'merge_pending · нужен ваш мерж', false],
+  [{cls:'t-stop',label:'стоит'}, 'stopped · исполнитель упал', false],
+  [{cls:'t-not',label:'не начата'}, 'not_started · пусто', false],
+  [{cls:'t-merged',label:'смержена'}, 'merged', false],
+  [TAGS.paused, 'paused · остановили вы, тревоги нет', true],
+  [TAGS.draft, 'draft · шаги ещё не запускались', true],
+].map(([t, d, n]) => `<div class="vc ${n?'new':''}">${tag(t)}<small>${d}</small>${n?'<span class="newb">новое</span>':''}</div>`).join('');
+
+document.getElementById('dkModal').innerHTML = `<div class="isl" style="min-height:330px">
+  <div class="tbar"><button class="tib">${I.back}</button><h3 class="ttl">Пауза и черновик фичи</h3>${tag(TAGS.running)}<button class="btn sec foc">${I.pause}Пауза</button><button class="tib">${I.more}</button></div>
+  <div class="body"><div class="skel" style="width:60%"></div><div class="skel" style="width:45%"></div></div>
+  <div class="scrim"></div>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h4>Поставить фичу на паузу?</h4>
+    <p>Идущие шаги прервутся сразу: <b>Денис · W4-HOLD-B</b> и <b>Кира · W4-HOLD-F2</b>.</p>
+    <p style="color:var(--c-text-secondary)">Файлы в worktree останутся как есть. Новые шаги не запустятся, пока вы не снимете паузу, — тогда прерванные продолжатся с того же места.</p>
+    <div class="foot"><button class="btn gh">Отмена</button><button class="btn pri">${I.pause}Поставить на паузу</button></div>
+  </div></div>`;
+
+document.getElementById('mbSheet').innerHTML = `<div class="isl" style="min-height:420px">
+  <div class="tbar"><button class="tib">${I.back}</button><h3 class="ttl">Пауза и черновик фичи</h3><button class="tib" style="background:var(--c-bg-selected)">${I.more}</button></div>
+  <div class="body"><div class="meta">${tag(TAGS.running)}</div><div class="skel" style="width:70%"></div></div>
+  <div class="scrim"></div>
+  <div class="sheet"><div class="grab"></div>
+    <button class="it"><span class="ic">${I.pause}</span>Поставить на паузу…</button>
+    <div class="hint">Прервёт 2 идущих шага</div>
+    <button class="it"><span class="ic">${I.branch}</span>Скопировать ветку</button>
+    <button class="it"><span class="ic">${I.list}</span>Открыть эпик в «Задачах»</button>
+    <button class="it"><span class="ic">${I.chat}</span>Открыть ключевой чат</button>
+  </div></div>`;
+
+document.getElementById('btnStates').innerHTML = [
+  `<button class="btn sec">${I.pause}Пауза</button><small style="color:var(--c-text-muted)">покой</small>`,
+  `<button class="btn sec hov">${I.pause}Пауза</button><small style="color:var(--c-text-muted)">hover</small>`,
+  `<button class="btn sec foc">${I.pause}Пауза</button><small style="color:var(--c-text-muted)">focus</small>`,
+  `<button class="btn sec load"><span class="spin"></span>Ставлю паузу…</button><small style="color:var(--c-text-muted)">loading</small>`,
+  `<button class="btn pri load"><span class="spin"></span>Снимаю паузу…</button><small style="color:var(--c-text-muted)">loading</small>`,
+].join('');
+
+document.getElementById('toasts').innerHTML = `
+  <div class="toast">${G.hold}<div><b>Фича на паузе</b><span>Прервано 2 шага. Снять паузу — на странице фичи.</span></div></div>
+  <div class="toast">${G.run}<div><b>Пауза снята</b><span>Продолжены 2 шага, куратор в курсе.</span></div></div>
+  <div class="toast">${G.stopped}<div><b>Паузу поставить нельзя</b><span>Мерж уже идёт — его не останавливают посреди.</span></div></div>`;
+
+function rows(mob) {
+  const R = [
+    ['edge-wait', G.wait, 'Голосовой режим v2', 'st wait', 'ждёт вас · Тимур · 12 мин'],
+    ['edge-stop', G.stopped, 'Импорт заметок', 'st stop', 'стоит · Денис · 25 мин'],
+    ['', G.run, 'Обзор фич, волна 4', 'st', 'Исполнение · идёт · Кира'],
+    ['', G.hold, 'Пауза и черновик фичи', 'st hold', 'на паузе · 2 ч'],
+    ['', G.draft, 'Очередь фич', 'st draft', 'черновик · 3 ч'],
+  ];
+  return `<div class="side">${R.map(r => `<div class="fg ${r[0]}"><span class="g">${r[1]}</span><div style="min-width:0"><div class="nm">${r[2]}</div><div class="${r[3]}">${r[4]}</div></div></div>`).join('')}</div>`;
+}
+document.getElementById('listDk').innerHTML = rows(false);
+document.getElementById('listMb').innerHTML = rows(true);
+
+render();
+</script>
+</body>
+</html>

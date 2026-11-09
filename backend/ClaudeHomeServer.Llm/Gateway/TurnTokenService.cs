@@ -119,6 +119,15 @@ public sealed class TurnTokenService
         return false;
     }
 
+    // Grant по turnId БЕЗ проверки токена: доступен только внутреннему коду Llm (счётчик хода,
+    // наблюдатель метрик) — наружу не публикуется; публичные маршруты шлюза авторизуются
+    // через TurnTokenEndpointFilter. null — ход не найден или отозван.
+    public TurnTokenGrant? FindGrant(string? turnId)
+    {
+        if (string.IsNullOrEmpty(turnId)) return null;
+        return _byTurn.TryGetValue(turnId, out var entry) ? entry.Grant : null;
+    }
+
     // Сбой запуска до адаптера: оркестрации не было, turn/completed не придёт.
     public bool RevokeTurn(string turnId) => _byTurn.TryRemove(turnId, out _);
 

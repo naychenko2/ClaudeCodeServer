@@ -58,6 +58,16 @@ public class ProjectCapabilitiesTests
         caps.Exec.Available.Should().BeTrue();
     }
 
+    // --- S1-1: общий проект (shared-projects, разрез §2.6): только серверный
+
+    [Fact]
+    public void Shareable_СерверныйПроектДа_ЛокальныйНет()
+    {
+        // Файлы локального проекта живут на машине владельца: общий он быть не может
+        ProjectCapabilities.Shareable(Server()).Should().BeTrue();
+        ProjectCapabilities.Shareable(Local()).Should().BeFalse();
+    }
+
     [Fact]
     public void ГруппыПокрываютВсеКлючиФичРовноОдинРаз()
     {
@@ -148,21 +158,17 @@ public class ProjectCapabilitiesTests
             .Should().Throw<ArgumentException>();
 
     [Fact]
-    public void Привязка_БезФлага_Отказ() =>
-        ProjectCapabilities.BindRefusal(false, Device()).Should().NotBeNull();
-
-    [Fact]
     public void Привязка_БезExec_Отказ() =>
-        ProjectCapabilities.BindRefusal(true, Device(caps: [DeviceCapabilities.Files]))
+        ProjectCapabilities.BindRefusal(Device(caps: [DeviceCapabilities.Files]))
             .Should().Be(ProjectCapabilities.NoExecReason);
 
     [Fact]
     public void Привязка_УстройстваНет_Отказ() =>
-        ProjectCapabilities.BindRefusal(true, null).Should().Be(ProjectCapabilities.DeviceMissingReason);
+        ProjectCapabilities.BindRefusal(null).Should().Be(ProjectCapabilities.DeviceMissingReason);
 
     [Fact]
-    public void Привязка_ФлагИExec_ДажеОфлайн_Можно() =>
-        ProjectCapabilities.BindRefusal(true, Device(online: false)).Should().BeNull();
+    public void Привязка_Exec_ДажеОфлайн_Можно() =>
+        ProjectCapabilities.BindRefusal(Device(online: false)).Should().BeNull();
 
     // --- Руки (ADR-016 §7, план рук Ш1) ---
 
@@ -322,5 +328,26 @@ public class ProjectCapabilitiesTests
             .And.Contain("обновите агента").And.Contain(DeviceAgentCompatibility.MinVersion)
             .And.NotContain("агент обновляется");
         if (reason is not null) gate.Reason.Should().Contain(reason);
+    }
+
+    // --- Плагины (ADR-031 §5.8): у локального проекта в MVP выключены, у серверного — нет ---
+
+    [Fact]
+    public void СерверныйПроект_ПлагиныДоступны()
+    {
+        var caps = ProjectCapabilities.For(Server(), null);
+
+        caps.Plugins.Available.Should().BeTrue();
+        caps.Plugins.Reason.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЛокальныйПроект_ПлагиныВыключеныСЧитаемойПричиной()
+    {
+        var caps = ProjectCapabilities.For(Local(), Device(caps: [DeviceCapabilities.Exec, DeviceCapabilities.Files]));
+
+        caps.Plugins.Available.Should().BeFalse();
+        caps.Plugins.Reason.Should().Be(ProjectCapabilities.PluginsLocalOffReason);
+        caps.Plugins.Reason.Should().NotBeNullOrEmpty("причина читаемая для человека");
     }
 }

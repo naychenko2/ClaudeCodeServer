@@ -15,22 +15,35 @@ namespace ClaudeHomeServer.Tests.ImageEditor;
 // «вариант задачи» и «шаг истории», пустой запрос — 400, а не «задача не найдена»; «Сохранить
 // как…» на занятое имя — 409 name_taken с suggestion и без перезаписи; проверка ничего не пишет;
 // шаг истории сохраняется без генерации.
-public class ImageEditorSaveTests : IDisposable
+[Trait("Category", "Host")]
+public class ImageEditorSaveTests : IClassFixture<ImageEditorSaveTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly OneVariantJobs _jobs = new();
-
-    public ImageEditorSaveTests() =>
-        _factory.ExtraServices = services => services.AddSingleton<IImageEditJobs>(_jobs);
-
-    public void Dispose()
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Фейк IImageEditJobs живёт в хосте: его состояние (байты «job-1») тесты не меняют,
+    /// поэтому конструктору тест-класса сбрасывать нечего. Проект каждый тест-экземпляр
+    /// заводит сам (CreateProject — уникальные GUID), результат сохранения идёт в папку
+    /// проекта — чужих файлов тесты не касаются.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
     {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        internal readonly OneVariantJobs Jobs = new();
+
+        public Hosts() =>
+            ExtraServices = services => services.AddSingleton<IImageEditJobs>(Jobs);
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly OneVariantJobs _jobs;
+
+    public ImageEditorSaveTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _jobs = hosts.Jobs;
     }
 
     // Одна задача «job-1» с единственным вариантом 1 у владельца — остальное неотличимо от отсутствующего
-    private sealed class OneVariantJobs : IImageEditJobs
+    internal sealed class OneVariantJobs : IImageEditJobs
     {
         public const string JobId = "job-1";
         public byte[] Bytes = Png(12, 8);
@@ -58,7 +71,6 @@ public class ImageEditorSaveTests : IDisposable
     {
         var users = _factory.Services.GetRequiredService<UserStore>();
         var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        users.SetFeatureFlag(user.Id, FeatureFlagKeys.ImageEditor, true).Should().BeTrue();
         var dir = Path.Combine(_factory.TempDir, "img_" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(Path.Combine(dir, "images"));
         var id = _factory.Services.GetRequiredService<ProjectManager>()
@@ -277,19 +289,6 @@ public class ImageEditorSaveTests : IDisposable
         var resp = await client.GetAsync($"{Root(projectId)}/save/check?folder=images&name=hero&format={format}");
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
-
-    [Fact]
-    public async Task Флаг_выключен_save_check_404()
-    {
-        var (projectId, _) = CreateProject();
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id, FeatureFlagKeys.ImageEditor, false);
-        var client = _factory.CreateAuthenticatedClient();
-
-        var resp = await client.GetAsync($"{Root(projectId)}/save/check?folder=images&name=hero&format=png");
-
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     private static async Task<JsonElement> Json(HttpResponseMessage resp) =>

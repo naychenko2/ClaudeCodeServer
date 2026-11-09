@@ -17,38 +17,63 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // Личный маршрут редактора api/image-editor/chats/{sessionId} на собранном приложении (разрез
 // docs/research/image-editor-personal-chats-cut-2026-09.md): черновик → запуск → версии → байты шага,
 // чужой личный чат и чат проекта неотличимы, у личного чата нет записи в проект, персонажей и файлов.
-public class PersonalChatEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class PersonalChatEndpointTests : IClassFixture<PersonalChatEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly PersonalJobs _jobs = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: подмена исполнителя задач и
+    /// поставщика зарегистрирована один раз. Состояние фейка (счётчик запусков, журнал
+    /// задач) поднимает заново конструктор класса перед каждым тестом. Личные prefs —
+    /// единственное состояние хоста, ключенное владельцем, а не чатом: его файл сносит
+    /// конструктор класса. Всё остальное (нити, черновики, версии) ключено парой
+    /// (владелец, чат), а чат каждый тест создаёт свой.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+        internal readonly PersonalJobs Jobs = new();
+
+        public Hosts()
+        {
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IImageEditJobs>(Jobs);
+                services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
+            };
+        }
+    }
+
+    private readonly TestWebApplicationFactory _factory;
+    private readonly PersonalJobs _jobs;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
 
-    public PersonalChatEndpointTests()
+    public PersonalChatEndpointTests(Hosts hosts)
     {
-        _factory.ExtraServices = services =>
-        {
-            services.AddSingleton<IImageEditJobs>(_jobs);
-            services.AddSingleton<IImageEditor>(new FakeImageEditor("fal", models: FakeImageEditor.Model("m")));
-        };
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
+        _factory = hosts;
+        _jobs = hosts.Jobs;
+        _jobs.Reset();
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = OwnerOf(TestWebApplicationFactory.TestUsername);
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
+        // Личная область ключена владельцем, а не чатом: чужой сохранённый выбор не должен
+        // дойти до черновика этого теста (личная ручка наследует prefs при создании нити)
+        var personalPrefs = _factory.Services.GetRequiredService<ImageProjectPrefsStore>().PathOf(_ownerId, ImageEditScope.Personal);
+        if (File.Exists(personalPrefs)) File.Delete(personalPrefs);
     }
 
     // Задачи в памяти, ключ — область: у личного чата это personal. Вариант 1 у каждой
-    private sealed class PersonalJobs : IImageEditJobs
+    internal sealed class PersonalJobs : IImageEditJobs
     {
         public int Started;
         private readonly Dictionary<string, (string Owner, string Scope, ImageEditJobInput Input)> _jobs = [];
+
+        // Сброс перед каждым тестом: общий хост помнит запущенные задачи и счётчик чужих тестов
+        public void Reset()
+        {
+            Started = 0;
+            lock (_jobs) _jobs.Clear();
+        }
 
         public Task<ImageEditCallResult<ImageEditQuoteDto>> QuoteAsync(
             string ownerId, string projectId, ImageEditQuoteRequest request, CancellationToken ct) =>
@@ -137,7 +162,6 @@ public class PersonalChatEndpointTests : IDisposable
     [Fact]
     public async Task Чужой_личный_чат_чат_проекта_и_несуществующий_404_одним_телом()
     {
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var foreign = await PersonalChat(OwnerOf(TestWebApplicationFactory.SecondUsername));
         var projectChat = await Sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Чат проекта");
 

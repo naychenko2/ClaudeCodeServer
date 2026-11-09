@@ -88,6 +88,7 @@ public sealed class CliManifestVerifierTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void Подпись_текстового_типа_отвергается()
     {
         var key = TestPgpKey.Trusted;

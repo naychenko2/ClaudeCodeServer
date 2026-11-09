@@ -20,11 +20,11 @@ export function shootExecutors(o: {
 }): ExecutorListModel | null {
   if (!o.catalog) return null;
   const value = rowId(o.r);
-  const key = [o.personal, o.r.aspect, o.r.auto, value].join('|');
+  const key = [o.personal, o.r.auto, value].join('|');
   const hit = _cache.get(o.sessionId);
   if (hit && hit.key === key && hit.catalog === o.catalog) return hit.model;
   const model: ExecutorListModel = {
-    rows: executorRows(o.catalog, o.personal, o.r.aspect, o.r.auto ? 'выбирает сервер' : ''),
+    rows: executorRows(o.catalog, o.personal, o.r.auto ? 'выбирает сервер' : ''),
     value,
     onChange: id => { const p = pickRow(id); changeSettings(o.scope, o.sessionId, { provider: p.provider, model: p.model }); },
   };

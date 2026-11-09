@@ -18,25 +18,30 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // PUT фокуса с ревизией, смена фокуса — настройка (UpdatedAt и sessions.json не меняются),
 // чужой чат и чужая нить неотличимы от несуществующих, удаление чата сносит нити через шину,
 // запись модуля в ленту через IChatFeed — активность с живой парой module_record.
-public class ThreadsEndpointTests : IDisposable
+[Trait("Category", "Host")]
+public class ThreadsEndpointTests : IClassFixture<ThreadsEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    /// <summary>
+    /// Хост на весь класс (IClassFixture), а не на тест: приложение собирается один раз.
+    /// Обного изменяемого состояния в хосте этот класс не заводит: проект и чат каждый
+    /// тест-экземпляр создаёт сам (CreateProject и Chat() — уникальные GUID), нити и фокус
+    /// ключуются парой (владелец, чат), sessions.json в Testing-среде пишется синхронно.
+    /// </summary>
+    public sealed class Hosts : TestWebApplicationFactory
+    {
+    }
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
     private readonly string _projectId;
 
-    public ThreadsEndpointTests()
+    public ThreadsEndpointTests(Hosts hosts)
     {
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.TestUsername);
+        _factory = hosts;
         (_projectId, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
         _ownerId = _factory.Services.GetRequiredService<UserStore>().FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
         _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private SessionManager Sessions => _factory.Services.GetRequiredService<SessionManager>();
@@ -123,7 +128,6 @@ public class ThreadsEndpointTests : IDisposable
         Store.Create(_ownerId, chat.Id, "a.png", null, focus: true);
 
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
         var (otherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.SecondUsername);
         var (myOtherProject, _) = CharacterEndpointsTests.CreateProject(_factory, TestWebApplicationFactory.TestUsername);
 
@@ -154,7 +158,6 @@ public class ThreadsEndpointTests : IDisposable
     {
         var chat = await Chat();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        CharacterEndpointsTests.EnableFlag(_factory, TestWebApplicationFactory.SecondUsername);
 
         var resp = await second.GetAsync(Threads(chat.Id));
 
@@ -176,23 +179,6 @@ public class ThreadsEndpointTests : IDisposable
         missingResp.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await foreignResp.Content.ReadAsStringAsync()).Should().Be(await missingResp.Content.ReadAsStringAsync());
         (await Json(foreignResp)).GetProperty("code").GetString().Should().Be(ImageEditErrorCodes.ThreadNotFound);
-    }
-
-    [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        var chat = await Chat();
-        var (state, thread) = Store.Create(_ownerId, chat.Id, "a.png", null, focus: false);
-        // Флаг включён по умолчанию — выключаем override'ом пользователя
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.ImageEditor, false).Should().BeTrue();
-
-        var get = await _client.GetAsync(Threads(chat.Id));
-        var put = await _client.PutAsJsonAsync($"{Threads(chat.Id)}/focus", new { threadId = thread.Id, revision = state.Revision });
-
-        get.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        put.StatusCode.Should().Be(HttpStatusCode.NotFound);
-        Store.Get(_ownerId, chat.Id).Focus.Should().BeNull();
     }
 
     [Fact]

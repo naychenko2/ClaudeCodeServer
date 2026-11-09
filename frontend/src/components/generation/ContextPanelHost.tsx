@@ -96,6 +96,7 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
   // в сторе вертикали и в зависимости мемо не входит
   const sel = primary ? selectRowAction(api, kindCtx, primary, refs) : { action: null, executors: null };
   const action = sel.action;
+  const format = primary ? api?.format?.(kindCtx, action?.id ?? null) ?? null : null;
   // Подпись, цена, состояние и запуск — те же, что у кнопки поля ввода: один хук на обоих
   const run = useActionRun(sessionId, kindCtx);
 
@@ -197,6 +198,8 @@ function Core({ session, project, onClose, isMobile = false, contained, layout, 
       }}
       action={action}
       exec={sel.executors}
+      format={format}
+      projectName={project?.name ?? null}
       params={run.params}
       onParam={(p, v) => run.setParam(p.kind, v)}
       addFrom={addFrom}

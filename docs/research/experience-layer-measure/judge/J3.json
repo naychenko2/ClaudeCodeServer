@@ -1,0 +1,45 @@
+[
+ {"target":"T105","total_tool_calls":137,
+  "useful":[],
+  "harmful":[],
+  "relevant_no_gain":["E014","E107","E070","E115","E048","E000","E001"],
+  "note":"Исполнение гладкое: сессия в worktree, mcp build/run_tests работали, мутации без no_build. Разведка ClaudeSession/LlmSessionContext/3 точек SessionManager покрыта только E158/E159, а они выросли из самой T105 (в пуле нет)."},
+ {"target":"T109","total_tool_calls":191,
+  "useful":[
+   {"id":"E044","episode":"mcp__tests__run_tests kind=vitest target=frontend files=['src/lib/__tests__/design.test.ts',...] -> «Путь ... в files не найден», повтор с префиксом frontend/","why_not_in_brief":"В постановке только «vitest зелёный», формат путей run_tests не указан","est_saved_calls":1}
+  ],
+  "harmful":[],
+  "relevant_no_gain":["E036","E063","E092","E125","E128","E016","E120","E045","E053","E102","E072","E134","E058","E066","E119"],
+  "note":"Единственный подтверждённый спотыкач покрыт пулом (E036/E063/E092/E125/E128 — дубли E044, экономия одна). Ошибки tsc (иконка Dots, barrel) и guard 'plugin' в PersonaBindingsPanel пул не покрывает (E167/E168 из самой T109). Середина выжимки опущена."},
+ {"target":"T115","total_tool_calls":144,
+  "useful":[
+   {"id":"E005","episode":"Юнита нет; исполнитель ~9 вызовами выясняет, как стенд получает данные и фронт: find appsettings, Read Development/appsettings.json/Local.json, grep DataPath в AppSettingsService и Program.cs, ls wwwroot, grep UseStaticFiles, dev-stand-host.md","why_not_in_brief":"Постановка даёт DataPath и порт, но не ключи конфигурации DataPath/FrontendDistPath и запуск с Development","est_saved_calls":4},
+   {"id":"E150","episode":"Первый старт юнита: порт не 5555 (appsettings.Development.json даёт 5000) -> запись appsettings.Local.json с Urls и перезапуск","why_not_in_brief":"Порт 5555 назван, способ задать его (--urls) нет","est_saved_calls":2},
+   {"id":"E141","episode":"grep data-testid по несуществующему PillMenuHeader.tsx -> ugrep warning, затем ls components/chat/feature/ для списка файлов","why_not_in_brief":"Расположение компонентов режима фичи в постановке не указано","est_saved_calls":1}
+  ],
+  "harmful":[],
+  "relevant_no_gain":["E149","E152","E178","E081","E151","E053","E102","E010"],
+  "note":"Главные потери (поиск отсутствующего юнита ~15 вызовов, URL чата #/project/.../chat/..., переполнение browser_evaluate) пулом не покрыты: E181–E183 выросли из самой T115. Экономия умеренная, только на настройке стенда."},
+ {"target":"T116","total_tool_calls":170,
+  "useful":[
+   {"id":"E082","episode":"6 провальных mcp__tests__run_tests: target «backend/ClaudeHomeServer.Personas.Tests.csproj», затем «ClaudeHomeServer.Personas.Tests/...csproj» -> «не найден»; find и pwd, потом верная форма backend/<P>/<P>.csproj","why_not_in_brief":"Постановка сама даёт неверную форму target (без папки проекта)","est_saved_calls":4},
+   {"id":"E041","episode":"~30 вызовов на slnx-уровне --list-tests: 15005 вместо 15206, diff с baseline, поиск склеенных FQN, сэмплы AudioEditor/FallbackLlm; только потом цикл per-project дал 15206","why_not_in_brief":"Постановка говорит «per-project = 15206», но не что slnx-уровень нестабилен и склеивает строки","est_saved_calls":15},
+   {"id":"E109","episode":"wc -l/head/grep -c/grep '^space'/grep -v '^#' по baseline-tests.txt — выяснение, что 15203 = строки без шапки #","why_not_in_brief":"Формат эталона (шапка из # строк) в постановке не описан","est_saved_calls":4},
+   {"id":"E055","episode":"grep HandsBridge в slnx, ls backend | grep hands, подсчёты HandsBridge-тестов в current и baseline — выяснение, что HandsBridge входит в набор","why_not_in_brief":"В постановке «29 тест-проектов» без состава, HandsBridge не назван","est_saved_calls":3},
+   {"id":"E172","episode":"После cd backend: «fatal: неоднозначный аргумент backend/» на git grep и повтор с cd; цикл per-project с неверной базой путей (sum 6556, sort: cannot read), pwd, исправление","why_not_in_brief":"Не про постановку — особенность Bash-среды","est_saved_calls":2},
+   {"id":"E057","episode":"Подсчёт IVT: git grep 'Personas.Tests' в csproj совпал не с IVT (комментарии/ProjectReference монолита), ~5 вызовов разбора, затем фильтр по <_Parameter1>|<InternalsVisibleTo","why_not_in_brief":"Постановка просит git grep InternalsVisibleTo, ловушку с комментариями не упоминает","est_saved_calls":2}
+  ],
+  "harmful":[
+   {"id":"E034","why":"Советует считать по всей slnx (--list-tests | grep | sed | sort -u -> 15203). На T116 именно это дало 15005 и стоило ~30 вызовов; рабочим оказался только per-project."},
+   {"id":"E069","why":"Эталон по slnx --list-tests и утверждение, что подсчёт по проектам завышает. На T116 всё наоборот: slnx-уровень нестабилен (15005), per-project дал точные 15206."}
+  ],
+  "relevant_no_gain":["E137","E017","E094","E155","E037","E035","E170","E089","E001","E049","E173","E171","E065"],
+  "note":"Самая выгодная цель: пул почти целиком покрывал методологию per-project и формат baseline. Но в пуле есть и противоречащие записи (E034/E069), которые толкают на slnx-уровень — тот самый ложный путь."},
+ {"target":"T117","total_tool_calls":142,
+  "useful":[
+   {"id":"E166","episode":"mcp__tests__run_tests kind=vitest files=['src/lib/pendingProjectChat.test.ts',...] -> «Путь ... не найден», повтор с префиксом frontend/","why_not_in_brief":"В постановке формат путей run_tests не указан","est_saved_calls":1}
+  ],
+  "harmful":[],
+  "relevant_no_gain":["E044","E063","E092","E125","E128","E158","E159","E070","E115","E097"],
+  "note":"Исполнение в основном гладкое. Промахи путей SandboxManager/ClaudeSession (2 Grep + find) E158/E159 точно не закрывают: полного пути в них нет. Опечатка target ClaudeCodeServer.Tests — не знание."}
+]

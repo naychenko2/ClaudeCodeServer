@@ -19,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // DossierAutoExportTests — здесь транспорт: каждая ситуация доводится до своей
 // wire-строки.
 [Trait("Category", "Slow")]
+[Trait("Category", "Host")]
 public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly TestWebApplicationFactory _factory;
@@ -30,11 +31,6 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
         _factory = factory;
         _client = factory.CreateAuthenticatedClient();
     }
-
-    private async Task EnableFlagAsync() =>
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
-        .EnsureSuccessStatusCode();
 
     // Репозиторий + проект основного пользователя; withBranch — сразу пишем ветку
     // паспортов plumbing-методом (фикстура по образцу DossierImportEndpointTests,
@@ -71,7 +67,6 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
     [Fact]
     public async Task СвояВетка_СтатусActive()
     {
-        await EnableFlagAsync();
         var (projectId, dir) = await CreateGitProjectAsync("DossierStOwn", withBranch: true);
 
         // Tip помечен созданным нашей выгрузкой — как после ручной/авто выгрузки
@@ -85,7 +80,6 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
     [Fact]
     public async Task ЧужойTip_СтатусForeignTip()
     {
-        await EnableFlagAsync();
         // Ветка есть, но метки MarkOwnTip нет — как после git pull соседа/второй машины
         var (projectId, _) = await CreateGitProjectAsync("DossierStForeign", withBranch: true);
 
@@ -96,7 +90,6 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
     [Fact]
     public async Task ТолькоOriginВетка_СтатусOriginOnly()
     {
-        await EnableFlagAsync();
         var (projectId, dir) = await CreateGitProjectAsync("DossierStOrphan", withBranch: true);
 
         // Ветка уезжает в bare-origin, локальная копия сносится — репо, куда ветку
@@ -116,7 +109,6 @@ public class DossierExportStatusAutoExportTests : IClassFixture<TestWebApplicati
     [Fact]
     public async Task ОбщаяПапка_СтатусSharedFolder()
     {
-        await EnableFlagAsync();
         var (projectId, dir) = await CreateGitProjectAsync("DossierStShared", withBranch: false);
 
         // Второй владелец подключает ту же папку своим проектом (между владельцами

@@ -1,9 +1,13 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services;
 
 namespace ClaudeHomeServer.Models;
 
 // Задача пользователя; может быть привязана к проекту или быть личной (ProjectId == null).
 // Хранение — data/tasks.json (TaskManager).
+// Полиморфная сериализация (без дискриминатора) нужна, чтобы поле, объявленное как TaskItem
+// (TaskChangedMessage.Task), несло поля облегчённого TaskListItem; чтение всегда даёт TaskItem.
+[JsonDerivedType(typeof(TaskListItem))]
 public class TaskItem
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -24,6 +28,23 @@ public class TaskItem
     // сбрасывается при изменении срока или офсета
     public DateTime? ReminderSentAt { get; set; }
     public TaskItemAssignee? Assignee { get; set; }
+    // ─── S2b-1 (общие проекты): человек-исполнитель и автор задачи ───
+    // Участник общего проекта, на которого назначена задача. Смысл имеет только при
+    // Assignee=Me: «Me» читается как это поле, а при его отсутствии — как владелец
+    // (TaskManager.ResolveMeUserId). Путь записи — определение исполнителя (S2b-2),
+    // здесь только модель и чтение. Инвариант «персона ⇒ Claude» не трогает поля:
+    // у Claude-задачи человека-исполнителя нет. Аддитивные nullable-поля: старый
+    // tasks.json без них читается как null, BackupSchema.Version не растёт
+    // (прецедент ExecutorLaunchedBySessionId/ReportToSessionId). WhenWritingNull:
+    // null не входит ни в файл стора, ни в ответ — формат старых записей не меняется.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssigneeUserId { get; set; }
+    // Кто поставил задачу: человек (UI/API, заметка — ни персоны-постановщика, ни чата-
+    // источника) — id этого пользователя; агент (персона, чат) и сервер — null
+    // (TaskManager.Create). Происхождение Update не переписывает. Для регулярной серии
+    // — устойчивый атрибут (SpawnNextOccurrence, как CreatedByPersonaId).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CreatedByUserId { get; set; }
     // Правило повторения; при завершении экземпляра создаётся следующий (см. TaskManager)
     public TaskRecurrence? Recurrence { get; set; }
     // Общий id серии повторяющейся задачи (= id первого экземпляра)
@@ -58,6 +79,13 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение этой пометки уже отправлено». Ставится
+    // перед доставкой продолжения, гасится вместе с пометкой (ClearExecutorStopped) или новой
+    // пометкой (MarkExecutorStopped); при бое доставки — снимается, чтобы повторное снятие
+    // паузы попробовал снова. Без него сбой между доставкой и снятием пометки заставлял
+    // повторное снятие слать продолжение заново. Аддитивная nullable-поле: BackupSchema.Version
+    // не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    public DateTime? HoldResumeDeliveredAt { get; set; }
     // Исполнитель ждёт устройство локального проекта (ADR-016, вариант А плана §5): момент
     // постановки в ожидание и причина для человека. ClaudeStartedAt при этом пуст — запуска
     // не было. Стартует DeviceOnlineDispatcher при выходе устройства в онлайн; через 24 ч —
@@ -84,6 +112,8 @@ public class TaskItem
     // (ClaudeResult) и D — Status=Done (tasks_complete/PUT). CAS TaskManager.TryMarkCompletionDelivered
     // гарантирует ровно одну доставку L0/Z-доклада вне зависимости от порядка их прихода.
     // НЕ переносится в SpawnNextOccurrence (как ClaudeResult — серия начинается заново).
+    // Сбрасывается при штатном переоткрытии (уход из Done через TaskManager.Update,
+    // расследование 88444536): переоткрытая для доработки карточка обязана исполняться снова.
     public bool CompletionDelivered { get; set; }
     // Markdown-описание итога выполнения (прикрепляет исполнитель через tasks_complete/
     // tasks_update). null — результата нет; "" — очищен. Не переносится в следующий
@@ -104,6 +134,64 @@ public class TaskItem
     // из него — второй источник истины не заводим).
     public string? CreatedByPersonaId { get; set; }
     public string? SourceSessionId { get; set; }
+    // Кто последним запустил исполнителя (tasks_run_executor из чата): доклад о
+    // завершении идёт в эту сессию, а не только в SourceSessionId (создателя карточки). Повторный
+    // запуск перезаписывает. Оба null — запуск человеком без чата (кнопка в UI не шлёт X-Caller-Session-Id и поля сбрасывает) или старые задачи: адресат
+    // прежний. Аддитивные nullable-поля: tasks.json читается штатно, BackupSchema.Version не растёт.
+    public string? ExecutorLaunchedBySessionId { get; set; }
+    // Нужно только для аудита: персона авто-хода доклада берётся из сессии-адресата, это поле не читается.
+    public string? ExecutorLaunchedByPersonaId { get; set; }
+    // Адресат доклада, унаследованный от родительской задачи: если задачу создала сессия — чат-исполнитель
+    // другой задачи T (планировщик, QA), доклад идёт туда, куда он сам докладывает по T (оркестратору),
+    // а не этой молчаливой сессии. Ставит только tasks_create при создании; аддитивное nullable-поле,
+    // BackupSchema.Version не растёт.
+    public string? ReportToSessionId { get; set; }
+    // ─── S2d-4b (К5): форма вместо чужого приватного чата ───
+    // Ряд с каждым id-полем выше: null — id в своём поле виден как раньше (ссылки нет);
+    // заполнено — id-поле обнулено, это чат, который зрителю не виден (решение — ChatRefs.For,
+    // ставит только TaskView). Поля проекции: проецируемая копия в стор не кладётся, поэтому в
+    // tasks.json они не появляются; WhenWritingNull — форма старых записей не меняется,
+    // BackupSchema.Version не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? LinkedChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? SourceChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? ExecutorLaunchedByChat { get; set; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ChatRef? ReportToChat { get; set; }
+    // ─── Фича (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md) ───
+    // Аддитивные nullable-поля: размеченные по-новому задачи получают их, старые — null.
+    // BackupSchema.Version не растёт (прецедент ExecutorLaunchedBySessionId/ReportToSessionId).
+    // Id задачи-эпика фичи; у эпика самого null.
+    public string? FeatureId { get; set; }
+    // Роль задачи в фиче: feature · cut · plan · step · rework · review · qa · final · merge · consult.
+    public string? Role { get; set; }
+    // Код шага из плана («B1», «F2»); у step/rework, по нему доработка склеивается со своим шагом.
+    public string? StepRef { get; set; }
+    // Линия («бэк», «фронт»); подпись берётся как есть.
+    public string? Lane { get; set; }
+    // Id задач, которые оценивает это ревью/проверка/финал. Пусто/у final,qa — вся фича.
+    public List<string>? ReviewOf { get; set; }
+    // Структурный список шагов плана (честный прогресс фичи, разрез Александра §2): знаменатель
+    // «сколько всего» берётся из PlanSteps задач role=plan, а не из markdown-плана. Аддитивное
+    // nullable-поле: допустимо ТОЛЬКО у role=plan (валидация — TaskManager), у прочих ролей и в
+    // старых задачах — null. BackupSchema.Version не растёт (прецедент ReviewOf).
+    public List<PlannedStep>? PlanSteps { get; set; }
+    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
+    public DateTime? AwaitingHumanSince { get; set; }
+    public string? AwaitingHumanReason { get; set; }
+    // Удержание фичи (волна 4, разрез §1): null — работа разрешена; иначе — причина (FeatureHoldReasons).
+    // Ставится только на эпике (role=feature) и только человеком. Аддитивное nullable-поле: старый
+    // tasks.json без «hold» читается как null, BackupSchema.Version не растёт.
+    public FeatureHold? Hold { get; set; }
+    // «Голос фичи» (волна 6, B3): короткий текст оркестратора/человека о состоянии фичи. Только у эпика
+    // (role=feature), пишет TaskManager.SetFeatureNote. Аддитивное nullable-поле: старый tasks.json
+    // без «note» читается как null, BackupSchema.Version не растёт.
+    public FeatureNote? Note { get; set; }
+    // Срок из первой оценки оркестратора после старта фичи (FeatureEstimate.EtaMinutes): пишется один раз
+    // SetFeatureNote и не перезаписывается, снятие голоса его не трогает. Аддитивное nullable-поле.
+    public int? InitialEtaMinutes { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -129,6 +217,18 @@ public class TaskItem
     // заметки, снятие волной), которые не оставляют системного Verification. Прочие значения
     // ставит человек/персона. Сбрасывается при уходе из Done.
     public DefectOutcome? Outcome { get; set; }
+    // Критерии приёмки (измеримые) и свидетельства их выполнения. Аддитивные поля: старые
+    // задачи читаются пустыми списками, BackupSchema.Version не растёт. Закрыть задачу с
+    // непустым Acceptance можно, только когда на каждый критерий есть свидетельство
+    // (гейт один — AcceptanceRules, вызывается из TaskManager на переходе в Done).
+    // Явный "acceptance": null в JSON затирал бы инициализатор — сеттер возвращает пустой список
+    public List<AcceptanceCriterion> Acceptance { get => _acceptance; set => _acceptance = value ?? []; }
+    public List<AcceptanceEvidence> Evidence { get => _evidence; set => _evidence = value ?? []; }
+    private List<AcceptanceCriterion> _acceptance = [];
+    // Последний результат предгейта шага (NC-P1b): кладёт только TaskManager.RecordPregate по вердикту
+    // ITaskPregate. Аддитивное поле: старые задачи читаются с null. Закрытие шага не блокирует — PregateRules
+    public PregateRecord? Pregate { get; set; }
+    private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.
@@ -137,11 +237,127 @@ public class TaskItem
     public DateTime? CompletedAt { get; set; }
 }
 
+// Удержание фичи (TaskItem.Hold, волна 4 §1): Reason — словарь FeatureHoldReasons (draft | manual |
+// queue), Since — момент постановки, BySessionId — чат постановки (null — из UI без чата), ByUser —
+// ставил человек (оркестратор только предлагает). Позиционная запись — как AcceptanceCriterion:
+// round-trip через JSON без конвертера.
+public record FeatureHold(string Reason, DateTime Since, string? BySessionId, bool ByUser);
+
+// Голос фичи (TaskItem.Note): Text — не длиннее FeatureNote.MaxTextLength, At/StageAtWrite/StateAtWrite
+// штампует сервер в момент записи (по ним считается «устарело»), BySessionId — чат автора (null — из UI
+// без чата; наружу не отдаётся: поле живёт в сторе, с wire его снимает конвертер типа на границе
+// сериализации — Main/Services/FeatureNoteJsonConverter.cs), ByUser — писал человек. Позиционная
+// запись — как FeatureHold.
+// StageAtWrite — стадия конвейера, StateAtWrite — КАТЕГОРИЯ фичи (brief.kind: running/waiting_you/
+// error/paused/queued/draft/idle/merged/closed) на момент записи (B15, дефект 415c1c80; merged —
+// девятая категория, «Фильтр фич по состоянию», R-Б1/2); имя поля и
+// JSON-контракт прежние — голоса, записанные до B15, хранят СОСТОЯНИЕ («running», «paused»…), они
+// достраиваются до категории таблицей FeatureBrief.KindByState (fail-closed для неизвестного).
+// Estimate — срок и «что дальше» от оркестратора (макет 2 сводки фичи): пишется только вместе с голосом, штамп
+// At/StageAtWrite/StateAtWrite общий; записи без оценки читаются с Estimate = null.
+public record FeatureNote(string Text, DateTime At, string? BySessionId, bool ByUser,
+    string StageAtWrite, string StateAtWrite, FeatureEstimate? Estimate = null)
+{
+    public const int MaxTextLength = 600;
+}
+
+// Оценка оркестратора (FeatureNote.Estimate): только срок и «что дальше». Процент готовности здесь не
+// живёт — он один, из run.stepProgress (FeatureStepAccounting). Remaining — ещё не начатое (первый
+// пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся оценить), Why — почему срок
+// заметно отличается от обычного. Старые записи с done/total/inProgress/percent читаются: лишние ключи
+// JSON игнорируются. Ограничения — Validate.
+public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why)
+{
+    public const int MaxRemaining = 8;
+    public const int MaxRemainingLength = 40;
+    public const int MaxWhyLength = 160;
+
+    // Текст отказа или null. Remaining/Why вызывающий нормализует Normalize до проверки.
+    public string? Validate()
+    {
+        var remaining = Remaining ?? [];
+        if (remaining.Count > MaxRemaining) return $"featureEstimate.remaining: не больше {MaxRemaining} пунктов";
+        if (remaining.Any(r => r.Length == 0 || r.Length > MaxRemainingLength))
+            return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
+        if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
+        if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        // Пустую оценку (ни срока, ни remaining) вызывающий отбрасывает через NullIfEmpty до Validate.
+        return null;
+    }
+
+    // Без срока и без «что дальше» (в т.ч. {} и одни старые done/total) оценка бессодержательна: её молча
+    // отбрасывают (null), а не отказывают — голос, с которым она пришла, при этом сохраняется. Вызывать после Normalize.
+    public FeatureEstimate? NullIfEmpty() => EtaMinutes is null && (Remaining ?? []).Count == 0 ? null : this;
+
+    // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
+    // Normalize Remaining не null.
+    public FeatureEstimate Normalize() => this with
+    {
+        Remaining = (Remaining ?? []).Select(r => (r ?? "").Trim()).ToList(),
+        Why = string.IsNullOrWhiteSpace(Why) ? null : Why.Trim(),
+    };
+}
+
+// Критерий приёмки задачи: Id стабилен (на него ссылается свидетельство), Text — измеримая формулировка.
+public record AcceptanceCriterion(string Id, string Text);
+
+// Свидетельство по критерию: How — чем проверено, Result — что получилось (вывод, цифры).
+public record AcceptanceEvidence(string CriterionId, string How, string Result);
+
+// Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
+// красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
+// проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
+// NothingApplicable — отдельный НЕЙТРАЛЬНЫЙ исход «ни одна проверка не применима» (Green при этом false: «зелёным» он
+// не считается, ни одна проверка не выполнена), но и не красный: в серию красных и эскалацию не входит, серию прежнего
+// красного переносит как есть (PregateRules.Next); закрытие шага он разрешает.
+// Outcome — производный трёхзначный исход для читателей вне кода (карточка, выгрузка, статистика): по одному Green
+// «нечего проверять» неотличим от провала. Хранится производно — формат записи и бэкапа не меняется.
+public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null,
+    bool NothingApplicable = false)
+{
+    public const string OutcomeGreen = "green";
+    public const string OutcomeRed = "red";
+    public const string OutcomeNeutral = "neutral";
+
+    public string Outcome => NothingApplicable ? OutcomeNeutral : Green ? OutcomeGreen : OutcomeRed;
+}
+
 public class TaskSubtask
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
     public string Title { get; set; } = "";
     public bool IsDone { get; set; }
+}
+
+// Шаг плана (TaskItem.PlanSteps): код шага (StepRef), его название (Title) и линия (Lane).
+// StepRef — ключ шага (тот же, что у step/rework): непуст и уникален внутри задачи.
+// Title — человекочитаемое название шага; Lane — линия (бэк/фронт), как у шагов.
+// Лимиты — константы (единая точка для валидации в TaskManager и для тестов).
+public class PlannedStep
+{
+    // Потолок числа шагов плана на задачу: план — не таблица на тысячу строк.
+    public const int MaxSteps = 200;
+    // Максимальная длина кода шага (StepRef) и названия (Title). Длина — в UTF-16 code units
+    // (string.Length): эмодзи/суперскрипты съедают по 2 единицы (минор 8, оговорено).
+    public const int MaxStepRefLength = 40;
+    public const int MaxTitleLength = 200;
+
+    public string StepRef { get; set; } = "";
+    public string Title { get; set; } = "";
+    public string? Lane { get; set; }
+
+    // Вид шага: строка, а не enum — откат кода с новым значением enum уносит стор в .corrupt
+    // (урок McpCatalogRef). null = step; в знаменатель прогресса идут только шаги (null/step).
+    public string? Kind { get; set; }
+
+    public const string KindStep = "step";
+    public const string KindReview = "review";
+    public const string KindQa = "qa";
+    public const string KindFinal = "final";
+    public static readonly string[] Kinds = [KindStep, KindReview, KindQa, KindFinal];
+
+    // Исполняемый шаг плана (учитывается в знаменателе): kind не задан или step.
+    public bool IsStep => Kind is null || string.Equals(Kind, KindStep, StringComparison.Ordinal);
 }
 
 public enum TaskItemStatus { Todo, InProgress, Done }

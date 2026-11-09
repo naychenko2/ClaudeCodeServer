@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>«Подставить персонажа» на лицо · варианты A / B / C · макет</title>
+<style>
+  /* Токены — копия frontend/src/lib/theme.css (обе темы), чтобы макет открывался без сервера.
+     Имена переменных = C.* (bg-main → C.bgMain); размеры — шкалы FS / SP / R / SHADOW / MODAL_W из lib/design.ts.
+     Сырых цветов ниже этого блока нет: только var(--c-*) / var(--shadow-*). */
+  :root, [data-theme="light"] {
+    --c-bg-main: #F4F0E8; --c-bg-panel: #EDE7DC; --c-bg-card: #FBF8F2; --c-bg-white: #FFFFFF;
+    --c-bg-selected: #E8E1D4; --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F; --c-text-primary: #39332B; --c-text-secondary: #756B5E; --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2; --c-on-dark: #FFFFFF;
+    --c-accent: #D97757; --c-accent-light: #F4ECE1; --c-accent-muted: #EAD3C5; --c-accent-soft: #E8A990;
+    --c-border: #E0D7C8; --c-border-light: #E8E1D4; --c-divider: #DDD4C4; --c-dashed: #D0C6B4; --c-track: #D8CFBE;
+    --c-progress-track: #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42); --c-glass: rgba(255, 255, 255, 0.74);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #5E8B4E; --c-success-bg: #E9F1E8; --c-success-text: #3F7A4F;
+    --c-warning: #C9923E; --c-warning-bg: #FBEFE0; --c-warning-text: #8A6A28;
+    --c-danger: #B4452F; --c-danger-bg: #FBF1EC; --c-danger-text: #B4452F; --c-danger-border: #F5C6BF;
+    --c-info: #3E7CA6; --c-info-bg: #E7EFF5;
+    --shadow-focus: 0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-selected: 0 0 0 3px var(--c-accent-light);
+    --shadow-modal: 0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet: 0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    --shadow-press: inset 0 1px 3px rgba(60, 50, 35, 0.12);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    /* Обвязка макета (не продукт) */
+    --doc-bg: #E9E4DA; --doc-card: #FBF8F2; --doc-line: #E0D7C8; --doc-text: #39332B; --doc-muted: #756B5E;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18; --c-bg-panel: #272320; --c-bg-card: #2E2A25; --c-bg-white: #2E2A25;
+    --c-bg-selected: #38332D; --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1; --c-text-primary: #EDE6DB; --c-text-secondary: #B3A897; --c-text-muted: #8A8072;
+    --c-on-accent: #201C18; --c-on-dark: #FFFFFF;
+    --c-accent: #E38A6A; --c-accent-light: #3A2E27; --c-accent-muted: #4A362C; --c-accent-soft: #9A5E48;
+    --c-border: #3D3830; --c-border-light: #34302A; --c-divider: #454037; --c-dashed: #4A443B; --c-track: #453F37;
+    --c-progress-track: #5C544A;
+    --c-overlay: rgba(0, 0, 0, 0.62); --c-glass: rgba(46, 42, 37, 0.74);
+    --c-media-scrim: rgba(0, 0, 0, 0.55);
+    --c-success: #7CB86A; --c-success-bg: #232E20; --c-success-text: #8FCB79;
+    --c-warning: #E0AC5A; --c-warning-bg: #322717; --c-warning-text: #E7B96E;
+    --c-danger: #E8785E; --c-danger-bg: #331F1B; --c-danger-text: #EE8A72; --c-danger-border: #5A302A;
+    --c-info: #5FA0CC; --c-info-bg: #1E2A33;
+    --shadow-focus: 0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-selected: 0 0 0 3px var(--c-accent-light);
+    --shadow-modal: 0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-sheet: 0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --shadow-press: inset 0 1px 4px rgba(0, 0, 0, 0.38);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+    --doc-bg: #171411; --doc-card: #24201C; --doc-line: #3D3830; --doc-text: #EDE6DB; --doc-muted: #B3A897;
+  }
+  :root {
+    /* FS */ --fs-xs: 11px; --fs-sm: 12px; --fs-base: 13px; --fs-md: 14px; --fs-lg: 16px; --fs-h2: 22px;
+    /* SP */ --sp-xxs: 2px; --sp-xs: 4px; --sp-sm: 8px; --sp-md: 12px; --sp-lg: 16px; --sp-xl: 24px;
+    /* R  */ --r-sm: 6px; --r-md: 8px; --r-lg: 10px; --r-xl: 12px; --r-xxl: 14px; --r-modal: 20px; --r-sheet: 22px; --r-max: 999px;
+    /* MODAL_W */ --modal-wide: 720px;
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; padding: 16px 16px 60px; background: var(--doc-bg); color: var(--doc-text);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: var(--fs-base); }
+  button { font: inherit; color: inherit; }
+  svg.i { width: 16px; height: 16px; flex: 0 0 auto; stroke: currentColor; fill: none; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+  svg.i.xs { width: 12px; height: 12px; }
+
+  /* ── Обвязка макета (не продукт) ── */
+  .doc-wrap { max-width: 1500px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 24px; margin: 0 0 6px; line-height: 1.25; }
+  p.lead { color: var(--doc-muted); margin: 0 0 10px; max-width: 980px; line-height: 1.55; }
+  .demo { position: sticky; top: 0; z-index: 90; background: var(--doc-bg); padding: 8px 0 10px; display: flex; flex-direction: column; gap: 6px; }
+  @media (max-width: 700px) { .demo { position: static; } }
+  .demo .row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .demo .lbl { font-size: 11px; color: var(--doc-muted); margin-right: 4px; min-width: 72px; }
+  .tbtn { font-size: 12px; cursor: pointer; border: 1px solid var(--doc-line); background: var(--doc-card); border-radius: 10px; padding: 4px 9px; color: var(--doc-text); }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+  .boards { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+  .board { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  .board > .cap { font-size: 12px; color: var(--doc-muted); }
+  .board > .cap b { color: var(--doc-text); }
+  .theme-box { background: var(--c-bg-main); padding: 14px; border-radius: 14px; border: 1px solid var(--doc-line); }
+  .dcard { background: var(--doc-card); border: 1px solid var(--doc-line); border-radius: 12px; padding: 10px 14px; line-height: 1.5; font-size: 12.5px; max-width: 980px; margin: 0 0 14px; }
+  .dcard h3 { margin: 0 0 4px; font-size: 14px; }
+  .dcard ul { margin: 4px 0 0; padding-left: 18px; }
+  .dcard code { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 11.5px; }
+  .gallery { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; }
+  body.hit .fbox::after, body.hit .fnum::before { outline: 1px dashed var(--c-info); }
+
+  /* ── Кнопки (ui/Button, ui/IconButton) ── */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: var(--sp-xs); height: 32px; padding: 0 var(--sp-md);
+    border-radius: var(--r-md); border: 1px solid transparent; cursor: pointer; font-size: var(--fs-base); font-weight: 600; white-space: nowrap; background: none; color: var(--c-text-primary); }
+  .btn:focus-visible, .ibtn:focus-visible, .crow:focus-visible, .ctile:focus-visible, .fbox:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .btn.primary { background: var(--c-accent); color: var(--c-on-accent); box-shadow: var(--shadow-button); }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.primary:active { box-shadow: var(--shadow-press); }
+  .btn.primary:disabled { background: var(--c-accent-soft); box-shadow: none; cursor: not-allowed; }
+  .btn.secondary { background: var(--c-bg-card); border-color: var(--c-border); }
+  .btn.secondary:hover, .btn.ghost:hover { background: var(--c-bg-selected); }
+  .btn.ghost { color: var(--c-text-secondary); }
+  .btn.ghostAccent { color: var(--c-accent); padding: 0 var(--sp-xs); }
+  .btn.ghostAccent:hover { background: var(--c-accent-light); }
+  .btn.xs { height: 26px; padding: 0 var(--sp-sm); font-size: var(--fs-sm); }
+  .btn.sm { height: 28px; padding: 0 var(--sp-sm); font-size: var(--fs-sm); }
+  .btn.block { width: 100%; }
+  .m .btn { min-height: 40px; } .m .btn.xs { min-height: 36px; }
+  .ibtn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; border-radius: var(--r-md); border: none; background: none; color: var(--c-text-secondary); cursor: pointer; flex: 0 0 auto; }
+  .ibtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .m .ibtn { width: 40px; height: 40px; }
+
+  /* ── Badge, MetaChip, Notice ── */
+  .badge { display: inline-flex; align-items: center; gap: var(--sp-xxs); font-size: var(--fs-xs); font-weight: 600; line-height: 1; padding: 3px var(--sp-sm); border-radius: var(--r-max); white-space: nowrap; }
+  .badge.neutral { background: var(--c-bg-inset); color: var(--c-text-secondary); }
+  .badge.accent { background: var(--c-accent-light); color: var(--c-accent); }
+  .badge.success { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .badge.info { background: var(--c-info-bg); color: var(--c-info); }
+  .mchip { display: inline-flex; align-items: center; gap: var(--sp-xs); height: 24px; padding: 0 var(--sp-sm); border-radius: var(--r-max); border: 1px solid var(--c-border); background: var(--c-bg-card); color: var(--c-text-secondary); font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; }
+  .mchip.free { border-color: transparent; background: var(--c-success-bg); color: var(--c-success-text); }
+  .notice { display: flex; gap: var(--sp-sm); align-items: flex-start; font-size: var(--fs-sm); line-height: 1.45; border-radius: var(--r-md); padding: var(--sp-sm) var(--sp-md); border: 1px solid; }
+  .notice.warning { background: var(--c-warning-bg); color: var(--c-warning-text); border-color: var(--c-warning); }
+  .notice.danger { background: var(--c-danger-bg); color: var(--c-danger-text); border-color: var(--c-danger-border); }
+  .notice.info { background: var(--c-info-bg); color: var(--c-text-primary); border-color: var(--c-info); }
+  .notice.info > svg { color: var(--c-info); }
+  .notice > svg { margin-top: 1px; }
+  .m .notice .btn { white-space: normal; height: auto; min-height: 40px; padding-top: var(--sp-xs); padding-bottom: var(--sp-xs); text-align: left; }
+  .notice .body { display: flex; flex-direction: column; gap: var(--sp-xs); align-items: flex-start; min-width: 0; }
+  .hint { font-size: var(--fs-sm); color: var(--c-text-muted); line-height: 1.45; }
+  .stitle { font-size: var(--fs-base); font-weight: 600; color: var(--c-text-heading); }
+  .meta { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .spin { width: 14px; height: 14px; border-radius: var(--r-max); border: 2px solid var(--c-progress-track); border-top-color: var(--c-accent); animation: spin .9s linear infinite; flex: 0 0 auto; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+  .skel { background: var(--c-bg-inset); border-radius: var(--r-md); }
+
+  /* ── Картинка версии с рамками лиц (новое: FaceOverlay, по образцу CropOverlay) ── */
+  .pic { position: relative; width: 100%; aspect-ratio: 4 / 3; border-radius: var(--r-md); overflow: visible; }
+  .pic > svg.scene { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: var(--r-md); display: block; }
+  .pic .busy { position: absolute; inset: 0; border-radius: var(--r-md); background: var(--c-overlay); display: flex; align-items: center; justify-content: center; padding: var(--sp-md); }
+  .pic .busy .pill { display: inline-flex; align-items: center; gap: var(--sp-sm); max-width: 100%; padding: var(--sp-sm) var(--sp-md); border-radius: var(--r-lg); background: var(--c-glass); color: var(--c-text-primary); font-size: var(--fs-sm); font-weight: 600; line-height: 1.4; box-shadow: var(--shadow-card); }
+  /* Рамка лица: белая линия + тёмный ореол — видна на любой фотографии; от темы не зависит */
+  .fbox { position: absolute; border: 2px solid var(--c-on-dark); border-radius: var(--r-md); background: none; padding: 0; cursor: pointer;
+    box-shadow: 0 0 0 1px var(--c-media-scrim), inset 0 0 0 1px var(--c-media-scrim); }
+  .fbox::after { content: ''; position: absolute; left: 50%; top: 50%; width: max(100%, 32px); height: max(100%, 32px); transform: translate(-50%, -50%); }
+  .m .fbox::after { width: max(100%, 44px); height: max(100%, 44px); } /* touch: зона касания ≥ 44 */
+  .fbox:hover { border-color: var(--c-accent-soft); }
+  .fbox.sel { border: 3px solid var(--c-accent); box-shadow: 0 0 0 1px var(--c-media-scrim), 0 0 0 4px var(--c-accent-muted); }
+  .fbox.dim { opacity: .65; }
+  .fbox.small { border-style: dashed; cursor: not-allowed; opacity: .85; }
+  .fbox.small:hover { border-color: var(--c-on-dark); }
+  .fbox.small.tapped { border-color: var(--c-warning); opacity: 1; }
+  .fbox.err { border-color: var(--c-danger); }
+  /* Номер-бейдж: снаружи левого верхнего угла; на мобиле — увеличенная зона касания 44×44 */
+  .fnum { position: absolute; left: -2px; top: -2px; transform: translate(-45%, -45%); min-width: 22px; height: 22px; padding: 0 var(--sp-xs);
+    border-radius: var(--r-max); background: var(--c-media-scrim); color: var(--c-on-dark); border: 1px solid var(--c-on-dark);
+    font-size: var(--fs-xs); font-weight: 700; display: inline-flex; align-items: center; justify-content: center; line-height: 1; pointer-events: none; }
+  .m .fnum { min-width: 24px; height: 24px; font-size: var(--fs-sm); }
+  .fnum::before { content: ''; position: absolute; inset: -10px; border-radius: var(--r-max); }
+  .fbox.sel .fnum { background: var(--c-accent); color: var(--c-on-accent); border-color: var(--c-accent); }
+  .fbox.small .fnum { border-style: dashed; }
+  .fbox.small.tapped .fnum { background: var(--c-warning); color: var(--c-on-accent); border-color: var(--c-warning); }
+  .fbox.err .fnum { background: var(--c-danger); border-color: var(--c-danger); }
+  /* Содержимое фотографии (не UI): плоские фигуры из тонов темы */
+  .sc-sky { fill: var(--c-info-bg); } .sc-ground { fill: var(--c-success-bg); } .sc-sun { fill: var(--c-warning-bg); }
+  .sc-hill { fill: var(--c-bg-inset); } .sc-face { fill: var(--c-accent-muted); } .sc-hair { fill: var(--c-text-secondary); }
+  .sc-b0 { fill: var(--c-accent-soft); } .sc-b1 { fill: var(--c-info); opacity: .55; } .sc-b2 { fill: var(--c-text-muted); } .sc-b3 { fill: var(--c-success); opacity: .6; }
+
+  /* ── Плашка режима (по образцу CropBar) ── */
+  .bar { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-sm) var(--sp-md); background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+    border-radius: var(--r-lg); box-shadow: var(--shadow-card); font-size: var(--fs-sm); color: var(--c-text-primary); line-height: 1.4; min-width: 0; }
+  .bar .txt { flex: 1; min-width: 0; }
+  .bar > svg { color: var(--c-accent); }
+
+  /* ── Выбор персонажа: список (десктоп) и плитки (мобила / вариант B) ── */
+  .clist { display: flex; flex-direction: column; gap: var(--sp-xxs); }
+  .crow { display: flex; align-items: center; gap: var(--sp-sm); min-height: 44px; padding: var(--sp-xs) var(--sp-sm); border-radius: var(--r-md); border: 1px solid transparent; background: none; cursor: pointer; text-align: left; width: 100%; color: var(--c-text-primary); }
+  .crow:hover { background: var(--c-bg-selected); }
+  .crow.on { background: var(--c-accent-light); border-color: var(--c-accent); }
+  .crow .nm { flex: 1; min-width: 0; font-size: var(--fs-base); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .crow .radio { width: 16px; height: 16px; border-radius: var(--r-max); border: 1.5px solid var(--c-dashed); flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; }
+  .crow.on .radio { border-color: var(--c-accent); background: var(--c-accent); color: var(--c-on-accent); }
+  .ctiles { display: flex; gap: var(--sp-sm); overflow-x: auto; padding: var(--sp-xxs) var(--sp-xxs) var(--sp-xs); scrollbar-width: thin; }
+  .ctile { flex: 0 0 72px; display: flex; flex-direction: column; align-items: center; gap: var(--sp-xs); padding: var(--sp-xs) var(--sp-xxs); border-radius: var(--r-lg); border: 1px solid transparent; background: none; cursor: pointer; color: var(--c-text-primary); min-height: 84px; }
+  .ctile:hover { background: var(--c-bg-selected); }
+  .ctile.on { background: var(--c-accent-light); border-color: var(--c-accent); }
+  .ctile .nm { font-size: var(--fs-xs); font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ctile .ctx { font-size: var(--fs-xs); color: var(--c-text-muted); line-height: 1; }
+  .off { opacity: .5; pointer-events: none; }
+  .av { position: relative; width: 32px; height: 32px; flex: 0 0 32px; border-radius: var(--r-max); border: 1px solid var(--c-border); overflow: hidden; color: var(--c-text-muted); }
+  .av.lg { width: 44px; height: 44px; flex-basis: 44px; }
+  .av::after { content: ''; position: absolute; inset: 18% 20% 0; border-radius: 50% 50% 0 0;
+    background: radial-gradient(circle at 50% 28%, currentColor 0 22%, transparent 23%), radial-gradient(ellipse at 50% 100%, currentColor 0 48%, transparent 49%); opacity: .5; }
+  .av.t1 { background: var(--c-accent-light); } .av.t2 { background: var(--c-info-bg); } .av.t3 { background: var(--c-success-bg); } .av.t4 { background: var(--c-warning-bg); }
+  .ctile.on .av, .crow.on .av { box-shadow: 0 0 0 2px var(--c-accent); }
+
+  /* ── Подвал запуска ── */
+  .foot { display: flex; align-items: center; gap: var(--sp-sm); flex-wrap: wrap; }
+  .foot .sp { flex: 1; }
+
+  /* ── Вариант A: редактор (Modal fullscreen) ── */
+  .ed { display: flex; flex-direction: column; background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); overflow: hidden; color: var(--c-text-primary); }
+  .ed.d { width: 940px; height: 620px; }
+  .ed.m { width: 320px; height: 660px; border-radius: 0; }
+  .ed-head { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-md) var(--sp-lg); border-bottom: 1px solid var(--c-border-light); flex: 0 0 auto; }
+  .m .ed-head { padding: var(--sp-xs) var(--sp-xs) var(--sp-xs) var(--sp-md); }
+  .ed-head .t { font-family: 'PT Serif', Georgia, serif; font-size: var(--fs-lg); color: var(--c-text-heading); font-weight: 700; }
+  .ed-head .s { font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .ed-body { flex: 1; min-height: 0; display: flex; }
+  .ed.m .ed-body { flex-direction: column; }
+  .ed-canvas { flex: 1; min-width: 0; background: var(--c-bg-inset); display: flex; flex-direction: column; align-items: center; gap: var(--sp-md); padding: var(--sp-lg) var(--sp-xl); overflow: hidden; }
+  .ed.m .ed-canvas { flex: 0 0 auto; padding: var(--sp-sm) var(--sp-md) var(--sp-md); gap: var(--sp-sm); }
+  .ed-canvas .pic { width: 520px; max-width: 100%; }
+  .ed-canvas .bar { width: 520px; max-width: 100%; }
+  .ed-side { width: 310px; flex: 0 0 auto; border-left: 1px solid var(--c-border-light); display: flex; flex-direction: column; background: var(--c-bg-main); }
+  .ed.m .ed-side { width: 100%; border-left: none; flex: 1; min-height: 0; }
+  .ed-side .scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-lg); display: flex; flex-direction: column; gap: var(--sp-md); }
+  .ed.m .ed-side .scroll { padding: var(--sp-md); }
+  .ed-side .foot { flex: 0 0 auto; border-top: 1px solid var(--c-border-light); padding: var(--sp-md) var(--sp-lg); background: var(--c-bg-panel); }
+  .ed.m .ed-side .foot { padding: var(--sp-sm) var(--sp-md); box-shadow: var(--shadow-sheet); flex-wrap: nowrap; }
+  .ed.m .ed-side .foot .btn.primary { flex: 1; }
+  .sec-h { display: flex; align-items: baseline; gap: var(--sp-sm); }
+  .sec-h .meta { margin-left: auto; }
+
+  /* ── Вариант B: в карточке версии в ленте ── */
+  .feed { display: flex; flex-direction: column; gap: var(--sp-md); }
+  .feed.d { width: 560px; } .feed.m { width: 320px; padding: 0 var(--sp-md); }
+  .vcard { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-card); padding: var(--sp-md); display: flex; flex-direction: column; gap: var(--sp-sm); min-width: 0; color: var(--c-text-primary); position: relative; }
+  .vcard.cur { border-color: var(--c-accent-muted); }
+  .vhead { display: flex; align-items: center; gap: var(--sp-xs); min-width: 0; flex-wrap: wrap; }
+  .vhead .nm { font-size: var(--fs-sm); font-weight: 600; color: var(--c-text-heading); flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vact { display: flex; gap: var(--sp-xs); flex-wrap: wrap; align-items: center; }
+  .vact .push { margin-left: auto; display: inline-flex; gap: var(--sp-xxs); position: relative; }
+  .swap { border-top: 1px solid var(--c-divider); padding-top: var(--sp-sm); display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .menu { position: absolute; right: 0; bottom: calc(100% + 4px); min-width: 210px; background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-lg); box-shadow: var(--shadow-dropdown); padding: var(--sp-xs); z-index: 5; }
+  .menu .it { display: flex; align-items: center; gap: var(--sp-sm); width: 100%; min-height: 32px; padding: 0 var(--sp-sm); border: none; background: none; border-radius: var(--r-md); cursor: pointer; font-size: var(--fs-base); color: var(--c-text-primary); text-align: left; }
+  .m .menu .it { min-height: 44px; }
+  .menu .it:hover, .menu .it.hl { background: var(--c-bg-selected); }
+  .menu .it .new { margin-left: auto; }
+  .run { display: flex; align-items: baseline; gap: var(--sp-xs); flex-wrap: wrap; font-size: var(--fs-sm); color: var(--c-text-secondary); }
+  .run b { color: var(--c-text-heading); }
+
+  /* ── Вариант C: отдельное окно-мастер (Modal wide / шторка) ── */
+  .dlg { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: var(--r-modal); box-shadow: var(--shadow-modal); display: flex; flex-direction: column; overflow: hidden; color: var(--c-text-primary); }
+  .dlg.d { width: var(--modal-wide); }
+  .dlg.m { width: 320px; border-radius: var(--r-sheet) var(--r-sheet) 0 0; box-shadow: var(--shadow-sheet); }
+  .dlg.m::before { content: ''; display: block; width: 36px; height: 4px; border-radius: var(--r-max); background: var(--c-divider); margin: var(--sp-sm) auto 0; }
+  .dlg-head { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-md) var(--sp-lg); }
+  .dlg-head .t { font-family: 'PT Serif', Georgia, serif; font-size: var(--fs-lg); font-weight: 700; color: var(--c-text-heading); flex: 1; }
+  .dlg-body { display: flex; gap: var(--sp-lg); padding: 0 var(--sp-lg) var(--sp-lg); }
+  .dlg.m .dlg-body { flex-direction: column; padding: 0 var(--sp-md) var(--sp-md); gap: var(--sp-md); }
+  .dlg-body .left { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--sp-sm); }
+  .dlg-body .right { width: 240px; flex: 0 0 auto; display: flex; flex-direction: column; gap: var(--sp-md); }
+  .dlg.m .dlg-body .right { width: auto; }
+  .dlg-foot { display: flex; align-items: center; gap: var(--sp-sm); padding: var(--sp-md) var(--sp-lg); border-top: 1px solid var(--c-border-light); background: var(--c-bg-panel); }
+  .dlg.m .dlg-foot { padding: var(--sp-sm) var(--sp-md); flex-wrap: wrap; }
+  .dlg.m .dlg-foot .btn.primary { flex: 1; }
+  .steps { display: flex; gap: var(--sp-xs); align-items: center; font-size: var(--fs-xs); color: var(--c-text-muted); }
+  .steps .on { color: var(--c-accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="doc-wrap">
+  <h1 class="doc">«Подставить персонажа» на лицо</h1>
+  <p class="lead">Человек собрал сцену, а у второго человека на картинке «не то» лицо: тап по рамке лица → выбор персонажа → «Подставить». Остальная картинка не меняется.
+    Три варианта, где живёт выбор: <b>A — в редакторе, как обрезка (рекомендую)</b>, B — прямо в карточке версии в ленте, C — отдельное окно-мастер.
+    Предложение и спецификация для Киры — <code>character-face-swap-proposal.md</code>.</p>
+
+  <div class="demo" id="demo">
+    <div class="row"><span class="lbl">Вариант</span><span id="ctl-variant"></span></div>
+    <div class="row"><span class="lbl">Тема</span><span id="ctl-theme"></span><span class="lbl" style="margin-left:12px">Ширина</span><span id="ctl-width"></span>
+      <span class="lbl" style="margin-left:12px">Отладка</span><button class="tbtn" id="ctl-hit" aria-pressed="false">Зоны касания</button></div>
+    <div class="row"><span class="lbl">Состояние</span><span id="ctl-state"></span></div>
+  </div>
+
+  <div class="dcard" id="note"></div>
+  <div id="out"></div>
+</div>
+
+<script>
+// ───────────── Иконки (lucide, обводка 1.75) ─────────────
+const ICONS = {
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01M15 9h.01"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
+  brush: '<path d="m9.06 11.9 8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/><path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-2.5 1.52-2 2.02 1.08 1.1 2.49 2.02 4 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3-3.02z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  spark: '<path d="M12 3l1.9 5.8L20 10.7l-5.8 1.9L12 18.5l-1.9-5.9L4 10.7l6.1-1.9z"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2"/>',
+  redo: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
+  expand: '<path d="m21 21-6-6m6 6v-4.8m0 4.8h-4.8M3 16.2V21m0 0h4.8M3 21l6-6M21 7.8V3m0 0h-4.8M21 3l-6 6M3 7.8V3m0 0h4.8M3 3l6 6"/>',
+  save: '<path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7M7 3v4a1 1 0 0 0 1 1h7"/>',
+  target: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>',
+  back: '<path d="m15 18-6-6 6-6"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]}</svg>`;
+
+// ───────────── Сцены: лица в долях картинки (x, y, w, h), как отдаёт сервер ─────────────
+const SCENES = {
+  two:   [{ x: .20, y: .20, w: .13, h: .19 }, { x: .60, y: .16, w: .15, h: .21 }],
+  small: [{ x: .20, y: .20, w: .13, h: .19 }, { x: .60, y: .16, w: .15, h: .21 }, { x: .86, y: .42, w: .045, h: .06, small: true }],
+  one:   [{ x: .42, y: .14, w: .18, h: .26 }],
+  none:  [],
+  close: [{ x: .12, y: .22, w: .12, h: .17 }, { x: .49, y: .2, w: .12, h: .17 }, { x: .605, y: .215, w: .12, h: .17 }],
+  changed: [{ x: .14, y: .22, w: .13, h: .19 }, { x: .64, y: .18, w: .14, h: .2 }],
+  // 11 человек: показываем 8 самых крупных, мелкие 3 — без рамок (на картинке они есть)
+  crowd: [
+    [.04, .30, .08, .11], [.14, .18, .10, .14], [.26, .32, .07, .10], [.35, .20, .09, .13], [.46, .36, .06, .08], [.54, .17, .10, .14],
+    [.66, .30, .08, .11], [.76, .19, .09, .13], [.87, .31, .08, .11], [.40, .47, .05, .07], [.93, .55, .05, .07],
+  ].map(([x, y, w, h]) => ({ x, y, w, h })),
+};
+const CROWD_SHOWN = SCENES.crowd.slice().sort((a, b) => b.w * b.h - a.w * a.h).slice(0, 8);
+
+function sceneSvg(faces, extraPeople = []) {
+  const people = faces.concat(extraPeople);
+  const figs = people.map((f, i) => {
+    const cx = (f.x + f.w / 2) * 400, cy = (f.y + f.h / 2) * 300, r = Math.min(f.w * 400, f.h * 300) * 0.42;
+    const bw = r * 2.7, top = cy + r * 0.95;
+    return `<path class="sc-b${i % 4}" d="M${cx - bw / 2} 300 L${cx - bw / 2} ${top + r * .9} Q${cx - bw / 2} ${top} ${cx} ${top} Q${cx + bw / 2} ${top} ${cx + bw / 2} ${top + r * .9} L${cx + bw / 2} 300 Z"/>
+      <circle class="sc-hair" cx="${cx}" cy="${cy - r * .12}" r="${r * 1.04}"/><circle class="sc-face" cx="${cx}" cy="${cy + r * .06}" r="${r * .92}"/>`;
+  }).join('');
+  return `<svg class="scene" viewBox="0 0 400 300" preserveAspectRatio="none" aria-hidden="true">
+    <rect class="sc-sky" width="400" height="300"/><circle class="sc-sun" cx="330" cy="58" r="30"/>
+    <path class="sc-hill" d="M0 170 Q90 120 180 160 T400 150 V300 H0Z"/><rect class="sc-ground" y="200" width="400" height="100"/>${figs}</svg>`;
+}
+
+// ───────────── Персонажи проекта ─────────────
+const CHARS = [
+  { id: 'andrey', name: 'Андрей', tone: 't2', ctx: true },
+  { id: 'marina', name: 'Марина', tone: 't1' },
+  { id: 'oleg', name: 'Олег', tone: 't3' },
+  { id: 'sonya', name: 'Соня', tone: 't4' },
+];
+
+// ───────────── Тексты (Софья — дословно) ─────────────
+const T = {
+  action: 'Подставить персонажа',
+  search: 'Ищу лица на картинке…',
+  queue: 'Видеокарта занята другой задачей — найду лица, как только освободится',
+  none: 'Лиц не нашлось. Закрасьте лицо кистью — и выберите персонажа',
+  brush: 'Закрасить кистью',
+  one: 'Нашёлся один человек. Выберите, чьё лицо подставить',
+  many: 'Нажмите на лицо, на которое нужно подставить персонажа',
+  pickTitle: 'Чьё лицо подставить?',
+  pickHint: 'Персонаж из строки контекста сам не подставляется: он обычно уже есть на картинке',
+  over8: 'Показаны 8 самых крупных лиц',
+  small: 'Лицо слишком мелкое — персонаж получится непохожим. Закрасьте его кистью или увеличьте картинку',
+  close: 'Лица стоят слишком близко — закрасьте нужное кистью',
+  busy: 'Видеокарта занята долгой задачей. Попробуйте чуть позже',
+  provider: 'Подставлять персонажа можно только локальными моделями',
+  useLocal: 'Использовать локальные для этого запуска',
+  changed: 'Картинка изменилась — лица найдены заново',
+  go: 'Подставить',
+  quote: 'бесплатно · ~1 мин',
+  caption: (name, n) => `${name} → лицо ${n}`,
+};
+
+// ───────────── Состояния ─────────────
+// face — номер выбранного лица (1…), char — id персонажа, notices — плашки над списком
+const STATES = [
+  { id: 's0', n: '0', title: 'Вход: действие в меню «⋯» карточки версии', feed: 'entry',
+    note: 'Действие — пункт меню «⋯» в ряду действий карточки версии (в карточке меню пока нет: «⋯» появляется вместе с этим пунктом; «Скачать» остаётся отдельной иконкой). Только в проекте, только если есть персонажи и локальные модели доступны; за флагом <code>character-face-swap</code>. В варианте A пункт открывает редактор этой версии сразу в режиме «Подставить»; в B — разворачивает блок под картинкой карточки; в C — открывает окно.' },
+  { id: 's1', n: '1', title: 'Ищем лица', scene: 'two', searching: 'search', listOff: true,
+    note: 'Картинка под затемнением <code>C.overlay</code>, в центре плашка <code>C.glass</code> со спиннером. Список персонажей уже виден, но недоступен — человек может прицелиться заранее. «Подставить» неактивна. Обычно 1–3 с.' },
+  { id: 's1q', n: '1б', title: 'Ищем лица — видеокарта в очереди', scene: 'two', searching: 'queue', listOff: true,
+    note: 'Тот же экран, вместо спиннера — значок часов: ждём очереди видеокарты. Отмена — та же «Отмена» плашки режима (выйти из режима).' },
+  { id: 's2', n: '2', title: 'Лиц не нашлось', scene: 'none', noFaces: true,
+    notices: [{ tone: 'info', icon: 'info', text: T.none, action: { label: T.brush, icon: 'brush', kind: 'ghostAccent' } }],
+    note: '«Закрасить кистью» включает обычную кисть редактора (раздел «Пометки»); список персонажей остаётся, «Подставить» станет доступна, как только есть закрашенная область. Кисть — запасной путь и для состояний 6 и 7.' },
+  { id: 's3', n: '3', title: 'Одно лицо — выбрано сразу', scene: 'one', face: 1, bar: T.one,
+    note: 'Единственное лицо выделено автоматически: дальше 2 клика — персонаж и «Подставить». Персонаж по умолчанию не выбран.' },
+  { id: 's4a', n: '4а', title: 'Несколько лиц — ни одно не выбрано', scene: 'two', bar: T.many, listOff: true,
+    note: 'Рамки — белая линия 2px <code>C.onDark</code> с ореолом <code>C.mediaScrim</code> (видна на любой фотографии, от темы не зависит). Номера слева направо — как у агента.' },
+  { id: 's4b', n: '4б', title: 'Несколько лиц — выбрано лицо 2', scene: 'two', face: 2, bar: T.many,
+    note: 'Выбранная рамка — 3px <code>C.accent</code> + кольцо <code>C.accentMuted</code>, бейдж залит <code>C.accent</code>; остальные приглушены (opacity .65), но кликабельны — можно перевыбрать. Список стал доступен.' },
+  { id: 's4c', n: '4в', title: 'Выбран персонаж — готово к запуску', scene: 'two', face: 2, char: 'marina', bar: T.many, ready: true,
+    note: 'Кнопка «Подставить» активна, рядом чип котировки «бесплатно · ~1 мин» (<code>MetaChip</code>, тон success).' },
+  { id: 's5', n: '5', title: 'Больше 8 лиц', scene: 'crowd', bar: T.many, listOff: true,
+    notices: [{ tone: 'info', icon: 'info', text: T.over8 }],
+    note: 'Из 11 человек рамки только у 8 самых крупных; нумерация слева направо среди показанных.' },
+  { id: 's6', n: '6', title: 'Мелкое лицо', scene: 'small', bar: T.many, tappedSmall: 3, listOff: true,
+    notices: [{ tone: 'warning', icon: 'alert', text: T.small, action: { label: T.brush, icon: 'brush', kind: 'ghostAccent' } }],
+    note: 'Лицо короче 64 px по короткой стороне: рамка пунктиром, выбрать нельзя. Тап/клик по ней не выбирает, а подсвечивает рамку <code>C.warning</code> и показывает плашку. На десктопе та же фраза — в title при наведении. На мобиле зона касания бейджа и рамки ≥ 44 px (включите «Зоны касания»).' },
+  { id: 's7', n: '7', title: 'Отказ: лица слишком близко', scene: 'close', face: 2, char: 'marina', errFaces: [2, 3], goOff: true, bar: T.many,
+    notices: [{ tone: 'danger', icon: 'alert', text: T.close, action: { label: T.brush, icon: 'brush', kind: 'ghostAccent' } }],
+    note: 'Ответ сервера после «Подставить». Рамки 2 и 3 — <code>C.danger</code>. «Подставить» неактивна, пока выбор не изменится; путь — кисть.' },
+  { id: 's8', n: '8', title: 'Видеокарта занята долгой задачей', scene: 'two', face: 2, char: 'marina', bar: T.many,
+    notices: [{ tone: 'danger', icon: 'clock', text: T.busy }],
+    note: 'Выбор лица и персонажа сохраняется — повторить можно той же кнопкой «Подставить», без нового выбора.' },
+  { id: 's9', n: '9', title: 'Провайдер — не «Локальные модели»', scene: 'two', face: 2, char: 'marina', provider: 'fal', bar: T.many,
+    notices: [{ tone: 'warning', icon: 'cpu', text: T.provider, action: { label: T.useLocal, icon: 'cpu', kind: 'secondary' } }],
+    note: 'Тихой подмены нет: кнопка «Подставить» неактивна, чипа котировки нет. Кнопка в плашке переключает исполнителя только для этого запуска — выбор в строке контекста не трогаем.' },
+  { id: 's9b', n: '9б', title: 'Локальные — только для этого запуска', scene: 'two', face: 2, char: 'marina', provider: 'once', ready: true, bar: T.many,
+    note: 'После нажатия плашка сменяется бейджем «Локальные модели · этот запуск» в подвале, «Подставить» и чип доступны. Строка контекста остаётся с прежним исполнителем.' },
+  { id: 's10', n: '10', title: 'Картинка изменилась — рамки обновились', scene: 'changed', char: 'marina', bar: T.many,
+    notices: [{ tone: 'info', icon: 'redo', text: T.changed }],
+    note: '409 <code>faces_changed</code>: рамки перерисованы, выбор лица сброшен (номера могли поменяться), выбранный персонаж остаётся.' },
+  { id: 's11', n: '11', title: 'В проекте нет персонажей', feed: 'nochars',
+    note: 'Пункта «Подставить персонажа» в меню нет вовсе (как и в личной области и без локальных моделей) — пустое меню не рисуем, «⋯» тоже. Объяснять отсутствие действия не предлагаю: оно появится, как только в проекте заведён персонаж. Вопрос команде — в proposal.md.' },
+  { id: 's12', n: '12', title: 'Карточка запуска в ленте', feed: 'launch',
+    note: 'Строка запуска «Правка версии 2 · {Имя} → лицо {n}», после — обычная карточка версии с подписью «Марина → лицо 2 · сходство 0,81 · локальные модели».' },
+];
+
+// ───────────── Настройки демо ─────────────
+const st = { variant: 'A', theme: 'light', width: 'd', state: 's4c', all: false };
+const VARIANTS = { A: 'A · в редакторе (реком.)', B: 'B · в карточке ленты', C: 'C · окно-мастер' };
+
+function seg(id, opts, key) {
+  document.getElementById(id).innerHTML = opts.map(([v, l]) =>
+    `<button class="tbtn" data-k="${key}" data-v="${v}" aria-pressed="${String(st[key]) === String(v)}">${l}</button>`).join(' ');
+}
+function controls() {
+  seg('ctl-variant', Object.entries(VARIANTS), 'variant');
+  seg('ctl-theme', [['light', 'Светлая'], ['dark', 'Тёмная'], ['both', 'Обе рядом']], 'theme');
+  seg('ctl-width', [['d', 'Десктоп'], ['m', 'Мобила 320'], ['both', 'Обе']], 'width');
+  seg('ctl-state', STATES.map(s => [s.id, s.n]).concat([['all', 'Все состояния']]), 'state');
+  document.querySelectorAll('#ctl-state .tbtn').forEach(b => { const s = STATES.find(x => x.id === b.dataset.v); if (s) b.title = s.title; });
+  if (st.all) document.querySelector('#ctl-state [data-v="all"]').setAttribute('aria-pressed', 'true');
+}
+document.getElementById('demo').addEventListener('click', e => {
+  const b = e.target.closest('.tbtn'); if (!b) return;
+  if (b.id === 'ctl-hit') { const on = document.body.classList.toggle('hit'); b.setAttribute('aria-pressed', on); return; }
+  const k = b.dataset.k, v = b.dataset.v;
+  if (k === 'state') { st.all = v === 'all'; if (!st.all) st.state = v; } else st[k] = v;
+  render();
+});
+
+// ───────────── Части экрана ─────────────
+function facesOf(s) {
+  if (!s.scene) return [];
+  const list = s.scene === 'crowd' ? CROWD_SHOWN : SCENES[s.scene];
+  return list.slice().sort((a, b) => a.x - b.x);
+}
+function picture(s, m) {
+  const faces = facesOf(s);
+  const extra = s.scene === 'crowd' ? SCENES.crowd.filter(f => !CROWD_SHOWN.includes(f)) : s.scene === 'none' ? [] : [];
+  let boxes = '';
+  if (!s.searching) boxes = faces.map((f, i) => {
+    const n = i + 1, cls = ['fbox'];
+    if (f.small) cls.push('small');
+    if (s.tappedSmall === n) cls.push('tapped');
+    if (s.face === n) cls.push('sel'); else if (s.face && !f.small) cls.push('dim');
+    if (s.errFaces?.includes(n)) cls.push('err');
+    const label = f.small ? `Лицо ${n}: слишком мелкое` : `Лицо ${n}`;
+    return `<button class="${cls.join(' ')}" style="left:${f.x * 100}%;top:${f.y * 100}%;width:${f.w * 100}%;height:${f.h * 100}%"
+      aria-label="${label}" aria-pressed="${s.face === n}" ${f.small ? `aria-disabled="true" title="${T.small}"` : ''}><span class="fnum">${n}</span></button>`;
+  }).join('');
+  // В сцене «лиц нет» — пейзаж без людей лицом к камере: человек спиной (только силуэт)
+  const svg = s.scene === 'none' ? sceneSvg([], []).replace('</svg>', `<path class="sc-b2" d="M180 300 L180 236 Q180 206 200 206 Q220 206 220 236 L220 300Z"/><circle class="sc-hair" cx="200" cy="196" r="15"/></svg>`) : sceneSvg(faces, extra);
+  const busy = s.searching ? `<div class="busy"><span class="pill">${s.searching === 'queue' ? ic('clock') : '<span class="spin"></span>'}<span>${T[s.searching]}</span></span></div>` : '';
+  return `<div class="pic">${svg}${boxes}${busy}</div>`;
+}
+function notices(s) {
+  return (s.notices || []).map(n => `<div class="notice ${n.tone}" role="${n.tone === 'danger' ? 'alert' : 'status'}">${ic(n.icon)}<div class="body"><span>${n.text}</span>${n.action
+    ? `<button class="btn ${n.action.kind} sm">${ic(n.action.icon)}${n.action.label}</button>` : ''}</div></div>`).join('');
+}
+function chars(s, tiles) {
+  const off = s.listOff || s.searching ? ' off' : '';
+  const items = CHARS.map(c => tiles
+    ? `<button class="ctile${s.char === c.id ? ' on' : ''}" aria-pressed="${s.char === c.id}"><span class="av lg ${c.tone}"></span><span class="nm">${c.name}</span>${c.ctx ? '<span class="ctx">в контексте</span>' : ''}</button>`
+    : `<button class="crow${s.char === c.id ? ' on' : ''}" role="radio" aria-checked="${s.char === c.id}"><span class="av ${c.tone}"></span><span class="nm">${c.name}</span>${c.ctx ? '<span class="badge neutral">в контексте</span>' : ''}<span class="radio">${s.char === c.id ? ic('check', 'xs') : ''}</span></button>`).join('');
+  return `<div class="${off.trim()}" style="display:flex;flex-direction:column;gap:var(--sp-sm)" ${off ? 'aria-disabled="true"' : ''}>
+    <div class="stitle">${T.pickTitle}</div>
+    <div class="${tiles ? 'ctiles' : 'clist'}" role="radiogroup" aria-label="${T.pickTitle}">${items}</div>
+    <div class="hint">${T.pickHint}</div></div>`;
+}
+function canGo(s) { return !!(s.ready && !s.goOff && (!s.provider || s.provider === 'once')); }
+function footer(s, m, extra = '') {
+  const go = canGo(s) || (s.id === 's8');
+  const quote = (s.provider === 'fal') ? '' : `<span class="mchip free">${T.quote}</span>`;
+  const once = s.provider === 'once' ? `<span class="badge info">${ic('cpu', 'xs')}Локальные модели · этот запуск</span>` : '';
+  return `${extra}${once}${m ? '' : '<span class="sp"></span>'}${quote}<button class="btn primary${m ? '' : ''}" ${go ? '' : 'disabled'}>${ic('scan')}${T.go}</button>`;
+}
+
+// ───────────── Вариант A: редактор ─────────────
+function variantA(s, m) {
+  const bar = s.bar ? `<div class="bar">${ic(s.barIcon || 'scan')}<span class="txt">${s.bar}</span><button class="btn ghost xs">Отмена</button></div>`
+    : `<div class="bar">${ic('scan')}<span class="txt">${T.action}</span><button class="btn ghost xs">Отмена</button></div>`;
+  const foot = m
+    ? `<div class="foot">${s.provider === 'fal' ? '' : `<span class="mchip free">${T.quote}</span>`}<button class="btn primary" ${canGo(s) || s.id === 's8' ? '' : 'disabled'}>${ic('scan')}${T.go}</button></div>`
+    : `<div class="foot">${footer(s, false)}</div>`;
+  const side = `<div class="ed-side"><div class="scroll">
+      ${m ? '' : `<div class="sec-h"><span class="stitle">${T.action}</span><span class="meta">локальные модели</span></div>`}
+      ${notices(s)}${chars(s, m)}${m && s.provider === 'once' ? `<span class="badge info" style="align-self:flex-start">${ic('cpu', 'xs')}Локальные модели · этот запуск</span>` : ''}</div>${foot}</div>`;
+  return `<div class="ed ${m ? 'm' : 'd'}">
+    <div class="ed-head"><div style="flex:1;min-width:0"><div class="t">Редактор · Сцена у озера</div><div class="s">версия 2 · черновик · в работе</div></div><button class="ibtn" aria-label="Закрыть">${ic('x')}</button></div>
+    <div class="ed-body"><div class="ed-canvas">${bar}${picture(s, m)}</div>${side}</div></div>`;
+}
+
+// ───────────── Вариант B: в карточке версии ─────────────
+function cardHead(name = 'Сцена у озера · версия 2') {
+  return `<div class="vhead"><span class="nm">${name}</span><span class="badge accent">${ic('target', 'xs')}В работе</span><span class="badge warning">черновик</span></div>`;
+}
+function variantB(s, m) {
+  const head = s.bar ? `<div class="row" style="display:flex;gap:var(--sp-sm);align-items:flex-start;font-size:var(--fs-sm);color:var(--c-text-primary);line-height:1.4"><span style="color:var(--c-accent)">${ic(s.barIcon || 'scan')}</span><span style="flex:1">${s.bar}</span></div>` : '';
+  return `<div class="feed ${m ? 'm' : 'd'}"><div class="vcard cur">${cardHead()}${picture(s, m)}
+    <div class="swap"><div style="display:flex;align-items:center;gap:var(--sp-sm)"><span class="stitle" style="flex:1">${T.action}</span><button class="ibtn" aria-label="Закрыть">${ic('x')}</button></div>
+    ${head}${notices(s)}${chars(s, true)}<div class="foot">${footer(s, m)}</div></div></div></div>`;
+}
+
+// ───────────── Вариант C: окно-мастер ─────────────
+function variantC(s, m) {
+  const step2 = !!s.face || s.scene === 'none';
+  const left = `<div class="left">${s.bar ? `<div class="hint" style="color:var(--c-text-primary)">${s.bar}</div>` : ''}${picture(s, m)}</div>`;
+  const right = `<div class="right">${notices(s)}${chars(s, m)}</div>`;
+  const body = m ? (step2 ? `<div class="dlg-body">${notices(s)}${chars(s, true)}</div>` : `<div class="dlg-body">${left}${notices(s)}</div>`) : `<div class="dlg-body">${left}${right}</div>`;
+  const steps = m ? `<span class="steps"><span class="${step2 ? '' : 'on'}">1 · лицо</span>·<span class="${step2 ? 'on' : ''}">2 · персонаж</span></span>` : '';
+  const foot = m && !step2 ? `${steps}<span style="flex:1"></span><button class="btn primary" disabled>Дальше</button>`
+    : `${m ? `<button class="btn ghost">${ic('back')}Лицо ${s.face || ''}</button><span style="flex:1"></span>` : '<button class="btn ghost">Отмена</button><span style="flex:1"></span>'}${s.provider === 'fal' ? '' : `<span class="mchip free">${T.quote}</span>`}<button class="btn primary" ${canGo(s) || s.id === 's8' ? '' : 'disabled'}>${T.go}</button>`;
+  return `<div class="dlg ${m ? 'm' : 'd'}"><div class="dlg-head"><span class="t">${T.action}</span>${m ? '' : '<span class="meta">Сцена у озера · версия 2</span>'}<button class="ibtn" aria-label="Закрыть">${ic('x')}</button></div>
+    ${body}<div class="dlg-foot">${foot}</div></div>`;
+}
+
+// ───────────── Лента: вход, нет персонажей, карточка запуска ─────────────
+function feedEntry(m, withMenu) {
+  const actions = `<button class="btn secondary xs">${ic('expand')}Открыть</button><button class="btn secondary xs">${ic('save')}Сохранить в проект</button>
+    <span class="push"><button class="ibtn" aria-label="Скачать">${ic('download')}</button>${withMenu ? `<button class="ibtn" aria-label="Ещё" aria-expanded="true" style="background:var(--c-bg-selected)">${ic('more')}</button>
+    <div class="menu" role="menu"><button class="it hl" role="menuitem">${ic('scan')}${T.action}</button></div>` : ''}</span>`;
+  return `<div class="feed ${m ? 'm' : 'd'}"><div class="vcard">${cardHead()}${picture({ scene: 'two' }, m).replace(/<button class="fbox[\s\S]*?<\/button>/g, '')}
+    <div class="meta">вариант 1 из 2 · от версии 1 · Qwen-Image · локальные модели</div><div class="vact">${actions}</div></div></div>`;
+}
+function feedLaunch(m) {
+  const run = `<div class="vcard"><div class="run">${ic('spark')}<b>Правка версии 2</b><span>Сцена у озера · ${T.caption('Марина', 2)} · локальные модели · ~1 мин</span></div>
+    <div style="display:flex;align-items:center;gap:var(--sp-sm)" class="meta"><span class="spin"></span>Подставляем лицо…</div><div class="skel" style="aspect-ratio:4/3"></div></div>`;
+  const done = `<div class="vcard cur">${cardHead('Сцена у озера · версия 3')}${picture({ scene: 'two' }, m).replace(/<button class="fbox[\s\S]*?<\/button>/g, '')}
+    <div class="meta" title="${T.caption('Марина', 2)} · сходство 0,81 · локальные модели">${T.caption('Марина', 2)} · сходство 0,81 · локальные модели</div>
+    <div class="vact"><button class="btn secondary xs">${ic('expand')}Открыть</button><button class="btn secondary xs">${ic('save')}Сохранить в проект</button><span class="push"><button class="ibtn" aria-label="Скачать">${ic('download')}</button><button class="ibtn" aria-label="Ещё">${ic('more')}</button></span></div></div>`;
+  return `<div class="feed ${m ? 'm' : 'd'}"><div class="meta">Идёт запуск:</div>${run}<div class="meta">Готово:</div>${done}</div>`;
+}
+
+function screen(s, m) {
+  if (s.feed === 'entry') return feedEntry(m, true);
+  if (s.feed === 'nochars') return feedEntry(m, false);
+  if (s.feed === 'launch') return feedLaunch(m);
+  return st.variant === 'A' ? variantA(s, m) : st.variant === 'B' ? variantB(s, m) : variantC(s, m);
+}
+
+// ───────────── Отрисовка ─────────────
+function boards(s) {
+  const themes = st.theme === 'both' ? ['light', 'dark'] : [st.theme];
+  const widths = st.width === 'both' ? ['d', 'm'] : [st.width];
+  return themes.flatMap(t => widths.map(w => `<div class="board"><div class="cap"><b>${s.n}. ${s.title}</b> · ${t === 'light' ? 'светлая' : 'тёмная'} · ${w === 'd' ? 'десктоп' : '320 CSS px'}</div>
+    <div class="theme-box" data-theme="${t}">${screen(s, w === 'm')}</div></div>`)).join('');
+}
+function render() {
+  controls();
+  document.documentElement.dataset.theme = st.theme === 'dark' ? 'dark' : 'light';
+  const s = STATES.find(x => x.id === st.state);
+  const note = document.getElementById('note');
+  if (st.all) {
+    note.innerHTML = `<h3>Все состояния · вариант ${VARIANTS[st.variant]}</h3>Состояния 0, 11, 12 — в ленте, одинаковы для всех вариантов.`;
+    document.getElementById('out').innerHTML = `<div class="gallery">${STATES.map(boards).join('')}</div>`;
+  } else {
+    note.innerHTML = `<h3>${s.n}. ${s.title}</h3>${s.note}`;
+    document.getElementById('out').innerHTML = `<div class="boards">${boards(s)}</div>`;
+  }
+}
+// Параметры из адреса: ?v=A&theme=both&w=both&s=s4c|all
+const q = new URLSearchParams(location.search);
+if (q.get('v')) st.variant = q.get('v');
+if (q.get('theme')) st.theme = q.get('theme');
+if (q.get('w')) st.width = q.get('w');
+if (q.get('s')) { if (q.get('s') === 'all') st.all = true; else st.state = q.get('s'); }
+if (q.get('hit')) document.body.classList.add('hit');
+render();
+</script>
+</body>
+</html>

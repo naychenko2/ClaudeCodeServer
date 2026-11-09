@@ -44,6 +44,9 @@ public sealed class RemoteProcessRunner : IProcessLauncher
         "--mcp-config",
         "--system-prompt-file",
         "--append-system-prompt-file",
+        // per-run JSON сабагентов-персон: содержимое доезжает на устройство, путь —
+        // placeholder (как у остальных файловых аргументов)
+        "--agents",
     };
 
     // Серверы нашего MCP-over-HTTP: только их адреса переводятся на сайдкар
@@ -279,6 +282,11 @@ public sealed class RemoteProcessRunner : IProcessLauncher
             if (a == "--settings" || a.StartsWith("--settings=", StringComparison.Ordinal))
                 throw new NotSupportedException("--settings на устройство не передаётся");
 
+            // --plugin-dir (ADR-031 §2.5): значение — каталог, не файл, поэтому НЕ в
+            // FileArgFlags (файлы spec не материализует). В MVP на устройство не едет:
+            // локальный проект плагинов не имеет (ProjectCapabilities.PluginsFor), и
+            // ClaudeSession аргумент не формирует. Если когда-то поедет — путь хоста,
+            // которого на устройстве нет, придётся материализовать отдельно.
             args.Add(a);
             if (!FileArgFlags.Contains(a) || i + 1 >= spec.Args.Count) continue;
 

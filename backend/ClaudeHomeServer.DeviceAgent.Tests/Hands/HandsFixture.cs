@@ -30,9 +30,9 @@ internal sealed class HandsFixture : IDisposable
     /// <summary>События «мост подействовал» — тест поднимает их вместо моста.</summary>
     public InProcessHandsActivityEvents Activity { get; } = new();
 
-    public HandsRuntime Runtime(IHandsMachineLock? machineLock = null, RecordingSink? sink = null, HandsRegistry? registry = null,
+    public HandsRuntime Runtime(RecordingSink? sink = null, HandsRegistry? registry = null,
         bool browserProfiles = false, bool activityEvents = true) =>
-        new(Component, machineLock ?? new InProcessHandsMachineLock(), registry ?? new HandsRegistry(), sink,
+        new(Component, registry ?? new HandsRegistry(), sink,
             browserProfiles ? BrowserProfilesRoot : null, activityEvents ? Activity : null);
 
     /// <summary>MCP-конфиг хода, каким его шлёт сервер после санитизации.</summary>

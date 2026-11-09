@@ -34,6 +34,10 @@ public sealed class PhasePipeline
         _exitGrace = exitGrace;
     }
 
+    // Отпечатки успешных сборок — один набор на процесс, как и блокировка дерева: их пишут и
+    // прогон тестов, и инструмент build, читает прогон тестов
+    public BuildFingerprintStore Fingerprints { get; } = new();
+
     // Гейт читается на каждый прогон: Configure со старта хоста подменяет Instance
     public BuildConcurrencyGate Gate => _gate ?? BuildConcurrencyGate.Instance;
 
@@ -180,10 +184,13 @@ public sealed class PhasePipeline
     // синхронизация на вызывающем), гашение дерева по отмене/потолку. TurnId берётся из spec:
     // без метки kill docker-клиента не трогает процесс в контейнере. Сбой Start (нет
     // dotnet/node, отказ среды) уходит наверх: слот и блокировку освобождают using вызывающего
+    // started — сразу после старта (замер RSS дерева шардов по PID); его сбой фазу не роняет
     public async Task<PhaseOutcome> RunProcessAsync(IProcessLauncher launcher, ProcessSpec spec,
-        Action<string> onLine, CancellationToken limit)
+        Action<string> onLine, CancellationToken limit, Action<Process>? started = null)
     {
         using var process = launcher.Start(spec);
+        try { started?.Invoke(process); }
+        catch (Exception e) when (e is InvalidOperationException or System.ComponentModel.Win32Exception) { }
         var readers = Task.WhenAll(
             PumpAsync(process.StandardOutput, onLine),
             PumpAsync(process.StandardError, onLine));

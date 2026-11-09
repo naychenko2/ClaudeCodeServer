@@ -1,0 +1,1570 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Заметки + Вики: один раздел, навигация только в боковых панелях · v2 · прототип</title>
+<!--
+  Макет к записке notes-wiki-unified-v1.md. Код продукта не правится.
+  Привязка: featureId 05c5938f-98ae-4726-884f-d7140c91b937 (эпик «Заметки+Вики: один раздел, который ведут человек и ИИ вместе»),
+  задача дизайна 5dc008cc. Шаги реализации ещё не нарезаны (stepRef появится у Егора) — первым пойдёт «навигация в боковые панели».
+  Модель — разрез Александра (задача ef7a0732), рекомендованный вариант Б: страница — один текст, файлы пишет только Хранитель,
+  правка человека идёт через него под именем автора, у каждого утверждения есть происхождение.
+  v2 (02.11) — под принятый ADR-038: ИИ сам заменяет и оспаривает утверждения человека, постфактум — метка «заменил вашу»,
+  «Вернуть мою», прежняя формулировка в «Истории», фильтр «ИИ поменял моё» в «Журнале»; во «Входящих» — только то, что
+  автомат не смог применить сам. Секции страницы — по ADR-035 §3. В «Настройках» — блок «Ночной разбор чатов» из среза Ф2
+  (эпик 7f63f1bd, llm-wiki-v2.html, «Срез Ф2 02.11»).
+  Главное правило макета: в контентной зоне нет навигации — ни вкладок, ни «Назад», ни крошек. Дерево — левая панель,
+  «Входящие / Журнал / Здоровье / Настройки» — правая панель и её рельса (на 360 — выезжающие шторки).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 18px rgba(60,50,35,.06);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; cursor:pointer; }
+button:focus-visible, [tabindex]:focus-visible, textarea:focus-visible, input:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+input, textarea { font:inherit; color:var(--c-text-primary); }
+svg { flex-shrink:0; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.mk label { font-size:12px; color:var(--c-text-secondary); display:flex; gap:4px; align-items:center; }
+.mknote { max-width:1280px; margin:10px auto 0; padding:0 16px; font-size:12.5px; color:var(--c-text-secondary); }
+.mknote b { color:var(--c-text-heading); }
+
+/* ui/PillSwitch / SegmentedControl — только в обвязке макета */
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+
+/* ===== Окно продукта ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:1280px; flex-shrink:0; height:800px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; display:flex; gap:8px; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; padding:0; gap:0; flex-direction:column; }
+.rail { width:40px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:4px; }
+/* ui/RailIconButton */
+.rb { position:relative; width:34px; height:34px; border-radius:8px; color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; }
+.rb:hover { background:var(--c-bg-selected); }
+.rb.on { background:var(--c-bg-white); color:var(--c-accent); box-shadow:var(--shadow-thumb); }
+.rb .cnt { position:absolute; top:-3px; right:-4px; }
+.rsep { width:20px; height:1px; background:var(--c-border); margin:4px 0; }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-height:0; position:relative; }
+.left { width:280px; flex-shrink:0; }
+.right { width:330px; flex-shrink:0; }
+.center { flex:1; min-width:0; }
+
+/* Шапки островов (PanelShell / IslandHeader) */
+.ph { display:flex; align-items:center; gap:6px; height:44px; padding:0 8px 0 14px; flex-shrink:0; }
+.ph .ttl { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-right:auto; display:flex; align-items:center; gap:8px; }
+.ph .ttl.ui { font-family:inherit; font-size:13px; font-weight:600; }
+.mhead { display:flex; align-items:center; gap:4px; height:56px; padding:0 6px; border-bottom:1px solid var(--c-border); background:var(--c-bg-main); flex-shrink:0; }
+.mhead .ttl { font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; padding:0 4px; }
+
+/* ui/IconButton */
+.ib { position:relative; width:28px; height:28px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.ib.xs { width:24px; height:24px; }
+.app.m .ib { width:40px; height:40px; border-radius:10px; }
+.ib .cnt { position:absolute; top:2px; right:1px; }
+/* ui/CountBadge */
+.cnt { min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:var(--c-accent); color:var(--c-on-accent); font-size:10px; font-weight:700; line-height:16px; text-align:center; }
+.cnt.muted { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.dot { position:absolute; top:6px; right:6px; width:7px; height:7px; border-radius:50%; background:var(--c-warning); }
+/* ui/Button */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:600; white-space:nowrap; }
+.btn.xs { height:24px; padding:0 9px; font-size:12px; border-radius:8px; }
+.btn.sm { min-height:32px; padding:6px 12px; font-size:13px; border-radius:10px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(.96); }
+.btn.sec { background:var(--c-bg-panel); color:var(--c-text-primary); }
+.btn.sec:hover { background:var(--c-bg-selected); }
+.btn.gh { color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled { opacity:.5; cursor:default; filter:none; }
+.app.m .btn.sm, .app.m .btn.xs { min-height:40px; height:auto; }
+.lnk { color:var(--c-accent); font-weight:600; font-size:12px; border-radius:6px; padding:2px 4px; display:inline-flex; align-items:center; gap:4px; }
+.lnk:hover { background:var(--c-accent-light); }
+.app.m .lnk { min-height:36px; }
+
+/* ui/Field (IconField) */
+.field { display:flex; align-items:center; gap:6px; height:32px; padding:0 10px; border:1px solid var(--c-border); border-radius:10px; background:var(--c-bg-card); color:var(--c-text-muted); }
+.field input { border:0; outline:0; background:transparent; flex:1; min-width:0; font-size:13px; }
+.app.m .field { height:40px; }
+/* ui/Chip (toggle) */
+.chips { display:flex; gap:4px; flex-wrap:wrap; }
+.app.m .chips { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+.chip { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 8px; border-radius:999px; font-size:12px; color:var(--c-text-secondary); border:1px solid var(--c-border); white-space:nowrap; }
+.chip.on { background:var(--c-bg-selected); border-color:transparent; color:var(--c-text-heading); font-weight:600; }
+.chip .n { color:var(--c-text-muted); font-weight:500; }
+.app.m .chip { height:32px; padding:0 10px; }
+/* ui/IconSegmented */
+.iseg { display:inline-flex; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.iseg button { position:relative; width:30px; height:22px; border-radius:7px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; }
+.iseg button.on { background:var(--c-bg-white); box-shadow:var(--shadow-thumb); color:var(--c-text-heading); }
+.iseg .cnt { position:absolute; top:-5px; right:-5px; }
+.app.m .iseg button { width:44px; height:36px; }
+/* ui/Badge */
+.bdg { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; line-height:16px; }
+.t-neutral { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.t-info { background:var(--c-info-bg); color:var(--c-info); }
+.t-success { background:var(--c-success-bg); color:var(--c-success-text); }
+.t-warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.t-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+/* ui/Notice */
+.ntc { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:12px; font-size:13px; line-height:1.45; }
+.ntc .b { flex:1; min-width:0; }
+.ntc .tt { font-weight:600; color:var(--c-text-heading); }
+.ntc .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; align-items:center; }
+.n-info { background:var(--c-info-bg); } .n-info > svg { color:var(--c-info); }
+.n-warn { background:var(--c-warning-bg); } .n-warn > svg { color:var(--c-warning); }
+.n-dng { background:var(--c-danger-bg); border:1px solid var(--c-danger-border); } .n-dng > svg { color:var(--c-danger); }
+/* ui/Toggle */
+.tgl { width:34px; height:20px; border-radius:999px; background:var(--c-bg-selected); position:relative; flex-shrink:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:var(--c-bg-card); box-shadow:var(--shadow-thumb); }
+.tgl.on { background:var(--c-accent); } .tgl.on::after { left:16px; }
+/* ui/SidebarSection */
+.sec-h { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; padding:10px 14px 4px; display:flex; align-items:center; gap:6px; }
+
+/* ===== Значки происхождения (новый компонент OriginGlyph, ui/) ===== */
+.og { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:5px; flex-shrink:0; }
+.og.note { color:var(--c-text-muted); }
+.og.ai { color:var(--c-info); background:var(--c-info-bg); }
+.og.me { color:var(--c-text-secondary); background:var(--c-bg-selected); }
+.og.mix { color:var(--c-info); background:linear-gradient(135deg, var(--c-info-bg) 50%, var(--c-bg-selected) 50%); }
+.og.ext { color:var(--c-warning-text); background:var(--c-warning-bg); }
+
+/* ===== Дерево (левая панель) ===== */
+.tree { flex:1; overflow:auto; padding:2px 6px 10px; }
+.trow { display:flex; align-items:center; gap:7px; height:30px; padding:0 8px; border-radius:8px; color:var(--c-text-primary); font-size:13px; width:100%; text-align:left; }
+.trow:hover { background:var(--c-bg-card); }
+.trow.on { background:var(--c-bg-selected); color:var(--c-text-heading); font-weight:600; }
+.trow .nm { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.trow .mt { font-size:11px; color:var(--c-text-muted); }
+.trow.grp { font-weight:600; color:var(--c-text-secondary); font-size:12px; height:28px; }
+.trow.ind1 { padding-left:22px; } .trow.ind2 { padding-left:38px; }
+.app.m .trow { height:44px; }
+.tfoot { border-top:1px solid var(--c-border); padding:8px 14px; font-size:11px; color:var(--c-text-muted); display:flex; gap:10px; flex-wrap:wrap; }
+.tfoot span { display:inline-flex; gap:4px; align-items:center; }
+
+/* ===== Документ (центр) ===== */
+.doc { flex:1; overflow:auto; }
+.docin { max-width:680px; margin:0 auto; padding:22px 32px 48px; }
+.app.m .docin { padding:16px 16px 40px; }
+.dtitle { font-family:"PT Serif",Georgia,serif; font-size:28px; font-weight:700; color:var(--c-text-heading); line-height:1.2; margin:0; }
+.app.m .dtitle { font-size:22px; }
+.dmeta { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; font-size:12px; color:var(--c-text-secondary); }
+.dbar { display:flex; align-items:center; gap:6px; }
+.dtop { display:flex; align-items:flex-start; gap:12px; }
+.dtop .grow { flex:1; min-width:0; }
+.h2 { font-size:16px; font-weight:700; color:var(--c-text-heading); margin:22px 0 6px; display:flex; align-items:center; gap:8px; }
+.st { position:relative; padding:5px 8px 5px 30px; margin:0 -8px; border-radius:8px; color:var(--c-text-primary); font-size:14px; line-height:1.6; }
+.st > .og { position:absolute; left:6px; top:8px; width:16px; height:16px; }
+.st:hover { background:var(--c-bg-card); }
+.fn { display:inline-flex; align-items:center; justify-content:center; min-width:16px; height:16px; padding:0 4px; margin-left:3px; border-radius:5px; font-size:10px; font-weight:700; vertical-align:2px; line-height:16px; }
+.fn.ai { background:var(--c-info-bg); color:var(--c-info); }
+.fn.me { background:var(--c-bg-selected); color:var(--c-text-secondary); font-weight:600; padding:0 6px; }
+.fn.on { box-shadow:0 0 0 2px var(--c-info); }
+.fn.me.on { box-shadow:0 0 0 2px var(--c-text-secondary); }
+.app.m .fn { min-width:22px; height:22px; line-height:22px; vertical-align:0; }
+/* Карточка сноски (на десктопе — поповер по наведению/клику, на 360 — шторка) */
+.pop { position:absolute; left:30px; top:calc(100% - 2px); z-index:20; width:340px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:12px; font-size:12.5px; }
+.pop .hd { display:flex; align-items:center; gap:6px; font-weight:600; color:var(--c-text-heading); font-size:12px; }
+.pop .q { margin:8px 0; padding:6px 10px; border-left:3px solid var(--c-info); background:var(--c-bg-card); border-radius:0 8px 8px 0; color:var(--c-text-primary); font-style:italic; }
+.pop .src { color:var(--c-text-secondary); }
+.pop .acts { display:flex; gap:4px; margin-top:8px; flex-wrap:wrap; }
+/* Правки на странице */
+.st.prop { outline:1.5px dashed var(--c-info); outline-offset:-1px; }
+.st.ghost { color:var(--c-text-secondary); background:var(--c-info-bg); }
+.st .tag { font-size:11px; font-weight:600; color:var(--c-info); margin-left:6px; white-space:nowrap; }
+.free { margin-top:6px; padding:10px 12px; background:var(--c-bg-card); border-radius:10px; font-size:14px; line-height:1.6; }
+.free table { border-collapse:collapse; font-size:13px; margin-top:6px; }
+.free td, .free th { border:1px solid var(--c-border); padding:3px 8px; text-align:left; }
+.hist { margin-top:26px; padding-top:10px; border-top:1px solid var(--c-border); font-size:12px; color:var(--c-text-muted); display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+
+/* Правка */
+.ebar { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:8px; padding:8px 16px; background:var(--c-bg-white); border-bottom:1px solid var(--c-border); }
+.app.m .ebar { flex-wrap:wrap; padding:8px 12px; }
+.app.m .ebar .bdg { display:none; }
+.app.m .ebar .btn:first-of-type { margin-left:auto; }
+.ebar .s { flex:1; min-width:0; font-size:12px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.est { position:relative; display:flex; gap:8px; align-items:flex-start; margin:0 -8px; padding:4px 8px; border-radius:8px; }
+.est .og { margin-top:9px; width:16px; height:16px; }
+.est .box { flex:1; min-width:0; border:1px solid transparent; border-radius:8px; padding:5px 8px; font-size:14px; line-height:1.6; }
+.est:hover .box { border-color:var(--c-border); }
+.est.focus .box { border-color:var(--c-accent); box-shadow:var(--shadow-focus); background:var(--c-bg-card); }
+.est .ra { display:flex; gap:2px; margin-top:4px; opacity:0; }
+.est:hover .ra, .est.focus .ra, .app.m .est .ra { opacity:1; }
+.est.gone .box { color:var(--c-text-muted); text-decoration:line-through; background:var(--c-bg-card); }
+.hint { margin:4px 0 2px 32px; font-size:12px; line-height:1.45; display:flex; gap:6px; align-items:flex-start; padding:6px 10px; border-radius:8px; }
+.hint.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.hint.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.hint.mut { color:var(--c-text-muted); padding:0 10px; }
+.badlink { text-decoration:underline wavy var(--c-danger); text-underline-offset:3px; }
+.oklink { color:var(--c-accent); }
+
+/* Конфликт: трёхстороннее сравнение по разделам */
+.cf { margin-top:14px; border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.cf .cfh { display:flex; align-items:center; gap:8px; padding:8px 12px; background:var(--c-bg-card); border-bottom:1px solid var(--c-border); font-weight:600; color:var(--c-text-heading); }
+.cf .cfh .s { margin-left:auto; font-weight:500; font-size:12px; }
+.cols { display:grid; grid-template-columns:1fr 1fr 1fr; }
+.app.m .cols { grid-template-columns:1fr; }
+.col { padding:10px 12px; font-size:13px; line-height:1.55; border-right:1px solid var(--c-border-light); }
+.col:last-child { border-right:0; }
+.app.m .col { border-right:0; border-bottom:1px solid var(--c-border-light); }
+.col .cl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; margin-bottom:6px; display:flex; gap:4px; align-items:center; }
+.col.mine { background:var(--c-accent-light); }
+.add { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); border-radius:3px; padding:0 2px; }
+.rem { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); border-radius:3px; padding:0 2px; text-decoration:line-through; }
+.cf .cfa { display:flex; gap:6px; flex-wrap:wrap; padding:8px 12px; border-top:1px solid var(--c-border); }
+.cf.done .cfh { background:var(--c-success-bg); }
+
+/* Скелетон */
+.sk { background:var(--c-bg-selected); border-radius:6px; animation:pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.55; } }
+
+/* Пусто (EmptyState) */
+.empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:32px; gap:8px; }
+.empty .ic { width:56px; height:56px; border-radius:16px; background:var(--c-bg-card); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; margin-bottom:6px; }
+.empty .t { font-family:"PT Serif",Georgia,serif; font-size:18px; font-weight:700; color:var(--c-text-heading); }
+.empty .d { font-size:13px; color:var(--c-text-secondary); max-width:340px; }
+.empty .a { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; justify-content:center; }
+
+/* ===== Правая панель ===== */
+.pbody { flex:1; overflow:auto; padding:4px 10px 14px; }
+.item { border:1px solid var(--c-border); border-radius:12px; padding:10px 12px; margin-top:8px; background:var(--c-bg-white); }
+.item.on { border-color:var(--c-accent-muted); box-shadow:var(--shadow-focus); }
+.item .t { font-weight:600; color:var(--c-text-heading); display:flex; gap:6px; align-items:center; }
+.item .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.item .why { margin-top:6px; font-size:12px; color:var(--c-text-secondary); display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.op { margin-top:10px; padding-top:10px; border-top:1px solid var(--c-border-light); }
+.op .ot { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.04em; }
+.op .df { margin-top:6px; font-size:13px; line-height:1.55; }
+.op .df div { padding:4px 8px; border-radius:6px; margin-top:4px; }
+.op .df .r { background:var(--c-diff-rem-bg); color:var(--c-diff-rem-text); }
+.op .df .a { background:var(--c-diff-add-bg); color:var(--c-diff-add-text); }
+.op .q { margin-top:6px; font-size:12px; color:var(--c-text-secondary); font-style:italic; }
+.op .acts { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.jday { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; margin:14px 2px 2px; }
+.jrow { display:flex; gap:8px; padding:10px 4px; border-bottom:1px solid var(--c-border-light); }
+.jrow .tm { width:38px; flex-shrink:0; font-size:12px; color:var(--c-text-muted); padding-top:1px; }
+.jrow .b { flex:1; min-width:0; }
+.jrow .t { font-size:13px; color:var(--c-text-primary); }
+.jrow .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.jrow .acts { margin-top:6px; display:flex; gap:6px; flex-wrap:wrap; }
+.confirm { margin-top:8px; padding:10px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border); font-size:12.5px; }
+.hrow { display:flex; gap:10px; align-items:flex-start; padding:10px 4px; border-bottom:1px solid var(--c-border-light); }
+.hrow .b { flex:1; min-width:0; }
+.srow { display:flex; gap:10px; align-items:flex-start; padding:12px 4px; border-bottom:1px solid var(--c-border-light); }
+.srow .b { flex:1; min-width:0; }
+.srow .t { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.srow .s { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+
+/* ===== Мобила: шторки ===== */
+.ov { position:absolute; inset:0; background:var(--c-overlay); z-index:30; }
+.drawer { position:absolute; top:0; bottom:0; z-index:31; width:304px; background:var(--c-bg-white); display:flex; flex-direction:column; box-shadow:var(--shadow-dropdown); }
+.drawer.l { left:0; border-radius:0 20px 20px 0; }
+.drawer.r { right:0; width:330px; border-radius:20px 0 0 20px; }
+.drawer .dh { display:flex; align-items:center; gap:6px; height:56px; padding:0 6px 0 14px; border-bottom:1px solid var(--c-border); flex-shrink:0; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:31; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); padding:8px 16px 20px; }
+.sheet .grab { width:40px; height:4px; border-radius:999px; background:var(--c-dashed); margin:0 auto 10px; }
+.mbody { flex:1; min-height:0; display:flex; flex-direction:column; background:var(--c-bg-white); }
+
+/* ===== Прототип: всплывающее (ui/Toast, ui/Menu, ui/ConfirmDialog) ===== */
+.toast { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); z-index:70; max-width:calc(100% - 32px); width:max-content;
+  padding:9px 14px; border-radius:10px; background:var(--c-text-heading); color:var(--c-bg-main); font-size:12.5px; box-shadow:var(--shadow-dropdown); pointer-events:none; text-align:center; }
+.mwrap { position:relative; display:inline-flex; }
+.menu { position:absolute; right:0; top:calc(100% + 4px); z-index:25; min-width:240px; padding:4px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); }
+.menu button, .msheet button { display:flex; align-items:center; gap:8px; width:100%; padding:7px 10px; border-radius:8px; text-align:left; font-size:13px; color:var(--c-text-primary); }
+.menu button:hover, .msheet button:hover { background:var(--c-bg-selected); }
+.menu .dng, .msheet .dng { color:var(--c-danger-text); }
+.msheet button { min-height:44px; }
+.modal { position:absolute; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:16px; }
+.modal .ov { z-index:0; }
+.dlg { position:relative; z-index:1; width:400px; max-width:100%; background:var(--c-bg-white); border-radius:16px; box-shadow:var(--shadow-dropdown); padding:18px; }
+.dlg .t { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); }
+.dlg .d { margin-top:6px; font-size:13px; color:var(--c-text-secondary); }
+.dlg .a { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; flex-wrap:wrap; }
+.chip:hover { background:var(--c-bg-card); }
+.chip.on:hover { background:var(--c-bg-selected); }
+button.oklink { color:var(--c-accent); font-weight:600; text-decoration:underline; text-underline-offset:2px; border-radius:4px; }
+button.oklink:hover { background:var(--c-accent-light); }
+[data-ph]:empty::before { content:attr(data-ph); color:var(--c-text-muted); }
+.ihead { display:block; width:100%; text-align:left; border-radius:8px; }
+.est .box { outline:none; min-height:34px; }
+.est .box:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); background:var(--c-bg-card); }
+.nedit { border:1px solid var(--c-border); border-radius:10px; padding:8px 10px; outline:none; }
+.nedit:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.tgl[aria-disabled="true"] { opacity:.55; cursor:default; }
+.hbtn { width:100%; text-align:left; border-radius:8px; }
+.hbtn:hover { background:var(--c-bg-card); }
+.nofn .fn.ai { display:none; }
+.item.flash { border-color:var(--c-accent); box-shadow:0 0 0 3px var(--c-accent-muted); }
+.st.flash { box-shadow:0 0 0 2px var(--c-accent-muted); background:var(--c-bg-card); }
+.dot.info { background:var(--c-info); }
+.st .tag.warn { color:var(--c-warning-text); }
+.st .vs { display:block; font-size:12px; color:var(--c-text-muted); }
+.st .sacts { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+.app.m .st .tag { white-space:normal; }
+/* Настройки: секции панели и «Ночной разбор чатов» (WikiNightlyBlock из среза Ф2) */
+.ps-h { font-size:10px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; margin:16px 2px 0; }
+.nf { padding:10px 4px; border-bottom:1px solid var(--c-border-light); }
+.nf .t { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.nf .row { display:flex; align-items:center; gap:6px; margin-top:6px; flex-wrap:wrap; font-size:12px; color:var(--c-text-secondary); }
+.nf .s { font-size:12px; color:var(--c-text-secondary); margin-top:4px; }
+.nf .err { font-size:12px; color:var(--c-danger-text); margin-top:4px; }
+.nf.off { opacity:.6; }
+.inp { height:32px; padding:0 8px; border:1px solid var(--c-border); border-radius:10px; background:var(--c-bg-card); font-size:13px; color:var(--c-text-primary); }
+.inp:focus { outline:none; border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.inp.bad { border-color:var(--c-danger); }
+.app.m .inp { height:40px; }
+.lock { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; background:var(--c-bg-inset); margin-top:6px; font-size:12px; color:var(--c-text-secondary); }
+.lock b { color:var(--c-text-primary); font-weight:600; }
+.kv { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+.kv div { background:var(--c-bg-card); border-radius:10px; padding:8px 10px; font-size:11px; color:var(--c-text-secondary); }
+.kv b { display:block; font-size:18px; color:var(--c-text-heading); }
+.pbar { height:6px; border-radius:999px; background:var(--c-bg-selected); overflow:hidden; margin-top:10px; }
+.pbar i { display:block; height:100%; background:var(--c-accent); border-radius:999px; }
+.mrow { display:flex; align-items:center; gap:6px; padding:8px 4px; border-bottom:1px solid var(--c-border-light); flex-wrap:wrap; }
+.mrow .nm { flex:1; min-width:120px; font-size:13px; color:var(--c-text-primary); }
+.mrow .nm small { display:block; font-size:11px; color:var(--c-text-muted); }
+.cm { display:inline-flex; align-items:center; gap:4px; height:26px; padding:0 8px; border-radius:8px; font-size:12px; color:var(--c-text-secondary); border:1px solid var(--c-border); }
+.cm:hover { background:var(--c-bg-card); }
+.cm.imp[aria-pressed="true"] { background:var(--c-accent-light); border-color:var(--c-accent-muted); color:var(--c-accent); font-weight:600; }
+.cm.skip[aria-pressed="true"] { background:var(--c-bg-selected); border-color:transparent; color:var(--c-text-heading); font-weight:600; }
+.cm:disabled { opacity:.5; cursor:default; }
+.app.m .mrow .acts2 { width:100%; display:flex; gap:6px; }
+.app.m .cm { height:40px; flex:1; justify-content:center; }
+/* Сводное утреннее уведомление (колокольчик продукта), поверх окна — не контент */
+.notif { position:absolute; top:12px; right:56px; z-index:40; width:320px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:14px; box-shadow:var(--shadow-dropdown); padding:12px; display:flex; gap:10px; }
+.app.m .notif { top:64px; left:12px; right:12px; width:auto; }
+.notif .b { flex:1; min-width:0; font-size:12.5px; color:var(--c-text-secondary); }
+.notif .tt { font-weight:600; color:var(--c-text-heading); font-size:13px; }
+.notif .acts { display:flex; gap:6px; margin-top:8px; flex-wrap:wrap; }
+.notif > svg { color:var(--c-info); margin-top:1px; }
+</style>
+</head>
+<body>
+<div class="mk" id="mk"></div>
+<div class="mknote" id="note"></div>
+<div class="stage"><div id="root"></div></div>
+
+<script>
+/* ===== Иконки (пути lucide; в продукте — lucide-react с ICON_SIZE/ICON_STROKE) ===== */
+const P = {
+  sparkles:'<path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z"/>',
+  pen:'<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  file:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  users:'<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  inbox:'<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  history:'<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  activity:'<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  cr:'<path d="m9 18 6-6-6-6"/>', cd:'<path d="m6 9 6 6 6-6"/>',
+  x:'<path d="M18 6 6 18M6 6l12 12"/>',
+  more:'<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  pleft:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  pright:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>',
+  chat:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info:'<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  undo:'<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>',
+  check:'<path d="M20 6 9 17l-5-5"/>',
+  plus:'<path d="M5 12h14M12 5v14"/>',
+  link:'<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
+  graph:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>',
+  archive:'<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
+  merge:'<circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/>',
+  ext:'<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  book:'<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/>',
+  folder:'<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>',
+  home:'<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  tasks:'<path d="m9 11 3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>',
+  wave:'<path d="M2 12h3l3-9 4 18 3-9h7"/>',
+  lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+  star:'<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/>',
+  ban:'<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  bell:'<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+};
+const I = (n, s = 16) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${P[n]}</svg>`;
+const OG_ICON = { note:'file', ai:'sparkles', me:'pen', mix:'users', ext:'alert' };
+const OG_TITLE = { note:'Заметка', ai:'Ведёт ИИ', me:'Написали вы', mix:'Ведёте вместе с ИИ', ext:'Изменена снаружи' };
+const og = (o, s = 12) => `<span class="og ${o}" title="${OG_TITLE[o]}">${I(OG_ICON[o], s)}</span>`;
+
+/* ===== Прототип: служебное ===== */
+const ME = 'Андрей', TODAY = '02.11';
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const clone = o => JSON.parse(JSON.stringify(o));
+const now = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+let UID = 0; const uid = p => p + '-' + (++UID);
+const plural = (n, a, b, c) => { const m = n % 10, h = n % 100; return m === 1 && h !== 11 ? a : m >= 2 && m <= 4 && (h < 12 || h > 14) ? b : c; };
+
+/* Внешняя обвязка: тема, ширина, метки решений, секция «Заметки» — в памяти, копия в адресе (диплинки).
+   В srcdoc-песочнице без allow-same-origin (просмотр файла в продукте) replaceState бросает SecurityError —
+   там адрес молча не трогаем, состояние живёт только в памяти. */
+const S = { t:'light', w:'d', s:'page' };
+function readHash() {
+  try {
+    const h = new URLSearchParams(location.hash.slice(1));
+    for (const k of Object.keys(S)) if (h.has(k)) S[k] = typeof S[k] === 'number' ? +h.get(k) : h.get(k);
+  } catch (e) { /* песочница: диплинка нет */ }
+}
+function writeHash() {
+  try { history.replaceState(null, '', '#' + new URLSearchParams(Object.entries(S).map(([k, v]) => [k, String(v)])).toString()); }
+  catch (e) { /* песочница: адрес недоступен, состояние остаётся в S */ }
+}
+
+/* ===== Данные раздела ===== */
+const FOLDERS = { aihome:'AI Home', dacha:'Дача', common:'Общее', personal:'Личное' };
+function seedDocs() {
+  const ai = (id, n, t, src, d, q, x = {}) => ({ id, o:'ai', n, t, src, d, q, ...x });
+  const me = (id, t, d) => ({ id, o:'me', who:ME, d, t });
+  const docs = {
+    gpu:{ title:'Очередь локальной GPU', folder:'aihome', kind:'wiki', updated:'сегодня в 09:14', nextN:8, sections:[
+      { h:'Сводка', items:[
+        ai('s1', 1, 'Картинки, видео и звук идут через одну общую очередь видеокарты — задачи ждут друг друга.', 'чат «Локальные модели: запуск»', '27.10', 'очередь общая с картинками и видео — задачи ждут друг друга'),
+        ai('s2', 2, 'Тяжёлые задачи — увеличение видео (апскейл) и обучение LoRA — идут строго по одной.', 'заметка «Обучение LoRA персонажа»', '29.10', 'одно на инстанс, в общей очереди GPU', { srcNote:1 }),
+        ai('f1', 3, 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, в быстром режиме — около четырёх.', 'чат «Замеры MiniMax H3»', '28.10', '1344×768: 5 с ≈ 5,5 мин (fast ≈ 4 мин)'),
+        me('f2', 'Ночью очередь свободна, поэтому длинные задачи лучше ставить вечером.', '02.11'),
+        me('n1', 'Обучение LoRA запускаем только на ночь.', '02.11'),
+        ai('f3', 4, 'История запусков хранится на диске 7 дней.', 'чат «Статистика локальных моделей»', '30.10', 'история медиа — 7 дней на диске'),
+        ai('r1', 5, 'Если локальная модель отказала, облако подключается только с согласия человека.', 'чат «Картинки: провайдеры»', '25.10', 'облако при отказе — с согласия'),
+        /* Замена постфактум (ADR-038, решение 4): ИИ сам заменил формулировку человека; метку выводит журнал, 14 дней */
+        ai('r2', 6, 'Для черновиков снимаем 864×480 — примерно в 3,7 раза быстрее: полторы минуты против пяти с половиной.', 'чат «Замеры MiniMax H3»', '02.11', '864×480, 5 с ≈ 1,5 мин; 1344×768 ≈ 5,5 мин',
+          { rep:{ d:TODAY, tm:'05:48', chat:'Замеры MiniMax H3', hid:'r2h' } }) ]},
+      { h:'Хронология', items:[
+        ai('c27', 7, '27.10 — завели одну очередь видеокарты на картинки, видео и звук.', 'чат «Локальные модели: запуск»', '27.10', 'очередь общая'),
+        me('c01', '01.11 — решили снимать черновики в половинном размере.', '01.11') ]} ],
+      history:[
+        { id:'r2h', o:'me', who:ME, d:'01.11', sec:'Сводка', t:'Для черновиков снимаем половинный размер 864×480 — это в четыре раза быстрее.', why:`ваша формулировка · заменил ИИ ${TODAY}`, ovr:'r2' },
+        { id:'h1', o:'ai', sec:'Сводка', t:'Ролик на 5 секунд снимается около шести минут.', why:'ИИ уточнил 28.10' },
+        { id:'h2', o:'ai', sec:'Сводка', t:'Картинки и видео идут через общую очередь.', why:'ИИ дополнил 27.10' },
+        { id:'h3', o:'me', who:ME, d:'01.11', sec:'Сводка', t:'Черновики снимаем в 720p.', why:'вы переформулировали 01.11' },
+        { id:'h4', o:'ai', sec:'Сводка', t:'История запусков хранится в памяти около часа.', why:'ИИ исправил 30.10' } ] },
+    keeper:{ title:'Хранитель базы', folder:'aihome', kind:'wiki', updated:'вчера в 22:40', nextN:4, sections:[
+      { h:'Сводка', items:[
+        ai('k1', 1, 'Файлы вики пишет только Хранитель — правка человека идёт через него под именем автора.', 'чат «Разбор вики»', '31.10', 'файлы пишет только Хранитель'),
+        me('k2', 'Ночной разбор чатов начинается в 03:00.', '01.11'),
+        ai('k3', 3, 'У каждого утверждения есть происхождение: сноска ИИ или «✎ имя, дата».', 'чат «Разрез: вики вместе»', '30.10', 'у каждого утверждения есть происхождение') ]} ],
+      history:[ { id:'k4', o:'me', who:ME, d:'01.11', sec:'Сводка', t:'Хранитель проверяет ссылки раз в час.', why:'убрано вами вчера в 22:40' } ] },
+    rel:{ title:'Правила релизов', folder:'aihome', kind:'wiki', updated:'29.10', nextN:1, sections:[ { h:'Сводка', items:[
+      me('l1', 'Выкатываем только из master после зелёного CI.', '29.10'), me('l2', 'Перед выкаткой — бэкап каталога data.', '29.10') ]} ], history:[] },
+    ideas:{ title:'Идеи для раздела «Видео»', folder:'aihome', kind:'note', updated:'вчера в 22:10', body:[
+      'Плавающее окно эфира должно помнить свой угол между сессиями.',
+      'Лента подписок — показывать сначала непросмотренное, а просмотренное сворачивать.',
+      'Спросить у [[Очередь локальной GPU]], можно ли превью роликов делать в фоне ночью.' ] },
+    call:{ title:'Созвон 31.10', folder:'aihome', kind:'note', updated:'31.10', body:['Макет единого раздела — к понедельнику.', 'Решения по [[Хранитель базы]] — до среды.'] },
+    mf:{ title:'Модули и MF-remote', folder:'aihome', kind:'wiki', updated:'28.10', nextN:3, sections:[ { h:'Сводка', items:[
+      ai('m1', 1, 'Раздел «Архитектура» — отдельный модуль: MF-remote в sandbox-iframe.', 'чат «Архитектура: Viaduct»', '28.10', 'динамический модуль + MF-remote'),
+      ai('m2', 2, 'Прежний список модулей описан в [[Старый реестр модулей]].', 'чат «Модули: история»', '20.10', 'старый реестр модулей') ]} ], history:[] },
+    dmeas:{ title:'Замеры видео на даче', folder:'dacha', kind:'wiki', updated:'26.10', nextN:2, sections:[ { h:'Сводка', items:[
+      ai('d1', 1, 'Роутер на даче даёт около 40 Мбит/с — эфир в 1080p идёт без рывков.', 'чат «Дача: интернет»', '26.10', '40 Мбит/с, 1080p без рывков'),
+      me('d2', 'Камеру у ворот смотрим в 720p.', '26.10') ]} ], history:[] },
+    seeds:{ title:'Посадки 2026', folder:'dacha', kind:'note', updated:'20.10', body:['Томаты — в теплицу в начале мая.', 'Чеснок — под зиму, до середины октября.'] },
+    recipes:{ title:'Рецепты на неделю', folder:'common', kind:'note', updated:'01.11', body:['Пн — борщ, ср — плов, пт — рыба в духовке.'] },
+    /* Спор (conflict): утверждение человека на месте с меткой «ИИ оспаривает», довод ИИ — в «Противоречиях» */
+    cars:{ title:'Машина: обслуживание', folder:'common', kind:'wiki', updated:'сегодня в 05:31', nextN:3, sections:[
+      { h:'Сводка', items:[
+        ai('c1', 1, 'ТО — каждые 15 000 км или раз в год.', 'чат «Машина»', '12.10', 'ТО — 15 000 км или год'),
+        { ...me('c2', 'Резину меняем в конце октября.', '01.11'), disp:'cx1' } ]},
+      { h:'Противоречия', items:[
+        ai('cx1', 2, 'Резину меняют, когда днём устойчиво ниже +7 °C: в этом году это было 18.10, а не в конце октября.', 'чат «Машина: шины»', TODAY, 'меняем при +7 °C, в этом году — 18.10', { vs:'c2' }) ]} ], history:[] },
+    books:{ title:'Книги на зиму', folder:'personal', kind:'note', updated:'15.10', body:['«Мастер и Маргарита» — перечитать.'] },
+    trip:{ title:'Поездка в Казань', folder:'personal', kind:'note', updated:'10.10', body:['Билеты — за месяц, гостиница у Кремля.'] },
+  };
+  for (const id in docs) docs[id].id = id;
+  return docs;
+}
+/* «Входящие» после решения 2: только замены формулировок человека, которые автомат не смог применить сам
+   (условия таблицы решения 4 ADR-038). cls — карточка появляется, когда класс «@human» выключен автоматикой. */
+function seedInbox() {
+  const ch = [ { l:'Заменить', c:'pri', do:'replace' }, { l:'Оставить моё', c:'sec', do:'keep' } ];
+  return [
+    { id:'i1', doc:'gpu', from:'из чата «Обучение LoRA: расписание» · ночной разбор', badge:['Источник старше вашей правки', 'warning'], open:true,
+      why:'Вы поправили это сегодня в 09:14, а разговор — от 29.10. Старый чат не перезаписывает свежую правку сам.', ops:[
+      { id:'o1', label:'Заменить вашу формулировку · Сводка', target:'n1', sec:'Сводка',
+        add:'Обучение LoRA запускаем днём: ночью очередь занята превью роликов.', src:'чат «Обучение LoRA: расписание»', d:'29.10', q:'LoRA — днём, ночью очередь под превью', choices:ch } ] },
+    { id:'i2', doc:'keeper', from:'из чата «Хранитель: расписание» · ночной разбор', badge:['Вы недавно откатывали эту страницу', 'warning'],
+      why:'Вы откатили её 31.10. Семь дней ИИ не меняет ваше на этой странице сам — решите здесь.', ops:[
+      { id:'o3', label:'Заменить вашу формулировку · Сводка', target:'k2', sec:'Сводка',
+        add:'Ночной разбор чатов начинается в 04:00, после бэкапа.', src:'чат «Хранитель: расписание»', d:TODAY, q:'разбор — после бэкапа, в 04:00', choices:ch } ] },
+    { id:'i3', doc:'rel', from:'из файла deploy/README.md · ночной разбор', badge:['Неизвестно, когда написан источник', 'neutral'],
+      why:'У файла нет даты — не проверить, новее ли он вашей правки.', ops:[
+      { id:'o4', label:'Заменить вашу формулировку · Сводка', target:'l2', sec:'Сводка',
+        add:'Перед выкаткой — бэкап каталога data и проверка свободного места на диске.', src:'файл deploy/README.md', d:'без даты', q:'бэкап data и свободное место', choices:ch } ] },
+    { id:'i4', doc:'rel', cls:1, from:'из чата «Релиз 31.10» · ночной разбор', badge:['Класс выключен', 'neutral'],
+      why:'Замену ваших формулировок автоматика выключила: 3 возврата за неделю.', settings:1, ops:[
+      { id:'o5', label:'Заменить вашу формулировку · Сводка', target:'l1', sec:'Сводка',
+        add:'Выкатываем только из master после зелёного CI и прогона e2e.', src:'чат «Релиз 31.10»', d:TODAY, q:'master, зелёный CI и e2e', choices:ch } ] },
+  ];
+}
+function seedJournal() {
+  return [
+    { id:'j1', day:'Сегодня', tm:'09:20', o:'ai', t:'ИИ дописал «Очередь локальной GPU»', s:'1 утверждение в «Сводке» · из чата «Статистика локальных моделей»', chat:'«Статистика локальных моделей»',
+      act:'Откатить', confirm:'Убрать запись ИИ от 09:20? Утверждение уйдёт в «Историю» страницы, удалено не будет.',
+      undo:{ kind:'ops', why:'откачено вами', ops:[ { doc:'gpu', id:'f3', prev:null } ] } },
+    { id:'j2', day:'Сегодня', tm:'09:14', o:'me', t:'Вы поправили «Очередь локальной GPU»', s:'2 утверждения: 2 новых',
+      act:'Откатить мою правку', confirm:'Вернуть страницу как было до 09:14? Ваши 2 правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.',
+      undo:{ kind:'ops', why:'ваша правка от 09:14, откачена', ops:[ { doc:'gpu', id:'f2', prev:null }, { doc:'gpu', id:'n1', prev:null } ] } },
+    { id:'j0', day:'Сегодня', tm:'05:48', o:'ai', ovr:1, rep:['gpu', 'r2'], t:'ИИ заменил вашу формулировку «Для черновиков снимаем половинный размер…»', s:'«Очередь локальной GPU» · Сводка · по чату «Замеры MiniMax H3». Прежняя — в «Истории».', chat:'«Замеры MiniMax H3»' },
+    { id:'jd', day:'Сегодня', tm:'05:31', o:'ai', ovr:1, open:'cars', t:'ИИ оспаривает ваше утверждение «Резину меняем в конце октября»', s:'«Машина: обслуживание» · довод — в «Противоречиях». Пока спор не решён, автоматика страницу не трогает.' },
+    { id:'j3', day:'Сегодня', tm:'03:00', o:'ai', t:'Ночной разбор: 5 страниц', s:'14 утверждений из 6 чатов · 1 вашу формулировку заменил, 1 оспорил · 3 замены — во «Входящих»',
+      more:[ ['gpu', 'Очередь локальной GPU — 3'], ['keeper', 'Хранитель базы — 4'], ['mf', 'Модули и MF-remote — 2'], ['cars', 'Машина: обслуживание — 2'], ['dmeas', 'Замеры видео на даче — 3'] ] },
+    { id:'j4', day:'Вчера', tm:'22:40', o:'me', t:'Вы убрали утверждение в «Хранитель базы»', s:'ушло в «Историю», не удалено',
+      act:'Вернуть', undo:{ kind:'restoreHist', doc:'keeper', hid:'k4' } },
+    { id:'j5', day:'Вчера', tm:'18:05', o:'ext', t:'Страницу «Машина: обслуживание» изменили снаружи', s:'вы приняли как свою правку' },
+  ];
+}
+const DRIFT_TEXT = 'Ночью очередь свободна — длинные задачи ставим после 22:00.';
+const THEIRS_F1 = 'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут, с увеличением до 1440p — ещё около 15.';
+
+let A;
+function fresh() {
+  return { docs:seedDocs(), open:'gpu', prevOpen:'gpu', mode:'view', edit:null, cf:null,
+    q:'', who:'all', fold:{ dacha:1, personal:1 }, p:'inbox', d:'', fn:'', menu:false, modal:null, histOpen:false,
+    busy:false, data:'ok', drift:false, cfSim:true, set:{ auto:1, fns:1, cls:1 }, hcheck:'сегодня в 06:00', hbusy:false,
+    jf:'all', inbox:seedInbox(), journal:seedJournal(), preset:'', focus:null, toastMsg:'', toastUntil:0, flash:'', notif:false,
+    /* «Ночной разбор чатов» — состав и тексты из среза Ф2 (llm-wiki-v2.html, WikiNightlyBlock); в продукте выключен по умолчанию */
+    night:{ on:1, from:3, to:6, budget:'700 000', pk:'20', pks:'6', out:'completed' },
+    marks:[ { id:'m1', chat:'Замеры MiniMax H3', s:'AI Home · сегодня', m:'imp' }, { id:'m2', chat:'Хранитель: расписание', s:'AI Home · вчера', m:'' },
+      { id:'m3', chat:'Личное: здоровье', s:'вне проектов · 30.10', m:'skip' }, { id:'m4', chat:'Исполнитель: шаг F2', s:'AI Home · вчера', m:'', exec:1 } ] };
+}
+/* Замены моложе 14 дней: метка на странице и точка C.info на «Журнале» выводятся отсюда, своего состояния у них нет */
+const replaced = () => live().flatMap(id => A.docs[id].kind === 'wiki' ? A.docs[id].sections.flatMap(s => s.items.filter(x => x.rep).map(x => [id, x])) : []);
+
+/* ===== Модель: поиск по данным ===== */
+const cur = () => A.docs[A.open];
+function find(doc, id) {
+  if (!doc || !doc.sections) return null;
+  for (const sec of doc.sections) { const i = sec.items.findIndex(x => x.id === id); if (i >= 0) return [sec, i]; }
+  return null;
+}
+function secByName(doc, h) {
+  let sec = doc.sections.find(s => s.h === h);
+  if (!sec) { sec = { h, items:[] }; doc.sections.push(sec); }
+  return sec;
+}
+function docOrigin(doc) {
+  if (doc.kind === 'note') return 'note';
+  const os = new Set(doc.sections.flatMap(s => s.items.map(x => x.o === 'ext' ? 'me' : x.o)));
+  return os.has('ai') && os.has('me') ? 'mix' : os.has('ai') ? 'ai' : 'me';
+}
+const docText = doc => doc.title + ' ' + (doc.kind === 'note' ? doc.body.join(' ') : doc.sections.flatMap(s => s.items.map(x => x.t)).join(' '));
+const byTitle = name => Object.entries(A.docs).find(([, d]) => !d.removed && d.title === name);
+const allowed = (from, to) => to.folder === from.folder || to.folder === 'common';
+function linkIssues(text, doc) {
+  const out = [];
+  for (const m of String(text).matchAll(/\[\[([^\]]+)\]\]/g)) {
+    const hit = byTitle(m[1]);
+    if (!hit) out.push({ name:m[1], kind:'missing' });
+    else if (!allowed(doc, hit[1])) out.push({ name:m[1], kind:'foreign', folder:FOLDERS[hit[1].folder] });
+  }
+  return out;
+}
+function linkify(t, doc) {
+  return String(t).split(/(\[\[[^\]]+\]\])/).map(part => {
+    const m = part.match(/^\[\[([^\]]+)\]\]$/);
+    if (!m) return esc(part);
+    const hit = byTitle(m[1]);
+    if (hit && allowed(doc, hit[1])) return `<button class="oklink" data-a="open" data-id="${hit[0]}">${esc(m[1])}</button>`;
+    return `<span class="badlink" title="Ссылка ведёт в никуда">${esc(m[1])}</span>`;
+  }).join('');
+}
+const inboxLive = () => A.inbox.filter(it => !it.cls || !A.set.cls);
+const pendingItems = () => inboxLive().filter(it => it.ops.some(o => !o.state));
+const docDisputed = doc => doc.kind === 'wiki' && doc.sections.some(s => s.items.some(x => x.disp));
+
+/* ===== Тост ===== */
+function toast(msg) {
+  A.toastMsg = msg; A.toastUntil = Date.now() + 2600; placeToast();
+  setTimeout(() => { if (Date.now() >= A.toastUntil) { A.toastMsg = ''; placeToast(); } }, 2700);
+}
+function placeToast() {
+  document.querySelectorAll('.toast').forEach(el => el.remove());
+  const app = document.querySelector('.app');
+  if (A.toastMsg && app) { const el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); el.textContent = A.toastMsg; app.appendChild(el); }
+}
+const DEAD = what => `В прототипе не работает: ${what}`;
+
+/* ===== Левая панель: единое дерево ===== */
+const WHO = [['all', 'Все'], ['note', 'Заметки'], ['ai', 'ИИ'], ['mix', 'Вместе'], ['me', 'Мои']];
+const live = () => Object.keys(A.docs).filter(id => !A.docs[id].removed);
+const filtering = () => !!A.q.trim() || A.who !== 'all';
+function matches(id, who = A.who) {
+  const doc = A.docs[id];
+  if (who !== 'all' && docOrigin(doc) !== who) return false;
+  const q = A.q.trim().toLowerCase();
+  return !q || docText(doc).toLowerCase().includes(q);
+}
+function chipsHtml() {
+  if (A.data === 'loading' || !live().length) return '';
+  return `<div class="chips" role="group" aria-label="Кто написал">${WHO.map(([v, l], i) =>
+    `<button class="chip ${A.who === v ? 'on' : ''}" data-a="who" data-v="${v}" aria-pressed="${A.who === v}">${i ? og(v, 11) : ''}${l} <span class="n">${live().filter(id => matches(id, v)).length}</span></button>`).join('')}</div>`;
+}
+function treeHtml() {
+  if (A.data === 'loading') return [70, 0, 55, 80, 62, 74, 0, 50, 66].map(w => w ? `<div style="display:flex;gap:8px;align-items:center;height:30px;padding:0 8px 0 ${w > 60 ? 38 : 22}px"><span class="sk" style="width:16px;height:16px"></span><span class="sk" style="height:10px;width:${w}%"></span></div>` : '<div style="height:10px"></div>').join('');
+  const ids = live();
+  if (!ids.length) return `<div class="empty" style="padding:24px 16px"><div class="d" style="font-size:12px">Здесь будут ваши заметки и страницы, которые ведёт ИИ.</div></div>`;
+  const F = filtering(), vis = ids.filter(id => matches(id));
+  if (F && !vis.length) {
+    const whoL = WHO.find(w => w[0] === A.who)[1].toLowerCase();
+    return `<div class="empty" style="padding:24px 16px"><div class="ic" style="width:44px;height:44px">${I('search', 20)}</div>
+      <div style="font-weight:600;color:var(--c-text-heading)">Ничего не нашлось</div>
+      <div class="d" style="font-size:12px">${A.who === 'all' ? `Ни в заметках, ни в вики нет «${esc(A.q.trim())}».` : `Среди «${whoL}» нет ${A.q.trim() ? `«${esc(A.q.trim())}»` : 'записей'}. Поищите во всех — ИИ мог записать это у себя.`}</div>
+      <div class="a">${A.who === 'all' ? `<button class="btn xs sec" data-a="q-clear">Сбросить поиск</button>` : `<button class="btn xs sec" data-a="who" data-v="all">Искать во всех</button>`}</div></div>`;
+  }
+  const row = (id, ind) => {
+    const doc = A.docs[id], n = pendingItems().filter(it => it.doc === id).length;
+    return `<button class="trow ind${ind} ${A.open === id ? 'on' : ''}" data-a="open" data-id="${id}">${og(docOrigin(doc))}<span class="nm">${esc(doc.title || 'Новая заметка')}</span>${n ? `<span class="cnt" title="Замена ждёт вас во «Входящих»">${n}</span>` : ''}</button>`;
+  };
+  const inF = f => vis.filter(id => A.docs[id].folder === f);
+  const grp = (key, label, ind, kids, body) => {
+    if (F && !kids) return '';
+    const open = F || !A.fold[key];
+    const head = F ? `<div class="trow grp ${ind ? 'ind1' : ''}">${I('cd', 14)}${ind ? I('folder', 14) : ''}<span class="nm">${label}</span></div>`
+      : `<button class="trow grp ${ind ? 'ind1' : ''}" data-a="fold" data-f="${key}" aria-expanded="${open}">${I(open ? 'cd' : 'cr', 14)}${ind ? I('folder', 14) : ''}<span class="nm">${label}</span>${open ? '' : `<span class="mt">${kids}</span>`}</button>`;
+    return head + (open ? body() : '');
+  };
+  const projKids = inF('aihome').length + inF('dacha').length;
+  return `<div class="sec-h">Разделы <span style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500">видны только вам</span></div>` +
+    grp('proj', 'Проекты', 0, projKids, () =>
+      grp('aihome', 'AI Home', 1, inF('aihome').length, () => inF('aihome').map(id => row(id, 2)).join('')) +
+      grp('dacha', 'Дача', 1, inF('dacha').length, () => inF('dacha').map(id => row(id, 2)).join(''))) +
+    grp('common', 'Общее', 0, inF('common').length, () => inF('common').map(id => row(id, 1)).join('')) +
+    grp('personal', 'Личное', 0, inF('personal').length, () => inF('personal').map(id => row(id, 1)).join(''));
+}
+function renderTree() {
+  document.querySelectorAll('.js-chips').forEach(el => el.innerHTML = chipsHtml());
+  document.querySelectorAll('.js-tree').forEach(el => el.innerHTML = treeHtml());
+}
+function leftPanel(mobile) {
+  const head = mobile
+    ? `<div class="dh"><span class="serif" style="font-size:16px;font-weight:700;color:var(--c-text-heading);flex:1">Заметки</span>
+        <button class="ib" title="Граф связей" data-a="dead" data-what="граф связей">${I('graph', 18)}</button>
+        <button class="ib" title="Закрыть" data-a="drawer" data-d="">${I('x', 18)}</button></div>`
+    : `<div class="ph"><span class="ttl">Заметки</span>
+        <button class="ib" title="Граф связей" data-a="dead" data-what="граф связей">${I('graph')}</button>
+        <button class="btn xs pri" data-a="new-note">${I('plus', 14)}Заметка</button></div>`;
+  const busy = A.data === 'loading';
+  return `${head}
+    <div style="padding:${mobile ? '10px 12px 8px' : '0 12px 8px'};display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--c-border)">
+      <label class="field">${I('search', 14)}<input class="js-q" placeholder="Поиск по заметкам и вики" aria-label="Поиск по заметкам и вики" value="${esc(A.q)}" ${busy ? 'disabled' : ''}></label>
+      <div class="js-chips">${chipsHtml()}</div>
+    </div>
+    <div class="tree js-tree">${treeHtml()}</div>
+    ${busy || !live().length ? '' : `<div class="tfoot"><span>${og('note', 10)}заметка</span><span>${og('ai', 10)}ИИ</span><span>${og('mix', 10)}вместе</span><span>${og('me', 10)}вы</span></div>`}
+    ${mobile ? `<div style="padding:10px 12px;border-top:1px solid var(--c-border)"><button class="btn sm pri" style="width:100%" data-a="new-note">${I('plus', 14)}Новая заметка</button></div>` : ''}`;
+}
+
+/* ===== Центр: документ ===== */
+function footPop(it) {
+  if (it.o === 'ai') return `<div class="pop" role="dialog" aria-label="Источник сноски ${it.n}">
+      <div class="hd">${og('ai', 11)}Сноска ${it.n} · записал ИИ, ${it.d}</div>
+      <div class="q">«${esc(it.q)}»</div>
+      <div class="src">Источник: ${esc(it.src)}</div>
+      ${it.rep ? `<div class="src" style="margin-top:6px">Заменил вашу формулировку ${it.rep.d} в ${it.rep.tm}. Прежняя — в «Истории».</div>` : ''}
+      <div class="acts">${it.rep ? `<button class="btn xs sec" data-a="restore-mine" data-doc="${A.open}" data-id="${it.id}">${I('undo', 13)}Вернуть мою</button>` : ''}<button class="btn xs ${it.rep ? 'gh' : 'sec'}" data-a="dead" data-what="${it.srcNote ? 'открыть ' : 'переход в '}${esc(it.src)}">${I(it.srcNote ? 'file' : 'chat', 13)}${it.srcNote ? 'Открыть заметку' : 'Открыть в чате'}</button><button class="btn xs gh" data-a="panel" data-p="journal">Показать в журнале</button></div></div>`;
+  return `<div class="pop" role="dialog" aria-label="Ваша правка">
+      <div class="hd">${og('me', 11)}Написал ${esc(it.who)}, ${it.d}</div>
+      <div class="src" style="margin-top:6px">Ваша правка. ИИ может заменить её, если найдёт источник новее вашей правки. Прежняя формулировка тогда уйдёт в «Историю», а здесь появится «Вернуть мою».</div>
+      <div class="acts"><button class="btn xs gh" data-a="panel" data-p="journal">Показать в журнале</button></div></div>`;
+}
+function stView(it, doc, extra = '') {
+  const on = A.fn === it.id;
+  let mark;
+  if (it.o === 'ai') mark = `<button class="fn ai ${on ? 'on' : ''}" data-a="fn" data-id="${it.id}" title="${esc(it.src)}" aria-label="Сноска ${it.n}">${it.n}</button>`;
+  else if (it.o === 'me') mark = `<button class="fn me ${on ? 'on' : ''}" data-a="fn" data-id="${it.id}">✎ ${esc(it.who)}, ${it.d}</button>`;
+  else mark = `<span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span>`;
+  if (it.rep) mark += `<span class="tag" title="Метка видна 14 дней после замены">заменил вашу · ${it.rep.d}</span>`;
+  if (it.disp) mark += `<span class="tag warn">${I('alert', 11)} ИИ оспаривает</span> <button class="lnk" data-a="to-disp" data-id="${it.disp}" style="padding:0 2px">в «Противоречиях»</button>`;
+  let body = linkify(it.t, doc);
+  if (it.vs) {
+    const v = find(doc, it.vs), vt = v ? v[0].items[v[1]].t : '';
+    body = `<span class="vs">Спорит с вашим: «${esc(vt)}»</span>${body}`;
+  }
+  const acts = it.vs ? `<div class="sacts"><button class="btn xs sec" data-a="disp-keep" data-id="${it.id}">Оставить моё</button><button class="btn xs gh" data-a="disp-take" data-id="${it.id}">Взять формулировку ИИ</button></div>` : '';
+  return `<div class="st ${extra} ${A.flash === it.id ? 'flash' : ''}" data-st="${it.id}">${og(it.o, 10)}${body}${mark}${acts}${on && S.w === 'd' ? footPop(it) : ''}</div>`;
+}
+function menuItems(doc) {
+  const B = (a, ic, l, x = '') => `<button data-a="${a}" ${x}>${I(ic, 15)}${l}</button>`;
+  return doc.kind === 'note'
+    ? B('to-wiki', 'book', 'Перенести в вики') + B('copy-link', 'link', 'Скопировать ссылку') + B('remove-doc', 'archive', 'Убрать заметку', 'class="dng"')
+    : B('hist', 'history', 'История страницы') + B('panel', 'history', 'Показать в журнале', 'data-p="journal"') + B('copy-link', 'link', 'Скопировать ссылку') + B('remove-doc', 'archive', 'Убрать страницу', 'class="dng"');
+}
+function moreBtn(doc) {
+  return `<span class="mwrap"><button class="ib" title="Ещё" aria-haspopup="menu" aria-expanded="${A.menu}" data-a="menu">${I('more')}</button>${A.menu && S.w === 'd' ? `<div class="menu" role="menu">${menuItems(doc)}</div>` : ''}</span>`;
+}
+function docHead(doc) {
+  const mobile = S.w === 'm', o = docOrigin(doc);
+  const all = doc.sections.flatMap(s => s.items), nAi = all.filter(x => x.o === 'ai').length;
+  const badge = doc.id === 'gpu' && A.drift ? `<span class="bdg t-warning">${I('alert', 12)}Изменена снаружи</span>`
+    : docDisputed(doc) ? `<span class="bdg t-warning">${I('alert', 12)}Есть противоречие</span>`
+    : o === 'mix' ? `<span class="bdg t-info">${I('users', 12)}Ведёте вместе</span>` : o === 'ai' ? `<span class="bdg t-info">${I('sparkles', 12)}Ведёт ИИ</span>` : `<span class="bdg t-neutral">${I('pen', 12)}Ваша страница</span>`;
+  return `<div class="dtop"><div class="grow">
+      <h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta">${badge}<span>${all.length} ${plural(all.length, 'утверждение', 'утверждения', 'утверждений')}: ${nAi} записал ИИ, ${all.length - nAi} — вы</span><span>· обновлено ${doc.updated}</span></div>
+    </div>
+    ${mobile ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec" data-a="edit">${I('pen', 14)}Править</button>${moreBtn(doc)}</div>`}
+    </div>
+    ${mobile ? `<div class="dbar" style="margin-top:10px"><button class="btn sm sec" style="flex:1" data-a="edit">${I('pen', 14)}Править</button></div>` : ''}`;
+}
+/* Секция «Заметки» (решение Андрея 1): последняя, после «Истории»; пишет только человек, ИИ её цитирует */
+function notesSection() {
+  return `<div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст · ИИ его не меняет, но читает</span></div>
+      <div class="free">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.
+        <table><tr><th>Размер</th><th>5 с</th><th>10 с</th></tr><tr><td>864×480</td><td>1,5 мин</td><td>—</td></tr><tr><td>1344×768</td><td>5,5 мин</td><td>15,5 мин</td></tr></table></div>`;
+}
+function histBlock(doc) {
+  const h = doc.history;
+  const head = `<div class="h2">История</div><div class="hist" style="margin-top:0;border-top:0;padding-top:0">${I('history', 13)}${h.length ? `${h.length} ${plural(h.length, 'прежняя формулировка', 'прежние формулировки', 'прежних формулировок')}
+    <button class="lnk" data-a="hist">${A.histOpen ? 'Скрыть' : 'Показать'}</button>` : 'Пока пусто'}</div>`;
+  if (!A.histOpen || !h.length) return head;
+  return head + h.map((x, i) => `<div class="hrow">${og(x.o, 10)}<div class="b"><div style="color:var(--c-text-primary)">${esc(x.t)}</div>
+    <div style="font-size:12px;color:var(--c-text-muted)">${esc(x.sec)} · ${esc(x.why)}</div></div>${x.ovr && find(doc, x.ovr)
+      ? `<button class="lnk" data-a="restore-mine" data-doc="${doc.id}" data-id="${x.ovr}">${I('undo', 13)}Вернуть</button>`
+      : `<button class="btn xs gh" data-a="hist-restore" data-i="${i}">${I('undo', 13)}Вернуть</button>`}</div>`).join('');
+}
+function docPage(doc) {
+  const isGpu = doc.id === 'gpu';
+  let top = '';
+  /* Замена постфактум: плашка на каждую замену моложе 14 дней */
+  for (const sec of doc.sections) for (const it of sec.items) if (it.rep) top += `<div class="ntc n-info" style="margin-bottom:6px">${I('sparkles', 18)}<div class="b">
+      <div class="tt">ИИ заменил вашу формулировку</div>
+      <div>В разделе «${esc(sec.h)}», сегодня в ${it.rep.tm}, по чату «${esc(it.rep.chat)}». Прежняя — в «Истории».</div>
+      <div class="acts"><button class="btn xs sec" data-a="restore-mine" data-doc="${doc.id}" data-id="${it.id}">${I('undo', 13)}Вернуть мою</button><button class="btn xs gh" data-a="dead" data-what="переход в чат «${esc(it.rep.chat)}»">${I('chat', 13)}Открыть в чате</button><button class="lnk" data-a="hist-show">Показать прежнюю</button></div></div></div>`;
+  if (docDisputed(doc)) top += `<div class="ntc n-warn" style="margin-bottom:6px">${I('alert', 18)}<div class="b">
+      <div class="tt">ИИ оспаривает ваше утверждение</div>
+      <div>Ваш текст на месте. Довод ИИ — в «Противоречиях»: пока вы не решите, автоматика страницу не трогает.</div>
+      <div class="acts"><button class="btn xs sec" data-a="to-disp" data-id="${doc.sections.flatMap(s => s.items).find(x => x.disp).disp}">Показать довод</button></div></div></div>`;
+  if (isGpu && A.drift) top += `<div class="ntc n-warn" style="margin-bottom:6px">${I('alert', 18)}<div class="b">
+      <div class="tt">Страницу изменили снаружи</div>
+      <div>Сегодня в 08:47 её поправили не в AI Home — например, в Obsidian. Пока вы не решите, что с этим делать, ИИ страницу не трогает.</div>
+      <div class="acts"><button class="btn xs pri" data-a="drift-mine">Принять как мою правку</button><button class="btn xs sec" data-a="drift-asis">Принять как есть</button><button class="lnk" data-a="drift-show">Что изменилось</button></div>
+      <div style="font-size:12px;color:var(--c-warning-text);margin-top:6px">«Как мою правку» — изменённые места станут вашими (✎ ${ME}). «Как есть» — текст останется, а у этих мест будет пометка «изменено снаружи».</div></div></div>`;
+  const body = doc.sections.map(sec => {
+    if (sec.h === 'Противоречия' && !sec.items.length) return '';
+    const rows = sec.items.map(it => {
+      if (isGpu && A.drift && it.id === 'f2') return `<div class="st">${og('ext', 10)}<span class="add">${esc(DRIFT_TEXT)}</span><span class="tag" style="color:var(--c-warning-text)">изменено снаружи</span></div>`;
+      return stView(it, doc);
+    }).join('');
+    return `<div class="h2">${esc(sec.h)}</div>${rows || '<div class="hint mut" style="margin-left:0">Пока пусто</div>'}`;
+  }).join('');
+  return `<div class="doc"><div class="docin ${A.set.fns ? '' : 'nofn'}">${docHead(doc)}${top}${body}${histBlock(doc)}${isGpu ? notesSection() : ''}</div></div>`;
+}
+
+/* --- Правка страницы --- */
+function editTexts(doc) {
+  const E = A.edit, out = [];
+  doc.sections.forEach(sec => sec.items.forEach(it => out.push({ it, sec:sec.h, gone:!!E.gone[it.id], t:E.draft[it.id] ?? it.t })));
+  E.added.forEach(a => out.push({ it:{ id:a.id, o:'me', t:'' }, sec:a.sec, gone:false, t:E.draft[a.id] ?? '', added:true }));
+  return out;
+}
+function editStats(doc) {
+  let n = 0, blocked = false;
+  for (const r of editTexts(doc)) {
+    if (r.gone) { n++; continue; }
+    if (r.added ? r.t.trim() : r.t.trim() !== r.it.t) n++;
+    if (linkIssues(r.t, doc).some(x => x.kind === 'foreign')) blocked = true;
+  }
+  return { n, blocked };
+}
+function editHints(doc, id) {
+  const E = A.edit, r = editTexts(doc).find(x => x.it.id === id);
+  if (!r) return '';
+  if (r.gone) return `<div class="hint mut">${I('archive', 13)}<span>Уйдёт в «Историю» с пометкой «убрано вами» — не удаляется. <button class="lnk" data-a="gone-undo" data-id="${id}" style="padding:0 2px">Вернуть</button></span></div>`;
+  let h = '';
+  if (E.ask === id) h += `<div class="confirm" role="alertdialog"><b>Убрать утверждение?</b> Оно уйдёт в «Историю» страницы, удалено не будет.
+    <div style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-a="gone-ok" data-id="${id}">${I('archive', 13)}Убрать</button><button class="btn xs gh" data-a="gone-no">Отмена</button></div></div>`;
+  if (r.it.o === 'ai' && r.t.trim() !== r.it.t) h += `<div class="hint warn" style="margin-left:0">${I('info', 13)}<span>Это формулировка ИИ. После сохранения прежняя уйдёт в «Историю» страницы, а утверждение станет вашим — сноска ${r.it.n} сменится на «✎ ${ME}».</span></div>`;
+  for (const x of linkIssues(r.t, doc)) {
+    if (x.kind === 'foreign') h += `<div class="hint dng" style="margin-left:0">${I('link', 13)}<span><b>Эту ссылку не сохранить.</b> Страница «${esc(x.name)}» лежит в разделе «${x.folder}», а эта — в «${FOLDERS[doc.folder]}». Чаты раздела «${FOLDERS[doc.folder]}» её не увидят. Ссылаться можно на страницы этого раздела и «Общее».</span></div>`;
+    else h += `<div class="hint warn" style="margin-left:0">${I('link', 13)}<span>Страницы «${esc(x.name)}» нет. Сохранить можно, но ссылка попадёт в «Здоровье» как ведущая в никуда.</span></div>`;
+  }
+  return h;
+}
+function editSummary(doc) {
+  const { n, blocked } = editStats(doc);
+  return blocked ? 'Есть ссылка, которую не сохранить' : n ? `Изменено ${n} ${plural(n, 'место', 'места', 'мест')}` : 'Пока без изменений';
+}
+function updateEditMeta(id) {
+  const doc = cur(), { blocked } = editStats(doc);
+  const h = document.querySelector(`[data-hid="${CSS.escape(id)}"]`);
+  if (h) h.innerHTML = editHints(doc, id);
+  document.querySelectorAll('.js-esum').forEach(el => el.textContent = editSummary(doc));
+  document.querySelectorAll('.js-esave').forEach(el => el.disabled = blocked);
+}
+function docEdit(doc) {
+  const E = A.edit, rows = editTexts(doc), mobile = S.w === 'm', { blocked } = editStats(doc);
+  const row = r => {
+    const id = r.it.id, mark = r.it.o === 'ai' ? `<span class="fn ai">${r.it.n}</span>` : r.added ? '' : `<span class="fn me">✎ ${esc(r.it.who)}</span>`;
+    return `<div class="est ${r.gone ? 'gone' : ''}">${og(r.it.o, 10)}<div style="flex:1;min-width:0">
+        <div class="box" ${r.gone ? '' : 'contenteditable="true" role="textbox" aria-multiline="true"'} data-sid="${id}" data-ph="Новое утверждение">${esc(r.t)}</div>
+        <div data-hid="${id}">${editHints(doc, id)}</div></div>
+      <div class="ra" style="flex-direction:column;align-items:flex-end;gap:4px">${mark}${r.gone || E.ask === id ? '' : `<button class="ib xs" title="Убрать в «Историю»" aria-label="Убрать утверждение" data-a="gone-ask" data-id="${id}">${I('archive', 14)}</button>`}</div></div>`;
+  };
+  return `<div class="doc">
+    <div class="ebar">${mobile ? '' : `<span class="bdg t-neutral">${I('pen', 12)}Правка</span>`}<span class="s js-esum">${editSummary(doc)}</span>
+      <button class="btn xs gh" data-a="edit-cancel">Отмена</button><button class="btn xs pri js-esave" data-a="edit-save" ${blocked ? 'disabled' : ''}>${I('check', 13)}Сохранить</button></div>
+    <div class="docin">
+      <h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta"><span>Утверждения ИИ можно переформулировать — тогда они станут вашими. Убранное не удаляется, а уходит в «Историю». Ссылка — <span class="mono">[[Название]]</span>.</span></div>
+      ${doc.sections.map((sec, si) => `<div class="h2">${esc(sec.h)}</div>${rows.filter(r => r.sec === sec.h).map(row).join('')}
+        <div style="margin:8px 0 0 24px"><button class="btn xs dashed" data-a="add-st" data-sec="${si}">${I('plus', 13)}Добавить утверждение</button></div>`).join('')}
+      ${doc.id === 'gpu' ? `<div class="h2">Заметки <span style="font-size:12px;font-weight:500;color:var(--c-text-muted)">свободный текст, без сносок · последняя секция</span></div>
+        <div class="free nedit" contenteditable="true" role="textbox" aria-label="Секция «Заметки»">Черновик: перед большим апскейлом проверить, не стоит ли в очереди обучение LoRA.</div>` : ''}
+    </div></div>`;
+}
+
+/* --- Конфликт 409 --- */
+function diffMark(a, b) {
+  let i = 0; while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0; while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  const mid = b.slice(i, b.length - j);
+  return esc(b.slice(0, i)) + (mid ? `<span class="add">${esc(mid)}</span>` : '') + esc(b.slice(b.length - j));
+}
+function buildConflict(doc) {
+  const E = A.edit, loc = find(doc, 'f1'), f1 = loc[0].items[loc[1]];
+  const touched = [...new Set(editTexts(doc).filter(r => r.gone || (r.added ? r.t.trim() : r.t.trim() !== r.it.t)).map(r => r.sec))];
+  const mineT = E.gone.f1 ? null : (E.draft.f1 !== undefined && E.draft.f1.trim() !== f1.t ? E.draft.f1.trim() : undefined);
+  const rows = [], auto = [];
+  if (mineT !== undefined) rows.push({ title:'Сводка · сноска 3', mine:mineT, theirs:THEIRS_F1, was:f1.t, state:'', val:'', merging:false });
+  else auto.push(['Сводка', touched.includes('Сводка') ? 'правили разные утверждения — сольётся само' : 'правил только ИИ — его правка применится']);
+  touched.filter(s => s !== 'Сводка').forEach(s => auto.push([s, 'правили только вы — ваши правки применятся']));
+  A.cf = { rows, auto };
+}
+function docConflict() {
+  const cf = A.cf, total = cf.rows.length + cf.auto.length, done = cf.auto.length + cf.rows.filter(r => r.state).length, ready = done === total;
+  const LBL = { mine:'взято моё', theirs:'взята правка ИИ', merge:'слито вручную' };
+  const row = (r, i) => {
+    const head = `<div class="cfh">${r.title}<span class="s" style="color:${r.state ? 'var(--c-success-text)' : 'var(--c-warning-text)'}">${r.state ? I('check', 13) + ' решено: ' + LBL[r.state] : 'изменили и вы, и ИИ'}</span></div>`;
+    if (r.state) return `<div class="cf done">${head}<div class="col" style="border:0">${esc(r.val ?? '(убрано)')}<div style="margin-top:6px"><button class="lnk" data-a="cf-reopen" data-i="${i}">Изменить выбор</button></div></div></div>`;
+    if (r.merging) return `<div class="cf">${head}<div class="col" style="border:0"><div class="cl">${I('merge', 11)}Слейте вручную — начали с вашего варианта</div>
+        <div class="nedit" contenteditable="true" role="textbox" data-cfm="${i}">${esc(r.mine ?? r.theirs)}</div>
+        <div class="hint mut" style="margin:6px 0 0;padding:0">ИИ дописал: «с увеличением до 1440p — ещё около 15».</div></div>
+      <div class="cfa"><button class="btn xs pri" data-a="cf-merge-done" data-i="${i}">${I('check', 13)}Готово</button><button class="btn xs gh" data-a="cf-merge-cancel" data-i="${i}">Отмена</button></div></div>`;
+    return `<div class="cf">${head}<div class="cols">
+        <div class="col mine"><div class="cl">${og('me', 10)}Моё</div>${r.mine === null ? '<i>вы убрали это утверждение</i>' : diffMark(r.was, r.mine)}</div>
+        <div class="col"><div class="cl">${og('ai', 10)}ИИ · сегодня 09:20</div>${diffMark(r.was, r.theirs)}</div>
+        <div class="col"><div class="cl">${I('history', 11)}Было, когда вы начали</div>${esc(r.was)}</div></div>
+      <div class="cfa"><button class="btn xs sec" data-a="cf-pick" data-v="mine" data-i="${i}">Оставить моё</button><button class="btn xs sec" data-a="cf-pick" data-v="theirs" data-i="${i}">Взять их</button><button class="btn xs gh" data-a="cf-merge" data-i="${i}">${I('merge', 13)}Слить вручную</button></div></div>`;
+  };
+  return `<div class="doc">
+    <div class="ebar"><span class="bdg t-warning">${I('alert', 12)}Нужно решить</span><span class="s">${ready ? 'Все разделы решены' : `Решено ${done} из ${total} ${plural(total, 'раздела', 'разделов', 'разделов')}`}</span>
+      <button class="btn xs gh" data-a="cf-drop">Отменить мою правку</button><button class="btn xs pri" data-a="cf-save" ${ready ? '' : 'disabled'}>${I('check', 13)}Сохранить</button></div>
+    <div class="docin">
+      <div class="ntc n-warn">${I('alert', 18)}<div class="b"><div class="tt">Страница изменилась, пока вы правили</div>
+        <div>Сегодня в 09:20 ИИ дописал её после разбора чата. Ваш текст не потерян: выберите, что оставить там, где вы с ИИ правили одно и то же. Остальное сольётся само.</div></div></div>
+      ${cf.rows.map(row).join('')}
+      ${cf.auto.map(([t, s]) => `<div class="cf done"><div class="cfh">${esc(t)}<span class="s" style="color:var(--c-success-text)">${I('check', 13)} ${s}</span></div></div>`).join('')}
+      ${cf.rows.length ? `<div class="hint mut" style="margin:12px 0 0">${I('info', 13)}<span>«Слить вручную» откроет раздел для правки с вашим вариантом и тем, что дописал ИИ.</span></div>` : ''}
+    </div></div>`;
+}
+
+/* --- Заметка --- */
+function docNote(doc) {
+  const m = S.w === 'm';
+  const toWiki = `<button class="btn sm sec" data-a="to-wiki">${I('book', 14)}Перенести в вики</button>`;
+  const refs = live().filter(id => id !== doc.id && A.docs[id].kind === 'wiki' && docText(A.docs[id]).includes('[[' + doc.title + ']]')).length;
+  return `<div class="doc"><div class="docin">
+    <div class="dtop"><div class="grow"><h1 class="dtitle">${esc(doc.title)}</h1>
+      <div class="dmeta"><span class="bdg t-neutral">${I('file', 12)}Заметка</span><span>изменена ${doc.updated}</span></div></div>
+      ${m ? '' : `<div class="dbar" style="padding-top:4px"><button class="btn sm sec" data-a="edit">${I('pen', 14)}Править</button>${toWiki}${moreBtn(doc)}</div>`}</div>
+    ${m ? `<div class="dbar" style="margin-top:10px;flex-wrap:wrap"><button class="btn sm sec" style="flex:1" data-a="edit">${I('pen', 14)}Править</button>${toWiki}</div>` : ''}
+    <div style="margin-top:16px;font-size:14px;line-height:1.7">${doc.body.length ? doc.body.map(p => `<p>${linkify(p, doc)}</p>`).join('') : '<p style="color:var(--c-text-muted)">Пустая заметка</p>'}</div>
+    <div class="hint mut" style="margin:18px 0 0">${I('info', 13)}<span>Заметку пишете только вы. ИИ читает её как источник${refs ? `: на неё ссылается ${refs} ${plural(refs, 'страница', 'страницы', 'страниц')} вики` : ''}.</span></div>
+  </div></div>`;
+}
+function docNoteEdit(doc) {
+  return `<div class="doc">
+    <div class="ebar">${S.w === 'm' ? '' : `<span class="bdg t-neutral">${I('pen', 12)}Правка заметки</span>`}<span class="s">Ссылка на страницу — <span class="mono">[[Название]]</span></span>
+      <button class="btn xs gh" data-a="nedit-cancel">Отмена</button><button class="btn xs pri" data-a="nedit-save">${I('check', 13)}Готово</button></div>
+    <div class="docin">
+      <h1 class="dtitle nedit" contenteditable="true" role="textbox" data-ntitle data-ph="Название заметки">${esc(doc.title)}</h1>
+      <div class="nedit" contenteditable="true" role="textbox" aria-multiline="true" data-nbody data-ph="Текст заметки" style="margin-top:12px;font-size:14px;line-height:1.7;min-height:160px;white-space:pre-wrap">${esc(doc.body.join('\n'))}</div>
+    </div></div>`;
+}
+function docLoading() {
+  const L = (w, h = 12, mt = 10) => `<div class="sk" style="width:${w};height:${h}px;margin-top:${mt}px"></div>`;
+  return `<div class="doc"><div class="docin" aria-busy="true">
+    ${L('62%', 26, 0)}${L('40%', 14, 12)}
+    ${L('30%', 16, 30)}${L('100%')}${L('88%')}
+    ${L('24%', 16, 30)}${L('96%')}${L('72%')}${L('84%')}
+    ${L('28%', 16, 30)}${L('92%')}${L('60%')}
+  </div></div>`;
+}
+function docEmpty() {
+  return `<div class="empty"><div class="ic">${I('book', 26)}</div>
+    <div class="t">Здесь будут ваши записи и вики</div>
+    <div class="d">Пишите заметки сами — а ИИ после разговоров соберёт из них и из чатов страницы со ссылками на источники. Вести страницу можно вместе.</div>
+    <div class="a"><button class="btn sm pri" data-a="new-note">${I('plus', 14)}Новая заметка</button><button class="btn sm sec" data-a="toast" data-msg="ИИ заведёт вики после ближайшего разговора — вручную ничего настраивать не нужно">Завести вики</button></div></div>`;
+}
+function docRemoved(doc) {
+  return `<div class="empty"><div class="ic">${I('archive', 24)}</div>
+    <div class="t">«${esc(doc.title)}» ${doc.kind === 'note' ? 'убрана' : 'убрана'}</div>
+    <div class="d">Она лежит в «Истории» раздела и не удалена. Вернуть можно здесь или из «Журнала».</div>
+    <div class="a"><button class="btn sm sec" data-a="doc-restore">${I('undo', 14)}Вернуть</button></div></div>`;
+}
+function center() {
+  if (A.data === 'loading' || A.busy) return docLoading();
+  const doc = cur();
+  if (!doc) return docEmpty();
+  if (doc.removed) return docRemoved(doc);
+  if (doc.kind === 'note') return A.mode === 'nedit' ? docNoteEdit(doc) : docNote(doc);
+  if (A.mode === 'edit') return docEdit(doc);
+  if (A.mode === 'conflict') return docConflict(doc);
+  return docPage(doc);
+}
+
+/* ===== Правая панель: Входящие / Журнал / Здоровье / Настройки ===== */
+function panelInbox() {
+  const items = pendingItems();
+  const lead = `Остальное, включая замену ваших формулировок новыми источниками, ИИ применил сам — это видно в «Журнале».`;
+  if (!items.length) return `<div class="empty"><div class="ic">${I('inbox', 24)}</div><div class="t" style="font-size:16px">Спорного нет</div><div class="d">Сюда приходит только то, что ИИ не смог применить сам. ${lead}</div>
+    <div class="a"><button class="btn xs sec" data-a="panel" data-p="journal">${I('history', 13)}Открыть «Журнал»</button></div></div>`;
+  return `<div class="pbody">
+    <div style="font-size:12px;color:var(--c-text-secondary);padding:6px 2px 0">${items.length} ${plural(items.length, 'замена ждёт', 'замены ждут', 'замен ждут')} вас: автомат не смог применить ${items.length === 1 ? 'её' : 'их'} сам. ${lead}</div>
+    ${items.map(it => {
+      const ops = it.ops.filter(o => !o.state), title = it.doc ? A.docs[it.doc].title : it.title;
+      return `<div class="item ${it.open ? 'on' : ''} ${A.flash === it.id ? 'flash' : ''}">
+        <button class="ihead" data-a="inbox-toggle" data-item="${it.id}" aria-expanded="${!!it.open}">
+          <div class="t">${og(it.doc ? docOrigin(A.docs[it.doc]) : it.o, 11)}<span style="flex:1">${esc(title)}</span><span style="color:var(--c-text-muted)">${I(it.open ? 'cd' : 'cr', 14)}</span></div>
+          <div class="s">${it.from}</div>
+          <div class="why"><span class="bdg t-${it.badge[1]}">${it.badge[0]}</span><span>${ops.length} ${plural(ops.length, 'правка', 'правки', 'правок')}</span></div></button>
+        ${it.open && it.why ? `<div class="s" style="margin-top:6px">${esc(it.why)}${it.settings ? ` <button class="lnk" data-a="panel" data-p="settings" style="padding:0 2px">В «Настройки»</button>` : ''}</div>` : ''}
+        ${it.open ? ops.map(o => {
+          const loc = o.target && find(A.docs[it.doc], o.target), was = loc ? loc[0].items[loc[1]].t : '';
+          const df = o.alt ? o.alt.map(([t, s]) => `<div class="a" style="background:var(--c-bg-card);color:var(--c-text-primary)">${esc(t)}<div style="font-size:11px;color:var(--c-text-muted)">${esc(s)}</div></div>`).join('')
+            : (was ? `<div class="r">${esc(was)}</div>` : '') + `<div class="a">${esc(o.add)}</div>`;
+          return `<div class="op"><div class="ot">${o.label}</div><div class="df">${df}</div>
+            ${o.alt ? '' : `<div class="q">Источник: «${esc(o.q)}» — ${esc(o.src)}, ${o.d}</div>`}
+            <div class="acts">${o.choices.map((c, ci) => `<button class="btn xs ${c.c}" data-a="op" data-item="${it.id}" data-op="${o.id}" data-c="${ci}">${c.l}</button>`).join('')}
+              ${o.alt ? '' : `<button class="btn xs gh" data-a="dead" data-what="переход в ${esc(o.src)}">${I('chat', 13)}Открыть в чате</button>`}</div></div>`;
+        }).join('') + (it.doc ? `<div style="margin-top:8px"><button class="lnk" data-a="open" data-id="${it.doc}">${I('file', 13)}Открыть страницу</button></div>` : '') : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
+}
+function panelJournal() {
+  const rows = A.journal.filter(j => A.jf === 'all' || (A.jf === 'ovr' ? j.ovr : j.o === A.jf));
+  const chips = `<div class="chips" style="padding:8px 2px 0;flex-wrap:wrap">${[['all', 'Все'], ['ai', 'ИИ'], ['me', 'Мои'], ['ovr', 'ИИ поменял моё']].map(([v, l]) =>
+    `<button class="chip ${A.jf === v ? 'on' : ''}" data-a="jf" data-v="${v}" aria-pressed="${A.jf === v}">${v === 'all' ? '' : og(v === 'ovr' ? 'mix' : v, 11)}${l}${v === 'ovr' ? ` <span class="n">${A.journal.filter(j => j.ovr).length}</span>` : ''}</button>`).join('')}</div>`;
+  if (!A.journal.length) return `<div class="empty"><div class="ic">${I('history', 24)}</div><div class="t" style="font-size:16px">Журнал пуст</div><div class="d">Здесь появится всё, что вы и ИИ меняли в разделе, — с откатом.</div></div>`;
+  let day = '', out = '';
+  for (const j of rows) {
+    if (j.day !== day) { day = j.day; out += `<div class="jday">${day}</div>`; }
+    const acts = [];
+    if (j.rep && !j.done && A.docs[j.rep[0]] && find(A.docs[j.rep[0]], j.rep[1])?.[0].items[find(A.docs[j.rep[0]], j.rep[1])[1]].rep)
+      acts.push(`<button class="btn xs sec" data-a="restore-mine" data-doc="${j.rep[0]}" data-id="${j.rep[1]}">${I('undo', 13)}Вернуть мою</button>`);
+    if (j.open && A.docs[j.open] && !A.docs[j.open].removed) acts.push(`<button class="btn xs gh" data-a="open" data-id="${j.open}">${I('file', 13)}Открыть страницу</button>`);
+    if (j.chat) acts.push(`<button class="btn xs gh" data-a="dead" data-what="переход в чат ${esc(j.chat)}">${I('chat', 13)}Открыть в чате</button>`);
+    if (j.act && !j.done && !j.asking) acts.push(`<button class="btn xs ${j.o === 'me' ? 'sec' : 'gh'}" data-a="j-act" data-j="${j.id}">${I('undo', 13)}${j.act}</button>`);
+    if (j.more) acts.push(`<button class="btn xs gh" data-a="j-more" data-j="${j.id}" aria-expanded="${!!j.moreOpen}">${j.moreOpen ? 'Свернуть' : 'Подробнее'}</button>`);
+    out += `<div class="jrow"><div class="tm">${j.tm}</div><div class="b"><div class="t">${og(j.o, 10)} ${esc(j.t)}${j.done ? ` <span class="bdg t-neutral">${j.done}</span>` : ''}</div>
+      <div class="s">${esc(j.s)}</div>
+      ${acts.length ? `<div class="acts">${acts.join('')}</div>` : ''}
+      ${j.moreOpen ? `<div style="margin-top:6px;display:flex;flex-direction:column;align-items:flex-start">${j.more.map(([id, l]) => A.docs[id] && !A.docs[id].removed ? `<button class="lnk" data-a="open" data-id="${id}">${esc(l)}</button>` : `<span class="s">${esc(l)}</span>`).join('')}</div>` : ''}
+      ${j.asking ? `<div class="confirm" role="alertdialog"><b>${esc(j.confirm.split('?')[0])}?</b><br>${esc(j.confirm.split('?').slice(1).join('?').trim())}
+        <div style="display:flex;gap:6px;margin-top:8px"><button class="btn xs dng" data-a="j-ok" data-j="${j.id}">${I('undo', 13)}Откатить</button><button class="btn xs gh" data-a="j-no" data-j="${j.id}">Отмена</button></div></div>` : ''}
+    </div></div>`;
+  }
+  return `<div class="pbody">${chips}${out || '<div class="hint mut" style="margin:12px 0 0">Здесь пока нет записей этого вида.</div>'}</div>`;
+}
+function panelHealth() {
+  const broken = [], ids = live();
+  ids.forEach(id => { const d = A.docs[id]; if (d.kind === 'wiki') linkIssues(docText(d), d).filter(x => x.kind === 'missing').forEach(x => broken.push([id, x.name])); });
+  const lonely = ids.filter(id => A.docs[id].kind === 'wiki' && !ids.some(o => o !== id && docText(A.docs[o]).includes('[[' + A.docs[id].title + ']]')));
+  const R = (tone, n, t, s, id) => `<button class="hrow hbtn" data-a="open" data-id="${id}"><span class="bdg t-${tone}">${n}</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">${t}</div><div style="font-size:12px;color:var(--c-text-secondary)">${s}</div></div>${I('cr', 14)}</button>`;
+  const f2 = find(A.docs.gpu, 'f2');
+  return `<div class="pbody">
+    <div style="display:flex;align-items:center;gap:8px;padding:8px 2px 4px;font-size:12px;color:var(--c-text-secondary)"><span style="flex:1">Проверено ${A.hcheck}</span><button class="btn xs sec" data-a="hcheck" ${A.hbusy ? 'disabled' : ''}>${A.hbusy ? 'Проверяю…' : 'Проверить сейчас'}</button></div>
+    ${A.drift && f2 ? `<div class="item on ${A.flash === 'drift' ? 'flash' : ''}"><div class="t">${og('ext', 11)}Изменили снаружи: «Очередь локальной GPU»</div><div class="s">сегодня 08:47 · 1 место</div>
+      <div class="op"><div class="ot">Сводка</div><div class="df"><div class="r">${esc(f2[0].items[f2[1]].t)}</div><div class="a">${esc(DRIFT_TEXT)}</div></div>
+      <div class="acts"><button class="btn xs pri" data-a="drift-mine">Принять как мою правку</button><button class="btn xs sec" data-a="drift-asis">Принять как есть</button></div></div></div>` : ''}
+    ${broken.length ? R('danger', broken.length, 'Ссылки ведут в никуда', broken.map(([id, n]) => `«${esc(A.docs[id].title)}» → «${esc(n)}»`).join(', '), broken[0][0]) : ''}
+    ${ids.length ? `<div class="hrow"><span class="bdg t-warning">3</span><div class="b"><div style="font-weight:600;color:var(--c-text-heading)">Источник пропал</div><div style="font-size:12px;color:var(--c-text-secondary)">Чат удалён — утверждения ИИ остались без подтверждения</div></div></div>` : ''}
+    ${lonely.length ? R('neutral', lonely.length, 'Страница без ссылок на неё', lonely.map(id => `«${esc(A.docs[id].title)}»`).join(', '), lonely[0]) : ''}
+    ${!ids.length ? '<div class="hint mut" style="margin:12px 0 0">Проверять пока нечего.</div>' : ''}
+  </div>`;
+}
+function panelSettings() {
+  const R = (k, t, s) => `<div class="srow"><div class="b"><div class="t">${t}</div><div class="s">${s}</div></div><button class="tgl ${A.set[k] ? 'on' : ''}" role="switch" aria-checked="${!!A.set[k]}" aria-label="${t}" data-a="tgl" data-k="${k}"></button></div>`;
+  const cls = A.set.cls
+    ? `<div class="srow"><div class="b"><div class="t">Замена ваших формулировок</div><div class="s">ИИ меняет ваше сам, если источник новее вашей правки. Прежняя — в «Истории», на странице — «Вернуть мою».</div>
+        <div class="s" style="color:var(--c-text-muted)">Выключится само, если за неделю вы трижды вернёте своё</div></div><span class="bdg t-success">применяется само</span></div>`
+    : `<div class="srow"><div class="b"><div class="t">Замена ваших формулировок</div><div class="s" style="color:var(--c-warning-text)">Выключено автоматикой: 3 возврата за неделю. Пока замены ждут вас во «Входящих».</div>
+        <div style="margin-top:6px"><button class="btn xs sec" data-a="cls-on">Снова применять само</button></div></div><span class="bdg t-warning">выключено</span></div>`;
+  return `<div class="pbody">
+    <div class="ps-h">Применение</div>
+    ${R('auto', 'Бесспорное — применять сразу', 'Иначе каждая правка ИИ будет ждать вас во «Входящих»')}
+    ${cls}
+    ${R('fns', 'Показывать сноски ИИ', 'Номера сносок у утверждений ИИ; ваши — «✎ имя, дата»')}
+    ${nightBlock()}
+    <div class="hint mut" style="margin:12px 0 0;padding:0 2px">Настройки — только вашей вики. Какой моделью разбирать, назначает администратор.</div>
+  </div>`;
+}
+/* ===== «Ночной разбор чатов» — секция панели «Настройки» (срез Ф2 02.11, шаги F2/F3) ===== */
+const H2 = h => String(h).padStart(2, '0') + ':00';
+function nightErr() {
+  const N = A.night, num = s => +String(s).replace(/\s/g, '');
+  return {
+    win: N.from === N.to ? 'Начало и конец окна совпадают' : '',
+    budget: !(num(N.budget) > 0) ? 'Нужно число больше нуля' : num(N.budget) > 5000000 ? 'Не больше 5 000 000' : '',
+    pk: !(num(N.pk) > 0) ? 'Нужно число больше нуля' : num(N.pk) > 20 ? 'Не больше 20 — иначе ночь упрётся в лимит «Входящих»' : '',
+    pks: !(num(N.pks) > 0) ? 'Нужно число больше нуля' : num(N.pks) > num(N.pk) ? 'На раздел — не больше, чем на всю вики' : '',
+  };
+}
+function nightResult() {
+  const N = A.night, win = `${H2(N.from)}–${H2(N.to)}`;
+  if (N.out === 'none') return `<div class="item" style="margin-top:6px"><div class="t">${I('clock', 14)}Ночного разбора ещё не было</div>
+    <div class="s">${N.on ? `Первый пройдёт сегодня с ${H2(N.from)} до ${H2(N.to)}. Утром придёт уведомление: что применилось само и что ждёт вас.` : 'Включите разбор — первая ночь пройдёт в ближайшее окно, утром придёт уведомление с итогом.'}</div></div>`;
+  const R = { completed:[14, 14, 9, 3, 512000, 'Закончилась в 05:12 — разобрано всё отобранное.'], budget:[14, 9, 6, 3, 700000, 'Закончилась в 04:40 — кончился бюджет.'], open_limit:[14, 6, 3, 20, 341000, 'Остановилась в 04:05 — во «Входящих» лимит.'] }[N.out];
+  const [sel, an, ap, inb, used, line] = R, fmt = n => n.toLocaleString('ru-RU').replace(/,/g, ' ');
+  const pre = N.out === 'budget' ? `<div class="ntc n-warn" style="margin-top:6px">${I('clock', 16)}<div class="b"><div class="tt">Не хватило бюджета на всё</div><div>Разобрали 9 чатов из 14 отобранных. Остальные 5 разберём следующей ночью — сначала они. Если так каждую ночь, поднимите бюджет.</div></div></div>`
+    : N.out === 'open_limit' ? `<div class="ntc n-warn" style="margin-top:6px">${I('inbox', 16)}<div class="b"><div class="tt">Остановились: во «Входящих» 20 пакетов ждут вашего решения</div><div>Больше 20 спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.</div>
+        <div class="acts"><button class="btn xs sec" data-a="panel" data-p="inbox">${I('inbox', 13)}Открыть «Входящие»</button></div></div></div>` : '';
+  return `${pre}<div class="item" style="margin-top:6px">
+    <div class="kv"><div><b>${sel}</b>чатов отобрано</div><div><b>${an}</b>разобрано</div><div><b>${ap}</b>пакетов применено само</div><div><b>${inb}</b>ждут вас во «Входящих»</div></div>
+    <div class="pbar" role="progressbar" aria-label="Расход бюджета" aria-valuenow="${used}" aria-valuemax="700000"><i style="width:${Math.round(used / 7000)}%"></i></div>
+    <div class="s mono" style="margin-top:4px">≈ ${fmt(used)} из 700 000</div>
+    <div class="s" style="margin-top:6px">${line} Окно ${win}. <button class="lnk" data-a="panel" data-p="journal" style="padding:0 2px">Открыть «Журнал»</button></div></div>`;
+}
+function nightBlock() {
+  const N = A.night, E = nightErr(), off = N.on ? '' : 'off';
+  const hours = sel => Array.from({ length:24 }, (_, h) => `<option value="${h}" ${h === sel ? 'selected' : ''}>${H2(h)}</option>`).join('');
+  const err = t => t ? `<div class="err" role="alert">${t}</div>` : '';
+  const marks = A.marks.map(m => {
+    const dis = m.exec ? 'disabled title="Чат исполнителя задачи — знание придёт итогом задачи"' : '';
+    return `<div class="mrow"><span class="nm">${esc(m.chat)}<small>${esc(m.exec ? 'Чат исполнителя задачи — знание придёт итогом задачи' : m.s)}</small></span>
+      <span class="acts2" style="display:flex;gap:4px"><button class="cm imp" aria-pressed="${m.m === 'imp'}" data-a="mark" data-id="${m.id}" data-v="imp" ${dis}>${I('star', 13)}Важный</button>
+      <button class="cm skip" aria-pressed="${m.m === 'skip'}" data-a="mark" data-id="${m.id}" data-v="skip" ${dis}>${I('ban', 13)}Не разбирать</button></span></div>`;
+  }).join('');
+  return `<div class="ps-h">Ночной разбор чатов <span class="bdg ${N.on ? 't-success' : 't-neutral'}" style="margin-left:4px;text-transform:none;letter-spacing:0">${N.on ? 'включён' : 'выключен'}</span></div>
+    <div class="srow"><div class="b"><div class="t">Разбирать по ночам</div><div class="s">По умолчанию выключено — включите, когда будете готовы. Без него вики пополняется только кнопкой «Разобрать этот чат».</div></div>
+      <button class="tgl ${N.on ? 'on' : ''}" role="switch" aria-checked="${!!N.on}" aria-label="Разбирать по ночам" data-a="night-tgl"></button></div>
+    ${N.on ? '' : `<div class="ntc n-info" style="margin-top:8px">${I('clock', 16)}<div class="b">Ночью ничего не разбирается. Отбор чатов всё равно считается, а пометки чатов ниже продолжают действовать.</div></div>`}
+    <div class="nf ${off}"><div class="t">Окно</div>
+      <div class="row"><select class="inp" data-nf="from" aria-label="Начало окна">${hours(N.from)}</select>—<select class="inp ${E.win ? 'bad' : ''}" data-nf="to" aria-label="Конец окна">${hours(N.to)}</select></div>
+      ${err(E.win)}<div class="s">Время сервера (MSK). У вас то же: ${H2(N.from)}–${H2(N.to)}. Не успели к концу окна — остальное следующей ночью.</div></div>
+    <div class="nf ${off}"><div class="t">Бюджет за ночь</div>
+      <div class="row"><input class="inp mono ${E.budget ? 'bad' : ''}" style="width:120px" inputmode="numeric" data-nf="budget" aria-label="Бюджет за ночь, токенов" value="${esc(N.budget)}"> токенов</div>
+      ${err(E.budget)}<div class="s">Примерно 20–30 длинных разговоров. Кончился — остальное следующей ночью.</div></div>
+    <div class="nf ${off}"><div class="t">Пакетов за ночь</div>
+      <div class="row"><input class="inp mono ${E.pk ? 'bad' : ''}" style="width:56px" inputmode="numeric" data-nf="pk" aria-label="Пакетов на всю вики" value="${esc(N.pk)}"> на всю вики
+        <input class="inp mono ${E.pks ? 'bad' : ''}" style="width:56px" inputmode="numeric" data-nf="pks" aria-label="Пакетов на раздел" value="${esc(N.pks)}"> на раздел</div>
+      ${err(E.pk)}${err(E.pks)}<div class="s">Чтобы один шумный проект не занял всю ночь. Чатов — до 10 на раздел, хроники в лимит не входят.</div></div>
+    <div class="nf ${off}"><div class="t">Чем разбирать</div>
+      <div class="lock">${I('lock', 13)}<span>Разбор · <b>Qwen3.8-27B (локальная)</b></span></div>
+      <div class="lock">${I('lock', 13)}<span>Отбор спорных чатов · <b>Qwen3.8-27B (локальная)</b></span></div>
+      <div class="s">Назначает администратор в «Поставщиках моделей». Локальная модель работает на нашей видеокарте — текст не покидает сервер.</div></div>
+    <div class="nf" style="border-bottom:0"><div class="t">Прошлая ночь · 01 → 02.11</div>${nightResult()}</div>
+    <div class="nf"><div class="t">Пометки чатов</div>
+      <div class="s">Ставятся и в меню чата. «Важный» — ночью в первую очередь, минуя отбор. «Не разбирать» — ни ночью, ни кнопкой. Повторный клик снимает пометку.</div>
+      ${marks}</div>`;
+}
+const PANELS = [['inbox', 'Входящие', 'inbox'], ['journal', 'Журнал', 'history'], ['health', 'Здоровье', 'activity'], ['settings', 'Настройки', 'settings']];
+const panelBody = () => A.data === 'loading'
+  ? `<div class="pbody" aria-busy="true">${[0, 1, 2].map(() => `<div class="item"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:10px;width:85%;margin-top:8px"></div><div class="sk" style="height:10px;width:40%;margin-top:8px"></div></div>`).join('')}</div>`
+  : ({ inbox:panelInbox, journal:panelJournal, health:panelHealth, settings:panelSettings })[A.p]();
+const PTITLE = () => PANELS.find(p => p[0] === A.p)[1];
+function panelSeg() {
+  const n = pendingItems().length;
+  return `<div class="iseg" role="tablist" aria-label="Разделы панели">${PANELS.map(([k, l, ic]) =>
+    `<button class="${A.p === k ? 'on' : ''}" data-a="panel" data-p="${k}" title="${l}" role="tab" aria-selected="${A.p === k}">${I(ic, 18)}${k === 'inbox' && n ? `<span class="cnt">${n}</span>` : ''}${railDot(k)}</button>`).join('')}</div>`;
+}
+/* Точки рельсы: «Здоровье» — страницу изменили снаружи (C.warning), «Журнал» — есть замены моложе 14 дней (C.info) */
+const railDot = k => k === 'health' && A.drift ? '<span class="dot" style="top:4px;right:4px"></span>'
+  : k === 'journal' && replaced().length ? '<span class="dot info" style="top:4px;right:4px" title="ИИ заменил ваши формулировки"></span>' : '';
+function notifHtml() {
+  if (!A.notif) return '';
+  const r = replaced().length, n = pendingItems().length;
+  return `<div class="notif" role="status" aria-label="Утреннее уведомление">${I('bell', 18)}<div class="b">
+    <div class="tt">ИИ заменил ${r} ${plural(r, 'вашу формулировку', 'ваши формулировки', 'ваших формулировок')}</div>
+    <div>Ночной разбор 01 → 02.11: дописал 5 страниц, 1 ваше утверждение оспорил.${n ? ` ${n} ${plural(n, 'замена ждёт', 'замены ждут', 'замен ждут')} вас во «Входящих».` : ''}</div>
+    <div class="acts"><button class="btn xs sec" data-a="notif-open">${I('history', 13)}Что поменял ИИ</button><button class="btn xs gh" data-a="notif-close">Закрыть</button></div></div></div>`;
+}
+
+/* ===== Слои поверх окна ===== */
+function modalHtml() {
+  const m = A.modal;
+  if (!m) return '';
+  return `<div class="modal"><div class="ov" data-a="modal-close"></div><div class="dlg" role="alertdialog" aria-modal="true" aria-label="${esc(m.title)}">
+    <div class="t">${esc(m.title)}</div><div class="d">${esc(m.text)}</div>
+    <div class="a"><button class="btn sm gh" data-a="modal-close">${m.cancel || 'Отмена'}</button><button class="btn sm ${m.danger ? 'dng' : 'pri'}" data-a="modal-ok">${m.ok}</button></div></div></div>`;
+}
+
+/* ===== Сборка десктопа и мобилы ===== */
+function desktop() {
+  const n = pendingItems().length;
+  return `<div class="app">
+    <div class="rail">${['home', 'chat', 'tasks', 'book', 'wave'].map((ic, i) => {
+      const l = ['Главная', 'Чаты', 'Задачи', 'Заметки', 'Видео'][i];
+      return ic === 'book' ? `<button class="rb on" title="${l}" data-a="toast" data-msg="Вы уже в разделе «Заметки»">${I(ic, 18)}</button>`
+        : `<button class="rb" title="${l} — в прототипе не работает" data-a="dead" data-what="раздел «${l}»">${I(ic, 18)}</button>`;
+    }).join('')}</div>
+    <div class="isl left">${leftPanel(false)}</div>
+    <div class="isl center">${center()}</div>
+    ${A.p ? `<div class="isl right"><div class="ph"><span class="ttl ui">${PTITLE()}</span>${A.p === 'inbox' && n ? `<span class="cnt muted">${n}</span>` : ''}
+      <button class="ib" title="Свернуть панель" data-a="panel" data-p="">${I('x')}</button></div>${panelBody()}</div>` : ''}
+    <div class="rail" aria-label="Панель вики">${PANELS.map(([k, l, ic]) =>
+      `<button class="rb ${A.p === k ? 'on' : ''}" data-a="panel" data-p="${A.p === k ? '' : k}" title="${l}" aria-pressed="${A.p === k}">${I(ic, 18)}${k === 'inbox' && n ? `<span class="cnt">${n}</span>` : ''}${railDot(k)}</button>`).join('')}</div>
+    ${notifHtml()}
+    ${modalHtml()}
+  </div>`;
+}
+function mobile() {
+  const doc = cur(), n = pendingItems().length;
+  const title = A.data === 'loading' ? 'Заметки' : !doc ? 'Заметки' : A.mode === 'edit' || A.mode === 'nedit' ? 'Правка' : A.mode === 'conflict' ? 'Нужно решить' : (doc.title || 'Новая заметка');
+  const canMore = doc && !doc.removed && A.mode === 'view' && A.data !== 'loading' && !A.busy;
+  let layer = '';
+  if (A.d === 'tree') layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="drawer l" role="dialog" aria-label="Дерево заметок и вики">${leftPanel(true)}</div>`;
+  if (A.d === 'panel') layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="drawer r" role="dialog" aria-label="Панель вики"><div class="dh">${panelSeg()}<span style="flex:1"></span><button class="ib" data-a="drawer" data-d="" title="Закрыть">${I('x', 18)}</button></div>
+     <div style="padding:10px 14px 0;font-weight:600;color:var(--c-text-heading)">${PTITLE()}</div>${panelBody()}</div>`;
+  if (A.d === 'sheet' && doc && find(doc, A.fn)) {
+    const [sec, i] = find(doc, A.fn);
+    layer = `<div class="ov" data-a="drawer" data-d=""></div><div class="sheet" role="dialog"><div class="grab"></div>${footPop(sec.items[i]).replace('class="pop"', 'style="font-size:13px"')}</div>`;
+  }
+  if (A.menu && canMore) layer = `<div class="ov" data-a="menu-close"></div><div class="sheet msheet" role="menu"><div class="grab"></div>${menuItems(doc)}</div>`;
+  return `<div class="app m">
+    <div class="mhead">
+      <button class="ib" data-a="drawer" data-d="tree" title="Дерево заметок и вики">${I('pleft', 20)}</button>
+      <span class="ttl js-mtitle">${esc(title)}</span>
+      <button class="ib" data-a="drawer" data-d="panel" title="Входящие, журнал, здоровье, настройки">${I('inbox', 20)}${n ? `<span class="cnt">${n}</span>` : ''}${A.drift ? '<span class="dot" style="top:4px;right:4px"></span>' : replaced().length ? '<span class="dot info" style="top:4px;right:4px"></span>' : ''}</button>
+      ${canMore ? `<button class="ib" title="Ещё" data-a="menu">${I('more', 20)}</button>` : ''}
+    </div>
+    <div class="mbody">${center()}</div>
+    ${layer}
+    ${A.d ? '' : notifHtml()}
+    ${modalHtml()}
+  </div>`;
+}
+
+/* ===== Действия ===== */
+/* Подсветка карточки в панели, к которой ведёт кнопка со страницы */
+function flash(key) {
+  A.flash = key; const tok = ++UID;
+  A.flashTok = tok; setTimeout(() => { if (A.flashTok === tok) { A.flash = ''; render(); } }, 1400);
+}
+function addJournal(e) { A.journal.unshift({ id:uid('j'), day:'Сегодня', tm:now(), ...e }); }
+function toHistory(doc, it, sec, why) { doc.history.unshift({ ...clone(it), sec, why }); }
+function applyUndo(u) {
+  if (u.kind === 'ops') u.ops.forEach(op => {
+    const doc = A.docs[op.doc], loc = find(doc, op.id);
+    if (!loc) return;
+    const [sec, i] = loc;
+    toHistory(doc, sec.items[i], sec.h, u.why);
+    if (op.prev) { const p = clone(op.prev); if (p.n === 'new') p.n = doc.nextN++; sec.items[i] = p; } else sec.items.splice(i, 1);
+  });
+  if (u.kind === 'snap') {
+    const doc = A.docs[u.doc], before = new Map(u.sections.flatMap(s => s.items.map(x => [x.id, x.t])));
+    doc.sections.forEach(s => s.items.forEach(x => { if (before.get(x.id) !== x.t) toHistory(doc, x, s.h, u.why); }));
+    doc.sections = clone(u.sections);
+  }
+  if (u.kind === 'restoreHist') restoreHist(A.docs[u.doc], A.docs[u.doc].history.findIndex(h => h.id === u.hid));
+  if (u.kind === 'restoreDoc') A.docs[u.doc].removed = false;
+}
+function restoreHist(doc, i) {
+  if (i < 0) return;
+  const [h] = doc.history.splice(i, 1), { sec, why, ...it } = h;
+  if (!it.id) it.id = uid('x');
+  if (it.o === 'ai' && !it.n) { it.n = doc.nextN++; it.src = it.src || 'История страницы'; it.d = it.d || TODAY; it.q = it.q || it.t; }
+  if (it.o === 'me' && !it.who) { it.who = ME; it.d = TODAY; }
+  secByName(doc, sec).items.push(it);
+  toast(`Утверждение вернулось в «${sec}»`);
+}
+function commitEdit() {
+  const doc = cur(), E = A.edit, snap = clone(doc.sections), tm = now();
+  let changed = 0, removed = 0, added = 0;
+  doc.sections.forEach(sec => {
+    sec.items = sec.items.filter(it => {
+      const t = (E.draft[it.id] ?? it.t).trim();
+      if (E.gone[it.id] || !t) { toHistory(doc, it, sec.h, `убрано вами сегодня в ${tm}`); removed++; return false; }
+      if (t !== it.t) {
+        changed++;
+        if (it.o === 'ai') { toHistory(doc, it, sec.h, `переформулировано вами сегодня в ${tm}`); Object.assign(it, { o:'me', who:ME, d:TODAY, t }); delete it.n; }
+        else Object.assign(it, { o:'me', who:ME, d:TODAY, t });
+      }
+      return true;
+    });
+  });
+  E.added.forEach(a => { const t = (E.draft[a.id] || '').trim(); if (t) { doc.sections.find(s => s.h === a.sec).items.push({ id:a.id, o:'me', who:ME, d:TODAY, t }); added++; } });
+  const parts = [added && `${added} ${plural(added, 'новое', 'новых', 'новых')}`, changed && `${changed} переформулировано`, removed && `${removed} убрано`].filter(Boolean);
+  addJournal({ o:'me', t:`Вы поправили «${doc.title}»`, s:`${parts.join(', ')}`, act:'Откатить мою правку',
+    confirm:`Вернуть «${doc.title}» как было до ${tm}? Ваши правки уйдут в «Историю». Записи ИИ, сделанные после, останутся.`,
+    undo:{ kind:'snap', doc:A.open, sections:snap, why:`ваша правка от ${tm}, откачена` } });
+  doc.updated = `сегодня в ${tm}`;
+  A.mode = 'view'; A.edit = null; A.cf = null;
+}
+function openDoc(id) {
+  if (['edit', 'conflict', 'nedit'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+  if (!A.docs[id]) return;
+  A.prevOpen = A.open; A.open = id; A.fn = ''; A.menu = false; A.histOpen = false; A.d = '';
+  A.busy = true; setTimeout(() => { A.busy = false; render(); }, 350);
+}
+function newNote() {
+  if (['edit', 'conflict', 'nedit'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+  const id = uid('n'), folder = cur() && !cur().removed ? cur().folder : 'aihome';
+  A.docs[id] = { id, title:'', folder, kind:'note', updated:'только что', body:[], isNew:true };
+  A.prevOpen = A.open; A.open = id; A.mode = 'nedit'; A.data = 'ok'; A.d = ''; A.menu = false;
+  A.fold[folder] = 0; if (folder === 'aihome' || folder === 'dacha') A.fold.proj = 0;
+  A.focus = '[data-ntitle]';
+}
+const ACT = {
+  preset:d => applyPreset(d.v, true),
+  theme:d => { S.t = d.v; writeHash(); },
+  width:d => { S.w = d.v; A.d = ''; A.menu = false; A.fn = ''; writeHash(); },
+  dead:d => toast(DEAD(d.what)),
+  toast:d => toast(d.msg),
+  'ev-drift':() => {
+    if (['edit', 'conflict'].includes(A.mode)) return toast('Сначала сохраните или отмените правку');
+    A.drift = true; if (A.open !== 'gpu') openDoc('gpu');
+    toast('Событие: «Очередь локальной GPU» поправили в Obsidian');
+  },
+  /* дерево */
+  open:d => openDoc(d.id),
+  fold:d => { A.fold[d.f] = A.fold[d.f] ? 0 : 1; },
+  who:d => { A.who = d.v; },
+  'q-clear':() => { A.q = ''; A.who = 'all'; },
+  'new-note':() => newNote(),
+  /* панели и шторки */
+  panel:d => {
+    if (S.w === 'm') { if (d.p) { A.p = d.p; A.d = 'panel'; } else A.d = ''; }
+    else A.p = d.p;
+    A.fn = ''; A.menu = false;
+  },
+  drawer:d => { A.d = d.d; if (!d.d) A.fn = ''; },
+  'inbox-show':d => { A.inbox.forEach(it => it.open = it.id === d.item); A.p = 'inbox'; if (S.w === 'm') A.d = 'panel'; flash(d.item); },
+  'drift-show':() => { A.p = 'health'; if (S.w === 'm') A.d = 'panel'; flash('drift'); },
+  'inbox-toggle':d => { const it = A.inbox.find(x => x.id === d.item); it.open = !it.open; },
+  op:d => {
+    const it = A.inbox.find(x => x.id === d.item), o = it.ops.find(x => x.id === d.op), c = o.choices[+d.c], doc = it.doc && A.docs[it.doc];
+    o.state = c.l;
+    if (c.do === 'replace') { const loc = find(doc, o.target); if (loc) { const [sec, i] = loc; toHistory(doc, sec.items[i], sec.h, `ваша формулировка · заменена с вашего согласия ${TODAY}`); sec.items[i] = { id:uid('a'), o:'ai', n:doc.nextN++, t:o.add, src:o.src, d:o.d, q:o.q }; } }
+    if (c.do === 'add') secByName(doc, o.sec).items.push({ id:uid('a'), o:'ai', n:doc.nextN++, t:o.add, src:o.src, d:o.d, q:o.q });
+    if (c.do === 'set') { const loc = find(doc, o.target); if (loc) { const x = loc[0].items[loc[1]]; toHistory(doc, x, loc[0].h, 'заменено ИИ с вашего согласия'); Object.assign(x, { t:c.t, src:c.src, q:c.q, d:TODAY }); } }
+    if (c.do === 'create') { A.docs.lawn = { id:'lawn', title:it.title, folder:'common', kind:'wiki', updated:'только что', nextN:2, history:[], sections:[ { h:'Сводка', items:[ { id:'g1', o:'ai', n:1, t:o.add, src:o.src, d:o.d, q:o.q } ] } ] }; A.fold.common = 0; }
+    if (c.do !== 'keep') { addJournal({ o:'ai', t:`ИИ ${c.do === 'create' ? 'завёл' : 'поправил'} «${doc ? doc.title : it.title}» — с вашего согласия`, s:o.label }); if (doc) doc.updated = `сегодня в ${now()}`; }
+    const left = it.ops.filter(x => !x.state).length;
+    toast(c.do === 'keep' ? `Оставлено как было${left ? '' : ' · предложение закрыто'}` : c.do === 'create' ? 'Страница создана в «Общее»' : `Готово: страница обновлена${left ? '' : ' · предложение закрыто'}`);
+  },
+  /* сноска, меню, история */
+  fn:d => { if (S.w === 'm') { A.fn = d.id; A.d = 'sheet'; } else A.fn = A.fn === d.id ? '' : d.id; },
+  menu:() => { A.menu = !A.menu; },
+  'menu-close':() => { A.menu = false; },
+  hist:() => { A.histOpen = !A.histOpen; A.menu = false; },
+  'hist-restore':d => restoreHist(cur(), +d.i),
+  'copy-link':() => { A.menu = false; toast('Ссылка на страницу скопирована'); },
+  'remove-doc':() => {
+    const doc = cur(); A.menu = false;
+    A.modal = { title:`Убрать «${doc.title}»?`, text:'Она уйдёт в «Историю» раздела, удалена не будет. Вернуть можно здесь или из «Журнала». Ссылки на неё попадут в «Здоровье».', ok:'Убрать', danger:1,
+      run:() => { doc.removed = true; addJournal({ o:'me', t:`Вы убрали «${doc.title}»`, s:'ушло в «Историю» раздела, не удалено', act:'Вернуть', undo:{ kind:'restoreDoc', doc:A.open } }); toast('Убрано в «Историю»'); } };
+  },
+  'doc-restore':() => { cur().removed = false; toast('Вернули на место'); },
+  'to-wiki':() => {
+    const doc = cur(); A.menu = false;
+    A.modal = { title:'Перенести заметку в вики?', text:'Заметка станет страницей вики: ваш текст — вашими утверждениями «✎ Андрей», а ИИ сможет дописывать страницу рядом с ними. Сама заметка заменится ссылкой на страницу — копий не будет.', ok:'Перенести',
+      run:() => { Object.assign(doc, { kind:'wiki', nextN:1, history:[], sections:[ { h:'Сводка', items:doc.body.map(t => ({ id:uid('w'), o:'me', who:ME, d:TODAY, t })) } ] }); delete doc.body; toast('Заметка перенесена в вики'); } };
+  },
+  'modal-close':() => { A.modal = null; },
+  'modal-ok':() => { const m = A.modal; A.modal = null; m.run(); },
+  /* правка страницы */
+  edit:() => {
+    A.menu = false; A.fn = '';
+    if (cur().kind === 'note') { A.mode = 'nedit'; A.focus = '[data-nbody]'; return; }
+    A.mode = 'edit'; A.edit = { draft:{}, gone:{}, added:[], ask:'' };
+  },
+  'gone-ask':d => { if (A.edit.added.some(a => a.id === d.id)) { A.edit.added = A.edit.added.filter(a => a.id !== d.id); delete A.edit.draft[d.id]; } else A.edit.ask = d.id; },
+  'gone-ok':d => { A.edit.gone[d.id] = 1; A.edit.ask = ''; },
+  'gone-no':() => { A.edit.ask = ''; },
+  'gone-undo':d => { delete A.edit.gone[d.id]; },
+  'add-st':d => { const id = uid('new'); A.edit.added.push({ id, sec:cur().sections[+d.sec].h }); A.focus = `[data-sid="${id}"]`; },
+  'edit-cancel':() => {
+    const { n } = editStats(cur());
+    if (!n) { A.mode = 'view'; A.edit = null; return; }
+    A.modal = { title:'Отменить правку?', text:`Изменения (${n}) пропадут — страница останется как была.`, ok:'Отменить правку', cancel:'Продолжить править', danger:1,
+      run:() => { A.mode = 'view'; A.edit = null; toast('Правка отменена'); } };
+  },
+  'edit-save':() => {
+    const doc = cur(), { n, blocked } = editStats(doc);
+    if (blocked) return;
+    if (!n) { A.mode = 'view'; A.edit = null; return toast('Без изменений'); }
+    if (A.cfSim && A.open === 'gpu' && find(doc, 'f1')) { buildConflict(doc); A.mode = 'conflict'; return; }
+    commitEdit(); toast('Сохранено');
+  },
+  /* конфликт */
+  'cf-pick':d => { const r = A.cf.rows[+d.i]; r.state = d.v; r.val = d.v === 'mine' ? r.mine : r.theirs; },
+  'cf-merge':d => { A.cf.rows[+d.i].merging = true; A.focus = `[data-cfm="${d.i}"]`; },
+  'cf-merge-done':d => { const r = A.cf.rows[+d.i], t = document.querySelector(`[data-cfm="${d.i}"]`).innerText.trim(); r.merging = false; r.state = 'merge'; r.val = t || r.theirs; },
+  'cf-merge-cancel':d => { A.cf.rows[+d.i].merging = false; },
+  'cf-reopen':d => { const r = A.cf.rows[+d.i]; r.state = ''; r.val = ''; },
+  'cf-save':() => {
+    const doc = cur(), loc = find(doc, 'f1'), f1 = loc[0].items[loc[1]], r = A.cf.rows[0], E = A.edit;
+    toHistory(doc, f1, 'Сводка', 'прежняя формулировка ИИ');
+    Object.assign(f1, { t:THEIRS_F1, d:TODAY, q:'с увеличением до 1440p — ещё ≈ 15 мин' });
+    if (r && r.state === 'theirs') { delete E.draft.f1; delete E.gone.f1; }
+    if (r && r.state === 'merge') { delete E.gone.f1; E.draft.f1 = r.val; }
+    commitEdit(); A.cfSim = false;
+    toast('Сохранено: ваша правка слита с правкой ИИ');
+  },
+  'cf-drop':() => {
+    A.modal = { title:'Отменить вашу правку?', text:'Страница останется такой, какой её сделал ИИ в 09:20. Ваши изменения пропадут.', ok:'Отменить мою правку', cancel:'Вернуться к сравнению', danger:1,
+      run:() => { const doc = cur(), loc = find(doc, 'f1'); if (loc) Object.assign(loc[0].items[loc[1]], { t:THEIRS_F1, d:TODAY }); A.mode = 'view'; A.edit = null; A.cf = null; A.cfSim = false; toast('Ваша правка отменена — страница как у ИИ'); } };
+  },
+  /* заметка */
+  'nedit-save':() => {
+    const doc = cur(), t = document.querySelector('[data-ntitle]').innerText.trim(), b = document.querySelector('[data-nbody]').innerText.split('\n').map(s => s.trim()).filter(Boolean);
+    doc.title = t || 'Без названия'; doc.body = b; doc.updated = `сегодня в ${now()}`; delete doc.isNew; A.mode = 'view'; toast('Заметка сохранена');
+  },
+  'nedit-cancel':() => {
+    const doc = cur(); A.mode = 'view';
+    if (doc.isNew) { delete A.docs[A.open]; A.open = A.docs[A.prevOpen] ? A.prevOpen : (live()[0] || null); toast('Новая заметка не сохранена'); }
+  },
+  /* снаружи */
+  'drift-mine':() => {
+    const loc = find(A.docs.gpu, 'f2'); if (!loc) return;
+    Object.assign(loc[0].items[loc[1]], { o:'me', who:ME, d:TODAY, t:DRIFT_TEXT }); A.drift = false;
+    addJournal({ o:'me', t:'Вы приняли внешнюю правку «Очередь локальной GPU» как свою', s:'1 место в «Сводке» стало вашим' });
+    toast('Принято как ваша правка');
+  },
+  'drift-asis':() => {
+    const loc = find(A.docs.gpu, 'f2'); if (!loc) return;
+    const x = loc[0].items[loc[1]]; Object.assign(x, { o:'ext', t:DRIFT_TEXT }); delete x.who; A.drift = false;
+    addJournal({ o:'ext', t:'Внешняя правка «Очередь локальной GPU» принята как есть', s:'место помечено «изменено снаружи»' });
+    toast('Принято как есть: место помечено «изменено снаружи»');
+  },
+  /* журнал */
+  jf:d => { A.jf = d.v; },
+  'j-act':d => {
+    const j = A.journal.find(x => x.id === d.j);
+    if (j.confirm) { j.asking = true; return; }
+    applyUndo(j.undo); j.done = 'возвращено'; toast('Вернули');
+  },
+  'j-ok':d => {
+    const j = A.journal.find(x => x.id === d.j); j.asking = false; applyUndo(j.undo); j.done = 'откачено';
+    addJournal({ o:'me', t:`Вы откатили: ${j.t.charAt(0).toLowerCase() + j.t.slice(1)}`, s:'прежние формулировки — в «Истории» страницы' });
+    toast('Откачено — прежнее в «Истории»');
+  },
+  'j-no':d => { A.journal.find(x => x.id === d.j).asking = false; },
+  'j-more':d => { const j = A.journal.find(x => x.id === d.j); j.moreOpen = !j.moreOpen; },
+  /* здоровье и настройки */
+  hcheck:() => { A.hbusy = true; setTimeout(() => { A.hbusy = false; A.hcheck = `сегодня в ${now()}`; render(); toast('Проверено: новых проблем нет'); }, 700); },
+  tgl:d => {
+    A.set[d.k] = A.set[d.k] ? 0 : 1;
+    if (d.k === 'auto') toast(A.set.auto ? 'Бесспорные правки ИИ снова применяются сами' : 'Теперь каждая правка ИИ будет ждать вас во «Входящих»');
+    if (d.k === 'fns') toast(A.set.fns ? 'Номера сносок ИИ снова видны' : 'Номера сносок ИИ скрыты — ваши «✎» остаются');
+  },
+  'cls-on':() => { A.set.cls = 1; toast('Замена ваших формулировок снова применяется сама'); },
+  /* «Вернуть мою» и спор */
+  'restore-mine':d => { A.fn = ''; A.d = A.d === 'sheet' ? '' : A.d; restoreMine(d.doc, d.id); },
+  'hist-show':() => { A.histOpen = true; A.focusScroll = '.hrow'; },
+  'to-disp':d => { A.focusScroll = `[data-st="${d.id}"]`; flash(d.id); },
+  'disp-keep':d => resolveDispute(d.id, 'keep'),
+  'disp-take':d => resolveDispute(d.id, 'take'),
+  /* ночной разбор */
+  'night-tgl':() => { A.night.on = A.night.on ? 0 : 1; toast(A.night.on ? `Ночной разбор включён: ${H2(A.night.from)}–${H2(A.night.to)}` : 'Ночной разбор выключен — вики пополняется только кнопкой «Разобрать этот чат»'); },
+  mark:d => {
+    const m = A.marks.find(x => x.id === d.id); m.m = m.m === d.v ? '' : d.v;
+    toast(m.m === 'imp' ? `«${m.chat}» — ночью в первую очередь` : m.m === 'skip' ? `«${m.chat}» не разбирается ни ночью, ни кнопкой` : `Пометка с «${m.chat}» снята`);
+  },
+  'notif-open':() => { A.notif = false; A.p = 'journal'; A.jf = 'ovr'; if (S.w === 'm') A.d = 'panel'; },
+  'notif-close':() => { A.notif = false; },
+  'notif-show':() => { A.notif = true; },
+  'night-out':d => { A.night.out = d.v; if (S.w === 'd') A.p = 'settings'; else { A.p = 'settings'; A.d = 'panel'; } },
+};
+/* «Вернуть мою» — пакет human: обратный supersede на исходную карточку человека; засчитывается откатом и включает карантин N7d */
+function restoreMine(docId, id) {
+  const doc = A.docs[docId], loc = doc && find(doc, id);
+  if (!loc || !loc[0].items[loc[1]].rep) return;
+  const [sec, i] = loc, now0 = sec.items[i], tm = now();
+  const hi = doc.history.findIndex(h => h.id === now0.rep.hid);
+  if (hi < 0) return;
+  const [h] = doc.history.splice(hi, 1), { sec:_s, why:_w, ovr:_o, ...mine } = h, { rep:_r, ...aiIt } = now0;
+  doc.history.unshift({ ...clone(aiIt), sec:sec.h, why:`формулировка ИИ · вы вернули свою сегодня в ${tm}` });
+  sec.items[i] = { ...mine, id };
+  doc.updated = `сегодня в ${tm}`;
+  A.journal.forEach(j => { if (j.rep && j.rep[0] === docId && j.rep[1] === id) j.done = 'вы вернули своё'; });
+  addJournal({ o:'me', t:'Вы вернули свою формулировку', s:`«${doc.title}» · ${sec.h} · 7 дней ИИ не меняет ваше на этой странице сам` });
+  toast('Вернули вашу формулировку. 7 дней ИИ не меняет ваше на этой странице сам');
+}
+function resolveDispute(cxId, how) {
+  const doc = cur(), loc = find(doc, cxId); if (!loc) return;
+  const [csec, ci] = loc, cx = csec.items[ci], mloc = find(doc, cx.vs), tm = now();
+  csec.items.splice(ci, 1);
+  const { vs:_v, ...claim } = cx;
+  if (mloc) {
+    const [msec, mi] = mloc, mine = msec.items[mi];
+    delete mine.disp;
+    if (how === 'take') { toHistory(doc, mine, msec.h, `ваша формулировка · заменена доводом ИИ с вашего согласия ${TODAY}`); msec.items[mi] = claim; }
+  }
+  if (how === 'keep') toHistory(doc, claim, csec.h, `довод ИИ · вы оставили своё сегодня в ${tm}`);
+  doc.updated = `сегодня в ${tm}`;
+  A.journal.forEach(j => { if (j.open === doc.id) j.done = how === 'keep' ? 'вы оставили своё' : 'вы взяли довод ИИ'; });
+  addJournal({ o:'me', t:how === 'keep' ? 'Вы оставили своё утверждение' : 'Вы взяли формулировку ИИ', s:`«${doc.title}» · спор закрыт, автоматика снова работает со страницей` });
+  toast(how === 'keep' ? 'Спор закрыт: ваше утверждение осталось' : 'Спор закрыт: формулировка ИИ встала на место вашей');
+}
+
+/* ===== Пресеты служебной шапки: «перейти к состоянию» ===== */
+const PRESETS = [
+  ['page', 'ИИ заменил ваше'], ['dispute', 'ИИ оспаривает'], ['inbox', 'Входящие'], ['journal', 'Журнал: ИИ поменял моё'], ['morning', 'Утреннее уведомление'],
+  ['settings', 'Настройки и ночной разбор'], ['nightoff', 'Ночной разбор выключен'], ['clsoff', 'Класс выключен'],
+  ['edit', 'Правка'], ['conflict', 'Конфликт 409'], ['drift', 'Изменили снаружи'], ['note', 'Заметка'], ['loading', 'Загрузка'], ['empty', 'Пусто'], ['nofind', 'Ничего не нашлось'],
+];
+function applyPreset(v, byClick) {
+  A = fresh(); A.preset = v; S.s = v; writeHash();
+  const seedEdit = () => {
+    A.mode = 'edit'; A.edit = { draft:{
+      f1:'Ролик на 5 секунд в 1344×768 снимается около пяти с половиной минут; для черновиков хватает 864×480.',
+      r2:'Для черновиков снимаем половинный размер 864×480, подробности — [[Замеры видео на даче]]',
+    }, gone:{ f3:1 }, added:[ { id:'new-demo', sec:'Хронология' } ], ask:'' };
+    A.edit.draft['new-demo'] = '02.11 — для превью решили брать 5 секунд, а не 10. Как это устроено — [[Хранитель базы]].';
+  };
+  if (v === 'edit') seedEdit();
+  if (v === 'conflict') { seedEdit(); delete A.edit.draft.r2; delete A.edit.gone.f3; A.edit.added = []; buildConflict(cur()); A.mode = 'conflict'; }
+  const side = p => { A.p = p; if (S.w === 'm') A.d = 'panel'; };
+  if (v === 'dispute') A.open = 'cars';
+  if (v === 'inbox') side('inbox');
+  if (v === 'journal') { A.jf = 'ovr'; side('journal'); }
+  if (v === 'morning') A.notif = true;
+  if (v === 'settings') side('settings');
+  if (v === 'nightoff') { A.night.on = 0; A.night.out = 'none'; side('settings'); }
+  if (v === 'clsoff') { A.set.cls = 0; side('settings'); }
+  if (v === 'drift') { A.drift = true; A.p = 'health'; }
+  if (v === 'note') A.open = 'ideas';
+  if (v === 'loading') A.data = 'loading';
+  if (v === 'empty') { A.docs = {}; A.open = null; A.inbox = []; A.journal = []; }
+  if (v === 'nofind') { A.q = 'апскейл'; A.who = 'me'; }
+  if (byClick) toast(`Состояние: ${PRESETS.find(p => p[0] === v)[1]}`);
+}
+const NOTES = {
+  page:'Ночью ИИ сам заменил вашу формулировку в «Сводке»: плашка вверху, у нового утверждения — метка «заменил вашу · 02.11» (14 дней), на «Журнале» — синяя точка. «Вернуть мою» возвращает ваш текст сразу; прежняя формулировка ИИ уходит в «Историю». Сноска «✎ Андрей» объясняет, когда ИИ может заменить ваше.',
+  dispute:'ИИ оспорил «Резину меняем в конце октября»: ваш текст на месте с меткой «ИИ оспаривает», довод — в «Противоречиях», бейдж страницы — «Есть противоречие». «Оставить моё» или «Взять формулировку ИИ» закрывают спор.',
+  inbox:'Во «Входящих» — только то, что автомат не применил сам, с причиной: «Источник старше вашей правки», «Вы недавно откатывали эту страницу», «Неизвестно, когда написан источник». «Заменить» / «Оставить моё» меняют страницу сразу.',
+  journal:'Фильтр «ИИ поменял моё»: замены и споры ИИ, у замены — «Вернуть мою». Ваш возврат пишется строкой «Вы вернули свою формулировку» в «Мои», а не в этот фильтр.',
+  morning:'Одно сводное уведомление за ночь, а не по штуке на замену. «Что поменял ИИ» открывает «Журнал» с фильтром «ИИ поменял моё».',
+  settings:'«Настройки»: класс «Замена ваших формулировок» и секция «Ночной разбор чатов» из среза Ф2 — тумблер, окно, бюджет, пакеты, модель (только чтение), итог прошлой ночи и пометки чатов. Итог ночи переключается в шапке.',
+  nightoff:'Так «Ночной разбор» выглядит у нового пользователя: по умолчанию выключен, ночей ещё не было. Поля можно править заранее.',
+  clsoff:'Автоматика выключила класс после трёх возвратов за неделю: строка «выключено» с кнопкой «Снова применять само», во «Входящих» появилась замена с причиной «Класс выключен».',
+  edit:'Черновик правки: формулировка ИИ (сноска 3) переписана, одно утверждение убрано, в «Сводке» — ссылка в чужой проект, поэтому «Сохранить» выключено. Поправьте ссылку — кнопка включится; с галкой «409» сохранение откроет сравнение.',
+  conflict:'Сохранение на изменившейся странице (409). «Оставить моё», «Взять их» или «Слить вручную» — раздел решён, «Сохранить» включается.',
+  drift:'Страницу поправили в Obsidian: «Принять как мою правку» или «Принять как есть». «Что изменилось» и жёлтая точка ведут в «Здоровье».',
+  note:'Заметка в том же дереве: «Править» → «Готово», ссылка [[…]] открывает страницу, «Перенести в вики» спрашивает подтверждение: заметка станет страницей, а на её месте останется ссылка.',
+  loading:'Скелетон дерева и документа. Выйти — любой другой пункт «Перейти к состоянию». При открытии строки дерева скелетон мелькает и сам.',
+  empty:'Ни заметок, ни вики: «Новая заметка» заводит первую запись, «Входящие» — «Спорного нет», «Журнал» пуст.',
+  nofind:'Поиск «апскейл» с фильтром «Мои» ничего не нашёл. «Искать во всех» снимает фильтр — найдётся страница, которую ведёте вместе с ИИ.',
+};
+const GUIDE = 'Всё нажимается прямо в макете. Сценарии: плашка «ИИ заменил вашу формулировку» → «Вернуть мою»; «Править» → поменяйте третье утверждение «Сводки» → «Сохранить» (конфликт 409); «Входящие» → «Заменить» / «Оставить моё»; кнопка шапки «Изменить страницу снаружи»; «Журнал» → «ИИ поменял моё». Кнопки, которые уводят из раздела (рельса продукта слева, граф, «Открыть в чате»), отвечают подсказкой «в прототипе не работает».';
+
+/* ===== Обвязка ===== */
+function mk() {
+  const pills = (a, cur, opts) => `<div class="pills">${opts.map(([v, l]) => `<button class="${cur === v ? 'on' : ''}" data-a="${a}" data-v="${v}">${l}</button>`).join('')}</div>`;
+  const f2 = A.docs.gpu && find(A.docs.gpu, 'f2');
+  return `<h1>Заметки + Вики · v2 · прототип</h1>
+    <div class="grp"><span class="lbl">Перейти к состоянию</span>${pills('preset', A.preset, PRESETS)}</div>
+    <div class="grp"><span class="lbl">События</span><button class="btn xs sec" data-a="ev-drift" ${A.drift || !f2 ? 'disabled' : ''}>${I('alert', 13)}Изменить страницу «снаружи»</button>
+      <button class="btn xs sec" data-a="notif-show" ${A.notif ? 'disabled' : ''}>${I('bell', 13)}Утреннее уведомление</button>
+      <label><input type="checkbox" data-chk="cf" ${A.cfSim ? 'checked' : ''}> пока правите «Очередь локальной GPU», ИИ меняет сноску 3 (→ 409)</label></div>
+    <div class="grp"><span class="lbl">Итог ночи</span>${pills('night-out', A.night.out, [['completed', 'всё разобрано'], ['budget', 'не хватило бюджета'], ['open_limit', 'лимит «Входящих»'], ['none', 'ещё не было']])}</div>
+    <div class="grp"><span class="lbl">Ширина</span>${pills('width', S.w, [['d', '1280'], ['m', '360']])}</div>
+    <div class="grp"><span class="lbl">Тема</span>${pills('theme', S.t, [['light', 'светлая'], ['dark', 'тёмная']])}</div>
+`;
+}
+function render() {
+  document.documentElement.dataset.theme = S.t;
+  document.getElementById('mk').innerHTML = mk();
+  const p = A.preset && PRESETS.find(x => x[0] === A.preset);
+  document.getElementById('note').innerHTML = (p ? `<b>${p[1]}.</b> ${NOTES[p[0]]} ` : `<b>Как пройти руками.</b> ${GUIDE} `) +
+    `Решения Андрея от 02.11 приняты (ADR-038): меток «зависит от решения» больше нет.`;
+  document.getElementById('root').innerHTML = S.w === 'm' ? mobile() : desktop();
+  placeToast();
+  if (A.focusScroll) { const el = document.querySelector(A.focusScroll); A.focusScroll = null; if (el) el.scrollIntoView({ block:'center' }); }
+  if (A.focus) { const el = document.querySelector(A.focus); A.focus = null; if (el) { el.focus(); const r = document.createRange(); r.selectNodeContents(el); r.collapse(false); const s = getSelection(); s.removeAllRanges(); s.addRange(r); } }
+}
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-a]');
+  let dirty = false;
+  if (A.fn && S.w === 'd' && !e.target.closest('.pop') && !(t && t.dataset.a === 'fn')) { A.fn = ''; dirty = true; }
+  if (A.menu && !e.target.closest('.menu') && !(t && t.dataset.a === 'menu')) { A.menu = false; dirty = true; }
+  if (!t || t.disabled) { if (dirty) render(); return; }
+  const a = t.dataset.a;
+  if (!['preset', 'theme', 'width'].includes(a)) A.preset = '';
+  const fn = ACT[a];
+  if (!fn) { console.error('Нет обработчика действия', a); return; }
+  fn(t.dataset, t);
+  render();
+});
+document.addEventListener('input', e => {
+  const el = e.target;
+  if (el.classList.contains('js-q')) { A.q = el.value; A.preset = ''; renderTree(); return; }
+  if (el.dataset.sid !== undefined && A.edit) { A.edit.draft[el.dataset.sid] = el.innerText; updateEditMeta(el.dataset.sid); return; }
+  if (el.dataset.ntitle !== undefined) { document.querySelectorAll('.js-mtitle').forEach(x => x.textContent = 'Правка'); }
+});
+document.addEventListener('change', e => {
+  const nf = e.target.dataset.nf;
+  if (nf) { A.night[nf] = nf === 'from' || nf === 'to' ? +e.target.value : e.target.value.trim(); render(); return; }
+  const k = e.target.dataset.chk;
+  if (!k) return;
+  if (k === 'cf') A.cfSim = e.target.checked;
+  else { S[k] = e.target.checked ? 1 : 0; writeHash(); }
+  render();
+});
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Escape') return;
+  if (A.modal) A.modal = null; else if (A.menu) A.menu = false; else if (A.fn) { A.fn = ''; if (A.d === 'sheet') A.d = ''; } else if (A.d) A.d = ''; else return;
+  render();
+});
+readHash();
+applyPreset(PRESETS.some(p => p[0] === S.s) ? S.s : 'page', false);
+render();
+</script>
+</body>
+</html>

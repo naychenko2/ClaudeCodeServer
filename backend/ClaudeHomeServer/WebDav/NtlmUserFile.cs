@@ -18,8 +18,15 @@ namespace ClaudeHomeServer.WebDav;
 /// NTLMv2-хэш домен входит с учётом регистра, причём строка БЕЗ домена считает хэш с ПУСТЫМ
 /// доменом, а не с присланным клиентом: Type3 с непустым доменом такая строка не сойдётся.
 /// Поэтому строки с доменами идут раньше строки без домена, а на домен — ровно один вариант
-/// написания. LM-поле обязано быть валидным hex,
+/// написания (регистровые двойники недостижимы). Голый логин Windows шлёт с доменом «.». LM-поле обязано быть валидным hex,
 /// но при уровне LM_COMPAT_LEVEL по умолчанию (3) gss-ntlmssp его не читает.
+///
+/// Файл привязан к хозяину: в шапке лежит метка — каноничный путь users.json экземпляра, который
+/// его ведёт. Дев-стенды берут Local.json, скопированный с боя, и ключ <c>WebDav:NtlmUserFile</c>
+/// у них оказывается тем же: без метки их Retain стирал бы строки боевых пользователей, а Record
+/// клал бы хэш дев-пароля под боевой логин. Метка чужая — файл не читается и не пишется вовсе,
+/// <see cref="NegotiateAvailable"/> = false. Метки нет (старый формат) — экземпляр считает себя
+/// хозяином и ставит свою.
 /// </summary>
 public sealed class NtlmUserFile
 {
@@ -31,6 +38,9 @@ public sealed class NtlmUserFile
     private readonly bool _isWindows;
     private readonly bool _mechanismPresent;
     private readonly string? _envPath;
+    private readonly string _ownerMark;
+    // Файл ведёт другой экземпляр: ни Load, ни Retain/Record/Remove
+    private readonly bool _foreign;
     // Имя пользователя (без учёта регистра) → NT-хэш в hex
     private readonly Dictionary<string, string> _hashes = new(StringComparer.OrdinalIgnoreCase);
 
@@ -52,6 +62,7 @@ public sealed class NtlmUserFile
         _mechanismPresent = mechanismPresent;
         _envPath = string.IsNullOrWhiteSpace(envPath) ? null : envPath;
         Domains = ResolveDomains(config.GetSection("WebDav:NtlmDomains").Get<string[]>());
+        _ownerMark = CanonicalPath(Services.UserStore.ResolveUsersFilePath(config));
 
         // Писать — только по явному пути из машинного конфига прода, НЕ по переменной среды:
         // NTLM_USER_FILE из юнита наследуют все дочерние процессы, включая дев-стенды из ходов,
@@ -71,7 +82,34 @@ public sealed class NtlmUserFile
         else
             WarnIfUnpatched(ReadPackageVersion("/var/lib/dpkg/status"));
 
+        var existingOwner = ReadOwnerMark(Path);
+        if (existingOwner is not null && existingOwner != _ownerMark)
+        {
+            _foreign = true;
+            _logger.LogError("Файл NTLM {Path} принадлежит другому экземпляру (метка владельца {Foreign}, "
+                + "этот экземпляр — {Own}): NTLM не трогаем, откат на Basic. Уберите WebDav:NtlmUserFile из Local.json "
+                + "этого стенда", Path, existingOwner, _ownerMark);
+            return;
+        }
+
         Load();
+        // Файл не совпал с тем, что построили бы сейчас, — перезаписываем: старый формат без метки (берём файл
+        // себе, чтобы чужой экземпляр дальше его не тронул) либо смена WebDav:NtlmDomains (иначе новые домены
+        // попали бы в файл только при следующей записи хэша)
+        if (File.Exists(Path) && FileDiffersFromExpected())
+            lock (_lock) WriteLocked();
+    }
+
+    private bool FileDiffersFromExpected()
+    {
+        try
+        {
+            return File.ReadAllText(Path!) != BuildContent(_hashes, Domains, _ownerMark);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -79,7 +117,7 @@ public sealed class NtlmUserFile
     /// при механизме gss-ntlmssp, переменной NTLM_USER_FILE на наш файл и самом файле: иначе
     /// рукопожатие обречено, а Mini-Redirector держится за Negotiate и крутит его по кругу.
     /// </summary>
-    public bool NegotiateAvailable => ComputeAvailable(_isWindows, _mechanismPresent, Path, _envPath,
+    public bool NegotiateAvailable => !_foreign && ComputeAvailable(_isWindows, _mechanismPresent, Path, _envPath,
         Path is not null && File.Exists(Path));
 
     internal static bool ComputeAvailable(bool isWindows, bool mechanismPresent, string? path,
@@ -99,7 +137,7 @@ public sealed class NtlmUserFile
     /// <summary>Записать хэш открытого пароля. Файл переписывается, только если хэш изменился.</summary>
     public void Record(string username, string password)
     {
-        if (Path is null || !IsRepresentable(username)) return;
+        if (Path is null || _foreign || !IsRepresentable(username)) return;
         var hash = Convert.ToHexString(NtlmHelper.ComputeNtHash(password));
         lock (_lock)
         {
@@ -112,7 +150,7 @@ public sealed class NtlmUserFile
     /// <summary>Убрать строки пользователя (удаление, переименование).</summary>
     public void Remove(string username)
     {
-        if (Path is null) return;
+        if (Path is null || _foreign) return;
         lock (_lock)
         {
             if (_hashes.Remove(username)) WriteLocked();
@@ -122,7 +160,7 @@ public sealed class NtlmUserFile
     /// <summary>Выбросить строки пользователей, которых больше нет (удалены при остановленном сервере).</summary>
     public void Retain(IEnumerable<string> usernames)
     {
-        if (Path is null) return;
+        if (Path is null || _foreign) return;
         var keep = new HashSet<string>(usernames, StringComparer.OrdinalIgnoreCase);
         lock (_lock)
         {
@@ -133,10 +171,14 @@ public sealed class NtlmUserFile
         }
     }
 
-    internal static string BuildContent(IEnumerable<KeyValuePair<string, string>> hashes, IReadOnlyList<string> domains)
+    internal const string OwnerPrefix = "# owner: ";
+
+    internal static string BuildContent(IEnumerable<KeyValuePair<string, string>> hashes, IReadOnlyList<string> domains,
+        string ownerMark)
     {
         var sb = new StringBuilder();
         sb.Append("# Сгенерировано ClaudeHomeServer (NtlmUserFile). Руками не править: файл перезаписывается.\n");
+        sb.Append(OwnerPrefix).Append(ownerMark).Append('\n');
         foreach (var (user, hash) in hashes.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
         {
             foreach (var domain in domains)
@@ -173,7 +215,7 @@ public sealed class NtlmUserFile
             {
                 using (var fs = new FileStream(tmp, options))
                 using (var w = new StreamWriter(fs, new UTF8Encoding(false)))
-                    w.Write(BuildContent(_hashes, Domains));
+                    w.Write(BuildContent(_hashes, Domains, _ownerMark));
                 File.Move(tmp, path, overwrite: true);
             }
             finally
@@ -186,6 +228,39 @@ public sealed class NtlmUserFile
             // Сбой записи не должен ронять вход: NTLM просто откатится на Basic
             _logger.LogError(ex, "Не удалось записать {Path}: NTLM для WebDAV может не принять новый пароль", path);
         }
+    }
+
+    /// <summary>Метка владельца из шапки файла; null — файла или метки нет.</summary>
+    internal static string? ReadOwnerMark(string? path)
+    {
+        try
+        {
+            if (path is null || !File.Exists(path)) return null;
+            foreach (var line in File.ReadLines(path))
+            {
+                if (!line.StartsWith('#')) break;
+                if (line.StartsWith(OwnerPrefix, StringComparison.Ordinal)) return line[OwnerPrefix.Length..].TrimEnd('\r');
+            }
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    // Каталог users.json мог прийти через симлинк: две дороги к одному файлу — один хозяин
+    internal static string CanonicalPath(string path)
+    {
+        var full = System.IO.Path.GetFullPath(path);
+        try
+        {
+            var dir = new DirectoryInfo(System.IO.Path.GetDirectoryName(full)!);
+            var target = dir.Exists ? dir.ResolveLinkTarget(returnFinalTarget: true) : null;
+            if (target is not null) return System.IO.Path.Combine(target.FullName, System.IO.Path.GetFileName(full));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        return full;
     }
 
     private void Load()
@@ -211,15 +286,18 @@ public sealed class NtlmUserFile
 
     private static IReadOnlyList<string> ResolveDomains(string[]? configured)
     {
-        // По умолчанию — WORKGROUP и имя хоста заглавными (так NetBIOS-имя шлёт Windows)
+        // По умолчанию — «.» (так Windows шлёт голый логин), WORKGROUP и имя хоста заглавными (так NetBIOS-имя
+        // шлёт Windows). Варианты нижнего регистра не нужны: gss-ntlmssp сравнивает домен без учёта регистра и
+        // берёт первую строку, поэтому workgroup после WORKGROUP недостижим (проверено живым Windows 2026-10-08)
         var source = configured is { Length: > 0 }
             ? configured
-            : ["WORKGROUP", Environment.MachineName.ToUpperInvariant()];
+            : [".", "WORKGROUP", Environment.MachineName.ToUpperInvariant()];
+        // Дубли убираем только по точному написанию: регистр входит в NTLMv2-хэш, и явно заданное
+        // администратором написание не схлопываем
         return source
             .Select(d => d.Trim())
             .Where(d => d.Length > 0 && IsRepresentable(d))
-            // Два написания одного домена бессмысленны: сработает только первое
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Distinct(StringComparer.Ordinal)
             .ToList();
     }
 
@@ -231,19 +309,20 @@ public sealed class NtlmUserFile
         string.Equals(a, b, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 
     /// <summary>
-    /// Без патча +ccs2 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше:
-    /// при apt upgrade патч слетает молча, поэтому громко пишем об этом при старте.
+    /// Без патча +ccs3 Windows SSPI (KEY_EXCH без SIGN/SEAL) получает InvalidToken при верном хэше,
+    /// а логин с неизвестным доменом клиента (имя машины) не проходит: при apt upgrade патч слетает
+    /// молча, поэтому громко пишем об этом при старте.
     /// Установка и откат — docs/operations/remote-access.md.
     /// </summary>
     private void WarnIfUnpatched(string? version)
     {
         if (version is null || IsPatchedVersion(version)) return;
-        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs2' или новее: Windows SSPI получит InvalidToken при верном хэше "
-            + "(KEY_EXCH без SIGN/SEAL). Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
+        _logger.LogWarning("gss-ntlmssp {Version} без патча '+ccs3' или новее: Windows SSPI получит InvalidToken при верном хэше "
+            + "(KEY_EXCH без SIGN/SEAL), а домен клиента вне списка строк не пройдёт. Поставьте пропатченный пакет, см. docs/operations/remote-access.md", version);
     }
 
-    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows по-прежнему не пускает.</summary>
-    private const int MinCcsBuild = 2;
+    /// <summary>Минимальный номер локальной сборки: +ccs1 без правки Type2 (MsvAvFlags) Windows не пускает, +ccs2 не принимает произвольный домен клиента.</summary>
+    private const int MinCcsBuild = 3;
 
     internal static bool IsPatchedVersion(string version)
     {

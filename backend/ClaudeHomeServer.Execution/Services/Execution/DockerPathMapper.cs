@@ -12,6 +12,10 @@ public sealed class DockerPathMapper : IPathMapper
         Add(sandbox.Options.ProjectsRoot, SandboxManager.ProjectsMount);
         Add(sandbox.ProfilesHostDir, SandboxManager.ProfilesMount);
         Add(sandbox.TmpHostDir, SandboxManager.TmpMount);
+        // Пакеты плагинов владельца (ADR-031 §2.5): data/plugins → /plugins (ro). Одна правка
+        // с bind-mount'ом в SandboxManager.BuildRunArgs (тот же хостовый каталог PluginsHostDir):
+        // --plugin-dir в контейнере указывает на /plugins/…, а не на хостовый путь.
+        Add(sandbox.PluginsHostDir, SandboxManager.PluginsMount);
         // MCP-серверы: в образе песочницы лежат тем же деревом под /app
         Add(Path.Combine(AppContext.BaseDirectory, "mcp"), sandbox.Options.McpRoot);
         Add(Path.Combine(AppContext.BaseDirectory, "mcp-dify"), "/app/mcp-dify");

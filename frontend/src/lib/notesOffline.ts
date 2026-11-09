@@ -7,13 +7,14 @@
 // мутаций) + meta:notes:localKey-index (serverId → localKey). Конфликт правки —
 // копией «{Title} (conflict …)» (стиль Obsidian Sync), данные не теряются.
 
-import { api } from './api';
+import { api, NoteConflictError, type NoteWithEtag } from './api';
 import { isOnline, OfflineError } from './offline';
 import {
   idbGet, idbSet,
   noteContentGet, noteContentPut, noteContentDelete, noteContentAll,
   notesOutboxAll, notesOutboxPut, notesOutboxDelete,
 } from './idb';
+import { showToast } from './toast';
 import type { CreateNoteDto, NoteDetail, NoteSummary } from '../types';
 
 export interface NoteRecord {
@@ -25,6 +26,7 @@ export interface NoteRecord {
   content: string;
   tags: string[];
   baseUpdatedAt: string | null; // updatedAt версии, на которой базируется правка (для конфликтов)
+  baseEtag: string | null;      // ETag той же версии (S2c-F3): по ней правка пишется по If-Match
   dirty: boolean;               // есть несинхронизированная локальная правка
   createdOffline: boolean;      // создана офлайн, ещё не на сервере (пока serverId=null)
   deletedOffline: boolean;      // удалена офлайн, ждёт синка
@@ -40,6 +42,7 @@ export interface NotesOutboxOp {
   kind: NoteOpKind;
   payload: NotePayload;
   baseUpdatedAt?: string | null;
+  baseEtag?: string | null;   // тег версии-базы правки; с ним синк идёт по If-Match (S2c-F3)
   attempts: number;
 }
 
@@ -96,14 +99,14 @@ function synthesizeDetail(rec: NoteRecord): NoteDetail {
 }
 
 // Записать/обновить запись из серверной детали (не затираем dirty-черновик)
-async function upsertFromDetail(d: NoteDetail): Promise<NoteRecord> {
+async function upsertFromDetail(d: NoteWithEtag): Promise<NoteRecord> {
   const lk = (await localKeyForServerId(d.id)) ?? (await findLocalKeyByPath(d.source, d.path)) ?? crypto.randomUUID();
   const rec: NoteRecord = {
     localKey: lk, serverId: d.id, source: d.source, path: d.path, title: d.title,
-    content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt,
+    content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt, baseEtag: d.etag ?? null,
     dirty: false, createdOffline: false, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(rec);
+  await cachePut(rec);
   await setIndex(d.id, lk);
   return rec;
 }
@@ -112,13 +115,16 @@ const dirOf = (path: string): string => (path.includes('/') ? path.slice(0, path
 
 // === Чтение для NoteView ===
 
-export async function getNoteForView(id: string): Promise<NoteDetail> {
+export async function getNoteForView(id: string): Promise<NoteWithEtag> {
   const rec = await resolveRecord(id);
   if (isOnline()) {
     const serverId = rec?.serverId ?? id;
     try {
       const detail = await api.notes.get(serverId);
-      if (rec?.dirty) return { ...detail, content: rec.content };   // черновик поверх серверных связей
+      // Черновик поверх серверных связей. Его база — тег той версии, на которой черновик
+      // стоит (baseEtag последней синхронизации), а НЕ тег свежей серверной версии: иначе
+      // сохранение черновника прошло бы по чужой правке молча, без конфликта (S2c-F3).
+      if (rec?.dirty) return { ...detail, content: rec.content, etag: rec.baseEtag ?? undefined };
       await upsertFromDetail(detail);
       return detail;
     } catch (e) {
@@ -163,18 +169,33 @@ export function mergeNoteOps(last: NotesOutboxOp, kind: NoteOpKind, payload: Not
   return { kind: 'update', payload: assignDefined(last.payload, payload) };
 }
 
-async function enqueueNote(localKey: string, kind: NoteOpKind, payload: NotePayload, baseUpdatedAt?: string | null): Promise<void> {
+// Сбой записи в notesOutbox не глотаем молча: пользователь видит тост.
+async function putOpOrWarn(op: NotesOutboxOp): Promise<void> {
+  try {
+    await notesOutboxPut(op);
+  } catch (e) {
+    console.warn('[notesOffline] не удалось записать офлайн-правку:', op.localKey, e);
+    showToast('Не сохранено', 'Не удалось сохранить офлайн-правку', 'error');
+  }
+}
+
+// Кэш контента — не источник истины для показа: сбой записи не ломает просмотр.
+const cachePut = (rec: NoteRecord): Promise<unknown> => noteContentPut(rec).catch(() => {});
+
+async function enqueueNote(localKey: string, kind: NoteOpKind, payload: NotePayload, baseUpdatedAt?: string | null, baseEtag?: string | null): Promise<void> {
   const ops = (await notesOutboxAll<NotesOutboxOp>().catch(() => []))
     .filter(o => o.localKey === localKey).sort((a, b) => a.opId - b.opId);
   const last = ops[ops.length - 1];
   if (!last) {
-    await notesOutboxPut({ opId: await nextNoteSeq(), localKey, kind, payload, baseUpdatedAt, attempts: 0 }).catch(() => {});
+    await putOpOrWarn({ opId: await nextNoteSeq(), localKey, kind, payload, baseUpdatedAt, baseEtag, attempts: 0 });
     return;
   }
   const merged = mergeNoteOps(last, kind, payload);
   if (merged === 'drop') { for (const o of ops) await notesOutboxDelete(o.opId).catch(() => {}); return; }
   for (const o of ops.slice(0, -1)) await notesOutboxDelete(o.opId).catch(() => {});
-  await notesOutboxPut({ ...last, kind: merged.kind, payload: merged.payload, baseUpdatedAt: baseUpdatedAt ?? last.baseUpdatedAt, attempts: 0 }).catch(() => {});
+  // База слитой операции — база исходной правки: baseEtag записи не меняется, пока правка
+  // не синхронизирована, поэтому у всех правок этой очереди он один и тот же
+  await putOpOrWarn({ ...last, kind: merged.kind, payload: merged.payload, baseUpdatedAt: baseUpdatedAt ?? last.baseUpdatedAt, baseEtag: baseEtag ?? last.baseEtag, attempts: 0 });
 }
 
 async function dropNoteOps(localKey: string): Promise<void> {
@@ -190,7 +211,7 @@ export async function saveNoteOffline(id: string, patch: { content: string; titl
   if (patch.title !== undefined && rec.createdOffline && !rec.serverId) rec.title = patch.title;
   rec.dirty = true;
   rec.localUpdatedAt = Date.now();
-  await noteContentPut(rec);
+  await cachePut(rec);
 
   const asCreate = rec.createdOffline && !rec.serverId;
   await enqueueNote(
@@ -200,6 +221,9 @@ export async function saveNoteOffline(id: string, patch: { content: string; titl
       ? { title: rec.title, content: patch.content, source: rec.source, folder: dirOf(rec.path) }
       : { content: patch.content },
     rec.baseUpdatedAt,
+    // Правка офлайн остаётся локальной и в очереди несёт свою базу: при синхронизации она
+    // пишется обычным путём по If-Match, а не молча поверх чужой правки (S2c-F3)
+    rec.baseEtag,
   );
 }
 
@@ -212,9 +236,9 @@ export async function createNoteOffline(dto: CreateNoteDto): Promise<string> {
   const rec: NoteRecord = {
     localKey, serverId: null, source: dto.source ?? 'personal', path, title,
     content: dto.content ?? `# ${title}\n`, tags: [],
-    baseUpdatedAt: null, dirty: true, createdOffline: true, deletedOffline: false, localUpdatedAt: Date.now(),
+    baseUpdatedAt: null, baseEtag: null, dirty: true, createdOffline: true, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(rec);
+  await cachePut(rec);
   await enqueueNote(localKey, 'create', { title, content: rec.content, source: rec.source, folder });
   return localKey;
 }
@@ -228,7 +252,7 @@ export async function deleteNoteOffline(id: string): Promise<void> {
     return;
   }
   rec.deletedOffline = true; rec.dirty = true; rec.localUpdatedAt = Date.now();
-  await noteContentPut(rec);
+  await cachePut(rec);
   await enqueueNote(rec.localKey, 'delete', {}, rec.baseUpdatedAt);
 }
 
@@ -240,15 +264,15 @@ function notifyRemap(from: string[], to: string): void {
     window.dispatchEvent(new CustomEvent('cc-note-remapped', { detail: { from, to } }));
 }
 
-async function remapNote(localKey: string, d: NoteDetail): Promise<void> {
+async function remapNote(localKey: string, d: NoteWithEtag): Promise<void> {
   const prev = await noteContentGet<NoteRecord>(localKey).catch(() => undefined);
   const prevServerId = prev?.serverId ?? null;
   const next: NoteRecord = {
     localKey, serverId: d.id, source: d.source, path: d.path, title: d.title,
-    content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt,
+    content: d.content, tags: d.tags, baseUpdatedAt: d.updatedAt, baseEtag: d.etag ?? null,
     dirty: false, createdOffline: false, deletedOffline: false, localUpdatedAt: Date.now(),
   };
-  await noteContentPut(next);
+  await cachePut(next);
   if (prevServerId && prevServerId !== d.id) await removeIndex(prevServerId);
   await setIndex(d.id, localKey);
   const from = [localKey, ...(prevServerId ? [prevServerId] : [])];
@@ -309,6 +333,21 @@ async function applyNoteOp(op: NotesOutboxOp): Promise<void> {
   }
   // update
   if (!rec?.serverId) return;   // нечего обновлять (ещё не создана) — create-op сделает это
+  if (op.baseEtag) {
+    // Обычный путь с If-Match (S2c-F3): базой служит тег версии, на которой стоит правка.
+    // Сервер либо пишет (200 + новый ETag), либо 409 note_changed, не трогая заметку:
+    // 409 — та же ветка конфликта, что ниже (правка уходит конфликт-копией, данные целы).
+    // 404 (переименовали/удалили) идёт своим путём — handleNoteOpError → resurrectAsCopy.
+    try {
+      const d = await api.notes.update(rec.serverId, { content: op.payload.content }, op.baseEtag);
+      await remapNote(op.localKey, d);
+    } catch (e) {
+      if (e instanceof NoteConflictError) await makeConflictCopy(rec, op);
+      else throw e;
+    }
+    return;
+  }
+  // Без базового тега (запись до S2c-F3 или прочитанная офлайн) — прежняя проверка по baseUpdatedAt
   const cur = await api.notes.get(rec.serverId);   // проверка конфликта (может кинуть 404)
   if (op.baseUpdatedAt && cur.updatedAt !== op.baseUpdatedAt) {
     await makeConflictCopy(rec, op);

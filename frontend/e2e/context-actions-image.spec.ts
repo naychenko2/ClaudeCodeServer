@@ -130,7 +130,7 @@ const panelCtx = (page: Page) => page.locator('[data-context-panel]');
 const runBtn = (page: Page) => page.locator('[data-composer-mode-bar] button').last();
 
 async function openFeed(page: Page, vp: { width: number; height: number }, theme: 'light' | 'dark', o: { primary?: ReturnType<typeof primary> | null; characters?: boolean } = {}) {
-  newWorld({ feed: [anchor(HERO)], threads: [heroThread()], flags: { 'image-editor': true }, ctx: { primary: o.primary ?? null } });
+  newWorld({ feed: [anchor(HERO)], threads: [heroThread()], flags: {}, ctx: { primary: o.primary ?? null } });
   await page.addInitScript(() => localStorage.setItem('cc-image-editor-mock', 'all'));
   await openChat(page, { vp, theme });
   await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });

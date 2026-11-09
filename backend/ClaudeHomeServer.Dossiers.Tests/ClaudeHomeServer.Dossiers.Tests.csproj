@@ -15,10 +15,11 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Dossiers\ClaudeHomeServer.Dossiers.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main и Main.Tests: тесты паспортов поднимают общий стек
-         (хелперы, фейки сессий/задач). Прецедент — Turn.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
+    <!-- TestKit (Core-only хелперы: FakeHostEnvironment/TestSessionBroadcaster/TestLauncherFactory —
+         internal, IVT в TestKit) + TestKit.Host (FakeFeatureFlagGate) — шаг 1.3.
+         Main приходит транзитно через TestKit.Host — прямая ссылка на Main убрана в шаге 2.1. -->
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit\ClaudeHomeServer.TestKit.csproj" />
+    <ProjectReference Include="..\ClaudeHomeServer.TestKit.Host\ClaudeHomeServer.TestKit.Host.csproj" />
   </ItemGroup>
 
   <ItemGroup>

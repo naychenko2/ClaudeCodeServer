@@ -16,5 +16,5 @@ namespace ClaudeHomeServer.Services;
 public static class InstanceSecretFiles
 {
     public static readonly string[] Names =
-        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json"];
+        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json", "plugin-secrets.json"];
 }

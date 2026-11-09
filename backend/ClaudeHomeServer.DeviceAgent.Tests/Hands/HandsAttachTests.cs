@@ -75,17 +75,18 @@ public class HandsAttachTests : IDisposable
     }
 
     [Fact]
-    public void Отказ_руки_заняты_другим_ходом_и_свободны_после_его_конца()
+    public void Два_хода_с_руками_подключаются_одновременно_замок_машины_берёт_мост()
     {
         _fx.WithBridge();
-        var machine = new InProcessHandsMachineLock();
+        var runtime = _fx.Runtime();
 
-        var first = HandsAttach.Prepare(Spawn(), "t1", _fx.Runtime(machine))!;
-        RefusalOf(() => HandsAttach.Prepare(Spawn(), "t2", _fx.Runtime(machine))).Should().Be(HandsMachineLock.BusyText);
+        // Подключение без действий замок не занимает: отказа «руки заняты» на старте хода нет
+        using var first = HandsAttach.Prepare(Spawn(), "t1", runtime);
+        using var second = HandsAttach.Prepare(Spawn(), "t2", runtime);
 
-        first.Dispose();
-        using var again = HandsAttach.Prepare(Spawn(), "t2", _fx.Runtime(machine));
-        again.Should().NotBeNull("конец хода отдаёт руки следующему");
+        first.Should().NotBeNull();
+        second.Should().NotBeNull("руки заняты только на время действий моста, а не пока жив процесс CLI");
+        second!.Activity!.Names.Should().NotBe(first!.Activity!.Names, "события у каждого хода свои");
     }
 
     [Theory]
@@ -107,11 +108,18 @@ public class HandsAttachTests : IDisposable
         var args = node["args"]!.AsArray().Select(a => (string?)a).ToList();
         // Имя Job хода мосту не едет: граница «только свои окна» снята (ADR-016 §7)
         args.Should().NotContain("--turn-job").And.NotContain(lease.JobName);
-        // Событие первого действия — своё у каждого хода, его создаёт агент
-        var activity = lease.Activity!.Name;
-        activity.Should().StartWith(HandsBridgeArgs.ActivityEventPrefix + "turn-7.");
-        if (vision) args.Should().Equal(HandsBridgeArgs.ActivityEvent, activity);
-        else args.Should().Equal(HandsBridgeArgs.ExcludeTools, "screenshot_control,browser_screenshot", HandsBridgeArgs.ActivityEvent, activity);
+        // События хода — свои у каждого хода, их создаёт агент
+        var events = lease.Activity!.Names;
+        events.Acted.Should().StartWith(HandsBridgeArgs.ActivityEventPrefix + "turn-7.");
+        events.Busy.Should().StartWith(HandsBridgeArgs.BusyEventPrefix + "turn-7.");
+        events.TurnEnd.Should().StartWith(HandsBridgeArgs.TurnEndEventPrefix + "turn-7.");
+        string[] eventArgs =
+        [
+            HandsBridgeArgs.ActivityEvent, events.Acted, HandsBridgeArgs.BusyEvent, events.Busy,
+            HandsBridgeArgs.TurnEndEvent, events.TurnEnd,
+        ];
+        if (vision) args.Should().Equal(eventArgs);
+        else args.Should().Equal(new[] { HandsBridgeArgs.ExcludeTools, "screenshot_control,browser_screenshot" }.Concat(eventArgs));
         JsonNode.Parse(content)!["mcpServers"]!["tasks"].Should().NotBeNull("прочие узлы не тронуты");
     }
 }

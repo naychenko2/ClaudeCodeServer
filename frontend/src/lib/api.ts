@@ -1,7 +1,19 @@
-import type { Me, CacheWarnThresholds, Project, ProjectGroup, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session,FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
-import { readStoredToken, request } from './offline';
+import type { Me, Project, ProjectGroup, ProjectMemberRole, ProjectMembersView, ProjectTag, ProjectSubject, ProjectSubjectEdit, SubjectRunState, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, ModelUnavailableMark, FalAccountResponse, GlifAccountResponse, YandexAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaVoice, TtsVoicesResponse, VoiceCandidatesResponse, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyPromptSectionsCatalog, ApplyDefaultBindingsResult, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, McpCatalogSearchResult, McpCatalogRevisionResult, DossierEntry, DesktopDevice, DesktopPairingCode, LocalHandsChatStatus, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier, ExternalPreviewLink, ExternalLinkIssued, QuickPhrase, VideoProviderInfo, VideoChannelsResponse, VideoFeedResponse, PlanMap, VideoFavoritesResponse, SessionContextEntry, MapHygieneReport, MapHygieneApplyResult, SphereOverview, DeleteSphereResponse, SphereMemoryResponse, SphereMemoryEntry, SphereMemoryType } from '../types';
+import { cachedToken, readStoredToken, request, writeStoredToken, type EtagRef } from './offline';
+import type { FeatureRun } from '../types/featureRun';
+import type { FeaturesIndex, FeaturePage } from '../types/featureIndex';
 import { forgetChatContextSession } from './chatContext/forget';
 import { assertServerRoute, noteProject, noteProjects, projectRequest, projectRouteOf, uploadAgentAttachment } from './deviceAgent';
+import type { HistoryCursorQuery, HistoryReply } from './historyTail';
+
+// Query-строка курсора докачки истории: after обязателен, fp — только для настоящего курсора
+const historyCursorParams = (q: HistoryCursorQuery) =>
+  `after=${q.after}${q.fp ? `&fp=${encodeURIComponent(q.fp)}` : ''}`;
+
+// Версия схемы миниатюр аватаров (?size=): bump-ит URL, чтобы браузеры, закэшировавшие
+// оригинал (1,5 МБ) с immutable, сделали один свежий запрос и получили миниатюру.
+// Сервер параметр может игнорировать; при смене схемы миниатюр поднять число.
+const AVATAR_THUMB_SCHEME_VERSION = 2;
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
 // null = наследовать глобальный слот, string = override, "" = сброс к наследованию.
@@ -15,6 +27,418 @@ export interface ModelTiers {
 // Сервер валидирует на входе; на фронте достаточно хранить как есть.
 export interface GlyphCandidate {
   name?: string | null;
+}
+
+// === «Локальные модели» ===
+//
+// DTO REST-ручек: LocalModelStatsController (снимок панели и список движков, только
+// админ — настройка глобальная) и SessionLocalModelController (итог последнего хода
+// чата, его владелец). Время — unix-мс; kv — доли 0..1 (не проценты и не ГиБ);
+// phase — строка; чужие чаты анонимны (own=false, без sessionId/projectId).
+
+// Снимок панели: GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|<имя движка>.
+// configured=false — локальный провайдер не настроен (панель и значок скрыты);
+// status: working | busy | down | notConnected | yielded.
+// 'yielded' — только у движка с StateUrl: метрики молчат, но арбитр сказал, что модель
+// уступила карту по плану, а не упала (разрез v2, §1): DownSince при этом не ставится.
+// Без engine — основной стенд, как до фичи: ни 'yielded', ни блока duty в ответе нет.
+export interface LocalModelStats {
+  configured: boolean;
+  engine?: string;
+  model?: string;
+  status: 'working' | 'busy' | 'down' | 'notConnected' | 'yielded';
+  // unix-мс
+  downSince?: number | null;
+  running?: number;
+  waiting?: number;
+  othersCount?: number;
+  // genPerStream/prefillPerStream — сейчас, на поток (~60 с, как чувствует отдельный чат);
+  // speculativeSpeedup — «ускорение угадыванием» (ADR-029, v2.3): Δgeneration_tokens/Δitl_count
+  // за окно ~60 с, во сколько раз DFlash ускоряет генерацию; null — нет данных/рестарт или шагов не было
+  speed?: { genPerStream?: number; prefillPerStream?: number; speculativeSpeedup?: number | null };
+  // cleanStepMs — база шага (мс): длительность прохода модели без помех, ОДНА на весь
+  // стенд и НЕ зависящая от окна графика. Нужна полосе «Куда уходит время агентов»:
+  // «генерирует» = ΣitlCount × база, «ждёт соседа» = ΣitlSeconds − «генерирует».
+  // Раньше база считалась на фронте по окну — величина прыгала при сдвиге окна.
+  // null/отсутствует — базы нет: «ждёт соседа» не выделяется (доля «—», не ноль).
+  cleanStepMs?: number | null;
+  // kv: ВСЕ доли 0..1 (не проценты и не ГиБ): usagePerc — занято блоками KV-кэша
+  // (это НЕ «память заполнена»); ramTierPerc — занятость тира в RAM;
+  // prefixHitPerc — попадания в кэш; ramTierHitPerc — попадания в RAM-тир;
+  // preemptions15m — вытеснения за 15 мин
+  kv?: { usagePerc?: number; ramTierPerc?: number; prefixHitPerc?: number; ramTierHitPerc?: number; preemptions15m?: number };
+  gpus?: { index: number; name: string; utilPerc?: number; memUsedMb?: number; memTotalMb?: number; tempC?: number; powerW?: number; powerLimitW?: number }[] | null;
+  // Точка кольца истории (шаг 5 с, глубина 1 ч). genThroughput/waiting/running — как раньше;
+  // серии кэша v2.1 (карточка «Нагрузка и кэш»): kvUsage — доля 0..1 (максимум по опросам с
+  // прошлой точки); prefixHits/prefixQueries/ramHits/ramQueries/preemptions — приращения
+  // счётчиков с прошлой точки (фронт сводит в интервалы и считает долю из сумм).
+  // Все `number | null`: null — нет прошлой точки, метрика не отдана или счётчик упал
+  // (рестарт); отрицательных значений нет. Старый бэкенд — поля отсутствуют (undefined).
+  history?: {
+    t: number;
+    genThroughput?: number | null;
+    waiting?: number | null;
+    running?: number | null;
+    kvUsage?: number | null;
+    prefixHits?: number | null;
+    prefixQueries?: number | null;
+    ramHits?: number | null;
+    ramQueries?: number | null;
+    preemptions?: number | null;
+    // скорость на поток (вторая линия графика, ADR-029): genTokens — приращение
+    // vllm:generation_tokens_total, itlSeconds — приращение
+    // vllm:inter_token_latency_seconds_sum (сек); фронт: ΣgenTokens/ΣitlSeconds =
+    // скорость генерации на поток (ток/с, главная линия графика).
+    // itlCount — приращение vllm:inter_token_latency_seconds_count (число шагов
+    // декодирования); фронт: ΣitlSeconds/ΣitlCount = время шага (мс),
+    // ΣgenTokens/ΣitlCount = токенов за шаг, ΣitlSeconds/длина интервала = агентов
+    // в генерации (график «Шаг модели»).
+    // null — нет прошлой точки/рестарт (см. api.md)
+    genTokens?: number | null;
+    itlSeconds?: number | null;
+    itlCount?: number | null;
+    // База шага (мс) для этой точки: по числу потоков в ней у батч-движка, иначе общая база стенда.
+    cleanStepMs?: number | null;
+    // Полоса «Куда уходит время агентов» (ADR-029, v2.3): prefillSeconds/queueSeconds —
+    // приращения гистограмм (сек), promptTokens — прочитанный промпт (токены).
+    // null — нет прошлой точки/рестарт (см. api.md)
+    prefillSeconds?: number | null;
+    queueSeconds?: number | null;
+    promptTokens?: number | null;
+  }[];
+  // tensorParallel — необязательное: число GPU в tensor-parallel (Денис добавляет
+  // следующим); нет поля — TP = число карт (gpus.length)
+  tensorParallel?: number;
+  // Подписи основного стенда из секции Stats (только показ): engineLabel — движок вместо
+  // engine (engine — формат метрик, у Strata за адаптером это «vllm»), topology — раскладка
+  // по картам вместо «TP=N». Нет поля — прежние подписи.
+  engineLabel?: string;
+  topology?: string;
+  // chats: «кто сейчас на модели». own — чат текущего пользователя (клик открывает его);
+  // чужие — строка «Чат другого пользователя» без названия и перехода. Бэк отдаёт
+  // только projectId (и только для своих чатов) — имя проекта резолвит фронт из
+  // стора проектов; для чужого чата подстроки нет вовсе.
+  chats?: { own: boolean; sessionId?: string; projectId?: string; title?: string; phase: string; genTps?: number }[];
+  // Сводка «Железо» (только админ): для строки-ссылки «Видеокарты» и точки на вкладке.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
+  unsupported?: string[];
+  // Блок «Дежурство» (типы — ниже): только у движка с StateUrl (второй движок). Нет поля
+  // или null — блока нет (основной стенд); arbiter:null — StateUrl у движка нет.
+  duty?: LocalModelDuty | null;
+}
+
+// === Стенд второй модели (второй движок): GET /api/local-model/engines, stats?engine= (разрез v2, §5) ===
+//
+// Ключ словаря движков: 'main' — основной стенд (то, что было до фичи), имя движка LocalEngines (например 'gemma') —
+// llama-server на Video. Ключ — только ключ: URL из него не строится никогда.
+// Обе ручки: только админ (иначе 403);
+// неизвестный движок или выключенная Llm → configured:false, 200; 500 — нигде.
+
+// 'main' — основной стенд; любое другое — имя движка LocalEngines из конфига сервера (например 'gemma').
+export type LocalModelEngineName = string;
+
+// Ответ GET /api/local-model/engines: список для переключателя вкладок моделей.
+// configured=false — движок не настроен: его сегмента нет; с одним движком переключателя нет.
+export interface LocalModelEngine {
+  name: LocalModelEngineName;
+  // подпись сегмента («Flash-Next», «Gemma 4»): имена моделей в сегмент не ставим (макет §2)
+  title: string;
+  configured: boolean;
+}
+
+// Состояние дежурства из /state арбитра (gpu-arbiter.py): пять значений, всё неизвестное
+// сервер сводит к 'unknown'. null — удачного снимка арбитра ещё не было (до первого успеха).
+export type LocalModelArbiterState = 'unknown' | 'ready' | 'yielded' | 'starting' | 'waiting-vram';
+// Режим карты: 'exclusive' — карта целиком у модели, 'shared' — рядом с ComfyUI. Всё прочее — null.
+export type LocalModelArbiterMode = 'exclusive' | 'shared';
+// Звено цепочки «модель → страховка → облако» (EngineCallLedger.Step, разрез v2, §4).
+// Третье звено — финальный облачный шаг (модель места или слота, обычно claude);
+// на фронте подписано «облако» (макет §5).
+export type LocalModelChainLink = 'engine' | 'insurance' | 'claude';
+// Вид задания ComfyUI по шву IComfyStats.DescribePromptKind (image|video|audio|train→lora);
+// не опознано — null. Таблица соответствия живёт на бэкенде, фронт её не повторяет (разрез §1).
+export type LocalModelJobKind = 'image' | 'video' | 'audio' | 'lora';
+
+// Причина уступки из /state арбитра. kind — вид строки арбитра: 'comfy' (задание ComfyUI,
+// по префиксу prompt_id), 'lease' (аренда из POST /lease — текст присылает кто угодно из
+// сети), 'gpu' (чужой процесс на карте). raw — текст строки без префикса вида: сервер режет
+// строку целиком на входе — «lease:» до 64 символов, прочие причины — общим потолком 80
+// (для gpu — «pid:командная строка», для comfy — префикс prompt_id (8 символов)).
+// Значение вне списка — неизвестный вид: показывать raw как текст, без перехода.
+export interface LocalModelDutyReason {
+  kind: string;
+  raw: string;
+  // только для kind='comfy': вид задания по шву Images; null — не опознан
+  jobKind?: LocalModelJobKind | null;
+  // только для kind='comfy': есть ли prompt_id в реестре ЭТОГО инстанса ComfyUI.
+  // false — «задание ComfyUI не с этого сервера» (ComfyUI общий у прода и дева); null — неизвестно
+  known?: boolean | null;
+}
+
+// Активная аренда карты. Идентификатор аренды наружу не отдаётся (разрез §2): только
+// причина (недоверенный текст, ≤64 символа) и остаток времени.
+export interface LocalModelDutyLease {
+  reason: string;
+  leftS?: number | null;
+}
+
+// Ответ арбитра о дежурстве. Всё из недоверенного /state: неверный тип поля обнуляет
+// только это поле; причин и аренд — не больше 32 каждой. При reachable:false — поля
+// последнего удачного снимка; до первого успеха — null.
+export interface LocalModelDutyArbiter {
+  reachable: boolean;
+  // unix-мс последнего удачного ответа арбитра; null — удачного ответа не было
+  lastSeenAt?: number | null;
+  state?: LocalModelArbiterState | null;
+  mode?: LocalModelArbiterMode | null;
+  // секунды до возврата модели; null — есть причины или модель уже активна
+  quietLeftS?: number | null;
+  // unix-мс начала периода счётчиков: сервер пересчитывает по часам Video (sinceAt = now − (ts − since)),
+  // часы Video и CCS расходятся. null — снимка не было. Период фронт подписывает всегда
+  // «с запуска арбитра»: HH:MM из чужих часов — ложная точность (решение Софьи, макет html:512)
+  sinceAt?: number | null;
+  yields?: number | null;
+  returns?: number | null;
+  // секунды последней уступки / последнего возврата; null — не было
+  lastYieldS?: number | null;
+  lastReturnS?: number | null;
+  reasons?: LocalModelDutyReason[] | null;
+  leases?: LocalModelDutyLease[] | null;
+}
+
+// Ответы мест за окно (EngineCallLedger, разрез v2, §4): корзины — звено, которое
+// ответило; missed — цепочка вернула пусто. sinceAt = max(now − 1 ч, старт процесса):
+// честный знаменатель доли. Нули — не «нет данных»: нет данных — весь блок null.
+export interface LocalModelDutyAnswers {
+  engine: number;
+  insurance: number;
+  claude: number;
+  missed: number;
+  sinceAt: number;
+}
+
+// Вызов места прямо сейчас («Кто сейчас на модели» у второй движок). Это журнал вызовов мест,
+// а не чаты: строка не кликабельна, владельца и промпта нет (разрез v2, §4).
+// place — название места из каталога; link — текущее звено цепочки; null — «ждёт в
+// очереди»: вызов уже в журнале, но ещё не вошёл ни в одно звено (макет §4, строка
+// «ждёт в очереди»); durationS — секунды с начала вызова; null — ещё не начался.
+export interface LocalModelDutyCall {
+  place: string;
+  // null — вызов ждёт в очереди, звена ещё нет (так отдаст бэк)
+  link: LocalModelChainLink | null;
+  durationS?: number | null;
+}
+
+// Блок «Дежурство» в ответе stats?engine= (макет §5). Форма поля chain контрактом
+// не зафиксирована (Б3c ещё в работе) — здесь прочитано как звенья типичного пути;
+// цепочка ТИПИЧНЫЙ путь, а не гарантированный, текущее звено — из callsNow и состояния
+// арбитра, не отсюда. На Ф5 (интеграция на живом ответе) поле сверяется заново.
+export interface LocalModelDuty {
+  // null — у движка нет StateUrl: «Дежурство» показывает «арбитр не подключён»
+  arbiter: LocalModelDutyArbiter | null;
+  chain?: LocalModelChainLink[] | null;
+  answersLastHour?: LocalModelDutyAnswers | null;
+  callsNow?: LocalModelDutyCall[] | null;
+}
+
+// === Вкладка «Медиа» (ComfyUI): GET /api/local-model/stats/media?since=<unix ms> ===
+//
+// Снимок второй видеокарты и ComfyUI: статус стенда, слоты очереди, идущие/ждущие
+// прогоны и завершённые за последний час. Время — unix-мс; чужие прогоны анонимны
+// (own=false, без sessionId/projectId, title «Чат другого пользователя»).
+//
+// configured=false — подсистема images/ComfyUI выключена (status:disabled, 200, не 500).
+// gpus=null — данные карты медиа ещё не приходят с узла ComfyUI (шаг 31).
+export interface LocalModelMedia {
+  configured: boolean;
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
+  // Сколько задач стоит перед текущим пользователем в очереди; null — сервер не сообщает
+  queueAhead?: number | null;
+  comfy: {
+    // working | busy | down | disabled
+    status: 'working' | 'busy' | 'down' | 'disabled';
+    // unix-мс; null — стенд не мёртв
+    downSince?: number | null;
+    version?: string | null;
+  };
+  // Слоты очереди ComfyUI: «N из M мест»
+  slots: { used: number; limit: number };
+  // Видеокарта медиа; null до шага 31 (данные карты — с узла ComfyUI, не с хоста)
+  gpus?: MediaGpu[] | null;
+  // Сводка «Железо» (только админ): строка-ссылка «Видеокарты» по картам с ролью media.
+  hardware?: import('../features/localModel/hardwareTypes').HardwareBrief;
+  // «Загружено сейчас»: имена моделей в памяти узла (basename, ≤ 96 символов);
+  // null/отсутствует — узел не сообщает (маршрут /ccs/stats не установлен)
+  loadedModels?: string[] | null;
+  running: MediaRunning[];
+  queue: MediaQueue[];
+  lastHour: MediaDone[];
+  unsupported?: string[];
+}
+
+// Видеокарта медиа (ComfyUI): числовые поля nullable — [N/A] → null.
+export interface MediaGpu {
+  uuid: string;
+  index: number;
+  name: string;
+  // Роли карты: в DTO бэкенда поле всегда присутствует (default []), не optional
+  roles: string[];
+  utilPerc?: number | null;
+  memUsedMb?: number | null;
+  memTotalMb?: number | null;
+  tempC?: number | null;
+  powerW?: number | null;
+  powerLimitW?: number | null;
+  mediaMemMb?: number | null;
+}
+
+// Прогресс семплера: текущий шаг, всего шагов, текущая стадия (если известна).
+export interface MediaSteps {
+  step: number;
+  total: number;
+  stage?: number | null;
+}
+
+// Идущий прогон ComfyUI. Own — прогон текущего пользователя (sessionId/projectId
+// отдаются, title null — фронт резолвит по sessionId); чужой — «Чат другого
+// пользователя», id/проект null. OwnerId наружу не уходит. Foreign — чужой источник.
+export interface MediaRunning {
+  kind: string;
+  op: string;
+  heavy: boolean;
+  own: boolean;
+  sessionId?: string | null;
+  projectId?: string | null;
+  title?: string | null;
+  foreign?: string | null;
+  steps?: MediaSteps | null;
+  percent?: number | null;
+  percentExact?: boolean | null;
+  etaSeconds?: number | null;
+  remainingSeconds?: number | null;
+  // unix-мс момента начала; null — ещё не стартовал
+  startedAt?: number | null;
+}
+
+// Прогон в очереди ComfyUI. Position — 1-based позиция. Анонимизация как в MediaRunning.
+export interface MediaQueue {
+  position: number;
+  kind: string;
+  op: string;
+  heavy: boolean;
+  own: boolean;
+  sessionId?: string | null;
+  projectId?: string | null;
+  title?: string | null;
+  foreign?: string | null;
+  etaSeconds?: number | null;
+  startInSeconds?: number | null;
+}
+
+// Завершённый за последний час прогон. Outcome — completed|failed|cancelled.
+export interface MediaDone {
+  kind: string;
+  op: string;
+  own: boolean;
+  outcome: string;
+  runSeconds?: number | null;
+  etaSeconds?: number | null;
+  // unix-мс момента завершения
+  finishedAt: number;
+}
+
+// === История медиа-генераций (ADR-030): GET /api/local-model/history ===
+//
+// 7 дней на диске, переживает рестарты. Запись — один прогон ComfyUI по prompt_id;
+// события журнала (enqueued/started/finished) бэкенд склеивает. В отличие от прочих
+// ручек фичи: времена — ISO-8601 UTC (не unix-мс), и обе ручки проверяют и роль
+// admin (403), и серверный  (без него — 404).
+// owner — логин владельца; название чата/проекта и sessionId/projectId НЕ отдаются
+// ни у чужих, ни у своих записей (строка и карточка одинаковы для всех).
+export interface MediaHistoryRecord {
+  // prompt_id
+  id: string;
+  // image | video | audio | train | other
+  kind?: string | null;
+  // операция: generate_image, text_to_video, …
+  op?: string | null;
+  model?: string | null;
+  // промпт, ≤ 4 КБ; null — не записан
+  prompt?: string | null;
+  // параметры (белый список: width, height, durationSec, frames, steps, seed,
+  // count, engine, fast, lora); null — не записаны
+  params?: Record<string, unknown> | null;
+  // логин владельца; null — пользователь не найден
+  owner?: string | null;
+  // completed | failed | cancelled | interrupted | running | queued | unknown
+  status: string;
+  // исход; null, пока запись не завершена
+  outcome?: string | null;
+  // недоверенный текст ComfyUI, ≤ 500 символов
+  error?: string | null;
+  runSeconds?: number | null;
+  enqueuedAt?: string | null;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  // local-media | image-editor | audio-editor | video-editor | lora
+  source?: string | null;
+}
+
+// Страница истории: записи newest-first, курсор следующей страницы (null — конец
+// ленты), счётчики для меню фильтров (с учётом остальных активных фильтров).
+export interface MediaHistoryPage {
+  records: MediaHistoryRecord[];
+  // 'all' — все пользователи (админ); 'self' — только свои (обычный пользователь).
+  // Старые ответы без поля трактуем как 'all'
+  scope?: 'all' | 'self';
+  nextCursor: string | null;
+  counters: { kinds: Record<string, number>; outcomes: Record<string, number> };
+}
+
+// Запрос к истории. Все фильтры необязательны; from — ISO-дата начала периода
+// (24 ч / 7 дней / сегодня), to бэкенд не требует. cursor — непрозрачная строка
+// предыдущей страницы; limit 1..50 (по умолчанию 50).
+export interface MediaHistoryQuery {
+  kind?: string | null;
+  model?: string | null;
+  outcome?: string | null;
+  login?: string | null;
+  from?: string | null;
+  to?: string | null;
+  cursor?: string | null;
+  limit?: number;
+}
+
+// Итог завершённого хода на локальной модели: суммы по запросам хода. Числа
+// nullable — движок не отдал поле (на экране «—»). Тот же состав — у hub-события
+// local_model_turn_stats (types/index.ts).
+export interface LocalModelTurnStats {
+  genTps?: number | null;
+  prefillTps?: number | null;
+  ttftMs?: number | null;
+  queueMsApprox?: number | null;
+  cacheHitPerc?: number | null;
+  outTokens?: number | null;
+  // Атрибуция по подсказочным заголовкам CLI (ADR-029): разрез по классам запросов хода.
+  // 0 — класс не встречался (не null). agentTypes — null, если сабагентов не было.
+  mainRequests?: number;
+  subagentRequests?: number;
+  compactionRequests?: number;
+  auxiliaryRequests?: number;
+  agentTypes?: string[] | null;
+  compactionKind?: 'auto' | 'manual' | 'reactive' | null;
+  // Утечки вызова инструмента в текст (vLLM qwen3_coder): число text-блоков основного
+  // агента с маркерами XML-формата вызова. 0 — не было (не null).
+  toolCallLeakTail?: number;
+  toolCallLeakWholeCall?: number;
+}
+
+// Ответ GET /api/sessions/{id}/local-model: lastTurn — null, если ходов на
+// локальной модели не было (или после рестарта бэкенда: счётчик ходов в памяти).
+export interface LocalModelTurnResponse {
+  lastTurn: LocalModelTurnStats | null;
 }
 
 // Итог «Собрать архитектуру» (POST /projects/{id}/architecture/generate).
@@ -172,9 +596,6 @@ export interface RemoteCommandResult {
 // TimeoutSeconds из примера конфига (Dify — 180 с) с запасом на дорогу: обрывать запрос
 // раньше, чем сервер закончит команду, значит показывать «нет связи» поверх живого старта.
 const REMOTE_COMMAND_TIMEOUT_MS = 200_000;
-// Перенос в новый чат: серверный потолок тёплого хода (ChatHandoffService.WarmTurnTimeout,
-// 5 мин) + запас на создание чата-преемника и сеть
-const HANDOFF_TIMEOUT_MS = 330_000;
 
 // Потолок ожидания preview/start. DevServerService.StartAsync (у сервера и у агента один) ждёт
 // порт по часам: не дольше DevServerLaunchPolicy.DotnetRunReadyTimeout (300 с, `dotnet run`
@@ -183,6 +604,18 @@ const HANDOFF_TIMEOUT_MS = 330_000;
 // меняй и этот: обрыв раньше сервера покажет «нет связи» поверх живого старта.
 const DEV_SERVER_PORT_WAIT_MS = 300_000;
 const PREVIEW_START_TIMEOUT_MS = DEV_SERVER_PORT_WAIT_MS + 30_000;
+
+// Потолок ожидания «Продолжить в новом чате»: ход записки-передачи — полноценный ход
+// агента, бэкенд ждёт его до HandoffTurnTimeout = 15 мин (ChatContinueService.cs). Берём
+// чуть больше (16 мин): обрыв по этому таймауту — RequestTimeoutError («Сервер не ответил
+// за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
+const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
+
+// Потолок ожидания «Перенести в новый чат» (фича, шаг F-4): тёплый путь —
+// видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
+// холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
+// RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
+const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
 
 // Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
 // исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
@@ -279,14 +712,372 @@ function gq(projectId: string, sep: '?' | '&' = '?'): string {
   return gitSessionCtx?.projectId === projectId ? `${sep}sessionId=${gitSessionCtx.sessionId}` : '';
 }
 
+// По-чатовой класс кэша для git-запросов проекта: ответ с ?sessionId= — это ответ про
+// дерево конкретного чата, без sessionId — про корень проекта (общий класс).
+// Ключ без чата в URL не должен множить по-чатовые записи (панель «Изменения»
+// открывается в дереве чата, и там ключ иначе был бы новым на каждый чат).
+function gitChatScope(projectId: string): string | undefined {
+  return gitSessionCtx?.projectId === projectId ? gitSessionCtx.sessionId : undefined;
+}
+
 // Перезапись cc_token после смены пароля: старый токен сервер отозвал, а хранилище
-// выбирает не вызывающий — оно задано галкой «запомнить меня» на входе (localStorage
-// против sessionStorage). Пишем туда, где токен уже лежит, режим входа не меняем.
+// выбирает не вызывающий — токен пишется туда, откуда его читает readStoredToken.
 export function setStoredToken(token: string) {
   if (typeof window === 'undefined') return;
-  if (localStorage.getItem('cc_token') !== null) localStorage.setItem('cc_token', token);
-  else sessionStorage.setItem('cc_token', token);
+  writeStoredToken(token);
 }
+
+// === Плагины владельца (ADR-031, вертикаль ClaudeHomeServer.Plugins) ===
+// DTO зеркалит PluginResponse.cs: значения секретов наружу НЕ едут — только имя
+// + признак «заполнен» (M7). id — {publisher}/{slug}; в URL — один сегмент publisher~slug
+// (бэк нормализует ~ → /), поэтому urlId кодирует разделитель.
+export interface PluginSecretView {
+  name: string;
+  set: boolean;
+  // Время последнего изменения (шаг 3.3): для бейджа «задан · {дата}». Значение не едет.
+  updatedAt?: string | null;
+}
+export interface PluginInfo {
+  id: string;
+  version: string;
+  sha256: string;
+  requested: string[];
+  granted: string[];
+  enabled: boolean;
+  source: string;
+  secrets: PluginSecretView[];
+  // Вклады пакета (contributes из манифеста): нужны, чтобы слот панели выбирал
+  // плагин, у которого панель объявлена, а не просто первый включённый.
+  // panels — {id, title, entry}; entry — путь панели относительно корня пакета
+  // (контракт GET /api/plugins/{id}/{ver}/assets/{entry}, ADR-031 §3.1).
+  contributes?: { panels?: PluginPanelView[] };
+}
+// Панель пакета (contributes.panels из манифеста, ADR-031 §2.1): id + title + entry.
+// entry — путь относительно **корня пакета** (например panel/index.html), тот же
+// контракт пути, что у GET /api/plugins/{id}/{ver}/assets/{entry} (catch-all {**path}).
+// slot в ответ списка не отдаётся (UI не использует) — см. CLAUDE.md вертикали, REST.
+export interface PluginPanelView {
+  id: string;
+  title: string;
+  entry: string;
+}
+// Тело POST /api/plugins/{id}/grant: выданные права (подмножество requested) + значения секретов
+// value: null — явное удаление секрета; не присланный (нет в списке) бэк не трогает («изменить», не «заменить»)
+export interface PluginGrantSecret {
+  name: string;
+  value: string | null;
+}
+export interface PluginPermissionsView {
+  requested: string[];
+  granted: string[];
+}
+
+// === Черновики build-it-yourself (ADR-031, шаги 4.3a/4.3b/4.3c, вертикаль Plugins) ===
+// DTO зеркалит PluginDraftService/PluginDraftDiff. Ключи camelCase — глобальная
+// JSON-политика MVC (типы без [JsonPropertyName] сериализуются дефолтом Web).
+// Значения секретов наружу не едут: только имя + признак «обязательный».
+
+// Сводка черновика для списка (GET /api/plugins/drafts): активные + отклонённые
+export interface PluginDraftSummary {
+  slug: string;
+  id: string;
+  version: string;
+  updatedAt: string;
+  // Число проблем последней проверки (валидатор пакета)
+  problems: number;
+  // Есть ли запись installed.json с тем же Id+Version
+  installedSameVersion: boolean;
+  // true — отклонён (в _rejected/{slug}); у активных false
+  rejected: boolean;
+  // Когда отклонённый исчезнет (rejectedAt + 30 дней); у активных null
+  expiresAt: string | null;
+  // Человекочитаемое имя пакета («Погода»): title первой панели манифеста. null/нет —
+  // панелей нет или title пуст (старый сервер поле не отдаёт): фронт берёт запасное имя.
+  displayName?: string | null;
+}
+// Панель в предпросмотре (PluginDraftPanel)
+export interface PluginDraftPanelView {
+  id: string;
+  slot: string;
+  title: string;
+}
+// Секрет в предпросмотре (PluginDraftSecret): имя + признак «обязательный»
+// + задан ли у установленного плагина (QA-фикс R; отсутствие = старое поведение, false)
+export interface PluginDraftSecretView {
+  name: string;
+  required: boolean;
+  // Задан ли секрет у установленного плагина с тем же id (бэк QA-фикс R).
+  // Отсутствие (старый сервер) = false.
+  set?: boolean;
+}
+// Файл в предпросмотре (PluginDraftFile): путь, каталог/файл, размер
+export interface PluginDraftFileView {
+  path: string;
+  isDir: boolean;
+  size: number;
+}
+// Проблема валидатора (PluginDraftProblem)
+export interface PluginDraftProblemView {
+  code: string;
+  message: string;
+}
+// Предпросмотр черновика (GET /api/plugins/drafts/{slug}/preview)
+export interface PluginDraftPreview {
+  slug: string;
+  name: string;
+  version: string;
+  panels: PluginDraftPanelView[];
+  commands: string[];
+  skills: string[];
+  requestedPermissions: string[];
+  secrets: PluginDraftSecretView[];
+  files: PluginDraftFileView[];
+  validation: { isValid: boolean; problems: PluginDraftProblemView[] };
+  // Версия установленного плагина с тем же id (QA-фикс R); null/отсутствие = первая установка
+  installedVersion?: string | null;
+}
+// Строка diff (PluginDraftDiffLine): kind = ctx/del/add
+export interface PluginDraftDiffLine {
+  oldLine: number;
+  newLine: number;
+  kind: 'ctx' | 'del' | 'add';
+  text: string;
+}
+// Файл в diff (PluginDraftDiffFile): binary/truncated → содержимое подавлено
+export interface PluginDraftDiffFile {
+  path: string;
+  size: number;
+  binary: boolean;
+  truncated: boolean;
+  lines: PluginDraftDiffLine[] | null;
+}
+// Секрет в diff (PluginDraftDiffSecret)
+export interface PluginDraftDiffSecret {
+  name: string;
+  required: boolean;
+}
+// Разница манифеста (PluginDraftDiffManifest): права и секреты
+export interface PluginDraftDiffManifest {
+  permissionsAdded: string[];
+  permissionsRemoved: string[];
+  secretsAdded: PluginDraftDiffSecret[];
+  secretsRemoved: PluginDraftDiffSecret[];
+  secretsRequiredChanged: PluginDraftDiffSecret[];
+}
+// Сравнение черновика с установленной версией (GET /api/plugins/drafts/{slug}/diff)
+export interface PluginDraftDiff {
+  status: 'new' | 'updated';
+  slug: string;
+  id: string;
+  version: string;
+  installedVersion: string | null;
+  // Суммарный потолок diff (1000 строк) превышен
+  truncated: boolean;
+  added: PluginDraftDiffFile[];
+  removed: PluginDraftDiffFile[];
+  modified: PluginDraftDiffFile[];
+  // null, если статус "new"
+  manifest: PluginDraftDiffManifest | null;
+}
+// Ответ «Принять» (POST /api/plugins/drafts/{slug}/accept)
+export interface PluginDraftAcceptResult {
+  id: string;
+  // Человекочитаемое имя пакета для диалога согласия (title первой панели манифеста);
+  // null/нет — панелей нет или старый сервер: имя выводится из id (humanizeId).
+  displayName?: string | null;
+  version: string;
+  sha256: string;
+  source: string;
+  enabled: boolean;
+  requested: string[];
+  granted: string[];
+  // true + newPermissions — только если обновление добавило новые запрошенные права
+  consentRequired: boolean;
+  newPermissions: string[];
+  // Глеб MAJOR-1: права, которые переходят на новое содержимое при обновлении (пусто, если
+  // не обновление). consentRequired=true и когда newPermissions пуст, но у установленного
+  // плагина есть выданные — диалог показывает блок «уже выданные» и требует явного подтверждения.
+  // Старый сервер поле не отдаёт → undefined → фронт считает [] (не падать).
+  inheritedPermissions?: string[];
+  // Глеб MAJOR 4: признак обновления уже установленного плагина (true) vs первая установка
+  // (false). Старый сервер поле не отдаёт → undefined → фронт считает false (режим install).
+  isUpdate?: boolean;
+  // Версия, на которую плагин был установлен ДО этого accept (null при первой установке)
+  previousVersion?: string | null;
+  secrets: PluginSecretView[];
+}
+// Ответ «Отклонить» (POST /api/plugins/drafts/{slug}/reject)
+export interface PluginDraftRejectResult {
+  slug: string;
+  rejectedAt: string;
+  expiresAt: string;
+}
+// Ответ «Вернуть» (POST /api/plugins/drafts/{slug}/restore)
+export interface PluginDraftRestoreResult {
+  slug: string;
+  restored: boolean;
+}
+
+// id → сегмент URL: publisher/slug → publisher~slug (M1: один сегмент маршрута)
+function pluginUrlId(id: string): string {
+  return id.replace(/\//g, '~');
+}
+
+// entry панели из манифеста (contributes.panels[].entry) — НЕДОВЕРЕННЫЙ источник
+// (пакет собрал агент). Без проверки подстановка `.../assets/${entry}` позволяла
+// `../../../../api/plugins/drafts` увести запрос с Bearer пользователя на чужой маршрут
+// (обход allow-list `panel/**`). Принимаем только форму `panel/...`: первый сегмент
+// «panel», остальные — обычные имена (без «.», «..», пустых); в строке нет «\», «?»,
+// «#», «%», управляющих символов (C0/C1) и схемы (двоеточие в первом сегменте).
+// Каждый сегмент кодируем encodeURIComponent ПОСЛЕ проверки — иначе «..» переживёт
+// кодировку. null — entry невалиден (запрос не делаем, понятная ошибка в PluginFrame).
+export function panelEntryPath(entry: unknown): string | null {
+  if (typeof entry !== 'string') return null;
+  if (/[\\?#%]/.test(entry)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(entry)) return null;
+  const segs = entry.split('/');
+  if (segs.length < 2) return null;
+  if (segs[0] !== 'panel') return null;
+  if (/:/.test(segs[0])) return null;
+  for (const s of segs) {
+    if (s === '' || s === '.' || s === '..') return null;
+  }
+  return segs.map(s => encodeURIComponent(s)).join('/');
+}
+
+// Резюме фичи (W5-F2, «Точка 6 · резюме»): результат модельного анализа хронологии.
+// text — markdown с разделами «Сделано», «Где застряло», «Дальше» (или голые пункты
+// без заголовков — пока так просит промпт feature-summary); model=null — локальная
+// модель; cached — результат взят из кэша бэка, без нового прогона. Ошибки: 502 —
+// модель не ответила (причина в error), 503 — подсистема выключена, 404 — фичи нет.
+export interface FeatureSummaryResult {
+  text: string;
+  generatedAt: string;
+  model: string | null;
+  cached: boolean;
+  usage?: unknown;
+  // Число событий хронологии, на которых построено резюме (W4-ANB): для шапки
+  // «по N событиям» (бейдж устаревания — без числа). Бэк отдаёт всегда; optional —
+  // защита от ответов старой версии сервера.
+  eventCount?: number;
+}
+
+// Конфликт сохранения файла (S2c-F2a, К8): 409 с телом {code:'file_changed', …} на
+// PUT files/content с If-Match. Поля — тело 409 как есть: актуальное состояние файла на
+// момент отказа. author и source бэк заполняет с S3-3/S2d-4, сейчас всегда null.
+// Бросается ТОЛЬКО при ifMatch в saveContent: без If-Match сервер 409 по конфликту не отдаёт
+// вовсе, поэтому существующие вызывающие (без ifMatch) этой ошибки не видят.
+export interface FileConflictAuthor { userId?: string; displayName?: string }
+// Форма ChatRef (К5) во фронте; в коде бэка её ещё нет (S2d-4), сейчас сервер шлёт null.
+export interface FileConflictSource { chatTitle?: string; private?: boolean }
+
+export class FileConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'file_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии; null для не-текста (видео/аудио/документ/сверх потолка)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: {
+    sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null;
+    changedAt?: string | null; source?: FileConflictSource | null;
+  }) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Файл изменили, пока вы правили');
+    this.name = 'FileConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
+// Конфликт сохранения заметки (S2c-F3, К8): 409 с телом {code:'note_changed', …} на
+// PUT /notes/{id} с If-Match. Поля — тело 409 как есть, тот же контракт К8, что у файла:
+// актуальное состояние заметки на момент отказа. author и source бэк заполняет с S3-3,
+// сейчас всегда null. Бросается ТОЛЬКО при ifMatch в notes.update: без If-Match сервер 409
+// по конфликту не отдаёт вовсе, поэтому существующие вызывающие (без ifMatch) её не видят.
+export class NoteConflictError extends Error {
+  readonly status = 409;
+  readonly code = 'note_changed';
+  // Тег актуальной версии (без кавычек, как в теле 409) — по нему повторяют сохранение
+  readonly sha256: string | null;
+  // Актуальный текст чужой версии (заметка — всегда текст)
+  readonly content: string | null;
+  readonly author: FileConflictAuthor | null;
+  readonly changedAt: string | null;
+  readonly source: FileConflictSource | null;
+  constructor(body: {
+    sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null;
+    changedAt?: string | null; source?: FileConflictSource | null;
+  }) {
+    // Текст тот же, что заголовок диалога конфликта (SaveConflictDialog) — отдельной копии нет
+    super('Заметку изменили, пока вы правили');
+    this.name = 'NoteConflictError';
+    this.sha256 = body.sha256 ?? null;
+    this.content = body.content ?? null;
+    this.author = body.author ?? null;
+    this.changedAt = body.changedAt ?? null;
+    this.source = body.source ?? null;
+  }
+}
+
+// Отказ тумблера видимости чата (S2d-F2): 409/403 с полем body.code. Тексты равны
+// серверным (ChatsController.SetVisibility / ChatAuthorGate — русские), чтобы на клиенте
+// не было второй формулировки того же отказа; человеку показывается текст, а не код.
+// Незнакомый код — серверный error как есть, без кода — общий текст.
+export const CHAT_VISIBILITY_TEXTS = {
+  not_shared_project: 'Приватным можно сделать только чат общего проекта',
+  chat_has_messages: 'В чате уже есть сообщения — приватным его не сделать',
+  reader: 'Читатель проекта не меняет видимость чата',
+  not_chat_author: 'Только автор чата',
+  // S2d-6b-4: бэк не смог перенести вложения чата при смене видимости — видимость не изменена
+  attachments_move_failed: 'Не удалось перенести вложения чата — видимость не изменена',
+} as const;
+
+export class ChatVisibilityError extends Error {
+  readonly status: 403 | 409;
+  readonly code: string | null;
+  constructor(status: number, body: { error?: string; code?: string } | undefined) {
+    const code = body?.code && body.code in CHAT_VISIBILITY_TEXTS ? body.code as keyof typeof CHAT_VISIBILITY_TEXTS : null;
+    super(code ? CHAT_VISIBILITY_TEXTS[code] : (body?.error ?? 'Не удалось изменить видимость чата'));
+    this.name = 'ChatVisibilityError';
+    this.status = status as 403 | 409;
+    this.code = body?.code ?? null;
+  }
+}
+
+// Ответ тумблера видимости (S2d-6b-4): поля Session + карта переноса вложений
+// {старый путь: новый путь} — бэк переносит файлы чата при смене видимости; карта
+// есть только когда перенос был. Вызывающий применяет её к ленте (remapSessionAttachedPaths).
+export type ChatVisibilityResponse = Session & { attachmentMoves?: Record<string, string> };
+
+// Отказ обновления полей чата (S2d-6c-F): 409 с полем body.code от PUT sessions/{sid}
+// (SessionsController.cs:126: пока чат приватный, «Не сохранять решения» нельзя
+// выключить). Серверный текст — только отказ; клиентский добавляет действие, как
+// требует постановка S2d-6c-F (человек читает причину и то, что сделать дальше); тон
+// тот же, что у CHAT_VISIBILITY_TEXTS: коротко, без кода и статуса.
+export const CHAT_FIELDS_ERROR_TEXTS = {
+  private_chat_dossiers: 'Пока чат приватный, решения из него не сохраняются — это нельзя выключить. Сначала сделайте чат общим.',
+} as const;
+
+// Текст тоста об отказе изменить настройки чата: знакомый код — понятный текст,
+// любая другая ошибка — тот же нейтральный, что был (отказ не меняет локальное состояние).
+export function chatFieldsErrorText(e: unknown): string {
+  const code = (e as { body?: { code?: string } })?.body?.code;
+  return code && code in CHAT_FIELDS_ERROR_TEXTS
+    ? CHAT_FIELDS_ERROR_TEXTS[code as keyof typeof CHAT_FIELDS_ERROR_TEXTS]
+    : 'Не удалось изменить настройку чата';
+}
+
+// Заметка + тег прочитанной версии (S2c-F3): etag есть только у сетевых get/update;
+// офлайн-доставка из кэша и локальный черновик тега не имеют — версии, по которой можно
+// сохранить по If-Match, без сервера нет. Вызывающие без etag работают как раньше.
+export type NoteWithEtag = NoteDetail & { etag?: string };
 
 // Projects
 export const api = {
@@ -296,7 +1087,9 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
-    me: (opts?: { timeoutMs?: number }) => request<Me>('/auth/me', opts),
+    // live: true — только для пути входа: ответ из IDB-кэша (ключ по URL, общий для владельцев)
+    // подставил бы id прежнего владельца к токену нового.
+    me: (opts?: { timeoutMs?: number; live?: boolean }) => request<Me>('/auth/me', opts),
     // Возвращает свежий токен: смена пароля отзывает все прежние, включая текущий
     changePassword: (currentPassword: string, newPassword: string) =>
       request<{ token: string; expiresAt: string }>('/auth/password', {
@@ -306,12 +1099,6 @@ export const api = {
     // Пороги индикатора контекста (per-user); пустой body → сброс к дефолтам
     setContextThresholds: (t: { warnPct?: number; dangerPct?: number }) =>
       request<{ contextThresholds: { warnPct: number; dangerPct: number } | null }>('/auth/context-thresholds', {
-        method: 'PUT',
-        body: JSON.stringify(t),
-      }),
-    // Порог «кэш скоро остынет» (per-user, секунды); пустой body → сброс к дефолтам
-    setCacheThresholds: (t: Partial<CacheWarnThresholds>) =>
-      request<{ cacheWarnThresholds: CacheWarnThresholds | null }>('/auth/cache-thresholds', {
         method: 'PUT',
         body: JSON.stringify(t),
       }),
@@ -363,6 +1150,9 @@ export const api = {
 
   usage: {
     get: () => request<UsageResponse>('/usage'),
+    // Лёгкий ответ для шапки чата (перф-3 B6): только последний снимок на окно, без истории —
+    // в десятки раз меньше; тип тот же UsageResponse (проекция той же службы, не второй источник)
+    getLimits: () => request<UsageResponse>('/usage?scope=limits'),
     // Снять пометку «модель недоступна на этой подписке» досрочно (кнопка «Проверить
     // сейчас», только админ). Модель — ровно в том виде, в каком пришла в выдаче: в именах
     // встречаются точки и суффикс окна «[1m]», поэтому она в теле, а не в пути. В ответе —
@@ -383,7 +1173,9 @@ export const api = {
     taskPrompt: (taskId: string) =>
       request<SpendTaskPromptResponse>(`/spend/tasks/${encodeURIComponent(taskId)}/prompt`),
     widget: () => request<SpendWidgetResponse>('/spend/widget'),
-    badge: (sessionId: string) => request<SpendBadgeResponse>(`/spend/sessions/${encodeURIComponent(sessionId)}/badge`),
+    // Суммарные токены за жизнь чата: значение устойчивое (не счётчик «сейчас»), поэтому
+    // в офлайне показываем последнее известное — по-чатовой класс кэша.
+    badge: (sessionId: string) => request<SpendBadgeResponse>(`/spend/sessions/${encodeURIComponent(sessionId)}/badge`, { chatScope: sessionId }),
   },
 
   // Исполнитель фоновых действий — правит только админ (настройка серверная, общая для всех).
@@ -391,16 +1183,78 @@ export const api = {
   // ollama ответа /usage.
   localActions: {
     setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
         { method: 'PUT', body: JSON.stringify({ route }) }),
     reset: (key: string) =>
-      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null; engine?: string | null }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
     // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
     applyPreset: (preset: 'tiers' | 'tiers-local') =>
       request<{ preset: string; count: number }>(`/admin/local-actions/preset`,
         { method: 'POST', body: JSON.stringify({ preset }) }),
+  },
+
+  // «Локальные модели»: снимок панели — только админ
+  // (настройка глобальная), итог последнего хода чата — его владелец. DTO — записи
+  // LocalModelStatsController / SessionLocalModelController (типы выше).
+  localModel: {
+    // GET /api/local-model/engines: список движков для переключателя вкладок моделей
+    // (макет §2). Один configured — переключателя нет, стенд того движка открывается сразу.
+    // live: true — тот же класс, что у /video/* и статуса выкатки: список запрашивается
+    // при каждом открытии панели (useLocalModelEngines — один вызов, без таймера;
+    // 2 с — опрос /stats внутри вкладки, 15 с — опрос значка в рельсе), и подставленный
+    // из IndexedDB список сказал бы «второй движок есть» про движок, который уже выключили
+    // (или наоборот).
+    engines: () => request<LocalModelEngine[]>('/local-model/engines', { live: true }),
+    // GET /api/local-model/stats?window=1m|5m|15m|1h&since=<unix ms>&engine=main|<имя движка>.
+    // Без engine — основной стенд, URL и ответ прежние (обратная совместимость, разрез v2, §5).
+    // engine — только ключ словаря ('main' или имя движка LocalEngines), не имя модели и не URL.
+    // live: true — снимок стенда отвечает за «что происходит СЕЙЧАС»: ключ кэша зависит от
+    // window/since/engine, поэтому опрос ещё и копил бы по записи на каждый тик, а при обрыве
+    // связи подставлял бы СТАРОЕ состояние второй движок как текущее — ровно то вранье, на котором
+    // держится вся панель.
+    stats: (window: '1m' | '5m' | '15m' | '1h' = '15m', since?: number, engine?: LocalModelEngineName) => {
+      const qs = new URLSearchParams({ window });
+      if (since != null) qs.set('since', String(since));
+      if (engine != null) qs.set('engine', engine);
+      return request<LocalModelStats>(`/local-model/stats?${qs.toString()}`, { live: true });
+    },
+    // GET /api/local-model/hardware?window=1m|5m|15m|1h — вкладка «Железо» (только админ;
+    // 403 не-админу, 404 без флага). window — окно графика «Температуры» (дефолт 15m).
+    // Тип ответа — в feature-слое (hardwareTypes.ts); type-only импорт, без цикла рантайма.
+    hardware: (window: '1m' | '5m' | '15m' | '1h' = '15m') =>
+      request<import('../features/localModel/hardwareTypes').HardwareReport>(`/local-model/hardware?window=${window}`),
+    // GET /api/sessions/{id}/local-model: lastTurn — null, если ходов не было
+    // Статистика последнего хода — по-чатовой класс: в офлайне она полезна («где шёл ход»),
+    // а весит меньше сотни байт.
+    lastTurn: (sessionId: string) =>
+      request<LocalModelTurnResponse>(`/sessions/${encodeURIComponent(sessionId)}/local-model`, { chatScope: sessionId }),
+    // GET /api/local-model/stats/media?since=<unix ms>: вкладка «Медиа» (ComfyUI).
+    // since — unix-мс, фильтрует lastHour (только завершённые новее момента).
+    media: (since?: number) => {
+      const qs = new URLSearchParams();
+      if (since != null) qs.set('since', String(since));
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return request<LocalModelMedia>(`/local-model/stats/media${suffix}`);
+    },
+    // GET /api/local-model/history: история медиа-генераций за 7 дней (ADR-030).
+    // Пустые фильтры не передаются; без query — вся история за 7 дней, страница 50.
+    history: (q?: MediaHistoryQuery) => {
+      const qs = new URLSearchParams();
+      if (q) {
+        if (q.kind) qs.set('kind', q.kind);
+        if (q.model) qs.set('model', q.model);
+        if (q.outcome) qs.set('outcome', q.outcome);
+        if (q.login) qs.set('login', q.login);
+        if (q.from) qs.set('from', q.from);
+        if (q.to) qs.set('to', q.to);
+        if (q.cursor) qs.set('cursor', q.cursor);
+        if (q.limit != null) qs.set('limit', String(q.limit));
+      }
+      const suffix = qs.toString() ? `?${qs.toString()}` : '';
+      return request<MediaHistoryPage>(`/local-model/history${suffix}`);
+    },
   },
 
   // Бэкапы — только админ (инстансная штука). Настройки правятся руками в секции Backup
@@ -468,6 +1322,13 @@ export const api = {
       request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
         method: 'POST', body: JSON.stringify({ enabled }),
       }),
+    // Пометка «для участников» (S2a-F6): меняет только владелец записи; участник общего
+    // проекта получает 403 (запись для него реальна, но чужие настройки он не правит),
+    // посторонний — 404. Ответ — обновлённая запись
+    setShared: (id: string, shared: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/shared`, {
+        method: 'PUT', body: JSON.stringify({ sharedWithMembers: shared }),
+      }),
     delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов.
     // Для записи из каталога + stdio + local-владелец передаём confirmed:true — иначе сервер
@@ -529,6 +1390,118 @@ export const api = {
       }),
     // Отзыв: запись остаётся надгробием, токен устройства умирает немедленно
     revoke: (id: string) => request<void>(`/devices/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
+
+  // Плагины владельца (ADR-031 §2.3, §4). Гейты бэка: подсистема выключена → 503,
+  // флаг plugins-mvp off → 403; install/grant/uninstall/тумблер — только пользовательский
+  // JWT (сервисный → 403). Секреты: значение не возвращается, только {name, set}.
+  plugins: {
+    // Список установленных (DTO без значений секретов)
+    list: () => request<PluginInfo[]>('/plugins'),
+    // Принять пакет по метке источника: draft:{slug} | upload:{id} | catalog:{ref}
+    install: (source: string) =>
+      request<PluginInfo>('/plugins/install', { method: 'POST', body: JSON.stringify({ source }) }),
+    // Выдать права (подмножество requested) и ввести значения секретов
+    grant: (id: string, permissions: string[], secrets: PluginGrantSecret[]) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/grant`, {
+        method: 'POST', body: JSON.stringify({ permissions, secrets }),
+      }),
+    // Значение секрета (шаг 3.3, UI 3.4): PUT /secrets/{name}, значение в теле.
+    // Сервер вернул {name, set, updatedAt} — значение наружу не уходит.
+    setSecret: (id: string, name: string, value: string) =>
+      request<{ name: string; set: boolean; updatedAt: string }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'PUT', body: JSON.stringify({ value }) },
+      ),
+    // Убрать значение секрета: DELETE /secrets/{name} → {name, set:false}
+    deleteSecret: (id: string, name: string) =>
+      request<{ name: string; set: boolean }>(
+        `/plugins/${pluginUrlId(id)}/secrets/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      ),
+    // Удалить пакет и запись (каскад)
+    uninstall: (id: string) =>
+      request<{ id: string; removed: boolean }>(`/plugins/${pluginUrlId(id)}/uninstall`, { method: 'POST' }),
+    // requested + granted для диалога согласия/редактирования
+    permissions: (id: string) =>
+      request<PluginPermissionsView>(`/plugins/${pluginUrlId(id)}/permissions`),
+    // Тумблер включения: выключенный не даёт --plugin-dir и не монтирует панели
+    setEnabled: (id: string, enabled: boolean) =>
+      request<{ id: string; enabled: boolean }>(`/plugins/${pluginUrlId(id)}/${enabled ? 'enable' : 'disable'}`, {
+        method: 'POST',
+      }),
+    // Вызов операции моста (ADR-031 §3.4). Тело HTTP-запроса — РОВНО {capability, args, projectId}
+    // (контракт бэкенда, PluginCallContractTests): capability — имя операции (внутренне в мосту
+    // это `op`, но в HTTP — capability), args — объект, projectId — проект слота (null — вне проекта).
+    // Лишних полей (op, context) сервер не принимает. Ответ — {ok, result?} | {ok:false, error:{code,
+    // message}}; коды error — ADR §3.4 (denied/not_found/invalid/unavailable/upstream/timeout/limit).
+    call: (id: string, body: { capability: string; args: Record<string, unknown>; projectId: string | null }) =>
+      request<{ ok: boolean; result?: unknown; error?: { code: string; message: string } }>(
+        `/plugins/${pluginUrlId(id)}/call`,
+        { method: 'POST', body: JSON.stringify(body) },
+      ),
+    // HTML панели пакета (ADR-031 §3.1): хост забирает его по REST с user JWT
+    // (навигация iframe не несёт Authorization) и сам строит srcdoc. entry — путь
+    // панели из манифеста (contributes.panels[].entry, например panel/index.html);
+    // маршрут {**path} — catch-all, слэши entry остаются литеральными. entry —
+    // недоверенный (пакет собрал агент): валидируем form'ой panel/... (panelEntryPath)
+    // и кодируем сегменты, иначе «..»/«?»/«#» уведут запрос на чужой маршрут.
+    // Прямой fetch (не request()): ответ — текст, а не JSON, и request() упёрся бы
+    // в JSON.parse. 404 — у плагина нет панели (макет 3, «пусто»).
+    panelHtml: async (id: string, version: string, entry: string): Promise<string> => {
+      // entry из недоверенного манифеста: валидируем ДО запроса (иначе «..»/«?»/«#»
+      // уводят запрос на чужой маршрут). Невалидно — понятная ошибка, запрос не идёт.
+      const path = panelEntryPath(entry);
+      if (path === null) throw new Error('Панель плагина указана неверно');
+      const token = readStoredToken();
+      const res = await fetch(
+        `/api/plugins/${pluginUrlId(id)}/${encodeURIComponent(version)}/assets/${path}`,
+        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+      );
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
+
+    // === Черновики build-it-yourself (шаги 4.3a/4.3b/4.3c). Гейты бэка:
+    // подсистема выключена → 503, plugins-mvp/plugins-build-yourself off → 403,
+    // сервисный JWT → 403, чужой/несуществующий черновик → 404 ===
+    // Список черновиков владельца (активные + отклонённые)
+    draftsList: () => request<PluginDraftSummary[]>('/plugins/drafts'),
+    // Предпросмотр черновика: вклады, запрошенные права, секреты, файлы, результат проверки
+    draftPreview: (slug: string) =>
+      request<PluginDraftPreview>(`/plugins/drafts/${encodeURIComponent(slug)}/preview`),
+    // Сравнение черновика с последней установленной версией того же id (diff)
+    draftDiff: (slug: string) =>
+      request<PluginDraftDiff>(`/plugins/drafts/${encodeURIComponent(slug)}/diff`),
+    // Принять черновик: установка по метке draft:{slug}; права НЕ выдаёт
+    draftAccept: (slug: string) =>
+      request<PluginDraftAcceptResult>(`/plugins/drafts/${encodeURIComponent(slug)}/accept`, { method: 'POST' }),
+    // Отклонить черновик: перенос в _rejected/{slug}
+    draftReject: (slug: string) =>
+      request<PluginDraftRejectResult>(`/plugins/drafts/${encodeURIComponent(slug)}/reject`, { method: 'POST' }),
+    // Вернуть отклонённый черновик обратно в _drafts/{slug}
+    draftRestore: (slug: string) =>
+      request<PluginDraftRestoreResult>(`/plugins/drafts/${encodeURIComponent(slug)}/restore`, { method: 'POST' }),
+    // Панель черновика для предпросмотра (GET /api/plugins/drafts/{slug}/panel, шаг 4.3d):
+    // сырой HTML, как panelHtml (текст ответа)
+    draftPanel: async (slug: string): Promise<string> => {
+      const token = readStoredToken();
+      const res = await fetch(`/api/plugins/drafts/${encodeURIComponent(slug)}/panel`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error ?? res.statusText) as Error & { status?: number };
+        e.status = res.status;
+        throw e;
+      }
+      return res.text();
+    },
   },
 
   providers: {
@@ -765,7 +1738,7 @@ export const api = {
       // ADR-016 §3.4: локальный проект создаётся с привязкой к устройству. deviceId
       // берётся из реестра ADR-008. Контракт 3.1 (CreateProjectRequest): путь НА устройстве
       // едет в том же rootPath, отдельного поля под него нет — local.rootPath заменяет
-      // аргумент rootPath. Передавать ТОЛЬКО когда флаг `local-projects` включён; иначе бэк откажет 400.
+      // аргумент rootPath. Передавать, только когда создаётся локальный проект.
       local?: { deviceId: string; rootPath: string }) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({
         name, rootPath: local ? local.rootPath : rootPath, createDirectory, groupId, ...git, color,
@@ -815,6 +1788,49 @@ export const api = {
       runState: (id: string) => request<SubjectRunState>(`/projects/${encodeURIComponent(id)}/subjects/run`, { live: true }),
     },
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
+
+    // --- Участники общего проекта (shared-projects, план §5 S1-F2) ---
+    //
+    // Эндпоинты — ProjectMembersController: GET /members, POST /members, PUT /members/{userId},
+    // DELETE /members/{userId}, DELETE /members/me. И чтение, и каждая мутация отвечают одним
+    // телом — ProjectMembersView (участники, владелец, моя роль): после правки список берут
+    // из ответа, отдельный запрос не нужен. У отказа — { error, code }: текст готовый для
+    // человека, машинный код — из MEMBER_REFUSAL (lib/offline прикрепляет тело ошибки целиком
+    // к err.body, читают его как в ImageGenNote.isImageGenQueued).
+    // Права: приглашает/меняет роль/убирает только владелец (403 not_owner); участник
+    // может только покинуть сам. Снаружи проекта — 404 от [ProjectScope] (код
+    // project_scope), существование не раскрываем.
+    members: {
+      // Живой запрос: список участников из офлайн-кэша показал бы уже убранного человека
+      list: (id: string) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, { live: true }),
+      // Пригласить по ТОЧНОМУ username (регистр не важен, как при входе). Поиска по части
+      // имени на бэке нет: нет пользователя → 404 user_not_found; уже участвует → 409
+      // already_member; сам себе → 400 self; флаг выключен у кого-то из них → 409
+      // flag_disabled; проект на устройстве → 409 local_project.
+      add: (id: string, username: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(`/projects/${encodeURIComponent(id)}/members`, {
+          method: 'POST', body: JSON.stringify({ username, role }),
+        }),
+      // Сменить роль участника (только владелец). Не участника → 404 not_member.
+      changeRole: (id: string, userId: string, role: ProjectMemberRole) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'PUT', body: JSON.stringify({ role }) },
+        ),
+      // Убрать участника (только владелец). Его нет в списке → 404 not_member.
+      remove: (id: string, userId: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`,
+          { method: 'DELETE' },
+        ),
+      // Покинуть проект: та же операция удаления, но её делает сам участник — id берёт
+      // сервер из токена, «me» в пути — маркер, не id. Владелец → 400 owner_cannot_leave.
+      leave: (id: string) =>
+        request<ProjectMembersView>(
+          `/projects/${encodeURIComponent(id)}/members/me`, { method: 'DELETE' },
+        ),
+    },
 
     // --- Значок проекта (ADR-009: SVG, белый список lucide, модельный подбор) ---
     // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).
@@ -1025,7 +2041,12 @@ export const api = {
     summary: (recent = 10) => request<HomeSummaryResponse>(`/home/summary?recent=${recent}`),
   },
   board: {
-    agents: () => request<{ items: BoardItem[] }>('/board/agents'),
+    // live: true — ответ крупный (замер часа работы: ~0,86 МБ), а доска читается
+    // на каждый чих статуса. В офлайн-кэш IndexedDB такая частота писала 258 МБ за
+    // час, и подставленный прошлый ответ выдавал бы доску «кто сейчас работает» за
+    // текущую — ровно тот класс вранья, из-за которого live: живёт у статуса
+    // выкатки и питания.
+    agents: () => request<{ items: BoardItem[] }>('/board/agents', { live: true }),
     interrupt: (sessionId: string) =>
       request<void>(`/board/agents/${sessionId}/interrupt`, { method: 'POST' }),
     allowPermission: (sessionId: string, requestId: string) =>
@@ -1069,16 +2090,81 @@ export const api = {
       if (from) qs.set('from', from);
       if (to) qs.set('to', to);
       const q = qs.toString();
-      return request<Task[]>(`/tasks${q ? `?${q}` : ''}`);
+      // live: список живёт одним экземпляром в сторе (tasks:all), пассивный GET-кэш его не дублирует
+      return request<Task[]>(`/tasks${q ? `?${q}` : ''}`, { live: true });
     },
-    listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`),
+    listByProject: (projectId: string) => request<Task[]>(`/projects/${projectId}/tasks`, { live: true }),
+    // Поиск по названию/описанию/меткам на сервере (по ПОЛНОМУ описанию, которого нет
+    // в облегчённом списке); элементы ответа — облегчённые, нужны id совпавших
+    // live: ключ кэша зависит от текста запроса — без live каждый ввод оставлял бы новую запись в IndexedDB
+    search: (q: string) => request<Task[]>(`/tasks?q=${encodeURIComponent(q)}`, { live: true }),
     // Задачи, порученные персоне-исполнителю (assignee=claude + personaId)
     listByPersona: (personaId: string) =>
-      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`),
+      request<Task[]>(`/tasks?personaId=${encodeURIComponent(personaId)}`, { live: true }),
+    // Агрегаты фич чата (режим «Исполнение фичи»): готовые `FeatureRun` из бэка.
+    // sessionId — id сессии-чата; без него — все фичи владельца.
+    getFeatures: (sessionId?: string) =>
+      request<FeatureRun[]>(`/tasks/features${sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : ''}`, { live: true }),
+    // Индекс фич (фасет «Фичи» и плашка в чате): строки фич + связи «чат × фича».
+    // projectId — область ответа; без него — все проекты владельца и чаты вне проектов.
+    // 503 при выключенной подсистеме Tasks (как getFeatures).
+    featuresIndex: (projectId?: string) =>
+      request<FeaturesIndex>(`/tasks/features/index${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''}`),
+    // Страница фичи (волна 2 «Обзор фич»): агрегат `FeatureRun` одной фичи + лента событий.
+    // fid — id эпика; eventsLimit — «all»/«0» → все, N (целое > 0) → N, иначе 100 (бэк).
+    // 404 — фичи нет/чужая/удалена (один 404); 503 — подсистема Tasks выключена.
+    // signal — отмена в-полёте запроса (быстрая смена fid в useFeaturePage): не плодим
+    // параллельных GET, устаревший отменяется (AbortError игнорируется в featurePage).
+    getFeature: (fid: string, eventsLimit?: string, signal?: AbortSignal) =>
+      request<FeaturePage>(
+        `/tasks/features/${encodeURIComponent(fid)}${eventsLimit ? `?eventsLimit=${encodeURIComponent(eventsLimit)}` : ''}`,
+        signal ? { signal, live: true } : { live: true },
+      ),
+    // Резюме фичи моделью (W5-F2, «Точка 6 · резюме»): POST summary[?force=true].
+    // force=false — берётся кэш бэка, если есть; force=true — новый прогон. 200 —
+    // FeatureSummaryResult; 502 — модель не ответила (текст причины в error); 503 —
+    // подсистема выключена; 404 — фичи нет. signal — «Остановить» в шапке резюме.
+    // Клиентский таймаут 240 с — по конвенции модельные вызовы задают свой лимит (см. analyze-
+    // запросы выше). Серверный бюджет цепочки выше: локаль 45 с + облако 180 с (LocalActionCatalog),
+    // а при таймаоте облачного шага он повторяется один раз (CheapTextRunner.cs:381-386) — до 405 с;
+    // на маршруте Model — ещё больше. Клиентский таймаут обрывает только ожидание ответа: сервер
+    // продолжает считать и кладёт результат в свой кэш (FeatureSummaryService.cs:76), когда
+    // доработает (до ~405 с). Повтор запроса до этой записи встаёт в single-flight и ждёт тот же
+    // расчёт (FeatureSummaryService.cs:51-59), а не даёт мгновенный кэш-хит; хит — только после
+    // попадания в кэш. Это не задуманное поведение, а известная проблема: на HTTP/1.1 отмена
+    // клиента не доходит до модельного вызова, работа продолжается (открытый дефект 1f065f3c).
+    featureSummary: (fid: string, force?: boolean, signal?: AbortSignal) =>
+      request<FeatureSummaryResult>(
+        `/tasks/features/${encodeURIComponent(fid)}/summary${force ? '?force=true' : ''}`,
+        { method: 'POST', ...(signal ? { signal } : {}), timeoutMs: 240_000 },
+      ),
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{fid}/merge):
+    // создаёт задачу role=merge с персоной DevopsExecutor и запускает её. Fail-closed:
+    // 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят / 0 или >1
+    // исполнителей DevOps) — причина в err.body.error (и err.message). Идемпотентна:
+    // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
+    mergeFeature: (fid: string) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
+    // Пауза/черновик фичи (W4-HOLD-F2, ручки W4-HOLD-B2): POST hold {reason} —
+    // удержание (reason: 'manual' — пауза человека, 'draft' — черновик), DELETE — снять.
+    // Fail-closed: 403 (сервисный токен — удержание ставит только человек), 404, 409
+    // (merged/closed/merging; draft после запуска шага; manual поверх draft; снятие без
+    // удержания) — причина в body.error. 200 — ходы, прерванные этой паузой:
+    // { interrupted: [taskId] } (контракт §1, :364).
+    setFeatureHold: (fid: string, reason: string) =>
+      request<{ interrupted: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'POST', body: JSON.stringify({ reason }) }),
+    // Снятие паузы (W4-HOLD-F2, хвост R-HOLD-H): 200 — { resumed: [taskId], expired: [taskId] }:
+    // resumed — задачи, которым пауза мешала запуститься и теперь разрешены (не очередь
+    // автостарта), expired — те, чьё ожидание истекло (фронтом не показывается).
+    clearFeatureHold: (fid: string) =>
+      request<{ resumed: string[]; expired: string[] }>(`/tasks/features/${encodeURIComponent(fid)}/hold`, { method: 'DELETE' }),
     // projectId === null → личная задача (вне проекта)
     create: (projectId: string | null, dto: CreateTaskDto) =>
       request<Task>(projectId ? `/projects/${projectId}/tasks` : '/tasks', { method: 'POST', body: JSON.stringify(dto) }),
-    get: (taskId: string) => request<Task>(`/tasks/${taskId}`),
+    // live: true — полная карточка (description + resultMarkdown, ~90 КБ) в пассивный GET-кэш не
+    // пишется: он без вытеснения. Открытые полные задачи держит стор (LRU FULL_TASKS_CAP, снимок
+    // tasks:all); офлайн ensureFullTask получает OfflineError → состояние «error» с «Повторить».
+    get: (taskId: string) => request<Task>(`/tasks/${taskId}`, { live: true }),
     update: (taskId: string, dto: UpdateTaskDto) =>
       request<Task>(`/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(dto) }),
     delete: (taskId: string) => request<void>(`/tasks/${taskId}`, { method: 'DELETE' }),
@@ -1193,12 +2279,39 @@ export const api = {
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/toc`, { method: 'POST' }),
     translate: (id: string) =>
       request<NoteDetail>(`/notes/${encodeURIComponent(id)}/translate`, { method: 'POST' }),
-    get: (id: string) => request<NoteDetail>(`/notes/${encodeURIComponent(id)}`),
+    // etag (S2c-F3, К8): тег прочитанной версии — заголовок ETag ответа (quoted sha256,
+    // NotesController.Get). По нему следующее сохранение идёт по If-Match. Офлайн-доставка
+    // из кэша тега не имеет: офлайн-правка идёт своим путём (notesOffline), не по If-Match.
+    get: async (id: string): Promise<NoteWithEtag> => {
+      const etagRef: EtagRef = {};
+      const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { etagRef });
+      return { ...d, etag: etagRef.etag };
+    },
     backlinks: (id: string) => request<NoteBacklink[]>(`/notes/${encodeURIComponent(id)}/backlinks`),
     create: (dto: CreateNoteDto) =>
       request<NoteDetail>('/notes', { method: 'POST', body: JSON.stringify(dto) }),
-    update: (id: string, dto: UpdateNoteDto) =>
-      request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
+    // ifMatch (К8): тег версии, которую видел вызывающий — etag из get или sha256 из
+    // NoteConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200 + новый ETag), либо отказывает 409 note_changed, не трогая заметку, — он
+    // становится NoteConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка
+    // нет, 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // etagOut: новый ETag ответа 200 — по нему идёт следующее сохранение (NotesController.Update).
+    update: async (id: string, dto: UpdateNoteDto, ifMatch?: string, etagOut?: EtagRef): Promise<NoteWithEtag> => {
+      const sink: EtagRef = etagOut ?? {};
+      try {
+        const d = await request<NoteDetail>(`/notes/${encodeURIComponent(id)}`, {
+          method: 'PUT',
+          body: JSON.stringify(dto),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: sink,
+        });
+        return { ...d, etag: sink.etag };
+      } catch (e) {
+        const err = e as { status?: number; body?: { code?: string; sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null; changedAt?: string | null; source?: FileConflictSource | null } };
+        if (err?.status === 409 && err?.body?.code === 'note_changed') throw new NoteConflictError(err.body);
+        throw e;
+      }
+    },
     delete: (id: string) =>
       request<void>(`/notes/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     // Задачи из заметок (флаг notes-task-sync): чекбоксы .md ↔ задачи
@@ -1351,12 +2464,20 @@ export const api = {
     // (заголовок Authorization <img> не шлёт — как у notes attachment / files stream).
     // Возвращает null, если у персоны нет картинки. cache-busting по imageFile —
     // иначе после перегенерации браузер покажет старый кадр из кэша.
-    avatarUrl: (persona: Persona): string | null => {
+    // size — размер показа (device px, 0 — оригинал): сервер отдаёт миниатюру ближайшей
+    // ступени (64/128/256), сгенерированную один раз; v в URL — имя файла, поэтому
+    // смена аватара сбрасывает кэш.
+    avatarUrl: (persona: Persona, size = 0): string | null => {
       if (persona.avatar?.kind !== 'image' || !persona.avatar.imageFile) return null;
-      const token = readStoredToken();
+      const token = cachedToken();
       const params = new URLSearchParams();
       if (token) params.set('access_token', token);
       params.set('v', persona.avatar.imageFile);
+      if (size > 0) {
+        params.set('size', String(size));
+        // Версия схемы миниатюр: сменила URL у всех, кто закэшировал оригинал (см. константу).
+        params.set('t', String(AVATAR_THUMB_SCHEME_VERSION));
+      }
       return `/api/personas/${encodeURIComponent(persona.id)}/avatar?${params}`;
     },
     // Загрузка своего аватара: оригинал + кропнутый квадрат + параметры кропа.
@@ -1577,7 +2698,17 @@ export const api = {
         body: JSON.stringify(entries),
       }); return api.sessions.getContext(projectId, sessionId); },
     getHistory: (projectId: string, sessionId: string) =>
-      request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`),
+      request<unknown[]>(`/projects/${projectId}/sessions/${sessionId}/history`, { chatScope: sessionId }),
+    // Докачка хвоста истории по курсору сервера (см. lib/historyTail). after=-1 — первая
+    // загрузка (полная история + якорь), её можно кэшировать офлайн; настоящий курсор — live:
+    // хвост в офлайн-кэше был бы мусором (подстановка куска вместо ленты).
+    // Полная история — по-чатовой класс кэша: она тяжёлая (до 2,5 МБ на чат), и без своего
+    // потолка по-чатовые записи съедали бы общий бюджет кэша и росли вместе с числом чатов.
+    // onBytes — необязательный колбэк веса ответа (мера та же, что у офлайн-кэша)
+    getHistoryTail: (projectId: string, sessionId: string, q: HistoryCursorQuery, onBytes?: (n: number) => void) =>
+      request<HistoryReply>(
+        `/projects/${projectId}/sessions/${sessionId}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0, chatScope: q.after < 0 ? sessionId : undefined, onBytes }),
     // «Итог сессии»: конспект сессии заметкой (флаг notes-session-summary).
     // Маршрут по id сессии — работает и для проектных сессий, и для чатов
     summary: (sessionId: string) =>
@@ -1649,8 +2780,8 @@ export const api = {
     // команды Bash. Снимок нужен потому, что событие bg_agents_presence приходит только на
     // смене состояния — открывший список позже старта иначе о нём не узнает
     agentsPresence: () => request<{ agents: string[]; commands: string[] }>('/chats/agents-presence'),
-    get: (id: string) => request<Session>(`/chats/${id}`),
-    create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
+    get: (id: string) => request<Session>(`/chats/${id}`, { chatScope: id }),
+    create: (mode?: string, resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
@@ -1675,9 +2806,25 @@ export const api = {
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
+    // Видимость чата (S2d-F2): true — приватный (виден только автору; только чат общего
+    // проекта, только пока в нём нет сообщений), false — снова общий (в любой момент;
+    // после этого приватность уже не вернуть — бэк 409 chat_has_messages). Отказы 409/403
+    // с body.code оборачиваются в ChatVisibilityError — с человеческим текстом, не кодом.
+    // Успешный ответ может нести attachmentMoves (S2d-6b-4) — карта переноса вложений чата.
+    setChatVisibility: async (id: string, isPrivate: boolean): Promise<ChatVisibilityResponse> => {
+      try {
+        return await request<ChatVisibilityResponse>(`/chats/${encodeURIComponent(id)}/visibility`, {
+          method: 'PUT', body: JSON.stringify({ private: isPrivate }),
+        });
+      } catch (e) {
+        const err = e as { status?: number; body?: { error?: string; code?: string } };
+        if (err.status === 409 || err.status === 403) throw new ChatVisibilityError(err.status, err.body);
+        throw e;
+      }
+    },
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
-    createGroup: (personaIds: string[], mode = 'auto', name?: string) =>
+    createGroup: (personaIds: string[], mode?: string, name?: string) =>
       request<Session>('/chats/group', {
         method: 'POST',
         body: JSON.stringify({ personaIds, mode, name }),
@@ -1787,20 +2934,25 @@ export const api = {
         `/chats/${id}/branch`,
         { method: 'POST', body: JSON.stringify(body) },
       ),
-    // Перенос в новый чат (docs/features/chat-handoff.md): передаточную записку пишет сам
-    // чат своим ходом (warm, тёплый кэш) или дешёвая модель по транскрипту (холодный путь —
-    // и тихий фолбэк сервера, если тёплый сейчас нельзя; какой сработал — warm в ответе).
-    // Сервер заводит чат-преемник без истории; draft — записка для композера нового чата
-    // (НЕ отправляется сама). 409 — отказ с человеческим текстом (группа, штаб, worktree,
-    // пустой чат, место на локали), 502 — записка не собралась (ошибка/обрыв хода, модель).
-    // Таймаут — явный и с запасом над ChatHandoffService.WarmTurnTimeout (5 мин): тёплый
-    // путь ждёт целый ход старого чата. С дефолтными 30 с фронт обрывал запрос сам, обрыв без
-    // явного timeoutMs request() считает сетевым («Действие недоступно офлайн»), а сервер по
-    // RequestAborted отменял перенос.
-    handoff: (id: string, warm: boolean) =>
-      request<{ chatId: string; projectId: string | null; draft: string; warm: boolean }>(
+    // «Продолжить в новом чате»: агент пишет записку-передачу (один ход, десятки секунд),
+    // платформа открывает новый чат той же персоны. 409 — чат занят, 400 — нет ходов агента;
+    // оба несут человеческий текст в Error.message. timeoutMs чуть больше серверного лимита
+    // хода (15 мин) — см. CONTINUE_TIMEOUT_MS: обрыв по таймауту не уводит в офлайн
+    continue: (id: string, note?: string) =>
+      request<{ newSessionId: string; handoffNoteId: string | null }>(
+        `/chats/${id}/continue`,
+        { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
+      ),
+    // «Перенести в новый чат» (фича, шаг F-4): путь выбирает сервер — тёплый
+    // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
+    // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
+    // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки
+    // человеческий и показывается как есть. Тёплый путь — видимый ход чата до 5 мин,
+    // таймаут фронта чуть больше — см. HANDOFF_TIMEOUT_MS.
+    handoff: (id: string) =>
+      request<{ chatId: string; projectId: string | null; draft: string | null; warm: boolean }>(
         `/chats/${id}/handoff`,
-        { method: 'POST', body: JSON.stringify({ warm }), timeoutMs: HANDOFF_TIMEOUT_MS },
+        { method: 'POST', timeoutMs: HANDOFF_TIMEOUT_MS },
       ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы
@@ -1818,7 +2970,11 @@ export const api = {
       request<Session>(`/chats/${id}/window-1m/drop`, { method: 'POST' }),
     delete: (id: string) => request<void>(`/chats/${id}`, { method: 'DELETE' })
       .then(r => { forgetChatContextSession(id); return r; }),
-    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`),
+    getHistory: (id: string) => request<unknown[]>(`/chats/${id}/history`, { chatScope: id }),
+    // То же, что api.sessions.getHistoryTail, для чата вне проекта
+    getHistoryTail: (id: string, q: HistoryCursorQuery, onBytes?: (n: number) => void) =>
+      request<HistoryReply>(`/chats/${id}/history?${historyCursorParams(q)}`,
+        { live: q.after >= 0, chatScope: q.after < 0 ? id : undefined, onBytes }),
     // Вложение локального проекта ложится на машину проекта через агента: сервер на свой
     // маршрут для него отвечает отказом G1
     uploadFile: async (id: string, file: File, projectId?: string): Promise<{ path: string }> => {
@@ -2042,7 +3198,9 @@ export const api = {
     // URL файла проекта для браузерного <img>/<video>: токен через ?access_token=,
     // потому что тег не шлёт заголовки. Нужен картинкам в markdown — README ссылается
     // на них относительным путём, а base64 из files/content для <img src> не подходит
-    fileUrl: (projectId: string, path: string): string => {
+    // sessionId (F1a, «Резолвинг ссылок по worktree»): забрать файл из дерева чата,
+    // а не из анкера проекта; параметр необязательный — старые вызовы не меняются.
+    fileUrl: (projectId: string, path: string, sessionId?: string): string => {
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
       // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
@@ -2050,6 +3208,7 @@ export const api = {
       if (route === 'agent') return '';
       const token = readStoredToken();
       const params = new URLSearchParams({ path });
+      if (sessionId) params.set('sessionId', sessionId);
       if (token) params.set('access_token', token);
       // С другого устройства файл отдаёт ретранслятор — целиком, без Range, под тем же JWT
       const base = route === 'relay' ? 'relay/files/stream' : 'files/stream';
@@ -2061,13 +3220,52 @@ export const api = {
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
       projectRequest<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
-    getContent: (projectId: string, path: string) =>
-      projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`),
-    saveContent: (projectId: string, path: string, content: string) =>
-      projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ content }),
-      }),
+    // Где путь реально лежит в деревьях проекта (анкер + worktree). paths ≤ 50,
+    // иначе сервер 400; в ответе только найденные пути. Формат — DTO endpoints
+    // files/locate (не TreeHit: TreeHit — внутренний тип локатора, без path и
+    // alternatives). alternatives — число других совпадений (совпадений − 1).
+    locate: (projectId: string, paths: string[], sessionId?: string) =>
+      projectRequest<{ path: string; branch?: string; isAnchor: boolean; alternatives?: number }[]>(
+        `/projects/${projectId}/files/locate`,
+        { method: 'POST', body: JSON.stringify({ paths, ...(sessionId ? { sessionId } : {}) }) },
+      ),
+    // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
+    // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
+    // нашли) и isAnchor (true — файл найден в заявленном дереве-анкере, false — в другом).
+    // etag (S2c-F2a, К8): тег прочитанной версии для сохранения по If-Match. Сервер даёт его
+    // только редактируемому тексту до 10 МиБ (FilesController.IsEtaggableText); видео/аудио/
+    // документы и сверх потолка — без тега, как и их правка без If-Match. Агент и ретранслятор
+    // ETag не отдают вовсе (LocalApi.MapFiles, ProjectRelayController) — там etag undefined.
+    // Офлайн-доставка из кэша тега не имеет: сохранять офлайн нельзя в любом случае.
+    getContent: async (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) => {
+      const etagRef: EtagRef = {};
+      const data = await projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`, { etagRef });
+      return { ...data, etag: etagRef.etag };
+    },
+    // ifMatch (К8): тег версии, которую видел вызывающий, — etag из getContent или sha256 из
+    // FileConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо
+    // пишет (200), либо отказывает 409 file_changed, не трогая файл, — он становится
+    // FileConflictError с полями тела. Без ifMatch — ровно как раньше: заголовка нет,
+    // 409 по конфликту сервер не отдаёт, существующие вызывающие ничего не заметили.
+    // Офлайн-сохранение — OfflineError, как любая прочая мутация: очереди файлов нет,
+    // запись с If-Match офлайн не ставится в очередь молча (offline.ts: мутации офлайн запрещены).
+    // etagOut: новый ETag ответа 200, если сервер его прислал (у файлов пока не присылает —
+    // см. дефект; у заметок присылает). На агентской ветке If-Match до агента не доходит и
+    // не проверяется: там конфликта нет по построению бэка.
+    saveContent: async (projectId: string, path: string, content: string, ifMatch?: string, etagOut?: EtagRef): Promise<void> => {
+      try {
+        await projectRequest<void>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ content }),
+          ...(ifMatch ? { headers: { 'If-Match': ifMatch } } : {}),
+          etagRef: etagOut,
+        });
+      } catch (e) {
+        const err = e as { status?: number; body?: { code?: string; sha256?: string | null; content?: string | null; author?: FileConflictAuthor | null; changedAt?: string | null; source?: FileConflictSource | null } };
+        if (err?.status === 409 && err?.body?.code === 'file_changed') throw new FileConflictError(err.body);
+        throw e;
+      }
+    },
     // Документы (pdf/docx/xlsx/pptx): конвертация в MD + ИИ-помощь (локальная модель / claude)
     documentConvert: (projectId: string, path: string) =>
       projectRequest<{ markdown: string }>(`/projects/${projectId}/files/document/convert?path=${encodeURIComponent(path)}`, { method: 'POST' }),
@@ -2149,14 +3347,16 @@ export const api = {
     // ?sessionId= (gq): активный worktree-чат переводит запросы в своё дерево — суффикс
     // добавляется ко всем операциям, достижимым из git-бара и панели «Изменения»
     status: (projectId: string) =>
-      projectRequest<GitStatus>(`/projects/${projectId}/git/status${gq(projectId)}`),
+      projectRequest<GitStatus>(`/projects/${projectId}/git/status${gq(projectId)}`, { chatScope: gitChatScope(projectId) }),
     diff: (projectId: string, path: string, staged = false) =>
       projectRequest<{ diff: string | null }>(`/projects/${projectId}/git/diff?path=${encodeURIComponent(path)}&staged=${staged}${gq(projectId, '&')}`),
     log: (projectId: string, limit = 100, branch?: string) =>
-      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}${gq(projectId, '&')}`),
-    // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения»
+      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/log?limit=${limit}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}${gq(projectId, '&')}`, { chatScope: gitChatScope(projectId) }),
+    // Незапушенные коммиты (впереди upstream) — стек скоупов панели «Изменения».
+    // live: ответ не кэшируется вовсе: это самый тяжёлый по-чатовой класс (до 29 КБ на
+    // чат, ключ с sessionId), а в офлайне он бесполезен — пушить без сети нельзя.
     unpushed: (projectId: string, limit = 100) =>
-      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}${gq(projectId, '&')}`),
+      projectRequest<GitLogEntry[]>(`/projects/${projectId}/git/unpushed?limit=${limit}${gq(projectId, '&')}`, { live: true }),
     // Настройка промпта AI-описания коммита: чтение (global/projectOverride/effective/default)
     getCommitPrompt: (projectId: string) =>
       projectRequest<GitCommitPromptInfo>(`/projects/${projectId}/git/commit-prompt`),
@@ -2432,9 +3632,7 @@ export const api = {
   //   400 → текст пуст или больше потолка (256 КБ)
   plans: {
     buildMap: async (plan: string): Promise<PlanMap | null> => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
+      const token = readStoredToken();
       const res = await fetch('/api/plans/map', {
         method: 'POST',
         headers: {

@@ -36,9 +36,11 @@ public record TextDeltaMessage(string Text)
 // числом оно уходит в историю, поэтому живая лента и перезагрузка показывают одно и то же.
 // DelegationTaskId — доклад о завершении делегированной задачи (см.
 // StoredUserMessage.DelegationTaskId): связь с задачей структурная, не из текста.
+// SenderUserId — человек-автор реплики (как StoredUserMessage.SenderUserId); у агентских и серверных null.
 public record UserMessageMessage(string Text, IReadOnlyList<string>? AttachedPaths, string? SenderPersonaId, bool Auto,
     string? SenderOrigin = null, string? SenderChatName = null, string? StaffNote = null,
-    long? Timestamp = null, string? DelegationTaskId = null)
+    long? Timestamp = null, string? DelegationTaskId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SenderUserId = null)
     : ServerMessage("user_message");
 
 // Очередь сообщений занятой сессии — полный снимок при каждом изменении (постановка,
@@ -53,12 +55,14 @@ public record PendingMessagesMessage(IReadOnlyList<PendingMessageDto> Items)
 // Kind — "user" (сообщение человека, ждёт в серверной очереди) или "agent" (chats_send);
 // AttachedPaths/Mode заполнены только у пользовательских — клиент рисует их на карточке
 // и (Mode) применяет при возврате в композер.
+// SenderUserId — человек-автор пользовательского сообщения (у агентских null, в JSON не пишется).
 // WaitingForDevice — сообщение ждёт устройство локального проекта (ADR-016, план §5): лежит
 // на сессии, уйдёт в работу при выходе устройства в онлайн.
 public record PendingMessageDto(string Id, string Text, string? SenderPersonaId,
     string? SenderOrigin, DateTime EnqueuedAt, string? SenderChatName = null,
     string Kind = "agent", IReadOnlyList<string>? AttachedPaths = null, string? Mode = null,
-    bool WaitingForDevice = false);
+    bool WaitingForDevice = false,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? SenderUserId = null);
 
 // «Стоп» вернул текст в композер (фича «честная очередь»). Payload null — восстанавливать
 // нечего (прерван авто/агентский ход, пользовательских в очереди не было): клиент просто
@@ -76,6 +80,23 @@ public record ComposerRestoreMessage(string? Text, IReadOnlyList<string>? Attach
 public record GuestTextMessage(string Text, string PersonaId, long? Timestamp = null,
     string? DelegationTaskId = null)
     : ServerMessage("guest_text");
+
+// Черновик плагина build-it-yourself изменился (ADR-031, шаг 4.2): наблюдатель
+// data/plugins/{owner}/_drafts/{slug} шлёт ВЛАДЕЛЬЦУ сигнал обновить предпросмотр панели.
+// Slug + монотонная ревизия (каждая правка файла в черновике её увеличивает); БЕЗ содержимого
+// файлов и без хостовых путей — карточка по slug сама перечитает предпросмотр. Эфемерное:
+// в history.json не пишется (нет case в OnMessageAsync), после F5 предпросмотр перечитается.
+public record PluginDraftChangedMessage(string Slug, long Revision)
+    : ServerMessage("plugin_draft_changed");
+
+// Установка плагина изменилась (ADR-031, S6): install/обновление/принятие черновика,
+// grant прав, enable/disable, uninstall или запись/удаление секрета. Точка испускания —
+// хранилище (PluginStore/PluginSecretsStore), а не контроллеры: каждая запись установки
+// испускает событие, поэтому новая ручка не сможет «забыть» его. ВЛАДЕЛЬЦУ (ToOwner),
+// БЕЗ полезной нагрузки: клиент сам перечитает GET /api/plugins (панель подхватит новую
+// версию/права/секреты). Эфемерное: в history.json не пишется, UpdatedAt не двигает.
+public record PluginsChangedMessage()
+    : ServerMessage("plugins_changed");
 
 public record ThinkingDeltaMessage(string Text)
     : ServerMessage("thinking_delta");
@@ -224,21 +245,47 @@ public record FileChangedMessage(string Path, int Added, int Removed, bool Exter
 // инструментов и ожидания подтверждений. По нему считается скорость генерации в плашке итога:
 // DurationMs для этого не годится — у хода с тул-лупом он кратно больше и занижает скорость.
 // null — CLI поля не прислал (сторонний поток) либо ход шёл мимо CLI (локальный движок).
-// PromptCache — состояние prompt cache основного агента для индикатора TTL; только у родного
-// Claude (у сторонних провайдеров ephemeral_* — эхо CLI, а не правда провайдера) — иначе null.
-public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null, PromptCacheInfo? PromptCache = null)
+// PromptCache — состояние prompt cache для индикатора (индикатор prompt cache); null — у
+// хода без сигнала кэша и у исторических result до этого поля.
+// UpstreamProvider/UpstreamModel — фактический маршрут прогона («учётка хода», SP1): ключ
+// провайдера, которому ход реально ушёл (родной Claude — "claude", аккаунт пула — его ключ,
+// сторонний — ключ провайдера как есть, без срезания "-direct"), и модель шлюзового маршрута
+// (заполняется только для хода через шлюз — её переписал шлюз, не сессия). null — у
+// исторических result до этих полей; UpstreamModel дополнительно null у прямого прогона:
+// его модель известна из самого прогона, не из шлюза.
+public record ResultMessage(string Subtype, long DurationMs, int NumTurns, UsageInfo? Usage, double? TotalCostUsd, string? ApiErrorStatus = null, IReadOnlyList<string>? PermissionDenials = null, int? ContextTokens = null, string? UsageModel = null, long? DurationApiMs = null, PromptCacheState? PromptCache = null, string? UpstreamProvider = null, string? UpstreamModel = null)
     : ServerMessage("result");
 
-// Состояние prompt cache на конец хода (индикатор TTL в шапке чата).
-// Ttl — "1h" | "5m": срок последней ЗАПИСИ кэша (вызов, который только читал, наследует его);
-// null — записи за жизнь процесса ещё не видели.
-// AnchorAtMs — unix-время (мс, часы сервера) прихода message_start последнего вызова основного
-// агента, который читал или писал кэш: от него отсчитывается TTL. Сабагенты якорь не двигают.
-// MissReason/MissedTokens — diagnostics.cache_miss_reason первого вызова хода (type и
-// cache_missed_input_tokens); null — промаха не было либо API причину не назвал.
-// PrefixTokens — размер контекста последнего запроса (= ContextTokens, 0 — оценки нет):
-// сколько перепишет следующий ход, если кэш остыл.
-public record PromptCacheInfo(string? Ttl, long? AnchorAtMs, string? MissReason, int? MissedTokens, int PrefixTokens);
+// Причина промаха prompt cache первого вызова хода — из diagnostics.cache_miss_reason.type
+// API-ответа. None — промаха не было; Unavailable — промах есть, но известная причина не
+// названа (в том числе незнакомый type) — осознанно: новый тип API не приравнивается к
+// известным bucket'ам. Контракт — строка, не число: конвертер на типе гарантирует строковый
+// формат любому сериализатору, имена на проводе — camelCase (JsonStringEnumMemberName
+// задаёт их явно, не завися от naming policy сериализатора). Числовые значения зафиксированы
+// явно в legacy-порядке: JsonStringEnumConverter читает числа по номеру, и перестановка
+// членов сломала бы чтение старой истории. Формулировки подписей — на фронте (promptCache.ts).
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum PromptCacheMissReason
+{
+    [JsonStringEnumMemberName("none")] None = 0,
+    [JsonStringEnumMemberName("systemChanged")] SystemChanged = 1,                    // system_changed — сменился системный промпт
+    [JsonStringEnumMemberName("messagesChanged")] MessagesChanged = 2,                // messages_changed — изменилась история сообщений
+    [JsonStringEnumMemberName("unavailable")] Unavailable = 3,                        // unavailable — причина неизвестна
+    [JsonStringEnumMemberName("previousMessageNotFound")] PreviousMessageNotFound = 4, // previous_message_not_found — запись кэша истекла
+    [JsonStringEnumMemberName("modelChanged")] ModelChanged = 5,                      // model_changed — сменилась модель
+    [JsonStringEnumMemberName("toolsChanged")] ToolsChanged = 6,                      // tools_changed — сменились инструменты
+}
+
+// Состояние prompt cache на конец хода (фича «Индикатор prompt cache», шаг B-1).
+// ReadTokens/WrittenTokens — cache_read_input_tokens и cache_creation_input_tokens из
+// usage result'а хода; AnchorAtMs — серверное UTC-время (мс) прихода message_start
+// последнего вызова основного агента, который читал или писал кэш (TTL продлевается и при чтении); Ttl — срок последней записи кэша,
+// "1h" | "5m" (usage.cache_creation.ephemeral_*), null — записи за жизнь процесса ещё не
+// видели; MissReason/MissedTokens — diagnostics первого вызова ПОСЛЕ эха нашего сообщения
+// (вызовы до эха — ход-продолжение CLI, а не наш ход), MissedTokens — cache_missed_input_tokens
+// того же diagnostics, null — промаха не было. Поле регистрируется (шаг B-1), интерфейс
+// фичи строится следующими шагами.
+public record PromptCacheState(int ReadTokens, int WrittenTokens, long? AnchorAtMs, string? Ttl, int? MissedTokens, PromptCacheMissReason MissReason);
 
 // Фактически списанная стоимость генерации fal.ai. Приходит асинхронно после tool_result:
 // сервер опрашивает fal.ai billing-events по request_id (см. FalCostService).
@@ -252,6 +299,21 @@ public record GlifCostMessage(string JobId, string? OutputType, int MediaCount, 
 
 // Ответ оборван по лимиту токенов (assistant stop_reason == max_tokens)
 public record TruncatedMessage() : ServerMessage("truncated");
+
+// Утечка вызова инструмента в текст (локальная модель): вызов пришёл text-блоком, а не
+// tool_use. Kind = "tail" (в том же сообщении есть tool_use — хвост после успешного вызова,
+// параметр мог потеряться) | "whole_call" (tool_use в сообщении нет — вызов целиком ушёл
+// текстом). AfterTool — имя последнего tool_use сообщения (для tail), Snippet — выдержка
+// текста с маркером.
+//
+// Snippet: ClaudeSession.BuildLeakSnippet режет до 200 символов (плашка на фронте —
+// человек читает, чуть больше контекста ок); тот же текст SubagentPrompts.TruncateSnippet
+// режет ещё до 120 для текста директивы (модель читает, не раздуваем инструкцию).
+// Два разных лимита — осознанно: у плашки и у директивы разная аудитория.
+// Tool — имя инструмента из утёкшего вызова (ToolCallLeakDetector.ExtractToolName) или null:
+// по нему исполнитель отличает слип формата от вызова инструмента, которого у сессии нет.
+public record ToolCallLeakMessage(string Kind, string? AfterTool, string Snippet, string? Tool = null)
+    : ServerMessage("tool_call_leak");
 
 // Скрытое (зашифрованное) размышление — блок redacted_thinking
 public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
@@ -288,8 +350,17 @@ public record RateLimitMessage(string LimitType, string? ResetsAt, string? Statu
 public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTokens = null)
     : ServerMessage("compact_boundary");
 
+// Живое заполнение контекста посреди хода: после каждого ответа модели основного агента
+// (usage assistant-сообщения — input + cache_read + cache_creation, см. ClaudeSession.
+// TrackContextTokens). Транзитное: в историю не пишется, итог хода по-прежнему несёт
+// ResultMessage.ContextTokens. Нужно, чтобы кольцо контекста в шапке чата двигалось по ходу
+// длинного хода (десятки вызовов инструментов на локальной модели), а не раз в конце (22.10.2026).
+public record ContextUsageMessage(int ContextTokens) : ServerMessage("context_usage");
+
 // Обрезка контекста прокси локальной модели: сдвиг границы прунинга (Kind = "prune") либо уход
-// автосжатия в облако (Kind = "compact_cloud"). И то, и другое стоит человеку десятков секунд
+// автосжатия в облако (Kind = "compact_cloud"), либо перехват петли модели в потоке
+// (Kind = "loop_guard": Blocks — сколько петель, ResultBlocks — был ли повтор). ImageBlocks /
+// ImageTokens — вырезанные прокси старые картинки и их оценка в токенах. Всё это стоит человеку десятков секунд
 // тишины в чате, неотличимых от зависания, — карточка рассказывает, чем они заняты.
 // PrefillSeconds — время до первого байта ответа модели у ЭТОГО запроса, то есть ровно
 // «сколько ждали»; CacheReadTokens / PromptTokens — доля промпта, взятая из prefix cache.
@@ -310,7 +381,9 @@ public record ContextPrunedMessage(
     double? PrefillSeconds,
     int? CacheReadTokens,
     int? PromptTokens,
-    string? EventId = null)
+    string? EventId = null,
+    int ImageBlocks = 0,
+    int ImageTokens = 0)
     : ServerMessage("context_pruned");
 
 // Ход компакции (system/status): Status == "compacting" — началась;
@@ -376,6 +449,21 @@ public record ModuleRecordMessage(string Module, string RecordType, System.Text.
 
 public record ChatArchivedMessage(bool Archived)
     : ServerMessage("chat_archived");
+
+// Видимость чата изменилась (S2d-7a): без содержимого — только id (SessionId) и новое состояние.
+// Private=true уходит группе проекта ПОСЛЕ того, как чужие соединения сняты с session-группы:
+// клиент участника убирает чат с экрана, автор обновляет тумблер.
+public record ChatVisibilityChangedMessage(bool Private)
+    : ServerMessage("chat_visibility_changed");
+
+// «Продолжить в новом чате»: чат (SessionId = исходный) продолжён в NewSessionId — записка
+// передана, новый чат создан. Живое событие: человек, смотрящий ИСХОДНЫЙ чат, должен
+// автоматически перейти в новый (фронт решает по тому, какой чат открыт). ProjectId — для
+// построения навигационного объекта (проектный чат); null — чат вне проекта.
+// Эфемерное: в history.json не пишется (история нового чата подтянется по переходу).
+// SessionId — унаследованное свойство базы, рассылка проставляет его (исходный чат).
+public record ChatContinuedMessage(string NewSessionId, string? ProjectId)
+    : ServerMessage("chat_continued");
 
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
@@ -673,6 +761,37 @@ public record HandsNoticeMessage(string Text)
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
 public record PromptSuggestionMessage(string Text)
     : ServerMessage("prompt_suggestion");
+
+// Живые метрики локальной модели (статистика локальных моделей). Оба события ЭФЕМЕРНЫЕ:
+// в history.json не пишутся (нет case в OnMessageAsync и StoredMessage) — после F5 их
+// подхватит следующий снимок. SessionId — унаследованное свойство ServerMessage,
+// рассылка проставляет его сама (msg with { SessionId = … }); здесь только состав.
+//
+// LocalModelLiveMessage — тиковый снимок состояния генерации: Phase — текущая фаза
+// (queued | prefill | generating), GenTps — токены/сек генерации, WaitingTotal — сколько
+// прогонов ждут GPU в общей очереди.
+public record LocalModelLiveMessage(string Phase, double? GenTps, int? WaitingTotal)
+    : ServerMessage("local_model_live");
+
+// LocalModelTurnStatsMessage — итоговые метрики завершённого хода на локальной модели:
+// GenTps/PrefillTps — скорость генерации и префилла, TtftMs — time-to-first-token,
+// QueueMsApprox — оценка времени в очереди, CacheHitPerc — доля prefix cache, OutTokens —
+// число выданных токенов. Атрибуция (ADR-029): разрез по классам запросов
+// (Main/Subagent/Compaction/Auxiliary), типы сабагентов (AgentTypes) и вид компакции.
+public record LocalModelTurnStatsMessage(double? GenTps, double? PrefillTps,
+    int? TtftMs, int? QueueMsApprox, double? CacheHitPerc, int? OutTokens,
+    int MainRequests, int SubagentRequests, int CompactionRequests, int AuxiliaryRequests,
+    string[]? AgentTypes, string? CompactionKind,
+    int ToolCallLeakTail = 0, int ToolCallLeakWholeCall = 0)
+    : ServerMessage("local_model_turn_stats");
+
+// Ход ждёт свободный слот локальной модели (гейт допуска LocalEngineBusyTracker). В отличие от
+// LocalModelLiveMessage идёт независимо от включённости статистики local-model-stats: человек обязан видеть, что ход ждёт,
+// а не «виснет молча». Position — место в очереди (1 — следующий), Active/Limit — «заняты N из M».
+// Position = 0 — ожидание кончилось (ход допущен либо отказан/остановлен): строку надо снять.
+// Эфемерное, в history.json не пишется (нет case в OnMessageAsync и StoredMessage).
+public record LocalTurnQueueMessage(int Position, int Active, int Limit)
+    : ServerMessage("local_turn_queue");
 
 // Сообщения от клиента к серверу
 public record ClientMessage([property: JsonPropertyName("type")] string Type);

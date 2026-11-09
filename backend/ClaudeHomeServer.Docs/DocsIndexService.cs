@@ -527,7 +527,10 @@ public sealed partial class DocsIndexService(IProjectFileGateway? files = null)
 
     // ---------- сборка корпуса ----------
 
-    private DocsCorpus GetCorpus(string rootPath, DocsScope? rawScope)
+    // internal, а не private: MockupCatalog (та же вертикаль) читает корпус по фиксированной
+    // области docs/mockups, не повторяя обход и кеш. Кеш ключуется корнем + областью, поэтому
+    // фиксированная область даёт отдельный кеш-слот, не мешая области проекта.
+    internal DocsCorpus GetCorpus(string rootPath, DocsScope? rawScope)
     {
         var root = Path.GetFullPath(rootPath);
         var scope = NormalizeScope(rawScope);

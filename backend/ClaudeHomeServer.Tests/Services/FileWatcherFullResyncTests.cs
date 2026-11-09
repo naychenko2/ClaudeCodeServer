@@ -120,9 +120,12 @@ public class FileWatcherFullResyncTests : IDisposable
     public async Task ПереполнениеЛимитаПутей_ШлётFullВместоТихойРезки()
     {
         var hub = new HubRecorder();
-        // Интервал 5с: все файлы пишутся ДО первого скана — дифф накапливается одним
-        // заходом, и переполнение срабатывает атомарно, без partial-флашей с full=false
-        var (svc, projectId, dir) = Build(hub, usePolling: true, pollMs: 5000);
+        // Таймер опроса выключен (PollIntervalMs < 0): первый скан делает сам тест — сразу
+        // после записи всех файлов. Порядок «запись → скан» держится вызовом PollNow, а не
+        // паузой в 5 с: дифф накапливается одним заходом, переполнение срабатывает атомарно,
+        // без partial-флашей с full=false (conventions.md, паттерн «интервал — опция,
+        // ожидание — событие»). Без PollNow события нет вовсе — тест краснеет по таймауту.
+        var (svc, projectId, dir) = Build(hub, usePolling: true, pollMs: -1);
 
         var tcs = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         hub.OnSent("project_" + projectId, p =>
@@ -135,11 +138,9 @@ public class FileWatcherFullResyncTests : IDisposable
         for (var i = 0; i < 205; i++)
             File.WriteAllText(Path.Combine(dir, $"file{i}.txt"), "x");
 
-        var done = await Task.WhenAny(tcs.Task, Task.Delay(TimeSpan.FromSeconds(30)));
-        done.Should().Be(tcs.Task,
-            "переполнение MaxPaths обязано дать событие full=true — раньше всё сверх лимита молча выбрасывалось");
+        svc.PollNow(projectId);
 
-        var payload = await tcs.Task;
+        var payload = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(10));
         payload.GetProperty("projectId").GetString().Should().Be(projectId);
         payload.GetProperty("full").GetBoolean().Should().BeTrue();
         payload.GetProperty("paths").GetArrayLength().Should().Be(0,
@@ -319,7 +320,11 @@ public class FileWatcherFullResyncTests : IDisposable
         context.Setup(c => c.ConnectionId).Returns("conn-1");
         context.Setup(c => c.User).Returns(principal);
 
-        var sessionHub = new SessionHub(null!, projects, svc, null!, null!)
+        // Точка доступа хаба (S0-6) — настоящая, поверх ProjectManager этого теста: sub-claim
+        // выше равен владельцу проекта, поэтому доступ есть. ISessionDirectory здесь не зовётся
+        // (JoinProject чат не резолвит) — оставляем пустую заглушку.
+        var sessionHub = new SessionHub(null!, projects, new ProjectAccessService(projects, new Mock<ISessionDirectory>().Object),
+            svc, null!, null!, new UserConnectionRegistry(), NullLogger<SessionHub>.Instance)
         {
             Context = context.Object,
             Groups = groups.Object,

@@ -501,12 +501,23 @@ public class McpOAuthServiceTests : IDisposable
 
     // ── таймаут discovery ────────────────────────────────────────────────────────────
 
+    // Дефолты продукта (5 с на попытку, 20 с общий) — отдельным тестом: кейс ниже
+    // сокращает интервалы до миллисекунд, и только этот держит продуктовые значения
+    // (conventions.md, паттерн «интервал — опция, ожидание — событие»).
+    [Fact]
+    public void Discovery_ДефолтныеТаймаутыПрежние()
+    {
+        var (service, _, _, _, _) = NewService();
+        service.DiscoveryTimeout.Should().Be(TimeSpan.FromSeconds(5));
+        service.DiscoveryOverallTimeout.Should().Be(TimeSpan.FromSeconds(20));
+    }
+
     [Theory]
-    [InlineData("5", false)]
-    [InlineData("30", false)]
-    [InlineData("5", true)]
+    [InlineData(500, false)] // сумма попыток (5×100 мс) ровно доходит до потолка — граница
+    [InlineData(3000, false)] // попытки кончаются раньше потолка — Unreachable по «ни один адрес не ответил»
+    [InlineData(500, true)] // issuer из сохранённой записи — цепочка короче, итог тот же
     public async Task Вход_НедоступныйСерверАвторизации_УкладываетсяВПотолокИДаётПонятнуюОшибку(
-        string overallSeconds, bool issuerKnown)
+        int overallMs, bool issuerKnown)
     {
         var dir = Path.Combine(Path.GetTempPath(), "ccs-mcp-oauth-hang-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(dir);
@@ -515,12 +526,16 @@ public class McpOAuthServiceTests : IDisposable
             var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(dir, "projects.json"),
-                ["Mcp:OAuthDiscoveryTimeoutSeconds"] = "1",
-                ["Mcp:OAuthDiscoveryOverallTimeoutSeconds"] = overallSeconds,
             }).Build();
             var registry = new McpRegistry(config, new McpSecretStore(config));
             var service = new McpOAuthService(registry, new McpSecretStore(config), new McpStatusStore(config),
                 new StubHttpClientFactory(new HangingHandler()), config, NullLogger<McpOAuthService>.Instance);
+            // Интервалы — internal-поля сервиса с прежними дефолтами: тест сокращает их до
+            // миллисекунд и ждёт отказа сервиса, а не реальных секунд. Если сервис их не уважит
+            // (дефолтные 5 с на попытку), потолок ниже краснит тест — как и положено.
+            const int attemptMs = 100;
+            service.DiscoveryTimeout = TimeSpan.FromMilliseconds(attemptMs);
+            service.DiscoveryOverallTimeout = TimeSpan.FromMilliseconds(overallMs);
             var record = NewRecord(registry);
             if (issuerKnown)
             {
@@ -541,8 +556,11 @@ public class McpOAuthServiceTests : IDisposable
             // потолка и уезжала в регистрацию с чужим «не поддерживает автоматическую регистрацию»
             thrown.Which.Failure.Should().Be(McpOAuthFailure.Unreachable);
             // Раньше та же недоступность authorization server держала запрос 90-100с
-            // (стандартные таймауты HttpClient складывались по цепочке discovery)
-            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15),
+            // (стандартные таймауты HttpClient складывались по цепочке discovery).
+            // Потолок — 10× суммы попыток: при игнорируемых интервалах (дефолтные 5 с)
+            // это уже минуты, и тест краснеет здесь же, а не через полчаса ожидания.
+            stopwatch.Elapsed.Should().BeLessThan(
+                TimeSpan.FromMilliseconds(10L * attemptMs * 5),
                 "общий потолок discovery не должен складываться в минуты ожидания");
         }
         finally

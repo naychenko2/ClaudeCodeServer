@@ -59,6 +59,18 @@ async function ensureConnected(): Promise<void> {
   }
 }
 
+// Остановка хаба при смене аккаунта: объект соединения остаётся тем же, а токен при
+// следующем start() возьмётся свежий. Переподписка не нужна — терминалы открываются заново
+// при монтировании.
+export async function resetTerminalConnection(): Promise<void> {
+  if (!connection) return
+  try {
+    await connection.stop()
+  } finally {
+    startPromise = null
+  }
+}
+
 export interface TerminalInfo {
   id: string
   projectId: string

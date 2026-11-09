@@ -313,6 +313,27 @@ public class ChatSubjectSweeperTests : IDisposable
             .Should().Contain([ok, fresh, short_, dangling, old]).And.NotContain([archived, running, child]);
     }
 
+    // S2d-4h: приватный чат (PrivateToUserId != null, включая пустой — тот же fail-closed,
+    // что у SessionAccess.CanSee) не кандидат разбора ни фоном, ни кнопкой; общий — как раньше
+    [Fact]
+    public async Task Кандидаты_ПриватныйЧатИсключён_ОбщийКакРаньше()
+    {
+        var (_, project) = OwnerWithProject();
+        var now = DateTime.UtcNow;
+        var common = await Chat(project.Id, 60);
+        var foreignPrivate = await Chat(project.Id, 60);
+        foreignPrivate.PrivateToUserId = "another-user";
+        var ownPrivate = await Chat(project.Id, 60);
+        ownPrivate.PrivateToUserId = project.OwnerId!;
+        var emptyPrivate = await Chat(project.Id, 60);
+        emptyPrivate.PrivateToUserId = "";
+
+        Candidates(project.Id).Should().BeEquivalentTo([common],
+            "приватные чаты — ни чужой, ни свой, ни с мусорным значением — не кандидаты авто-прохода");
+        _sessions.GetSubjectCandidates(project.Id, now, manual: true).Should().BeEquivalentTo([common],
+            "ручная кнопка берёт те же чаты: содержимое приватного не уходит в модель и по кнопке");
+    }
+
     // ===================== Проходы сторожа =====================
 
     [Fact]
@@ -340,6 +361,28 @@ public class ChatSubjectSweeperTests : IDisposable
 
         _runner.Calls.Should().Be(1, "новой активности не было — второй тик модель не зовёт");
         owner.Should().NotBeNull();
+    }
+
+    // S2d-4h: содержимое приватного чата — ни реплики истории, ни название — не уходит в модель,
+    // общий чат проекта разбирается как раньше
+    [Fact]
+    public async Task Тик_ПриватныйЧатНеОтдаётНиРепликНиНазваниеВМодель()
+    {
+        var (_, project) = OwnerWithProject();
+        var now = DateTime.UtcNow;
+        _projects.EnsureSubjectsSweepSince(project.Id, now.AddDays(-1));
+        var common = await Chat(project.Id, 60, history: ["Общая реплика про деплой"]);
+        var priv = await Chat(project.Id, 60, history: ["Личная реплика про здоровье"]);
+        priv.Name = "Приватный чат";
+        priv.PrivateToUserId = "another-user";
+        _runner.Respond = _ => """{"assign":[{"chat":"c1","topic":null}]}""";
+
+        await _sut.TickAsync(now);
+
+        _runner.Calls.Should().Be(1, "в пачке только общий чат");
+        _runner.Prompts[0].Should().Contain("Общая реплика")
+            .And.NotContain("Личная реплика", "содержимое приватного чата не уходит в модель")
+            .And.NotContain("Приватный чат", "название приватного чата — тоже");
     }
 
     [Fact]
@@ -897,11 +940,12 @@ public class ChatSubjectSweeperTests : IDisposable
     }
 
     // Подставной раннер. Маршрут места — две НЕЗАВИСИМЫЕ ручки, как в настоящем раннере:
-    // Local (UsesLocal: место на локали) и FreeRoute (HasFreeRoute: есть хоть какой-то бесплатный
-    // путь, в том числе прямой облачный адаптер). direct-маршрут агрегатора — FreeRoute=true при
-    // Local=false. Calls — обращения к модели через RunLocalOnlyAsync (каждое, даже отбитое
-    // маршрутом: проход не должен звать модель вовсе), FreeCalls — RunFreeAsync, его первый шаг
-    // ходит в облако, и фича не зовёт его никогда. Платные пути считаются в PaidCalls.
+    // Local (UsesLocal/HasRoute: место на локали и исполнимо) и FreeRoute (HasFreeRoute: есть
+    // хоть какой-то бесплатный путь, в том числе прямой облачный адаптер). direct-маршрут
+    // агрегатора — FreeRoute=true при Local=false. Calls — обращения к модели через
+    // RunLocalOrChosenAsync (каждое, даже отбитое маршрутом: проход не должен звать модель
+    // вовсе), FreeCalls — RunFreeAsync, его первый шаг ходит в облако, и фича не зовёт его
+    // никогда. Платные пути считаются в PaidCalls.
     private sealed class FakeRunner : ICheapTextRunner
     {
         public bool Local { get; set; } = true;
@@ -912,28 +956,20 @@ public class ChatSubjectSweeperTests : IDisposable
         // Локаль упала исключением (обрыв соединения, 500 движка)
         public Exception? Throw { get; set; }
         public int Calls;
-        public int FreeCalls;
+        // = 0: после переработки маршрута RunFreeAsync-инкремент убран, поле всегда 0 (CS0649)
+        public int FreeCalls = 0;
         public int PaidCalls;
         public List<string> Prompts { get; } = [];
         public List<object?> JsonFormats { get; } = [];
 
         public bool UsesLocal(string actionKey) => Local;
         public bool HasFreeRoute(string actionKey) => FreeRoute;
+        public bool HasRoute(string actionKey) => Local;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "local";
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default)
-        {
-            Interlocked.Increment(ref FreeCalls);
-            return Task.FromResult(Respond(prompt));
-        }
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
-            RunLocalOnlyAsync(actionKey, prompt, null, ct);
-
-        // Как настоящий раннер: маршрут не локаль — null, модель не зовётся
-        public async Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, object? jsonFormat,
-            CancellationToken ct)
+        // Как настоящий раннер: маршрут не исполним — null, модель не зовётся
+        public async Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default)
         {
             Interlocked.Increment(ref Calls);
             lock (Prompts) { Prompts.Add(prompt); JsonFormats.Add(jsonFormat); }

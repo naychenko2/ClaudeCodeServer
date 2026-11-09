@@ -298,4 +298,27 @@ public class LocalMediaCleanupTests : IDisposable
 
         files.Should().NotBeEmpty().And.AllSatisfy(f => File.Exists(f).Should().BeFalse(f));
     }
+
+    // Ротация журнала истории (шаг 2): файлы дня старше 7 дней удаляются, свежие остаются
+    [Fact]
+    public void ЖурналИстории_ФайлыСтарше7Дней_Удаляются_Свежие_Остаются()
+    {
+        var now = new DateTime(2026, 10, 15, 12, 0, 0);
+        var histDir = Path.Combine(_tempDir, "data", ComfyRunHistory.DirName);
+        Directory.CreateDirectory(histDir);
+
+        // Файлы: сегодня (остаётся), 3 дня назад (остаётся), 8 дней назад (удаляется)
+        var today = (now.Date).ToString("yyyy-MM-dd") + ".jsonl";
+        var threeDaysAgo = (now.Date.AddDays(-3)).ToString("yyyy-MM-dd") + ".jsonl";
+        var eightDaysAgo = (now.Date.AddDays(-8)).ToString("yyyy-MM-dd") + ".jsonl";
+        File.WriteAllText(Path.Combine(histDir, today), "{}\n");
+        File.WriteAllText(Path.Combine(histDir, threeDaysAgo), "{}\n");
+        File.WriteAllText(Path.Combine(histDir, eightDaysAgo), "{}\n");
+
+        _cleanup.Run(Options(configured: false), now);
+
+        File.Exists(Path.Combine(histDir, today)).Should().BeTrue("сегодняшний файл держим");
+        File.Exists(Path.Combine(histDir, threeDaysAgo)).Should().BeTrue("3 дня — в пределах 7, держим");
+        File.Exists(Path.Combine(histDir, eightDaysAgo)).Should().BeFalse("8 дней — старше 7, удалён");
+    }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.Media;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Catalog;
 
@@ -39,9 +40,14 @@ public static class FalVideoCatalog
         bool PriceVaries,
         IReadOnlyDictionary<string, JsonNode?>? Defaults = null);
 
-    private static VideoCaps Caps(int[] durations, string[] aspects, bool sound, bool lastFrame) =>
+    private static VideoCaps Caps(int[] durations, string[] aspects, bool sound, bool lastFrame,
+        MediaFormatCaps? format = null) =>
         new(durations, aspects, sound, lastFrame, VideoLicense.Commercial, VideoPriceUnits.Usd,
-            MaxFrameBytes: MaxFrameBytes);
+            MaxFrameBytes: MaxFrameBytes, Format: format);
+
+    // Формат модели без ступеней: пропорции параметром (или по кадру, если Aspects пусты), ступеней у схемы нет
+    private static MediaFormatCaps AspectsOnly(string label, string[] aspects) =>
+        new(label, VideoFormatCatalog.RealAspects(aspects), []);
 
     private static VideoPriceHint PerSec(double usd) => new(usd, VideoPriceUnits.Usd, "sec");
 
@@ -52,7 +58,8 @@ public static class FalVideoCatalog
         // Самая дешёвая: черновик FLUX 3, 0,03 $/с, кадр A и кадр B обязательны
         new(new VideoModelInfo(FluxDraft, "FLUX 3 · черновик",
                 Caps([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
-                    ["auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16"], sound: true, lastFrame: true),
+                    ["auto", "21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16"], sound: true, lastFrame: true,
+                    AspectsOnly("FLUX 3", ["21:9", "2:1", "16:9", "4:3", "1:1", "3:4", "9:16"])),
                 PerSec(0.03)),
             First: "start_image_url", Last: "end_image_url", LastRequired: true,
             Duration: "duration", DurationForm: FalDurationForm.Int,
@@ -61,29 +68,35 @@ public static class FalVideoCatalog
 
         // Veo 3.1 Lite: 0,05 $/с за 720p; прайс отдаёт одну цену, а звук и 1080p её меняют
         new(new VideoModelInfo(VeoLite, "Veo 3.1 Lite",
-                Caps([4, 6, 8], ["auto", "16:9", "9:16"], sound: true, lastFrame: true),
+                Caps([4, 6, 8], ["auto", "16:9", "9:16"], sound: true, lastFrame: true,
+                    new MediaFormatCaps("Veo 3.1 Lite", ["16:9", "9:16"],
+                        VideoFormatCatalog.TiersFromOptions(["16:9", "9:16"], ["720p", "1080p"]), WireParam: "resolution")),
                 PerSec(0.05)),
             First: "first_frame_url", Last: "last_frame_url", LastRequired: true,
             Duration: "duration", DurationForm: FalDurationForm.Seconds,
             Aspect: "aspect_ratio", Sound: "generate_audio", Seed: "seed",
-            ParamNames: Names("negative_prompt", "resolution", "auto_fix", "safety_tolerance"),
+            ParamNames: Names("negative_prompt", "auto_fix", "safety_tolerance"),
             EtaSeconds: 90, PriceVaries: true),
 
         // MiniMax H3: последний кадр необязателен, пропорция — по кадру; по умолчанию у fal 2K-апскейл,
-        // мы берём родные 768P (меньше файл, цена по разрешению меняется)
+        // мы берём родные 768P (меньше файл, цена по разрешению меняется). Схема 2026-10-07: «480P и 768P — родные
+        // режимы, 2K и 4K — увеличение 768P-основы», а автоматического апскейла у нас нет (решение Андрея): ступени
+        // Стандарт = 480P, Высокое = 768P, «Макс» серая
         new(new VideoModelInfo(MiniMaxH3, "MiniMax H3",
-                Caps([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], [], sound: true, lastFrame: true),
+                Caps([5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], [], sound: true, lastFrame: true,
+                    new MediaFormatCaps("MiniMax H3", [],
+                        VideoFormatCatalog.TiersFromOptions([], ["480P", "768P"]), WireParam: "resolution",
+                        NativeNote: "в родных 480P и 768P (2K и 4K у неё — увеличение, а не родной размер)")),
                 PerSec(0.05)),
             First: "image_url", Last: "end_image_url", LastRequired: false,
             Duration: "duration", DurationForm: FalDurationForm.Int,
             Aspect: null, Sound: null, Seed: "seed",
-            ParamNames: Names("resolution", "prompt_expansion_mode", "enable_safety_checker"),
-            EtaSeconds: 120, PriceVaries: true,
-            Defaults: new Dictionary<string, JsonNode?> { ["resolution"] = "768P" }),
+            ParamNames: Names("prompt_expansion_mode", "enable_safety_checker"),
+            EtaSeconds: 120, PriceVaries: true),
 
         // Kling O1 Standard: последний кадр необязателен, без звука, пропорция — по кадру
         new(new VideoModelInfo(KlingO1, "Kling O1 Standard",
-                Caps([3, 4, 5, 6, 7, 8, 9, 10], [], sound: false, lastFrame: true),
+                Caps([3, 4, 5, 6, 7, 8, 9, 10], [], sound: false, lastFrame: true, AspectsOnly("Kling O1", [])),
                 PerSec(0.084)),
             First: "start_image_url", Last: "end_image_url", LastRequired: false,
             Duration: "duration", DurationForm: FalDurationForm.String,

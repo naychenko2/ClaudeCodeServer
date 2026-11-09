@@ -1,0 +1,10 @@
+import type { SubsystemManifest } from '../lib/subsystems/registryCore';
+export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'personas' | 'specialties' | 'knowledge' | 'notifications' | 'telemetry';
+export type SubsystemTab = `subsystem:${string}`;
+export type HubTabValue = HubTab | `module:${string}` | SubsystemTab;
+export declare function isModuleTab(v: HubTabValue): v is `module:${string}`;
+export declare function moduleIdOf(v: HubTabValue): string | null;
+export declare function isSubsystemTab(v: HubTabValue): v is SubsystemTab;
+export declare function subsystemKeyOf(v: HubTabValue): string | null;
+export declare function subsystemTabValue(key: string): SubsystemTab;
+export declare function defaultHubTabs(subs: SubsystemManifest[]): HubTabValue[];

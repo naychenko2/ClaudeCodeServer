@@ -1,10 +1,8 @@
 // Манифест MF-модуля «Звук» (ADR-021 §3). Ключ совпадает с AudioEditorSubsystem.Key
-// бэкенда: гейт слотов сверяется с активными подсистемами из /api/auth/me. Фич-флаг
-// владельца (audio-editor) проверяют сами входы — каждый вклад через isAvailable с
-// getFlag(FLAGS.audioEditor).
+// бэкенда: гейт слотов сверяется с активными подсистемами из /api/auth/me.
 
 import { Mic } from 'lucide-react';
-import { FLAGS, getFlag, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
+import { ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type {
   ChatItemToolCtx, ComposerChipCtx, ContextOpenerApi, SlotContribution, SubsystemManifest,
   WorkspacePanelDefApi, WorkspacePanelDefCtx,
@@ -18,8 +16,6 @@ import { audioKindApi } from './context/kind';
 import { audioRefOfPath, isAudioFile } from './context/opener';
 import { RECORD_LAUNCH, RECORD_THREAD, recordKey } from './thread/records';
 import { LaunchAnchor, ThreadAnchor } from './thread/ThreadCard';
-
-const enabled = () => getFlag(FLAGS.audioEditor);
 
 // Карточки ленты (module_record модуля): карточка версии и запуск ИИ — карточка на каждый вариант
 const THREAD_ANCHORS: SlotContribution<ChatItemToolCtx>[] = [
@@ -42,10 +38,7 @@ export const manifest: SubsystemManifest = {
   order: 96,
   noPill: true,
   slots: {
-    // Якоря нити (module_record модуля) флаг проверяют сами: без него — строка fallback записи.
-    // Карточки вызовов агента без флага не вкладываются вовсе — лента рисует вызовы как раньше.
-    // Геттер читается на каждом чтении слота: реестр пересчитывает вклады вместе со сторами
-    get 'chat-item-tool'() { return enabled() ? [...THREAD_ANCHORS, ...FEED_CARDS] : THREAD_ANCHORS; },
+    'chat-item-tool': [...THREAD_ANCHORS, ...FEED_CARDS],
     // Загрузка нитей чата и редактор звука; сам ничего не рисует
     'composer-chip': [
       { name: 'sound-watch', render: (ctx: ComposerChipCtx) => <SoundChatWatcher ctx={ctx} /> },
@@ -70,7 +63,7 @@ export const manifest: SubsystemManifest = {
         action: {
           title: 'Голоса',
           icon: <Mic size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-          isAvailable: (projectId: string | null) => projectId !== null && enabled(),
+          isAvailable: (projectId: string | null) => projectId !== null,
         } satisfies WorkspacePanelDefApi as unknown as Record<string, unknown>,
       },
     ],

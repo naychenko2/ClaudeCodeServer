@@ -32,6 +32,19 @@ public static class ExecutorStopClassifier
     public const string SubagentStuckReason = "subagent_stuck";
 
     /// <summary>
+    /// Вызов инструмента ушёл в текст (локальная модель, qwen3_coder/vLLM): ход не принял
+    /// вызов, но может повторить его штатным tool_use. НЕ терминальная причина (как
+    /// subagent_truncated): работа продолжается повтором, человека звать рано.
+    /// </summary>
+    public const string ToolCallLeakedReason = "tool_call_leaked";
+
+    /// <summary>
+    /// Утечки вызова инструмента в текст повторяются, а повторы исчерпаны (потолок —
+    /// две попытки). Терминальная причина: продолжение не помогает, дальше решает человек.
+    /// </summary>
+    public const string ToolCallLeakStuckReason = "tool_call_leak_stuck";
+
+    /// <summary>
     /// Человек нажал «Стоп» у исполнителя задачи. Терминальная причина: прерванный ход
     /// result не присылает, и без пометки задача висела бы «в работе» без исполнителя;
     /// продолжать сам исполнитель не должен — решает человек (перезапуск снимает пометку).
@@ -43,10 +56,31 @@ public static class ExecutorStopClassifier
     public const string DeviceWaitExpiredReason = "device_wait_expired";
 
     /// <summary>
+    /// Фичу поставили на паузу (W4-HOLD-D, разрез §1): человек снял активный ход исполнителя
+    /// задачи. Терминальная причина: сам ход не продолжается — его возвращает только снятие
+    /// паузы (шаг D), а пока фича удержана, гейт закрывает новые запуски по ней.
+    /// </summary>
+    public const string FeatureHeldReason = "feature_held";
+
+    /// <summary>
+    /// Фичу сняли с паузы, но чат прерванного исполнителя к этому моменту уже удалён (истёк
+    /// TTL или его удалил человек; W4-HOLD-J, контракт §1 :241). Терминальная причина:
+    /// продолжения нет — шаг перезапускают штатным tasks_run_executor, который снимает
+    /// пометку сам (MarkClaudeStarted).
+    /// </summary>
+    public const string FeatureHeldExpiredReason = "feature_held_expired";
+
+    /// <summary>
     /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
     /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
     /// </summary>
     public enum SubagentTurnState { None, Truncated, Stuck }
+
+    /// <summary>
+    /// Утечки вызова инструмента в текст (локальная модель): None — не было; Leaked —
+    /// вызов ушёл текстом, повтор в пути; Stuck — уходит раз за разом, попытки исчерпаны.
+    /// </summary>
+    public enum ToolCallLeakTurnState { None, Leaked, Stuck }
 
     /// <summary>
     /// Причина остановки исполнителя либо null — обычный ход (успех или рабочая ошибка).
@@ -56,13 +90,19 @@ public static class ExecutorStopClassifier
     /// Отказ авторизации сильнее: не авторизовавшись, добивать нечего.
     /// </summary>
     public static string? Classify(ResultMessage result, string? errorText,
-        SubagentTurnState subagent = SubagentTurnState.None) =>
+        SubagentTurnState subagent = SubagentTurnState.None,
+        ToolCallLeakTurnState leak = ToolCallLeakTurnState.None) =>
         IsTerminalAuthFailure(result.ApiErrorStatus, errorText) ? AuthFailedReason
         : subagent switch
         {
             SubagentTurnState.Truncated => SubagentTruncatedReason,
             SubagentTurnState.Stuck => SubagentStuckReason,
-            _ => null,
+            _ => leak switch
+            {
+                ToolCallLeakTurnState.Leaked => ToolCallLeakedReason,
+                ToolCallLeakTurnState.Stuck => ToolCallLeakStuckReason,
+                _ => null,
+            },
         };
 
     /// <summary>
@@ -74,7 +114,7 @@ public static class ExecutorStopClassifier
     /// задаче решал бы «работа встала, зовите человека».
     /// </summary>
     public static bool IsTerminal(string? reason) =>
-        reason is not null && reason != SubagentTruncatedReason;
+        reason is not null && reason != SubagentTruncatedReason && reason != ToolCallLeakedReason;
 
     // Отказ авторизации у провайдера модели: 401 в статусе ЛИБО канонические формулировки
     // в тексте ошибки. Только по статусу проверять нельзя — на этом перекосе уже стояли

@@ -15,6 +15,12 @@ public enum PersonaMemoryType { Semantic, Episodic, Procedural }
 // Вид аватара: Initials — круг с инициалами на цветном фоне; Image — сгенерированная/загруженная картинка.
 public enum PersonaAvatarKind { Initials, Image }
 
+// Явный пол персоны. Unspecified = 0 — дефолт: System.Text.Json читает отсутствующее
+// поле как 0, т.е. старый personas.json без gender-поля не меняет поведение (род не подставляется).
+// Заданный Gender даёт сигнал рода в системном промпте (PersonaPromptBuilder) — маленькие
+// модели иначе ошибаются в роде («Нашёл» вместо «Нашла»).
+public enum PersonaGender { Unspecified = 0, Male = 1, Female = 2 }
+
 // Тип привязки персоны к источнику знаний или правилу (фича persona-bindings):
 // Project — проект целиком (файлы через workspace); ProjectPath — папка/файл проекта;
 // Knowledge — Dify-датасет (база знаний проекта или заметок); Notes — источник заметок;
@@ -118,6 +124,9 @@ public class Persona
     // Для Scope == Sphere — id сферы (Project.GroupId), к которой привязана персона
     public string? SphereId { get; set; }
     public PersonaAvatar Avatar { get; set; } = new();
+    // Явный пол (дефолт Unspecified — род в промпт не подставляется). Заданный Gender
+    // добавляет сигнал рода в системный промпт, чтобы малые модели не ошибались в роде.
+    public PersonaGender Gender { get; set; }
     // Как персона звучит в голосовом режиме; null — голосом инстанса из конфига.
     // Аддитивное nullable-поле: старый personas.json читается без миграции
     public PersonaVoice? Voice { get; set; }

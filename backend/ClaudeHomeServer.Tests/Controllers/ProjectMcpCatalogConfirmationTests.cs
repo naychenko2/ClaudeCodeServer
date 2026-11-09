@@ -12,6 +12,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Второе подтверждение (план «Каталог MCP-серверов», шаг 6, решение владельца
 // от 28.08.2026): включение каталожного stdio-сервера в проект — единственный
 // момент, когда чужой код впервые едет в ходы. Гейт на сервере, не в диалоге.
+[Trait("Category", "Host")]
 public class ProjectMcpCatalogConfirmationTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
@@ -29,8 +30,6 @@ public class ProjectMcpCatalogConfirmationTests(TestWebApplicationFactory factor
 
     private async Task<string> CreateServerAsync(object? catalogRef)
     {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.GetFirst()!.Id, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
         var body = new Dictionary<string, object?>
         {
             ["key"] = "cat-" + Guid.NewGuid().ToString("N")[..6],
@@ -89,8 +88,6 @@ public class ProjectMcpCatalogConfirmationTests(TestWebApplicationFactory factor
     public async Task Каталожная_http_запись_включается_без_подтверждения()
     {
         // Подтверждение — про запуск на компьютере; удалённый сервер на нём ничего не запускает
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.GetFirst()!.Id, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
         var projectId = await CreateProjectAsync();
 
         var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>

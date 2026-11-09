@@ -2,12 +2,16 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services;
+
+// FeatureHoldReleaseOutcome / FeatureHoldRelease / IFeatureHoldReleaser переехали в Core
+// (Core/Services/FeatureHoldRelease.cs, дефект 6c71a827): их держит и вертикаль Tasks.
 
 /// <summary>
 /// Алиасы тиров моделей владельца (opus/sonnet/haiku) для таблицы уровней в постановке.
@@ -30,10 +34,13 @@ internal sealed record TaskPromptMetrics(int TotalChars, int TotalTokensEst,
     int MandatoryChars, int RestrictionsChars, int DelegationChars,
     int OmOChars, int ContextChars, int NotesContextChars);
 
+/// <summary>Кто запустил исполнителя: сессия и персона; пустые значения сбрасывают прежнего запустившего.</summary>
+public sealed record ExecutorLauncher(string? SessionId, string? PersonaId);
+
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
-public class TaskExecutionService : Execution.IDeviceOnlineHandler
+public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHoldReleaser, IKeyChatCardSender
 {
     private readonly TaskManager _tasks;
     private readonly SessionManager _sessions;
@@ -94,10 +101,29 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // агента не более двух раз (SessionManager.MaxSubagentNudges) — дальше молчать нельзя:
     // работа реально встала, и это уже случай «зовите человека».
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _truncations = new();
+    // Утечка вызова инструмента в текст (локальная модель) в ЗАВЕРШАЮЩЕМСЯ ходу: true, если
+    // ход нёс WholeCall-утечку (вызов целиком ушёл текстом). Tail-утечка ход не валит — сюда
+    // не попадает. Ключ живёт до result хода (TakeLeakState снимает его) либо до удаления чата.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, bool> _leakThisTurn = new();
+    // Имя инструмента из последней WholeCall-утечки хода (ToolCallLeakMessage.Tool): по нему
+    // ветка result решает, повторять ли вызов (слип формата) или объяснять, что инструмента нет.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _leakTool = new();
+    // Сколько ходов подряд было WholeCall-утечкой по этой сессии-исполнителю. Ход без такой
+    // утечки обрывает серию; потолок попыток — SessionManager.MaxSubagentNudges (как у обрывов
+    // сабагентов): до него — восстановимый повтор, после — работа встала (терминальная причина).
+    // Счётчик живёт в памяти процесса: при рестарте сервера сбрасывается и потолок
+    // MaxSubagentNudges применяется заново — осознанно (дешевле, чем персистить; серия
+    // WholeCall-утечек на ровном месте редка).
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _leakAttempts = new();
     // Сколько чат-исполнитель должен молчать, чтобы страховка сочла задачу брошенной
     // (Tasks:ExecutorStaleMinutes, дефолт 15). Тем же порогом меряется и второй шаг —
     // молчание ПОСЛЕ напоминания.
     private readonly TimeSpan _staleAfter;
+    // Изолированное дерево ревью: слот на коммите волны вместо живого дерева исполнителя.
+    // null — пул не подключён (тесты без него): ревьюер стартует в дереве волны, как раньше.
+    private readonly ReviewTreePool? _reviewTrees;
+    // Потолок списка грязных путей дерева волны в постановке ревьюера
+    private const int ReviewDirtyPathsLimit = 30;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -114,9 +140,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // исполнителя тихо пропускается (BuildNotesContextAsync).
         INoteSemanticIndex? kb = null,
         IProjectManager? projects = null,
-        Execution.IProjectDeviceGate? deviceGate = null)
+        Execution.IProjectDeviceGate? deviceGate = null,
+        ReviewTreePool? reviewTrees = null)
     {
         _deviceGate = deviceGate;
+        _reviewTrees = reviewTrees;
         _staleAfter = TimeSpan.FromMinutes(
             int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
         _subagentRuns = subagentRuns;
@@ -159,11 +187,33 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         {
             _turnErrors.TryRemove(s.Id, out _);
             _truncations.TryRemove(s.Id, out _);
+            _leakThisTurn.TryRemove(s.Id, out _);
+            _leakAttempts.TryRemove(s.Id, out _);
+            _leakTool.TryRemove(s.Id, out _);
         };
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
         // единственный путь в Done, поднимает событие ровно на переходе
         _tasks.TaskCompleted += OnTaskCompleted;
+        _tasks.TaskDeleted += t => ReleaseReviewTree(t.Id);
+        // Предгейт шага красный второй раз подряд по той же причине: доклад постановщику (NC-P1b)
+        _tasks.PregateEscalated += (t, text) => _ = ReportPregateEscalationAsync(t, text);
+    }
+
+    // Синхронное событие TaskManager → фон: доклад идёт чатом исполнителя вверх (ReportUpAsync сам
+    // вычисляет адресата), ошибки логируем — доставка не должна ронять вызов предгейта
+    private async Task ReportPregateEscalationAsync(TaskItem task, string text)
+    {
+        if (task.LinkedSessionId is null || task.OwnerId is null) return;
+        try
+        {
+            var result = await _sessions.ReportUpAsync(task.LinkedSessionId, "⛔ " + text, task.OwnerId, withTurn: true);
+            _log.LogInformation("Предгейт задачи {TaskId}: доклад постановщику — {Outcome}", task.Id, result);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось доложить постановщику о втором красном предгейте задачи {TaskId}", task.Id);
+        }
     }
 
     // Предусловие ухода цикла в фазу waiting. Задача «живая делегированная» = поставлена
@@ -200,22 +250,36 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     /// Запуск выполнения задачи Claude-ом: отдельная сессия в проекте задачи
     /// (личная — чат вне проекта) в режиме acceptEdits, первым сообщением — постановка.
     /// </summary>
+    /// <param name="actorUserId">Кто запустил исполнителя (человек или актор хода-вызывателя); null — автозапуск, актор неизвестен (fail-closed).</param>
     /// <exception cref="InvalidOperationException">задача не подходит или уже выполняется</exception>
-    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto)
+    public async Task<TaskItem> ExecuteAsync(TaskItem task, bool auto, ExecutorLauncher? launcher = null,
+        string? actorUserId = null)
     {
         if (task.Status == TaskItemStatus.Done)
             throw new InvalidOperationException("Задача уже завершена");
         // Прод 2026-08-02 (находка Веры): дубль доклада о завершении после того, как координатор
         // перезапустил исполнение под-задачи в ответ на разблокировку карточки остановки —
-        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода
-        // (например прямым PUT/tasks_update). CompletionDelivered — необратимый CAS-флаг
-        // (TaskManager.TryMarkCompletionDelivered): раз доклад уже ушёл, перезапуск той же
-        // задачи не должен порождать второй — независимая страховка поверх проверки статуса,
-        // не завязанная на то, что Status и CompletionDelivered меняются синхронно.
+        // Status==Done выше блокирует релонч, ПОКА статус не переоткрыт в обход этого метода.
+        // CompletionDelivered — CAS-флаг (TaskManager.TryMarkCompletionDelivered); штатное
+        // переоткрытие через TaskManager.Update снимает его вместе со статусом (расследование
+        // 88444536): доработка принятой карточки получает новый цикл и новый доклад. Прямая
+        // смена Status (мимо Update) флаг оставляет — перезапуск уже доложенной задачи не
+        // должен порождать второй дубль: независимая страховка поверх проверки статуса.
         if (task.CompletionDelivered)
             throw new InvalidOperationException("Доклад по этой задаче уже доставлен — перезапуск отключён");
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
+        // Эпик фичи — контейнер, а не работа: исполнителем не запускается (шаг 1.4).
+        // Отказ до claim'а и до подъёма процесса; текст гейта — FeatureEpicLaunchRefusal.
+        if (FeatureEpicLaunchRefusal(task) is { } refusal)
+            throw new InvalidOperationException(refusal);
+        // Фича на паузе (W4-HOLD-G, контракт §1 :174): здесь сходятся и tasks_run_executor, и
+        // автоматика (автозапуск ждающей задачи идёт через этот же ExecuteAsync) — поэтому гейт
+        // один и стоит до claim'а и до подъёма процесса. Формула — TaskManager.FeatureHoldRefusal.
+        // Тип отказа — FeatureHoldException: планировщик отличает отказ по источнику, а не
+        // пересчётом гейта (W4-HOLD-I).
+        if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
+            throw new FeatureHoldException(holdRefusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
@@ -224,7 +288,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             throw new InvalidOperationException("По задаче уже запускается исполнитель — подождите и повторите");
         try
         {
-            return await ExecuteClaimedAsync(task, auto).ConfigureAwait(false);
+            return await ExecuteClaimedAsync(task, auto, launcher, actorUserId).ConfigureAwait(false);
         }
         finally
         {
@@ -235,12 +299,29 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
     }
 
-    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto)
+    // Запустивший исполнителя записывается только после того, как запуск принят (отказ гардов не должен
+    // перехватывать доклад у прежнего адресата); null — запуск автоматикой, поля не трогаем.
+    private void ApplyLauncher(TaskItem task, ExecutorLauncher? launcher)
+    {
+        if (launcher is null) return;
+        _tasks.SetExecutorLauncher(task.Id, launcher.SessionId, launcher.PersonaId);
+    }
+
+    private async Task<TaskItem> ExecuteClaimedAsync(TaskItem task, bool auto, ExecutorLauncher? launcher,
+        string? actorUserId)
     {
         // Инвариант проверен в ExecuteAsync ДО claim'а; повторяем ради nullability-анализа
         // этого метода (граница методов рвёт поток null-check из вызывающего)
         if (task.OwnerId is null)
             throw new InvalidOperationException("У задачи нет владельца");
+
+        // Гонка «пауза между гейтом и стартом» (W4-HOLD-G, R-HOLD-G находка 5): пауза может
+        // встать после первого гейта, до или во время claim'а. Повторная проверка того же
+        // гейта после claim'а, до первого хода: если эпик удержан — чат задачи не создаётся
+        // вовсе (он здесь поднимается раньше MarkClaudeStarted, поэтому одной отметки
+        // «не запущена» для доказательства мало).
+        if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
+            throw new FeatureHoldException(holdRefusal);
 
         // Не более одной живой сессии на задачу
         if (task.LinkedSessionId is not null &&
@@ -256,6 +337,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         {
             if (!gate.MustWait)
                 throw new InvalidOperationException(gate.Reason ?? ProjectCapabilities.DeviceMissingReason);
+            ApplyLauncher(task, launcher);
             return await EnterDeviceWaitAsync(task, gate.Reason);
         }
 
@@ -274,9 +356,17 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         {
             _log.LogWarning("Задача {TaskId}: исполнитель отклонён — {Reason}", task.Id, zoneRefusal);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } refused)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", refused));
+                await _broadcaster.ToTaskBoard(task.OwnerId, refused.ProjectId, new TaskChangedMessage("updated", refused));
             throw new InvalidOperationException(zoneRefusal);
         }
+
+        // W4-SEAM R3 (четвёртая дверь): штатный перезапуск шага с пометкой feature_held при
+        // уже снятом Hold (доставка продолжения упала, паузу больше не снимали — R1). Новый
+        // чат создаётся, MarkClaudeStarted снимает пометку — и никто больше не вернёт старому
+        // чату замороженный срок: шаг перестанет быть feature_held, а эпик не удаляется.
+        // До подъёма нового чата возвращаем замороженный срок старому — та же страховка, что на
+        // дверях удаления.
+        RestoreFrozenChatOfTask(task);
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
         // Модель исполнителя (ADR-007 §5.3): единая точка резолвера — уровень задачи →
@@ -299,17 +389,55 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // стартует сразу в нём. Дерево уже существует — только присваиваем поля свежей
         // сессии до первого хода, cwd подставит EnsureProcessAsync. Невалидный путь не
         // должен ронять запуск: мягко деградируем в корень проекта.
-        if (task.WorktreePath is { } worktree && task.ProjectId is not null
-            && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
-            _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
-                "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+        // Повторный запуск той же задачи: прежняя аренда в пуле остаётся — Reserve отдаст задаче
+        // её же слот. Единственный источник правды об аренде — пул; здесь держим лишь выданную
+        // сейчас аренду ради абзаца в постановке
+        ReviewTreeLease? reviewLease = null;
+        string? detachedTree = null;
+        if (task.WorktreePath is not { } worktree || task.ProjectId is null)
+            ReleaseReviewTree(task.Id);
+        else
+        {
+            var attached = false;
+            if (await TryLeaseReviewTreeAsync(task, worktree) is { } lease)
+            {
+                if (await _sessions.AttachWorktreeAsync(session.Id, lease.SlotPath, null))
+                {
+                    attached = true;
+                    reviewLease = lease;
+                }
+                else
+                {
+                    ReleaseReviewTree(task.Id);
+                    _log.LogWarning("Слот ревью {Slot} задачи {TaskId} не привязался к чату — ревьюер " +
+                        "стартует в дереве волны", lease.SlotPath, task.Id);
+                }
+            }
+            if (!attached && !await _sessions.AttachWorktreeAsync(session.Id, worktree, task.WorktreeBranch))
+            {
+                _log.LogWarning("Дерево {Worktree} задачи {TaskId} не подошло (нет на диске либо не числится " +
+                    "в git worktree list проекта) — исполнитель стартует в корне проекта", worktree, task.Id);
+                // Молча работать в корне нельзя: сборка и тесты встанут в общую блокировку корня
+                detachedTree = BuildDetachedTreeSection(worktree,
+                    await _sessions.IsProjectWorktreeAsync(task.ProjectId, task.OwnerId, worktree));
+            }
+        }
 
-        var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow)
-            ?? throw new InvalidOperationException("Задача удалена");
-        await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", updated));
+        ApplyLauncher(task, launcher);
+        var updated = _tasks.MarkClaudeStarted(task.Id, session.Id, DateTime.UtcNow);
+        if (updated is null)
+        {
+            ReleaseReviewTree(task.Id);
+            throw new InvalidOperationException("Задача удалена");
+        }
+        await _broadcaster.ToTaskBoard(task.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task), ResolveRulesTemplate(session.Id, task.OwnerId));
+        if (reviewLease is not null)
+            prompt += BuildReviewTreeSection(reviewLease);
+        if (detachedTree is not null)
+            prompt += detachedTree;
         // Обогащение контекста семантически близкими заметками
         var notesBlock = await BuildNotesContextAsync(updated);
         prompt += notesBlock;
@@ -332,15 +460,17 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
         try
         {
-            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
+            await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id,
+                senderUserId: actorUserId);
         }
         catch (Exception ex)
         {
             // Отметка запуска уже стоит (без неё первые события хода не нашли бы задачу), а
             // постановка не ушла: итог «error», чтобы задача не выглядела идущей в работе
             _log.LogError(ex, "Постановка исполнителю задачи {TaskId} не отправлена", task.Id);
+            ReleaseReviewTree(task.Id);
             if (_tasks.MarkClaudeResult(task.Id, "error") is { } failed)
-                await _broadcaster.ToOwner(task.OwnerId, new TaskChangedMessage("updated", failed));
+                await _broadcaster.ToTaskBoard(task.OwnerId, failed.ProjectId, new TaskChangedMessage("updated", failed));
             throw;
         }
 
@@ -369,7 +499,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         var first = _tasks.GetById(task.Id)?.DeviceWaitSince is null;
         var updated = _tasks.MarkDeviceWait(task.Id, DateTime.UtcNow, reason)
             ?? throw new InvalidOperationException("Задача удалена");
-        await _broadcaster.ToOwner(task.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(task.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         if (first)
         {
             await NotifyAsync(updated, new NotificationMessage(
@@ -406,7 +536,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     {
         try
         {
-            if (task.DeviceWaitSince is { } since && nowUtc - since >= ProjectCapabilities.DeviceWaitCeiling)
+            if (ProjectCapabilities.DeviceWaitExpired(task, nowUtc))
             {
                 await ExpireDeviceWaitAsync(task);
                 return;
@@ -422,7 +552,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             }
             if (!gate.IsReady) return;
             _log.LogInformation("Устройство проекта готово — запускаю ждавшую задачу {TaskId} «{Title}»", task.Id, task.Title);
-            await ExecuteAsync(task, auto: true);
+            // Возобновление автоматикой: актор — создатель задачи, как у автозапуска по сроку (F-9)
+            await ExecuteAsync(task, auto: true, actorUserId: TaskLaunchActor.For(task));
         }
         catch (Exception ex)
         {
@@ -599,10 +730,28 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine("- Статус веди через tasks_*: задача уже inProgress, подзадачи отмечай tasks_toggle_subtask.");
         sb.AppendLine("- Готово = проверено и закрыто через tasks_complete с resultMarkdown (итог) " +
                       "и linkedFiles (итоговые файлы, если есть).");
+        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests`; " +
+                      "`run_in_background`, Monitor и фоновые " +
+                      "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.");
         // Тот же канал эскалации, что и у персоны (см. комментарий в BuildPersonaPrompt)
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
+        AppendPregateRule(sb, task);
         return ToLf(sb.ToString());
+    }
+
+    // Правило предгейта для шага с собственным деревом: порядок «закоммить → pregate →
+    // tasks_complete». Результат предгейта пишется в карточку и его видит ревьюер; закрытие
+    // шага предгейт не блокирует. Без своего дерева правило не нужно — к такой задаче
+    // предгейт не применяется вовсе.
+    private static void AppendPregateRule(StringBuilder sb, TaskItem task)
+    {
+        if (!PregateRules.Applies(task.Role, task.WorktreePath)) return;
+        sb.AppendLine();
+        sb.AppendLine("## ПРЕДГЕЙТ");
+        sb.AppendLine("- Перед `tasks_complete` закоммить правки и прогони `pregate`: результат " +
+                      "пишется в карточку, его увидит ревьюер. Предгейт может не состояться (дерево " +
+                      "занято, нет git) — тогда так и доложи в итоге: закрытие он не блокирует.");
     }
 
     // Постановка уходит в CLI с единым концом строки LF на любой ОС. AppendLine пишет
@@ -636,6 +785,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (rulesTemplate is { } template && !string.IsNullOrWhiteSpace(template))
         {
             sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
+            AppendPregateRule(sb, task);
             AppendContextSection(sb, task);
             return sb.ToString();
         }
@@ -663,6 +813,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         sb.AppendLine("- Делегировал часть работы субагенту — не доверяй его отчёту на слово, проверь результат сам.");
         sb.AppendLine("- ОСТАНОВИСЬ после первой успешной верификации: не полируй сделанное и не выдумывай " +
                       "дополнительную работу сверх постановки.");
+        sb.AppendLine("- Сборки и тесты — только через `mcp__dev__build` / `mcp__tests__run_tests`; " +
+                      "`run_in_background`, Monitor и фоновые " +
+                      "агенты не использовать; задачу не закрывай, пока не завершилось всё запущенное.");
         sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");
         sb.AppendLine("- Не заявляй завершение раньше времени: «почти готово» — это не готово.");
         sb.AppendLine();
@@ -689,6 +842,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
+        AppendPregateRule(sb, task);
         AppendContextSection(sb, task);
         return sb.ToString();
     }
@@ -725,6 +879,71 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                        .Replace(placeholder + "\n", "")
                        .Replace(placeholder, "");
         }
+    }
+
+    // Аренда слота ревью: только серверный проект и дерево волны, отличное от корня проекта.
+    // null — пул не нужен или слотов нет: вызывающий остаётся на дереве волны (старое поведение).
+    private async Task<ReviewTreeLease?> TryLeaseReviewTreeAsync(TaskItem task, string waveTree)
+    {
+        if (_reviewTrees is null || task.Role != TaskRoles.Review || task.ProjectId is null) return null;
+        if (_projects?.GetById(task.ProjectId) is not { } project || !ProjectCapabilities.FilesOnServer(project))
+            return null;
+        if (PathNormalizer.NormalizePath(waveTree) == PathNormalizer.NormalizePath(project.RootPath)) return null;
+        try
+        {
+            var lease = await _reviewTrees.TryAcquireAsync(task.OwnerId, project, waveTree, task.Id);
+            if (lease is null)
+                _log.LogInformation("Задача {TaskId}: оба слота ревью волны заняты — ревьюер стартует в дереве волны",
+                    task.Id);
+            return lease;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Задача {TaskId}: слот ревью не получен — ревьюер стартует в дереве волны", task.Id);
+            return null;
+        }
+    }
+
+    private void ReleaseReviewTree(string taskId) => _reviewTrees?.Release(taskId);
+
+    // Абзац постановки, когда дерево задачи не подключилось к чату: исполнитель стоит в корне проекта.
+    // listed — путь есть на диске и числится в `git worktree list`: тогда работать в нём и собирать
+    // через tree; иначе дерева нет, и подсказывать путь в tree бессмысленно (инструмент откажет)
+    internal static string BuildDetachedTreeSection(string worktree, bool listed)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## ДЕРЕВО ЗАДАЧИ");
+        if (listed)
+            sb.AppendLine($"Дерево задачи `{worktree}` не подключилось, чат стоит в корне проекта. Свои правки делай " +
+                          $"в `{worktree}`, а для сборки и тестов (mcp__dev__build, mcp__tests__run_tests) передавай " +
+                          $"tree=`{worktree}`: иначе прогон пойдёт в корне и встанет в общую блокировку корня.");
+        else
+            sb.AppendLine($"Дерево задачи `{worktree}` не найдено: его нет на диске или оно не числится в " +
+                          "`git worktree list` проекта. Чат стоит в корне проекта. Не правь корень вслепую: " +
+                          "заведи своё дерево (git worktree add) и передавай его путь в tree у mcp__dev__build и " +
+                          "mcp__tests__run_tests, либо эскалируй постановщику через chats_report_up.");
+        return sb.ToString();
+    }
+
+    internal static string BuildReviewTreeSection(ReviewTreeLease lease)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## ДЕРЕВО РЕВЬЮ");
+        sb.AppendLine($"Дерево ревью на коммите `{lease.Sha}`. Правки здесь никуда не уедут, не коммить. " +
+                      "При повторном запуске задачи берётся свободный слот волны (не обязательно тот же) и сбрасывается на актуальный коммит (`checkout --detach -f` и `clean -fd`): незакоммиченные правки прошлых ходов в нём пропадут. Оба слота заняты или слот не удалось сбросить — задача стартует в дереве волны, и этого абзаца в постановке нет. " +
+                      "Первый прогон тестов — со сборкой, без `no_build`. " +
+                      "Дерево освобождается после завершения задачи или «Стопа» исполнителя; на паузе фичи оно остаётся за тобой до снятия паузы.");
+        if (lease.DirtyPaths.Count > 0)
+        {
+            sb.AppendLine("Незакоммиченные правки дерева волны (эти правки в проверяемый коммит не вошли):");
+            foreach (var path in lease.DirtyPaths.Take(ReviewDirtyPathsLimit))
+                sb.AppendLine($"- {path}");
+            if (lease.DirtyPaths.Count > ReviewDirtyPathsLimit)
+                sb.AppendLine($"- …ещё {lease.DirtyPaths.Count - ReviewDirtyPathsLimit}");
+        }
+        return sb.ToString();
     }
 
     // Секция КОНТЕКСТ — общая для обеих веток сборки (шаблон и встроенный фолбэк).
@@ -854,7 +1073,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // метод напрямую с синтетическими Session/ResultMessage вместо живого хода claude.exe.
     internal async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not (ResultMessage or ErrorMessage or PermissionRequestMessage or AskQuestionMessage)) return;
+        if (msg is not (ResultMessage or ErrorMessage or PermissionRequestMessage or AskQuestionMessage
+            or ToolCallLeakMessage)) return;
 
         // Ищем задачу этой сессии с незавершённым запуском исполнителя
         var task = FindTracked(session.Id);
@@ -862,6 +1082,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
         switch (msg)
         {
+            // Утечка вызова инструмента в текст (локальная модель) приходит во время хода,
+            // ПЕРЕД result: помечаем ход, чтобы по result решить — повторить вызов (WholeCall)
+            // или просто посчитать (Tail). Копим на сессию, как NoteTurnError.
+            case ToolCallLeakMessage leak:
+                NoteLeak(session.Id, leak.Kind, leak.Tool);
+                return;
             // Текст ошибки хода приезжает ОТДЕЛЬНЫМ сообщением перед result (CLI кладёт
             // API-ошибку в result-поле при subtype=success + is_error) — копим его до result,
             // иначе терминальный отказ не с чем распознавать (ResultMessage текста не несёт).
@@ -871,24 +1097,59 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             case ResultMessage result:
                 {
                     var errorText = TakeTurnError(session.Id);
+                    // Судьба утечек вызова в тексте этого хода (снимаем пометку и серию):
+                    // None — ход чист, Leaked — WholeCall-утечка (повтор в пути), Stuck — исчерпано.
+                    var (leakState, leakAttempts) = TakeLeakState(session.Id);
                     // Терминальный отказ («дальше работать нечем») сильнее subtype: 401 у CLI
                     // регулярно приходит как формально успешный ход
                     var stopReason = ExecutorStopClassifier.Classify(result, errorText,
-                        TakeSubagentState(session.Id));
-                    // Восстановимая остановка (сабагент оборвался на середине): работа НЕ
-                    // закончена, но и человека звать рано — продолжение уже ушло добиванием.
+                        TakeSubagentState(session.Id), leakState);
+                    // Восстановимая остановка: работа НЕ закончена, но и человека звать рано.
+                    // Обрыв сабагента — продолжение уже ушло добиванием (SessionManager);
+                    // WholeCall-утечка — шлём директиву повторить вызов в ту же сессию.
                     // Молчим: ни итога задаче, ни уведомления, ход досчитается следующим result.
                     if (stopReason is not null && !ExecutorStopClassifier.IsTerminal(stopReason))
                     {
-                        _log.LogWarning("Ход исполнителя задачи {TaskId} оборван сабагентом ({Reason}) — " +
-                            "итог не принимаем, ждём продолжения (попытка {Attempt})",
-                            task.Id, stopReason, _truncations.GetValueOrDefault(session.Id));
+                        if (stopReason == ExecutorStopClassifier.ToolCallLeakedReason)
+                        {
+                            // Вызов инструмента не из состава сессии — не слип формата, повтор не поможет:
+                            // объясняем, что инструмента нет, и перечисляем доступные.
+                            _leakTool.TryRemove(session.Id, out var leakedTool);
+                            var profile = ExecutorProfile(session);
+                            string directive;
+                            if (leakedTool is not null && profile is not null
+                                && !ExecutorToolAvailability.IsKnown(leakedTool, profile))
+                            {
+                                _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов несуществующего инструмента " +
+                                    "{Tool} ({Attempts}/{Max}) — директива «инструмента нет», итог не принимаем",
+                                    task.Id, leakedTool, leakAttempts, SessionManager.MaxSubagentNudges);
+                                directive = Prompts.SubagentPrompts.ResumeToolCallUnknownTool(
+                                    leakAttempts, SessionManager.MaxSubagentNudges, leakedTool,
+                                    ExecutorToolAvailability.Describe(profile));
+                            }
+                            else
+                            {
+                                _log.LogWarning("Ход исполнителя задачи {TaskId}: вызов инструмента ушёл в текст " +
+                                    "({Attempts}/{Max}) — директива повторить вызов, итог не принимаем",
+                                    task.Id, leakAttempts, SessionManager.MaxSubagentNudges);
+                                directive = Prompts.SubagentPrompts.ResumeToolCallLeak(
+                                    leakAttempts, SessionManager.MaxSubagentNudges);
+                            }
+                            await _sessions.SendMessageAsync(session.Id, directive, [],
+                                systemDirective: true, cause: SessionManager.DeliveryCause.ToolCallLeakNudge);
+                        }
+                        else
+                        {
+                            _log.LogWarning("Ход исполнителя задачи {TaskId} оборван сабагентом ({Reason}) — " +
+                                "итог не принимаем, ждём продолжения (попытка {Attempt})",
+                                task.Id, stopReason, _truncations.GetValueOrDefault(session.Id));
+                        }
                         break;
                     }
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
-                    await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+                    await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
                     if (stopReason is not null)
                     {
                         // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
@@ -924,6 +1185,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
                         // от сигнала D (Status=Done). Промежуточные успешные ходы многошаговой
                         // задачи (Status ещё не Done) молча пропускаются гейтом внутри — не спамят.
                         await TryDeliverCompletionAsync(updated);
+                        // Повторный конец хода (R) после доставки по D посреди хода: TryDeliverCompletionAsync
+                        // выше вернул «уже доставлено» и StopExecutorProcess не вызвал, а StopClosedExecutorProcess
+                        // тогда отказал по статусу Working. Ход кончился (статус уже не Working) — гасим процесс
+                        // здесь, иначе инцидент 13.10: фоновая работа живого процесса будит закрытую задачу.
+                        if (updated.Status == TaskItemStatus.Done && updated.CompletionDelivered)
+                            StopExecutorProcess(updated);
                     }
                     break;
                 }
@@ -958,6 +1225,48 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             ? ExecutorStopClassifier.SubagentTurnState.Truncated
             : ExecutorStopClassifier.SubagentTurnState.Stuck;
 
+    // Пометка WholeCall-утечки в завершающемся ходу (ToolCallLeakMessage приходит до result).
+    // Tail-утечка ход не валит — сюда не попадает (считает её счётчик локальной модели).
+    internal void NoteLeak(string sessionId, string kind, string? tool = null)
+    {
+        if (kind != "whole_call") return;
+        _leakThisTurn[sessionId] = true;
+        if (!string.IsNullOrWhiteSpace(tool)) _leakTool[sessionId] = tool;
+        else _leakTool.TryRemove(sessionId, out _);
+    }
+
+    // Состав инструментов сессии-исполнителя (профиль облегчённого контекста её модели) — null,
+    // если резолвер/реестр не подключены (тесты) или модель не из профиля: тогда любой
+    // утёкший вызов считаем слипом формата, как раньше.
+    private Models.LightProfile? ExecutorProfile(Session session)
+    {
+        if (_providers is null) return null;
+        var persona = session.PersonaId is { } pid && session.OwnerId is { } oid ? _personas.Get(pid, oid) : null;
+        var model = _assignments?.Resolve(Llm.LocalActionCatalog.TasksExecutor, session.Model, session.OwnerId)
+            ?? session.Model;
+        return _providers.LightProfileFor(model, persona, session.FallbackSubstitution);
+    }
+
+    // Судьба утечек вызова в тексте только что закончившегося хода. По аналогии с
+    // TakeSubagentState: ход без WholeCall-утечки (чистый или только Tail) обрывает серию;
+    // пока повторы не исчерпаны (потолок SessionManager.MaxSubagentNudges) — утечка
+    // восстановима (Leaked), после — работа встала (Stuck). Возвращает состояние и номер
+    // текущей попытки (для директивы «повтор N из M»).
+    internal (ExecutorStopClassifier.ToolCallLeakTurnState State, int Attempts) TakeLeakState(string sessionId)
+    {
+        if (!_leakThisTurn.TryRemove(sessionId, out var had) || !had)
+        {
+            _leakAttempts.TryRemove(sessionId, out _);
+            _leakTool.TryRemove(sessionId, out _);
+            return (ExecutorStopClassifier.ToolCallLeakTurnState.None, 0);
+        }
+        var attempts = _leakAttempts.AddOrUpdate(sessionId, 1, (_, n) => n + 1);
+        var state = attempts <= SessionManager.MaxSubagentNudges
+            ? ExecutorStopClassifier.ToolCallLeakTurnState.Leaked
+            : ExecutorStopClassifier.ToolCallLeakTurnState.Stuck;
+        return (state, attempts);
+    }
+
     // Копим текст ошибок хода до его result (их может быть несколько — напр. ошибка API
     // и следом обрыв потока)
     private void NoteTurnError(string sessionId, string text)
@@ -980,9 +1289,16 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     {
         var task = FindTracked(sessionId);
         if (task is null || task.Status == TaskItemStatus.Done) return null;
+        // W4-SEAM R2: «Стоп» не затирает пометку паузы. Стоп на паузе записан самой паузой:
+        // если перезаписать причину, шаг выпадет из продолжения при снятии (фильтр по
+        // feature_held его не увидит), а замороженный паузой срок чата никто не вернёт —
+        // чат станет вечным. Тот же мотив, что у SetHold: чужие причины не трогает
+        // (TaskManager.cs:1298). Процесс уже гасится штатным Interrupt — пометку не меняем.
+        if (task.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason) return null;
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, ExecutorStopClassifier.InterruptedByUserReason);
         if (stopped is null) return null;
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        ReleaseReviewTree(task.Id);
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
         return stopped;
     }
 
@@ -996,8 +1312,455 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (task is null || task.ExecutorStopReason != ExecutorStopClassifier.InterruptedByUserReason) return;
         var resumed = _tasks.ClearExecutorStopped(task.Id, ExecutorStopClassifier.InterruptedByUserReason);
         if (resumed is null) return;
-        await _broadcaster.ToOwner(resumed.OwnerId!, new TaskChangedMessage("updated", resumed));
+        await _broadcaster.ToTaskBoard(resumed.OwnerId!, resumed.ProjectId, new TaskChangedMessage("updated", resumed));
     }
+
+    // Физическое прерывание идущих ходов фичи при постановке паузы (W4-HOLD-E, контракт §1 :208):
+    // SetHold уже отметил задачи feature_held — здесь тот же путь, что «Стоп» человека: процесс CLI
+    // гасится, очередь замораживается, WorkLoop снимается. Прерванный ход не доходит до result,
+    // поэтому ни MarkClaudeResult, ни доклад постановщику не случаются. Ключевой чат оркестратора
+    // пропускается: он общий для нескольких фич, и его ход может быть про другую фичу (контракт :200) —
+    // о паузе оркестратор узнает из карточки, а не из прерывания своего хода. Возвращает число
+    // реально прерванных сессий. Снятие паузы здесь ничего не возобновляет: возврат шагов в работу —
+    // отдельный шаг D с проверкой живости чата.
+    public int InterruptFeatureTurnsOnHold(string featureId, string ownerId)
+    {
+        var epic = _tasks.GetById(featureId);
+        if (epic is null) return 0;
+        var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
+        // Та же цепочка, по которой проектор считает keySessionId: сессия задачи в ключевом чате
+        // не прерывается, даже если её ход идёт.
+        var keyChain = FeatureKeyChain.Of(epic, featureTasks);
+        var stopped = 0;
+        foreach (var t in featureTasks)
+        {
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
+            _sessions.Interrupt(t.LinkedSessionId);
+            // W4-HOLD-J (контракт §1 :266): на паузе активности в чате нет, и не снятый срок
+            // снёс бы контекст исполнителя раньше, чем пауза снимется. Заморозка: срок
+            // снимается и сохраняется на записи чата — при снятии паузы возвращается тот же
+            // срок самого чата с якорем «сейчас» (хвост N: не срок задачи).
+            _sessions.FreezeExpiryForHold(t.LinkedSessionId);
+            // W4-SEAM2 (хвост R-SEAM2 п.1): новая пауза прерывает ход заново — старое
+            // «продолжение уже слалось» к этому прерыванию не относится; гасим признак,
+            // чтобы при снятии паузы продолжение ушло снова.
+            _tasks.ClearHoldResumeDelivered(t.Id);
+            stopped++;
+        }
+        return stopped;
+    }
+
+    // Единое снятие удержания фичи (тело бывшей ручки DELETE hold): порядок — подсчёт
+    // resumed/expired → ClearHold → task_changed по эпику → фоновое продолжение ходов.
+    // hold — Hold эпика из снимка проектора, взятого до снятия (null — Hold уже снят). Признак
+    // «фича удержана» — само наличие Hold, а не его Reason: битый tasks.json может дать Hold с
+    // пустой причиной (STJ non-nullable не проверяет), и вывод признака из Reason оставил бы
+    // такую паузу несъёмной (409 «снимать нечего»).
+    public async Task<FeatureHoldRelease> ReleaseFeatureHold(string featureId, string ownerId, FeatureHold? hold, string? by = null)
+    {
+        if (hold is null)
+        {
+            // W4-SEAM R1 (тупик после сбоя продолжения): если доставка продолжения упала
+            // (catch в ResumeFeatureTurnsAfterHold), шаг остаётся помеченный feature_held при
+            // уже снятом Hold: карточка «шаг ждёт снятия паузы», фича stopped, а повторный
+            // DELETE hold давал бы 409 «снимать нечего» — тупик. Если такие шаги есть,
+            // повторное снятие не 409, а повтор продолжения: метод идемпотентен по пометке.
+            // Причина снятой паузы из состояния не восстанавливается — карточка повторяется
+            // в общей формулировке (manual).
+            var stuck = _tasks.GetByOwner(ownerId).Any(t => t.FeatureId == featureId
+                && t.Status == TaskItemStatus.InProgress
+                && t.ExecutorStopReason == ExecutorStopClassifier.FeatureHeldReason);
+            if (!stuck) return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotHeld, [], []);
+            _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, FeatureHoldReasons.Manual);
+            // W4-SEAM2 (хвост R-SEAM2 п.2): пустые resumed/expired здесь неотличимы от
+            // «нечего делать» — исход помечается явно: продолжение повторено,
+            // а не «паузы не было».
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Repeated, [], []);
+        }
+
+        // W4-HOLD-H (контракт §1, :368): ответ — пробуждение очереди, а не эпик. Состав считается
+        // ДО снятия паузы (находка R-HOLD-H): пока Hold активен, FeatureHoldRefusal не-null ровно
+        // для задач, которым запуск блокирует пауза — это и есть те, кому снятие открывает запуск.
+        // После ClearHold гейт тавтологически «разрешает» и предикат перестал бы фильтровать.
+        // expired — те, чьё ожидание устройства просрочено потолком (общий предикат
+        // ProjectCapabilities.DeviceWaitExpired, как в sweep TaskExecutionService); закрытые не
+        // пробуждаются — как в GetDeviceWaiting. Форма — как у hold: списки id. Эпик в выборку
+        // не входит (FeatureId == null): его никто не запускает.
+        var now = DateTime.UtcNow;
+        var resumed = new List<string>();
+        var expired = new List<string>();
+        foreach (var t in _tasks.GetByOwner(ownerId))
+        {
+            if (t.FeatureId != featureId || t.Status == TaskItemStatus.Done) continue;
+            if (ProjectCapabilities.DeviceWaitExpired(t, now))
+                expired.Add(t.Id);
+            else if (_tasks.FeatureHoldRefusal(t) is not null)
+                resumed.Add(t.Id);
+        }
+
+        // Дефект bec00347: формулировка карточки зависит от причины удержания — её берут из
+        // снимка проектора до ClearHold: у живого эпика после снятия Hold уже null. Пустая
+        // причина битых данных трактуется как ручная пауза.
+        var holdReason = hold.Reason ?? FeatureHoldReasons.Manual;
+        var epic = _tasks.ClearHold(featureId, by);
+        if (epic is null)
+        {
+            // Дефект 06aae1bf (гонка): снимок взят при активном Hold, а конкурент успел снять
+            // его до этого ClearHold — фича на месте, требование уже выполнено победителем.
+            // 404 «Фича не найдена» здесь вводит в заблуждение: исход — пустые списки
+            // (пробуждение очереди — на стороне победителя). NotFound остаётся только если
+            // эпик реально исчез (удалён между снимком и снятием).
+            if (_tasks.GetById(featureId) is null)
+                return new FeatureHoldRelease(FeatureHoldReleaseOutcome.NotFound, [], []);
+            return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, [], []);
+        }
+        // Дефект c41d7e02 (возврат QA): снятие паузы молчал — страница фичи оставалась «на
+        // паузе» до ручной перезагрузки: task_changed вещает только продолжение по
+        // ПРОДОЛЖЕНным шагам, а если прерванных не было — вещания нет вовсе. Тот же формат, что
+        // у постановки: task_changed("updated") по эпику — с снятым Hold проектор считает
+        // состояние не-пауза, экран уходит с «на паузе» живьём.
+        await _broadcaster.ToTaskBoard(ownerId, epic.ProjectId, new TaskChangedMessage("updated", epic));
+        // W4-HOLD-D (контракт §1, :231): снятие паузы возвращает отнятое — прерванные ходы
+        // продолжаются в своих сессиях, карточка уходит оркестратору в ключевой чат при любом
+        // снятии (W4-HOLD-K): draft — «фича запущена», без продолженных — «пауза снята, запуски
+        // разрешены». resumed/expired — пробуждение очереди (R-HOLD-H), продолженные шаги в неё
+        // не входят (они уже в работе).
+        // R-HOLD-D (п.1): продолжение — фон: ответ не ждёт чатов. Сбой локализован в
+        // ResumeFeatureTurnsAfterHold: каждая ветка продолжения обёрнута и логируется там, а
+        // после W4-HOLD-J метод на известных путях не бросает (R-HOLD-K2 п.1).
+        _ = ResumeFeatureTurnsAfterHold(featureId, ownerId, holdReason);
+        return new FeatureHoldRelease(FeatureHoldReleaseOutcome.Released, resumed, expired);
+    }
+
+    // Возврат прерванных паузой ходов при её снятии (W4-HOLD-D, контракт §1 :231): продолжение
+    // идёт в ТЕ ЖЕ сессию исполнителя — контекст цел, новый чат не нужен. Кандидаты: только
+    // помеченные этой паузой (feature_held) и ещё в работе; остальные остановки (401, «Стоп»
+    // человека до паузы) пауза не отнимала — они остаются остановленными (п.2). Ключевой чат
+    // не продолжается: его ход принадлежит оркестратору, а не исполнителю задачи. Удалённый
+    // чат (TTL или человек) получает терминальную пометку feature_held_expired (W4-HOLD-J,
+    // контракт §1 :241): продолжения не будет, шаг перезапускают штатно. Возвращает число
+    // продолженных шагов.
+    // Дефект bec00347 (контракт §1 :102-105, п.4): карточка оркестратору в ключевой чат уходит
+    // при ЛЮБОМ снятии удержания, не только когда что-то продолжено: reason=draft — «фича
+    // запущена» с ходом (прерванных ходов у черновика не бывает, будить куратора — смысл кнопки);
+    // manual/queue без продолженных — «пауза снята, запуски разрешены». Причина приходит из
+    // ручки: после ClearHold Hold эпика уже null, а по состоянию её не восстановить — manual
+    // без продолженных выглядит ровно как пустой черновик.
+    public async Task<int> ResumeFeatureTurnsAfterHold(string featureId, string ownerId, string holdReason)
+    {
+        var epic = _tasks.GetById(featureId);
+        if (epic is null) return 0;
+        // W4-HOLD-N (хвост R-HOLD-J п.1): продолжение — фон, и за время его пути пауза могла
+        // встать заново. Текущий Hold проверяется здесь: пока новая пауза держится, шаги не
+        // продолжаются и карточка «пауза снята» не уходит — иначе она противоречит состоянию.
+        if (epic.Hold is not null) return 0;
+        var featureTasks = _tasks.GetByOwner(ownerId).Where(t => t.FeatureId == featureId).ToList();
+        // Та же цепочка, что у прерывания: сессия задачи в ключевом чате не прерывалась,
+        // и продолжение ей не шлётся.
+        var keyChain = FeatureKeyChain.Of(epic, featureTasks);
+        var resumed = 0;
+        // R-HOLD-J (п.3): шаги, чей чат исчез за паузу: их не продолжить, но в карточке
+        // их считают отдельно — оркестратор должен знать, что их перезапускают штатно.
+        var expired = 0;
+        // W4-HOLD-N (хвост R-N п.2): пауза может встать во время await'ов цикла — снимок
+        // эпика на входе метода устаревает. Текущий Hold перечитывается перед каждой
+        // отправкой: новая пауза держит и продолжения, и карточку «пауза снята».
+        bool HeldNow() => _tasks.GetById(featureId)?.Hold is not null;
+        foreach (var t in featureTasks)
+        {
+            if (t.Status != TaskItemStatus.InProgress) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null || keyChain.Contains(t.LinkedSessionId)) continue;
+            if (HeldNow()) return resumed;
+            if (_sessions.GetById(t.LinkedSessionId) is null)
+            {
+                // Ветка feature_held_expired (контракт §1 :241): чат исполнителя удалён
+                // (TTL или человек) — пометку не снимаем, а меняем на терминальную:
+                // продолжения нет, шаг перезапустит штатный tasks_run_executor.
+                // R-HOLD-J2 (п.2): expired считается только при фактической смене пометки:
+                // если задачу удалили между снимком и вызовом, карточка не должна обещать
+                // перезапуск несуществующего шага.
+                // W4-HOLD-J (хвост R-J3): сама смена пометки под try: сбой записи tasks.json
+                // не должен уходить из метода — остальные шаги продолжают, карточка
+                // оркестратору уходит. Честность защиты (хвост R-J4): до try исключение
+                // доходит только в синхронном режиме (Tasks:SaveDebounceMs ≤ 0) и после
+                // Dispose — там ScheduleSave пишет сразу (TaskManager.cs:1511). При
+                // дефолтном дебаунсе (1000 мс) сбой записи глотает OnSaveTimer
+                // (TaskManager.cs:1529), до MarkExecutorStopExpired он не долетает.
+                TaskItem? marked;
+                try
+                {
+                    marked = _tasks.MarkExecutorStopExpired(t.Id);
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не удалось сменить пометку на терминальную {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                    // Хвост R-J4 (контракт §1 :241): сбой марки не отменяет факта: чат
+                    // исполнителя исчез, продолжить шаг нельзя — он истёк и ждёт штатного
+                    // tasks_run_executor. Без этого счётчика карточка говорит «прерванных
+                    // шагов нет», хотя шаг с исчезнувшим чатом в фиче есть.
+                    expired++;
+                    continue;
+                }
+                if (marked is null) continue;
+                expired++;
+                // Чат удалён, продолжения не будет: слот, державшийся паузой, отдаём
+                ReleaseReviewTree(t.Id);
+                // R-HOLD-J (п.2): сбой рассылки не обрывает цикл: пометка уже сменена,
+                // остальные шаги продолжают, карточка оркестратору уходит.
+                try
+                {
+                    await _broadcaster.ToTaskBoard(marked.OwnerId!, marked.ProjectId, new TaskChangedMessage("updated", marked));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не доставлено уведомление владельцу о терминальной пометке {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                }
+                continue;
+            }
+            // R-HOLD-D (п.3): сбой одного чата не обрывает цикл — каждая задача ловится отдельно,
+            // остальные продолжают. Р-HOLD-D (п.2): пометка снимается только после успешной
+            // доставки: при сбое задача остаётся «на паузе» и повторное снятие её подхватит.
+            // W4-SEAM2 (хвост R-SEAM2 п.1): признак «продолжение уже отправляется» ставится
+            // ДО доставки — гасить пометку до доставки нельзя (W4-HOLD-D п.2), а без признака
+            // повторное снятие, пришедшее пока доставка в полёте, шлёт продолжение второй раз.
+            if (t.HoldResumeDeliveredAt is not null) continue; // продолжение этой пометки уже слалось
+            // Сбой записи стора не должен обрывать продолжение: в памяти признак уже
+            // поставлен (мутация до ScheduleSave), и повторное снятие его увидит.
+            try
+            {
+                _tasks.MarkHoldResumeDelivered(t.Id);
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Не удалось поставить признак доставки продолжения {TaskId}: {Message}",
+                    t.Id, ex.Message);
+            }
+            try
+            {
+                await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
+                    cause: SessionManager.DeliveryCause.HoldResume);
+            }
+            catch (Exception ex)
+            {
+                // Продолжение не дошло: признак снимается — повторное снятие паузы
+                // подхватит шаг и попробует снова (W4-HOLD-D п.2). И здесь сбой записи
+                // не роняет цикл: в памяти признак снят.
+                try
+                {
+                    _tasks.ClearHoldResumeDelivered(t.Id);
+                }
+                catch (Exception ex2)
+                {
+                    _log.LogWarning("Не удалось снять признак доставки продолжения {TaskId}: {Message}",
+                        t.Id, ex2.Message);
+                }
+                _log.LogWarning("Продолжение после паузы задачи {TaskId} не доставлено в чат {Session}: {Message}",
+                    t.Id, t.LinkedSessionId, ex.Message);
+                continue;
+            }
+            // Доставка состоялась: дальше — снятие пометки. Если оно упадёт, признак
+            // останется и повторное снятие не продублирует продолжение (W4-SEAM2).
+            try
+            {
+                // W4-HOLD-J (контракт §1 :267, R-HOLD-J п.1): возвращаем замороженный паузой
+                // срок только после успешной доставки продолжения: при сбое хода чат остаётся
+                // замороженным (пауза держится — пометка на месте), повторное снятие его
+                // подхватит. Хвост R-HOLD-J п.3: возвращается сохранённый при заморозке срок
+                // самого чата, а не TTL задачи: при TTL задачи null временный чат не становился
+                // бы вечным. Якорь отсчёта — «сейчас» (SetExpiry внутри RestoreFrozenExpiry).
+                _sessions.RestoreFrozenExpiry(t.LinkedSessionId);
+                var cleared = _tasks.ClearExecutorStopped(t.Id, ExecutorStopClassifier.FeatureHeldReason);
+                if (cleared is null) continue;
+                // R-HOLD-D (п.4): шаг возвращён в работу — он продолжен независимо от доставки
+                // уведомления: сбой рассылки теряет нотификацию, а не возврат.
+                resumed++;
+                try
+                {
+                    await _broadcaster.ToTaskBoard(cleared.OwnerId!, cleared.ProjectId, new TaskChangedMessage("updated", cleared));
+                }
+                catch (Exception ex)
+                {
+                    _log.LogWarning("Не доставлено уведомление владельцу о продолжении задачи {TaskId}: {Message}",
+                        t.Id, ex.Message);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning("Не удалось снять пометку продолженной задачи {TaskId}: {Message}",
+                    t.Id, ex.Message);
+            }
+        }
+        // Общий путь карточки (п.4, дефект bec00347): любое снятие будит оркестратора в ключевом
+        // чате. Берётся первое живое звено цепочки, как в KeySession (чужой/удалённый чат
+        // пропускается).
+        var key = FeatureKeyChain.FirstLive(keyChain, _sessions, ownerId);
+        if (key is null) return resumed;
+        // W4-HOLD-N (хвост R-N п.2): карточка «пауза снята» не уходит, если за время
+        // продолжений пауза встала заново: она противоречила бы состоянию фичи.
+        if (HeldNow()) return resumed;
+        if (holdReason == FeatureHoldReasons.Draft) {
+            // «Фича запущена» (контракт :103): кнопка снимает гейт, шаги по плану запускает
+            // оркестратор — будить его здесь и есть смысл запроса. Пока фича стояла под
+            // гейтом, доклады ложились карточками без пробуждения (контракт §1, :249-251) —
+            // их надо разобрать и при снятии черновика.
+            await DeliverKeyChatCardAsync(key,
+                "Фича запущена: черновик снят, фича активна. Начни конвейер по плану; " +
+                "разбери доклады, накопленные за паузу.");
+            return resumed; // у черновика прерванных ходов не бывает — 0
+        }
+        if (holdReason == FeatureHoldReasons.Queue)
+        {
+            // Очередь фич (волна 6): слот проекта освободился, голову очереди снял
+            // FeatureQueueService (или человек кнопкой) — оркестратора будят так же, как при
+            // снятии черновика: конвейер по плану стартует с него. Продолженные и истёкшие шаги
+            // названы в хвосте: очередь держит и уже начатую фичу.
+            var queueTail = resumed > 0 ? $" Продолжены прерванные ходы: {resumed} {PluralSteps(resumed)}." : "";
+            if (expired > 0)
+                queueTail += $" {expired} {PluralSteps(expired)} не продолжены — чат исполнителя исчез, " +
+                    "их нужно перезапустить штатным tasks_run_executor.";
+            await DeliverKeyChatCardAsync(key,
+                "Фича запущена из очереди: слот проекта освободился, пауза снята, запуски разрешены." +
+                queueTail + " Начни конвейер по плану; разбери доклады, накопленные за ожидание.");
+            return resumed;
+        }
+        if (resumed == 0) {
+            if (expired > 0) {
+                // R-HOLD-J (п.3): «прерванных шагов нет» — неправда: чат expired-шага
+                // исчез, его не продолжить. Считаем их отдельно: эти шаги перезапускают
+                // штатным исполнителем.
+                var ev = expired == 1 ? "продолжен" : "продолжены";
+                var obj = expired == 1 ? "его" : "их";
+                await DeliverKeyChatCardAsync(key,
+                    $"Пауза снята: {expired} {PluralSteps(expired)} не {ev} — чат исполнителя исчез, " +
+                    $"{obj} нужно перезапустить штатным tasks_run_executor. " +
+                    "Разбери доклады, накопленные за паузу.");
+                return 0;
+            }
+            // R-HOLD-K (п.2): тот же мотив контракта §1, :249-251: доклады за паузу
+            // накопились и здесь — оркестратору надо их разобрать, а не только знать,
+            // что запуски разрешены.
+            await DeliverKeyChatCardAsync(key,
+                "Пауза снята: прерванных шагов нет, запуски разрешены; " +
+                "разбери доклады, накопленные за паузу.");
+            return 0;
+        }
+        // R-HOLD-D (п.5): формулировка контракта §1, :249 — «пауза снята, продолжены N шагов»,
+        // с русским согласованием числительных (то же правило, что pluralSteps на фронте).
+        // R-HOLD-J (п.3): expired-шаги названы отдельно: их не продолжить, их перезапускают.
+        var verb = resumed == 1 ? "продолжен" : "продолжены";
+        var expiredPart = expired > 0
+            ? $"{expired} {PluralSteps(expired)} не {(expired == 1 ? "продолжен" : "продолжены")} — " +
+              $"чат исполнителя исчез, {(expired == 1 ? "его" : "их")} нужно перезапустить. "
+            : "";
+        await DeliverKeyChatCardAsync(key,
+            $"Пауза фичи снята: {verb} {resumed} {PluralSteps(resumed)}. {expiredPart}" +
+            "Доклады, накопленные за паузу, — в лентах этих шагов; разбери их.");
+        return resumed;
+    }
+
+    // W4-HOLD-N (хвост R-HOLD-D2): страховка необратимой заморозки. Эпик фичи, удалённый
+    // на паузе, больше не может ни «сняться», ни «встать»: путь возврата срока (выше) для
+    // его шагов не выполнится никогда, и чат исполнителя останется «вечным» навсегда.
+    // Ручка удаления эпика зовёт это до удаления: замороженные сроки шагов с пометкой
+    // feature_held возвращаются их чатам. Возвращает число восстановленных чатов.
+    public int RestoreFrozenChatsAfterFeatureDelete(string featureId, string ownerId)
+    {
+        var restored = 0;
+        foreach (var t in _tasks.GetByOwner(ownerId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            if (t.LinkedSessionId is null) continue;
+            // Хвост R-N2 (минор 2): RestoreFrozenExpiry возвращает запись и когда возвращать
+            // нечего (чат не замораживался — вечный) — так счётчик считал бы и пустые
+            // возвраты. Считаем только фактический: заморозка на чате есть.
+            if (_sessions.GetById(t.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is null) continue;
+            _sessions.RestoreFrozenExpiry(t.LinkedSessionId);
+            restored++;
+        }
+        return restored;
+    }
+
+    // W4-HOLD-N (хвост R-N п.3): единая страховка на всех дверях удаления задачи. Её обходят
+    // только REST-удаление эпика; MCP tasks_delete, удаление проекта и REST-удаление шага
+    // оставляли заморозку необратимой: удалённый на паузе эпик больше ни «снялся», ни
+    // «встал» — возврат срока его шагам не выполнится никогда; удалённый на паузе шаг не
+    // дождётся её снятия — его чат останется «вечным» навсегда. Каждая точка, зовущая
+    // TaskManager.Delete/DeleteByProject (REST, MCP-тулсет, удаление проекта), вызывает это
+    // ДО удаления: после него задачи в реестре нет. Возвращает число восстановленных чатов.
+    public int RestoreFrozenChatsBeforeDelete(TaskItem task)
+    {
+        // Хвост R-N2 (минор 3): явный guard вместо task.OwnerId! на nullable-поле: без него
+        // GetByOwner(null) тихо не находит ничего, и отказ выглядит как «ничего не восстановлено».
+        // У эпика без владельца регистр поиска не определён — возвращаем 0 явно.
+        if (task.Role == TaskRoles.Feature)
+            return task.OwnerId is null ? 0 : RestoreFrozenChatsAfterFeatureDelete(task.Id, task.OwnerId);
+        // Отдельно — удаление шага на паузе: возвращаем срок его собственному чату.
+        return RestoreFrozenChatOfTask(task) ? 1 : 0;
+    }
+
+    // Тело той же страховки для одной задачи: вернуть замороженный паузой срок её собственному
+    // чату. Хвост N2 (минор): RestoreFrozenExpiry возвращает запись и когда возвращать нечего
+    // (чат не замораживался — вечный) — guard по фактической заморозке, возврат считается
+    // только настоящий. Зовётся с двух дверей: удаление задачи (выше) и штатный перезапуск
+    // шага (W4-SEAM R3, «четвёртая дверь» ниже в ExecuteClaimedAsync). Возвращает, был ли
+    // настоящий возврат.
+    private bool RestoreFrozenChatOfTask(TaskItem task)
+    {
+        if (task.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) return false;
+        if (task.LinkedSessionId is null) return false;
+        if (_sessions.GetById(task.LinkedSessionId)?.HoldFrozenExpiresAfterMinutes is null) return false;
+        _sessions.RestoreFrozenExpiry(task.LinkedSessionId);
+        return true;
+    }
+
+    // R-HOLD-K (хвост): карточка в ключевой чат — фоновая нотификация: сбой доставки
+    // логируется сервисом и не всплывает до ручки — продолжение уже завершено, и отказ
+    // уведомления не должен читаться как отказ возврата.
+    // W4-HOLD-N (хвост R-N): причина карточки — HoldCard, не HoldResume: карточка — сама
+    // нотификация снятия паузы, а не продолжение прерванного хода (у черновика прерванных
+    // ходов не бывает вовсе). HoldResume остаётся честным для продолжений в чаты шагов.
+    private async Task DeliverKeyChatCardAsync(string sessionId, string text) =>
+        await ((IKeyChatCardSender)this).TrySendAsync(sessionId, text);
+
+    // Шов IKeyChatCardSender (Core): та же доставка для серверного пинка простоя (вертикаль Tasks).
+    async Task<bool> IKeyChatCardSender.TrySendAsync(string sessionId, string text)
+    {
+        try
+        {
+            await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
+                cause: SessionManager.DeliveryCause.HoldCard);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning("Карточка в ключевой чат {Session} не доставлена: {Message}", sessionId, ex.Message);
+            return false;
+        }
+    }
+
+    // Склонение «шаг/шага/шагов» (R-HOLD-D п.3) — то же правило, что pluralSteps на фронте
+    // (FeaturePageHeader.tsx:457): решает последняя цифра, 11 — исключение. Прежняя inline-
+    // форма согласовала только до 4: «21 шагов» вместо «21 шаг». internal — для табличного
+    // теста (InternalsVisibleTo ClaudeHomeServer.Tests).
+    internal static string PluralSteps(int n)
+    {
+        int d = n % 10, h = n % 100;
+        if (d == 1 && h != 11) return "шаг";
+        if (d >= 2 && d <= 4 && (h < 10 || h >= 20)) return "шага";
+        return "шагов";
+    }
+
+    // Реплика-продолжение прерванного паузой хода (контракт §1 :236): текст дословно из
+    // контракта — агент сверяется с состоянием дерева, чтобы не повторить вслепую то, что
+    // могло уже выполниться за паузу.
+    private const string HoldResumePrompt =
+        "Пауза фичи снята. Ход был прерван на середине: проверь состояние рабочего дерева " +
+        "(git status) и продолжи с того места, где остановился.";
 
     // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
     // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
@@ -1005,7 +1768,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
     {
         var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
-        await _broadcaster.ToOwner(stopped.OwnerId!, new TaskChangedMessage("updated", stopped));
+        ReleaseReviewTree(task.Id);
+        await _broadcaster.ToTaskBoard(stopped.OwnerId!, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
 
         var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
         await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
@@ -1047,8 +1811,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         ExecutorStopClassifier.AuthFailedReason => "не удалось авторизоваться у провайдера модели",
         ExecutorStopClassifier.SubagentStuckReason =>
             "сабагент раз за разом обрывается посреди работы, добить его не удалось",
+        ExecutorStopClassifier.ToolCallLeakStuckReason =>
+            "вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось",
         ExecutorStopClassifier.DeviceWaitExpiredReason =>
             "устройство локального проекта так и не стало доступно — исполнитель не запускался",
+        ExecutorStopClassifier.FeatureHeldExpiredReason =>
+            "чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить",
         _ => "исполнение прервано",
     };
 
@@ -1063,6 +1831,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // уводим в фон. Ошибки логируем — фоновая доставка не должна ронять вызывающий PUT/MCP-запрос.
     private void OnTaskCompleted(TaskItem task)
     {
+        // Слот ревью освобождаем сразу и независимо от того, доставлен ли уже доклад
+        ReleaseReviewTree(task.Id);
         _ = Task.Run(async () =>
         {
             try { await TryDeliverCompletionAsync(task); }
@@ -1104,6 +1874,21 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             await NotifyAsync(task, BuildResultNotification(task, ok: true, persona));
         // Модель Z: активный доклад в чат постановщика (в дополнение к L0-тосту выше)
         await ReportToDelegatorAsync(task, persona);
+        // Задача закрыта и ход кончился — процесс исполнителя с его фоновой работой больше не нужен:
+        // без гашения поздний task-notification будит завершённого агента (инцидент 13.10)
+        StopExecutorProcess(task);
+    }
+
+    // Гашение процесса CLI исполнителя закрытой задачи. Статус задачи и ExecutorStoppedAt не
+    // трогаем — закрыта штатно, это не «остановлен». Ошибка гашения доклад не отменяет.
+    private void StopExecutorProcess(TaskItem task)
+    {
+        if (task.LinkedSessionId is null) return;
+        try { _sessions.StopClosedExecutorProcess(task.LinkedSessionId, task.Id); }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось погасить процесс исполнителя закрытой задачи {TaskId}", task.Id);
+        }
     }
 
     // --- Страховка: ход кончился, а задачу никто не закрыл ---
@@ -1137,14 +1922,20 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // живого CLI. Порог передаётся параметром — тот же и для тишины после напоминания.
     // hasOpenBlocker (волна 2 team-blocker-honest): есть ли по этой задаче открытая карточка
     // блокера в чате-штабе (SourceSessionId → TeamEscalation c TaskId=task.Id и Kind=Blocker).
-    // Резолв идёт на стороне вызывающего — ClassifyStall остаётся чистой функцией, как и
-    // раньше. true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
+    // true переключает исход Alert/Nudge на AlertWaitingForBlocker (отдельный текст
     // окрика + отдельная подпись плашки в CheckStalledExecutorAsync).
+    // featurePaused (W4-HOLD-I, контракт §1 :179): фича задачи на паузе — ничего не делается:
+    // ни оклик исполнителя, ни зов человека. Резолв идёт на стороне вызывающего — ClassifyStall
+    // остаётся чистой функцией, как и раньше.
     internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
-        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false)
+        DateTime nowUtc, TimeSpan staleAfter, bool hasOpenBlocker = false, bool featurePaused = false)
     {
         if (task.CompletionDelivered) return ExecutorStallAction.None;
         if (task.Status == TaskItemStatus.Done) return ClassifyUndeliveredDone(task, session, nowUtc, staleAfter);
+        // Фича на паузе (W4-HOLD-I, контракт §1 :179): причина тишины — сама пауза, оклик и
+        // зов человека будят оркестатора во время остановки. Закрытая задача осталась выше:
+        // её доклад — карточка без хода (подавление внутри ReportToDelegatorAsync).
+        if (featurePaused) return ExecutorStallAction.None;
         // Исполнителя не запускали, ход ещё идёт (ClaudeResult null) либо он провалился:
         // провал уведомляет сам (BuildResultNotification), дублировать его не надо
         if (task.ClaudeStartedAt is null || task.ClaudeResult != "success") return ExecutorStallAction.None;
@@ -1213,21 +2004,28 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
     {
         var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба.
-        // Сейчас штабный реестр эскалаций живёт в TeamWaveService через ITeamHistoryStore,
-        // и его резолв делает подключаемый крючок (OpenBlockerLookup ниже). null — крючок не
-        // подключён (например, режим «Командная реализация» выключен): страховка работает
-        // как раньше, без новой ветки.
-        var hasOpenBlocker = false;
-        if (_openBlockerLookup is not null)
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :179): та же сфера, что у гейта запуска
+        // (TaskManager.FeatureIsPaused) — задач удержанной фичи сторож не окликает и человека
+        // не зовёт: их тишина — сама пауза, а не брошенная работа.
+        var featurePaused = _tasks.FeatureIsPaused(task);
+        var action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: false, featurePaused);
+        // Резолв «есть ли открытая карточка блокера по этой задаче» — на стороне штаба
+        // (крючок OpenBlockerLookup ниже; null — режим «Командная реализация» выключен).
+        // Признак меняет только исходы Nudge/Alert, а резолв читает историю чата-постановщика
+        // целиком — поэтому зовём его лишь для них, а не для каждой задачи на каждом тике
+        // (прод 2026-11-05: ~1100 загрузок history.json раз в 30 с ради одной задачи).
+        if (_openBlockerLookup is not null && action is ExecutorStallAction.Nudge or ExecutorStallAction.Alert)
         {
+            var hasOpenBlocker = false;
             try { hasOpenBlocker = await _openBlockerLookup(task); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Резолв открытого блокера по задаче {TaskId} не удался", task.Id);
             }
+            if (hasOpenBlocker)
+                action = ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker: true, featurePaused);
         }
-        switch (ClassifyStall(task, session, nowUtc, _staleAfter, hasOpenBlocker))
+        switch (action)
         {
             case ExecutorStallAction.Nudge:
                 await NudgeExecutorAsync(task, session!, nowUtc);
@@ -1253,7 +2051,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         if (updated is null) return;
         _log.LogWarning("Задача {TaskId} «{Title}» закрыта, а итог хода не пришёл (сессия {SessionId}) — " +
             "доставляю доклад по сигналу D", updated.Id, updated.Title, updated.LinkedSessionId);
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
         await TryDeliverCompletionAsync(updated);
     }
 
@@ -1297,7 +2095,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc, bool waitingForBlocker)
     {
         var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
         await NotifyAsync(updated, BuildStaleNotification(updated, persona, waitingForBlocker));
@@ -1373,6 +2171,19 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // --- Чистая логика маппинга (извлечена для юнит-тестов) ---
 
+    // Гейты запуска эпика фичи (шаг 1.4): эпик — контейнер фичи, а не работа, поэтому
+    // исполнителем не запускается. null — задача не эпик, запуск не отказывать.
+    // Гейт 2 (более специфичный): Role=feature без FeatureId — противоречие данных.
+    // Гейт 1: Role=feature — эпик; чтобы вести фичу, заведите задачу шага/ревью/проверки.
+    internal static string? FeatureEpicLaunchRefusal(TaskItem task)
+    {
+        if (task.Role != TaskRoles.Feature) return null;
+        if (string.IsNullOrEmpty(task.FeatureId))
+            return "Эпик фичи без привязки к фиче: у задачи роль feature, но FeatureId пуст.";
+        return "Эпик фичи не запускается исполнителем; чтобы вести задачи фичи, " +
+               "заведите задачу шага/ревью/проверки через tasks_create.";
+    }
+
     // Итог хода успешен, если result не error
     internal static bool IsSuccess(ResultMessage result) => result.Subtype != "error";
 
@@ -1424,6 +2235,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // только по сессии владельца задачи, иначе fallback на TaskUrl
         var sourceSession = task.SourceSessionId is not null ? _sessions.GetById(task.SourceSessionId) : null;
         if (sourceSession is not null && _sessions.ResolveOwnerId(sourceSession) != task.OwnerId)
+            sourceSession = null;
+        // S2d-4b2: уведомление несёт id исходного чата в ссылке — чужой приватный чат владельцу
+        // задачи не виден, ссылка на него невозможна (откат на TaskUrl).
+        // Резолвера проектов нет — решения нет, поведение прежнее (как в ChatRefs.For).
+        if (sourceSession is not null && _projects is not null
+            && !SessionAccess.CanSee(sourceSession,
+                sourceSession.ProjectId is { } srcPid ? _projects.GetById(srcPid) : null, task.OwnerId))
             sourceSession = null;
         await NotifyAsync(task, BuildDelegatorNotification(task, ok, delegator, sourceSession));
         _log.LogInformation("L0 задачи {TaskId}: отправлено постановщику {PersonaId} (обычное уведомление подавлено)", task.Id, delegator.Id);
@@ -1507,6 +2325,57 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
     // оживлял бы рабочий чат пользователя скрытым платным расходом на каждое завершение задачи.
     internal static bool ShouldSendDelegatorReaction(Persona? delegator) => delegator is not null;
 
+    // Живая сессия владельца задачи по id; чужая/мёртвая — null
+    private Session? OwnedSession(string? sessionId, string? ownerId) =>
+        !string.IsNullOrEmpty(sessionId) && _sessions.GetById(sessionId) is { } s
+        && _sessions.ResolveOwnerId(s) == ownerId ? s : null;
+
+    // Подъём по цепочке: сессия, исполняющая задачу T, не адресат — адресат тот, кому докладывает T
+    // (ReportToSessionId ?? запустивший ?? создатель). Идём, пока не упрёмся в сессию, не являющуюся
+    // исполнителем; предохранители — глубина и защита от цикла. Звено мёртвое/чужое — остаёмся на
+    // последней живой сессии цепочки.
+    // keepAwaitingStart: стартовая сессия — запустивший; пока её собственная задача ещё открыта
+    // (Status != Done), она координатор и сама ждёт доклад — выше не поднимаемся. Сигнал «ход
+    // кончился» (ClaudeResult) здесь НЕ годится: он проставляется в конце ПЕРВОГО хода координатора,
+    // а его задача при этом ещё открыта — и доклад уходил бы на уровень выше, минуя координатора.
+    // Закрытая задача координатора (Status == Done) — подъём продолжается (планировщик закрыл план →
+    // доклад идёт оркестратору).
+    private Session? ResolveAddressee(string? startSessionId, string? ownerId, bool keepAwaitingStart = false)
+    {
+        var current = OwnedSession(startSessionId, ownerId);
+        var visited = new HashSet<string>();
+        for (var depth = 0; current is not null && depth < MaxReportChainDepth && visited.Add(current.Id); depth++)
+        {
+            if (_tasks.GetBySession(current.Id) is not { } t) break;
+            if (keepAwaitingStart && depth == 0 && t.Status != TaskItemStatus.Done) break;
+            var nextId = t.ReportToSessionId ?? t.ExecutorLaunchedBySessionId ?? t.SourceSessionId;
+            if (OwnedSession(nextId, ownerId) is not { } next || visited.Contains(next.Id)) break;
+            current = next;
+        }
+        return current;
+    }
+
+    private const int MaxReportChainDepth = 5;
+
+    // Запустивший — координатор, который сам ждёт доклад (keepAwaitingStart на глубине 0): его
+    // собственная задача ещё открыта. null — такого нет.
+    private Session? AwaitingCoordinator(string? launchedBySessionId, string? ownerId) =>
+        OwnedSession(launchedBySessionId, ownerId) is { } s
+        && _tasks.GetBySession(s.Id) is { } t && t.Status != TaskItemStatus.Done ? s : null;
+
+    // Ключевой чат фичи для задачи фичи (не эпика): первое живое звено FeatureKeyChain с переходом
+    // по продолжениям (Core, единая точка правды). null — задача вне фичи, она эпик, ключевого чата
+    // нет или это сам чат-исполнитель задачи (докладывать себе незачем) — остаётся прежняя цепочка.
+    private Session? ResolveFeatureKeyChat(TaskItem task)
+    {
+        if (task.FeatureId is null || task.Role == TaskRoles.Feature || task.OwnerId is null) return null;
+        var epic = _tasks.GetById(task.FeatureId);
+        if (epic is null || epic.OwnerId != task.OwnerId) return null;
+        var featureTasks = _tasks.GetByOwner(task.OwnerId).Where(t => t.FeatureId == epic.Id).ToList();
+        var key = FeatureKeyChain.FirstLive(FeatureKeyChain.Of(epic, featureTasks), _sessions, task.OwnerId);
+        return key is null || key == task.LinkedSessionId ? null : _sessions.GetById(key);
+    }
+
     // Модель Z: активный доклад о завершении делегированной задачи — в отличие от L0-тоста
     // (NotifyDelegatorAsync) кладёт репорт прямо в чат постановщика. ШАГ 1 — гостевая реплика
     // исполнителя B с готовым resultMarkdown (0 токенов, без агентского хода); ШАГ 2 — сразу
@@ -1522,19 +2391,41 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         }
         // Постановщик-персона нужен только чтобы реакция шла от её лица и чтобы был fallback
         // в новый чат. Его отсутствие (задачу поставил человек) доклад больше не отменяет.
-        var delegator = task.CreatedByPersonaId is not null
-            ? _personas.Get(task.CreatedByPersonaId, task.OwnerId!)
+        // Адресат — тот, кто ждёт результат: запустивший исполнителя (tasks_run_executor из чата),
+        // затем унаследованный от родительской задачи (ReportToSessionId). Оба поднимаются по цепочке:
+        // если сессия сама исполняет другую задачу, доклад идёт её адресату (планировщик → оркестратор).
+        // Чужая/мёртвая сессия — откат на следующий пункт, в конце — создатель карточки.
+        // Чат-исполнитель вынесен пользователем в корень (ParentDetached) — «вынес из группы» значит
+        // «не докладывай»: инвариант сильнее любого адресата (запустивший, ReportToSessionId).
+        var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
+        if (executorSession?.ParentDetached == true)
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
+            return;
+        }
+        // Порядок выбора адресата: (1) вынос в корень — выше; (2) запустивший — координатор, который
+        // сам ждёт (его задача открыта): подзадачи внутри шага и team-implement; (3) задача фичи (не
+        // эпик) — ключевой чат фичи; (4) прежняя цепочка (запустивший → ReportToSessionId → создатель).
+        var addressee = AwaitingCoordinator(task.ExecutorLaunchedBySessionId, task.OwnerId)
+            ?? ResolveFeatureKeyChat(task)
+            ?? ResolveAddressee(task.ExecutorLaunchedBySessionId, task.OwnerId, keepAwaitingStart: true)
+            ?? ResolveAddressee(task.ReportToSessionId, task.OwnerId);
+        // Персона авто-хода — персона сессии-адресата, а не создателя карточки
+        var delegatorPersonaId = addressee is not null ? addressee.PersonaId : task.CreatedByPersonaId;
+        var delegator = delegatorPersonaId is not null
+            ? _personas.Get(delegatorPersonaId, task.OwnerId!)
             : null;
 
         // Цель доклада — ЭФФЕКТИВНЫЙ родитель чата-исполнителя, а не сырой SourceSessionId:
         // ручная группировка (перетаскивание в списке чатов) побеждает связь по задаче, а явный
         // вынос в корень её гасит — «вынес из группы» значит «не докладывай туда». Чата-исполнителя
         // нет (задача закрыта без запуска) — остаётся SourceSessionId, как было.
-        var executorSession = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
-        var targetId = ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out var fromFallback);
+        var fromFallback = false;
+        var targetId = addressee?.Id
+            ?? ResolveReportTarget(executorSession, task.SourceSessionId, new TaskLookupAdapter(_tasks), out fromFallback);
         if (targetId is null)
         {
-            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — чат-исполнитель явно вынесен в корень (ParentDetached)", task.Id);
+            _log.LogInformation("Доклад Z задачи {TaskId}: пропуск — нет целевого чата для доклада", task.Id);
             return;
         }
         if (fromFallback)
@@ -1581,26 +2472,52 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
         // контракт для фронта (формат карточки/маркера — фронт)
         // Лицо доклада: персона-исполнитель, иначе — нейтральная карточка с именем её чата
         // («Задача: починить билд»), тот же вид, что у входящих сообщений без персоны
-        var reportText = BuildDelegationReportText(task);
-        var executorChatName = executorSession?.Name;
-        // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
-        // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
-        // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
-        // по совпадению timestamp+текста, без общего timestamp дедуп ключа не было бы.
-        var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        // B1: id задачи едет структурным полем в ОБОИХ вариантах записи (исполнитель-персона →
-        // guest_text, исполнитель без персоны → user_message) и в обоих слоях (история + живая
-        // лента) — по нему карточка открывает задачу, не выковыривая id из текста маркера.
-        await _sessions.AppendStoredAsync(targetSessionId,
-            executor is not null
-                ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs,
-                    delegationTaskId: task.Id)
-                : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName,
-                    timestamp: reportTs, delegationTaskId: task.Id),
-            executor is not null
-                ? new GuestTextMessage(reportText, executor.Id, reportTs, DelegationTaskId: task.Id)
-                : new UserMessageMessage(reportText, null, null, true, null, executorChatName,
-                    Timestamp: reportTs, DelegationTaskId: task.Id));
+        async Task AppendReportCardAsync(string cardSessionId)
+        {
+            var reportText = BuildDelegationReportText(task);
+            var executorChatName = executorSession?.Name;
+            // S2d-4b2 (К5): название чата-исполнителя уходит в чат-адресат доклада — читателям
+            // ЭТОГО чата. Решает та же ChatRefs.For, что маска задачи: чужой приватный чат
+            // исполнителя для аудитории адресата закрыт, вместо названия — подпись формы.
+            if (_sessions.GetById(cardSessionId) is { } cardSession
+                && ChatRefs.For(_sessions, _projects, task.LinkedSessionId, ReportCardAudience(cardSession)) is { Private: true })
+                executorChatName = ChatRef.PrivateFormTitle;
+            // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
+            // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
+            // (BroadcastSessionMessageAsync шлёт событие и в session-, и в project_/user_-группу)
+            // по совпадению timestamp+текста, без общего timestamp дедуп ключа не было бы.
+            var reportTs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // B1: id задачи едет структурным полем в ОБОИХ вариантах записи (исполнитель-персона →
+            // guest_text, исполнитель без персоны → user_message) и в обоих слоях (история + живая
+            // лента) — по нему карточка открывает задачу, не выковыривая id из текста маркера.
+            await _sessions.AppendStoredAsync(cardSessionId,
+                executor is not null
+                    ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs,
+                        delegationTaskId: task.Id)
+                    : new StoredUserMessage(reportText, viaAgent: true, senderChatName: executorChatName,
+                        timestamp: reportTs, delegationTaskId: task.Id),
+                executor is not null
+                    ? new GuestTextMessage(reportText, executor.Id, reportTs, DelegationTaskId: task.Id)
+                    : new UserMessageMessage(reportText, null, null, true, null, executorChatName,
+                        Timestamp: reportTs, DelegationTaskId: task.Id));
+        }
+
+        await AppendReportCardAsync(targetSessionId);
+        // Запустивший не создатель карточки: создателю — только карточка доклада (ШАГ 1), без
+        // авто-хода: он не ждёт результата, но должен видеть итог своей задачи
+        if (addressee is not null && task.SourceSessionId is { } creatorId && creatorId != targetSessionId
+            && _sessions.GetById(creatorId) is { } creatorSession
+            && _sessions.ResolveOwnerId(creatorSession) == task.OwnerId)
+            await AppendReportCardAsync(creatorId);
+
+        // Фича задачи на паузе (W4-HOLD-I, контракт §1 :183): карточка доклада остаётся —
+        // человек её видит, — но ход постановщика не поднимается: причина молчания — пауза,
+        // платный ход во время остановки пустой.
+        if (_tasks.FeatureIsPaused(task))
+        {
+            _log.LogInformation("Доклад Z задачи {TaskId}: фича на паузе — карточка положена, ход постановщика не поднят", task.Id);
+            return;
+        }
 
         // ШАГ 2 (платный авто-ход постановщика) — только при живом постановщике-персоне.
         // Задачу мог поставить человек из обычного чата (без персоны): тогда ход не от чьего
@@ -1654,6 +2571,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
 
+    // Аудитория карточки доклада = читатели чата, куда она кладётся (S2d-4b2): общий чат проекта —
+    // вся группа проекта, приватный — только автор приватности, чат вне проекта — владелец.
+    internal static ChatAudience ReportCardAudience(Session target) =>
+        target.ProjectId is { } pid && target.PrivateToUserId is null
+            ? ChatAudience.Group(pid)
+            : ChatAudience.Viewer(target.PrivateToUserId ?? target.OwnerId);
+
     // Маркер гостевой реплики-доклада: контракт для фронта — по нему отличают доклад
     // делегированной задачи от обычной реплики персоны в ленте
     internal const string DelegationReportMarker = "↩ Отчёт по делегированной задаче: ";
@@ -1698,7 +2622,23 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler
 
     // Текст гостевой реплики B: маркер + пустая строка + итог задачи
     internal static string BuildDelegationReportText(TaskItem task) =>
-        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
+        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}{DelegationReportAcceptance(task)}";
+
+    // Таблица «критерий → свидетельство» для задач с критериями приёмки; без критериев — пусто.
+    // Критерий без свидетельства (задачу закрыли мимо гейта, например человек через UI) —
+    // явная пометка, а не пропуск строки.
+    private static string DelegationReportAcceptance(TaskItem task)
+    {
+        if (task.Acceptance.Count == 0) return "";
+        static string Cell(string v) => v.Replace("|", "\\|").Replace("\r", "").Replace("\n", " ");
+        var rows = task.Acceptance.Select(c =>
+        {
+            var e = task.Evidence.FirstOrDefault(x => x.CriterionId == c.Id);
+            var proof = e is null ? "_нет свидетельства_" : $"{Cell(e.How)} — {Cell(e.Result)}";
+            return $"| {Cell(c.Id)}. {Cell(c.Text)} | {proof} |";
+        });
+        return "\n\n**Критерии приёмки**\n\n| Критерий | Свидетельство |\n|---|---|\n" + string.Join("\n", rows);
+    }
 
     // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
     // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом

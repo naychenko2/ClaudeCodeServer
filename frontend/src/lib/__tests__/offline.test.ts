@@ -1,11 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Мокаем IndexedDB-обёртку целиком: offline.ts работает с ней только через idbGet/idbSet
-const { idbGet, idbSet } = vi.hoisted(() => ({
+// Мокаем IndexedDB-обёртку целиком: офлайн-пути этого файла работают с ней через
+// idbGet/idbSet/idbDelete (idbDelete нужен и классу содержимого файлов — снимает
+// противоположную пометку)
+const { idbGet, idbSet, idbDelete } = vi.hoisted(() => ({
   idbGet: vi.fn(),
   idbSet: vi.fn(),
+  idbDelete: vi.fn(),
 }));
-vi.mock('../idb', () => ({ idbGet, idbSet }));
+vi.mock('../idb', () => ({ idbGet, idbSet, idbDelete }));
 
 // Простая замена Web Storage
 function storageStub(init: Record<string, string> = {}) {
@@ -44,6 +47,8 @@ beforeEach(async () => {
   idbGet.mockReset();
   idbSet.mockReset();
   idbSet.mockResolvedValue('key');
+  idbDelete.mockReset();
+  idbDelete.mockResolvedValue(undefined);
 
   fetchMock = vi.fn();
   dispatched = [];
@@ -53,7 +58,7 @@ beforeEach(async () => {
     addEventListener: vi.fn(),
     dispatchEvent: (e: Event) => { dispatched.push(e.type); return true; },
   });
-  vi.stubGlobal('localStorage', storageStub({ cc_token: 'tok' }));
+  vi.stubGlobal('localStorage', storageStub({ cc_token: 'tok', cc_user_id: 'u1' }));
   vi.stubGlobal('sessionStorage', storageStub());
 
   offline = await import('../offline');
@@ -74,7 +79,9 @@ describe('request: network-first', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.objectContaining({
       headers: expect.objectContaining({ Authorization: 'Bearer tok' }),
     }));
-    expect(idbSet).toHaveBeenCalledWith('/projects', expect.objectContaining({ data: { items: [1, 2] } }));
+    // Запись в кэш идёт в фоне: ответ сети её не ждёт — дожидаемся сами
+    await offline.flushPassiveWrites();
+    expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ data: { items: [1, 2] } }));
     expect(offline.isOnline()).toBe(true);
   });
 
@@ -85,7 +92,7 @@ describe('request: network-first', () => {
     const data = await offline.request('/projects');
 
     expect(data).toEqual({ cached: true });
-    expect(idbGet).toHaveBeenCalledWith('/projects');
+    expect(idbGet).toHaveBeenCalledWith('offline:u1:/projects');
     // Сеть молчит и на запросе, и на подтверждающем пинге → офлайн
     expect(offline.isOnline()).toBe(false);
   });
@@ -101,6 +108,201 @@ describe('request: network-first', () => {
   it('204 → undefined, пустое тело не парсится как JSON', async () => {
     fetchMock.mockResolvedValue({ ok: true, status: 204, statusText: 'No Content', json: async () => ({}), text: async () => '' });
     await expect(offline.request('/tasks/1', { method: 'DELETE' })).resolves.toBeUndefined();
+  });
+});
+
+describe('request: etagRef (K8 — ETag успешного ответа вызывающему)', () => {
+  it('сервер прислал ETag — sink заполнен', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ content: 'текст' }),
+      headers: { get: (k: string) => (k === 'ETag' ? '"deadbeef"' : null) },
+    });
+
+    const sink: { etag?: string } = {};
+    const data = await offline.request<{ content: string }>('/projects/p1/files/content?path=a.md', { etagRef: sink });
+
+    expect(data.content).toBe('текст');
+    expect(sink.etag).toBe('"deadbeef"');
+  });
+
+  it('без заголовка ETag (бинарник, документ, сверх потолка) — sink пустой', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ content: null, isBinary: true }),
+      headers: { get: () => null },
+    });
+
+    const sink: { etag?: string } = {};
+    await offline.request('/projects/p1/files/content?path=v.mp4', { etagRef: sink });
+    expect(sink.etag).toBeUndefined();
+  });
+
+  it('на ошибке sink не заполняется: заголовок и так в error.responseHeaders', async () => {
+    fetchMock.mockResolvedValue({
+      ...jsonResponse({ code: 'file_changed' }, 409),
+      headers: { get: (k: string) => (k === 'ETag' ? '"e"' : null) },
+    });
+
+    const sink: { etag?: string } = {};
+    await expect(offline.request('/x', { method: 'PUT', body: '{}', etagRef: sink }))
+      .rejects.toMatchObject({ status: 409 });
+    expect(sink.etag).toBeUndefined();
+  });
+
+  it('etagRef не уходит в init fetch (лишним полем запроса)', async () => {
+    fetchMock.mockResolvedValue({ ...jsonResponse({ ok: true }), headers: { get: () => null } });
+    await offline.request('/projects/p1/files', { etagRef: {} });
+    const init = fetchMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(init).not.toHaveProperty('etagRef');
+  });
+});
+
+describe('request: onBytes', () => {
+  it('онлайн GET с onBytes — колбэк получает ровно длину тела ответа', async () => {
+    const body = { items: [1, 2] };
+    const text = JSON.stringify(body);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual(body);
+    expect(onBytes).toHaveBeenCalledTimes(1);
+    // Мера та же, что идёт в кэш: длина текста ответа, второй меры нет
+    expect(onBytes).toHaveBeenCalledWith(text.length);
+    // …и то же число лежит в bytes записи кэша — оценка вызывающего и учёт кэша сходятся
+    await offline.flushPassiveWrites();
+    expect(idbSet).toHaveBeenCalledWith('offline:u1:/projects', expect.objectContaining({ bytes: text.length }));
+  });
+
+  it('сетевой обрыв + запись кэша с bytes — данные из кэша, колбэк получает вес записи', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1, bytes: 1234 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).toHaveBeenCalledWith(1234);
+  });
+
+  it('onBytes — поле слоя offline: в fetch не уходит', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ items: [1, 2] }));
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ items: number[] }>('/projects', { onBytes });
+
+    expect(data).toEqual({ items: [1, 2] });
+    // Колбэк потребляет сам слой: в опции fetch его быть не должно — лишний ключ
+    // на сетевой стороне нарушает контракт (objectContaining его не увидел бы)
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects', expect.not.objectContaining({ onBytes: expect.anything() }));
+  });
+
+  it('запись кэша без bytes — веса нет: колбэк не зовётся, данные отдаются', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    // Запись, написанная до появления поля bytes: веса у неё нет
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+    const onBytes = vi.fn();
+
+    const data = await offline.request<{ cached: boolean }>('/projects', { onBytes });
+
+    // Данные из кэша отдаются как обычно, но вызывающий веса не получает:
+    // undefined в бюджете лент S2b стал бы NaN
+    expect(data).toEqual({ cached: true });
+    expect(onBytes).not.toHaveBeenCalled();
+  });
+});
+
+describe('request: потолок веса по-чатовой записи (F3-S4b)', () => {
+  // Полные истории чата бывают по несколько МБ: такая запись одна исчерпала бы весь
+  // бюджет по-чатового класса, а её чтение при загрузке снапшота раздувает вкладку.
+  // Тяжелее CHAT_CLASS_MAX_BYTES — в кэш не пишется вовсе.
+
+  const chatUrl = '/chats/c1';
+  const chatKey = 'offlinechat:u1:c1:/chats/c1';
+
+  it('запись тяжелее CHAT_CLASS_MAX_BYTES не пишется; офлайн-чтение — miss', async () => {
+    const body = { blob: 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES) };
+    const text = JSON.stringify(body);
+    expect(text.length).toBeGreaterThan(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    const data = await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    // Сетевой ответ отдаётся как обычно — пропуск касается только записи в кэш
+    expect(data).toEqual(body);
+    expect(idbSet).not.toHaveBeenCalled();
+
+    // Офлайн-чтение той же истории — miss: в кэше её нет
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
+  });
+
+  it('ответ тяжелее потолка удаляет прежнюю запись под тем же ключом; офлайн-чтение — miss', async () => {
+    // Чат вырос за потолок: новый ответ в кэш не пишется, но и прежняя запись (раньше
+    // влезала в стор) больше не отвечает текущему запросу — её удаляем, иначе офлайн
+    // отдавал бы старую ленту вместо miss. Стор — фейковое хранилище: мок idbGet
+    // отражает прежнюю запись, иначе дефект не ловится.
+    const store = new Map<string, { data: unknown; savedAt: number; bytes?: number }>();
+    store.set(chatKey, { data: { d: 'old' }, savedAt: 1, bytes: 2_500_000 });
+    idbGet.mockImplementation((k: string) => Promise.resolve(store.get(k)));
+    idbSet.mockImplementation((k: string, v: unknown) => { store.set(k, v as { data: unknown; savedAt: number; bytes?: number }); return Promise.resolve(k); });
+    idbDelete.mockImplementation((k: string) => { store.delete(k); return Promise.resolve(undefined); });
+
+    const body = { blob: 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES) };
+    expect(JSON.stringify(body).length).toBeGreaterThan(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    const data = await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    // Сетевой ответ отдаётся как обычно; новая запись не пишется…
+    expect(data).toEqual(body);
+    const written = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(written).toBeUndefined();
+    // …а прежняя — удалена из стора
+    expect(idbDelete).toHaveBeenCalledWith(chatKey);
+    expect(store.has(chatKey)).toBe(false);
+
+    // Офлайн-чтение той же истории — miss, а не старая лента
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    await expect(offline.request(chatUrl, { chatScope: 'c1' })).rejects.toThrowError(offline.OfflineError);
+  });
+
+  it('запись ровно на пороге и легче — пишется', async () => {
+    // Граница открыта «тяжелее — не пишем»: ровно на пороге — пишем. Длина текста ответа
+    // подобрана ровно до CHAT_CLASS_MAX_BYTES (обёртка {"d":"…"} известной длины).
+    const payload = 'x'.repeat(offline.CHAT_CLASS_MAX_BYTES - JSON.stringify({ d: '' }).length);
+    const body = { d: payload };
+    expect(JSON.stringify(body).length).toBe(offline.CHAT_CLASS_MAX_BYTES);
+    fetchMock.mockResolvedValue(jsonResponse(body));
+
+    await offline.request<typeof body>(chatUrl, { chatScope: 'c1' });
+
+    const atLimit = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(atLimit).toBeDefined();
+    expect((atLimit![1] as { bytes?: number }).bytes).toBe(offline.CHAT_CLASS_MAX_BYTES);
+
+    // Легче порога — обычный путь класса, запись на месте
+    idbSet.mockClear();
+    fetchMock.mockResolvedValue(jsonResponse({ d: 'light' }));
+    await offline.request('/chats/c2/history', { chatScope: 'c2' });
+    expect(idbSet).toHaveBeenCalledWith('offlinechat:u1:c2:/chats/c2/history', expect.objectContaining({ data: { d: 'light' } }));
+  });
+
+  it('вес ответа неизвестен (у тела нет меры) — запись пишется как раньше', async () => {
+    // Единственный путь request() сообщает длину текста ответа; «вес неизвестен» — это
+    // bytes === undefined в passiveWrite. Достичимо только когда у тела нет .length:
+    // тело-число (JSON от него валиден, меры у него нет). Отсутствие меры — не тяжесть:
+    // guard такую запись пропускает в стор как раньше.
+    fetchMock.mockResolvedValue({
+      ok: true, status: 200, statusText: 'OK',
+      json: async () => 1, text: async () => 12345 as unknown as string,
+    });
+
+    await offline.request<number>(chatUrl, { chatScope: 'c1' });
+
+    const written = idbSet.mock.calls.find(c => c[0] === chatKey);
+    expect(written).toBeDefined();
+    expect((written![1] as { bytes?: number }).bytes).toBeUndefined();
   });
 });
 
@@ -158,6 +360,132 @@ describe('request: свой таймаут', () => {
 
     // 30-сек дефолтный таймаут без явного timeoutMs — зависший запрос это пропажа связи
     expect(offline.isOnline()).toBe(false);
+  });
+});
+
+// --- Signal вызывающего: «Остановить» должен реально обрывать запрос (W5-F2b, вердикт W5-R-F2) ---
+// Раньше внутренний контроллер таймаута перетирал переданный signal: отмена «Остановить»
+// и смена fid доходили только до компонента, а fetch висел до своего таймаута.
+describe('request: signal вызывающего', () => {
+  // fetch, который висит до любой отмены и реджектит по abort — как настоящий
+  function hangUntilAnyAbort() {
+    return (_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      if (init.signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  }
+
+  it('abort() вызывающего обрывает запрос AbortError, связь не трогается', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+    await expect(promise).rejects.toThrow('Aborted');
+
+    // Отмена человека — не сетевой сбой: приложение остаётся онлайн
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('signal вызывающего не глушит внутренний таймаут: timeoutMs по-прежнему срабатывает', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', {
+      method: 'POST', body: '{}', signal: ac.signal, timeoutMs: 180_000,
+    });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+  });
+
+  it('уже отменённый signal — сразу AbortError, без ожидания таймаута', async () => {
+    fetchMock.mockImplementation(hangUntilAnyAbort());
+    const ac = new AbortController();
+    ac.abort();
+
+    await expect(offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal }))
+      .rejects.toThrow('Aborted');
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('отмена судится по имени, не по типу: Error-подобный AbortError — тоже отмена', async () => {
+    // Контракт по имени, как у потребителя (featurePage.ts:105 судит по e.name === 'AbortError'):
+    // в ряде окружений abort приходит Error с именем 'AbortError', а не DOMException.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+
+    // Наш таймаут, обрывающий fetch такой ошибкой, должен трактоваться как таймаут
+    // (RequestTimeoutError), а не уходить в сырую ошибку или офлайн.
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('слушатель на signal вызывающего снимается: на долгоживущем signal не остаётся записи', async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ ok: true }));
+    // Сигнал, который переживает запрос: тот же signal передают в следующий вызов.
+    // Считаем не вызовы add/remove, а состояние реестра слушателей: Map по типу,
+    // и после каждого запроса запись 'abort' должна быть удалена по ключу.
+    const handlers = new Map<string, () => void>();
+    const longLivedSignal = {
+      aborted: false,
+      addEventListener: (type: string, handler: () => void) => { handlers.set(type, handler); },
+      removeEventListener: (type: string, handler: () => void) => {
+        if (handlers.get(type) === handler) handlers.delete(type);
+      },
+    } as unknown as AbortSignal;
+
+    for (let i = 0; i < 3; i++) {
+      await offline.request('/tasks/features/f1', { signal: longLivedSignal });
+      // Каждый слушатель снят в finally: на сигнале не остаётся ни одного
+      expect(handlers.has('abort')).toBe(false);
+    }
+    expect(handlers.size).toBe(0);
+  });
+
+  it('отмена вызывающим Error-подобным AbortError (не DOMException) возвращается как есть', async () => {
+    // Ветка «отмена вызывающим» (offline.ts:477) закрыта name-контрактом: отмена,
+    // пришедшая не как DOMException, тоже опознаётся по имени и не трактуется как пропажа связи.
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => {
+        const err = new Error('Aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+    const ac = new AbortController();
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', signal: ac.signal });
+    ac.abort();
+
+    const err = await promise.catch((e: unknown) => e);
+    expect((err as Error).name).toBe('AbortError');
+    // Намеренная отмена — не сетевой сбой: состояние не трогаем, OfflineError нет
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('isAbortError судит по имени без instanceof: объект с name="AbortError" — отмена', async () => {
+    // Потребитель (featurePage.ts:105) судит по e.name === 'AbortError'; слой не должен
+    // быть строже. Наш таймаут, обрывающий fetch объектом не-Error с именем 'AbortError',
+    // обязан дать RequestTimeoutError, а не проткнуть сырой объект (с instanceof-гейтом
+    // он проходил мимо обеих веток).
+    fetchMock.mockImplementation((_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject({ name: 'AbortError', message: 'Aborted' }));
+    }));
+
+    const promise = offline.request('/tasks/features/f1/summary', { method: 'POST', body: '{}', timeoutMs: 180_000 });
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+    expect(offline.isOnline()).toBe(true);
   });
 });
 
@@ -627,5 +955,98 @@ describe('display-состояние: гистерезис и тихий воз�
     offline.setOnline(false);
     vi.advanceTimersByTime(3_000);
     expect(fn).toHaveBeenCalledTimes(3); // отписались — уведомлений нет
+  });
+});
+
+describe('readStoredToken / readStoredUserId: «сначала своё»', () => {
+  it('свой токен в sessionStorage побеждает чужой в localStorage', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'чужой', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'u-a' }));
+
+    expect(offline.readStoredToken()).toBe('свой');
+    expect(offline.readStoredUserId()).toBe('u-a');
+  });
+
+  it('нет своего — читается общий localStorage («запомнить меня»)', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий', cc_user_id: 'u-b' }));
+    vi.stubGlobal('sessionStorage', storageStub());
+
+    expect(offline.readStoredToken()).toBe('общий');
+    expect(offline.readStoredUserId()).toBe('u-b');
+  });
+
+  it('мусорный id ("null") приравнивается к отсутствию', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой', cc_user_id: 'null' }));
+    vi.stubGlobal('localStorage', storageStub());
+
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+
+  it('токен в sessionStorage без id там же, id в localStorage — id неизвестен, не чужой', () => {
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'токен-A' }));
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'токен-B', cc_user_id: 'u-b' }));
+
+    expect(offline.readStoredToken()).toBe('токен-A');
+    expect(offline.readStoredUserId()).toBeNull();
+  });
+
+  it('окружение без sessionStorage — токен читается из localStorage', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий' }));
+    vi.stubGlobal('sessionStorage', undefined);
+
+    expect(offline.readStoredToken()).toBe('общий');
+  });
+
+  it('окружение без localStorage — токен читается из sessionStorage', () => {
+    vi.stubGlobal('localStorage', undefined);
+    vi.stubGlobal('sessionStorage', storageStub({ cc_token: 'свой' }));
+
+    expect(offline.readStoredToken()).toBe('свой');
+  });
+
+  it('sessionStorage бросает SecurityError — localStorage всё равно читается', () => {
+    vi.stubGlobal('localStorage', storageStub({ cc_token: 'общий' }));
+    vi.stubGlobal('sessionStorage', { getItem: () => { throw new Error('SecurityError'); } });
+
+    expect(offline.readStoredToken()).toBe('общий');
+  });
+});
+
+describe('writeStoredToken: пишет туда, откуда читает readStoredToken', () => {
+  it('заняты оба хранилища — новый токен в sessionStorage, localStorage не тронут', () => {
+    const local = storageStub({ cc_token: 'чужой' });
+    const session = storageStub({ cc_token: 'старый' });
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(session.getItem('cc_token')).toBe('новый');
+    expect(local.getItem('cc_token')).toBe('чужой');
+    expect(offline.readStoredToken()).toBe('новый');
+  });
+
+  it('токен только в localStorage («запомнить меня») — обновляется он', () => {
+    const local = storageStub({ cc_token: 'старый' });
+    const session = storageStub();
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(local.getItem('cc_token')).toBe('новый');
+    expect(session.getItem('cc_token')).toBeNull();
+  });
+
+  it('токена нет нигде — пишется в sessionStorage', () => {
+    const local = storageStub();
+    const session = storageStub();
+    vi.stubGlobal('localStorage', local);
+    vi.stubGlobal('sessionStorage', session);
+
+    offline.writeStoredToken('новый');
+
+    expect(session.getItem('cc_token')).toBe('новый');
+    expect(local.getItem('cc_token')).toBeNull();
   });
 });

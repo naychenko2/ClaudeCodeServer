@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage } from '../../types';
 import {
-  prunedHeadline, prunedDetails, cachePct, summarizePruned, prunedSummaryText,
+  prunedHeadline, prunedDetails, prunedIcon, cachePct, summarizePruned, prunedSummaryText,
   type PrunedItem,
 } from '../contextPruned';
 import { applyServerMessage, initialChatState } from '../chatReducer';
@@ -38,9 +38,45 @@ describe('prunedHeadline', () => {
       .toBe('сжатие в облаке');
   });
 
+  it('вырезаны только картинки — их число и цена', () => {
+    expect(prunedHeadline(prune({ tokensBefore: 0, tokensAfter: 0, blocks: 0, imageBlocks: 7, imageTokens: 14_280 })))
+      .toBe('вырезано 7 картинок (~14k ток)');
+    expect(prunedHeadline(prune({ tokensBefore: 0, tokensAfter: 0, blocks: 0, imageBlocks: 1, imageTokens: 2040 })))
+      .toBe('вырезано 1 картинка (~2.0k ток)');
+  });
+
   it('тысячи ниже 10k — с десятой долей', () => {
     expect(prunedHeadline(prune({ tokensBefore: 9500, tokensAfter: 940 })))
       .toBe('контекст обрезан · 9.5k → 940');
+  });
+});
+
+describe('перехват петли (loop_guard)', () => {
+  const loop = (over: Partial<PrunedItem> = {}) => prune({
+    pruneKind: 'loop_guard', tokensBefore: 0, tokensAfter: 0,
+    blocks: 1, resultBlocks: 1, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: undefined, cacheReadTokens: undefined, promptTokens: undefined, ...over,
+  });
+
+  it('повтор прошёл — «запрос повторён»', () => {
+    expect(prunedHeadline(loop())).toBe('петля перехвачена · запрос повторён');
+    expect(prunedIcon(loop())).toBe('↻');
+    expect(prunedIcon(prune())).toBe('✂');
+  });
+
+  it('вторая петля или повтор выключен — ответ усечён', () => {
+    expect(prunedHeadline(loop({ blocks: 2 }))).toBe('петля перехвачена дважды · ответ усечён');
+    expect(prunedHeadline(loop({ resultBlocks: 0 }))).toBe('петля перехвачена · ответ усечён');
+  });
+
+  it('подзаголовок — где петляла модель', () => {
+    expect(prunedDetails(loop())).toBe('модель повторялась в ответе');
+    expect(prunedDetails(loop({ thinkingBlocks: 1 }))).toBe('модель повторялась в размышлениях');
+  });
+
+  it('в сводку сдвигов контекста не входит', () => {
+    expect(summarizePruned([loop()])).toBeUndefined();
+    expect(summarizePruned([loop(), prune()])).toEqual({ count: 1, savedTokens: 58_000 });
   });
 });
 
@@ -198,6 +234,18 @@ describe('applyServerMessage: context_pruned', () => {
       s = applyServerMessage(s, wire({ tokensBefore: 200_000 }));
       expect(s.items.filter(i => i.kind === 'context_pruned')).toHaveLength(2);
     });
+  });
+
+  it('картинки доезжают до элемента и попадают в подробности', () => {
+    const next = applyServerMessage(initialChatState(), wire({ imageBlocks: 3, imageTokens: 6120 }));
+    const item = next.items[0] as PrunedItem;
+    expect(item).toMatchObject({ imageBlocks: 3, imageTokens: 6120 });
+    expect(prunedDetails(item)).toBe('25 блоков (выводов 20, входов 3, размышлений 2) · 3 картинки (~6.1k ток) · пересчёт 87 с · из кэша 0%');
+  });
+
+  it('ноль картинок с бэкенда — полей в элементе нет', () => {
+    const next = applyServerMessage(initialChatState(), wire({ imageBlocks: 0, imageTokens: 0 }));
+    expect(next.items[0]).not.toHaveProperty('imageBlocks');
   });
 
   it('необязательных полей нет — в элементе их тоже нет', () => {

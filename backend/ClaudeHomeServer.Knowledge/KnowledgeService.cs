@@ -140,12 +140,12 @@ public class KnowledgeService : IKnowledgeIndex
         RenameDatasetAsync(datasetId, newName);
 
     Task<DifyDocumentInfo> IKnowledgeIndex.IndexFileByTextAsync(string datasetId, string fileName,
-        string content, List<string>? tags) =>
-        IndexFileByTextAsync(datasetId, fileName, content, tags);
+        string content, List<string>? tags, IReadOnlyDictionary<string, string>? metadata) =>
+        IndexFileByTextAsync(datasetId, fileName, content, tags, metadata: metadata);
 
     Task<IReadOnlyList<DifyRetrieveChunk>> IKnowledgeIndex.RetrieveAsync(string datasetId, string query,
-        int topK, IReadOnlyList<KnowledgeMetadataFilter>? filters) =>
-        RetrieveAsync(datasetId, query, topK, filters);
+        int topK, IReadOnlyList<KnowledgeMetadataFilter>? filters, string logic) =>
+        RetrieveAsync(datasetId, query, topK, filters, logic);
 
     // Расширения, которые индексируем как текст (прямая отправка содержимого)
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -424,16 +424,22 @@ public class KnowledgeService : IKnowledgeIndex
 
     public async Task<DifyDocumentInfo> IndexFileByTextAsync(
         string datasetId, string fileName, string content, List<string>? tags = null,
-        string? indexingTechnique = null, string? processRuleMode = null)
+        string? indexingTechnique = null, string? processRuleMode = null,
+        IReadOnlyDictionary<string, string>? metadata = null)
     {
         var client = CreateClient();
+        // doc_metadata — та же форма, что держится для tags; дополнительные поля (S2c:
+        // wiki_section у страниц вики) кладутся в тот же объект строковыми значениями.
+        var docMetadata = new Dictionary<string, object> { ["tags"] = (tags ?? []).ToArray() };
+        if (metadata is { Count: > 0 })
+            foreach (var (name, value) in metadata) docMetadata[name] = value;
         var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/document/create_by_text", new
         {
             name = fileName,
             text = content,
             indexing_technique = indexingTechnique ?? _cfg.IndexingTechnique,
             process_rule = new { mode = processRuleMode ?? "automatic" },
-            doc_metadata = new { tags = (tags ?? []).ToArray() },
+            doc_metadata = docMetadata,
         });
         resp.EnsureSuccessStatusCode();
 

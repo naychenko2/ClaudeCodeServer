@@ -469,6 +469,9 @@ internal static class LocalApi
                 agents = await skills.GetProjectAgentsAsync(files, WorkProject(ctx), ct),
                 workflows = skills.GetWorkflowsInConfigRoot(workbench.CliProfile),
                 plugins = skills.GetPluginSkillsInConfigRoot(workbench.CliProfile),
+                // Пакеты владельца на устройстве не живут (локальный проект, ADR-031 §7):
+                // та же форма, что у сервера, — всегда пустой массив.
+                ownerPlugins = Array.Empty<SkillInfo>(),
             });
         });
         g.MapGet("/agents/{agentName}", async (HttpContext ctx, string agentName, CancellationToken ct) =>

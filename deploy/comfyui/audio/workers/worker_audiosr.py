@@ -10,7 +10,7 @@ import tempfile
 
 import numpy as np
 
-from ccs_common import fail, load_job
+from ccs_common import emit_progress, fail, load_job
 
 MAX_SECONDS = 120
 CHUNK_S = 20.0
@@ -50,9 +50,11 @@ def main():
     size = int(CHUNK_S * sr_in)
     fade = int(OVERLAP_S * SR)
     out = np.zeros(0, dtype=np.float32)
+    starts = range(0, max(1, len(audio) - int(OVERLAP_S * sr_in)), step)
+    emit_progress(0, len(starts))
     tmp = tempfile.mkdtemp(prefix="audiosr-")
     try:
-        for k, start in enumerate(range(0, max(1, len(audio) - int(OVERLAP_S * sr_in)), step)):
+        for k, start in enumerate(starts):
             chunk = audio[start:start + size]
             path = os.path.join(tmp, f"{k}.wav")
             sf.write(path, chunk, sr_in)
@@ -68,6 +70,7 @@ def main():
                 wav = wav[fade:]
             out = np.concatenate([out, wav])
             job.stats["chunks"] = k + 1
+            emit_progress(k + 1, len(starts))
     finally:
         subprocess.run(["rm", "-rf", tmp], check=False)
     job.lap("infer")

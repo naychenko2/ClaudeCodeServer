@@ -2,6 +2,7 @@ using ClaudeHomeServer.Services.AudioEditor;
 using ClaudeHomeServer.Services.VideoEditor;
 using ClaudeHomeServer.Services.Backup;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using FluentAssertions;
 
@@ -140,6 +141,14 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void ОбучающиеФотоПерсонажа_БиометрияИсключена()
+    {
+        var dir = $"{ImageEditorPaths.TrainingDirName}/owner/project/anya";
+        BackupPaths.ShouldInclude($"{dir}/0123456789abcdef.png").Should().BeFalse();
+        BackupPaths.ShouldInclude($"{ImageEditorPaths.TrainingDirName}/owner/project/anya").Should().BeFalse();
+    }
+
+    [Fact]
     public void МодульЗвук_РабочаяПапкаИсключена_НитиИПрефыЕдут()
     {
         // Файлы вариантов задач — кеш на 7 дней (ADR-021 §2); имя из константы Core, её же
@@ -180,6 +189,16 @@ public class BackupPathsTests
         BackupPaths.ShouldInclude("plan-maps.json").Should().BeFalse();
     }
 
+    // Журнал истории медиа-генераций (шаг 2): кеш превью, восстанавливать нечего;
+    // включая подпапку thumbs (шаг 3)
+    [Theory]
+    [InlineData("local-media-history/2026-10-15.jsonl")]
+    [InlineData("local-media-history/thumbs/ab12.png")]
+    public void ЖурналИсторииМедиа_Исключён(string path)
+    {
+        BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
     [Fact]
     public void СнимокСпискаHiggsfield_Исключен()
     {
@@ -213,6 +232,19 @@ public class BackupPathsTests
     {
         // А вот сам graph.json невосстановим без перестроения Roslyn — его бэкапим
         BackupPaths.ShouldInclude("code-graphs/ab12cd/graph.json").Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("pages/Общее/X.md")] // страница раздела
+    [InlineData("keeper/manifest/common.json")] // манифест: без него сверка после restore даёт ложный drift
+    [InlineData("keeper/log.jsonl")] // журнал: единственный носитель отката между бэкапами
+    public void Вики_СтраницыИХранительПопадаютВАрхив(string underOwner)
+    {
+        // Сторож ADR-035 §13: корень «wiki» в BackupPaths не исключён — и не должен
+        // стать исключением незаметно. Имя корня — из константы WikiPaths.DirName,
+        // её же читает гейт записи: переименование корня покраснило бы и гейт, и этот тест.
+        var path = $"{WikiPaths.DirName}/user-1/{underOwner}";
+        BackupPaths.ShouldInclude(path).Should().BeTrue();
     }
 
     [Theory]

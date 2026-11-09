@@ -22,11 +22,14 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// отдельным режимом списка), гейт живости отдаётся текстом сервиса как есть, чужой чат
 /// не архивируется (та же формула владения, что у соседей по тулсету).
 /// </summary>
-public class WorkspaceHttpChatArchiveTests : IDisposable
+[Trait("Category", "Host")]
+public class WorkspaceHttpChatArchiveTests : IClassFixture<TestWebApplicationFactory>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на класс; чаты и архивация каждый тест заводит сам. Состояние НАКАПЛИВАЕТСЯ между тестами
+    // класса (чаты и архив владельца общие): проверять только собственные чаты по id, а не число записей
+    private readonly TestWebApplicationFactory _factory;
 
-    public void Dispose() => _factory.Dispose();
+    public WorkspaceHttpChatArchiveTests(TestWebApplicationFactory factory) => _factory = factory;
 
     private HttpClient Client => _factory.CreateAuthenticatedClient();
 
@@ -47,7 +50,7 @@ public class WorkspaceHttpChatArchiveTests : IDisposable
     private static async Task<JsonElement> CallToolAsync(HttpClient client, string sessionId,
         string tool, object args)
     {
-        var resp = await client.PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
+        var resp = await client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/wsp/{sessionId}", new
         {
             jsonrpc = "2.0",
             id = 1,

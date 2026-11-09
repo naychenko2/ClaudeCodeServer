@@ -1,4 +1,5 @@
 import type { Mode } from '../lib/modes';
+import type { PromptCacheWire } from '../lib/promptCache';
 export type { Mode };
 
 export interface PermissionRule {
@@ -100,6 +101,10 @@ export interface ProjectCapabilitiesView {
   // Механики, читающие транскрипт CLI с диска сервера; у старого бэка поля нет
   transcript?: ProjectCapabilityGroup;
   exec: { available: boolean; reason: string | null };
+  // Плагины владельца (ADR-031): не группа, а отдельная возможность — доступность
+  // считает ProjectCapabilities.Plugins (у локального проекта в MVP выключена:
+  // каталог пакетов и секреты на устройство не едут). У старого бэка поля нет
+  plugins?: { available: boolean; reason: string | null };
 }
 
 // Ключи возможностей (ADR-016 §4, ключи ProjectFeatures на бэке). Фронт держит свой
@@ -133,6 +138,9 @@ export const ProjectFeature = {
   // Руки на устройстве (ADR-016 §7): ни в одну группу не входят — доступность решает
   // handsRefusal проекта, а не состояние группы (зеркало ProjectFeatures.Hands)
   Hands: 'hands',
+  // Плагины владельца (ADR-031): ни в одну группу не входят — доступность считает
+  // capabilities.plugins (у локального проекта в MVP выключена, причина — в reason)
+  Plugins: 'plugins',
 } as const;
 export type ProjectFeatureKey = (typeof ProjectFeature)[keyof typeof ProjectFeature];
 
@@ -148,6 +156,95 @@ export interface ProjectDeviceView {
   harnessReady: boolean;
   harnessProblem: string | null;
 }
+
+// --- Участники общего проекта (shared-projects, план docs/research/shared-projects-plan-2026-10.md §5) ---
+//
+// Роль участника: editor (читает и пишет) или reader (только читает) — матрица прав
+// разреза §2.1. «Владелец» в списке участников не живёт никогда: он выводится из
+// Project.OwnerId (ProjectAccess.Check), поэтому ни на бэке, ни здесь его в списке нет.
+export type ProjectMemberRole = 'editor' | 'reader';
+
+// Роль ТЕКУЩЕГО человека в проекте. Сервер пока не отдаёт её нигде (в DTO проекта её
+// нет — ProjectsController.WithCount), поле резервируем под следующий шаг UI. Сегодня
+// право действия определяют по ownerId, а не по этому полю.
+export type ProjectRoleView = 'owner' | 'editor' | 'reader';
+
+// Строка списка участников в ответах /api/projects/{id}/members. Владельца в списке нет:
+// он приходит отдельным полем ответа (ProjectMembersView.owner). username/displayName/
+// addedAt остаются необязательными: старые данные и тесты строят участника из одной пары
+// userId + role, а UI в таком случае показывает то, что есть.
+export interface ProjectMember {
+  userId: string;
+  role: ProjectMemberRole;
+  username?: string;
+  displayName?: string;
+  addedAt?: string;
+  addedBy?: string;
+}
+
+// Владелец проекта в ответе списка участников
+export interface ProjectOwnerRef {
+  userId: string;
+  username: string;
+  displayName?: string | null;
+}
+
+// Тело GET /api/projects/{id}/members и ответ каждой мутации членства: участники, владелец
+// и роль того, кто спрашивает (по ней вид настроек — владелец или участник).
+export interface ProjectMembersView {
+  members: ProjectMember[];
+  owner: ProjectOwnerRef;
+  myRole: ProjectRoleView;
+}
+
+// Человек в сводке участников (ProjectMembersView.Summary): только опознавательные поля,
+// роли нет — она есть в полном списке.
+export interface ProjectMemberSummaryRef {
+  userId: string;
+  username?: string;
+  displayName?: string | null;
+}
+
+// Сводка участников в DTO проекта (S1-2b): количество + первые трое. Не полный список:
+// он только в GET /api/projects/{id}/members (ProjectMembersView).
+export interface ProjectMembersSummary {
+  count: number;
+  first: ProjectMemberSummaryRef[];
+}
+
+// Машинные коды отказов операций членства. Текст отказа бэк отдаёт готовым для человека;
+// по коду фронт выбирает действие («включить флаг», «это проект на устройстве»,
+// «человек уже здесь»). Тело ошибки приносит lib/offline целиком (err.body).
+export const MEMBER_REFUSAL = {
+  // Рубильник «Общие проекты» выключен на сервере (503)
+  SwitchDisabled: 'shared_projects_disabled',
+  // Флаг выключен у владельца ИЛИ у приглашаемого (409)
+  FlagDisabled: 'flag_disabled',
+  // Проект на устройстве — его нельзя открыть другим людям (409)
+  LocalProject: 'local_project',
+  // Роль не editor/reader (400)
+  InvalidRole: 'invalid_role',
+  // Пользователя с таким username нет (404)
+  UserNotFound: 'user_not_found',
+  // Владелец приглашает сам себя (400)
+  Self: 'self',
+  // Человек уже в списке (409)
+  AlreadyMember: 'already_member',
+  // Меняют/убирают не участника (404)
+  NotMember: 'not_member',
+  // Проект не виден вызывающему (404, ответ сервиса членства)
+  NotFound: 'not_found',
+  // Проект виден, но управляет им только владелец (403)
+  NotOwner: 'not_owner',
+  // Владелец не может покинуть свой проект (400)
+  OwnerCannotLeave: 'owner_cannot_leave',
+  // Не удалось подготовить git-репозиторий проекта (500)
+  GitInitFailed: 'git_init_failed',
+  // Отказ точки доступа [ProjectScope] до тела действия: 404 «не найдено» или 403
+  // «нет права на запись» — один код на оба (ProjectScopeAttribute.ErrorCode)
+  ProjectScope: 'project_scope',
+} as const;
+export type MemberRefusalCode = (typeof MEMBER_REFUSAL)[keyof typeof MEMBER_REFUSAL];
 
 export interface Project {
   id: string;
@@ -211,6 +308,21 @@ export interface Project {
   // Только в ответе создания и перепривязки локального проекта: агент устройства создал или
   // разрешил папку («Папка «…» создана и разрешена агенту на «…»»). Показывается уведомлением
   folderNotice?: string | null;
+  // Участники общего проекта: сводка из DTO (S1-2b, ProjectsController.WithCount →
+  // ProjectMembersView.Summary): { count, first }. null у обычного проекта, где
+  // вызывающий — владелец, и у старого бэка. Полный список — только в
+  // /api/projects/{id}/members; здесь решать «кого пригласили» нельзя.
+  members?: ProjectMembersSummary | null;
+  // Роль вызывающего в общем проекте (Summary.MyRole): null у обычного проекта и у старого
+  // бэка. Где есть — авторитетна; где её нет — право действия по ownerId.
+  myRole?: ProjectRoleView;
+  // Владелец общего проекта для заголовка «Проект Андрея» и метки на чужом проекте
+  // (Summary.OwnerUsername/OwnerDisplayName). null у обычного проекта и у старого бэка.
+  ownerUsername?: string | null;
+  ownerDisplayName?: string | null;
+  // Бывшие участники общего проекта: подпись «больше не в проекте» над их сообщениями.
+  // Нет у обычного проекта и у старого бэка
+  formerMembers?: { userId: string; displayName?: string | null }[];
 }
 
 // Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
@@ -585,13 +697,32 @@ export interface TaskSubtask {
   isDone: boolean;
 }
 
+// Форма ChatRef (бэк Models/ChatRef.cs, шаг S2d-4b, К5): ссылка на чат, связанный с задачей.
+// Видимый чат — id и название остаются в своих id-полях задачи (linkedSessionId и др.),
+// этой формы нет. Чужой приватный (не виден зрителю) — id-поле обнулено (null), рядом
+// стоит эта запись: sessionId нет, title — подпись вместо названия, private — признак.
+export interface ChatRef {
+  sessionId?: string | null;
+  title?: string | null;
+  private?: boolean;
+  authorUserId?: string | null;   // чей чат: id автора, не название и не id чата
+}
+
 export interface Task {
   id: string;
   // Отсутствует у личной задачи (вне проекта)
   projectId?: string;
   ownerId?: string;
   title: string;
-  description: string;      // markdown
+  description: string;      // markdown; у облегчённого элемента списка (listItem) всегда ''
+  // Облегчённый элемент СПИСКА (GET /api/tasks, /projects/{id}/tasks): description='' и
+  // resultMarkdown отсутствуют, вместо них — признаки и превью. Полный текст — через
+  // ensureFullTask(id) (GET /api/tasks/{id}); у полной задачи (ответ create/update/get,
+  // realtime task_changed) поля listItem нет.
+  listItem?: boolean;
+  hasDescription?: boolean;
+  hasResult?: boolean;
+  descriptionPreview?: string;   // начало описания (≤200 символов + «…» при усечении)
   status: TaskStatus;
   columnId?: string;         // колонка доски проекта; отсутствует = дефолтная колонка категории
   priority: TaskPriority;
@@ -600,9 +731,30 @@ export interface Task {
   reminderMinutes?: number;  // офсет напоминания до срока в минутах (0 = в момент срока)
   reminderSentAt?: string;   // UTC-отметка отправленного напоминания
   assignee?: TaskAssignee;
+  // Общий проект: человек-исполнитель и кто поставил задачу (S2b-1). Нет у задач личного
+  // проекта и у старого бэка — тогда вид карточки прежний
+  assigneeUserId?: string | null;
+  createdByUserId?: string | null;
   recurrence?: TaskRecurrence;
   seriesId?: string;         // общий id серии регулярной задачи
-  linkedSessionId?: string;
+  // S2d-4b (К5): чат, невидимый зрителю, приходит обнулённым (null), форма — в linkedChat
+  linkedSessionId?: string | null;
+  // Режим «Исполнение фичи»: связь задачи с фичей (эпик) и кодом шага.
+  // Аддитивно и nullable — старые задачи без разметки не несут этих полей.
+  featureId?: string | null;   // id задачи-эпика
+  stepRef?: string | null;    // код шага из плана («Ш1», «D1c»)
+  lane?: string | null;       // линия шага («бэк», «фронт»); подпись берётся как есть
+  // Роль задачи в фиче (бэк TaskItem.Role): feature · cut · plan · step · rework · review · qa · final · merge · consult.
+  role?: string | null;
+  // Чат, породивший задачу (бэк TaskItem.SourceSessionId). Для фичи — связь эпика с чатом:
+  // GET /api/tasks/features?sessionId= выбирает эпики по этому полю (и ExecutorLaunchedBySessionId).
+  sourceSessionId?: string | null;
+  // Маска чужих приватных чатов (бэк TaskView.MaskForeignChats, S2d-4b): форма стоит рядом с
+  // обнулённым id-полем и приходит ТОЛЬКО когда чат не виден зрителю; для видимого чата её нет.
+  linkedChat?: ChatRef | null;
+  sourceChat?: ChatRef | null;
+  executorLaunchedByChat?: ChatRef | null;
+  reportToChat?: ChatRef | null;
   personaId?: string;        // исполнение от лица персоны (assignee=claude)
   // Уровень модели исполнителя (слот strong/medium/weak); отсутствует — не задан:
   // модель берётся от персоны-исполнителя и назначения места «Исполнитель задач»
@@ -628,12 +780,23 @@ export interface Task {
   repro?: DefectRepro | null;
   // Подтверждение проверки (null — не подтверждено). Сбрасывается при уходе из Done
   verification?: TaskVerification | null;
+  // Критерии приёмки и свидетельства по ним (пусто/нет — задача без критериев)
+  acceptance?: AcceptanceCriterion[];
+  evidence?: AcceptanceEvidence[];
+  // Последний результат предгейта (бэк TaskItem.Pregate): бывает только у шага/доработки;
+  // null/нет — не прогонялся. Аддитивно: старые задачи читаются без поля.
+  pregate?: PregateRecord | null;
   // Исход дефекта: 'closedWithoutCheck' — внутренний путь закрытия без проверки
   outcome?: DefectOutcome | null;
   // Фикс-волна 4 team-blocker-honest: метки от терминального отказа хода исполнителя
   // (см. ExecutorStopClassifier). executorStoppedAt != null — карточка ждёт человека.
   executorStoppedAt?: string;
   executorStopReason?: string;
+  // Явное ожидание человека (Update AwaitingHumanSince): с какого момента и почему.
+  // «Ход идёт» (спиннер «AI работает») — только без остановки и без ожидания,
+  // тот же предикат, что бэк FeatureProjector.IsTurnRunning.
+  awaitingHumanSince?: string;
+  awaitingHumanReason?: string;
   /** Исполнитель ждёт устройство локального проекта (ADR-016): с какого момента и почему */
   deviceWaitSince?: string | null;
   deviceWaitReason?: string | null;
@@ -693,7 +856,7 @@ export interface CreateTaskDto {
   reminderMinutes?: number;
   assignee?: TaskAssignee;
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  linkedSessionId?: string | null;   // null — не задано (то же, что поле отсутствует)
   personaId?: string;        // исполнение от лица персоны
   // Уровень модели исполнителя; не указано — не задан (модель по персоне и месту)
   modelTier?: ModelTierValue;
@@ -730,6 +893,26 @@ export interface DefectRepro {
   actual?: string;
 }
 
+// Критерий приёмки задачи и свидетельство его выполнения (связь по criterionId)
+export interface AcceptanceCriterion { id: string; text: string }
+export interface AcceptanceEvidence { criterionId: string; how: string; result: string }
+
+// Результат предгейта шага (бэк record PregateRecord): sha — коммит, по которому гнали проверки;
+// green — вердикт; summary — вывод красных проверок; at — момент (UTC);
+// redStreak — сколько красных подряд по одному redKey (зелёный обнуляет);
+// nothingApplicable — «нечего проверять» (green при этом false, «зелёным» не считается, но и не красный);
+// outcome — производный трёхзначный исход с бэка: green / red / neutral («нечего проверять»).
+export interface PregateRecord {
+  sha: string;
+  green: boolean;
+  summary: string;
+  at: string;
+  redStreak: number;
+  redKey?: string | null;
+  nothingApplicable?: boolean;
+  outcome?: 'green' | 'red' | 'neutral';
+}
+
 // Подтверждение проверки: personaId == null означает проверку человеком (UI-форма
 // владельца задачи), не-null — конкретной персоной (чаще всего — исполнившей дефект).
 // Поле бэк подставляет из сессии, клиент его НЕ шлёт
@@ -743,7 +926,9 @@ export interface TaskVerification {
 // (NoteTaskSyncService / TeamWaveService). Прочие исходы придут следующими волнами
 export type DefectOutcome = 'closedWithoutCheck';
 
-// Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять
+// Пустая строка в dueDate/dueTime/linkedSessionId = очистить поле, undefined = не менять;
+// null в linkedSessionId = не менять (зеркало бэка: TaskManager.Update правит поле только когда
+// req.LinkedSessionId not null; null приходит из маски S2d-4b, а не как значение от клиента)
 export interface UpdateTaskDto {
   title?: string;
   description?: string;
@@ -754,9 +939,13 @@ export interface UpdateTaskDto {
   // Отрицательное значение = убрать напоминание, undefined = не менять
   reminderMinutes?: number;
   assignee?: TaskAssignee;
+  // Человек-исполнитель общего проекта (S2b-1): undefined = не менять, null = снять,
+  // guid участника = назначить
+  assigneeUserId?: string | null;
   // type 'none' = убрать повторение, undefined = не менять
   recurrence?: TaskRecurrence;
-  linkedSessionId?: string;
+  // '' = очистить, null = не менять (маска S2d-4b), undefined = не менять
+  linkedSessionId?: string | null;
   // Персона-исполнитель: '' = убрать, undefined = не менять
   personaId?: string;
   // Уровень модели исполнителя: '' = сбросить, undefined = не менять
@@ -804,7 +993,7 @@ export interface FeatureFlagDefinition {
   title: string;
   description: string;
   default: boolean;
-  stage: 'dev' | 'beta' | 'stable';
+  stage: 'dev' | 'beta' | 'stable' | 'experimental';
 }
 
 // Привязка чата картинки к файлу проекта (ADR-018 §1). Пути — от корня проекта через «/»
@@ -921,6 +1110,10 @@ export interface Session {
   // побеждает авто-связь по задаче (TaskId → Task.SourceSessionId).
   // null — корневой чат: обычный, вынесенный вручную либо с удалённой задачей
   parentSessionId?: string | null;
+  // «Продолжить в новом чате»: из какого чата продолжен этот и в какой продолжен он сам.
+  // Поля могут отсутствовать (старый бэкенд) — читать как null
+  continuedFromSessionId?: string | null;
+  continuedInSessionId?: string | null;
   // Тема чата: id из Project.subjectRegistry. Висячий id (тему
   // удалили) читается как «без темы». subjectSource: 'ai' — разложила модель, 'human' —
   // закрепил человек (в т.ч. «убрал из темы» при subjectId = null), null — никто
@@ -958,6 +1151,12 @@ export interface Session {
   archiveSummary?: string | null;
   archiveSummaryAt?: string | null;
   summaryNoteId?: string | null;
+  // Видимость проектного чата (S2d). privateToUserId — id человека, которому чат приватен
+  // (null/отсутствует — общий); createdByUserId — автор чата (создавший): тумблер видимости
+  // разрешён только ему (бэк SessionManager.SetChatVisibility). Оба поля приходят с бэка
+  // как есть (SessionJsonConverter их не вырезает), старые записи читаются как null.
+  privateToUserId?: string | null;
+  createdByUserId?: string | null;
 }
 
 // Тип материала контекста чата — те же значения, что SessionContextTypes на бэке
@@ -1180,12 +1379,19 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'text_delta'; text: string }
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
   // полем (см. ChatItem user_message), а не вытащенный из текста маркера
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null }
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark | null; senderUserId?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
   // delegationTaskId — задача этого доклада (StoredTextMessage.DelegationTaskId)
   | { type: 'guest_text'; text: string; personaId: string; timestamp?: number; delegationTaskId?: string }
+  // Черновик плагина build-it-yourself изменился (ADR-031, шаг 4.2): наблюдатель
+  // data/plugins/{owner}/_drafts/{slug} шлёт владельцу сигнал обновить предпросмотр.
+  // slug + монотонная ревизия; без содержимого файлов и хостовых путей.
+  | { type: 'plugin_draft_changed'; slug: string; revision: number }
+  // Установка плагина изменилась (S6): install/обновление/grant/enable/uninstall/секрет.
+  // Без полезной нагрузки (владельцу): клиент сам перечитывает GET /api/plugins.
+  | { type: 'plugins_changed' }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
@@ -1222,8 +1428,10 @@ export type ServerMessage = { sessionId: string } & (
   // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
-  // на этом событии лента клеит модель постам текущего хода
-  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheInfo | null }
+  // на этом событии лента клеит модель постам текущего хода.
+  // promptCache — состояние prompt cache хода; null/отсутствует —
+  // ход без сигнала кэша и история до появления поля
+  | { type: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; usageModel?: string; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -1236,8 +1444,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'error'; text: string; details?: string; action?: string | null }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
-  // Прокси локальной модели обрезал историю хода (kind='prune') либо увёл сжатие в облако
-  // (kind='compact_cloud'). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
+  // Прокси локальной модели обрезал историю хода (kind='prune'), увёл сжатие в облако
+  // (kind='compact_cloud') либо перехватил петлю модели в потоке (kind='loop_guard': blocks —
+  // сколько петель, resultBlocks — был ли повтор запроса, thinkingBlocks — петля в размышлениях). Приходит ПОСЛЕ первого байта ответа — до него лента молчит, и
   // это нормально: своего «ожидания» у прунинга нет.
   // blocks — сколько блоков выкинуто всего, дальше разбивка по видам (вывод инструмента,
   // вход инструмента, размышление). prefillSeconds — сколько ждали пересчёт префикса после
@@ -1246,12 +1455,17 @@ export type ServerMessage = { sessionId: string } & (
   // вкладка открытого чата состоит в обеих, то есть получает одно событие дважды. По eventId
   // редьюсер отличает вторую доставку от второго сдвига (карточки до появления поля — без него)
   | {
-      type: 'context_pruned'; kind: 'prune' | 'compact_cloud'; eventId?: string;
+      type: 'context_pruned'; kind: 'prune' | 'compact_cloud' | 'loop_guard'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+      // Сколько старых картинок прокси вырезал из истории (всего за чат) и их оценка в токенах
+      imageBlocks?: number; imageTokens?: number;
     }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
+  // Живое заполнение контекста посреди хода (после каждого ответа модели основного агента);
+  // транзитное, в историю не попадает — итог хода несёт result.contextTokens
+  | { type: 'context_usage'; contextTokens: number }
   // Записи ленты чата картинки (ADR-018 §1, §2): живые копии StoredImageLaunchMessage и
   // StoredImageFileMovedMessage. Рисует их модуль редактора через слот chat-item-tool
   | ({ type: 'image_launch' } & ImageLaunchFields)
@@ -1268,7 +1482,16 @@ export type ServerMessage = { sessionId: string } & (
   // Принимает строго по этому типу: подписки на chat_archived не должны случайно
   // отрабатывать событие удаления, и наоборот.
   | { type: 'chat_archived'; archived: boolean }
+  // Чат стал приватным (S2d-F2): сервер СНЯЛ чужие соединения с группы чата и лишь потом
+  // послал это в project-группу — после него клиент участника не получит ни одного события
+  // чата. Без содержимого: только id и новое состояние. private всегда true: возврат в
+  // общий события не шлёт — участники догонят его поллингом списка (чата у них не было).
+  | { type: 'chat_visibility_changed'; private: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
+  // «Продолжить в новом чате»: исходный чат (sessionId) продолжён в newSessionId.
+  // Живое событие: если открыт именно исходный чат, фронт сам переходит в новый (тост).
+  // projectId — для построения навигации (проектный чат); null — чат вне проекта.
+  | { type: 'chat_continued'; newSessionId: string; projectId?: string | null }
   // Сторожа чатов: ПОЛНЫЙ состав id чатов и проектов владельца с активными
   // сторожами. Событие глобальное (не про один чат) и заменяет состояние стора целиком —
   // диффы потребитель не считает
@@ -1350,7 +1573,7 @@ export type ServerMessage = { sessionId: string } & (
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
   // kind: 'user' — сообщение человека из «честной очереди» (рисуется карточкой «Вы» с
   // вложениями и режимом, который вернётся в композер по «Стоп»); 'agent' — chats_send.
-  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean }[] }
+  | { type: 'pending_messages'; items: { id: string; text: string; senderPersonaId?: string; senderOrigin?: string; enqueuedAt: string; senderChatName?: string; kind?: 'user' | 'agent'; attachedPaths?: string[]; mode?: string | null; waitingForDevice?: boolean; senderUserId?: string }[] }
   // «Стоп» вернул прерванное пользовательское сообщение в композер (фича «честная
   // очередь»). text=null — восстанавливать нечего (прерван авто/агентский ход, очередь
   // пуста): композер не трогаем. Иначе — текст, вложения и режим, которые подставятся
@@ -1367,6 +1590,19 @@ export type ServerMessage = { sessionId: string } & (
   // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
   // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
   | { type: 'prompt_snapshot'; snapshotId: string; applied: boolean; inheritedFromId?: string }
+  // Живые метрики локальной модели. Эфемерные: в историю не
+  // пишутся, после F5 подхватываются следующим снимком/REST. phase — фаза генерации
+  // (queued|prefill|generating), genTps — ток/с, waitingTotal — сколько прогонов ждут GPU.
+  | { type: 'local_model_live'; phase: string; genTps?: number | null; waitingTotal?: number | null }
+  // Итоговые метрики завершённого хода на локальной модели: скорость генерации/префилла,
+  // time-to-first-token, оценка времени в очереди, доля prefix-кэша, число выданных токенов.
+  | { type: 'local_model_turn_stats'; genTps?: number | null; prefillTps?: number | null; ttftMs?: number | null; queueMsApprox?: number | null; cacheHitPerc?: number | null; outTokens?: number | null; mainRequests?: number; subagentRequests?: number; compactionRequests?: number; auxiliaryRequests?: number; agentTypes?: string[] | null; compactionKind?: 'auto' | 'manual' | 'reactive' | null; toolCallLeakTail?: number; toolCallLeakWholeCall?: number }
+  // Ход ждёт свободный слот локальной модели (гейт допуска, бэк 4683acb29). В отличие от
+  // local_model_live идёт БЕЗ : человек обязан видеть, что ход ждёт,
+  // а не «виснет молча». position — место в очереди (1-based), active/limit — «заняты N из M».
+  // position=0 — ожидание кончилось (ход допущен/отказан/остановлен): строку снять.
+  // Эфемерное: в историю не пишется, свою строку ленты снимает и на конце хода (редьюсер).
+  | { type: 'local_turn_queue'; position: number; active: number; limit: number }
 );
 
 // Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
@@ -1432,20 +1668,6 @@ export interface UsageInfo {
   outputTokens: number;
   cacheReadTokens: number;
   cacheCreationTokens: number;
-}
-
-// Состояние prompt cache на конец хода (ResultMessage.PromptCache бэкенда). Только у родного
-// Claude; у сторонних провайдеров и локального движка поля нет — индикатор скрыт.
-// ttl — срок последней ЗАПИСИ кэша (null — запись ещё не видели, берётся из прошлых result);
-// anchorAtMs — unix-мс часов сервера: приход message_start последнего вызова с кэшем;
-// missReason/missedTokens — diagnostics.cache_miss_reason первого вызова хода;
-// prefixTokens — размер контекста последнего запроса (сколько перепишет остывший кэш).
-export interface PromptCacheInfo {
-  ttl?: '1h' | '5m' | null;
-  anchorAtMs?: number | null;
-  missReason?: string | null;
-  missedTokens?: number | null;
-  prefixTokens: number;
 }
 
 // Preview: запускаемый сервис проекта (инференс из манифеста или из .claude/launch.json)
@@ -1661,12 +1883,22 @@ export interface OllamaActionInfo {
   route?: string;
   // Пресет назначения (разворачивается в route на бэке); null — назначение не пресет
   preset?: PlacePresetRef | null;
+  // Подпись именованного локального движка (например «Gemma 4»), когда route='local' ведёт на него,
+  // а не на основную локальную модель; null/нет — основной движок
+  engine?: string | null;
   // Действию нужна сильная модель (лицо продукта, генерация артефактов) — локаль ему не
   // годится; пресеты подбирают Claude/облачную модель. В UI помечается бейджем.
   requiresStrong?: boolean;
   // Агентное место (группа «Чаты и персоны»): запускает сессию claude CLI, поэтому
   // локальная модель и direct:-модели ему недоступны
   agentic?: boolean;
+  // Что место получает на вход (ADR-027 §2): 'text' — только текст, 'images' — текст плюс
+  // картинки (разметка фото персонажа). Для мест с картинками локаль, direct:-модели,
+  // пресеты и модели без зрения недоступны. Старый бэк поле не шлёт — дефолт 'text'.
+  input?: 'text' | 'images';
+  // Место умеет считать ракурс лица локально (InsightFace, маршрут face-pose) — только
+  // место ракурса. Пикер на нём показывает пункт «Локально, InsightFace».
+  facePose?: boolean;
 }
 
 export interface SubscriptionUsage {
@@ -2148,7 +2380,7 @@ export type ChatItem =
   // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
   // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
   // imageSnapshot — сообщение из чата картинки: приложен ли снимок холста (ADR-018 §3)
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark }
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string; imageSnapshot?: ImageSnapshotMark; senderUserId?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -2185,8 +2417,8 @@ export type ChatItem =
   | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   // durationApiMs — время запросов к API за ход (без инструментов и ожиданий): знаменатель
   // скорости генерации в плашке итога. Нет поля (старая история, локальный движок) — скорость
-  // считается по durationMs. promptCache — состояние кэша для индикатора TTL (lib/promptCache.ts)
-  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number; promptCache?: PromptCacheInfo | null }
+  // считается по durationMs
+  | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number; durationApiMs?: number; promptCache?: PromptCacheWire }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
   | { kind: 'rate_limit'; limitType: string; resetsAt?: string; status?: string }
@@ -2199,10 +2431,11 @@ export type ChatItem =
   // по ней дедупится повторная доставка одного события. Необязательно: у карточек,
   // записанных до её появления, поля нет
   | {
-      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud'; eventId?: string;
+      kind: 'context_pruned'; pruneKind: 'prune' | 'compact_cloud' | 'loop_guard'; eventId?: string;
       tokensBefore: number; tokensAfter: number;
       blocks: number; resultBlocks: number; inputBlocks: number; thinkingBlocks: number;
       prefillSeconds?: number; cacheReadTokens?: number; promptTokens?: number;
+      imageBlocks?: number; imageTokens?: number;
     }
   // Тихие строки чата картинки: «Вы запустили: …» и «Сохранено как …» (ADR-018 §1, §2)
   | ({ kind: 'image_launch' } & ImageLaunchFields)
@@ -2247,6 +2480,10 @@ export type ChatItem =
   // Строка ленты о руках локального проекта (hands_notice или остановка рук на устройстве).
   // Live-only: события эфемерные, в историю не пишутся
   | { kind: 'hands_notice'; text: string; tone: 'neutral' | 'warning' }
+  // Строка ленты: ход ждёт свободный слот локальной модели (событие local_turn_queue).
+  // position — позиция в очереди (1-based), active/limit — «заняты N из M». Live-only:
+  // событие эфемерное, в историю не пишется; снимается position=0 или концом хода (редьюсер).
+  | { kind: 'local_turn_queue'; position: number; active: number; limit: number }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error).
   // action — признак предлагаемого действия под карточкой: сейчас только "window-1m-drop"
   // (кнопка «Продолжить в стандартном окне» под карточкой отказа Window1MUnavailable).
@@ -2311,9 +2548,6 @@ export interface GeneratedSkill {
 // Поля онбординга: defaultPersonaId — личная дефолт-персона
 // (null — онбординг не пройден), needsOnboarding — обязательный гейт
 // онбординга при входе, onboardingSessionId — живая сессия интервью для резюма.
-// Порог «кэш промпта скоро остынет» (per-user, секунды до остывания) — PUT /api/auth/cache-thresholds
-export interface CacheWarnThresholds { warn1hSec: number; warn5mSec: number }
-
 export interface Me {
   userId: string;
   username: string;
@@ -2332,8 +2566,10 @@ export interface Me {
   // пришло в me-ответе. Контрактный сторож — subsystems.contract.test.ts.
   subsystems?: string[];
   contextThresholds?: { warnPct: number; dangerPct: number } | null;
-  // Порог «кэш скоро остынет», секунды до остывания; null — дефолты фронта
-  cacheWarnThresholds?: CacheWarnThresholds | null;
+  // Личные пороги предупреждения об остывании prompt cache (фича «Индикатор prompt
+  // cache и перенос в новый чат», F-3): минуты; null — не настроено, работают
+  // дефолты индикатора. Сидирует App.tsx в тот же момент, что и contextThresholds.
+  cacheWarnThresholds?: { warn1hMin: number; warn5mMin: number } | null;
   defaultPersonaId?: string | null;
   needsOnboarding?: boolean;
   onboardingSessionId?: string | null;
@@ -2656,6 +2892,10 @@ export type PersonaScope = 'global' | 'project' | 'sphere';
 // советует, но ничего не меняет; custom — свой список запрещённых инструментов
 export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 
+// Пол персоны: female/male — явный выбор, unspecified — дефолт «авто по имени».
+// camelCase-строки из бэкенда (JsonStringEnumConverter(CamelCase))
+export type PersonaGender = 'female' | 'male' | 'unspecified';
+
 // Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
 // конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
 // группировка/статус команды, роутинг памяти команды. none — не задана.
@@ -2958,6 +3198,8 @@ export interface Persona {
   // Облегчённый контекст: краткая карта вместо полного CLAUDE.md, урезанные инструменты и MCP.
   // null/отсутствие — решение не принято (читается как «выкл»)
   lightContext?: boolean | null;
+  // Пол: female/male — явный выбор, unspecified — дефолт «авто по имени»
+  gender?: PersonaGender;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
   // Возможности персоны (ключи tasks/notes/web); null/отсутствие — без ограничений
@@ -3057,7 +3299,8 @@ export interface AutomationRuleDto {
 // projectPersonas/projectTasks — кросс-проектные привязки: доступ к персонам/задачам
 // ДРУГОГО проекта того же владельца (target — projectId; path — сужение: personaId для
 // projectPersonas, "readonly" для projectTasks; пусто — вся команда / полный доступ)
-export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill' | 'projectPersonas' | 'projectTasks';
+// plugin (ADR-031) — навык плагина: target — «plugin:{id}/{skill}» (id пакета {publisher}/{slug})
+export type PersonaBindingType = 'project' | 'projectPath' | 'knowledge' | 'notes' | 'tool' | 'skill' | 'plugin' | 'projectPersonas' | 'projectTasks';
 
 // Режим привязки: auto — персона обращается по условию; always — выжимка в каждый ход; off — выключена
 export type PersonaBindingMode = 'auto' | 'always' | 'off';
@@ -3066,7 +3309,8 @@ export interface PersonaBinding {
   id: string;
   type: PersonaBindingType;
   // Цель по типам: project/projectPath → projectId; knowledge → datasetId;
-  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка
+  // notes → ключ источника; tool → ключ инструмента; skill — имя навыка;
+  // plugin → «plugin:{id}/{skill}» (навык плагина, ADR-031)
   target: string;
   // Путь внутри цели: папка/файл проекта или папка источника заметок
   path?: string | null;
@@ -3129,6 +3373,8 @@ export interface CreatePersonaDto {
   greeting?: string;
   memoryEnabled?: boolean;
   lightContext?: boolean;
+  // Пол: female/male — явный выбор, unspecified — дефолт «авто по имени»
+  gender?: PersonaGender;
   // Возможности (tasks/notes/web); полный набор бэкенд нормализует в «без ограничений»
   tools?: string[];
   // Профиль доступа (P6): full | readOnly | custom
@@ -3295,12 +3541,22 @@ export interface SpendTokens {
   total: number;
 }
 
+// Токены дня по ценовым классам моделей. Класс определяет бэк (S1): фронт
+// красит по ключу и НЕ знает, какая модель какого класса.
+export interface SpendTierCounts {
+  free: number;
+  cheap: number;
+  expensive: number;
+}
+
 // Точка дневного ряда обзора/виджета; aggregated — день свёрнут (за детальным окном)
 export interface SpendDayPoint {
   date: string;
   aggregated: boolean;
   total: number;
   bySource: Record<string, number>;
+  // Раскладка дня по ценовым классам (бэк кладёт не везде — старые ответы без поля)
+  byTier?: SpendTierCounts;
   falGenerations: number;
 }
 
@@ -3312,6 +3568,12 @@ export interface SpendCardRow {
   tokens: SpendTokens;
   turns: number;
   falGenerations: number;
+  // Ценовой класс модели строки (free|cheap|expensive). Заполнен для разрезов
+  // «модель» и «провайдер», у прочих — null: класса у них нет
+  tier?: string | null;
+  // Разрез «пользователь» у владельца общего проекта: сколько приватных чатов участника
+  // вошло в его расход и сколько токенов (контракт К7). Бэк пока не отдаёт: нет поля — нет подстроки
+  privateChats?: { count: number; tokens: number } | null;
 }
 
 export interface SpendOverviewResponse {
@@ -3395,6 +3657,7 @@ export interface SpendTurnDto {
   model: string | null;
   source: string;            // chat-turn | one-shot | fal | free
   label: string | null;      // подпись one-shot действия или endpoint fal
+  tier?: string | null;      // ценовой класс модели хода (free|cheap|expensive)
   tokens: SpendTokens;
   generations: number;
   durationMs: number | null;
@@ -3530,6 +3793,10 @@ export interface McpServer {
   allowReadOnlyPersonas: boolean;
   // Доезжать ли в чаты вне проектов при allow-модели (флаг mcp-allowlist); deny-ветка не читает
   allowOutsideProjects: boolean;
+  // «Для участников» (shared-projects, S2a-7/S2a-F6): в узкой рамке общего проекта это единственный
+  // путь реестровой записи в ход (McpDelivery). Пометку меняет только владелец записи
+  // (PUT {id}/shared); без неё сервер в ходах общего проекта недоступен и не показывается.
+  sharedWithMembers: boolean;
   source: string;               // manual | legacymcpconfig | legacyuserscope
   authVersion: number;
   createdAt: string;

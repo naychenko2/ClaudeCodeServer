@@ -126,6 +126,7 @@ public class HostLlmController(
             {
                 RouteKind.Local => LocalActionOverridesStore.LocalRoute,
                 RouteKind.Claude => LocalActionOverridesStore.ClaudeRoute,
+                RouteKind.FacePose => LocalActionOverridesStore.FacePoseRoute,
                 RouteKind.Tier => LocalActionOverridesStore.TierRoute(route.Tier ?? ModelTier.Medium),
                 _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
             };

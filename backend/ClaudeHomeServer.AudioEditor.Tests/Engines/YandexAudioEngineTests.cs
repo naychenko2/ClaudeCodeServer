@@ -214,8 +214,8 @@ public sealed class YandexAudioEngineTests
         general!.Select(v => v.Id).Should().Equal("alena", "filipp", "jane");
         live!.Select(v => v.Id).Should().Equal("sofia", "denis");
         all!.Should().HaveCount(5);
-        all.Single(v => v.Id == "sofia").Name.Should().EndWith("· LiveTTS");
-        all.Single(v => v.Id == "jane").Name.Should().Be("Джейн");
+        all!.Single(v => v.Id == "sofia").Name.Should().EndWith("· LiveTTS");
+        all!.Single(v => v.Id == "jane").Name.Should().Be("Джейн");
     }
 
     [Fact]

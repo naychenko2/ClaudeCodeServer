@@ -211,4 +211,411 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         queued.StaffNote.Should().Be(TaskExecutionService.DelegatorReactionStaffNote);
         _sessions.GetVisiblePending(parent.Id).Should().BeEmpty();
     }
+
+    // W4-HOLD-I (контракт §1 :183): доклад о задаче удержанной фичи — карточка в чате
+    // постановщика остаётся, ход-реакция не поднимается: будить оркестатора во время паузы
+    // пустое. Мутация: убрать FeatureIsPaused в ReportToDelegatorAsync — последнее
+    // утверждение краснеет (реакция уйдёт).
+    [Fact]
+    public async Task Доклад_ФичаНаПаузе_КарточкаБезХодаРеакции()
+    {
+        var (task, _, _) = await ArrangeDelegatedTaskAsync();
+        var epic = _tasks.Create(null, task.OwnerId!, new CreateTaskRequest("Фича", Role: "feature"));
+        _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
+        task.FeatureId = epic.Id;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        Sent<GuestTextMessage>().Should().ContainSingle("факт завершения человек видит карточкой");
+        Sent<UserMessageMessage>().Should().BeEmpty("во время паузы постановщик не будится ходом-реакцией");
+    }
+
+    // --- Адресат доклада — запустивший исполнителя, а не только создатель карточки ---
+
+    private async Task<Session> LaunchChatAsync(TaskItem task, string name)
+    {
+        var persona = CreatePersona(task.OwnerId!, "Запускающий " + name);
+        var chat = await _sessions.CreatePersonaChatAsync(task.OwnerId!, persona.Id, ClaudeMode.AcceptEdits, name: name);
+        StubProcess(chat);
+        return chat;
+    }
+
+    private async Task<(int Cards, int Reactions)> CountAsync(string sessionId)
+    {
+        var history = await _sessions.GetHistoryAsync(sessionId);
+        return (history.OfType<StoredTextMessage>().Count(m => m.DelegationTaskId is not null),
+            history.OfType<StoredUserMessage>().Count(m => m.StaffNote == TaskExecutionService.DelegatorReactionStaffNote));
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзДругогоЧата_КарточкаИАвтоХодЗапустившему_СоздателюТолькоКарточка()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((1, 1), "запустивший ждёт результат: карточка и авто-ход");
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0), "создателю — только карточка, без платного авто-хода");
+    }
+
+    [Fact]
+    public async Task Доклад_ЗапускИзЧатаСоздателя_КакРаньше()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        task.ExecutorLaunchedBySessionId = creatorChat.Id;
+        task.ExecutorLaunchedByPersonaId = creatorChat.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 1), "одна карточка и один авто-ход, без дубля");
+    }
+
+    [Fact]
+    public async Task Доклад_ПовторныйЗапускИзТретьегоЧата_АдресатПоследнийЗапустивший()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var first = await LaunchChatAsync(task, "Первый");
+        var last = await LaunchChatAsync(task, "Третий");
+        task.ExecutorLaunchedBySessionId = first.Id;
+        task.ExecutorLaunchedByPersonaId = first.PersonaId;
+        // повторный запуск перезаписывает поля — так делает tasks.Update в tasks_run_executor
+        _tasks.Update(task.Id, new UpdateTaskRequest(
+            ExecutorLaunchedBySessionId: last.Id, ExecutorLaunchedByPersonaId: last.PersonaId));
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(last.Id)).Should().Be((1, 1));
+        (await CountAsync(first.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЧатИсполнительВынесенВКорень_НеУходитНикомуДажеПриЖивомЗапустившем()
+    {
+        var (task, creatorChat, _) = await ArrangeDelegatedTaskAsync();
+        var launcher = await LaunchChatAsync(task, "Чат запустившего");
+        var executorChat = await LaunchChatAsync(task, "Чат исполнителя");
+        executorChat.ParentDetached = true;
+        task.LinkedSessionId = executorChat.Id;
+        task.ExecutorLaunchedBySessionId = launcher.Id;
+        task.ExecutorLaunchedByPersonaId = launcher.PersonaId;
+
+        await _sut.TryDeliverCompletionAsync(task);
+
+        (await CountAsync(launcher.Id)).Should().Be((0, 0));
+        (await CountAsync(creatorChat.Id)).Should().Be((0, 0));
+        (await CountAsync(executorChat.Id)).Should().Be((0, 0));
+    }
+
+    // --- Адресат по цепочке: планировщик/QA создают и запускают задачи, доклад идёт оркестратору ---
+
+    private sealed record Team(string OwnerId, Session Sofya, Session Egor, Session Vera, Persona Denis);
+
+    private async Task<Team> ArrangeTeamAsync()
+    {
+        var user = _userStore.Add("chain-owner", "password123", "user");
+        async Task<Session> Chat(string name)
+        {
+            var chat = await _sessions.CreatePersonaChatAsync(user.Id,
+                CreatePersona(user.Id, name).Id, ClaudeMode.AcceptEdits, name: name);
+            StubProcess(chat);
+            return chat;
+        }
+        return new Team(user.Id, await Chat("Софья"), await Chat("Егор"), await Chat("Вера"),
+            CreatePersona(user.Id, "Денис"));
+    }
+
+    // Задача, которую исполняет чат executorChat (планировщик/QA), поставленная из source и запущенная launchedBy.
+    // finished: true — задача координатора ЗАКРЫТА (Status = Done): подъём по цепочке с неё продолжается
+    // (доклад идёт выше). finished: false — задача ещё открыта (Status = Todo): координатор ждёт доклад,
+    // подъём на нём останавливается. ClaudeResult проставляется в обоих случаях, т.к. ход координатора
+    // завершился — но адресат определяется по Status, а не по ClaudeResult (см. ResolveAddressee).
+    private TaskItem MakeExecuting(Team team, Session executorChat, string? sourceId, string? launchedById,
+        string? reportTo = null, bool finished = false)
+    {
+        var t = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("План " + executorChat.Name,
+            ReportToSessionId: reportTo));
+        _tasks.MarkClaudeStarted(t.Id, executorChat.Id, DateTime.UtcNow);
+        if (finished) _tasks.MarkClaudeResult(t.Id, "success");
+        var task = _tasks.GetById(t.Id)!;
+        task.SourceSessionId = sourceId;
+        task.ExecutorLaunchedBySessionId = launchedById;
+        if (finished) task.Status = TaskItemStatus.Done;
+        return task;
+    }
+
+    // Лист цепочки: задачу создал чат creatorChat, исполнил Денис, доклад готов уходить
+    private TaskItem MakeLeaf(Team team, Session creatorChat, string? reportTo, string? launchedById)
+    {
+        var t = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Лист", ReportToSessionId: reportTo));
+        _tasks.MarkClaudeStarted(t.Id, "leaf-executor-session", DateTime.UtcNow);
+        _tasks.MarkClaudeResult(t.Id, "success");
+        var task = _tasks.GetById(t.Id)!;
+        task.CreatedByPersonaId = creatorChat.PersonaId;
+        task.PersonaId = team.Denis.Id;
+        task.SourceSessionId = creatorChat.Id;
+        task.ExecutorLaunchedBySessionId = launchedById;
+        task.ResultMarkdown = "Готово.";
+        task.Status = TaskItemStatus.Done;
+        return task;
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСоздалСофьяЗапустила_КарточкаИАвтоХодСофье_ПланировщикуТолькоКарточка()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: team.Sofya.Id, launchedById: team.Sofya.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСоздалЧеловекЗапустилИзUI_АдресатReportToSessionId()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Egor, reportTo: team.Sofya.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаВРаботе_ДокладПланировщику()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "Егор ещё исполняет свою задачу и ждёт итога — он координатор");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ПланировщикСамЗапустилИсполнителя_ЕгоЗадачаЗавершена_ПодъёмДоСофьи()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id, finished: true);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    // --- Задача фичи: доклад всегда в ключевой чат фичи (оркестратору) ---
+
+    // Эпик фичи с ключевым чатом key (SourceSessionId — первое звено цепочки); лист — шаг этой фичи
+    private (TaskItem Epic, TaskItem Leaf) MakeFeatureLeaf(Team team, Session key, Session creatorChat,
+        string? reportTo, string? launchedById, string role = TaskRoles.Step)
+    {
+        var epic = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Фича", Role: TaskRoles.Feature));
+        epic.SourceSessionId = key.Id;
+        var leaf = MakeLeaf(team, creatorChat, reportTo, launchedById);
+        leaf.FeatureId = epic.Id;
+        leaf.Role = role;
+        return (epic, leaf);
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_ЗапущенЧеловекомИзUI_УходитВКлючевойЧатАНеПланировщику()
+    {
+        var team = await ArrangeTeamAsync();
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1), "ключевой чат фичи — адресат отчёта шага");
+        // Планировщик — создатель задачи: ему остаётся карточка без авто-хода (как раньше у создателя)
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_ЗапустившийКоординаторЖдёт_ДокладЕму_АнеВКлючевойЧат()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "подзадачи внутри шага докладывают координатору");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_КлючевойЧатПерешёлВПродолжение_ДокладВПоследнееЖивоеПродолжение()
+    {
+        var team = await ArrangeTeamAsync();
+        var continued = await _sessions.CreatePersonaChatAsync(team.OwnerId, team.Sofya.PersonaId!,
+            ClaudeMode.AcceptEdits, name: "Софья (продолжение)");
+        StubProcess(continued);
+        team.Sofya.ContinuedInSessionId = continued.Id;
+        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(continued.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ШагФичи_ВсеЗвеньяКлючевойЦепочкиМертвы_ПрежняяЦепочка()
+    {
+        var team = await ArrangeTeamAsync();
+        var (epic, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null);
+        epic.SourceSessionId = "удалённый-чат";
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "ключевого чата нет — адресат ReportToSessionId, как до правки");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЭпикФичи_НеУходитВКлючевойЧат_ПрежняяЦепочка()
+    {
+        var team = await ArrangeTeamAsync();
+        var (epic, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
+            reportTo: team.Egor.Id, launchedById: null, role: TaskRoles.Feature);
+        leaf.FeatureId = null; // у эпика FeatureId нет
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "эпик — не шаг: правило ключевого чата к нему не применяется");
+        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
+        epic.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Доклад_СоздательНеИсполнитель_КакПослеЗапускаИзЧата()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Sofya, reportTo: null, launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((0, 0));
+    }
+
+    [Fact]
+    public async Task Доклад_ЦепочкаИзДвухУровней_ДоСофьи()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Sofya.Id, team.Sofya.Id);
+        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id, finished: true);
+        var leaf = MakeLeaf(team, team.Vera, reportTo: null, launchedById: team.Vera.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Sofya.Id)).Should().Be((1, 1));
+        (await CountAsync(team.Egor.Id)).Should().Be((0, 0));
+        (await CountAsync(team.Vera.Id)).Should().Be((1, 0), "создателю листа — только карточка");
+    }
+
+    [Fact]
+    public async Task Доклад_РодительскаяСессияМертва_ОткатНаПоследнююЖивуюБезПадения()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, "ghost-session", "ghost-session");
+        var leaf = MakeLeaf(team, team.Egor, reportTo: "ghost-session", launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1), "цепочка оборвалась на Егоре — он последняя живая сессия");
+    }
+
+    [Fact]
+    public async Task Доклад_ReportToМёртвый_ОткатНаСоздателяКарточки()
+    {
+        var team = await ArrangeTeamAsync();
+        var leaf = MakeLeaf(team, team.Egor, reportTo: "ghost-session", launchedById: null);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        (await CountAsync(team.Egor.Id)).Should().Be((1, 1));
+    }
+
+    [Fact]
+    public async Task Доклад_ЦиклВЦепочке_НеВисит()
+    {
+        var team = await ArrangeTeamAsync();
+        MakeExecuting(team, team.Egor, team.Vera.Id, team.Vera.Id, finished: true);
+        MakeExecuting(team, team.Vera, team.Egor.Id, team.Egor.Id);
+        var leaf = MakeLeaf(team, team.Egor, reportTo: null, launchedById: team.Egor.Id);
+
+        await _sut.TryDeliverCompletionAsync(leaf).WaitAsync(TimeSpan.FromSeconds(10));
+
+        (await CountAsync(team.Vera.Id)).Should().Be((1, 1), "цикл Егор → Вера → Егор останавливается на Вере");
+    }
+
+    // --- Сценарий бага 17.10: доклад шага уходит координатору, а не на уровень выше ---
+    // A (чат без задачи) запустил координатора S; S (своя задача ещё открыта) запускает
+    // исполнителя D. Доклад D обязан остаться у S: S — координатор, и пока его задача не
+    // закрыта, он сам ждёт результат. Старая эвристика (IsAwaitingResult) гасла после ПЕРВОГО
+    // хода S (ClaudeResult=success) и поднимала доклад к A, минуя S.
+
+    // sTaskDone: false — задача S ещё открыта (InProgress); true — S закрыл задачу (Done).
+    private async Task<(Session A, Session S, TaskItem Leaf)> ArrangeCoordinatorChainAsync(bool sTaskDone)
+    {
+        var team = await ArrangeTeamAsync();
+        // A — чат, из которого запущен координатор; задачи у него нет
+        var a = await _sessions.CreatePersonaChatAsync(team.OwnerId,
+            CreatePersona(team.OwnerId, "Оркестратор").Id, ClaudeMode.AcceptEdits, name: "Чат A");
+        StubProcess(a);
+        var s = team.Sofya;
+        // Задача координатора S: запущена из A, первый ход завершён (ClaudeResult=success)
+        var st = _tasks.Create(null, team.OwnerId, new CreateTaskRequest("Оркестровка " + s.Name));
+        _tasks.MarkClaudeStarted(st.Id, s.Id, DateTime.UtcNow);
+        _tasks.MarkClaudeResult(st.Id, "success");
+        var sTask = _tasks.GetById(st.Id)!;
+        sTask.SourceSessionId = a.Id;
+        sTask.ExecutorLaunchedBySessionId = a.Id;
+        sTask.Status = sTaskDone ? TaskItemStatus.Done : TaskItemStatus.InProgress;
+        // Лист: шаг, который S создала и сама запустила; Денис (D) его исполнил
+        var leaf = MakeLeaf(team, s, reportTo: null, launchedById: s.Id);
+        return (a, s, leaf);
+    }
+
+    [Fact]
+    public async Task Доклад_КоординаторСОткрытойЗадачей_АвтоХодКоординатору_НеНаУровеньВыше()
+    {
+        var (a, s, leaf) = await ArrangeCoordinatorChainAsync(sTaskDone: false);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        // S — координатор с открытой задачей: доклад (карточка + авто-ход) остаётся у него
+        (await CountAsync(s.Id)).Should().Be((1, 1), "координатор с открытой задачей получает карточку и авто-ход");
+        // A — запустивший координатора, но не адресат: авто-хода не получает
+        (await CountAsync(a.Id)).Should().Be((0, 0), "доклад не поднимается на уровень выше, минуя координатора");
+    }
+
+    [Fact]
+    public async Task Доклад_КоординаторСЗакрытойЗадачей_ПодъёмКЗапустившему()
+    {
+        var (a, s, leaf) = await ArrangeCoordinatorChainAsync(sTaskDone: true);
+
+        await _sut.TryDeliverCompletionAsync(leaf);
+
+        // S закрыл задачу (Done) — подъём продолжается: авто-ход идёт A (запустившему)
+        (await CountAsync(a.Id)).Should().Be((1, 1), "задача координатора закрыта — доклад поднимается к запустившему");
+        // S — создатель листа, но не адресат: только карточка, без авто-хода
+        (await CountAsync(s.Id)).Should().Be((1, 0), "создателю листа — только карточка");
+    }
 }

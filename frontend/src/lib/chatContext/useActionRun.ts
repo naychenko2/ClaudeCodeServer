@@ -2,7 +2,7 @@
 // `run` для кнопки поля ввода И низа панели «Контекст». Обе зовут этот хук с одним состоянием и
 // получают одну подпись; сборка — buildActionRun (actionRun.ts), здесь только подписки и цена по запросу.
 
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { useActionMemoryVersion } from './actionMemory';
 import { buildActionRun, ensureQuote, getRunVersion, subscribeRun } from './actionRun';
 import { getKindApi } from './registry';
@@ -19,7 +19,15 @@ export function useActionRun(sessionId: string | null, ctx: ContextKindCtx): Act
   useSyncExternalStore(subscribeRun, getRunVersion, getRunVersion);
   const { primary, refs, revision } = context;
   const api = primary ? getKindApi(primary.kind) : null;
-  const built = buildActionRun({ sessionId: sessionId ?? '', api: sessionId ? api : null, ctx, primary, refs, revision });
+  // buildActionRun — не дёшево (actions/params/цена + JSON.stringify запроса цены). Гоняем
+  // его только когда изменилось то, что в него входит: контекст, состояние запуска, ctx.
+  // На text_delta (текст поля) ни один из этих ключей не меняется — сборка не повторяется.
+  const runVersion = getRunVersion();
+  const built = useMemo(
+    () => buildActionRun({ sessionId: sessionId ?? '', api: sessionId ? api : null, ctx, primary, refs, revision }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deps осознанно по содержимому, не по ссылкам
+    [sessionId, api, ctx.projectId, ctx.isMobile, primary, refs, revision, runVersion],
+  );
   const { req, scope } = built;
   const reqKey = req ? JSON.stringify(req) : null;
   useEffect(() => {

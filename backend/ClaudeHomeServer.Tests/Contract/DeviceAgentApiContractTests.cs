@@ -31,6 +31,7 @@ namespace ClaudeHomeServer.Tests.Contract;
 /// Отказ «слишком большой» (413) есть только у агента — серверные маршруты читают и пишут
 /// без потолка (тело режет хост); сам отказ агента проверяет LocalApiTests в тестах агента.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicationFactory>, IAsyncLifetime
 {
     private const string AgentProjectId = "p1";
@@ -306,6 +307,20 @@ public sealed class DeviceAgentApiContractTests : IClassFixture<TestWebApplicati
         }
 
         mismatches.Should().BeEmpty("сервер и агент обязаны отвечать одинаково:\n" + string.Join("\n", mismatches));
+    }
+
+    // Блокер B1 гейта: серверный GET skills отдаёт ownerPlugins (SkillsController), а агент
+    // устройства не отдавал — контракт-форма разошёлся. Плагины владельца на устройстве не живут
+    // (локальный проект, ADR-031 §7), поэтому агент отдаёт тот же ключ — пустым массивом.
+    [Fact]
+    public async Task Агент_ОтдаётOwnerPlugins_ПустымМассивом()
+    {
+        var resp = await _agent.GetAsync($"/api/projects/{AgentProjectId}/skills");
+        resp.EnsureSuccessStatusCode();
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        var ownerPlugins = doc.RootElement.GetProperty("ownerPlugins");
+        ownerPlugins.ValueKind.Should().Be(JsonValueKind.Array, "агент обязан отдавать ключ ownerPlugins");
+        ownerPlugins.GetArrayLength().Should().Be(0, "на устройстве плагины владельца не живут (ADR-031 §7)");
     }
 
     [Fact]

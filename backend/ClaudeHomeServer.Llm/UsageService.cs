@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 
@@ -16,6 +17,12 @@ public class UsageService
     private readonly object _lock = new();
     private readonly List<UsageSnapshot> _snapshots = new();
     private static readonly JsonSerializerOptions _opts = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    // Версия набора снимков: растёт на каждом РЕАЛЬНОМ записи (Record, когда снимок добавлен,
+    // а не отброшен троттлингом). Нужна инвалидации кэша /api/usage: ответ меняется только
+    // когда записан новый снимок (состояние пула/опроса — отдельные версии, см. UsageResponseCache).
+    private long _version;
+    public long Version => Interlocked.Read(ref _version);
 
     public UsageService(IConfiguration config)
     {
@@ -50,6 +57,9 @@ public class UsageService
             var cutoff = now - Retention;
             _snapshots.RemoveAll(s => s.Timestamp < cutoff);
 
+            // Снимок реально добавлен — версия набора изменилась (кэш /api/usage инвалидируется).
+            Interlocked.Increment(ref _version);
+
             Save();
         }
     }
@@ -60,8 +70,7 @@ public class UsageService
     {
         try
         {
-            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            var credsPath = Path.Combine(home, ".claude", ".credentials.json");
+            var credsPath = CredsPath();
             if (!File.Exists(credsPath)) return null;
             using var doc = JsonDocument.Parse(File.ReadAllText(credsPath));
             var root = doc.RootElement;
@@ -71,6 +80,26 @@ public class UsageService
             return new PlanInfo(subType, tier, PlanLabel(subType, tier));
         }
         catch { return null; }
+    }
+
+    // Путь к ~/.claude/.credentials.json — единственная точка (GetPlan и PlanVersion).
+    private static string CredsPath()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude", ".credentials.json");
+
+    // Версия файла тарифа (mtime в тиках, 0 — файла нет): для инвалидации кэша /api/usage.
+    // Тариф меняется редко (re-login), но при смене кэш обязан пересобраться, а не ждать
+    // следующего снимка.
+    public long PlanVersion
+    {
+        get
+        {
+            try
+            {
+                var credsPath = CredsPath();
+                return File.Exists(credsPath) ? new FileInfo(credsPath).LastWriteTimeUtc.Ticks : 0;
+            }
+            catch { return 0; }
+        }
     }
 
     private static string PlanLabel(string? subType, string? tier)
@@ -102,6 +131,59 @@ public class UsageService
                 .ToDictionary(g => g.Key, g => g.OrderBy(s => s.Timestamp).ToList());
         }
     }
+
+    // Проекция «последний снимок на (подписку, окно)» — для ЛЁГКОГО ответа /api/usage?scope=limits.
+    // Шапке чата нужны только ТЕКУЩИЕ состояния окон (latestPerWindow/withAccountFallback на фронте),
+    // а не 8-дневная история: она весит мегабайты, а в ответе дублируется дважды (плоско и per-sub).
+    // На каждую (подписку, окно) отдаём не более ТРЁХ снимков:
+    //   • самый свежий в целом (resetsAt/статус/сброс — от него шапка строит окно);
+    //   • самый свежий С ПРОЦЕНТОМ, если он не тот же (latestPerWindow подставляет процент того же
+    //     окна, когда свежее событие пришло без utilization);
+    //   • самый свежий из УЖЕ СБРОШЕННЫХ окон, если он не совпадает с двумя выше (маркер stale:
+    //     окно сбросилось, а свежего снимка ещё нет — фронт рисует прочерк «данные устарели»).
+    // Всё остальное из истории для этих трёх потребностей не нужно — отсюда в десятки раз меньше.
+    public Dictionary<string, List<UsageSnapshot>> GetLatestPerWindow()
+    {
+        lock (_lock)
+        {
+            var now = DateTime.UtcNow;
+            var byKey = new Dictionary<string, List<UsageSnapshot>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var group in _snapshots.GroupBy(s => (Key: s.SubscriptionKey, Window: s.LimitType)))
+            {
+                UsageSnapshot? latest = null, latestWithUtil = null, latestExpired = null;
+                foreach (var s in group)
+                {
+                    if (latest is null || s.Timestamp > latest.Timestamp) latest = s;
+                    if (s.Utilization is not null && (latestWithUtil is null || s.Timestamp > latestWithUtil.Timestamp))
+                        latestWithUtil = s;
+                    if (IsExpired(s.ResetsAt, now) && (latestExpired is null || s.Timestamp > latestExpired.Timestamp))
+                        latestExpired = s;
+                }
+                if (latest is null) continue;
+
+                if (!byKey.TryGetValue(group.Key.Key, out var list))
+                {
+                    list = new List<UsageSnapshot>();
+                    byKey[group.Key.Key] = list;
+                }
+                list.Add(latest);
+                if (latestWithUtil is not null && !ReferenceEquals(latestWithUtil, latest))
+                    list.Add(latestWithUtil);
+                if (latestExpired is not null
+                    && !ReferenceEquals(latestExpired, latest)
+                    && !ReferenceEquals(latestExpired, latestWithUtil))
+                    list.Add(latestExpired);
+            }
+            return byKey;
+        }
+    }
+
+    // Окно «сброшено»: resetsAt в прошлом (тот же признак, что expired() на фронте).
+    private static bool IsExpired(string? resetsAt, DateTime now)
+        => resetsAt is not null
+            && DateTime.TryParse(resetsAt, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var t)
+            && t <= now;
 
     private void Load()
     {

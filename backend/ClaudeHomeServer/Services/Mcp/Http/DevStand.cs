@@ -35,8 +35,13 @@ internal sealed partial class DevStand(
 {
     // Ожидание порта после сборки: запуск собранного стенда — секунды (замер — 2,3 с), 120 с — запас
     internal static readonly TimeSpan ReadyTimeout = TimeSpan.FromSeconds(120);
-    // Меньше этого на запуск не остаётся смысла: отказ «повтори», а не заведомый таймаут
-    internal static readonly TimeSpan MinReadyBudget = TimeSpan.FromSeconds(5);
+    // Меньше этого на запуск не остаётся смысла: отказ «повтори», а не заведомый таймаут.
+    // Дефолт продукта — DefaultMinReadyBudget (его и инициализатор порога экземпляра держит
+    // отдельный тест); на своём экземпляре порог опускается: тестовый стенд-заглушка слушает
+    // порт сразу, а без этой опции самая
+    // короткая достижимая проба «потолка во время пробы» — 5 с, которые тест и платит.
+    internal static readonly TimeSpan DefaultMinReadyBudget = TimeSpan.FromSeconds(5);
+    internal TimeSpan MinReadyBudget { get; set; } = DefaultMinReadyBudget;
     // Проба health_path: сколько ждать HTTP-ответа после того, как порт начал принимать TCP
     internal static readonly TimeSpan HealthTimeout = TimeSpan.FromSeconds(30);
 
@@ -187,6 +192,31 @@ internal sealed partial class DevStand(
             }
             caller.SendFinal(sessionId, toolUseId, stages, failed, totals: null);
         }
+    }
+
+    // Адрес поднятого стенда сервиса (ui_probe): только ЧИТАЕТ реестр и конфигурацию, ничего не
+    // поднимает. Нет реестра, сервиса или живого стенда — текст отказа
+    public async Task<(string? Origin, string? Error)> FindRunningOriginAsync(Session session, Project project,
+        string ownerId, string? raw)
+    {
+        if (devServer is null || discovery is null)
+            return (null, "Стенды из чата выключены на этом сервере — передай url живого стенда.");
+        var running = devServer.GetRunning(project.Id, ownerId);
+        var root = ProjectRunCaller.RootOf(session, project);
+        var live = running.FirstOrDefault(r => r.ServiceId == raw);
+        string name = raw ?? "";
+        if (live is null)
+        {
+            var resolved = await ResolveServiceAsync(project, root, raw);
+            if (resolved.Error is not null) return (null, resolved.Error);
+            name = resolved.Service!.Name;
+            var id = StandId(resolved.Service.Id, root, project.RootPath);
+            live = running.FirstOrDefault(r => r.ServiceId == id);
+        }
+        return live is { Status: "started", Port: { } port }
+            ? ($"http://127.0.0.1:{port}", null)
+            : (null, $"Стенд «{name}» не поднят — ui_probe сам стенды не поднимает. Попроси поднять его "
+                + $"(start_stand, service «{raw}») и повтори вызов.");
     }
 
     public async Task<McpToolCallResult> StopAsync(Session session, Project project, string ownerId,

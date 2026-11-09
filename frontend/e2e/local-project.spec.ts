@@ -1,7 +1,6 @@
 import { test, expect, type APIRequestContext, type Page, type Route } from '@playwright/test';
 
-// E2E локального проекта (ADR-016 §3.4): флаг `local-projects` включён,
-// диалог создания проекта показывает сегмент «Локальный», выбор устройства
+// E2E локального проекта (ADR-016 §3.4): диалог создания проекта показывает сегмент «Локальный», выбор устройства
 // фильтрует по capabilities.exec. UI-уровневый smoke — реальное устройство
 // через бэк не проверяем (требует живого агента).
 
@@ -19,32 +18,18 @@ async function login(request: APIRequestContext): Promise<string> {
 
 const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-// Фич-флаг меняется PUT /api/feature-flags/{key}; ответ проверяем — иначе опечатка в
-// маршруте молча оставит флаг выключенным. Возвращает значение ДО правки, чтобы вернуть
-// инстанс как было. Токен — из beforeAll: вход под rate-limit, лишний логин его выжигает
-async function setFlag(request: APIRequestContext, token: string, key: string, value: boolean): Promise<boolean> {
-  const before = await request.get('/api/feature-flags', { headers: auth(token) });
-  expect(before.ok(), `флаги читаются: ${before.status()}`).toBeTruthy();
-  const was = Boolean((await before.json()).values?.[key]);
-  const r = await request.put(`/api/feature-flags/${key}`, { headers: auth(token), data: { enabled: value } });
-  expect(r.ok(), `флаг ${key} переключается: ${r.status()} ${await r.text()}`).toBeTruthy();
-  return was;
-}
-
 // У Modal нет role="dialog" — карточку модалки находим по её заголовку
 const modal = (page: Page, title: string) =>
   page.locator('.cc-modal-card').filter({ has: page.getByRole('heading', { name: title }) });
 
 test.describe('локальный проект (ADR-016 §3.4)', () => {
   let token: string;
-  let flagWas = false;
 
   // Логин ровно один на спек: окно auth-login — 10 входов в минуту на IP, а спеки
   // локального проекта гоняются подряд и по нескольку раз
   test.beforeAll(async ({ playwright, baseURL }) => {
     const request = await playwright.request.newContext({ baseURL });
     token = await login(request);
-    flagWas = await setFlag(request, token, 'local-projects', true);
     await request.dispose();
   });
 
@@ -54,12 +39,10 @@ test.describe('локальный проект (ADR-016 §3.4)', () => {
     const list = (await (await request.get('/api/projects', { headers: auth(token) })).json()) as Array<{ id: string; name: string }>;
     for (const p of list.filter((x) => x.name === PROJECT_NAME))
       await request.delete(`/api/projects/${p.id}`, { headers: auth(token) });
-    // Возвращаем флаг как было до спека
-    await setFlag(request, token, 'local-projects', flagWas);
     await request.dispose();
   });
 
-  test('диалог создания показывает сегмент «Локальный» под флагом', async ({ page, context }) => {
+  test('диалог создания показывает сегмент «Локальный»', async ({ page, context }) => {
     await context.addInitScript((tk) => localStorage.setItem('cc_token', tk as string), token);
     await page.goto('/#/projects');
     await expect(page.getByRole('button', { name: 'Добавить проект' }).first()).toBeVisible();
@@ -73,7 +56,7 @@ test.describe('локальный проект (ADR-016 §3.4)', () => {
     // Сегмент «Новый / Существующий» уже был до фичи — без него никуда
     await expect(dialog.getByRole('button', { name: 'Новый' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Существующий' })).toBeVisible();
-    // Новый сегмент «Серверный / Локальный» — под флагом local-projects
+    // Новый сегмент «Серверный / Локальный»
     await expect(dialog.getByRole('button', { name: 'Локальный' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Серверный' })).toBeVisible();
   });
@@ -133,16 +116,10 @@ test.describe('локальный проект с офлайн-устройст�
   let token: string;
   let projectId: string;
   let sessionId: string;
-  let flagsWere: Record<string, boolean> = {};
 
   test.beforeAll(async ({ playwright, baseURL }) => {
     const request = await playwright.request.newContext({ baseURL });
     token = await login(request);
-    // Карта проекта — серверный контент под своим флагом: без него секции нет ни у кого
-    flagsWere = {
-      'local-projects': await setFlag(request, token, 'local-projects', true),
-      'project-map-hygiene': await setFlag(request, token, 'project-map-hygiene', true),
-    };
     const r = await request.post('/api/projects', {
       headers: auth(token),
       data: { name: OFFLINE_NAME, rootPath: `/tmp/e2e-offline-${RUN}`, createDirectory: true },
@@ -159,7 +136,6 @@ test.describe('локальный проект с офлайн-устройст�
     if (!token) return;
     const request = await playwright.request.newContext({ baseURL });
     if (projectId) await request.delete(`/api/projects/${projectId}`, { headers: auth(token) });
-    for (const [key, was] of Object.entries(flagsWere)) await setFlag(request, token, key, was);
     await request.dispose();
   });
 

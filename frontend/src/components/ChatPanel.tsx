@@ -4,12 +4,14 @@ import { ArrowDown, ArrowUp, RotateCw, CircleHelp, Archive, ArchiveRestore } fro
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { ProjectFeature } from '../types';
 import { featureReason, isLocalProject, useProjectFeature } from '../lib/projectCapabilities';
-import { useSession } from '../hooks/useSession';
+import { remapPaths, useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { useSphereOf } from '../lib/useSphereOf';
 import { isZoneRefusal } from '../lib/personaZone';
+import { buildBranchAnchors, branchAnchorText as branchAnchorTextOf, BRANCH_BEFORE_PROMPT } from '../lib/branchAnchors';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
+import { denialTextOf, guardTurnAction, ownerDecisionDeniedReason, ownerSettingsDeniedReason, turnDeniedReason } from '../features/projects/members/participantGate';
 import { isArchivedChat } from '../lib/chatFilters';
 import { archiveApi } from '../api/chats';
 import { projectMainColor } from '../features/projects/projectUtil';
@@ -35,9 +37,8 @@ import { EscalationStickyBanner, findOpenEscalations } from './chat/EscalationSt
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
-import { missReasonLabel, type TurnCacheInfo } from '../lib/promptCache';
-import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
-import { retryableInterruptedIndex } from '../lib/chatReducer';
+import { computeTurnTree, sessionStartedBoundaries, type TurnTree } from '../lib/turnWorktree';
+import { retryableInterruptedIndex, turnAlreadyEnded } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
 import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
@@ -57,7 +58,10 @@ import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
-import { navPush, type NavSnapshot } from '../lib/nav';
+import { navPush, getNav, type NavSnapshot } from '../lib/nav';
+import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
+import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
+import { FeatureBanner } from './chat/feature/FeatureBanner';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -66,13 +70,17 @@ import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ToolLivenessContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
+import { useFeatureRuns } from '../lib/featureRuns';
+import { useFeaturesIndex, featureOf } from '../lib/featuresIndex';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
 import { splitAgentResultTail } from '../lib/agentTail';
-import { ChatItemView, FileChangedRow } from './chat/ChatItemView';
+import { ChatItemView, FileChangedRow, shouldHideAbortBanner } from './chat/ChatItemView';
 import { PendingMessageList } from './chat/PendingMessageView';
+import { readStoredUserId } from '../lib/offline';
+import { canCancelPending } from '../features/projects/members/messageAuthor';
 import { type ToolUseItem } from './chat/ToolUseView';
 import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
@@ -106,7 +114,8 @@ interface Props {
   session: Session;
   // Отсутствует для чата вне проекта (project-less) — тогда скрываем файловые возможности
   project?: Project;
-  onOpenFile?: (path: string) => void;
+  // sessionId — чат-источник: FileViewer читает файл из дерева задачи этого чата (резолв по worktree)
+  onOpenFile?: (path: string, sessionId?: string) => void;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки (флаг link-reader).
   // Отсутствует — MarkdownContent не рисует кнопку вовсе, лента как без фичи
   onOpenReader?: (url: string) => void;
@@ -225,24 +234,39 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 // создаётся единожды и переживает любой пересчёт turnMeta. Иначе новая ссылка
 // {read,creation} на каждую дельту пробивала React.memo у всех карточек хода.
 function memoizedCacheEntry(
-  map: WeakMap<ChatItem, TurnCacheInfo>,
+  map: WeakMap<ChatItem, { read: number; creation: number }>,
   result: ChatItem,
   read: number,
   creation: number,
-): TurnCacheInfo {
+): { read: number; creation: number } {
   const cached = map.get(result);
   if (cached) return cached;
-  // Причина промаха первого вызова хода (diagnostics.cache_miss_reason) — строкой в подвале
-  const pc = result.kind === 'result' ? result.promptCache : undefined;
-  const entry: TurnCacheInfo = pc?.missReason
-    ? { read, creation, miss: { label: missReasonLabel(pc.missReason), tokens: pc.missedTokens ?? undefined } }
-    : { read, creation };
+  const entry = { read, creation };
   map.set(result, entry);
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, onAddToWall, onChatDeleted, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, contextBar, headerDragProps, availableChatIds }: Props) {
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, liveContextTokens, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, teamWavePulse, promptSuggestion, pending, composerRestore, consumeRestore, send: rawSend, allowPermission: rawAllowPermission, denyPermission: rawDenyPermission, allowAlways: rawAllowAlways, answerQuestion: rawAnswerQuestion, respondPlan: rawRespondPlan, respondTeamPlan: rawRespondTeamPlan, respondTeamEscalation: rawRespondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Участник общего проекта не запускает ходы и не отвечает агенту (бэк откажет): все входы
+  // вне композера идут через гейт в точке отправки, а не каждый со своей проверкой
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const turnDenied = turnDeniedReason(project);
+  const { send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation } = useMemo(() => {
+    const deny = (reason: string) => showToast('Чат', reason);
+    const get = () => projectRef.current;
+    return {
+      send: guardTurnAction(get, rawSend, deny),
+      allowPermission: guardTurnAction(get, rawAllowPermission, deny, ownerDecisionDeniedReason),
+      allowAlways: guardTurnAction(get, rawAllowAlways, deny, ownerDecisionDeniedReason),
+      answerQuestion: guardTurnAction(get, rawAnswerQuestion, deny),
+      respondPlan: guardTurnAction(get, rawRespondPlan, deny, ownerDecisionDeniedReason),
+      denyPermission: guardTurnAction(get, rawDenyPermission, deny, ownerDecisionDeniedReason),
+      respondTeamPlan: guardTurnAction(get, rawRespondTeamPlan, deny, ownerDecisionDeniedReason),
+      respondTeamEscalation: guardTurnAction(get, rawRespondTeamEscalation, deny, ownerDecisionDeniedReason),
+    };
+  }, [rawSend, rawAllowPermission, rawDenyPermission, rawAllowAlways, rawAnswerQuestion, rawRespondPlan, rawRespondTeamPlan, rawRespondTeamEscalation]);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -251,7 +275,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // ширине) не трогаем — фокус поднимает экранную клавиатуру поверх ленты; стену тоже
   // (embedded): там курсор забирает только активная колонка, сигналом composerFocusSignal.
   const isTouch = useIsTouch();
+  // Все пути открытия файла из ленты несут id этого чата (дерево задачи чата)
+  const onOpenFile = useMemo(
+    () => (onOpenFileProp ? (path: string) => onOpenFileProp(path, session.id) : undefined),
+    [onOpenFileProp, session.id],
+  );
   const [emptyChatFocus, setEmptyChatFocus] = useState(0);
+  // M2: главное действие плашки фичи, когда ждут В ЭТОМ чате — фокус в композер
+  // (ответ пишут здесь, не на странице фичи). Счётчик монотонен, как emptyChatFocus.
+  const [composerFocusBump, setComposerFocusBump] = useState(0);
   const focusDecidedFor = useRef<string | null>(null);
   useEffect(() => {
     if (isMobile || isTouch || embedded || isHistoryLoading) return;
@@ -318,6 +350,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
   // разрешает воспроизведение только после пользовательского жеста.
   const voiceMode = session.voiceMode === true;
+  // «Голос» — настройка чата, только владелец проекта (QA-P1F, зеркало бэкового
+  // OwnerSettingsGate): участнику общего проекта тумблер неактивен (гейт в Composer),
+  // и PUT отсюда не уходит. Обычный проект и чат вне проекта — без изменений
+  const voiceDeniedReason = ownerSettingsDeniedReason(project);
   // Стиль озвучки живёт ЗДЕСЬ, а не в модуле-хранилище: значение читают четыре места в
   // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
   // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
@@ -385,13 +421,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // к handleToggleVoiceMode ниже). Ошибки молча: чинить тут человеку нечего
   useEffect(() => {
     if (!voiceMode) return;
+    // Участнику общего проекта бэк отказал бы этот PUT (403 owner_settings) — не шлём:
+    // стиль остаётся таким, каким его оставил владелец (QA-P1F)
+    if (voiceDeniedReason) return;
     if (normalizeVoiceStyle(session.voiceStyle) === voiceStyle) return;
     if (styleSyncedRef.current === session.id) return;
     styleSyncedRef.current = session.id;
     void updateChatFields(session, { voiceStyle }).catch(() => {});
-  }, [session, voiceMode, voiceStyle]);
+  }, [session, voiceMode, voiceStyle, voiceDeniedReason]);
 
   const handleToggleVoiceMode = useCallback(async (next: boolean) => {
+    // «Голос» — настройка владельца (QA-P1F): у участника кнопка неактивна (гейт в Composer),
+    // а авто-переключение петли падает здесь: причина вместо запроса — её catch гасит
+    // разговор так же, как провал запроса (voiceMode на чате остаётся как у владельца)
+    if (voiceDeniedReason) throw new Error(voiceDeniedReason);
     primeAudio();
     // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
     // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
@@ -409,7 +452,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
       throw err;
     }
-  }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
+  }, [session, onSessionUpdated, stopSpeech, voiceStyle, voiceDeniedReason]);
 
   // Признак архива — производное от бэка (см. isArchivedChat). Плашка открытого
   // архивного чата сидит над лентой; считаем прямо в рендере, useState тут не нужен —
@@ -549,7 +592,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const worstRate = useMemo(() => worstWindow(rateWindows), [rateWindows]);
   // Оценка заполнения контекстного окна — по последнему result-элементу ленты
   const ctxThresholds = useCtxThresholds();
-  const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds), [items, session.model, ctxThresholds]);
+  const ctxEstimate = useMemo(() => estimateContext(items, session.model, ctxThresholds, liveContextTokens), [items, session.model, ctxThresholds, liveContextTokens]);
   // Возможности провайдера модели (UI скрывает недоступное)
   const caps = useModelCaps(session.model);
   // Чат-исполнитель задачи: композер помечается строкой «Исполнитель задачи «…»».
@@ -868,6 +911,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     ? {
       id: project.id, rootPath: project.rootPath, transcriptReason: featureReason(project, ProjectFeature.WorkflowView),
       local: isLocalProject(project), devicePlatform: project.device?.platform ?? null,
+      myRole: project.myRole, formerMembers: project.formerMembers,
     }
     : null, [project]);
   // Ветка копирует транскрипт CLI на сервере — у локального проекта кнопок ветвления нет
@@ -1241,6 +1285,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // в рабочую папку сессии (для worktree-чата — в неё же, а не в корень проекта) и сам
   // сохраняет оригинальное имя, уникальность даёт подпапка. Путь из ответа — во вложения.
   const chatFileInputRef = useRef<HTMLInputElement>(null);
+  // Черновик вложений для колбэков, живущих дольше рендера: загрузка b стартовала при
+  // черновике [a], пока она шла, тумблер переписал черновик в [a']. Замыкание по
+  // attachedFiles вернуло бы [a, b] — перенесённый путь потерян; через ref выходит [a', b].
+  const attachedFilesRef = useRef(attachedFiles);
+  attachedFilesRef.current = attachedFiles;
   const handleChatUpload = useCallback(async (files: File[]) => {
     const added: string[] = [];
     for (const file of files) {
@@ -1250,8 +1299,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         added.push(path);
       } catch { showToast('Вложение', UPLOAD_FAIL_MSG); }
     }
-    if (added.length) onAttachedFilesChange([...attachedFiles, ...added]);
-  }, [session.id, project?.id, attachedFiles, onAttachedFilesChange]);
+    if (added.length) onAttachedFilesChange([...attachedFilesRef.current, ...added]);
+  }, [session.id, project?.id, onAttachedFilesChange]);
+
+  // Черновик по карте переноса (S2d-6b-4F3): пути вложений, перенесённых бэком в private/…,
+  // подменяются в черновике композера — иначе AttachmentInliner молча пропустит файл
+  const handleAttachmentMoves = useCallback((moves: Record<string, string>) => onAttachedFilesChange(remapPaths(attachedFilesRef.current, moves)), [onAttachedFilesChange]);
 
   // Единая точка загрузки с устройства (вставка, перетаскивание, кнопка пикера):
   // гейт по зрению модели сужен до картинок — pdf и документы claude читает с диска
@@ -1309,21 +1362,87 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [session.id, project]);
 
-  // Перенос в новый чат (docs/features/chat-handoff.md): записку пишет сам чат (warm —
-  // путь выбрала шапка по статусу кэша) или дешёвая модель, сервер заводит чат-преемник без
-  // истории. Дальше: записку в черновик нового чата (человек её поправит, автоотправки НЕТ)
-  // и открытие чата через openChatById. Голый navPush тут не годится: он пишет только
-  // историю браузера, а экран переключают события cc-open-url/cc-open-chat — с ним новый
-  // чат приходилось открывать руками. Отказы 409/502 несут человеческий текст — тостом
-  const handleHandoff = useCallback(async (warm: boolean) => {
+  // «Продолжить в новом чате»: диалог, запрос и переход. Ошибки (409 «чат занят», 400 «нет
+  // ходов агента») несут человеческий текст — показываем его тостом и бросаем дальше, чтобы
+  // диалог снял блокировку и остался открытым. Запрос идёт десятки секунд (агент пишет
+  // записку), поэтому диалог держит состояние «выполняется» сам.
+  const [continueOpen, setContinueOpen] = useState(false);
+  const handleContinue = useCallback(async (note: string) => {
     try {
-      const result = await api.chats.handoff(session.id, warm);
-      setDraft(result.chatId, result.draft);
-      await openChatById(result.chatId, { missingTitle: 'Перенос в новый чат' });
+      const result = await api.chats.continue(session.id, note || undefined);
+      setContinueOpen(false);
+      // Живое событие chat_continued могло уже увести в новый чат (гонка с ответом POST) —
+      // не дублируем navPush, если мы уже там.
+      if (getNav()?.chatId !== result.newSessionId) {
+        navPush(project
+          ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
+          : { screen: 'chats', chatId: result.newSessionId });
+      }
     } catch (err) {
-      showToast('Перенос в новый чат', err instanceof Error ? err.message : 'Не удалось перенести разговор');
+      const msg = err instanceof Error ? err.message : 'Не удалось продолжить в новом чате';
+      // 409 «уже продолжен»: тост с текстом и ссылкой на новый чат, если ссылка пришла
+      const link = continuedLinkFromError(err);
+      if (link) {
+        showToast('Продолжение чата', msg, 'info', {
+          label: 'Открыть новый чат',
+          onClick: () => { void openChatById(link); },
+        });
+        throw err;
+      }
+      // Долгий запрос оборвался (таймаут/сеть): не показываем ошибку сразу, а перечитываем
+      // сессию — если продолжение состоялось на сервере, уводим в новый чат
+      try {
+        const fresh = await api.chats.get(session.id);
+        if (fresh.continuedInSessionId) {
+          onSessionUpdated?.(fresh);
+          setContinueOpen(false);
+          navPush(project
+            ? { screen: 'project', project, chatId: fresh.continuedInSessionId, view: 'chat', file: null }
+            : { screen: 'chats', chatId: fresh.continuedInSessionId });
+          return;
+        }
+      } catch { /* не перечитали — показываем ошибку */ }
+      showToast('Продолжение чата', msg);
+      throw err;
     }
+  }, [session.id, project, onSessionUpdated]);
+  const openContinue = useCallback(() => setContinueOpen(true), []);
+  // Пункт меню шапки (ChatHeaderBar) сообщает через событие — как cc-ai-run
+  useEffect(() => {
+    const onEvt = (e: Event) => {
+      if ((e as CustomEvent<{ sessionId?: string }>).detail?.sessionId === session.id) setContinueOpen(true);
+    };
+    window.addEventListener('cc-chat-continue', onEvt);
+    return () => window.removeEventListener('cc-chat-continue', onEvt);
   }, [session.id]);
+
+  // Подсказка при большом контексте: «Не сейчас» запоминает размер контекста, новая
+  // подсказка — после роста на CONTINUE_HINT_SNOOZE_STEP. Сбрасывается при смене чата.
+  const [hintSnoozedAt, setHintSnoozedAt] = useState<number | undefined>(undefined);
+  useEffect(() => { setHintSnoozedAt(undefined); }, [session.id]);
+  const showContinueHint = !embedded && online && !isWaiting && !session.continuedInSessionId
+    && shouldShowContinueHint({ tokens: ctxEstimate.tokens, windowTokens: ctxEstimate.window, snoozedAt: hintSnoozedAt });
+
+  // Связи продолжения: имя чата-источника для плашки вверху нового чата
+  const { from: continuedFromId, into: continuedIntoId } = continuationLinks(session);
+  const [continuedFromName, setContinuedFromName] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    setContinuedFromName(undefined);
+    if (!continuedFromId) return;
+    let cancelled = false;
+    api.chats.get(continuedFromId).then(s => { if (!cancelled) setContinuedFromName(s.name ?? undefined); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [continuedFromId]);
+  const lastAssistantIdx = useMemo(() => lastAssistantTextIndex(items), [items]);
+  // Кнопка «Продолжить в новом чате» под последним ответом: прячем, пока ход ещё идёт
+  // (последний элемент ленты не result/error — ответ стримится) и если чат уже продолжен
+  // (кнопка дублировала бы плашку-связь). isWaiting — отдельный признак занятости редьюсера
+  const continueGate = continueButtonGate({
+    online,
+    isWaiting,
+    turnRunning: !turnAlreadyEnded(items),
+    continuedInto: !!continuedIntoId,
+  });
 
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
@@ -1359,7 +1478,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           : await api.chats.update(session.id, payload);
       onSessionUpdated?.(updated);
     } catch (err) {
-      showToast('Модель', err instanceof Error ? err.message : 'Не удалось сменить модель');
+      // Отказ по машинному коду (S2a-10b): «настройки выбирает владелец» — текстом клиента,
+      // короткую серверную строку человек не обязан понимать сам. Незнакомый отказ — как раньше.
+      showToast('Модель', denialTextOf(err) ?? (err instanceof Error ? err.message : 'Не удалось сменить модель'));
     }
   }, [session.id, session.model, session.projectId, session.claudeSessionId, onSessionUpdated]);
 
@@ -1388,7 +1509,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // карточка лежит глубоко в ленте.
   const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
     subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
-    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback).catch(err => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback)?.catch(err => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
     });
   }, [respondTeamPlan]);
@@ -1471,8 +1592,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const planningKind = planPhase === 'planning' ? 'planning' : planPhase === 'replanning' ? 'replanning' : undefined;
 
   // Дерево ХОДА (turnWorktree с бэка + EnterWorktree первого хода, см. lib/turnWorktree) —
-  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath
-  const turnTree = useMemo(() => computeTurnTree(items), [items]);
+  // git-бар и разделитель в ленте считают его отсюда, а не из Session.worktreePath.
+  // computeTurnTree пересчитывается на каждую дельту (useMemo по items) и возвращает новый
+  // объект {path,name} даже когда содержимое то же — ContextRow (React.memo) перерисовывался
+  // бы на каждый text_delta. Держим стабильную ссылку: path/name не изменились — прежний объект.
+  const turnTreeRef = useRef<TurnTree | null>(null);
+  const turnTree = useMemo(() => {
+    const next = computeTurnTree(items);
+    const prev = turnTreeRef.current;
+    if (prev === next || (prev !== null && next !== null && prev.path === next.path && prev.name === next.name)) {
+      return prev;
+    }
+    turnTreeRef.current = next;
+    return next;
+  }, [items]);
   // Индексы session_started, видимые в ленте разделителем «ход в дереве агента»/«ход
   // вернулся в проект» (остальные session_started прозрачны для группировки, см. isInvisible)
   const turnBoundaries = useMemo(() => sessionStartedBoundaries(items), [items]);
@@ -1681,6 +1814,21 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const taskTodos = useMemo(
     () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
     [todoBatches]);
+  // Индекс ТЕКУЩЕЙ карточки плана (последняя пачка): живое тело (переключатель + выбор
+  // фичи + FeatureRunView/TodoList) рисуется только на ней, прошлые — снимок TodoList.
+  // Для TodoWrite это последний вызов TodoWrite, для Task* — пачка с максимальным lastIndex.
+  const lastPlanIndex = useMemo(
+    () => todoBatches.reduce((max, b) => Math.max(max, b.lastIndex), -1),
+    [todoBatches]);
+  // Режим «Исполнение фичи»: агрегаты берутся из REST по сессии чата.
+  const featureRuns = useFeatureRuns(session.id);
+  // Слот строки фичи в шапке (В2), как и сама строка (FeatureBanner).
+  // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
+  // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
+  // (ревью F2, major 2). Индекс — тот же стор, что у FeatureBanner (один запрос на
+  // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
+  useFeaturesIndex(session.projectId ?? null);
+  const hasFeatureRow = featureOf(session.id).length > 0;
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -1690,7 +1838,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // не видит, поэтому считаем здесь и отдаём пропами.
   // ref-хранилище кеш-объектов хода по ссылке result-элемента — переживает пересчёт
   // turnMeta на каждой стрим-дельте, сохраняя стабильные ссылки для React.memo
-  const cacheByResultRef = useRef<WeakMap<ChatItem, TurnCacheInfo>>(new WeakMap());
+  const cacheByResultRef = useRef<WeakMap<ChatItem, { read: number; creation: number }>>(new WeakMap());
 
   const turnMeta = useMemo(() => {
     const snapshots: (string | undefined)[] = new Array(items.length);
@@ -1706,9 +1854,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // Объект берём из WeakMap по ссылке result: он не пересоздаётся на дельту,
     // иначе React.memo на ChatItemView пробивался бы у всех карточек хода.
     const cacheByResult = cacheByResultRef.current;
-    const cache: (TurnCacheInfo | undefined)[] = new Array(items.length);
+    const cache: ({ read: number; creation: number } | undefined)[] = new Array(items.length);
     let currentTokens: number | undefined;
-    let currentCache: TurnCacheInfo | undefined;
+    let currentCache: { read: number; creation: number } | undefined;
     for (let i = items.length - 1; i >= 0; i--) {
       const it = items[i];
       if (it.kind === 'result') {
@@ -1835,7 +1983,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // topEscalation зависит от openEscalations. Контекст живёт, пока включён режим —
   // в выключенном чате карточки только читаются
   const handleRespondTeamEscalation = useCallback((escalationId: string, actionId?: string, comment?: string) => {
-    respondTeamEscalation(escalationId, actionId, comment).catch((err: unknown) => {
+    respondTeamEscalation(escalationId, actionId, comment)?.catch((err: unknown) => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение');
     });
   }, [respondTeamEscalation]);
@@ -1959,41 +2107,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
-  // Адрес якорного user_message для кнопки «Ветвление» (фича chat-branch). У ленты
-  // элементы не имеют стабильного id, а индексы items и messages расходятся штатно
-  // (normalizeHistory вливает workflow_progress в tool_use и группирует ошибки), поэтому
-  // сервер и фронт считают одно и то же множество — порядковый номер user_message.
-  // Для user_message: его собственный индекс. Для ответа ассистента: индекс ПОСЛЕДНЕГО
-  // user_message выше (то же значение, что у user_message). Нет user_message выше →
-  // кнопки нет. anchorText — первые ~120 символов текста этого сообщения: сервер
-  // сверяет его с найденным по индексу сообщением, на расхождении отвечает 409.
-  // useMemo от items — пересчёт только при изменении ленты, иначе renderItem пересоздавался
-  // бы на каждую стрим-дельту и ронял мемоизацию ChatItemView.
-  const branchAnchors = useMemo(() => {
-    const arr: ({ userMessageIdx: number; anchorText: string; include: 'turn' | 'beforePrompt' } | null)[] = [];
-    let count = 0;
-    let lastText = '';
-    for (let i = 0; i < items.length; i++) {
-      const it = items[i];
-      if (it.kind === 'user_message') {
-        count++;
-        lastText = it.text.slice(0, 120);
-        arr[i] = { userMessageIdx: count - 1, anchorText: lastText, include: 'beforePrompt' };
-      } else {
-        arr[i] = count > 0 ? { userMessageIdx: count - 1, anchorText: lastText, include: 'turn' } : null;
-      }
-    }
-    return arr;
-  }, [items]);
+  // Адрес якорного user_message для кнопки «Ветвление» — см. lib/branchAnchors: якоря
+  // лежат в двух типизированных массивах (без текстовых срезов), anchorText берётся из
+  // ленты в момент клика.
+  const branchAnchors = useMemo(() => buildBranchAnchors(items), [items]);
+  const branchAnchorText = useCallback(
+    (userMessageIdx: number) => branchAnchorTextOf(itemsRef.current, userMessageIdx), []);
 
   const renderItem = useCallback((item: ChatItem, i: number,
     extras?: {
       agentActivity?: ActivityEntry[];
       agentRenderChild?: (item: ChatItem, idx: number) => React.ReactNode;
     }) => {
-    const anchor = branchAnchors[i];
-    const onBranchForItem = anchor && branchAvailable
-      ? () => handleBranch({ userMessageIndex: anchor.userMessageIdx, anchorText: anchor.anchorText, include: anchor.include })
+    const anchorIdx = branchAnchors.userIdx[i];
+    const onBranchForItem = anchorIdx >= 0 && branchAvailable
+      ? () => handleBranch({
+          userMessageIndex: anchorIdx,
+          anchorText: branchAnchorText(anchorIdx),
+          include: branchAnchors.include[i] === BRANCH_BEFORE_PROMPT ? 'beforePrompt' : 'turn',
+        })
       : undefined;
     return (
     <ChatItemView
@@ -2003,10 +2135,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
-      planPill={!showWaiting && i === lastResultIndex && taskTodos.length > 0
-        ? <TurnPlanPill todos={taskTodos} />
+      planPill={!showWaiting && i === lastResultIndex && (taskTodos.length > 0 || featureRuns.length > 0)
+        ? <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
         : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
+      hideAbortBanner={shouldHideAbortBanner(item, items[i + 1])}
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
       onDenyPermission={denyPermission}
@@ -2023,8 +2156,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
       onBranch={onBranchForItem}
+      onContinue={continueGate && i === lastAssistantIdx ? openContinue : undefined}
       availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
+      isCurrentPlan={i === lastPlanIndex}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
@@ -2066,7 +2201,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, handleDropWindow1M, branchAnchors, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, branchAnchorText, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,
@@ -2622,8 +2757,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       lastMechanic={lastMechanic}
       onOpenSidebar={onOpenSidebar}
       ctxEstimate={ctxEstimate}
-      items={items}
       isWaiting={isWaiting}
+      items={items}
       isCompacting={isCompacting}
       canCompact={canCompact}
       compactNote={compactNote}
@@ -2633,10 +2768,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       agent={persona ? null : chatAgent}
       participants={isGroupChat ? participantPersonas : null}
       onSessionUpdated={onSessionUpdated}
+      onAttachmentMoves={handleAttachmentMoves}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
+      // Строка фичи — вторая строка шапки (В2 «Трек», F2): под заголовком, над
+      // контекстом. Чат без фичи (или с выключенными флагами) — слот НЕ передаётся:
+      // шапка остаётся ровно как без строки фичи (ни пикселя, линия тулбара на месте).
+      featureBar={hasFeatureRow ? (
+        <FeatureBanner
+          sessionId={session.id}
+          projectId={session.projectId ?? null}
+          isMobile={!!isMobile}
+          chatTaskId={session.taskId ?? null}
+          // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+          onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+        />
+      ) : null}
       contextBar={contextBar}
-      onHandoff={handleHandoff}
     />
   );
 
@@ -2645,10 +2793,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     <PersonaContext.Provider value={persona}>
     {/* embedded (колонка стены) — тоже прозрачный: подложку даёт стеклянный остров
         колонки, а собственный плотный фон закрывал бы дудл-холст под ней */}
-    <div style={{
-      display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
-      background: headerIsland || embedded ? 'transparent' : C.bgMain,
-    }}>
+    <div
+      data-testid="chat-panel"
+      style={{
+        display: 'flex', flexDirection: 'column', height: '100%', position: 'relative',
+        background: headerIsland || embedded ? 'transparent' : C.bgMain,
+      }}
+    >
       {/* В режиме headerIsland шапка сама рисует себя hero-вариантом прямо на
           холсте (ChatHeaderBar, ветка island) — обёртки не нужно. На стене
           (embedded) шапка тоже штатная — канонический вид чата; над ней колонка
@@ -2773,6 +2924,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           )
         )}
 
+        {continuedFromId && (
+          <ContinuationBanner kind="from" name={continuedFromName} onOpen={() => { void openChatById(continuedFromId); }} />
+        )}
+
         {/* Окно рендера: якорь авто-догрузки и кнопка «Показать предыдущие» —
             видны, только пока сверху ленты остаются скрытые узлы */}
         {hidden > 0 && (
@@ -2849,7 +3004,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
                 индикатора не оставалось места даже под аватар и время. Половина — потолок,
                 а не ширина: на широкой колонке пилюля упирается в свой maxWidth раньше */}
             <div style={{ marginLeft: 'auto', minWidth: 0, maxWidth: '50%', display: 'flex' }}>
-              <TurnPlanPill todos={taskTodos} />
+              <TurnPlanPill todos={taskTodos} runs={featureRuns} sessionId={session.id} chatTaskId={session.taskId ?? null} />
             </div>
           </div>
         )}
@@ -2886,6 +3041,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             а кнопка на стоящей очереди читалась бы как сломанная */}
         <PendingMessageList items={pending} isMobile={isMobile}
           sessionId={session.id}
+          canCancelItem={p => canCancelPending(project, p.senderUserId, readStoredUserId())}
           onCancel={online ? cancelPending : undefined}
           onPreempt={online && isWaiting ? preemptForPending : undefined} />
 
@@ -2927,10 +3083,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
               </div>
               <button
                 onClick={() => { atBottomRef.current = true; void send('Продолжи', [], mode); }}
+                disabled={!!turnDenied}
+                title={turnDenied ?? undefined}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 7,
                   padding: '9px 22px', borderRadius: R.lg, fontSize: 13, fontWeight: 600,
-                  background: C.accent, border: 'none', cursor: 'pointer', color: C.onAccent,
+                  background: C.accent, border: 'none', cursor: turnDenied ? 'not-allowed' : 'pointer', color: C.onAccent, opacity: turnDenied ? 0.5 : 1,
                   boxShadow: SHADOW.button, transition: 'opacity 0.12s',
                 }}
                 onMouseEnter={e => { e.currentTarget.style.opacity = '0.88'; }}
@@ -2942,6 +3100,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             </div>
           );
         })()}
+
+        {continuedIntoId && (
+          <ContinuationBanner kind="into" onOpen={() => { void openChatById(continuedIntoId); }} />
+        )}
 
         <div ref={bottomRef} />
       </div></div>
@@ -3025,10 +3187,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             />
           )}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
-              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать */}
+              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать.
+              Подсказка «Продолжить в новом чате» (вариант C) — тонкой полосой внутри строки,
+              над полем: строка снова прилегает к карточке, а не висит в воздухе */}
           {!embedded && online && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
-              onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll} />
+              onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll}
+              notice={showContinueHint
+                ? <ContinueHint tokens={ctxEstimate.tokens!} isMobile={isMobile === true} onOpen={openContinue}
+                    onSnooze={() => setHintSnoozedAt(ctxEstimate.tokens)} />
+                : undefined}
+            />
           )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
               обёртка: полоса контролов вынесена из карточки, и тень на обёртке рисовала
@@ -3041,6 +3210,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             style={{ display: 'none' }}
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleComposerFiles(fs); }}
           />
+          {continueOpen && <ContinueChatDialog onConfirm={handleContinue} onClose={() => setContinueOpen(false)} />}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
             // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,
@@ -3111,10 +3281,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             rateWindow={worstRate}
             restore={composerRestore}
             onReplaceAttachments={onAttachedFilesChange}
-            // Два источника «поставь курсор в поле»: колонка стены стала активной и
-            // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
-            // из них; 0 = сигнала не было (Composer такое значение игнорирует).
-            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
+            // Три источника «поставь курсор в поле»: колонка стены стала активной,
+            // открылся пустой чат, главное действие плашки фичи (ждут в этом чате, M2).
+            // Счётчики монотонны, поэтому сумма растёт от любого из них; 0 = сигнала не
+            // было (Composer такое значение игнорирует).
+            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus + composerFocusBump}
             // Цвет сияния при озвучке: сперва цвет говорящей персоны (тот же, что у кольца
             // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
             // ни того, ни другого нет — оранжевый токен внутри композера

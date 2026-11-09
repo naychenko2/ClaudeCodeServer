@@ -480,9 +480,14 @@ public class FileWatcherService : IDisposable
     // Любой сегмент пути в списке исключений → игнорируем
     private static bool IsExcluded(string rel)
     {
-        foreach (var seg in rel.Split('/'))
+        var segments = rel.Split('/');
+        foreach (var seg in segments)
             if (TreeExcludes.WatchContains(seg)) return true;
-        return false;
+        // Служебный файл атомарной записи (".имя.<guid>.tmp", FilesController.WriteAtomic):
+        // его создание и подмена — не правка пользователя: в filesChanged и в синк знаний он
+        // не идёт, там ему место только шумом (доработка S2c-1 п.2). Признак — общий с
+        // построением имени, поэтому фильтр и запись не разъезжаются.
+        return TreeExcludes.IsAtomicTempWrite(segments[^1]);
     }
 
     // Каталоги, которые граф кода не обходит: их перенос структуру графа не меняет.
@@ -603,11 +608,30 @@ public class FileWatcherService : IDisposable
         if (_entries.TryGetValue(key, out var entry)) RecreateWatcher(key, entry);
     }
 
+    // internal для тестов (InternalsVisibleTo): немедленный полл-скан по ключу — тот же
+    // PollScan, что поднимает таймер. Порядок «запись файлов → скан» в тестах держится
+    // этим вызовом, а не паузой интервала (conventions.md, паттерн «интервал — опция,
+    // ожидание — событие»): с выключенным таймером (PollIntervalMs < 0) скан делает только тест.
+    internal void PollNow(string key)
+    {
+        if (_entries.TryGetValue(key, out var entry) && entry.Poll is not null)
+            PollScan(key, entry);
+    }
+
     // internal для тестов: запись по ключу (для сверки по ссылке) и поднят ли на ней watcher.
     internal (object Entry, bool Watching)? Inspect(string key)
     {
         lock (_lock)
             return _entries.TryGetValue(key, out var e) ? (e, e.Watcher is not null || e.Poll is not null) : null;
+    }
+
+    // internal для тестов (InternalsVisibleTo): живой наблюдатель ключа — для прямой меры его
+    // подписок. Дельта по процессу (InotifyProbe до/после) для этого не годится: тесты сервера
+    // поднимают свои наблюдатели в том же процессе, и их открытие/закрытие попадает в окно
+    // замера (флака регрессий бюджета).
+    internal RecursiveDirectoryWatcher? WatcherFor(string key)
+    {
+        lock (_lock) return _entries.TryGetValue(key, out var e) ? e.Watcher : null;
     }
 
     // internal для тестов: гасит watcher и заказ пересоздания, оставляя саму запись, —

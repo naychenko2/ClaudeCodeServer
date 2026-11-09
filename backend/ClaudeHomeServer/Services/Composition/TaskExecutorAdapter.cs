@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Tasks;
 
 namespace ClaudeHomeServer.Services.Composition;
 
@@ -6,11 +7,16 @@ namespace ClaudeHomeServer.Services.Composition;
 // Тонкий форвардер: вертикаль Tasks через шов зовёт автозапуск исполнителя и
 // страховку «задача осталась в работе», ничего не зная о SessionManager/
 // NotificationService/ProjectManager/UserStore, которые держит сам исполнитель.
-public sealed class TaskExecutorAdapter(TaskExecutionService executor) : ITaskExecutor
+// Сервис очереди фич необязателен: при выключенной подсистеме задач его нет, сверка — пустая.
+public sealed class TaskExecutorAdapter(TaskExecutionService executor, FeatureQueueService? queue = null) : ITaskExecutor
 {
-    public Task ExecuteAsync(TaskItem task, bool auto) =>
-        executor.ExecuteAsync(task, auto);
+    // Актор едет в ExecuteAsync исполнителя параметром actorUserId (отправитель первой подачи хода)
+    public Task ExecuteAsync(TaskItem task, bool auto, string? actorUserId) =>
+        executor.ExecuteAsync(task, auto, launcher: null, actorUserId);
 
     public Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc) =>
         executor.CheckStalledExecutorAsync(task, nowUtc);
+
+    public Task ReconcileFeatureQueuesAsync(string ownerId) =>
+        queue?.ReconcileAsync(ownerId) ?? Task.CompletedTask;
 }

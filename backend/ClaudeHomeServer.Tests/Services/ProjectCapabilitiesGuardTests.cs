@@ -20,7 +20,12 @@ public class ProjectCapabilitiesGuardTests
         + @"|\.DeviceId\s+is\s+(not\s+)?null"
         + @"|\.DeviceId\s+is\s*\{"
         + @"|IsNullOr(Empty|WhiteSpace)\(\s*[A-Za-z_][A-Za-z0-9_.]*\.DeviceId\s*\)"
-        + @"|\bIsLocal\b",
+        + @"|\bIsLocal\b"
+        // C# 8+ property pattern: is { DeviceId: not null } — DeviceId внутри скобок,
+        // а не перед is (направление «expr is { Prop: not null }»). Не берём общее
+        // is { ... not null }: в коде много таких (SessionManager, VideoEditor), не про
+        // локальность проекта.
+        + @"|\bis\s*\{[^{}]*\bDeviceId\b[^{}]*\bnot\s+null\b",
         RegexOptions.Compiled);
 
     private static readonly Regex FrontendPattern = new(
@@ -35,14 +40,74 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Gateway/TurnTokenService.cs"] = (1, "привязка токена хода к устройству"),
         ["backend/ClaudeHomeServer.DeviceAgent/Pairing/DevicePairing.cs"] = (1, "ответ сопряжения устройства, не проект"),
         // IsLocal — признак локального LLM-провайдера, к проектам не относится
-        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (7, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (4, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (9, "LLM-провайдер"),
+        // Признак локальности LLM-провайдера в /api/models (LlmCapabilities.IsLocal) и его
+        // отдача наружу (ModelsController) — про провайдера, не про локальность проекта.
+        ["backend/ClaudeHomeServer.Core/Services/Llm/LlmCapabilities.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer/Controllers/ModelsController.cs"] = (3, "LLM-провайдер"),
+        // Адаптер шва IModelResolver и one-shot-раннер: IsLocal — признак локального
+        // LLM-провайдера для классификации расхода (Spend), не локальность проекта.
+        ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),
+        // UseServerGateway спрашивает provider.IsLocal (локальный LLM-провайдер), не локальность
+        // проекта; гейт допуска ходов к локали (B1b) переехал в FallbackLlmSessionAdapter, из
+        // ClaudeSession ушли два прежних вхождения — осталось 3.
+        ["backend/ClaudeHomeServer.Llm/Claude/ClaudeSession.cs"] = (3, "LLM-провайдер"),
+        // Классификация расхода one-shot: IsLocal источника — локальный LLM-провайдер, не проект.
+        ["backend/ClaudeHomeServer.Llm/CloudCheapClient.cs"] = (1, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/FallbackLlmSessionAdapter.cs"] = (3, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/Gateway/UpstreamSelector.cs"] = (1, "LLM-провайдер"),
+        // Шлюз: наблюдатель метрик создаётся, когда маршрут — локальный LLM-провайдер
+        // (LlmProviderConfig.IsLocal), не «локальный проект» — чужой смысл того же слова.
+        ["backend/ClaudeHomeServer.Llm/Gateway/LlmGatewayEndpoints.cs"] = (2, "LLM-провайдер"),
+        // Поллер: источник метрик выбирается по провайдеру, помеченному IsLocal (LLM-провайдер).
+        // Три вхождения: код (p.IsLocal) плюс два упоминания в комментариях о выборе провайдера
+        // (комментарий 01.11.2026 добавил третье) — все про локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer.Llm/LocalStats/LocalModelStatsPoller.cs"] = (3, "LLM-провайдер"),
+        // Подписи основного стенда панели «Локальные модели»: берутся из Stats первого провайдера с IsLocal (LLM-провайдер).
+        // Два вхождения: код (p.IsLocal) плюс комментарий 01.11.2026 о выборе провайдера с Stats — оба про локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs"] = (2, "LLM-провайдер"),
+        // Очередь GPU: «какие провайдеры уступают GPU» отбираются по IsLocal провайдера
+        // (LlmProviderConfig.IsLocal), не по локальности проекта — чужой смысл того же слова.
+        ["backend/ClaudeHomeServer.Llm/MediaGpuYieldGate.cs"] = (1, "IsLocal провайдера GPU-очереди, не проекта"),
+        // Швы оркестрации фичи: «локальный исполнитель» — персона, чья модель уходит в локального
+        // провайдера (IModelResolver.IsLocal в комментарии к LocalExecutor), не локальный проект.
+        ["backend/ClaudeHomeServer.Core/Services/FeatureOrchestrationSeams.cs"] = (1, "чужой смысл: локальный провайдер модели"),
+        // Реализация шва: resolver.IsLocal(key) провайдера модели персоны плюс приватный IsLocal(persona)
+        // и его вызов и упоминание в комментарии — все про провайдера, не про локальный проект.
+        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (4, "чужой смысл: локальный провайдер модели"),
+        // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
+        ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Services/Llm/IModelResolver.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
+        // Тестовый хелпер шлюза: IsLocal — признак локального LLM-провайдера (vLLM), не проекта.
+        // Жил в ClaudeHomeServer.Tests (сторож его пропускал как .Tests); переехал в TestKit.Host (шаг 3.3).
+        ["backend/ClaudeHomeServer.TestKit.Host/GatewayTestKit.cs"] = (2, "LLM-провайдер"),
+        // Учёт расхода: «бесплатный» определяется по IsLocal провайдера (LlmProviderConfig),
+        // не по локальности проекта — вертикаль Spend и её швы.
+        ["backend/ClaudeHomeServer.Core/Services/Llm/IModelResolver.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/SpendRecord.cs"] = (2, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendStore.cs"] = (1, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Spend/SpendMaintenanceService.cs"] = (4, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer/Services/SpendMapping.cs"] = (2, "LLM-провайдер"),
+        // Ценовой класс провайдера (/api/models): локальный LLM-провайдер → бесплатно.
+        ["backend/ClaudeHomeServer/Services/ModelCatalogService.cs"] = (1, "LLM-провайдер"),
+        // Фронт: признак локальности LLM-провайдера (isLocal в capabilities провайдера)
+        // — про провайдера, не про локальность проекта.
+        ["frontend/src/lib/models.ts"] = (1, "LLM-провайдер"),
+        ["frontend/src/lib/spendSources.ts"] = (6, "LLM-провайдер"),
+        ["frontend/src/features/modelsSpend/QuotasTab.tsx"] = (10, "LLM-провайдер"),
+        // Пикер модели в композере: группа «Локальные» собирается по isLocal провайдера
+        // (providerCapsByKey(...).isLocal) — локальность провайдера, не проекта.
+        ["frontend/src/components/ComposerModelPicker.tsx"] = (2, "LLM-провайдер"),
     };
 
     private static string RepoRoot()
@@ -84,6 +149,7 @@ public class ProjectCapabilitiesGuardTests
     }
 
     [Fact]
+    [Trait("Category", "Slow")]
     public void ПроверкиЛокальностиПроекта_ТолькоВМатрице()
     {
         var hits = Scan(RepoRoot());
@@ -120,6 +186,10 @@ public class ProjectCapabilitiesGuardTests
     [InlineData("var local = p.DeviceId is { } d;")]
     [InlineData("if (!string.IsNullOrEmpty(project.DeviceId)) { }")]
     [InlineData("if (project.IsLocal) { }")]
+    // C# 8+ property pattern: оба направления — «expr.Prop is { not null }» (свойство
+    // перед is) и «expr is { Prop: not null }» (свойство внутри скобок).
+    [InlineData("if (project.DeviceId is { not null }) { return false; }")]
+    [InlineData("if (project is { DeviceId: not null }) { return false; }")]
     public void Шаблон_ЛовитИнлайновуюПроверку(string line) =>
         BackendPattern.IsMatch(line).Should().BeTrue();
 

@@ -39,7 +39,7 @@ internal sealed class TestCliSource(string? executablePath, string? problem = nu
 /// <summary>
 /// Фейковый CLI для Unix: пишет свой env и argv (с содержимым файлов-аргументов) в рабочий
 /// каталог, кладёт файлы сессии в профиль, как настоящий CLI, порождает внука (долгий
-/// sleep) и отвечает эхом на строки stdin.
+/// sleep) и отвечает эхом на строки stdin; на строку <c>result</c> — строкой конца хода stream-json.
 /// </summary>
 [UnsupportedOSPlatform("windows")]
 internal static class FakeUnixCli
@@ -66,6 +66,7 @@ internal static class FakeUnixCli
         fi
         while IFS= read -r line; do
           if [ "$line" = "exit" ]; then exit 3; fi
+          if [ "$line" = "result" ]; then echo '{"type":"result","subtype":"success"}'; continue; fi
           echo "echo:$line"
         done
         exit 0

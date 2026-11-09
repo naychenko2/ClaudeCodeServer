@@ -58,6 +58,8 @@ describe('подпись кнопки (Р3): одна функция', () => {
     expect(runBlockReason(edit, '  ')).toBe('Напишите текст: Что изменить на картинке…');
     expect(runBlockReason(edit, 'x')).toBeNull();
     expect(runBlockReason({ ...edit, disabledReason: 'Выделите кусок' }, 'x')).toBe('Выделите кусок');
+    // blockReason — чип выбираем, но запуск закрыт: причина ложится на кнопку и при набранном тексте
+    expect(runBlockReason({ ...edit, blockReason: 'Выберите пропорции' }, 'x')).toBe('Выберите пропорции');
     expect(runBlockReason(null, '')).toBeNull();
   });
 });

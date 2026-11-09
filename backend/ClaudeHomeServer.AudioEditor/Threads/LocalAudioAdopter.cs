@@ -12,14 +12,13 @@ namespace ClaudeHomeServer.Services.AudioEditor.Threads;
 //  - разделение на стемы (audio_separate) — ОДНА нить и ОДНА версия со стемами по ролям (stem:vocals…),
 //    запуск и его якорь audio_launch_versions, как у кнопки separate;
 //  - остальные операции — нить по каждому звуковому файлу; нить по этому файлу уже есть — второго якоря нет.
-// Фокус человека не трогаем: выбор звука в полосе остаётся его. Выключенный модуль (флаг) и чужой чат —
+// Фокус человека не трогаем: выбор звука в полосе остаётся его. Чужой чат —
 // молчаливый отказ.
 public sealed class LocalAudioAdopter(
     AudioThreadStore store,
     AudioJobThreads threads,
     ISessionDirectory directory,
-    IProjectManager projects,
-    IFeatureFlagGate flags) : ILocalMediaAdopter
+    IProjectManager projects) : ILocalMediaAdopter
 {
     // Столько карточек на задачу достаточно: набор из стольких файлов — это уже не «результат»
     public const int MaxThreadsPerJob = 6;
@@ -39,7 +38,6 @@ public sealed class LocalAudioAdopter(
             .Where(f => f.ContentType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase))
             .Take(separate ? MaxStems : MaxThreadsPerJob).ToList();
         if (files.Count == 0) return;
-        if (!flags.IsEnabled(adoption.OwnerId, FeatureFlagKeys.AudioEditor)) return;
         if (directory.GetById(adoption.SessionId) is not { } session || session.ProjectId != adoption.ProjectId) return;
         if (directory.ResolveOwnerId(session) != adoption.OwnerId) return;
         if (projects.GetById(adoption.ProjectId) is not { } project || project.OwnerId != adoption.OwnerId) return;

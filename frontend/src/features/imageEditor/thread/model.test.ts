@@ -199,6 +199,26 @@ describe('launchEndNote', () => {
     expect(launchEndNote('failed', 0, 1)).toBe('Сервис рисования отказал — версий нет.');
   });
 
+  it('подстановка на два лица — тексты словаря v2-notes (ADR-028)', () => {
+    expect(launchEndNote('failed', 0, 1, 2)).toBe('Не удалось подставить лица — версия не создана. Назначения можно повторить из редактора.');
+    expect(launchEndNote('cancelled', 0, 1, 2)).toBe('Отменено — версия не создана');
+    // Отмена после лица 1: строки «готово 1 из 1» нет — говорит плашка частичного результата
+    expect(launchEndNote('cancelled', 1, 1, 2)).toBeNull();
+  });
+
+  it('прерывание перезапуском при двух лицах — прежние тексты, как без подстановки (m-T2)', () => {
+    expect(launchEndNote('interrupted', 0, 1, 2)).toBe('Генерация прервана перезапуском сервера.');
+    expect(launchEndNote('interrupted', 1, 1, 2)).toBe('Прервано перезапуском сервера — готово 1 из 1.');
+    expect(launchEndNote('interrupted', 0, 1, 2)).toBe(launchEndNote('interrupted', 0, 1));
+    expect(launchEndNote('interrupted', 1, 1, 2)).toBe(launchEndNote('interrupted', 1, 1));
+  });
+
+  it('подстановка на одно лицо — прежние тексты', () => {
+    expect(launchEndNote('cancelled', 1, 1, 1)).toBe('Отменено — готово 1 из 1.');
+    expect(launchEndNote('cancelled', 0, 1, 1)).toBe('Генерация отменена.');
+    expect(launchEndNote('failed', 0, 1, 1)).toBe('Сервис рисования отказал — версий нет.');
+  });
+
   it('идущий и доделанный запуск надписи не несут', () => {
     expect(launchEndNote('running', 1, 3)).toBeNull();
     expect(launchEndNote('done', 3, 3)).toBeNull();

@@ -15,10 +15,6 @@
   <ItemGroup>
     <ProjectReference Include="..\ClaudeHomeServer.Memory\ClaudeHomeServer.Memory.csproj" />
     <ProjectReference Include="..\ClaudeHomeServer.Core\ClaudeHomeServer.Core.csproj" />
-    <!-- ProjectReference на Main и Main.Tests: тесты памяти поднимают общий стек
-         (хелперы, фейки персон/сессий). Прецедент — Turn.Tests. -->
-    <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
-    <ProjectReference Include="..\ClaudeHomeServer.Tests\ClaudeHomeServer.Tests.csproj" />
   </ItemGroup>
 
   <ItemGroup>

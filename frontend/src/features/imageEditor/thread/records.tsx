@@ -3,7 +3,7 @@
 // тихие строки модуль рисует из fallback — текст готовит сервер.
 
 import type { ReactNode } from 'react';
-import { GitBranch, Image as ImageIcon, Save, Zap } from 'lucide-react';
+import { GitBranch, Image as ImageIcon, RectangleHorizontal, Save, Zap } from 'lucide-react';
 import { C, FS, SP, ICON_SIZE, ICON_STROKE } from 'aihome_shell/kit';
 import type { ChatItemToolCtx } from '../../../lib/subsystems/registryCore';
 import type { ChatItem } from '../../../types';
@@ -42,10 +42,11 @@ function SysLine({ icon, children }: { icon: ReactNode; children: ReactNode }) {
 }
 
 const ICONS: Record<string, typeof Zap> = {
-  image_launch: Zap, image_saved: Save, image_stack_forked: GitBranch, image_focus: ImageIcon,
+  image_launch: Zap, image_saved: Save, image_stack_forked: GitBranch, image_focus: ImageIcon, image_format: RectangleHorizontal,
 };
 
-// «Вы запустили: …», «Сохранено как …», «Шаги 3–5 не пропали…», «Claude взял в работу: …»
+// «Вы запустили: …», «Сохранено как …», «Шаги 3–5 не пропали…», «Claude взял в работу: …»,
+// «✦ Claude сменил формат картинок проекта: 16:9 → 9:16»
 export function ThreadSysLine({ ctx }: { ctx: ChatItemToolCtx }) {
   const rec = recordOf(ctx.item);
   if (!rec?.fallback) return null;

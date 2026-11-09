@@ -5,9 +5,9 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, clearGenDraft, FLAGS, followChat, showToast, useFeature } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
 import {
-  AUTO_MODEL, imageEditorApi, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
+  AUTO_MODEL, imageEditorApi, type FaceTarget, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
 import {
   effectiveProvider, isRemovalPrompt, modelBlockReason, priceSum, priceText, variantsWord,
@@ -16,21 +16,21 @@ import { currentModel } from '../ProviderModelPicker';
 import { contextInputCounts } from '../context/samples';
 import { exportAnnotated, exportMask, hasMaskMark, marksToJson } from '../marks';
 import {
-  quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
+  outpaintFormatWish, quickAvailability, quickPlan, quickUsesOwnModel, samplesToJobInput,
   type LaunchAction, type LaunchPlan, type OutpaintRatio, type QuickAction, type QuickRoute,
 } from '../editorInputs';
 import { isPersonalScope } from '../scope';
 import {
-  activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, getCreateRatio, isOneVariant, launchMarks, modeOp, opBlockReason, queueText, quickOf,
-  resolveOp, runVerb, usePanelChoiceVersion, type PanelChoice,
+  activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, isOneVariant, launchMarks, modeOp, queueText, quickOf,
+  runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../context/ops';
 import { useQuote } from '../useQuote';
 import { buildQuoteBody, marksSent } from './quoteBody';
 import { loadCatalog, useCatalog } from './catalog';
-import { effectiveSettings, getPrefs, modeSettings, setModeSettings, setPrefs, usePrefs, type ProjectPrefs } from './prefs';
-import { effectiveImageMode, getStoredImageMode, modeAware, useImageModeVersion, type ImageMode } from './modeState';
+import { getPrefs, modeSettings, setModeSettings, usePrefs } from './prefs';
+import { effectiveImageMode, getStoredImageMode, useImageModeVersion, type ImageMode } from './modeState';
 import { activeStepOf } from './actions';
-import { currentVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
+import { currentVersion, findVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
 
@@ -57,6 +57,14 @@ export function activeSrc(projectId: string, t: ImageThread): string | null {
 
 export { threadHasImage } from './model';
 
+// Маска на нити: тот же расчёт, что в launchThread (пометки + «Вся картинка» + hasMaskMark),
+// чтобы котировка на кнопке не расходилась с фактическим запуском (inpaint против edit)
+export function threadHasMask(thread: ImageThread | null): boolean {
+  const { marks: drawn } = getThreadMarks(thread?.id ?? null);
+  const marks = launchMarks(drawn, isWholeImage(thread?.id ?? null));
+  return threadHasImage(thread) && hasMaskMark(marks);
+}
+
 // Поставщик и модель по настройкам: модель не выбрана — умолчание админа у его поставщика
 export function resolveModel(catalog: ImageEditCatalog | null, settings: ImageThreadSettings) {
   const pv = catalog ? effectiveProvider(catalog, settings.provider ?? 'settings') : null;
@@ -64,14 +72,10 @@ export function resolveModel(catalog: ImageEditCatalog | null, settings: ImageTh
   return { pv, m: currentModel(pv, settings.model ?? fallback) };
 }
 
-// Режим запуска чата (флаг image-panel-v5); null — флаг выключен, режимов нет
-export function launchMode(sessionId: string | null, thread: ImageThread | null): ImageMode | null {
-  return modeAware() ? effectiveImageMode(getStoredImageMode(sessionId), threadHasImage(thread)) : null;
+// Режим запуска чата
+export function launchMode(sessionId: string | null, thread: ImageThread | null): ImageMode {
+  return effectiveImageMode(getStoredImageMode(sessionId), threadHasImage(thread));
 }
-
-// Настройки запуска: с режимом — выбор режима, без него — как раньше
-export const launchSettings = (mode: ImageMode | null, prefs: ProjectPrefs, own: ImageThreadSettings | null | undefined) =>
-  mode ? modeSettings(mode, prefs, own) : effectiveSettings(prefs, own);
 
 export function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
@@ -91,11 +95,9 @@ export function quickAvailabilityFor(catalog: ImageEditCatalog | null, settings:
 
 // Что запустит промпт или кнопка низа при операции панели «Картинки»: «Авто» — pickOp,
 // операция без промпта идёт путём быстрого действия редактора
-// byMode — выбор по режиму (флаг image-panel-v5): «Авто» нет, «Изменить» сам решает по отметкам
-export function panelRoute(choice: PanelChoice, hasImage: boolean, hasMask: boolean, byMode = false) {
-  const { op, reason } = byMode
-    ? modeOp(choice.op, hasImage, hasMask)
-    : { op: resolveOp(choice.op, hasImage, hasMask), reason: opBlockReason(choice.op, hasImage, hasMask) };
+// «Авто» нет, «Изменить» сам решает по отметкам
+export function panelRoute(choice: PanelChoice, hasImage: boolean, hasMask: boolean) {
+  const { op, reason } = modeOp(choice.op, hasImage, hasMask);
   return { op, quick: quickOf(op), one: isOneVariant(op), reason };
 }
 
@@ -112,10 +114,12 @@ export interface ContextLaunch {
 }
 
 // Запуск в нить; true — задача запущена, причина отказа уже показана тостом.
-// provider — поставщик только на этот запуск («Взять fal»), выбор в полосе не меняется
+// provider — поставщик только на этот запуск («Взять fal»), выбор в полосе не меняется.
+// quoteId — готовая котировка (облачный запуск): повторный расчёт цены внутри не идёт,
+// цена на кнопке = цена запуска.
 export async function launchThread(
   projectId: string, sessionId: string, thread: ImageThread, requested: LaunchAction,
-  opts?: { provider?: string; ctx?: ContextLaunch },
+  opts?: { provider?: string; ctx?: ContextLaunch; quoteId?: string },
 ): Promise<boolean> {
   let action = requested;
   const api = imageEditorApi();
@@ -124,25 +128,32 @@ export async function launchThread(
   const cx = opts?.ctx;
   // Действие чипа: «Нарисовать» — режим «Создать», остальное — «Править»
   const chatMode = cx ? (cx.op === 'generate' ? 'create' : 'edit') as ImageMode : launchMode(sessionId, thread);
-  const mode = chatMode && requested.kind !== 'prompt' && threadHasImage(thread) ? 'edit' : chatMode;
-  const baseSettings = launchSettings(mode, prefs, thread.settings);
+  const mode = requested.kind !== 'prompt' && threadHasImage(thread) ? 'edit' : chatMode;
+  const baseSettings = modeSettings(mode, prefs, thread.settings);
   const settings = cx ? { ...baseSettings, count: cx.count } : baseSettings;
   const catalog = await loadCatalog(projectId);
-  const { pv, m } = resolveModel(catalog, settings);
+  let { pv, m } = resolveModel(catalog, settings);
+  // Явный поставщик только на этот запуск («Сделать в облаке»): выбор в полосе не меняется,
+  // модель подбирает сервер («Авто»)
+  if (opts?.provider) {
+    const forced = catalog?.providers.find(p => p.key === opts.provider);
+    if (forced) { pv = forced; m = { id: AUTO_MODEL, label: 'Авто' }; }
+  }
   if (!pv || !m) {
     showToast('Рисовать нечем: администратор не настроил поставщиков картинок', '', 'error');
     return false;
   }
   const { marks: drawn, size } = getThreadMarks(thread.id);
   // С режимом «Где менять: Вся картинка» маску не шлём, даже если она закрашена
-  const marks = mode ? launchMarks(drawn, isWholeImage(thread.id)) : drawn;
+  const marks = launchMarks(drawn, isWholeImage(thread.id));
   const hasImage = threadHasImage(thread);
-  const hasMask = hasImage && hasMaskMark(marks);
-  // Операция панели «Картинки» (без флага — всегда «Авто»): у промпта она решает, что делать
+  // Маска — общим хелпером threadHasMask: тот же расчёт, что в котировке облачного исполнителя
+  const hasMask = threadHasMask(thread);
+  // Операция панели «Картинки»: у промпта она решает, что делать
   const choice: PanelChoice = cx
     ? { op: cx.op, mode: 'auto', ratio: (cx.aspect ?? DEFAULT_CHOICE.ratio) as OutpaintRatio }
     : activeChoice(projectId, mode);
-  const pr = panelRoute(choice, hasImage, hasMask, !!mode);
+  const pr = panelRoute(choice, hasImage, hasMask);
   let one = false;
   if (action.kind === 'prompt') {
     if (pr.reason) {
@@ -183,21 +194,27 @@ export async function launchThread(
   const noSamples = own || route?.maxReferences === 0;
   const withMask = plan.useMask && hasMask;
   const withMarks = marksSent(plan.op, hasImage, marks);
-  // Пропорции новой картинки из «Ещё настроек» «Создать»; у дорисовки — свои
-  const aspectRatio = plan.aspectRatio
-    ?? (cx ? (fromScratch ? cx.aspect : null) : mode === 'create' && fromScratch ? getCreateRatio(projectId) : null);
+  // Дорисовка из «Формата» несёт пропорцию желанием котировки (любые W:H: 4:3, 21:9…), а не `aspectRatio`
+  // запуска, где у сервера белый список трёх значений правки
+  const outpaintFormat = outpaintFormatWish(!!cx, plan) ?? undefined;
+  const aspectRatio = outpaintFormat ? undefined : plan.aspectRatio
+    ?? (cx && fromScratch ? cx.aspect : null);
   try {
     // Запуск по ревизии берёт образцы и персонажа из контекста чата; без неё — из памяти вкладки и prefs
     const inputCounts = () => noSamples ? { references: 0, hasCharacter: false }
       : cx ? contextInputCounts(sessionId) : { references: getSamples(projectId).length, hasCharacter: !!prefs.characterSlug };
-    const q = await api.quote(projectId, buildQuoteBody({
-      provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
-      mode: route ? 'auto' : effectiveMode(m, choice.mode), op: plan.op,
-      count: one ? 1 : route?.count ?? settings.count,
-      hasImage, marks, withMask, removal: plan.removal,
-      ...inputCounts(),
-      size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
-    }));
+    // Готовая котировка (облачный запуск): повторный расчёт не идёт, цена = цена на кнопке
+    const q = opts?.quoteId
+      ? { quoteId: opts.quoteId }
+      : await api.quote(projectId, buildQuoteBody({
+          provider: route?.provider ?? pv.key, model: route?.model ?? m.id,
+          mode: route ? 'auto' : effectiveMode(m, choice.mode), op: plan.op,
+          count: one ? 1 : route?.count ?? settings.count,
+          hasImage, marks, withMask, removal: plan.removal,
+          ...inputCounts(),
+          size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
+          format: outpaintFormat,
+        }));
     const legacy = isLegacyThread(thread);
     const version = legacy ? null : currentVersion(thread);
     const stepId = activeStepOf(thread);
@@ -242,25 +259,79 @@ export async function launchThread(
   }
 }
 
+// Тело котировки подстановки (ADR-028): одно на чип подвала и на запуск, чтобы чип показывал
+// то же число проходов и время, что уйдёт в запуск. null — локальных моделей нет в каталоге
+export function faceSwapQuoteBody(
+  catalog: ImageEditCatalog | null, faceTarget: FaceTarget, size: { w: number; h: number } | null,
+): ImageEditQuoteRequest | null {
+  const local = catalog?.providers.find(p => p.key === 'local');
+  const m = local ? currentModel(local, local.models[0]?.id ?? AUTO_MODEL) : null;
+  if (!m) return null;
+  return buildQuoteBody({
+    provider: 'local', model: m.id, mode: 'auto', op: 'inpaint', count: 1,
+    hasImage: true, marks: [], withMask: false, removal: false, references: 0, hasCharacter: true,
+    size, context: null, faceTarget,
+  });
+}
+
+// «Подставить персонажа» (ADR-028, этап 3): запуск с faceTarget (faces: [{face, characterSlug}]).
+// Котировка и запуск — тем же путём, что обычный (buildQuoteBody + startJob), только исполнитель
+// — локальные модели (подстановка работает только на них), маска лица строится сервером.
+// true — задача запущена.
+export async function launchFaceSwap(
+  projectId: string, sessionId: string, thread: ImageThread,
+  faceTarget: FaceTarget,
+  versionId: string | null, size: { w: number; h: number } | null,
+): Promise<boolean> {
+  const api = imageEditorApi();
+  const catalog = await loadCatalog(projectId);
+  const local = catalog?.providers.find(p => p.key === 'local');
+  if (!local) {
+    showToast('Локальные модели недоступны', '', 'error');
+    return false;
+  }
+  const m = currentModel(local, local.models[0]?.id ?? AUTO_MODEL);
+  if (!m) {
+    showToast('Рисовать нечем: администратор не настроил поставщиков картинок', '', 'error');
+    return false;
+  }
+  const version = versionId ? findVersion(thread, versionId) ?? currentVersion(thread) : currentVersion(thread);
+  const src = version ? versionSrc(projectId, thread, version) : activeSrc(projectId, thread);
+  const source = src ? await fetch(src).then(r => r.blob()) : undefined;
+  const body = faceSwapQuoteBody(catalog, faceTarget, size);
+  if (!body) return false;
+  const q = await api.quote(projectId, body);
+  await api.startJob(projectId, {
+    quoteId: q.quoteId, prompt: '',
+    source,
+    sessionId, threadId: thread.id,
+    versionId: version?.id,
+    faceTarget,
+  });
+  followChat(sessionId);
+  return true;
+}
+
 export function useThreadLaunch(projectId: string, sessionId: string | null, thread: ImageThread | null) {
   const api = useMemo(() => imageEditorApi(), []);
   const catalog = useCatalog(projectId);
   const prefs = usePrefs(projectId);
   useThreadStoreVersion();
-  useFeature(FLAGS.imagePanelV5);
   useImageModeVersion();
   const imgMode = launchMode(sessionId, thread);
-  const settings = launchSettings(imgMode, prefs, thread?.settings);
+  const settings = modeSettings(imgMode, prefs, thread?.settings);
   const { pv, m } = resolveModel(catalog, settings);
   const { marks: drawn, size } = getThreadMarks(thread?.id ?? null);
   const whole = isWholeImage(thread?.id ?? null);
-  const marks = imgMode ? launchMarks(drawn, whole) : drawn;
+  const marks = launchMarks(drawn, whole);
   const hasImage = threadHasImage(thread);
-  const hasMask = hasImage && hasMaskMark(marks);
+  // Маска — общим хелпером threadHasMask: формула эквивалентна локальному
+  // `hasImage && hasMaskMark(marks)`, но один расчёт — в котировке и запуске
+  const hasMask = threadHasMask(thread);
   // Операция и режим панели «Картинки»
   usePanelChoiceVersion();
   const choice = activeChoice(projectId, imgMode);
-  const pr = panelRoute(choice, hasImage, hasMask, !!imgMode);
+  const pr = panelRoute(choice, hasImage, hasMask);
   const quick = pr.quick ? quickAvailabilityFor(catalog, settings, pr.quick) : null;
   const route = quick?.route ?? null;
   const fromScratch = pr.op === 'generate';
@@ -301,9 +372,8 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
 
   const setSettings = useCallback((patch: Partial<ImageThreadSettings>) => {
     const next = { ...settings, ...patch };
-    // С режимом: «Создать» пишет только свой выбор проекта, нить не трогает
-    if (imgMode) setModeSettings(projectId, imgMode, patch);
-    else setPrefs(projectId, patch);
+    // «Создать» пишет только свой выбор проекта, нить не трогает
+    setModeSettings(projectId, imgMode, patch);
     if (thread && sessionId && imgMode !== 'create') {
       void mutate(projectId, sessionId, rev => threadsApi.settings(projectId, sessionId, thread.id, next, rev));
     }

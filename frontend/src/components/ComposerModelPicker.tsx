@@ -1,5 +1,5 @@
 import { Sparkles, Gem, Brain, Feather, Lock, Zap, Cpu } from 'lucide-react';
-import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOption,
+import { useModels, modelProvider, providerLabel, providerCapsByKey, modelLabel, useDefaultModelOption,
   modelFamily, versionHint,
   USAGE, type UsageKey } from '../lib/models';
 import { effortLabel } from '../lib/effort';
@@ -47,6 +47,10 @@ interface Props {
   // (узкий экран) уже имеет фиксированную ширину в ComposerMenu — этот проп на неё
   // не действует
   maxTriggerWidth?: number;
+  // Я здесь участник общего проекта (не его владелец): модель проекта — решение владельца,
+  // участнику остаётся смотреть. Строки списка выключены, сверху — пояснение (п.16 карты).
+  // У владельца общего проекта и в личном проекте — как прежде
+  participant?: boolean;
 }
 
 // Иконка модели по «классу» (мощная/универсальная/экономичная/быстрая). Тир угадываем
@@ -63,9 +67,18 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
   return <Cpu {...props} />;                                              // нейтральная
 }
 
+// Ключ группы композера: все локальные провайдеры — одна группа, остальные — по провайдеру
+const LOCAL_GROUP = '__local';
+function groupKeyOf(provider: string): string {
+  return providerCapsByKey(provider).isLocal ? LOCAL_GROUP : provider;
+}
+function groupLabel(key: string): string {
+  return key === LOCAL_GROUP ? 'Локальные' : providerLabel(key);
+}
+
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
   usage = USAGE.chatNew, showFreezeNote, effort, onEffortChange, showEffortLabel = true,
-  maxTriggerWidth }: Props) {
+  maxTriggerWidth, participant }: Props) {
   const models = useModels();
   const defaultOption = useDefaultModelOption(usage);
 
@@ -78,19 +91,22 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
   const current = value ?? '';
   const currentProvider = modelProvider(current);
 
-  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи.
+  // Группировка по провайдеру, Claude первой, остальные по алфавиту подписи. Локальные
+  // провайдеры (isLocal с бэка: свои движки на наших машинах) сведены в одну группу
+  // «Локальные» — их несколько (Flash-Next на ai, Gemma на Video), а для выбора важно
+  // «своя или облачная», а не чей это эндпоинт.
   // Пункт «По умолчанию» (value '') из групп исключён — он стоит НАД ними отдельной
   // строкой: настройка может указывать на модель любого провайдера, и место внутри
   // Claude — артефакт того, что этот пункт приходит из каталога CLI.
   const byProvider = new Map<string, typeof selectable>();
   for (const m of selectable) {
     if (!m.value) continue;
-    const key = m.provider ?? 'claude';
+    const key = groupKeyOf(m.provider ?? 'claude');
     if (!byProvider.has(key)) byProvider.set(key, []);
     byProvider.get(key)!.push(m);
   }
   const providerKeys = [...byProvider.keys()].sort((a, b) =>
-    a === 'claude' ? -1 : b === 'claude' ? 1 : providerLabel(a).localeCompare(providerLabel(b)));
+    a === 'claude' ? -1 : b === 'claude' ? 1 : groupLabel(a).localeCompare(groupLabel(b)));
   // Заголовки групп нужны, только когда провайдеров больше одного
   const showHeaders = providerKeys.length > 1;
 
@@ -109,15 +125,18 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       description: defaultOption.description,
       icon: <ModelIcon value="" />,
       badge: <WindowBadge tokens={defaultOption.contextWindow} />,
+      // «По умолчанию» — тоже настройка владельца: участнику не выбирается
+      disabled: !!participant,
     }],
   }] : [];
 
   const groups: ComposerMenuGroup[] = providerKeys.map(pk => ({
     key: pk,
-    label: showHeaders ? providerLabel(pk) : undefined,
-    // Перенос чата: другой провайдер И разговор уже начат
-    note: started && pk !== currentProvider
-      ? `Перенесёт чат к ${providerLabel(pk)} — контекст сохранится`
+    label: showHeaders ? groupLabel(pk) : undefined,
+    // Перенос чата: другой провайдер И разговор уже начат. В группе «Локальные» провайдеров
+    // несколько — перенос, если хоть одна её модель у другого провайдера, чем текущий чат.
+    note: started && byProvider.get(pk)!.some(m => (m.provider ?? 'claude') !== currentProvider)
+      ? `Перенесёт чат к ${pk === LOCAL_GROUP ? 'другой модели' : providerLabel(pk)} — контекст сохранится`
       : undefined,
     items: byProvider.get(pk)!.map(m => ({
       value: m.value,
@@ -126,6 +145,8 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       description: m.description,
       icon: <ModelIcon value={m.value} />,
       badge: <WindowBadge tokens={m.contextWindow} />,
+      // Участник не меняет модель проекта — строки только для чтения (п.16)
+      disabled: !!participant,
     })),
   }));
 
@@ -144,11 +165,16 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
       triggerLabel={current ? modelLabel(current) : 'Модель'}
       triggerSuffix={onEffortChange && showEffortLabel && <EffortBars value={effortValue} />}
       title={`Модель: ${current ? modelLabel(current) : defaultOption.label}`
+        // В compact-форме (узкая полоса) тултип — единственный способ сказать, почему
+        // список только для чтения
+        + (participant ? ' · выбирает владелец проекта' : '')
         + (onEffortChange ? ` · Усилие: ${effortLabel(effortValue)}` : '')}
       isMobile={isMobile}
       compact={compact}
       maxTriggerWidth={maxTriggerWidth}
-      header={frozen && <ComposerFreezeNote />}
+      // Участнику пояснение идёт вместо пометки заморозки: менять модель он не может
+      // вовсе, а «на что повлияет правка» ему решать не о чем
+      header={participant ? <ModelOwnerNote /> : frozen && <ComposerFreezeNote />}
       footer={onEffortChange && <ComposerEffortPanel value={effort} onChange={onEffortChange} />}
     />
   );
@@ -175,6 +201,27 @@ function ComposerFreezeNote() {
     >
       <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
       <span>Правки цепочек — только для новых чатов</span>
+    </div>
+  );
+}
+
+// Пояснение для участника общего проекта: модель — решение владельца, список только для
+// чтения. Вид — как пометка заморозки (та же строка с отчерком снизу, без заливки):
+// это сведения о чате, а не запрет — человек видит, на чём проект идёт, и может это
+// прочитать в тултипе плашки и в compact-форме.
+function ModelOwnerNote() {
+  return (
+    <div
+      title="Модель общего проекта выбирает его владелец. Участникам остаётся смотреть, на чём идёт чат."
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm,
+        margin: `0 ${SP.xs}px ${SP.xs}px`, padding: `${SP.xs}px ${SP.sm}px ${SP.sm}px`,
+        borderBottom: `1px solid ${C.borderLight}`, cursor: 'help',
+        fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35, fontFamily: FONT.sans,
+      }}
+    >
+      <Lock size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+      <span>Модель выбирает владелец проекта</span>
     </div>
   );
 }

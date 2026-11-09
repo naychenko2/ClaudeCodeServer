@@ -31,7 +31,11 @@ internal sealed class SidecarHost : IAsyncDisposable
         TurnGrants grants, IDeviceIdentity device, ILoggerFactory loggers, int port = 0,
         HttpMessageHandler? gatewayHandler = null, IEgressTunnelOpener? egress = null, CancellationToken ct = default)
     {
-        var builder = WebApplication.CreateSlimBuilder();
+        // Environment Testing: slim builder иначе берёт ASPNETCORE_ENVIRONMENT из окружения
+        // (Production в dev-шелле) и грузит appsettings.Production.json, где Kestrel:Endpoints:Https
+        // (конфиг ГЛАВНОГО сервера) падает в HttpsConfigurationService без UseKestrelHttpsConfiguration.
+        // Testing-файл Kestrel-секции не имеет — сайдкар слушает только свой loopback.
+        var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { EnvironmentName = "Testing" });
         // Свой логгер у сайдкара — агента; журнал запросов Kestrel не нужен (в нём адреса ходов)
         builder.Logging.ClearProviders();
 

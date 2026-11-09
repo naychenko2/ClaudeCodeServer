@@ -319,7 +319,7 @@ export async function mockApi(page: Page, trace = false) {
     if (p === '/auth/me') {
       return json({
         id: 'u1', userId: 'u1', username: 'admin', displayName: 'Андрей', role: 'admin', executionEnvironment: 'local',
-        featureFlags: { 'video-editor': true, 'image-editor': true, 'audio-editor': true, 'image-panel-v5': true },
+        featureFlags: {},
         subsystems: ['videoeditor', 'imageeditor', 'audioeditor'],
       });
     }

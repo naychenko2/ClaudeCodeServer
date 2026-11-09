@@ -42,6 +42,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { useContextButton } from '../features/chatContext/useContextButton';
 import { useFileContextMenu } from '../features/chatContext/useFileContextMenu';
+import { canWriteContent } from '../features/projects/members/contentRights';
 import { EmptyState } from './EmptyState';
 import { DeviceAgentGate } from './DeviceAgentGate';
 import { CapabilityUnavailable } from './CapabilityGate';
@@ -49,7 +50,6 @@ import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { NO_AUTOFILL } from '../lib/noAutofill';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 
 interface Props {
   project: Project;
@@ -744,12 +744,25 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Контрол записи рисуется, только если у проекта сейчас есть его маршрут: у агента — не все,
   // с другого устройства (ретранслятор) — ни одного. Список маршрутов — deviceAgentRoutes.ts
   const { can } = useProjectRoutes(project);
-  const canUpload = can('POST files/upload');
-  const canToMarkdown = can('POST files/document/to-markdown');
-  const canCreateFile = can('POST files/create');
-  const canMkdir = can('POST files/mkdir');
-  const canRename = can('POST files/rename');
-  const canDelete = can('DELETE files');
+  // Маршрут + право записи по роли (S2c-F4b): контрол записи есть, только если у проекта
+  // есть маршрут И роль умеет эту дверь контента (contentRights.ts). Закрытый — ПРЯЧЕТ,
+  // не отключён: решение живёт в одном месте, а не по каждому контролу.
+  const canUpload = can('POST files/upload') && canWriteContent(project, 'file.upload');
+  const canToMarkdown = can('POST files/document/to-markdown') && canWriteContent(project, 'file.toMarkdown');
+  const canCreateFile = can('POST files/create') && canWriteContent(project, 'file.create');
+  const canMkdir = can('POST files/mkdir') && canWriteContent(project, 'file.mkdir');
+  const canRename = can('POST files/rename') && canWriteContent(project, 'file.rename');
+  const canDelete = can('DELETE files') && canWriteContent(project, 'file.delete');
+  // Удаление папки — отдельная дверь ('dir.delete'): редактору закрыта на бэке, закрыта
+  // и здесь. Удаление файла ('file.delete') — не удаление папки.
+  const canDeleteDir = can('DELETE files') && canWriteContent(project, 'dir.delete');
+  // Пункты заметок («Заметка»/«Новая заметка»/«Заметка о файле») — дверь 'note.create':
+  // читателю скрыты, редактору и владельцу есть (S2c-F4k).
+  const canNoteCreate = canWriteContent(project, 'note.create');
+  // Пункты картинок («Редактировать картинку»/«Нарисовать картинку») — дверь 'media.edit':
+  // шлюзы медиа-редакторов на бэке под полным Write на проект (ImageEditScopeGate),
+  // участник пишет через них 404 — скрыты и редактору, и читателю.
+  const canMediaEdit = canWriteContent(project, 'media.edit');
   const canCreate = canCreateFile || canMkdir || canUpload;
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
@@ -909,7 +922,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
   // Вход — вклад MF-модуля image-editor: нет модуля или флага — нет и пунктов. Картинка
   // открывается в последнем активном чате проекта (ADR-019), попапом «Редактор»
   const imageEditor = useSlotItem<never, ImageEditorOpenerApi>('image-editor', 'opener')?.action;
-  const imageEditorOn = useFeature(FLAGS.imageEditor) && !!imageEditor;
+  const imageEditorOn = !!imageEditor;
   const openEditor = (target: ImageEditorOpenTarget) =>
     imageEditor?.open({ projectId: project.id, projectName: project.name, target, onShowInFiles: path => onOpenFile(path) });
   const doTransformMd = async (entry: FileEntry, targetDir: string | null) => {
@@ -1666,8 +1679,9 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
     <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
       {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
           создать, но .md через notes-API получает бэклинки и попадает в граф.
-          Подсистема выключена — заметки как формата не существует, пункт скрыт */}
-      {inNotes && notesOn && folderIconC && newNoteDialogC && (
+          Подсистема выключена — заметки как формата не существует, пункт скрыт.
+          Роль: читателю пункта нет ('note.create', canNoteCreate) */}
+      {inNotes && notesOn && canNoteCreate && folderIconC && newNoteDialogC && (
         <MenuItem
           icon={folderIconC.render?.({ size: 15 })}
           label="Заметка"
@@ -2142,7 +2156,7 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         const add = (cond: unknown, node: ReactNode) => { if (cond) items.push(node); };
         const sep = (key: string) => items.push(<div key={key} style={{ height: 1, background: C.border, margin: '4px 6px' }} />);
 
-        add(entry.isDirectory && inNotesVault(entry.path) && newNoteDialogC,
+        add(entry.isDirectory && inNotesVault(entry.path) && canNoteCreate && newNoteDialogC,
           <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
         // Контекст чата — первым: он про «материал живёт у чата», вложение ниже —
         // про «уедет с ближайшим сообщением». В контексте пункт превращается
@@ -2151,10 +2165,12 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(chatContextBtn.available && !fileCtx.on,
           <MenuItem key="chat-context" icon={chatContextBtn.inContext ? <MI_Check /> : <MI_Context />}
             label={chatContextBtn.title} onClick={() => { close(); chatContextBtn.toggle(); }} />);
-        add(imageEditorOn && online && !entry.isDirectory && !fileCtx.on && imageEditor?.isEditable(entry.path),
+        // Медиа-пункты — под дверью 'media.edit' (закрыта редактору и читателю: бэковый
+        // шлюз под полным Write), поэтому canMediaEdit здесь обязателен
+        add(imageEditorOn && online && canMediaEdit && !entry.isDirectory && !fileCtx.on && imageEditor?.isEditable(entry.path),
           <MenuItem key="image-edit" icon={<Pencil size={15} strokeWidth={ICON_STROKE} />} label="Редактировать картинку"
             onClick={() => { close(); openEditor({ kind: 'edit', path: entry.path }); }} />);
-        add(imageEditorOn && online && entry.isDirectory && !inNotesVault(entry.path),
+        add(imageEditorOn && online && canMediaEdit && entry.isDirectory && !inNotesVault(entry.path),
           <MenuItem key="image-create" icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />} label="Нарисовать картинку"
             onClick={() => { close(); openEditor({ kind: 'create', folder: entry.path }); }} />);
         add(!entry.isDirectory && onAttachToChat,
@@ -2177,19 +2193,22 @@ function FileExplorerBody({ project, onOpenFile, activeFilePath, isMobile = fals
         add(!entry.isDirectory && onOpenDossiers,
           <MenuItem key="dossiers" icon={<MI_Dossiers />} label="Почему менялся этот файл" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
         // «Заметка о файле» — привязка frontmatter file:. Только вне vault: внутри
-        // notes/ уже есть «Новая заметка», а заметка о заметке не нужна
-        add(!entry.isDirectory && !inNotesVault(entry.path) && newNoteDialogC,
+        // notes/ уже есть «Новая заметка», а заметка о заметке не нужна.
+        // Роль: та же дверь 'note.create', что у прочих пунктов заметок
+        add(!entry.isDirectory && !inNotesVault(entry.path) && canNoteCreate && newNoteDialogC,
           <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
-        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
-        if (!isNotesRoot(entry) && online && (canRename || canDelete)) {
+        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний.
+        // Удаление — по типу записи: у папки своя дверь 'dir.delete', у файла 'file.delete'
+        const canDeleteEntry = entry.isDirectory ? canDeleteDir : canDelete;
+        if (!isNotesRoot(entry) && online && (canRename || canDeleteEntry)) {
           sep('sep-1');
           if (canRename) {
             items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
             items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
           }
-          if (canRename && canDelete) sep('sep-2');
-          if (canDelete)
+          if (canRename && canDeleteEntry) sep('sep-2');
+          if (canDeleteEntry)
             items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
         }
 

@@ -23,6 +23,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //
 // Конфиг минимальный: ключей Dify не задаём — KnowledgeService тихо работает на дефолтах
 // (IsConfigured=false, реконсайлер сразу выходит).
+[Trait("Category", "Host")]
 public class KnowledgeSubsystemRegistrationTests
 {
     private static IConfiguration BuildConfig(string dataPath) =>

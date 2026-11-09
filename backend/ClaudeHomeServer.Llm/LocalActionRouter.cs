@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Services.ImageEditor;
+
 namespace ClaudeHomeServer.Services.Llm;
 
 // Откуда взято действующее значение маршрута — нужно UI, чтобы честно показать,
@@ -10,13 +12,16 @@ public enum RouteSource { Default, Config, Admin }
 // Claude — модель действия по умолчанию (та, что оно берёт из своего конфига);
 // Tier   — слот тира инстанса (сильная/средняя/слабая, AppSettings.ModelTier*);
 //          пустой слот откатывается на модель действия, как Claude;
-// Model  — конкретная модель конкретного провайдера (Model заполнено её id).
-public enum RouteKind { Local, Claude, Tier, Model }
+// Model  — конкретная модель конкретного провайдера (Model заполнено её id);
+// FacePose — локальный расчёт ракурса лица (InsightFace в local-media), не LLM: допустим
+//          только месту с LocalAction.FacePose (ADR-027 §3). Не путать с Local (Ollama).
+public enum RouteKind { Local, Claude, Tier, Model, FacePose }
 
 // Действующий маршрут действия: чем начинаем, какой моделью (для Kind=Model),
-// каким слотом (для Kind=Tier) и откуда взято.
+// каким слотом (для Kind=Tier) и откуда взято. Engine — имя именованного локального движка
+// (`LocalEngines:{name}`) для Kind=Local; null — основной LocalLlm.
 public sealed record ActionRoute(RouteKind Kind, string? Model, RouteSource Source,
-    ModelTier? Tier = null);
+    ModelTier? Tier = null, string? Engine = null);
 
 // Решает, идёт ли конкретное фоновое действие на локальную модель (Ollama) или на
 // существующий механизм (claude one-shot). Приоритет источников: оверрайд админа из UI
@@ -36,6 +41,13 @@ public sealed class LocalActionRouter
     private readonly Dictionary<string, bool> _overrides;
     private readonly Dictionary<CheapProfile, CheapProfileSpec> _profiles;
     private readonly ILogger<LocalActionRouter> _log;
+    private readonly ILocalImageMedia? _localMedia;
+    // Слоты тиров (UserModelTierResolver) — нужны голосовому ходу: выбор слота места
+    // chat-voice разворачивается в модель единственной точкой (см. VoiceModelFor).
+    private readonly UserModelTierResolver? _userTiers;
+    // Именованные движки (LocalEngines:*): место из их Actions идёт на свой движок, если
+    // админ и Ollama:Actions его не переопределили.
+    private readonly NamedLocalEngines? _engines;
 
     // Значение LocalLlm:BackgroundWhileTurn — что делать с фоновым действием, пока на
     // локальном движке идёт ход исполнителя.
@@ -44,12 +56,17 @@ public sealed class LocalActionRouter
 
     public LocalActionRouter(ILocalLlmClient ollama, LocalActionOverridesStore store,
         IConfiguration config, ILogger<LocalActionRouter> log,
-        SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null)
+        SpecialtySettingsStore? specialty = null, LocalEngineBusyTracker? busy = null,
+        ILocalImageMedia? localMedia = null, UserModelTierResolver? userTiers = null,
+        NamedLocalEngines? engines = null)
     {
+        _localMedia = localMedia;
         _ollama = ollama;
         _store = store;
         _specialty = specialty;
         _busy = busy ?? LocalEngineBusyTracker.Instance;
+        _userTiers = userTiers;
+        _engines = engines;
         _log = log;
 
         // Правило «локаль занята ходом»: fallback (по умолчанию) — фоновое действие пропускает
@@ -115,9 +132,42 @@ public sealed class LocalActionRouter
     // локальном провайдере просто некому начать, а шаг локали и так отсечён ollama.Enabled.
     public bool LocalBlockedByTurn => _skipLocalWhileTurn && _busy.Busy;
 
-    // Начинается ли действие с локальной модели. Требует настроенного Ollama; иначе — нет.
-    public bool UsesLocal(string actionKey) =>
-        _ollama.Enabled && Resolve(actionKey).Kind == RouteKind.Local;
+    // Начинается ли действие с локальной модели: основной LocalLlm (нужен настроенный) либо
+    // именованный движок маршрута (нужен настроенный он). Иначе — нет.
+    public bool UsesLocal(string actionKey)
+    {
+        var route = Resolve(actionKey);
+        if (route.Kind != RouteKind.Local) return false;
+        return route.Engine is null ? _ollama.Enabled : _engines?.Enabled(route.Engine) == true;
+    }
+
+    // Именованный движок маршрута места (Kind=Local с Engine) — null у основного LocalLlm
+    // и у прочих маршрутов.
+    public LocalEngine? EngineOf(ActionRoute route) =>
+        route.Kind == RouteKind.Local ? _engines?.Get(route.Engine) : null;
+
+    // Подпись именованного движка маршрута для UI (Title, иначе модель, иначе имя); null — основной
+    // LocalLlm или не локаль. Без неё настройки показывали бы модель основного движка.
+    public string? EngineLabel(ActionRoute route) =>
+        EngineOf(route)?.Spec is { } s ? (s.Title ?? s.Model ?? s.Name) : null;
+
+    // Модель голосового хода (место chat-voice) по ЯВНОМУ выбору админа: слот →
+    // UserModelTierResolver.ModelFor (единственная точка разворачивания уровня), конкретная
+    // модель → как есть. «Локальная» (свой быстрый HTTP-путь), «по умолчанию» (модель чата),
+    // пресет и отсутствие выбора → null: голосовой ход идёт на модели чата, как раньше.
+    // null — штатный резолв (модель чата), вызывающий подмены модель только при не-null.
+    public string? VoiceModelFor(string actionKey, string? ownerId)
+    {
+        if (_store.TryGet(actionKey) is not { } raw) return null;
+        var v = raw.Trim();
+        if (v is LocalActionOverridesStore.LocalRoute or LocalActionOverridesStore.ClaudeRoute
+            or LocalActionOverridesStore.DefaultRoute or LocalActionOverridesStore.FacePoseRoute)
+            return null;
+        if (LocalActionOverridesStore.ParseTierRoute(v) is { } tier)
+            return _userTiers?.ModelFor(tier, ownerId);
+        if (LocalActionOverridesStore.IsPresetRoute(v)) return null;
+        return v;
+    }
 
     // Действующий маршрут и его источник — БЕЗ учёта доступности Ollama: UI показывает
     // настройку и при выключенной локали (иначе выбор выглядел бы сброшенным).
@@ -143,20 +193,28 @@ public sealed class LocalActionRouter
         }
         if (_overrides.TryGetValue(actionKey, out var cfg))
             return new ActionRoute(cfg ? RouteKind.Local : RouteKind.Claude, null, RouteSource.Config);
+        // Именованный движок из конфига (LocalEngines:*:Actions) — источник Config, как Ollama:Actions.
+        if (_engines?.EngineFor(actionKey) is { } engine)
+            return new ActionRoute(RouteKind.Local, null, RouteSource.Config, Engine: engine);
         // Без настройки админа и конфига место идёт на свой слот тира из каталога
         // (сильная/средняя/слабая): слово «по умолчанию» означает одно и то же во всём
         // продукте. Модель действия (обычно haiku) остаётся фолбэком — её берёт
         // CheapTextRunner.EffectiveFallback, когда слот пуст.
         var action = LocalActionCatalog.Find(actionKey);
+        // Дефолт места ракурса — локальный InsightFace; без local-media разворачивается в
+        // обычный дефолт места (vision-слот). Явный выбор админа выше не подменяется.
+        if (action?.FacePose == true && _localMedia?.Configured == true)
+            return new ActionRoute(RouteKind.FacePose, null, RouteSource.Default);
         return action?.DefaultLocal == true
             ? new ActionRoute(RouteKind.Local, null, RouteSource.Default)
             : new ActionRoute(RouteKind.Tier, null, RouteSource.Default,
                 action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
     }
 
-    private static ActionRoute Parse(string route, RouteSource source) => route switch
+    internal static ActionRoute Parse(string route, RouteSource source) => route switch
     {
         LocalActionOverridesStore.LocalRoute => new ActionRoute(RouteKind.Local, null, source),
+        LocalActionOverridesStore.FacePoseRoute => new ActionRoute(RouteKind.FacePose, null, source),
         // Легаси-значения одиночной «модели по умолчанию» (v1): оба означали «обычная модель,
         // не локаль» — с появлением слотов это средняя
         LocalActionOverridesStore.ClaudeRoute or LocalActionOverridesStore.DefaultRoute =>

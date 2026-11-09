@@ -8,34 +8,64 @@ import { onMessage, onReconnected } from './signalr';
 
 let _items: BoardItem[] = [];
 let _loaded = false;
-let _loading: Promise<void> | null = null;
+let _inFlight: Promise<void> | null = null;
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
-const DEBOUNCE_MS = 500;
+
+// Ответ доски — самый крупный из регулярно опрашиваемых (замер: ~0,86 МБ на ответ),
+// а поток status_changed идёт пачками на каждом ходе. Прежний debounce в 500 мс
+// ограничивал только ЧАСТОТУ ВЫЗОВОВ, но не полёты: пока запрос летел, следующий
+// событие успевало взвести новый — и доска читалась раз в 12 с, по 258 МБ за час,
+// плюс столько же копий уходило в офлайн-кэш IndexedDB (см. api.board.agents live).
+//
+// Здесь две защиты: один полёт за раз (события, пришедшие в полёте, не теряются —
+// взводят догон), и минимальный зазор между СТАРТАМИ запросов.
+const MIN_GAP_MS = 5_000;
 
 function emit() {
   _listeners.forEach(fn => fn());
 }
 
-// Debounced fetch: при батче событий перезапрашиваем не чаще DEBOUNCE_MS
-let _fetchTimer: ReturnType<typeof setTimeout> | null = null;
+let _tailTimer: ReturnType<typeof setTimeout> | null = null;
+let _lastStartedAt = 0;
+let _pending = false;
+// off-функции от onMessage/onReconnected — resetBoardStore отписывается, иначе
+// следующий тест (после reset) не переподписался бы и видел бы старую подписку.
+let _offMessage: (() => void) | null = null;
+let _offReconnected: (() => void) | null = null;
+
+// Догон: взвести таймер на конец зазора. Действующий таймер не переставляется —
+// пачка событий даёт один запрос, а не по одному на событие.
+// Пока доску никто не смотрит (_listeners пуст) — фоновых запросов нет: realtime-
+// события и реконнект не должны тянуть 0,86 МБ в пустоту.
 function scheduleFetch() {
-  if (_fetchTimer) return;
-  _fetchTimer = setTimeout(() => {
-    _fetchTimer = null;
+  if (_listeners.size === 0) return;
+  if (_tailTimer !== null) return;
+  const wait = Math.max(0, MIN_GAP_MS - (Date.now() - _lastStartedAt));
+  _tailTimer = setTimeout(() => {
+    _tailTimer = null;
     void fetchBoard();
-  }, DEBOUNCE_MS);
+  }, wait);
 }
 
-async function fetchBoard(): Promise<void> {
-  // При первичной загрузке (не debounce из реальтайма) — делаем полноценным
-  if (!_loaded) {
-    _loading = doFetch();
-    await _loading;
-    _loading = null;
-    return;
+// Один полёт на всех. Пока он летит, повод не начинает второй, а помечает себя
+// догоном: без этого событие, пришедшее в полёте, потеряло бы обновление до
+// следующего повода (реальтайм-событие одноразовое).
+function fetchBoard(): Promise<void> {
+  if (_inFlight) {
+    _pending = true;
+    return _inFlight;
   }
-  await doFetch();
+  _lastStartedAt = Date.now();
+  const run = doFetch().finally(() => {
+    _inFlight = null;
+    if (_pending) {
+      _pending = false;
+      scheduleFetch();
+    }
+  });
+  _inFlight = run;
+  return run;
 }
 
 async function doFetch(): Promise<void> {
@@ -53,7 +83,7 @@ function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
 
-  onMessage(msg => {
+  _offMessage = onMessage(msg => {
     // task_changed — задача обновилась или удалилась → обновляем доску
     if (msg.type === 'task_changed') {
       scheduleFetch();
@@ -85,43 +115,56 @@ function wireRealtime() {
       });
 
       if (changed) emit();
-      // Debounce на случай, если за этим последует ещё событие
+      // На случай, если за этим последует ещё событие — через троттл, не debounce
       scheduleFetch();
     }
   });
 
-  onReconnected(() => {
-    // После реконнекта — свежие данные
-    void fetchBoard();
+  _offReconnected = onReconnected(() => {
+    // После реконнекта — свежие данные (через троттл: реконнект часто ложится
+    // на пачку status_changed, и два полёта на одну и ту же доску не нужны)
+    scheduleFetch();
   });
 }
 
 export function ensureAgentsLoaded(): Promise<void> {
   wireRealtime();
   if (_loaded) return Promise.resolve();
-  if (!_loading) {
-    _loading = doFetch().finally(() => { _loading = null; });
-  }
-  return _loading;
+  return fetchBoard();
 }
 
 // Принудительный рефетч доски — страховочный пуллинг дашборда «Домой»
-// (статусы проектных исполнителей не приходят в user-группу SignalR)
+// (статусы проектных исполнителей не приходят в user-группу SignalR).
+// Через троттл: пуллинг и realtime-события сходятся в одну очередь.
 export function refreshAgentBoard(): void {
-  void fetchBoard();
+  scheduleFetch();
+}
+
+// Подписка на стор: добавляет слушателя. Первый подписчик (доску никто не смотрел)
+// — один свежий запрос; фоновые полёты дальше только через троттл.
+// Экспортирована: тесты симулируют смонтированный компонент через неё.
+export function subscribe(fn: () => void): () => void {
+  _listeners.add(fn);
+  if (_listeners.size === 1 && !_loaded) void fetchBoard();
+  return () => { _listeners.delete(fn); };
 }
 
 export function useAgentBoard(): BoardItem[] {
-  return useSyncExternalStore(
-    fn => { _listeners.add(fn); return () => _listeners.delete(fn); },
-    () => _items,
-    () => _items,
-  );
+  return useSyncExternalStore(subscribe, () => _items, () => _items);
 }
 
-// Очистка (для тестов)
+// Очистка (для тестов). Снимает и взведённый таймер, и флаг виртуальной подписки,
+// и подписки на signalr (onMessage/onReconnected): иначе следующий тест не
+// переподписался бы и видел бы старую подписку.
 export function resetBoardStore() {
   _items = [];
   _loaded = false;
   _listeners.clear();
+  _inFlight = null;
+  _pending = false;
+  _lastStartedAt = 0;
+  _realtimeWired = false;
+  _offMessage?.(); _offMessage = null;
+  _offReconnected?.(); _offReconnected = null;
+  if (_tailTimer !== null) { clearTimeout(_tailTimer); _tailTimer = null; }
 }

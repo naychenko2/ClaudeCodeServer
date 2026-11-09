@@ -2,7 +2,7 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
-// Автоправило архивации чатов (план «Архив чатов» v4, шаг 6, флаг chat-auto-archive):
+// Автоправило архивации чатов (план «Архив чатов» v4, шаг 6):
 // раз в час убирает в архив чаты без активности дольше порога. Архив ПРЯЧЕТ чат, а не
 // удаляет (история и claudeSessionId целы), отбор — SessionManager.GetArchiveRuleCandidates
 // (единая точка для тика и превью), потолок 200 за проход и один ArchiveBatchId — откат
@@ -17,7 +17,6 @@ public class ChatArchiveService(
     SessionManager sessions,
     ProjectManager projects,
     UserStore users,
-    FeatureFlagService flags,
     NotificationService notifications,
     ILogger<ChatArchiveService> log) : BackgroundService
 {
@@ -68,8 +67,7 @@ public class ChatArchiveService(
 
     // Кнопка «Применить сейчас» (POST /api/chats/archive-run): ровно один проход владельца
     // по всем его сферам, включая накопившиеся залежи, — гейт первого прохода не действует,
-    // кнопка его и снимает (проставляет ArchiveRuleFirstRunAt). Флаг уже проверен контроллером,
-    // здесь защита от вызова без проверки.
+    // кнопка его и снимает (проставляет ArchiveRuleFirstRunAt). 
     // Возвращает (число убранных чатов, batchId прохода; batchId null — пачка пуста).
     public async Task<(int Archived, string? BatchId)> RunNowAsync(string ownerId, DateTime nowUtc)
     {
@@ -88,7 +86,6 @@ public class ChatArchiveService(
     {
         var owner = users.GetById(ownerId)
             ?? throw new InvalidOperationException($"Пользователь не найден: {ownerId}");
-        if (!flags.IsEnabled(owner.Id, FeatureFlagKeys.ChatAutoArchive)) return (0, null);
         var project = projects.GetById(projectId);
         if (project is null || project.OwnerId != ownerId) return (0, null);
         if ((project.ArchiveAfterDays ?? owner.ArchiveAfterDays) is not int days) return (0, null);
@@ -99,11 +96,9 @@ public class ChatArchiveService(
 
     // Проход по сферам одного владельца: чаты вне проектов (личный порог) и каждый проект
     // (порог проекта ?? личный — «null = наследовать»). Проект без порога ни прямо, ни
-    // по наследию — не трогаем. Флаг — по владельцу (проектной сессии OwnerId нет, владелец
-    // резолвится через проект — отбор уже получил проект из списка владельца).
+    // по наследию — не трогаем.
     private async Task<(int Archived, string? BatchId)> RunPassAsync(User owner, DateTime nowUtc, bool requireFirstRun)
     {
-        if (!flags.IsEnabled(owner.Id, FeatureFlagKeys.ChatAutoArchive)) return (0, null);
         if (requireFirstRun && owner.ArchiveRuleFirstRunAt is null) return (0, null);
 
         var candidates = new List<Session>();

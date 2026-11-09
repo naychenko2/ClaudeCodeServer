@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services.Turn;
@@ -84,7 +85,18 @@ public sealed record PromptSessionContext(
     // MCP-сервер модуля «Видео» (video_*) доехал до хода — по той же причине
     bool HasVideoEditorMcp = false,
     // Живого человека у хода нет — см. TurnAudience.IsUnattended
-    bool Unattended = false);
+    bool Unattended = false,
+    // Хук PreToolUse «потребители правленого файла» реально доедет до CLI хода (local-владелец на Linux, http-адрес).
+    // Только диагностика: хвост первого хода ConsumersTailContributor идёт независимо от признака (правки через Bash хук не видит)
+    bool ConsumersHookActive = false,
+    // Рамка хода (S2a-4, разрез И.3 в ревизии 29.10): вердикт TurnFrame/ITurnFrameSource. Narrow —
+    // общий проект: личное пространство арендатора (личный vault, личная память, память глобальных
+    // персон) в подборку хода не попадает, при любом акторе включая владельца. Wide — личный чат:
+    // защищать не от чего. Контрибьюторы личных данных (recall заметок, память персоны) проверяют
+    // вердикт в IsEnabled/BuildAsync. Продакшен-место (ClaudeSession) ставит его всегда по
+    // ITurnFrameSource; дефолт Wide — «вердикта нет»: тестовые пути без источника и чат вне проекта
+    // (личное пространство и так его).
+    TurnFrameKind Frame = TurnFrameKind.Wide);
 
 public static class TurnAudience
 {

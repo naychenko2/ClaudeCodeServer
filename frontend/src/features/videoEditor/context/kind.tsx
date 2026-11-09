@@ -13,6 +13,7 @@ import { createScene, currentResolved } from '../scene/actions';
 import { isPersonalScope, videoScope } from '../scope';
 import { getCatalog, openVideoEditor, useVideoStoreVersion } from '../store/videoStore';
 import { NO_AI_MODEL, shootExecutors } from './executors';
+import { videoFormat } from './format';
 import { paramsFor, quoteAction, launchAction } from './run';
 import { videoRefRoles } from './roles';
 import { actionOf, FILM_KIND, SCENE_KIND, sceneOfPrimary, videoActions } from './state';
@@ -73,6 +74,8 @@ export const videoKindApi: ContextKindApi = {
     if (!found || !op || !scene) return [];
     return paramsFor(getCatalog(found.scope), currentResolved(ctx.sessionId, found.scope, scene), op);
   },
+  // Чип «Формат» (ADR-025): пропорции и ступень сцены; виден и в «Чате», как у картинок
+  format: (ctx, actionId) => videoFormat(ctx, actionId),
   create: {
     title: 'Видео',
     hint: 'новая сцена между двумя кадрами',
@@ -88,7 +91,8 @@ export const videoKindApi: ContextKindApi = {
     const scene = found ? sceneOfPrimary(ctx.sessionId, found.primary) : null;
     if (!found || !scene) return '';
     const r = currentResolved(ctx.sessionId, found.scope, scene);
-    return `${r.provider?.key ?? ''}/${r.model?.id ?? ''}`;
+    // Формат входит в ключ цены: другая ступень — другая котировка
+    return `${r.provider?.key ?? ''}/${r.model?.id ?? ''}/${r.format?.aspect ?? ''}/${r.format?.tier ?? ''}`;
   },
   quote: quoteAction,
   launch: launchAction,

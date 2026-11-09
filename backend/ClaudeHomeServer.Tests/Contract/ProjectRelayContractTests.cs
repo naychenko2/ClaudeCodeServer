@@ -24,6 +24,7 @@ namespace ClaudeHomeServer.Tests.Contract;
 /// настоящий канал исполнения поверх loopback WebSocket и настоящий RelayHandler агента на
 /// одинаковых деревьях. Успешные ответы обязаны совпасть формой JSON, отказы — кодом.
 /// </summary>
+[Trait("Category", "Host")]
 public sealed class ProjectRelayContractTests : IAsyncLifetime
 {
     private const string Device = "dev-contract";
@@ -67,8 +68,6 @@ public sealed class ProjectRelayContractTests : IAsyncLifetime
             },
         };
         _client = _factory.CreateAuthenticatedClient();
-        (await _client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LocalProjects}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
         _serverProjectId = await CreateAsync(ServerRoot, deviceId: null);
         _localProjectId = await CreateAsync(AgentRoot, Device);
     }

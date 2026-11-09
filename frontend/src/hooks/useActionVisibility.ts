@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { migrateCardSubjectHidden, migrateRingPillHidden } from '../lib/chatActions';
+import { migrateCardSubjectHidden, migrateCardWikiHidden, migrateRingPillHidden } from '../lib/chatActions';
 
 // Видимость элементов в рядах действий (шапка чата, губа композера, плитка чата).
 // Кнопка «⋯» стоит в ряду ВСЕГДА, а пользователь сам решает, что показывать
@@ -36,10 +36,15 @@ type HiddenStore = Pick<Storage, 'getItem' | 'setItem'>;
 
 // Одноразовые переводы сохранённых наборов при смене состава ключей. Маркер ставится
 // после первого чтения — есть сохранённый набор или нет: перевод не идемпотентен
-// (после него ["cost"] уже значит «спрятать пилюлю»), повторный прогон его бы сломал
-const MIGRATIONS: Partial<Record<ActionSurface, { marker: string; run: (hidden: string[]) => string[] }>> = {
-  'chat-header': { marker: 'cc_chat_header_hidden_ring_v1', run: migrateRingPillHidden },
-  'chat-card': { marker: 'cc_chat_card_hidden_subject_v1', run: migrateCardSubjectHidden },
+// (после него ["cost"] уже значит «спрятать пилюлю»), повторный прогон его бы сломал.
+// На поверхности — СПИСОК переводов по порядку: каждый со своим маркером, следующий
+// читает уже переведённый предыдущим набор
+const MIGRATIONS: Partial<Record<ActionSurface, { marker: string; run: (hidden: string[]) => string[] }[]>> = {
+  'chat-header': [{ marker: 'cc_chat_header_hidden_ring_v1', run: migrateRingPillHidden }],
+  'chat-card': [
+    { marker: 'cc_chat_card_hidden_subject_v1', run: migrateCardSubjectHidden },
+    { marker: 'cc_chat_card_hidden_wiki_v1', run: migrateCardWikiHidden },
+  ],
 };
 
 // Битое значение (не массив / не строки) — тихо считаем «ничего не скрыто»:
@@ -57,8 +62,8 @@ function parseHidden(raw: string | null): string[] | null {
 export function readHidden(surface: ActionSurface, store?: HiddenStore): string[] | null {
   try {
     const s = store ?? localStorage;
-    const migration = MIGRATIONS[surface];
-    if (migration && s.getItem(migration.marker) === null) {
+    for (const migration of MIGRATIONS[surface] ?? []) {
+      if (s.getItem(migration.marker) !== null) continue;
       // Битый набор переводить нечего — маркер всё равно ставим (catch ниже его не пропустит,
       // поэтому разбор — в своём try)
       let cur: string[] | null = null;

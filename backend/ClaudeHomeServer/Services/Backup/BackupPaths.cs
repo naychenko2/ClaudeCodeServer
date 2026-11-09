@@ -101,11 +101,22 @@ public static class BackupPaths
         if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
             && fileName.Equals("task-prompts.jsonl", StringComparison.OrdinalIgnoreCase))
             return false;
+        // Резервная копия исходных turns-*.jsonl перед разовой миграцией накопленных итогов в
+        // дельты хода (задача ad52316b): это локальный страховочный снимок, не источник истины —
+        // в облачный архив не едет (иначе данные расхода дублировались бы в бэкапе).
+        if (root.Equals("spend", StringComparison.OrdinalIgnoreCase)
+            && segments.Length > 1
+            && segments[^2].Equals("pre-delta-backup", StringComparison.OrdinalIgnoreCase))
+            return false;
         // Рабочая папка редактора картинок (ADR-017, раздел 5): варианты и маски сеансов —
         // кеш на 7 дней весом до гигабайт. Журнал трат редактора лежит рядом, в корне data
         // (image-editor-spend.jsonl), и в архив едет: это деньги, других копий у них нет.
         if (segments.Length > 1
             && root.Equals(ImageEditor.ImageEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
+            return false;
+        // Обучающие фото персонажей для LoRA (ADR-026 §5): биометрия, восстанавливается повторной
+        // загрузкой — в облачный архив не едет. Формат не меняется, BackupSchema.Version не трогаем
+        if (root.Equals(ImageEditor.ImageEditorPaths.TrainingDirName, StringComparison.OrdinalIgnoreCase))
             return false;
         // Рабочая папка задач модуля «Звук» (ADR-021 §2): файлы вариантов — кеш на 7 дней.
         // Нити (audio-threads) и префы (audio-editor-prefs) — другие корни, они в архив едут
@@ -117,6 +128,9 @@ public static class BackupPaths
         if (segments.Length > 1
             && root.Equals(VideoEditor.VideoEditorPaths.WorkspaceDirName, StringComparison.OrdinalIgnoreCase))
             return false;
+        // Журнал истории медиа-генераций (шаг 2): кеш превью, восстанавливать нечего;
+        // включая подпапку thumbs (шаг 3). Литерал, чтобы Main не тянул сборку Images
+        if (root.Equals("local-media-history", StringComparison.OrdinalIgnoreCase)) return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Встроенный Forgejo (forgejo/**): репозитории и gitea.db едут, но три подпапки нет.

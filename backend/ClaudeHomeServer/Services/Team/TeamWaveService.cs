@@ -80,6 +80,12 @@ public class TeamWaveService
     // десять секунд прогона (фикс-волна 4 team-blocker-honest).
     internal TimeSpan ExecutorIdleTimeout { get; set; } = TimeSpan.FromSeconds(10);
 
+    // Интервал опроса статуса в WaitExecutorIdleAsync. Поле с ПРЕЖНИМ дефолтом, а не литерал
+    // в теле: кейсу, которому нужен именно выход по таймауту, не платить полным интервалом
+    // на каждый прогон (паттерн «интервал — опция, ожидание — событие»,
+    // docs/architecture/conventions.md, раздел тестов).
+    internal TimeSpan ExecutorIdlePollInterval { get; set; } = TimeSpan.FromMilliseconds(200);
+
     public TeamWaveService(SessionManager sessions, TaskManager tasks, IProjectManager projects,
         ISessionBroadcaster broadcaster, ILogger<TeamWaveService> log,
         // Имя персоны-автора для текста уведомлений и push (Э8) — зависимость обязательная:
@@ -321,6 +327,10 @@ public class TeamWaveService
                 // Session.ParentSessionId дочернего чата) и координатор как постановщик
                 SourceSessionId: session.Id,
                 CreatedByPersonaId: team.CoordinatorPersonaId ?? session.PersonaId,
+                // Создатель под-задачи — автор чата-штаба (Session.CreatedByUserId): волну запускает
+                // он, и автозапуск исполнителей наследует его актора (F-9). Автор не записан —
+                // старый чат, ход шёл с правами владельца
+                CreatedByActorUserId: session.CreatedByUserId ?? ownerId,
                 Labels: ["Командная реализация", $"волна {subtask.Wave}"]));
             // Поля под-задачи правит и перевыдача (OnTaskFailedAsync) — держим их под тем же
             // локом состояния, иначе на одном объекте плана было бы два разных лока
@@ -332,7 +342,7 @@ public class TeamWaveService
                 return true;
             });
             created.Add(task);
-            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("created", task));
+            await _broadcaster.ToTaskBoard(ownerId, task.ProjectId, new TaskChangedMessage("created", task));
         }
 
         // Состояние и бюджет уже записаны транзакцией-резервом выше (счёт ведёт бэкенд
@@ -363,7 +373,7 @@ public class TeamWaveService
             {
                 // Устройство локального проекта офлайн — под-задача не падает, а ждёт его:
                 // состояние «ждёт устройство» на самой задаче, запуск — по выходу в онлайн
-                var launched = await _exec!.ExecuteAsync(task, auto: true);
+                var launched = await _exec!.ExecuteAsync(task, auto: true, actorUserId: TaskLaunchActor.For(task));
                 if (launched.DeviceWaitSince is not null)
                     _log.LogInformation("Под-задача {TaskId} «{Title}» ждёт устройство: {Reason}",
                         task.Id, task.Title, launched.DeviceWaitReason);
@@ -463,7 +473,7 @@ public class TeamWaveService
         var stopped = _tasks.MarkExecutorStopped(taskId, DateTime.UtcNow, stopReason)
             ?? markedDropped;
         if (stopped.OwnerId is { } ownerId)
-            await _broadcaster.ToOwner(ownerId, new TaskChangedMessage("updated", stopped));
+            await _broadcaster.ToTaskBoard(ownerId, stopped.ProjectId, new TaskChangedMessage("updated", stopped));
         // Волна 1 team-blocker-honest: сняли под-задачу, на которую был открыт блокер —
         // гасим карточку штаба по факту (стадия возвращается в работу).
         if (stopped.SourceSessionId is { } sourceSessionId)
@@ -760,12 +770,12 @@ public class TeamWaveService
                 $"Прошлый запуск не довёл задачу до конца ({reason}). Разберись, что пошло не так, " +
                 "и доведи работу до фактической проверки — «почти готово» не считается."));
         if (updated is null) return (false, "задача удалена");
-        await _broadcaster.ToOwner(updated.OwnerId!, new TaskChangedMessage("updated", updated));
+        await _broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
         if (_exec is null) return (true, null);
         try
         {
-            await _exec.ExecuteAsync(updated, auto: true);
+            await _exec.ExecuteAsync(updated, auto: true, actorUserId: TaskLaunchActor.For(updated));
             _log.LogInformation("Под-задача {TaskId} «{Title}» перевыдана (попытка {Attempt})",
                 updated.Id, updated.Title, subtask.Attempts);
             return (true, null);
@@ -841,7 +851,7 @@ public class TeamWaveService
                     ExecutorIdleTimeout, what);
                 return false;
             }
-            await Task.Delay(TimeSpan.FromMilliseconds(200));
+            await Task.Delay(ExecutorIdlePollInterval);
         }
         return true;
     }
@@ -1253,8 +1263,8 @@ public class TeamWaveService
             // Человек прямо сейчас в этом чате — он и так видит карточку в ленте
             if (_run.HasViewers(session.Id)) continue;
 
-            var ownerId = session.OwnerId
-                ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+            // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+            var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
             if (ownerId is null || _notif is null) continue;
 
             foreach (var card in await _history.GetOpenTeamEscalationsAsync(session.Id))
@@ -1271,7 +1281,7 @@ public class TeamWaveService
                 // Push — по тем же правилам, что у первого уведомления (только когда человека
                 // нет в чате); зрителей мы выше отсекли, поэтому здесь он всегда уходит
                 await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-                    Title: TeamImplementPrompts.ReminderTitle(PersonaName(authorId, ownerId)),
+                    Title: TeamImplementPrompts.ReminderTitle(PersonaName(authorId, session)),
                     Body: TeamImplementPrompts.ReminderBody(card.Title, hours),
                     Url: ChatUrl(session),
                     Kind: "claude",
@@ -1303,8 +1313,8 @@ public class TeamWaveService
     {
         await _history.PublishTeamEscalationAsync(session.Id, escalation);
 
-        var ownerId = session.OwnerId
-            ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+        // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+        var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
         if (ownerId is null || _notif is null) return;
 
         // Push — только когда человека нет в этом чате: он и так видит карточку в ленте
@@ -1315,7 +1325,7 @@ public class TeamWaveService
         // вопросы различаются уже в списке уведомлений. Обезличенное «Команда ждёт…»
         // остаётся фолбэком, когда персоны у штаба нет.
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), escalation.Kind),
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, session), escalation.Kind),
             Body: escalation.Title,
             Url: ChatUrl(session),
             Kind: "claude",
@@ -1334,14 +1344,14 @@ public class TeamWaveService
     internal async Task OnStabQuestionAsync(Session session)
     {
         if (_notif is null) return;
-        var ownerId = session.OwnerId
-            ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+        // Адресат — по приватности чата (S2d-4f): приватный штаб — только автор
+        var ownerId = ChatNotificationAudience.OwnerOf(_sessions, session);
         if (ownerId is null) return;
 
         var authorId = session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
             // Вопрос интервью — тот же текст, что у карточки тупика с уточнениями
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId),
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, session),
                 TeamEscalationKind.NeedsClarification),
             Body: TeamImplementPrompts.QuestionNotificationBody,
             Url: ChatUrl(session),
@@ -1355,10 +1365,14 @@ public class TeamWaveService
         ? $"/chats/{session.Id}"
         : $"/project/{session.ProjectId}/chat/{session.Id}";
 
-    // Имя персоны-автора для текста уведомления. null — персоны нет, реестр не передан или
-    // персона удалена: текст деградирует до обезличенного.
-    private string? PersonaName(string? personaId, string ownerId) =>
-        personaId is not null && _personas.Get(personaId, ownerId) is { } p ? p.Name : null;
+    // Имя персоны для текста уведомления (S2d-4g). Скоуп поиска — владелец сессии
+    // (ResolveOwnerId), а НЕ адресат уведомления: персона принадлежит владельцу проекта,
+    // а в приватном штабе адресат — автор чата; поиск по адресату терял имя координатора
+    // и заголовок деградировал до обезличенного. null — персоны нет, реестр не передан
+    // или персона удалена: текст деградирует до обезличенного.
+    private string? PersonaName(string? personaId, Session session) =>
+        personaId is not null && _sessions.ResolveOwnerId(session) is { } scopeId
+        && _personas.Get(personaId, scopeId) is { } p ? p.Name : null;
 
     private bool IsDone(string taskId) => _tasks.GetById(taskId)?.Status == TaskItemStatus.Done;
 }

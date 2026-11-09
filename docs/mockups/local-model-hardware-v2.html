@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Локальные модели · вкладка «Железо» · макет v2 (итоговый)</title>
+<!--
+  Привязка: задача d0c83bea (продолжение 0e44f649). Эпика (featureId) пока нет;
+  шаги реализации (stepRef) — по спецификации local-model-hardware-spec.md.
+  Итоговый вариант: А (вкладка «Железо», только админ) + мини-графики за 15 мин на плитках
+  + серые фоновые иконки lucide. История вариантов — local-model-hardware-v1.html.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts. Новых цветов нет. ===== */
+[data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5; --c-plan:#6C5CB0;
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33; --c-plan:#9385D8;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+}
+* { box-sizing:border-box; }
+body { margin:0; font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.bar { position:sticky; top:0; z-index:50; display:flex; gap:8px 16px; flex-wrap:wrap; align-items:center;
+  padding:10px 24px; background:#EDE7DC; border-bottom:1px solid #E0D7C8; color:#2A251F; }
+.bar h1 { margin:0; font-size:15px; font-weight:600; flex:1 1 260px; }
+.bar label { font-size:11px; color:#756B5E; margin-right:4px; }
+.tog { display:inline-flex; flex-wrap:wrap; border:1px solid #E0D7C8; border-radius:10px; overflow:hidden; vertical-align:middle; }
+.tog button { font:inherit; font-size:12px; padding:5px 11px; cursor:pointer; background:transparent; border:none; color:#756B5E; }
+.tog button.on { background:#2A251F; color:#F4F0E8; }
+.cols { display:flex; flex-wrap:wrap; }
+.col { flex:1 1 440px; background:var(--c-bg-main); color:var(--c-text-primary); padding:24px; }
+.col h2 { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:600; color:var(--c-text-heading); margin:0 0 4px; }
+.col p.note { margin:0 0 16px; color:var(--c-text-secondary); max-width:80ch; font-size:12px; }
+.panels { display:flex; flex-wrap:wrap; gap:24px; align-items:flex-start; }
+.pcap { font-size:11px; color:var(--c-text-muted); margin:6px 2px 0; max-width:380px; }
+
+/* ===== Остров панели: C.bgPanel, рамка C.borderLight, R.xxl (14), SHADOW.island; шапка 40 на C.bgInset.
+   На мобиле — лист снизу: верхние углы R.sheet (22), SHADOW.sheet, переключатель вкладок строкой в теле ===== */
+.isl { background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; }
+.isl.sheet { border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); }
+.isl .hd { height:40px; display:flex; align-items:center; gap:8px; padding:0 12px; background:var(--c-bg-inset);
+  font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.isl.sheet .hd { background:transparent; }
+.isl .hd .x { margin-left:auto; color:var(--c-text-muted); font-weight:400; }
+.isl .grab { width:36px; height:4px; border-radius:999px; background:var(--c-track); margin:8px auto 0; }
+.body { padding:12px; display:flex; flex-direction:column; gap:12px; }
+
+/* Переключатель вкладок — InlineSegmented size=sm: активная C.accentLight / C.accent */
+.seg { display:inline-flex; background:var(--c-bg-inset); border-radius:10px; padding:2px; font-size:12px; }
+.seg span { padding:3px 10px; border-radius:8px; color:var(--c-text-secondary); white-space:nowrap; display:inline-flex; align-items:center; gap:4px; cursor:default; }
+.seg .on { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.seg.sm { font-size:11px; } .seg.sm span { padding:2px 8px; cursor:pointer; }
+.seg.sm .on { background:var(--c-bg-card); color:var(--c-text-heading); }
+.tabdot { width:6px; height:6px; border-radius:50%; display:inline-block; }
+.ic { display:inline-block; vertical-align:-2px; }
+
+/* Карточка панели: C.bgCard, рамка C.borderLight, R.xl (12), паддинг SP.md (12) */
+.card { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; min-width:0; }
+.ch { display:flex; align-items:center; gap:8px; margin-bottom:8px; min-width:0; }
+.ch h3 { margin:0; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stub { padding:10px 12px; } .stub .ch { margin:0; } .stub .ch i { font-style:normal; font-size:11px; color:var(--c-text-muted); }
+
+.dot { width:8px; height:8px; border-radius:50%; display:inline-block; flex:none; }
+.d-ok { background:var(--c-success); } .d-warn { background:var(--c-warning); } .d-danger { background:var(--c-danger); } .d-none { background:var(--c-track); }
+.pill { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+.p-warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.p-danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.p-info { background:var(--c-info-bg); color:var(--c-info); }
+.p-mute { background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.t-ok { color:var(--c-text-heading); } .t-warn { color:var(--c-warning-text); } .t-danger { color:var(--c-danger-text); }
+.na { color:var(--c-text-muted); font-style:italic; font-weight:400; font-family:"Hanken Grotesk",sans-serif; }
+.sum { font-size:12px; color:var(--c-text-secondary); margin:-2px 0 8px; }
+.sum b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); white-space:nowrap; }
+
+/* ===== Плитка узла: C.bgWhite, рамка C.borderLight, R.lg (10), паддинг SP.sm (8).
+   Фоновая иконка — lucide size 52, stroke C.textMuted, opacity .12, aria-hidden, pointer-events:none ===== */
+.heat { display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:8px; }
+.tile { position:relative; overflow:hidden; border:1px solid var(--c-border-light); background:var(--c-bg-white); border-radius:10px; padding:8px; min-width:0; }
+.tile.warn { background:var(--c-warning-bg); border-color:var(--c-warning); }
+.tile.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.tile .wm { position:absolute; top:4px; right:-6px; width:52px; height:52px; color:var(--c-text-muted); opacity:.12; pointer-events:none; }
+.tile > *:not(.wm) { position:relative; }
+.tile .tn { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; }
+.tile .tn span:last-child { overflow:hidden; text-overflow:ellipsis; }
+.tile .tv { font-family:"JetBrains Mono",monospace; font-size:20px; font-weight:600; line-height:1.2; margin:2px 0 0; white-space:nowrap; }
+.tile .tv .na { font-size:13px; }
+.tile .tl { font-size:10px; color:var(--c-text-secondary); margin-bottom:2px; }
+.tile .td { font-size:11px; color:var(--c-text-secondary); line-height:1.35; margin-top:2px; }
+.tile .td b { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); }
+.spark { display:block; width:100%; height:24px; margin:2px 0 0; }
+.spark-na { height:24px; margin-top:2px; border-radius:4px; background:var(--c-bg-inset); }
+.fans { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-secondary); margin-top:8px; flex-wrap:wrap; }
+.fans b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); }
+
+/* ===== Карточка видеокарты (только на «Железе»): C.bgWhite, R.lg, SP.sm. Главная — температура памяти ===== */
+.gpus { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; }
+.gpu { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:10px; padding:8px; min-width:0; }
+.gpu.warn { border-color:var(--c-warning); } .gpu.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); }
+.gh { display:flex; align-items:center; gap:6px; font-size:12px; font-weight:700; color:var(--c-text-heading); min-width:0; }
+.gh > span.n { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+.gsub { font-size:11px; color:var(--c-text-muted); margin:0 0 6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.hero { display:flex; align-items:baseline; gap:6px; }
+.hero .v { font-family:"JetBrains Mono",monospace; font-size:22px; font-weight:600; line-height:1.1; }
+.hero .l { font-size:11px; color:var(--c-text-secondary); }
+.scale { position:relative; height:6px; background:var(--c-track); border-radius:999px; margin:6px 0 2px; }
+.scale > i { position:absolute; left:0; top:0; bottom:0; border-radius:999px; background:var(--c-success); }
+.scale > i.warn { background:var(--c-warning); } .scale > i.danger { background:var(--c-danger); }
+.scale > u { position:absolute; top:-3px; width:2px; height:12px; background:var(--c-text-heading); border-radius:1px; }
+.scap { display:flex; justify-content:space-between; font-size:10px; color:var(--c-text-muted); margin-bottom:6px; white-space:nowrap; }
+.scap b { font-family:"JetBrains Mono",monospace; color:var(--c-text-secondary); }
+.badges { display:flex; flex-wrap:wrap; gap:4px; margin:4px 0; }
+.badges .pill { white-space:normal; line-height:1.3; padding:2px 8px; }
+.kv { display:flex; justify-content:space-between; gap:4px; font-size:11px; padding:1px 0; min-width:0; }
+.kv > span:first-child { color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.kv > span:last-child { font-family:"JetBrains Mono",monospace; font-weight:600; color:var(--c-text-primary); white-space:nowrap; }
+.kv > span:last-child.na { font-family:inherit; font-weight:400; }
+.kv > span:last-child.t-warn, .kv > span:last-child .t-warn { color:var(--c-warning-text); }
+.kv > span:last-child.t-danger, .kv > span:last-child .t-danger { color:var(--c-danger-text); }
+.bar4 { height:4px; background:var(--c-track); border-radius:999px; overflow:hidden; margin:0 0 4px; }
+.bar4 > i { display:block; height:100%; border-radius:999px; background:var(--c-accent); }
+.disc { font-size:11px; color:var(--c-accent); font-weight:600; margin-top:4px; display:inline-flex; gap:4px; cursor:pointer; }
+.more { border-top:1px solid var(--c-border-light); margin-top:6px; padding-top:4px; }
+
+/* ===== Строка-ссылка «Видеокарты» на LLM и Медиа (админ): Card, кнопка всей строкой ===== */
+.hwrow { display:flex; align-items:center; gap:6px 8px; flex-wrap:wrap; cursor:pointer; padding:10px 12px; }
+.hwrow:hover { background:var(--c-bg-selected); }
+.hwrow .t { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; color:var(--c-text-muted); }
+.hwrow .v { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; }
+.hwrow .v b { font-family:"JetBrains Mono",monospace; }
+.hwrow .go { margin-left:auto; font-size:11px; font-weight:600; color:var(--c-accent); white-space:nowrap; }
+
+/* Баннер «стенд не отвечает»: C.warningBg, текст C.warningText */
+.banner { display:flex; gap:8px; align-items:flex-start; background:var(--c-warning-bg); color:var(--c-warning-text); border-radius:10px; padding:8px 10px; font-size:12px; }
+.stale .tv, .stale .hero .v, .stale .kv > span:last-child, .stale .v b, .stale .sum b { color:var(--c-text-muted) !important; }
+.stale .bar4 > i, .stale .scale > i { background:var(--c-text-muted) !important; }
+.stale .dot { background:var(--c-track) !important; }
+
+/* ===== График «Температуры» ===== */
+.chips { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 8px; }
+.chip { display:inline-flex; align-items:center; gap:4px; font:inherit; font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--c-border); background:transparent; color:var(--c-text-secondary); cursor:pointer; white-space:nowrap; }
+.chip.on { background:var(--c-accent-light); border-color:var(--c-accent-muted); color:var(--c-text-heading); font-weight:600; }
+.chip:disabled { opacity:.45; cursor:not-allowed; }
+.chip .sw { width:10px; height:3px; border-radius:2px; display:inline-block; }
+.hint { font-size:11px; color:var(--c-text-muted); margin:-4px 0 8px; }
+svg { display:block; overflow:visible; }
+.ax { font-family:"JetBrains Mono",monospace; font-size:10px; fill:var(--c-text-muted); }
+.thr { font-family:"Hanken Grotesk",sans-serif; font-size:10px; fill:var(--c-warning-text); }
+.time { display:flex; justify-content:space-between; font-family:"JetBrains Mono",monospace; font-size:10px; color:var(--c-text-muted); margin-top:2px; }
+.leg { display:flex; flex-wrap:wrap; gap:2px 12px; font-size:11px; color:var(--c-text-secondary); margin-top:6px; }
+.leg span { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.leg b { font-family:"JetBrains Mono",monospace; color:var(--c-text-heading); }
+.leg svg { display:inline-block; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <h1>Вкладка «Железо» · макет v2 (итоговый)</h1>
+  <span><label>Состояние</label><span class="tog" id="tSt"></span></span>
+  <span><label>Тема</label><span class="tog" id="tTh"></span></span>
+  <span><label>Ширина</label><span class="tog" id="tW"></span></span>
+</div>
+<div class="cols" id="root"></div>
+<script>
+// ===== Иконки lucide 1.24 (те же узлы, что в frontend/node_modules/lucide-react) =====
+const ICONS = {
+  Gpu: '<path d="M2 17h18a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H2"/><path d="M2 21V3"/><path d="M7 17v3a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3"/><circle cx="16" cy="11" r="2"/><circle cx="8" cy="11" r="2"/>',
+  Cpu: '<path d="M12 20v2"/><path d="M12 2v2"/><path d="M17 20v2"/><path d="M17 2v2"/><path d="M2 12h2"/><path d="M2 17h2"/><path d="M2 7h2"/><path d="M20 12h2"/><path d="M20 17h2"/><path d="M20 7h2"/><path d="M7 20v2"/><path d="M7 2v2"/><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/>',
+  CircuitBoard: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M11 9h4a2 2 0 0 0 2-2V3"/><circle cx="9" cy="9" r="2"/><path d="M7 21v-4a2 2 0 0 1 2-2h4"/><circle cx="15" cy="15" r="2"/>',
+  Zap: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/>',
+  HardDrive: '<path d="M10 16h.01"/><path d="M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><path d="M21.946 12.013H2.054"/><path d="M6 16h.01"/>',
+  MemoryStick: '<path d="M12 12v-2"/><path d="M12 18v-2"/><path d="M16 12v-2"/><path d="M16 18v-2"/><path d="M2 11h1.5"/><path d="M20 18v-2"/><path d="M20.5 11H22"/><path d="M4 18v-2"/><path d="M8 12v-2"/><path d="M8 18v-2"/><rect x="2" y="6" width="20" height="10" rx="2"/>',
+  Fan: '<path d="M10.827 16.379a6.082 6.082 0 0 1-8.618-7.002l5.412 1.45a6.082 6.082 0 0 1 7.002-8.618l-1.45 5.412a6.082 6.082 0 0 1 8.618 7.002l-5.412-1.45a6.082 6.082 0 0 1-7.002 8.618l1.45-5.412Z"/><path d="M12 12v.01"/>',
+  MessageSquareText: '<path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/><path d="M7 11h10"/><path d="M7 15h6"/><path d="M7 7h8"/>',
+  Clapperboard: '<path d="m12.296 3.464 3.02 3.956"/><path d="M20.2 6 3 11l-.9-2.4c-.3-1.1.3-2.2 1.3-2.5l13.5-4c1.1-.3 2.2.3 2.5 1.3z"/><path d="M3 11h18v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="m6.18 5.276 3.1 3.899"/>',
+};
+const icon = (name, size, cls = 'ic', sw = 2) => `<svg class="${cls}" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name]}</svg>`;
+
+// ===== Живые значения 18.10 (обе карты под полной нагрузкой) =====
+const LIVE = {
+  gpus: [
+    { i:0, uuid:'GPU-a', name:'RTX 3090', roles:['text'], util:100, used:24022, tot:24576, membus:44, core:61, mem:68, hot:75, fan:0,
+      clk:1590, clkMax:2100, memClk:9501, pw:218, pl:220, powerCap:true, thermal:false, ps:'P2', pcie:'4.0 ×8', bus:'b' },
+    { i:1, uuid:'GPU-b', name:'RTX 3090', roles:['text','media'], util:99, used:24022, tot:24576, membus:44, core:64, mem:81, hot:76, fan:52,
+      clk:1485, clkMax:2100, memClk:9501, pw:217, pl:220, powerCap:true, thermal:false, ps:'P2', pcie:'4.0 ×8', bus:'c' },
+  ],
+  cpu: { tctl:75, ccd:[71, 58] },
+  board: { chipset:78, chipsetFan:3846, vrm:53, caseFans:[1159, 4821] },
+  sys: { t:59.9, crit:null },
+  kv: { t:58.9, t2:82.8, crit:84, usedGb:370, totGb:492 },
+  ram: { usedGb:83, totGb:121 },
+};
+const clone = o => JSON.parse(JSON.stringify(o));
+
+const STATES = {
+  live:  { title:'Сейчас (18.10)', make: () => clone(LIVE),
+    cap:'Живые значения 18.10. Диск кэша — 82,8 °C при собственном пределе 84 °C: по правилу «опасность за 3 °C до предела» (с 81 °C) это опасность. Так и показано — до предела 1,2 °C. Вентилятор карты 1 — «0 %» без тревоги: температуры карты в норме.' },
+  norm:  { title:'Норма', make: () => { const d = clone(LIVE); d.kv.t2 = 65; return d; },
+    cap:'Норма: всё как сейчас, кроме второго датчика диска кэша — условно 65 °C. Все плитки белые, мини-графики зелёные, на вкладке нет точки.' },
+  warn:  { title:'Предупреждение', make: () => { const d = clone(LIVE); d.gpus[1].mem = 98; d.gpus[0].core = 86; d.cpu.tctl = 87; d.board.chipset = 86; d.kv.t2 = 76; return d; },
+    cap:'Синтетика для порогов: память карты 2 — 98 °C (≥ 95), ядро карты 1 — 86 °C (≥ 85), процессор — 87 °C (≥ 85), чипсет — 86 °C (≥ 85), диск кэша — 76 °C (≥ 74 = предел − 10). У карты 1 вентилятор «0 %» теперь окрашен: температура карты вышла за порог.' },
+  danger:{ title:'Опасность', make: () => { const d = clone(LIVE); Object.assign(d.gpus[1], { mem:106, hot:101, core:93, thermal:true, clk:1110 }); return d; },
+    cap:'Синтетика: память карты 2 — 106 °C (≥ 105), горячая точка — 101 °C (≥ 100), ядро — 93 °C (≥ 92), карта сбрасывает частоту от перегрева. Диск кэша — живые 82,8 °C.' },
+  na:    { title:'Нет датчика', make: () => { const d = clone(LIVE); d.gpus[1].mem = null; d.gpus[1].hot = null; return d; },
+    cap:'Память карты и горячую точку читает отдельный помощник с правами root. Не ответил — «нет данных» и пустая подложка вместо мини-графика; плитка карты тогда показывает ядро. У оперативной памяти датчика нет вовсе — «датчика нет» во всех состояниях.' },
+  off:   { title:'Стенд не отвечает', make: () => clone(LIVE), offline:true,
+    cap:'Нет связи: баннер сверху, последние значения приглушены (C.textMuted), статусы и плитки не красим — данные устарели. Мини-графики и общий график обрываются, точка на вкладке гаснет.' },
+  one:   { title:'Одна карта', make: () => { const d = clone(LIVE); d.gpus = [d.gpus[0]]; d.gpus[0].roles = ['text','media']; return d; },
+    cap:'Стенд с одной картой: одна плитка карты, карточка во всю ширину («карта 1 из 1»), на графике — одна линия на ряд.' },
+};
+
+// ===== Пороги [warn, danger]. На проде level считает бэкенд, здесь — только для макета =====
+const TH = { mem:[95,105], core:[85,92], hot:[null,100], cpu:[85,95], chipset:[85,95], vrm:[90,105] };
+const diskTh = crit => crit == null ? [70, 80] : [crit - 10, crit - 3];
+const lvlBy = (th, v) => { if (v == null) return 'none'; const [w, d] = th;
+  if (d != null && v >= d) return 'danger'; if (w != null && v >= w) return 'warn'; return 'ok'; };
+const lvl = (k, v) => lvlBy(TH[k], v);
+const RANK = { none:-1, ok:0, warn:1, danger:2 };
+const worst = ls => ls.reduce((a, b) => RANK[b] > RANK[a] ? b : a, 'none');
+
+const n1 = v => (Math.round(v * 10) / 10).toString().replace('.', ',');
+const tC = (v, dec) => v == null ? '<span class="na">нет данных</span>' : `${dec ? n1(v) : Math.round(v)} °C`;
+const gb = mb => n1(mb / 1024);
+
+const S = { st:'live', th:'both', w:380, win:'15m', fams:['mem'], moreOpen:false };
+
+// ===== Узлы стенда: порядок фиксирован (не сортируем по тревоге — место узла запоминается) =====
+const gpuLvl = g => worst([lvl('mem', g.mem), lvl('core', g.core), lvl('hot', g.hot)]);
+function nodesOf(d) {
+  const n = [];
+  d.gpus.forEach(g => { const memOk = g.mem != null;
+    n.push({ name:`Карта ${g.i + 1}`, ic:'Gpu', label: memOk ? 'память' : 'ядро · память: нет данных', v: memOk ? g.mem : g.core, lv:gpuLvl(g), seed:g.i + 1,
+      sparkOk: memOk, th: memOk ? TH.mem : TH.core,
+      det:`ядро <b>${Math.round(g.core)}</b> · гор. точка <b>${g.hot == null ? '—' : Math.round(g.hot)}</b>` }); });
+  n.push({ name:'Процессор', ic:'Cpu', label:'общая', v:d.cpu.tctl, lv:lvl('cpu', d.cpu.tctl), seed:3, sparkOk:true, th:TH.cpu,
+    det:`кристаллы <b>${d.cpu.ccd[0]}</b> и <b>${d.cpu.ccd[1]}</b>` });
+  n.push({ name:'Питание процессора', ic:'Zap', label:'цепи питания на плате', v:d.board.vrm, lv:lvl('vrm', d.board.vrm), seed:4, sparkOk:true, th:TH.vrm, det:'' });
+  n.push({ name:'Чипсет платы', ic:'CircuitBoard', label:'', v:d.board.chipset, lv:lvl('chipset', d.board.chipset), seed:5, sparkOk:true, th:TH.chipset,
+    det:`вентилятор <b>${d.board.chipsetFan}</b> об/мин` });
+  const kth = diskTh(d.kv.crit), kv = Math.max(d.kv.t, d.kv.t2);
+  n.push({ name:'Диск кэша', ic:'HardDrive', label:'самый горячий датчик', v:kv, dec:true, lv:lvlBy(kth, kv), seed:6, sparkOk:true, th:kth, crit:d.kv.crit,
+    det:`до предела <b>${n1(d.kv.crit - kv)}</b> °C · занято <b>${d.kv.usedGb}</b> из ${d.kv.totGb} ГБ` });
+  const sth = diskTh(d.sys.crit);
+  n.push({ name:'Системный диск', ic:'HardDrive', label:'', v:d.sys.t, dec:true, lv:lvlBy(sth, d.sys.t), seed:7, sparkOk:true, th:sth,
+    det: d.sys.crit == null ? 'предел не сообщает — пороги 70 / 80' : '' });
+  n.push({ name:'Оперативная память', ic:'MemoryStick', label:'', v:null, ram:true, lv:'none', seed:8, sparkOk:false,
+    det:`занято <b>${d.ram.usedGb}</b> из ${d.ram.totGb} ГБ` });
+  return n;
+}
+// Ближе всех к пределу: худший уровень, при равенстве — меньший запас до порога опасности
+function closest(ns) {
+  const c = ns.filter(x => x.v != null && x.th[1] != null);
+  return c.sort((a, b) => (RANK[b.lv] - RANK[a.lv]) || ((a.th[1] - a.v) - (b.th[1] - b.v)))[0];
+}
+
+// ===== Синтетическая история: n точек, последняя = текущему; warn/danger — с подъёмом =====
+function hist(cur, seed, n, rise, offline) {
+  if (cur == null) return Array(n).fill(null);
+  const f = i => 1.6 * Math.sin(i / (n / 9) + seed) + 0.8 * Math.sin(i / 2.3 + seed * 1.7) + (rise ? (i / (n - 1) - 1) * rise : 0);
+  const cut = Math.round(n * 0.86), last = offline ? cut - 1 : n - 1;
+  return Array.from({ length:n }, (_, i) => offline && i >= cut ? null : cur + f(i) - f(last));
+}
+
+// Мини-график: 15 мин, 90 точек (шаг 10 с), без осей, цвет по уровню, точка — текущее значение
+function spark(x, off) {
+  if (!x.sparkOk || x.v == null) return '<div class="spark-na"></div>';
+  const N = 90, W = 120, H = 24, rise = x.lv === 'danger' ? 7 : x.lv === 'warn' ? 4 : 0;
+  const pts = hist(x.v, x.seed, N, rise, off);
+  const vs = pts.filter(v => v != null), lo = Math.min(...vs) - 1, hi = Math.max(...vs) + 1;
+  const X = i => i * W / (N - 1), Y = v => H - 2 - (v - lo) / (hi - lo) * (H - 4);
+  const col = off ? '--c-text-muted' : x.lv === 'danger' ? '--c-danger' : x.lv === 'warn' ? '--c-warning' : '--c-success';
+  const li = pts.reduce((a, v, i) => v != null ? i : a, 0);
+  return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="за 15 минут">
+    <polyline points="${pts.map((v, i) => v == null ? null : `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).filter(Boolean).join(' ')}" fill="none" stroke="var(${col})" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>
+    <circle cx="${X(li)}" cy="${Y(pts[li])}" r="2.5" fill="var(${col})" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+function tile(x, off) {
+  const l = off ? 'none' : x.lv, tint = l === 'warn' || l === 'danger' ? l : '';
+  const val = x.ram ? '<span class="na">датчика нет</span>' : tC(x.v, x.dec);
+  const thTxt = x.th ? `Предупреждение с ${x.th[0] ?? '—'} °C, опасность с ${x.th[1]} °C` : '';
+  return `<div class="tile ${tint}" title="${thTxt}">${icon(x.ic, 52, 'wm', 1.5)}
+    <div class="tn"><span class="dot d-${l}"></span><span>${x.name}</span></div>
+    <div class="tv t-${l === 'none' ? 'ok' : l}">${val}</div>
+    ${x.label ? `<div class="tl">${x.label}</div>` : ''}
+    ${spark(x, off)}
+    ${x.det ? `<div class="td">${x.det}</div>` : ''}</div>`;
+}
+
+// ===== Карточка видеокарты: крупно — память и запас до замедления =====
+const fanTxt = g => { const L = gpuLvl(g); return g.fan == null ? '<span class="na">нет данных</span>'
+  : `<span class="${L === 'warn' || L === 'danger' ? 't-' + L : ''}">${g.fan} %</span>`; };
+// Вентилятор 0 % при нагрузке — водянка или внешнее управление: сам по себе не тревога
+const ROLE = { text:'текст', media:'медиа' };
+function gpuCard(g, total, open) {
+  const L = gpuLvl(g), lm = lvl('mem', g.mem), mg = g.mem == null ? null : 95 - g.mem;
+  const pos = v => Math.max(0, Math.min(100, (v - 30) / (110 - 30) * 100));
+  const kvT = (label, k) => `<div class="kv"><span>${label}</span><span class="${g[k] == null ? 'na' : 't-' + lvl(k, g[k])}">${tC(g[k])}</span></div>`;
+  const b = [];
+  if (g.thermal) b.push('<span class="pill p-danger">Сбрасывает частоту от перегрева</span>');
+  if (g.powerCap) b.push('<span class="pill p-info" title="Карта берёт максимум разрешённой мощности — поэтому быстрее не станет. Это не поломка.">Упирается в лимит мощности</span>');
+  const more = open ? `<div class="more">
+      <div class="kv"><span>Частота ядра</span><span>${g.clk}/${g.clkMax} МГц</span></div>
+      <div class="kv"><span>Частота памяти</span><span>${g.memClk} МГц</span></div>
+      <div class="kv"><span>Шина памяти занята</span><span>${g.membus} %</span></div>
+      <div class="kv"><span>Режим питания</span><span>${g.ps}</span></div>
+      <div class="kv"><span>Подключение</span><span>PCIe ${g.pcie}</span></div>
+      <div class="kv"><span>Шина</span><span>${g.bus}</span></div></div>` : '';
+  return `<div class="gpu ${L === 'warn' || L === 'danger' ? L : ''}">
+    <div class="gh"><span class="dot d-${L}"></span><span class="n">${g.name} · ${g.roles.map(r => ROLE[r]).join(' · ')}</span></div>
+    <div class="gsub">карта ${g.i + 1} из ${total} · ${Math.round(g.tot / 1024)} ГБ</div>
+    <div class="hero"><span class="v t-${lm === 'none' ? 'ok' : lm}">${g.mem == null ? '<span class="na" style="font-size:13px">нет данных</span>' : Math.round(g.mem) + ' °C'}</span><span class="l">память карты</span></div>
+    ${g.mem == null ? '<div class="scap" style="margin-top:4px"><span>датчик памяти не ответил</span></div>' : `
+    <div class="scale"><i class="${lm}" style="width:${pos(g.mem)}%"></i><u style="left:${pos(95)}%"></u></div>
+    <div class="scap"><span>${mg > 0 ? `запас до замедления <b>${mg} °C</b>` : 'память замедляется'}</span><span>95</span></div>`}
+    ${b.length ? `<div class="badges">${b.join('')}</div>` : ''}
+    ${kvT('Ядро', 'core')}${kvT('Горячая точка', 'hot')}
+    <div class="kv"><span>Вентилятор</span>${fanTxt(g)}</div>
+    <div class="kv"><span>Загрузка</span><span>${g.util} %</span></div>
+    <div class="bar4"><i style="width:${g.util}%"></i></div>
+    <div class="kv"><span>Видеопамять</span><span>${gb(g.used)}/${Math.round(g.tot / 1024)} ГБ</span></div>
+    <div class="kv"><span>Мощность</span><span>${g.pw}/${g.pl} Вт</span></div>
+    ${more}<span class="disc" data-more>${open ? 'Свернуть ▴' : 'Подробнее ▾'}</span></div>`;
+}
+
+// ===== График «Температуры» =====
+const FAMS = [
+  { k:'mem',  label:'Память карт',   color:'--c-accent', gpu:true, thr:95,  thrTxt:'замедление памяти' },
+  { k:'core', label:'Ядро карт',     color:'--c-info',   gpu:true, thr:85,  thrTxt:'горячо' },
+  { k:'hot',  label:'Горячая точка', color:'--c-plan',   gpu:true, thr:100, thrTxt:'опасность' },
+  { k:'cpu',  label:'Процессор',     color:'--c-success', thr:85, thrTxt:'горячо' },
+  { k:'chip', label:'Чипсет',        color:'--c-text-secondary', thr:85, thrTxt:'горячо' },
+  { k:'disk', label:'Диски',         color:'--c-warning' },
+];
+const MAXF = 3;
+function seriesOf(d) {
+  const out = [];
+  for (const k of S.fams) { const f = FAMS.find(x => x.k === k);
+    if (f.gpu) d.gpus.forEach(g => out.push({ f, label:`${f.label.split(' ')[0]} · карта ${g.i + 1}`, cur:g[k], dash:g.i ? '4 3' : '', seed:g.i * 2 + k.length }));
+    else if (k === 'cpu') out.push({ f, label:'Процессор', cur:d.cpu.tctl, dash:'', seed:7 });
+    else if (k === 'chip') out.push({ f, label:'Чипсет', cur:d.board.chipset, dash:'', seed:9 });
+    else { out.push({ f, label:'Диск кэша', cur:Math.max(d.kv.t, d.kv.t2), dash:'', seed:11, dec:true }); out.push({ f, label:'Системный', cur:d.sys.t, dash:'4 3', seed:13, dec:true }); }
+  }
+  return out;
+}
+function tempChart(d, inner, off) {
+  const PR = 26, pw = inner - PR, H = 110, N = 60;
+  const ser = seriesOf(d).map(s => ({ ...s, pts:hist(s.cur, s.seed, N, 0, off) }));
+  const vals = ser.flatMap(s => s.pts).filter(v => v != null);
+  const fam1 = S.fams.length === 1 ? FAMS.find(x => x.k === S.fams[0]) : null;
+  const thr = fam1?.thr ?? (fam1?.k === 'disk' ? d.kv.crit - 10 : null);
+  const thrTxt = fam1?.thr ? fam1.thrTxt : 'горячо для диска кэша';
+  if (thr != null) vals.push(thr);
+  const lo = vals.length ? Math.floor((Math.min(...vals) - 5) / 10) * 10 : 30, hi = vals.length ? Math.ceil((Math.max(...vals) + 3) / 10) * 10 : 100;
+  const y = v => H - (v - lo) / (hi - lo) * H, x = i => i * pw / (N - 1);
+  const grid = [lo, (lo + hi) / 2, hi].map((v, j) => `<line x1="0" x2="${pw}" y1="${y(v)}" y2="${y(v)}" stroke="var(${j ? '--c-border-light' : '--c-border'})"/><text class="ax" x="${pw + PR}" y="${y(v) + (j === 2 ? 9 : j ? 3 : 0)}" text-anchor="end">${Math.round(v)}</text>`).join('');
+  const lines = ser.map(s => { const segs = []; let c = [];
+    s.pts.forEach((v, i) => { if (v == null) { if (c.length) segs.push(c); c = []; } else c.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`); });
+    if (c.length) segs.push(c);
+    return segs.map(sg => `<polyline points="${sg.join(' ')}" fill="none" stroke="var(${s.f.color})" stroke-width="1.75" stroke-dasharray="${s.dash}" stroke-linejoin="round"/>`).join(''); }).join('');
+  const thrL = thr != null ? `<line x1="0" x2="${pw}" y1="${y(thr)}" y2="${y(thr)}" stroke="var(--c-warning)" stroke-dasharray="3 3"/><text class="thr" x="2" y="${y(thr) - 3}">${thrTxt} ${thr}</text>` : '';
+  const cut = Math.round(N * 0.86);
+  const offZone = off ? `<rect x="${x(cut)}" y="0" width="${pw - x(cut)}" height="${H}" fill="var(--c-bg-inset)" opacity=".6"/><text class="ax" x="${(x(cut) + pw) / 2}" y="${H / 2}" text-anchor="middle">нет связи</text>` : '';
+  const T = { '1m':['−1 мин','−30 с','сейчас'], '5m':['−5 мин','−2,5','сейчас'], '15m':['−15 мин','−10','−5','сейчас'], '1h':['−1 ч','−30','сейчас'] }[S.win];
+  const chips = FAMS.map(f => { const on = S.fams.includes(f.k), dis = !on && S.fams.length >= MAXF;
+    return `<button class="chip ${on ? 'on' : ''}" data-fam="${f.k}" ${dis ? 'disabled title="Не больше трёх рядов сразу — снимите один"' : ''}><i class="sw" style="background:var(${f.color})"></i>${f.label}</button>`; }).join('');
+  const fmt = s => s.cur == null ? '—' : (s.dec ? n1(s.cur) : Math.round(s.cur)) + '°';
+  const leg = ser.map(s => `<span><svg width="14" height="6"><line x1="0" x2="14" y1="3" y2="3" stroke="var(${s.f.color})" stroke-width="2" stroke-dasharray="${s.dash ? '3 2' : ''}"/></svg>${s.label} <b>${fmt(s)}</b></span>`).join('');
+  const win = ['1m','5m','15m','1h'].map(w => `<span class="${S.win === w ? 'on' : ''}" data-win="${w}">${{ '1m':'1 мин','5m':'5 мин','15m':'15 мин','1h':'1 ч' }[w]}</span>`).join('');
+  return `<div class="card ${off ? 'stale' : ''}"><div class="ch"><h3>Температуры</h3><span class="seg sm">${win}</span></div>
+    <div class="chips">${chips}</div>
+    ${S.fams.length >= MAXF ? '<div class="hint">Не больше трёх рядов сразу — так линии читаются.</div>' : ''}
+    ${ser.length ? `<svg width="${pw + PR}" height="${H}">${grid}${offZone}${thrL}${lines}</svg>
+    <div class="time" style="padding-right:${PR}px">${T.map(t => `<span>${t}</span>`).join('')}</div>
+    <div class="leg">${leg}</div>` : `<div style="height:${H}px;border-radius:6px;background:var(--c-bg-inset);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--c-text-muted)">Выберите, что показать</div>`}
+    ${d.gpus.length > 1 ? '<div class="hint" style="margin:6px 0 0">Карта 1 — сплошная линия, карта 2 — пунктир.</div>' : ''}
+  </div>`;
+}
+
+// ===== Обвязка панели =====
+const TABS = [['LLM','MessageSquareText'], ['Медиа','Clapperboard'], ['Железо','Cpu']];
+function island(tab, body, dot) {
+  const mob = S.w < 380;
+  const tabs = `<span class="seg">${TABS.map(([t, ic]) => `<span class="${t === tab ? 'on' : ''}">${icon(ic, 12)}${t}${t === 'Железо' && dot ? `<i class="tabdot d-${dot}"></i>` : ''}</span>`).join('')}</span>`;
+  return `<div class="isl ${mob ? 'sheet' : ''}" style="width:${S.w}px">${mob ? '<div class="grab"></div>' : ''}
+    <div class="hd">${mob ? 'Локальные модели' : tabs}<span class="x">✕</span></div>
+    <div class="body">${mob ? `<div>${tabs}</div>` : ''}${body}</div></div>`;
+}
+const stub = (t, h) => `<div class="card stub"><div class="ch"><h3>${t}</h3><i>${h || 'без изменений'}</i></div></div>`;
+const banner = off => off ? `<div class="banner"><span>⚠</span><span><b>Стенд не отвечает</b> с 14:32:10. Показаны последние данные — они могут быть неверны.</span></div>` : '';
+
+// Строка-ссылка «Видеокарты» вместо карточек на LLM / Медиа (только у админа)
+function hwRow(gpus, off) {
+  if (!gpus.length) return '';
+  const L = off ? 'none' : worst(gpus.map(gpuLvl));
+  const mem = gpus.map(g => { const l = off ? 'ok' : lvl('mem', g.mem); return g.mem == null ? '<span class="na">нет данных</span>' : `<b class="t-${l}">${Math.round(g.mem)}°</b>`; }).join(' · ');
+  return `<div class="card hwrow ${off ? 'stale' : ''}" role="button" tabindex="0" aria-label="Видеокарты — открыть вкладку «Железо»">
+    <span class="dot d-${L}"></span><span class="t">${gpus.length > 1 ? 'Видеокарты' : 'Видеокарта'}</span>
+    <span class="v">память ${mem}</span>
+    ${!off && gpus.some(g => g.thermal) ? '<span class="pill p-danger">перегрев</span>' : ''}
+    ${gpus.some(g => g.powerCap) ? '<span class="pill p-info">в лимите мощности</span>' : ''}
+    <span class="go">Железо →</span></div>`;
+}
+
+function hardwareTab(d, off) {
+  const ns = nodesOf(d), inner = S.w - 2 - 24 - 24;
+  const L = off ? 'none' : worst(ns.map(x => x.lv).filter(l => l !== 'none'));
+  const c = closest(ns);
+  const sum = off ? '<div class="sum">нет свежих данных с <b>14:32:10</b></div>'
+    : L === 'ok' ? `<div class="sum">Горячее всех — ${c.name.toLowerCase()}: <b>${c.dec ? n1(c.v) : Math.round(c.v)} °C</b></div>`
+    : `<div class="sum">${L === 'danger' ? 'Ближе всех к пределу' : 'Горячо'} — ${c.name.toLowerCase()}: <b>${c.dec ? n1(c.v) : Math.round(c.v)} °C</b>, опасно с <b>${c.th[1]} °C</b></div>`;
+  const pill = L === 'danger' ? '<span class="pill p-danger">есть опасность</span>' : L === 'warn' ? '<span class="pill p-warn">есть горячие узлы</span>' : L === 'ok' ? '<span class="pill p-mute">всё в норме</span>' : '';
+  return `${banner(off)}
+    <div class="card ${off ? 'stale' : ''}"><div class="ch"><h3>Стенд</h3>${pill}</div>${sum}
+      <div class="heat">${ns.map(x => tile(x, off)).join('')}</div>
+      <div class="fans">${icon('Fan', 14)}Вентиляторы корпуса: <b>${d.board.caseFans[0]}</b> и <b>${d.board.caseFans[1]}</b> об/мин</div></div>
+    ${tempChart(d, inner, off)}
+    <div class="card ${off ? 'stale' : ''}"><div class="ch"><h3>${d.gpus.length > 1 ? 'Видеокарты' : 'Видеокарта'}</h3></div>
+      <div class="gpus">${d.gpus.map(g => gpuCard(g, d.gpus.length, S.moreOpen)).join('')}</div></div>`;
+}
+
+function render() {
+  const st = STATES[S.st], d = st.make(), off = !!st.offline;
+  const ns = nodesOf(d), L = off ? null : worst(ns.map(x => x.lv).filter(l => l !== 'none'));
+  const dot = L === 'warn' || L === 'danger' ? L : null;
+  const llm = `${banner(off)}${stub('Сейчас')}${stub('Скорость')}${stub('Нагрузка и кэш')}${hwRow(d.gpus.filter(g => g.roles.includes('text')), off)}${stub('Кто на модели')}`;
+  const media = `${banner(off)}${stub('ComfyUI')}${hwRow(d.gpus.filter(g => g.roles.includes('media')), off)}${stub('Очередь')}${stub('История генераций')}`;
+  const ths = S.th === 'both' ? ['light', 'dark'] : [S.th];
+  document.getElementById('root').innerHTML = ths.map(th => `<div class="col" data-theme="${th}">
+    <h2>Вкладка «Железо» — ${th === 'light' ? 'светлая' : 'тёмная'} тема</h2>
+    <p class="note"><b>${st.title}.</b> ${st.cap} ${S.w < 380 ? `<br>Мобильный лист шириной ${S.w} CSS px: переключатель вкладок — строкой в теле.` : '<br>Остров рельса 380 px: переключатель вкладок — в шапке панели.'}</p>
+    <div class="panels">
+      <div>${island('Железо', hardwareTab(d, off), dot)}<p class="pcap">«Железо» (только админ): сводка «Стенд» с плитками узлов → «Температуры» → подробные карточки карт. Плитка: точка-светофор, значение, мини-график за 15 мин, серая иконка устройства на фоне.</p></div>
+      <div>${island('LLM', llm, dot)}<p class="pcap">«LLM»: карточки карт уехали на «Железо». Осталась одна строка-ссылка — память карт и лимит мощности; касание открывает «Железо». Точка на вкладке «Железо» видна отсюда.</p></div>
+      <div>${island('Медиа', media, dot)}<p class="pcap">«Медиа» у админа — та же строка, только по карте медиа. У обычного пользователя на «Медиа» нет ни строки, ни вкладки «Железо» (ADR-030: карты ему не показываются).</p></div>
+    </div></div>`).join('');
+  document.querySelectorAll('[data-fam]').forEach(b => b.onclick = () => { const k = b.dataset.fam;
+    S.fams = S.fams.includes(k) ? S.fams.filter(x => x !== k) : [...S.fams, k]; render(); });
+  document.querySelectorAll('[data-win]').forEach(b => b.onclick = () => { S.win = b.dataset.win; render(); });
+  document.querySelectorAll('[data-more]').forEach(b => b.onclick = () => { S.moreOpen = !S.moreOpen; render(); });
+  bar();
+}
+function tog(id, key, opts) {
+  document.getElementById(id).innerHTML = opts.map(([v, t]) => `<button class="${S[key] === v ? 'on' : ''}" data-v="${v}">${t}</button>`).join('');
+  document.querySelectorAll(`#${id} button`).forEach(b => b.onclick = () => { S[key] = key === 'w' ? +b.dataset.v : b.dataset.v; render(); });
+}
+function bar() {
+  tog('tSt', 'st', Object.entries(STATES).map(([k, v]) => [k, v.title]));
+  tog('tTh', 'th', [['light','Светлая'], ['dark','Тёмная'], ['both','Обе']]);
+  tog('tW', 'w', [[380,'Рельс 380'], [360,'Телефон 360'], [320,'Узкий 320']]);
+}
+render();
+</script>
+</body>
+</html>

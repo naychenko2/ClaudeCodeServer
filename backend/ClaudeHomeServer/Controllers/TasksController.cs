@@ -1,15 +1,23 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Docs;
+using ClaudeHomeServer.Services.Git;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
+using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -23,32 +31,71 @@ namespace ClaudeHomeServer.Controllers;
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
-    ISphereDirectory spheres) : ControllerBase
+    ISphereDirectory spheres, SessionManager sessions,
+    // Явный резолв доступа к проекту — та же точка, что у FeatureOwnerGate на двери правки
+    // (F2-M2); null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    private Project? OwnProject(string projectId)
-    {
-        var project = projects.GetById(projectId);
-        return project?.OwnerId == UserId ? project : null;
-    }
+    // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
+    private Project? OwnProject(string projectId) => projects.GetById(projectId);
 
     [HttpGet]
+    [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
         if (OwnProject(projectId) is null) return NotFound();
-        return Ok(tasks.GetByProject(projectId));
+        // Список — облегчённый (без Description/ResultMarkdown); полная карточка — GET /api/tasks/{id}.
+        // S2c-9: задачи проекта, вызываемые не владельцем, — через единую проекцию участника TaskView
+        // (те же поля, что в его карточке, минус тяжёлый текст). «Владелец или участник» берётся из
+        // RequestScope, который [ProjectScope] разрешил до действия: новой сверки id вызывающего
+        // в контроллере нет.
+        var asMember = HttpContext.GetRequestScope().Role != ProjectRole.Owner;
+        // Маска чужих приватных чатов (S2d-4b) — обе роли: задачи проекта вызываются и владельцем,
+        // и участником, а чужой приватный чат не видит никто из них, кроме его автора.
+        var audience = ChatAudience.Viewer(UserId);
+        return Ok(tasks.GetByProject(projectId)
+            .Select(t => TaskView.MaskForeignChats(
+                asMember ? TaskView.ForMemberListItem(t) : TaskListItem.From(t), sessions, projects, audience))
+            .ToList());
     }
 
+    // Задача в общий проект (F2-T1, разрез §2.1 «править задачи» — владелец и редактор): право
+    // WriteContent, то же, что у остального записывания задач проекта; читатель — 403
+    // project_scope («нет права на запись», форма ProjectScopeAttribute), посторонний — 404.
+    // Право Write участнику остаётся закрытым (замок ProjectAccessService не открыт).
     [HttpPost]
+    [ProjectScope(Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateTaskRequest req)
     {
         var project = OwnProject(projectId);
         if (project is null) return NotFound();
+        // Арендатор проекта — ключ записи его задач (F2-T1): тот же источник, что у
+        // RequestScope.TenantOwnerId, который разрешил [ProjectScope] до действия.
+        var tenantId = project.OwnerId!;
         if (string.IsNullOrWhiteSpace(req.Title))
             return BadRequest(new { error = "Название задачи не может быть пустым" });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
+        // Фичевые поля при создании — тот же предикат, что на двери правки (F2-M2, возврат
+        // финала db216f32): дверь WriteContent открыта редактору, но она не отдаёт ему ведение
+        // фичи арендатора — роль/фичу/план/связь с ревью создаёт только владелец. Актор —
+        // вызывающий, запись ляжет под арендатором (tenantId — ключ, не автор). Отказ до любой
+        // записи. Обычная задача (без фичевых полей) — создаётся как раньше.
+        if (FeatureOwnerGate.DeniedForCreate(access, UserId, tenantId, projectId, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
 
         // Колонка доски → статус выводим из её категории
         var cat = BoardColumnHelper.Category(project, req.ColumnId);
@@ -79,14 +126,32 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            task = tasks.Create(projectId, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
+            // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
+            // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
+            // Ключ записи — арендатор проекта (Project.OwnerId, тот же источник, что у
+            // RequestScope.TenantOwnerId в [ProjectScope]), автор — вызывающий (F2-T1): задача
+            // участника общего проекта лежит под тем же ключом, что задачи владельца («ключ
+            // записи проектной задачи» в TaskManager.Update), иначе она уедет из календаря и
+            // выдачи арендатора; CreatedByUserId — тот, кто её поставил, по нему решается
+            // удаление. Для владельца проекта оба id совпадают — прежний путь.
+            task = tasks.Create(projectId, tenantId,
+                req with { CreatedByHuman = true, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
-        return Ok(task);
+        // Событие доски: адресат полной карточки — владелец записи (не тот, кто нажал кнопку):
+        // группе проекта идёт проекция участника, арендатору — полная (ISessionBroadcaster.ToTaskBoard).
+        await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // Ответ записи — копия с маской чужих приватных чатов (S2d-4i), та же форма, что в GET-пути.
+        // Проектная задача лежит под арендатором (TaskManager), а её чат-источник может быть
+        // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
+        // Состав полей — по владению записью, как в пути чтения (S2c-9): открытая редактору
+        // дверь записи не должна отдавать ему то, чего ему не отдаёт GET.
+        return Ok(TaskView.MaskForeignChats(TaskView.ForWrite(task, UserId),
+            sessions, projects, ChatAudience.Viewer(UserId)));
     }
 }
 
@@ -102,13 +167,97 @@ public class TasksController(
     // Подсистема Notes отключаемая: null — обратная запись чекбокса в заметку-источник
     // тихо пропускается (SyncTaskToNoteAsync ниже, флаг notes-task-sync и так no-op
     // для задач не из заметки).
-    INoteTaskSync? noteSync = null) : ControllerBase
+    INoteTaskSync? noteSync = null,
+    // Агрегат фичи (режим «Исполнение фичи»): null, когда подсистема Tasks выключена
+    // гейтом Subsystems:tasks:Enabled — тогда GET /features отвечает честным 503, а не 500
+    // (правило отключаемости, ADR-014; образец — AgentDownloadsController).
+    FeatureProjector? features = null,
+    // Git-вертикаль (опционально, как в SessionManager): гард мержа проверяет, что worktree
+    // фичи числится в `git worktree list` проекта (тот же предикат, что AttachWorktreeAsync).
+    // null — подсистема Git выключена → мерж fail-closed (иначе исполнитель стартует в корне).
+    GitService? git = null,
+    // Б5b (минор 4): боевой резолвер модели исполнителя (ModelAssignmentResolver.ExecutorModel) —
+    // та же модель, что реально едет в чат (матрицы персоны, дефолт места «исполнитель» = Strong,
+    // явная модель персоны). null — подсистема Llm выключена → «Авто» без разворота (не 500).
+    ModelAssignmentResolver? assignments = null,
+    // Б5b: журнал событий фичи (волна 3): точный режим stats.timeline (work/waiting/error/idle)
+    // и модели breakdown из журнала. null — подсистема Tasks выключена (как features) →
+    // stats.source=approx, не 500.
+    FeatureJournalStore? journal = null,
+    // Б-mk-b: каталог макетов фичи (Docs): null — подсистема Docs выключена → mockups: []
+    // (без флага, не 500). Склейка в GetFeature, не в FeatureProjector (ADR-031 «Макеты фичи»).
+    MockupCatalog? catalog = null,
+    // Б9b: шов расхода фичи (Core, ISpendFeatureReader): null — подсистема Spend выключена
+    // (гейт Subsystems:spend:Enabled) → stats.spend = null, не 500 (решение Андрея 20.10).
+    // Вертикаль Tasks Spend не видит напрямую — только через этот шов (SubsystemBoundaryTests).
+    ISpendFeatureReader? spend = null,
+    // NC-P1b: запуск предгейта шага; null (тесты без DI) — ручка честно отвечает 503
+    TaskPregateService? pregate = null,
+    // W4-ANB (разрез §4): авторезюме фичи по кнопке. null — подсистема Tasks выключена
+    // (гейт тот же, что у features) → честный 503, не 500 (ADR-014).
+    FeatureSummaryService? summary = null,
+    // Очередь фич (волна 6): пересчёт очереди проекта после постановки/снятия удержания.
+    // null — подсистема Tasks выключена (тот же гейт, что у features) → пересчёта нет.
+    FeatureQueueService? queue = null,
+    // Явный резолв доступа к проекту из тела/запроса ([ProjectScope] такого id не видит);
+    // null — fail-closed (проект недоступен)
+    IProjectAccess? access = null,
+    // Выдача «моих задач» (S2b-3a): личные и свои + назначенные мне в общих проектах.
+    // null — подсистема Tasks выключена: фолбэк на собственные задачи (GetByOwner).
+    MyTasksQuery? myTasks = null,
+    // Лимит слотов очереди для brief.queueStartEstimate (FeatureQueuePolicy.Limit): тот же ключ, что у снятия очереди.
+    IConfiguration? config = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Признак сервисного токена (W4-HOLD-B2): тот же claim-литерал, что в PluginBridgeController
+    // (MapInboundClaims=false оставляет raw-имена). Удержание фичи ставит только человек —
+    // сервисный токен (MCP-обвязка) на ручках hold/clear отказывается 403.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
+
     // Проект генерации: только свой; чужой/несуществующий → личный контекст
     private string? OwnProjectId(string? projectId) =>
-        projectId is not null && projects.GetById(projectId)?.OwnerId == UserId ? projectId : null;
+        projectId is not null && CanUseProject(projectId) ? projectId : null;
+
+    // Доступ вызывающего к проекту, названному в теле/запросе (в S0 — только владелец)
+    private bool CanUseProject(string projectId) =>
+        access?.Resolve(UserId, projectId, ProjectRight.Read) is not null && projects.GetById(projectId) is not null;
+
+    // Двери записи задач (F2-T1, разрез §2.1: «править … задачи» — владелец ✓, редактор ✓,
+    // читатель —). Право решает IProjectAccess по проекту задачи: WriteContent (правка, статус,
+    // колонка, подзадачи, порядок) и RunTurn (запуск исполнителя — он у редактора открыт с
+    // S2a-10). Своя запись — личная или своего проекта — как раньше, по владению: право не
+    // спрашивается, рубильник и флаг «Общих проектов» её не касаются. Чужая личная — 404.
+    // Видимому без права — 403 той же формы и тем же кодом, что у [ProjectScope]
+    // (ProjectScopeAttribute.cs:87-97), невидимому — 404: решение о праве идёт ПОСЛЕ проверки
+    // видимости (тот же порядок, что TurnRightExtensions.Deny).
+    private IActionResult? TaskActionDenied(TaskItem? task, ProjectRight right)
+    {
+        if (task is null || task.OwnerId == UserId) return null;
+        if (task.ProjectId is not { } pid) return new NotFoundResult();
+        if (access?.Resolve(UserId, pid, right) is not null) return null;
+        if (access?.Resolve(UserId, pid, ProjectRight.Read) is null) return new NotFoundResult();
+        return StatusCode(StatusCodes.Status403Forbidden, new
+        {
+            error = right == ProjectRight.RunTurn ? "Нет права вести ход" : "Нет права на запись",
+            code = ProjectScopeAttribute.ErrorCode,
+        });
+    }
+
+    // Удаление задачи (F2-T1, по образцу чатов — вопрос 2 макета, рекомендация Александра):
+    // её автор (CreatedByUserId) или её владелец. Порядок: сначала право — читателю остаёт
+    // 403 project_scope (права нет до авторства), невидимому — 404; затем авторство —
+    // редактору на чужой задаче 403 not_task_author с причиной (по коду фронт выключает
+    // кнопку). Автор неизвестен (старые и серверные записи, CreatedByUserId == null) — автором
+    // не считается: тот же fail-closed, что у DenyTurnAuthor и ChatAuthorGate.
+    private IActionResult? TaskDeleteDenied(TaskItem? task)
+    {
+        if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
+        if (task is null || task.OwnerId == UserId) return null;
+        return task.CreatedByUserId == UserId ? null : TaskAuthorGate.Denied();
+    }
 
     // Сгенерировать описание задачи (Claude): по названию + контекст проекта (личная — только название)
     [HttpPost("ai/description")]
@@ -213,9 +362,21 @@ public class TasksController(
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
 
+        // Приватный чат не привязывается к фиче (S2d-7b-2)
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
+        // Чат, ведущий фичу, не заводит задачи чужой фичи (правило FeatureChatBinding)
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(), FeatureChatDoor.CreateTarget(req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+
         // Проект из тела (если он свой) — для резолва кастомной колонки. Чужой проект
-        // игнорируем: личный эндпоинт не должен подменять статус по чужой доске.
-        var project = bodyProjectId is not null && projects.GetById(bodyProjectId)?.OwnerId == UserId
+        // игнорируем: личный эндпоинт не должен подменять статус по чужой доске. Право на
+        // чужую доску — WriteContent (F2-T1), не чтение: читателю общего проекта её колонки
+        // не управляют его личной задачей.
+        var project = bodyProjectId is not null
+            && access?.Resolve(UserId, bodyProjectId, ProjectRight.WriteContent) is not null
             ? projects.GetById(bodyProjectId)
             : null;
 
@@ -249,14 +410,18 @@ public class TasksController(
             // TeamWaveService) могут слать personal-карточки в review-колонку своих
             // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
             // обычный кейс гейта.
-            task = tasks.Create(null, UserId, req, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
+            // как в проектной ветке Create выше.
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", task));
-        return Ok(task);
+        await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // Та же маска ответа записи, что в проектной ветке Create и в GET-путе (S2d-4i):
+        // чат-источник из тела — id чата, и он может быть приватным чатом другого человека.
+        return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
     }
 
     // Все задачи пользователя (календарь, MCP): диапазон по сроку, поиск и фильтры.
@@ -268,9 +433,15 @@ public class TasksController(
         [FromQuery] string? q = null, [FromQuery] string? status = null,
         [FromQuery] string? priority = null, [FromQuery] string? assignee = null,
         [FromQuery] string? projectId = null, [FromQuery] bool personal = false,
-        [FromQuery] string? personaId = null)
+        [FromQuery] string? personaId = null, [FromQuery] int? doneDays = null)
     {
-        var result = tasks.GetByOwner(UserId).AsEnumerable();
+        var result = (myTasks?.ForUser(UserId) ?? tasks.GetByOwner(UserId)).AsEnumerable();
+        // doneDays задан — закрытые только за N дней по CompletedAt (границу включаем); не задан — все
+        if (doneDays is { } dd)
+        {
+            var border = DateTime.UtcNow.AddDays(-Math.Max(dd, 0));
+            result = result.Where(t => t.Status != TaskItemStatus.Done || (dd > 0 && t.CompletedAt is { } c && c >= border));
+        }
         // Строковое сравнение корректно для ISO-дат YYYY-MM-DD
         if (from is not null)
             result = result.Where(t => t.DueDate is not null && string.Compare(t.DueDate, from, StringComparison.Ordinal) >= 0);
@@ -293,23 +464,70 @@ public class TasksController(
                 t.Title.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Description.Contains(q, StringComparison.OrdinalIgnoreCase) ||
                 t.Labels.Any(l => l.Contains(q, StringComparison.OrdinalIgnoreCase)));
-        return Ok(result.ToList());
+        // Фильтры (в т.ч. q по полному описанию) отработали на полных задачах; наружу уходит
+        // облегчённый элемент: без Description/ResultMarkdown (на проде это ~80% веса ответа).
+        // Полная карточка — GET /api/tasks/{taskId}.
+        // S2c-9: задачи общих проектов, не принадлежащие вызывающему, — через единую проекцию
+        // участника TaskView (те же поля, что в его карточке, минус тяжёлый текст; id личной заметки
+        // владельца закрыт). MyTasksQuery уже отобрал их по праву Read — сверка «своя ли задача»
+        // выбирает форму ответа, ключом хранилищ не служит.
+        // Маска чужих приватных чатов (S2d-4b) — и своих задач тоже: владелец не видит чат,
+        // приватный другому участнику его проекта.
+        var audience = ChatAudience.Viewer(UserId);
+        return Ok(result.Select(t => TaskView.MaskForeignChats(
+            t.OwnerId == UserId ? TaskListItem.From(t) : TaskView.ForMemberListItem(t), sessions, projects, audience)).ToList());
     }
 
     [HttpGet("{taskId}")]
     public IActionResult GetById(string taskId)
     {
         var task = tasks.GetById(taskId);
-        return task is null || task.OwnerId != UserId ? NotFound() : Ok(task);
+        if (task is null) return NotFound();
+        // Владелец (арендатор) — полная карточка, как раньше (тот же состав полей), но копия с
+        // маской чужих приватных чатов (S2d-4b): их не видит и владелец проекта.
+        if (task.OwnerId == UserId)
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
+        // S2c-9 (решение Андрея 01.11): участник общего проекта с правом Read (редактор и читатель)
+        // читает полную карточку через единую проекцию TaskView (тот же состав полей, что в списке,
+        // плюс Description/ResultMarkdown). Членство и флаг «Общие проекты» решает только
+        // IProjectAccess.Resolve; ключ хранилища не меняется — задача лежит у арендатора.
+        if (task.ProjectId is { } pid && access?.Resolve(UserId, pid, ProjectRight.Read) is not null)
+            return Ok(TaskView.MaskForeignChats(TaskView.ForMember(task), sessions, projects, ChatAudience.Viewer(UserId)));
+        // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
+        // «нет» и «чужое» не различаем.
+        return NotFound();
     }
 
     [HttpPut("{taskId}")]
     public async Task<IActionResult> Update(string taskId, [FromBody] UpdateTaskRequest req)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Правка, статус, колонка (перетаскивание), подзадачи и порядок — право WriteContent
+        // по проекту задачи (F2-T1): редактор может, читателю 403, невидимому 404.
+        if (TaskActionDenied(task, ProjectRight.WriteContent) is { } denied) return denied;
+        // Фичевые поля и жизнь фичи — только владельцу проекта (возврат ревью R-F2-T1): дверь
+        // WriteContent открыта редактору, но она не отдаёт ему ведение фичи арендатора. Отказ
+        // 403 до любой записи и до валидации тела — при отказе хранимый объект не тронут.
+        if (FeatureOwnerGate.Denied(access, UserId, task, req) is { } featureDenied)
+            return StatusCode(StatusCodes.Status403Forbidden,
+                new { error = featureDenied, code = FeatureOwnerGate.ErrorCode });
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+
+        // Человеческий REST не принимает id чата из тела: ось «чат-исполнитель» ставит сервер
+        // (ExecutorLauncher), иначе приватный чат привязывался бы к фиче мимо двери (S2d-7b-2)
+        req = req with { ExecutorLaunchedBySessionId = null };
+
+        // Смена фичи задачи (featureId или превращение в эпик ролью) — та же дверь, что у создания
+        if (FeatureChatDoor.DenyPrivateForHeader(sessions,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } privateChat)
+            return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
+        if (FeatureChatDoor.DenyForHeader(sessions, tasks, UserId,
+                Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault(),
+                FeatureChatDoor.UpdateTarget(task, req.FeatureId, req.Role)) is { } bound)
+            return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
 
         // Целевой проект для валидации колонки/персоны: текущий, либо новый из req.ProjectId
         // (null в req = не менять; "" = сделать личной; guid = привязать к проекту)
@@ -317,8 +535,19 @@ public class TasksController(
         if (req.ProjectId is not null)
         {
             targetProjectId = req.ProjectId == "" ? null : req.ProjectId;
-            if (targetProjectId is not null && projects.GetById(targetProjectId)?.OwnerId != UserId)
+            if (targetProjectId is not null && !CanUseProject(targetProjectId))
                 return BadRequest(new { error = "Проект не найден или недоступен" });
+            // Перенос в другой проект — это запись в него (задача появится на доске и уйдёт в группу
+            // проекта): право Write, оно остаётся только у владельца (F2-T1: «остаётся только у
+            // владельца … перенос задачи из проекта в личные или в другой проект»). Тот же отказ —
+            // на выводе задачи из общего проекта в личные: данные уходят из проекта, а не правятся
+            // в нём, поэтому это не WriteContent редактора.
+            if (targetProjectId is not null && targetProjectId != task.ProjectId
+                && access?.Resolve(UserId, targetProjectId, ProjectRight.Write) is null)
+                return StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode });
+            if (targetProjectId is null && task.ProjectId is { } fromPid
+                && access?.Resolve(UserId, fromPid, ProjectRight.Write) is null)
+                return StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode });
         }
 
         // Колонка доски → статус выводим из её категории (единый источник для MCP/Claude и доски).
@@ -336,6 +565,46 @@ public class TasksController(
             effectiveColumn = targetProject?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
         else if (task.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
             effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == task.ColumnId);
+
+        // Человек-исполнитель (S2b-2a): id участника проекта задачи. Членство и роль знает
+        // только проект — их проверяет дверь (TaskManager проекта не видит; ту же пару
+        // проверок для MCP-двери поставит S2b-2b). Отказ — 400 с машинным кодом контракта
+        // (assignee_not_member / reader_not_assignable): по коду фронт решает подсказку.
+        // access резолвит УЧАСТНИКА, а не вызывающего: право на это действие у вызывающего
+        // уже проверено выше (чужой — 403), здесь вопрос «можно ли этого человека исполнителем».
+        // id владельца проекта — не отказ: TaskManager сбрасывает поле (владелец — исполнитель
+        // по умолчанию). Личная задача: чужой id — тот же отказ (ей нечего быть участником),
+        // свой id допустим и равен «снять» (для правки задачи вызывающий и есть её владелец).
+        var tenantOwnerId = targetProject?.OwnerId;
+        var assigneeUserId = string.IsNullOrWhiteSpace(req.AssigneeUserId) ? null : req.AssigneeUserId.Trim();
+        if (assigneeUserId is not null)
+        {
+            if (targetProjectId is null)
+            {
+                if (assigneeUserId != UserId)
+                    return BadRequest(new
+                    {
+                        error = "Личной задаче нельзя назначить исполнителя: у неё нет проекта",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+            }
+            else
+            {
+                var assigneeRole = access?.Resolve(assigneeUserId, targetProjectId, ProjectRight.Read)?.Role;
+                if (assigneeRole is null)
+                    return BadRequest(new
+                    {
+                        error = $"«{assigneeUserId}» не участник проекта задачи",
+                        code = TaskManager.AssigneeNotMemberCode,
+                    });
+                if (assigneeRole == ProjectRole.Reader)
+                    return BadRequest(new
+                    {
+                        error = "Читателя нельзя назначить исполнителем: он только смотрит",
+                        code = TaskManager.ReaderNotAssignableCode,
+                    });
+            }
+        }
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
         // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
@@ -362,6 +631,10 @@ public class TasksController(
                     Notes = req.Verification.Notes,
                     VerifiedAt = DateTime.UtcNow,
                     PersonaId = callerPersonaId,
+                    // Дефект a7b3b85d: verdict терялся при PUT (MCP tasks_complete его копировал,
+                    // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
+                    Verdict = req.Verification.Verdict,
+                    ReturnReason = req.Verification.ReturnReason, // санирует TaskManager
                 },
             };
         }
@@ -378,14 +651,56 @@ public class TasksController(
             // подделки, а разведение путей: подделанный заголовок делает правило строже.
             var isAgentCall = !string.IsNullOrEmpty(
                 Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault());
-            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall)
+            // Исполнитель по claim typ=svc (fail-closed, решение Александра 22.10): сервисный токен
+            // без валидной сессии-вызывающей (заголовка нет, чужая или несуществующая сессия) — исполнитель;
+            // с валидной — исполнитель, только если сессия привязана к ЭТОЙ задаче (Session.TaskId).
+            // Пользовательский JWT из логина — человек, критерии менять может. Заголовок в расчёте
+            // участвует лишь как указание сессии: его отсутствие правило не смягчает.
+            var callerSessionHeader = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
+            var callerSession = callerSessionHeader is not null
+                && sessions.GetById(callerSessionHeader) is { } cs
+                && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            // Дверь MCP (TasksToolset) строже REST: исполнитель там определяется только по
+            // session.TaskId == id, без claim typ=svc (MCP всегда под сервисным токеном). Правила двух
+            // дверей обязаны оставаться согласованными: ослабление одной открывает обход через другую.
+            var callerIsExecutor =
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
+                && (callerSession is null || callerSession.TaskId == taskId);
+            // Закрытие и возобновление эпика фичи — только из чата человека. Предикат один для
+            // обеих дверей (дефект df85c799) и записан в спинке (FeatureTurnGate, Core): здесь
+            // только входы пути — тип токена и сессия-вызывающий. Отказ бросает TaskManager
+            // (FeatureCloseDenied/FeatureReopenDenied).
+            var denyFeature = FeatureTurnGate.DenyFeature(
+                User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind,
+                callerSession, callerSessionHeader,
+                () => !DelegatedTurnGate.Decide(
+                    sessions, UserId, callerSessionHeader, "Закрытие/возобновление фичи",
+                    alsoWhenExecutorSuppressed: false, allowInTeamImplement: false).Allowed);
+            // Арендатор целевого проекта — ключ записи и «владелец» для назначения на владельца
+            updated = tasks.Update(taskId, req, effectiveColumn, isAgentCall, callerIsExecutor,
+                denyFeatureClose: denyFeature, denyFeatureReopen: denyFeature, tenantOwnerId: tenantOwnerId)
                 ?? throw new InvalidOperationException("Задача не найдена");
+        }
+        catch (TaskManager.TaskAssigneeDeniedException ex)
+        {
+            // Отказ назначения — 400 с машинным кодом (тот же словарь, что у проверок двери выше)
+            return BadRequest(new { error = ex.Message, code = ex.Code });
+        }
+        catch (TaskManager.FeatureCloseDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
+        }
+        catch (TaskManager.FeatureReopenDeniedException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
             return BadRequest(new { error = ex.Message });
         }
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("updated", updated));
+        // Адресат полной карточки — владелец записи (арендатор общего проекта), а не вызывающий:
+        // группа проекта получает проекцию участника, арендатор — полную (ToTaskBoard).
+        await broadcaster.ToTaskBoard(updated.OwnerId!, updated.ProjectId, new TaskChangedMessage("updated", updated), sessions, projects);
 
         // Завершение экземпляра регулярной задачи → следующий экземпляр серии.
         // Покрывает и UI, и MCP (tasks_complete/tasks_update идут через этот PUT)
@@ -393,7 +708,7 @@ public class TasksController(
         {
             var next = tasks.SpawnNextOccurrence(updated);
             if (next is not null)
-                await broadcaster.ToOwner(UserId, new TaskChangedMessage("created", next));
+                await broadcaster.ToTaskBoard(next.OwnerId!, next.ProjectId, new TaskChangedMessage("created", next), sessions, projects);
         }
 
         // Обратная запись в заметку-источник: смена done-состояния ставит/снимает галочку
@@ -401,8 +716,1023 @@ public class TasksController(
         if (wasDone != (updated.Status == TaskItemStatus.Done))
             await (noteSync?.SyncTaskToNoteAsync(UserId, updated) ?? Task.CompletedTask);
 
-        return Ok(updated);
+        // Мироринг MCP (TasksToolset.CompleteResponse): если ревью/проверку/финал фичи
+        // закрыли без вердикта, ответ несёт мягкое предупреждение (отдельное поле warning,
+        // не notes) — карточка фичи вердикт не покажет, а блокировать закрытие ради UI нельзя.
+        // Копия с маской чужих приватных чатов (S2d-4i): PUT — тот же вектор утечки, что закрытый
+        // в GET (задача участника лежит у арендатора, её чат-источник — приватный чат участника).
+        // Warning считается по хранимым полям (Status/Role/Verification), маска их не трогает.
+        // Состав полей — по роли вызывающего, как в GET (S2c-9): открытая редактору дверь
+        // записи не должна отдавать ему то, чего ему не отдаёт чтение.
+        return WithWarning(TaskView.MaskForeignChats(TaskView.ForWrite(updated, UserId), sessions, projects, ChatAudience.Viewer(UserId)));
     }
+
+    // Карточка + мягкое warning (FeatureVerdict.Warning), если условие сработало. Единый путь
+    // сериализации: TaskItem → JsonObject теми же опциями, что MVC (camelCase + string-enum
+    // camelCase, relaxed-энкодер против двойного \u-экранирования) — один source of truth,
+    // warning (если есть) дописывается на верхнем уровне. Та же форма, что у MCP tasks_complete.
+    private ObjectResult WithWarning(TaskItem task)
+    {
+        var json = JsonNode.Parse(JsonSerializer.Serialize(task, FeatureJsonOptions))!.AsObject();
+        if (FeatureVerdict.Warning(task) is { } warning)
+            json["warning"] = warning;
+        return Ok(json);
+    }
+
+    // Опции сериализации TaskItem, совпадающие с MVC (AddJsonOptions: camelCase +
+    // JsonStringEnumConverter(CamelCase), FeatureNoteJsonConverter). Relaxed-энкодер: кириллица
+    // не уходит в \uXXXX при пред-сериализации, иначе MVC переэкранировал бы её вторично.
+    private static readonly JsonSerializerOptions FeatureJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase), new FeatureNoteJsonConverter() },
+    };
+
+    // Агрегат фичи (режим «Исполнение фичи», docs/research/turn-plan-feature-mode-cut-2026-10.md):
+    // GET /api/tasks/features?sessionId=… — фичи чата (эпик + конвейер) с агрегатом каждой.
+    // Без sessionId — все фичи владельца. Выборка и подсчёт — только через FeatureProjector
+    // (без второго источника правды); [Authorize] + OwnerId из claim. Подсистема Tasks
+    // выключена (features == null) → честный 503, а не 500 (ADR-014).
+    [HttpGet("features")]
+    public IActionResult GetFeatures([FromQuery] string? sessionId = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Связь фичи с чатом: эпик через SourceSessionId/ExecutorLaunchedBySessionId (разрез §2:
+        // «фича переезжает за оркестратором»). sessionId — id сессии (GUID-строка).
+        // Б7: снимок сессий владельца в оба ветвления — исполнители (chatId/chatArchived)
+        // одинаковы для features?sessionId= и features/{id} (ProjectFull); fail-closed.
+        // Б4: одна и та же функция модели чата (ChatModelResolver) в оба ветвления —
+        // modelLabel/modelFull исполнителей одинаковы, что в списке, что на странице.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
+        var runs = sessionId is null
+            ? features.ProjectAll(UserId, snapshot, resolver)
+            : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
+        return Ok(runs.Select(r => FeatureChatDoor.MaskRunChats(r, sessions, projects, UserId)).ToList());
+    }
+
+    // Индекс «чат → фичи» (контракт С0, GET /api/tasks/features/index?projectId=…): [Authorize],
+    // владелец из claim, только свои данные (GetByOwner). Сессии владельца — узкий снимок
+    // (FeatureIndexSession) из SessionManager: чужие/неизвестные id чатов в снимок не попадают
+    // (fail-closed). projectId — только сессии/фичи этого проекта (эпик в проекте ИЛИ собственный
+    // чат в проекте); без projectId — все проекты владельца. Подсистема Tasks выключена
+    // (features == null) → честный 503, а не 500 (ADR-014, как у GetFeatures).
+    [HttpGet("features/index")]
+    public IActionResult GetFeaturesIndex([FromQuery] string? projectId = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Сессии владельца → узкий снимок (id, taskId, projectId, archived). GetAllOwnedBy
+        // отдаёт только живые сессии владельца: чужие/удалённые id чатов в снимок не попадают.
+        return Ok(features.BuildIndex(UserId, SessionSnapshot(), projectId));
+    }
+
+    // Узкий снимок сессий владельца (id, taskId, projectId, archived, model, personaId) — единый
+    // источник для индекса (GetFeaturesIndex) и ленты одной фичи (GetFeature): fail-closed, чужие/
+    // удалённые id чатов в снимок не попадают (GetAllOwnedBy — только живые сессии владельца). Model —
+    // Session.Model (null/пусто — «Авто», слот; Б4). PersonaId — Session.PersonaId (W4-1B, оркестратор).
+    // S2d-4j: проекции для человека берут снимок ВИДИМЫХ чатов; гард привязки (DenyReason ниже)
+    // зовёт машинный FeatureChatDoor.Snapshot напрямую.
+    private List<FeatureIndexSession> SessionSnapshot() => FeatureChatDoor.SnapshotVisible(sessions, UserId);
+
+    // Б4/Б5b: готовая функция модели чата (label/full) для проекции фичи. Явная модель
+    // (Session.Model) — её имя/метка. «Авто» — боевой резолвер ModelAssignmentResolver.ExecutorModel
+    // (минор 4): та же модель, что реально едет в чат (уровень задачи → матрицы персоны → дефолт
+    // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
+    // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
+    // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
+    internal Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    {
+        if (assignments is null) return null;
+        return s =>
+        {
+            // Явная модель чата: имя + короткая метка.
+            if (!string.IsNullOrWhiteSpace(s.Model))
+                return (ModelShortLabel(s.Model), ModelDisplayName(s.Model));
+            // «Авто»: боевой резолвер. tasks.GetById — общий словарь, поэтому проверяем владельца
+            // (fail-closed, минор 5): чужая задача → как без задачи (резолв по персоне/месту).
+            var task = s.TaskId is not null ? tasks.GetById(s.TaskId) : null;
+            if (task is not null && task.OwnerId != UserId) task = null;
+            var persona = task?.PersonaId is not null ? personas.Get(task.PersonaId, UserId) : null;
+            // (минор 8) assignments здесь не null (null-случай — Llm выключена — обработан выше,
+            // функция не создаётся) → мёртвая проверка убрана.
+            string? model = task is not null
+                // Слот задачи: уровень задачи (постановщик) → PersonaModel (модель персоны → уровень).
+                ? assignments.ExecutorModel(task, persona, UserId)
+                // Задачи нет (или чужая): модель персоны; у персоны без явной модели/уровня
+                // подхватывается дефолт места «исполнитель» (Strong) — PersonaModel(placeDefaultTier:
+                // Strong). Персоны нет (null) → null: «Авто» без модели (в контексте фичи места нет).
+                : assignments.PersonaModel(persona, UserId,
+                    LocalActionCatalog.DefaultTierOf(LocalActionCatalog.TasksExecutor));
+            var full = model is null ? "Авто" : $"Авто → {ModelDisplayName(model)}";
+            return ("Авто", full);
+        };
+    }
+
+    // Полное имя модели для чипа: Claude → «Claude {Семейство}», иначе id модели как есть.
+    // internal — для сверки «Авто» с боевым резолвером (тест минора 4).
+    internal static string? ModelDisplayName(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return $"Claude {family.DisplayName}";
+        return model;
+    }
+
+    // Короткая метка модели: Claude → семейство («Opus»), иначе первое слово id («Qwen»).
+    private static string? ModelShortLabel(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (ClaudeModelFamily.Resolve(model) is { } family)
+            return family.DisplayName;
+        return model.Split(' ')[0];
+    }
+
+    // Одна фича по id эпика (волна 2 «Обзор фич», GET /api/tasks/features/{featureId}):
+    // обёртка { run, events, eventsTotal } — агрегат (Project, без новой арифметики) + лента
+    // событий (BuildEvents, порядок как отдаёт функция) + общее число событий до обрезки.
+    // [Authorize], владелец из claim (не из маршрута); нет эпика/чужой/удалён → один 404
+    // (не отличаем: это же состояние «Фичу удалили» на фронте). Подсистема Tasks выключена
+    // (features == null) → честный 503 (ADR-014, как у GetFeatures/GetFeaturesIndex). Ручка
+    // от фич-флагов не зависит. ?eventsLimit=: не задан → 100; "all"/"0" → все; N (целое > 0)
+    // → N; прочее → 100.
+    // B1b: ответ получает аддитивное поле brief (сводка состояния, разрез п.6) — FeatureBrief.Build
+    // над теми же run/timeline, что идут в stats; индекс и список brief не несут.
+    // п.7: белый список символов id фичи (как resumeSessionId): GUID/строка id без спецсимволов.
+    // Нестандартный id (слеш, «..», >128) → 404 «Фича не найдена» (тело как у «нет эпика»).
+    private static readonly System.Text.RegularExpressions.Regex FeatureIdPattern =
+        new(@"^[A-Za-z0-9_-]{1,128}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    [HttpGet("features/{featureId}")]
+    public async Task<IActionResult> GetFeature(string featureId, [FromQuery] string? eventsLimit = null)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // п.7: нестандартный id (символы вне белого списка) → тот же 404, что «нет эпика»:
+        // lookup по кривому id (с «/» или «..») не идёт, фронт 404 не различает.
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+        // ProjectFull: ПОЛНЫЙ (необлегчённый) run — null, если эпика нет (нет/чужой/удалён —
+        // один 404, см. выше). Тело совпадает с 404 POST merge: { error: "Фича не найдена" }
+        // (фронт читает error).
+        // Б7: снимок сессий владельца → исполнители/шаги/витки (chatId/reviewChatId) fail-closed,
+        // как sessionId события ниже; одинаковые исполнители, что в features?sessionId= (ProjectForSession).
+        // Б4: chats[] — все чаты фичи из снимка владельца (fail-closed); modelLabel/modelFull — та же
+        // функция (ChatModelResolver), что у исполнителей: список и страница дают одинаковые.
+        var snapshot = SessionSnapshot();
+        var resolver = ChatModelResolver();
+        var run = features.ProjectFull(featureId, UserId, snapshot, resolver);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+        // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
+        // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по
+        // ПОЛНОМУ run: reason вердикта = Verification.Notes, который Slim обнуляет для
+        // списков/ответа (контракт master). run в ответе облегчён (SlimRun) — тот же контракт.
+        var journalResult = journal?.Read(UserId, featureId);
+        var all = FeatureProjector.BuildEvents(run, snapshot, journalResult?.Entries);
+        var eventsTotal = all.Count;
+        var events = all.Take(ResolveEventsLimit(eventsLimit)).ToList();
+        // Б-pl: документы фичи (вкладка «Планы и макеты») — СПИСОК (без текста) по ПОЛНОМУ run
+        // (до SlimRun: Slim обнуляет ResultMarkdown, а hasText/mockupPaths — из него).
+        var plans = FeatureProjector.BuildPlans(run);
+        // Б4: chats[] — все чаты фичи из снимка владельца; только features/{id}
+        // (в SlimRun/индекс chats не входит). Набор и kind — единое правило FeatureChatMembership
+        // (W4-CHT-B), локальной копии по TaskId/признакам эпика нет (BuildFeatureChats).
+        var allFeatureTasks = new List<TaskItem> { run.Epic };
+        allFeatureTasks.AddRange(run.Steps);
+        allFeatureTasks.AddRange(run.Reviews);
+        allFeatureTasks.AddRange(run.Qa);
+        if (run.Final is not null) allFeatureTasks.Add(run.Final);
+        if (run.Merge is not null) allFeatureTasks.Add(run.Merge);
+        allFeatureTasks.AddRange(run.Cut);
+        // W4-CHT-B2: design и безролевые задачи — тоже задачи фичи: их чаты должны быть
+        // в «Чатах» так же, как в индексе (тот же состав, что FeatureTasks).
+        allFeatureTasks.AddRange(run.Design);
+        allFeatureTasks.AddRange(run.Plan);
+        allFeatureTasks.AddRange(run.Unroled);
+        var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
+        // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
+        // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
+        // Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи: чтение журнала
+        // (FeatureJournalStore.Read) — ТОЛЬКО здесь, не в индексе/списке.
+        // Б5b: журнал фичи (опционально — null, если подсистема Tasks выключена): полный
+        // (StartsWithCreated && !Truncated) → timeline в точном режиме (work/waiting/error/idle)
+        // и модели breakdown из журнала; иначе approx (по задачам). Выключенный журнал →
+        // source=approx, не 500 (Read сам не бросает: fail-closed на кривой id/отсутствие файла).
+        var journalComplete = journalResult is { StartsWithCreated: true, Truncated: false };
+        // Б6: breakdown (разрезы по персонам/моделям/ролям) + longestNow («дольше всех сейчас») —
+        // тоже по ПОЛНОМУ run, на том же снимке владельца (fail-closed) и now. Журнал полный →
+        // модели из журнала (turn.model), иначе из снимка через resolver (резолв «Авто» — Б4).
+        var now = DateTime.UtcNow;
+        // Б9b/Б9c: расход фичи (stats.spend). Атрибуция (единое правило членства,
+        // FeatureChatMembership — доработка Б9c): задачи фичи (id) + сессии (LinkedSessionId) +
+        // чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}); ОБЩИЕ чаты (M[c] ⊇ {F}, |M[c]| ≥ 2)
+        // вычитаются из прямого среза (exclude) и делятся поровну (shared). Шов опционален:
+        // null (Spend выключен) → spend = null, не 500.
+        var taskIds = allFeatureTasks
+            .Select(t => t.Id)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        var F = run.Epic.Id;
+        var owner = tasks.GetByOwner(UserId).ToList();
+        // Единое правило «чат → фичи» (executor ∪ curator ∪ orchestrator), без фильтра по проекту.
+        var membership = FeatureChatMembership.Build(owner, snapshot);
+        // Общие чаты фичи: входят в 2+ фичи (F ∈ M[c], |M[c]| ≥ 2). Исключение главнее обеих осей.
+        var sharedChatIds = membership
+            .Where(kv => kv.Value.Contains(F) && kv.Value.Count >= 2)
+            .Select(kv => kv.Key)
+            .ToHashSet(StringComparer.Ordinal);
+        // sessionIds: LinkedSessionId задач + чаты, состоящие ТОЛЬКО в этой фиче (M[c] = {F}),
+        // минус общие (они — в долю, не в прямой срез).
+        var sessionIds = allFeatureTasks
+            .Select(t => t.LinkedSessionId)
+            .Where(id => id is not null)
+            .Select(id => id!)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var (chatId, feats) in membership)
+            if (feats.Count == 1 && feats.Contains(F))
+                sessionIds.Add(chatId);
+        sessionIds.ExceptWith(sharedChatIds);
+        // Один проход (Slice): итог и записи из одного набора — без окна рассогласования между
+        // двумя отдельными сканами стора (минор доработки Б9b). spend null (Spend выключен) →
+        // оба null, как раньше (spend?.Totals / spend?.Records).
+        FeatureSpendTotals? spendTotals = null;
+        IReadOnlyList<FeatureSpendRecord>? spendRecords = null;
+        if (spend is not null)
+            (spendTotals, spendRecords) = spend.Slice(UserId, taskIds, sessionIds, sharedChatIds, from: run.Epic.CreatedAt);
+
+        // Б9c: доля ОБЩИХ (оркестраторских) чатов фичи. «Общий чат» — чат, входящий в 2+ фичи
+        // владельца (единое правило FeatureChatMembership: executor ∪ curator ∪ orchestrator
+        // эпика и дочерних задач). Их расход делится ПОРОВНУ (1/N) между фичами, активными на
+        // момент хода (state ∈ {running, waiting, merging}). Доля текущей фичи → stats.spend.shared
+        // + ВКЛЮЧЕНА в итоги. Нет общих чатов или Spend выключен (spendTotals null) → shared: null.
+        FeatureSpendShared? shared = null;
+        bool sharedCostPartial = false;
+        var sharedHidden = new List<string>();
+        if (spendTotals is not null && sharedChatIds.Count > 0)
+        {
+            // (1) Карта chatId → M[c] (состав каждого общего чата фичи) — знаменатель записи.
+            //     M[c] = membership[c]: множество фич, в которые чат входит (FeatureChatMembership).
+            var chatParticipants = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                chatParticipants[chatId] = membership[chatId];
+
+            // (2) Кэш журнала на запрос (решение Александра, п.в): featureId → FeatureJournalReadResult?,
+            //     Read один раз на фичу, включая текущую (journalResult уже прочитан выше) —
+            //     глобального кэша нет. journal null (подсистема выключена) → null, не 500.
+            var journalCache = new Dictionary<string, FeatureJournalReadResult?>(StringComparer.Ordinal)
+            {
+                [run.Epic.Id] = journalResult,
+            };
+            FeatureJournalReadResult? ReadJournal(string fid)
+            {
+                if (!journalCache.TryGetValue(fid, out var jr))
+                {
+                    jr = journal?.Read(UserId, fid);
+                    journalCache[fid] = jr;
+                }
+                return jr;
+            }
+            // Журнал фичи полный: StartsWithCreated && !Truncated (единый предикат, как в п.4).
+            bool JournalComplete(string fid) =>
+                ReadJournal(fid) is { StartsWithCreated: true, Truncated: false };
+
+            // (3) Участницы = объединение M[c] по общим чатам фичи (для интервалов и minCreated).
+            var participants = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var chatId in sharedChatIds)
+                foreach (var fid in membership[chatId])
+                    participants.Add(fid);
+
+            // (4) ОДИН проход по участницам (решение Александра, п.8: один ProjectFull на
+            // участницу): ProjectFull даёт и интервалы, и Epic.CreatedAt — для границы окна (from)
+            // и для clipFrom journal-интервалов (знаменатели режимов однородны: оба обрезаются по
+            // epic.CreatedAt, минор 3). Источник интервалов выбирается ПО УЧАСТНИЦЕ: полный
+            // журнал участницы → её интервалы из её журнала, иначе approx. Так интервалы фичи
+            // не зависят от того, чьё состояние запрашивают (глобальный выбор по объединению
+            // давал F+H ≠ расход чата: у F в запросе от F approx, в запросе от H журнал).
+            var activities = new List<FeatureActivity>();
+            var minCreated = DateTime.MaxValue;
+            foreach (var fid in participants)
+            {
+                var p = features!.ProjectFull(fid, UserId, snapshot, resolver);
+                var intervals = JournalComplete(fid)
+                    ? SharedSpendSplitter.JournalActivity(ReadJournal(fid)!, now, p?.Epic.CreatedAt)
+                    : SharedSpendSplitter.ApproxActivity(p, now);
+                activities.Add(new FeatureActivity(fid, intervals));
+                if (p is not null && p.Epic.CreatedAt < minCreated)
+                    minCreated = p.Epic.CreatedAt;
+            }
+            if (minCreated == DateTime.MaxValue) minCreated = run.Epic.CreatedAt;
+
+            // (5) Записи ВСЕХ общих чатов — ОДИН Records (from = min CreatedAt участниц).
+            var sharedRecords = spend!.Records(UserId, [], sharedChatIds, [], from: minCreated);
+
+            // (6) Метод каждого общего чата: journal, если (a) журналы ВСЕХ M[c] полные И
+            //     (b) среди записей чата в окне нет дневных строк; иначе approx. Дневная строка
+            //     понижает метку независимо от активных (п.5). Итог фичи: journal, только если
+            //     ВСЕ её общие чаты journal (смысл метки — комментарий у FeatureSpendShared.Method).
+            var method = "journal";
+            foreach (var (chatId, m) in chatParticipants)
+            {
+                var complete = m.All(JournalComplete);
+                var hasDaily = sharedRecords.Any(r => r.SessionId == chatId && r.IsDaily);
+                if (!(complete && !hasDaily)) { method = "approx"; break; }
+            }
+
+            // (7) Деление: знаменатель = M[rec.SessionId] (состав чата), не объединение участниц.
+            var (share, shareCostPartial, shareHidden) =
+                SharedSpendSplitter.Split(sharedRecords, activities, chatParticipants, run.Epic.Id, method);
+            sharedCostPartial |= shareCostPartial;
+            sharedHidden.AddRange(shareHidden);
+            if (share.Turns > 0 || share.InputTokens > 0 || share.OutputTokens > 0
+                || share.CacheReadTokens > 0 || share.CacheCreationTokens > 0 || share.CostUsd > 0)
+                shared = share;
+        }
+        sharedHidden = sharedHidden.Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
+
+        // FeatureSpendTotals + доля общего чата → FeatureSpend (camelCase в JSON). Итоги
+        // (токены/цена/costPartial/hiddenCostModels) ВКЛЮЧАЮТ долю: токены и цена складываются,
+        // costPartial/hiddenCostModels — объединяются (та же логика надёжности цены, что в срезе).
+        var allHidden = spendTotals is null
+            ? sharedHidden
+            : spendTotals.HiddenCostModels.Concat(sharedHidden)
+                .Distinct(StringComparer.Ordinal).OrderBy(m => m, StringComparer.Ordinal).ToList();
+        FeatureSpend? featureSpend = spendTotals is null ? null : new FeatureSpend(
+            InputTokens: spendTotals.InputTokens + (shared?.InputTokens ?? 0),
+            OutputTokens: spendTotals.OutputTokens + (shared?.OutputTokens ?? 0),
+            CacheReadTokens: spendTotals.CacheReadTokens + (shared?.CacheReadTokens ?? 0),
+            CacheCreationTokens: spendTotals.CacheCreationTokens + (shared?.CacheCreationTokens ?? 0),
+            CostUsd: spendTotals.CostUsd + (shared?.CostUsd ?? 0),
+            CostPartial: spendTotals.CostPartial || sharedCostPartial,
+            HiddenCostModels: allHidden,
+            // from — контракт string (не null, TS featureStats.ts): срез пуст (записей нет) →
+            // дата начала фичи (создание эпика), не null (решение по минору Б9b: не правим TS-тип).
+            From: (spendTotals.From ?? DateOnly.FromDateTime(run.Epic.CreatedAt)).ToString("yyyy-MM-dd"),
+            Shared: shared);
+        var (breakdown, longestNow) = FeatureBreakdown.Build(run, journalResult, snapshot, resolver, now, spendRecords);
+        // ST-B1: «типичная фича проекта» — медиана и p25–p75 длительности, ожидания и возвратов
+        // по смерженным фичам того же проекта и владельца (текущая исключена; null — смерженных
+        // меньше трёх). Длительность и возвраты — из уже посчитанного Summary/Verdicts (чистая
+        // проекция, кэш на ревизию данных); ожидание — только из полного журнала. Выборка и
+        // стоимость — в комментарии FeatureTypical.cs.
+        var typical = FeatureTypical.Build(owner, UserId, run.Epic.ProjectId, run.Epic.Id,
+            fid => journal?.Read(UserId, fid), now);
+        // B1b: timeline — локальная: тот же экземпляр идёт в stats и в brief (FeatureBrief),
+        // второй FeatureTimeline.Build запрещён (разрез п.7: «те же экземпляры»).
+        var timeline = FeatureTimeline.Build(run, journalResult, now);
+        var stats = new FeatureStats(
+            Source: journalComplete ? "journal" : "approx",
+            Truncated: journalResult?.Truncated ?? false,
+            Timeline: timeline,
+            Breakdown: breakdown,
+            LongestNow: longestNow,
+            Spend: featureSpend,
+            Typical: typical);
+        // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
+        // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
+        // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.
+        // queueStartEstimate: набор фич проекта нужен, только когда фича сама стоит в очереди.
+        var projectRuns = run.Queue is null ? null : features!.ProjectAll(UserId, snapshot);
+        var brief = FeatureBrief.Build(run, timeline, typical, now, projectRuns, FeatureQueuePolicy.Limit(config));
+        // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
+        // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
+        var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
+        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, stats,
+            brief, mockups, mockupsUnavailable });
+    }
+
+    // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{featureId}/summary) ──────────────────
+    // Авторезюме по кнопке (разрез §4): вход модели — детерминированная выжимка FeatureRun
+    // (FeatureSummaryDigest), исполнитель — место «feature-summary» (по умолчанию локаль,
+    // админский выбор в «Поставщиках моделей»). Кэш в памяти процесса: тот же отпечаток
+    // выжимки отдаётся без вызова модели (cached: true); ?force=true — пересчёт. Автоматического
+    // запуска нет (решение Андрея): только по кнопке. 404 — тело как у GET features/{id};
+    // 503 — подсистема выключена; 502 — отказ модели (таймаут — LlmTimeoutException) с причиной.
+    [HttpPost("features/{featureId}/summary")]
+    public async Task<IActionResult> FeatureSummary(string featureId, [FromQuery] bool force = false,
+        CancellationToken ct = default)
+    {
+        if (features is null || summary is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        // Владелец из claim, как у GetFeature: нет эпика/чужой/удалён → один 404. Выжимка
+        // считается по облегчённому run: причина витка живёт в Rounds[].Reason (Slim гасит
+        // Verification.Notes у задач, не у витков) — отдельного ProjectFull не нужно.
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        try
+        {
+            var res = await summary.SummarizeAsync(UserId, featureId, run, force, ct);
+            return Ok(new { text = res.Text, generatedAt = res.GeneratedAt, model = res.Model,
+                cached = res.Cached, usage = res.Usage, eventCount = res.EventCount });
+        }
+        catch (InvalidOperationException ex)
+        {
+            // LlmTimeoutException — потомок InvalidOperationException: причина в сообщении
+            // («не ответил за отведённое время» / «вернула пустой ответ»).
+            return StatusCode(502, new { error = ex.Message });
+        }
+    }
+
+    // ─── W4-HOLD-B2: удержание фичи (POST/DELETE /api/tasks/features/{featureId}/hold) ────────
+    // Контракт §1 (docs/research/feature-lifecycle-shared-chat-cut-2026-10.md): Hold ставит
+    // только человек — сервисный токен (typ=svc) получает 403 на обе ручки. Эти ручки только
+    // пишут поле эпика и записи журнала held/hold_cleared; прерывание идущих ходов — шаг D.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой/кривой id — тело как у GET),
+    // 400 (неизвестный reason), 409: merged/closed/merging; queue для merge_pending
+    // (FeatureQueuePolicy.QueueDenied — тот же список, что QUEUE_DENIED фронта);
+    // draft после первого запуска шага; manual/queue поверх существующего draft; DELETE без
+    // удержания. POST 200 — тело
+    // { interrupted: [taskId] } (контракт :364, W4-HOLD-D2): прерванные этой паузой задачи.
+
+    // Тело POST hold: reason — словарь FeatureHoldReasons (draft | manual | queue).
+    public record FeatureHoldRequest(string? Reason);
+
+    [HttpPost("features/{featureId}/hold")]
+    public async Task<IActionResult> SetFeatureHold(string featureId, [FromBody] FeatureHoldRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи ставит только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        // Тот же 404 с телом, что у GET features/{id} (фронт различает не должен).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        // Завершённые и мержащиеся фичи на паузу не ставят: merged/closed — удерживать нечего,
+        // merging — мерж пауза не трогает вовсе (контракт §1: «на нём ручка отвечает 409»).
+        if (run.State == FeatureStates.Merged)
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.State == FeatureStates.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+        if (run.State == FeatureStates.Merging)
+            return Conflict(new { error = "Мерж идёт: пауза на мерж не ставится" });
+
+        var reason = req?.Reason is null ? null : req.Reason.Trim();
+        if (string.IsNullOrEmpty(reason))
+            return BadRequest(new { error = "Нужен reason удержания (draft | manual | queue)" });
+        if (reason != FeatureHoldReasons.Draft && reason != FeatureHoldReasons.Manual
+            && reason != FeatureHoldReasons.Queue)
+            return BadRequest(new { error = "Неизвестный reason удержания: " + reason });
+
+        // Очередь (волна 6, решение 19.10 п. 5): фичу, которая уже уступила слот или завершена,
+        // в очередь не ставят — иначе merge_pending уходит в paused и тревога мержа исчезает.
+        // Единственное выражение правила — FeatureQueuePolicy.QueueDenied; тот же список, что
+        // QUEUE_DENIED на фронте (FeaturePageHeader.tsx), расхождение ловится тестом
+        // FeatureQueuePolicyTests.QueueDenied_Совпадает_СФронтовымQUEUE_DENIED. Для merged/
+        // closed/merging до этой ветки уже стоит общий отказ выше — ветка полная, чтобы
+        // правило жило в одном месте.
+        if (reason == FeatureHoldReasons.Queue && FeatureQueuePolicy.QueueDenied(run))
+            return Conflict(new { error = "Фича уже уступила слот или завершена: в очередь она не ставится" });
+
+        // Draft — черновик: фичу готовят, до первого запуска шага (решение 23.10: «только до
+        // первого запуска шага, иначе 409»). Тот же предикат anyStarted, что в проекторе.
+        if (reason == FeatureHoldReasons.Draft && FeatureAnyStarted(featureId))
+            return Conflict(new { error = "Draft только до первого запуска шага" });
+        // Manual поверх draft: фича не начиналась — останавливать нечего, черновик снимают clear,
+        // а не переклейкой в паузу. Queue поверх draft разрешён (волна 6): «поставить в очередь»
+        // — штатный путь черновика, фича встаёт в очередь проекта вместо немедленного запуска.
+        if (reason == FeatureHoldReasons.Manual && run.Epic.Hold?.Reason == FeatureHoldReasons.Draft)
+            return Conflict(new { error = "Фича в черновике: ручное удержание поверх draft" });
+
+        var epic = tasks.SetHold(featureId, reason);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        // W4-HOLD-E (контракт §1, :208): помеченные ходы прерываются физически — тот же путь,
+        // что «Стоп»: процесс гасится, очередь замораживается, прерванный ход не присылает result
+        // и не докладывает постановщику. Ключевой чат оркестратора не трогается — внутри сервиса.
+        executor.InterruptFeatureTurnsOnHold(featureId, UserId);
+        // Дефект 8a94dede (возврат QA): постановка паузы молчала — страница фичи и список
+        // задач остаются «идёт» после «Пауза», экран противоречит тосту. Снятие вещает
+        // (TaskExecutionService.cs:1343), поэтому здесь — тот же формат: task_changed(updated)
+        // в группу владельца для эпика (с Hold — проектор по нему считает state=paused)
+        // и каждого шага, помеченного этой паузой. Без вещания стор обновляется только по
+        // снятию — асимметрия, которую Вера и зафиксировала.
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
+        foreach (var t in tasks.GetByOwner(UserId))
+        {
+            if (t.FeatureId != featureId) continue;
+            if (t.ExecutorStopReason != ExecutorStopClassifier.FeatureHeldReason) continue;
+            await broadcaster.ToTaskBoard(UserId, t.ProjectId, new TaskChangedMessage("updated", t), sessions, projects);
+        }
+        // W4-HOLD-D2 (контракт :364): ответ — прерванные этой паузой задачи. Тот же набор,
+        // что поле run.interrupted на странице («на паузе» читает его, а не пустой now), —
+        // не отдельный счёт. Повторный hold с тем же reason идемпотентен по записи и Since,
+        // но набор interrupted пересчитывается: guard только на записи Hold, цикл пометки
+        // живёт на каждом вызове — ходы, начатые после первой паузы, добавляются.
+        var after = features.Project(featureId, UserId);
+        // Очередь проекта: черновик, ставший queue, и пауза на слоте меняют занятость — пересчёт
+        // (сбой внутри сервиса глотается: ответ ручки от него не зависит).
+        if (queue is not null) await queue.RebalanceAsync(UserId, epic.ProjectId);
+        return Ok(new { interrupted = after?.Interrupted ?? [] });
+    }
+
+    // ─── B3: голос фичи (PUT /api/tasks/features/{featureId}/note) ────────────────────────────
+    // Пишет человек (сервисный токен → 403, как у hold). At/StageAtWrite/StateAtWrite ставит
+    // сервер из проекции; стадия — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же
+    // база, что у StaleOf — B14 возврат FIN); категория — FeatureBrief.KindAtWriteOf, та же
+    // величина, что brief.kind (B15, дефект 415c1c80); пустой text снимает голос. Не-эпик → 400,
+    // чужой/кривой id → 404.
+
+    // Тело PUT note: text и необязательная оценка оркестратора (featureEstimate) — прочих полей FeatureNote
+    // у клиента нет.
+    public record FeatureNoteRequest(string? Text, FeatureEstimate? FeatureEstimate = null);
+
+    [HttpPut("features/{featureId}/note")]
+    public async Task<IActionResult> SetFeatureNote(string featureId, [FromBody] FeatureNoteRequest? req)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Голос фичи пишет оркестратор или человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var epic0 = tasks.GetByOwner(UserId).FirstOrDefault(t => t.Id == featureId);
+        if (epic0 is null) return NotFound(new { error = "Фича не найдена" });
+        if (epic0.Role != TaskRoles.Feature)
+            return BadRequest(new { error = "Голос пишется только у фичи (role=feature)" });
+        FeatureEstimate? estimate = null;
+        if (req?.FeatureEstimate is { } rawEstimate)
+        {
+            if (string.IsNullOrWhiteSpace(req.Text))
+                return BadRequest(new { error = "Оценка пишется вместе с голосом" });
+            estimate = rawEstimate.Normalize().NullIfEmpty();
+            if (estimate?.Validate() is { } invalid) return BadRequest(new { error = invalid });
+        }
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
+            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
+        if (epic is null) return NotFound(new { error = "Фича не найдена" });
+        await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
+        return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
+    }
+
+    [HttpDelete("features/{featureId}/hold")]
+    public async Task<IActionResult> ClearFeatureHold(string featureId)
+    {
+        if (IsServiceToken)
+            return StatusCode(403, new { error = "Удержание фичи снимает только человек" });
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+        // Тело снятия (подсчёт resumed/expired, вещание, продолжение ходов, повтор после
+        // сбоя продолжения) — один общий метод сервиса: другой копии у ручки быть не должно.
+        var release = await executor.ReleaseFeatureHold(featureId, UserId, run.Epic.Hold);
+        // Освободившийся слот (снята пауза/черновик — занятость фичи изменилась): очередь проекта
+        // пересчитывается и после неуспешного исхода — пересчёт идемпотентен.
+        if (queue is not null) await queue.RebalanceAsync(UserId, run.Epic.ProjectId);
+        return release.Outcome switch
+        {
+            FeatureHoldReleaseOutcome.NotHeld => Conflict(new { error = "Фича не удержана: снимать нечего" }),
+            FeatureHoldReleaseOutcome.NotFound => NotFound(new { error = "Фича не найдена" }),
+            FeatureHoldReleaseOutcome.Repeated => Ok(new { resumed = release.Resumed, expired = release.Expired, repeated = true }),
+            FeatureHoldReleaseOutcome.Released => Ok(new { resumed = release.Resumed, expired = release.Expired }),
+            // Новый исход без явной ветки не должен молча стать «успехом» с пустыми списками.
+            _ => throw new InvalidOperationException($"Неизвестный исход снятия удержания: {release.Outcome}"),
+        };
+    }
+
+    // Любая задача фичи хоть раз запускалась — «первый запуска шага» состоялся. Тот же состав
+    // задач, что FeatureTasks в проекторе (эпик + дочерние по FeatureId), и тот же признак
+    // anyStarted (ClaudeStartedAt ≠ null) — гард draft не должен расходиться с состоянием.
+    private bool FeatureAnyStarted(string featureId) =>
+        tasks.GetByOwner(UserId).Any(t => (t.Id == featureId || t.FeatureId == featureId)
+            && t.ClaudeStartedAt is not null);
+
+    // Б-mk-b: склейка макетов фичи (ADR-031 «Макеты фичи»). Порядок (fail-closed, сторож G10):
+    //   1. эпик → его проект: только если принадлежит текущему владельцу (GetByOwner);
+    //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
+    //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
+    //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
+    //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
+    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
+    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей, а exists
+    //      записи дерева проверяется по дереву фичи (W4-R1: читатель с ?featureId= читает
+    //      ровно дерево). Дерева нет или проверка не прошла — только main, как раньше.
+    //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
+    // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
+    // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
+    // убыв., null в конце (детерминизм — путь).
+    private async Task<(IReadOnlyList<MockupEntry> Mockups, string? Unavailable)> BuildMockups(FeatureRun run, MockupCatalog? catalog)
+    {
+        // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
+        var project = run.Epic.ProjectId is { } pid
+            ? projects.GetByOwner(UserId).FirstOrDefault(p => p.Id == pid)
+            : null;
+        if (project is null) return ([], null);
+
+        // 2. Локальный проект (файлы на устройстве) → [] + "device" ДО Docs (G10).
+        if (!ProjectCapabilities.FilesOnServer(project))
+            return ([], "device");
+
+        // 3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага). linkedPaths —
+        //    linkedFiles всех задач ПОЛНОГО run (состав — по AllRunTasks), только из проекта
+        //    эпика (см. AllLinkedFiles).
+        var linkedPaths = AllLinkedFiles(run);
+
+        // W4-5: каталог читает проверенное дерево эпика и main; слияние по относительному
+        // пути. Кэш DocsIndexService ключуется корнем — дерево получает свой слот без правок.
+        var featureRoot = await FeatureTreePathAsync(run.Epic, project);
+        var merged = new Dictionary<string, MockupEntry>(StringComparer.OrdinalIgnoreCase);
+        if (featureRoot is not null)
+            foreach (var e in catalog?.Find(featureRoot, run.FeatureId, linkedPaths) ?? [])
+                merged[e.Path] = e with { Tree = MockupTree.Feature };
+        foreach (var e in catalog?.Find(project.RootPath, run.FeatureId, linkedPaths) ?? [])
+        {
+            if (merged.TryGetValue(e.Path, out var fromTree))
+            {
+                // W4-R1 (вариант А): запись дерева побеждает (tree="feature"), Files —
+                // объединение путей: файл, существующий только в main, не исчезает из
+                // каталога. Для дерева фичи exists проверяется ПО дереву фичи: читатель
+                // с ?featureId= читает ровно дерево (фолбэка на main нет), поэтому
+                // exists=true обязан гарантировать, что файл откроется. Пути, лежащие
+                // только в main, остаются в списке с exists=false.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var files = new List<MockupFile>();
+                foreach (var f in fromTree.Files)
+                    if (seen.Add(f.Path)) files.Add(f);
+                foreach (var f in e.Files)
+                    if (seen.Add(f.Path)) files.Add(f with { Exists = false });
+                merged[e.Path] = fromTree with { Files = files };
+            }
+            else
+            {
+                merged[e.Path] = e with { Tree = MockupTree.Main };
+            }
+        }
+        var found = merged.Values;
+
+        // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
+        //    path макета или любой из его files; иначе null.
+        var attributed = found
+            .Select(e =>
+            {
+                var owner = OwnerTask(run, e);
+                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId };
+            })
+            .ToList();
+
+        // 5. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
+        attributed = attributed
+            .OrderBy(e => e.ModifiedAt is null)
+            .ThenByDescending(e => e.ModifiedAt ?? DateTime.MinValue)
+            .ThenBy(e => e.Path)
+            .ToList();
+
+        return (attributed, null);
+    }
+
+    // Все задачи ПОЛНОГО run в одном списке: эпик + шаги + ревью + qa + финал + мерж +
+    // разрез + дизайн + план + безролевые. Единый хелпер (не две копии): новая роль в run не должна молча отстать
+    // в одном из мест (автор макета / linkedFiles) — обе точки берут список отсюда.
+    // Полноту состава держит сторож TasksControllerTests.AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли:
+    // новая роль из TaskRoles.All или новый список в FeatureRun без строки здесь — красный тест.
+    // internal — тот же шов, что у других хелперов для тестов (InternalsVisibleTo).
+    // M1: design входит — иначе макеты от задач дизайнера не попадают ни в AllLinkedFiles,
+    // ни в OwnerTask (карточка фичи их не показывает).
+    // M8 (находка Глеба 8ad0b125, п.2): Unroled входит — состав тот же, что у ленты событий
+    // (FeatureProjector.BuildEvents) и chats[] (allFeatureTasks в GetFeature): ВСЕ задачи с
+    // featureId. Безролевая задача с linkedFiles на макет не должна молча выпадать из карточки.
+    internal static List<TaskItem> AllRunTasks(FeatureRun run)
+    {
+        var all = new List<TaskItem> { run.Epic };
+        all.AddRange(run.Steps);
+        all.AddRange(run.Reviews);
+        all.AddRange(run.Qa);
+        if (run.Final is not null) all.Add(run.Final);
+        if (run.Merge is not null) all.Add(run.Merge);
+        all.AddRange(run.Cut);
+        all.AddRange(run.Design);
+        all.AddRange(run.Plan);
+        all.AddRange(run.Unroled);
+        return all;
+    }
+
+    // linkedFiles всех задач ПОЛНОГО run. Резолв идёт от RootPath проекта эпика, поэтому
+    // берём linkedFiles только из задач того же проекта (иначе файл чужого проекта дал бы
+    // exists:false-шум в списке макетов). Фильтр по ProjectId применяется ВСЕГДА: эпик без
+    // проекта (ProjectId=null) → проходят только задачи тоже без проекта (ветка недостижима —
+    // без проекта эпика BuildMockups каталог не вызывает, см. шаг 1).
+    private static List<string> AllLinkedFiles(FeatureRun run)
+    {
+        var epicProject = run.Epic.ProjectId;
+        return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
+            .SelectMany(t => t.LinkedFiles)
+            .ToList();
+    }
+
+    // Первая (по CreatedAt) задача фичи, в linkedFiles которой есть path макета или любой из его
+    // files; иначе null. Пути нормализуем (регистр/разделители): linkedFiles в сторе может
+    // отличаться от пути каталога регистром или обратным слэшем. Фильтр по проекту эпика —
+    // как в AllLinkedFiles: иначе макет (из проекта эпика) мог бы получить taskId/authorPersonaId
+    // задачи ДРУГОГО проекта.
+    private static TaskItem? OwnerTask(FeatureRun run, MockupEntry entry)
+    {
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
+        foreach (var f in entry.Files) targets.Add(f.Path);
+        var epicProject = run.Epic.ProjectId;
+        return AllRunTasks(run)
+            .Where(t => t.ProjectId == epicProject)
+            .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
+            .OrderBy(t => t.CreatedAt)
+            .FirstOrDefault();
+    }
+
+    // Нормализация пути linkedFiles для сравнения с путями каталога: прямые слэши, без
+    // ведущего «/», регистр в нижний (Windows-диск регистронезависим, Linux — нет, но
+    // сравнение делаем нечувствительным, чтобы не терять совпадение).
+    private static string NormalizeLinkedPath(string? p) =>
+        (p ?? "").Replace('\\', '/').TrimStart('/').ToLowerInvariant();
+
+    // ?eventsLimit= : не задан (null) → 100; строка «0» или «all» → все (int.MaxValue) — «0»
+    // читается как «без лимита», а не как числовой ноль (отдельного числового 0 на wire нет:
+    // параметр всегда строка); N (целое > 0) → N; прочее → 100.
+    private static int ResolveEventsLimit(string? eventsLimit)
+    {
+        if (eventsLimit is null) return 100;
+        if (eventsLimit == "all" || eventsLimit == "0") return int.MaxValue;
+        if (int.TryParse(eventsLimit, out var n) && n > 0) return n;
+        return 100;
+    }
+
+    // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
+    // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
+    // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик, тело { error: "Фича не найдена" }),
+    // 409 (финал не принят, уже смержено/закрыто, worktree не на диске, 0 или >1 исполнителей DevOps).
+    // Идемпотентна и атомарна: открытая merge-задача → вернуть её (создание сериализовано по featureId),
+    // если todo — запустить, вторую не заводить.
+    [HttpPost("features/{featureId}/merge")]
+    [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
+    public async Task<IActionResult> MergeFeature(string featureId)
+    {
+        if (features is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+
+        // m2: нестандартный id (символы вне белого списка) → тот же 404, что у GET features/{id}
+        // (одинаковый код и тело { error: "Фича не найдена" } — фронт читает error).
+        if (!FeatureIdPattern.IsMatch(featureId))
+            return NotFound(new { error = "Фича не найдена" });
+
+        var run = features.Project(featureId, UserId);
+        // 404 с телом: фича чужая/удалена — то же тело, что у GET features/{id} (фронт читает error).
+        if (run is null) return NotFound(new { error = "Фича не найдена" });
+
+        // «Уже смержена» (State == merged: merge Done ∧ (финал принят ∨ эпик Done)) и «закрыта»
+        // (State == closed) — ПЕРЕД «финал не принят»: у закрытой фичи без принятого финала
+        // причина — «закрыта», а не «финал не принят» (п.5). Частичный мерж (merge Done, финал не
+        // принят, эпик открыт) → State != merged: верхний гард НЕ срабатывает (инцидент 21.10).
+        if (run.State == FeatureStates.Merged)
+            return Conflict(new { error = "Фича уже смержена" });
+        if (run.Closed)
+            return Conflict(new { error = "Фича закрыта" });
+
+        // Финал не принят → мерж преждевременно.
+        if (!run.Ready)
+            return Conflict(new { error = "Финал не принят: мерж преждевременно" });
+
+        // Worktree фичи: непустые путь и ветка, путь на диске и числится в `git worktree list`
+        // проекта (тот же предикат, что AttachWorktreeAsync) — иначе исполнитель тихо стартовал бы
+        // в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+        var (gitDisabled, worktreeError) = await FeatureWorktreeErrorAsync(run.Epic);
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (gitDisabled)
+            return StatusCode(503, new { error = "Подсистема Git выключена на этом сервере" });
+        if (worktreeError is not null)
+            return Conflict(new { error = worktreeError });
+
+        // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
+        // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
+        var devops = personas.GetByOwner(UserId)
+            .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
+            .Where(p =>
+            {
+                var scopes = bindings.BuildExternalTaskScopes(UserId, p);
+                return TaskPersonaValidator.Error(personas, UserId, p.Id,
+                    taskProjectId: run.Epic.ProjectId, externalScopes: scopes, spheres: spheres) is null;
+            })
+            .ToList();
+
+        if (devops.Count == 0)
+            return Conflict(new { error = "Нет исполнителя DevOps: задайте персона с специальностью DevopsExecutor" });
+        if (devops.Count > 1)
+            return Conflict(new { error = "Несколько исполнителей DevOps: уточните, кто ведёт мерж" });
+
+        var persona = devops[0];
+
+        // m1: основная ветка проекта (текущая ветка корня) — для шаблона постановки; null — git не дал.
+        var mainBranch = await ResolveMainBranchAsync(run.Epic);
+
+        // Создание идемпотентно и атомарно: два конкурентных POST сериализуем по featureId,
+        // иначе оба увидят «merge-задачи нет» и заведут две (два исполнителя на одном worktree).
+        var gate = MergeGates.GetOrAdd(featureId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
+        {
+            // Идемпотентность: merge-задача уже есть (свежий снимок — после gate).
+            var freshRun = features.Project(featureId, UserId);
+            var existing = freshRun?.Merge;
+            if (existing is not null)
+            {
+                // п.2/п.73: merge-задача закрыта (Done) в окне между снимком и гейтом → 409: дубль
+                // не проходит (верхний гард смотрел на устаревший снимок). Текст отличен от верхнего
+                // гарда («Фича уже смержена»), чтобы тест гонки различал, какая ветка сработала.
+                // Частичный мерж (merge Done при State != merged) сюда не доходит: верхний гард
+                // «!run.Ready → Финал не принят» (921) отсекает его раньше (§7.8) — ветка «создать
+                // новую» была мёртвой и убрана, чтобы код не обещал несуществующую обработку.
+                if (existing.Status == TaskItemStatus.Done)
+                    return Conflict(new { error = "Фича смержена во время мержа" });
+                // Открыта (todo/inProgress): если todo — запускаем исполнителя; возвращаем
+                // актуальную задачу (п.6: та же форма, что и ветка создания — с ClaudeStartedAt,
+                // если запуск прошёл).
+                if (existing.Status == TaskItemStatus.Todo)
+                {
+                    try
+                    {
+                        existing = await executor.ExecuteAsync(existing, auto: false, null, UserId);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        return BadRequest(new { error = ex.Message });
+                    }
+                }
+                // Ответ — хранимая задача идемпотентной ветки: та же маска чужих приватных чатов
+                // в копии, что во всех write-ответах (S2d-4i).
+                return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(existing), sessions, projects, ChatAudience.Viewer(UserId)));
+            }
+
+            // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
+            // Description — самодостаточный шаблон постановки (исход/цель, push, конфликт, критерий, уборка).
+            // ProjectId! — здесь не null: гард worktree (FeatureWorktreeErrorAsync) выше уже вернул 409,
+            // если у эпика нет проекта.
+            var req = new CreateTaskRequest(
+                Title: $"Мерж фичи: {run.Epic.Title}",
+                Description: BuildMergeDescription(run, projects.GetById(run.Epic.ProjectId!)?.RootPath, mainBranch),
+                FeatureId: featureId,
+                Role: TaskRoles.Merge,
+                PersonaId: persona.Id,
+                Assignee: TaskItemAssignee.Claude,
+                WorktreePath: run.Epic.WorktreePath,
+                WorktreeBranch: run.Epic.WorktreeBranch,
+                // Мерж ставит человек по кнопке: он и создатель (автозапуск возобновления наследует его)
+                CreatedByActorUserId: UserId);
+
+            TaskItem task;
+            try
+            {
+                task = tasks.Create(run.Epic.ProjectId, UserId, req);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+
+            // Возвращаем задачу ПОСЛЕ запуска: ClaudeStartedAt/статус подтверждают, что исполнитель стартовал.
+            TaskItem started;
+            try
+            {
+                started = await executor.ExecuteAsync(task, auto: false, null, UserId);
+            }
+            catch (InvalidOperationException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            // Та же маска в копии ответа, что в идемпотентной ветке выше (S2d-4i).
+            return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(started), sessions, projects, ChatAudience.Viewer(UserId)));
+        }
+        finally
+        {
+            gate.Release();
+            // Не снимаем запись из MergeGates (осознанно, отменяет минор п.42 «MergeGates растёт»):
+            // один SemaphoreSlim на фичу живёт до рестарта процесса, цена — десятки объектов.
+            // Снятие записи из словаря давало параллельные критические секции (два запроса на
+            // разных экземплярах гейта) и дубль merge-задачи; идемпотентность держит свежий снимок
+            // features.Project ПОСЛЕ gate, гейт лишь сериализует создание, а не гарантирует «один в секции».
+        }
+    }
+
+    // Причина, по которой worktree фичи непригоден для мержа (null — годен). Тот же предикат,
+    // что AttachWorktreeAsync (SessionManager): путь непустой, на диске и числится в
+    // `git worktree list` проекта — иначе чат-исполнитель не привяжется к дереву и тихо
+    // стартовал бы в корне проекта. Текст 409 — без абсолютного пути хоста (п.4).
+    // Возврат (gitDisabled, reason): gitDisabled=true → честный 503 (подсистема Git выключена,
+    // п.57, как у Tasks), иначе reason — текст 409 (null — worktree годен).
+    private async Task<(bool GitDisabled, string? Reason)> FeatureWorktreeErrorAsync(TaskItem epic)
+    {
+        if (string.IsNullOrWhiteSpace(epic.WorktreePath)) return (false, "Worktree фичи не задан");
+        if (string.IsNullOrWhiteSpace(epic.WorktreeBranch)) return (false, "Ветка фичи не задана");
+        // п.56: у эпика нет проекта (личная задача) → 409, а не ArgumentNullException из GetById(null).
+        if (epic.ProjectId is null) return (false, "Worktree фичи не найден");
+        if (projects.GetById(epic.ProjectId) is not { } project) return (false, "Worktree фичи не найден");
+        // п.56: некорректный путь (недопустимые символы) → 409, а не 500 из Path.GetFullPath.
+        string path;
+        try
+        {
+            path = Path.GetFullPath(epic.WorktreePath.Trim());
+        }
+        catch (Exception)
+        {
+            return (false, "Worktree фичи не найден");
+        }
+        if (!Directory.Exists(path)) return (false, "Worktree фичи не найден");
+        // п.54: гард принимает корень проекта как worktree (WorktreePath = RootPath) — запрещаем:
+        // иначе «мерж в основную ветку» происходил бы в том же дереве, что и исход.
+        if (PathNormalizer.NormalizePath(path) == PathNormalizer.NormalizePath(project.RootPath))
+            return (false, "Worktree фичи совпадает с корнем проекта");
+        // п.57: подсистема Git выключена → честный 503 (как у Tasks), а не 409 «не найден».
+        if (git is null) return (true, null);
+        var wanted = PathNormalizer.NormalizePath(path);
+        IReadOnlyList<GitWorktreeInfo> list;
+        try
+        {
+            // п.53: сбой git (worktree list) → 409 с честной причиной, не 500 (как AttachWorktreeAsync).
+            list = await git.WorktreeListAsync(UserId, project.RootPath);
+        }
+        catch (Exception)
+        {
+            return (false, "Не удалось прочитать git worktree list проекта");
+        }
+        if (!list.Any(w => PathNormalizer.NormalizePath(w.Path) == wanted))
+            return (false, "Worktree фичи не найден");
+        return (false, null);
+    }
+
+    // W4-5 (п.5.1): проверенное дерево эпика для чтения каталога макетов. Предикат — общий
+    // с W4-5B2: GitService.VerifiedFeatureTreeAsync (тот же, что FeatureWorktreeErrorAsync/
+    // AttachWorktreeAsync). Не прошёл проверку — дерева нет (null): каталог читает main, как
+    // раньше. В отличие от гарда мержа — не 409: отсутствие дерева здесь фолбэк, а не ошибка.
+    // Ветка эпика не требуется: для чтения дерева она не нужна. Git выключен (null) или сбой
+    // git — fail-closed, main (не 500).
+    private async Task<string?> FeatureTreePathAsync(TaskItem epic, Project project)
+    {
+        if (git is null) return null;
+        return await git.VerifiedFeatureTreeAsync(UserId, project.RootPath, epic.WorktreePath);
+    }
+
+    // m1: основная ветка проекта — текущая ветка корня (git symbolic-ref). null — git выключен,
+    // корень не репо, detached HEAD или сбой git: шаблон тогда пишет «обычно master» без жёсткого имени.
+    private async Task<string?> ResolveMainBranchAsync(TaskItem epic)
+    {
+        if (git is null || epic.ProjectId is null) return null;
+        var project = projects.GetById(epic.ProjectId);
+        if (project is null) return null;
+        try
+        {
+            return await git.CurrentBranchAsync(UserId, project.RootPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    // Шаблон постановки merge-задачи (M1): самодостаточный — исход/цель, push, конфликт, критерий, уборка.
+    // Названия ветки и пути worktree подставляются из эпика; основное рабочее дерево (корень проекта,
+    // куда мержим) — абсолютный путь (п.40; прецедент TeamImplementPrompts: путь дерева в постановке).
+    private static string BuildMergeDescription(FeatureRun run, string? projectRoot, string? mainBranch)
+    {
+        var branch = string.IsNullOrWhiteSpace(run.Epic.WorktreeBranch) ? "ветку фичи" : run.Epic.WorktreeBranch;
+        var worktree = string.IsNullOrWhiteSpace(run.Epic.WorktreePath) ? "worktree фичи" : run.Epic.WorktreePath;
+        var mainTree = string.IsNullOrWhiteSpace(projectRoot) ? "корень проекта" : projectRoot;
+        // m1: основная ветка — из git (текущая ветка корня проекта); если неизвестна — честно
+        // «основная ветка проекта (обычно master)», без жёсткого master в команде.
+        var target = string.IsNullOrWhiteSpace(mainBranch)
+            ? "основную ветку проекта (в этом проекте обычно master)"
+            : $"основную ветку проекта «{mainBranch}»";
+        return string.Join("\n",
+            $"Смержить ветку фичи «{branch}» в {target} в основном рабочем дереве проекта; исход — worktree фичи {worktree}.",
+            $"Основное рабочее дерево (сюда мержим): {mainTree}.",
+            "Предусловие: финал фичи принят (проверено сервером).",
+            "Push НЕ делать — только локальный мерж.",
+            "При конфликте не разрешать молча: остановиться и доложить в отчёте задачи, что именно конфликтует.",
+            "После успешного мержа проверить git log/сборку по кратким критериям проекта. Эпик не закрывать: фичу закрывает человек.",
+            "Worktree и ветки не удалять — уборка по слову человека.");
+    }
+
+    // Семафоры создания merge-задач по featureId: статика, т.к. контроллер transient (по одному на запрос).
+    // Запись НЕ убирается в finally (осознанно, отменяет минор п.42): один SemaphoreSlim на фичу живёт
+    // до рестарта процесса (цена — десятки объектов). Снятие записи давало параллельные критические секции
+    // и дубль merge-задачи; идемпотентность (свежий снимок после gate) держит корректность, гейт — сериализация.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new();
 
     // Запустить выполнение задачи Claude-ом (кнопка «Выполнить с Claude»)
     [HttpPost("{taskId}/execute")]
@@ -412,15 +1742,44 @@ public class TasksController(
     // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
     // Ход-реакция на доклад исполнителя запускать может: запрет снят решением владельца
     // (мешал и пользы не давал), цикл «доклад → запуск → доклад» останавливает «Стоп».
-    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true)]
+    [DenyOnDelegatedTurn("Запуск задачи на исполнение", AllowInTeamImplement = true,
+        AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Запуск исполнителя — право RunTurn по проекту задачи (F2-T1): оно открыто редактору
+        // с S2a-10, читателю — нет (403 project_scope «нет права вести ход»). Сам вызов
+        // исполнителя остаётся под owner'ом задачи: порождённый ход принадлежит владельцу
+        // записи, а не тому, кто нажал кнопку (TaskExecutionService).
+        if (TaskActionDenied(task, ProjectRight.RunTurn) is { } denied) return denied;
 
         try
         {
-            return Ok(await executor.ExecuteAsync(task, auto: false));
+            // Кнопка в UI: сессии-вызывателя нет — после успешного запуска поля сбрасываются; на идущей
+            // задаче запуск отказывает раньше записи, поле запустившего не затирается
+            var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault();
+            var callerSession = callerSessionId is not null && sessions.GetById(callerSessionId) is { } cs
+                && sessions.ResolveOwnerId(cs) == UserId ? cs : null;
+            if (FeatureChatDoor.DenyPrivateForHeader(sessions, callerSessionId, FeatureChatDoor.TargetFeature(task)) is { } privateChat)
+                return Conflict(new { error = privateChat, code = FeatureChatDoor.PrivateChatCode });
+            if (callerSession is not null
+                && FeatureChatDoor.DenyReason(tasks, FeatureChatDoor.Snapshot(sessions, UserId), UserId, callerSession.Id,
+                    FeatureChatDoor.TargetFeature(task)) is { } bound)
+                return Conflict(new { error = bound, code = FeatureChatDoor.DeniedCode });
+            // Актор: из реестра идущего хода чата-вызывателя (F-1). Молчание реестра (в этом чате
+            // сейчас нет хода) не делает вызов безымянным: человек с JWT этого запроса — сам
+            // инициатор и владелец задачи (проверено выше). После О2 финального ревью
+            // «Общих проектов» безымянный актор общего проекта не имеет ни одного права —
+            // без имени исполнитель не мог бы ни закрыть свою задачу, ни поставить сторожа.
+            var actor = callerSession is null ? null : sessions.GetTurnActor(callerSession.Id, UserId);
+            var started = await executor.ExecuteAsync(task, auto: false,
+                new ExecutorLauncher(callerSession?.Id, callerSession?.PersonaId),
+                string.IsNullOrEmpty(actor) ? UserId : actor);
+            // Кнопка «Выполнить с Claude» на задаче участника: в ответ уходит хранимая задача,
+            // её чат-источник — приватный чат участника. Копия с маской (S2d-4i), как в PUT/GET;
+            // состав полей — по роли вызывающего (S2c-9), как в PUT.
+            return Ok(TaskView.MaskForeignChats(TaskView.ForWrite(started, UserId), sessions, projects, ChatAudience.Viewer(UserId)));
         }
         catch (InvalidOperationException ex)
         {
@@ -428,14 +1787,41 @@ public class TasksController(
         }
     }
 
+    // Предгейт шага (NC-P1b): прогон проверок в дереве шага, результат с sha коммита пишется
+    // в задачу — его видит ревьюер; закрытие шага (tasks_complete и PUT) он не блокирует.
+    // Вызов синхронный: ответ — когда проверки кончились.
+    // 409 — прогон не применим или не состоялся, текст отказа в error
+    [HttpPost("{taskId}/pregate")]
+    public async Task<IActionResult> RunPregate(string taskId, CancellationToken ct)
+    {
+        if (pregate is null) return StatusCode(503, new { error = "Предгейт недоступен." });
+        var callerSessionId = Request.Headers[McpEndpoints.CallerSessionHeader].FirstOrDefault() ?? "";
+        var outcome = await pregate.RunAsync(UserId, taskId, callerSessionId, ct);
+        return outcome.Status switch
+        {
+            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, outcome = outcome.Record.Outcome, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
+            TaskPregateStatus.NotFound => NotFound(),
+            TaskPregateStatus.Disabled => StatusCode(503, new { error = outcome.Text }),
+            _ => Conflict(new { error = outcome.Text }),
+        };
+    }
+
     [HttpDelete("{taskId}")]
     public async Task<IActionResult> Delete(string taskId)
     {
         var task = tasks.GetById(taskId);
-        if (task is null || task.OwnerId != UserId) return NotFound();
+        if (task is null) return NotFound();
+        // Удаление необратимо: автор задачи или её владелец (F2-T1, по образцу чатов).
+        if (TaskDeleteDenied(task) is { } denied) return denied;
 
+        // W4-HOLD-N (хвост R-N п.3): страховка на любой двери удаления: эпик возвращает
+        // замороженные сроки своим шагам, шаг на паузе — срок собственному чату. До удаления:
+        // после него задачи в реестре нет, и путь возврата срока для её чата больше не выполнится.
+        executor.RestoreFrozenChatsBeforeDelete(task);
         tasks.Delete(taskId);
-        await broadcaster.ToOwner(UserId, new TaskChangedMessage("deleted", task));
+        // Адресат — владелец записи: удалил чужую задачу её автор (редактор) — полную карточку
+        // получает арендатор, группа проекта — проекцию участника.
+        await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("deleted", task), sessions, projects);
         return NoContent();
     }
 }

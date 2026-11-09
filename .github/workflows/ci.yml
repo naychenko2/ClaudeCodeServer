@@ -6,38 +6,154 @@ on:
   pull_request:
 
 jobs:
-  backend:
-    name: Backend (build + test)
+  # Backend разнесён на сборку и прогон (фича «Ускорение тестов», Э2): сборка идёт ОДИН раз,
+  # её bin едет артефактом в матрицу прогонов. Шарды раскладывает scripts/test-shards.py по
+  # профилю прошлого прогона: монолит ClaudeHomeServer.Tests и Llm.Tests — по классам, остальные
+  # тестовые проекты решения («rest») — по проектам. Состав не сокращается: объединение шардов
+  # скрипт сверяет с `dotnet test --list-tests` (rest — с набором тестовых проектов slnx) и падает
+  # при расхождении. Проверки, не нужные шардам (агент win-x64, UTF-8, тесты скриптов), вынесены
+  # в backend-checks: на пути сборка → шарды им делать нечего.
+  backend-build:
+    name: Backend (build)
     runs-on: ubuntu-latest
-    # История: тесты на Linux-раннере зависали насмерть (прогоны умирали на дефолтном
-    # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
-    # зависания ищет blame-режим шага Test ниже.
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      # ffmpeg для тестов монтажа без ИИ модуля «Звук» (ADR-021, этап 5).
-      # В ubuntu-latest он есть в репозитории universe, но ставится явно — без
-      # зависимости от состава предустановленного софта в будущих образах.
-      - name: Install ffmpeg
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - uses: actions/setup-dotnet@v4
         with:
           # Проекты на net10.0. Раньше тут стояло 9.0.x, и сборка проходила лишь потому,
           # что на образе раннера случайно оказался предустановленный SDK 10.x — при
           # обновлении образа это молча сломалось бы.
           dotnet-version: 10.0.x
+          # Кэш пакетов NuGet общий со сборкой шардов: пакеты Test SDK берутся из него (см. backend-test)
+          cache: true
+          cache-dependency-path: backend/**/*.csproj
+      # .deb ffmpeg для шардов качаем ЗДЕСЬ, фоном, пока идёт сборка (3+ минуты), и отдаём артефактом
+      # ffmpeg-debs: apt на самом шарде нестабилен по времени (в прогоне 41033318930 у 4 из 11 шардов
+      # установка шла 41–46 с — устаревший индекс образа и `apt update`), а подготовка шарда должна
+      # укладываться в ~35 с. На шарде остаётся `dpkg -i` без сети и без `apt update`. --download-only
+      # берёт только пакеты, которых нет на образе, — ровно тот набор, что нужен шарду (образ тот же).
+      # Вывод — только в файлы: дескрипторы шага фоновый процесс не держит, иначе шаг не завершится.
+      - name: Fetch ffmpeg .deb (background)
+        run: |
+          setsid nohup bash -c '
+            mkdir -p "$RUNNER_TEMP/ffmpeg-debs"
+            get="sudo apt-get install -y -qq --no-install-recommends --download-only ffmpeg"
+            $get || { sudo apt-get update -qq && $get; }
+            rc=$?
+            [ "$rc" = 0 ] && cp /var/cache/apt/archives/*.deb "$RUNNER_TEMP/ffmpeg-debs/"
+            echo $? > "$RUNNER_TEMP/ffmpeg-debs.status"' \
+            > "$RUNNER_TEMP/ffmpeg-debs.log" 2>&1 < /dev/null &
       # Предупреждения компилятора — ошибка сборки, но только здесь, а не в
       # Directory.Build.props: локально они не должны мешать отладке (временно
       # неиспользуемая переменная — норма в процессе работы, а не повод глушить
       # предупреждение прагмой). Гейт стоит там, где решается попадание в master.
       # Список кодов, выведенных из-под гейта (NuGet-предупреждения, зависящие от
       # сети и внешних advisory), — в свойстве WarningsNotAsErrors там же, в props.
+      #
+      # NoWarn: "NU1903" — точечное исключение из-под гейта:
+      #
+      # NU1903 (NuGet audit, high-severity): restore-таск NuGet (SDK 10.0.112) НЕ
+      # применяет WarningsNotAsErrors к audit-предупреждениям, так что под -warnaserror
+      # NU1903 становится ошибкой; единственный способ не превращать его в ошибку —
+      # NoWarn. Держим env-переменной на ЭТОЙ команде, а не в общем props: (1) в
+      # локальной dev-сборке (без -warnaserror) NU1903 остаётся видимым warning —
+      # уязвимости светятся; (2) решение явно в workflow, а не спрятано в общем файле;
+      # (3) глушим только high-severity — NU1901/NU1902/NU1904 в CI по-прежнему видны.
+      #
+      # Env, а не -p:NoWarn=: -p: задаёт ГЛОБАЛЬНОЕ свойство MSBuild, которое перебивает
+      # per-project <NoWarn>$(NoWarn);…</NoWarn> в .csproj (и не умеет list-value:
+      # ; = разделитель свойств). Env-переменная — обычное свойство, поэтому per-project
+      # подавления (CA1822/CA1805/CS1591/CA2255) дописываются сами и дублировать их
+      # в CI-флаге не нужно.
       - name: Build
+        env:
+          NoWarn: "NU1903"
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
+      # Списки тестов монолита и Llm.Tests снимаются один раз — по ним каждый шард строит свой фильтр
+      - name: List tests
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en
+        run: |
+          dotnet test backend/ClaudeHomeServer.Tests --no-build --list-tests > monolith-tests.txt &
+          monolith=$!
+          dotnet test backend/ClaudeHomeServer.Llm.Tests --no-build --list-tests > llm-tests.txt &
+          llm=$!
+          wait "$monolith"
+          wait "$llm"
+      # В артефакт — bin и результаты restore (см. ниже), и только нативные рантаймы
+      # linux-x64: нативы остальных платформ (SkiaSharp и пр. с pdb в сотни МБ) в КАЖДОМ из ~90 bin
+      # раздували архив до 1,4 ГБ. Исключение по RID, а не перечень нужных: linux-[!x]* — все linux-*
+      # кроме linux-x64/x86, x86 — отдельно. zstd --long=27: одни и те же dll лежат в десятках bin,
+      # окно 128 МБ склеивает дубли (распаковка принимает окно 2^27 по умолчанию) — ~280 МБ вместо 1,4 ГБ
+      #
+      # Вместе с bin едут результаты restore (obj/project.assets.json, *.nuget.g.props/targets, project.nuget.cache,
+      # *.nuget.dgspec.json — десятки КБ на проект): шарду не нужен свой `dotnet restore` (10–16 с на 90 проектов),
+      # ему хватает кэша пакетов NuGet. Пути в assets абсолютные, но раннер и каталог те же, что у сборки.
+      - name: Pack build output
+        run: |
+          { find backend -type d -name bin -prune -print0
+            find backend -type f -path '*/obj/*' \( -name project.assets.json -o -name project.nuget.cache \
+              -o -name '*.nuget.g.props' -o -name '*.nuget.g.targets' -o -name '*.nuget.dgspec.json' \) -print0; } \
+            | tar --null --exclude='backend/*/bin/Release' \
+                --exclude='*/runtimes/win*' --exclude='*/runtimes/osx*' --exclude='*/runtimes/linux-musl*' \
+                --exclude='*/runtimes/linux-arm*' --exclude='*/runtimes/browser*' --exclude='*/runtimes/maccatalyst*' \
+                --exclude='*/runtimes/ios*' --exclude='*/runtimes/android*' --exclude='*/runtimes/freebsd*' \
+                --exclude='*/runtimes/linux-[!x]*' --exclude='*/runtimes/linux-x86*' \
+                -cf - -T - monolith-tests.txt llm-tests.txt | zstd -T0 -3 -q --long=27 -o "$RUNNER_TEMP/backend-build.tar.zst"
+          ls -lh "$RUNNER_TEMP/backend-build.tar.zst"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: backend-build
+          path: ${{ runner.temp }}/backend-build.tar.zst
+          compression-level: 0
+          retention-days: 1
+      # Фон с .deb к этому моменту давно закончен (сборка идёт минуты). Не вышло — артефакт не создаём,
+      # шарды ставят ffmpeg через apt (запасной путь, медленнее, но с теми же гарантиями)
+      - name: Wait ffmpeg .deb
+        run: |
+          for _ in $(seq 1 300); do [ -f "$RUNNER_TEMP/ffmpeg-debs.status" ] && break; sleep 1; done
+          tail -n 5 "$RUNNER_TEMP/ffmpeg-debs.log"
+          if [ "$(cat "$RUNNER_TEMP/ffmpeg-debs.status" 2>/dev/null)" != 0 ]; then
+            echo "::warning::.deb ffmpeg не скачались — шарды поставят ffmpeg через apt"
+            rm -rf "$RUNNER_TEMP/ffmpeg-debs"
+          fi
+          ls "$RUNNER_TEMP/ffmpeg-debs" 2>/dev/null | wc -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-debs
+          path: ${{ runner.temp }}/ffmpeg-debs
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
+
+  # Проверки, не влияющие на шарды (вынесены из backend-build, чтобы не держать путь сборка → шарды)
+  backend-checks:
+    name: Backend (checks)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          # Свой ключ кэша (только агент): общий с backend-build дал бы гонку сохранений, и шарды
+          # могли бы получить кэш одного агента вместо кэша всего решения
+          cache: true
+          cache-dependency-path: backend/ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj
+      # Тесты скриптов профиля и шардов: линейка всей фичи не должна врать молча
+      - name: Test scripts (profile, shards)
+        run: |
+          python3 -I scripts/test_test_profile.py
+          python3 -I scripts/test_test_shards.py
       # Сторож кросс-сборки агента устройства (agent-distribution AD-1): выкатка собирает
       # win-x64 на Linux, и мост ConPTY обязан ехать в тот же каталог. Условие в csproj
       # по ОС сборки вместо целевого RID молча выкинуло бы мост — здесь это падение.
+      # NU1903 глушится так же, как в Build backend-build (там разбор причины): publish теперь
+      # делает свой restore, и без этого аудит NuGet под -warnaserror роняет шаг
       - name: Publish DeviceAgent (win-x64)
+        env:
+          NoWarn: "NU1903"
         run: |
           dotnet publish backend/ClaudeHomeServer.DeviceAgent/ClaudeHomeServer.DeviceAgent.csproj \
             -c Release -r win-x64 --self-contained -warnaserror -o "$RUNNER_TEMP/agent-win-x64"
@@ -72,47 +188,211 @@ jobs:
           print(f'OK: {sum(1 for r,_,fs in os.walk(\"backend\") for f in fs if f.endswith(\".cs\"))} файлов .cs — валидный UTF-8')
           "
         shell: bash
+
+  backend-test:
+    name: Backend (test ${{ matrix.name }})
+    needs: backend-build
+    runs-on: ubuntu-latest
+    # История: тесты на Linux-раннере зависали насмерть (прогоны умирали на дефолтном
+    # 6-часовом таймауте). Потолок джобы — страховка от сгоревших часов; виновника
+    # зависания ищет blame-режим прогона ниже.
+    timeout-minutes: 30
+    # actions: read — `gh run download` в фоне берёт артефакты этого прогона (подготовка шарда)
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Число шардов — по замеру: подбирается так, чтобы время шарда с накладными ~1,5 мин
+          # укладывалось в бюджет всего конвейера (сборка + шард ≤ 7 мин). Меняется только здесь:
+          # N берётся из shard, раскладка и сверка покрытия считаются скриптом
+          - { name: "monolith 1/6", key: m1, kind: monolith, shard: "1/6" }
+          - { name: "monolith 2/6", key: m2, kind: monolith, shard: "2/6" }
+          - { name: "monolith 3/6", key: m3, kind: monolith, shard: "3/6" }
+          - { name: "monolith 4/6", key: m4, kind: monolith, shard: "4/6" }
+          - { name: "monolith 5/6", key: m5, kind: monolith, shard: "5/6" }
+          - { name: "monolith 6/6", key: m6, kind: monolith, shard: "6/6" }
+          # Llm.Tests — отдельная цель (свой тестовый проект), классы по профилю; параллель коллекций включена,
+          # inotify-классы помечены Inotify+Slow и идут вторым проходом
+          - { name: "Llm.Tests 1/2", key: l1, kind: llm, shard: "1/2" }
+          - { name: "Llm.Tests 2/2", key: l2, kind: llm, shard: "2/2" }
+          # rest — остальные тестовые проекты slnx, по проектам: вынесенные проекты идут в том же гейте master
+          - { name: "rest 1/3", key: r1, kind: rest, shard: "1/3" }
+          - { name: "rest 2/3", key: r2, kind: rest, shard: "2/3" }
+          - { name: "rest 3/3", key: r3, kind: rest, shard: "3/3" }
+    env:
+      DOTNET_CLI_UI_LANGUAGE: en
+      # Fast — исключение категорий, а не перечень меток (Э3). Единственная копия фильтра в CI;
+      # в скриптах — FAST_FILTER в scripts/test-profile.py, в предгейте — Pregate:Checks.
+      FAST: "Category!=Host&Category!=Slow&Category!=Integration&Category!=Node&Category!=Bench"
+      NOT_FAST: "(Category=Host|Category=Slow|Category=Integration|Category=Bench)&Category!=Node"
+      # Порог сторожа длительности — единственная константа, и она здесь. Стена теста на 4 vCPU
+      # раннера под параллелью шумит в разы (сторож Host локально 1,9 с, здесь ~10 с), поэтому CI
+      # ловит только грубые регрессии; острый порог 5 с (CHECK_THRESHOLD в scripts/test-profile.py) —
+      # ручной --check на спокойной машине, в предгейт сторож не входит
+      DURATION_GUARD_THRESHOLD: "30"
+    steps:
+      # Подготовка шарда идёт конвейером: последовательны только действия (checkout, setup-dotnet, кэш),
+      # тяжёлое — скачивание артефактов, распаковка сборки и установка ffmpeg — работает ФОНОМ с первой секунды.
+      # Бюджет до первого `dotnet test` — ~35 с, поэтому в цепочке нет ни `dotnet restore`, ни `apt`, ни
+      # `download-artifact` (действие нельзя увести в фон, а оно стоило 3–17 с подряд). Артефакты текущего
+      # прогона берёт `gh run download` (нужен actions: read, см. permissions). Распаковка идёт в склад
+      # $RUNNER_TEMP/stage, а не в рабочую папку: checkout чистит её, если в ней нет .git; после checkout
+      # склад сливается жёсткими ссылками.
+      - name: Start background prep (artifacts, unpack, ffmpeg)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/stage"
+          # gh кладёт файлы артефакта под -D (глубина зависит от версии), поэтому имя файла ищем find-ом
+          setsid nohup bash -o pipefail -c 'start=$(date +%s)
+            for i in 1 2 3; do gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n backend-build -D "$RUNNER_TEMP/dl-build" && break; sleep 2; done
+            echo "Скачивание заняло $(( $(date +%s) - start )) с"
+            zstd -d -q --long=27 -c "$(find "$RUNNER_TEMP/dl-build" -name backend-build.tar.zst)" | tar -xf - -C "$RUNNER_TEMP/stage"; rc=$?
+            echo "Скачивание и распаковка заняли $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/unpack.status"' \
+            > "$RUNNER_TEMP/unpack.log" 2>&1 < /dev/null &
+          # ffmpeg нужен тестам монтажа без ИИ модуля «Звук» (ADR-021, этап 5) и миниатюрам истории медиа: на CI
+          # без него эти тесты падают (CI=true), а не пропускаются. Llm.Tests им не пользуется — ему не ставим.
+          # Монолит и «rest» — ставим всем: куда попадёт класс с ffmpeg (монолит) или проект Images.Tests («rest»),
+          # решает раскладка по профилю прошлого прогона, до распаковки её не узнать. Пакеты скачала сборка
+          # (артефакт ffmpeg-debs) — на шарде это dpkg -i без сети; --force-unsafe-io: раннер одноразовый, fsync
+          # на сотнях файлов только тормозит; --no-triggers: триггеры (man-db, кэши шрифтов и иконок) — самая долгая
+          # часть при 4 vCPU под конкуренцией с распаковкой (прогон 41048814510: 32–37 с против 9–18 с), нужен лишь
+          # ldconfig; что ffmpeg и ffprobe запускаются, проверяем сразу, иначе — запасной путь через apt. Нет артефакта или dpkg не справился — запасной путь через apt
+          # (устаревший индекс образа лечит apt update).
+          if [ "${{ matrix.kind }}" != llm ]; then
+            setsid nohup bash -c 'start=$(date +%s)
+              export DEBIAN_FRONTEND=noninteractive
+              gh run download "$GITHUB_RUN_ID" -R "$GITHUB_REPOSITORY" -n ffmpeg-debs -D "$RUNNER_TEMP/dl-debs" || echo "артефакта ffmpeg-debs нет"
+              debs=$(find "$RUNNER_TEMP/dl-debs" -name "*.deb" 2> /dev/null)
+              if [ -n "$debs" ] && sudo -E dpkg --force-unsafe-io --no-triggers -i $debs && sudo ldconfig && ffmpeg -version > /dev/null && ffprobe -version > /dev/null; then rc=0
+              else
+                echo "dpkg -i не вышел или .deb нет — ставим через apt"
+                sudo -E apt-get install -y -qq --no-install-recommends ffmpeg || { sudo -E apt-get update -qq && sudo -E apt-get install -y -qq --no-install-recommends ffmpeg; }
+                rc=$?
+              fi
+              echo "ffmpeg занял $(( $(date +%s) - start )) с"; echo $rc > "$RUNNER_TEMP/ffmpeg.status"' \
+              > "$RUNNER_TEMP/ffmpeg.log" 2>&1 < /dev/null &
+          fi
+      - uses: actions/checkout@v4
+      # Кэш пакетов NuGet нужен и без restore: из него берутся пакеты Test SDK, чьи props подключают
+      # obj/*.nuget.g.props (без них `dotnet test --no-build` молча ничего не запускает, код 0).
+      # Ключ общий со сборкой — она сохраняет кэш до старта шардов. Цена: ~4 с (524 МБ: скачать ~2 с, распаковать ~2 с)
+      # из ~5,5 с шага; без кэша пакеты тянул бы restore из сети — это дороже
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: backend/**/*.csproj
+      # Профиль прошлого прогона (job backend-profile) — веса раскладки; нет его — раскладка
+      # по стабильному хешу имени класса, покрытие от этого не зависит
+      - uses: actions/cache/restore@v4
+        with:
+          path: test-profile.json
+          key: test-profile-${{ github.run_id }}
+          restore-keys: test-profile-
+      - name: Дождаться фона (распаковка, ffmpeg) и выложить сборку
+        run: |
+          waits="unpack"; [ "${{ matrix.kind }}" = llm ] || waits="unpack ffmpeg"
+          for _ in $(seq 1 1500); do
+            ready=1; for t in $waits; do [ -f "$RUNNER_TEMP/$t.status" ] || ready=0; done
+            [ "$ready" = 1 ] && break
+            sleep 0.2
+          done
+          for t in $waits; do
+            echo "::group::$t"; tail -n 20 "$RUNNER_TEMP/$t.log"; echo "::endgroup::"
+            [ "$(cat "$RUNNER_TEMP/$t.status" 2>/dev/null)" = 0 ] || { echo "$t: фоновый шаг не завершился успешно" >&2; exit 1; }
+          done
+          cp -al "$RUNNER_TEMP/stage/." . || cp -a "$RUNNER_TEMP/stage/." .
+      # Цель и фильтр шарда. Категория "Node" — за бортом: нужен Node + frontend/node_modules,
+      # не ставим. Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
+      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её — потерять
+      # рабочие тесты, в т.ч. SSRF-страховку Reader. Шард «rest» гоняет slnx без монолита:
+      # вынесенные тестовые проекты должны идти в том же гейте master.
+      - name: Shard filter
+        run: |
+          case "${{ matrix.kind }}" in
+            monolith | llm)
+              if [ "${{ matrix.kind }}" = llm ]; then target=backend/ClaudeHomeServer.Llm.Tests; list=llm-tests.txt
+              else target=backend/ClaudeHomeServer.Tests; list=monolith-tests.txt; fi
+              # Без restore нет и assets: пусть падение будет громким, а не молчаливым прогоном ни одного теста
+              test -f "$target/obj/project.assets.json" || { echo "нет $target/obj/project.assets.json — артефакт сборки без результатов restore" >&2; exit 1; }
+              SHARD=$(python3 -I scripts/test-shards.py --list "$list" --shard "${{ matrix.shard }}" --timings test-profile.json)
+              echo "TARGET=$target" >> "$GITHUB_ENV"
+              echo "SHARD=($SHARD)&" >> "$GITHUB_ENV" ;;
+            rest)
+              python3 -I scripts/test-shards.py --slnx backend/ClaudeHomeServer.slnx \
+                --exclude ClaudeHomeServer.Tests,ClaudeHomeServer.Llm.Tests \
+                --shard "${{ matrix.shard }}" --timings test-profile.json > backend/ClaudeHomeServer.Rest.slnx
+              echo "TARGET=backend/ClaudeHomeServer.Rest.slnx" >> "$GITHUB_ENV"
+              echo "SHARD=" >> "$GITHUB_ENV" ;;
+          esac
+      # Два прохода на шард: набор Fast отдельно — его TRX проверяет сторож длительности,
+      # остальное (Host/Slow/Integration/Bench) — вторым проходом; вместе это весь шард.
       # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
       # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
       # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
-      # Порог 5 минут: обычный тест живёт <1 с, пять минут тишины — гарантированный труп,
-      # а итерация диагностики втрое быстрее, чем с 15 минутами.
       # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
       # передаёт их MSBuild как неизвестные свитчи (MSB1001).
-      - name: Test
-# Категория "Node" — за бортом: нужен Node + frontend/node_modules, не ставим.
-      # Категория "Dns" на ubuntu-latest НЕ исключается: внешний DNS-резолв в CI
-      # работает штатно (исторический прогон 02.09: 1317 passed), а выкинуть её —
-      # потерять рабочие тесты, в т.ч. SSRF-страховку Reader (проверки приватных
-      # адресов/схем через редирект — `ReaderService_*`, `SsrfGuardTests.*DnsFailed`).
-      # На локальной Windows-машине с Proxifier Dns-категория падает средой, и там
-      # прогоняют с дополнительным `--filter "Category!=Dns"` (рекомендация в CLAUDE.md,
-      # раздел «Соглашения»); в CI этого фильтра быть НЕ должно.
-      # Общий прогон по `.slnx`, а не по одному `.Tests.csproj`: вынесенные тестовые
-      # проекты (`.Video.Tests`/`.Yandex.Tests`/`.Reader.Tests`, после Этапа 3) собираются
-      # шагом Build выше и должны гоняться в том же гейте master — иначе их падения
-      # пройдут мимо CI, ровно до первого прод-бага в перенесённом коде.
-      # Blame-режим: молчание тестового процесса дольше 5 минут — VSTest снимает дамп,
-      # пишет в лог ИМЕНА тестов, выполнявшихся в этот момент, и валит шаг. По mini-дампу
-      # дедлок не разобрать (dumpasync требует метаданных, которых в mini нет) — берём full.
-      # Порог 5 минут: обычный тест живёт <1 с, пять минут тишины — гарантированный труп,
-      # а итерация диагностики втрое быстрее, чем с 15 минутами.
-      # Флаги vstest-консоли (--diagnostic и пр.) сюда нельзя: dotnet test в MSBuild-режиме
-      # передаёт их MSBuild как неизвестные свитчи (MSB1001).
+      - name: Test (Fast)
         run: >
-          dotnet test backend/ClaudeHomeServer.slnx --no-build
-          --filter "Category!=Node"
+          dotnet test "$TARGET" --no-build
+          --filter "${SHARD}${FAST}"
+          --logger "trx;LogFilePrefix=fast" --results-directory "$RUNNER_TEMP/trx/fast"
           --blame-hang-timeout 5m --blame-hang-dump-type full
+      - name: Test (Host, Slow, Integration, Bench)
+        if: success() || failure()
+        run: >
+          dotnet test "$TARGET" --no-build
+          --filter "${SHARD}(${NOT_FAST})"
+          --logger "trx;LogFilePrefix=rest" --results-directory "$RUNNER_TEMP/trx/rest"
+          --blame-hang-timeout 5m --blame-hang-dump-type full
+      # Сторож Э3: тест набора Fast дольше порога — нехостовый тест без метки Slow (гейт, блокирующий);
+      # порог CI — DURATION_GUARD_THRESHOLD выше, тесты между 2 с и порогом печатаются без падения.
+      # Идёт и при упавших тестах: TRX Fast есть всегда, вердикт сторожа не должен теряться
+      - name: Duration guard (Fast)
+        if: success() || failure()
+        run: python3 -I scripts/test-profile.py "$RUNNER_TEMP/trx/fast" --check --threshold "$DURATION_GUARD_THRESHOLD"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trx-${{ matrix.key }}
+          path: ${{ runner.temp }}/trx/**/*.trx
+          retention-days: 7
       # Дампы и Sequence.xml blame складывает в TestResults — при падении выгружаем,
-      # иначе они умирают вместе с раннером. После Этапа 3 артефакты тестов идут
-      # из корня slnx (а не из папки конкретного `.Tests.csproj`) — общий глоб
-      # `backend/**/TestResults/**` ловит выгрузки всех проектов.
+      # иначе они умирают вместе с раннером.
       - name: Upload hang dumps
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: test-hang-artifacts
-          path: backend/**/TestResults/**
+          name: test-hang-artifacts-${{ matrix.key }}
+          path: |
+            ${{ runner.temp }}/trx/**
+            backend/**/TestResults/**
+
+  # Профиль всего прогона в лог и в кэш: следующий прогон раскладывает шарды по нему
+  backend-profile:
+    name: Backend (profile)
+    needs: backend-test
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: trx-*
+          path: trx
+      - name: Profile
+        run: |
+          python3 -I scripts/test-profile.py trx --src backend
+          python3 -I scripts/test-profile.py trx --src backend --json > test-profile.json
+      - uses: actions/cache/save@v4
+        with:
+          path: test-profile.json
+          key: test-profile-${{ github.run_id }}
 
   # ADR-016 2.5. Агент устройства (`backend/ClaudeHomeServer.DeviceAgent`) работает на
   # Linux и Windows, но основная задача `backend` гоняет только ubuntu-latest — платформенные
@@ -184,7 +464,7 @@ jobs:
       # жёсткий гейт отдельным конфигом: в общем линте выше он тонул бы в легаси-долге
       # Видео — ADR-022, хосты контекста хода — ADR-023 §Д6
       - name: Lint remote guard (image-editor, audio-editor, video-editor, хосты контекста)
-        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation
+        run: npx eslint --config eslint.remote.config.js src/features/imageEditor src/features/audioEditor src/features/videoEditor src/components/chat src/components/generation src/features/notes
       - name: Build (tsc -b + vite)
         run: npm run build
       - name: Test

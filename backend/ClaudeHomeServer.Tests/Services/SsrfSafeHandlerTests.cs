@@ -191,7 +191,8 @@ public class SsrfSafeHandlerTests
             .Select(f => Path.GetRelativePath(backend, f).Replace('\\', '/'))
             .ToList();
 
-        owners.Should().Equal("ClaudeHomeServer.Core/Services/SsrfSafeHandler.cs");
+        owners.Should().Equal(
+            "ClaudeHomeServer.Core/Services/SsrfSafeHandler.cs");
     }
 
     [Fact]

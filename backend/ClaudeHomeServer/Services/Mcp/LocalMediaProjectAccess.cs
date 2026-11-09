@@ -21,4 +21,17 @@ public sealed class LocalMediaProjectAccess(ProjectManager projects, FileService
 
     public void NotifyWritten(string root, string relativePath) =>
         files?.NotifyMutated(root, relativePath, FileMutationKind.Write);
+
+    // Состояние проекта для истории (ADR-030 §3): Gone — нет/чужой, Local — на устройстве,
+    // OnServer — на сервере (корень). Пустой projectId — null (запись без проекта)
+    public MediaHistoryProjectProbe? ProbeProject(string ownerId, string projectId)
+    {
+        if (string.IsNullOrEmpty(projectId)) return null;
+        var project = projects.GetById(projectId);
+        if (project is null || !string.Equals(project.OwnerId, ownerId, StringComparison.Ordinal))
+            return new MediaHistoryProjectProbe(MediaHistoryProjectState.Gone, null);
+        return ProjectCapabilities.FilesOnServer(project)
+            ? new MediaHistoryProjectProbe(MediaHistoryProjectState.OnServer, project.RootPath)
+            : new MediaHistoryProjectProbe(MediaHistoryProjectState.Local, null);
+    }
 }

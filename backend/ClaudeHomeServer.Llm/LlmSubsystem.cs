@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Http;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -152,10 +154,34 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<LlamaServerClient>();
         services.AddSingleton<ILocalLlmClient>(sp =>
         {
-            var options = LocalLlmOptions.Read(sp.GetRequiredService<IConfiguration>());
-            return options.Provider == LocalLlmOptions.LlamaServer
+            var config = sp.GetRequiredService<IConfiguration>();
+            var options = LocalLlmOptions.Read(config);
+            ILocalLlmClient inner = options.Provider == LocalLlmOptions.LlamaServer
                 ? sp.GetRequiredService<LlamaServerClient>()
                 : sp.GetRequiredService<OllamaClient>();
+            // Слот в общем счётчике движка под ключом провайдера, с которым клиент делит движок
+            // (LocalLlm:EngineKey; не задан — свой ключ, то есть отдельный движок). Потолок —
+            // MaxConcurrentTurns этого провайдера; реестр берём лениво, из конструктора фабрики
+            // он не нужен (цикл в графе DI).
+            var key = TrackedLocalLlmClient.ReadEngineKey(config);
+            var logger = sp.GetRequiredService<ILogger<TrackedLocalLlmClient>>();
+            var warned = 0;
+            return new TrackedLocalLlmClient(inner, LocalEngineBusyTracker.Instance, key,
+                () =>
+                {
+                    // Реестр на старте ещё не готов — проверяем при первом использовании ключа
+                    var registry = sp.GetService<LlmProviderRegistry>();
+                    if (Interlocked.Exchange(ref warned, 1) == 0)
+                        TrackedLocalLlmClient.WarnIfEngineKeyUnknown(config, registry, logger);
+                    return registry?.GetByKey(key)?.MaxConcurrentTurns ?? TrackedLocalLlmClient.DefaultLimit;
+                },
+                logger,
+                // Потолок ожидания слота для цепочек без облачной страховки (ночной разбор,
+                // ступень 2): ТЕ ЖЕ очередь и то же время, что у допуска ходов CLI этого же
+                // провайдера — отдельного «своего» потолка для ночи не заводим (WN-4).
+                () => sp.GetService<LlmProviderRegistry>()?.GetByKey(key) is { } provider
+                    ? new LocalSlotWaitPolicy(provider.MaxQueuedTurns, provider.TurnQueueTimeout)
+                    : LocalSlotWaitPolicy.Default);
         });
         // Тихие HTTP-логгеры на оба имени: каждая реализация пишет в свою категорию,
         // и одна мёртвая зависимость не глушит жалобы другой. Без них каждый вызов
@@ -183,6 +209,33 @@ public sealed class LlmSubsystem : IAppSubsystem
                 Subject: "локальным движком модели (vLLM/llama.cpp)",
                 Consequence: "Ход на локальной модели завершится сразу «локальная модель не запущена»."));
 
+        // Именованные локальные движки (LocalEngines:*) — дежурные llama-server рядом с
+        // основным LocalLlm (например, Gemma 4 на машине «Video» под арбитром GPU). Проба
+        // готовности — тихий клиент: движок выгружен штатно, а не сломан.
+        services.AddSingleton<NamedLocalEngines>();
+        services.AddQuietHttpClient(
+            NamedLocalEngines.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngines",
+                Subject: "арбитром именованного локального движка",
+                Consequence: "Место уйдёт дальше по своей цепочке (страховка или claude)."));
+        // /metrics именованных движков (дорожка статистики LocalModelStatsPoller, Б2b): тихий
+        // клиент со своей категорией — выгруженный арбитром стенд не должен spamить Error-ами
+        // каждый тик, и его тишина не глушит жалобы на основной стенд (и наоборот).
+        services.AddQuietHttpClient(
+            LocalModelStatsPoller.EngineMetricsHttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalEngineMetrics",
+                Subject: "метриками именованного локального движка (llama-server)",
+                Consequence: "Панель «Локальные модели» не обновит снимок движка до следующего опроса."));
+
+        // Клиент состояния арбитра GPU (/state) для движков с `StateUrl`: опрос по запросу,
+        // фонового цикла нет — его зовут дорожка статистики (статус «уступила») и блок «Дежурство».
+        services.AddSingleton<LocalEngineStateClient>();
+        // Читатель состояния для поллера дорожек (Б3b): ТОТ ЖЕ инстанс клиента —
+        // по образцу ILocalModelStatsReader → LocalModelStatsPoller.
+        services.AddSingleton<IEngineArbiterStateReader>(sp => sp.GetRequiredService<LocalEngineStateClient>());
+
         // Бесплатное ранжирование действий локальной Ollama для роутинга
         // через LocalActionRouter.
         services.AddSingleton<OllamaActionRankService>();
@@ -205,9 +258,16 @@ public sealed class LlmSubsystem : IAppSubsystem
 
         // Роутинг фоновых действий локаль(Ollama)/claude + единый «дешёвый»
         // текстовый раннер с фолбэком.
+        // Журнал вызовов мест к именованным движкам: «кто сейчас на модели» и ответы за час
+        // (блок «Дежурство», разрез v2 §4, шаг Б5). Синглтон в DI, живёт с контейнером;
+        // на диск ничего не пишется. Писатель один — CheapTextRunner, и только цепочек,
+        // где маршрут дал движок.
+        services.AddSingleton<EngineCallLedger>();
         services.AddSingleton<LocalActionOverridesStore>();
         services.AddSingleton<LocalActionRouter>();
         services.AddSingleton<ICheapTextRunner, CheapTextRunner>();
+        // Шов разметки картинок моделью со зрением (ADR-027 §4): ImageEditor видит только интерфейс.
+        services.AddSingleton<IImageLabeler, ImageLabeler>();
 
         // Резолвер моделей агентных мест (явная модель → назначение админа →
         // слот тира).
@@ -243,6 +303,11 @@ public sealed class LlmSubsystem : IAppSubsystem
             new LlmProviderRegistry(
                 sp.GetRequiredService<IConfiguration>(),
                 sp.GetRequiredService<ILocalEndpointProbe>()));
+
+        // Медиа-задание после хода локального провайдера, делящего GPU с ComfyUI (YieldsGpuToMedia):
+        // ждёт локальный драйвер картинок. Нет вертикали Llm — шлюза нет, драйвер шлёт задания сразу.
+        services.AddSingleton<IMediaGpuYieldGate>(sp => new MediaGpuYieldGate(
+            sp.GetRequiredService<LlmProviderRegistry>(), LocalEngineBusyTracker.Instance));
 
         // Этап 5, шаг 3 (шов IModelResolver): Core-интерфейс под единственный
         // метод `ResolveModelOrDefault`, который Spend дёргает у LlmProviderRegistry.
@@ -346,6 +411,33 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton(sp => new Gateway.TurnTokenService(
             sp.GetRequiredService<Turn.ITurnEventBus>(),
             log: sp.GetService<ILogger<Gateway.TurnTokenService>>()));
+        // Счётчик хода локальной модели (статистика локальных моделей): реализует ILocalModelRequestSink
+        // (шлюз отводит ему копию SSE) и подписан на шину хода (TurnCompleted/SessionDeleted).
+        // Ленивая фабрика: подписка на шину (Subscribe) — в момент первого резолва, когда все
+        // швы на месте. Если убрать фабрику (простая регистрация без Subscribe) — ходы не
+        // собираются в итог: TurnCompleted не дойдёт до счётчика, OnTurn/GetLastTurn не вызовутся.
+        // ILocalModelLiveSink (рассылка живых событий в чат) регистрируется в Main (шаг 19);
+        // без него счётчик работает, события уходят в никуда. ISessionDirectory (Core-шов на
+        // SessionManager) — название/проект чата для ActiveChats; без шва — null.
+        services.AddSingleton<LocalModelTurnMeter>(sp =>
+        {
+            var meter = new LocalModelTurnMeter(
+                sp.GetRequiredService<Gateway.TurnTokenService>(),
+                sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetService<ILocalModelStatsReader>(),
+                sp.GetService<ILocalModelLiveSink>(),
+                sp.GetService<ISessionDirectory>());
+            meter.Subscribe(sp.GetRequiredService<Turn.ITurnEventBus>());
+            return meter;
+        });
+        // Два имени одного singleton'а: ILocalModelRequestSink (шлюз отводит сюда копию
+        // потока) и ILocalModelTurnMeter (панель «Локальные модели» в Main читает живые
+        // чаты движка и итог последнего хода).
+        services.AddSingleton<ILocalModelRequestSink>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
+        services.AddSingleton<ILocalModelTurnMeter>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
+        // Шов утечки вызова в текст: ClaudeSession (Llm) сообщает о детекте, счётчик хода копит.
+        services.AddSingleton<IToolCallLeakSink>(sp => sp.GetRequiredService<LocalModelTurnMeter>());
         // Шлюз MCP ходит в свой же Kestrel: без прокси (адрес локальный) и без таймаута —
         // streamable HTTP и долгие инструменты живут столько, сколько запрос клиента.
         // Логгеры HttpClient сняты: каждый вызов инструмента печатался бы строкой Information.
@@ -368,9 +460,60 @@ public sealed class LlmSubsystem : IAppSubsystem
         // Серверный ход провайдера с NormalizeToolInputArrays — тоже через шлюз (ADR-016 §2)
         services.AddSingleton<Gateway.ServerTurnGateway>();
         services.AddHttpClient(Gateway.LlmGatewayEndpoints.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+        // OCR страницы локальной Qwen (фича «руки без UIA», этап A, шаг A1): картинка → текст.
+        // Именованный HttpClient без таймаута: таймаут страницы держит сам сервис (CTS под PageTimeoutSec).
+        services.AddHttpClient(Gateway.LocalOcrService.HttpClientName, c => c.Timeout = Timeout.InfiniteTimeSpan);
+        services.AddSingleton<Gateway.LocalOcrService>();
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
         // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
         // и кеш корней после Build).
+
+        // === Фича «Статистика локальных моделей»: поллер метрик стенда + видеокарты ===
+        // Опции читаются через IOptionsMonitor ВНУТРИ поллера (тумблер подсистемы не нужен):
+        // LocalModelStats:Enabled=false — поллер не ходит в сеть, цикл ждёт и перечитывает.
+        services.AddOptions<LocalModelStatsOptions>()
+            .Bind(config.GetSection(LocalModelStatsOptions.Section));
+        // Именованный тихий HttpClient для /metrics: перед vLLM стоит прокси, и мёртвый
+        // стенд (ECONNREFUSED) не должен заспамить консоль Error-ами — одна строка Warning.
+        services.AddQuietHttpClient(
+            LocalModelStatsPoller.HttpClientName,
+            new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Llm.LocalModelStats",
+                Subject: "метриками локального стенда (vLLM)",
+                Consequence: "Панель «Локальные модели» не обновит снимок до следующего опроса."));
+        // Поллер — hosted (фоновый цикл) + singleton; читатель (ILocalModelStatsReader) —
+        // ТОТ ЖЕ инстанс (инвариант «интерфейс и конкретный тип — один объект»).
+        // Hosted — AddGatedHostedFrom (фабрика резолвит singleton): БЕЗ второго
+        // AddSingleton<LocalModelStatsPoller>, иначе дубль Singleton (гейт
+        // DuplicateSingletonRegistrationTests).
+        services.AddSingleton<LocalModelStatsPoller>();
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        services.AddSingleton<ILocalModelStatsReader>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        services.AddSingleton<ILocalEngineStatsDirectory>(sp => sp.GetRequiredService<LocalModelStatsPoller>());
+        // Сэмплер видеокарт (nvidia-smi на хосте): по запросу, не в фоне. Кэш на GpuCacheTtl.
+        services.AddSingleton<IGpuSampler>(sp => new GpuSampler(
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>().CurrentValue.GpuCacheTtl,
+            sp.GetRequiredService<ILogger<GpuSampler>>()));
+
+        // === Вкладка «Железо» (Б1): фоновый сэмплер датчиков + кольцо 1 ч + отчёт с уровнями ===
+        // Источники ТОЛЬКО читаются (nvidia-smi — уже существующий вызов GpuSampler, файл помощника
+        // ccs-gddr6, /sys/class/hwmon, /proc/meminfo). Singleton + hosted от того же экземпляра
+        // (без второго AddSingleton<HardwareSampler>: гейт DuplicateSingletonRegistrationTests).
+        services.AddSingleton(sp => new Gddr6HelperReader(sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(_ => new HwmonReader());
+        services.AddSingleton(_ => new MeminfoReader());
+        services.AddSingleton<HardwareSampler>(sp => new HardwareSampler(
+            sp.GetRequiredService<IOptionsMonitor<LocalModelStatsOptions>>(),
+            sp.GetRequiredService<IGpuSampler>(),
+            sp.GetRequiredService<Gddr6HelperReader>(),
+            sp.GetRequiredService<HwmonReader>(),
+            sp.GetRequiredService<MeminfoReader>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<HardwareSampler>>()));
+        services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<HardwareSampler>());
+        services.AddSingleton<IHardwareSampler>(sp => sp.GetRequiredService<HardwareSampler>());
+        services.AddSingleton<IHardwareReportService, HardwareReportService>();
     }
 }

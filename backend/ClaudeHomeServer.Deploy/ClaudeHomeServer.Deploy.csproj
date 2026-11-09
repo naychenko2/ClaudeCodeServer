@@ -12,6 +12,12 @@
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
       <_Parameter1>ClaudeHomeServer.Tests</_Parameter1>
     </AssemblyAttribute>
+    <!-- ClaudeHomeServer.Deploy.Tests (шаг 3.11, вынос Deploy-тестов из монолита): тесты
+         используют internal-члены этой сборки — DeployService.PendingReport (DeployServiceTests)
+         и DeployReportService.Compose (DeployBuildIdTests). Без допуска они не соберутся. -->
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>ClaudeHomeServer.Deploy.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup>

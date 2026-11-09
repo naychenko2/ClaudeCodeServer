@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // GET api/mcp/catalog/search (план «Каталог MCP-серверов», волна 1, шаг 3): флаг,
 // «пустой адрес = выключен», доменный отказ при лежащем реестре, потолок запросов
 // на бэке и изоляция по авторизации. Записей отсюда не создаётся — это только поиск.
+[Trait("Category", "Host")]
 public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     // Фейковый клиент: FetchAndMapAsync переопределён, кэш не задействован
@@ -73,12 +74,6 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
         return factory;
     }
 
-    private static void EnableFlag(TestWebApplicationFactory factory)
-    {
-        var users = factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.GetFirst()!.Id, FeatureFlagKeys.McpCatalog, true).Should().BeTrue();
-    }
-
     private static readonly McpCatalogSearchResult SamplePage = new(
     [
         new McpCatalogCardDto("io.github.o/one", "One", "Описание", "https://repo",
@@ -92,7 +87,6 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task Поиск_возвращает_карточки_и_курсор()
     {
         using var factory = FactoryWith(SamplePage);
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/mcp/catalog/search?q=one");
@@ -105,20 +99,9 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     }
 
     [Fact]
-    public async Task Флаг_выключен_404()
-    {
-        using var factory = FactoryWith(SamplePage);
-        // Флаг не включаем — дефолт выключен (dark launch)
-        var client = factory.CreateAuthenticatedClient();
-        var resp = await client.GetAsync("/api/mcp/catalog/search?q=one");
-        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
     public async Task Пустой_адрес_каталога_503_с_текстом()
     {
         using var factory = FactoryWith(SamplePage, enabled: false);
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/mcp/catalog/search?q=one");
@@ -131,7 +114,6 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task Лежащий_реестр_502_плашкой_а_не_исключением()
     {
         using var factory = FactoryWith(failWith: new McpCatalogUnavailableException("Реестр MCP ответил 503"));
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
 
         var resp = await client.GetAsync("/api/mcp/catalog/search?q=one");
@@ -144,7 +126,6 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task Без_авторизации_401()
     {
         using var factory = FactoryWith(SamplePage);
-        EnableFlag(factory);
         var resp = await factory.CreateClient().GetAsync("/api/mcp/catalog/search?q=one");
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -153,7 +134,6 @@ public class McpCatalogControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task Потолок_запросов_429()
     {
         using var factory = FactoryWith(SamplePage, rateLimit: 3);
-        EnableFlag(factory);
         var client = factory.CreateAuthenticatedClient();
 
         HttpStatusCode last = HttpStatusCode.OK;

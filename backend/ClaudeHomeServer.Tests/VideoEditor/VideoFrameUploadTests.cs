@@ -15,37 +15,46 @@ namespace ClaudeHomeServer.Tests.VideoEditor;
 
 // Загрузка кадра «С компьютера» в личном чате (ADR-022, «Контракты»): у личного чата нет проекта, кадр ложится в
 // рабочую папку владельца, а FrameRef вида file годен для настроек сцены, котировки и запуска
-public class VideoFrameUploadTests : IDisposable
+[Trait("Category", "Host")]
+public class VideoFrameUploadTests : IClassFixture<VideoFrameUploadTests.Host>
 {
+    // Хост на КЛАСС (раньше — фабрика на каждый тест). Общего изменяемого состояния тесты не оставляют:
+    // проект, каталог и чат заводятся свои на тест (Guid), нити и очередь съёмок ключуются по чату.
+    // Движок общий на хост: SeenFrameA сбрасывается в конструкторе тест-класса
+    public sealed class Host : TestWebApplicationFactory
+    {
+        internal FrameCapturingEngine Engine { get; } = new();
+
+        public Host()
+        {
+            ExtraServices = services => services.AddSingleton<IVideoEngine>(Engine);
+        }
+    }
+
     private static readonly byte[] Png = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4];
-    private readonly TestWebApplicationFactory _factory = new();
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
     private readonly string _ownerId;
-    private readonly FrameCapturingEngine _engine = new();
+    private readonly FrameCapturingEngine _engine;
 
-    public VideoFrameUploadTests()
+    public VideoFrameUploadTests(Host factory)
     {
-        _factory.ExtraServices = services => services.AddSingleton<IVideoEngine>(_engine);
+        _factory = factory;
+        _engine = factory.Engine;
+        _engine.SeenFrameA = null;
         var users = _factory.Services.GetRequiredService<UserStore>();
         _ownerId = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.VideoEditor, true).Should().BeTrue();
         _client = _factory.CreateAuthenticatedClient();
     }
 
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
-    }
-
     // Модель с первым кадром; запоминает байты кадра A, с которыми её запустили
-    private sealed class FrameCapturingEngine : IVideoEngine
+    internal sealed class FrameCapturingEngine : IVideoEngine
     {
         private static readonly VideoModelInfo Model = new("frame-model", "Кадровая",
             new VideoCaps([5], ["16:9"], false, false, VideoLicense.Commercial, VideoPriceUnits.Usd, FirstFrame: true),
             new VideoPriceHint(0.1, VideoPriceUnits.Usd, "sec"));
 
-        public byte[]? SeenFrameA { get; private set; }
+        public byte[]? SeenFrameA { get; set; }
         public string Key => "framefake";
         public string Label => "Кадровый фейк";
         public string PriceUnit => VideoPriceUnits.Usd;

@@ -8,6 +8,7 @@ import { hasMaskMark } from '../marks';
 import { enterScope } from '../scope';
 import { getCatalog } from '../thread/catalog';
 import { launchMarks } from './ops';
+import { editAspectOf, editOf } from './formatChoice';
 import { threadHasImage } from '../thread/model';
 import { getThreadMarks, getThreadsState, isWholeImage, openEditor } from '../thread/threadStore';
 import type { ImageThread } from '../thread/threadsApi';
@@ -35,6 +36,7 @@ export function inputOf(ctx: ContextKindCtx, thread: ImageThread): ImageActionIn
       outpaint: quickOffered('outpaint', catalog),
     },
     openBrush: () => openEditor(ctx.sessionId, thread.id, null, { tool: 'mask' }),
+    format: { outpaintAspect: editAspectOf(thread.id), pendingAspect: editAspectOf(thread.id) !== null && editOf(thread.id).how === null },
   };
 }
 

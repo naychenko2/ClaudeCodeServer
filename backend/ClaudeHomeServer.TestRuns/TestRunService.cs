@@ -25,7 +25,9 @@ namespace ClaudeHomeServer.Services.TestRuns;
 //
 // Инварианты:
 //  • dotnet: все spec Heavy, и прогон держит ОДИН слот BuildConcurrencyGate на весь конвейер:
-//    отдать слот между фазами — значит пустить чужую сборку в середину прогона. vitest встаёт в
+//    отдать слот между фазами — значит пустить чужую сборку в середину прогона. Монолит без
+//    filter идёт фазой прогона N процессами (TestShards, TestRuns:MonolithShards) под ТЕМ ЖЕ
+//    слотом: второго семафора нет, классы шардов — из того же --list-tests. vitest встаёт в
 //    гейт только прогоном и только когда файлов много (VitestHeavyFiles): воркеров у него по
 //    числу файлов, до ядер−1. Playwright вне гейта (workers: 1, один браузер);
 //  • свой TurnId на каждый процесс из единственного генератора (ProcessTurnIds): без метки
@@ -73,6 +75,8 @@ public sealed partial class TestRunService
     private readonly PhasePipeline _pipeline;
     private readonly TimeSpan _progressInterval;
     private readonly Func<Uri, CancellationToken, Task<bool>> _standProbe;
+    // Снимок машины для числа шардов (AdaptiveShards); тесты подменяют чтение /proc
+    private readonly Func<MachineSnapshot?> _machine;
 
     public TestRunService(ILauncherFactory launchers, TestRunsOptions options)
         : this(launchers, options, new PhasePipeline()) { }
@@ -85,17 +89,31 @@ public sealed partial class TestRunService
     // свой шаг прогресса (по умолчанию — не чаще раза в секунду) и своя проверка стенда
     internal TestRunService(ILauncherFactory launchers, TestRunsOptions options,
         BuildConcurrencyGate? gate, TimeSpan exitGrace, TimeSpan? progressInterval = null,
-        Func<Uri, CancellationToken, Task<bool>>? standProbe = null)
-        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe) { }
+        Func<Uri, CancellationToken, Task<bool>>? standProbe = null, Func<MachineSnapshot?>? machine = null)
+        : this(launchers, options, new PhasePipeline(gate, exitGrace), progressInterval, standProbe, machine) { }
 
-    private TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
-        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe)
+    // Для тестов: общий конвейер с движком сборки (отпечатки сборок — его) и свой снимок машины
+    internal TestRunService(ILauncherFactory launchers, TestRunsOptions options, PhasePipeline pipeline,
+        TimeSpan? progressInterval, Func<Uri, CancellationToken, Task<bool>>? standProbe,
+        Func<MachineSnapshot?>? machine = null)
     {
         _launchers = launchers;
         _options = options;
         _pipeline = pipeline;
         _progressInterval = progressInterval ?? TimeSpan.FromSeconds(1);
         _standProbe = standProbe ?? ProbeStandAsync;
+        // Шарды идут в scope под Execution:Isolation:Slice — его запас памяти и меряем, а не только хост
+        _machine = machine ?? (() => AdaptiveShards.Read(slice: IsolationOptions.Instance.Enabled
+            ? IsolationOptions.Instance.Slice : null));
+    }
+
+    // Число шардов монолита: по нагрузке машины под потолком MonolithShards или само MonolithShards
+    internal (int Shards, string? Reason) ShardCount()
+    {
+        if (!_options.AdaptiveShards) return (_options.MonolithShards, null);
+        var (n, reason) = AdaptiveShards.Choose(_machine(), _options.MonolithShards,
+            ShardPeakMemory.Load(_options.MemoryDirectory));
+        return (n, reason);
     }
 
     public TestRunsOptions Options => _options;
@@ -138,18 +156,26 @@ public sealed partial class TestRunService
     // склейки строки нет. Папка результатов — ОТНОСИТЕЛЬНО каталога процесса: путь одинаково
     // верен на хосте и в песочнице (без маппинга путей)
     internal static ProcessSpec BuildSpec(TestRunPhase phase, TestRunRequest request, string turnId,
-        string resultsDirectory, bool heavy = true) => request.Kind switch
+        string resultsDirectory, bool heavy = true, string trxPrefix = "results") => request.Kind switch
     {
         TestRunKind.Vitest => VitestSpec(phase, request, turnId, resultsDirectory, heavy),
         TestRunKind.Playwright => PlaywrightSpec(request, turnId, resultsDirectory),
-        _ => DotnetSpec(phase, request, turnId, resultsDirectory),
+        _ => DotnetSpec(phase, request, turnId, resultsDirectory, trxPrefix),
     };
 
+    // Потолок параллельных проектов MSBuild — а значит, и одновременных testhost при прогоне
+    // решения. Лимит из backend/Directory.Build.rsp (-maxcpucount:6) здесь НЕ работает: dotnet
+    // test/build сам передаёт MSBuild голый `-maxcpucount` (= все ядра), и он перебивает файл.
+    // Явный ключ в командной строке перебивает уже его (замер 2026-10-19: без ключа 24 testhost
+    // и ~5,8 GB пика, с ключом — 6 и ~3,6 GB). Число держим равным значению в .rsp.
+    internal const string MaxCpuCountArg = "-m:6";
+
     private static ProcessSpec DotnetSpec(TestRunPhase phase, TestRunRequest request, string turnId,
-        string resultsDirectory)
+        string resultsDirectory, string trxPrefix)
     {
         var args = new List<string> { phase == TestRunPhase.Build ? "build" : "test" };
         if (!string.IsNullOrWhiteSpace(request.Target)) args.Add(request.Target);
+        args.Add(MaxCpuCountArg);
         if (phase != TestRunPhase.Build)
         {
             args.Add("--no-build");
@@ -166,7 +192,8 @@ public sealed partial class TestRunService
             args.AddRange(["--logger", "console;verbosity=normal",
                 // Префикс, а не LogFileName: у решения с несколькими тестовыми проектами одно
                 // имя файла перезаписалось бы, префикс даёт по файлу на сборку
-                "--logger", "trx;LogFilePrefix=results",
+                // Шарды пишут одновременно: у каждого свой префикс, иначе имена по секундам совпали бы
+                "--logger", $"trx;LogFilePrefix={trxPrefix}",
                 "--results-directory", resultsDirectory]);
         }
         return Spec("dotnet", args, request, turnId, heavy: true, new Dictionary<string, string>
@@ -363,11 +390,23 @@ public sealed partial class TestRunService
             var candidate = Path.Combine(dir, bin);
             if (File.Exists(candidate))
             {
+                // Worktree: node_modules — ссылка на зависимости основного дерева того же репозитория (как у FindPackageDir)
                 if (!ResolvesInside(rootFull, candidate))
                 {
-                    error = $"{Relative(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
-                        + "такой пакет не запускаем.";
-                    return null;
+                    var modules = Path.Combine(dir, "node_modules");
+                    if (ResolvesInside(rootFull, modules))
+                    {
+                        error = $"{Relative(rootFull, candidate)} ведёт символической ссылкой за пределы проекта — "
+                            + "такой пакет не запускаем.";
+                        return null;
+                    }
+                    if (!LinkedModulesInRepository(rootFull, modules, bin["node_modules/".Length..]))
+                    {
+                        error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
+                            + "node_modules с package.json рядом в основном дереве того же репозитория, либо бинарь внутри "
+                            + "неё ссылается наружу — такой пакет не запускаем.";
+                        return null;
+                    }
                 }
                 return Path.GetRelativePath(targetFull, candidate).Replace('\\', '/');
             }
@@ -378,6 +417,123 @@ public sealed partial class TestRunService
         error = $"Ни в «{(shown.Length == 0 ? "." : shown)}», ни выше до корня проекта нет {bin} — зависимости "
             + "не установлены (npm ci / pnpm install) или это не тот каталог.";
         return null;
+    }
+
+    // Каталог node_modules с одним из пакетов (ui_probe: скрипту нужен только require('playwright'), без CLI тест-раннера).
+    // Идём от цели вверх до корня дерева по правилам Node. Мягче FindNodeBin ровно в одном: сам
+    // node_modules может быть ссылкой на node_modules другого каталога с package.json (так
+    // scripts/worktree-setup.sh подключает зависимости основного дерева к worktree). Всё внутри
+    // этого node_modules обязано в нём и оставаться. Возвращает каталог node_modules с пакетом или null
+    public static string? FindPackageDir(string root, string target, IReadOnlyList<string> packages, out string error)
+    {
+        error = "";
+        var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string targetFull;
+        try { targetFull = SafePath.Join(rootFull, target); }
+        catch (Exception e) when (e is UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            error = "target выходит за пределы проекта — вызов отклонён.";
+            return null;
+        }
+        targetFull = targetFull.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        for (var dir = targetFull; ; dir = Path.GetDirectoryName(dir)!)
+        {
+            var modules = Path.Combine(dir, "node_modules");
+            var package = packages.FirstOrDefault(p => File.Exists(Path.Combine(modules, p, "package.json")));
+            if (package is not null)
+            {
+                // Сам пакет проверяется в обеих ветках: node_modules/playwright → ссылка наружу исполнила бы чужой код
+                var packagePath = Path.Combine(modules, package);
+                if (ResolvesInside(rootFull, modules))
+                {
+                    if (ResolvesInside(rootFull, packagePath)) return modules;
+                    error = $"{Relative(rootFull, packagePath)} ведёт символической ссылкой за пределы проекта — "
+                        + "такой пакет не запускаем.";
+                    return null;
+                }
+                if (LinkedModulesInRepository(rootFull, modules, package)) return modules;
+                error = $"{Relative(rootFull, modules)} ведёт символической ссылкой за пределы проекта не на "
+                    + "node_modules с package.json рядом в основном дереве того же репозитория — такой пакет не запускаем.";
+                return null;
+            }
+            if (PathComparer.Equals(dir, rootFull) || !IsInside(rootFull, dir)) break;
+        }
+        var shown = Relative(rootFull, targetFull);
+        error = $"Ни в «{(shown.Length == 0 ? "." : shown)}», ни выше до корня проекта нет пакета {string.Join(" / ", packages)} — зависимости "
+            + "не установлены (npm ci / pnpm install или scripts/worktree-setup.sh) или это не тот каталог.";
+        return null;
+    }
+
+    // node_modules — ссылка на каталог ТАКОГО ЖЕ имени, рядом с которым лежит package.json, внутри дерева
+    // того же репозитория (основной checkout или любой его worktree), а путь внутри него (пакет или бинарь) ссылками из него не выходит
+    internal static bool LinkedModulesInRepository(string rootFull, string modules, string package)
+    {
+        FileSystemInfo? resolved;
+        try { resolved = new DirectoryInfo(modules).ResolveLinkTarget(returnFinalTarget: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return false; }
+        if (resolved is not DirectoryInfo { Name: "node_modules", Parent: { } owner } real || !real.Exists) return false;
+        var realFull = real.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return File.Exists(Path.Combine(owner.FullName, "package.json"))
+            && RepositoryTrees(rootFull).Any(tree => IsInside(tree, RealPath(realFull)))
+            && ResolvesInside(realFull, Path.Combine(real.FullName, package));
+    }
+
+    // Деревья репозитория корня (как `git worktree list`, но без запуска git): основной checkout и worktree'ы
+    // из <общий .git>/worktrees/*/gitdir. .git ищется от корня вверх: корень проекта — подкаталог репозитория.
+    // Нет .git ни в корне, ни выше — пусто (сам по себе корень не «репозиторий»)
+    private static IEnumerable<string> RepositoryTrees(string rootFull)
+    {
+        try
+        {
+            string? commonDir = null;
+            for (var dir = rootFull; dir is { Length: > 0 }; dir = Path.GetDirectoryName(dir))
+            {
+                var dotGit = Path.Combine(dir, ".git");
+                if (Directory.Exists(dotGit)) { commonDir = dotGit; break; }
+                if (File.Exists(dotGit))
+                {
+                    if (File.ReadAllText(dotGit).Trim() is var line && line.StartsWith("gitdir:", StringComparison.Ordinal))
+                    {
+                        // gitdir: <общий .git>/worktrees/<имя>
+                        var gitDir = Path.GetFullPath(line["gitdir:".Length..].Trim(), dir);
+                        commonDir = Path.GetDirectoryName(Path.GetDirectoryName(gitDir));
+                    }
+                    break;
+                }
+            }
+            if (commonDir is null || Path.GetDirectoryName(commonDir) is not { } primary) return [];
+            var trees = new List<string> { primary };
+            var worktrees = Path.Combine(commonDir, "worktrees");
+            if (Directory.Exists(worktrees))
+                foreach (var entry in Directory.EnumerateDirectories(worktrees))
+                    if (File.Exists(Path.Combine(entry, "gitdir"))
+                        && Path.GetDirectoryName(File.ReadAllText(Path.Combine(entry, "gitdir")).Trim()) is { Length: > 0 } tree)
+                        trees.Add(tree);
+            // Реальные пути: сравнение с целью ссылки идёт по раскрытым ссылкам, а не по тому, как записан путь
+            return trees.Select(t => RealPath(t.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException) { return []; }
+    }
+
+    // Путь с раскрытыми ссылками на каждом сегменте; сегмент, который не удалось раскрыть, остаётся как есть
+    private static string RealPath(string path)
+    {
+        var full = Path.GetFullPath(path);
+        var root = Path.GetPathRoot(full) ?? "";
+        var current = root;
+        foreach (var segment in full[root.Length..].Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, segment);
+            try
+            {
+                if (new DirectoryInfo(current).ResolveLinkTarget(returnFinalTarget: true) is { } target)
+                    current = target.FullName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* не раскрылся */ }
+        }
+        return current;
     }
 
     private static readonly StringComparer PathComparer =
@@ -451,36 +607,130 @@ public sealed partial class TestRunService
         RunState run, PhaseArtifacts artifacts, CancellationToken ct)
     {
         using var limit = Ceiling(ct);
-        var firstPhase = request.NoBuild ? TestRunPhase.List : TestRunPhase.Build;
+        var timings = new PhaseTimings();
+        TestRunResult Done(TestRunResult result) => result with { Timings = timings };
+
+        // Явный no_build — пропуск без проверки; иначе сверяем отпечаток исходников дерева с тем,
+        // что был при последней успешной сборке: совпал — сборка была бы холостой
+        // Отпечатки общие с инструментом build (PhasePipeline.Fingerprints): «build → run_tests»
+        // без правок не собирает дважды, сборка решения .slnx покрывает его проекты
+        var fingerprints = _pipeline.Fingerprints;
+        var tree = BuildFingerprintStore.TreeKey(request.WorkingDirectory);
+        string? fingerprint = null;
+        var skipBuild = request.NoBuild;
+        var skippedByFingerprint = false;
+        if (request.NoBuild) timings.BuildSkipped = "no_build";
+        else
+        {
+            fingerprint = BuildFingerprint.Compute(tree);
+            if (fingerprints.Covers(tree, request.Target, fingerprint) is { } reason)
+            {
+                skipBuild = skippedByFingerprint = true;
+                timings.BuildSkipped = reason;
+            }
+        }
+        // Подсчёт нужен ради процента всего прогона; при filter тестов единицы — лишний запуск хоста
+        var skipList = !string.IsNullOrWhiteSpace(request.Filter);
+        if (skipList) timings.ListSkipped = "задан filter";
+        // Монолит без filter идёт шардами: их классы берутся из этого же подсчёта, второго нет
+        var shardable = !skipList && _options.MonolithShards > 1
+            && TestShards.IsMonolith(request.Target, _options.MonolithTarget);
+        if (shardable) run.CollectListedNames();
+        IReadOnlyList<string>? shardFilters = null;
+
+        var firstPhase = skipBuild ? (skipList ? TestRunPhase.Test : TestRunPhase.List) : TestRunPhase.Build;
         var (slot, queued) = await AcquireAsync(BuildSpec(firstPhase, request, "", run.Results), firstPhase, run,
             limit.Token, ct);
         if (queued is not null) return queued;
 
         using (slot)
         {
-            if (!request.NoBuild)
+            if (!skipBuild)
             {
-                run.Report(new TestRunProgress("build", "сборка"));
-                var build = await RunPhaseAsync(launcher, TestRunPhase.Build, request, run, limit.Token);
-                if (build.Aborted) return Aborted(run, build, TestRunPhase.Build, ct);
-                if (build.ExitCode != 0)
-                    return run.Result(build.ExitCode, TestRunPhase.Build) with
-                    {
-                        BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
-                    };
+                var failed = await BuildAsync();
+                if (failed is not null) return failed;
             }
 
-            run.Report(new TestRunProgress("list", "подсчёт тестов"));
-            var list = await RunPhaseAsync(launcher, TestRunPhase.List, request, run, limit.Token);
-            if (list.Aborted) return Aborted(run, list, TestRunPhase.List, ct);
-            // Подсчёт не удался — прогон всё равно идёт, просто без процента
-            run.Total = list.ExitCode == 0 ? run.ListedCount : null;
+            if (!skipList)
+            {
+                run.Report(new TestRunProgress("list", "подсчёт тестов"));
+                var listWatch = Stopwatch.StartNew();
+                var list = await RunPhaseAsync(launcher, TestRunPhase.List, request, run, limit.Token);
+                timings.List = listWatch.Elapsed;
+                if (list.Aborted) return Done(Aborted(run, list, TestRunPhase.List, ct));
+                // Подсчёт не удался — прогон всё равно идёт, просто без процента
+                run.Total = list.ExitCode == 0 ? run.ListedCount : null;
+                // Самопроверка не сошлась или список пуст — одним процессом, как раньше
+                if (shardable && list.ExitCode == 0)
+                {
+                    var (n, why) = ShardCount();
+                    shardFilters = TestShards.Plan(run.ListedNames(), n);
+                    timings.ShardsReason = why;
+                }
+            }
 
-            run.StartTesting();
-            var test = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
-            if (test.Aborted) return Aborted(run, test, TestRunPhase.Test, ct);
+            var test = await TestAsync();
+            // Сборку пропустили по отпечатку, а раннер её не нашёл или не загрузил — отпечаток соврал
+            // (файл вне перечня расширений, сборка удалена): один повтор со сборкой
+            if (!test.Aborted && test.ExitCode != 0 && skippedByFingerprint && run.TakeStaleBuildSignal())
+            {
+                fingerprints.Forget(tree, request.Target);
+                fingerprint = BuildFingerprint.Compute(tree);
+                timings.BuildSkipped = null;
+                skippedByFingerprint = false;
+                var failed = await BuildAsync();
+                if (failed is not null) return failed;
+                test = await TestAsync();
+            }
+            if (test.Aborted) return Done(Aborted(run, test, TestRunPhase.Test, ct));
             var (reports, oversized) = ReadTrxReports(request.WorkingDirectory, artifacts);
-            return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
+            return Done(run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized });
+        }
+
+        // Сборка; не null — прогон на этом кончился (ошибка сборки или обрыв)
+        async Task<TestRunResult?> BuildAsync()
+        {
+            run.Report(new TestRunProgress("build", "сборка"));
+            var buildWatch = Stopwatch.StartNew();
+            var build = await RunPhaseAsync(launcher, TestRunPhase.Build, request, run, limit.Token);
+            timings.Build = buildWatch.Elapsed;
+            if (build.Aborted) return Done(Aborted(run, build, TestRunPhase.Build, ct));
+            if (build.ExitCode != 0)
+                return Done(run.Result(build.ExitCode, TestRunPhase.Build) with
+                {
+                    BuildErrors = VsTestConsoleParser.BuildErrors(run.BuildErrorCandidates()),
+                });
+            // Отпечаток снят ДО сборки: правка во время неё не должна сойти за собранную
+            fingerprints.Remember(tree, request.Target, fingerprint!);
+            return null;
+        }
+
+        async Task<PhaseOutcome> TestAsync()
+        {
+            run.StartTesting();
+            var testWatch = Stopwatch.StartNew();
+            PhaseOutcome outcome;
+            if (shardFilters is null)
+                outcome = await RunPhaseAsync(launcher, TestRunPhase.Test, request, run, limit.Token);
+            else
+            {
+                // Шарды — параллельно под уже взятым слотом; у каждого свой TurnId и свой TRX
+                timings.Shards = shardFilters.Count;
+                // Пик RSS дерева шардов — для оценки памяти на шард следующего выбора N (AdaptiveShards).
+                // В песочнице PID — docker-клиента, дерево в контейнере отсюда не видно: не меряем
+                var pids = new System.Collections.Concurrent.ConcurrentBag<int>();
+                using var sampling = new CancellationTokenSource();
+                var sampler = launcher.IsSandboxed ? Task.FromResult(0L) : SamplePeakAsync(pids, sampling.Token);
+                var outcomes = await Task.WhenAll(shardFilters.Select((filter, i) =>
+                    RunPhaseAsync(launcher, TestRunPhase.Test, request with { Filter = filter }, run, limit.Token,
+                        trxPrefix: $"results-shard{i + 1}", started: p => pids.Add(p.Id))));
+                await sampling.CancelAsync();
+                var peak = await sampler;
+                outcome = CombineShards(outcomes);
+                if (!outcome.Aborted) ShardPeakMemory.Save(_options.MemoryDirectory, peak, shardFilters.Count);
+            }
+            timings.Test += testWatch.Elapsed;
+            return outcome;
         }
     }
 
@@ -529,6 +779,15 @@ public sealed partial class TestRunService
         return run.Result(test.ExitCode, TestRunPhase.Test) with { Reports = reports, OversizedReports = oversized };
     }
 
+    // Итог шардов: оборван любой — оборван прогон; код — первый ненулевой (неизвестный — null)
+    internal static PhaseOutcome CombineShards(IReadOnlyList<PhaseOutcome> outcomes)
+    {
+        var aborted = outcomes.Any(o => o.Aborted);
+        int? exit = outcomes.Any(o => o.ExitCode is null) ? null
+            : outcomes.Select(o => o.ExitCode!.Value).FirstOrDefault(c => c != 0);
+        return new PhaseOutcome(exit, aborted);
+    }
+
     private static TestRunResult Aborted(RunState run, PhaseOutcome phase, TestRunPhase where, CancellationToken callerCt)
     {
         var cancelled = callerCt.IsCancellationRequested;
@@ -539,12 +798,31 @@ public sealed partial class TestRunService
     // вычитка и гашение — в конвейере. Сбой Start уходит наверх: слот освободит using,
     // блокировку дерева — using в RunAsync
     private Task<PhaseOutcome> RunPhaseAsync(IProcessLauncher launcher, TestRunPhase phase,
-        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true)
+        TestRunRequest request, RunState run, CancellationToken limit, bool heavy = true, string trxPrefix = "results",
+        Action<Process>? started = null)
     {
         var turnId = ProcessTurnIds.New();
-        var spec = BuildSpec(phase, request, turnId, run.Results, heavy);
+        var spec = BuildSpec(phase, request, turnId, run.Results, heavy, trxPrefix);
         run.BeginPhase(phase, spec, turnId);
-        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit);
+        return _pipeline.RunProcessAsync(launcher, spec, run.OnLine, limit, started);
+    }
+
+    // Пик суммы RSS деревьев шардов раз в полсекунды до отмены; тесты подменяют чтение /proc
+    internal Func<IReadOnlyCollection<int>, long> TreeRss { get; init; } = roots => ProcessTreeRss.SumBytes(roots);
+
+    private async Task<long> SamplePeakAsync(System.Collections.Concurrent.ConcurrentBag<int> pids, CancellationToken ct)
+    {
+        long peak = 0;
+        while (true)
+        {
+            if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+            try { await Task.Delay(TimeSpan.FromMilliseconds(500), ct); }
+            catch (OperationCanceledException) { break; }
+        }
+        // Замыкающий замер: у настоящих шардов дерево уже пусто и пика он не поднимет, а подменённое
+        // чтение в тестах иначе не застало бы ни одного PID
+        if (!pids.IsEmpty) peak = Math.Max(peak, TreeRss([.. pids]));
+        return peak;
     }
 
     // Сводки всех TRX прогона; битый файл пропускается — остальные сборки важнее, огромный —
@@ -663,6 +941,10 @@ public sealed partial class TestRunService
     public string FormatResult(TestRunResult result) =>
         TestRunSummaryFormatter.Format(result, _options.MaxResultBytes, _options.CeilingSeconds);
 
+    // Строки vstest, по которым пропущенная по отпечатку сборка считается устаревшей
+    private static readonly string[] StaleBuildMarkers =
+        ["No test is available", "Could not find", "could not be loaded"];
+
     // Состояние одного прогона: хвост вывода, полный лог в файл, разбор строк фаз под вид
     // прогона и живой счётчик. Строки приходят из двух потоков сразу — всё под одним замком
     private sealed class RunState : IDisposable
@@ -675,10 +957,14 @@ public sealed partial class TestRunService
         private readonly TextWriter _log;
         private readonly List<string> _buildErrors = [];
         private readonly VsTestConsoleParser.ListCounter _listCounter = new();
+        // Имена из --list-tests — только когда прогон пойдёт шардами (null — не копим)
+        private List<string>? _listedNames;
+        private bool _seenListHeader;
         private readonly List<string> _failedNames = [];
         // Playwright: исход по названию теста — повтор (retry) перезаписывает, а не добавляет
         private readonly Dictionary<string, TestLineOutcome> _byTitle = new(StringComparer.Ordinal);
         private readonly object _gate = new();
+        private bool _staleBuild;
         private int _listedFiles;
         private int _filesDone;
         private TestRunPhase _phase;
@@ -719,6 +1005,30 @@ public sealed partial class TestRunService
         }
 
         public void Report(TestRunProgress progress) => _progress?.Invoke(progress);
+
+        public void CollectListedNames()
+        {
+            lock (_gate) _listedNames ??= [];
+        }
+
+        public IReadOnlyList<string> ListedNames()
+        {
+            lock (_gate) return [.. _listedNames ?? []];
+        }
+
+        // Та же форма, что у ListCounter: строки с отступом в 4 пробела после шапки
+        private void CollectName(string raw)
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Trim() == VsTestConsoleParser.ListHeader)
+            {
+                _seenListHeader = true;
+                return;
+            }
+            if (_seenListHeader && line.StartsWith("    ", StringComparison.Ordinal) && line.Trim().Length > 0
+                && _listedNames!.Count < TestShards.MaxListedTests)
+                _listedNames.Add(line.Trim());
+        }
 
         public void BeginPhase(TestRunPhase phase, ProcessSpec spec, string turnId)
         {
@@ -783,8 +1093,11 @@ public sealed partial class TestRunService
                         break;
                     case TestRunPhase.List:
                         _listCounter.Feed(line);
+                        if (_listedNames is not null) CollectName(line);
                         break;
                     case TestRunPhase.Test:
+                        if (_kind == TestRunKind.Dotnet && StaleBuildMarkers.Any(m => line.Contains(m, StringComparison.OrdinalIgnoreCase)))
+                            _staleBuild = true;
                         (counted, force) = _kind switch
                         {
                             TestRunKind.Vitest => OnVitestLine(parsed.VitestFile),
@@ -862,6 +1175,17 @@ public sealed partial class TestRunService
             _lastLabel = label;
             var percent = TestRunSummaryFormatter.ProgressPercent(done, _total);
             return new TestRunProgress("running", label, percent, percent is null ? null : true);
+        }
+
+        // Признаки «сборки нет / тест не найден / не загрузился» в выводе фазы Test; читается один раз
+        public bool TakeStaleBuildSignal()
+        {
+            lock (_gate)
+            {
+                var seen = _staleBuild;
+                _staleBuild = false;
+                return seen;
+            }
         }
 
         public IEnumerable<string> BuildErrorCandidates()

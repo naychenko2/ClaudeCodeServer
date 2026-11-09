@@ -7,6 +7,10 @@ public static class ImageEditorPaths
     // Рабочая папка редактора рядом с data: варианты задач, маски и шаги истории — кеш
     public const string WorkspaceDirName = "image-editor";
 
+    // Обучающие фото персонажей для LoRA: {TrainingDirName}/{owner}/{project}/{slug}/. Биометрия,
+    // в бэкап не едет (BackupPaths, тест в BackupPathsTests)
+    public const string TrainingDirName = "lora-training";
+
     // Состояние редактора чатов картинки: {WorkspaceDirName}/{ownerId}/chats/{sessionId}.json.
     // Тот же TTL-кеш рабочей папки, в бэкап не едет (BackupPaths, тест в BackupPathsTests)
     public const string ChatsDirName = "chats";

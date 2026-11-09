@@ -26,9 +26,13 @@ public interface IPersonaRecallSource
     // намеренно — вызывающий один, дефолты фасада ему не нужны.
     // sessionProjectId — проект ЧАТА: единственный ключ полки сферы (не персона и не аргументы
     // модели); null — чат вне проекта, полка сферы не вспоминается.
+    // personalMemory=false (S2a-4, узкая рамка общего проекта): личная часть recall-блока —
+    // рабочий фокус, записи полки персоны, командная память и память сферы как часть блока
+    // «что персона помнит» — не читается и не строится; остаётся только досье проекта.
     Task<PersonaRecallBlock?> BuildRecallAsync(
         string ownerId, string personaId, string query, int topK, double minScore,
-        DossierRecallRequest? dossierRequest, bool splitDossier, string? sessionProjectId = null);
+        DossierRecallRequest? dossierRequest, bool splitDossier, string? sessionProjectId = null,
+        bool personalMemory = true);
 }
 
 // Запись памяти, попавшая в блок recall: только то, что нужно манифесту атрибуции F3

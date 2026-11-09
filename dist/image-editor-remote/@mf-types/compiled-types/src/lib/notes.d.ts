@@ -1,0 +1,16 @@
+import type { NoteSummary, NoteFolder } from '../types';
+export declare function reloadNotes(): Promise<void>;
+export declare function ensureNotesLoaded(): Promise<void>;
+export declare function useNotes(): NoteSummary[];
+export declare function useNoteFolders(): NoteFolder[];
+export declare function getNotesSnapshot(): NoteSummary[];
+export declare function useNotesVersion(): number;
+export declare function existingTitleSet(notes: NoteSummary[]): Set<string>;
+export declare function groupNotesByFile(notes: NoteSummary[], projectId: string): Map<string, NoteSummary[]>;
+export declare function useNotesByFile(projectId: string): Map<string, NoteSummary[]>;
+export declare function bumpNotes(): void;
+export declare const FAVORITE_TAG = "\u0438\u0437\u0431\u0440\u0430\u043D\u043D\u043E\u0435";
+export declare function isFavorite(tags: string[]): boolean;
+export declare function withFavoriteTag(content: string): string;
+export declare function withoutFavoriteTag(content: string): string;
+export declare function toggleFavorite(id: string): Promise<boolean>;

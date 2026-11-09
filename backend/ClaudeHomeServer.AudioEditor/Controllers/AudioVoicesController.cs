@@ -80,7 +80,7 @@ public class AudioVoicesController(
         var sessionId = req.SessionId.Trim();
         if (!gate.TryProjectChat(UserId, projectId, sessionId, out var scope, out var denied)) return denied;
 
-        var thread = threads.Store.Get(UserId, sessionId).Threads.FirstOrDefault(t => t.Id == req.ThreadId?.Trim());
+        var thread = threads.Store.Get(AudioEditorEndpoints.Owner(scope), sessionId).Threads.FirstOrDefault(t => t.Id == req.ThreadId?.Trim());
         if (thread is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.ThreadNotFound, "Звук не найден в этом чате");
         var version = string.IsNullOrWhiteSpace(req.VersionId) ? thread.CurrentVersion : thread.Version(req.VersionId.Trim());
@@ -92,8 +92,8 @@ public class AudioVoicesController(
         if (model is null || index is null)
             return Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                 "В версии нет пары модели RVC: нужны .pth и .index");
-        var modelPath = AudioVersionFiles.Resolve(workspace, UserId, scope, version, model);
-        var indexPath = AudioVersionFiles.Resolve(workspace, UserId, scope, version, index);
+        var modelPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, model);
+        var indexPath = AudioVersionFiles.Resolve(workspace, AudioEditorEndpoints.Owner(scope), UserId, scope, version, index);
         if (modelPath is null || indexPath is null)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.FileNotFound,
                 "Файлы модели больше не найдены — рабочая папка очищена");
@@ -143,13 +143,13 @@ public class AudioVoicesController(
         if (voices.Get(scope, slug) is null) return VoiceNotFound();
         if (string.IsNullOrWhiteSpace(quoteId))
         {
-            var quote = await jobs.QuoteVoiceCloneAsync(UserId, scope, slug, provider ?? "", ct);
+            var quote = await jobs.QuoteVoiceCloneAsync(AudioEditorEndpoints.Owner(scope), scope, slug, provider ?? "", ct);
             return quote.Value is { } q ? Ok(q) : JobError(quote.ErrorCode, quote.Error);
         }
         // Запуск — только по котировке пересоздания ЭТОГО голоса
-        if (jobs.FindQuote(UserId, scope.Key, quoteId.Trim()) is not { } found || found.RecreateVoice != slug)
+        if (jobs.FindQuote(AudioEditorEndpoints.Owner(scope), scope.Key, quoteId.Trim()) is not { } found || found.RecreateVoice != slug)
             return Error(StatusCodes.Status404NotFound, AudioEditErrorCodes.QuoteNotFound, AudioEditJobService.QuoteExpiredText);
-        var started = await jobs.StartAsync(UserId, scope,
+        var started = await jobs.StartAsync(AudioEditorEndpoints.Owner(scope), scope,
             new AudioJobInput(quoteId.Trim(), Voice: AudioVoiceRefs.Prefix + slug), ct);
         return started.Value is { } created
             ? StatusCode(StatusCodes.Status202Accepted, created)
@@ -176,7 +176,9 @@ public class AudioVoicesController(
         return PhysicalFile(full, AudioVersionFiles.ContentTypeOf(full), enableRangeProcessing: true);
     }
 
-    // Записи из загрузки и из проекта; байты читаются до библиотеки, формат она проверит сама
+    // Записи из загрузки и из проекта; байты читаются до библиотеки, формат она проверит сама.
+    // Путь проекта — только ResolveInsideAs (чужое private участника — тот же отказ, что «вне проекта»:
+    // наличие не раскрываем, F2-M1)
     private async Task<(List<VoiceSampleUpload>? Samples, IActionResult? Bad)> SamplesAsync(
         AudioEditScope scope, VoiceSamplesForm form, CancellationToken ct)
     {
@@ -192,7 +194,7 @@ public class AudioVoicesController(
         }
         foreach (var rel in form.ProjectFiles ?? [])
         {
-            if (string.IsNullOrWhiteSpace(rel) || ProjectLinkGuard.ResolveInside(root, rel.Trim()) is not { } full
+            if (string.IsNullOrWhiteSpace(rel) || ProjectLinkGuard.ResolveInsideAs(root, rel.Trim(), UserId) is not { } full
                 || !System.IO.File.Exists(full))
                 return (null, Error(StatusCodes.Status400BadRequest, AudioEditErrorCodes.InvalidRequest,
                     "Файл не найден в проекте или путь идёт через символическую ссылку"));

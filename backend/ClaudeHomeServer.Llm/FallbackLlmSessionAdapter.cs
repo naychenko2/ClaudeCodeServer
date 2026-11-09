@@ -70,6 +70,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
     private readonly ILogger? _log;
+    // Факт внутренних повторов CLI текущего хода (ClaudeSession.CliRetryStats, system/api_retry):
+    // сколько раз headless-сессия сама переждала 429/529, суммарное ожидание (мс) и последний
+    // HTTP-статус. null (тесты/без фабрики) — паспорт пишет нули (повторов не было).
+    private readonly Func<CliRetryStats>? _cliRetryStats;
     // Колбэк персиста сессий (SessionManager.SaveSessions через фабрику/контекст): нужен,
     // чтобы переписать sessions.json ВОССТАНОВЛЕННЫМИ значениями после restore в finally —
     // иначе финальный result успевает сохранить подменённую модель (ApplyStatusAsync →
@@ -90,6 +94,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // сосед-облако всё равно не починит мёртвый эндпоинт. null (тесты/без DI) — проба
     // выключена, прежнее поведение (Unreachable → цепочка).
     private readonly ILocalEndpointProbe? _localProbe;
+    // Гейт допуска ходов к локальному движку (потолок N, очередь FIFO, таймаут). Слот держит
+    // ПОПЫТКА на локальном провайдере, а не ход целиком. null (тесты/без DI) — допуска нет.
+    private readonly LocalEngineBusyTracker? _localGate;
     // Шина событий хода (ADR-013, этап 1): публикация turn/completed с TurnRunPassport
     // отсюда, запись в TurnRunLog — у подписчика SessionManager.HandleTurnCompleted.
     // null (тесты) — паспорт просто не публикуется, поведение прежнее.
@@ -105,6 +112,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Транскрипт чата на диске сервера. false — локальный проект (ADR-016): транскрипт на
     // устройстве в единственном профиле CLI, провайдера выбирает шлюз — переносить нечего
     private readonly bool _transcriptOnServer;
+    // Владелец хода: у проектной сессии Info.OwnerId пуст (см. LlmSessionContext.OwnerId)
+    private readonly string? _turnOwnerId;
     private readonly CancellationTokenSource _cts = new();
 
     // Активная оркестрация фолбэка (null — сообщения проходят насквозь)
@@ -137,12 +146,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
         Action<string>? orchestrationDone = null,
         Func<string>? contextSource = null,
+        Func<CliRetryStats>? cliRetryStats = null,
         IEgressProbe? egress = null,
         Turn.ITurnEventBus? events = null,
         TimeSpan? egressRetryDelay = null,
         ILocalEndpointProbe? localProbe = null,
-        bool transcriptOnServer = true)
+        bool transcriptOnServer = true,
+        string? turnOwnerId = null,
+        LocalEngineBusyTracker? localGate = null)
     {
+        _localGate = localGate;
         _inner = inner;
         _effectiveModel = effectiveModel;
         _downstream = downstream;
@@ -157,6 +170,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _capacity = capacity;
         _lastContextTokens = lastContextTokens;
         _contextSource = contextSource;
+        _cliRetryStats = cliRetryStats;
         _log = log;
         _persist = persist;
         _enqueueBypass = enqueueBypass;
@@ -165,6 +179,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _events = events;
         _localProbe = localProbe;
         _transcriptOnServer = transcriptOnServer;
+        _turnOwnerId = turnOwnerId ?? Info.OwnerId;
         _egressRetryDelay = egressRetryDelay ?? EgressRetryDelay;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey(Info.Model));
     }
@@ -193,17 +208,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {FallbackStep}", message);
 
-    // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
-    // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у
-    // проектных сессий без владельца — тогда читаем global-слой.
-    private int EffectiveMaxSubstitutions() =>
-        _fallbackSettings?.ResolveMaxSubstitutions(Info.OwnerId)
+    // Эффективный потолок подмен для владельца ХОДА: личный слот → global → дефолт 4
+    // (FallbackSettingsStore.DefaultMaxSubstitutions), значение клампится ClampMaxSubstitutions.
+    // Ключ — _turnOwnerId (у проектного чата это арендатор): Info.OwnerId у проектной сессии
+    // пуст по контракту, и по нему читался бы global-слой.
+    internal int EffectiveMaxSubstitutions() =>
+        _fallbackSettings?.ResolveMaxSubstitutions(_turnOwnerId)
         ?? FallbackSettingsStore.DefaultMaxSubstitutions;
 
     // Повторов хода при лежащем выходе в сеть — один. Предел сознательный, той же природы, что
     // потолок добиваний сабагента: канал либо моргнул (тогда одного повтора хватает), либо лежит
     // всерьёз — и тогда честный отказ полезнее молчаливого цикла ожидания.
     internal const int MaxEgressRetries = 1;
+
+    // Повтор той же пары при пропавшем файле аргумента (--agents / --mcp-config) — один: CLI
+    // перезапускается и пересобирает файлы; повтор не помог — честная ошибка хода. Той же природы,
+    // что MaxEgressRetries: локальная причина, смена пары «модель × подписка» её не лечит.
+    internal const int MaxLocalFileRetries = 1;
 
     // Пауза перед повтором. Наблюдаемые отказы прокси длятся секунды (рестарт/исчерпание
     // соединений), поэтому ждать долго незачем, а бить сразу — бессмысленно.
@@ -273,8 +294,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Запуск хода с фолбэк-оркестрацией. Возвращаемся сразу (как базовый адаптер):
     // цикл живёт в фоне и держит ход в своих руках до финального исхода.
     public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
-        int agentDepth = 0, bool suppressTasksExecute = false)
+        int agentDepth = 0, bool suppressTasksExecute = false, string? turnModelOverride = null)
     {
+        // Явная модель хода (голосовой ход на модели места chat-voice): ставим на внутренний
+        // адаптер ДО чтения цепочки — RunFallbackLoopAsync снимает её (EffectiveTurnChain)
+        // уже на старте, а RunTurnAsync перепишет то же значение и сбросит в finally.
+        (_inner as Claude.ClaudeSession)?.SetTurnModelOverride(turnModelOverride);
         lock (_gate)
         {
             // Оркестрация уже идёт (нештатно: SessionManager считает чат свободным — результат
@@ -297,14 +322,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return _enqueueBypass(Info.Id, text, attachedPaths, agentDepth, suppressTasksExecute);
                 }
                 LogWarn($"Доставка при активной оркестрации — байпас в _inner (session {Info.Id}, «{Truncate(text, 60)}»): колбэк requeue не настроен (тесты).");
-                return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
+                return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute, turnModelOverride);
             }
             _turn = new FallbackTurn();
         }
         _userInterrupted = false;
         _snapshotMessageCount = Info.MessageCount;
         var turn = _turn;
-        _ = Task.Run(() => RunFallbackLoopAsync(turn, text, attachedPaths ?? [], agentDepth, suppressTasksExecute));
+        _ = Task.Run(() => RunFallbackLoopAsync(turn, text, attachedPaths ?? [], agentDepth, suppressTasksExecute, turnModelOverride));
         return Task.CompletedTask;
     }
 
@@ -458,6 +483,37 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return text[(end + 1)..];
     }
 
+    // Снимает служебный маркер гибели процесса из видимых «Подробностей» (классификатор уже отработал)
+    private static string? StripProcessKilledMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.ProcessKilledMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.ProcessKilledMarker.Length..].TrimStart()
+            : text;
+
+    // Снимает маркер «файл аргумента не найден» из видимых «Подробностей» (классификатор уже
+    // отработал и выдал LocalFileMissing). Без снятия человек читал бы «[Local:file-missing]
+    // Error: --agents file not found…» в «Подробностях» — маркер технический, а вот сам stderr
+    // (после маркера) человек видеть должен: он и есть причина.
+    private static string? StripLocalFileMissingMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.LocalFileMissingMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.LocalFileMissingMarker.Length..].TrimStart()
+            : text;
+
+    // Снимает маркер «остановлен сервером» из видимых «Подробностей» (классификатор уже отработал
+    // и выдал None → FailClosedAsync). Без снятия человек читал бы «[Process:stopped-by-server]
+    // процесс агента остановлен сервером…» в «Подробностях» — технический шум.
+    private static string? StripProcessStoppedByServerMarker(string? text) =>
+        text is not null && text.StartsWith(TurnErrorClassifier.ProcessStoppedByServerMarker, StringComparison.Ordinal)
+            ? text[TurnErrorClassifier.ProcessStoppedByServerMarker.Length..].TrimStart()
+            : text;
+
+    // Снимает маркер «остановлен сервером» из Details ErrorMessage перед отправкой в ленту
+    // (FailClosedAsync: класс None, маркер нужен только классификатору).
+    private static ErrorMessage StripStoppedByServerMarker(ErrorMessage em) =>
+        em.Details is not null
+            && em.Details.StartsWith(TurnErrorClassifier.ProcessStoppedByServerMarker, StringComparison.Ordinal)
+            ? em with { Details = StripProcessStoppedByServerMarker(em.Details) }
+            : em;
+
     // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
     // null — гасить было нечего (ошибка не приходила).
     private static string? HeldErrorDetails(IEnumerable<ServerMessage> held)
@@ -471,7 +527,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Основной цикл: попытка → исход → классификация → ротация → повтор.
     private async Task RunFallbackLoopAsync(FallbackTurn turn, string text,
-        IReadOnlyList<string> attachedPaths, int agentDepth, bool suppressTasksExecute)
+        IReadOnlyList<string> attachedPaths, int agentDepth, bool suppressTasksExecute,
+        string? turnModelOverride = null)
     {
         // Учёт попыток «модель × подписка»: пара не пробуется дважды за ход (ADR §4)
         var attempted = new HashSet<(string Model, string Key)>();
@@ -488,6 +545,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var startedAt = DateTime.UtcNow;
         var turnOutcome = "cancelled";
         var egressRetries = 0;
+        // Повтор той же пары при пропавшем файле аргумента (--agents / --mcp-config): один,
+        // как и egressRetries. CLI перезапускается и пересобирает файлы; повтор не помог — финал.
+        var localFileRetries = 0;
         FallbackErrorClass? lastClass = null;
 
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
@@ -527,6 +587,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // restore обязан сработать по накопленному флагу). Решает в finally, что восстанавливать
         // и переносить ли транскрипт обратно — регрессия волны 2 (см. блок restore ниже).
         var anyProviderSwitch = false;
+        // Слот допуска текущей попытки на локальном провайдере (null — попытка не локальная).
+        // Освобождается по концу попытки, перед переходом на следующую пару и в finally.
+        IDisposable? attemptSlot = null;
 
         try
         {
@@ -587,6 +650,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // из реестра кулдауна, у нативного — из пула подписок. Внешнее условие про
                     // ТЕКУЩИЙ провайдер остаётся прежним: стартовая подмена задумана для стороннего.
                     var k = ProviderKeyFor(sm);
+                    if (!StepConfigured(k)) continue;
                     if (!StepUnavailable(k)) { stepIdx = i; stepKeyFound = k; break; }
                 }
                 if (stepIdx > 0)
@@ -664,6 +728,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // разруливает ничью подписок через Pick (случайно), и второй вызов мог бы
                     // отдать ДРУГУЮ подписку — проверили одну, поехали на другую.
                     var k = ProviderKeyFor(sm);
+                    if (!StepConfigured(k)) continue;
                     if (StepUnavailable(k))
                     {
                         if (cooledWinIdx < 0) { cooledWinIdx = i; cooledWinKey = k; }
@@ -716,6 +781,62 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 attempted.Add((currentModel, currentKey));
 
+                // Допуск к локальному движку — после пробы живости (мёртвый движок уже дал
+                // LocalModelDown без очереди) и по ФАКТИЧЕСКОЙ паре попытки: стартовая подмена
+                // могла уйти с локали, шаг цепочки — на неё. Слот прошлой попытки отпускаем до
+                // новой постановки в очередь, чтобы ход не занимал место дважды.
+                attemptSlot?.Dispose();
+                attemptSlot = null;
+                if (_localGate is not null && _providers?.GetByKey(currentKey) is { IsLocal: true } gated)
+                {
+                    LocalTurnAdmission admission;
+                    // Ожидание видно человеку без флага статистики: позиция в очереди и «заняты N из M».
+                    var waitLine = new LocalWaitLine();
+                    try
+                    {
+                        using var admitCts = CancellationTokenSource.CreateLinkedTokenSource(
+                            _cts.Token, turn.Interrupted.Token);
+                        admission = await _localGate.AcquireAsync(currentKey, gated.MaxConcurrentTurns,
+                            gated.MaxQueuedTurns, gated.TurnQueueTimeout, admitCts.Token,
+                            (pos, act, lim) => ShowLocalWait(waitLine, pos, act, lim));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        await ClearLocalWaitAsync(waitLine);
+                        // «Стоп» в очереди: CLI не стартовал, место в очереди уже освобождено
+                        // гейтом. Как и при остановке посреди попытки — шлём терминал сами,
+                        // иначе ход навсегда останется в Working.
+                        if (_userInterrupted)
+                        {
+                            turnOutcome = "interrupted";
+                            lock (turn.Sync)
+                            {
+                                if (!turn.Settled)
+                                {
+                                    turn.Hold(new ExitedMessage(_inner.SubmittedTurnSeq));
+                                    turn.AttemptResolved = true;
+                                }
+                            }
+                            await SettleAsync(turn);
+                        }
+                        return; // иначе _cts отменён — сессию закрыли
+                    }
+
+                    await ClearLocalWaitAsync(waitLine);
+                    if (admission.Slot is null)
+                    {
+                        // «Занято» — отдельный класс отказа (ADR-007): провайдер НЕ помечается в
+                        // _health и цепочка не идёт, иначе следующий ход уехал бы на платного
+                        // соседа по стартовой подмене при кулдауне.
+                        LogWarn($"Локальный движок «{currentKey}» занят ({admission.Refusal}, идут {admission.Running}) — "
+                            + "ход не запущен, цепочку не идём.");
+                        turnOutcome = "local_busy";
+                        await FailLocalBusyAsync(turn, admission.Running, admission.Refusal);
+                        return;
+                    }
+                    attemptSlot = admission.Slot;
+                }
+
                 TaskCompletionSource<AttemptEnd> attemptTcs;
                 lock (turn.Sync)
                 {
@@ -726,7 +847,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     attemptTcs = turn.AttemptTcs;
                 }
 
-                await _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
+                await _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute, turnModelOverride);
 
                 // Ждём терминал попытки через ЛИНКОВАННЫЙ токен: иначе «Стоп» будит только паузу
                 // egress-ретрая (turn.Interrupted.Cancel), а ожидание attemptTcs живёт до DisposeAsync —
@@ -771,6 +892,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     }
                 }
                 lastEnd = end;
+                // Попытка кончилась — место на локальном движке свободно, даже если ход пойдёт
+                // дальше по цепочке (на нелокальную пару слот держать незачем).
+                attemptSlot?.Dispose();
+                attemptSlot = null;
 
                 if (_userInterrupted) { turnOutcome = "interrupted"; await SettleAsync(turn); return; }
 
@@ -838,7 +963,50 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (cls == FallbackErrorClass.PromptOverflow)
                 {
                     turnOutcome = "failed";
-                    await FailPromptOverflowAsync(turn, end);
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.PromptOverflow);
+                    return;
+                }
+
+                // Процесс CLI убит сигналом ОС (oom-kill, exit 137): причина локальная, на нашей
+                // машине, и соседняя пара пойдёт тем же процессом на той же памяти. Подмена здесь
+                // только уводит чат на чужую модель (инцидент 2026-10-10: три oom-kill подряд →
+                // MiniMax → opus → deepseek при живых провайдерах). Честная ошибка, пара не меняется,
+                // кулдаун провайдеру не ставим (вендор ни при чём).
+                if (cls == FallbackErrorClass.ProcessKilled)
+                {
+                    LogWarn($"Процесс CLI убит сигналом ОС ({Info.Id}, «{currentModel}» × «{currentKey}»): фолбэк не запускаем, пара не меняется");
+                    turnOutcome = "failed";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.ProcessKilled);
+                    return;
+                }
+
+                // Файл аргумента CLI не найден на старте (exit=1 до первого события): per-run файл
+                // --agents / --mcp-config пропал между записью и запуском. Смена пары «модель ×
+                // подписка» не лечит (тот же процесс на той же машине упрётся в тот же пропавший
+                // файл), но повтор той же пары лечит: CLI перезапускается и пересобирает файлы.
+                // Один повтор (как egressRetries), затем честная ошибка хода. ДО ветки egress/
+                // ротации: наш случай вообще не про сеть и не про провайдера (инцидент 2026-10-16:
+                // Opus → MiniMax-M3 без спроса). attempts не растёт, подмены не тратим.
+                if (cls == FallbackErrorClass.LocalFileMissing)
+                {
+                    if (localFileRetries < MaxLocalFileRetries)
+                    {
+                        localFileRetries++;
+                        LogWarn($"Файл аргумента CLI не найден ({Info.Id}, «{currentModel}» × «{currentKey}»): "
+                            + $"повтор {localFileRetries}/{MaxLocalFileRetries} той же пары — CLI пересоберёт файлы, "
+                            + "шаги цепочки и подмены не тратим, кулдаун провайдеру не ставим");
+                        using (var wait = CancellationTokenSource.CreateLinkedTokenSource(
+                                   _cts.Token, turn.Interrupted.Token))
+                        {
+                            try { await Task.Delay(_egressRetryDelay, wait.Token); }
+                            catch (OperationCanceledException) { /* решает проверка наверху цикла */ }
+                        }
+                        continue;
+                    }
+                    LogWarn($"Файл аргумента CLI не найден ({Info.Id}, «{currentModel}» × «{currentKey}»): "
+                        + $"повтор {localFileRetries} не помог, честная ошибка хода");
+                    turnOutcome = "local_file_missing";
+                    await FailLocalCauseAsync(turn, end, TurnFailureText.LocalFileMissing);
                     return;
                 }
 
@@ -1049,6 +1217,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
         finally
         {
+            // Слот допуска освобождается на любом выходе: исключение, отмена, «Стоп».
+            attemptSlot?.Dispose();
             // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
             // переписывать модель чата навсегда (инцидент 2026-08-07). Восстановление ПОКОМПОНЕНТНОЕ
             // (CAS по каждому полю отдельно): так ручная смена одного поля во время хода не блокирует
@@ -1144,6 +1314,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 try
                 {
                     var endedAt = DateTime.UtcNow;
+                    // Факт внутренних повторов CLI этого хода (system/api_retry): null — без
+                    // фабрики/тесты, CLI не дотягивал (нули в паспорте).
+                    var cliRetry = _cliRetryStats?.Invoke();
                     passport = new TurnRunPassport(
                         SessionId: Info.Id,
                         StartedAt: startedAt,
@@ -1162,8 +1335,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         LastError: lastEnd?.ErrorText ?? lastEnd?.Result?.ApiErrorStatus,
                         ContextTokens: ContextEstimate(),
                         RecordedAt: endedAt,
+                        // Причина промаха prompt cache и цена промаха — из result последней
+                        // попытки; у сторонних провайдеров PromptCache null — поля остаются пустыми
                         CacheMissReason: lastEnd?.Result?.PromptCache?.MissReason,
-                        CacheMissedTokens: lastEnd?.Result?.PromptCache?.MissedTokens);
+                        CacheMissedTokens: lastEnd?.Result?.PromptCache?.MissedTokens)
+                    {
+                        // Факт внутренних повторов CLI (system/api_retry) этого хода: сколько раз
+                        // headless-сессия сама переждала 429/529, суммарное ожидание (мс) и
+                        // последний HTTP-статус. 0/null — повторов не было (CLI не дотягивал).
+                        CliRetries = cliRetry?.Count ?? 0,
+                        CliRetryWaitMs = cliRetry?.WaitMs ?? 0,
+                        CliRetryLastStatus = cliRetry?.LastStatus,
+                    };
                 }
                 catch (Exception ex)
                 {
@@ -1178,7 +1361,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     _ = _events.PublishAsync(new TurnCompleted(
                         Turn: new TurnContext(
                             SessionId: Info.Id,
-                            OwnerId: Info.OwnerId,
+                            OwnerId: _turnOwnerId,
                             TurnSeq: (int)SubmittedTurnSeq,
                             AgentDepth: 0,
                             ProjectId: Info.ProjectId),
@@ -1321,6 +1504,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var stepModel = chain[scan];
                 var stepKey = ProviderKeyFor(stepModel);
                 if (attempted.Contains((stepModel, stepKey))) continue;
+                // Провайдер без ключа не обслужит ход — пропуск жёсткий, без fail-open остывших
+                if (!StepConfigured(stepKey)) continue;
                 // Окно кандидата не вместит текущий контекст — пропускаем ЖЁСТКО, без fail-open:
                 // это уверенный отказ (модель точно упадёт с тем же «Prompt is too long»), а не
                 // наблюдение о живости (кулдаун). Какие источники сверять, WouldFit решает по
@@ -1408,6 +1593,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // провайдера — ProviderHealthRegistry, у подписки пула Claude — сам пул (дублировать
     // нельзя, инвариант ADR-007 §4.3). Без этой развилки нативный шаг цепочки считался бы
     // «всегда живым»: реестр кулдауна подписок пула не ведёт вовсе.
+    // Шаг цепочки настроен? Сторонний провайдер без ключа/эндпоинта (Enabled=false) не может
+    // обслужить ход вовсе: попытка на нём падает исключением «Провайдер не настроен» посреди
+    // хода (инцидент 2026-10-10: цепочка дошла до DeepSeek без ключа). Это не кулдаун-наблюдение
+    // с fail-open, а уверенный отказ — шаг пропускается ЖЁСТКО при обходе цепочки.
+    private bool StepConfigured(string stepKey) =>
+        _providers?.GetByKey(stepKey) is not { Enabled: false };
+
     private bool StepUnavailable(string stepKey) =>
         IsExternalProvider(stepKey)
             ? _health?.IsUnavailable(stepKey) is true
@@ -1477,6 +1669,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         {
             if (sub.Key == currentKey || sub.Key == pick) continue;
             if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key) || !_pool.IsPairUsable(sub.Key, model)) continue;
+            yield return sub.Key;
+        }
+        // Последний шанс уровня 1: живой аккаунт, у которого помечена лишь ПАРА с моделью.
+        // Пометку ставит один отказ (в т.ч. чужого чата), и она не повод отдавать ход
+        // заведомому провалу: без цепочки он иначе падал на исчерпанной подписке, хотя
+        // соседняя тянула ту же модель (инцидент 2026-10-26). Настоящий no_access стоит
+        // одной быстрой попытки — attempted не пустит на ту же пару второй раз.
+        foreach (var sub in _pool.All)
+        {
+            if (sub.Key == currentKey) continue;
+            if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key)) continue;
+            if (!_pool.SupportsModel(sub.Key, model) || !_pool.IsModelUnavailable(sub.Key, model)) continue;
             yield return sub.Key;
         }
     }
@@ -1653,11 +1857,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // ТРЕБОВАНИЕ К СЛЕДУЮЩЕЙ ПОД-ЗАДАЧЕ (SessionManager, его тут не правим): парная логика
         // остаётся корректной — при подмене НИ ошибка, НИ result попытки downstream не идут,
         // так что флаг не выставляется и не остаётся висеть.
+        // Маркер «остановлен сервером» (класс None) снимаем из Details: он нужен только
+        // классификатору, в ленту человек его читать не должен.
         foreach (var m in held.OfType<ErrorMessage>().Where(e => e.ExpectResultFollows))
-            await _downstream(m);
+            await _downstream(StripStoppedByServerMarker(m));
         await _downstream(result);
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
-            await _downstream(m);
+            await _downstream(m is ErrorMessage em ? StripStoppedByServerMarker(em) : m);
     }
 
     /// <summary>
@@ -1687,6 +1893,61 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
                 orig?.Usage, orig?.TotalCostUsd,
                 ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus));
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
+            await _downstream(m);
+    }
+
+    // Строка ожидания одной попытки: 0 — не показана, 1 — показана, 2 — снята (поздние сдвиги глотаем).
+    // Проверка состояния и постановка события в downstream идут под одним локом, иначе
+    // отложенный сдвиг позиции мог бы вклиниться после снятия и воскресить строку навсегда.
+    private sealed class LocalWaitLine
+    {
+        public readonly object Sync = new();
+        public int State;
+    }
+
+    private void ShowLocalWait(LocalWaitLine line, int pos, int active, int limit)
+    {
+        lock (line.Sync)
+        {
+            if (line.State == 2) return;
+            line.State = 1;
+            _ = SafeDownstreamAsync(new LocalTurnQueueMessage(pos, active, limit));
+        }
+    }
+
+    // Снять строку ожидания (Position = 0), если она была показана; идемпотентно.
+    private Task ClearLocalWaitAsync(LocalWaitLine line)
+    {
+        lock (line.Sync)
+        {
+            var shown = line.State == 1;
+            line.State = 2;
+            return shown ? SafeDownstreamAsync(new LocalTurnQueueMessage(0, 0, 0)) : Task.CompletedTask;
+        }
+    }
+
+    // Информационное событие не должно ронять ход: сбой доставки глотаем.
+    private async Task SafeDownstreamAsync(ServerMessage m)
+    {
+        try { await _downstream(m); }
+        catch { /* строка ожидания — подсказка, а не часть контракта хода */ }
+    }
+
+    // Финал «локальный движок занят»: гейт допуска не пустил ход. Форма как у FailLocalDownAsync,
+    // но без кулдауна провайдера и без шагов цепочки — движок жив, он просто загружен.
+    private async Task FailLocalBusyAsync(FallbackTurn turn, int running, LocalTurnRefusal refusal)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+
+        await _downstream(new ErrorMessage(TurnFailureText.LocalEngineBusy(running, refusal), ExpectResultFollows: true));
+        await _downstream(new ResultMessage("error", 0, 0, null, null));
         foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage))
             await _downstream(m);
     }
@@ -1726,8 +1987,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     /// иначе пользователь пошёл бы менять модель. Сменить пару бесполезно — длина
     /// промпта от выбора пары не зависит, и попытка N+1 упадёт так же.
     /// attempts остаётся 1, substitutions не растёт (фолбэк не запускается).
+    /// Тот же финал у гибели процесса от сигнала ОС (ProcessKilled): отличается лишь текст.
     /// </summary>
-    private async Task FailPromptOverflowAsync(FallbackTurn turn, AttemptEnd end)
+    private async Task FailLocalCauseAsync(FallbackTurn turn, AttemptEnd end, string humanText)
     {
         List<ServerMessage> held;
         lock (turn.Sync)
@@ -1737,13 +1999,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             turn.Settled = true;
         }
 
-        // Сырой текст ошибки — в Details, но без технического маркера "[Win32:NNN]":
-        // человек видит его в «Подробности» маркера ошибки, и ему незачем знать про Win32-код.
-        // Сам маркер НЕ теряем — ExtractWin32Code выше уже положил 206 в Win32ErrorCode
-        // для классификатора; здесь просто снимаем первые байты "[Win32:206]" из видимого
-        // текста. Осмысленная формулировка — TurnFailureText.PromptOverflow в Text.
-        var raw = StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held));
-        await _downstream(new ErrorMessage(TurnFailureText.PromptOverflow,
+        // Сырой текст ошибки — в Details, но без технических маркеров "[Win32:NNN]" /
+        // "[Process:killed]" / "[Local:file-missing]": человек видит их в «Подробности» маркера
+        // ошибки, и маркеры ему незачем (они нужны только классификатору). Сам маркер НЕ
+        // теряем — классификатор уже отработал; здесь просто снимаем префикс из видимого текста.
+        // Осмысленная формулировка — humanText в Text (PromptOverflow / ProcessKilled /
+        // LocalFileMissing).
+        var raw = StripLocalFileMissingMarker(
+            StripProcessKilledMarker(StripWin32Marker(end.ErrorText ?? HeldErrorDetails(held))));
+        await _downstream(new ErrorMessage(humanText,
             ExpectResultFollows: true, Details: raw));
 
         // Финальный result — ошибочный: ход не состоялся, и статус чата обязан это показать
@@ -1906,6 +2170,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         FallbackErrorClass.ProviderError => "поставщик вернул ошибку",
         FallbackErrorClass.Unreachable => "сервис не отвечает",
         FallbackErrorClass.AuthFailure => "не удалось авторизоваться",
+        FallbackErrorClass.ProcessKilled => "процесс остановлен системой",
         _ => "не удалось выполнить",
     };
 

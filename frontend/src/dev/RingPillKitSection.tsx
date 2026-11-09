@@ -2,17 +2,17 @@ import { CircleGauge } from 'lucide-react';
 import { Island, IslandHeader } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { C, FS, ISLAND, SP } from '../lib/design';
-import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type HandoffControl, type ProviderBalance } from '../components/chat/ChatHeaderBar';
-import { handoffAvailability } from '../lib/chatHandoff';
+import { RingPillBadge, FalCostBadge, GlifCostBadge, type CostStats, type FalCostStats, type ProviderBalance } from '../components/chat/ChatHeaderBar';
+import type { LocalModelLiveState } from '../features/localModel/useLocalModelLive';
 import type { ContextEstimate } from '../lib/context';
 import type { GlifGenStats } from '../components/chat/glifStats';
 import { toRateWindows, type RateWindow } from '../lib/rateLimit';
 import type { ChatItem, RateLimitInfo } from '../types';
 
-// Витрина пилюли шапки чата: полоски контекста и лимитов (бывшие кольца C2, состояния
-// спецификации §5 — заметка «Шапка чата — пилюля «кольца» (C2), спецификация») и
-// циферблат кэша промпта справа. Тема — общим переключателем страницы; поповеры живые
-// (клик по пилюле), сжатие в них ничего не делает.
+// Витрина кольцевой пилюли шапки чата (вариант C2): все состояния спецификации §5 —
+// заметка «Шапка чата — пилюля «кольца» (C2), спецификация» — и циферблат кэша промпта
+// (блок «Кэш»). Тема — общим переключателем страницы; поповеры живые (клик по пилюле),
+// сжатие в них ничего не делает.
 
 const noop = () => {};
 const NO_COST: CostStats = { cost: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0, turns: 0, results: 0 };
@@ -32,15 +32,18 @@ const wins = (u: Record<string, number | undefined>, over: Record<string, Partia
   toRateWindows(Object.fromEntries(Object.entries(u).map(([k, v]) =>
     [k, { limitType: k, utilization: v, status: 'allowed', resetsAt: RESET, ...over[k] }])));
 
-// Лента с одним ходом родного Claude: якорь кэша сдвинут от «сейчас» витрины так, чтобы
-// часовой кэш был тёплым, остывающим или остывшим
+// Фикстуры для циферблата кэша: лента с одним ходом родного Claude, якорь сдвинут от
+// «сейчас» витрины так, чтобы часовой кэш был тёплым, остывающим или остывшим.
+// «Идёт ход» — тот же тёплый фикстур с isWaiting: во время хода остаток не показывается.
 const NOW = Date.now();
 const cacheFeed = (agoMin: number): ChatItem[] => [{
   kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1, contextTokens: 120_000,
-  promptCache: { ttl: '1h', anchorAtMs: NOW - agoMin * 60_000, prefixTokens: 118_000 },
+  promptCache: { readTokens: 118_000, writtenTokens: 4_000, anchorAtMs: NOW - agoMin * 60_000, ttl: '1h', missReason: 'none' },
 }];
-const CACHE: Record<'warm' | 'expiring' | 'cold', ChatItem[]> = {
-  warm: cacheFeed(12), expiring: cacheFeed(56), cold: cacheFeed(130),
+const CACHE: Record<'warm' | 'cooling' | 'cold', ChatItem[]> = {
+  warm: cacheFeed(12),    // 48 мин до истечения — тёплый
+  cooling: cacheFeed(56), // 4 мин — остывает (порог 5 мин)
+  cold: cacheFeed(130),   // срок прошёл — холодный
 };
 
 interface Sample {
@@ -56,28 +59,23 @@ interface Sample {
   compact?: boolean;
   reducedMotion?: boolean;
   empty?: boolean;                      // пилюли нет: на её месте — пояснение
-  cache?: keyof typeof CACHE;           // циферблат кэша промпта
-  waiting?: boolean;                    // идёт ход
-  handoff?: HandoffControl;             // «Перенести в новый чат»: секция кэша и, при warn/danger, ряд контекста
+  localModel?: LocalModelLiveState;    // форсированное состояние локальной модели
+  cache?: keyof typeof CACHE;           // фикстур ленты для циферблата кэша
+  waiting?: boolean;                    // идёт ход: стрелка крутится, остаток не показан
 }
-
-// Перенос в новый чат: в витрине клик ничего не делает; выключенный — с причиной текстом
-const HANDOFF_ON: HandoffControl = { enabled: true, busy: false, onClick: noop };
-const HANDOFF_OFF: HandoffControl = { ...handoffAvailability({ participants: ['p1', 'p2'] }, false), busy: false, onClick: noop };
 
 const DS_OK: ProviderBalance = { available: true, currency: 'USD', totalBalance: '4.20' };
 
-const SAMPLES: Sample[] = [
-  { caption: 'кэш тёплый — «норм»', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.12 }), cache: 'warm' },
-  { caption: 'кэш остывает + лимит', estimate: ctx(40), windows: wins({ five_hour: 0.81, seven_day: 0.3 }), cache: 'expiring' },
-  { caption: 'кэш остыл', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold' },
-  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true, handoff: HANDOFF_ON },
+// Блок «Кэш»: состояния циферблата (F-1c) — тёплый, остывает, остыл, идёт ход
+const CACHE_SAMPLES: Sample[] = [
+  { caption: 'кэш тёплый (1h)', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.12 }), cache: 'warm' },
+  { caption: 'кэш остывает — «4 мин»', estimate: ctx(40), windows: wins({ five_hour: 0.81, seven_day: 0.3 }), cache: 'cooling' },
+  { caption: 'кэш остыл — «остыл»', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold' },
+  { caption: 'кэш остыл (мобила — без подписи)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', compact: true },
   { caption: 'идёт ход — стрелка крутится', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', waiting: true },
-  { caption: 'перенос в новый чат — кнопка в поповере', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'expiring', handoff: HANDOFF_ON },
-  { caption: 'перенос выключен (групповой чат)', estimate: ctx(55), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'cold', handoff: HANDOFF_OFF },
-  { caption: 'контекст danger — «Перенести» рядом со сжатием', estimate: ctx(91), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', handoff: HANDOFF_ON },
-  { caption: 'контекст danger (мобила) — кнопки переносятся', estimate: ctx(91), windows: wins({ five_hour: 0.3, seven_day: 0.15 }), cache: 'warm', compact: true, handoff: HANDOFF_ON },
-  { caption: 'DeepSeek, контекст warn — перенос без кэша (холодный)', estimate: ctx(72), cost: SOME_COST, provider: { name: 'DeepSeek', balance: DS_OK }, handoff: HANDOFF_ON },
+];
+
+const SAMPLES: Sample[] = [
   { caption: '5.1 обычное — худшее окно', estimate: ctx(62), windows: wins({ five_hour: 0.81, seven_day: 0.34, seven_day_opus: 0.12 }) },
   { caption: '5.1 контекст danger перебивает', estimate: ctx(92), windows: wins({ five_hour: 0.41, seven_day: 0.12 }) },
   { caption: '5.1 окно вне колец (Opus 95%) красит рамку', estimate: ctx(30), windows: wins({ five_hour: 0.2, seven_day: 0.3, seven_day_opus: 0.95 }) },
@@ -97,6 +95,17 @@ const SAMPLES: Sample[] = [
   { caption: '5.8b DeepSeek — начало сессии, контекста нет', estimate: NO_CTX, provider: { name: 'DeepSeek', balance: DS_OK } },
   { caption: '5.9 workflow (мобила)', estimate: ctx(62), windows: wins({ five_hour: 0.41, seven_day: 0.12 }), workflow: { phasesDone: 2, phasesTotal: 5 }, fal: FAL, compact: true },
   { caption: '5.10 нечего показывать — пилюли нет', estimate: NO_CTX, empty: true },
+  // Локальная модель: все состояния
+  { caption: 'LM генерация 38 ток/с', estimate: ctx(45), localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM читает промпт', estimate: ctx(45), localModel: { seen: true, phase: 'prefill', genTps: null, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM очередь · ждут 3', estimate: ctx(45), localModel: { seen: true, phase: 'queued', genTps: null, waitingTotal: 3, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM после хода (idle)', estimate: ctx(45), localModel: { seen: true, phase: 'idle', genTps: null, waitingTotal: 0, lastTurn: { genTps: 30, prefillTps: 1200, ttftMs: 800, queueMsApprox: 4000, cacheHitPerc: 0.87, outTokens: 500 }, lastActivityAt: Date.now() } },
+  // Мобила, вариант А: лицо заменено компактным словом (≤ 7 знаков)
+  { caption: 'LM моб: генерация 38 т/с', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: читает', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'prefill', genTps: null, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: очередь', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'queued', genTps: null, waitingTotal: 3, lastTurn: null, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: после хода (idle) — Ctx 61k', estimate: ctx(45), compact: true, localModel: { seen: true, phase: 'idle', genTps: null, waitingTotal: 0, lastTurn: { genTps: 30, prefillTps: 1200, ttftMs: 800, queueMsApprox: 4000, cacheHitPerc: 0.87, outTokens: 500 }, lastActivityAt: Date.now() } },
+  { caption: 'LM моб: тревога Ctx 92% побеждает', estimate: ctx(92), compact: true, localModel: { seen: true, phase: 'generating', genTps: 38, waitingTotal: 0, lastTurn: null, lastActivityAt: Date.now() } },
 ];
 
 function RingSample({ s }: { s: Sample }) {
@@ -110,7 +119,9 @@ function RingSample({ s }: { s: Sample }) {
         cost={s.cost ?? NO_COST} falCost={s.fal ?? NO_FAL} glifCost={NO_GLIF}
         balance={s.provider?.balance ?? null} billing={s.billing ?? 'subscription'} windows={s.windows ?? []}
         activeWorkflow={s.workflow} isMobile={s.compact} isCompact={s.compact} resetKey={s.caption}
-        forceReducedMotion={s.reducedMotion} cacheItems={s.cache && CACHE[s.cache]} handoff={s.handoff}
+        forceReducedMotion={s.reducedMotion}
+        forceLocalModel={s.localModel}
+        items={s.cache ? CACHE[s.cache] : undefined}
       />
       {s.empty && <div style={{ fontSize: FS.sm, color: C.textMuted }}>(компонент вернул null)</div>}
     </div>
@@ -132,7 +143,7 @@ function HeaderRowSample() {
           isCliProvider={false} providerName="Claude"
           cost={NO_COST} falCost={NO_FAL} glifCost={NO_GLIF}
           balance={null} billing="subscription" windows={wins({ five_hour: 0.81, seven_day: 0.34 })}
-          resetKey="header-row" cacheItems={CACHE.warm}
+          resetKey="header-row" items={CACHE.warm}
         />
         <FalCostBadge stats={FAL} resetKey="header-row" />
         <GlifCostBadge stats={GLIF} resetKey="header-row" />
@@ -146,14 +157,16 @@ export function RingPillKitSection() {
     <Island>
       <IslandHeader
         icon={<CircleGauge size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
-        title="Пилюля шапки чата — полоски и кэш"
-        badge="RingPillBadge"
+        title="Пилюля «кольца» шапки чата"
+        badge="RingPillBadge · C2"
       />
       <div style={{
         padding: ISLAND.pad,
         display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: ISLAND.gap,
       }}>
         <HeaderRowSample />
+        <div style={{ gridColumn: '1 / -1', fontSize: FS.sm, color: C.textMuted }}>циферблат кэша промпта — состояния</div>
+        {CACHE_SAMPLES.map(s => <RingSample key={s.caption} s={s} />)}
         {SAMPLES.map(s => <RingSample key={s.caption} s={s} />)}
       </div>
     </Island>

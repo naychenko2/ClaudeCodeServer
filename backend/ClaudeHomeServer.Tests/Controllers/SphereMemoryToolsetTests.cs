@@ -11,14 +11,24 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // C4 «Сфер»: инструменты sphere_memory_* сервера памяти — состав по флагу владельца, сфера из проекта
 // чата, запись только персонами ЭТОЙ сферы, adopt = перемещение с полки проекта на полку сферы.
-public class SphereMemoryToolsetTests : IDisposable
+[Trait("Category", "Host")]
+public class SphereMemoryToolsetTests : IClassFixture<SphereMemoryToolsetTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    // Хост на КЛАСС, а не на тест. Сферы, проекты и персоны каждый тест заводит свои (новые id),
+    // записи памяти и полки team-памяти читаются только в своих сферах/проектах. Единственное
+    // общее изменяемое — флаг spheres владельца: тест состава проверяет и «выключен», поэтому
+    // конструктор класса сбрасывает его перед каждым тестом, остальные включают сами.
+    public sealed class Hosts : TestWebApplicationFactory;
+
+    private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
 
-    public SphereMemoryToolsetTests() => _client = _factory.CreateAuthenticatedClient();
-
-    public void Dispose() => _factory.Dispose();
+    public SphereMemoryToolsetTests(Hosts hosts)
+    {
+        _factory = hosts;
+        _client = _factory.CreateAuthenticatedClient();
+        _factory.Services.GetRequiredService<UserStore>().SetFeatureFlag(OwnerId, FeatureFlagKeys.Spheres, false);
+    }
 
     private string OwnerId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -51,12 +61,24 @@ public class SphereMemoryToolsetTests : IDisposable
         return p;
     }
 
+    // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него считается узким (fail-closed). Тесты этого класса зовут инструменты от
+    // лица своего личного чата проекта — рамка широкая, поведение прежнее. Чат создаётся на
+    // тот же проект, что и хвост маршрута: сессия-вызыватель и её проект должны совпадать
     private async Task<JsonElement> CallAsync(string? personaId, string projectId, string tool, object args)
     {
-        var resp = await _client.PostAsJsonAsync($"/mcp/memory/{personaId ?? "-"}/{projectId}", new
+        var chat = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        chat.EnsureSuccessStatusCode();
+        var sessionId = (await chat.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"/mcp/memory/{personaId ?? "-"}/{projectId}")
         {
-            jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
-        });
+            Content = new StringContent(JsonSerializer.Serialize(new
+            {
+                jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
+            }), System.Text.Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Add("X-Caller-Session-Id", sessionId);
+        var resp = await _client.SendAsync(req);
         resp.EnsureSuccessStatusCode();
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("result");
     }

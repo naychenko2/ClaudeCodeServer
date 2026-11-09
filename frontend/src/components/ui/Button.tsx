@@ -55,7 +55,22 @@ interface ButtonProps {
   onClick?: (e: MouseEvent) => void;
   type?: 'button' | 'submit';
   title?: string;
+  // Доступное имя для скринридера (aria-label): переопределяет текстовое содержимое.
+  // Для кнопки, у которой видимая подпись не несёт полного контекста (напр. «Ответить»
+  // без указания, какой фичи). Не задан — aria-label не выставляется.
+  ariaLabel?: string;
+  // Disclosure (aria-expanded): раскрывающая кнопка (напр. «Архивные · N»). Не задан —
+  // aria-expanded не выставляется.
+  ariaExpanded?: boolean;
+  // id управляемого региона (aria-controls): пара к ariaExpanded у кнопки, открывающей шторку
+  // или панель. Не задан — aria-controls не выставляется.
+  ariaControls?: string;
+  // Toggle (aria-pressed): переключатель (напр. чип-фильтр «все/в работе/…»). Не задан —
+  // aria-pressed не выставляется.
+  ariaPressed?: boolean;
   style?: CSSProperties;
+  // Тестовый идентификатор (data-testid) — для рендер-тестов (findNodeByAttr).
+  dataTestId?: string;
   // Задан — вместо <button> рендерится честная <a> в новой вкладке: работает средний клик
   // и «открыть в новой вкладке». Ссылки на внешние ресурсы — только через этот путь.
   href?: string;
@@ -64,7 +79,7 @@ interface ButtonProps {
 
 export function Button({
   variant = 'primary', size = 'md', fullWidth, loading = false,
-  disabled, glow, pill, leftIcon, onClick, type = 'button', title, style, href, children,
+  disabled, glow, pill, leftIcon, onClick, type = 'button', title, ariaLabel, ariaExpanded, ariaControls, ariaPressed, style, dataTestId, href, children,
 }: ButtonProps) {
   const isDisabled = disabled || loading;
   const baseStyle: CSSProperties = {
@@ -89,6 +104,11 @@ export function Button({
         target="_blank"
         rel="noopener noreferrer"
         title={title}
+        aria-label={ariaLabel}
+        aria-expanded={ariaExpanded}
+        aria-controls={ariaControls}
+        aria-pressed={ariaPressed}
+        data-testid={dataTestId}
         onClick={onClick}
         style={baseStyle}
       >
@@ -101,6 +121,11 @@ export function Button({
     <button
       type={type}
       title={title}
+      aria-label={ariaLabel}
+      aria-expanded={ariaExpanded}
+      aria-controls={ariaControls}
+      aria-pressed={ariaPressed}
+      data-testid={dataTestId}
       disabled={isDisabled}
       onClick={onClick}
       style={baseStyle}

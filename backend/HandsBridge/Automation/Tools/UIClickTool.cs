@@ -69,7 +69,10 @@ public static partial class UIClickTool
             return HandsGate.Deny(HandsTools.UiClick, gate);
         }
 
-        HandsGate.Acted(HandsTools.UiClick);
+        if (HandsGate.Acted(HandsTools.UiClick) is { } busy)
+        {
+            return busy;
+        }
 
         if (string.IsNullOrWhiteSpace(windowHandle))
         {

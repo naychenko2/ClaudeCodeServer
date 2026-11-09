@@ -17,11 +17,12 @@ public sealed class OllamaActionRankService
 {
     private readonly ICheapTextRunner _runner;
 
-    // Ранжир доступен, если у места `action-rank` есть ХОТЬ КАКОЙ-ТО бесплатный маршрут
-    // (локаль ИЛИ direct-модель агрегатора через RunFreeAsync). Проверка живёт в
-    // CheapTextRunner.HasFreeRoute — единая точка «есть бесплатный шаг» для всей
-    // цепочки, иначе та же правка правила в одном месте оставит другие врозь.
-    public bool Enabled => _runner.HasFreeRoute(LocalActionCatalog.ActionRank);
+    // Ранжир доступен, если у места `action-rank` есть исполнимый маршрут по фактическому
+    // выбору: локаль — с настроенным движком, слот/модель/claude — всегда. Проверка живёт в
+    // CheapTextRunner.HasRoute — единая точка «маршрут исполним», иначе та же правка
+    // правила в одном месте оставит другие врозь. До этого здесь был HasFreeRoute, который
+    // для места со слотом (Tier) возвращал false, хотя выбор слота админом — исполнимый.
+    public bool Enabled => _runner.HasRoute(LocalActionCatalog.ActionRank);
 
     public OllamaActionRankService(ICheapTextRunner runner)
     {
@@ -82,11 +83,12 @@ public sealed class OllamaActionRankService
             $"МАКСИМУМ: {maxK}\n\n" +
             $"ДОСТУПНЫЕ ДЕЙСТВИЯ:\n{JsonSerializer.Serialize(menu)}";
 
-        // Бесплатная цепочка: direct-модель агрегатора → локальная Ollama.
+        // Цепочка: локаль по умолчанию → без облачного шага (фоновое украшение не
+        // молчит и не платит); явный выбор админом слота/модели → полная цепочка.
         // Профиль (num_ctx/num_predict/timeout) применяет сам раннер — раньше это
         // приходилось тащить сюда и молча терялось.
-        var raw = await _runner.RunFreeAsync(LocalActionCatalog.ActionRank, userPrompt,
-            jsonFormat: FormatSchema, ct);
+        var raw = await _runner.RunLocalOrChosenAsync(LocalActionCatalog.ActionRank, userPrompt,
+            jsonFormat: FormatSchema, ct: ct);
         if (string.IsNullOrWhiteSpace(raw)) return [];
 
         var allowed = actions.Select(a => a.Id).ToHashSet(StringComparer.Ordinal);

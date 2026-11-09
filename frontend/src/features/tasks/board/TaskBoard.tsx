@@ -4,7 +4,7 @@
 // стора задач (реальные, без виртуальных повторов). Тулбар: инлайн (хаб/мобайл) или
 // в сайдбаре (десктоп-проект, тогда inlineToolbar=false — тулбар рендерит WorkspacePage).
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   DndContext, DragOverlay, MouseSensor, TouchSensor, useSensor, useSensors,
   closestCorners, type DragEndEvent, type DragStartEvent,
@@ -16,18 +16,31 @@ import {
   boardCardSort, boardLanes, columnColor, computeOrder, createTask, isOpenDefect, reloadTasks,
   taskColumnKey, updateTask, upsertTaskLocal, type BoardGroupBy,
 } from '../../../lib/tasks';
+import { api } from '../../../lib/api';
 import { showToast } from '../../../lib/toast';
-import { useBoardControls, setGroupBy } from '../../../lib/boardControls';
+import { reportBoardScope, useBoardControls, setGroupBy } from '../../../lib/boardControls';
 import { DRAG_MOUSE_ACTIVATION, DRAG_TOUCH_ACTIVATION } from '../../../lib/dnd';
 import { OfflineError } from '../../../lib/offline';
 import { useWindowWidth, TABLET_MAX } from '../../../lib/breakpoints';
+import { useMe } from '../../../lib/defaultPersona';
 import { TaskCard } from '../TaskCard';
+import { useProjectPeople } from '../TaskUserBadge';
+import {
+  isOwnerProjectView, isSharedProjectView, matchTaskAssignee, memberOptionName,
+  type AssigneePersonOption,
+} from '../TasksListFilter';
+import { canWriteTasks } from '../../projects/members/participantGate';
 import { BoardCell, ColumnHeader } from './BoardColumn';
 import { BoardToolbar, useDefectsOnly } from './BoardToolbar';
 
 // Геометрия доски: гэп между колонками и зазор справа под бегунок 6px (см. скролл-контейнер
 // ниже). Колонка живёт в диапазоне [COL_MIN, COL_MAX] — конкретная ширина считается от
 // фактической ширины контейнера, см. colMin.
+// Опции сенсоров — константы модуля: новый объект на каждый рендер пересоздаёт активаторы
+// dnd-kit, меняет его внутренний контекст и перерисовывает все карточки (memo не спасает)
+const MOUSE_SENSOR_OPTIONS = { activationConstraint: DRAG_MOUSE_ACTIVATION };
+const TOUCH_SENSOR_OPTIONS = { activationConstraint: DRAG_TOUCH_ACTIVATION };
+
 const BOARD_GAP = 14;
 const BOARD_PAD_RIGHT = 12;
 const COL_MIN = 200;
@@ -47,11 +60,30 @@ interface Props {
   onEditColumns?: () => void;                 // открыть редактор колонок (проектная доска)
 }
 
+// id задач, найденных сервером по запросу (с задержкой, чтобы не слать запрос на каждую
+// букву). null — запроса нет, ответ ещё не пришёл или не вышел (офлайн): тогда работает
+// только локальный поиск по названию, превью и меткам.
+function useServerSearchIds(query: string): Set<string> | null {
+  const [found, setFound] = useState<{ q: string; ids: Set<string> } | null>(null);
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) { setFound(null); return; }
+    let alive = true;
+    const timer = setTimeout(() => {
+      api.tasks.search(q)
+        .then(list => { if (alive) setFound({ q, ids: new Set(list.map(t => t.id)) }); })
+        .catch(() => { /* офлайн/сбой — остаётся локальный поиск */ });
+    }, 300);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [query]);
+  return found && found.q === query.trim() ? found.ids : null;
+}
+
 export function TaskBoard({
   tasks, columns, projectsById, onOpenTask,
   quickAddProjectId = null, scope = 'hub', inlineToolbar = true, onEditColumns,
 }: Props) {
-  const { groupBy, search, priorities, assignee, wip } = useBoardControls();
+  const { groupBy, search, priorities, assignee, assigneeUserId, wip } = useBoardControls();
   const defectsOnly = useDefectsOnly();
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -62,15 +94,63 @@ export function TaskBoard({
     : ['none', 'priority', 'assignee', 'project', 'due'];
   useEffect(() => { if (isProjectBoard && groupBy === 'project') setGroupBy('none'); }, [isProjectBoard, groupBy]);
 
-  const sensors = useSensors(
-    useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
-    useSensor(TouchSensor, { activationConstraint: DRAG_TOUCH_ACTIVATION }),
+  // Общий проект (S2b-F5): «Участники» в фильтре и дорожки по assigneeUserId — только
+  // на проектной доске общего проекта. Доработка вердикта 136d1069 (п.1): стор общий
+  // для всех досок, поэтому сообщаем стору контекст ЭТОЙ доски: вне общего проекта
+  // (хаб, личный проект) и при смене проекта — даже между двумя общими — 'member'
+  // сбрасывается в самом сторе (reportBoardScope), а не только при выходе в хаб.
+  const boardProject = isProjectBoard && quickAddProjectId ? projectsById.get(quickAddProjectId) : undefined;
+  const shared = boardProject ? isSharedProjectView(boardProject) : false;
+  // Право править задачи (F2-Q3, разрез CONSULT-TASK-RIGHTS): в общем проекте читатель
+  // только смотрит — быстрое добавление в ячейках скрыто, карточки не активируются для
+  // броска (запрет на уровне dnd-активаторов, а не отказа после отпускания). Владелец,
+  // редактор, личный проект (myRole нет) и хаб (проекта нет) — как раньше.
+  const canWrite = canWriteTasks(boardProject);
+  useEffect(() => {
+    reportBoardScope(isProjectBoard ? (quickAddProjectId ?? null) : null, shared);
+  }, [isProjectBoard, quickAddProjectId, shared]);
+  const me = useMe();
+  const { view } = useProjectPeople(quickAddProjectId ?? undefined, shared);
+  const people = useMemo<AssigneePersonOption[]>(
+    () => view ? view.members.map(m => ({ userId: m.userId, name: memberOptionName(m) })) : [],
+    [view],
   );
+  // Контекст «Я» для фильтра/дорожек: в личном проекте и хабе — его нет, поведение прежнее
+  const matchCtx = useMemo(
+    () => boardProject
+      ? { currentUserId: me.userId, isOwner: isOwnerProjectView(boardProject, me.userId) }
+      : undefined,
+    [boardProject, me.userId],
+  );
+  // Имена дорожек «по исполнителю»: владелец первым, затем участники; ушедший/неизвестный
+  // в именах не числится — попадёт в «Без исполнителя»
+  const assigneePeople = useMemo(() => {
+    if (!shared || !view) return undefined;
+    const names = new Map<string, string>();
+    if (view.owner) names.set(view.owner.userId, memberOptionName(view.owner));
+    view.members.forEach(m => names.set(m.userId, memberOptionName(m)));
+    return { names, ownerUserId: view.owner?.userId ?? boardProject?.ownerId ?? null };
+  }, [shared, view, boardProject]);
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, MOUSE_SENSOR_OPTIONS),
+    useSensor(TouchSensor, TOUCH_SENSOR_OPTIONS),
+  );
+
+  // Стабильный onOpen для BoardCard: вызывающие (WorkspacePage, CalendarPage) передают
+  // новую стрелку на каждый рендер, и без обёртки memo карточек не срабатывал бы никогда.
+  // Актуальный onOpenTask читаем из ref, который обновляется в layout-эффекте.
+  const onOpenRef = useRef(onOpenTask);
+  useLayoutEffect(() => { onOpenRef.current = onOpenTask; });
+  const handleOpen = useCallback((t: Task) => onOpenRef.current(t), []);
 
   const projectNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.name : undefined);
   // Имя устройства локального проекта — для плашки «ждёт устройство» на карточке
   const deviceNameOf = (t: Task) => (t.projectId ? projectsById.get(t.projectId)?.device?.name : undefined);
   const columnById = useMemo(() => new Map(columns.map(c => [c.id, c])), [columns]);
+
+  // Совпадения по полному описанию — с сервера (в облегчённом списке описания нет)
+  const descMatches = useServerSearchIds(search);
 
   // Фильтрация (клиентская, по стору)
   const filtered = useMemo(() => {
@@ -78,19 +158,24 @@ export function TaskBoard({
     return tasks.filter(t => {
       if (t.virtual) return false;
       if (priorities.length && !priorities.includes(t.priority)) return false;
-      if (assignee !== 'all' && t.assignee !== assignee) return false;
+      if (!matchTaskAssignee(t, assignee, assigneeUserId, matchCtx)) return false;
       // «Только дефекты» показывает открытые карточки-дефекты: kind=defect и status≠done.
       // Закрытые дефекты сюда не попадают — для них есть фильтр по колонке.
       if (defectsOnly && !isOpenDefect(t)) return false;
       if (q) {
-        const hay = `${t.title} ${t.description} ${t.labels.join(' ')}`.toLowerCase();
-        if (!hay.includes(q)) return false;
+        // Облегчённая задача несёт только превью описания; глубже превью находит сервер
+        const desc = t.listItem ? (t.descriptionPreview ?? '') : t.description;
+        const hay = `${t.title} ${desc} ${t.labels.join(' ')}`.toLowerCase();
+        if (!hay.includes(q) && !descMatches?.has(t.id)) return false;
       }
       return true;
     });
-  }, [tasks, search, priorities, assignee, defectsOnly]);
+  }, [tasks, search, priorities, assignee, assigneeUserId, matchCtx, defectsOnly, descMatches]);
 
-  const lanes = useMemo(() => boardLanes(filtered, groupBy, projectsById), [filtered, groupBy, projectsById]);
+  const lanes = useMemo(
+    () => boardLanes(filtered, groupBy, projectsById, assigneePeople),
+    [filtered, groupBy, projectsById, assigneePeople],
+  );
 
   // Структуры доски: ячейка(lane::column)→карточки, карточка→ячейка, тоталы по колонкам
   const { cellCards, cellByCard, columnTotals, taskById } = useMemo(() => {
@@ -140,6 +225,11 @@ export function TaskBoard({
 
     const sourceLaneKey = cellByCard.get(active.id as string)?.laneKey;
     const destCards = (cellCards.get(`${destLaneKey}::${destColId}`) ?? []).filter(c => c.id !== active.id);
+    // Индекс считается по ПОЛНОМУ списку ячейки, а не по видимому окну SortableContext
+    // (колонка «Готово» показывает первые 50). Бросок на видимую карточку встаёт точно
+    // перед ней. Бросок на саму ячейку (пустое место) — в конец полного списка: в окне
+    // «Готово» такая карточка может оказаться за пределами видимых и появится после
+    // «Показать ещё» — это осознанное поведение, порядок на сервере остаётся честным.
     let idx = overCardId ? destCards.findIndex(c => c.id === overCardId) : destCards.length;
     if (idx < 0) idx = destCards.length;
     const order = computeOrder(destCards[idx - 1]?.order, destCards[idx]?.order);
@@ -151,7 +241,35 @@ export function TaskBoard({
     // Перенос между дорожками меняет поле — только priority/assignee (drag-to-change)
     if (sourceLaneKey && destLaneKey !== sourceLaneKey) {
       if (groupBy === 'priority') dto.priority = destLaneKey as TaskPriority;
-      else if (groupBy === 'assignee' && destLaneKey !== 'none') dto.assignee = destLaneKey as TaskAssignee;
+      else if (groupBy === 'assignee') {
+        // 'me'/'claude' (личная доска, хаб): смена исполнителя на человека/AI снимает и
+        // человека-исполнителя (assigneeUserId:'' по контракту бэка, S2b-2a): иначе прежний
+        // участник остаётся в записи — карточка на дорожке AI показывала бы чип человека
+        // вместо значка Claude, а в общем проекте «снятие» означает владельца.
+        if (destLaneKey === 'me' || destLaneKey === 'claude') {
+          dto.assignee = destLaneKey as TaskAssignee;
+          dto.assigneeUserId = '';
+        }
+        // Дорожка участника ('u:<id>', S2b-F6): бросок назначает человека (К9: 'me' + id).
+        // Дорожка владельца ('u:<id владельца>', S2b-F7): бэк трактует его id как снятие
+        // («Me» без id и есть владелец, TaskManager.Update), поэтому просим снятие прямо: '' —
+        // тот же итог на сервере и карточка без чипа сразу, а не чип владельца до его ответа.
+        // Отказ двери (не участник / читатель / личная задача) — обычный путь ошибки ниже:
+        // тост с серверным текстом и reloadTasks, это откатывает оптимистичное движение.
+        else if (destLaneKey.startsWith('u:')) {
+          const uid = destLaneKey.slice(2);
+          dto.assignee = 'me';
+          dto.assigneeUserId = uid === assigneePeople?.ownerUserId ? '' : uid;
+        }
+        // Дорожка «Без исполнителя» ('none', S2b-F7): в общем проекте на неё падают задачи с id
+        // участника, которого нет в names (ушедший/неизвестный). Смысл броска на неё — снять
+        // человека ('' по контракту бэка); Assignee не трогаем: «Me без id» бэк и дорожка читают
+        // как владельца. В хабе/личной доске 'none' — задачи без assignee: поля там нет, '' для
+        // бэка — no-op (тот же смысл, что в 'me'/'claude'-ветке).
+        else if (destLaneKey === 'none') {
+          dto.assigneeUserId = '';
+        }
+      }
     }
 
     // Оптимистично двигаем карточку в сторе сразу — иначе оверлей «отлетает» назад
@@ -160,6 +278,9 @@ export function TaskBoard({
     if (isProjectBoard) optimistic.columnId = destColId;
     if (dto.priority) optimistic.priority = dto.priority;
     if (dto.assignee) optimistic.assignee = dto.assignee;
+    // assigneeUserId едет и как id (назначить), и как '' (снять) — '' опустим в UI
+    // (чипа участника нет, значок Claude на месте), поэтому очищаем поле карточки вместе
+    if (dto.assigneeUserId !== undefined) optimistic.assigneeUserId = dto.assigneeUserId;
     upsertTaskLocal(optimistic);
 
     // Откат drag только на реальной ошибке. При офлайне (OfflineError / выключенный
@@ -234,7 +355,7 @@ export function TaskBoard({
 
   return (
     <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={onDragStart} onDragEnd={onDragEnd}>
-      {inlineToolbar && <BoardToolbar layout="inline" groupOptions={groupOptions} onEditColumns={onEditColumns} />}
+      {inlineToolbar && <BoardToolbar layout="inline" groupOptions={groupOptions} onEditColumns={onEditColumns} people={people} />}
 
       {/* Скролл-контейнер доски. Класс `cc-hide-scrollbar` снят (QA Fold 8): на планшете
           минимум колонки 240, и три колонки влезают без скролла; при переполнении (4+
@@ -280,10 +401,12 @@ export function TaskBoard({
                   key={`${lane.key}::${col.id}`}
                   cellId={`${lane.key}::${col.id}`}
                   cards={cellCards.get(`${lane.key}::${col.id}`) ?? []}
+                  windowSize={col.category === 'done' ? 50 : undefined}
                   projectNameOf={projectNameOf}
                   deviceNameOf={deviceNameOf}
-                  onOpen={onOpenTask}
-                  onQuickAdd={grouped ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
+                  onOpen={handleOpen}
+                  onQuickAdd={grouped || !canWrite ? undefined : title => void createTask(quickAddProjectId, { title, status: col.category, columnId: isProjectBoard ? col.id : undefined })}
+                  canDrag={canWrite}
                   minEmptyHeight={minEmptyHeight}
                 />
               ))}

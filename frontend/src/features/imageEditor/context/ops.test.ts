@@ -1,20 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { pickOp } from '../format';
 import {
-  activeChoice, DEFAULT_CHOICE, footPrice, isOneVariant, launchMarks, modeOp, opBlockReason, PANEL_OPS, queueText, quickOf,
-  resolveOp, runVerb,
+  footPrice, isOneVariant, launchMarks, modeOp, opBlockReason, PANEL_OPS, queueText, quickOf,
+  runVerb,
 } from './ops';
 
 const STATES: [boolean, boolean][] = [[false, false], [true, false], [true, true]];
 
-describe('«Авто» — ровно pickOp', () => {
+describe('«Авто» — всегда доступно', () => {
   it.each(STATES)('картинка %s, отметки %s', (hasImage, hasMask) => {
-    expect(resolveOp('auto', hasImage, hasMask)).toBe(pickOp(hasImage, hasMask));
     expect(opBlockReason('auto', hasImage, hasMask)).toBe('');
-  });
-
-  it('явная операция идёт как есть', () => {
-    expect(resolveOp('upscale', true, true)).toBe('upscale');
   });
 });
 
@@ -54,13 +48,6 @@ describe('операция запуска с режимом', () => {
     expect(modeOp('removeBackground', false, false).reason).toBe('Сначала выберите картинку в ленте или загрузите её');
   });
 });
-
-describe('выбор, с которым идёт запуск', () => {
-  it('без режима — выбор вкладки по умолчанию', () => {
-    expect(activeChoice('ops-test-p')).toEqual(DEFAULT_CHOICE);
-  });
-});
-
 describe('пометки запуска', () => {
   const mask = { type: 'mask' };
   const arrow = { type: 'arrow' };

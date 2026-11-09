@@ -78,6 +78,9 @@ Thumbs.db
 !frontend/public/maskable-icon-*.png
 !frontend/public/apple-touch-icon-*.png
 !docs/assets/screenshots/*.png
+# Макеты фичи «Плагины» — эталонные экраны, нужны в репозитории (Кира, шаги 2.3/4.4)
+!docs/mockups/plugins/*.png
+!docs/mockups/wave3-acceptance/*.png
 *.jpg
 # Аватарки ролей раздела «Специальности» — комплект лежит в репозитории,
 # без него RoleAvatar уходит в фолбэк с глифом
@@ -162,3 +165,18 @@ tmp/
 # Держим правило общим, а не по одной папке — питоновские утилиты заводятся точечно.
 __pycache__/
 *.py[cod]
+
+# Рабочие данные персонажей редактора картинок (локальные, не для репозитория)
+/characters/
+
+# QA-стенд плагинов (отдельное хранилище)
+data-qa/
+
+# Служебные вложения чатов (скриншоты, фикстуры прогонов): не коммитим
+.cc-attachments/
+
+# Временное решение быстрых тестов предгейта (scripts/test-shards.py --run-fast): убитый процесс оставляет файл
+backend/ClaudeHomeServer.FastRest.slnx
+
+# Сырые дампы QA-прогонов
+.qa/raw/

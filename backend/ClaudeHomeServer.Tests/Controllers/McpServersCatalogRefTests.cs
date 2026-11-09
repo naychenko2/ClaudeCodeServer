@@ -14,19 +14,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Волна 1 «Каталога MCP-серверов», шаг 4: CatalogRef в запросе создания и DTO,
 // каталожная запись заводится выключенной, PUT её не выключает и не теряет,
 // AllowOutsideProjects начинает переноситься, стор переживает неизвестные поля.
+[Trait("Category", "Host")]
 public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client = factory.CreateAuthenticatedClient();
-
-    private static string UserIdOf(TestWebApplicationFactory factory) =>
-        factory.Services.GetRequiredService<UserStore>().GetFirst()!.Id;
-
-    // Тесты класса делят один UserStore: включённый другим тестом флаг не должен
-    // протекать в проверки выключенного состояния
-    private static void SetFlag(TestWebApplicationFactory factory, bool enabled) =>
-        factory.Services.GetRequiredService<UserStore>()
-            .SetFeatureFlag(UserIdOf(factory), FeatureFlagKeys.McpCatalog, enabled).Should().BeTrue();
 
     private static async Task<JsonElement> CreateServerAsync(HttpClient client, object? catalogRef = null)
     {
@@ -48,8 +40,6 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Create_сCatalogRef_выключенИПомечен()
     {
-        SetFlag(factory, enabled: true);
-
         var created = await CreateServerAsync(_client, new
         {
             name = "io.github.owner/filesystem",
@@ -64,21 +54,6 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
         catalogRef.GetProperty("url").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
-    [Fact]
-    public async Task Create_сCatalogRef_безФлага_отказ()
-    {
-        // Флаг по умолчанию выключен (dark launch); соседние тесты его включают — гасим явно
-        SetFlag(factory, enabled: false);
-        var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>
-        {
-            ["key"] = "flagged",
-            ["transport"] = "stdio",
-            ["command"] = "node",
-            ["catalogRef"] = new { name = "io.github.owner/filesystem", version = "1.0.0" },
-        });
-        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-    }
-
     // Каталожный http-URL проходит настоящий SSRF-резолв (SsrfGuard.CheckAsync в Create):
     // на машине с Proxifier резолв внешнего имени может прийти loopback-адресом (127.x.x.x),
     // и гейт честно режет его как приватный — среда, не регрессия. На CI (ubuntu) это NXDOMAIN → DnsFailed.
@@ -86,8 +61,6 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     public async Task Create_http_сCatalogRef_импортированныйUrlСовпадаетСЗаписью()
     {
-        SetFlag(factory, enabled: true);
-
         var resp = await _client.PostAsJsonAsync("/api/mcp/servers", new Dictionary<string, object?>
         {
             ["key"] = "remote-cat",
@@ -107,7 +80,6 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Put_безEnabled_не_выключает_каталожную_запись()
     {
-        SetFlag(factory, enabled: true);
         var created = await CreateServerAsync(_client, new { name = "io.github.owner/one", version = "1.0.0" });
         var id = created.GetProperty("id").GetString()!;
 
@@ -127,7 +99,6 @@ public class McpServersCatalogRefTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Put_сохраняетCatalogRefИПереноситAllowOutsideProjects()
     {
-        SetFlag(factory, enabled: true);
         var created = await CreateServerAsync(_client, new { name = "io.github.owner/two", version = "1.0.0" });
         var id = created.GetProperty("id").GetString()!;
 

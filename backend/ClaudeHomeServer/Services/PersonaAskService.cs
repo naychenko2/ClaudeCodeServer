@@ -20,7 +20,7 @@ public sealed class PersonaAskService(
     ModelAssignmentResolver? assignments = null)
 {
     public async Task<string> AskAsync(string ownerId, Persona persona, string question,
-        string? context, CancellationToken ct = default)
+        string? context, CancellationToken ct, bool callerIsPrivate)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine(promptBuilder.Build(persona, persona.Model, greeted: false));
@@ -71,8 +71,9 @@ public sealed class PersonaAskService(
         if (string.IsNullOrWhiteSpace(answer))
             throw new InvalidOperationException("Персона не ответила (пустой ответ модели)");
 
-        // Консультация не должна быть бесследной для памяти персоны (фон, best-effort)
-        autolearn.LearnFromConsultation(persona, question, answer);
+        // Консультация не должна быть бесследной для памяти персоны (фон, best-effort) —
+        // кроме вызова из приватного чата: ответ уходит вызывателю, в общую полку не пишем
+        autolearn.LearnFromConsultation(persona, question, answer, callerIsPrivate);
         return answer;
     }
 }

@@ -189,13 +189,23 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         _log?.LogInformation("spend: свёрнуто дней в агрегаты: {Count}", victims.Count);
     }
 
+    // Составной ключ свёртки разрезов (S2a-6b): единственное определение для обоих путей
+    // свёртки — Aggregate (детали → daily) и MergeByKey (слияние строк внутри дневных
+    // проходов). Актор входит в ключ: две строки с разными акторами не сливаются никогда —
+    // иначе после часового Reclassify записи двух участников одного чата/модели/дня схлопываются
+    // в одну, расход переатрибутируется, второй участник теряет срез (вердикт efa973f5, MAJOR).
+    private static (string, string?, string?, string?, string?, string?, string, string?, string) SliceKey(
+        string ownerId, string? projectId, string? sessionId, string? taskId, string? personaId,
+        string? actorUserId, string provider, string? model, string source) =>
+        (ownerId, projectId, sessionId, taskId, personaId, actorUserId, provider, model, source);
+
     // Свёртка записей дня по полному составному ключу разрезов
     internal static List<DailySpendRow> Aggregate(string date, IEnumerable<SpendRecord> records)
     {
-        var map = new Dictionary<(string, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
+        var map = new Dictionary<(string, string?, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
         foreach (var r in records)
         {
-            var key = (r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.Provider, r.Model, r.Source);
+            var key = SliceKey(r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
             if (!map.TryGetValue(key, out var row))
                 map[key] = row = new DailySpendRow
                 {
@@ -205,6 +215,7 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
                     SessionId = r.SessionId,
                     TaskId = r.TaskId,
                     PersonaId = r.PersonaId,
+                    ActorUserId = r.ActorUserId,
                     Provider = r.Provider,
                     Model = r.Model,
                     Source = r.Source,
@@ -222,6 +233,240 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
         return [.. map.Values];
     }
 
+    // --- переклассификация «локальный = бесплатный» ---
+
+    // Ходы локальных провайдеров (IsLocal в конфиге), записанные до учёта этого признака
+    // в SpendSources.IsFree, лежат в сторе как chat-turn/one-shot. Проход переставляет их
+    // в "free" — и в деталях, и в дневных агрегатах (инвариант «день либо в деталях, либо
+    // в daily» не затрагивается). Идемпотентен: уже бесплатные не трогает, ничего не
+    // перевернулось — никакого обращения к диску.
+    public int ReclassifyLocalAsFree(Func<string, bool> isLocalProvider) =>
+        Reclassify((source, provider, model) => Reclassifiable(source, provider, model, isLocalProvider),
+            SpendSources.Free);
+
+    // Обратный проход: платный прямой адаптер («minimax-direct», «kimi-direct»), записанный
+    // free по старому правилу «любой *-direct бесплатен», переводится в one-shot (прямой адаптер
+    // зовут только фоновые one-shot). «freellm*-direct» и локальные провайдеры остаются free.
+    // Условия взаимоисключающие с ReclassifyLocalAsFree (там IsFree=true, здесь false) —
+    // пинг-понга в часовом цикле нет. Идемпотентен. Локальность спрашивается у реестра по
+    // БАЗОВОМУ ключу провайдера (без «-direct»): записи «local-x-direct» остаются free.
+    public int ReclassifyPaidDirectFromFree(Func<string, bool> isLocalProvider) =>
+        Reclassify((source, provider, model) =>
+                source == SpendSources.Free
+                && provider.EndsWith(DirectSuffix, StringComparison.OrdinalIgnoreCase)
+                && !SpendSources.IsFree(provider, model, isLocalProvider(provider[..^DirectSuffix.Length])),
+            SpendSources.OneShot);
+
+    private const string DirectSuffix = "-direct";
+
+    private int Reclassify(Func<string, string, string?, bool> match, string target)
+    {
+        var flipped = 0;
+        lock (_ioLock)
+        {
+            foreach (var (date, list) in _details)
+            {
+                List<SpendRecord> snapshot;
+                bool changed = false;
+                lock (list)
+                {
+                    foreach (var r in list)
+                    {
+                        if (!match(r.Source, r.Provider, r.Model)) continue;
+                        r.Source = target;
+                        changed = true;
+                        flipped++;
+                    }
+                    snapshot = [.. list];
+                }
+                if (!changed) continue;
+                try
+                {
+                    File.WriteAllText(TurnsPath(date),
+                        string.Join(Environment.NewLine,
+                            snapshot.Select(r => JsonSerializer.Serialize(r, JsonOpts)))
+                        + Environment.NewLine);
+                }
+                catch (Exception ex)
+                {
+                    // Память уже исправлена — диск догонит при следующем проходе
+                    _log?.LogError(ex, "spend: переклассификация — не переписать {Date}", date);
+                }
+            }
+
+            flipped += ReclassifyDaily(match, target);
+        }
+        return flipped;
+    }
+
+    private static bool Reclassifiable(string source, string provider, string? model, Func<string, bool> isLocal) =>
+        (source == SpendSources.ChatTurn || source == SpendSources.OneShot)
+        && SpendSources.IsFree(provider, model, isLocal(provider));
+
+    // Дневные агрегаты: после смены источника две строки могут сойтись по полному
+    // составному ключу — их сливает MergeByKey (двойного счёта не должно быть).
+    private int ReclassifyDaily(Func<string, string, string?, bool> match, string target)
+    {
+        Dictionary<string, List<DailySpendRow>>? next = null;
+        var flipped = 0;
+        foreach (var (date, rows) in _daily)
+        {
+            var changed = false;
+            foreach (var r in rows)
+            {
+                if (!match(r.Source, r.Provider, r.Model)) continue;
+                r.Source = target;
+                changed = true;
+                flipped++;
+            }
+            if (!changed) continue;
+            next ??= new Dictionary<string, List<DailySpendRow>>(_daily);
+            next[date] = MergeByKey(rows);
+        }
+        if (next is null) return 0;
+        if (PersistDaily(next)) _daily = next;
+        return flipped;
+    }
+
+    // Слияние дневных строк по тому же ключу, что и свёртка (SliceKey): актор в ключе,
+    // строки двух участников одного чата/модели/дня не сливаются ни при каком проходе.
+    private static List<DailySpendRow> MergeByKey(List<DailySpendRow> rows)
+    {
+        var map = new Dictionary<(string, string?, string?, string?, string?, string?, string, string?, string), DailySpendRow>();
+        foreach (var r in rows)
+        {
+            var key = SliceKey(r.OwnerId, r.ProjectId, r.SessionId, r.TaskId, r.PersonaId, r.ActorUserId, r.Provider, r.Model, r.Source);
+            if (map.TryGetValue(key, out var acc))
+            {
+                acc.InputTokens += r.InputTokens;
+                acc.OutputTokens += r.OutputTokens;
+                acc.CacheReadTokens += r.CacheReadTokens;
+                acc.CacheCreationTokens += r.CacheCreationTokens;
+                acc.CostUsd += r.CostUsd;
+                acc.CostRub += r.CostRub;
+                acc.CostCredits += r.CostCredits;
+                acc.Generations += r.Generations;
+                acc.Turns += r.Turns;
+            }
+            else map[key] = r;
+        }
+        return [.. map.Values];
+    }
+
+    // --- разовый rekey прямых пар: Claude-ключ + не-Claude модель (разрез c47fe6da, Ш3) ---
+
+    // Записи, где Provider — ключ Claude, а Model — не родная модель Claude («claude» +
+    // MiniMax-M3, «claude-2» + qwen3.8-27b): подписка Claude такие модели не обслуживает,
+    // ход шёл к провайдеру, объявившему модель. Правда следует из самой записи, поэтому
+    // проход меняет Provider в деталях и дневных агрегатах. Это исправление ЗАВЫШЕНИЯ:
+    // «дорогой» Claude прятал реальный «дешёвый» или бесплатный ход. Обратные пары
+    // (minimax + claude-*) и новые Claude-ключи из резолва не трогается: источника правды в
+    // них нет, перевод был бы догадкой в сторону завышения. Идемпотентен: после rekey Provider
+    // уже не Claude-ключ, повторный проход — no-op без обращения к диску. Сбой записи любого
+    // turns-*.jsonl или daily.json пробрасывается наружу: маркер не ставится, следующий старт
+    // повторит проход с диска. Суффикс «-direct» не срезается:
+    // прямые адаптеры пишутся one-shot-путём и в фильтр не попадают.
+    //
+    // Порядок проверок важен: «родной Claude» спрашивается ДО резолва — сторонний провайдер,
+    // объявивший модель с id вида claude-* или перехвативший префикс «claude-» (ghostcli),
+    // не должен увести запись настоящей подписки к себе (тот же порядок требует
+    // LlmProviderRegistry.IsNativeClaudeModel).
+    public int RekeyNonClaudeModelsOnClaudeKeys(
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        var rekeyed = 0;
+        lock (_ioLock)
+        {
+            foreach (var (date, list) in _details)
+            {
+                List<SpendRecord> snapshot;
+                bool changed = false;
+                lock (list)
+                {
+                    foreach (var r in list)
+                    {
+                        if (RekeyNewProvider(r.Source, r.Provider, r.Model,
+                                isNativeClaudeModel, providerByModel) is not string key
+                            || key == r.Provider) continue;
+                        r.Provider = key;
+                        changed = true;
+                        rekeyed++;
+                    }
+                    snapshot = [.. list];
+                }
+                if (!changed) continue;
+                try
+                {
+                    // Как PersistDaily: tmp + Move(overwrite) — убийство процесса посреди
+                    // записи не оставляет обрезанный день
+                    var path = TurnsPath(date);
+                    var tmp = path + ".tmp";
+                    File.WriteAllText(tmp,
+                        string.Join(Environment.NewLine,
+                            snapshot.Select(r => JsonSerializer.Serialize(r, JsonOpts)))
+                        + Environment.NewLine);
+                    File.Move(tmp, path, overwrite: true);
+                }
+                catch (Exception ex)
+                {
+                    // Проход одноразовый и без отката: сбой записи = провал прохода.
+                    // Пробрасываем — сервис не поставит маркер, следующий старт повторит
+                    // rekey с диска (в памяти уже исправлено, но оно перечитается с диска)
+                    _log?.LogError(ex, "spend: rekey прямых пар — не переписать {Date}", date);
+                    throw;
+                }
+            }
+
+            rekeyed += RekeyDaily(isNativeClaudeModel, providerByModel);
+        }
+        return rekeyed;
+    }
+
+    // Новый провайдер записи или null (не трогать). chat-turn + Claude-ключ (через
+    // единственный словарь SpendCostTiers) + не-родная модель + резолв модели даёт ключ,
+    // который сам НЕ Claude-ключ: rekey к другому Claude-ключу — не выход из области Claude
+    // (смысл прохода), а перенумеровывание записи между профилями; такую не трогаем.
+    private static string? RekeyNewProvider(string source, string provider, string? model,
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        if (source != SpendSources.ChatTurn || !SpendCostTiers.IsClaudeKey(provider) || isNativeClaudeModel(model))
+            return null;
+        var key = providerByModel(model);
+        return key is not null && !SpendCostTiers.IsClaudeKey(key) ? key : null;
+    }
+
+    private int RekeyDaily(
+        Func<string?, bool> isNativeClaudeModel, Func<string?, string?> providerByModel)
+    {
+        // После смены провайдера строка может сойтись с уже существующей (тот же ключ
+        // с правильным провайдером) — их сливает MergeByKey, двойного счёта нет.
+        Dictionary<string, List<DailySpendRow>>? next = null;
+        var rekeyed = 0;
+        foreach (var (date, rows) in _daily)
+        {
+            var changed = false;
+            foreach (var r in rows)
+            {
+                if (RekeyNewProvider(r.Source, r.Provider, r.Model,
+                        isNativeClaudeModel, providerByModel) is not string key
+                    || key == r.Provider) continue;
+                r.Provider = key;
+                changed = true;
+                rekeyed++;
+            }
+            if (!changed) continue;
+            next ??= new Dictionary<string, List<DailySpendRow>>(_daily);
+            next[date] = MergeByKey(rows);
+        }
+        if (next is null) return 0;
+        if (!PersistDaily(next))
+            // Первопричина уже залогирована в PersistDaily; здесь только проваливаем проход:
+            // маркер не поставится, следующий старт повторит rekey с диска
+            throw new IOException("spend: rekey прямых пар — не переписать daily.json");
+        _daily = next;
+        return rekeyed;
+    }
+
     // --- backfill: маркер разового импорта истории ---
 
     private string BackfillMarkerPath => Path.Combine(_dir, "backfill.done");
@@ -236,6 +481,40 @@ public sealed class SpendStore : ISpendCollector, ISpendDetailReader
             File.WriteAllText(BackfillMarkerPath, DateTime.UtcNow.ToString("O"));
         }
         catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер backfill"); }
+    }
+
+    // --- delta-backfill: маркер разовой миграции накопленных итогов в дельты хода (задача
+    // ad52316b, 2026-10-12). Как и backfill.done — идемпотентный маркер: файл существует →
+    // миграция уже прогонялась, повторный запуск no-op.
+    private string DeltaBackfillMarkerPath => Path.Combine(_dir, "delta-backfill.done");
+
+    public bool DeltaBackfillDone => File.Exists(DeltaBackfillMarkerPath);
+
+    public void MarkDeltaBackfillDone()
+    {
+        try
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(DeltaBackfillMarkerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер delta-backfill"); }
+    }
+
+    // --- provider-rekey-v1: маркер разового rekey прямых пар (разрез c47fe6da, Ш3).
+    // Как backfill.done — идемпотентный маркер: файл существует → проход уже делался. ---
+
+    private string ProviderRekeyMarkerPath => Path.Combine(_dir, "provider-rekey-v1.done");
+
+    public bool ProviderRekeyDone => File.Exists(ProviderRekeyMarkerPath);
+
+    public void MarkProviderRekeyDone()
+    {
+        try
+        {
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(ProviderRekeyMarkerPath, DateTime.UtcNow.ToString("O"));
+        }
+        catch (Exception ex) { _log?.LogError(ex, "spend: не удалось записать маркер rekey"); }
     }
 
     // --- диск ---

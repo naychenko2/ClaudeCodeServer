@@ -7,7 +7,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // бэкенда — упавший бэкенд оставляет в slice узлы MSBuild и VBCSCompiler, которых не видит
 // ни --collect, ни ProcessRegistry. Сторож разбирает их при следующем старте.
 // Настоящий systemd тестам не нужен: перечисление юнитов, «жив ли владелец» и остановка —
-// швы. Коллекция процесс-глобального состояния: тест правит IsolationOptions.Instance и швы.
+// швы. Коллекция процесс-глобального состояния: тест правит швы ListScopes/IsProcessAlive/StopScope.
+// IsolationOptions.Instance тесты не публикуют: Sweep получает опции параметром, а чужие хосты
+// (Enabled=false) с их фоновой уборкой из Program.cs выходят сразу, не доходя до заглушек.
 [Collection(TestCollections.ProcessGlobalState)]
 public class ScopeOrphanSweeperTests
 {
@@ -54,19 +56,18 @@ public class ScopeOrphanSweeperTests
     {
         if (OperatingSystem.IsWindows()) return;
 
-        var prevOptions = IsolationOptions.Instance;
         var prevList = ScopeOrphanSweeper.ListScopes;
         var prevAlive = ScopeOrphanSweeper.IsProcessAlive;
         var prevStop = LocalProcessRunner.StopScope;
         var stopped = new List<string>();
         // SystemdRunPath задан явно — поиск по PATH в тесте не нужен
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = "/usr/bin/systemd-run" };
+        var options = new IsolationOptions { Enabled = true, SystemdRunPath = "/usr/bin/systemd-run" };
         ScopeOrphanSweeper.ListScopes = _ => [Dead, Alive];
         ScopeOrphanSweeper.IsProcessAlive = pid => pid == 1111;
         LocalProcessRunner.StopScope = (_, unit) => { lock (stopped) stopped.Add(unit); };
         try
         {
-            ScopeOrphanSweeper.Sweep(IsolationOptions.Instance);
+            ScopeOrphanSweeper.Sweep(options);
 
             lock (stopped) stopped.Should().Equal(Dead);
         }
@@ -75,24 +76,22 @@ public class ScopeOrphanSweeperTests
             LocalProcessRunner.StopScope = prevStop;
             ScopeOrphanSweeper.IsProcessAlive = prevAlive;
             ScopeOrphanSweeper.ListScopes = prevList;
-            IsolationOptions.Instance = prevOptions;
         }
     }
 
     [Fact]
     public void Уборка_ИзоляцияВыключена_НичегоНеПеречисляетИНеГасит()
     {
-        var prevOptions = IsolationOptions.Instance;
         var prevList = ScopeOrphanSweeper.ListScopes;
         var prevStop = LocalProcessRunner.StopScope;
         var listed = 0;
         var stops = 0;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = false };
+        var options = new IsolationOptions { Enabled = false };
         ScopeOrphanSweeper.ListScopes = _ => { Interlocked.Increment(ref listed); return []; };
         LocalProcessRunner.StopScope = (_, _) => Interlocked.Increment(ref stops);
         try
         {
-            ScopeOrphanSweeper.Sweep(IsolationOptions.Instance);
+            ScopeOrphanSweeper.Sweep(options);
 
             listed.Should().Be(0);
             stops.Should().Be(0);
@@ -101,7 +100,6 @@ public class ScopeOrphanSweeperTests
         {
             LocalProcessRunner.StopScope = prevStop;
             ScopeOrphanSweeper.ListScopes = prevList;
-            IsolationOptions.Instance = prevOptions;
         }
     }
 
@@ -110,16 +108,15 @@ public class ScopeOrphanSweeperTests
     {
         if (OperatingSystem.IsWindows()) return;
 
-        var prevOptions = IsolationOptions.Instance;
         var prevList = ScopeOrphanSweeper.ListScopes;
         var prevStop = LocalProcessRunner.StopScope;
         var stops = 0;
-        IsolationOptions.Instance = new IsolationOptions { Enabled = true, SystemdRunPath = "/usr/bin/systemd-run" };
+        var options = new IsolationOptions { Enabled = true, SystemdRunPath = "/usr/bin/systemd-run" };
         ScopeOrphanSweeper.ListScopes = _ => throw new TimeoutException("шина молчит");
         LocalProcessRunner.StopScope = (_, _) => Interlocked.Increment(ref stops);
         try
         {
-            var act = () => ScopeOrphanSweeper.Sweep(IsolationOptions.Instance);
+            var act = () => ScopeOrphanSweeper.Sweep(options);
 
             act.Should().NotThrow("уборка сирот fail-open: сбой не должен ронять старт бэкенда");
             stops.Should().Be(0);
@@ -128,7 +125,6 @@ public class ScopeOrphanSweeperTests
         {
             LocalProcessRunner.StopScope = prevStop;
             ScopeOrphanSweeper.ListScopes = prevList;
-            IsolationOptions.Instance = prevOptions;
         }
     }
 }

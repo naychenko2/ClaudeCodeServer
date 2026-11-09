@@ -3,7 +3,9 @@ using System.Security.Claims;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
 
@@ -15,27 +17,43 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
     DefaultAssistantProvisioner provisioner,
-    PersonaManager personas, SessionContextResolver contextResolver) : ControllerBase
+    PersonaManager personas, SessionContextResolver contextResolver,
+    PrefixFingerprintCache prefixFpCache) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
-    // Проект принадлежит текущему пользователю; чужой/несуществующий — как отсутствующий (404)
-    private bool OwnsProject(string projectId) =>
-        projects.GetById(projectId)?.OwnerId == UserId;
+    // Кэш отпечатков префиксов истории (Перф-3 B8) — см. ChatsController._prefixFpCache
+    private readonly PrefixFingerprintCache _prefixFpCache = prefixFpCache;
 
     [HttpGet]
+    [ProjectScope]
     public IActionResult GetAll(string projectId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         // Вычисляемые parentSessionId/taskDone дописывает конвертер Session на границе
-        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно
-        return Ok(sessions.GetByProject(projectId));
+        // сериализации (SessionJsonConverter) — здесь ничего подставлять не нужно.
+        // Условный GET: фронт опрашивает список каждые несколько секунд, а меняется он редко;
+        // тег считается по готовому телу, так что updatedAt в ответе всегда точный
+        // S2d-4a: список чатов проекта — человеческая ручка, видимая часть (GetVisibleByProject):
+        // чужой приватный чат не отдаётся ни id, ни названием; свой приватный и общий — как раньше.
+        return new ETagJsonResult(sessions.GetVisibleByProject(projectId, UserId));
     }
 
+    // Создание чата — действие хода (S2d-1c): редактор общего проекта создаёт чат и становится
+    // его автором (CreatedByUserId — только из sub вызывающего, не из тела); читателю 403,
+    // постороннему 404. Автор на видимость чата не влияет (S2d-1).
     [HttpPost]
+    [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
+        // FIN3-2 (FINAL-3, п. 3 ревью b13f2105): resume принимается только для транскрипта чата,
+        // видимого вызывающему. ClaudeSessionId — ключ истории (HistoryKeyOf, SessionManager.cs:557)
+        // и транскрипта CLI: новый общий чат с csid чужого приватного получил бы его разговор
+        // через эту дверь. Отказ — тот же, что на неизвестный id в теле («Персона не найдена»
+        // ниже): существование чужого приватного не выдаётся. Неизвестный ключ не трогается —
+        // продолжение чата (ветвление) подаёт свой новый csid до регистрации чата
+        // (SessionManager.cs:3660), внешний транскрипт — законный случай.
+        if (req.ResumeSessionId is { Length: > 0 } resumeId && sessions.IsTranscriptReservedForOthers(resumeId, UserId))
+            return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
         // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим
@@ -66,21 +84,84 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         try
         {
+            // Явное назначение собеседника (доработка R-S2a-8): глобальной персоне чат общего
+            // проекта не назначается — общая проверка рамки SessionManager. Персона резолвится
+            // по id вызывающего или владельца проекта: участник назначает свою, арендатор — свою;
+            // чужой id вне проверки (и сегодня, и дальше). Фолбэк сервера ниже (без personaId в
+            // теле) — не назначение вызывающим, проверка его не касается.
+            if (!string.IsNullOrWhiteSpace(req.PersonaId))
+            {
+                var assigned = personas.Get(req.PersonaId, UserId)
+                    ?? (projects.GetById(projectId)?.OwnerId is { } tenantId ? personas.Get(req.PersonaId, tenantId) : null);
+                if (assigned is null) return NotFound(new { error = "Персона не найдена" });
+                sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
+            }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: personaId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
+        // Глобальная персона в общем чате (R-S2a-8): 400 с машинным кодом — тот же, что при смене собеседника.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Переименование и прочие правки чата: QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2) —
+    // право записи (редактор и выше), а не авторство чата: участник упирался даже в своём чате.
+    // Область — Read: постороннего отбивает атрибут (404, проект не виден), участнику остаётся
+    // цепочка тела: видимость чата (404 на чужом приватном) → режим чата (409) → право записи (403)
+    // → настройки владельца чата (403 owner_settings, доработка QA-P1: ниже)
     [HttpPut("{sessionId}")]
+    [ProjectScope]
     public async Task<IActionResult> Update(string projectId, string sessionId, [FromBody] UpdateSessionRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        // Модель и её настройки (effort) — выбор владельца чата (S2a-10b): тот же гейт, что у режима
+        // прав и провайдера (DenyOwnerTurn → 403 owner_settings), отдельного гейта «на модель» нет.
+        // Порядок до проверки права записи важен: запрос с моделью отвечает о более узком праве, чем
+        // запрос о переименовании. Явная очистка модели (null в теле) от отсутствия поля не
+        // различима в контракте — такое поле ниже решается общим правом записи (модель не трогается).
+        if ((req.Model is not null || req.Effort is not null) && sessions.DenyOwnerTurn(sessionId, UserId) is { } denied)
+            return denied;
+        // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — то же, что на несуществующем,
+        // существование не выдаётся кодом. Приём тот же, что у DenyTurnAuthor: сначала гейт видимости
+        // GetAccessible, решение о праве — после него.
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NotFound();
+        // QA-D45 (D5): отказ режима идёт раньше отказа права (как прежде — раньше авторского 403).
+        // Порядок безопасен по видимости: приватный чат виден только автору (CanSee), поэтому 409
+        // не выдаёт существование постороннему; автор-участник своего приватного чата остаётся на
+        // 409 (до права записи дело не доходит), и чужой флаг он не пишет — запись ниже идёт после
+        // режима и после гейта права.
+        if (req.ExcludeFromDossiers is false && sessions.IsPrivateChat(sessionId))
+            return PrivateChatDossiersDenied();
+        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): переименование и метки чата —
+        // право WriteContent (редактор и выше), читателю — 403 project_scope. Авторство чата здесь
+        // больше не решает ничего; модель и effort — на владельном гейте DenyOwnerTurn выше.
+        if (sessions.DenyContentWrite(sessionId, UserId) is { } noWrite) return noWrite;
+        // QA-P1 (доработка, возврат Глеба a21170f7): WriteContent открывает редактору ТОЛЬКО name и
+        // tags. Остальные поля запроса — настройки владельца чата: срок жизни, мьют уведомлений,
+        // озвучка со стилем, opt-out «Не сохранять решения». Им — тот же гейт владельца-арендатора,
+        // что у модели и режима (DenyOwnerTurn → 403 owner_settings): право записи контента их не
+        // открывает, срок жизни чата ставит только владелец. Без этого редактор с
+        // {"expiresAfterMinutes":1} на чате владельца снимал его через ChatExpiryService
+        // (SetExpiry → SessionManager.cs:2474, удаление — ChatExpiryService.cs:35,47-50) — обход
+        // правила удаления этого же шага. Гейт стоит ДО любой записи поля: смешанный запрос
+        // (name + срок) отказывается целиком, имя не записано. Предикат — ровно тот, что у
+        // записи ниже: поле считается запрошенным, когда его запись состоялась бы.
+        if ((req.ExpiresAfterMinutes is not -1 || req.NotificationsMuted is not null
+                || req.VoiceMode is not null || req.VoiceStyle is not null
+                || req.ExcludeFromDossiers is not null)
+            && sessions.DenyOwnerTurn(sessionId, UserId) is { } notOwner)
+            return notOwner;
+        // S2d-6c: «Не сохранять решения» нельзя выключить, пока чат приватный. Зовётся раньше
+        // остальных Set*: отказ 409 не должен применять половину запроса (остальные поля —
+        // mute/озвучка/срок/имя — тогда не трогаются вовсе). true принимается всегда. Ниже это
+        // тот же отказ на гонке с тумблером: приватность встала после проверки выше.
+        if (req.ExcludeFromDossiers is { } optOut && !sessions.TrySetExcludeFromDossiers(sessionId, optOut))
+            return PrivateChatDossiersDenied();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
         if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
@@ -92,8 +173,6 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
             sessions.SetExpiry(sessionId, req.ExpiresAfterMinutes);
         }
-        if (req.ExcludeFromDossiers is { } optOut)
-            sessions.SetExcludeFromDossiers(sessionId, optOut);
         try
         {
             var updated = await sessions.UpdateAsync(sessionId, UserId, req.Name, req.Model, req.Effort, req.Tags);
@@ -103,17 +182,33 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
-    // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора
+    // Отказ режима «приватный чат + «Не сохранять решения» выкл» (S2d-6c, QA-D45): один текст и код
+    // для обеих точек Update — проверки порядка и записи флага (тот же контракт формы отказа, что у
+    // ChatAuthorGate.Denied: ObjectResult с code).
+    private static ObjectResult PrivateChatDossiersDenied() =>
+        new(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" })
+            { StatusCode = StatusCodes.Status409Conflict };
+
+    // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.
+    // Гейт — GetOwnedVisible (S2d-3e): чужой приватный чат неотличим от «нет такого» (решение 28.10).
+    // Запись остаётся на авторе-арендаторе (SetPersona внутри сверяет ResolveOwnerId): участник и до
+    // шага не менял собеседника проектной сессии — для него отказ тот же, 404.
     [HttpPost("{sessionId}/persona")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public IActionResult SetPersona(string projectId, string sessionId, [FromBody] SetPersonaRequest req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
-        var session = sessions.GetById(sessionId);
+        var session = sessions.GetOwnedVisible(sessionId, UserId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         try
         {
             var updated = sessions.SetPersona(sessionId, UserId, req.PersonaId, req.AgentName);
             return updated == null ? NotFound() : Ok(updated);
+        }
+        // Глобальная персона чату общего проекта (S2a-8): 400 с машинным кодом, чтобы фронт
+        // различал этот отказ среди прочих 400 смены собеседника.
+        catch (SessionManager.GlobalPersonaInSharedException ex)
+        {
+            return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code });
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -124,17 +219,43 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // не ломаются). С limit и/или before включает постраничный режим и возвращает объект
     // { messages, hasMore, cursor }: это режет длинную историю (5+ МБ целиком) до ~100
     // сообщений хвоста, а более ранние догружаются по курсору кнопкой «Показать ранее».
+    // С after (+ fp) — докачка хвоста (Перф-2 B5): клиент, у которого лента уже в памяти,
+    // просит только записи после курсора; ответ — объект { reset, messages, anchorIndex,
+    // anchorFp }: reset=false — messages = хвост (дописывается), reset=true — messages =
+    // полная история (замена), anchor* — новый курсор для следующего запроса.
+    // Гейт (S2d-3e) — путь видимости GetAccessible (ResolveSession → SessionAccess.CanSee, тот же,
+    // через который ходит [ProjectScope]): чужой приватный чат неотличим от «нет такого», автору
+    // своего приватного и общему чату — как раньше. GetOwned здесь не годился бы: участник-автор
+    // своего приватного чата не арендатор, а историю своего чата он читал и до шага.
     [HttpGet("{sessionId}/history")]
+    [ProjectScope]
     public async Task<IActionResult> GetHistory(
         string projectId, string sessionId,
         [FromQuery] int? limit = null,
-        [FromQuery] int? before = null)
+        [FromQuery] int? before = null,
+        [FromQuery] int? after = null,
+        [FromQuery] string? fp = null)
     {
-        if (!OwnsProject(projectId)) return NotFound();
-        var session = sessions.GetById(sessionId);
-        if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetAccessible(sessionId, UserId) is not { } found || found.Session.ProjectId != projectId)
+            return NotFound();
+        var session = found.Session;
 
         var history = await sessions.GetHistoryAsync(sessionId);
+
+        // Курсор докачки (after) — приоритетнее пагинации: клиент пришёл за хвостом, не за страницей
+        if (after is not null)
+        {
+            // Ключ кэша — csid (HistoryKeyOf): отпечатки префиксов не пересчитываются на каждый запрос
+            var tail = ChatHistoryTail.Compute(history, after, fp,
+                _prefixFpCache.GetOrCompute(session.ClaudeSessionId ?? sessionId, history));
+            return Ok(new
+            {
+                reset = tail.Reset,
+                messages = tail.Messages,
+                anchorIndex = tail.AnchorIndex,
+                anchorFp = tail.AnchorFp,
+            });
+        }
 
         // Ни одного параметра пагинации — прежний контракт: полный список как плоский массив
         if (limit is null && before is null)
@@ -150,14 +271,24 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 
     [HttpDelete("{sessionId}")]
+    [ProjectScope]
     // Секция destructive: на делегированном ходу агент не удаляет чаты (см. FilesController.Delete)
     [DenyOnDelegatedTurn("Удаление чата")]
     public async Task<IActionResult> Delete(string projectId, string sessionId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null) return NoContent(); // идемпотентное удаление
         if (session.ProjectId != projectId) return NotFound(); // чужая сессия — не удаляем
+        // S2d-3f.1 (R-S2d-3f §1): постороннему (чат не виден по CanSee) — тот же 204, что и несуществующему:
+        // прежний контракт идемпотентного удаления (строка выше) сохранён, существование не выдаётся кодом,
+        // сам чат не тронут. Видимость — первым шагом, как требует порядок «решение прав после видимости».
+        if (sessions.GetAccessible(sessionId, UserId) is null) return NoContent();
+        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): удалить может автор чата или владелец
+        // проекта. Авторство — CreatedByUserId (только это поле; nil — автор неизвестен и автором не
+        // считается, тот же fail-closed, что у DenyTurnAuthor). Видимому не-автору (читателю, редактору
+        // чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
+        if (session.CreatedByUserId != UserId && sessions.GetOwnedVisible(sessionId, UserId) is null)
+            return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }
@@ -172,26 +303,33 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // SessionContextResolver: у неё же его берёт MCP-тул context_list, иначе фронт и тул
     // разошлись бы в оценке одной записи. Битая запись отдаётся с missing=true
     // (убрать/переуказать — решение клиента), молча не чистим: состав меняется только PUT.
+    // Гейт (S2d-3e) — тот же путь видимости, что у истории: GetAccessible (ResolveSession → CanSee).
+    // Состав контекста чужого приватного чата не отдаётся никому, кроме его автора; отказ
+    // неотличим от «нет такого чата».
     [HttpGet("{sessionId}/context")]
+    [ProjectScope]
     public IActionResult GetContext(string projectId, string sessionId)
     {
-        if (!OwnsProject(projectId)) return NotFound();
-        var session = sessions.GetById(sessionId);
-        if (session == null || session.ProjectId != projectId) return NotFound();
+        if (sessions.GetAccessible(sessionId, UserId) is not { } found || found.Session.ProjectId != projectId)
+            return NotFound();
 
-        return Ok(contextResolver.Resolve(session, UserId));
+        return Ok(contextResolver.Resolve(found.Session, UserId));
     }
 
     // PUT — идемпотентная замена состава целиком. Валидация: Type из белого списка,
     // непустой Id, потолок 50. Записи с несуществующими адресами НЕ отбиваются —
     // «не найден» отображается (missing в GET), а PUT описывает желание человека,
     // а не состояние файловой системы.
+    // Гейт (S2d-3e) — запись, поэтому GetOwnedVisible (автор-арендатор + видимость), а не путь
+    // чтения: участнику запись в проект открыта только RunTurn (S2a-10), и до шага она здесь
+    // отбивалась фильтром Write — для него отказ тот же. Без этого GET контекста был бы закрыт
+    // на чужом приватном чате, а PUT — открыт.
     [HttpPut("{sessionId}/context")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> PutContext(string projectId, string sessionId,
         [FromBody] List<SessionContextItemRequest> req)
     {
-        if (!OwnsProject(projectId)) return NotFound();
-        var session = sessions.GetById(sessionId);
+        var session = sessions.GetOwnedVisible(sessionId, UserId);
         if (session == null || session.ProjectId != projectId) return NotFound();
 
         if (req.Count > MaxContextEntries)
@@ -218,9 +356,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки
     // тем» в разделе проекта). Возвращает счётчики для тоста.
     [HttpPost("icon-batch")]
+    [ProjectScope(Right = ProjectRight.Write)]
     public async Task<IActionResult> IconBatch(string projectId, CancellationToken ct)
     {
-        if (!OwnsProject(projectId)) return NotFound();
         try
         {
             var result = await sessions.SetChatIconsAsync(UserId, ct, projectId);
@@ -238,6 +376,9 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // необязателен — подпись со стороны добавившего, сервер только тримит).
 public record SessionContextItemRequest(string Type, string Id, string? Title = null);
 
+// Name/Tags — право записи контента чата (WriteContent: редактор и выше). Остальные поля —
+// настройки владельца чата: они открыты только владельцу-арендатору, остальным — 403
+// owner_settings (доработка QA-P1, возврат Глеба a21170f7).
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out

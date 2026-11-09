@@ -1,0 +1,655 @@
+using System.Text.Json;
+using ClaudeHomeServer.Services.Deploy;
+using ClaudeHomeServer.Tests.Helpers;
+using FluentAssertions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// Приём заявок на выкатку (ADR-010). Проверяем ровно то, что ломается: белый список ref
+// (ручка исполняет код на хосте — это граница привилегий), guard'ы «один деплой за раз» и
+// «грязное дерево», отказ на машине без контура и формат журнала — шва с внешним агентом.
+//
+// Хостовые операции (git, schtasks) подменены фейком: на раннере CI нет ни Task Scheduler,
+// ни боевого репозитория, а предмет проверки — решения сервиса, а не наличие утилит.
+public class DeployServiceTests : IDisposable
+{
+    private readonly string _tempDir;
+    private readonly FakeDeployHost _host = new();
+
+    public DeployServiceTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), "ccs_deploy_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose() => TestFs.DeleteDirectoryResilient(_tempDir);
+
+    private sealed class FakeDeployHost : IDeployHost
+    {
+        public DeployGitSnapshot Snapshot { get; set; } = new("4dc7ddab", [], null);
+        public string? WakeError { get; set; }
+        public int WakeCalls { get; private set; }
+        /// <summary>Жив ли агент: занятый мьютекс Global\ccs-deploy = ехать некуда.</summary>
+        public bool AgentAlive { get; set; }
+        public int LockAttempts { get; private set; }
+
+        public Task<DeployGitSnapshot> GitSnapshotAsync(string repoDir, CancellationToken ct = default) =>
+            Task.FromResult(Snapshot);
+
+        public Task<string?> WakeAgentAsync(DeployOptions options, string deployId, CancellationToken ct = default)
+        {
+            WakeCalls++;
+            return Task.FromResult(WakeError);
+        }
+
+        // Настоящего именованного мьютекса/файлового лока в тестах не берём: на общем имени
+        // тесты цеплялись бы друг за друга (и за живой агент на машине разработчика)
+        public IDisposable? TryLockAgent(string releasesDir)
+        {
+            LockAttempts++;
+            return AgentAlive ? null : new Lease();
+        }
+
+        private sealed class Lease : IDisposable
+        {
+            public void Dispose() { }
+        }
+    }
+
+    private DeployService Build(bool enabled = true, Action<Dictionary<string, string?>>? tweak = null)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Deploy:Enabled"] = enabled ? "true" : "false",
+            ["Deploy:RepoDir"] = Path.Combine(_tempDir, "repo"),
+            ["Deploy:AgentDir"] = Path.Combine(_tempDir, "agent"),
+            ["Deploy:PublishDir"] = Path.Combine(_tempDir, "publish"),
+            ["Deploy:StagingDir"] = Path.Combine(_tempDir, "staging"),
+            ["Deploy:ReleasesDir"] = Path.Combine(_tempDir, "releases"),
+            ["Deploy:TaskName"] = "CCS-Deploy-Test",
+            // Явно Windows-ветка: CI на Linux, иначе IsLinux=OperatingSystem.IsLinux() увёл бы
+            // тесты в Linux-ветку Misconfiguration/отката. Linux-ветка — в DeployServiceLinuxTests.
+            ["Deploy:IsLinux"] = "false",
+        };
+        tweak?.Invoke(values);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        return new DeployService(config, _host, NullLogger<DeployService>.Instance);
+    }
+
+    private string StatePath => Path.Combine(_tempDir, "releases", DeployState.FileName);
+
+    private DeployState ReadJournal() =>
+        JsonSerializer.Deserialize<DeployState>(File.ReadAllText(StatePath), DeployState.Json)!;
+
+    // ---------- Белый список ref ----------
+
+    [Theory]
+    [InlineData("master")]
+    [InlineData("feature/deploy-from-chat")]
+    [InlineData("v1.2.3")]
+    [InlineData("release_2026.08")]
+    [InlineData("4dc7ddab")]
+    public void Ref_допустимые_проходят(string value) =>
+        DeployValidation.IsValidRef(value).Should().BeTrue();
+
+    [Theory]
+    // Попытка подсунуть аргумент агенту/git
+    [InlineData("--upload-pack=calc")]
+    [InlineData("-fmaster")]
+    // Обход пути
+    [InlineData("../../etc/passwd")]
+    [InlineData("master..dev")]
+    [InlineData("..")]
+    // Инъекция команды оболочки
+    [InlineData("master; rm -rf /")]
+    [InlineData("master && calc")]
+    [InlineData("master|calc")]
+    [InlineData("$(whoami)")]
+    [InlineData("master\ndeploy")]
+    [InlineData("master\"")]
+    [InlineData("master'")]
+    // Прочее вне белого списка
+    [InlineData("")]
+    [InlineData("/master")]
+    [InlineData("master/")]
+    [InlineData("master.lock")]
+    [InlineData("ветка")]
+    public void Ref_недопустимые_отвергаются(string value) =>
+        DeployValidation.IsValidRef(value).Should().BeFalse();
+
+    [Fact]
+    public void Ref_длиннее_ста_символов_отвергается()
+    {
+        DeployValidation.IsValidRef(new string('a', 100)).Should().BeTrue();
+        DeployValidation.IsValidRef(new string('a', 101)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Ref_с_обратным_слэшем_отвергается() =>
+        // Windows-путь в ref — тот же обход, только в другую сторону
+        DeployValidation.IsValidRef("..\\..\\windows\\system32").Should().BeFalse();
+
+    [Fact]
+    public async Task Заявка_с_плохим_ref_отклоняется_и_агента_не_будит()
+    {
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("--upload-pack=calc"), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.InvalidRef);
+        _host.WakeCalls.Should().Be(0);
+        File.Exists(StatePath).Should().BeFalse();
+    }
+
+    // ---------- Контур выключен ----------
+
+    [Fact]
+    public async Task Выключенный_контур_отказывает_и_не_трогает_планировщик()
+    {
+        var deploy = Build(enabled: false);
+
+        var start = await deploy.StartAsync(new DeployStartRequest("master"), "u1", null);
+        var rollback = await deploy.RollbackAsync(null, "u1", null);
+
+        start.Status.Should().Be(DeployStartStatus.Disabled);
+        rollback.Status.Should().Be(DeployStartStatus.Disabled);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Неполная_секция_отказывает_до_планировщика()
+    {
+        var deploy = Build(tweak: v => v["Deploy:ReleasesDir"] = "");
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.Misconfigured);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    // ---------- Guard'ы ----------
+
+    [Fact]
+    public async Task Идущая_выкатка_даёт_отказ_и_второго_агента_не_поднимает()
+    {
+        var deploy = Build();
+        var first = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+        first.Status.Should().Be(DeployStartStatus.Accepted);
+
+        var second = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+
+        second.Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        second.DeployId.Should().Be(first.DeployId);
+        _host.WakeCalls.Should().Be(1);
+    }
+
+    // Агент мог не приступить вовсе (задача планировщика не стартовала, сработал его guard):
+    // запись навсегда осталась бы в queued и отвечала 409 на всё следующее — до ручной правки
+    // журнала на боевой машине.
+    [Fact]
+    public async Task Протухшая_заявка_в_queued_закрывается_и_пропускает_следующую()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+                InitiatedBy = new DeployInitiator { UserId = "u1", SessionId = "s1" },
+            },
+        });
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+
+        result.Status.Should().Be(DeployStartStatus.Accepted);
+        var after = ReadJournal();
+        var stale = after.History.Should().ContainSingle(h => h.Id == "20260818-120000").Subject;
+        stale.Phase.Should().Be(DeployPhases.Failed);
+        stale.Result!.Ok.Should().BeFalse();
+        stale.Result.Message.Should().Contain("протухш");
+        // Призрак закрыт молча: доклад о нём никому не нужен
+        stale.Reported.Should().BeTrue();
+        deploy.PendingReport().Should().BeNull();
+        _host.WakeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Свежая_заявка_в_queued_остаётся_идущей()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddMinutes(-1),
+            },
+        });
+        var deploy = Build();
+
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        // Мьютекс даже не трогали: TTL не вышел
+        _host.LockAttempts.Should().Be(0);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Живой_агент_держит_мьютекс_протухшую_заявку_не_закрываем()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+            },
+        });
+        _host.AgentAlive = true;
+        var deploy = Build();
+
+        // Мьютекс занят — агент жив (пусть и медленный): его журнал не наш
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        _host.LockAttempts.Should().Be(1);
+        ReadJournal().Current!.Phase.Should().Be(DeployPhases.Queued);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Заявка_сдвинутая_агентом_по_TTL_не_закрывается()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                // building = агент работает; долгая сборка не повод считать заявку призраком
+                Phase = DeployPhases.Building,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+            },
+        });
+        var deploy = Build();
+
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        _host.LockAttempts.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Завершённая_выкатка_не_блокирует_следующую()
+    {
+        var deploy = Build();
+        var first = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+        // Агент дописал итог — с этого момента выкатка не «идёт»
+        var state = ReadJournal();
+        state.Current!.Phase = DeployPhases.Succeeded;
+        state.Current.Result = new DeployResult { Ok = true, Status = DeployPhases.Succeeded };
+        File.WriteAllText(StatePath, JsonSerializer.Serialize(state, DeployState.Json));
+
+        var second = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+
+        second.Status.Should().Be(DeployStartStatus.Accepted);
+        second.DeployId.Should().NotBe(first.DeployId);
+        // Прошлая запись уехала в историю, current — новая заявка
+        var after = ReadJournal();
+        after.History.Should().ContainSingle(h => h.Id == first.DeployId);
+        after.Current!.Id.Should().Be(second.DeployId);
+    }
+
+    [Fact]
+    public async Task Грязное_дерево_без_allowDirty_отказ_со_списком_файлов()
+    {
+        _host.Snapshot = new DeployGitSnapshot("4dc7ddab",
+            ["frontend/src/lib/design.ts", "docs/mockups/tablet-adaptive-proposal.md"], null);
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.DirtyTree);
+        result.DirtyFiles.Should().BeEquivalentTo(
+            ["frontend/src/lib/design.ts", "docs/mockups/tablet-adaptive-proposal.md"]);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Грязное_дерево_с_allowDirty_едет_и_пишет_sha_и_dirty()
+    {
+        _host.Snapshot = new DeployGitSnapshot("4dc7ddab", ["frontend/src/lib/design.ts"], null);
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(
+            new DeployStartRequest("master", AllowDirty: true), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.Accepted);
+        var current = ReadJournal().Current!;
+        current.Sha.Should().Be("4dc7ddab");
+        current.Dirty.Should().BeTrue();
+        current.DirtyFiles.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Git_не_отработал_ехать_вслепую_не_даём()
+    {
+        _host.Snapshot = new DeployGitSnapshot(null, [], "это не git-репозиторий");
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.GitFailed);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Планировщик_не_запустился_заявка_не_виснет_в_очереди()
+    {
+        _host.WakeError = "задача CCS-Deploy-Test не найдена";
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.LaunchFailed);
+        var current = ReadJournal().Current!;
+        current.Phase.Should().Be(DeployPhases.Failed);
+        current.Result!.Ok.Should().BeFalse();
+        // Заказчик получил ошибку синхронно — докладывать нечего
+        current.Reported.Should().BeTrue();
+
+        // И следующая попытка не упирается в призрак предыдущей
+        _host.WakeError = null;
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.Accepted);
+    }
+
+    // ---------- Откат ----------
+
+    [Fact]
+    public async Task Откат_без_снимков_отклоняется()
+    {
+        var deploy = Build();
+
+        var result = await deploy.RollbackAsync(null, "u1", null);
+
+        result.Status.Should().Be(DeployStartStatus.NoRelease);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Откат_на_известный_снимок_пишет_заявку_с_releaseId()
+    {
+        WriteJournal(new DeployState
+        {
+            Releases = [new DeployReleaseInfo { Id = "20260818-135500", Sha = "8e28cba9" }],
+        });
+        var deploy = Build();
+
+        var result = await deploy.RollbackAsync("20260818-135500", "u1", "s1");
+
+        result.Status.Should().Be(DeployStartStatus.Accepted);
+        var current = ReadJournal().Current!;
+        current.Kind.Should().Be(DeployKinds.Rollback);
+        current.Request.ReleaseId.Should().Be("20260818-135500");
+        _host.WakeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Откат_на_неизвестный_снимок_отклоняется()
+    {
+        WriteJournal(new DeployState
+        {
+            Releases = [new DeployReleaseInfo { Id = "20260818-135500" }],
+        });
+        var deploy = Build();
+
+        (await deploy.RollbackAsync("20260101-000000", "u1", null))
+            .Status.Should().Be(DeployStartStatus.NoRelease);
+        // Идентификатор релиза тоже под белым списком — путь к папке снимка строится по нему
+        (await deploy.RollbackAsync("../../windows", "u1", null))
+            .Status.Should().Be(DeployStartStatus.InvalidRef);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    // ---------- Журнал ----------
+
+    [Fact]
+    public async Task Заявка_ложится_в_журнал_в_формате_шва_с_агентом()
+    {
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(
+            new DeployStartRequest("master", SkipFrontend: true, SkipSandbox: true), "user-1", "sess-1");
+
+        // Читаем файл как это сделает агент — по именам полей camelCase
+        using var doc = JsonDocument.Parse(File.ReadAllText(StatePath));
+        var current = doc.RootElement.GetProperty("current");
+        current.GetProperty("id").GetString().Should().Be(result.DeployId);
+        current.GetProperty("phase").GetString().Should().Be("queued");
+        current.GetProperty("kind").GetString().Should().Be("deploy");
+        current.GetProperty("ref").GetString().Should().Be("master");
+        current.GetProperty("sha").GetString().Should().Be("4dc7ddab");
+        current.GetProperty("dirty").GetBoolean().Should().BeFalse();
+        current.GetProperty("reported").GetBoolean().Should().BeFalse();
+        current.GetProperty("initiatedBy").GetProperty("userId").GetString().Should().Be("user-1");
+        current.GetProperty("initiatedBy").GetProperty("sessionId").GetString().Should().Be("sess-1");
+        // Параметры заявки едут агенту журналом, а не командной строкой
+        var request = current.GetProperty("request");
+        request.GetProperty("skipFrontend").GetBoolean().Should().BeTrue();
+        request.GetProperty("skipSandbox").GetBoolean().Should().BeTrue();
+        request.GetProperty("allowDirty").GetBoolean().Should().BeFalse();
+        doc.RootElement.GetProperty("history").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void Журнал_агента_читается_целиком()
+    {
+        // Ровно тот вид, что записан в ADR-010 — включая незнакомые серверу поля
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, """
+        {
+          "current": {
+            "id": "20260818-141230",
+            "phase": "verifying",
+            "ref": "master", "sha": "4dc7ddab", "dirty": false,
+            "initiatedBy": { "userId": "u1", "sessionId": "s1" },
+            "steps": [ { "name": "frontend", "status": "ok", "ms": 41200 } ],
+            "result": null, "reported": false,
+            "unknownFutureField": 42
+          },
+          "history": [ { "id": "20260818-120000", "phase": "failed" } ],
+          "releases": [ { "id": "20260818-135500", "sha": "8e28cba9", "path": "C:/deploy/claude.releases/20260818-135500" } ]
+        }
+        """);
+
+        var state = Build().Load();
+
+        state.Current!.Id.Should().Be("20260818-141230");
+        state.Current.Phase.Should().Be(DeployPhases.Verifying);
+        state.Current.IsActive.Should().BeTrue();
+        state.Current.Steps.Should().ContainSingle(s => s.Name == "frontend" && s.Ms == 41200);
+        state.History.Should().ContainSingle(h => h.Id == "20260818-120000");
+        state.Releases.Should().ContainSingle(r => r.Sha == "8e28cba9");
+    }
+
+    // Агент ставит result.releaseId при откате (set-rollback-target → finalize rolled_back).
+    // Мутация: переименуй ReleaseId → ReleaseIdX в DeployResult (или releaseId → releaseIdX
+    // в JSON) — тест краснеет.
+    [Fact]
+    public void Итог_отката_с_releaseId_читается_и_сериализуется()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, """
+        {
+          "current": {
+            "id": "20261012-131230",
+            "kind": "rollback",
+            "phase": "rolled_back",
+            "ref": "master", "sha": "4dc7ddab", "dirty": false,
+            "initiatedBy": { "userId": "u1", "sessionId": "s1" },
+            "request": { "releaseId": "20261012-120000" },
+            "steps": [ { "name": "switch", "status": "ok", "ms": 5200 } ],
+            "result": {
+              "ok": false,
+              "status": "rolled_back",
+              "message": "health не сошёлся, откат на предыдущий снимок",
+              "releaseId": "20261012-120000",
+              "finishedAt": "2026-10-12T13:12:45.000Z"
+            },
+            "reported": true
+          },
+          "history": [],
+          "releases": [
+            { "id": "20261012-120000", "sha": "4dc7ddab", "path": "/opt/ccs/releases/20261012-120000" }
+          ]
+        }
+        """);
+
+        var state = Build().Load();
+
+        state.Current!.Id.Should().Be("20261012-131230");
+        state.Current.Phase.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.Should().NotBeNull("агент записал итог");
+        state.Current.Result!.Ok.Should().BeFalse();
+        state.Current.Result.Status.Should().Be(DeployPhases.RolledBack);
+        state.Current.Result.ReleaseId.Should().Be("20261012-120000",
+            "releaseId из result — на каком снимке остановились");
+        state.Current.Result.FinishedAt.Should().NotBeNull();
+
+        // Сериализация обратно: releaseId не теряется
+        var json = JsonSerializer.Serialize(state, DeployState.Json);
+        var reloaded = JsonSerializer.Deserialize<DeployState>(json, DeployState.Json)!;
+        reloaded.Current!.Result!.ReleaseId.Should().Be("20261012-120000");
+    }
+
+    [Fact]
+    public async Task Незадоложенный_итог_поднимается_и_гасится_отметкой()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-141230",
+                Phase = DeployPhases.RolledBack,
+                InitiatedBy = new DeployInitiator { UserId = "u1", SessionId = "s1" },
+                Result = new DeployResult { Ok = false, Status = DeployPhases.RolledBack, Message = "health не сошёлся" },
+            },
+        });
+        var deploy = Build();
+
+        var pending = deploy.PendingReport();
+        pending!.Id.Should().Be("20260818-141230");
+
+        await deploy.MarkReportedAsync(pending.Id);
+
+        deploy.PendingReport().Should().BeNull();
+    }
+
+    // Отметка «доложено» — ОТДЕЛЬНЫЙ файл: журнал в этот момент ещё может переписывать живой
+    // агент (result он ставит до конца работы), и общая запись двух процессов теряется.
+    [Fact]
+    public async Task Отметка_о_докладе_ложится_маркером_рядом_и_журнал_не_трогает()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-141230",
+                Phase = DeployPhases.Succeeded,
+                Result = new DeployResult { Ok = true, Status = DeployPhases.Succeeded },
+            },
+        });
+        var deploy = Build();
+        var before = File.ReadAllText(StatePath);
+
+        await deploy.MarkReportedAsync("20260818-141230");
+
+        File.Exists(Path.Combine(_tempDir, "releases", "reported-20260818-141230")).Should().BeTrue();
+        File.ReadAllText(StatePath).Should().Be(before);
+        deploy.PendingReport().Should().BeNull();
+    }
+
+    // Агент ставит result уже ПОСЛЕ подъёма нового сервера (старт → health-гейт до 90 с →
+    // ротация → запись итога), поэтому доклад ищет итог поллингом: на первом чтении журнала
+    // его нет, на последующих — есть.
+    [Fact]
+    public void Итог_дописанный_агентом_после_старта_поднимается_следующим_чтением()
+    {
+        var record = new DeployRecord
+        {
+            Id = "20260818-141230",
+            Phase = DeployPhases.Verifying,
+            InitiatedBy = new DeployInitiator { UserId = "u1", SessionId = "s1" },
+        };
+        WriteJournal(new DeployState { Current = record });
+        var deploy = Build();
+
+        deploy.PendingReport().Should().BeNull();
+
+        // Агент дописал журнал своей копией — сервер в него не лез
+        record.Phase = DeployPhases.Succeeded;
+        record.Result = new DeployResult { Ok = true, Status = DeployPhases.Succeeded };
+        WriteJournal(new DeployState { Current = record });
+
+        deploy.PendingReport()!.Id.Should().Be("20260818-141230");
+    }
+
+    [Fact]
+    public void Итог_старше_суток_не_докладывается()
+    {
+        var finished = new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Succeeded,
+                Result = new DeployResult
+                {
+                    Ok = true, Status = DeployPhases.Succeeded, FinishedAt = finished,
+                },
+            },
+        });
+        var deploy = Build();
+
+        // Через час после выкатки — новость, через месяц — дезинформация
+        deploy.PendingReport(finished.AddHours(1)).Should().NotBeNull();
+        deploy.PendingReport(finished.AddDays(30)).Should().BeNull();
+    }
+
+    [Fact]
+    public void Идущая_выкатка_докладом_не_считается()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord { Id = "20260818-141230", Phase = DeployPhases.Building },
+        });
+
+        Build().PendingReport().Should().BeNull();
+    }
+
+    [Fact]
+    public void Битый_журнал_не_роняет_чтение()
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, "{ это не json ");
+
+        var state = Build().Load();
+
+        state.Current.Should().BeNull();
+        state.History.Should().BeEmpty();
+    }
+
+    // ---------- Разбор git status ----------
+    // Парсер выехал в GitService.ParseDirty (волна 1 типизации commit-inspection) — тесты
+    // лежат в GitServiceTests рядом с самим методом.
+
+    private void WriteJournal(DeployState state)
+    {
+        Directory.CreateDirectory(Path.Combine(_tempDir, "releases"));
+        File.WriteAllText(StatePath, JsonSerializer.Serialize(state, DeployState.Json));
+    }
+}

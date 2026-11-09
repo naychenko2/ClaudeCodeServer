@@ -48,11 +48,11 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool flagOn = true, bool withContext = false)
+        bool withContext = false)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
-        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")));
+        Prefs = new VideoPrefsService(new VideoPrefsStore(Path.Combine(F.Dir, "prefs")), F.Broadcaster);
         Jobs = new VideoEditJobService([Engine], F.Workspace, F.JobThreads, NullLogger<VideoEditJobService>.Instance,
             Prefs, Spend, F.Broadcaster);
         Scenes = new VideoSceneService(F.JobThreads, Prefs);
@@ -68,18 +68,19 @@ internal sealed class AgentWorld : IDisposable
         var accessor = new Mock<IMcpSessionAccessor>();
         accessor.Setup(a => a.GetOwned(It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string id, string owner) => Sessions.GetValueOrDefault(id) is { } s && s.OwnerId == owner ? s : null);
-        var flags = new Mock<IFeatureFlagGate>();
-        flags.Setup(f => f.IsEnabled(It.IsAny<string>(), FeatureFlagKeys.VideoEditor)).Returns(flagOn);
         var projects = new Mock<IProjectManager>();
         projects.Setup(p => p.GetById(ProjectId)).Returns(F.Project);
         Gate.Setup(g => g.Deny(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>()))
             .Returns((string _, string _, string action) => delegatedDenied ? $"{action}: делегированный ход — отказ" : null);
 
-        Toolset = new VideoEditorToolset(accessor.Object, flags.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
+        Toolset = new VideoEditorToolset(accessor.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
             Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
-        var scopeGate = new VideoEditScopeGate(flags.Object, projects.Object, F.Directory.Object);
+        var access = new Mock<ClaudeHomeServer.Services.Access.IProjectAccess>();
+        access.Setup(a => a.Resolve(Owner, ProjectId, It.IsAny<ClaudeHomeServer.Services.Access.ProjectRight>()))
+            .Returns(new ClaudeHomeServer.Services.Access.RequestScope(Owner, Owner, ClaudeHomeServer.Services.Access.ProjectRole.Owner));
+        var scopeGate = new VideoEditScopeGate(projects.Object, F.Directory.Object, access.Object);
         Rest = new VideoEditorController(scopeGate, [Engine], Jobs, F.JobThreads, Prefs, F.Workspace, Scenes)
             { ControllerContext = UserContext() };
         var music = new FilmMusicComposer(F.Service, F.Side, F.JobThreads, projects.Object, NullLogger<FilmMusicComposer>.Instance);
@@ -150,6 +151,12 @@ internal sealed class AgentWorld : IDisposable
     // Подставной поставщик: сразу отдаёт клип (или, blocking, висит до отмены — для video_cancel)
     internal sealed class FakeEngine(string key, bool blocking) : IVideoEngine
     {
+        // «Макс» с упавшим увеличением: съёмка возвращается с пометкой, а повтор (RetryRefusal = null) отдаёт клип 1440p
+        public bool MarkUpscaleError { get; set; }
+        // null — повтор возможен; по умолчанию у модели увеличения нет
+        public string? RetryRefusal { get; set; } = VideoUpscaleRetryTexts.NoUpscale;
+        public int Retries;
+
         public string Key => key;
         public string Label => key;
         public string PriceUnit => VideoPriceUnits.Usd;
@@ -168,8 +175,21 @@ internal sealed class AgentWorld : IDisposable
             Interlocked.Increment(ref Runs);
             progress.Report(new VideoProgress(VideoStage.Queued, RemoteId: "r1", Accepted: true));
             if (blocking) await Task.Delay(Timeout.Infinite, ct);
-            return new VideoResult(VideoOutcome.Ok, new VideoFile([1, 2, 3], "video/mp4", ".mp4", req.DurationSec, true),
+            return new VideoResult(VideoOutcome.Ok,
+                new VideoFile([1, 2, 3], "video/mp4", ".mp4", req.DurationSec, true,
+                    MarkUpscaleError ? 1344 : null, MarkUpscaleError ? 768 : null,
+                    MarkUpscaleError ? "Увеличение до 1440p не удалось: oom" : null),
                 null, true, "r1", null);
+        }
+
+        public string? UpscaleRetryRefusal(string shotTicket) => RetryRefusal;
+
+        public Task<VideoResult> RetryUpscaleAsync(UpscaleRetryRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Retries);
+            progress.Report(new VideoProgress(VideoStage.Upscaling, RemoteId: "up1"));
+            return Task.FromResult(new VideoResult(VideoOutcome.Ok,
+                new VideoFile([9, 9], "video/mp4", ".mp4", 5, true, 2528, 1440), null, false, "up1", null));
         }
 
         public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(true);

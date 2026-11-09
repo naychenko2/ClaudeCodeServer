@@ -24,6 +24,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { isProjectTeam } from '../../lib/personaZone';
+import { TASKS_LOAD_INITIAL, settleTasks, heroCount, type TasksLoad } from './tasksLoad';
 
 // Командный центр проекта (①-L1, табовый): 3 вкладки — Обзор / Память команды / Активность-таймлайн.
 type Tab = 'overview' | 'memory' | 'activity';
@@ -67,7 +68,8 @@ export function TeamCommandCenter({
   const team = useMemo(() => personas.filter(p => isProjectTeam(p, project.id)), [personas, project.id]);
   const [events, setEvents] = useState<EventRow[] | null>(null);
   const [mem, setMem] = useState<TeamMemoryEntry[] | null>(null);
-  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [tasksLoad, setTasksLoad] = useState<TasksLoad>(TASKS_LOAD_INITIAL);
+  const tasks = tasksLoad.tasks;
   const [tab, setTab] = useState<Tab>(() => (sessionStorage.getItem('cc_team_tab') as Tab) || 'overview');
   const [filter, setFilter] = useState<FilterKey>('all');
   const [actorFilter, setActorFilter] = useState<string | null>(null);
@@ -97,7 +99,11 @@ export function TeamCommandCenter({
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
     catch { setEvents([]); }
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
-    try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
+    // Сбой не затирает список: иначе hero нарисовал бы ложные «0 в работе / 0 задач активно»
+    try {
+      const ok = await api.tasks.listByProject(project.id);
+      setTasksLoad(prev => settleTasks(prev, { ok }));
+    } catch (err) { setTasksLoad(prev => settleTasks(prev, { err })); }
   }, [project.id, limit]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка ленты с интервалом поллинга
   useEffect(() => { void refresh(); }, [refresh]);
@@ -222,6 +228,7 @@ export function TeamCommandCenter({
           {tab === 'overview' && (
             <OverviewPanel project={project} team={team} events={events} mem={mem} tasks={tasks}
               inFlight={inFlight} onlineSet={onlineSet} tasksActive={tasksActive} chatsToday={chatsToday}
+              tasksFailed={tasksLoad.failed} onRetryTasks={() => { void refresh(); }}
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
@@ -279,6 +286,7 @@ function LeadInviteRow({ project, isMobile, style }: { project: Project; isMobil
 function OverviewPanel(props: {
   project: Project; team: Persona[]; events: EventRow[] | null; mem: TeamMemoryEntry[] | null; tasks: Task[] | null;
   inFlight: Map<string, string>; onlineSet: Set<string>; tasksActive: number; chatsToday: number;
+  tasksFailed: boolean; onRetryTasks: () => void;
   personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
   onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onMenuOpen: () => void; stripe: string;
   isMobile: boolean;
@@ -286,7 +294,7 @@ function OverviewPanel(props: {
   // onMakeLead не задан — блок руководителя не рисуется (флаг выключен)
   leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
 }) {
-  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead } = props;
+  const { project, team, events, mem, tasks, tasksFailed, onRetryTasks, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead } = props;
   const specialtyCatalog = useSpecialtyCatalog();
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
@@ -322,11 +330,17 @@ function OverviewPanel(props: {
           <div style={{ marginLeft: 'auto', fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>{team.length} в команде</div>
         </div>
         <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 10 }}>
-          <StatusChip color={C.accent} dot>{inFlight.size} в работе</StatusChip>
+          <StatusChip color={C.accent} dot>{heroCount(tasks, inFlight.size)} в работе</StatusChip>
           <StatusChip color={C.success}>{onlineSet.size} на связи</StatusChip>
-          <StatusChip color={C.textSecondary}>{tasksActive} задач активно</StatusChip>
+          <StatusChip color={C.textSecondary}>{heroCount(tasks, tasksActive)} задач активно</StatusChip>
           <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
         </div>
+        {tasksFailed && (
+          <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 8, fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>
+            <span>Нет связи — {tasks === null ? 'задачи не загружены' : 'данные о задачах не обновлены'}.</span>
+            <Button size="xs" variant="ghostAccent" onClick={onRetryTasks}>Повторить</Button>
+          </div>
+        )}
         {/* Руководитель проекта — дефолт-персона чатов проекта; смена через меню
             (фича default-personas-onboarding) */}
         {onMakeLead && (

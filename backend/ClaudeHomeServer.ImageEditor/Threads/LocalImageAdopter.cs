@@ -1,5 +1,4 @@
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.ImageEditor;
 
@@ -8,12 +7,11 @@ namespace ClaudeHomeServer.Services.ImageEditor.Threads;
 // Агент позвал local_generate_image / local_edit_image / local_face_detail напрямую, мимо image_generate:
 // картинка лежит файлом в проекте, а ленте нечего показать, кроме голого вызова. Одна картинка — нить по
 // файлу с якорем в ленте; несколько (count > 1) — одна нить с вариантами-версиями, как у кнопки.
-// Выключенный модуль (флаг) и чужой чат — молчаливый отказ.
+// Чужой чат — молчаливый отказ.
 public sealed class LocalImageAdopter(
     ImageThreadService threads,
     ISessionDirectory directory,
-    IProjectManager projects,
-    IFeatureFlagGate flags) : ILocalMediaAdopter
+    IProjectManager projects) : ILocalMediaAdopter
 {
     public const int MaxThreadsPerJob = 4;
     private const long MaxFileBytes = 100L * 1024 * 1024;
@@ -24,7 +22,6 @@ public sealed class LocalImageAdopter(
             .Where(f => f.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
             .Take(MaxThreadsPerJob).ToList();
         if (files.Count == 0) return;
-        if (!flags.IsEnabled(adoption.OwnerId, FeatureFlagKeys.ImageEditor)) return;
         if (directory.GetById(adoption.SessionId) is not { } session || session.ProjectId != adoption.ProjectId) return;
         if (directory.ResolveOwnerId(session) != adoption.OwnerId) return;
         if (projects.GetById(adoption.ProjectId) is not { } project || project.OwnerId != adoption.OwnerId) return;

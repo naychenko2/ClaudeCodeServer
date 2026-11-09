@@ -87,7 +87,8 @@ describe('запуск съёмки по ревизии контекста', () 
   it('без параметров хоста берутся настройки сцены', async () => {
     applyScene();
     await run('shoot');
-    expect(quoted[0]).toMatchObject({ count: 2, durationSec: 8, aspect: '16:9' });
+    expect(quoted[0]).toMatchObject({ count: 2, durationSec: 8 });
+    expect(quoted[0].aspect).toBeUndefined();
   });
 
   it('сцена пропала (контекст сменился) — запуск отказывает без запроса', async () => {

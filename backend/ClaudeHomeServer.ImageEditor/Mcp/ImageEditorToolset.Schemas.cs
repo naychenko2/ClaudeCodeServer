@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Services.ImageEditor.Faces;
 using ClaudeHomeServer.Services.Mcp.Http;
 
 namespace ClaudeHomeServer.Services.ImageEditor.Mcp;
@@ -19,6 +20,8 @@ public sealed partial class ImageEditorToolset
     public const string ToolFocus = "image_focus";
     public const string ToolNew = "image_new";
     public const string ToolGenerate = "image_generate";
+    // Имя с запасом от image_focus, чтобы LLM их не путала (правило про однокоренные имена)
+    public const string ToolFindFaces = "image_find_faces";
     public const string ToolSuggestPrompt = "image_suggest_prompt";
     public const string ToolCancel = "image_cancel";
 
@@ -27,7 +30,9 @@ public sealed partial class ImageEditorToolset
     // Операции, берущие образцы-референсы (контекст чата): у остальных образцов нет
     internal static readonly string[] RefOps = ["generate", "edit", "inpaint"];
 
-    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces"];
+    internal static readonly string[] Ops = ["generate", "edit", "inpaint", "outpaint", "removeBackground", "upscale", "enhanceFaces", "crop"];
+    private static readonly string[] Qualities = ["standard", "high", "max"];
+    private static readonly string[] Anchors = ["left", "center", "right", "top", "bottom"];
     private static readonly string[] Roles = ["character", "style", "object"];
 
     private static JsonArray StrEnum(params string[] values)
@@ -125,13 +130,68 @@ public sealed partial class ImageEditorToolset
                 },
                 ["character"] = Str("Персонаж проекта (slug папки characters/; только в чате проекта). "
                     + "Не передан — персонаж из контекста чата, пустая строка — без персонажа. " + NotWithoutAsk),
+                ["face"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["minimum"] = 1,
+                    ["description"] = "Номер лица из image_find_faces, на которое подставить персонажа. Только вместе с character, "
+                        + "только для локальных моделей (provider local). Маску строит сервер, свою не передавай. "
+                        + "Персонаж из строки контекста на чужое лицо не подставляется сам — укажи character явно.",
+                },
+                // Несколько лиц за один запуск (ADR-028, этап 3): массив {face, character}; лимит — MaxFacePasses
+                ["faces"] = new JsonObject
+                {
+                    ["type"] = "array",
+                    ["minItems"] = 1,
+                    ["maxItems"] = FaceTargetRules.MaxFacePasses,
+                    ["description"] = "До двух лиц за один запуск, каждому — свой персонаж: face из image_find_faces и character. "
+                        + "Нельзя вместе с face/character. Только для локальных моделей (provider local).",
+                    ["items"] = Obj(new JsonObject
+                    {
+                        ["face"] = new JsonObject
+                        {
+                            ["type"] = "integer",
+                            ["minimum"] = 1,
+                            ["description"] = "Номер лица из image_find_faces",
+                        },
+                        ["character"] = Str("Персонаж проекта (slug), которого подставить на это лицо"),
+                    }, "face", "character"),
+                },
                 ["op"] = OneOf(Ops, "Операция: правка, фон, апскейл, дорисовка за края, улучшить лица (enhanceFaces, "
-                    + "только local); по умолчанию — правка, а у новой картинки без файла — generate"),
+                    + "только local); crop — обрезать картинку под пропорции aspect без ИИ и бесплатно (результат — новая версия); "
+                    + "по умолчанию — правка, а у новой картинки без файла — generate"),
+                // Формат (ADR-025). Схема статична: пропорции и ступени модели в enum не попадают, они в image_state
+                ["aspect"] = Str("Пропорции «W:H». У generate — формат новой картинки (запишется как формат проекта, человек увидит ✦); "
+                    + "у outpaint — до каких пропорций дорисовать; у crop — до каких обрезать. Допустимые пропорции модели — в image_state. "
+                    + NotWithoutAsk),
+                ["quality"] = OneOf(Qualities, "Ступень качества новой картинки: размер зависит от модели, ступени — в image_state. "
+                    + NotWithoutAsk),
+                ["width"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["description"] = "Точная ширина новой картинки в px, только вместе с height; сервер округлит под модель. " + NotWithoutAsk,
+                },
+                ["height"] = new JsonObject
+                {
+                    ["type"] = "integer",
+                    ["description"] = "Точная высота новой картинки в px, только вместе с width. " + NotWithoutAsk,
+                },
+                ["anchor"] = OneOf(Anchors, "Только у op crop: к какой стороне прижать рамку обрезки; по умолчанию center"),
                 ["matchSourceSize"] = new JsonObject
                 {
                     ["type"] = "boolean",
                     ["description"] = "Вернуть вариантам размер исходника, если пропорции совпадают",
                 },
+            }, "threadId")),
+
+        new(ToolFindFaces,
+            "Находит лица на картинке версии и возвращает их номера слева направо. Нужен перед image_generate "
+            + "с аргументом face. Ничего не меняет и бесплатен.",
+            Obj(new JsonObject
+            {
+                ["threadId"] = Str("Картинка этого чата (threadId из image_state)"),
+                ["versionId"] = Str("Версия картинки (versionId из image_state), на которой искать лица; "
+                    + "не указана — текущая"),
             }, "threadId")),
 
         new(ToolSuggestPrompt,

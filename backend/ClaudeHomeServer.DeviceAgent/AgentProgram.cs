@@ -332,10 +332,10 @@ public static class AgentProgram
 
         await using var control = new HubControlConnection(device, log);
 
-        // Руки (ADR-016 §7) — только на Windows: мост — Windows-программа, замок машины — именованный
-        // семафор, сигнал первого действия моста — именованное событие хода
+        // Руки (ADR-016 §7) — только на Windows: мост — Windows-программа, связь с ним — именованные
+        // события хода. Замок машины берёт сам мост при первом действии
         var hands = OperatingSystem.IsWindows()
-            ? new HandsRuntime(HandsComponent.ForThisAgent(), new NamedHandsMachineLock(), new HandsRegistry(), control,
+            ? new HandsRuntime(HandsComponent.ForThisAgent(), new HandsRegistry(), control,
                 paths.BrowserProfilesRoot, new NamedHandsActivityEvents())
             : null;
 

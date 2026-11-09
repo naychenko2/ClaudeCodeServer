@@ -19,15 +19,21 @@ public class MemoryDifyDebouncerTests
         debouncer.Schedule("before", () => fired.TrySetResult());
         debouncer.Dispose();
 
-        // Пауза с запасом больше дебаунса (негативное условие — флако-безопасно):
-        // живой таймер успел бы сработать и на самом медленном раннере
-        await Task.Delay(TimeSpan.FromSeconds(1));
-        fired.Task.IsCompleted.Should().BeFalse("Dispose освободил запланированный таймер");
-
         // Расписание после Dispose — no-op, новый таймер не заводится
         var late = new TaskCompletionSource();
         debouncer.Schedule("after", () => late.TrySetResult());
-        await Task.Delay(TimeSpan.FromSeconds(1));
+
+        // Негативное условие меряется сигналом, а не паузой: живой «часовой» дебаунсер того же
+        // класса с интервалом в 3× проверяемого. Его срабатывание значит, что окно дебаунса
+        // прошло и механизм таймеров работает; живой таймер «before» (50 мс) сработал бы раньше
+        // него — поэтому проверка после сигнала не «слишком рано», а после срока обеих записей.
+        // Таймаут сигнала — красный, как у любого ожидания.
+        var window = new TaskCompletionSource();
+        using var ticker = new MemoryDifyDebouncer(debounce * 3);
+        ticker.Schedule("clock", () => window.TrySetResult());
+        await window.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        fired.Task.IsCompleted.Should().BeFalse("Dispose освободил запланированный таймер");
         late.Task.IsCompleted.Should().BeFalse("Schedule после Dispose не заводит новых таймеров");
     }
 }

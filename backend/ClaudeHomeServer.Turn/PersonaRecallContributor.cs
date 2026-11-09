@@ -8,7 +8,7 @@ using ClaudeHomeServer.Services.Memory;
 namespace ClaudeHomeServer.Services.Turn;
 
 // Auto-recall долгой памяти персоны (F3): релевантные записи памяти по тексту хода +
-// (опционально, при включённом change-dossiers-recall и проектном чате) паспорта
+// (опционально, в проектном чате) паспорта
 // изменений как ОТДЕЛЬНАЯ секция dossier-recall. Гейт один и тот же (MemoryMcp != null),
 // поэтому обе секции выезжают из одного контрибьютора: раздельные промптеры плодили
 // бы дубль флагов и риск потери одного из них.
@@ -27,7 +27,6 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
     // на Dossiers.DossierRecallService (её держали только ради проверки на null).
     // Флаги — IFeatureFlagGate (Composition), история — IChatHistoryLoader.
     private readonly IPersonaRecallSource _recall;
-    private readonly IFeatureFlagGate _flags;
     private readonly IChatHistoryLoader _history;
     private readonly IProjectManager _projects;
     private readonly IConfiguration _config;
@@ -40,14 +39,12 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
 
     public PersonaRecallContributor(
         IPersonaRecallSource recall,
-        IFeatureFlagGate flags,
         IChatHistoryLoader history,
         IProjectManager projects,
         IConfiguration config,
         ILogger<PersonaRecallContributor> log)
     {
         _recall = recall;
-        _flags = flags;
         _history = history;
         _projects = projects;
         _config = config;
@@ -81,11 +78,15 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
         {
             var session = sessionContext.Session;
 
+            // S2a-4 (разрез И.3, решение 29.10): в узкой рамке общего проекта личная часть блока
+            // памяти не строится вовсе — личная память владельца и его глобальных персон в
+            // подборку не попадает; из этого контрибьютора остаётся только досье проекта.
+            var narrow = sessionContext.Frame == ClaudeHomeServer.Services.Access.TurnFrameKind.Narrow;
+
             // Контекст паспортов (ADR-004 §5): проект чата + якоря + текст хода. null —
-            // вне проектного контекста (нет ProjectId у сессии) или выключен флаг.
+            // вне проектного контекста (нет ProjectId у сессии).
             Dossiers.DossierRecallRequest? dossier = null;
-            if (_recall.DossierRecallAvailable && sessionContext.ServerContent && session.ProjectId is { } dossierProjectId
-                && _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.ChangeDossiersRecall))
+            if (_recall.DossierRecallAvailable && sessionContext.ServerContent && session.ProjectId is { } dossierProjectId)
             {
                 var prevTurnFiles = await LastTurnChangedFilesAsync(session);
                 dossier = new Dossiers.DossierRecallRequest(
@@ -96,13 +97,11 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     turnText);
             }
 
-            // Выделение досье в свою секцию (план «Секции промптов» этап 3) — под тем же
-            // флагом, что и prompt-sections (единый dark launch). Выключен — досье остаётся
-            // внутри recall-memory, как до фичи.
-            var splitDossier = _flags.IsEnabled(sessionContext.OwnerId, FeatureFlagKeys.SpecialtyPromptSections);
+            // Досье выделяется в свою секцию (план «Секции промптов» этап 3).
             var recallTask = _recall.BuildRecallAsync(
                 sessionContext.OwnerId, sessionContext.Persona.Id, query,
-                topK, minScore, dossier, splitDossier, session.ProjectId);
+                topK, minScore, dossier, splitDossier: true, session.ProjectId,
+                personalMemory: !narrow);
             var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
             if (completed != recallTask) return null;
             var recall = await recallTask;
@@ -115,16 +114,19 @@ public sealed class PersonaRecallContributor : IPromptSectionContributor
                     $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                 .ToList();
 
-            // Селекция секций: основной блок всегда идёт; dossier-блок — только когда
-            // выделен (splitDossier=true) и непустой, иначе секция не добавляется.
-            var sections = new List<PromptSection>
+            // Селекция секций: в широкой рамке основной блок идёт всегда; dossier-блок — только
+            // непустой. В узкой рамке (S2a-4) основной блока нет вовсе: личной подложки в нём не
+            // остаётся, и пустая секция только заняла бы место подборки; одна dossier-секция.
+            var sections = new List<PromptSection>();
+            if (!narrow)
             {
-                new(Key, recall.Text ?? string.Empty),
-            };
-            if (splitDossier && !string.IsNullOrWhiteSpace(recall.DossierText))
+                sections.Add(new(Key, recall.Text ?? string.Empty));
+            }
+            if (!string.IsNullOrWhiteSpace(recall.DossierText))
             {
                 sections.Add(new PromptSection("dossier-recall", recall.DossierText!));
             }
+            if (sections.Count == 0) return null;
             return new PromptSectionContribution(sections, items);
         }
         catch (Exception ex)

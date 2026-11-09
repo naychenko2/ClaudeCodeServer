@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.DeviceAgent.Exec;
 using ClaudeHomeServer.DeviceAgent.Sidecar;
 using ClaudeHomeServer.Protocol;
@@ -104,6 +105,38 @@ public class SidecarTests
         sent.Content!.Headers.ContentType!.MediaType.Should().Be("application/json");
     }
 
+    [Fact]
+    public async Task Ocr_уходит_в_шлюз_хода_с_токеном_устройства_и_хода_а_авторизация_CLI_выбрасывается()
+    {
+        var gateway = new FakeGateway(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"text":"страница"}""", Encoding.UTF8, "application/json"),
+        }));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-turn-9", TurnToken));
+        await using var _h = host;
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{host.Url}/t/{key}/ocr/page")
+        {
+            Content = new StringContent("""{"image":"aGk="}""", Encoding.UTF8, "application/json"),
+        };
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", CliEnvironment.AuthPlaceholder);
+        request.Headers.Add("x-api-key", "cli-key");
+        using var response = await Client().SendAsync(request);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await response.Content.ReadAsStringAsync()).Should().Be("""{"text":"страница"}""");
+
+        var (sent, body) = gateway.Seen.Single();
+        sent.RequestUri!.ToString().Should().Be("https://server.example/gw/t/gw-turn-9/ocr/page");
+        sent.Method.Should().Be(HttpMethod.Post);
+        body.Should().Be("""{"image":"aGk="}""");
+        sent.Headers.GetValues("Authorization").Should().Equal("Device " + DeviceToken);
+        sent.Headers.GetValues("X-Turn-Token").Should().Equal(TurnToken);
+        sent.Headers.GetValues("X-Device-Fingerprint").Should().Equal("fp-abc");
+        sent.Headers.Contains("x-api-key").Should().BeFalse();
+        sent.Content!.Headers.ContentType!.MediaType.Should().Be("application/json");
+    }
+
     [Theory]
     [InlineData("GET")]
     [InlineData("DELETE")]
@@ -141,6 +174,39 @@ public class SidecarTests
         unknown.StatusCode.Should().Be(HttpStatusCode.NotFound);
         bad.StatusCode.Should().Be(HttpStatusCode.NotFound);
         missing.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        gateway.Seen.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Неизвестный_сегмент_маршрута_получает_404_без_похода_на_сервер()
+    {
+        var gateway = new FakeGateway(_ => Task.FromResult(new HttpResponseMessage()));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-1", TurnToken));
+        await using var _h = host;
+
+        using var response = await Client().GetAsync($"{host.Url}/t/{key}/bogus/page");
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        gateway.Seen.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Тело_ocr_больше_потолка_получает_413_без_чтения()
+    {
+        var gateway = new FakeGateway(_ => Task.FromResult(new HttpResponseMessage()));
+        var (host, _, key) = await StartAsync(gateway, new DeviceExecGateway("gw-1", TurnToken));
+        await using var _h = host;
+
+        // Объявленная длина выше потолка, а тела почти нет: сайдкар обязан ответить 413 по
+        // Content-Length, не читая тело, — иначе тест зависнет на ожидании оставшихся 8 МБ
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, host.Port);
+        var stream = client.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes(
+            $"POST /t/{key}/ocr/page HTTP/1.1\r\nHost: 127.0.0.1:{host.Port}\r\n" +
+            $"Content-Length: {SidecarProxy.MaxOcrBodyBytes + 1}\r\n\r\n" + new string('x', 16)));
+        (await ReadAsync(stream, "\r\n\r\n")).Should().StartWith("HTTP/1.1 413");
+
         gateway.Seen.Should().BeEmpty();
     }
 
@@ -349,6 +415,20 @@ public class SidecarTests
         new DeviceExecGateway("gw-1", TurnToken).ToString().Should().NotContain(TurnToken);
         new DeviceExecControl(DeviceExecControlOps.Spawn, "t", null, new DeviceExecGateway("gw-1", TurnToken)).ToString()
             .Should().NotContain(TurnToken);
+    }
+
+    [Fact]
+    public void Мост_токена_хода_не_видит_адрес_сайдкара_несёт_ключ_агента()
+    {
+        var grants = new TurnGrants();
+        var key = grants.Register(new DeviceExecGateway("gw-1", TurnToken));
+        var url = DeviceSidecarRoutes.TurnUrl("http://127.0.0.1:5000", key);
+
+        // Мосту (и CLI) известен только этот адрес: токен живёт в памяти агента (TurnGrants),
+        // а сайдкар подставляет его в запрос серверу сам
+        url.Should().Be($"http://127.0.0.1:5000/t/{key}");
+        url.Should().NotContain(TurnToken);
+        Regex.IsMatch(key, "^[0-9a-f]{32}$").Should().BeTrue("ключ — 32 символа hex, не токен");
     }
 
     private static async Task<string> ReadAsync(NetworkStream stream, string until)

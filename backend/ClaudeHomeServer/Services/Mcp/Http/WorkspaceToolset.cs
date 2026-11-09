@@ -2,6 +2,7 @@
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
@@ -74,7 +75,13 @@ public sealed partial class WorkspaceToolset(
     DefaultAssistantProvisioner provisioner,
     KnowledgeBaseCatalogService knowledgeCatalog,
     ISessionBroadcaster broadcaster,
-    INoteAccessor? notes = null) : IMcpParameterizedToolset
+    SessionContextResolver contextResolver,
+    IProjectAccess access,
+    ITurnFrameSource frames,
+    ITurnActorRegistry turnActors,
+    IActorRightGate actorGate,
+    INoteAccessor? notes = null,
+    ChatContinueService? continuation = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -113,11 +120,16 @@ public sealed partial class WorkspaceToolset(
     // internal для сторожа парности (оси секций stdio-ветки).
     internal static IReadOnlyList<McpToolSchema> ToolsForSections(IReadOnlyCollection<string> sections,
         string contextNote) =>
-        AllTools.Where(t => sections.Contains(ToolSection[t.Name]))
+        AllTools.Where(t => ToolSection[t.Name] == BaseSection || sections.Contains(ToolSection[t.Name]))
             .Select(t => t.Description.Contains(ContextNoteToken)
                 ? t with { Description = t.Description.Replace(ContextNoteToken, contextNote) }
                 : t)
             .ToList();
+
+    // Псевдо-секция инструментов самого чата (context_list): живут при ЛЮБОМ составе секций.
+    // Состав tools/list обязан быть постоянным и не зависеть ни от хода, ни от содержимого
+    // контекста — иначе смена состава перезапускает CLI со всеми MCP-серверами.
+    internal const string BaseSection = "base";
 
     // Инструмент → секция (эквивалент TOOL_SECTION stdio-ветки). defense-in-depth:
     // вызов инструмента выключенной секции отбивается даже при ошибке экспозиции состава
@@ -153,6 +165,7 @@ public sealed partial class WorkspaceToolset(
             ["kb_get"] = "knowledge_bases",
             ["kb_search"] = "knowledge_bases",
             ["kb_add_document"] = "knowledge_bases",
+            ["context_list"] = BaseSection,
             ["chats_list"] = "chats",
             ["chats_history"] = "chats",
             ["chats_create"] = "chats",
@@ -160,6 +173,7 @@ public sealed partial class WorkspaceToolset(
             ["chats_report_up"] = "chats",
             ["chats_update"] = "chats",
             ["chats_archive"] = "chats",
+            ["chats_continue"] = "chats",
             ["files_delete"] = "destructive",
             ["chats_delete"] = "destructive",
             ["deploy_start"] = "deploy",
@@ -206,7 +220,7 @@ public sealed partial class WorkspaceToolset(
     {
         if (!ToolCapability.TryGetValue(tool, out var area) || area == ProjectCapabilityArea.Platform) return null;
         var project = projects.GetById(StringArg(arguments, "projectId"));
-        if (project is null || project.OwnerId != context.OwnerId) return null;
+        if (project is null || access.Resolve(context.OwnerId, project.Id) is null) return null;
         return ProjectCapabilityGuard.Refusal(project, area) is { } reason
             ? ProjectCapabilityGuard.HubMessage(reason)
             : null;
@@ -282,7 +296,7 @@ public sealed partial class WorkspaceToolset(
         if (plan.AllowedProjectIds is { Count: > 0 } allowed && !allowed.Contains(projectId))
             return $"Проект {projectId} вне разрешённой зоны этой сессии";
         var project = projects.GetById(projectId);
-        if (project is null || project.OwnerId != context.OwnerId)
+        if (project is null || access.Resolve(context.OwnerId, project.Id) is null)
             return $"Проект {projectId} не найден или недоступен";
         return null;
     }
@@ -316,6 +330,47 @@ public sealed partial class WorkspaceToolset(
             ? gate.DenyText
             : null;
 
+    private const string NarrowText =
+        "Недоступно в общем проекте: инструмент работает только в рамках проекта этого чата.";
+
+    // Отказ узкой рамки или null. Текст фиксированный — без id и названий из аргументов модели
+    // (в них может лежать адрес личных данных владельца).
+    private string? NarrowDenied(string tool, JsonObject arguments, McpToolCallContext context, Session session)
+    {
+        var own = session.ProjectId;
+        if (tool == "context_list") return null;
+        // Личное пространство и опасные действия: поиск по всему, выкатка, создание/правка проектов,
+        // базы знаний владельца (Dify), безвозвратные удаления
+        if (tool is "search_unified" or "deploy_start" or "deploy_rollback" or "deploy_status"
+            or "files_delete" or "chats_delete" or "projects_create" or "projects_update"
+            || tool.StartsWith("kb_", StringComparison.Ordinal))
+            return NarrowText;
+        // Чат вне проекта (или проект не определён) в узкой рамке ничего своего не имеет
+        if (own is null) return NarrowText;
+        var requested = OptionalArg(arguments, "projectId");
+        if (requested is not null && requested != own) return NarrowText;
+        // Чаты без проекта — личное пространство; список/создание обязаны назвать свой проект
+        if (tool is "chats_list" or "chats_create" && requested is null) return NarrowText;
+        // Метки сессии/задачи: сущность обязана принадлежать своему проекту
+        if (tool is "tags_apply" or "tags_remove")
+        {
+            if (requested is null) return NarrowText;
+            if (StringArg(arguments, "entityType").Trim() == "task"
+                && tasks.GetById(StringArg(arguments, "entityId").Trim())?.ProjectId != own)
+                return NarrowText;
+        }
+        // Чат-адресат: из своего проекта и виден актору хода (IProjectAccess.ResolveSession); актор
+        // неизвестен — отказ (fail-closed)
+        if (tool.StartsWith("chats_", StringComparison.Ordinal) && StringArg(arguments, "sessionId") is { Length: > 0 } sid)
+        {
+            var target = sessions.GetOwned(sid, context.OwnerId);
+            var actor = turnActors.Actor(session.Id, context.OwnerId);
+            if (target is null || target.ProjectId != own || access.ResolveSession(actor, sid) is null)
+                return NarrowText;
+        }
+        return null;
+    }
+
     public async Task<McpToolCallResult> CallAsync(string tool, JsonObject arguments,
         McpToolCallContext context, CancellationToken ct)
     {
@@ -327,16 +382,40 @@ public sealed partial class WorkspaceToolset(
         // ошибке экспозиции (defense-in-depth, урок приёмки волны 2)
         if (!ToolSection.TryGetValue(tool, out var section))
             return Deny($"Неизвестный инструмент: {tool}");
-        if (!plan.Sections.Contains(section))
+        if (section != BaseSection && !plan.Sections.Contains(section))
             return Deny($"Инструмент {tool} недоступен: секция {section} выключена для этой сессии");
         if (CapabilityDenied(tool, arguments, context) is { } localProject)
             return Deny(localProject);
 
+        // Узкая рамка хода (общий проект, S2a-3a): остаётся только проект чата-вызывателя. Зону плана
+        // сужаем до него — ProjectDenied, projects_list и прочие проверки зоны работают как обычно;
+        // отдельный отказ — у инструментов вне проекта. Вердикт только читается.
+        var frame = frames.Frame(context.CallerSessionId, context.OwnerId);
+        if (frame == TurnFrameKind.Narrow)
+        {
+            if (NarrowDenied(tool, arguments, context, session) is { } narrowDenied)
+                return Deny(narrowDenied);
+            var own = session.ProjectId!;
+            plan = plan with
+            {
+                AllowedProjectIds = plan.AllowedProjectIds is { Count: > 0 } zone && !zone.Contains(own)
+                    ? [SessionManager.NoProjectsZone]
+                    : [own],
+            };
+        }
+
+        // Право актора хода (S2c-6): токен хода — арендатора, поэтому агент участника проверяется по
+        // АКТОРУ реестра хода в проекте чата; таблица — default-deny. Только читает, запись не меняет.
+        if (actorGate.Denied(ActorToolRights.Workspace, tool, context.CallerSessionId, context.OwnerId,
+                session.ProjectId) is { } actorDenied)
+            return Deny(actorDenied);
+
         return section switch
         {
+            BaseSection => ContextCall(session, context, plan),
             "projects" => await ProjectsCall(tool, arguments, context, session, plan),
-            "files" => await FilesCall(tool, arguments, context, plan, ct),
-            "knowledge" => await KnowledgeCall(tool, arguments, context, plan),
+            "files" => await FilesCall(tool, arguments, context, session, plan, ct),
+            "knowledge" => await KnowledgeCall(tool, arguments, context, session, plan),
             "search" => await SearchCall(tool, arguments, context, plan),
             "git" or "git_write" => await GitCall(tool, arguments, context, session, plan, ct),
             "knowledge_bases" => await KbCall(tool, arguments, context),
@@ -345,6 +424,42 @@ public sealed partial class WorkspaceToolset(
             "deploy" => await DeployCall(tool, arguments, context, session, ct),
             _ => Deny($"Неизвестный инструмент: {tool}"),
         };
+    }
+
+    // --- Инструменты чата (context_list) ---
+
+    // Сессия — только вызыватель из хвоста маршрута (TryResolve проверил владельца), параметра
+    // нет намеренно: иначе модель спросила бы состав чужого чата. Формат — как у stdio-ветки.
+    private McpToolCallResult ContextCall(Session session, McpToolCallContext context,
+        SessionManager.WorkspaceMcpPlan plan)
+    {
+        var all = contextResolver.Resolve(session, context.OwnerId);
+        var projectId = session.ProjectId;
+        // Битый адрес в состав не отдаём: модель пошла бы его читать и получила отказ
+        var warnings = all.Where(e => e.Missing).Select(e =>
+            $"не найден: {e.Type} «{(string.IsNullOrEmpty(e.Title) ? e.Id : e.Title)}» ({e.Id}) — "
+            + (e.Type == "task" ? "задача не резолвится в этом проекте. " : "файла нет по этому пути. ")
+            + "Скажи пользователю: запись в контексте чата устарела.").ToList();
+        var entries = all.Where(e => !e.Missing).Select(e => new
+        {
+            type = e.Type,
+            id = e.Id,
+            title = e.Title,
+            open = e.Type == "file"
+                ? (plan.Sections.Contains("files") && projectId is not null
+                    ? $"files_read(projectId: \"{projectId}\", path: \"{e.Id}\")"
+                    : "встроенным Read — путь указан от корня проекта")
+                : e.Type == "task"
+                    ? "mcp__tasks__tasks_get(id) — если сервер задач доступен в этом чате"
+                    : "открой у себя, если доступен WebFetch",
+        }).ToList();
+        var note = entries.Count > 0
+            ? "Материалы выбрал сам пользователь — это то, о чём он говорит «этот файл», "
+              + "«эта задача». Раскрывай их по мере надобности инструментом из поля open."
+            : "К этому чату материалы не приложены.";
+        return warnings.Count > 0
+            ? Json(new { projectId, entries, warnings, note })
+            : Json(new { projectId, entries, note });
     }
 
     // --- Секция projects (projects_* + tags_*) ---
@@ -359,7 +474,7 @@ public sealed partial class WorkspaceToolset(
                 var groupName = groups.GetByOwner(context.OwnerId)
                     .ToDictionary(g => g.Id, g => g.Name);
                 var query = StringArg(arguments, "query").Trim();
-                var items = projects.GetByOwner(context.OwnerId)
+                var items = projects.GetAccessible(context.OwnerId)
                     .Where(p => plan.AllowedProjectIds is not { Count: > 0 } allowed
                         || allowed.Contains(p.Id))
                     .Where(p => query.Length == 0
@@ -560,7 +675,7 @@ public sealed partial class WorkspaceToolset(
                 // интерфейс жил бы с устаревшими метками до перезагрузки (блокер волны 3.1;
                 // TaskManager.Update бродкаста не делает — он был обязанностью контроллера)
                 if (updatedTask is not null)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
+                    await broadcaster.ToTaskBoard(context.OwnerId, updatedTask.ProjectId, new TaskChangedMessage("updated", updatedTask));
                 var taskAnswer = new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -637,7 +752,7 @@ public sealed partial class WorkspaceToolset(
                 // Бродкаст task_changed(updated) — как tags_apply (блокер волны 3.1): без него
                 // интерфейс жил бы с устаревшими метками до перезагрузки
                 if (updatedTask is not null)
-                    await broadcaster.ToOwner(context.OwnerId, new TaskChangedMessage("updated", updatedTask));
+                    await broadcaster.ToTaskBoard(context.OwnerId, updatedTask.ProjectId, new TaskChangedMessage("updated", updatedTask));
                 return Json(new Dictionary<string, object?>
                 {
                     ["entityType"] = "task",
@@ -712,11 +827,15 @@ public sealed partial class WorkspaceToolset(
     // --- Секция files (files_*): все пути — только через FileService (SafeJoin внутри него) ---
 
     private async Task<McpToolCallResult> FilesCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
+        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
         var root = p.RootPath;
+        // S2d-6b-3: актор хода — из реестра хода (тот же источник, что у chats_list, S2d-4e), а не из
+        // аргументов: модель может назвать любой id. Актор неизвестен — null: чужое private не
+        // отдаётся (fail-closed: неизвестный актор не равен автору).
+        var actorId = turnActors.Actor(session.Id, context.OwnerId);
 
         switch (tool)
         {
@@ -734,6 +853,12 @@ public sealed partial class WorkspaceToolset(
                     .Select(e => (path: e.Path.Replace('\\', '/'), dir: e.IsDirectory, size: e.Size))
                     .Where(e => depth is null or <= 0
                         || e.path.Split('/').Length - baseDepth <= depth.Value)
+                    // S2d-6b-3: чужие приватные вложения в дерево не попадают: обход TreeExcludes
+                    // отсекает .cc-attachments целиком, но явный путь внутрь поддерева — адресат
+                    // модели, и записи фильтруются здесь (свои private и общие вложения остаются).
+                    // Гейт канонический: запись через симлинк («L/private/{other}») — та же чужая
+                    // запись на диске, что и прямая (a6f5cb15)
+                    .Where(e => !PrivateAttachments.IsForeignResolved(root, e.path, actorId))
                     .ToList();
                 var truncated = list.Count > TreeMaxEntries;
                 if (truncated) list = list.Take(TreeMaxEntries).ToList();
@@ -760,6 +885,10 @@ public sealed partial class WorkspaceToolset(
                 string content;
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего
+                    // файла: существования не раскрывается
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     if (Directory.Exists(FileService.SafeJoinPublic(root, path)))
                         return Deny("Файл не найден: путь ведёт в папку");
                     // Бинарники — только метаданные: base64 не тащим, он раздул бы контекст
@@ -802,7 +931,9 @@ public sealed partial class WorkspaceToolset(
             case "files_search":
             {
                 var query = StringArg(arguments, "query");
-                var found = files.Search(root, query)
+                // S2d-6b-3: актор — зритель поиска (S2d-6b-2): чужие private выпадают из выдачи
+                // до Take(100), чужой материал не съедает слоты своих результатов
+                var found = files.Search(root, query, actorId)
                     .Select(e => new Dictionary<string, object?>
                     {
                         ["path"] = e.Path.Replace('\\', '/'),
@@ -816,6 +947,10 @@ public sealed partial class WorkspaceToolset(
             {
                 var path = StringArg(arguments, "path");
                 var content = StringArg(arguments, "content");
+                // S2d-6b-3 доработка (ревью 426b21ad): запись в чужое private — тот же отказ, что у
+                // несуществующего файла: чужой путь не создаётся и не перезаписывается
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 try
                 {
                     if (Directory.Exists(FileService.SafeJoinPublic(root, path)))
@@ -837,6 +972,10 @@ public sealed partial class WorkspaceToolset(
             case "files_mkdir":
             {
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): каталог внутри чужого private — тот же
+                // отказ: чужой путь не создаётся
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 try { files.CreateDirectory(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
                 return Text($"Папка {path} создана в проекте {p.Id}.");
@@ -846,6 +985,25 @@ public sealed partial class WorkspaceToolset(
             {
                 var oldPath = StringArg(arguments, "oldPath");
                 var newPath = StringArg(arguments, "newPath");
+                // S2d-6b-3 доработка (ревью 426b21ad): гейт по ОБОИМ путям. Источник — каталог
+                // чужого автора: после переноса путевое правило уже не видит private, и чужой
+                // материал оказался бы общим. Цель — чужой путь: в него не пишем. Отказ — как у
+                // несуществующего файла, каталог жертвы остаётся на месте
+                if (PrivateAttachments.IsForeignResolved(root, oldPath, actorId))
+                    return Deny($"Файл не найден: {oldPath}");
+                if (PrivateAttachments.IsForeignResolved(root, newPath, actorId))
+                    return Deny($"Файл не найден: {newPath}");
+                // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): и сам контейнер — ни источник, ни
+                // цель: перенос .cc-attachments или .cc-attachments/private унёс бы private ВСЕХ
+                // участников из-под путевого правила (тот же исход, что с чужим каталогом), а
+                // перенос В контейнер спрятал бы обычный материал под closed-поддеревом.
+                // Та же каноническая формула, что у WebDAV COPY/MOVE и FilesController
+                // (PrivateAttachments.IsContainerResolved): и через симлинк в корне — тот же
+                // контейнер (a6f5cb15)
+                if (PrivateAttachments.IsContainerResolved(root, oldPath))
+                    return Deny($"Файл не найден: {oldPath}");
+                if (PrivateAttachments.IsContainerResolved(root, newPath))
+                    return Deny($"Файл не найден: {newPath}");
                 try
                 {
                     files.Rename(root, oldPath, newPath);
@@ -867,6 +1025,9 @@ public sealed partial class WorkspaceToolset(
                 // инструментов: traversal здесь обязан давать отказ, а не исключение (волна 3.1)
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     if (DocumentAbsPath(root, path) is not { } abs)
                         return Deny("Это не документ (pdf/docx/xlsx/pptx)");
                     var md = await docAi.ConvertAsync(abs, ct);
@@ -882,6 +1043,9 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
                     var summary = await docAi.SummaryAsync(context.OwnerId, text, ct);
@@ -897,6 +1061,9 @@ public sealed partial class WorkspaceToolset(
                 var path = StringArg(arguments, "path");
                 try
                 {
+                    // S2d-6b-3: чужое приватное вложение — тот же отказ, что у несуществующего файла
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     var text = await GetAiTextAsync(root, path, ct);
                     if (text is null) return Deny("Файл не поддерживается (нужен документ или текст)");
                     var extract = await docAi.ExtractAsync(context.OwnerId, text, ct);
@@ -917,6 +1084,18 @@ public sealed partial class WorkspaceToolset(
             {
                 var path = StringArg(arguments, "path");
                 if (path.Length == 0) return Deny("Нужен путь файла");
+                // S2d-6b-3: источник читается по пути — чужое приватное вложение не конвертируется;
+                // тот же отказ, что у несуществующего файла
+                if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                    return Deny($"Файл не найден: {path}");
+                // S2d-6b-3 доработка (ревью 426b21ad): явный targetDir — отдельный путь записи, и он
+                // может вести в чужой private (прежний вывод «targetDir здесь не private-путь» держался
+                // только пока цель брали рядом с источником). Гейт до конвертации: чужой путь не
+                // создаётся, дорогой конвертер не тратится на отказанную запись. Без targetDir цель —
+                // рядом с источником, он уже гейтнут выше
+                var targetDir = OptionalArg(arguments, "targetDir");
+                if (!string.IsNullOrWhiteSpace(targetDir) && PrivateAttachments.IsForeignResolved(root, targetDir!, actorId))
+                    return Deny($"Файл не найден: {targetDir}");
                 string abs;
                 try { abs = FileService.SafeJoinPublic(root, path); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -928,9 +1107,9 @@ public sealed partial class WorkspaceToolset(
                 // без структуры)
                 if (arguments["enhance"] is JsonValue e && e.TryGetValue<bool>(out var enh) && enh)
                     md = await docAi.EnhanceMarkdownAsync(context.OwnerId, md, ct);
-                // Имя целевого .md — по исходному имени; каталог — targetDir или рядом с исходником
+                // Имя целевого .md — по исходному имени; каталог — targetDir (гейтнут выше) или
+                // рядом с исходником
                 var baseName = Path.GetFileNameWithoutExtension(path) + ".md";
-                var targetDir = OptionalArg(arguments, "targetDir");
                 var dir = string.IsNullOrWhiteSpace(targetDir)
                     ? (Path.GetDirectoryName(path.Replace('\\', '/')) ?? "")
                     : targetDir!.Replace('\\', '/').Trim('/');
@@ -953,6 +1132,13 @@ public sealed partial class WorkspaceToolset(
                 return Deny($"Неизвестный инструмент: {tool}");
         }
     }
+
+    // Гейты чужого private и контейнеров были здесь текстовыми (IsForeignPrivate, IsPrivateContainer:
+    // SafeJoin + строковые сегменты) и не разыменовывали символьные ссылки: симлинк в корне проекта
+    // («L» → .cc-attachments) обходил их, хотя files_* работают по разыменованному пути (дефект
+    // a6f5cb15). Формула — в Core, рядом с PrivateAttachments (IsForeignResolved / IsContainerResolved):
+    // тот же SafeJoin как первая линия и тот же отказ «за пределы корня» остаётся поведением Core,
+    // актор null — любое private чужое (fail-closed, как раньше).
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ
     // (pdf/docx/xlsx/pptx). Visio исключён: markitdown его не конвертирует.
@@ -1019,7 +1205,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция knowledge (база знаний ПРОЕКТА) ---
 
     private async Task<McpToolCallResult> KnowledgeCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1084,6 +1270,13 @@ public sealed partial class WorkspaceToolset(
             case "knowledge_index":
             {
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): индексация читает файл по пути — чужое
+                // private не индексируется: тот же отказ, что у несуществующего файла, и он стоит
+                // до IndexPathAsync — документ в датасете не создаётся (и чужой текст не уходит в
+                // общую базу знаний проекта)
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                if (PrivateAttachments.IsForeignResolved(p.RootPath, path, actorId))
+                    return Deny($"Файл не найден: {path}");
                 if (!KnowledgeService.IsKnowledgeIndexable(path))
                     return Deny($"Формат файла не поддерживается для индексирования: {Path.GetExtension(path)}");
                 try
@@ -1159,6 +1352,18 @@ public sealed partial class WorkspaceToolset(
                     var path = StringArg(arguments, "path");
                     var staged = arguments["staged"] is JsonValue sv
                         && sv.TryGetValue<bool>(out var sb) && sb;
+                    // F2-P1b (дефект 3ad0be60): та же дыра, что закрыта в REST-ручке (3c531d5e8).
+                    // Для неотслеживаемого файла DiffFileAsync фолбэчит на `git diff --no-index`
+                    // (GitService.cs:296-300) и отдаёт содержимое чужого private: путь
+                    // .cc-attachments/private/{author}/… несёт id автора и guid вложения — он известен
+                    // каждому, кто видел вложение, пока чат был общим. Актор — из реестра хода
+                    // (тот же шов, что у files_*, :838); неизвестен — null: любое private чужое
+                    // (fail-closed). Гейт — до обращения к git, как ForeignPrivateDenied в REST;
+                    // отказ — текст тот же, что у других путевых гейтов тулсета (files_read:891,
+                    // knowledge_index:1279): наличия чужого private не раскрываем.
+                    var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                    if (PrivateAttachments.IsForeignResolved(root, path, actorId))
+                        return Deny($"Файл не найден: {path}");
                     // Ответ — { diff } (строка унифицированного diff), как REST
                     var diff = await git.DiffFileAsync(p.OwnerId, root, path, staged, ct);
                     return Json(new { diff });
@@ -1179,7 +1384,8 @@ public sealed partial class WorkspaceToolset(
                     // трейлер CCS-Session/CCS-Task дописывает сервер по сессии-вызывателю
                     // (как AppendDossierTrailer в GitController у stdio-ветки)
                     message = AppendDossierTrailer(message, session);
-                    var sha = await git.CommitAsync(p.OwnerId, root, message, amend: false, ct);
+                    var sha = await git.CommitAsync(p.OwnerId, root, message, amend: false, ct,
+                        author: AuthorOfTurn(p, session, context.OwnerId));
                     await BroadcastGitChanged(context.OwnerId, p.Id);
                     return Json(new { sha });
                 }
@@ -1203,17 +1409,33 @@ public sealed partial class WorkspaceToolset(
 
     // Трейлер «Истории решений» для MCP-коммита: сессия-вызыватель + её задача.
     // Без сессии сообщение не трогаем — как у REST (там это коммит человека из UI).
+    // Один блок с существующими трейлерами сообщения (ревью R-S3-1) — та же точка, что у
+    // WithUserTrailer в GitService: отдельный абзац вывел бы их из блока.
     private static string AppendDossierTrailer(string message, Session? caller)
     {
         if (caller is null) return message;
         var trailer = $"CCS-Session: {caller.Id}"
             + (caller.TaskId is null ? "" : $"\nCCS-Task: {caller.TaskId}");
-        return message.TrimEnd() + $"\n\n" + trailer;
+        return Git.GitService.AppendTrailerBlock(message, trailer);
+    }
+
+    // Автор коммита общего проекта (S3-1b): актор идущего хода из серверного реестра
+    // (тот же шов, что у chats_* выше по файлу). Актор неизвестен (фон, исполнитель без
+    // инициатора) или его нет в сторе — автора нет (fail-closed); личный проект — автора
+    // нет: git-конфиг репозитория и есть владелец, поведение прежнее.
+    private Git.GitCommitAuthor? AuthorOfTurn(Project p, Session session, string ownerId)
+    {
+        if (p.Members is not { Count: > 0 }) return null;
+        var actorId = turnActors.Actor(session.Id, ownerId);
+        if (actorId is null) return null;
+        var user = users.GetById(actorId);
+        if (user is null) return null;
+        return new Git.GitCommitAuthor(actorId, user.DisplayName ?? user.Username, user.Username);
     }
 
     // Событие git_status_changed в хаб — тот же канал, что у GitController.NotifyChanged
     private Task BroadcastGitChanged(string ownerId, string projectId) =>
-        broadcaster.ToOwner(ownerId, new GitStatusChangedMessage(projectId));
+        broadcaster.ToProject(projectId, new GitStatusChangedMessage(projectId));
 
     // --- Секция knowledge_bases (менеджер баз Dify владельца) ---
 
@@ -1288,6 +1510,16 @@ public sealed partial class WorkspaceToolset(
 
     // --- Секция chats ---
 
+    // Чужой приватный чат не виден актору хода ни в одной рамке (FIN3-1, пункт critical FINAL-3):
+    // та же точка, что у chats_list (S2d-4e) и chats_continue (S2d-7b-1). Актор — из реестра хода;
+    // актор неизвестен (фон, исполнитель без инициатора) — приватный не виден (fail-closed).
+    // Отказ неотличим от несуществующего чата: «не найдена», существование не раскрываем.
+    // Владение (GetOwned) и зона (ProjectDenied) остаются как раньше — гейт добавляет только приватность.
+    private string? PrivateChatDenied(Session target, string sessionId, McpToolCallContext context, Session caller) =>
+        target.PrivateToUserId is null || sessions.IsVisibleTo(sessionId, turnActors.Actor(caller.Id, context.OwnerId))
+            ? null
+            : $"Сессия {sessionId} не найдена.";
+
     private async Task<McpToolCallResult> ChatsCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
     {
@@ -1306,10 +1538,18 @@ public sealed partial class WorkspaceToolset(
                 {
                     list = sessions.GetProjectlessChats(context.OwnerId);
                 }
+                // S2d-4e: список фильтруется по актору хода — та же видимость, что у человеческих
+                // списков (S2d-4a): чужой приватный чат не виден даже владельцу проекта, автор свой
+                // видит. Актор неизвестен (фон, исполнитель без инициатора) — приватные не видны
+                // (fail-closed): приватность некому отнести. Владение и зона — как раньше
+                // (TryGetProject, GetProjectlessChats): фильтр добавляет только приватность.
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
                 // Архив по умолчанию спрятан — как в интерфейсе, где он живёт за отдельным
                 // режимом списка. Признак производный (Session.IsArchived), отдельно не хранится
                 var includeArchived = BoolArg(arguments, "includeArchived");
-                var items = list.Where(s => includeArchived || !s.IsArchived).Select(s =>
+                var visible = list.Where(s => (includeArchived || !s.IsArchived)
+                    && (actorId is null ? s.PrivateToUserId is null : sessions.IsVisibleTo(s.Id, actorId)));
+                var items = visible.Select(s =>
                 {
                     // isSelf — как stdio (s.id === SELF_SESSION_ID || undefined): ключа нет
                     // у чужих сессий
@@ -1334,6 +1574,8 @@ public sealed partial class WorkspaceToolset(
                 var sid = StringArg(arguments, "sessionId");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 // Зона сессии: маршрут адресуется по sessionId в обход projectId — суженная
                 // зона не должна читать чаты чужих проектов владельца (как stdio-ветка
                 // по ответу history)
@@ -1374,6 +1616,18 @@ public sealed partial class WorkspaceToolset(
                         // Персона: явная → она; иначе руководитель проекта, иначе провижн
                         // ассистента — правило «персона контекста», то же что в
                         // SessionsController.Create (stdio-ветка получала его через REST)
+                        // Явная персона (R-S2a-8): глобальная чату общего проекта не назначается —
+                        // CreateAsync рамку не проверяет, поэтому та же проверка, что в REST. Код
+                        // отказа едет в JSON-теле: агент различает его, а не разбирает текст
+                        if (personaId is not null)
+                        {
+                            try { sessions.EnsurePersonasVisibleInFrame(p.Id, new[] { personas.Get(personaId, context.OwnerId) }); }
+                            catch (SessionManager.GlobalPersonaInSharedException ex)
+                            {
+                                return Deny(JsonSerializer.Serialize(
+                                    new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }, JsonOpts));
+                            }
+                        }
                         personaId ??= await ResolveNewChatPersona(context.OwnerId, p.Id, default);
                         if (personaId is null)
                             return Deny("Новый чат создаётся только с персоной: укажите personaId");
@@ -1385,7 +1639,7 @@ public sealed partial class WorkspaceToolset(
                         personaId ??= (await provisioner.EnsureAsync(context.OwnerId))?.Id;
                         if (personaId is null)
                             return Deny("Новый чат создаётся только с персоной: укажите personaId");
-                        created = await sessions.CreateChatAsync(context.OwnerId, ClaudeMode.Auto,
+                        created = await sessions.CreateChatAsync(context.OwnerId, ClaudeModeExtensions.ForNewChat(null, hasPersona: true),
                             resumeSessionId: null, name: name, model: model, personaId: personaId);
                     }
                 }
@@ -1402,6 +1656,8 @@ public sealed partial class WorkspaceToolset(
                 if (name.Length == 0) return Deny("Название чата пусто");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1428,6 +1684,8 @@ public sealed partial class WorkspaceToolset(
                     return Deny("Не указан archived: true — убрать в архив, false — вернуть");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1445,6 +1703,49 @@ public sealed partial class WorkspaceToolset(
                     : Json(new { id = archivedSession.Id, isArchived = archivedSession.IsArchived });
             }
 
+            case "chats_continue":
+            {
+                if (continuation is null) return Deny("Продолжение в новом чате недоступно на этом сервере");
+                // Без sessionId — текущий чат агента (ротация на границе этапа)
+                var sid = StringArg(arguments, "sessionId");
+                var isSelf = sid.Length == 0 || sid == session.Id;
+                if (isSelf) sid = session.Id;
+                var target = sessions.GetOwned(sid, context.OwnerId);
+                if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта; актор неизвестен
+                // (фон, исполнитель без инициатора) — приватный чат не виден (fail-closed, как в chats_list)
+                var continueActor = turnActors.Actor(session.Id, context.OwnerId);
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
+                if (target.ProjectId is { } targetPid
+                    && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
+                    return Deny(zoneDenied);
+                // Чужой чат делегированный ход не продолжает (тот же гейт, что у chats_send/chats_archive);
+                // собственный — можно: это ротация своей работы, а не вмешательство в чужую
+                if (!isSelf && DelegatedDenied(context, session, "Продолжение чата в новом") is { } gateDenied)
+                    return Deny(gateDenied);
+                if (target.Participants is { Count: > 0 } || target.TeamImplement is not null)
+                    return Deny("Групповой чат и режим «Командная реализация» нельзя продолжить в новом");
+                var userNote = OptionalArg(arguments, "note");
+                // Из собственного хода дождаться его конца нельзя — продолжение встаёт в очередь
+                // и стартует, когда ход кончится; чужой чат продолжаем сразу, но фоном
+                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf,
+                    actorUserId: continueActor);
+                return queued
+                    ? Json(new
+                    {
+                        status = "scheduled",
+                        hint = isSelf
+                            ? "продолжение стартует после завершения этого хода: завершай ход коротким сообщением "
+                              + "(записку-передачу попросит система отдельным ходом), в новом чате появится записка"
+                            : "продолжение запущено фоном: агент чата напишет записку, затем откроется новый чат",
+                    })
+                    : Json(new
+                    {
+                        status = "already_scheduled",
+                        hint = "продолжение этого чата уже стоит в очереди — повторно не ставь",
+                    });
+            }
+
             case "chats_send":
             {
                 var sid = StringArg(arguments, "sessionId");
@@ -1456,6 +1757,8 @@ public sealed partial class WorkspaceToolset(
                 if (text.Length == 0) return Deny("Текст сообщения пуст");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 // Зона: при суженной зоне целевой проект проверяем до отправки (как stdio)
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
@@ -1628,6 +1931,16 @@ public sealed partial class WorkspaceToolset(
                 if (DelegatedDenied(context, session, "Удаление файлов") is { } gateDenied)
                     return Deny(gateDenied);
                 var path = StringArg(arguments, "path");
+                // S2d-6b-3 доработка (ревью 426b21ad): удаление по пути — чужое private и чужой
+                // каталог автора не удаляются рекурсивно: тот же отказ, что у несуществующего файла
+                var actorId = turnActors.Actor(session.Id, context.OwnerId);
+                if (PrivateAttachments.IsForeignResolved(p.RootPath, path, actorId))
+                    return Deny($"Файл не найден: {path}");
+                // S2d-6b-3 доработка 2 (дельта-ревью 24c92aef): сам контейнер не удаляется
+                // рекурсивно: под ним private всех участников (та же формула, что у WebDAV
+                // COPY/MOVE и у files_rename выше)
+                if (PrivateAttachments.IsContainerResolved(p.RootPath, path))
+                    return Deny($"Файл не найден: {path}");
                 try { files.Delete(p.RootPath, path); }
                 catch (FileNotFoundException) { return Deny($"Файл не найден: {path}"); }
                 catch (UnauthorizedAccessException) { return Deny("Доступ за пределы проекта запрещён"); }
@@ -1643,6 +1956,8 @@ public sealed partial class WorkspaceToolset(
                     return Deny("Нельзя удалить собственный чат — chats_delete адресован ДРУГИМ сессиям");
                 var target = sessions.GetOwned(sid, context.OwnerId);
                 if (target is null) return Deny($"Сессия {sid} не найдена.");
+                // FIN3-1: чужой приватный — неотличим от несуществующего (PrivateChatDenied)
+                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
                 if (target.ProjectId is { } targetPid
                     && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
                     return Deny(zoneDenied);
@@ -1764,6 +2079,9 @@ public sealed partial class WorkspaceToolset(
                 return Deny($"{action} НЕ запущена: механизм выкатки на этой машине не настроен "
                     + $"({result.Error}). Это не временный сбой и не занятость — включить контур может только "
                     + "администратор в appsettings.Local.json. Сообщи это пользователю и не повторяй вызов.");
+            case DeployStartStatus.Unsupported:
+                return Deny($"{action} НЕ запущена: {result.Error}. Это ограничение платформы, а не сбой — "
+                    + "повторять тот же вызов бессмысленно; действуй по тексту отказа.");
             default:
                 return Deny($"{action} НЕ запущена: {result.Error ?? "внутренняя ошибка сервера"}.");
         }

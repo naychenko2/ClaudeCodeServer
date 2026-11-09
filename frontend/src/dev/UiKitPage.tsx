@@ -8,6 +8,8 @@
 // компонентов ui/. Ни одного hex-литерала: lint:design проходит зелёным.
 
 import { useState, useEffect, useRef, type CSSProperties, Fragment } from 'react';
+import { ContinueChatDialog, ContinueHint, ContinuationBanner } from '../components/chat/ContinueChat';
+import { LipEarBaseContext } from '../components/chat/LipEar';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -26,7 +28,7 @@ import {
   Calendar, Share2, MessageCircle,
   Network, FileText, AlertCircle, Loader2,
 } from 'lucide-react';
-import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal } from 'lucide-react';
+import { Rows3, Pin, FolderOpen, Bell, List, ListTree, ArrowRightToLine, Unplug, ImageIcon, Info, Mic, Music, SlidersHorizontal, Link2 } from 'lucide-react';
 import { GenerationPanel } from '../components/generation/GenerationPanel';
 import type { GenerationFoot } from '../components/generation/GenerationPanel';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
@@ -43,6 +45,7 @@ import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
+  UserAvatar,
   SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, MenuSep, BackButton, PressableArea, WaitingIndicator,
@@ -54,6 +57,7 @@ import {
 } from '../components/ui';
 import { CapabilityUnavailable } from '../components/CapabilityGate';
 import { InlineSegmented } from '../components/ui/InlineSegmented';
+import { SectionChip, type SectionChipOption, type SectionChipValue } from '../components/ui/SectionChip';
 import { ICON_SIZE, ICON_STROKE, ICON_PROPS } from '../components/ui/icons';
 import { Toolbar, ToolbarIconButton } from '../components/Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOverflowMenu';
@@ -73,7 +77,10 @@ import { GenSharedKitSection } from './GenSharedKitSection';
 import { ContextRowKitSection } from './ContextRowKitSection';
 import { RingPillKitSection } from './RingPillKitSection';
 import { ContextPanelKitSection } from './ContextPanelKitSection';
+import { FormatKitSection } from './FormatKitSection';
 import { ComposerActionRowKitSection } from './ComposerActionRowKitSection';
+import { LocalGpuQueueKitSection } from './LocalGpuQueueKitSection';
+import { PluginKitSection } from './PluginKitSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
@@ -129,6 +136,7 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-context-row', label: 'Строка контекста' },
   { id: 'sec-composer-actions', label: 'Чипы действий' },
   { id: 'sec-context-panel', label: 'Панель «Контекст»' },
+  { id: 'sec-format', label: 'Формат' },
   { id: 'sec-audio-player', label: 'Звук: плеер' },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -142,8 +150,11 @@ const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-panels',     label: 'Панели'             },
   { id: 'sec-visual-plan',label: 'Визуальный план'    },
   { id: 'sec-headers',    label: 'Шапки'              },
+  { id: 'sec-section-chip', label: 'Чип «Раздел»' },
   { id: 'sec-ring-pill',  label: 'Пилюля «кольца»'    },
   { id: 'sec-tool-progress', label: 'Прогресс инструмента' },
+  { id: 'sec-local-gpu-queue', label: 'Очередь локальной GPU' },
+  { id: 'sec-plugin-kit', label: 'Кит панели плагина' },
 ];
 
 // Высота sticky-элементов над контентом: шапка темы + TOC-бар. Секция
@@ -258,6 +269,11 @@ export function UiKitPage() {
               <ContextPanelKitSection />
             </div>
 
+            {/* Чип «Формат» и его всплывашка (ADR-025) — все состояния из записки */}
+            <div id="sec-format" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <FormatKitSection />
+            </div>
+
             {/* Звук: плеер — волна, выделение куска, A/B, микшер стемов (синусы из браузера) */}
             <div id="sec-audio-player" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <AudioPlayerKitSection />
@@ -328,6 +344,11 @@ export function UiKitPage() {
               <HeadersSection />
             </div>
 
+            {/* Секция «Чип «Раздел»» (W7, Заметки+Вики) — чип закрепленного слота шапки панели */}
+            <div id="sec-section-chip" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <SectionChipKitSection />
+            </div>
+
             {/* Секция «Пилюля «кольца» шапки чата» — все состояния RingPillBadge */}
             <div id="sec-ring-pill" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <RingPillKitSection />
@@ -337,6 +358,17 @@ export function UiKitPage() {
                 на настоящем ToolUseView (см. ToolProgressSection) */}
             <div id="sec-tool-progress" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <ToolProgressSection />
+            </div>
+
+            {/* Строка ожидания локальной GPU-генерации (шаг 34): форматтер + компонент */}
+            <div id="sec-local-gpu-queue" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <LocalGpuQueueKitSection />
+            </div>
+
+            {/* Кит панели плагина (S11): девять классов plugin-kit в токенах текущей
+                темы + «неправильный» голый button (опт-ин) + пример «как писать панель» */}
+            <div id="sec-plugin-kit" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <PluginKitSection />
             </div>
           </div>
 
@@ -509,6 +541,25 @@ function TogglesSection() {
               <Badge tone="success" dot onClick={() => {}}>Принято</Badge>
               <Badge tone="info" dot onClick={() => {}} active>Предложено (меню открыто)</Badge>
               <Badge tone="danger" icon={<X size={11} />}>С иконкой</Badge>
+            </div>
+          </div>
+        </SubBlock>
+
+        {/* UserAvatar: знак участника — круглый инициал со стабильным цветом по userId
+            (палитра-данные GROUP_COLORS, от темы не зависит; текст C.onDark). Бывший
+            участник — нейтральный вид: цвет больше ничего не несёт */}
+        <SubBlock label="UserAvatar — знак участника (4 размера, цвет по userId, «бывший»)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+              <UserAvatar userId="demo-maria" displayName="Мария" />
+              <UserAvatar userId="demo-andrey" displayName="Андрей" size={18} />
+              <UserAvatar userId="demo-zoya" displayName="Зоя" size={28} />
+              <UserAvatar userId="demo-egor" displayName="Егор" size={34} />
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+              <UserAvatar userId="demo-maria" displayName="Мария" />
+              <UserAvatar userId="demo-maria" displayName="Мария" gone />
+              <span style={{ fontSize: FS.sm, color: C.textMuted }}>тот же id: слева активный, справа бывший (цвет ключа — id, не имя)</span>
             </div>
           </div>
         </SubBlock>
@@ -2284,7 +2335,7 @@ const DEMO_PROVIDER_LIMIT_ITEMS: Extract<ChatItem, { kind: 'provider_limit' }>[]
 ];
 
 // Демо строк «контекст обрезан» (событие context_pruned прокси локальной модели):
-// обрезка с полной статистикой, обрезка без замеров и сжатие, ушедшее в облако.
+// обрезка с полной статистикой, обрезка без замеров, вырезанные картинки, сжатие в облаке и петля.
 const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[] = [
   {
     kind: 'context_pruned', pruneKind: 'prune',
@@ -2304,9 +2355,21 @@ const DEMO_CONTEXT_PRUNED_ITEMS: Extract<ChatItem, { kind: 'context_pruned' }>[]
     blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
     prefillSeconds: 21,
   },
+  {
+    kind: 'context_pruned', pruneKind: 'prune',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 0, resultBlocks: 0, inputBlocks: 0, thinkingBlocks: 0,
+    prefillSeconds: 12, cacheReadTokens: 40_000, promptTokens: 96_000,
+    imageBlocks: 7, imageTokens: 14_280,
+  },
+  {
+    kind: 'context_pruned', pruneKind: 'loop_guard',
+    tokensBefore: 0, tokensAfter: 0,
+    blocks: 1, resultBlocks: 1, inputBlocks: 0, thinkingBlocks: 0,
+  },
 ];
 
-// Мета 9 панелей правой рельсы — копия PANEL_META из RightPanelStack (там
+// Мета 9 панелей правой рельсы — копия меты (panelMeta) из каталога (там
 // не экспортируется). Меняется только Icon и title; контент у каждого свой.
 const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: boolean }[] = [
   { key: 'plan',     title: 'План',      Icon: ClipboardList },
@@ -3695,6 +3758,61 @@ function HeadersSection() {
   );
 }
 
+// === Секция «Чип «Раздел»» ==========================================
+// SectionChip (W7, Заметки+Вики): чип-кнопка с меню выбора раздела вики, ставится
+// в закрепленный слот шапки панели (PanelHeaderSlot pinned). Состояния follow /
+// all / section + пример длинного имени — оно режется многоточием (maxWidth 150),
+// это ожидаемое поведение контрола, а не дефект. Демо живое: выбор в меню меняет
+// состояние примера.
+const SECTION_CHIP_DEMO_OPTIONS: SectionChipOption[] = [
+  { key: 'aihome', label: 'AI Home' },
+  { key: 'home', label: 'Дом и семья' },
+  { key: 'health', label: 'Здоровье' },
+  { key: 'long', label: 'Долгое имя раздела для проверки многоточия' },
+];
+
+function SectionChipDemo({ initial, caption }: { initial: SectionChipValue; caption: string }) {
+  const [value, setValue] = useState<SectionChipValue>(initial);
+  // Подпись на чипе решает вызывающий: при follow — раздел открытой страницы,
+  // при all — «Все разделы», при section — имя выбранного
+  const label = value.mode === 'follow' ? 'AI Home'
+    : value.mode === 'all' ? 'Все разделы'
+    : SECTION_CHIP_DEMO_OPTIONS.find(o => o.key === value.key)?.label ?? 'Раздел';
+  return (
+    <ToggleRow label={caption}>
+      <span data-testid="section-chip-demo" style={{ display: 'inline-flex', flexShrink: 0 }}>
+        <SectionChip value={value} options={SECTION_CHIP_DEMO_OPTIONS} label={label} onChange={setValue} />
+      </span>
+    </ToggleRow>
+  );
+}
+
+function SectionChipKitSection() {
+  return (
+    <Island>
+      <IslandHeader
+        icon={<Link2 size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />}
+        title="Чип «Раздел» панели вики"
+        badge="шапка · pinned"
+      />
+      <div style={{ padding: ISLAND.pad, display: 'flex', flexDirection: 'column', gap: ISLAND.gap }}>
+        <SubBlock label="Состояния (макет notes-wiki-panels-v1, раздел «Чип раздела»)">
+          <SectionChipDemo initial={{ mode: 'follow' }} caption="следует за открытой страницей (значок Link2)" />
+          <SectionChipDemo initial={{ mode: 'all' }} caption="все разделы" />
+          <SectionChipDemo initial={{ mode: 'section', key: 'home' }} caption="выбранный раздел" />
+          <SectionChipDemo initial={{ mode: 'section', key: 'long' }} caption="длинное имя — многоточие (ожидаемое)" />
+        </SubBlock>
+        <p style={{ margin: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
+          В покое opacity 0.55, под курсором и при открытом меню — opacity 1, фон
+          accentMuted, текст accent. Меню: «Следовать за открытой страницей» (галка
+          при follow), разделитель, «Все разделы», затем разделы. В продукте ставится
+          в PanelHeaderSlot pinned шапки панели (W3).
+        </p>
+      </div>
+    </Island>
+  );
+}
+
 // === Секция «Тулбар и EmptyState» =================================
 // Toolbar (контейнер) с несколькими ToolbarIconButton и одним
 // ToolbarOverflowMenu (items + toggle-item + danger) — повторяет раскладку
@@ -3803,9 +3921,60 @@ function ToolbarAndEmptySection() {
           </div>
         </SubBlock>
 
+        {/* «Продолжить в новом чате»: подсказка при большом контексте, плашки связи, диалог */}
+        <SubBlock label="Продолжить в новом чате — подсказка, плашки связи, диалог">
+          <ContinueChatKit />
+        </SubBlock>
+
         <KitOptionsDemo />
       </div>
     </Island>
+  );
+}
+
+// Витрина «Продолжить в новом чате»: компоненты настоящие, запрос — заглушка с задержкой
+// (успех) или отказом «чат занят» (ошибка), чтобы увидеть оба состояния диалога.
+function ContinueChatKit() {
+  const [dialog, setDialog] = useState<'ok' | 'busy' | null>(null);
+  const [hidden, setHidden] = useState(false);
+  const fake = (fail: boolean) => async () => {
+    await new Promise(r => setTimeout(r, 2500));
+    if (fail) throw new Error('Чат занят — дождитесь окончания хода');
+    setDialog(null);
+  };
+  // Ушко в контексте основания: host-колонка + провайдер (губа/поле). Показываем оба
+  // основания (губа и поле) × (десктоп/мобила), чтобы видеть стык, цвета и высоту.
+  const cell = (base: 'lip' | 'field', isMobile: boolean, label: string) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: isMobile ? 390 : undefined }}>
+      <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>
+      <LipEarBaseContext.Provider value={base}>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          <ContinueHint tokens={312_000} isMobile={isMobile} onOpen={() => setDialog('ok')} onSnooze={() => {}} />
+        </div>
+      </LipEarBaseContext.Provider>
+    </div>
+  );
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+      {hidden
+        ? <Button size="sm" variant="secondary" onClick={() => setHidden(false)}>Показать подсказку снова</Button>
+        : <LipEarBaseContext.Provider value="lip"><ContinueHint tokens={312_000} onOpen={() => setDialog('ok')} onSnooze={() => setHidden(true)} /></LipEarBaseContext.Provider>}
+      <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        {cell('lip', false, 'десктоп · на губе')}
+        {cell('field', false, 'десктоп · на поле (без губы)')}
+        {cell('lip', true, 'мобила · на губе')}
+        {cell('field', true, 'мобила · на поле (без губы)')}
+      </div>
+      <ContinuationBanner kind="from" name="Оркестратор — спринт 12" onOpen={() => {}} />
+      <ContinuationBanner kind="into" onOpen={() => {}} />
+      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Button size="sm" onClick={() => setDialog('ok')}>Диалог: успех</Button>
+        <Button size="sm" variant="secondary" onClick={() => setDialog('busy')}>Диалог: 409 (чат занят)</Button>
+      </div>
+      {dialog && (
+        <ContinueChatDialog onConfirm={fake(dialog === 'busy')} onClose={() => setDialog(null)} />
+      )}
+    </div>
   );
 }
 

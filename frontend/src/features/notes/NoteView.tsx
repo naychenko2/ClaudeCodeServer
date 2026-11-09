@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, lazy, Suspense } from 'react';
-import { Check, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
+import { AlertTriangle, BookMarked, BookOpen, Check, CheckCircle2, Copy, FileText, MessageCircle, Undo2, X } from 'lucide-react';
 import type { NoteDetail, NoteReply, Persona } from '../../types';
 import {
   api, bumpNotes, useNotesVersion, isFavorite, withFavoriteTag, withoutFavoriteTag,
@@ -11,11 +11,21 @@ import {
   showToast, openChatById, beginAiBusy, endAiBusy,
   registerCopyDoc, copyMarkdown, copyRenderedHtml,
   ensurePersonasLoaded, personaLabel, usePersonas, NO_AUTOFILL,
+  FLAGS, useFeature, Notice, requestOpenWikiPage, transferWikiNote, WikiError,
 } from 'aihome_shell/kit';
 import type { NoteSource } from '../../types';
+// Конфликт сохранения (S2c-F3, п.28): типизированный 409 заметки и тот же диалог с тем же
+// диффом, что у файлов (S2c-F2b) — своих текстов и своей формы здесь нет
+import { NoteConflictError } from '../../lib/api';
+import { conflictCopyName } from '../../lib/conflictCopyName';
+import { lineDiff } from '../../lib/lineDiff';
+import { SaveConflictDialog } from '../../components/SaveConflictDialog';
+import { useAllProjects } from '../projects/useAllProjects';
+import { canWriteContent, type ContentDoor } from '../projects/members/contentRights';
 import { NoteConnections } from './NoteConnections';
 import { NoteTasksSection } from './NoteTasksSection';
 import { useSphereOf } from '../../lib/useSphereOf';
+import { requestNoteIngest } from './WikiChatActions';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import {
   SourceBadge,
@@ -24,6 +34,22 @@ import {
 
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
+
+// Конфликт сохранения заметки (S2c-F3, п.28): тело последнего 409 note_changed и свой текст
+// на момент попытки — та же форма, что в FileViewer (S2c-F2b). again — заметку изменили ещё
+// раз после «Заменить своей»; copyError — копия не создалась (диалог остаётся); mineAt —
+// время своей версии для варианта без диффа (оно одно: момент попытки сохранения).
+interface SaveConflictState {
+  error: NoteConflictError;
+  mine: string;
+  // Заголовок черновика на момент попытки (доработка S2c-F3): «Заменить своей» пишет его по
+  // тому же правилу, что save(), — то, что человек набрал, не теряется ни на одном действии диалога.
+  draftTitle: string;
+  again: boolean;
+  copyError: boolean;
+  busy: boolean;
+  mineAt: string;
+}
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
@@ -52,6 +78,11 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 }) {
   const version = useNotesVersion();
   const online = useOnline();
+  // «Разобрать в базу» (S7b) — за флагом llm-wiki; requestNoteIngest никогда не бросает,
+  // поэтому экрану нужен только busy для кнопки и текст для тоста
+  const wikiOn = useFeature(FLAGS.llmWiki);
+  // «Перенести в вики» (F5b) — только при включённом llm-wiki.
+  const [ingestBusy, setIngestBusy] = useState(false);
   // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
   // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
   // aside с float:right внутри обёртки display:flow-root. Свёрнутые секции связей
@@ -60,13 +91,27 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // под контент, сайдбара нет → panelTarget не нужен.
   const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
   const [note, setNote] = useState<NoteDetail | null>(null);
+  // Право записи по роли в проекте источника (S2c-F4e): у 'personal' проекта нет — всё
+  // разрешено; пока кэш проектов не загружен — тоже как раньше. Закрытое прячем, не отключаем.
+  const allProjects = useAllProjects();
+  // Проект-источник заметки ('personal' — проекта нет → undefined → все двери открыты);
+  // он же — проп права 'note.tasks' для NoteTasksSection (S2c-F4f)
+  const sourceProject = !note || note.source === 'personal' ? undefined : allProjects.find(p => p.id === note.source);
+  const can = (door: ContentDoor) => canWriteContent(sourceProject, door);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [draftTitle, setDraftTitle] = useState('');
   const [draftBody, setDraftBody] = useState('');
   const [saving, setSaving] = useState(false);
+  const [saveConflict, setSaveConflict] = useState<SaveConflictState | null>(null);
   const editingRef = useRef(false);
   useEffect(() => { editingRef.current = editing; }, [editing]);
+  // Два тега (К8/S2c-F3): noteEtag — прочитанной версии (та, что показана сейчас),
+  // draftEtag — той версии, на которой стоит черновик редактора. Сохранение идёт по
+  // второму: если заметку изменили под нами, черновик честно упрётся в 409, а не ляжет
+  // поверх чужой правки молча.
+  const noteEtag = useRef<string | null>(null);
+  const draftEtag = useRef<string | null>(null);
   // Живые часы для бейджа срока истечения: Date.now() в рендере нечистый (purity),
   // а без тика отсчёт замирал до случайного перерендера. Интервал нужен только
   // когда бейдж реально виден.
@@ -98,20 +143,102 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
   };
 
+  // Заявка «Разобрать в базу» (S7b0b): исход и любой отказ (409 packages_limit, 404)
+  // становятся текстом тоста — экран не падает; повторный клик пока идёт — игнорируется
+  const runIngest = async () => {
+    if (ingestBusy) return;
+    setIngestBusy(true);
+    const text = await requestNoteIngest(noteId);
+    showToast('Разобрать в базу', text, 'info');
+    setIngestBusy(false);
+  };
+
+  // «Перенести в вики» (F5b): подтверждение → POST переноса → заметка становится страницей
+  // в доме заметки, а сама заменяется ссылкой на неё (ручка делает обе записи сразу).
+  // Конкурентность (урок S5b/S5e, образец doRetract в WikiChatActions): пока идёт — второй
+  // клик ничего не шлёт; подтверждение закрыто по исходу. Ответ применяется только к той
+  // заметке, для которой начался: после смены заметки он отбрасывается по noteId. Отказ
+  // наружу не выходит — любой становится текстом Notice, кнопка остаётся.
+  const [transferConfirm, setTransferConfirm] = useState(false);
+  const [transferBusy, setTransferBusy] = useState(false);
+  const [transferFlash, setTransferFlash] = useState<{ ok: boolean; text: string } | null>(null);
+  const openNoteIdRef = useRef(noteId);
+  useEffect(() => {
+    // Смена заметки: прежний запрос стал чужим (его ответ отбрасывается по noteId), а его
+    // подтверждение и плашка не переходят в новую заметку
+    openNoteIdRef.current = noteId;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния переноса прежней заметки при смене заметки
+    { setTransferConfirm(false); setTransferBusy(false); setTransferFlash(null); }
+  }, [noteId]);
+  const doTransfer = async () => {
+    if (transferBusy) return;
+    const forNoteId = noteId;
+    setTransferBusy(true);
+    // Исход переноса определяет ТОЛЬКО ответ сервера: действия после успеха — вне этого try
+    // (свой защитный catch ниже). Иначе баг в приёмнике 'cc-open-note' показал бы состоявшийся
+    // на сервере перенос как «Не удалось…», а повтор дал бы 409 wiki_note_transferred.
+    let openPage: { section: string; path: string } | null = null;
+    let failure: unknown = null;
+    try {
+      const res = await transferWikiNote(forNoteId);
+      openPage = { section: res.section, path: res.page };
+    } catch (e) {
+      failure = e;
+    }
+    // Заметка сменилась, пока запрос шёл: плашка и страница — прежней заметки,
+    // ответ отбрасывается по noteId; состояние новой заметки (её возможный перенос) не трогаем
+    if (forNoteId !== openNoteIdRef.current) return;
+    setTransferConfirm(false);
+    if (openPage) {
+      setTransferFlash({ ok: true, text: TRANSFER_TEXT.done });
+      setTransferBusy(false);
+      // На сервере заметка заменена ссылкой — перечитываем список и саму заметку
+      // Открыть созданную страницу: запрос — в стор вики (OPEN-1), смонтированный раздел
+      // «Заметки» переключится на «Вики» и откроет её; из встраивания в файлы к разделу
+      // ведёт тот же канал 'cc-open-note', что у «[[wikilink]]»
+      try {
+        bumpNotes();
+        requestOpenWikiPage(openPage);
+        window.dispatchEvent(new Event('cc-open-note'));
+      } catch (e) {
+        // Приёмник 'cc-open-note' упал: перенос уже состоялся — плашка остаётся «Перенесено».
+        // Молча не глотаем: сбой слушателя виден в логе (образец: notesOffline.putOpOrWarn)
+        console.warn('[notes] приёмник cc-open-note упал:', e);
+      }
+    } else {
+      setTransferFlash({ ok: false, text: transferFailText(failure) });
+      setTransferBusy(false);
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- индикатор загрузки перед перечитыванием заметки
     setLoading(true);
     // Читаем через офлайн-слой (черновик/кэш офлайн, сеть онлайн)
     getNoteForView(noteId)
-      .then(n => { if (alive) { setNote(n); if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); } } })
+      .then(n => {
+        if (!alive) return;
+        setNote(n);
+        noteEtag.current = n.etag ?? null;
+        // Вне правки показанная версия и есть база следующей правки. В режиме правки базу
+        // черновика НЕ двигаем: событие notes_changed обновляет просмотр, но не текст,
+        // который человек правит, и не версию, против которой он пишет (п.28)
+        if (!editingRef.current) { setDraftTitle(n.title); setDraftBody(n.content); draftEtag.current = n.etag ?? null; }
+      })
       .catch(() => { if (alive) setNote(null); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
     // Перечитываем при смене заметки и при realtime-изменении (version)
   }, [noteId, version]);
 
-  const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
+  // Черновик начинается с показанной версии — её тег и становится базой сохранения
+  const startEdit = () => {
+    if (!note || !can('note.edit')) return;
+    setDraftTitle(note.title); setDraftBody(note.content);
+    draftEtag.current = noteEtag.current;
+    setEditing(true);
+  };
 
   // Открыть чат, из которого создана заметка: проектный уедет в воркспейс своего
   // проекта, чат вне проектов — в раздел «Чаты» (решает общий хелпер)
@@ -157,7 +284,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [note?.id, version]);
   const sendAnnReply = async () => {
-    if (!note || !annReplyDraft.trim()) return;
+    if (!note || !annReplyDraft.trim() || !can('note.comment')) return;
     setAnnReplySending(true);
     try {
       await api.notes.reply(note.id, annReplyDraft.trim());
@@ -197,7 +324,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [assignAnchor, setAssignAnchor] = useState<HTMLElement | null>(null);
   useEffect(() => { if (ann && !ann.isReply) void ensurePersonasLoaded(); }, [ann]);
   const createTaskFromComment = async (persona?: Persona) => {
-    if (!note || !ann) return;
+    if (!note || !ann || !can('note.tasks')) return;
     setAssignAnchor(null);
     try {
       await api.tasks.create(ann.docScope === 'personal' ? null : ann.docScope, {
@@ -228,7 +355,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   // Принять связь: секция «## Связанное» с [[…]] в конце заметки
   const acceptLink = async (title: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const hasSection = /(^|\n)## Связанное\s*\n/.test(note.content);
     const content = hasSection
       ? note.content.trimEnd() + `\n- [[${title}]]\n`
@@ -240,14 +367,14 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   // Избранное — тот же тег в тексте: тело уже загружено, дочитывать не надо
   const toggleFav = async () => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const content = isFavorite(note.tags) ? withoutFavoriteTag(note.content) : withFavoriteTag(note.content);
     setNote(await api.notes.update(note.id, { content }));
     bumpNotes();
   };
   // Принять тег (ИИ-предложение или ручной ввод): inline #тег в конец заметки
   const acceptTag = async (tagRaw: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     const tag = tagRaw.trim().replace(/^#+/, '').replace(/\s+/g, '-');
     if (!tag || note.tags.some(t => t.toLowerCase() === tag.toLowerCase())) return;
     const updated = await api.notes.update(note.id, { content: note.content.trimEnd() + ` #${tag}\n` });
@@ -279,6 +406,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     const onRun = (e: Event) => {
       const action = (e as CustomEvent<{ action?: string }>).detail?.action;
       if (!action || !note) return;
+      // AI-действия пишут в заметку (теги/связи/заголовок/оглавление/перевод/конспект) — дверь note.edit
+      if (action !== 'note.ask' && !can('note.edit')) return;
       if (action === 'note.links') suggestLinks();
       else if (action === 'note.tags') suggestTags();
       else if (action === 'note.ask') onAskClaude?.(note);
@@ -329,18 +458,27 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     if (!note) return;
     setSaving(true);
     try {
+      // If-Match — только когда известна версия, на которой стоит черновик. Без него запрос
+      // ровно прежний: сервер 409 по конфликту не отдаёт вовсе, диалога нет (п.28).
       const updated = await api.notes.update(note.id, {
         // Переименование — только онлайн (офлайн title не меняем)
         title: draftTitle !== note.title ? draftTitle : undefined,
         content: draftBody,
-      });
+      }, draftEtag.current ?? undefined);
+      // 200 принёс новый ETag (NotesController.Update): следующая правка идёт по нему
+      noteEtag.current = updated.etag ?? null;
+      draftEtag.current = updated.etag ?? null;
       setEditing(false);
       bumpNotes();
       // id мог смениться при переименовании — переключаемся на новый
       if (updated.id !== note.id) onSelectNote(updated.id);
       else setNote(updated);
     } catch (e) {
+      // Из правки не выходим: несохранённые правки должны остаться (как в FileViewer)
+      if (e instanceof NoteConflictError) { openSaveConflict(e, draftBody, draftTitle); return; }
       if (e instanceof OfflineError) {
+        // Офлайн: правка остаётся локальной и в очереди несёт свою базу — при синхронизации
+        // она пишется обычным путём по If-Match, а не поверх чужой правки молча (notesOffline)
         await saveNoteOffline(note.id, { content: draftBody });
         setEditing(false);
         setNote({ ...note, content: draftBody });
@@ -351,11 +489,98 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
     }
   };
 
+  // ——— Конфликт сохранения (S2c-F3, п.28) ———
+  // Вид и тексты держит SaveConflictDialog (S2c-F1); здесь — данные конфликта и три действия.
+  // Диалог закрывается, когда выбор исполнен; при повторном 409 «Заменить своей» он остаётся.
+  // По событию notes_changed диалог НЕ открывается: человек мог ещё не закончить правку.
+
+  // Имя автора копии — то же, чем приложение называет пользователя (App держит cc_display_name
+  // по ответу /auth/me). Имени нет — суффикс «без имени» (conflictCopyName).
+  const copyAuthorName = () => {
+    try { return localStorage.getItem('cc_display_name') || ''; } catch { return ''; }
+  };
+
+  const openSaveConflict = (e: NoteConflictError, mine: string, title: string) => {
+    setSaveConflict({
+      error: e, mine, draftTitle: title, again: false, copyError: false, busy: false,
+      // Другой даты у своей версии нет: это тот текст, который только что не записался
+      mineAt: relTime(new Date().toISOString()),
+    });
+  };
+
+  // «Сохранить мою копией» (primary): заметка-копия рядом в том же источнике и папке,
+  // оригинал не тронут. Заметка — всегда текст, поэтому дифф читается (без варианта draw.io)
+  const conflictSaveCopy = async () => {
+    const c = saveConflict;
+    if (!c || c.busy || !note) return;
+    setSaveConflict({ ...c, busy: true, copyError: false });
+    try {
+      await api.notes.create({
+        title: conflictCopyName(note.title, copyAuthorName()),
+        content: c.mine,
+        source: note.source,
+        folder: note.path.includes('/') ? note.path.slice(0, note.path.lastIndexOf('/')) : '',
+      });
+      setSaveConflict(null);
+      bumpNotes();
+    } catch {
+      // Копия не создалась — диалог остаётся, свой текст в редакторе (Notice copyError)
+      setSaveConflict({ ...c, busy: false, copyError: true });
+    }
+  };
+
+  // «Заменить своей»: повторная запись по актуальному состоянию — If-Match = sha256 из тела 409
+  const conflictReplace = async () => {
+    const c = saveConflict;
+    if (!c || c.busy || !note) return;
+    setSaveConflict({ ...c, busy: true });
+    try {
+      const updated = await api.notes.update(note.id, {
+        // Переименование черновика — по тому же правилу, что save(): только если отличается от
+        // заголовка прочитанной версии. Без него «Заменить своей» молча теряло переименование.
+        title: c.draftTitle !== note.title ? c.draftTitle : undefined,
+        content: c.mine,
+      }, c.error.sha256 ?? undefined);
+      noteEtag.current = updated.etag ?? null;
+      draftEtag.current = updated.etag ?? null;
+      setSaveConflict(null);
+      setEditing(false);
+      bumpNotes();
+      if (updated.id !== note.id) onSelectNote(updated.id);
+      else setNote(updated);
+    } catch (e) {
+      if (e instanceof NoteConflictError) {
+        // Заметку изменили ещё раз: диалог остаётся, с новым телом 409 и again (Notice над диффом)
+        setSaveConflict({ ...c, error: e, again: true, busy: false, mineAt: relTime(new Date().toISOString()) });
+        return;
+      }
+      // Прочий сбой (офлайн и т.п.) — обычный фидбек; свой текст остаётся в редакторе
+      setSaveConflict(null);
+      showToast('Заметка', e instanceof OfflineError ? 'Действие недоступно офлайн' : 'Не удалось сохранить заметку', 'error');
+    }
+  };
+
+  // «Взять чужую версию»: редактор и база — чужный текст и чужой тег; правка продолжается
+  // от актуальной копии, а не от проигравшей
+  const conflictTakeTheirs = () => {
+    const c = saveConflict;
+    if (!c) return;
+    setSaveConflict(null);
+    const theirs = c.error.content;
+    // Текста в 409 нет — брать нечего, но и терять нечего
+    if (theirs == null) return;
+    setNote(prev => prev ? { ...prev, content: theirs } : prev);
+    setDraftBody(theirs);
+    setEditing(true);
+    noteEtag.current = c.error.sha256 ?? null;
+    draftEtag.current = c.error.sha256 ?? null;
+  };
+
   // Удаление в два шага: запрос подтверждения (диалог) → само удаление
   const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const del = () => { if (note) setDeleteConfirm(true); };
+  const del = () => { if (note && can('note.delete')) setDeleteConfirm(true); };
   const doDelete = async () => {
-    if (!note) return;
+    if (!note || !can('note.delete')) return;
     setDeleteConfirm(false);
     try {
       await api.notes.delete(note.id);
@@ -369,7 +594,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   // «Связать» несвязанное упоминание (кнопка в блоке связей)
   const linkMention = (targetTitle: string) => {
-    if (!note) return;
+    if (!note || !can('note.edit')) return;
     void api.notes.linkMention(note.id, targetTitle).then(n => { if (n) setNote(n); bumpNotes(); });
   };
 
@@ -382,7 +607,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const openMove = () => {
     setMoveError(null);
     setShowMove(true);
-    api.notes.sources().then(setMoveSources).catch(() => setMoveSources([]));
+    // Другие источники — дверь note.moveSource (редактору закрыта): выбор источника не рисуется
+    api.notes.sources()
+      .then(all => setMoveSources(can('note.moveSource') ? all : all.filter(s => s.key === note?.source)))
+      .catch(() => setMoveSources([]));
   };
   // Папки источника — из путей всех его заметок (включая промежуточные уровни)
   const foldersFor = (src: string) => [...new Set(
@@ -393,7 +621,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       }),
   )].sort((a, b) => a.localeCompare(b, 'ru'));
   const moveTo = async (folder: string, targetSource?: string) => {
-    if (!note) return;
+    if (!note || !can('note.move')) return;
+    if (targetSource && targetSource !== note.source && !can('note.moveSource')) return;
     setMoveError(null);
     try {
       const updated = await api.notes.move(note.id, folder || null,
@@ -490,7 +719,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           {editing ? (
             /* В правке — «Отмена» + «Сохранить» в тулбаре, как у файлов */
             <>
-              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); }} style={tbBtnGhost}>Отмена</button>
+              <button onClick={() => { setEditing(false); setDraftBody(note.content); setDraftTitle(note.title); draftEtag.current = noteEtag.current; }} style={tbBtnGhost}>Отмена</button>
               <button onClick={save} disabled={saving}
                 style={{ ...tbBtnPrimary, marginLeft: 6, ...(saving ? { opacity: 0.6, cursor: 'default' } : {}) }}>
                 {saving ? 'Сохранение…' : 'Сохранить'}
@@ -499,16 +728,32 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           ) : (
             <>
               {/* AI-действия (связи, теги, конспект дня, «спросить Claude») — только через AI-палитру (⌘/Ctrl+K) */}
-              <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
-                tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
-                <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
-              </IconButton>
+              {can('note.edit') && (
+                <IconButton title={isFavorite(note.tags) ? 'Убрать из избранного' : 'В избранное'}
+                  tone={isFavorite(note.tags) ? 'accent' : undefined} onClick={() => { void toggleFav(); }}>
+                  <IconStar size={ICON_SIZE.sm} filled={isFavorite(note.tags)} />
+                </IconButton>
+              )}
               <IconButton title={copied ? 'Скопировано' : 'Скопировать Markdown (Shift — с форматированием)'} onClick={copyNote}>
                 {copied ? <Check size={ICON_SIZE.sm} color={C.success} strokeWidth={2.5} /> : <Copy size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               </IconButton>
-              <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
-              <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>
-              <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>
+              {wikiOn && (
+                <IconButton title="Разобрать в базу: Хранитель соберёт пакет правок вики" disabled={!online || ingestBusy} onClick={() => { void runIngest(); }}>
+                  <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+              {/* «Перенести в вики» (F5b) — та же форма действия, что у соседних: ряд тулбара
+                  на 360 не переносится, подписанная кнопка в нём не помещается */}
+              {wikiOn && can('note.delete') && (
+                <IconButton title="Перенести в вики" disabled={!online || transferBusy} onClick={() => setTransferConfirm(true)}>
+                  <BookMarked size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </IconButton>
+              )}
+              {can('note.move') && (
+                <IconButton title={online ? 'Переместить…' : 'Перенос недоступен офлайн'} onClick={openMove} disabled={!online}><IconFolderMove /></IconButton>
+              )}
+              {can('note.delete') && <IconButton title="Удалить" tone="danger" onClick={del}><IconTrash /></IconButton>}
+              {can('note.edit') && <button onClick={startEdit} style={{ ...tbBtnPrimary, marginLeft: 6 }}>Править</button>}
             </>
           )}
           {extraToolbar}
@@ -531,6 +776,17 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       // заметка лежит на фоне страницы с дудл-паттерном
       <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '10px 18px 24px',
         ...(hero ? { background: C.msgBg, borderRadius: ISLAND.radius } : {}) }}>
+        {/* Исход «Перенести в вики» (F5b): успех — плашка остаётся там, где была заметка
+            (сам экран переходит к «Вики» запросом в стор); отказ — причина по-русски,
+            кнопка тулбара на месте. Тон и икона — как у флешей правки страницы (WikiPageView) */}
+        {!editing && transferFlash && (
+          <Notice
+            tone={transferFlash.ok ? 'info' : 'danger'}
+            icon={transferFlash.ok ? CheckCircle2 : AlertTriangle}
+            title={transferFlash.text}
+            style={{ marginBottom: 12 }}
+          />
+        )}
         {/* Hero: заголовок заметки — крупно над тегами (в стиле markdown-H1);
             ведущий H1 самого контента глушится (hideLeadingH1), чтобы не дублировался */}
         {!editing && hero && (
@@ -547,7 +803,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               </button>
             ))}
             {/* Ручное добавление тега */}
-            {addingTag ? (
+            {!can('note.edit') ? null : addingTag ? (
                 <input
                   {...NO_AUTOFILL}
                   autoFocus
@@ -577,7 +833,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               {tagsJob.status === 'done' && (tagsJob.result ?? []).length === 0 && (
                 <span style={{ fontSize: 11, color: C.textMuted }}>нечего предложить</span>
               )}
-              {tagsJob.status === 'done' && (tagsJob.result ?? []).map(t => (
+              {can('note.edit') && tagsJob.status === 'done' && (tagsJob.result ?? []).map(t => (
                 <button key={t} onClick={() => void acceptTag(t)} title="Добавить тег"
                   style={{ fontSize: 11.5, fontWeight: 500, color: C.textSecondary, background: C.bgSelected, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '2px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
                   +#{t}
@@ -606,10 +862,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                       <span style={{ fontWeight: 500, color: C.textPrimary }}>{l.title}</span>
                       <span style={{ color: C.textMuted }}> — {l.why}</span>
                     </span>
-                    <button onClick={() => void acceptLink(l.title)}
+                    {can('note.edit') && <button onClick={() => void acceptLink(l.title)}
                       style={{ display: 'flex', alignItems: 'center', gap: 4, flex: 'none', fontSize: 11, fontWeight: 500, color: C.accent, background: C.bgWhite, border: `1px solid ${C.accentMuted}`, borderRadius: R.sm, padding: '3px 8px', cursor: 'pointer', fontFamily: FONT.sans }}>
                       <IconLink />Связать
-                    </button>
+                    </button>}
                   </div>
                 ))}
               </>
@@ -661,7 +917,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               }}>«{ann.anchorQuote}»</div>
             )}
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {!ann.isReply && (
+              {!ann.isReply && can('note.comment') && (
                 <button
                   onClick={() => {
                     const next = ann.status === 'open' ? 'resolved' : 'open';
@@ -687,7 +943,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                 </button>
               )}
               {/* «Обработать» = задача из комментария: лично или персоне-исполнителю */}
-              {!ann.isReply && (
+              {!ann.isReply && can('note.tasks') && (
                 <span style={{ display: 'inline-flex', gap: 6 }}>
                   <button onClick={() => void createTaskFromComment()} style={annBtn}>
                     Создать задачу
@@ -719,7 +975,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                     }}>{new Date(r.createdAt).toLocaleDateString('ru')}</button>
                   </div>
                 ))}
-                <div style={{ display: 'flex', gap: 6 }}>
+                {can('note.comment') && <div style={{ display: 'flex', gap: 6 }}>
                   <input
                     {...NO_AUTOFILL}
                     value={annReplyDraft}
@@ -736,7 +992,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
                     border: `1px solid ${C.border}`, borderRadius: R.sm, padding: '3px 10px',
                     cursor: 'pointer', fontFamily: FONT.sans, opacity: annReplySending ? 0.6 : 1,
                   }}>Отправить</button>
-                </div>
+                </div>}
               </div>
             )}
           </div>
@@ -757,9 +1013,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
               {/* Контейнер панели комментариев — портал из DocCommentedMarkdown; пока
                   комментариев нет, пуст и высоты не занимает */}
               <div ref={setPanelEl} />
-              <NoteTasksSection noteId={note.id} version={version} />
+              <NoteTasksSection noteId={note.id} version={version} project={sourceProject} />
               <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-                onWikilink={onWikilink} onLinkMention={linkMention} />
+                onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
             </aside>
           )}
           {/* data-selection-scope — «Копировать как Markdown/HTML» из master работает
@@ -795,9 +1051,9 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
         {(isMobile || connectionsBelow) && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
-            <NoteTasksSection noteId={note.id} version={version} />
+            <NoteTasksSection noteId={note.id} version={version} project={sourceProject} />
             <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-              onWikilink={onWikilink} onLinkMention={linkMention} />
+              onWikilink={onWikilink} onLinkMention={can('note.edit') ? linkMention : undefined} />
           </div>
         )}
       </div>
@@ -817,6 +1073,41 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         />
       )}
 
+      {/* Конфликт сохранения (S2c-F3, п.28): 409 note_changed на запись по If-Match. Вид и
+          тексты — целиком SaveConflictDialog (S2c-F1), своих здесь нет. Заметка — всегда
+          текст, поэтому дифф обычный; выше потолка строк lineDiff — тот же вариант без диффа */}
+      {saveConflict && note && (() => {
+        const e = saveConflict.error;
+        const theirs = e.content;
+        const noText = theirs === null;
+        const diff = noText ? null : lineDiff(theirs, saveConflict.mine);
+        return (
+          <SaveConflictDialog
+            conflict={{
+              code: 'note_changed',
+              sha256: e.sha256 ?? '',
+              // author и source бэк заполнит с S3-3, сейчас всегда null — диалог сам
+              // подставит «Другой участник» и не подпишет источник
+              author: e.author ? { userId: e.author.userId, displayName: e.author.displayName ?? '' } : undefined,
+              changedAt: e.changedAt ?? undefined,
+              source: e.source ?? undefined,
+            }}
+            fileName={note.title}
+            copyName={conflictCopyName(note.title, copyAuthorName())}
+            diff={diff ?? undefined}
+            noDiff={noText || diff === null}
+            mineAt={saveConflict.mineAt}
+            again={saveConflict.again}
+            copyError={saveConflict.copyError}
+            busy={saveConflict.busy}
+            onSaveCopy={() => { void conflictSaveCopy(); }}
+            onReplace={() => { void conflictReplace(); }}
+            onTakeTheirs={conflictTakeTheirs}
+            onClose={() => setSaveConflict(null)}
+          />
+        );
+      })()}
+
       {deleteConfirm && (
         <ConfirmDialog
           title="Удалить заметку?"
@@ -827,8 +1118,63 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           onCancel={() => setDeleteConfirm(false)}
         />
       )}
+
+      {/* Подтверждение переноса (F5b) — текст записки notes-wiki-unified-v1 дословно (§«е. Заметка»);
+          «✎ вы» вместо «✎ Андрей» из макета: сноска человека рисуется знаком «✎ вы, {дата}»
+          (ADR-038 «Авторство…»), так же делает страница (WikiPageView). Диалог открыт до
+          исхода запроса (образец doRetract): спиннер на кнопке, закрытие — по результату */}
+      {transferConfirm && (
+        <ConfirmDialog
+          title={TRANSFER_TEXT.confirmTitle}
+          subtitle={TRANSFER_TEXT.confirmBody}
+          confirmLabel={TRANSFER_TEXT.confirm}
+          onConfirm={doTransfer}
+          onCancel={() => setTransferConfirm(false)}
+        />
+      )}
     </div>
   );
+}
+
+// Тексты «Перенести в вики» (F5b). Подтверждение — из записки notes-wiki-unified-v1 (§«е.
+// Заметка»), дословно, кроме «✎ вы» вместо имени макета (см. комментарий модалки). Отказы —
+// свой текст по кодам контракта (формулировки — ADR-038); тексты фичи ведёт Софья.
+const TRANSFER_TEXT = {
+  confirmTitle: 'Перенести заметку в вики?',
+  confirmBody: 'Заметка станет страницей вики: ваш текст — вашими утверждениями «✎ вы», а ИИ сможет дописывать страницу рядом с ними. Сама заметка заменится ссылкой на страницу — копий не будет.',
+  confirm: 'Перенести',
+  done: 'Перенесено',
+  notFound: 'Заметки нет или она чужая.',
+  alreadyMoved: 'Заметка уже перенесена в вики: в ней ссылка на страницу.',
+  nameTaken: 'Страница с таким именем уже есть: переименуйте заметку и повторите перенос.',
+  off: 'Перенос в вики сейчас выключен: включите «Заметки и Вики» в настройках и повторите.',
+  refused: 'Перенос отказан. Повторите перенос — он доведёт его до конца.',
+  failed: 'Не удалось перенести заметку. Проверьте соединение и повторите.',
+} as const;
+
+// Текст отказа переноса. У именованных кодов — свой текст; у wiki_refused, wiki_edit_invalid и
+// wiki_not_initialized причина — в message бэка (ADR-038 «причина текстом»: «страница „X“ уже
+// есть: переименуйте заметку…», «в заметке нет текста для утверждений: переносить нечего»,
+// «вики этого владельца не заведена») — показываем его с большой буквы; без message — общий
+// текст. С LI-2 ручка переноса сама заводит вики владельца (WikiController.cs:498), и 409
+// wiki_not_initialized из действия человека не приходит: что остаётся — ответ второй линии
+// защиты (гейт WikiApplyService.cs:194), его message — честная причина. Своей готовой фразы
+// «вики не заведена» здесь нет: подразумеваемая ею просьба нажимать кнопку «Завести вики»
+// лишняя — самой кнопки нет с LI-3. Сетевой сбой (не WikiError) — общий текст.
+function transferFailText(e: unknown): string {
+  if (!(e instanceof WikiError)) return TRANSFER_TEXT.failed;
+  switch (e.code) {
+    case 'not_found': return TRANSFER_TEXT.notFound;
+    case 'wiki_note_transferred': return TRANSFER_TEXT.alreadyMoved;
+    case 'wiki_page_changed': return TRANSFER_TEXT.nameTaken;
+    case 'wiki_unified_off': return TRANSFER_TEXT.off;
+    case 'wiki_refused':
+    case 'wiki_edit_invalid':
+    case 'wiki_not_initialized':
+      return e.message ? e.message.charAt(0).toUpperCase() + e.message.slice(1) : TRANSFER_TEXT.refused;
+  }
+  if (e.status === 403) return 'Нет доступа.';
+  return TRANSFER_TEXT.failed;
 }
 
 // Диалог переноса: выбор источника (личный vault / проекты) + папки выбранного

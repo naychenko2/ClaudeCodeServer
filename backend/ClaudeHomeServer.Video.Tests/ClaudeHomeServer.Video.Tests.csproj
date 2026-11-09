@@ -23,6 +23,8 @@
          подсистемы). Тест-проект → main НЕ создаёт цикла, потому что main
          на тесты не ссылается; меняется лишь то, что правка main инвалидирует
          эту DLL, а правка Video — только Video + эту DLL. -->
+    <!-- Шаг 2.2: Main проверен и остаётся — без него не компилируется
+         UserStore/SessionManager (фикстуры VideoFavoritesTests/YouTubeFeedTests). -->
     <ProjectReference Include="..\ClaudeHomeServer\ClaudeHomeServer.csproj" />
   </ItemGroup>
 

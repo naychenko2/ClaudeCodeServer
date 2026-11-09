@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { ConfirmDialog, Modal } from '../../components/ui';
 import { C, FONT, FS, MODAL_W, R } from '../../lib/design';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useMcpData, plural } from './useMcpData';
 import { McpServerList } from './McpServerList';
 import { McpServerForm } from './McpServerForm';
@@ -21,10 +20,6 @@ type TabKey = 'servers' | 'add' | 'catalog' | 'access' | 'higgsfield' | 'diag';
 
 export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isAdmin: boolean }) {
   const data = useMcpData();
-  // Каталог MCP-серверов (волна 1, задача 9fa075ec) — за фич-флагом, чтобы кнопка
-  // «Найти сервер» не светилась у тех, кому каталог ещё не включили. На бэке
-  // соответствующий ключ в FeatureFlagCatalog.All (заводит Денис)
-  const catalogOn = useFeature(FLAGS.mcpCatalog);
   const [tab, setTab] = useState<TabKey>('servers');
   // Правка существующей записи открывается на вкладке «Добавить» той же формой
   const [editing, setEditing] = useState<McpServer | null>(null);
@@ -67,7 +62,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
       count: data.servers?.filter(s => s.group !== 'integration').length || undefined,
     },
     { key: 'add', label: editing ? 'Правка' : (catalogDraft ? 'Каталог' : 'Добавить') },
-    ...(catalogOn ? [{ key: 'catalog' as TabKey, label: 'Каталог' }] : []),
+    { key: 'catalog', label: 'Каталог' },
     { key: 'access', label: 'Доступ' },
     ...(isAdmin ? [
       { key: 'higgsfield' as TabKey, label: 'Higgsfield', admin: true },
@@ -151,7 +146,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
                 data={data}
                 onAdd={openAdd}
                 onEdit={openEdit}
-                onCatalog={catalogOn ? () => setTab('catalog') : undefined}
+                onCatalog={() => setTab('catalog')}
                 onOpenAccess={() => setTab('access')}
                 onDelete={setPendingDelete}
               />
@@ -166,7 +161,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
                 onCancel={() => { setEditing(null); setCatalogDraft(null); setTab('servers'); }}
               />
             )}
-            {tab === 'catalog' && catalogOn && (
+            {tab === 'catalog' && (
               <McpCatalogPanel
                 installedNames={installedCatalogNames}
                 onPick={openCatalogDraft}

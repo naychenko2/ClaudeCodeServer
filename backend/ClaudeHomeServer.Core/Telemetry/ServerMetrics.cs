@@ -45,9 +45,11 @@ public static class ServerMetrics
         "error_type",  // rate_limit, network, auth, ...
         "status",      // событие лимитов: allowed | allowed_warning | rejected | unknown
         "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other;
-                       // причина промаха prompt cache: none | system_changed | … | other
+                     // причина промаха prompt cache: none | systemChanged | … | other
         "dataset_type",// тип датасета Dify: notes | persona | team | dossiers | project
         "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
+        "observer",    // имя типа наблюдателя сообщений сессии (≈10 значений, берутся из кода)
+        "session_kind",// human | executor — чат человека или чат-исполнитель задачи
     };
 
     private static readonly Meter _meter = new(MeterName, MeterVersion);
@@ -61,6 +63,21 @@ public static class ServerMetrics
         "ccs.llm.duration",
         unit: "ms",
         description: "Длительность хода LLM (ms)");
+
+    public static readonly Histogram<double> SessionQueueWait = _meter.CreateHistogram<double>(
+        "ccs.session.queue_wait",
+        unit: "ms",
+        description: "Ожидание сообщения чата в очереди сессии до рассылки (ms)");
+
+    public static readonly Histogram<double> SessionObserverDuration = _meter.CreateHistogram<double>(
+        "ccs.session.observer_duration",
+        unit: "ms",
+        description: "Время обработки сообщения чата наблюдателем (ms)");
+
+    public static readonly Histogram<long> SessionQueueBytes = _meter.CreateHistogram<long>(
+        "ccs.session.queue_bytes",
+        unit: "By",
+        description: "Суммарный текст несливаемых кадров в очереди сессии (символов), по моменту добавления кадра");
 
     /// <summary>
     /// Явные границы бакетов для <see cref="LlmDuration"/> (мс). Регистрируются как View
@@ -99,16 +116,16 @@ public static class ServerMetrics
 
     /// <summary>
     /// Начала ходов родного Claude с разметкой причиной промаха prompt cache первого вызова
-    /// (<c>diagnostics.cache_miss_reason.type</c>): <c>none</c> — префикс прочитан без промаха.
-    /// Сумма по всем причинам — знаменатель доли холодных стартов, поэтому <c>none</c> тоже
-    /// пишется. Сторож регресса CLI: 2.1.259 рвал кэш при смене нестабильных секций
-    /// системного блока (<c>system_changed</c>), см. правило 09 и docs/observability/overview.md.
+    /// (enum <c>PromptCacheMissReason</c>): <c>none</c> — префикс прочитан без
+    /// промаха. Сумма по всем причинам — знаменатель доли холодных стартов, поэтому <c>none</c>
+    /// тоже пишется. Сторож регресса CLI: 2.1.259 рвал кэш при смене нестабильных секций
+    /// системного блока (<c>systemChanged</c>), см. правило 09 и docs/observability/overview.md.
     /// Токены промаха сюда не едут (C4) — они в паспорте хода.
     /// </summary>
     public static readonly Counter<long> PromptCacheTurns = _meter.CreateCounter<long>(
         "ccs.prompt_cache.turns",
         unit: "{turn}",
-        description: "Начала ходов Claude по причине промаха prompt cache (reason: none | system_changed | …)");
+        description: "Начала ходов Claude по причине промаха prompt cache (reason: none | systemChanged | …)");
 
     public static readonly Counter<long> McpCalls = _meter.CreateCounter<long>(
         "ccs.mcp.calls",
@@ -131,6 +148,11 @@ public static class ServerMetrics
         "ccs.chat_subjects.parse_failed",
         unit: "{batch}",
         description: "Пачки разбора чатов по темам с неразборчивым ответом модели");
+
+    public static readonly Counter<long> CoalescedFrames = _meter.CreateCounter<long>(
+        "ccs.session.coalesced_frames",
+        unit: "{frame}",
+        description: "Кадры-дельты, слитые с предыдущим при переполнении очереди сессии (текст не теряется)");
 
     public static readonly Counter<long> TelemetryHeartbeat = _meter.CreateCounter<long>(
         "ccs.telemetry.heartbeat",
@@ -188,6 +210,20 @@ public static class ServerMetrics
             new KeyValuePair<string, object?>("execution", execution));
     }
 
+    /// <summary>Время ожидания сообщения в очереди сессии: <paramref name="sessionKind"/> — human | executor.</summary>
+    public static void RecordSessionQueueWait(double waitMs, string sessionKind) =>
+        SessionQueueWait.Record(waitMs, new KeyValuePair<string, object?>("session_kind", sessionKind));
+
+    /// <summary>Суммарный текст несливаемых кадров в очереди сессии: <paramref name="sessionKind"/> — human | executor.</summary>
+    public static void RecordSessionQueueBytes(long bytes, string sessionKind) =>
+        SessionQueueBytes.Record(bytes, new KeyValuePair<string, object?>("session_kind", sessionKind));
+
+    /// <summary>Время наблюдателя: <paramref name="observer"/> — имя типа обработчика (значения из кода, не из данных).</summary>
+    public static void RecordSessionObserverDuration(double durationMs, string observer, string sessionKind) =>
+        SessionObserverDuration.Record(durationMs,
+            new KeyValuePair<string, object?>("observer", observer),
+            new KeyValuePair<string, object?>("session_kind", sessionKind));
+
     public static void RecordLlmError(string provider, string errorType, string execution = "local")
     {
         LlmErrors.Add(1,
@@ -203,15 +239,6 @@ public static class ServerMetrics
             new KeyValuePair<string, object?>("status", status));
     }
 
-    /// <summary>
-    /// Начало хода с причиной промаха prompt cache. <paramref name="reason"/> уже сведён к
-    /// замкнутому набору (<see cref="TurnTelemetry.ClassifyCacheMissReason"/>).
-    /// </summary>
-    public static void RecordPromptCacheTurn(string reason)
-    {
-        PromptCacheTurns.Add(1, new KeyValuePair<string, object?>("reason", reason));
-    }
-
     public static void RecordMcpCall(string toolName, string outcome)
     {
         McpCalls.Add(1,
@@ -224,6 +251,15 @@ public static class ServerMetrics
         McpErrors.Add(1,
             new KeyValuePair<string, object?>("tool_name", MetricTagGuard.Tool(toolName)),
             new KeyValuePair<string, object?>("error_type", errorType));
+    }
+
+    /// <summary>
+    /// Начало хода с причиной промаха prompt cache. <paramref name="reason"/> уже сведён к
+    /// замкнутому набору тегов (<see cref="TurnTelemetry.CacheMissReasonTag"/>).
+    /// </summary>
+    public static void RecordPromptCacheTurn(string reason)
+    {
+        PromptCacheTurns.Add(1, new KeyValuePair<string, object?>("reason", reason));
     }
 
     public static void RecordDifySyncError(string reason)

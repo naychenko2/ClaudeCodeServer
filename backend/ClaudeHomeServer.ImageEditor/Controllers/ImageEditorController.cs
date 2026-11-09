@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
@@ -31,58 +32,78 @@ public class ImageEditorController(
     IConfiguration? config = null,
     IImageRaster? raster = null,
     ImageThreadService? threads = null,
-    ImageContextLaunch? context = null)
+    ImageContextLaunch? context = null,
+    ILocalImageMedia? localMedia = null,
+    CharacterTrainingPhotos? trainingPhotos = null,
+    CharacterPhotoLabeling? labeling = null,
+    CharacterLoraRuns? loraRuns = null)
     : ImageEditorEndpoints(editors, launcher, placeSettings, jobs, steps, config, raster, context)
 {
     [HttpGet("catalog")]
     public IActionResult Catalog(string projectId) =>
         Gate(projectId, out _, out var denied) ? CatalogOf() : denied;
 
+    [HttpGet("format")]
+    public async Task<IActionResult> Format(string projectId, [FromQuery] string? provider, [FromQuery] string? model,
+        [FromQuery] string? op, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string projectId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await QuoteIn(scope, req, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, req.SessionId, out denied)
+            ? await QuoteIn(scope, req, ct) : denied;
 
     [HttpPost("jobs")]
     [RequestSizeLimit(MaxJobBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxJobBodyBytes)]
     public async Task<IActionResult> Start(string projectId, [FromForm] StartJobForm form, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await StartIn(scope, form, ct) : denied;
+        Gate(projectId, out var scope, out var denied) && gate.TryOptionalChat(UserId, projectId, form.SessionId, out denied)
+            ? await StartIn(scope, form, ct) : denied;
 
     // Образец с диска человека в рабочую папку модуля (ADR-023 §2.3): дальше — attachRef({kind: 'image', ref: {upload}})
     [HttpPost("uploads")]
     [RequestSizeLimit(MaxUploadBodyBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBodyBytes)]
     public async Task<IActionResult> Upload(string projectId, IFormFile? file, CancellationToken ct) =>
-        Gate(projectId, out _, out var denied) ? await UploadIn(file, ct) : denied;
+        Gate(projectId, out var scope, out var denied) ? await UploadIn(scope, file, ct) : denied;
 
     [HttpGet("jobs/{jobId}")]
     public IActionResult GetJob(string projectId, string jobId) =>
-        Gate(projectId, out var scope, out var denied) ? JobIn(scope, jobId) : denied;
+        Gate(projectId, out var scope, out var denied) ? (JobVisible(scope, jobId) ? JobIn(scope, jobId) : JobNotFound()) : denied;
 
     [HttpDelete("jobs/{jobId}")]
     public async Task<IActionResult> Cancel(string projectId, string jobId, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await CancelIn(scope, jobId, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? await CancelIn(scope, jobId, ct) : JobNotFound()) : denied;
 
     [HttpGet("jobs/{jobId}/variants/{variant:int}")]
     public IActionResult Variant(string projectId, string jobId, int variant) =>
-        Gate(projectId, out var scope, out var denied) ? VariantIn(scope, jobId, variant) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (JobVisible(scope, jobId) ? VariantIn(scope, jobId, variant) : JobNotFound()) : denied;
 
     // ── Правки без ИИ и шаги истории (ADR-018 §9) ──────────────────────────────────
 
     [HttpPost("transform")]
     public async Task<IActionResult> Transform(string projectId, [FromBody] ImageTransformRequest req,
         [FromQuery] bool dryRun, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await TransformIn(scope, req, dryRun, ct) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (BaseVisible(scope, req.Base) ? await TransformIn(scope, req, dryRun, ct)
+                : Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.JobNotFound, "Задача не найдена"))
+            : denied;
 
     // Картинка шага истории — для холста и миниатюр; токен через ?access_token=, как у вариантов
     [HttpGet("steps/{stepId}")]
     public IActionResult Step(string projectId, string stepId) =>
-        Gate(projectId, out var scope, out var denied) ? StepIn(scope, stepId) : denied;
+        Gate(projectId, out var scope, out var denied)
+            ? (StepVisible(scope, stepId) ? StepIn(scope, stepId)
+                : Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден"))
+            : denied;
 
     [HttpPost("save")]
     public async Task<IActionResult> Save(string projectId, [FromBody] ImageEditSaveRequest req)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        if (!gate.TryOptionalChat(UserId, projectId, req.SessionId, out denied)) return denied;
         if (saver is null) return JobsUnavailable();
         if (Raster is null) return RasterUnavailable();
 
@@ -111,14 +132,17 @@ public class ImageEditorController(
         if (hasStep)
         {
             if (Steps is null) return JobsUnavailable();
-            image = Steps.Open(UserId, projectId, req.StepId!.Trim())?.Image;
+            if (!StepVisible(ImageEditScope.Of(project), req.StepId!.Trim()))
+                return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
+            image = Steps.Open(ImageEditScope.TenantOf(project), projectId, req.StepId!.Trim())?.Image;
             if (image is null)
                 return Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.StepNotFound, "Шаг истории не найден");
         }
         else
         {
             if (Jobs is null) return JobsUnavailable();
-            image = Jobs.OpenVariant(UserId, projectId, req.JobId!.Trim(), req.Variant);
+            if (!JobVisible(ImageEditScope.Of(project), req.JobId!.Trim())) return JobNotFound();
+            image = Jobs.OpenVariant(ImageEditScope.TenantOf(project), projectId, req.JobId!.Trim(), req.Variant);
             if (image is null) return JobNotFound();
         }
 
@@ -149,8 +173,8 @@ public class ImageEditorController(
             files?.NotifyMutated(project.RootPath, result.Path, FileMutationKind.Write);
             // Нить идёт за сохранённым файлом (ADR-019). Чужая нить или чат молча пропускаются:
             // файл уже сохранён, а ответ не должен выдавать чужое
-            if (threads is not null && threads.OwnThread(UserId, project.Id, req.SessionId, req.ThreadId))
-                await threads.OnSavedAsync(UserId, project.Id, req.SessionId!.Trim(), req.ThreadId!.Trim(), result.Path,
+            if (threads is not null && threads.OwnThread(ImageEditScope.TenantOf(project), project.Id, req.SessionId, req.ThreadId))
+                await threads.OnSavedAsync(ImageEditScope.TenantOf(project), project.Id, req.SessionId!.Trim(), req.ThreadId!.Trim(), result.Path,
                     HttpContext?.RequestAborted ?? CancellationToken.None);
         }
         return Map(saved, Ok);
@@ -190,7 +214,24 @@ public class ImageEditorController(
     public IActionResult Characters(string projectId)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
-        return Ok(CharacterStore.List(project.RootPath).Select(CharacterDto.From));
+        var list = CharacterStore.List(project.RootPath);
+        foreach (var m in list) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, m.Slug);
+        return Ok(list.Select(m => CharacterDto.From(m, withLabels: true)));
+    }
+
+    // Список LoRA ComfyUI для формы персонажа. Нет шва или ComfyUI не ответил — не ошибка:
+    // available: false, форма прячет выбор и оставляет текущую LoRA как есть
+    [HttpGet("loras")]
+    public async Task<IActionResult> Loras(string projectId, CancellationToken ct)
+    {
+        if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        var items = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
+        var own = items?.Where(n => LoraNamespace.VisibleTo(ImageEditScope.TenantOf(project), n)).ToList();
+        // Даты обучения — только для имён, прошедших фильтр видимости: чужие не утекают
+        var trained = own is null ? [] : loraRuns?.TrainedDates(project.RootPath)
+            .Where(kv => own.Contains(kv.Key, StringComparer.Ordinal))
+            .ToDictionary(kv => kv.Key, kv => kv.Value) ?? [];
+        return Ok(new { available = own is not null, items = own ?? [], trained });
     }
 
     [HttpGet("characters/{slug}")]
@@ -198,7 +239,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         var manifest = CharacterStore.Get(project.RootPath, slug);
-        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest));
+        if (manifest is not null) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, manifest.Slug);
+        return manifest is null ? CharacterNotFound() : Ok(CharacterDto.From(manifest, withLabels: true));
     }
 
     [HttpPost("characters")]
@@ -207,11 +249,25 @@ public class ImageEditorController(
     public async Task<IActionResult> CreateCharacter(string projectId, [FromForm] CharacterForm form, CancellationToken ct)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        var (lora, loraDenied) = await LoraPatchAsync(ImageEditScope.TenantOf(project), form, ct);
+        // «Убрать» при создании нечего: LoRA ещё нет
+        if (lora is { Remove: true }) lora = null;
+        if (loraDenied is not null) return loraDenied;
+        // Имя проверяем до создания: отказ не должен оставить персонажа без LoRA на диске
+        if (lora is not null && CharacterStore.CheckLora(ImageEditScope.TenantOf(project), lora) is { } loraError) return MapCharacter(loraError, _ => Ok());
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
         var draft = new CharacterDraft(form.Name ?? "", form.Description, photos);
         var created = CharacterStore.Create(project.RootPath, draft, DateTime.UtcNow);
         if (created.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Create);
-        return Map(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest)));
+        if (created.Value is { } made && lora is not null)
+        {
+            var withLora = CharacterStore.Update(project.RootPath, ImageEditScope.TenantOf(project), made.Manifest.Slug,
+                new CharacterPatch(null, null, [], [], null, lora));
+            if (withLora?.Value is { } loraChange) Notify(project.RootPath, loraChange, FileMutationKind.Write);
+            created = withLora ?? created;
+        }
+        if (created.Value is { } born) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, born.Manifest.Slug);
+        return MapCharacter(created, c => StatusCode(StatusCodes.Status201Created, CharacterDto.From(c.Manifest, withLabels: true)));
     }
 
     [HttpPut("characters/{slug}")]
@@ -220,12 +276,17 @@ public class ImageEditorController(
     public async Task<IActionResult> UpdateCharacter(string projectId, string slug, [FromForm] CharacterForm form, CancellationToken ct)
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
+        var (lora, loraDenied) = await LoraPatchAsync(ImageEditScope.TenantOf(project), form, ct);
+        if (loraDenied is not null) return loraDenied;
+        var (labels, labelsDenied) = PhotoLabelsOf(form);
+        if (labelsDenied is not null) return labelsDenied;
         var photos = await PhotosAsync(form.Photos, form.Angles, ct);
-        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto);
-        var updated = CharacterStore.Update(project.RootPath, slug, patch);
+        var patch = new CharacterPatch(form.Name, form.Description, photos, form.RemovePhotos ?? [], form.PrimaryPhoto, lora, labels);
+        var updated = CharacterStore.Update(project.RootPath, ImageEditScope.TenantOf(project), slug, patch);
         if (updated is null) return CharacterNotFound();
         if (updated.Value is { } change) Notify(project.RootPath, change, FileMutationKind.Write);
-        return Map(updated, c => Ok(CharacterDto.From(c.Manifest)));
+        if (photos.Count > 0) labeling?.Enqueue(ImageEditScope.TenantOf(project), project.RootPath, slug);
+        return MapCharacter(updated, c => Ok(CharacterDto.From(c.Manifest, withLabels: true)));
     }
 
     [HttpDelete("characters/{slug}")]
@@ -233,6 +294,8 @@ public class ImageEditorController(
     {
         if (!ProjectGate(projectId, out var project, out var denied)) return denied;
         if (!CharacterStore.Delete(project.RootPath, slug)) return CharacterNotFound();
+        // Обучающие фото персонажа живут вне проекта (data/lora-training) — без уборки остаются сиротами
+        trainingPhotos?.Purge(ImageEditScope.TenantOf(project), projectId, slug);
         files?.NotifyMutated(project.RootPath, $"{CharacterStore.Folder}/{slug}", FileMutationKind.Delete);
         return NoContent();
     }
@@ -250,12 +313,64 @@ public class ImageEditorController(
     public sealed class CharacterForm
     {
         public string? Name { get; set; }
+        // Пустая строка = «стереть», поэтому в null её не превращаем
+        [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? Description { get; set; }
         public List<IFormFile>? Photos { get; set; }
         public List<string>? Angles { get; set; }
         public List<string>? RemovePhotos { get; set; }
         public string? PrimaryPhoto { get; set; }
+        public string? LoraName { get; set; }
+        public string? LoraTrigger { get; set; }
+        public string? LoraStrength { get; set; }
+        public bool? RemoveLora { get; set; }
+        // JSON {"<файл>": {"angle","pitch","emotion"}}
+        public string? PhotoLabels { get; set; }
     }
+
+    private static readonly System.Text.Json.JsonSerializerOptions LabelsJson = new(System.Text.Json.JsonSerializerDefaults.Web);
+
+    // Ручные метки фото (ADR-027 §1). Значения и имена файлов проверяет CharacterStore.Update
+    private (IReadOnlyDictionary<string, CharacterPhotoLabels>? Labels, IActionResult? Denied) PhotoLabelsOf(CharacterForm form)
+    {
+        if (string.IsNullOrWhiteSpace(form.PhotoLabels)) return (null, null);
+        try
+        {
+            var labels = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, CharacterPhotoLabels>>(form.PhotoLabels, LabelsJson);
+            if (labels is not null && labels.Values.All(l => l is not null)) return (labels, null);
+        }
+        catch (System.Text.Json.JsonException) { }
+        return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest, "Метки фото: ожидается объект {файл: {angle, pitch, emotion}}"));
+    }
+
+    // Патч LoRA из формы: RemoveLora — убрать, LoraName — задать, иначе null (не трогать).
+    // Список ComfyUI запрашиваем только когда LoRA задают
+    private async Task<(CharacterLoraPatch? Patch, IActionResult? Denied)> LoraPatchAsync(
+        string tenantId, CharacterForm form, CancellationToken ct)
+    {
+        if (form.RemoveLora == true) return (CharacterLoraPatch.Removal(), null);
+        if (string.IsNullOrWhiteSpace(form.LoraName)) return (null, null);
+        double? strength = null;
+        if (!string.IsNullOrWhiteSpace(form.LoraStrength))
+        {
+            if (!double.TryParse(form.LoraStrength.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                return (null, Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
+                    "Сила должна быть числом от 0 до 2."));
+            strength = parsed;
+        }
+        if (!LoraNamespace.VisibleTo(tenantId, form.LoraName.Trim()))
+            return (null, Error(StatusCodes.Status403Forbidden, ImageEditErrorCodes.LoraNotVisible, "Эта LoRA вам недоступна."));
+        var known = localMedia is null ? null : await localMedia.ListLorasAsync(ct);
+        return (CharacterLoraPatch.Set(form.LoraName, form.LoraTrigger, strength, known), null);
+    }
+
+    // Недоступный ComfyUI при проверке LoRA — 503, а не 409 из общего Map
+    private IActionResult MapCharacter<T>(ImageEditCallResult<T> result, Func<T, IActionResult> ok) =>
+        result.ErrorCode == ImageEditErrorCodes.ProviderUnavailable
+            ? Error(StatusCodes.Status503ServiceUnavailable, result.ErrorCode, result.Error ?? "Запрос не выполнен")
+            : result.ErrorCode == ImageEditErrorCodes.LoraNotVisible
+                ? Error(StatusCodes.Status403Forbidden, result.ErrorCode, result.Error ?? "Запрос не выполнен")
+                : Map(result, ok);
 
     // Проектный гейт области: флаг и чужой проект одинаково 404 (ImageEditScopeGate)
     private bool Gate(string projectId, [NotNullWhen(true)] out ImageEditScope? scope,
@@ -271,6 +386,22 @@ public class ImageEditorController(
     private bool ProjectGate(string projectId, [NotNullWhen(true)] out Project? project,
         [NotNullWhen(false)] out IActionResult? denied) =>
         gate.TryProject(UserId, projectId, out project, out denied);
+
+    // Артефакты по id (находка 4.3): привязка к чату проекта — зритель обязан его видеть. Задачи нет —
+    // true: «не найдена» ответит сама ручка
+    private bool JobVisible(ImageEditScope scope, string jobId)
+    {
+        var chat = Jobs?.Get(scope.Tenant, scope.Key, jobId)?.ChatSessionId;
+        return gate.TryArtifactChat(UserId, scope.Key, chat);
+    }
+
+    private bool StepVisible(ImageEditScope scope, string stepId) =>
+        Steps?.Open(scope.Tenant, scope.Key, stepId) is not { Step.JobId: { } jobId } || JobVisible(scope, jobId);
+
+    private bool BaseVisible(ImageEditScope scope, ImageTransformBase? b) =>
+        b is null
+        || (string.IsNullOrWhiteSpace(b.JobId) || JobVisible(scope, b.JobId.Trim()))
+        && (string.IsNullOrWhiteSpace(b.StepId) || StepVisible(scope, b.StepId.Trim()));
 
     private IActionResult CharacterNotFound() =>
         Error(StatusCodes.Status404NotFound, ImageEditErrorCodes.CharacterNotFound, "Персонаж не найден");

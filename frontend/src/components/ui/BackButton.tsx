@@ -7,9 +7,11 @@ import { PressableArea } from './PressableArea';
 // Клик по всей кнопке (стрелка + текст) выполняет возврат — одинаково во всех шапках.
 // Рендерится нажимаемой областью (PressableArea), а не <button>: в children бывают
 // собственные кнопки (стек участников группового чата в мобильной шапке).
-export function BackButton({ onClick, title, children, iconColor = C.textSecondary, iconSize = 16, style }: {
+export function BackButton({ onClick, title, ariaLabel, children, iconColor = C.textSecondary, iconSize = 16, style }: {
   onClick: (e: MouseEvent | KeyboardEvent) => void;
   title?: string;
+  // Полный текст для скринридеров (видимая подпись может быть короткой, «Чат»/«К списку»).
+  ariaLabel?: string;
   children?: ReactNode;
   iconColor?: string;
   iconSize?: number;
@@ -19,6 +21,7 @@ export function BackButton({ onClick, title, children, iconColor = C.textSeconda
     <PressableArea
       onPress={onClick}
       title={title ?? 'Назад'}
+      aria-label={ariaLabel}
       style={{
         display: 'flex', alignItems: 'center', gap: 7,
         background: 'none', border: 'none', cursor: 'pointer',

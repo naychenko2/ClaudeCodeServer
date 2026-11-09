@@ -507,6 +507,7 @@ public sealed class CodeGraphService : IDisposable
         Core.CodeGraph? prevGraph,
         CancellationToken ct)
     {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var allNodes = new Dictionary<string, CodeGraphNode>();
         var allEdges = new List<CodeGraphEdge>();
 
@@ -568,6 +569,12 @@ public sealed class CodeGraphService : IDisposable
         // но склейка нескольких графов — наша забота; дубль здесь задваивал бы степень
         // узлов (топ хабов и сортировка соседей врут).
         var dedupedEdges = allEdges.DistinctBy(e => (e.Source, e.Target, e.Relation)).ToList();
+
+        // Замер построения: длительность раньше нигде не фиксировалась (ADR-003 — прогрев worktree)
+        _logger.LogInformation(
+            "Построение графа для {Path}: {Nodes} узлов, {Files} файлов за {Seconds:F1} с",
+            rootPath, allNodes.Count, allNodes.Values.Select(n => n.SourceFile).Distinct().Count(),
+            stopwatch.Elapsed.TotalSeconds);
 
         return new Core.CodeGraph { Nodes = allNodes, Edges = dedupedEdges };
     }

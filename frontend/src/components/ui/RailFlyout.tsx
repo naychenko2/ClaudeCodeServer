@@ -258,9 +258,11 @@ export function RailFlyout({ side, label, hint, open, actions, railWidth, hostSt
                       <span style={{
                         width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
                         // Тон точки повторяет кружок на иконке: accent (оранжевый,
-                        // primary), muted (серый, secondary) или warning (жёлтый)
+                        // primary), muted (серый, secondary), warning (жёлтый)
+                        // или info (синий, факт без действия)
                         background: ln.tone === 'muted' ? C.textMuted
-                          : ln.tone === 'warning' ? C.warning : C.accent,
+                          : ln.tone === 'warning' ? C.warning
+                          : ln.tone === 'info' ? C.info : C.accent,
                       }} />
                       <span style={{
                         fontSize: FS.xs, color: C.textMuted, lineHeight: 1.3,

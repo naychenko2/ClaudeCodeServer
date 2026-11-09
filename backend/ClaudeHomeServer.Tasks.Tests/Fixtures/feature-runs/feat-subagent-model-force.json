@@ -1,0 +1,48 @@
+[
+ {
+  "id": "epic-subagent-model-force",
+  "title": "CLI 2.1.300: форс модели субагентов и потолок параллельных агентов Workflow для локальной модели",
+  "persona": "Андрей",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T22:51",
+  "kind": "epic",
+  "role": "feature",
+  "featureId": null,
+  "worktreeBranch": "feat/subagent-model-force",
+  "stepRef": null,
+  "lane": null,
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "smf-s1",
+  "title": "Денис: форс модели сабагентов + потолок параллельных агентов Workflow",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:08",
+  "completed": "2026-10-14T22:31",
+  "kind": "build",
+  "role": "step",
+  "featureId": "epic-subagent-model-force",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ },
+ {
+  "id": "smf-r1",
+  "title": "Денис: доработка CLAUDE_CODE_SUBAGENT_MODEL_FORCE (булев флаг)",
+  "persona": "Денис",
+  "status": "done",
+  "created": "2026-10-14T22:34",
+  "completed": "2026-10-14T22:51",
+  "kind": "rework",
+  "role": "rework",
+  "featureId": "epic-subagent-model-force",
+  "stepRef": "Ш1",
+  "lane": "бэк",
+  "reviewOf": [],
+  "verification": { "verdict": null }
+ }
+]

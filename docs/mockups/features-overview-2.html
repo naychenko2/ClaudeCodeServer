@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фичи, волна 2 · плашка, страница фичи, фильтры · три варианта</title>
+<!--
+  Макет к записке features-overview-2-proposal.md. Код продукта не правится.
+  Привязка: featureId dd859ee2-42a3-4701-bc9c-443c66230f20, stepRef М2-1 (lane front).
+  Пометка .new (пунктир C.accentMuted) — то, чего в продукте сейчас нет.
+  Пометка .be («нужно от бэка») — данных или ручки сейчас нет, см. записку.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Это единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 18px rgba(60,50,35,.06);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-sheet:0 -8px 28px rgba(60,50,35,.18);
+  --shadow-drawer:-12px 0 32px rgba(60,50,35,.14);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --shadow-drawer:-14px 0 36px rgba(0,0,0,.5);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body { background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45; }
+/* Ловушки волны 1, заданы явно: UA-рамка у <button> и шрифт, который кнопка не наследует
+   (Arial вместо Hanken Grotesk). В продукте это делает ui/Button и PressableArea; здесь — сброс. */
+button { font:inherit; color:inherit; border:0; background:none; margin:0; padding:0; -webkit-appearance:none; appearance:none; }
+button:focus-visible, [tabindex]:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+.new { outline:1.5px dashed var(--c-accent-muted); outline-offset:2px; }
+.nonew .new { outline:none; }
+.be { display:inline-flex; align-items:center; gap:3px; font-size:10px; font-weight:700; letter-spacing:.02em; color:var(--c-warning-text);
+  background:var(--c-warning-bg); border-radius:6px; padding:0 6px; white-space:nowrap; vertical-align:middle; }
+.nonew .be { display:none; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:100; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:10px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; cursor:pointer; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { max-width:1240px; margin:10px auto 0; padding:0 16px; font-size:12.5px; color:var(--c-text-secondary); }
+.note b { color:var(--c-text-heading); }
+
+/* ===== Окно продукта ===== */
+.stage { padding:14px 16px 40px; display:flex; justify-content:center; }
+.app { position:relative; width:100%; max-width:1240px; height:780px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; display:flex; gap:8px; padding:8px; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; padding:0; gap:0; display:block; }
+.rail { width:40px; flex-shrink:0; display:flex; flex-direction:column; align-items:center; gap:4px; padding-top:4px; }
+.rail .sep { width:20px; height:1px; background:var(--c-divider); margin:4px 0; }
+.rb { position:relative; width:34px; height:34px; border-radius:8px; color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.rb:hover { background:var(--c-bg-selected); }
+.rb.on { background:var(--c-bg-white); color:var(--c-accent); box-shadow:var(--shadow-thumb); }
+.isl { background:var(--c-bg-white); border-radius:14px; box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-height:0; position:relative; }
+.side { width:340px; flex-shrink:0; }
+.side.narrow { width:316px; }
+.center { flex:1; min-width:0; }
+.right { width:384px; flex-shrink:0; }
+.app.m .isl { border-radius:0; box-shadow:none; width:auto; height:100%; }
+
+/* Шапка панели «Чаты» */
+.ph { display:flex; align-items:center; gap:4px; padding:12px 10px 8px 14px; }
+.ph .ttl { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-right:auto; }
+/* ui/IconButton: xs 24 / sm 28 / lg 40; active → C.accentMuted + C.accent */
+.ib { position:relative; width:28px; height:28px; border-radius:8px; color:var(--c-text-secondary); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.ib.act { background:var(--c-accent-muted); color:var(--c-accent); }
+.app.m .ib { width:40px; height:40px; border-radius:10px; }
+/* Бейдж фильтра у триггера (как FilterBar: нейтральный «скрыто N») */
+.ib .hid { position:absolute; top:-5px; right:-5px; min-width:16px; height:16px; padding:0 4px; border-radius:999px; background:var(--c-bg-selected);
+  color:var(--c-text-secondary); border:1px solid var(--c-border); font:700 10px/14px "JetBrains Mono",monospace; text-align:center; }
+.app.m .ib .hid { top:2px; right:2px; }
+/* ui/Button */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:6px; font-weight:600; cursor:pointer; white-space:nowrap; transition:filter .12s, background .12s; }
+.btn.xs { height:24px; padding:0 9px; font-size:12px; border-radius:8px; }
+.btn.sm { min-height:32px; padding:7px 13px; font-size:13px; border-radius:10px; }
+.btn.md { min-height:40px; padding:11px 16px; font-size:14px; border-radius:12px; }
+.btn.pri { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.pri:hover { filter:brightness(.96); }
+.btn.sec { background:var(--c-bg-panel); color:var(--c-text-secondary); }
+.btn.sec:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn.gh { border:1px solid var(--c-border); color:var(--c-text-secondary); }
+.btn.gh:hover { background:var(--c-bg-selected); }
+.btn.dash { border:1.5px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.app.m .btn.sm, .app.m .btn.xs { min-height:40px; height:auto; }
+.lnk { color:var(--c-accent); font-weight:600; cursor:pointer; font-size:12px; border-radius:6px; padding:2px 4px; }
+.lnk:hover { background:var(--c-accent-light); }
+.lnk.red { color:var(--c-danger-text); }
+.lnk:disabled { opacity:.5; cursor:default; background:none; }
+
+/* Секции списка */
+.scroll { flex:1; overflow:auto; min-height:0; padding:0 10px 14px; }
+.sec { display:flex; align-items:center; gap:6px; width:100%; padding:12px 6px 5px; font-size:10px; font-weight:700;
+  letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); text-align:left; }
+.sec.tg { cursor:pointer; min-height:30px; }
+.sec.tg:hover { color:var(--c-text-secondary); }
+.sec .n { font-family:"JetBrains Mono",monospace; letter-spacing:0; }
+.sec .hint { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:400; font-size:11px; }
+.app.m .sec.tg { min-height:40px; }
+
+/* Строка чата (ChatCard, упрощённо) */
+.cc { display:flex; align-items:center; gap:9px; width:100%; border-radius:10px; padding:7px 9px; cursor:pointer; text-align:left; margin:1px 0; min-height:44px; }
+.cc:hover { background:var(--c-bg-card); }
+.cc.on { background:var(--c-bg-selected); }
+.cc .w { min-width:0; flex:1; }
+.cc .t { font-size:13px; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cc .s { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; }
+.cc .tm { font-size:11px; color:var(--c-text-muted); flex-shrink:0; align-self:flex-start; margin-top:2px; }
+.cc.tint-run { animation:flow 2.6s ease-in-out infinite; }
+.cc.tint-wait { background:var(--c-info-bg); }
+.cc.tint-stop { background:var(--c-danger-bg); }
+@keyframes flow { 0%,100% { background:var(--c-bg-white); } 50% { background:var(--c-bg-selected); } }
+.role { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-secondary); background:var(--c-bg-selected); border-radius:6px; padding:0 5px; flex-shrink:0; }
+.role.key { background:var(--c-accent-light); color:var(--c-accent); font-weight:700; }
+.multi { font-size:10.5px; color:var(--c-text-secondary); border:1px dashed var(--c-dashed); border-radius:6px; padding:0 5px; flex-shrink:0; }
+.kids { margin:2px 0 8px 14px; padding-left:8px; border-left:1px solid var(--c-divider); }
+.more { font-size:12px; color:var(--c-text-secondary); padding:6px 9px; border-radius:8px; cursor:pointer; min-height:32px; }
+.more:hover { background:var(--c-bg-card); color:var(--c-text-primary); }
+.app.m .more { min-height:40px; }
+
+.av { flex-shrink:0; width:22px; height:22px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-heading);
+  display:inline-flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; }
+.av.sm { width:18px; height:18px; font-size:9.5px; }
+.av.xs { width:16px; height:16px; font-size:9px; }
+.stack { display:inline-flex; flex-shrink:0; }
+.stack .av { box-shadow:0 0 0 2px var(--c-bg-card); }
+.stack .av + .av { margin-left:-5px; }
+
+/* Глифы, мини-рельса, тоны (словарь волны 1: FeatureGlyphs, FeatureRail) */
+.gl { display:inline-flex; flex-shrink:0; width:14px; height:14px; }
+.mr { display:inline-flex; align-items:center; gap:2px; flex-shrink:0; }
+.mr i { display:block; width:8px; height:5px; border-radius:999px; background:var(--c-progress-track); }
+.mr i.d { background:var(--c-success); }
+.mr i.x { background:transparent; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.mr i.a { width:15px; }
+.mr i.a.run { background:var(--c-text-heading); } .mr i.a.wait { background:var(--c-info); }
+.mr i.a.stop { background:var(--c-danger); } .mr i.a.loop { background:var(--c-warning); }
+.mr.gone i, .mr.gone i.d { background:var(--c-text-muted); opacity:.5; }
+.mr.gone i.x { background:transparent; }
+.tn-wait { color:var(--c-info) !important; font-weight:600; }
+.tn-stop { color:var(--c-danger-text) !important; font-weight:600; }
+.tn-loop { color:var(--c-warning-text) !important; font-weight:600; }
+.tn-run { color:var(--c-text-heading) !important; }
+.tn-ok { color:var(--c-success-text) !important; }
+.pulse { animation:pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+@media (prefers-reduced-motion: reduce) { .pulse, .cc.tint-run { animation:none; } }
+.tag { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:600; border-radius:6px; padding:1px 7px; white-space:nowrap; flex-shrink:0; }
+.tag.run { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.tag.wait { background:var(--c-info-bg); color:var(--c-info); }
+.tag.stop { background:var(--c-danger-bg); color:var(--c-danger-text); box-shadow:inset 0 0 0 1px var(--c-danger); }
+.tag.loop { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.mute { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+
+/* ===== А · двухстрочная плашка ===== */
+.ga { margin:4px 0 2px; }
+.ha { position:relative; display:flex; align-items:stretch; border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:10px; transition:border-color .12s, box-shadow .12s; }
+.ha:hover { border-color:var(--c-border); box-shadow:var(--shadow-card); }
+.ha.att-wait { box-shadow:inset 3px 0 0 var(--c-info); }
+.ha.att-stop { box-shadow:inset 3px 0 0 var(--c-danger); }
+.ha.sel { border-color:var(--c-accent-muted); background:var(--c-accent-light); }
+.ha .chev { width:26px; flex-shrink:0; display:flex; align-items:center; justify-content:center; color:var(--c-text-muted); cursor:pointer; border-radius:10px 0 0 10px; }
+.ha .chev:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.ha .chev svg { transition:transform .15s; }
+.ga.open .ha .chev svg { transform:rotate(90deg); }
+.ha .bd { flex:1; min-width:0; display:flex; flex-direction:column; gap:3px; padding:7px 10px 7px 2px; cursor:pointer; text-align:left; }
+.ha .l1 { display:flex; align-items:center; gap:7px; min-width:0; }
+.ha .nm { font-size:13px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.ha .pr { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.ha .l2 { display:flex; align-items:center; gap:7px; min-width:0; }
+.ha .st { font-size:11.5px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.ha .ago { font-size:11px; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.ha .qa { position:absolute; right:6px; top:6px; opacity:0; transition:opacity .12s; }
+.ha:hover .qa, .ha:focus-within .qa { opacity:1; }
+.ha:hover .pr { visibility:hidden; }
+.app.m .ha .chev { width:40px; }
+.app.m .ha .bd { min-height:52px; }
+.app.m .ha .qa { display:none; }
+.closedA .ha { background:transparent; border-color:transparent; }
+.closedA .ha .bd { padding-top:5px; padding-bottom:5px; }
+.closedA .ha .nm { color:var(--c-text-secondary); font-weight:600; }
+.closedA .ha:hover { background:var(--c-bg-card); }
+
+/* ===== Б · карточка-плитка ===== */
+.cb { border:1px solid var(--c-border-light); background:var(--c-bg-card); border-radius:12px; margin:0 0 8px; transition:border-color .12s, box-shadow .12s; overflow:hidden; }
+.cb:hover { border-color:var(--c-border); box-shadow:var(--shadow-card); }
+.cb.att-wait { box-shadow:inset 3px 0 0 var(--c-info); }
+.cb.att-stop { box-shadow:inset 3px 0 0 var(--c-danger); }
+.cb.sel { border-color:var(--c-accent-muted); }
+.cb .bd { display:block; width:100%; text-align:left; padding:10px 12px 0; cursor:pointer; }
+.cb .h { display:flex; align-items:center; gap:7px; min-width:0; }
+.cb .nm { font-size:13.5px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cb .br { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); margin:1px 0 0 21px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lr { display:grid; grid-template-columns:repeat(7,1fr); gap:3px; margin:9px 0 0; }
+.lr .sgm { height:6px; border-radius:999px; background:var(--c-progress-track); }
+.lr .sgm.d { background:var(--c-success); }
+.lr .sgm.x { background:transparent; box-shadow:inset 0 0 0 1px var(--c-dashed); }
+.lr .sgm.a.run { background:var(--c-text-heading); } .lr .sgm.a.wait { background:var(--c-info); }
+.lr .sgm.a.stop { background:var(--c-danger); } .lr .sgm.a.loop { background:var(--c-warning); }
+.lr.gone .sgm { background:var(--c-text-muted); opacity:.45; }
+.lr .lb { font-size:10px; color:var(--c-text-muted); text-align:center; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.lr .lb.a { color:var(--c-text-heading); font-weight:700; overflow:visible; }
+.cb .nw { display:flex; align-items:center; gap:7px; margin-top:8px; font-size:12px; color:var(--c-text-secondary); min-width:0; }
+.cb .nw .tx { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.cb .nw b { color:var(--c-text-heading); }
+.cb .ft { display:flex; align-items:center; gap:6px; padding:8px 8px 8px 12px; margin-top:8px; border-top:1px solid var(--c-border-light); font-size:11.5px; color:var(--c-text-muted); }
+.cb .ft .cnt { display:inline-flex; align-items:center; gap:4px; cursor:pointer; border-radius:6px; padding:2px 4px; min-height:24px; }
+.cb .ft .cnt:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.cb .ft .sp { flex:1; }
+.cb .kids { margin:0 10px 8px 14px; }
+.app.m .cb .ft .cnt { min-height:40px; }
+.cb.gone { background:transparent; border-color:transparent; margin:0; }
+.cb.gone:hover { background:var(--c-bg-card); box-shadow:none; }
+.cb.gone .bd { padding:7px 10px 7px; }
+.cb.gone .nm { color:var(--c-text-secondary); font-weight:600; font-size:13px; }
+
+/* ===== В · строка-индикатор ===== */
+.hc { display:flex; align-items:center; gap:8px; width:100%; border-radius:10px; padding:6px 8px 6px 4px; cursor:pointer; text-align:left; margin:1px 0; min-height:40px; }
+.hc:hover { background:var(--c-bg-card); }
+.hc.sel { background:var(--c-accent-light); }
+.hc .chev { width:22px; height:28px; display:flex; align-items:center; justify-content:center; color:var(--c-text-muted); border-radius:6px; flex-shrink:0; }
+.hc .chev:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.hc .chev svg { transition:transform .15s; }
+.gc.open .hc .chev svg { transform:rotate(90deg); }
+.hc .nm { font-size:13px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.hc .rt { display:flex; align-items:center; gap:6px; flex-shrink:0; font-size:11px; color:var(--c-text-muted); }
+.ring { flex-shrink:0; }
+.app.m .hc { min-height:48px; }
+.app.m .hc .chev { width:40px; height:40px; }
+.gc.gone .hc .nm { color:var(--c-text-secondary); font-weight:600; }
+
+/* ===== Фильтры ===== */
+/* ui/Chip variant="toggle" — эталон FilterBar «Чатов» */
+.chip { display:inline-flex; align-items:center; gap:6px; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; cursor:pointer;
+  border:1px solid var(--c-border-light); color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; }
+.chip:hover { border-color:var(--c-border); color:var(--c-text-primary); }
+.chip.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.chip .n { font:400 10px "JetBrains Mono",monospace; opacity:.8; }
+.chip .dt { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.chip.zero { opacity:.5; }
+.app.m .chip { padding:7px 13px; font-size:14px; min-height:40px; }
+/* ui/Chip variant="soft" — вариант В */
+.sc { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; border-radius:999px; font-size:12px; cursor:pointer;
+  border:1px solid var(--c-border); background:var(--c-bg-card); color:var(--c-text-secondary); white-space:nowrap; flex-shrink:0; height:26px; }
+.sc:hover { background:var(--c-bg-selected); }
+.sc.on { border-color:var(--c-accent-muted); background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.sc .n { font:400 10.5px "JetBrains Mono",monospace; color:var(--c-text-muted); }
+.sc.on .n { color:var(--c-accent); }
+.sc .dt { width:6px; height:6px; border-radius:50%; }
+.sc.zero { opacity:.5; }
+.app.m .sc { height:40px; padding:0 13px; font-size:13px; }
+.vsep { width:1px; align-self:stretch; background:var(--c-divider); margin:4px 2px; flex-shrink:0; }
+.chips { display:flex; gap:6px; align-items:center; padding:0 12px 8px 14px; overflow-x:auto; scrollbar-width:none; }
+.chips::-webkit-scrollbar { display:none; }
+.chips.wrap { flex-wrap:wrap; overflow:visible; }
+/* ui/InlineSegmented — вариант Б */
+.iseg { display:flex; gap:0; padding:2px; border-radius:9px; background:var(--c-bg-selected); margin:0 12px 8px 14px; overflow-x:auto; scrollbar-width:none; }
+.iseg::-webkit-scrollbar { display:none; }
+.iseg button { flex:1 0 auto; display:inline-flex; align-items:center; justify-content:center; gap:4px; height:28px; padding:0 7px; border-radius:7px; font-size:12px; font-weight:600; color:var(--c-text-muted); cursor:pointer; white-space:nowrap; }
+.iseg button:hover { color:var(--c-text-primary); }
+.iseg button.on { background:var(--c-accent-light); color:var(--c-accent); }
+.iseg .n { font:400 10.5px "JetBrains Mono",monospace; opacity:.85; }
+.iseg .dt { width:6px; height:6px; border-radius:50%; }
+.app.m .iseg { margin:0 8px 8px; }
+.app.m .iseg button { height:36px; padding:0 12px; font-size:13px; }
+/* Поповер FilterBar (320, C.bgWhite, R.xl, SHADOW.dropdown, SP.md) */
+.pop { position:absolute; z-index:50; width:320px; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:12px; }
+.pop .cap, .fsh .cap, .fcap { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin:10px 0 6px; display:flex; align-items:center; gap:6px; }
+.pop .cap:first-child, .fsh .cap:first-child { margin-top:0; }
+.fcap .r { margin-left:auto; text-transform:none; letter-spacing:0; font-weight:600; }
+.srch { display:flex; align-items:center; gap:7px; height:34px; border:1px solid var(--c-border); border-radius:12px; padding:0 10px; color:var(--c-text-muted); font-size:13px; }
+.app.m .srch { height:40px; }
+.pop .row, .fsh .row { display:flex; flex-wrap:wrap; gap:6px; }
+.pop .foot, .fsh .foot { display:flex; align-items:center; gap:8px; margin-top:12px; padding-top:10px; border-top:1px solid var(--c-divider); font-size:12px; color:var(--c-text-muted); }
+.pop .foot .sp, .fsh .foot .sp { flex:1; }
+/* ui/Toggle (PillSwitch-переключатель) */
+.tgl { display:flex; align-items:center; gap:10px; width:100%; text-align:left; cursor:pointer; padding:6px 0; min-height:32px; font-size:13px; color:var(--c-text-primary); }
+.tgl .sw { margin-left:auto; width:32px; height:18px; border-radius:999px; background:var(--c-progress-track); position:relative; flex-shrink:0; transition:background .12s; }
+.tgl .sw::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); transition:left .12s; }
+.tgl.on .sw { background:var(--c-accent); }
+.tgl.on .sw::after { left:16px; }
+.tgl .d { display:block; font-size:11px; color:var(--c-text-muted); }
+.app.m .tgl { min-height:44px; }
+/* Строка активного фильтра под шапкой (А) */
+.afl { display:flex; align-items:center; gap:6px; flex-wrap:wrap; padding:0 12px 8px 14px; font-size:12px; color:var(--c-text-muted); }
+.rmc { display:inline-flex; align-items:center; gap:4px; height:24px; padding:0 4px 0 9px; border-radius:999px; background:var(--c-accent-light); border:1px solid var(--c-accent-muted); color:var(--c-accent); font-size:12px; font-weight:600; }
+.rmc button { width:18px; height:18px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--c-accent); }
+.rmc button:hover { background:var(--c-accent-muted); }
+.app.m .rmc { height:32px; }
+.app.m .rmc button { width:32px; height:32px; }
+
+/* Пустые состояния */
+.empty { text-align:center; padding:28px 18px; color:var(--c-text-secondary); }
+.empty .ic { width:44px; height:44px; border-radius:50%; background:var(--c-bg-selected); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; margin-bottom:10px; }
+.empty .h { font-family:"PT Serif",Georgia,serif; font-size:16px; font-weight:700; color:var(--c-text-heading); margin-bottom:4px; }
+.empty .d { font-size:12.5px; max-width:300px; margin:0 auto 12px; }
+.empty.sm { padding:14px 10px 6px; }
+.empty.sm .h { font-size:14px; }
+.calm { display:flex; align-items:center; gap:8px; margin:6px 0 8px; padding:8px 10px; border-radius:10px; background:var(--c-success-bg); color:var(--c-success-text); font-size:12px; }
+
+/* ===== Страница фичи ===== */
+.pg { display:flex; flex-direction:column; min-height:0; height:100%; }
+.pgh { flex-shrink:0; padding:12px 16px 10px; border-bottom:1px solid var(--c-border-light); }
+.pgh .top { display:flex; align-items:center; gap:6px; margin-bottom:6px; min-height:28px; }
+.crumb { display:inline-flex; align-items:center; gap:5px; color:var(--c-text-secondary); font-size:12px; cursor:pointer; border-radius:8px; padding:4px 8px 4px 4px; max-width:260px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.crumb:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .crumb { min-height:40px; }
+.pgh .tt { display:flex; align-items:center; gap:9px; min-width:0; }
+.pgh h2 { margin:0; font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:700; color:var(--c-text-heading); line-height:1.25; min-width:0; }
+.app.m .pgh h2, .drw .pgh h2, .right .pgh h2 { font-size:17px; }
+.pgh .meta { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; margin-top:6px; font-size:12px; color:var(--c-text-secondary); }
+.pgh .meta .mono { font-size:11.5px; }
+.pgh .acts { display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px; }
+.pgb { flex:1; overflow:auto; min-height:0; padding:14px 16px 20px; }
+.cols { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:18px; align-items:start; }
+.blk { margin:0 0 18px; }
+.blk > .cap { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin:0 0 6px; display:flex; align-items:center; gap:6px; }
+.blk > .cap .r { margin-left:auto; text-transform:none; letter-spacing:0; }
+.alert { border-radius:10px; padding:10px 12px; font-size:12.5px; margin:0 0 16px; display:flex; gap:9px; align-items:flex-start; }
+.alert.wait { background:var(--c-info-bg); }
+.alert.stop { background:var(--c-danger-bg); }
+.alert .b { flex:1; min-width:0; }
+.alert .b b { color:var(--c-text-heading); }
+.alert .acts { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.fin { display:flex; align-items:center; gap:10px; margin:0 0 16px; padding:10px 12px; border-radius:10px; background:var(--c-success-bg); font-size:12.5px; }
+.fin.gone { background:var(--c-bg-selected); }
+.fin b { color:var(--c-success-text); }
+.fin.gone b { color:var(--c-text-heading); }
+/* Конвейер с исполнителями */
+.pf { list-style:none; margin:0; padding:0; }
+.pf li { display:grid; grid-template-columns:18px minmax(0,1fr) auto; column-gap:9px; align-items:center; padding:6px 0; position:relative; }
+.pf li:not(:last-child)::before { content:""; position:absolute; left:8px; top:24px; bottom:-8px; width:2px; background:var(--c-progress-track); }
+.pf li.d::before { background:var(--c-success); }
+.pf li.p::before, .pf li.x::before { background:none; border-left:2px dashed var(--c-dashed); width:0; }
+.pf .n { font-size:13px; color:var(--c-text-primary); display:flex; align-items:center; gap:7px; min-width:0; }
+.pf li.p .n, .pf li.x .n { color:var(--c-text-muted); }
+.pf li.a .n { font-weight:700; color:var(--c-text-heading); }
+.pf .m { font-size:11.5px; color:var(--c-text-muted); white-space:nowrap; display:flex; align-items:center; gap:6px; }
+.pf .sub { grid-column:2 / 4; font-size:11.5px; color:var(--c-text-secondary); margin-top:2px; }
+.pf li.a { background:var(--c-bg-card); border-radius:10px; margin:2px -8px; padding:7px 8px; }
+.pf li.a::before { left:16px; }
+/* Шаги, задачи, чаты, события — строки */
+.rw { display:flex; align-items:center; gap:8px; padding:7px 8px; margin:0 -8px; border-radius:8px; min-height:36px; font-size:12.5px; cursor:pointer; width:calc(100% + 16px); text-align:left; }
+.rw:hover { background:var(--c-bg-card); }
+.rw .t { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text-primary); }
+.rw .t b { color:var(--c-text-heading); }
+.rw .x { font-size:11px; color:var(--c-text-muted); white-space:nowrap; flex-shrink:0; }
+.rw.key { background:var(--c-accent-light); }
+.rw.key .t { font-weight:700; color:var(--c-text-heading); }
+.app.m .rw { min-height:44px; }
+.ev { display:grid; grid-template-columns:44px 16px minmax(0,1fr); column-gap:8px; padding:5px 0; font-size:12px; color:var(--c-text-secondary); align-items:start; }
+.ev .tm { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--c-text-muted); padding-top:1px; }
+.ev b { color:var(--c-text-heading); font-weight:600; }
+.cnts { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:6px; }
+/* Скелет загрузки */
+.sk { background:var(--c-bg-selected); border-radius:6px; animation:pulse 1.4s ease-in-out infinite; }
+/* ui/Notice (ошибка) */
+.ntc { display:flex; gap:10px; align-items:flex-start; padding:12px; border-radius:12px; background:var(--c-danger-bg); color:var(--c-text-primary); font-size:12.5px; }
+.ntc b { color:var(--c-danger-text); }
+/* ui/Tabs — вкладки страницы в варианте Б */
+.tabs { display:flex; gap:2px; border-bottom:1px solid var(--c-border-light); padding:0 12px; flex-shrink:0; overflow-x:auto; scrollbar-width:none; }
+.tabs button { height:36px; padding:0 10px; font-size:13px; color:var(--c-text-secondary); cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; }
+.tabs button.on { color:var(--c-text-heading); font-weight:700; border-bottom-color:var(--c-accent); }
+.tabs .n { font:400 10.5px "JetBrains Mono",monospace; color:var(--c-text-muted); }
+.app.m .tabs button { height:44px; }
+/* Сворачиваемый блок (ui/SidebarSection) — вариант В */
+.sect { border-top:1px solid var(--c-border-light); }
+.sect > .sh { display:flex; align-items:center; gap:6px; width:100%; padding:10px 16px; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); cursor:pointer; min-height:40px; }
+.sect > .sh:hover { color:var(--c-text-secondary); }
+.sect > .sh .n { font-family:"JetBrains Mono",monospace; letter-spacing:0; }
+.sect > .sh svg { transition:transform .15s; }
+.sect.open > .sh svg { transform:rotate(90deg); }
+.sect > .sb { padding:0 16px 12px; }
+
+/* Шторка справа (вариант Б, десктоп) */
+.scrimc { position:absolute; inset:0; background:var(--c-overlay); z-index:40; }
+.drw { position:absolute; top:0; right:0; bottom:0; width:540px; z-index:41; background:var(--c-bg-white); box-shadow:var(--shadow-drawer); display:flex; flex-direction:column; border-radius:14px 0 0 14px; }
+/* Мобила */
+.mhd { display:flex; align-items:center; gap:2px; padding:6px 6px 4px 4px; }
+.mhd .ttl { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); flex:1; min-width:0; padding-left:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:60; }
+.sheet { position:absolute; left:0; right:0; bottom:0; z-index:61; background:var(--c-bg-white); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); max-height:92%; display:flex; flex-direction:column; }
+.sheet .grab { width:38px; height:4px; border-radius:999px; background:var(--c-dashed); margin:8px auto 2px; flex-shrink:0; }
+.sheet .in { overflow:auto; padding:4px 16px 16px; }
+.sheet.tall { height:92%; }
+.fsh .hd { display:flex; align-items:center; padding:4px 8px 4px 16px; }
+.fsh .hd .t { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); flex:1; }
+.fsh .foot { padding:10px 16px 16px; margin:0; }
+/* PillSwitch вкладок на мобиле (В) */
+.mtabs { display:flex; gap:2px; padding:2px; margin:0 10px 6px; background:var(--c-bg-selected); border-radius:9px; flex-shrink:0; }
+.mtabs button { flex:1; border-radius:7px; height:36px; font-size:13px; color:var(--c-text-secondary); cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:6px; min-width:0; }
+.mtabs button span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mtabs button.on { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-thumb); }
+
+/* Чат (центр, упрощённо) */
+.chd { flex-shrink:0; display:flex; align-items:center; gap:9px; padding:12px 14px 10px 18px; }
+.chd .t { font-family:"PT Serif",Georgia,serif; font-size:17px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.fs { flex-shrink:0; display:flex; align-items:center; gap:9px; min-height:38px; padding:4px 6px 4px 12px; margin:0 14px; border-radius:10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); }
+.fs.t-wait { background:var(--c-info-bg); border-color:transparent; }
+.fs.t-stop { background:var(--c-danger-bg); border-color:transparent; }
+.fs .nm { font-size:12.5px; font-weight:700; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:40px; }
+.fs .sg { font-size:12px; color:var(--c-text-secondary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0; flex:1; }
+.fs .go { flex-shrink:0; display:inline-flex; align-items:center; gap:4px; color:var(--c-accent); font-weight:600; font-size:12px; padding:5px 8px; border-radius:8px; cursor:pointer; white-space:nowrap; }
+.fs .go:hover { background:var(--c-accent-light); }
+.app.m .fs { margin:0 8px; min-height:44px; }
+.app.m .fs .go { min-height:40px; }
+.feed { flex:1; overflow:auto; padding:14px 22px 12px; display:flex; flex-direction:column; gap:12px; min-height:0; }
+.feed > * { max-width:720px; }
+.msg-u { align-self:flex-end; max-width:78%; background:var(--c-bg-selected); border-radius:14px; padding:8px 12px; }
+.msg-a { line-height:1.55; }
+.comp { flex-shrink:0; margin:0 14px 14px; border:1px solid var(--c-border); border-radius:14px; background:var(--c-bg-card); padding:12px 14px; color:var(--c-text-muted); font-size:13.5px; }
+.app.m .comp { margin:0 8px 10px; }
+.toast { position:absolute; left:50%; bottom:84px; transform:translateX(-50%); z-index:80; background:var(--c-text-heading); color:var(--c-bg-white); border-radius:10px;
+  padding:8px 12px; font-size:12px; box-shadow:var(--shadow-dropdown); max-width:90%; text-align:center; }
+.menu { position:absolute; z-index:55; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-dropdown); padding:5px; min-width:220px; }
+.mi { display:flex; align-items:center; gap:8px; width:100%; padding:9px 10px; border-radius:8px; font-size:13px; cursor:pointer; text-align:left; color:var(--c-text-primary); }
+.mi:hover { background:var(--c-bg-selected); }
+.mi.dng { color:var(--c-danger-text); }
+.mi .d { margin-left:auto; }
+.msep { height:1px; background:var(--c-border-light); margin:4px 0; }
+.app.m .mi { min-height:44px; }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>Фичи · волна 2</h1>
+  <div class="grp"><span class="lbl">Вариант</span><div class="pills" id="pv"></div></div>
+  <div class="grp"><span class="lbl">Список</span><div class="pills" id="pd"></div></div>
+  <div class="grp"><span class="lbl">Страница</span><div class="pills" id="pp"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" id="pt"></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" id="pw"></div></div>
+  <label style="font-size:12px;color:var(--c-text-secondary);display:inline-flex;gap:5px;align-items:center"><input type="checkbox" id="shownew" checked>новое и «нужно от бэка»</label>
+</div>
+<div class="note" id="note"></div>
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+'use strict';
+const S = { v:'a', data:'normal', ps:'ok', theme:'light', m:false,
+  chat:'c17', page:null, from:null, open:{}, closedOpen:false,
+  fa:new Set(), faClosed:false, pop:false,           // А: FilterBar
+  fb:'open',                                          // Б: InlineSegmented
+  fc:new Set(), fcClosed:false,                       // В: Chip soft
+  tab:'over', sect:{ conv:true, chats:true, steps:false, tasks:false, ev:false },
+  mscreen:'list', sheet:null, menu:null, toast:null };
+
+const P = { alex:'Александр', mayya:'Майя', sofya:'Софья', denis:'Денис', kira:'Кира', gleb:'Глеб', vera:'Вера', mark:'Марк', egor:'Егор' };
+const STG = ['Разрез','План','Производство','Ревью','Проверка','Финальное ревью','Мерж'];
+const STG_S = ['Разрез','План','Произв.','Ревью','Пров.','Финал','Мерж'];
+
+/* Фичи. Поля списка повторяют FeatureIndexRow: bucket, attention{kind,since,reason,personaId}, rail (7 сегм.),
+   stepsAccepted/Total, loops, now0{personaId,stage,stepRef}, lastActivityAt, summary{mergedAt,durationMinutes},
+   keySessionId, chatCount. Поля, которых в индексе НЕТ (ветка, число задач, параллельные исполнители,
+   возраст фичи), помечены в отрисовке «нужно от бэка». */
+const FEATS0 = [
+  { id:'exp', name:'Опыт исполнителя и версии памяти', br:'feat/executor-experience', rail:'apppppp', tone:'wait',
+    acc:0, tot:0, loops:0, att:{ k:'wait', why:'выбрать вариант разреза', p:'sofya', since:'2 ч' }, now:[], key:'c1', ago:'2 ч', age:'2 ч', tasks:2 },
+  { id:'fmd', name:'Режим фичи: правки дизайн-ревью', br:'fix/feature-mode-design', rail:'xddddda', tone:'wait',
+    acc:3, tot:3, loops:2, att:{ k:'merge', why:'всё принято, осталось смержить', p:null, since:'40 мин' }, now:[], key:'c3', ago:'40 мин', age:'1 дн 2 ч', tasks:11, ready:true },
+  { id:'proxy', name:'Сжатие через облако', br:'feat/proxy-compaction', rail:'ddapppp', tone:'stop',
+    acc:1, tot:3, loops:1, att:{ k:'stop', why:'Денис молчит на Ш2', p:'denis', since:'25 мин' }, now:[{p:'denis', ref:'Ш2', min:'52 мин'}], key:'c8', ago:'25 мин', age:'1 дн 6 ч', tasks:7 },
+  { id:'stats', name:'Медиа-история v2', br:'feat/local-media-history-v2', rail:'ddapppp', tone:'loop',
+    acc:4, tot:6, loops:3, att:null, now:[{p:'kira', ref:'Ш3', min:'8 мин', loop:true},{p:'denis', ref:'Ш5', min:'21 мин'}], key:'c15', ago:'8 мин', age:'2 дн 1 ч', tasks:16 },
+  { id:'ov', name:'Обзор фич в продукте, волна 2', br:'feat/features-overview-2', rail:'ddapppp', tone:'run',
+    acc:0, tot:3, loops:0, att:null, now:[{p:'mayya', ref:'М2-1', min:'34 мин'}], key:'c13', ago:'сейчас', age:'5 ч', tasks:5 },
+  { id:'tpfm', name:'Режим «Исполнение фичи»', br:'feat/turn-plan-feature-mode', rail:'ddddddd', closed:true, merged:'17.10', dur:'2 дн 4 ч',
+    acc:9, tot:9, loops:5, key:'c23', ago:'17 окт', tasks:31 },
+  { id:'vdi', name:'Спайк: OCR на VDI', br:'spike/vdi-ocr', rail:'ddddxxx', closed:true, merged:null, closedAt:'15.10', dur:'9 ч',
+    acc:3, tot:3, loops:3, key:'c25', ago:'15 окт', tasks:14 },
+];
+
+const CHATS = [
+  { id:'c1',  t:'Опыт исполнителя: разрез', p:'sofya', f:['exp'], r:'key', st:'wait', ago:'2 ч' },
+  { id:'c2',  t:'Разрез ADR-032', p:'alex', f:['exp'], r:'cut', ref:'разрез', st:'idle', ago:'2 ч' },
+  { id:'c3',  t:'Режим фичи: правки ревью', p:'sofya', f:['fmd'], r:'key', st:'wait', ago:'40 мин' },
+  { id:'c4',  t:'Чипы и меню на мобиле', p:'kira', f:['fmd'], r:'step', ref:'Ш1 · фронт', st:'idle', ago:'3 ч' },
+  { id:'c5',  t:'Ревью Ш1', p:'gleb', f:['fmd'], r:'review', ref:'ревью', st:'idle', ago:'2 ч' },
+  { id:'c6',  t:'Проверка 360 px', p:'vera', f:['fmd'], r:'qa', ref:'проверка', st:'idle', ago:'1 ч' },
+  { id:'c7',  t:'Финальное ревью', p:'alex', f:['fmd'], r:'final', ref:'финал', st:'idle', ago:'42 мин' },
+  { id:'c8',  t:'Прокси: сжатие в облако', p:'sofya', f:['proxy'], r:'key', st:'idle', ago:'25 мин' },
+  { id:'c9',  t:'Маркер x-ccs-compaction', p:'denis', f:['proxy'], r:'step', ref:'Ш2 · бэк', st:'stop', ago:'25 мин' },
+  { id:'c10', t:'Нормализация usage', p:'denis', f:['proxy'], r:'step', ref:'Ш1 · бэк', st:'idle', ago:'вчера' },
+  { id:'c11', t:'Ревью Ш1', p:'gleb', f:['proxy'], r:'review', ref:'ревью', st:'idle', ago:'вчера' },
+  { id:'c13', t:'Обзор фич: волна 2', p:'sofya', f:['ov'], r:'key', st:'idle', ago:'34 мин' },
+  { id:'c14', t:'Макеты волны 2', p:'mayya', f:['ov'], r:'step', ref:'М2-1 · макет', st:'run', ago:'сейчас' },
+  { id:'c15', t:'Медиа-история v2', p:'sofya', f:['stats'], r:'key', st:'idle', ago:'8 мин' },
+  { id:'c16', t:'Журнал медиа на диске', p:'denis', f:['stats'], r:'step', ref:'Ш1 · бэк', st:'idle', ago:'вчера' },
+  { id:'c17', t:'Панель истории', p:'kira', f:['stats'], r:'step', ref:'Ш3 · фронт', st:'run', ago:'сейчас' },
+  { id:'c18', t:'Ревью фронта: Ш3 и М1', p:'gleb', f:['stats','ov'], r:'review', ref:'ревью', st:'idle', ago:'12 мин' },
+  { id:'c19', t:'Фильтр по LoRA', p:'denis', f:['stats'], r:'step', ref:'Ш5 · бэк', st:'run', ago:'сейчас' },
+  { id:'c23', t:'Исполнение фичи', p:'sofya', f:['tpfm'], r:'key', st:'idle', ago:'17 окт' },
+  { id:'c24', t:'Пилюля плана', p:'kira', f:['tpfm'], r:'step', ref:'Ш4 · фронт', st:'idle', ago:'16 окт' },
+  { id:'c25', t:'OCR на VDI', p:'sofya', f:['vdi'], r:'key', st:'idle', ago:'15 окт' },
+  { id:'c30', t:'Почему падает бэкап', p:'mark', f:[], st:'idle', ago:'1 ч' },
+  { id:'c31', t:'Обои для главной', p:null, f:[], st:'idle', ago:'вчера' },
+];
+
+/* Детали страницы. Источник — FeatureRun: stages (personaIds, runningSince, rounds), stepChains, now[], attention,
+   summary; ветка и даты — только через epic. Лента событий — нужно от бэка (в API её нет). */
+const STEPS = {
+  stats:[['Ш1','бэк','denis','ok','Журнал медиа на диске',1],['Ш2','бэк','denis','ok','Чтение журнала и пагинация',1],['Ш3','фронт','kira','loop','Панель истории',3],
+         ['Ш4','бэк','denis','ok','Права на чужую историю',1],['Ш5','бэк','denis','run','Фильтр по LoRA',1],['Ш6','фронт','kira','ok','Карточка результата',2]],
+  proxy:[['Ш1','бэк','denis','ok','Нормализация usage',2],['Ш2','бэк','denis','stop','Маркер x-ccs-compaction',1],['Ш3','бэк','denis','pend','Счётчик сжатий в паспорте',0]],
+  fmd:[['Ш1','фронт','kira','ok','Чипы и меню на мобиле',2],['Ш2','фронт','kira','ok','Тоны рельсы',1],['Ш3','фронт','kira','ok','Легенда',1]],
+  ov:[['М2-1','фронт','mayya','run','Макеты волны 2',1],['М2-2','фронт','kira','pend','Плашка и фильтры',0],['М2-3','бэк','denis','pend','Данные страницы фичи',0]],
+  exp:[], tpfm:[['Ш1','бэк','denis','ok','Агрегат FeatureRun',3],['Ш4','фронт','kira','ok','Пилюля плана',2],['Ш9','фронт','kira','ok','Рельса',1]],
+  vdi:[['Ш1','бэк','denis','ok','Прогон OCR',1],['Ш2','бэк','denis','ok','Замеры',1],['Ш3','бэк','denis','ok','Отчёт',1]],
+};
+const STAGE_P = { stats:[['sofya'],['egor'],['denis','kira'],['gleb'],['vera'],['alex'],['mark']],
+  proxy:[['sofya'],['egor'],['denis'],['gleb'],['vera'],['alex'],['mark']], fmd:[[],['egor'],['kira'],['gleb'],['vera'],['alex'],['mark']],
+  ov:[['sofya'],['egor'],['mayya','kira','denis'],['gleb'],['vera'],['alex'],['mark']], exp:[['sofya','alex'],['egor'],[],[],[],[],[]],
+  tpfm:[['sofya'],['egor'],['denis','kira'],['gleb'],['vera'],['alex'],['mark']], vdi:[['sofya'],['egor'],['denis'],['gleb'],[],[],[]] };
+const EVENTS = {
+  stats:[['14:02','gleb','вернул <b>Ш3</b> на доработку · круг 3','loop'],['13:40','kira','сдала <b>Ш3</b> на ревью','run'],['13:12','denis','взял <b>Ш5 · Фильтр по LoRA</b>','run'],
+         ['12:55','gleb','принял <b>Ш4</b>','ok'],['вчера','vera','проверила <b>Ш1–Ш2</b> на 360 px','ok']],
+  proxy:[['13:37','denis','последний ответ в <b>Ш2</b>','stop'],['12:45','denis','взял <b>Ш2 · Маркер</b>','run'],['вчера','gleb','принял <b>Ш1</b> со 2-го круга','ok']],
+  fmd:[['13:20','alex','финальное ревью: <b>принято</b>','ok'],['12:40','vera','проверка: <b>принято</b>','ok'],['11:05','gleb','принял <b>Ш3</b>','ok']],
+  ov:[['13:26','mayya','взяла <b>М2-1 · макеты</b>','run'],['13:20','egor','план из 3 шагов готов','ok']],
+  exp:[['12:00','sofya','спрашивает вас: <b>какой вариант разреза?</b>','wait'],['11:48','alex','предложил 3 варианта разреза','run']],
+  tpfm:[['17.10','mark','смержил в master','ok']], vdi:[['15.10','sofya','закрыла без мержа: спайк','mute']],
+};
+
+const I = {
+  chev:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>',
+  down:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>',
+  back:'<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>',
+  go:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg>',
+  x:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  filter:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>',
+  dots:'<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
+  branch:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="7" r="2.5"/><path d="M6 8.5v7M18 9.5c0 5-6 4-11 6.5"/></svg>',
+  chat:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  task:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="m8 12 3 3 5-6"/></svg>',
+  search:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  plus:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  sort:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M6 12h12M10 18h4"/></svg>',
+  layers:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="m12 2 10 6-10 6L2 8z"/><path d="m2 16 10 6 10-6"/></svg>',
+  arch:'<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10h14V9M10 13h4"/></svg>',
+  route:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>',
+  chats:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+  files:'<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/></svg>',
+  retry:'<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>',
+};
+function G(k){ // глифы состояния — словарь FeatureGlyphs
+  const m={
+    wait:'<path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" fill="var(--c-info)"/>',
+    merge:'<path d="M7 1.6 12.4 7 7 12.4 1.6 7Z" fill="var(--c-info)"/>',
+    stop:'<rect x="2.5" y="2.5" width="9" height="9" rx="1.6" fill="var(--c-danger)"/>',
+    run:'<circle cx="7" cy="7" r="4.6" fill="none" stroke="var(--c-text-heading)" stroke-width="1.8"/><circle class="pulse" cx="7" cy="7" r="1.7" fill="var(--c-text-heading)"/>',
+    loop:'<path d="M3.2 8.6A4 4 0 1 0 4 4.4" fill="none" stroke="var(--c-warning)" stroke-width="1.8" stroke-linecap="round"/><path d="M2.6 2.2v2.9h2.9" fill="none" stroke="var(--c-warning)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    merged:'<circle cx="7" cy="7" r="5.4" fill="var(--c-success-bg)" stroke="var(--c-success)" stroke-width="1.3"/><path d="m4.6 7.1 1.7 1.7 3.2-3.4" fill="none" stroke="var(--c-success)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    closed:'<circle cx="7" cy="7" r="5" fill="none" stroke="var(--c-text-muted)" stroke-width="1.5"/><path d="M4.4 7h5.2" stroke="var(--c-text-muted)" stroke-width="1.5" stroke-linecap="round"/>',
+  };
+  return `<svg class="gl" viewBox="0 0 14 14" aria-hidden="true">${m[k]||m.run}</svg>`;
+}
+const plural = n => n + ' ' + (n%10===1&&n%100!==11?'фичу':[2,3,4].includes(n%10)&&![12,13,14].includes(n%100)?'фичи':'фич');
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const av = (p, cls='') => p ? `<span class="av ${cls}" title="${P[p]}">${P[p][0]}</span>` : `<span class="av ${cls}">А</span>`;
+const stack = (ps, cls='xs') => `<span class="stack">${ps.map(p=>av(p,cls)).join('')}</span>`;
+
+/* ---------- Состояние фичи ---------- */
+function feats(){
+  if (S.data==='none') return [];
+  if (S.data==='calm') return FEATS0.filter(f=>f.closed);
+  return FEATS0;
+}
+function kind(f){ // тот же разбор, что featureDisplayState
+  if (f.closed) return f.merged ? 'merged' : 'closed';
+  if (f.att) return f.att.k;               // wait | merge | stop
+  return f.tone==='loop' ? 'loop' : 'run';
+}
+function activeIdx(f){ return f.rail.indexOf('a'); }
+function stageName(f, short){ const i=activeIdx(f); return i<0 ? '' : (short?STG_S:STG)[i]; }
+function statusText(f){
+  const k=kind(f);
+  if (k==='merged') return `смержена ${f.merged} · за ${f.dur}`;
+  if (k==='closed') return `закрыта без мержа ${f.closedAt} · ${f.dur}`;
+  if (k==='wait') return `ждёт вас · ${f.att.why}`;
+  if (k==='merge') return `ждёт вас · мерж`;
+  if (k==='stop') return `стоит · ${f.att.why}`;
+  const n=f.now[0]; const tail = k==='loop' ? 'доработка' : P[n.p];
+  return `${stageName(f)} · ${tail}`;
+}
+const toneCls = k => ({wait:'tn-wait',merge:'tn-wait',stop:'tn-stop',loop:'tn-loop',run:'tn-run',merged:'tn-ok'}[k]||'');
+const attCls = k => (k==='wait'||k==='merge') ? 'att-wait' : k==='stop' ? 'att-stop' : '';
+function rail(f){
+  const gone = f.closed ? ' gone' : '';
+  const tn = {wait:'wait',stop:'stop',loop:'loop',run:'run'}[f.tone]||'run';
+  return `<span class="mr${gone}" aria-label="Этапы: ${STG.map((s,i)=>s+' — '+({d:'пройден',a:'сейчас',p:'впереди',x:'нет в трекере'}[f.rail[i]])).join(', ')}">${
+    [...f.rail].map((c,i)=>`<i class="${c}${c==='a'?' '+tn:''}" title="${STG[i]}${c==='a'?' — сейчас':''}"></i>`).join('')}</span>`;
+}
+function railLabeled(f){
+  const tn = {wait:'wait',stop:'stop',loop:'loop',run:'run'}[f.tone]||'run';
+  const ai=activeIdx(f);
+  return `<div class="lr${f.closed?' gone':''}">${[...f.rail].map(c=>`<span class="sgm ${c}${c==='a'?' '+tn:''}"></span>`).join('')}
+    ${STG_S.map((s,i)=>`<span class="lb${i===ai?' a':''}">${(S.m && i!==ai)?'':s}</span>`).join('')}</div>`;
+}
+function ring(f, size=22){
+  const r=8, c=2*Math.PI*r, p=f.tot? f.acc/f.tot : 0;
+  const col = {wait:'var(--c-info)',merge:'var(--c-info)',stop:'var(--c-danger)',loop:'var(--c-warning)',run:'var(--c-text-heading)',merged:'var(--c-success)',closed:'var(--c-text-muted)'}[kind(f)];
+  return `<svg class="ring" width="${size}" height="${size}" viewBox="0 0 22 22" aria-label="Принято ${f.acc} из ${f.tot}"><circle cx="11" cy="11" r="${r}" fill="none" stroke="var(--c-progress-track)" stroke-width="3"/>
+    <circle cx="11" cy="11" r="${r}" fill="none" stroke="${col}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(c*p).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 11 11)"/>
+    ${p===0?`<circle cx="11" cy="11" r="2" fill="${col}"/>`:''}</svg>`;
+}
+const prog = f => `${f.acc}/${f.tot}${f.loops?' ↺'+f.loops:''}`;
+const chatsOf = id => CHATS.filter(c=>c.f.includes(id)).sort((a,b)=>(b.r==='key')-(a.r==='key'));
+
+/* ---------- Фильтры: одна модель, три вида ---------- */
+const FKEYS = [['wait','Ждут вас','var(--c-info)'],['stop','Стоят','var(--c-danger)'],['merge','К мержу','var(--c-info)'],['run','Идут','var(--c-text-heading)']];
+const fk = f => { const k=kind(f); return (k==='loop')?'run':k; };
+function cnt(key){ return feats().filter(f=>!f.closed && fk(f)===key).length; }
+function visible(){
+  const all=feats(); const open=all.filter(f=>!f.closed), closed=all.filter(f=>f.closed);
+  if (S.v==='a'){ const sel=S.fa; return { open: sel.size? open.filter(f=>sel.has(fk(f))) : open, closed: S.faClosed? closed:[], showClosedSec:S.faClosed }; }
+  if (S.v==='b'){
+    if (S.fb==='closed') return { open:[], closed, showClosedSec:true, onlyClosed:true };
+    const m = {open:()=>true, att:f=>['wait','merge','stop'].includes(fk(f)), run:f=>fk(f)==='run'}[S.fb];
+    return { open: open.filter(m), closed: S.fb==='open'?closed:[], showClosedSec:S.fb==='open' };
+  }
+  const sel=S.fc; const o = sel.size? open.filter(f=>sel.has(fk(f))) : open;
+  return { open:(S.fcClosed && sel.size===0 && false)?[]:o, closed:S.fcClosed?closed:[], showClosedSec:S.fcClosed };
+}
+function hiddenCount(){ const v=visible(); return feats().length - v.open.length - v.closed.length; }
+function resetFilters(){ S.fa.clear(); S.faClosed=false; S.fb='open'; S.fc.clear(); S.fcClosed=false; }
+
+/* ---------- Плашки ---------- */
+function headerA(f){
+  const k=kind(f), sel = S.page===f.id ? ' sel':'';
+  const who = f.closed ? '' : f.att && f.att.p ? stack([f.att.p]) : f.now.length ? stack(f.now.map(n=>n.p)) : '';
+  const par = !f.closed && f.now.length>1 ? ` · параллельно: ${f.now.map(n=>P[n.p]+' · '+n.ref).join(', ')}` : '';
+  const qa = f.closed ? '' : `<span class="qa"><button class="btn xs gh new" data-act="key" data-f="${f.id}" style="background:var(--c-bg-white)">${k==='merge'?'К мержу':k==='wait'?'Ответить':'Ключевой чат'} ${I.go}</button></span>`;
+  return `<div class="ha ${attCls(k)}${sel}">
+    <button class="chev" data-act="tog" data-f="${f.id}" aria-label="${S.open[f.id]?'Свернуть':'Развернуть'} чаты фичи" aria-expanded="${!!S.open[f.id]}">${I.chev}</button>
+    <button class="bd new" data-act="page" data-f="${f.id}" aria-label="Открыть страницу фичи «${esc(f.name)}»">
+      <span class="l1">${G(k)}<span class="nm">${esc(f.name)}</span><span class="pr">${f.closed?'':(f.att?f.att.since:f.ago)}</span></span>
+      <span class="l2">${f.closed?'':rail(f)}${who}<span class="st ${toneCls(k)}" title="${esc(statusText(f))}${par}">${statusText(f)}</span><span class="ago mono" title="Принято шагов · возвратов">${f.closed?'':prog(f)}</span></span>
+    </button>${qa}</div>`;
+}
+function headerB(f){
+  const k=kind(f);
+  if (f.closed) return `<div class="cb gone"><button class="bd" data-act="page" data-f="${f.id}"><span class="h">${G(k)}<span class="nm">${esc(f.name)}</span>
+     <span class="tag ${k==='merged'?'ok':'mute'}">${k==='merged'?'смержена '+f.merged:'без мержа'}</span></span>
+     <div class="br" style="margin-bottom:0">${f.dur} · ${f.tasks} задач · ${f.acc} шагов</div></button></div>`;
+  const tagT = {wait:['wait','Ждёт вас'],merge:['wait','К мержу'],stop:['stop','Стоит'],loop:['loop','Доработка'],run:['run','Идёт']}[k];
+  let nowLine;
+  if (f.att && f.att.k==='wait') nowLine = `${av(f.att.p,'sm')}<span class="tx"><b>${P[f.att.p]}</b> спрашивает: ${f.att.why} · ${f.att.since}</span>`;
+  else if (f.att && f.att.k==='merge') nowLine = `${G('merged')}<span class="tx">Всё принято · ветка готова к мержу · ${f.att.since}</span>`;
+  else if (f.att && f.att.k==='stop') nowLine = `${av(f.att.p,'sm')}<span class="tx tn-stop">${P[f.att.p]} молчит ${f.att.since} · ${f.now[0].ref}</span>`;
+  else nowLine = `${stack(f.now.map(n=>n.p),'sm')}<span class="tx">${f.now.map(n=>`<b>${P[n.p]}</b> · ${n.ref}${n.loop?' доработка':''} · ${n.min}`).join(', ')}</span>`;
+  const qa = {wait:['pri','Ответить'],merge:['pri','К мержу'],stop:['gh','Чат Дениса'],loop:['gh','Ключевой чат'],run:['gh','Ключевой чат']}[k];
+  const open = S.open[f.id];
+  return `<div class="cb ${attCls(k)}${S.page===f.id?' sel':''}">
+    <button class="bd new" data-act="page" data-f="${f.id}" aria-label="Открыть фичу «${esc(f.name)}»">
+      <span class="h">${G(k)}<span class="nm">${esc(f.name)}</span><span class="tag ${tagT[0]}">${tagT[1]}</span></span>
+      <div class="br">${I.branch} ${f.br} <span class="be">бэк</span></div>
+      ${railLabeled(f)}
+      <div class="nw">${nowLine}</div>
+    </button>
+    <div class="ft"><button class="cnt" data-act="tog" data-f="${f.id}" aria-expanded="${!!open}">${I.chat} ${chatsOf(f.id).length} ${open?I.down:I.chev}</button>
+      <span title="Задачи фичи" style="white-space:nowrap">${I.task} ${f.tasks} <span class="be">бэк</span></span>
+      <span class="mono" style="white-space:nowrap">${prog(f)}</span><span class="sp"></span>
+      <button class="btn xs ${qa[0]} new" data-act="key" data-f="${f.id}">${qa[1]} ${I.go}</button></div>
+    ${open?`<div class="kids">${chatsOf(f.id).map(chatRow).join('')}</div>`:''}
+  </div>`;
+}
+function headerC(f){
+  const k=kind(f);
+  let rt;
+  if (f.closed) rt = `<span>${k==='merged'?'смержена '+f.merged:'без мержа'}</span>`;
+  else if (f.att) rt = `<span class="tag ${k==='stop'?'stop':'wait'}">${{wait:'ждёт вас',merge:'к мержу',stop:'стоит'}[k]} · ${f.att.since}</span>`;
+  else rt = `${stack(f.now.map(n=>n.p))}<span class="mono">${stageName(f,true)}</span>`;
+  return `<div class="hc${S.page===f.id?' sel':''}" >
+    <button class="chev" data-act="tog" data-f="${f.id}" aria-label="Чаты фичи" aria-expanded="${!!S.open[f.id]}">${I.chev}</button>
+    <button data-act="page" data-f="${f.id}" class="new" style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;text-align:left;cursor:pointer;min-height:28px" aria-label="Открыть фичу «${esc(f.name)}» в панели">
+      ${ring(f)}<span class="nm">${esc(f.name)}</span><span class="rt">${rt}</span></button></div>`;
+}
+function chatRow(c){
+  const tint = c.st==='run'?' tint-run':c.st==='wait'?' tint-wait':c.st==='stop'?' tint-stop':'';
+  const role = c.r==='key' ? '<span class="role key">ключевой</span>' : c.ref ? `<span class="role">${c.ref}</span>` : '';
+  const multi = c.f.length>1 ? `<span class="multi new" title="Чат участвует ещё в фиче «${esc(FEATS0.find(x=>x.id===c.f[1]).name)}»">+1 фича</span>` : '';
+  return `<button class="cc${tint}${S.chat===c.id && !S.page?' on':''}" data-act="chat" data-c="${c.id}">${av(c.p)}
+    <span class="w"><span class="t" style="display:block">${esc(c.t)}</span><span class="s">${role}${multi}<span>${c.p?P[c.p]:'вы'}</span></span></span><span class="tm">${c.ago}</span></button>`;
+}
+function group(f){
+  const kids = chatsOf(f.id);
+  const head = S.v==='a'?headerA(f): S.v==='b'?headerB(f): headerC(f);
+  if (S.v==='b') return head;
+  const open=!!S.open[f.id];
+  const shown = open ? kids : kids.filter(c=>c.r==='key'||c.st==='run'||c.st==='stop'||c.st==='wait');
+  const rest = kids.length - shown.length;
+  const body = f.closed && !open ? '' : `<div class="kids">${shown.map(chatRow).join('')}${rest>0?`<button class="more" data-act="tog" data-f="${f.id}">ещё ${rest} ${rest<5?'чата':'чатов'}</button>`:''}</div>`;
+  return `<div class="${S.v==='a'?'ga':'gc'}${open?' open':''}${f.closed?(S.v==='a'?' closedA':' gone'):''}">${head}${S.v==='c'&&!open&&!f.closed?'':body}</div>`;
+}
+
+/* ---------- Фильтры: отрисовка ---------- */
+function filterSummary(){
+  if (S.v==='a'){ const a=[...S.fa].map(k=>FKEYS.find(x=>x[0]===k)[1]); if (S.faClosed) a.push('и закрытые'); return a; }
+  return [];
+}
+function filterBodyA(mobile){
+  const big = mobile?' ':'';
+  const chip = ([k,l,c]) => { const n=cnt(k); return `<button class="chip${S.fa.has(k)?' on':''}${n===0?' zero':''}" data-act="fa" data-k="${k}" aria-pressed="${S.fa.has(k)}"><span class="dt" style="background:${S.fa.has(k)?'var(--c-on-accent)':c}"></span>${l}<span class="n">${n}</span></button>`; };
+  const nClosed = feats().filter(f=>f.closed).length;
+  return `<div class="srch">${I.search}<span>Поиск по названию…</span></div>
+    <div class="cap">Фичи · что с ними</div><div class="row">${FKEYS.map(chip).join('')}</div>
+    <div class="cap">Закрытые</div>
+    <button class="tgl${S.faClosed?' on':''}" data-act="faClosed" role="switch" aria-checked="${S.faClosed}"><span>Показывать закрытые фичи · <span class="mono">${nClosed}</span><span class="d">Секцией внизу списка, на втором плане</span></span><span class="sw"></span></button>
+    <div class="cap">Чаты · как везде</div><div class="row"><button class="chip">Ждёт меня</button><button class="chip">В работе</button><button class="chip">С ошибкой</button></div>`;
+}
+function footA(){
+  const h=hiddenCount(), dirty = S.fa.size||S.faClosed;
+  return `<span>${h? 'Скрыто фич: '+h : 'Все открытые фичи показаны'}</span>${dirty?'<button class="lnk" data-act="reset">Сбросить всё</button>':''}<span class="sp"></span>`;
+}
+function filterTriggerA(){
+  const h = S.fa.size||S.faClosed ? hiddenCount() : 0;
+  return `<button class="ib${S.pop||S.fa.size||S.faClosed?' act':''}" data-act="pop" aria-label="Фильтры${S.fa.size?': '+filterSummary().join(', '):' и поиск'}" title="Фильтры и поиск">${I.filter}${h?`<span class="hid">${h}</span>`:''}</button>`;
+}
+function filterRowB(){
+  const all=feats(); const o=all.filter(f=>!f.closed);
+  const att = o.filter(f=>['wait','merge','stop'].includes(fk(f))).length, run=o.filter(f=>fk(f)==='run').length;
+  const it = [['open','Открытые',o.length,null],['att','Ждут вас',att,'var(--c-info)'],['run','Идут',run,null],['closed','Закрытые',all.length-o.length,null]];
+  return `<div class="iseg new" role="tablist" aria-label="Какие фичи показать">${it.map(([k,l,n,c])=>`<button role="tab" class="${S.fb===k?'on':''}" data-act="fb" data-k="${k}" aria-selected="${S.fb===k}">${c?`<span class="dt" style="background:${c}"></span>`:''}${l}<span class="n">${n}</span></button>`).join('')}</div>`;
+}
+function filterRowC(){
+  const dirty = S.fc.size||S.fcClosed;
+  const nClosed=feats().filter(f=>f.closed).length;
+  return `<div class="chips${S.m?'':' wrap'} new">${FKEYS.map(([k,l,c])=>{const n=cnt(k);return `<button class="sc${S.fc.has(k)?' on':''}${n===0?' zero':''}" data-act="fc" data-k="${k}" aria-pressed="${S.fc.has(k)}"><span class="dt" style="background:${c}"></span>${l}<span class="n">${n}</span></button>`;}).join('')}
+    <span class="vsep"></span><button class="sc${S.fcClosed?' on':''}" data-act="fcClosed" aria-pressed="${S.fcClosed}">Закрытые<span class="n">${nClosed}</span></button>
+    ${dirty?'<button class="lnk" data-act="reset" style="min-height:'+(S.m?40:26)+'px">Сбросить</button>':''}</div>`;
+}
+
+/* ---------- Список ---------- */
+function listBody(){
+  const all = feats();
+  if (!all.length) return `<div class="empty"><div class="ic">${I.route}</div><div class="h">Фич пока нет</div>
+     <div class="d">Фича собирает чаты и задачи одной работы: разрез, план, шаги, ревью, мерж. Её заводит оркестратор, когда работа больше одного чата.</div>
+     <button class="btn sm gh">Попросить Софью завести фичу</button></div>${noFeatureChats()}`;
+  const v = visible();
+  let h='';
+  if (S.data==='calm' && !v.open.length) h += `<div class="calm">${G('merged')} Открытых фич нет. Последняя смержена 17.10</div>`;
+  else if (!v.open.length && !v.onlyClosed) h += `<div class="empty sm"><div class="h">Под фильтр ничего не попало</div><div class="d">${S.v==='b'?'Сейчас ни одна фича не требует вас':'Фич в таком состоянии сейчас нет'}</div><button class="btn sm gh" data-act="reset">Показать все открытые</button></div>`;
+  h += v.open.map(group).join('');
+  if (v.closed.length){
+    const open = S.closedOpen || v.onlyClosed || S.v!=='b';
+    h += `<button class="sec tg" data-act="closedSec" aria-expanded="${open}"><span style="display:inline-flex;transform:rotate(${open?90:0}deg)">${I.chev}</span>Закрытые <span class="n">${v.closed.length}</span><span class="hint">на втором плане</span></button>`;
+    if (open) h += v.closed.map(group).join('');
+  }
+  if (!v.onlyClosed) h += noFeatureChats();
+  return h;
+}
+function noFeatureChats(){ const c=CHATS.filter(x=>!x.f.length); return `<div class="sec">Без фичи <span class="n">${c.length}</span></div>${c.map(chatRow).join('')}`; }
+
+function listPanel(){
+  const m=S.m;
+  let tb;
+  if (S.v==='a') tb = `${filterTriggerA()}<button class="ib" title="Сортировка">${I.sort}</button><button class="ib act" title="Группировка: Фичи">${I.layers}</button><button class="ib" title="Архивные">${I.arch}</button>
+     ${m?'':`<button class="btn xs pri">${I.plus} Чат</button>`}`;
+  else tb = `<button class="ib" title="Фильтры чатов">${I.filter}</button><button class="ib act" title="Группировка: Фичи">${I.layers}</button><button class="ib" title="Архивные">${I.arch}</button>${m?'':`<button class="btn xs pri">${I.plus} Чат</button>`}`;
+  let under='';
+  if (S.v==='a'){ const s=filterSummary(); if (s.length) under = `<div class="afl new">Показаны: ${[...S.fa].map(k=>`<span class="rmc">${FKEYS.find(x=>x[0]===k)[1]}<button data-act="fa" data-k="${k}" aria-label="Убрать фильтр">${I.x}</button></span>`).join('')}${S.faClosed?`<span class="rmc">и закрытые<button data-act="faClosed" aria-label="Убрать">${I.x}</button></span>`:''}<button class="lnk" data-act="reset">Сбросить</button></div>`; }
+  if (S.v==='b' && feats().length) under = filterRowB();
+  if (S.v==='c' && feats().length) under = filterRowC();
+  const pop = (S.v==='a' && S.pop && !m) ? `<div class="pop new" style="left:14px;top:48px">${filterBodyA()}<div class="foot">${footA()}<button class="btn xs pri" data-act="pop">Готово</button></div></div>` : '';
+  return `${m?`<div class="mhd"><span class="ttl">Чаты · Фичи</span>${tb}</div>`:`<div class="ph"><span class="ttl">Чаты</span>${tb}</div>`}
+    ${m?`<div style="padding:0 8px 8px"><button class="btn md pri" style="width:100%">${I.plus} Новый чат</button></div>`:''}
+    ${under}<div class="scroll">${listBody()}</div>${pop}`;
+}
+
+/* ---------- Страница фичи ---------- */
+function F(id){ return FEATS0.find(f=>f.id===id); }
+function pageHead(f, mode){
+  const k=kind(f);
+  const tagT = {wait:['wait','Ждёт вас'],merge:['wait','К мержу'],stop:['stop','Стоит'],loop:['loop','Доработка'],run:['run','Идёт'],merged:['ok','Смержена '+f.merged],closed:['mute','Закрыта без мержа']}[k];
+  const fromChat = S.from ? CHATS.find(c=>c.id===S.from) : null;
+  let top='';
+  if (mode==='center' || mode==='mobile') top = `<button class="crumb" data-act="back">${I.back} ${fromChat? 'К чату «'+esc(fromChat.t)+'»' : (mode==='mobile'?'К списку':'Назад')}</button>`;
+  const close = (mode==='drawer'||mode==='panel'||mode==='sheet') ? `<button class="ib" data-act="close" aria-label="Закрыть" style="margin-left:auto">${I.x}</button>` : '';
+  const kebab = `<button class="ib" data-act="menu" aria-label="Ещё действия" ${mode==='center'||mode==='mobile'?'style="margin-left:auto"':''}>${I.dots}</button>`;
+  const prim = f.closed ? `<button class="btn sm gh" data-act="key" data-f="${f.id}">${I.chat} Ключевой чат</button><button class="btn sm sec new" data-act="toast" data-t="Вернуть в работу: нужна ручка на бэке">Вернуть в работу <span class="be">нужно от бэка</span></button>`
+    : k==='merge' ? `<button class="btn sm pri new" data-act="toast" data-t="Мерж из страницы: нужна ручка на бэке">Смержить ветку <span class="be" style="background:var(--c-bg-white)">бэк</span></button><button class="btn sm gh" data-act="key" data-f="${f.id}">${I.chat} Ключевой чат</button>`
+    : k==='wait' ? `<button class="btn sm pri" data-act="key" data-f="${f.id}">Ответить в ключевом чате ${I.go}</button>`
+    : `<button class="btn sm pri" data-act="key" data-f="${f.id}">${I.chat} Ключевой чат</button>${k==='stop'?`<button class="btn sm gh" data-act="chat" data-c="c9">Чат Дениса · Ш2</button>`:''}`;
+  return `<div class="pgh">${top||close?`<div class="top">${top}${mode==='center'||mode==='mobile'?kebab:''}${close?kebab+close:''}</div>`:''}
+    <div class="tt">${G(k)}<h2>${esc(f.name)}</h2></div>
+    <div class="meta"><span class="tag ${tagT[0]}">${tagT[1]}</span>
+      <span class="mono" style="display:inline-flex;gap:4px;align-items:center">${I.branch} ${f.br}</span>
+      <span>${f.closed?'шла '+f.dur:'идёт '+(f.age||'')}</span><span class="be">бэк: в индекс</span>
+      <span>${chatsOf(f.id).length} чатов · ${f.tasks} задач</span></div>
+    <div class="acts">${prim}</div></div>`;
+}
+function attBlock(f){
+  const k=kind(f);
+  if (k==='merged') return `<div class="fin">${G('merged')}<span><b>Смержена ${f.merged}</b> · за ${f.dur} · ${f.tasks} задач · ${f.tot} шагов · ${f.loops} возвратов</span></div>`;
+  if (k==='closed') return `<div class="fin gone">${G('closed')}<span><b>Закрыта без мержа ${f.closedAt}</b> · спайк, ветка не вливалась · ${f.tasks} задач</span></div>`;
+  if (k==='wait') return `<div class="alert wait">${G('wait')}<div class="b"><b>${P[f.att.p]} ждёт вашего решения ${f.att.since}:</b> ${f.att.why}. Пока вы не ответите, разрез и план стоят.<div class="acts"><button class="btn xs pri" data-act="key" data-f="${f.id}">Ответить</button></div></div></div>`;
+  if (k==='merge') return `<div class="alert wait">${G('merge')}<div class="b"><b>Ветка готова:</b> ревью, проверка и финальное ревью приняты ${f.att.since} назад. Осталось смержить <span class="mono">${f.br}</span>.</div></div>`;
+  if (k==='stop') return `<div class="alert stop">${G('stop')}<div class="b"><b>Денис молчит ${f.att.since}</b> на Ш2 · маркер x-ccs-compaction. Ход мог упасть или упереться в лимит.<div class="acts"><button class="btn xs gh" data-act="chat" data-c="c9" style="background:var(--c-bg-white)">Открыть его чат</button></div></div></div>`;
+  return '';
+}
+function conveyor(f){
+  const tn = {wait:'wait',stop:'stop',loop:'loop',run:'run'}[f.tone]||'run';
+  const ps = STAGE_P[f.id]||[];
+  return `<ul class="pf">${[...f.rail].map((c,i)=>{
+    const g = c==='d'?G('merged'): c==='a'? G(tn==='wait'?'wait':tn): c==='x'?G('closed'):`<svg class="gl" viewBox="0 0 14 14"><circle cx="7" cy="7" r="4.5" fill="var(--c-bg-white)" stroke="var(--c-progress-track)" stroke-width="2"/></svg>`;
+    const who = (ps[i]||[]).length ? stack(ps[i],'xs') : '';
+    let m = c==='d'?'пройден': c==='x'?'нет в трекере': c==='p'?'впереди':'';
+    if (c==='a'){ m = f.att? `<span class="tag ${f.att.k==='stop'?'stop':'wait'}">${f.att.k==='stop'?'стоит':'ждёт вас'} · ${f.att.since}</span>` : `<span class="tag ${tn==='loop'?'loop':'run'}">${tn==='loop'?'доработка':'идёт'}</span>`; }
+    const sub = c==='a' && f.id==='stats' ? `<div class="sub">Ш3 · Кира · круг 3 · 8 мин &nbsp;·&nbsp; Ш5 · Денис · 21 мин</div>` : c==='a' && f.id==='proxy' ? `<div class="sub">Ш2 · Денис · 52 мин в работе</div>` : c==='a' && f.id==='ov' ? `<div class="sub">М2-1 · Майя · 34 мин</div>` : '';
+    return `<li class="${c}">${g}<span class="n">${STG[i]}${who}</span><span class="m">${m}</span>${sub}</li>`; }).join('')}</ul>`;
+}
+function stepsList(f){
+  const st = STEPS[f.id]||[];
+  if (!st.length) return `<div class="empty sm"><div class="h">Шагов пока нет</div><div class="d">Шаги появятся, когда Егор разложит план. Сейчас фича на разрезе.</div></div>`;
+  const tg = {ok:['ok','принят'],loop:['loop','доработка'],run:['run','идёт'],stop:['stop','стоит'],pend:['mute','впереди']};
+  return st.map(([ref,lane,p,s,t,r])=>`<button class="rw" data-act="toast" data-t="Откроется чат исполнителя шага ${ref}">${av(p,'sm')}<span class="t"><b class="mono" style="font-size:11.5px">${ref}</b> · ${esc(t)}</span><span class="x">${lane}${r>1?' · круг '+r:''}</span><span class="tag ${tg[s][0]}">${tg[s][1]}</span></button>`).join('');
+}
+function chatsList(f){
+  return chatsOf(f.id).map(c=>`<button class="rw${c.r==='key'?' key':''}" data-act="chat" data-c="${c.id}">${av(c.p,'sm')}<span class="t">${esc(c.t)}</span>${c.r==='key'?'<span class="role key">ключевой</span>':`<span class="role">${c.ref}</span>`}<span class="x">${c.ago}</span></button>`).join('');
+}
+function tasksBlock(f){
+  const st=STEPS[f.id]||[]; const done=st.filter(s=>s[3]==='ok').length;
+  return `<div class="cnts"><span class="tag ok">готово ${f.closed?f.tasks:done+Math.max(0,f.tasks-st.length-3)}</span><span class="tag run">в работе ${f.closed?0:st.filter(s=>['run','loop','stop'].includes(s[3])).length}</span><span class="tag mute">впереди ${f.closed?0:st.filter(s=>s[3]==='pend').length}</span></div>
+    <button class="rw" data-act="toast" data-t="«Задачи» с фильтром по фиче: такого фильтра пока нет"><span class="t">Все ${f.tasks} задач фичи в «Задачах»</span>${I.go}</button>
+    <div style="margin-top:4px"><span class="be">фильтр «Задач» по фиче — нужно сделать</span></div>`;
+}
+function eventsBlock(f){
+  const ev=EVENTS[f.id]||[];
+  if (!ev.length) return `<div class="empty sm"><div class="d">Событий пока нет</div></div>`;
+  return ev.map(([t,p,x,k])=>`<div class="ev"><span class="tm">${t}</span>${av(p,'xs')}<span><b>${P[p]}</b> ${x}</span></div>`).join('');
+}
+const blk = (cap, body, right='') => `<div class="blk"><div class="cap">${cap}${right?`<span class="r">${right}</span>`:''}</div>${body}</div>`;
+function pageBodyState(){
+  if (S.ps==='loading') return `<div style="display:flex;flex-direction:column;gap:10px">${[70,92,84,60,88,76].map(w=>`<div class="sk" style="height:14px;width:${w}%"></div>`).join('')}<div class="sk" style="height:120px;margin-top:6px"></div></div>`;
+  if (S.ps==='error') return `<div class="ntc">${G('stop')}<div><b>Не удалось загрузить фичу.</b> Сервер не ответил; список и чаты работают как обычно.<div style="margin-top:8px;display:flex;gap:6px"><button class="btn xs gh" data-act="retry" style="background:var(--c-bg-white)">${I.retry} Повторить</button></div></div></div>`;
+  if (S.ps==='gone') return `<div class="empty"><div class="ic">${I.route}</div><div class="h">Фичи больше нет</div><div class="d">Эпик удалён в «Задачах». Чаты остались на месте и снова живут без фичи.</div><button class="btn sm gh" data-act="back">К списку чатов</button></div>`;
+  return null;
+}
+function evCap(){ return `События <span class="be">журнал: нужно от бэка</span>`; }
+function page(f, mode){
+  const st = pageBodyState();
+  if (mode==='center'){
+    const body = st || `${attBlock(f)}<div class="cols"><div>${blk('Конвейер',conveyor(f), prog(f))}${blk('Шаги',stepsList(f), (STEPS[f.id]||[]).length+'')}</div>
+      <div>${blk('Чаты фичи · '+chatsOf(f.id).length,chatsList(f))}${blk('Задачи',tasksBlock(f))}${blk(evCap(),eventsBlock(f))}</div></div>`;
+    return `<div class="pg">${pageHead(f,'center')}<div class="pgb">${body}</div></div>`;
+  }
+  if (mode==='drawer' || mode==='sheet'){
+    const tabs = [['over','Обзор'],['chats','Чаты',chatsOf(f.id).length],['tasks','Задачи',f.tasks],['ev','События']];
+    let body = st;
+    if (!st){
+      if (S.tab==='over') body = `${attBlock(f)}${blk('Конвейер',conveyor(f),prog(f))}${blk('Шаги',stepsList(f))}`;
+      else if (S.tab==='chats') body = blk('Ключевой чат первым',chatsList(f));
+      else if (S.tab==='tasks') body = blk('Задачи',tasksBlock(f));
+      else body = blk(evCap(),eventsBlock(f));
+    }
+    return `<div class="pg">${pageHead(f,mode)}<div class="tabs" role="tablist">${tabs.map(([k,l,n])=>`<button role="tab" class="${S.tab===k?'on':''}" data-act="tab" data-k="${k}">${l}${n!=null?`<span class="n">${n}</span>`:''}</button>`).join('')}</div><div class="pgb">${body}</div></div>`;
+  }
+  // panel (В) и мобильный экран В — сворачиваемые секции
+  const sec = (k, cap, n, body) => `<div class="sect${S.sect[k]?' open':''}"><button class="sh" data-act="sect" data-k="${k}" aria-expanded="${!!S.sect[k]}">${I.chev}${cap}${n!=null?` <span class="n">${n}</span>`:''}</button>${S.sect[k]?`<div class="sb">${body}</div>`:''}</div>`;
+  const body = st ? `<div style="padding:14px 16px">${st}</div>` : `<div style="padding:12px 16px 0">${attBlock(f)}</div>
+    ${sec('conv','Конвейер',prog(f),conveyor(f))}${sec('chats','Чаты фичи',chatsOf(f.id).length,chatsList(f))}${sec('steps','Шаги',(STEPS[f.id]||[]).length,stepsList(f))}
+    ${sec('tasks','Задачи',f.tasks,tasksBlock(f))}${sec('ev','События',null,`<div style="margin-bottom:6px"><span class="be">журнал: нужно от бэка</span></div>`+eventsBlock(f))}`;
+  return `<div class="pg">${pageHead(f,'panel')}<div class="pgb" style="padding:0">${body}</div></div>`;
+}
+
+/* ---------- Чат ---------- */
+function chatView(){
+  const c = CHATS.find(x=>x.id===S.chat) || CHATS[0];
+  const f = c.f.length ? F(c.f[0]) : null;
+  const k = f ? kind(f) : null;
+  const plank = f ? `<div class="fs ${k==='stop'?'t-stop':(k==='wait'||k==='merge')?'t-wait':''}">${G(k)}<span class="nm">${esc(f.name)}</span>${S.m?'':rail(f)}<span class="sg ${toneCls(k)}">${statusText(f)}</span>
+     ${S.m?'':`<span class="role">${c.r==='key'?'ключевой':'этот чат: '+c.ref}</span>`}<button class="go new" data-act="page" data-f="${f.id}" data-from="${c.id}">Фича ${I.go}</button></div>` : '';
+  return `${S.m?`<div class="mhd"><button class="ib" data-act="mback" aria-label="К списку">${I.back}</button><span class="ttl">${esc(c.t)}</span></div>`:`<div class="chd"><span class="t">${esc(c.t)}</span></div>`}
+    ${plank}<div class="feed"><div class="msg-u">Продолжай Ш3: поправь пустое состояние панели по замечаниям Глеба.</div>
+    <div class="msg-a">Поправила пустое состояние: текст и кнопка «Сбросить фильтр». Тёмная тема и 360 px проверены, отдаю на ревью.</div></div>
+    <div class="comp">Напишите сообщение…</div>`;
+}
+
+/* ---------- Сборка экрана ---------- */
+function railCol(){ return `<div class="rail"><button class="rb on" title="Чаты">${I.chats}</button><button class="rb" title="Файлы">${I.files}</button><span class="sep"></span><button class="rb" title="Задачи">${I.task}</button></div>`; }
+function render(){
+  document.documentElement.dataset.theme = S.theme;
+  document.body.classList.toggle('nonew', !document.getElementById('shownew').checked);
+  const app = document.getElementById('app'); app.className = 'app' + (S.m?' m':'');
+  const f = S.page ? F(S.page) : null;
+  let h='';
+  if (!S.m){
+    if (S.v==='a'){
+      h = railCol() + `<div class="isl side">${listPanel()}</div><div class="isl center">${f?page(f,'center'):chatView()}</div>`;
+    } else if (S.v==='b'){
+      h = railCol() + `<div class="isl side">${listPanel()}</div><div class="isl center">${chatView()}${f?`<div class="scrimc" data-act="close"></div><div class="drw" role="dialog" aria-label="Фича">${page(f,'drawer')}</div>`:''}</div>`;
+    } else {
+      h = railCol() + `<div class="isl side narrow">${listPanel()}</div><div class="isl center">${chatView()}</div>${f?`<div class="isl right new">${page(f,'panel')}</div>`:''}`;
+    }
+  } else {
+    if (S.v==='a'){
+      h = `<div class="isl">${S.mscreen==='page'&&f?page(f,'mobile'):S.mscreen==='chat'?chatView():listPanel()}</div>`;
+    } else if (S.v==='b'){
+      h = `<div class="isl">${S.mscreen==='chat'?chatView():listPanel()}</div>${f?`<div class="scrim" data-act="close"></div><div class="sheet tall"><div class="grab"></div>${page(f,'sheet')}</div>`:''}`;
+    } else {
+      const tabs = f ? `<div class="mtabs new" style="margin-top:8px"><button class="${S.mscreen!=='page'?'on':''}" data-act="mtab" data-k="list"><span>Чаты</span></button><button class="${S.mscreen==='page'?'on':''}" data-act="mtab" data-k="page">${G(kind(f))}<span>${esc(f.name)}</span></button></div>` : '';
+      h = `<div class="isl">${tabs}${S.mscreen==='page'&&f?page(f,'panel'):S.mscreen==='chat'?chatView():listPanel()}</div>`;
+    }
+    if (S.v==='a' && S.sheet==='filter'){
+      h += `<div class="scrim" data-act="sheetclose"></div><div class="sheet fsh"><div class="grab"></div><div class="hd"><span class="t">Фильтры</span><button class="ib" data-act="sheetclose" aria-label="Закрыть">${I.x}</button></div>
+        <div class="in">${filterBodyA(true)}</div><div class="foot">${S.fa.size||S.faClosed?'<button class="lnk" data-act="reset" style="min-height:40px">Сбросить всё</button>':''}<span class="sp"></span>
+        <button class="btn md pri" data-act="sheetclose">Показать ${plural(visible().open.length+visible().closed.length)}</button></div></div>`;
+    }
+  }
+  if (S.menu) h += `<div class="menu" style="${S.m?'left:8px;right:8px;top:60px':'right:24px;top:56px'}"><button class="mi" data-act="toast" data-t="Ветка скопирована">Скопировать ветку</button>
+     <button class="mi" data-act="toast" data-t="Откроются «Задачи»">Открыть эпик в «Задачах»</button><div class="msep"></div>
+     <button class="mi dng" data-act="toast" data-t="Закрыть без мержа: нужна ручка на бэке">Закрыть без мержа <span class="be d">бэк</span></button></div>`;
+  if (S.toast) h += `<div class="toast">${S.toast}</div>`;
+  app.innerHTML = h;
+  renderBar(); renderNote(); saveHash();
+}
+
+/* ---------- События ---------- */
+document.getElementById('app').addEventListener('click', e => {
+  const t = e.target.closest('[data-act]');
+  if (!t){ if (S.pop||S.menu){ S.pop=false; S.menu=null; render(); } return; }
+  const a=t.dataset.act, id=t.dataset.f;
+  if (a!=='menu') S.menu=null;
+  switch(a){
+    case 'tog': S.open[id]=!S.open[id]; break;
+    case 'page': S.from = t.dataset.from || (S.page? S.from : S.chat); S.page=id; S.tab='over'; S.ps = S.ps==='gone'?'ok':S.ps; if (S.m) S.mscreen = S.v==='b' ? S.mscreen : 'page'; break;
+    case 'close': S.page=null; if (S.m && S.v==='c') S.mscreen='list'; break;
+    case 'back': if (S.from && !S.m){ S.chat=S.from; } S.page=null; if (S.m) S.mscreen = S.from? 'chat':'list'; S.from=null; break;
+    case 'mback': S.mscreen='list'; break;
+    case 'chat': S.chat=t.dataset.c; if (!(S.v==='c' && !S.m)) S.page=null; if (S.m) S.mscreen='chat'; break;
+    case 'key': { const f=F(id); S.chat=f.key; S.page = S.v==='c' && !S.m ? S.page : null; if (S.m) S.mscreen='chat'; S.toast = f.att&&f.att.k==='merge' ? 'Ключевой чат: финальное ревью принято, мерж — у оркестратора' : null; break; }
+    case 'pop': if (S.m){ S.sheet='filter'; } else S.pop=!S.pop; break;
+    case 'sheetclose': S.sheet=null; break;
+    case 'fa': S.fa.has(t.dataset.k)?S.fa.delete(t.dataset.k):S.fa.add(t.dataset.k); break;
+    case 'faClosed': S.faClosed=!S.faClosed; break;
+    case 'fb': S.fb=t.dataset.k; break;
+    case 'fc': S.fc.has(t.dataset.k)?S.fc.delete(t.dataset.k):S.fc.add(t.dataset.k); break;
+    case 'fcClosed': S.fcClosed=!S.fcClosed; break;
+    case 'reset': resetFilters(); break;
+    case 'closedSec': S.closedOpen=!S.closedOpen; if (S.v==='a' && S.faClosed && !S.closedOpen) {} break;
+    case 'tab': S.tab=t.dataset.k; break;
+    case 'sect': S.sect[t.dataset.k]=!S.sect[t.dataset.k]; break;
+    case 'mtab': S.mscreen = t.dataset.k==='page'?'page':'list'; break;
+    case 'menu': S.menu=!S.menu; break;
+    case 'retry': S.ps='loading'; render(); setTimeout(()=>{ S.ps='ok'; render(); }, 900); return;
+    case 'toast': S.toast=t.dataset.t; break;
+  }
+  if (a!=='toast' && a!=='key') S.toast = a==='key'?S.toast:null;
+  if (S.toast){ clearTimeout(render.tt); render.tt=setTimeout(()=>{ S.toast=null; render(); }, 2400); }
+  e.stopPropagation(); render();
+});
+document.addEventListener('keydown', e => { if (e.key==='Escape'){ if (S.pop||S.menu||S.sheet){ S.pop=false; S.menu=null; S.sheet=null; } else if (S.page && S.v!=='a'){ S.page=null; } render(); } });
+
+/* ---------- Служебная панель и записка ---------- */
+function pills(id, items, key, after){
+  document.getElementById(id).innerHTML = items.map(([v,l])=>`<button class="${S[key]===v?'on':''}" data-v="${v}">${l}</button>`).join('');
+  document.getElementById(id).onclick = e => { const b=e.target.closest('button'); if(!b) return; let v=b.dataset.v; if (v==='true') v=true; if (v==='false') v=false; S[key]=v; after&&after(); render(); };
+}
+function renderBar(){
+  pills('pv',[['a','А · Строка + страница в центре'],['b','Б · Плитка + шторка'],['c','В · Индикатор + панель']],'v',()=>{ S.page=null; S.pop=false; S.sheet=null; S.mscreen='list'; });
+  pills('pd',[['normal','Обычно'],['calm','Все закрыты'],['none','Нет фич']],'data',()=>{ resetFilters(); S.page=null; });
+  pills('pp',[['ok','Обычно'],['loading','Загрузка'],['error','Ошибка'],['gone','Фичу удалили']],'ps', ()=>{ if(!S.page){ S.page='stats'; S.from='c17'; if(S.m && S.v!=='b') S.mscreen='page'; } });
+  pills('pt',[['light','Светлая'],['dark','Тёмная']],'theme');
+  pills('pw',[[false,'1280'],[true,'360']],'m',()=>{ S.pop=false; S.sheet=null; S.mscreen = S.page && S.v!=='b' ? 'page' : 'list'; });
+}
+const NOTES = {
+  a:'<b>А · «Строка + страница в центре».</b> Плашка — две строки, 55 px: шеврон отдельной тач-целью раскрывает чаты, тело открывает <b>страницу фичи в центральной области</b> вместо чата (крошка «← К чату …» возвращает туда, откуда пришли). Фильтр — тот же <b>FilterBar</b>, что у «Чатов»: воронка, поповер с секцией «Фичи · что с ними» и тумблером «Закрытые», бейдж «скрыто N», сброс; активный фильтр виден строкой снимаемых чипов под шапкой. Наведите на плашку — справа появится быстрое действие.',
+  b:'<b>Б · «Плитка + шторка».</b> Плашка — карточка 156 px: тег состояния, ветка, <b>подписанная рельса</b>, строка «кто и что сейчас», внизу чаты/задачи и быстрое действие. Страница — <b>шторка справа поверх чата</b> (540 px, вкладки Обзор · Чаты · Задачи · События), чат за ней не теряется, Esc закрывает. Фильтр — <b>InlineSegmented</b> по корзинам «Открытые · Требуют вас · Идут · Закрытые» с числами, одно нажатие. На 360 — нижняя шторка 92 %.',
+  c:'<b>В · «Индикатор + панель».</b> Плашка — одна строка 40 px: кольцо прогресса шагов, название, справа кто/стадия или тревога. Список остаётся плотным, детали живут в <b>панели «Фича» справа</b>, она остаётся открытой, пока вы ходите по чатам фичи (как «Файлы»). Фильтр — ряд <b>ui/Chip soft</b> с числами, «Закрытые» за разделителем, «Сбросить» появляется при выборе. На 360 — вкладки «Чаты · ‹фича›».',
+};
+function renderNote(){ document.getElementById('note').innerHTML = NOTES[S.v] + ' <span style="color:var(--c-text-muted)">Пунктир — нового нет в продукте; жёлтая метка — данных или ручки нет на бэке.</span>'; }
+function saveHash(){ const p=[S.v]; if (S.m) p.push('m'); if (S.theme==='dark') p.push('dark'); if (S.page) p.push('page='+S.page); if (S.data!=='normal') p.push(S.data); if (S.ps!=='ok') p.push('ps='+S.ps); history.replaceState(null,'','#'+p.join('&')); }
+function loadHash(){
+  const p = location.hash.slice(1).split('&').filter(Boolean);
+  for (const x of p){
+    if (['a','b','c'].includes(x)) S.v=x; else if (x==='m') S.m=true; else if (x==='dark') S.theme='dark';
+    else if (x.startsWith('page=')){ S.page=x.slice(5); S.from='c17'; } else if (['calm','none'].includes(x)) S.data=x;
+    else if (x.startsWith('ps=')) S.ps=x.slice(3); else if (x==='pop') S.pop=true; else if (x==='fsheet') S.sheet='filter';
+    else if (x.startsWith('fa=')) x.slice(3).split(',').forEach(k=>S.fa.add(k)); else if (x.startsWith('fb=')) S.fb=x.slice(3);
+    else if (x.startsWith('fc=')) x.slice(3).split(',').forEach(k=>S.fc.add(k)); else if (x.startsWith('open=')) S.open[x.slice(5)]=true;
+  }
+  if (S.m && S.page && S.v!=='b') S.mscreen='page';
+}
+document.getElementById('shownew').onchange = render;
+loadHash(); render();
+</script>
+</body>
+</html>

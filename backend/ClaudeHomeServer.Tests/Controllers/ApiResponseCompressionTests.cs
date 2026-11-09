@@ -6,6 +6,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // Сжатие ответов REST (Program.cs, UseWhen по /api): список чатов проекта — сотни КБ JSON,
 // и через внешний домен он ехал несжатым. Ветка /api/auth из сжатия исключена — токен
 // в теле ответа рядом со сжатием даёт материал для BREACH.
+[Trait("Category", "Host")]
 public class ApiResponseCompressionTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {

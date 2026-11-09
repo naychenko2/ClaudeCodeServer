@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.Versioning;
 using ClaudeHomeServer.Services.Images.Editing.Raster;
@@ -54,17 +55,28 @@ public class ImageEditJobServiceTests : IDisposable
         return started.Value!.JobId;
     }
 
-    private static async Task<ImageEditJobDto> WaitDone(ImageEditJobService service, string owner, string jobId)
+    // Конец задачи продукт объявляет завершающим сообщением (ImageEditCompletedMessage /
+    // ImageEditFailedMessage): оно уходит после того, как состояние стало терминальным
+    // (:600→:604, :628→:636, :660→:666) — ожидание по нему и есть «состояние терминальное,
+    // событие дошло до вещателя». Сигнал Finished для этого не годится: он звенит до отправки
+    // сообщения (:603 раньше :604). Подписка раньше проверки «уже отправлено»: послано до подписки —
+    // не ждём, после — придёт сигнал. Потолок 30 с — страховка от зависания под нагрузкой, а не
+    // проверяемая скорость (образец 10526374b)
+    private async Task<ImageEditJobDto> WaitDone(ImageEditJobService service, string owner, string jobId,
+        string scope = Project)
     {
-        for (var i = 0; i < 500; i++)
-        {
-            var job = service.Get(owner, Project, jobId)!;
-            if (job.Status is ImageEditJobStatus.Completed or ImageEditJobStatus.Failed or ImageEditJobStatus.Cancelled)
-                return job;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException("задача не завершилась");
+        var finished = new TaskCompletionSource();
+        void OnMessage(ServerMessage message) { if (IsCompletionFor(jobId, message)) finished.TrySetResult(); }
+        _broadcaster.MessageSent += OnMessage;
+        if (!_broadcaster.AllMessages.Any(m => IsCompletionFor(jobId, m)))
+            await finished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        _broadcaster.MessageSent -= OnMessage;
+        return service.Get(owner, scope, jobId)!;
     }
+
+    private static bool IsCompletionFor(string jobId, ServerMessage message) =>
+        message is ImageEditCompletedMessage completed && completed.JobId == jobId
+        || message is ImageEditFailedMessage failed && failed.JobId == jobId;
 
     [Fact]
     public async Task Higgsfield_ТратаПишетсяНаЗапустившего_ВКредитахПоКотировке()
@@ -86,8 +98,23 @@ public class ImageEditJobServiceTests : IDisposable
         record.CostCredits.Should().Be(3.0);
         record.CostUsd.Should().BeNull("кредиты с долларами не складываются");
         record.Generations.Should().Be(2);
+        // Задача редактора проекта идёт группе проекта (участники общего проекта), а не одному владельцу
+        _broadcaster.ToProjectCalls.Should().Contain(c => c.ProjectId == Project && c.Message is ImageEditCompletedMessage);
+        _broadcaster.ToOwnerCalls.Should().BeEmpty();
+    }
+
+    // Область «personal» (чат вне проекта) — не id проекта: события идут владельцу, а не в несуществующую группу project_personal
+    [Fact]
+    public async Task ЛичнаяОбласть_СобытияЗадачиИдутВладельцуНеВГруппуПроекта()
+    {
+        var (higgsfield, _, _) = HiggsfieldImageEditorTests.Create();
+        var service = Service(higgsfield);
+        var quote = await service.QuoteAsync("user-b", ImageEditScope.Personal, Quote("higgsfield"), default);
+        var started = await service.StartAsync("user-b", ImageEditScope.Personal, Input(quote.Value!.QuoteId), default);
+        await WaitDone(service, "user-b", started.Value!.JobId, ImageEditScope.Personal);
+
         _broadcaster.ToOwnerCalls.Should().Contain(c => c.OwnerId == "user-b" && c.Message is ImageEditCompletedMessage);
-        _broadcaster.ToOwnerCalls.Should().OnlyContain(c => c.OwnerId == "user-b");
+        _broadcaster.ToProjectCalls.Should().BeEmpty();
     }
 
     // ADR-018 §2: чат картинки и инициатор идут из входа в задачу, её события и запись траты —
@@ -112,7 +139,7 @@ public class ImageEditJobServiceTests : IDisposable
         var record = _spend.Records.Should().ContainSingle().Subject;
         record.SessionId.Should().Be("chat-1");
         record.Initiator.Should().Be(spendInitiator);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>().Should()
+        _broadcaster.AllMessages.OfType<ImageEditCompletedMessage>().Should()
             .ContainSingle().Which.Should().Match<ImageEditCompletedMessage>(m => m.ChatSessionId == "chat-1" && m.Initiator == initiator);
     }
 
@@ -156,7 +183,7 @@ public class ImageEditJobServiceTests : IDisposable
         fal.Runs.Should().Be(0);
         higgsfield.Runs.Should().Be(1);
         _spend.Records.Should().BeEmpty();
-        var failed = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single();
+        var failed = _broadcaster.AllMessages.OfType<ImageEditFailedMessage>().Single();
         failed.RetryQuote!.Provider.Should().Be("fal");
     }
 
@@ -182,17 +209,20 @@ public class ImageEditJobServiceTests : IDisposable
         });
         var service = Service(slow);
         var jobId = await StartAsync(service, "user-a", "higgsfield", count: 2);
-        await accepted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Потолки 30 с — страховка от зависания, не проверяемая скорость: старт драйвера — work item
+        // пула (ImageEditJobService.StartAsync), под нагрузкой параллельного гейта он не получает
+        // поток за 5 с (флак 6aa5013e: TimeoutException за 7 с в первом прогоне, зелёный на перезапуске)
+        await accepted.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         var cancelled = await service.CancelAsync("user-a", Project, jobId, default);
 
-        await driverSawCancel.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await driverSawCancel.Task.WaitAsync(TimeSpan.FromSeconds(30));
         cancelled!.Status.Should().Be(ImageEditJobStatus.Cancelled);
         cancelled.Outcome.Should().Be(EditOutcome.Cancelled);
         // Higgsfield работу не останавливает: списание неизвестно, трата по котировке остаётся
         cancelled.Charged.Should().BeNull();
         _spend.Records.Should().ContainSingle(r => r.OwnerId == "user-a" && r.CostCredits == 3.0 && r.Generations == 2);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>()
+        _broadcaster.AllMessages.OfType<ImageEditFailedMessage>()
             .Should().ContainSingle(m => m.JobId == jobId && m.Outcome == EditOutcome.Cancelled);
     }
 
@@ -243,7 +273,7 @@ public class ImageEditJobServiceTests : IDisposable
         var job = await WaitDone(service, "user-a", await StartAsync(service, "user-a", "fal"));
 
         job.Status.Should().Be(ImageEditJobStatus.Failed);
-        var retry = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditFailedMessage>().Single().RetryQuote;
+        var retry = _broadcaster.AllMessages.OfType<ImageEditFailedMessage>().Single().RetryQuote;
         retry!.Provider.Should().Be("higgsfield");
         retry.Estimate.Amount.Should().BeNull();
         higgsfield.Runs.Should().Be(0);
@@ -401,7 +431,9 @@ public class ImageEditJobServiceTests : IDisposable
         });
         var service = Service(time, editor);
         var jobId = await StartAsync(service, "owner", "fal");
-        await running.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        // Потолок 30 с — страховка от зависания под нагрузкой, а не проверяемая скорость: переход
+        // в Running — сигнал фейка, а старт драйвера — work item пула (образец 10526374b)
+        await running.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         time.Advance(TimeSpan.FromSeconds(7));
         var job = service.Get("owner", Project, jobId)!;
@@ -409,7 +441,7 @@ public class ImageEditJobServiceTests : IDisposable
         job.Status.Should().Be(ImageEditJobStatus.Running);
         job.RunElapsedSeconds.Should().Be(7, "отсчёт — с перехода в Running, а не с постановки в очередь");
         (job.Run, job.Runs, job.EtaSeconds).Should().Be((2, 3, 40));
-        var progress = _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditProgressMessage>().ToList();
+        var progress = _broadcaster.AllMessages.OfType<ImageEditProgressMessage>().ToList();
         progress.First().RunElapsedSeconds.Should().BeNull("в очереди прогон ещё не идёт");
         progress.Last().Should().Match<ImageEditProgressMessage>(m =>
             m.Run == 2 && m.Runs == 3 && m.EtaSeconds == 40 && m.RunElapsedSeconds == 0);
@@ -418,18 +450,68 @@ public class ImageEditJobServiceTests : IDisposable
         (await WaitDone(service, "owner", jobId)).RunElapsedSeconds.Should().BeNull();
     }
 
+    // Шаг 28: снимок очереди GPU из отчёта прогресса едет в событие ImageEditProgressMessage;
+    // статус запуска, трата и recordType от него не зависят (Gpu — только отображение, не учёт)
+    [Fact]
+    public async Task СобытиеПрогресса_НесётGpu_СтатусТратаИRecordTypeНеЗависят()
+    {
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 0, StartInSeconds: null, Steps: null, Percent: 50, PercentExact: true,
+            RemainingSeconds: 10, Busy: null, DownSince: null);
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Running, Run: 1, Runs: 1, EtaSeconds: 40, Gpu: gpu));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok,
+                [new EditedImage(TestImages.Png(2, 2), "image/png")],
+                new EditCost(3.0, ImageEditPriceUnits.Credits), true, "r", null));
+        });
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal");
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Status.Should().Be(ImageEditJobStatus.Completed);
+        // Событие прогресса несёт живой снимок очереди GPU
+        _broadcaster.AllMessages.OfType<ImageEditProgressMessage>()
+            .Should().ContainSingle().Which.Gpu.Should().Be(gpu);
+        // Статус, трата и recordType не зависят от Gpu: итог Completed, трата по котировке,
+        // подпись записи — обычный (не «сумма уточняется»)
+        done.Cost.Should().Be(new EditCost(3.0, ImageEditPriceUnits.Credits));
+        var record = _spend.Records.Should().ContainSingle().Subject;
+        record.Provider.Should().Be("fal");
+        record.Label.Should().Be(ImageEditJobService.SpendLabel);
+        record.Generations.Should().Be(1);
+    }
+
+    // Ревью шага 28 (Глеб, minor): ImageEditProgressMessage.Gpu теперь с JsonIgnore(WhenWritingNull),
+    // как ImageEditJobDto.Gpu: при Gpu=null ключ gpu не пишется в JSON события
+    [Fact]
+    public void СобытиеПрогресса_GpuNull_НеПишетКлючGpu()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions { PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase };
+        var empty = new ImageEditProgressMessage("j", "p1", EditStage.Queued, 1);
+        System.Text.Json.JsonSerializer.Serialize(empty, options).Should().NotContain("gpu", "null не пишется");
+
+        var gpu = new ClaudeHomeServer.Services.Media.LocalGpuQueueInfo(
+            Ahead: 1, StartInSeconds: 30, Steps: null, Percent: 40, PercentExact: false,
+            RemainingSeconds: 20, Busy: null, DownSince: null);
+        var filled = new ImageEditProgressMessage("j", "p1", EditStage.Running, null, Gpu: gpu);
+        System.Text.Json.JsonSerializer.Serialize(filled, options).Should().Contain("gpu", "заполненный снимок пишется");
+    }
+
     // ── Варианты по готовности (EditProgress.Ready) ──────────────────────────
 
     private static EditedImage Variant(byte shade) => new(TestImages.Png(4, 4, shade), "image/png");
 
-    private static async Task WaitUntil(Func<bool> condition, string what)
+    // Вариант попадает в job.Variants до подъёма VariantReady (ImageEditJobService.cs:560-567):
+    // подпись сигнала раньше чтения состояния — гонка «вариант стал готов до подписки» закрыта
+    // порядком. Потолок 30 с — страховка от зависания под нагрузкой, а не проверяемая скорость
+    // (образец 10526374b)
+    private static async Task WaitFirstVariant(ImageEditJobService service, string owner, string jobId)
     {
-        for (var i = 0; i < 500; i++)
-        {
-            if (condition()) return;
-            await Task.Delay(10);
-        }
-        throw new TimeoutException(what);
+        var ready = new TaskCompletionSource();
+        service.VariantReady += (_, dto) => { if (dto.JobId == jobId) ready.TrySetResult(); return Task.CompletedTask; };
+        if (service.Get(owner, Project, jobId)!.Variants.Count == 0)
+            await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
     }
 
     [Fact]
@@ -450,7 +532,7 @@ public class ImageEditJobServiceTests : IDisposable
         service.VariantReady += (_, dto) => { lock (ready) ready.Add(dto); return Task.CompletedTask; };
         var jobId = await StartAsync(service, "owner", "fal", count: 3);
 
-        await WaitUntil(() => service.Get("owner", Project, jobId)!.Variants.Count == 1, "первый вариант не отдан");
+        await WaitFirstVariant(service, "owner", jobId);
         var running = service.Get("owner", Project, jobId)!;
         running.Status.Should().NotBe(ImageEditJobStatus.Completed, "задача ещё идёт");
         running.Variants.Should().Equal(1);
@@ -464,8 +546,37 @@ public class ImageEditJobServiceTests : IDisposable
         done.Variants.Should().Equal(1, 2, 3);
         service.OpenVariant("owner", Project, jobId, 3)!.Bytes.Should().Equal(images[2].Bytes);
         lock (ready) ready.Select(d => d.Variants.Count).Should().Equal(1, 2, 3);
-        _broadcaster.ToOwnerCalls.Select(c => c.Message).OfType<ImageEditCompletedMessage>()
+        _broadcaster.AllMessages.OfType<ImageEditCompletedMessage>()
             .Should().ContainSingle().Which.Variants.Should().Equal(1, 2, 3);
+    }
+
+    [Fact]
+    public async Task Сходство_ПишетсяИзReadyИИзХвостаФинала()
+    {
+        EditedImage[] images = [Variant(1) with { Similarity = 0.6 }, Variant(2), Variant(3) with { Similarity = 0.8 }];
+        var editor = new ScriptedEditor("fal", (_, progress, _) =>
+        {
+            progress.Report(new EditProgress(EditStage.Downloading, Run: 1, Runs: 3, Ready: [images[0], images[1]]));
+            return Task.FromResult(new ImageEditResult(EditOutcome.Ok, images, null, true, "r", null));
+        });
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal", count: 3);
+
+        var done = await WaitDone(service, "owner", jobId);
+
+        done.Variants.Should().Equal(1, 2, 3);
+        done.Similarities.Should().BeEquivalentTo(new Dictionary<int, double> { [1] = 0.6, [3] = 0.8 });
+    }
+
+    [Fact]
+    public async Task Сходство_БезНегоСловарьNull()
+    {
+        var editor = new ScriptedEditor("fal", (_, _, _) =>
+            Task.FromResult(new ImageEditResult(EditOutcome.Ok, [Variant(1), Variant(2)], null, true, "r", null)));
+        var service = Service(editor);
+        var jobId = await StartAsync(service, "owner", "fal", count: 2);
+
+        (await WaitDone(service, "owner", jobId)).Similarities.Should().BeNull();
     }
 
     // Разбор готового варианта медленный (приведение размера), а драйвер уже вернул итог: Finished
@@ -484,14 +595,25 @@ public class ImageEditJobServiceTests : IDisposable
         var service = new ImageEditJobService([editor], new ImageEditWorkspace(Path.Combine(_dir, "image-editor")),
             NullLogger<ImageEditJobService>.Instance, _spend, _broadcaster, raster: new SlowRaster());
         _services.Add(service);
+        var allEvents = new TaskCompletionSource();
         service.VariantReady += (_, dto) => { lock (events) events.Add($"ready {dto.Variants.Count}"); return Task.CompletedTask; };
-        service.Finished += (_, dto) => { lock (events) events.Add($"finished {dto.Variants.Count}"); return Task.CompletedTask; };
+        service.Finished += (_, dto) =>
+        {
+            lock (events)
+            {
+                events.Add($"finished {dto.Variants.Count}");
+                if (events.Count == 3) allEvents.TrySetResult();
+            }
+            return Task.CompletedTask;
+        };
 
         var jobId = await StartAsync(service, "owner", "fal", count: 2);
         var done = await WaitDone(service, "owner", jobId);
 
         done.Variants.Should().Equal(1, 2);
-        await WaitUntil(() => { lock (events) return events.Count == 3; }, "события не пришли");
+        // Сигнал ставит свой же Finished-слушатель теста: ждём своих событий, не состояния продукта;
+        // потолок 30 с — страховка от зависания, а не проверяемая скорость
+        await allEvents.Task.WaitAsync(TimeSpan.FromSeconds(30));
         lock (events) events.Should().Equal("ready 1", "ready 2", "finished 2");
     }
 
@@ -506,7 +628,7 @@ public class ImageEditJobServiceTests : IDisposable
         });
         var service = Service(editor);
         var jobId = await StartAsync(service, "owner", "fal", count: 3);
-        await WaitUntil(() => service.Get("owner", Project, jobId)!.Variants.Count == 1, "первый вариант не отдан");
+        await WaitFirstVariant(service, "owner", jobId);
 
         var cancelled = await service.CancelAsync("owner", Project, jobId, default);
 

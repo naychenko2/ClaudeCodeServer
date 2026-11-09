@@ -73,6 +73,15 @@ public class ClaudeSubscriptionPool
 
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
     private readonly UsageService? _usage;
+
+    // Версия состояния пула: растёт на каждом изменении (исчерпание, auth, пометки моделей).
+    // Для инвалидации кэша /api/usage: блок подписок в ответе (InRotation/Utilization/Exhausted/
+    // UnavailableModels/цель роутинга) меняется только когда меняется состояние пула.
+    private long _version;
+    public long Version => Interlocked.Read(ref _version);
+
+    // Состояние пула изменилось — версия выросла (кэш /api/usage пересоберётся при следующем чтении).
+    private void BumpVersion() => Interlocked.Increment(ref _version);
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
     private readonly double _softThreshold;
     // Аккаунт с утилизацией недельного окна >= порога тоже выводится из ротации.
@@ -217,6 +226,16 @@ public class ClaudeSubscriptionPool
         // временные пометки пар тут fail-open, иначе помеченная пара выбрасывала бы аккаунт
         // из последнего варианта, и Pick возвращал бы заведомо неспособный по тарифу.
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
+
+        // Среди способных первым идёт аккаунт, который НЕ исчерпан и не auth-dead, а лишь
+        // несёт пометку пары: пометка — наблюдение одного хода (бывает ложным в чужом чате),
+        // исчерпание — факт до resetsAt. Без этого шага PickSoonestRecovery отсекал по тарифу
+        // раньше, чем по сроку, и отдавал исчерпанный max20 вместо живого max5 с пометкой
+        // (инцидент 2026-10-26: задача на «claude» с недельным лимитом при живой «claude-3»).
+        var alive = capable.Where(k => !IsExhausted(k) && !IsAuthDead(k)).ToList();
+        if (alive.Count > 0)
+            return PickTopTier(alive, deterministic);
+
         return PickSoonestRecovery(capable.Count > 0 ? capable : AllKeys(), deterministic);
     }
 
@@ -328,8 +347,8 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Модель, которая уйдёт в --model: семейство + окно 1M, если его можно получить.</summary>
     /// Храним только семейство, окно решает сервер при запуске: суффикс [1m] дописывается, если
-    /// семейство его поддерживает (ClaudeModelFamily.Supports1M) И подписка хода тянет окно. Ключ
-    /// подписки известен (ход чата на аккаунте пула) — решает её план; не известен или вне пула
+    /// семейство его поддерживает (ClaudeModelFamily.Supports1M) И подписка хода тянет окно.
+    /// Ключ подписки известен (ход чата на аккаунте пула) — решает её план; не известен или вне пула
     /// (основной аккаунт, фон до Pick) — CanServeWindow1M по всему пулу, тогда Pick по модели с
     /// окном сам выберет аккаунт, который его тянет. Алиас с суффиксом из старых данных приводится
     /// к тем же правилам (срезается, если окна нет). Полные id и сторонние модели — как есть.
@@ -421,6 +440,7 @@ public class ClaudeSubscriptionPool
         if (resetsAt.HasValue && resetsAt.Value.Kind != DateTimeKind.Utc)
             resetsAt = resetsAt.Value.ToUniversalTime();
         _exhausted[key] = resetsAt ?? DateTime.UtcNow.Add(DefaultExhaustion);
+        BumpVersion();
     }
 
     /// <summary>Подписка сейчас на лимите?</summary>
@@ -441,6 +461,7 @@ public class ClaudeSubscriptionPool
     {
         _exhausted.TryRemove(key, out _);
         _authDead.TryRemove(key, out _);
+        BumpVersion();
     }
 
     /// <summary>Пометить подписку как негодную по auth (протухший OAuth/ключ, P29).</summary>
@@ -450,7 +471,7 @@ public class ClaudeSubscriptionPool
     /// прошла, до лимитов он бы не дошёл). Полный <see cref="Reset"/> чистит и auth-dead, и exhausted.
     public void MarkAuthDead(string key)
     {
-        if (!string.IsNullOrEmpty(key)) _authDead[key] = 1;
+        if (!string.IsNullOrEmpty(key)) { _authDead[key] = 1; BumpVersion(); }
     }
 
     /// <summary>Подписка помечена негодной по auth (протухший токен/ключ)?</summary>
@@ -465,7 +486,7 @@ public class ClaudeSubscriptionPool
     /// токен уже починили (P31, блокер ревью P29).
     public void ClearAuthDead(string key)
     {
-        if (!string.IsNullOrEmpty(key)) _authDead.TryRemove(key, out _);
+        if (!string.IsNullOrEmpty(key) && _authDead.TryRemove(key, out _)) BumpVersion();
     }
 
     /// <summary>Пометить пару (подписка, модель) недоступной до истечения TTL причины.</summary>
@@ -479,6 +500,7 @@ public class ClaudeSubscriptionPool
         Interlocked.Exchange(ref _lastModelRejectionTicks, DateTime.UtcNow.Ticks);
         if (string.IsNullOrWhiteSpace(model)) return;
         _modelUnavailable[PairKey(key, model)] = (DateTime.UtcNow.Add(ModelTtl(reason)), reason);
+        BumpVersion();
     }
 
     /// <summary>Был ли отказ ПО МОДЕЛИ только что (окно ModelRejectionSuppression)?</summary>
@@ -515,7 +537,7 @@ public class ClaudeSubscriptionPool
     public void ClearModelUnavailable(string key, string? model)
     {
         if (string.IsNullOrEmpty(key) || string.IsNullOrWhiteSpace(model)) return;
-        _modelUnavailable.TryRemove(PairKey(key, model), out _);
+        if (_modelUnavailable.TryRemove(PairKey(key, model), out _)) BumpVersion();
     }
 
     /// <summary>Пара сейчас помечена недоступной (TTL ещё не истёк)?</summary>

@@ -163,7 +163,9 @@ public class ChatArchiveFlagTests : IDisposable
         chat.UpdatedAt = DateTime.UtcNow.AddMinutes(-5);
         var updatedAt0 = chat.UpdatedAt;
 
-        sut.SetExcludeFromDossiers(chat.Id, true)!.ExcludeFromDossiers.Should().BeTrue();
+        // S2d-6c: метод стал TrySet… (отказ по приватности); общий чат — принимается
+        sut.TrySetExcludeFromDossiers(chat.Id, true).Should().BeTrue();
+        chat.ExcludeFromDossiers.Should().BeTrue();
 
         chat.UpdatedAt.Should().Be(updatedAt0, "тумблер «Не сохранять решения» — настройка, а не активность");
     }
@@ -484,6 +486,7 @@ public class ChatArchiveFlagTests : IDisposable
 
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
@@ -493,11 +496,8 @@ public class ChatArchiveFlagTests : IDisposable
             return Task.FromResult(answer);
         }
 
-        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(answer);
-
-        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt,
-            CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) => Task.FromResult<string?>(answer);
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,

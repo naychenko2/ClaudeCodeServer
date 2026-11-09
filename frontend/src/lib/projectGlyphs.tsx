@@ -32,29 +32,37 @@ import { useEffect, useState } from 'react';
 import type { ComponentType, SVGProps } from 'react';
 import { Icon as LucideIcon } from 'lucide-react';
 import type { IconNode } from 'lucide-react';
-import { dynamicIconImports, iconNames } from 'lucide-react/dynamic';
+import { LUCIDE_ICON_NAMES_LIST } from './lucideIconNames.g';
 
+// Карта loader'ов (~2000 `import()`) грузится ЛЕНИВО, одним динамическим импортом
+// модуля `lucide-react/dynamic`, а не статическим: статический тащил её в стартовый
+// граф и порождал 1700+ `modulepreload` в index.html. Имена для проверки «есть ли
+// такой значок» берутся из сгенерированного модуля (без карты).
+type DynamicModule = typeof import('lucide-react/dynamic');
 // `name` в карте loader'ов строго типизирован (literal union из 1995 имён).
 // Бэк-сверка допускает `string` снаружи (любой ответ сервера), внутри
 // обёртки приводим к `IconName`.
-type IconName = (typeof iconNames)[number];
+type IconName = DynamicModule['iconNames'][number];
+
+let loaderMapPromise: Promise<DynamicModule['dynamicIconImports']> | null = null;
+function loaderMap(): Promise<DynamicModule['dynamicIconImports']> {
+  loaderMapPromise ??= import('lucide-react/dynamic').then(m => m.dynamicIconImports);
+  return loaderMapPromise;
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // Список имён
 // ──────────────────────────────────────────────────────────────────────────
 
-// Полный список имён установленного lucide-react. `iconNames` собирается
-// в `dynamicIconImports.mjs` как `Object.keys(dynamicIconImports)`;
-// добавление/удаление имён следует за версией `lucide-react`, рукописных
-// списков не ведём.
-//
-// Иммутабельный `readonly string[]` снаружи — изменение состава пакета
-// единственный источник правды; под капотом массив тот же, что у пакета.
-export const LUCIDE_ICON_NAMES: readonly string[] = iconNames;
+// Полный список имён установленного lucide-react. Генерируется
+// `scripts/gen-glyph-names.mjs` из `iconNames` пакета (вместе с бэкенд-списком,
+// ADR-009 §5.2); равенство с пакетом держит vitest-сторож lucideIconNames.test.ts.
+// Рукописных списков не ведём.
+export const LUCIDE_ICON_NAMES: readonly string[] = LUCIDE_ICON_NAMES_LIST;
 
 // O(1) предикат: «входит ли имя в набор». Удобно в тех местах, где
 // вызов горячий (preview, валидация ответа модели на клиенте).
-export const LUCIDE_ICON_NAME_SET: ReadonlySet<string> = new Set(iconNames);
+export const LUCIDE_ICON_NAME_SET: ReadonlySet<string> = new Set(LUCIDE_ICON_NAMES_LIST);
 
 export function isLucideIconName(name: string): boolean {
   return LUCIDE_ICON_NAME_SET.has(name);
@@ -101,7 +109,8 @@ export function preloadGlyph(name: string): Promise<void> {
 function loadGlyph(name: string): Promise<void> {
   const already = pendingGlyphs.get(name);
   if (already) return already;
-  const load = dynamicIconImports[name as IconName]()
+  const load = loaderMap()
+    .then(map => map[name as IconName]())
     .then(mod => { loadedGlyphs.set(name, mod.__iconNode); })
     .catch(err => { console.error('[projectGlyphs] значок не загрузился:', name, err); })
     .finally(() => { pendingGlyphs.delete(name); });

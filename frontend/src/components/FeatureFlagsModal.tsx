@@ -15,6 +15,7 @@ const STAGE_COLOR: Record<FeatureFlagDefinition['stage'], string> = {
   dev: C.textMuted,
   beta: C.accent,
   stable: C.success,
+  experimental: C.warning,
 };
 
 export function FeatureFlagsModal({ onClose }: Props) {

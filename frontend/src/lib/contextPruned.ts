@@ -10,14 +10,26 @@ export function fmtPrunedTokens(n: number): string {
   return n >= 1000 ? (n / 1000).toFixed(n >= 10000 ? 0 : 1) + 'k' : String(n);
 }
 
+// Значок строки: ножницы — контекст двигали, круговая стрелка — прокси оборвал петлю модели
+export function prunedIcon(item: PrunedItem): string {
+  return item.pruneKind === 'loop_guard' ? '↻' : '✂';
+}
+
 // Заголовок строки: что именно случилось и с каким объёмом
 export function prunedHeadline(item: PrunedItem): string {
+  if (item.pruneKind === 'loop_guard') {
+    // blocks — сколько петель поймали: вторая — повтор тоже петлял, ответ усечён
+    if (item.blocks >= 2) return 'петля перехвачена дважды · ответ усечён';
+    return item.resultBlocks > 0 ? 'петля перехвачена · запрос повторён' : 'петля перехвачена · ответ усечён';
+  }
   if (item.pruneKind === 'compact_cloud') {
     // Сжатие ушло в облако: объём истории тут не главное — важна цена паузы
     const s = roundSeconds(item.prefillSeconds);
     return s === null ? 'сжатие в облаке' : `сжатие в облаке · ${s} с`;
   }
   const { tokensBefore: before, tokensAfter: after } = item;
+  // Сдвинулись только картинки: прокси вырезал старые, граница выводов стоит на месте
+  if (item.blocks === 0 && before === 0 && (item.imageBlocks ?? 0) > 0) return `вырезано ${imagesText(item)}`;
   if (before > 0 && after > 0) return `контекст обрезан · ${fmtPrunedTokens(before)} → ${fmtPrunedTokens(after)}`;
   if (before > 0) return `контекст обрезан · было ${fmtPrunedTokens(before)}`;
   return 'контекст обрезан';
@@ -28,6 +40,9 @@ export function prunedHeadline(item: PrunedItem): string {
 // нет — всё сказано в заголовке.
 export function prunedDetails(item: PrunedItem): string | null {
   if (item.pruneKind === 'compact_cloud') return null;
+  if (item.pruneKind === 'loop_guard') {
+    return item.thinkingBlocks > 0 ? 'модель повторялась в размышлениях' : 'модель повторялась в ответе';
+  }
 
   const parts: string[] = [];
   if (item.blocks > 0) {
@@ -38,6 +53,7 @@ export function prunedDetails(item: PrunedItem): string | null {
     parts.push(kinds.length > 0
       ? `${item.blocks} ${blocksPlural(item.blocks)} (${kinds.join(', ')})`
       : `${item.blocks} ${blocksPlural(item.blocks)}`);
+    if ((item.imageBlocks ?? 0) > 0) parts.push(imagesText(item));
   }
 
   const s = roundSeconds(item.prefillSeconds);
@@ -65,6 +81,16 @@ function roundSeconds(sec: number | undefined): number | null {
   return rounded > 0 ? rounded : null;
 }
 
+// «7 картинок (~14k ток)» — сколько старых картинок прокси вырезал из истории за чат
+function imagesText(item: PrunedItem): string {
+  const n = item.imageBlocks ?? 0;
+  const tokens = item.imageTokens ?? 0;
+  const mod10 = n % 10, mod100 = n % 100;
+  const word = mod10 === 1 && mod100 !== 11 ? 'картинка'
+    : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? 'картинки' : 'картинок';
+  return tokens > 0 ? `${n} ${word} (~${fmtPrunedTokens(tokens)} ток)` : `${n} ${word}`;
+}
+
 function blocksPlural(n: number): string {
   const mod10 = n % 10, mod100 = n % 100;
   if (mod10 === 1 && mod100 !== 11) return 'блок';
@@ -83,7 +109,8 @@ export interface PrunedSummary {
 export function summarizePruned(items: ChatItem[]): PrunedSummary | undefined {
   let count = 0, savedTokens = 0;
   for (const it of items) {
-    if (it.kind !== 'context_pruned') continue;
+    // Перехват петли контекст не двигает — в сводку сдвигов не входит
+    if (it.kind !== 'context_pruned' || it.pruneKind === 'loop_guard') continue;
     count++;
     const saved = it.tokensBefore - it.tokensAfter;
     if (saved > 0) savedTokens += saved;

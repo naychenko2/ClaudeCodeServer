@@ -134,7 +134,7 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -253,7 +253,7 @@ public sealed class PersonasCrudService(
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
@@ -589,9 +589,8 @@ public sealed class PersonasCrudService(
         var fileName = $"avatar-{Guid.NewGuid():N}{ext}";   // cache-busting
         System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
 
-        // Удаляем прежний аватар и всю папку кандидатов
-        if (!string.IsNullOrEmpty(persona.Avatar.ImageFile))
-            try { System.IO.File.Delete(Path.Combine(dir, persona.Avatar.ImageFile)); } catch { }
+        // Удаляем прежний аватар (с его миниатюрами) и всю папку кандидатов
+        personas.DeleteAvatarAssets(id, persona.Avatar.ImageFile);
         try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         var updated = personas.SetAvatarImage(id, userId, fileName);

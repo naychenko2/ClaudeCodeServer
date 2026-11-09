@@ -8,7 +8,6 @@ import { ensurePersonasLoaded, getPersonaById, usePersonas, usePersonasVersion }
 import { agentDotColor } from '../AgentSelector';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { teamPlanRunLabel } from '../../lib/teamImplement';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
@@ -496,7 +495,6 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
   // Разворот схемой (флаг visual-plan): вид тела «Текстом/Схемой» — только у
   // активной карточки на подтверждении. Схема строится из структуры плана
   // детерминированно, модель не зовётся
-  const visualPlanEnabled = useFeature(FLAGS.visualPlan);
   const [schemeView, setSchemeView] = useState<'text' | 'scheme'>(initialSchemeView);
   // В не-персон-чате стор персон мог быть не загружен — резолвим имена исполнителей
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -703,22 +701,20 @@ export function TeamPlanView({ item, online, initialSchemeView = 'text' }: {
       {/* Переключатель «Текстом/Схемой» — по образцу plan_review, но на accent-оси
           карточки. Кнопки «Собрать схему» нет: схема детерминированная, строится
           из структуры плана без модели */}
-      {visualPlanEnabled && (
-        <div style={{ margin: '12px 0 -4px' }}>
-          <InlineSegmented
-            value={schemeView}
-            onChange={setSchemeView}
-            options={[
-              { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
-                tone: { bg: C.accentLight, fg: C.accent } },
-              { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
-                tone: { bg: C.accentLight, fg: C.accent } },
-            ]}
-          />
-        </div>
-      )}
+      <div style={{ margin: '12px 0 -4px' }}>
+        <InlineSegmented
+          value={schemeView}
+          onChange={setSchemeView}
+          options={[
+            { value: 'text', label: 'Текстом', icon: <FileText size={12} />,
+              tone: { bg: C.accentLight, fg: C.accent } },
+            { value: 'scheme', label: 'Схемой', icon: <Network size={12} />,
+              tone: { bg: C.accentLight, fg: C.accent } },
+          ]}
+        />
+      </div>
 
-      {visualPlanEnabled && schemeView === 'scheme' ? (
+      {schemeView === 'scheme' ? (
         <SchemeBody plan={plan} rootPath={rootPath} />
       ) : (
         <PlanBody plan={plan} candidates={candidates} onReassign={reassign}

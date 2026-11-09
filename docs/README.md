@@ -45,6 +45,7 @@
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
 **features/** — [spheres.md](features/spheres.md) (сферы: зоны персоны, две полки памяти, граница MVP),
+[local-model-stats.md](features/local-model-stats.md) (статистика локальных моделей: панель «Локальные модели», кольцо Ctx, строка ожидания GPU в карточках, включение на деве),
 [audio-editor.md](features/audio-editor.md) (редактор звука: режимы
 Голос / Музыка / Обработка, поставщики, нити и версии, «Голоса», склейка и монтаж, агент),
 [video-editor.md](features/video-editor.md) (редактор видео: сцены, фильм, сборка, агент `video_*`),
@@ -70,7 +71,13 @@ Tone.js, где встроен, инварианты ленивой загруз
 [voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
 устройство, ограничения, критерии снятия флага),
 [architecture-section.md](features/architecture-section.md) (раздел «Архитектура»: C4-модель
-проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения).
+проекта файлом под git, мост с Viaduct, сборка из кода, тулсет `arch_*`, ограничения),
+[features-overview.md](features/features-overview.md) (обзор фич: страница фичи и её
+вкладки, панель фичи в чате, состояния, честный прогресс, журнал событий, статистика
+и деление расхода общего чата),
+[plugins.md](features/plugins.md) (плагины: зачем фича, что видит человек, «Что нового»
+и границы; за двумя флагами `plugins-mvp` и `plugins-build-yourself`),
+[task-acceptance-criteria.md](features/task-acceptance-criteria.md) (критерии приёмки и свидетельства у задачи: гейт закрытия, кто меняет критерии, причина возврата, оговорка «не граница безопасности»).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
@@ -84,7 +91,11 @@ Tone.js, где встроен, инварианты ленивой загруз
 
 **operations/** — [docker.md](operations/docker.md) (сборка и запуск в контейнере),
 [remote-access.md](operations/remote-access.md) (Tailscale + HTTPS),
-[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct).
+[viaduct-module.md](operations/viaduct-module.md) (сборка, раздача и выкатка редактора Viaduct),
+[release-linux.md](operations/release-linux.md) (ручная выкатка на Linux-прод + `watch_start`),
+[deploy-linux.md](operations/deploy-linux.md) (включение контура выкатки из чата на Linux: секция `Deploy` в `appsettings.Local.json`, порядок «сначала ручная, потом `Enabled=true`»),
+[testing.md](operations/testing.md) (наборы Fast/Host/Slow, шарды по классу в CI и `run_tests`, сторожа, пул общих хостов, коллекции xunit, известные пределы),
+[qa-stand.md](operations/qa-stand.md) (QA-прогон фичи на стенде из worktree: хелперы, шаблон, `run_tests` с `target=frontend/e2e/qa`).
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
 [target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины
@@ -144,7 +155,12 @@ MF-remote, нейтральные Core-швы `Services.Higgsfield` / `Services.
 генерации и перенос настроек картинок в неё, тулсет `audio_*`, этапы — черновик; полосы и панели заменены ADR-023),
 [ADR-022](adr/ADR-022-video-editor.md) (модуль «Видео»: сцены между двумя кадрами и фильм, `local` / fal / Higgsfield),
 [ADR-023](adr/ADR-023-turn-context.md) (контекст хода: строка над полем ввода и панель «Контекст» вместо полос и режимов поля, стор `Services.ChatContext`, правило ✦ и «основной объект один»; контракты — [ADR-023-contracts.md](adr/ADR-023-contracts.md)),
-[ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md));
+[ADR-024](adr/ADR-024-spheres.md) (сферы: зона персоны `PersonaZone` и две полки памяти над проектами, fail-closed, членство меняет только человек; описание — [features/spheres.md](features/spheres.md)),
+[ADR-027](adr/ADR-027-character-smart-photos.md) (умный подбор фото персонажа под сюжет: метки ракурса и эмоции в манифесте, места разметки с картинками на вход, маршрут `face-pose`, шов `IImageLabeler`, фолбэк к прежнему порядку байт в байт; за флагом `character-smart-photos`),
+[ADR-028](adr/ADR-028-multi-character-faces.md) (подстановка персонажей на лица картинки, этапы 1–3: одна детекция и цепочка проходов в задаче, одна версия на запрос, частичный результат, MCP `faces`; за флагом `character-face-swap`),
+[ADR-029](adr/ADR-029-local-model-stats.md) (статистика локальных моделей: учёт за ход в шлюзе `/gw`, очередь текста без номера, реестр prompt_id ComfyUI как единственная точка атрибуции, чужим — только агрегаты; описание — [features/local-model-stats.md](features/local-model-stats.md)),
+[ADR-031](adr/ADR-031-feature-as-dimension.md) (фича как сквозное измерение чатов: членство «чат → фича» вычисляется индексом `features/index`, `Session` не расширяется, ключевой чат — цепочкой, «одна строка — одна группа»; за флагом `features-overview`),
+[ADR-033](adr/ADR-033-turn-auto-resume.md) (авто-возобновление ходов после рестарта сервера: фоновый `TurnAutoResumeService` с прогревом, снимок кандидатов из `Working` в `LoadSessions`, сторож crash-loop, фронт-ветка `server_restart` в `ChatItemView`; за флагом `turn-auto-resume`),
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке),
 [specialties-personalization-review.md](adr/specialties-personalization-review.md) — приложение

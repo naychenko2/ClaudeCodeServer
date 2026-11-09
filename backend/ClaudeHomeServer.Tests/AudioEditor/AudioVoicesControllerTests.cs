@@ -18,20 +18,58 @@ namespace ClaudeHomeServer.Tests.AudioEditor;
 // Ручки библиотеки «Голоса» на собранном приложении (ADR-021 §2): CRUD по voices/<slug>/ проекта,
 // образцы из загрузки и из файлов проекта, модель RVC из версии нити, изоляция владельцев, отказ
 // локальному проекту до диска и пустое состояние личного чата.
-public class AudioVoicesControllerTests : IDisposable
+[Trait("Category", "Host")]
+public class AudioVoicesControllerTests : IClassFixture<AudioVoicesControllerTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
-    private readonly HttpClient _client;
-    private readonly string _ownerId;
-    private readonly string _projectId;
-    private readonly string _projectRoot;
-
     private static readonly byte[] Wav = [.. "RIFF"u8, 0, 0, 0, 0, .. "WAVE"u8, 7, 7];
 
-    private readonly MiniMaxCloner _cloner = new();
+    private readonly Hosts _hosts;
+
+    public AudioVoicesControllerTests(Hosts hosts) => _hosts = hosts;
+
+    // Хост на КЛАСС: конфигурация одна — клон-фейк как IAudioEngine. Проект, образцы и нити
+    // каждый тест заводит свои в собственном каталоге TempDir; счётчик фейка сбрасывает Use()
+    public sealed class Hosts : IDisposable
+    {
+        public MiniMaxHost MiniMax { get; } = new();
+
+        public void Dispose() => MiniMax.Dispose();
+    }
+
+    public sealed class MiniMaxHost : TestWebApplicationFactory
+    {
+        public MiniMaxCloner Cloner { get; } = new();
+
+        public MiniMaxHost() => ExtraServices = services => services.AddSingleton<IAudioEngine>(Cloner);
+
+        // Чистый счётчик фейка на начало теста
+        public MiniMaxHost Use()
+        {
+            Cloner.Reset();
+            return this;
+        }
+    }
+
+    private TestWebApplicationFactory _factory = null!;
+    private HttpClient _client = null!;
+    private string _ownerId = "", _projectId = "", _projectRoot = "";
+
+    private void Start()
+    {
+        _factory = _hosts.MiniMax.Use();
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
+        _ownerId = user.Id;
+        _projectRoot = Path.Combine(_factory.TempDir, "voices_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(_projectRoot);
+        _projectId = _factory.Services.GetRequiredService<ProjectManager>()
+            .Create("v-" + Guid.NewGuid().ToString("N")[..6], _projectRoot, user.Id, user.Username).Id;
+        File.WriteAllBytes(Path.Combine(_projectRoot, "anya.wav"), Wav);
+        _client = _factory.CreateAuthenticatedClient();
+    }
 
     // Поставщик-подставка: единственная модель сама создаёт клон MiniMax; считает прогоны
-    private sealed class MiniMaxCloner : IAudioEngine
+    public sealed class MiniMaxCloner : IAudioEngine
     {
         private int _runs;
         public int Runs => _runs;
@@ -50,6 +88,8 @@ public class AudioVoicesControllerTests : IDisposable
         public string? LibraryVoiceRefusal(AudioModelInfo model, AudioOp op, AudioVoiceUse voice) => null;
         public (string Key, bool Creates)? StoredClone(AudioModelInfo model, AudioOp op) => (VoiceProviders.MiniMax, true);
 
+        public void Reset() => _runs = 0;
+
         public Task<AudioResult> RunAsync(AudioRequest req, IProgress<AudioProgress> progress, CancellationToken ct)
         {
             Interlocked.Increment(ref _runs);
@@ -58,27 +98,6 @@ public class AudioVoicesControllerTests : IDisposable
         }
 
         public Task<bool> CancelRemoteAsync(string remoteId, CancellationToken ct) => Task.FromResult(false);
-    }
-
-    public AudioVoicesControllerTests()
-    {
-        _factory.ExtraServices = services => services.AddSingleton<IAudioEngine>(_cloner);
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        var user = users.FindByUsername(TestWebApplicationFactory.TestUsername)!;
-        _ownerId = user.Id;
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, true).Should().BeTrue();
-        _projectRoot = Path.Combine(_factory.TempDir, "voices_" + Guid.NewGuid().ToString("N")[..8]);
-        Directory.CreateDirectory(_projectRoot);
-        _projectId = _factory.Services.GetRequiredService<ProjectManager>()
-            .Create("v-" + Guid.NewGuid().ToString("N")[..6], _projectRoot, user.Id, user.Username).Id;
-        File.WriteAllBytes(Path.Combine(_projectRoot, "anya.wav"), Wav);
-        _client = _factory.CreateAuthenticatedClient();
-    }
-
-    public void Dispose()
-    {
-        _factory.Dispose();
-        GC.SuppressFinalize(this);
     }
 
     private string Voices => $"/api/projects/{_projectId}/audio-editor/voices";
@@ -111,6 +130,7 @@ public class AudioVoicesControllerTests : IDisposable
     [Fact]
     public async Task Crud_ИзЗагрузкиИФайлаПроекта()
     {
+        Start();
         var slug = await CreateVoice();
         var dir = Path.Combine(_projectRoot, "voices", slug);
         Directory.GetFiles(dir).Select(Path.GetFileName).Should()
@@ -148,6 +168,7 @@ public class AudioVoicesControllerTests : IDisposable
     [Fact]
     public async Task Отказы_ввода_и_пути()
     {
+        Start();
         var notAudio = await _client.PostAsync(Voices, Form("Аня", projectFile: "../escape.wav", upload: false));
         notAudio.StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
@@ -160,9 +181,78 @@ public class AudioVoicesControllerTests : IDisposable
         Directory.GetDirectories(Path.Combine(_projectRoot, "voices")).Should().ContainSingle();
     }
 
+    // F2-M1: образцы из файлов проекта проходят общий предикат private (ProjectLinkGuard.ResolveInsideAs,
+    // субъект — вызывающий): чужой .cc-attachments/private/{X} — 400 как «файл не найден» (наличие не
+    // раскрываем), в voices/ ничего не записано на обеих ручках; свой private и обычный файл — как раньше
+    [Fact]
+    public async Task Чужой_private_в_образцах_400_в_voices_ничего_не_записано()
+    {
+        Start();
+        var foreign = Path.Combine(_projectRoot, ".cc-attachments", "private", "other-user", "g1");
+        Directory.CreateDirectory(foreign);
+        File.WriteAllBytes(Path.Combine(foreign, "secret.wav"), Wav);
+
+        // Create: чужое private — отказ как «файл не найден», включая нормализованный обход
+        foreach (var file in new[]
+                 {
+                     ".cc-attachments/private/other-user/g1/secret.wav",
+                     ".cc-attachments/PRIVATE/other-user/g1/../g1/secret.wav",
+                 })
+        {
+            var denied = await _client.PostAsync(Voices, Form("Аня", "Привет", projectFile: file, upload: false));
+            denied.StatusCode.Should().Be(HttpStatusCode.BadRequest, file);
+            var body = await Json(denied);
+            body.GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.InvalidRequest, file);
+            // дошёл именно до отказа пути: текст — тот же, что у «вне проекта»
+            body.GetProperty("error").GetString().Should().Contain("Файл не найден в проекте", file);
+        }
+        Directory.Exists(Path.Combine(_projectRoot, "voices")).Should().BeFalse("отказанное создание не трогает диск");
+        (await Json(await _client.GetAsync(Voices))).GetProperty("voices").GetArrayLength().Should().Be(0);
+
+        // AddSamples: тот же отказ, образцы голоса не изменились
+        var slug = await CreateVoice();
+        var dir = Path.Combine(_projectRoot, "voices", slug);
+        var added = await _client.PostAsync($"{Voices}/{slug}/samples",
+            Form(null, projectFile: ".cc-attachments/private/other-user/g1/secret.wav", upload: false));
+        added.StatusCode.Should().Be(HttpStatusCode.BadRequest, await added.Content.ReadAsStringAsync());
+        (await Json(added)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.InvalidRequest);
+        Directory.GetFiles(dir).Select(Path.GetFileName).Should().BeEquivalentTo("voice.json", "sample-01.wav", "sample-02.wav");
+    }
+
+    // Свой private участника и обычный файл проекта остаются образцами на обеих ручках
+    [Fact]
+    public async Task Свой_private_и_обычный_файл_становятся_образцом()
+    {
+        Start();
+        // валидный WAV, но байтами отличимый от Wav — чтобы проверить, что образец взят из private-файла
+        byte[] mine = [.. "RIFF"u8, 1, 1, 1, 1, .. "WAVE"u8, 3, 3];
+        var own = Path.Combine(_projectRoot, ".cc-attachments", "private", _ownerId, "g1");
+        Directory.CreateDirectory(own);
+        File.WriteAllBytes(Path.Combine(own, "mine.wav"), mine);
+        var ownRel = $".cc-attachments/private/{_ownerId}/g1/mine.wav";
+
+        // Create: загрузка + обычный файл проекта — как раньше
+        var slug = await CreateVoice();
+        var dir = Path.Combine(_projectRoot, "voices", slug);
+        Directory.GetFiles(dir).Select(Path.GetFileName).Should().BeEquivalentTo("voice.json", "sample-01.wav", "sample-02.wav");
+
+        // AddSamples: свой private — принят, его байты легли в образец
+        var added = await _client.PostAsync($"{Voices}/{slug}/samples", Form(null, projectFile: ownRel, upload: false));
+        added.StatusCode.Should().Be(HttpStatusCode.OK, await added.Content.ReadAsStringAsync());
+        (await Json(added)).GetProperty("samples").GetArrayLength().Should().Be(3);
+        File.ReadAllBytes(Path.Combine(dir, "sample-03.wav")).Should().Equal(mine);
+
+        // Create: свой private — единственный источник образца
+        var created = await _client.PostAsync(Voices, Form("Борис", "Привет", projectFile: ownRel, upload: false));
+        created.StatusCode.Should().Be(HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
+        var ownSlug = (await Json(created)).GetProperty("slug").GetString()!;
+        File.ReadAllBytes(Path.Combine(_projectRoot, "voices", ownSlug, "sample-01.wav")).Should().Equal(mine);
+    }
+
     [Fact]
     public async Task Rvc_ИзВерсииНити_ПараЛожитсяВместе()
     {
+        Start();
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
         var chatId = (await sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "Обучение")).Id;
         var store = _factory.Services.GetRequiredService<AudioJobThreads>().Store;
@@ -193,48 +283,75 @@ public class AudioVoicesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task Чужой_проект_и_выключенный_флаг_404()
+    public async Task Чужой_проект_404()
     {
+        Start();
         var slug = await CreateVoice();
         var second = _factory.CreateAuthenticatedClient(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
-        var users = _factory.Services.GetRequiredService<UserStore>();
-        users.SetFeatureFlag(users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id, FeatureFlagKeys.AudioEditor, true);
 
         (await second.GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await second.DeleteAsync($"{Voices}/{slug}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         Directory.Exists(Path.Combine(_projectRoot, "voices", slug)).Should().BeTrue();
 
-        users.SetFeatureFlag(_ownerId, FeatureFlagKeys.AudioEditor, false);
-        (await _client.GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await _factory.CreateClient().GetAsync(Voices)).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
     public async Task Локальный_проект_отказ_до_диска()
     {
+        Start();
+        // Отдельный локальный проект: тест выносит его на несуществующий путь — общий проект
+        // других тестов затронут быть не должен
         var trap = Path.Combine(_factory.TempDir, "trap_" + Guid.NewGuid().ToString("N")[..8]);
-        var project = _factory.Services.GetRequiredService<ProjectManager>().GetById(_projectId)!;
+        var localRoot = Path.Combine(_factory.TempDir, "local_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(localRoot);
+        var localId = _factory.Services.GetRequiredService<ProjectManager>()
+            .Create("loc-" + Guid.NewGuid().ToString("N")[..6], localRoot, _ownerId, TestWebApplicationFactory.TestUsername).Id;
+        var projects = _factory.Services.GetRequiredService<ProjectManager>();
+        var project = projects.GetById(localId)!;
         project.DeviceId = "dev";
         project.RootPath = trap;
 
-        var responses = new[]
+        try
         {
-            await _client.GetAsync(Voices),
-            await _client.PostAsync(Voices, Form("Аня")),
-            await _client.DeleteAsync($"{Voices}/anya"),
-        };
+            var localVoices = $"/api/projects/{localId}/audio-editor/voices";
+            var responses = new[]
+            {
+                await _client.GetAsync(localVoices),
+                await _client.PostAsync(localVoices, Form("Аня")),
+                await _client.DeleteAsync($"{localVoices}/anya"),
+            };
 
-        foreach (var r in responses)
-        {
-            r.StatusCode.Should().Be(HttpStatusCode.Conflict);
-            (await Json(r)).GetProperty("code").GetString().Should().Be(ProjectCapabilityGuard.Code);
+            foreach (var r in responses)
+            {
+                r.StatusCode.Should().Be(HttpStatusCode.Conflict);
+                (await Json(r)).GetProperty("code").GetString().Should().Be(ProjectCapabilityGuard.Code);
+            }
+            Directory.Exists(trap).Should().BeFalse();
         }
-        Directory.Exists(trap).Should().BeFalse();
+        finally
+        {
+            // «Битый» проект с несуществующим RootPath не должен жить в реестре общего хоста до конца класса
+            projects.Delete(localId);
+        }
+    }
+
+    [Fact]
+    public async Task Use_сбрасывает_счётчик_фейка()
+    {
+        var cloner = _hosts.MiniMax.Cloner;
+        await cloner.RunAsync(null!, null!, CancellationToken.None);
+        cloner.Runs.Should().Be(1);
+
+        _hosts.MiniMax.Use();
+
+        cloner.Runs.Should().Be(0);
     }
 
     [Fact]
     public async Task Личный_чат_пустое_состояние()
     {
+        Start();
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
         var chatId = (await sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный")).Id;
 
@@ -254,6 +371,8 @@ public class AudioVoicesControllerTests : IDisposable
     [Fact]
     public async Task Recreate_ДвеФазы_И_МаршрутОшибок()
     {
+        Start();
+        var cloner = _hosts.MiniMax.Cloner;
         var slug = await CreateVoice();
         var other = await CreateVoice("Борис");
         var url = $"{Voices}/{slug}/recreate";
@@ -263,21 +382,21 @@ public class AudioVoicesControllerTests : IDisposable
         var quote = await Json(quoted);
         quote.GetProperty("recreateVoice").GetString().Should().Be(slug);
         var quoteId = quote.GetProperty("quoteId").GetString()!;
-        _cloner.Runs.Should().Be(0, "котировка ничего не запускает");
+        cloner.Runs.Should().Be(0, "котировка ничего не запускает");
 
         // Котировка выписана на другой голос — как несуществующая
         var foreign = await _client.PostAsync($"{Voices}/{other}/recreate?quoteId={quoteId}", null);
         foreign.StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await Json(foreign)).GetProperty("code").GetString().Should().Be(AudioEditErrorCodes.QuoteNotFound);
         (await _client.PostAsync($"{url}?quoteId=nope", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        _cloner.Runs.Should().Be(0);
+        cloner.Runs.Should().Be(0);
 
         var started = await _client.PostAsync($"{url}?quoteId={quoteId}", null);
         started.StatusCode.Should().Be(HttpStatusCode.Accepted, await started.Content.ReadAsStringAsync());
         var jobId = (await Json(started)).GetProperty("jobId").GetString()!;
         var jobs = _factory.Services.GetRequiredService<AudioEditJobService>();
         await jobs.WhenDone(jobId);
-        _cloner.Runs.Should().Be(1);
+        cloner.Runs.Should().Be(1);
         var voice = await Json(await _client.GetAsync($"{Voices}/{slug}"));
         voice.GetProperty("providers").EnumerateArray().Single(p => p.GetProperty("provider").GetString() == "minimax")
             .GetProperty("state").GetString().Should().Be("ok");
@@ -287,6 +406,6 @@ public class AudioVoicesControllerTests : IDisposable
         (await _client.PostAsync($"{url}?quoteId={quoteId}", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await _client.PostAsync($"{url}?provider=higgsfield", null)).StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await _client.PostAsync($"{Voices}/nobody/recreate?provider=minimax", null)).StatusCode.Should().Be(HttpStatusCode.NotFound);
-        _cloner.Runs.Should().Be(1);
+        cloner.Runs.Should().Be(1);
     }
 }

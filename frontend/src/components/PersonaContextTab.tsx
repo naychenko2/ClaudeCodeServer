@@ -5,6 +5,7 @@ import { usePersonas, personaLabel } from '../lib/personas';
 import { useRecallManifest } from '../lib/recallManifest';
 import type { PersonaBinding, PersonaMemoryEntry, PersonaMemoryType, Task, TeamMemoryEntry } from '../types';
 import { C, FONT, R, SHADOW } from '../lib/design';
+import { Button } from './ui';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { BINDING_ICONS } from '../features/personas/bindingMeta';
 import { useBindingLabels } from '../features/personas/useBindingLabels';
@@ -19,17 +20,22 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   const usedNow = useRecallManifest(sessionId ?? null);
   const [mem, setMem] = useState<PersonaMemoryEntry[] | null>(null);
   const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [tasksFailed, setTasksFailed] = useState(false);
+  const [tasksReload, setTasksReload] = useState(0);
   const [teamMem, setTeamMem] = useState<TeamMemoryEntry[] | null>(null);
   const projectId = ownProjectId(persona);
 
   useEffect(() => {
     let alive = true;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и перезагрузка памяти/задач при смене персоны
-    setMem(null); setTasks(null);
+    setMem(null); setTasks(null); setTasksFailed(false);
     api.personas.memory(personaId).then(m => { if (alive) setMem(m); }).catch(() => { if (alive) setMem([]); });
-    api.tasks.listByPersona(personaId).then(t => { if (alive) setTasks(t); }).catch(() => { if (alive) setTasks([]); });
+    // Сбой не превращаем в [] — иначе секция заявит «Нет активных задач.»
+    api.tasks.listByPersona(personaId)
+      .then(t => { if (alive) setTasks(t); })
+      .catch(() => { if (alive) setTasksFailed(true); });
     return () => { alive = false; };
-  }, [personaId]);
+  }, [personaId, tasksReload]);
 
   // Память команды проекта (③-3.4) — только у проектных персон, отдельный запрос
   // (данные общие для всех персон проекта, не персональные)
@@ -54,7 +60,6 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
   }
 
   const memoryAll = mem ?? [];
-  const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 2px' }}>
@@ -104,18 +109,31 @@ export function PersonaContextTab({ personaId, sessionId }: { personaId: string;
         )}
       </Section>
 
-      <Section title={`Задачи${activeAll.length ? ` · ${activeAll.length}` : ''}`}>
-        {activeAll.length === 0 ? (
-          tasks === null ? <Skeleton /> : <Muted>Нет активных задач.</Muted>
-        ) : (
-          <ExpandableRows items={activeAll} previewCount={5} renderRow={t => (
-            <Row key={t.id} icon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0, marginTop: 4 }} />}>
-              {t.title}{t.dueDate ? <span style={{ color: C.textMuted }}> · до {t.dueDate}</span> : null}
-            </Row>
-          )} />
-        )}
-      </Section>
+      <TasksSection tasks={tasks} failed={tasksFailed} onRetry={() => setTasksReload(n => n + 1)} />
     </div>
+  );
+}
+
+// Секция «Задачи»: при сбое запроса не утверждает «Нет активных задач.» — показывает причину и повтор.
+export function TasksSection({ tasks, failed, onRetry }: { tasks: Task[] | null; failed: boolean; onRetry: () => void }) {
+  const activeAll = (tasks ?? []).filter(t => t.status !== 'done');
+  return (
+    <Section title={`Задачи${activeAll.length ? ` · ${activeAll.length}` : ''}`}>
+      {failed ? (
+        <>
+          <Muted>Нет связи — показать не удалось.</Muted>
+          <Button size="xs" variant="ghostAccent" onClick={onRetry} style={{ alignSelf: 'flex-start' }}>Повторить</Button>
+        </>
+      ) : activeAll.length === 0 ? (
+        tasks === null ? <Skeleton /> : <Muted>Нет активных задач.</Muted>
+      ) : (
+        <ExpandableRows items={activeAll} previewCount={5} renderRow={t => (
+          <Row key={t.id} icon={<span style={{ width: 8, height: 8, borderRadius: '50%', background: C.accent, flexShrink: 0, marginTop: 4 }} />}>
+            {t.title}{t.dueDate ? <span style={{ color: C.textMuted }}> · до {t.dueDate}</span> : null}
+          </Row>
+        )} />
+      )}
+    </Section>
   );
 }
 

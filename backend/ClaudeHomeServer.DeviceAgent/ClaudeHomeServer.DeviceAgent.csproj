@@ -126,6 +126,18 @@
     <InternalsVisibleTo Include="ClaudeHomeServer.DeviceAgent.Tests" />
     <!-- Сквозной тест сервер ↔ агент (задача 2.8) живёт в серверных тестах -->
     <InternalsVisibleTo Include="ClaudeHomeServer.Tests" />
+    <!-- TestKit.Host (шаг 1.2): LoopbackRelayChannel соединяет настоящий DeviceExecStream
+         с настоящим ExecLink (internal) поверх loopback WebSocket. Main DeviceAgent не
+         тянет, поэтому допуск нужен именно сюда, а не в Main. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.TestKit.Host" />
+    <!-- Mcp.Tests (шаг 3.6): OcrGatewayEndpointTests использует internal SidecarProxy
+         (ClaudeHomeServer.DeviceAgent.Sidecar) — тот же шов, что у монолита. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.Mcp.Tests" />
+    <!-- RemoteCommands.Tests (шаг 3.12, пачка G): E2E-тест хода на устройстве (ADR-016, задача 2.8)
+         гоняет настоящие стороны — internal TurnExecutor/ExecLink/SidecarHost/TurnJournal/
+         AgentPathPolicy/TurnGrants и internal-швы IAgentRoots/ICliLeaseSource/ICliHandle/
+         IExecSocketConnector. Main DeviceAgent не тянет, поэтому допуск нужен именно сюда. -->
+    <InternalsVisibleTo Include="ClaudeHomeServer.RemoteCommands.Tests" />
   </ItemGroup>
 
 </Project>

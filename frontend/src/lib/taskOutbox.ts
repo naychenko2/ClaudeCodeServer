@@ -9,6 +9,7 @@
 import { api } from './api';
 import { isOnline, OfflineError } from './offline';
 import { outboxAll, outboxGet, outboxPut, outboxDelete } from './idb';
+import { showToast } from './toast';
 import type { CreateTaskDto, Task, UpdateTaskDto } from '../types';
 import {
   ensureNotClosedAtCreate, ensureVerificationOnClose,
@@ -124,6 +125,20 @@ export function mergeOps(prev: OutboxOp, incoming: { kind: OutboxKind; dto: Crea
 
 // === Постановка в очередь ===
 
+// Запись в outbox не удалась (квота, сбой IDB): правка НЕ числится сохранённой
+// (_pending не выставляем), а пользователь видит тост — иначе офлайн-правка
+// молча пропала бы.
+async function putOrWarn(op: OutboxOp): Promise<boolean> {
+  try {
+    await outboxPut(op);
+    return true;
+  } catch (e) {
+    console.warn('[taskOutbox] не удалось записать офлайн-правку:', op.taskId, e);
+    showToast('Не сохранено', 'Не удалось сохранить офлайн-правку', 'error');
+    return false;
+  }
+}
+
 export async function enqueue(
   taskId: string,
   kind: OutboxKind,
@@ -139,7 +154,7 @@ export async function enqueue(
       projectId: opts?.projectId, baseUpdatedAt: opts?.baseUpdatedAt,
       attempts: 0, enqueuedAt: Date.now(),
     };
-    await outboxPut(op).catch(() => {});
+    if (!(await putOrWarn(op))) return;
     _pending.add(taskId);
     return;
   }
@@ -159,7 +174,7 @@ export async function enqueue(
     attempts: 0,
     nextAttemptAt: undefined,
   };
-  await outboxPut(op).catch(() => {});
+  if (!(await putOrWarn(op))) return;
   _pending.add(taskId);
 }
 
@@ -204,9 +219,17 @@ function handlePermanent(op: OutboxOp, e: unknown): void {
 
 let _draining = false;
 
-export async function drainTaskOutbox(): Promise<void> {
+// opts.reloadWhenEmpty — канонизировать стор (reload) даже при пустой очереди: триггеры
+// переподключения теряли realtime-события за время обрыва и им нужен reload, даже если
+// офлайн-очередь была пуста.
+export async function drainTaskOutbox(opts?: { reloadWhenEmpty?: boolean }): Promise<void> {
   if (!_hooks || !isOnline() || _draining) return;
   _draining = true;
+  // Поставили на сервер хотя бы одну операцию (реально применили или сняли как
+  // отклонённую) — значит серверное состояние изменилось и его стоит канонизировать.
+  // Пустая очередь (ничего не отправлено) — reload не нужен: иначе каждый монтаж
+  // компонента задач тянул бы весь список (GET /api/tasks) впустую.
+  let applied = false;
   try {
     const ops = (await outboxAll<OutboxOp>().catch(() => [] as OutboxOp[])).sort((a, b) => a.seq - b.seq);
     for (const op of ops) {
@@ -215,6 +238,7 @@ export async function drainTaskOutbox(): Promise<void> {
         await applyOp(op);
         await outboxDelete(op.taskId).catch(() => {});
         _pending.delete(op.taskId);
+        applied = true;
       } catch (e) {
         if (e instanceof OfflineError) break;             // снова офлайн — ждём следующего триггера
         const status = httpStatus(e);
@@ -222,6 +246,7 @@ export async function drainTaskOutbox(): Promise<void> {
           handlePermanent(op, e);
           await outboxDelete(op.taskId).catch(() => {});
           _pending.delete(op.taskId);
+          applied = true;
         } else {
           // 5xx / прочее — повтор с backoff
           await outboxPut({ ...op, attempts: op.attempts + 1, nextAttemptAt: Date.now() + backoff(op.attempts + 1) }).catch(() => {});
@@ -231,7 +256,11 @@ export async function drainTaskOutbox(): Promise<void> {
   } finally {
     _draining = false;
   }
-  // Канонизируем состояние только когда очередь пуста (иначе reload затрёт pending)
+  // Канонизируем состояние (reload) после реального дренажа или — при флаге
+  // reloadWhenEmpty — после переподключения с пустой очередью: realtime-события
+  // за время обрыва потеряны, и reload нужен, даже если офлайн-очередь была пуста.
+  // Reload один (условие объединено) и только когда очередь пуста — иначе затрёт pending.
+  if (!applied && !opts?.reloadWhenEmpty) return;
   const rest = await outboxAll<OutboxOp>().catch(() => [] as OutboxOp[]);
   if (rest.length === 0) await _hooks.reload().catch(() => {});
 }
@@ -290,7 +319,8 @@ export function buildLocalTask(id: string, projectId: string | null, dto: Create
     personaId: dto.personaId || undefined,
     recurrence: dto.recurrence && dto.recurrence.type !== 'none' ? dto.recurrence : undefined,
     seriesId: dto.recurrence && dto.recurrence.type !== 'none' ? id : undefined,
-    linkedSessionId: dto.linkedSessionId,
+    // S2d-4b: null в DTO — не значение (маска бэка), локальная задача не должна нести его как «чат задан»
+    linkedSessionId: dto.linkedSessionId ?? undefined,
     linkedFiles: dto.linkedFiles ?? [],
     subtasks: (dto.subtasks ?? []).map(s => ({ id: crypto.randomUUID(), title: s.title, isDone: false })),
     labels: dto.labels ?? [],
@@ -331,13 +361,24 @@ export function applyUpdateLocally(task: Task, dto: UpdateTaskDto): Task {
     next.personaId = dto.personaId === '' ? undefined : dto.personaId;
     if (next.personaId) next.assignee = 'claude';
   }
+  // Человек-исполнитель общего проекта (S2b-F7, зеркало TaskManager.Update): id — назначить и
+  // поставить assignee='me' (смысл поля — «этот человек исполняет»; явное назначение человека
+  // сильнее присланного Assignee); '' или null — снять (обратно к владельцу); не слать — не менять.
+  // id владельца бэк трактует как снятие — здесь он не различается: фронт на дорожку владельца
+  // просит снятие прямо (TaskBoard), отдельного значения «на себя» в записи нет.
+  if (dto.assigneeUserId !== undefined) {
+    const uid = dto.assigneeUserId === '' || dto.assigneeUserId === null ? undefined : dto.assigneeUserId;
+    next.assigneeUserId = uid;
+    if (uid) next.assignee = 'me';
+  }
   // Уровень модели исполнителя: '' — сбросить (семантика строковых полей на бэке)
   if (dto.modelTier !== undefined) next.modelTier = dto.modelTier === '' ? undefined : dto.modelTier;
   if (dto.recurrence !== undefined) {
     next.recurrence = dto.recurrence.type === 'none' ? undefined : dto.recurrence;
     if (next.recurrence && !next.seriesId) next.seriesId = next.id;
   }
-  if (dto.linkedSessionId !== undefined) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
+  // S2d-4b: null — не менять (зеркало TaskManager.cs: req.LinkedSessionId is not null), '' — очистить
+  if (dto.linkedSessionId != null) next.linkedSessionId = dto.linkedSessionId === '' ? undefined : dto.linkedSessionId;
   if (dto.linkedFiles !== undefined) next.linkedFiles = dto.linkedFiles;
   if (dto.labels !== undefined) next.labels = dto.labels;
   if (dto.order !== undefined) next.order = dto.order;

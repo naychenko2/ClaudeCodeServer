@@ -5,14 +5,14 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { Check, ChevronDown, Clapperboard, Film, FilePlus2, FolderTree, Hammer, ListVideo, Music, Plus, RefreshCw, Sparkles, X } from 'lucide-react';
 import {
-  Button, C, FLAGS, FS, IconButton, useFeature, Menu, MenuItem, MenuSep, R, SegmentedControl, SP, TextField, ByClaude, showToast,
+  Button, C, FS, IconButton, Menu, MenuItem, MenuSep, R, SegmentedControl, SP, TextField, ByClaude, showToast,
   type GenerationFoot,
 } from 'aihome_shell/kit';
 import type { WorkspacePanelDefCtx } from '../../../../lib/subsystems/registryCore';
 import { ERR, errorCode, errorText, videoApi, type FilmState, type VideoScene } from '../../api';
 import { ProjectPicker } from '../ProjectPicker';
 import { Hint, ic, Label } from '../primitives';
-import { createScene } from '../../scene/actions';
+import { createScene, fitSceneToFilm } from '../../scene/actions';
 import { isPersonalScope, videoScope } from '../../scope';
 import {
   buildFilm, cancelBuild, filmName, focusFilm, loadFilmList, patchFilm, useFilm, useFilmList, useVideoStoreVersion,
@@ -235,7 +235,6 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
   const personal = isPersonalScope(scope);
   const threads = useVideoThreads(scope, sessionId);
   useVideoStoreVersion();
-  const soundOn = useFeature(FLAGS.audioEditor);
   const path = personal ? null : pathOverride ?? threads.focus.filmPath ?? null;
   const film = useFilm(scope, path ? sessionId : null, path);
   const films = useFilmList(scope, personal ? null : sessionId);
@@ -331,6 +330,14 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
     onWork: reshoot,
     hasScene: (i: number) => !!sceneOfItem(scenes, doc.items[i]),
     onReveal: i => { void openProjectFile(doc.items[i].file, true); },
+    formatFix: i => {
+      const s = sceneOfItem(scenes, doc.items[i]);
+      return {
+        sceneAspect: s ? s.settings.format?.aspect ?? s.settings.aspect ?? null : null,
+        filmAspect: doc.aspect,
+        fix: s ? () => fitSceneToFilm(scope, sessionId, s, doc.aspect) : null,
+      };
+    },
   };
   const addFile = (file: string, scene?: VideoScene | null) => {
     setPicking(null);
@@ -436,12 +443,12 @@ export function FilmTab({ ctx, path: pathOverride, editor }: {
       )}
       {doc.items.length > 0 && (
         <div style={{ marginTop: SP.sm }}>
-          <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing || !soundOn} title={soundOn ? undefined : 'Раздел «Звук» выключен'} style={isMobile ? { minHeight: TOUCH } : undefined}
+          <Button size="sm" variant="secondary" leftIcon={ic(Sparkles)} disabled={composing} style={isMobile ? { minHeight: TOUCH } : undefined}
             onClick={() => { void composeForFilm(scope, sessionId, filmName(path), f, !isMobile).then(ok => { if (ok) ctx.onClose(); }); }}>
             {composing ? 'Сочиняем в «Звуке»…' : 'Сочинить под фильм…'}
           </Button>
           <Hint>
-            {!soundOn ? 'Раздел «Звук» выключен — сочинить музыку под фильм нельзя. ' : ''}Откроет «Звук» с заготовкой: длина {filmClock(doc)}
+            Откроет «Звук» с заготовкой: длина {filmClock(doc)}
             {filmDuration(doc) < MUSIC_MIN_SEC && ` (музыка выйдет не короче ${MUSIC_MIN_SEC} с)`}, настроение по текстам сцен. Готовый трек встанет сюда сам.
           </Hint>
         </div>

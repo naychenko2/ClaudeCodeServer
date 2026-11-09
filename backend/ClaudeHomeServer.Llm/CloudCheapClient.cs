@@ -30,6 +30,7 @@ public sealed class CloudCheapClient
     private readonly IHttpClientFactory _http;
     private readonly ILogger<CloudCheapClient> _logger;
     private readonly List<Source> _sources = [];
+    private readonly LlmProviderRegistry _providers;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
     private readonly Spend.ISpendCollector? _spend;
     private int _spendNullWarned;
@@ -64,9 +65,17 @@ public sealed class CloudCheapClient
     // по ключу «minimax» в коде, ровно по образцу Temperature выше: это тот же класс
     // особенности (поле тела запроса, нужное одному провайдеру), и двух разных механизмов
     // для него заводить незачем. Берётся из CheapHttpSources:{key}:DisableThinking.
+    //
+    // ReasoningEffort — глубина рассуждения для модели, которая думает всегда и гасить
+    // мысли не даёт: MiniMax-M3.1-Flash на thinking:{type:"disabled"} отвечает 400
+    // «requires adaptive thinking», а без подсказки думает на max и тратит время и вывод.
+    // Значение уходит в тело как reasoning_effort (low…max); ход мысли эта модель кладёт
+    // в message.reasoning_content, content остаётся чистым. Тот же класс особенности, что
+    // у полей выше, поэтому та же форма. Берётся из CheapHttpSources:{key}:ReasoningEffort.
     public record Source(
         string Key, string ProviderKey, string ApiBaseUrl, string ApiKey,
-        IReadOnlyList<string> Models, double Temperature = 0, bool DisableThinking = false)
+        IReadOnlyList<string> Models, double Temperature = 0, bool DisableThinking = false,
+        string? ReasoningEffort = null)
     {
         public bool Configured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
     }
@@ -78,6 +87,7 @@ public sealed class CloudCheapClient
         _http = http;
         _logger = logger;
         _spend = spend;
+        _providers = providers;
         ProviderKey = config["OpenRouter:Provider"] is { Length: > 0 } legacyProvider ? legacyProvider : "openrouter";
 
         // Legacy openrouter-direct всегда на месте (совместимость с spend и пресетами);
@@ -98,10 +108,12 @@ public sealed class CloudCheapClient
                 NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var t)
                 ? t : 0;
             var disableThinking = bool.TryParse(child["DisableThinking"], out var dt) && dt;
+            var reasoningEffort = child["ReasoningEffort"] is { } re && !string.IsNullOrWhiteSpace(re)
+                ? re.Trim() : null;
             _sources.Add(new Source(sourceKey, providerKey,
                 cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
                 cfg?.ApiKey ?? "",
-                models, temperature, disableThinking));
+                models, temperature, disableThinking, reasoningEffort));
         }
     }
 
@@ -166,8 +178,8 @@ public sealed class CloudCheapClient
             var client = _http.CreateClient("llm-provider");
             client.Timeout = timeout;
 
-            // Словарь, а не анонимный объект: thinking уходит только у источников с
-            // DisableThinking, остальным тело запроса менять нельзя (см. Source выше)
+            // Словарь, а не анонимный объект: thinking и reasoning_effort уходят только у
+            // источников с соответствующей настройкой, остальным тело менять нельзя (см. Source выше)
             var body = new Dictionary<string, object?>
             {
                 ["model"] = model,
@@ -177,6 +189,7 @@ public sealed class CloudCheapClient
                 ["messages"] = new[] { new { role = "user", content = prompt } },
             };
             if (source.DisableThinking) body["thinking"] = new { type = "disabled" };
+            if (source.ReasoningEffort is not null) body["reasoning_effort"] = source.ReasoningEffort;
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"{source.ApiBaseUrl}/chat/completions")
             {
@@ -277,8 +290,9 @@ public sealed class CloudCheapClient
             && string.Equals(sr.GetString(), "length", StringComparison.OrdinalIgnoreCase));
 
     // Расход прямого вызова в аналитику: токены из usage OpenAI-совместимого ответа,
-    // стоимость 0 (модели бесплатные). Источник spend провайдера — {sourceKey}-direct.
-    // Ошибка записи вызов не роняет.
+    // стоимость 0. Провайдер в spend — {sourceKey}-direct; источник — free только для
+    // бесплатных (freellm*, модель ":free"), платный прямой адаптер пишется как one-shot.
+    // Ошибка записи вызова не роняет.
     private void RecordSpend(string model, string sourceKey, JsonElement json, string? ownerId, string? label)
     {
         if (_spend is null)
@@ -297,12 +311,18 @@ public sealed class CloudCheapClient
                 if (u.TryGetProperty("completion_tokens", out var c) && c.ValueKind == JsonValueKind.Number)
                     outTok = c.GetInt64();
             }
+            var provider = $"{sourceKey}-direct";
+            // Локальность — по провайдеру источника из реестра (не по ключу «…-direct»)
+            var isLocal = _sources.FirstOrDefault(s => s.Key == sourceKey) is { } src
+                && _providers.GetByKey(src.ProviderKey)?.IsLocal == true;
             _spend.Record(new Models.SpendRecord
             {
                 OwnerId = ownerId ?? "",
-                Provider = $"{sourceKey}-direct",
+                Provider = provider,
                 Model = model,
-                Source = Models.SpendSources.Free,
+                Source = Models.SpendSources.IsFree(provider, model, isLocal)
+                    ? Models.SpendSources.Free
+                    : Models.SpendSources.OneShot,
                 Label = label,
                 InputTokens = inTok,
                 OutputTokens = outTok,

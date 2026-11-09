@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
-    PersonaManager personas, ProjectManager projects, FeatureFlagService flags,
+    PersonaManager personas, ProjectManager projects,
     UserStore users) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -137,11 +137,6 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] McpServerUpsertRequest req, CancellationToken ct)
     {
-        // Указатель на реестр-каталог принимаем только под флагом: dark launch прячет
-        // и поиск, и сам способ пометить запись каталожной (гейты безопасности у записи
-        // при этом работают всегда — они не зависят от флага)
-        if (req.CatalogRef is not null && !flags.IsEnabled(UserId, FeatureFlagKeys.McpCatalog))
-            return BadRequest(new { error = "Каталог MCP-серверов выключен" });
         var draft = new McpServerRecord { Key = req.Key ?? "" };
         if (Apply(draft, req, existing: null) is { } error) return BadRequest(new { error });
         // Каталожная запись заводится строго выключенной: «настройки взяты из каталога,
@@ -214,6 +209,38 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         registry.SetEnabled(UserId, id, req.Enabled) is { } record
             ? Ok(McpServerMapper.ToDto(record))
             : NotFound(new { error = "Сервер не найден" });
+
+    // Пометка «для участников» (S2a-7): меняет её только владелец записи. Участник общего
+    // проекта, которому принадлежит запись, получает 403: запись для него реальна (это сервер
+    // хозяина проекта, который может доехать и до его хода), но править чужие настройки
+    // он не может. Посторонний — 404: в его реестре такой записи нет, как и любой чужой.
+    [HttpPut("{id}/shared")]
+    public IActionResult SharedWithMembers(string id, [FromBody] McpSharedWithMembersRequest req)
+    {
+        if (registry.SetSharedWithMembers(UserId, id, req.SharedWithMembers) is { } updated)
+            return Ok(McpServerMapper.ToDto(updated));
+        return IsMemberOfAnotherOwner(id)
+            ? StatusCode(403, new { error = "Пометку «для участников» ставит только владелец записи сервера" })
+            : NotFound(new { error = "Сервер не найден" });
+    }
+
+    // «Чей это id и знаю ли я этого владельца»: запись ищется по чужим реестрам, и если
+    // она найдена у владельца, с которым вызывающий состоит в общем проекте, — это участник.
+    // Своей проверки «не себя ли»: в эту ветку попали только потому, что в реестре
+    // вызывающего записи нет (SetSharedWithMembers вернул null), — Get по его же owner
+    // пропустит её сам. Отдельное инлайн-сравнение владельца с вызывающим здесь не нужен
+    // (OwnerIdInlineGuardTests). Id записи — GUID, двух владельцев практически исключены,
+    // поэтому поиск останавливается на первом совпадении.
+    private bool IsMemberOfAnotherOwner(string id)
+    {
+        foreach (var owner in registry.GetAllOwners())
+        {
+            if (registry.Get(owner, id) is null) continue;
+            return projects.GetByOwner(owner).Any(p =>
+                p.Members is { Count: > 0 } && p.Members.Any(m => m.UserId == UserId));
+        }
+        return false;
+    }
 
     [HttpDelete("{id}")]
     public IActionResult Delete(string id)
@@ -391,3 +418,6 @@ public record McpServerUpsertRequest(
     McpCatalogRefInput? CatalogRef = null);
 
 public record McpEnableRequest(bool Enabled);
+
+/// <summary>Тумблер «для участников» (S2a-7): состояние пометки записи реестра.</summary>
+public record McpSharedWithMembersRequest(bool SharedWithMembers);

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Collections.Frozen;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -30,15 +31,25 @@ public static class LlmGatewayEndpoints
     public const string HttpClientName = "llm-gateway";
     public const string Route = "/gw/t/{turnId}/llm/{**path}";
     public const string OAuthBeta = "oauth-2025-04-20";
+    // Маркер сжатия, который шлюз добавляет upstream: CLI-заголовок x-claude-code-compaction
+    // (ADR-029) вырезается (DropRequestHeaders), а прокси локальной модели маршрутизирует
+    // запрос-суммаризацию в облако по этому собственному маркеру, не разбирая тело.
+    public const string CompactionMarkerHeader = "x-ccs-compaction";
 
     // Заголовки, которые не пересылаются upstream: авторизация клиента (её заменяет шлюз),
     // токен хода и hop-by-hop. anthropic-beta собирается отдельно.
+    // Gateway hint headers (CLAUDE_CODE_GATEWAY_HINT_HEADERS=1) — consumed шлюзом для
+    // статистики локальных моделей (ADR-029): upstream (vLLM/прокси) их не ждёт, строгий
+    // прокси мог бы отклонить неизвестные x-claude-code-*.
     private static readonly HashSet<string> DropRequestHeaders = new(StringComparer.OrdinalIgnoreCase)
     {
         "Host", "Authorization", "x-api-key", TurnTokenEndpointFilter.HeaderName,
         TurnTokenEndpointFilter.DeviceFingerprintHeader, "anthropic-beta",
         "Connection", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection", "TE", "Trailer",
         "Transfer-Encoding", "Upgrade", "Content-Length", "Cookie",
+        GatewayHintHeaders.RequestClassHeader, GatewayHintHeaders.AgentTypeHeader,
+        GatewayHintHeaders.CompactionHeader, GatewayHintHeaders.ContextCompactedHeader,
+        "x-claude-code-prompt-id", "x-claude-code-prev-tool-durations",
     };
 
     // Общий для обоих шлюзов (LLM и MCP): hop-by-hop и всё, чем upstream мог бы выставить
@@ -162,6 +173,40 @@ public static class LlmGatewayEndpoints
             await using var body = await response.Content.ReadAsStreamAsync(ctx.RequestAborted);
             var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
             var filtered = sse is null ? null : new ArrayBufferWriter<byte>();
+
+            // Наблюдатель метрик локальной модели (статистика локальных моделей): создаётся только
+            // в ветке БЕЗ нормализатора (sse is null) и только когда ответ — SSE, маршрут
+            // локальный и метрики включены; иначе поведение шлюза не меняется ни на байт.
+            // Копия каждого куска идёт наблюдателю ПОСЛЕ записи клиенту (клиент — первым).
+            // LlmProviderRegistry — из DI (GetService): в тестах шлюза без него null →
+            // наблюдатель не создаётся, поведение прежнее.
+            // Все опциональные швы — через GetService (единый стиль): биндинг endpoint'а
+            // не тянет их как обязательные параметры HandleAsync, а тесты без них — null.
+            var statsOptions = ctx.RequestServices.GetService<IOptionsMonitor<LocalModelStatsOptions>>();
+            var time = ctx.RequestServices.GetService<TimeProvider>();
+            var providers = ctx.RequestServices.GetService<LlmProviderRegistry>();
+            var sink = ctx.RequestServices.GetService<ILocalModelRequestSink>();
+            var observer = CreateUsageObserver(sse, mediaType, grant, providers, statsOptions, time, sink);
+            // observer non-null ⟹ sink non-null (CreateUsageObserver проверяет sink is null → null).
+            // requestId — уникальный на HTTP-запрос (Guid "N"): параллельные запросы одного
+            // хода (сабагенты, боковые) не затирают друг друга в счётчике (M4).
+            var requestId = Guid.NewGuid().ToString("N");
+            if (observer is not null)
+            {
+                sink!.OnRequestStarted(requestId, grant.TurnId);
+                // Подсказочные заголовки CLI (ADR-029): класс запроса, тип агента, компакция —
+                // бесплатная атрибуция для разреза «основной ход / субагенты / компакция».
+                // Недоверенный ввод: GatewayHintHeaders.From валидирует/обрезает; null — нет.
+                var hints = GatewayHintHeaders.From(ctx.Request.Headers);
+                if (hints is not null)
+                    sink!.OnRequestHints(requestId, grant.TurnId, hints);
+                // M5: живая скорость — наблюдатель шлёт счётчик токенов на каждую дельту.
+                observer.OnTokenCount = count => sink!.OnTokenCount(requestId, grant.TurnId, count);
+            }
+            // «Первый токен» сообщаем приёмнику один раз: SawFirstDelta после первой дельты
+            // остаётся true на всех последующих кусках, без флага OnFirstToken ушёл бы на каждый.
+            var firstTokenSent = false;
+
             try
             {
                 int read;
@@ -174,6 +219,28 @@ public static class LlmGatewayEndpoints
                         sse.Push(buffer.AsSpan(0, read), filtered!);
                         await WriteFilteredAsync(ctx, filtered!);
                     }
+                    // Наблюдатель — ПОСЛЕ клиента: клиент уже получил байты, копия только
+                    // для метрик. Любое исключение глотается (лог Debug), поток клиента не
+                    // искажается; упавший наблюдатель отключается до конца запроса.
+                    if (observer is { } obs)
+                    {
+                        try
+                        {
+                            obs.Feed(buffer.AsSpan(0, read));
+                            if (obs.SawFirstDelta && !firstTokenSent)
+                            {
+                                firstTokenSent = true;
+                                sink!.OnFirstToken(requestId, grant.TurnId);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            loggers.CreateLogger(LogCategory).LogDebug(ex,
+                                "Наблюдатель метрик локальной модели упал (ход {TurnId}) — отключён до конца запроса",
+                                grant.TurnId);
+                            observer = null;
+                        }
+                    }
                     await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
                 }
                 if (sse is not null)
@@ -181,6 +248,19 @@ public static class LlmGatewayEndpoints
                     sse.Complete(filtered!);
                     await WriteFilteredAsync(ctx, filtered!);
                     await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
+                }
+                // Поток закончился: снимаем итог и отдаём приёмнику.
+                if (observer is { } done)
+                {
+                    try
+                    {
+                        sink!.OnRequestCompleted(requestId, grant.TurnId, done.Complete());
+                    }
+                    catch (Exception ex)
+                    {
+                        loggers.CreateLogger(LogCategory).LogDebug(ex,
+                            "Итог наблюдателя метрик не доставлен (ход {TurnId})", grant.TurnId);
+                    }
                 }
             }
             finally
@@ -196,6 +276,27 @@ public static class LlmGatewayEndpoints
     public const string DumpFilePrefix = "gw-normalized-";
     private static readonly System.Text.RegularExpressions.Regex DumpFileName =
         new(@"^gw-normalized-\d{8}-\d{6}-\d{3}-[0-9a-f]{32}\.json$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+    // Наблюдатель метрик локальной модели (статистика локальных моделей): создаётся только когда
+    // (а) ответ — SSE, (б) маршрут локальный (ResolveByModel → IsLocal) и (в) метрики
+    // включены (IOptionsMonitor<LocalModelStatsOptions>.Enabled). Иначе null — поведение
+    // шлюза не меняется ни на байт и ни на аллокацию. Нормализатор (sse != null) здесь
+    // исключает наблюдателя: он живёт в ветке «байт в байт без нормализатора».
+    // providers/sink — необязательные (GetService): null — наблюдатель не создаётся
+    // (нет локального маршрута / итог некуда отдать).
+    private static SseUsageObserver? CreateUsageObserver(
+        ToolInputResponseFilter? sse, string? mediaType, TurnTokenGrant grant,
+        LlmProviderRegistry? providers, IOptionsMonitor<LocalModelStatsOptions>? statsOptions,
+        TimeProvider? time, ILocalModelRequestSink? sink)
+    {
+        if (sse is not null) return null;
+        if (!string.Equals(mediaType, "text/event-stream", StringComparison.OrdinalIgnoreCase)) return null;
+        if (statsOptions is null || !statsOptions.CurrentValue.Enabled) return null;
+        if (providers?.ResolveByModel(grant.Route?.Model)?.IsLocal is not true) return null;
+        if (sink is null) return null;
+        if (time is null) return null;
+        return new SseUsageObserver(time);
+    }
 
     private static async Task WriteFilteredAsync(HttpContext ctx, ArrayBufferWriter<byte> filtered)
     {
@@ -258,6 +359,15 @@ public static class LlmGatewayEndpoints
             else
                 request.Headers.TryAddWithoutValidation(name, values.ToArray());
         }
+
+        // Запрос-суммаризация: CLI помечает его x-claude-code-compaction (ADR-029), шлюз
+        // вырезает hint-заголовок (DropRequestHeaders) и ставит собственный маркер — прокси
+        // локальной модели по нему шлёт сжатие в облако, не глядя на тело. Значение уже
+        // провалидировано GatewayHintHeaders (CompactionKinds); облачному upstream лишний
+        // заголовок безвреден, поэтому не завязываем на вид upstream.
+        var hints = GatewayHintHeaders.From(ctx.Request.Headers);
+        if (hints?.Compaction is { } compaction)
+            request.Headers.TryAddWithoutValidation(CompactionMarkerHeader, compaction);
 
         var betas = ctx.Request.Headers["anthropic-beta"]
             .SelectMany(v => (v ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))

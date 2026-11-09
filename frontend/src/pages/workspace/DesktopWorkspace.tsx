@@ -36,9 +36,10 @@ import { VideoCenter } from '../../features/video/VideoCenter';
 import { setVideoCenterBlocked, useVideoCenter, useVideoCenterSplit, VIDEO_PANEL_EVENT } from '../../lib/videoStage';
 import { ChatContextBar, type ContextTarget } from '../../features/chatContext/ChatContextBar';
 import { useHasChatContext } from '../../lib/chatContext';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { getTaskById } from '../../lib/tasks';
 import { canSplitCenter, CHAT_SPLIT_MIN_PX, SPLIT_SIDE_MIN_PX } from './splitLayout';
+import { FeatureCenter } from '../../components/feature/FeatureCenter';
+import { centerOccupiedByOther, type CenterOccupancy } from '../../lib/centerOccupancy';
 
 // Минимумы колонок разделённого центра — в splitLayout.ts; на узком центре соседка (минимум 200) всё равно
 // остаётся, поэтому минимум ленты — это то, что остаётся от неё
@@ -57,6 +58,9 @@ interface Props {
   activeSession: Session | null;
   onSelectSession: (s: Session, firstMessage?: string, autoSelect?: boolean) => void;
   onSessionUpdated: (s: Session) => void;
+  // Полный список сессий проекта → WorkspacePage (N1): тот же колбэк, что у мобильной
+  // раскладки. Без него на десктопе sessions пуст.
+  onSessionsListChanged?: (sessions: Session[]) => void;
   // Создание чата по клику (кнопка в пустом состоянии центра) + сброс при удалении последнего
   onCreateSession: () => void;
   onClearSession: () => void;
@@ -79,7 +83,9 @@ interface Props {
   openCommitSha: string | null;
   openCommitFile?: string | null;
   onCloseCommit: () => void;
-  onOpenFileFromChat: (path: string) => void;
+  onOpenFileFromChat: (path: string, sessionId?: string) => void;
+  // Чат, из ленты которого открыт файл: FileViewer читает его из дерева задачи этого чата
+  openFileSessionId?: string;
   onCloseFile: () => void;
   // Ридер ссылок — открывается по кнопке-компаньону у внешней ссылки в чате, живёт
   // в центре как просмотр файла: split с чатом либо на всю контентную зону
@@ -146,6 +152,32 @@ interface Props {
   availableChatIds?: Set<string>;
   // Человек закрыл панель (крестик или рельса) — для признака автооткрытия генерации
   onPanelUserClose?: (k: PanelKey) => void;
+  // Страница фичи (Ф2.3/C1): открыта (fid ≠ null) — центр прячется display:none,
+  // страница рисуется соседом (FeatureCenter). Исполнитель «← назад» — от WorkspacePage.
+  openFeatureId: string | null;
+  onFeatureBack: (t: import('../../components/feature/FeaturePage').FeaturePageBackTarget) => void;
+  // seq события «открыли страницу фичи» (монотонный счётчик WorkspacePage): 0 — страница
+  // не открыта. Порядок «кто выигрывает центр» — по seq, см. centerWinner.
+  featureOpenedAt: number;
+  // seq события «открыли файл» (тот же счётчик): 0 — файл не открыт (холодный старт:
+  // файл «восстановлен» из сохранённого состояния, а не открыт действием).
+  fileOpenedAt: number;
+  // Итерация 2: мета панелей плагинов (заголовок + иконка) — пропсом в PanelZone.
+  pluginPanelMeta?: Record<import('./panelCatalog').PluginPanelKey, { title: string; Icon: import('lucide-react').LucideIcon }>;
+}
+
+// Кто выигрывает центр: страница фичи или файл — тот, чьё событие «открыли»
+// ПОЗЖЕ (больший seq монотонного счётчика WorkspacePage). 0 = не открыто:
+// восстановленный файл при холодном старте и закрытая страница. Чистая функция —
+// порядок определяется в момент действия, а не выводом из сравнения значений.
+export function centerWinner(featureOpenedAt: number, fileOpenedAt: number): 'page' | 'file' {
+  return fileOpenedAt > featureOpenedAt ? 'file' : 'page';
+}
+
+// Страница фичи уступает центр файлу: файл открыт и событие «открыли» у него позже.
+// Общий предикат десктопной и мобильной веток (не разъезжаются при правке правила).
+export function pageYieldsCenterToFile(openFile: unknown, featureOpenedAt: number, fileOpenedAt: number): boolean {
+  return !!openFile && centerWinner(featureOpenedAt, fileOpenedAt) === 'file';
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -219,6 +251,18 @@ export function DesktopWorkspace(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet, p.activeSession?.id]);
 
+  // «Последнее действие выигрывает» (продуктовое правило, Софья): центр показывает
+  // то, что открыто ПОСЛЕДНИМ — страницу фичи или файл. Порядок — по seq событий
+  // «открыли» (монотонный счётчик WorkspacePage, ставится в момент действия — повторное
+  // открытие того же файла/той же фичи тоже событие, а не вывод из сравнения значений):
+  // страница уступает центр файлу, открытому ПОСЛЕ неё (свой макет или любой другой:
+  // «Открыть макет», панель «Файлы», ссылка из чата, карточка задачи), а открытие
+  // страницы — вкл. повторное «Фича →» на ту же фичу — возвращает её поверх ранее
+  // открытого файла. Файл не сбрасывается при закрытии страницы: остаётся в состоянии
+  // и вернётся. Мобильная раскладка не меняется (там yielded не передаётся, FileViewer
+  // вне центра).
+  const yielded = pageYieldsCenterToFile(p.openFile, p.featureOpenedAt, p.fileOpenedAt);
+
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
@@ -275,7 +319,7 @@ export function DesktopWorkspace(p: Props) {
   // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
   const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsListChanged={p.onSessionsListChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 
@@ -296,9 +340,8 @@ export function DesktopWorkspace(p: Props) {
   // Полоса — тонкий слой НАД существующей маршрутизацией: клик по материалу ведёт
   // ровно тем же путём, что клик по нему в панели (open-file из ленты, ридер,
   // задача-aside). Своей маршрутизации у неё нет.
-  const contextOn = useFeature(FLAGS.chatContext);
   const hasContext = useHasChatContext(p.activeSession?.id ?? null);
-  const contextVisible = contextOn && !!p.activeSession && hasContext;
+  const contextVisible = !!p.activeSession && hasContext;
   const openContextEntry = (e: SessionContextEntry) => {
     if (e.type === 'file') { p.onOpenFileFromChat(e.id); return; }
     if (e.type === 'url') { p.onOpenReader?.(e.id); return; }
@@ -394,8 +437,25 @@ export function DesktopWorkspace(p: Props) {
   // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
   // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
   // не останется вовсе, компенсация выродится в ноль и заставку перекосит.
-  const centerFree = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
-    && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
+  // «Центр занят другим окном» — ОДИН источник (lib/centerOccupancy), общий со
+  // WorkspacePage (otherCenterOpen/автоскрытие страницы фичи): новое окно центра
+  // добавляется одним полем, а не в два расходящихся перечня. Видео-центр —
+  // «потребитель» свободного центра, а не его блокировщик: для centerFree его поле
+  // гасим (иначе videoInCenter = videoCenter && centerFree было бы противоречием).
+  const centerOccupancy: CenterOccupancy = {
+    file: !!p.openFile,
+    commit: !!p.openCommitSha,
+    task: !!p.selectedTask,
+    graph: p.graphOpen,
+    reader: p.readerState.open,
+    persona: personaOpen,
+    teamCenter: p.teamCenterOpen,
+    board: p.boardOpen,
+    preview: p.previewOpen,
+    terminalMobile: false,
+    videoCenter: videoCenter != null,
+  };
+  const centerFree = !centerOccupiedByOther({ ...centerOccupancy, videoCenter: false });
   // Эфир и каталог занимают тот же остров, что файл и задача, — значит уступают им.
   // Уступка живёт ОДНИМ эффектом, а не колбэком в каждом из девяти открывателей
   // центра: те раскиданы по WorkspacePage, и один забытый вызов дал бы два острова
@@ -457,6 +517,7 @@ export function DesktopWorkspace(p: Props) {
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
+        pluginPanelMeta={p.pluginPanelMeta}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -469,7 +530,15 @@ export function DesktopWorkspace(p: Props) {
         }
       />
 
-      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат === */}
+      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат ===
+          Страница фичи (Ф2.3/C1) — СОСЕД центра: при открытой (openFeatureId) весь центр
+          прячется display:none (не размонтируется), страница рисуется рядом. FeatureCenter —
+          общий паттерн с мобильной веткой.
+          «Последнее действие выигрывает»: страница уступает центр файлу, открытому ПОСЛЕ неё
+          (свой макет или любой другой), а открытие страницы (вкл. смена фичи) возвращает её
+          поверх ранее открытого файла. Страница остаётся смонтированной (display:none):
+          закрыл файл — вернулась с прежним состоянием; файл при закрытии страницы не сбрасывается. */}
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} projectOwnerId={p.project.ownerId ?? null} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
@@ -582,7 +651,7 @@ export function DesktopWorkspace(p: Props) {
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
             </div>
           </Island>
         </div>
@@ -591,7 +660,7 @@ export function DesktopWorkspace(p: Props) {
       {!fileSplit && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете и на узком центре сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
         </div>
       )}
       </div>
@@ -624,6 +693,7 @@ export function DesktopWorkspace(p: Props) {
           <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
         </div>
       )}
+      </FeatureCenter>
 
       {/* === Справа: стек рабочих панелей + рельса иконок === */}
       <PanelZone
@@ -634,6 +704,7 @@ export function DesktopWorkspace(p: Props) {
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
         centerFileOpen={!!p.openFile}
+        pluginPanelMeta={p.pluginPanelMeta}
       />
     </div>
   );

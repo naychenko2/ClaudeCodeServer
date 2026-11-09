@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>План хода · режим «Исполнение фичи» · макет v1</title>
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+  --shadow-press:inset 0 1px 3px rgba(60,50,35,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-progress-track:#5C544A;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+  --shadow-press:inset 0 1px 4px rgba(0,0,0,.38);
+}
+* { box-sizing:border-box; }
+html,body { margin:0; }
+body {
+  background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.45;
+}
+button { font:inherit; color:inherit; }
+.serif { font-family:"PT Serif",Georgia,serif; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* ===== Обвязка макета (не часть продукта) ===== */
+.mk { position:sticky; top:0; z-index:50; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:center;
+  padding:10px 16px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.mk h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); }
+.mk .grp { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.mk .lbl { font-size:11px; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; }
+.pills { display:inline-flex; flex-wrap:wrap; gap:2px; padding:2px; background:var(--c-bg-selected); border-radius:9px; }
+.pills button { border:none; background:transparent; color:var(--c-text-secondary); padding:4px 10px; border-radius:7px; font-size:12px; cursor:pointer; }
+.pills button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-thumb); font-weight:600; }
+.note { max-width:760px; margin:12px auto 0; padding:0 16px; font-size:12px; color:var(--c-text-secondary); }
+
+/* ===== «Окно» чата ===== */
+.stage { padding:16px; display:flex; justify-content:center; }
+.app { position:relative; width:100%; max-width:780px; height:720px; border:1px solid var(--c-border); border-radius:14px;
+  background:var(--c-bg-main); overflow:hidden; transform:translateZ(0); }
+.app.m { width:360px; height:760px; border-radius:28px; }
+.feed { position:absolute; inset:0; overflow:auto; padding:18px 22px 24px; display:flex; flex-direction:column; gap:12px; }
+.app.m .feed { padding:14px 12px 20px; }
+.msg-u { align-self:flex-end; max-width:80%; background:var(--c-bg-selected); color:var(--c-text-primary); border-radius:14px; padding:8px 12px; }
+.msg-a { color:var(--c-text-primary); line-height:1.55; }
+.msg-a b { color:var(--c-text-heading); }
+.endrow { display:flex; align-items:center; gap:8px; margin-top:2px; }
+.meta-pill { font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; background:var(--c-bg-selected);
+  border-radius:8px; padding:4px 11px; display:flex; align-items:center; gap:7px; white-space:nowrap; }
+.pillbox { margin-left:auto; min-width:0; max-width:50%; display:flex; }
+
+/* ===== TurnPlanPill: копия стиля из кода ===== */
+.tpp { font-size:11px; color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; background:var(--c-bg-selected);
+  border:none; border-radius:8px; padding:4px 11px; display:flex; align-items:center; gap:7px; cursor:pointer;
+  max-width:300px; min-width:0; flex-shrink:1; }
+.tpp:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.app.m .tpp { min-height:28px; }
+.tpp .k { flex-shrink:0; }
+.tpp .d { opacity:.45; flex-shrink:0; }
+.tpp .t { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tpp .ic { position:relative; display:flex; flex-shrink:0; }
+.tpp .ic .dot { position:absolute; right:-3px; top:-3px; width:6px; height:6px; border-radius:50%; background:var(--c-info); box-shadow:0 0 0 1.5px var(--c-bg-selected); }
+.tpp.t-wait .t { color:var(--c-info); font-weight:600; }
+.tpp.t-crash .t { color:var(--c-danger-text); font-weight:600; }
+.tpp .ret { flex-shrink:0; }
+.tpp .ret.hot { color:var(--c-warning-text); font-weight:700; }
+
+/* ===== Menu (ui/Menu): bgWhite, border, R.xl 12, SHADOW.dropdown, padding 5 ===== */
+.menu { position:absolute; z-index:20; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  box-shadow:var(--shadow-dropdown); padding:5px; min-width:280px; max-width:380px; display:flex; flex-direction:column; overflow:hidden; }
+.app.m .menu { left:8px; right:8px; min-width:0; max-width:none; }
+.menu .in { padding:9px 12px 11px; overflow:auto; }
+.menu .hd { display:flex; align-items:center; gap:8px; padding-bottom:7px; margin-bottom:5px; border-bottom:1px solid var(--c-divider); }
+.menu.feat .in { padding-top:0; }
+.menu.feat .hd { position:sticky; top:0; background:var(--c-bg-white); z-index:2; padding-top:9px; }
+.hd .ttl { font-family:"PT Serif",Georgia,serif; font-size:13px; font-weight:700; color:var(--c-text-heading); }
+.cnt { margin-left:auto; font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+
+/* ===== TodoList: копия разметки ===== */
+.tl { display:flex; flex-direction:column; gap:1px; }
+.tl .it { display:flex; align-items:flex-start; gap:9px; padding:4px 0; }
+.tl .it svg { flex-shrink:0; margin-top:1px; }
+.tl .tx { font-size:13px; line-height:1.4; color:var(--c-text-secondary); }
+.tl .done .tx { color:var(--c-text-muted); text-decoration:line-through; }
+.tl .act .tx { color:var(--c-text-heading); font-weight:600; }
+
+/* ===== Карточки ленты ===== */
+.card { border:1px solid var(--c-border-light); border-radius:12px; background:var(--c-bg-white); overflow:hidden; box-shadow:var(--shadow-card); }
+.card .ch { display:flex; align-items:center; gap:8px; padding:10px 13px; border-bottom:1px solid var(--c-divider); }
+.card .ch .ttl { font-family:"PT Serif",Georgia,serif; font-size:14px; font-weight:700; color:var(--c-text-heading); }
+.card .cb { padding:7px 13px 10px; }
+.card .cf { display:flex; align-items:center; justify-content:flex-end; gap:5px; padding:8px 14px; border-top:1px solid var(--c-divider);
+  font-size:12px; font-weight:600; color:var(--c-accent); cursor:pointer; background:none; border-left:0; border-right:0; border-bottom:0; width:100%; }
+.card .cf:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+/* TaskCreatedView */
+.tc { border-left:3px solid var(--c-accent); cursor:pointer; transition:border-color .15s; }
+.tc:hover { border-color:var(--c-accent-muted); border-left-color:var(--c-accent); }
+.tc .th { display:flex; align-items:center; gap:9px; padding:9px 12px; background:var(--c-accent-light); border-bottom:1px solid var(--c-divider); }
+.tc .th .bd { width:26px; height:26px; border-radius:50%; background:var(--c-accent-muted); color:var(--c-accent); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+.tc .tb { padding:11px 14px 12px; }
+.tc .tt { font-size:15px; font-weight:700; line-height:1.35; color:var(--c-text-heading); }
+.tc .tdsc { margin-top:5px; font-size:12.5px; line-height:1.5; color:var(--c-text-secondary); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.tc .grid { margin-top:12px; display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px 16px; }
+.cl { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin-bottom:4px; }
+.cv2 { display:flex; align-items:center; gap:6px; font-size:12.5px; font-weight:600; color:var(--c-text-primary); min-width:0; }
+.chip { display:inline-flex; align-items:center; gap:4px; font-size:11px; border-radius:6px; padding:1px 7px; background:var(--c-bg-selected); color:var(--c-text-secondary); }
+.featchip { margin-top:11px; display:inline-flex; align-items:center; gap:6px; font-size:12px; color:var(--c-text-secondary);
+  background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:8px; padding:3px 9px; cursor:pointer; min-height:28px; }
+.featchip:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.app.m .featchip { min-height:40px; }
+.new { outline:2px dashed var(--c-accent-muted); outline-offset:2px; border-radius:8px; }
+
+/* InlineSegmented size sm */
+.seg { display:flex; gap:2px; background:var(--c-bg-selected); border-radius:10px; padding:2px; flex-shrink:0; }
+.seg button { border:none; border-radius:7px; cursor:pointer; font-size:11px; font-weight:600; padding:2px 8px; min-height:20px;
+  background:transparent; color:var(--c-text-muted); transition:background .12s, color .12s; white-space:nowrap; }
+.seg button.on { background:var(--c-accent-light); color:var(--c-accent); }
+.seg button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.app.m .seg button { min-height:40px; padding:2px 10px; }
+
+/* ===== Режим «Исполнение фичи» ===== */
+.fx { display:flex; flex-direction:column; gap:10px; }
+.fx .fh { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.fx .fn { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.fx .br { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.sec { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); margin:2px 0 -4px; }
+
+/* Тоны: цвет + форма глифа */
+.t-wait  { --tc:var(--c-info);    --tt:var(--c-info);         --tb:var(--c-info-bg); }
+.t-loop  { --tc:var(--c-warning); --tt:var(--c-warning-text); --tb:var(--c-warning-bg); }
+.t-crash { --tc:var(--c-danger);  --tt:var(--c-danger-text);  --tb:var(--c-danger-bg); }
+.t-run   { --tc:var(--c-text-heading); --tt:var(--c-text-heading); --tb:var(--c-bg-selected); }
+.t-done  { --tc:var(--c-success); --tt:var(--c-success-text); --tb:var(--c-success-bg); }
+.g { flex-shrink:0; display:inline-block; vertical-align:-2px; }
+.pulse { animation:pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:.25; } 50% { opacity:.9; } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation:none; opacity:.5; } }
+
+.alert { display:flex; flex-direction:column; gap:8px; background:var(--tb); color:var(--tt); border-radius:8px; padding:8px 10px; font-size:12.5px; }
+.alert .r { display:flex; gap:8px; align-items:flex-start; }
+.alert .r .g { margin-top:2px; }
+.alert b { font-weight:700; }
+.acts { display:flex; gap:6px; flex-wrap:wrap; }
+
+/* Button из ui/: xs 24 / мобила 40 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:5px; border:none; cursor:pointer; font-weight:600;
+  font-size:12px; padding:0 9px; min-height:24px; border-radius:8px; white-space:nowrap; transition:background .15s, color .15s; }
+.app.m .btn { min-height:40px; font-size:13px; padding:0 12px; border-radius:10px; }
+.btn.secondary { background:var(--c-bg-panel); color:var(--c-text-secondary); }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); border:1px solid var(--c-border); }
+.btn.secondary:hover, .btn.ghost:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+.btn:active { box-shadow:var(--shadow-press); }
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+
+.now { display:flex; gap:9px; align-items:flex-start; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; padding:8px 10px; }
+.av { width:22px; height:22px; border-radius:50%; flex-shrink:0; display:inline-flex; align-items:center; justify-content:center;
+  font-size:11px; font-weight:700; background:var(--c-accent-muted); color:var(--c-accent); }
+.av.sm { width:18px; height:18px; font-size:10px; }
+.now .w { flex:1; min-width:0; }
+.now .a { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.now .b { font-size:12px; color:var(--c-text-secondary); margin-top:1px; }
+.now .tm { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); white-space:nowrap; }
+
+.recs { display:flex; flex-direction:column; gap:4px; }
+.rec { display:flex; gap:8px; align-items:flex-start; font-size:12.5px; color:var(--c-text-primary); padding:6px 0; border-top:1px solid var(--c-border-light); }
+.rec:first-child { border-top:none; padding-top:2px; }
+.rec .g { margin-top:2px; }
+.rec .w { flex:1; min-width:0; }
+.rec .w .acts { margin-top:5px; }
+
+/* Конвейер: рельса слева, толщина сегмента = проходы */
+.cv { list-style:none; margin:0; padding:0; }
+.cv > li { position:relative; }
+.cv > li::before { content:""; position:absolute; left:8px; top:22px; bottom:-6px; width:var(--w,2px); transform:translateX(-50%);
+  background:var(--c-text-muted); border-radius:2px; opacity:.55; }
+.cv > li.todo::before { background:none; border-left:2px dashed var(--c-dashed); width:0; opacity:1; }
+.cv > li:last-child::before { display:none; }
+.row { width:100%; display:grid; grid-template-columns:16px 1fr auto; gap:9px; align-items:start; text-align:left; border:none; background:transparent;
+  cursor:pointer; padding:5px 4px 5px 0; border-radius:8px; min-height:32px; position:relative; }
+.app.m .row { min-height:40px; }
+.row:hover { background:var(--c-bg-selected); }
+.row:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.row .gw { display:flex; justify-content:center; padding-top:1px; background:var(--c-bg-white); border-radius:50%; position:relative; z-index:1; }
+.row .nm { font-size:13px; color:var(--c-text-primary); display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+.row .nm b { font-weight:600; color:var(--c-text-heading); }
+.todo .row .nm { color:var(--c-text-muted); }
+.row .ms { font-size:12px; color:var(--c-text-secondary); margin-top:1px; }
+.row .rt { display:flex; align-items:center; gap:4px; padding-top:1px; }
+.row .chev { color:var(--c-text-muted); transition:transform .15s; display:flex; }
+.row[aria-expanded="true"] .chev { transform:rotate(180deg); }
+.mut { color:var(--c-text-muted); font-family:"JetBrains Mono",monospace; font-size:11px; }
+.badge { display:inline-flex; align-items:center; gap:3px; font-size:11px; font-weight:700; border-radius:999px; padding:0 7px; line-height:18px;
+  background:var(--c-bg-selected); color:var(--c-text-secondary); white-space:nowrap; }
+.badge.hot { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.badge.dng { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; border-radius:999px; padding:0 8px; line-height:18px;
+  background:var(--tb); color:var(--tt); border:1px solid var(--tc); white-space:nowrap; }
+.lanes { display:flex; flex-direction:column; gap:5px; margin:2px 0 4px 25px; }
+.lane { display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:center; font-size:12px; color:var(--c-text-secondary); }
+.lane .tr { height:var(--lw,3px); min-height:2px; background:var(--c-progress-track); border-radius:999px; overflow:hidden; }
+.lane .tr i { display:block; height:100%; background:var(--c-text-muted); }
+
+/* Детали по нажатию — раскрываются под строкой, внутри той же поверхности */
+.det { margin:2px 0 8px 25px; padding:8px 10px; background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:10px; display:flex; flex-direction:column; gap:8px; }
+.det .h { font-size:10px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--c-text-muted); }
+.det ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:4px; }
+.det li { display:flex; gap:7px; align-items:flex-start; font-size:12px; color:var(--c-text-primary); }
+.det li .s { color:var(--c-text-secondary); }
+.det .lnk { align-self:flex-end; display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; color:var(--c-accent);
+  background:none; border:none; cursor:pointer; padding:2px 0; min-height:24px; }
+.app.m .det .lnk { min-height:40px; }
+.steps { display:flex; flex-direction:column; gap:2px; }
+.step { width:100%; display:grid; grid-template-columns:14px 1fr auto; gap:7px; align-items:start; text-align:left; border:none; background:transparent;
+  cursor:pointer; padding:4px 4px; border-radius:8px; font-size:12px; color:var(--c-text-primary); min-height:28px; }
+.app.m .step { min-height:40px; }
+.step:hover, .step[aria-expanded="true"] { background:var(--c-bg-selected); }
+.step:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.lanehd { font-size:11px; color:var(--c-text-muted); margin:4px 0 0; }
+.verd-ok { color:var(--c-success-text); font-weight:600; }
+.verd-ret { color:var(--c-warning-text); font-weight:600; }
+
+.fin { display:flex; gap:10px; align-items:center; background:var(--c-success-bg); border-radius:10px; padding:9px 11px; }
+.fin .a { font-size:13px; font-weight:700; color:var(--c-success-text); }
+.fin .b { font-size:12px; color:var(--c-text-secondary); }
+.empty { font-size:12.5px; color:var(--c-text-secondary); background:var(--c-bg-card); border:1px dashed var(--c-dashed); border-radius:10px; padding:10px 12px; }
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11px; color:var(--c-text-muted); }
+</style>
+</head>
+<body>
+<div class="mk">
+  <h1>План хода · «Исполнение фичи» · v1</h1>
+  <div class="grp"><span class="lbl">Где</span><div class="pills" id="mk-surf"></div></div>
+  <div class="grp"><span class="lbl">Режим</span><div class="pills" id="mk-mode"></div></div>
+  <div class="grp"><span class="lbl">Фича</span><div class="pills" id="mk-fs"></div></div>
+  <div class="grp"><span class="lbl">Тема</span><div class="pills" id="mk-theme"></div></div>
+  <div class="grp"><span class="lbl">Ширина</span><div class="pills" id="mk-w"></div></div>
+</div>
+<p class="note">Пунктирная обводка — то, что добавляется к текущему виду. Пилюля, меню и карточки без обводки повторяют код как есть
+(TurnPlanPill, TodoList, TodoPlanView, TaskCreatedView). Пример — настоящая фича «История медиа-генераций» из трекера.</p>
+<div class="stage"><div class="app" id="app"></div></div>
+
+<script>
+'use strict';
+const S = { surf:'menu', mode:'feature', fs:'run', theme:'light', mobile:false, open:null, step:null };
+
+/* ---------- Данные: фича «История медиа-генераций», ветка feat/local-media-history ---------- */
+const P = { alex:'Александр', mayya:'Майя', sofya:'Софья', denis:'Денис', kira:'Кира', gleb:'Глеб', vera:'Вера', mark:'Марк' };
+const STEPS = [
+  { id:'Ш1', name:'Журнал медиа-генераций', lane:'back', who:'denis', dur:'1 ч 10 мин',
+    tasks:[['denis','Журнал истории медиа-генераций','done'],['gleb','Ревью: журнал — коммит 31dc5938e','done'],['denis','Доработка по ревью журнала','done'],['gleb','Повторное ревью журнала','done']],
+    rounds:[['ret','2 Major: ошибка ComfyUI не пишется в журнал; нет исхода interrupted'],['ok','принято']] },
+  { id:'Ш2', name:'Чтение и превью', lane:'back', who:'denis', dur:'40 мин',
+    tasks:[['denis','Чтение и превью истории','done'],['gleb','Ревью: чтение и превью','done']], rounds:[['ok','принято с первого круга']] },
+  { id:'Ш3', name:'Экран «История · 7 дней»', lane:'front', who:'kira', dur:'1 ч 15 мин',
+    tasks:[['kira','Экран «История · 7 дней»','done'],['gleb','Ревью экрана','done'],['kira','Правки по ревью экрана','done'],['gleb','Повторное ревью экрана','done']],
+    rounds:[['ret','вернул: правки состояний и токенов'],['ok','принято']] },
+  { id:'Ш4', name:'reduced-motion', lane:'front', who:'kira', dur:'15 мин',
+    tasks:[['kira','Отключить анимации при reduced-motion','done']], rounds:[['ok','принято']] },
+  { id:'Ш5', name:'Дефекты проверки (3)', lane:'back', who:'denis', dur:'35 мин', from:'проверка Веры №1',
+    tasks:[['denis','3 дефекта по проверке Веры','done'],['gleb','Ревью дефектов','done']], rounds:[['ok','принято']] },
+  { id:'Ш6', name:'Дефект 360 px', lane:'front', who:'kira', dur:'20 мин', from:'живая проверка Веры',
+    tasks:[['kira','«История · 7 дней» недоступна на 360 px','done']], rounds:[], noCheck:true },
+  { id:'Ш7', name:'Блокеры финала', lane:'back', who:'denis', dur:'25 мин', from:'финальное ревью Александра',
+    tasks:[['denis','2 блокера финального ревью','run']], rounds:[] },
+];
+const STAGES = [
+  { k:'cut',    n:'Разрез',          who:'alex' },
+  { k:'plan',   n:'План',            who:'mayya' },
+  { k:'prod',   n:'Производство' },
+  { k:'review', n:'Ревью',           who:'gleb' },
+  { k:'check',  n:'Проверка',        who:'vera' },
+  { k:'final',  n:'Финальное ревью', who:'alex' },
+  { k:'merge',  n:'Мерж',            who:'mark' },
+];
+const PLAN = [
+  ['completed','Прочитать итог финального ревью'],
+  ['completed','Поставить Денису задачу на блокеры'],
+  ['completed','Запустить исполнителя'],
+  ['in_progress','Дождаться отчёта Дениса','Жду отчёта Дениса'],
+  ['pending','Поставить повторный финал Александру'],
+  ['pending','Доложить Андрею'],
+];
+
+// Состояние фичи: что видно в каждом сценарии
+function feature(fs){
+  const base = { acc:8, tot:9, ret:3 };
+  const st7 = fs==='run' ? 'run' : fs==='crash' ? 'crash' : 'done';
+  const steps = STEPS.map(s => ({ ...s, st: s.id==='Ш7' ? st7 : 'done' }));
+  const F = {
+    start:{ acc:0, tot:null, ret:0, stage:'Разрез', pill:'Разрез · Александр', tone:'run', steps:[],
+      st:{cut:'run'}, meta:{cut:'Александр · идёт 15 мин'}, cur:'cut', tag:'стоит сейчас · 15 мин',
+      now:['alex','Разрез фичи','Режет фичу на шаги и линии, пишет ADR','идёт 15 мин'], recs:[] },
+    run:{ ...base, stage:'Производство', pill:'Производство · Денис', tone:'run', steps,
+      st:{cut:'done',plan:'done',prod:'run',review:'done',check:'done',final:'loop',merge:'todo'},
+      cur:'prod', tag:'стоит сейчас · 25 мин',
+      now:['denis','Ш7 · Блокеры финала','Вернул Александр: 2 блокера финального ревью','идёт 25 мин'],
+      recs:[
+        ['loop','Финал вернул блокеры, которых не поймали ни ревью шагов, ни проверка Веры. Добавить в план чек-лист инвариантов ADR-030?',['Добавить в план']],
+        ['wait','Ш7 правит только бэк — повторную проверку Веры можно сузить до журнала и API.',['Сузить проверку']],
+      ] },
+    wait:{ ...base, acc:9, stage:'Мерж', pill:'ждёт вас · мерж', tone:'wait', steps,
+      st:{cut:'done',plan:'done',prod:'done',review:'done',check:'done',final:'done',merge:'wait'},
+      cur:'merge', tag:'ждёт вас · 40 мин',
+      alert:['wait','<b>Ждёт вас 40 мин.</b> Александр принял финал со второго прохода. Отдать фичу Марку на мерж?',[['secondary','Попросить Марка'],['ghost','Итог финала']]],
+      recs:[ ['wait','Перед мержем: Глеб просил закрыть Minor из ревью Ш1 (детали в Register) «до master». В итогах шагов закрытия нет.',['Открыть ревью Ш1']] ] },
+    crash:{ ...base, stage:'Производство', pill:'стоит · Денис', tone:'crash', steps,
+      st:{cut:'done',plan:'done',prod:'crash',review:'done',check:'done',final:'loop',merge:'todo'},
+      cur:'prod', tag:'стоит · 12 мин',
+      alert:['crash','<b>Исполнитель упал.</b> Денис, Ш7 «Блокеры финала» — остановился 12 мин назад, отчёта нет.',[['secondary','Перезапустить'],['ghost','Чат исполнителя']]],
+      recs:[ ['crash','Коммитов в ветке после старта Ш7 нет — перезапуск с того же места безопасен.',['Перезапустить']] ] },
+    done:{ ...base, acc:9, stage:'Мерж', pill:'Фича смержена', tone:'done', steps,
+      st:{cut:'done',plan:'done',prod:'done',review:'done',check:'done',final:'done',merge:'done'},
+      cur:null, fin:['Фича смержена','15.10 · 6 ч 10 мин · 14 задач · 9 шагов · ↺3'],
+      recs:[ ['loop','Ретро: 2 из 3 возвратов — по исходам журнала. В разрез следующей фичи — критерии исходов (failed / interrupted).',['В заметку']] ] },
+  };
+  const f = F[fs];
+  f.meta = f.meta || metaFor(fs);
+  return f;
+}
+function metaFor(fs){
+  const fin2 = fs==='run' || fs==='crash';
+  return {
+    cut:'Александр · 40 мин', plan:'Майя — макет · Софья — план на 4 шага',
+    prod: fs==='wait'||fs==='done' ? 'бэк 4 из 4 · фронт 3 из 3' : 'бэк 3 из 4 · фронт 3 из 3',
+    review:'Глеб · 7 кругов на 6 шагах', check:'Вера · 2 прохода · 4 дефекта → Ш5, Ш6',
+    final: fin2 ? 'Александр · вернул 2 блокера' : 'Александр · принял со 2-го прохода',
+    merge: fs==='done' ? 'Марк · 15.10 19:20' : fs==='wait' ? 'Марк · ждёт вашего решения' : 'Марк',
+  };
+}
+const PASSES = { cut:1, plan:1, prod:3, review:7, check:2, final:2, merge:1 };
+
+/* ---------- Глифы (форма дублирует цвет) ---------- */
+function glyph(k, s=14){
+  const v = `width="${s}" height="${s}" viewBox="0 0 16 16" class="g" aria-hidden="true"`;
+  switch(k){
+    case 'crash': return `<svg ${v}><rect x="2.5" y="2.5" width="11" height="11" rx="1.5" style="fill:var(--c-danger)"/></svg>`;
+    case 'wait':  return `<svg ${v}><path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" style="fill:var(--c-info)"/></svg>`;
+    case 'loop':  return `<svg ${v}><path d="M12.6 9.2A4.8 4.8 0 1 1 11.3 4.4" style="fill:none;stroke:var(--c-warning);stroke-width:2.2;stroke-linecap:round"/><path d="M9.2 2.6 12.6 3.4 11.8 6.8" style="fill:none;stroke:var(--c-warning);stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'run':   return `<svg ${v}><circle cx="8" cy="8" r="6.5" class="pulse" style="fill:none;stroke:var(--c-text-heading);stroke-width:1.5"/><circle cx="8" cy="8" r="3.5" style="fill:var(--c-text-heading)"/></svg>`;
+    case 'done':  return `<svg ${v}><circle cx="8" cy="8" r="7" style="fill:var(--c-success)"/><path d="M4.8 8.2 7 10.3l4.3-4.6" style="fill:none;stroke:var(--c-on-accent);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    case 'past':  return `<svg ${v}><circle cx="8" cy="8" r="6.5" style="fill:var(--c-bg-selected);stroke:var(--c-text-muted);stroke-width:1"/><path d="M5.3 8.1 7.1 9.9l3.6-3.8" style="fill:none;stroke:var(--c-text-muted);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round"/></svg>`;
+    default:      return `<svg ${v}><circle cx="8" cy="8" r="6" style="fill:none;stroke:var(--c-dashed);stroke-width:1.5;stroke-dasharray:2.5 2"/></svg>`;
+  }
+}
+// Кружки TodoList — один в один из TodoList.tsx
+const TODO_SVG = {
+  completed:`<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" style="fill:var(--c-success)"/><path d="M4.5 8.2l2.2 2.2 4.8-4.8" style="stroke:var(--c-on-accent)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  in_progress:`<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" style="fill:var(--c-accent)"/><circle cx="8" cy="8" r="2.6" style="fill:var(--c-accent-light)"/></svg>`,
+  pending:`<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" style="stroke:var(--c-dashed)" stroke-width="1.5"/></svg>`,
+};
+const ICON = {
+  // lucide ListChecks / SquareCheck / Route / ArrowRight / ChevronDown
+  list:(c)=>`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 17 2 2 4-4"/><path d="m3 7 2 2 4-4"/><path d="M13 6h8"/><path d="M13 12h8"/><path d="M13 18h8"/></svg>`,
+  route:(c,s=12)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="3"/><path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15"/><circle cx="18" cy="5" r="3"/></svg>`,
+  sq:(c,s=15)=>`<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="m9 12 2 2 4-4"/></svg>`,
+  arrow:`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>`,
+  chev:`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"/></svg>`,
+};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const av = (k, sm) => `<span class="av${sm?' sm':''}" title="${P[k]}">${P[k].slice(0,1)}</span>`;
+const btn = (v, label) => `<button class="btn ${v}" data-a="noop">${esc(label)}</button>`;
+const TONE = { wait:'t-wait', loop:'t-loop', crash:'t-crash', run:'t-run', done:'t-done' };
+
+/* ---------- План хода (как сейчас) ---------- */
+function todoList(){
+  return `<div class="tl">${PLAN.map(([st,c,af]) => {
+    const cls = st==='completed' ? 'done' : st==='in_progress' ? 'act' : '';
+    return `<div class="it ${cls}">${TODO_SVG[st]}<span class="tx">${esc(st==='in_progress'&&af?af:c)}</span></div>`;
+  }).join('')}</div>`;
+}
+const planDone = () => PLAN.filter(p => p[0]==='completed').length;
+
+/* ---------- Переключатель режима (InlineSegmented size sm) ---------- */
+function seg(){
+  return `<div class="seg new" role="group" aria-label="Что показать">
+    <button class="${S.mode==='plan'?'on':''}" aria-pressed="${S.mode==='plan'}" data-a="mode:plan">План хода</button>
+    <button class="${S.mode==='feature'?'on':''}" aria-pressed="${S.mode==='feature'}" data-a="mode:feature">Исполнение фичи</button>
+  </div>`;
+}
+function counter(f){
+  if (S.mode==='plan') return `${planDone()}/${PLAN.length}`;
+  return `${f.acc}/${f.tot ?? '—'}${f.ret ? ` · ↺${f.ret}` : ''}`;
+}
+
+/* ---------- Тело режима «Исполнение фичи» — общее для меню и карточки ---------- */
+function featureBody(f){
+  let h = `<div class="fx new">`;
+  h += `<div class="fh"><span class="fn">История медиа-генераций</span><span class="br">feat/local-media-history</span></div>`;
+  if (f.alert){
+    const [t, txt, acts] = f.alert;
+    h += `<div class="alert ${TONE[t]}" role="status"><div class="r">${glyph(t,14)}<span>${txt}</span></div>
+      <div class="acts">${acts.map(a => btn(a[0], a[1])).join('')}</div></div>`;
+  }
+  if (f.fin){
+    h += `<div class="fin">${glyph('done',18)}<div><div class="a">${f.fin[0]}</div><div class="b mono">${f.fin[1]}</div></div></div>`;
+  }
+  if (f.now){
+    const [w, a, b, tm] = f.now;
+    h += `<div class="sec">Сейчас</div><div class="now">${av(w)}<div class="w"><div class="a">${P[w]} · ${esc(a)}</div><div class="b">${esc(b)}</div></div><span class="tm">${tm}</span></div>`;
+  }
+  if (f.recs.length){
+    h += `<div class="sec">Советы оркестратора</div><div class="recs">${f.recs.map(([t, txt, acts]) =>
+      `<div class="rec">${glyph(t,13)}<div class="w">${esc(txt)}<div class="acts">${acts.map(a => btn('ghost', a)).join('')}</div></div></div>`).join('')}</div>`;
+  }
+  h += `<div class="sec">Конвейер</div>${conveyor(f)}`;
+  if (!f.steps.length){
+    h += `<div class="empty">Шагов пока нет. План появится, когда Александр закончит разрез — тогда здесь будут шаги по линиям бэк и фронт.</div>`;
+  } else {
+    h += `<div class="legend"><span>${glyph('loop',11)} возврат</span><span>${glyph('wait',11)} ждёт вас</span><span>${glyph('crash',11)} стоит</span><span>толщина — проходы</span></div>`;
+  }
+  return h + `</div>`;
+}
+
+function conveyor(f){
+  return `<ol class="cv">${STAGES.map(s => {
+    const st = f.st[s.k] || 'todo';
+    const isCur = f.cur===s.k;
+    const passes = f.steps.length ? PASSES[s.k] : (st==='todo' ? 0 : 1);
+    const w = st==='todo' ? 2 : Math.min(2 + (passes-1)*1.5, 8);
+    const g = st==='done' ? glyph('past',16) : st==='todo' ? glyph('todo',16) : glyph(st,16);
+    let badges = '';
+    if (passes>1 && st!=='todo' && s.k!=='review') badges += `<span class="mut">×${passes}</span>`;
+    if (s.k==='prod' && f.steps.length){
+      badges += `<span class="badge">↺2 ревью</span>`;
+      badges += `<span class="badge ${f.st.final==='loop'?'hot':''}">↺1 с финала</span>`;
+    }
+    const tag = isCur && f.tag ? `<span class="tag ${TONE[st]||'t-run'}">${f.tag}</span>` : '';
+    const open = S.open===s.k;
+    const meta = f.meta[s.k] || (s.who ? P[s.who] : '');
+    let lanes = '';
+    if (s.k==='prod' && f.steps.length){
+      lanes = `<div class="lanes">${[['back','Бэк · Денис',1],['front','Фронт · Кира',1]].map(([ln, lbl, r]) => {
+        const all = f.steps.filter(x => x.lane===ln), ok = all.filter(x => x.st==='done').length;
+        const pct = Math.round(ok/all.length*100), lw = Math.min(2 + r*1.5, 8);
+        return `<div class="lane"><span>${lbl} · ${ok} из ${all.length}</span><span class="tr" style="--lw:${lw}px"><i style="width:${pct}%"></i></span><span class="badge">↺${r}</span></div>`;
+      }).join('')}</div>`;
+    }
+    return `<li class="${st==='todo'?'todo':''}" style="--w:${w}px">
+      <button class="row" aria-expanded="${open}" data-a="stage:${s.k}">
+        <span class="gw">${g}</span>
+        <span><span class="nm"><b>${s.n}</b>${badges}${tag}</span><span class="ms" style="display:block">${esc(meta)}</span></span>
+        <span class="rt">${st!=='todo'||s.k==='cut'?`<span class="chev">${ICON.chev}</span>`:''}</span>
+      </button>${lanes}${open ? stageDetails(s, f) : ''}</li>`;
+  }).join('')}</ol>`;
+}
+
+const link = (label='Открыть задачу') => `<button class="lnk" data-a="noop">${label}${ICON.arrow}</button>`;
+function stageDetails(s, f){
+  const D = (inner) => `<div class="det">${inner}</div>`;
+  switch(s.k){
+    case 'cut': return D(`<div class="h">Задачи этапа</div><ul><li>${av('alex',1)}<span>ADR-030 «История медиа-генераций и видимость для админа» <span class="s">· ${f.st.cut==='run'?'идёт':'принят'}</span></span></li></ul>${link()}`);
+    case 'plan': return D(`<div class="h">Задачи этапа</div><ul><li>${av('mayya',1)}<span>Макет «История генераций» на вкладке «Медиа» <span class="s">· принят</span></span></li><li>${av('sofya',1)}<span>План: 4 шага, линии бэк и фронт <span class="s">· из плана хода оркестратора</span></span></li></ul>${link()}`);
+    case 'prod': return D(stepsList(f));
+    case 'review': return D(`<div class="h">Круги ревью Глеба</div><ul>${f.steps.filter(x=>x.rounds.length).map(x =>
+        `<li><span class="mono s">${x.id}</span><span>${x.rounds.map(r => r[0]==='ok' ? '<span class="verd-ok">принял</span>' : '<span class="verd-ret">вернул</span>').join(' → ')}</span></li>`).join('')}
+        <li><span class="mono s">Ш6</span><span class="s">закрыт без ревью (дефект, closedWithoutCheck)</span></li></ul>`);
+    case 'check': return D(`<div class="h">Проходы проверки</div><ul><li>${av('vera',1)}<span>№1 · 3 дефекта <span class="s">→ Ш5</span></span></li><li>${av('vera',1)}<span>№2, живая · дефект 360 px <span class="s">→ Ш6</span></span></li></ul>${link()}`);
+    case 'final': {
+      const back = f.st.final==='loop';
+      return D(`<div class="h">Проходы финального ревью</div><ul><li>${av('alex',1)}<span>№1 · <span class="verd-ret">вернул 2 блокера</span> <span class="s">→ Ш7</span></span></li>${back?'':`<li>${av('alex',1)}<span>№2 · <span class="verd-ok">принял</span></span></li>`}</ul>${link()}`);
+    }
+    case 'merge': return D(`<div class="h">Мерж</div><ul><li>${av('mark',1)}<span>${f.st.merge==='done'?'Смержено в master 15.10 19:20':f.st.merge==='wait'?'Ждёт вашего решения — Марк получит запрос':'Начнётся после финального ревью'}</span></li></ul>`);
+  }
+  return '';
+}
+function stepsList(f){
+  let h = '';
+  [['back','Бэк · Денис'],['front','Фронт · Кира']].forEach(([ln, lbl]) => {
+    h += `<div class="lanehd">${lbl}</div><div class="steps">`;
+    f.steps.filter(x => x.lane===ln).forEach(x => {
+      const r = x.rounds.filter(q => q[0]==='ret').length;
+      const g = x.st==='done' ? glyph('past',14) : glyph(x.st,14);
+      const open = S.step===x.id;
+      h += `<button class="step" aria-expanded="${open}" data-a="step:${x.id}">${g}<span><span class="mono" style="color:var(--c-text-muted)">${x.id}</span> ${esc(x.name)}${x.from?`<span style="color:var(--c-text-muted)"> · из: ${x.from}</span>`:''}</span>
+        <span>${r?`<span class="badge">↺${r}</span>`:''}${x.st==='run'?`<span class="mut"> ${x.dur}</span>`:''}</span></button>`;
+      if (open) h += stepDetails(x);
+    });
+    h += `</div>`;
+  });
+  return h;
+}
+function stepDetails(x){
+  const stTxt = { done:'принят', run:'идёт', crash:'исполнитель упал' }[x.st];
+  return `<div class="det" style="margin-left:0;background:var(--c-bg-white)">
+    <div style="font-size:12px;color:var(--c-text-secondary)">${av(x.who,1)} ${P[x.who]} · ${x.lane==='back'?'бэк':'фронт'} · ${x.dur} · <b style="color:var(--c-text-heading)">${stTxt}</b></div>
+    <div class="h">Задачи шага</div><ul>${x.tasks.map(t => `<li>${t[2]==='done'?glyph('past',13):glyph(x.st==='crash'?'crash':'run',13)}<span>${P[t[0]]}: ${esc(t[1])}</span></li>`).join('')}</ul>
+    ${x.rounds.length ? `<div class="h">Круги ревью</div><ul>${x.rounds.map((r,i) => `<li><span class="mono s">${i+1}</span><span><span class="${r[0]==='ok'?'verd-ok':'verd-ret'}">${r[0]==='ok'?'принял':'вернул'}</span> <span class="s">— ${esc(r[1])}</span></span></li>`).join('')}</ul>`
+      : x.noCheck ? `<div style="font-size:12px;color:var(--c-text-secondary)">Закрыт без ревью и проверки — так отмечено в трекере.</div>` : `<div style="font-size:12px;color:var(--c-text-secondary)">Ревью ещё не было.</div>`}
+    ${link()}</div>`;
+}
+
+/* ---------- Пилюля ---------- */
+function pill(f){
+  if (S.mode==='plan'){
+    const act = PLAN.find(p => p[0]==='in_progress');
+    const dot = f.tone==='wait' || f.tone==='crash'
+      ? `<span class="dot" style="${f.tone==='crash'?'background:var(--c-danger)':''}"></span>` : '';
+    return `<button class="tpp" data-a="pill" title="Показать план хода"><span class="ic">${ICON.list('var(--c-accent)')}${dot}</span>
+      <span class="k">${planDone()}/${PLAN.length}</span><span class="d">·</span><span class="t">${esc(act[2])}</span></button>`;
+  }
+  const lead = f.tone==='wait' ? glyph('wait',12) : f.tone==='crash' ? glyph('crash',12)
+    : `<span class="ic">${ICON.route(f.tone==='done'?'var(--c-text-muted)':'var(--c-accent)')}</span>`;
+  // На мобиле слово «фича» опускаем: значок маршрута и так отличает режим
+  return `<button class="tpp new ${TONE[f.tone]}" data-a="pill" title="Показать исполнение фичи">${lead}
+    ${S.mobile?'':'<span class="k">фича</span><span class="d">·</span>'}
+    <span class="k">${f.acc}/${f.tot ?? '—'}</span>${f.ret?`<span class="ret">↺${f.ret}</span>`:''}<span class="d">·</span><span class="t">${esc(f.pill)}</span></button>`;
+}
+
+/* ---------- Меню пилюли ---------- */
+function menu(f){
+  if (S.surf!=='menu') return '';
+  const feat = S.mode==='feature';
+  const maxH = S.mobile ? 560 : (feat ? 520 : 340);
+  const pos = S.mobile ? `bottom:62px;max-height:${maxH}px` : `right:22px;bottom:58px;max-height:${maxH}px;width:380px`;
+  return `<div class="menu ${feat?'feat':''}" style="${pos}" role="dialog" aria-label="План хода">
+    <div class="in"><div class="hd">${seg()}<span class="cnt">${counter(f)}</span></div>
+    ${feat ? featureBody(f) : todoList()}</div></div>`;
+}
+
+/* ---------- Карточки ленты ---------- */
+function planCard(f){
+  const feat = S.mode==='feature';
+  return `<div class="card" id="plan-card">
+    <div class="ch">${ICON.sq('var(--c-accent)')}${S.mobile ? '' : '<span class="ttl">План хода</span>'}${seg()}<span class="cnt">${counter(f)}</span></div>
+    <div class="cb">${feat ? featureBody(f) : todoList()}</div>
+    ${feat ? `<button class="cf new" data-a="noop">Задачи фичи в трекере ${ICON.arrow}</button>` : ''}
+  </div>`;
+}
+function taskCard(){
+  return `<div class="card tc" title="Открыть задачу">
+    <div class="th"><div class="bd">${ICON.sq('currentColor',14)}</div><span class="serif" style="font-size:14px;font-weight:700;color:var(--c-text-heading)">Задача создана</span>
+      <span class="mono" style="margin-left:auto;font-size:11px;color:var(--c-text-muted);flex-shrink:0">tasks · create</span></div>
+    <div class="tb"><div class="tt">Денис: блокеры финального ревью истории медиа-генераций</div>
+      <div class="tdsc">Александр вернул фичу с финального ревью: 2 блокера. Исправить в ветке feat/local-media-history, прогнать затронутые тесты, закоммитить локально.</div>
+      <div class="grid"><div><div class="cl">Исполнитель</div><div class="cv2">${av('denis')}Денис</div></div>
+        <div><div class="cl">Приоритет</div><div class="cv2"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--c-danger)" stroke-width="2" stroke-linecap="round"><path d="M4 22V4a1 1 0 0 1 .4-.8A6 6 0 0 1 8 2c3 0 5 2 7.3 2.9A1 1 0 0 1 16 6v8a1 1 0 0 1-.6.9C13 16 11 14 8 14a6 6 0 0 0-3.6 1.2"/></svg>Высокий</div></div></div>
+      <div style="margin-top:11px;display:flex;gap:6px;flex-wrap:wrap"><span class="chip">media-history</span><span class="chip">backend</span></div>
+      <button class="featchip new" data-a="tocard">${ICON.route('var(--c-accent)')} Шаг Ш7 фичи · Производство, бэк</button>
+    </div>
+    <div class="cf" style="cursor:pointer">Открыть задачу ${ICON.arrow}</div>
+  </div>`;
+}
+
+/* ---------- Экран ---------- */
+function render(){
+  document.documentElement.dataset.theme = S.theme;
+  const f = feature(S.fs);
+  const app = document.getElementById('app');
+  app.className = 'app' + (S.mobile ? ' m' : '');
+  app.innerHTML = `<div class="feed" id="feed">
+      <div class="msg-u">Доведи «Историю медиа-генераций» до мержа.</div>
+      <div class="msg-a">Финальное ревью Александра вернуло фичу: <b>2 блокера</b>. Ставлю Денису задачу и веду дальше.</div>
+      ${taskCard()}
+      ${planCard(f)}
+      <div class="msg-a">Исполнитель Дениса запущен. Как будет отчёт — поставлю повторный финал Александру.</div>
+      <div class="endrow"><span class="meta-pill">✓ 5 шагов · 12.3с</span><div class="pillbox">${pill(f)}</div></div>
+    </div>${menu(f)}`;
+  const feed = document.getElementById('feed');
+  if (S.surf==='card'){ document.getElementById('plan-card').scrollIntoView({ block:'start' }); }
+  else feed.scrollTop = feed.scrollHeight;
+  renderMk();
+}
+
+function pills(id, opts, key){
+  document.getElementById(id).innerHTML = opts.map(([v, l]) =>
+    `<button class="${String(S[key])===String(v)?'on':''}" data-mk="${key}:${v}">${l}</button>`).join('');
+}
+function renderMk(){
+  pills('mk-surf', [['pill','Пилюля'],['menu','Меню пилюли'],['card','Карточка в чате']], 'surf');
+  pills('mk-mode', [['plan','План хода'],['feature','Исполнение фичи']], 'mode');
+  pills('mk-fs', [['start','Только начата'],['run','Идёт'],['wait','Ждёт вас'],['crash','Исполнитель упал'],['done','Всё принято']], 'fs');
+  pills('mk-theme', [['light','Светлая'],['dark','Тёмная']], 'theme');
+  pills('mk-w', [['false','Десктоп'],['true','360 px']], 'mobile');
+}
+
+document.addEventListener('click', e => {
+  const mk = e.target.closest('[data-mk]');
+  if (mk){
+    const [k, v] = mk.dataset.mk.split(':');
+    S[k] = v==='true' ? true : v==='false' ? false : v;
+    if (k==='fs'){ S.open = null; S.step = null; }
+    render(); return;
+  }
+  const el = e.target.closest('[data-a]');
+  if (!el) return;
+  const [a, v] = el.dataset.a.split(':');
+  if (a==='mode') S.mode = v;
+  else if (a==='pill') S.surf = S.surf==='menu' ? 'pill' : 'menu';
+  else if (a==='stage'){ S.open = S.open===v ? null : v; S.step = null; }
+  else if (a==='step') S.step = S.step===v ? null : v;
+  else if (a==='tocard'){ e.stopPropagation(); S.mode = 'feature'; S.surf = 'card'; }
+  else return;
+  // Позиция прокрутки меню переживает перерисовку: раскрытие деталей не должно уводить вверх
+  const sc = document.querySelector('.menu .in')?.scrollTop ?? 0;
+  const fsc = document.getElementById('feed')?.scrollTop ?? 0;
+  const keepFeed = a==='stage' || a==='step' || a==='mode';
+  render();
+  const m = document.querySelector('.menu .in'); if (m) m.scrollTop = sc;
+  if (keepFeed && S.surf==='card') document.getElementById('feed').scrollTop = fsc;
+});
+document.addEventListener('keydown', e => { if (e.key==='Escape' && S.surf==='menu'){ S.surf = 'pill'; render(); } });
+render();
+</script>
+</body>
+</html>

@@ -81,7 +81,8 @@ public sealed record ImageThread(
 // ИИ до первого запуска ложатся в него. Версия от ИИ: JobId + Variant — вариант запуска;
 // BaseVersionId и BaseStepId — версия и её шаг, от которых запускали (null — от файла или пустого
 // черновика). Steps — шаги ImageEditStep версии по порядку: у версии от ИИ первым идёт сам вариант,
-// дальше правки без ИИ; CurrentStepId — шаг версии, который сейчас её картинка
+// дальше правки без ИИ; CurrentStepId — шаг версии, который сейчас её картинка; Similarity — сходство
+// лица с эталоном персонажа (null — не считалось); MostSimilar — самая похожая среди версий своего запуска
 public sealed record ImageThreadVersion(
     string Id,
     int Number,
@@ -91,7 +92,9 @@ public sealed record ImageThreadVersion(
     string? BaseStepId,
     IReadOnlyList<string> Steps,
     string? CurrentStepId,
-    DateTime CreatedAt)
+    DateTime CreatedAt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] double? Similarity = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool MostSimilar = false)
 {
     public const string OriginId = "origin";
 
@@ -103,7 +106,10 @@ public sealed record ImageThreadVersion(
 
 // Запуск ИИ в нить: его якорь в ленте (image_launch_versions) — по JobId. BaseVersionId и BaseStepId —
 // откуда запустили; Status — ImageThreadLaunchStatus.*; Initiator — human | agent; Prompt — для
-// блока хвоста хода («версия 3 — вариант 1 запуска «синий фон»»)
+// блока хвоста хода («версия 3 — вариант 1 запуска «синий фон»»). Character — какие фото персонажа
+// ушли драйверу и почему (ADR-027 §8); null — подбор не работал, старые нити читаются так же.
+// Op — операция запуска (generate / edit / inpaint / outpaint / …), camelCase; null — старые нити
+// и запуски без операции (обрезка, local-media)
 public sealed record ImageThreadLaunch(
     string JobId,
     string? BaseVersionId,
@@ -111,7 +117,28 @@ public sealed record ImageThreadLaunch(
     DateTime At,
     string Status,
     string Initiator,
-    string? Prompt);
+    string? Prompt,
+    ImageThreadCharacter? Character = null,
+    string? Op = null,
+    // Подстановка персонажа на лицо (ADR-028, этап 2): номер лица, bbox и slug персонажа
+    // для подписи карточки «Тест Мария → лицо 2»; null — запуск без подстановки (старые нити).
+    // Этап 3: FaceTargets — массив (по лицу), FaceTarget — только чтение старых данных
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageThreadFaceTarget? FaceTarget = null,
+    // Подстановка нескольких персонажей (ADR-028, этап 3): по одному элементу на лицо, с
+    // сходством и статусом прохода; null — запуск без подстановки или старые нити (этап 2)
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] IReadOnlyList<ImageThreadFaceTarget>? FaceTargets = null);
+
+// Подстановка персонажа на лицо в запуске нити (ADR-028): N — номер лица (с 1),
+// BBox — [x1, y1, x2, y2] в пикселях базовой версии, CharacterSlug — slug персонажа.
+// Similarity — сходство лица с эталоном персонажа (0..1), null — не считалось;
+// Status — done | failed | cancelled (ADR-028, §9), null — пока задача идёт или старые нити
+public sealed record ImageThreadFaceTarget(int N, int[] BBox, string CharacterSlug,
+    double? Similarity = null, string? Status = null);
+
+// Photos — имена файлов манифеста в порядке отправки драйверу, байтов не храним.
+// Pick: auto — подобрано по сцене; manual — явный список человека; fallback — нынешний порядок
+public sealed record ImageThreadCharacter(
+    string Slug, IReadOnlyList<string> Photos, string Pick, CharacterScene? Scene);
 
 public static class ImageThreadLaunchStatus
 {
@@ -175,6 +202,8 @@ public sealed record ImageThreadWrite(ImageThreadWriteStatus Status, ImageThread
     public bool Existing { get; init; }
     // Версии, которые завела запись завершения запуска
     public IReadOnlyList<ImageThreadVersion> NewVersions { get; init; } = [];
+    // Запись завершения сдвинула текущую версию с первой версии запуска на самую похожую
+    public (string From, string To)? MovedToMostSimilar { get; init; }
 }
 
 // Откат и новая правка: FrozenStack — старая стопка, NewStack — новая. KeptFrom/KeptTo —

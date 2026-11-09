@@ -1,5 +1,7 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.Skills;
 
@@ -9,6 +11,13 @@ public class SkillInfo
     public string Description { get; set; } = "";
     public string? ArgumentHint { get; set; }
     public string FilePath { get; set; } = "";
+    // Метка источника (ADR-031 §2.5): «plugin:{id}» — навык/команда пакета владельца,
+    // «cli-profile» — плагин профиля CLI (installed_plugins.json). null — не плагин.
+    // Плагины профиля CLI и владельца — разные источники, в API и UI метятся явно.
+    public string? Source { get; set; }
+    // user-invocable: true → навык вызывается как slash-команда (попадает в slash_commands);
+    // без флага — доступен агенту только через Skill-тул (ADR-031 §2.1).
+    public bool UserInvocable { get; set; }
 }
 
 public class AgentInfo
@@ -38,6 +47,18 @@ public class SkillsService
 
     private static string GetAgentsDir(string projectRootPath) =>
         Path.Combine(projectRootPath, ".claude", "agents");
+
+    // Корень data/ (как в PluginStore/PluginSkillLocalizer): DataPath → каталог projects.json,
+    // фолбэк AppContext.BaseDirectory/data. Опционально: в юнит-тестах `new SkillsService()`
+    // без конфига — корень по фолбэку, GetOwnerPluginSkills его не трогает (тесты дают свой путь).
+    private readonly string _dataDir;
+
+    public SkillsService(IConfiguration? config = null)
+    {
+        _dataDir = Path.GetDirectoryName(
+            config?["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+    }
 
     // --- Чтение скиллов и агентов ---
 
@@ -136,6 +157,8 @@ public class SkillsService
         {
             if (!seen.Add(skill.Name)) continue;
             skill.Name = $"{pluginName}:{skill.Name}";
+            // Плагин профиля CLI — отдельный источник от пакетов владельца (ADR-031 §2.5).
+            skill.Source = "cli-profile";
             result.Add(skill);
         }
 
@@ -154,6 +177,102 @@ public class SkillsService
                     Description = meta.TryGetValue("description", out var d) ? d : "",
                     ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
                     FilePath = file,
+                    Source = "cli-profile",
+                });
+            }
+            catch { }
+        }
+    }
+
+    // Навыки и команды УСТАНОВЛЕННЫХ ПАКЕТОВ ВЛАДЕЛЬЦА (data/plugins/{owner}/, ADR-031 §2.5) —
+    // отдельный источник от плагинов профиля CLI (installed_plugins.json, GetPluginSkills).
+    // Метка источника «plugin:{id}»; user-invocable: true → slash-команда (slash_commands),
+    // без флага — только через Skill-тул. Локальный проект (ProjectCapabilities.PluginsFor) —
+    // каталог пакетов на устройство не едет, список пуст.
+    public IReadOnlyList<SkillInfo> GetOwnerPluginSkills(string ownerId, Project? project)
+    {
+        if (!ProjectCapabilities.PluginsFor(project).Available) return [];
+
+        var installedFile = SafePath.Join(_dataDir, $"plugins/{ownerId}/installed.json");
+        var records = JsonFileStore.Load<List<PluginInstall>>(installedFile) ?? [];
+        if (records.Count == 0) return [];
+
+        var result = new List<SkillInfo>();
+        foreach (var record in records)
+        {
+            if (!record.Enabled) continue;
+            // Битый id/version (не по формату) — пропустить, а не бросать (как в PluginDirSource).
+            if (!PluginId.IsValid(record.Id) || !PluginVersion.IsValid(record.Version)) continue;
+            var pkgDir = SafePath.Join(_dataDir, $"plugins/{ownerId}/packages/{record.Id}/{record.Version}");
+            if (!Directory.Exists(pkgDir)) continue;
+            AddOwnerPluginEntries(result, record.Id, pkgDir);
+        }
+        return result;
+    }
+
+    // Разобрать target привязки «plugin:{id}/{skill}» (единый разбор PluginSkillTarget, C1)
+    // и вернуть навык из пакета владельца, если плагин установлен и включён; null — плагин
+    // удалён/выключен (привязка тихо пропадает из промпта, без исключения). project —
+    // фильтрация по локальности (M2): у локального проекта плагины выключены, навык не
+    // виден; null (ход без привязки) — все включённые пакеты.
+    public SkillInfo? ResolveOwnerPluginSkill(string ownerId, string target, Project? project = null)
+    {
+        if (!PluginSkillTarget.TryParse(target, out var parsed)) return null;
+        var source = $"{PluginSkillTarget.Prefix}{parsed.PluginId}";
+        foreach (var s in GetOwnerPluginSkills(ownerId, project))
+        {
+            if (s.Source != source) continue;
+            // Имя в листинге «{slug}:{имя}»; сравниваем по базовому имени навыка.
+            var baseName = s.Name.Contains(':') ? s.Name[(s.Name.IndexOf(':') + 1)..] : s.Name;
+            if (string.Equals(baseName, parsed.Skill, StringComparison.OrdinalIgnoreCase)) return s;
+        }
+        return null;
+    }
+
+    // Содержимое навыка плагина владельца по target «plugin:{id}/{skill}»; null — плагин
+    // удалён/выключен или навык не найден (выжимка Always-привязки тихо пропускается).
+    // project — та же фильтрация по локальности, что в ResolveOwnerPluginSkill (M2).
+    public string? GetOwnerPluginSkillContent(string ownerId, string target, Project? project = null)
+    {
+        var skill = ResolveOwnerPluginSkill(ownerId, target, project);
+        if (skill is null || !File.Exists(skill.FilePath)) return null;
+        try { return File.ReadAllText(skill.FilePath); }
+        catch { return null; }
+    }
+
+    // Навыки (skills/*/SKILL.md) и команды (commands/*.md) одного пакета владельца; дубли имён
+    // схлопываются. Метка источника «plugin:{id}»; имя вызова — «{slug}:{имя}».
+    private static void AddOwnerPluginEntries(List<SkillInfo> result, string pluginId, string pkgDir)
+    {
+        var slug = pluginId.Split('/')[1]; // {publisher}/{slug} → slug для имени вызова
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var skill in ReadSkillsFrom(Path.Combine(pkgDir, "skills")))
+        {
+            if (!seen.Add(skill.Name)) continue;
+            skill.Name = $"{slug}:{skill.Name}";
+            skill.Source = $"plugin:{pluginId}";
+            result.Add(skill);
+        }
+
+        var commandsDir = Path.Combine(pkgDir, "commands");
+        if (!Directory.Exists(commandsDir)) return;
+        foreach (var file in Directory.GetFiles(commandsDir, "*.md"))
+        {
+            var name = Path.GetFileNameWithoutExtension(file);
+            if (!seen.Add(name)) continue;
+            try
+            {
+                var meta = ParseFrontmatter(File.ReadAllText(file));
+                result.Add(new SkillInfo
+                {
+                    Name = $"{slug}:{name}",
+                    Description = meta.TryGetValue("description", out var d) ? d : "",
+                    ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
+                    FilePath = file,
+                    Source = $"plugin:{pluginId}",
+                    // Файл в commands/ — по определению slash-команда (user-invocable).
+                    UserInvocable = true,
                 });
             }
             catch { }
@@ -197,6 +316,10 @@ public class SkillsService
             Description = meta.TryGetValue("description", out var d) ? d : "",
             ArgumentHint = meta.TryGetValue("argument-hint", out var ah) ? ah : null,
             FilePath = filePath,
+            // user-invocable (CLI-формат плагина): true → slash-команда; глобальные/проектные
+            // навыки флага не несут → false (доступ агенту через Skill-тул, не в slash_commands).
+            UserInvocable = meta.TryGetValue("user-invocable", out var ui)
+                && string.Equals(ui, "true", StringComparison.OrdinalIgnoreCase),
         };
     }
 

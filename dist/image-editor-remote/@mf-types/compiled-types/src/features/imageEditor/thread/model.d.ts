@@ -1,0 +1,42 @@
+import type { ImageThread, ImageThreadEvent, ImageThreadLaunch, ImageThreadStack, ImageThreadVersion } from './threadsApi';
+export interface ThreadPos {
+    stepId: string | null;
+}
+export declare const threadName: (t: ImageThread) => string;
+export declare const isEmptyThread: (t: ImageThread) => boolean;
+export declare const isHiddenDraft: (t: ImageThread) => boolean;
+export declare const findStack: (t: ImageThread, stackId: string | null | undefined) => ImageThreadStack | null;
+export declare const currentStack: (t: ImageThread) => ImageThreadStack;
+export declare function chainOf(t: ImageThread, stack: ImageThreadStack | null): ThreadPos[];
+export declare function currentIndex(t: ImageThread, chain: ThreadPos[], stack: ImageThreadStack | null): number;
+export declare const stepOf: (i: number, total: number) => string;
+export declare function versionLabel(t: ImageThread, pos: ThreadPos | undefined, savedStepId: string | null): string;
+export declare function focusLabel(t: ImageThread, short?: boolean, personal?: boolean): string;
+export declare function saveFolder(t: ImageThread): string;
+export declare function launchedPrompt(text: string): string | null;
+export declare function interruptedOf(t: ImageThread, events?: readonly ImageThreadEvent[]): {
+    jobId: string;
+    prompt: string | null;
+} | null;
+export declare const ORIGIN = "origin";
+export declare const versionsOf: (t: ImageThread) => ImageThreadVersion[];
+export declare const isLegacyThread: (t: ImageThread) => boolean;
+export declare const findVersion: (t: ImageThread, id: string | null | undefined) => ImageThreadVersion | null;
+export declare const currentVersion: (t: ImageThread) => ImageThreadVersion;
+export declare const versionStep: (t: ImageThread, v: ImageThreadVersion) => string | null;
+export declare const originFile: (t: ImageThread) => string;
+export declare function threadHasImage(t: ImageThread | null): boolean;
+export declare const versionHasImage: (t: ImageThread, v: ImageThreadVersion) => boolean;
+export declare const versionName: (v: ImageThreadVersion) => string;
+export declare const versionShort: (v: ImageThreadVersion) => string;
+export declare const fromVersion: (v: ImageThreadVersion) => string;
+export declare function lastLaunchPrompt(t: ImageThread): string | null;
+export declare const launchOf: (t: ImageThread, jobId: string) => ImageThreadLaunch | null;
+export declare const launchVersions: (t: ImageThread, jobId: string) => ImageThreadVersion[];
+export declare function launchEndNote(status: ImageThreadLaunch['status'], ready: number, count: number): string | null;
+export declare function versionMeta(t: ImageThread, v: ImageThreadVersion, model?: string | null): string;
+export declare function versionDone(t: ImageThread, v: ImageThreadVersion): string | null;
+export type VersionPrimary = 'save' | 'download' | 'continue' | 'work' | null;
+export declare function versionPrimary(t: ImageThread, v: ImageThreadVersion, focused: boolean, saved: boolean, personal?: boolean): VersionPrimary;
+export declare function stackSaveState(t: ImageThread, isCurrent: boolean, unsaved: boolean, personal: boolean): 'save' | 'in-project' | null;
+export declare function downloadName(t: ImageThread, v: ImageThreadVersion, mime: string): string;

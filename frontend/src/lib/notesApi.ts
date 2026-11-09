@@ -2,7 +2,8 @@
 // и notes/ проектов. lib/api.ts подмешивает их в объект api spread'ом (адрес
 // api.notes.* остаётся прежним для потребителей); типы — в features/notes/types.ts,
 // доступны через ../types. Файл вне features/notes/: прямой импорт lib/offline там
-// запрещён сторожем графа хранилища заметок. Класс конфликта — в features/notes/api.ts.
+// запрещён сторожем графа хранилища заметок. Класс конфликта NoteConflictError — в lib/offline
+// (единый экземпляр, remote берёт его из 'aihome_shell/kit').
 import { conflictBodyOf, request, NoteConflictError } from './offline';
 import type { EtagRef } from './offline';
 import type {
@@ -21,7 +22,7 @@ import type {
   UpdateNoteDto,
 } from '../types';
 import type { NoteDetail } from '../features/notes/types';
-// eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
+// eslint-disable-next-line module/no-cross-feature-import -- из домена нужен только тип «заметка + etag» (NoteWithEtag)
 import type { NoteWithEtag } from '../features/notes/api';
 
 export const notesApi = {

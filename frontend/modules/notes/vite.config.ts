@@ -12,7 +12,7 @@ import path from 'node:path';
 import react from '@vitejs/plugin-react';
 import { federation } from '@module-federation/vite';
 import { hostReactShared } from '../hostReactShared';
-import { findViolation } from './guardLists.mjs';
+import { findBundledStore, findViolation } from './guardLists.mjs';
 
 // Сторож графа сборки remote «Заметки» (LLM-wiki, QA B1 critical; доработка ревью 0c1052e1):
 // сторы ядра хоста (featureFlags, offline, signalr, toast, wiki) не должны попасть в remote
@@ -25,15 +25,11 @@ import { findViolation } from './guardLists.mjs';
 // барьеров совпадают. Раньше плагин смотрел только вики-часть, а ESLint — весь модуль; теперь
 // области одинаковые: весь модуль (узкий список) и его вики-часть (широкий). Поимённые
 // легаси-исключения — LEGACY_ALLOWED там же. Импорт через 'aihome_shell/kit' не относительный
-// и не помечается: MF резолвит его в кит хоста, второй копии нет. Транзитивные импорты
-// (components/ui/* → lib/design) не помечаются: смотрим только прямые импорты файлов области —
-// как ESLint-страж. Следствие (ревью a59df930, 09.11): зелёная сборка НЕ доказывает отсутствие
-// транзитивной второй копии стора (так в remote попадал lib/offline через useSphereOf →
-// useAllProjects → lib/api и через ui/Field → VoiceMicButton → talkDiag). Решение: барьер не
-// расширяем (обход графа дал бы ложные срабатывания на листовых components/ui/*), а зависимость
-// убрана — useSphereOf, useAllProjects, codeMask, Field/TextField/TextArea и NoteConflictError
-// remote берёт из 'aihome_shell/kit'. Проверка при правках области — grep маркера
-// `offlinenotes:` в modules/notes/dist/assets (должен быть пуст).
+// и не помечается: MF резолвит его в кит хоста, второй копии нет.
+// Транзитивные импорты ловит проверка собранных чанков (findBundledStore в generateBundle):
+// граф resolveId шире бандла (tree-shaking вычищает загруженное), поэтому смотрим модули с
+// непустым выводом. Так в remote попадал lib/offline через useSphereOf → useAllProjects →
+// lib/api (ревью a59df930, 09.11). design/breakpoints в обход не входят: они есть в ките.
 function toPosix(p: string) {
   return p.split(path.sep).join('/');
 }
@@ -45,6 +41,7 @@ function notesStoreGraphGuard(): Plugin {
   // Set, а не список: на один импорт resolveId в этой сборке вызывается дважды (наблюдено
   // на живой сборке), нарушение должно быть в сообщении один раз
   const violations = new Set<string>();
+  const transitive = new Set<string>();
   return {
     name: 'aihome-notes-store-graph-guard',
     // 'pre' — чтобы hook получил каждый импорт раньше, чем его разрешит другой плагин
@@ -66,6 +63,22 @@ function notesStoreGraphGuard(): Plugin {
         `Remote «Заметки» собирает вторую копию стора ядра через прямой импорт:\n` +
         [...violations].map(v => `  - ${v}`).join('\n') +
         `\nИмпортируй из 'aihome_shell/kit' (та же граница закрыта ESLint-сторожем notesStoreImportGuard/notesWikiImportGuard; списки и области — modules/notes/guardLists.mjs).`,
+      );
+    },
+    generateBundle(_options, bundle) {
+      for (const chunk of Object.values(bundle)) {
+        if (chunk.type !== 'chunk') continue;
+        for (const [id, info] of Object.entries(chunk.modules)) {
+          if (info.renderedLength === 0) continue;
+          const hit = findBundledStore(id);
+          if (hit) transitive.add(`${chunk.fileName} содержит ${hit} (транзитивно)`);
+        }
+      }
+      if (transitive.size === 0) return;
+      this.error(
+        `Remote «Заметки» собрал вторую копию стора ядра транзитивно:\n` +
+        [...transitive].map(v => `  - ${v}`).join('\n') +
+        `\nНайди цепочку импортов до стора и замени зависимость на 'aihome_shell/kit'.`,
       );
     },
   };

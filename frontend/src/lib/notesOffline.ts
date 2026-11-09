@@ -8,7 +8,7 @@
 // копией «{Title} (conflict …)» (стиль Obsidian Sync), данные не теряются.
 
 import { api } from './api';
-// eslint-disable-next-line module/no-cross-feature-import -- контракт конфликта заметки живёт в домене
+// eslint-disable-next-line module/no-cross-feature-import -- из домена нужен только тип «заметка + etag» (NoteWithEtag)
 import type { NoteWithEtag } from '../features/notes/api';
 import { isOnline, OfflineError, NoteConflictError } from './offline';
 import {

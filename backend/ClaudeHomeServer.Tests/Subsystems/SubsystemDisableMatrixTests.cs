@@ -433,8 +433,11 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             .Should().BeEmpty("причина пропущенной строки обязана называть файл:строку того, что падает");
 
         // Вторая половина — существование места. Полный адрес — путь:строка или путь:строка-строка.
-        // Путь принимается в двух записанных в словаре формах: от корня репозитория (backend/…)
-        // и коротким путём Main-проекта (Controllers/…, Program.cs) — обе ведут к одному файлу.
+        // Разбор адреса и резолв пути — общие с SourceLinkGuardTests в TestSourceAddresses:
+        // путь принимается в двух записанных в словаре формах (от корня репозитория backend/…
+        // и коротким путём Main-проекта Controllers/…, Program.cs — обе ведут к одному файлу),
+        // дальше — единственный файл дерева с таким путём или именем (для этого словаря он
+        // ничего не добавляет: его адреса резолвятся первыми двумя формами).
         // Строка и обе границы диапазона меряются [1..total] в обеих формах: «:0» — не
         // существующая строка (п. 2 хвоста d3e0ddf8); «Файл.cs:138-139» мерилось нижней
         // половиной, а инвертированная пара «(:9999-50)» и нулевая верхняя «(:59-0)» проходили
@@ -446,7 +449,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
         foreach (var (key, reason) in KnownViolations)
         {
             string? owner = null; // последний названный в строке файл — владелец коротких ссылок
-            foreach (Match m in ReasonAddress.Matches(reason))
+            foreach (Match m in TestSourceAddresses.DictionaryAddress.Matches(reason))
             {
                 if (m.Groups["short"].Success)
                 {
@@ -455,14 +458,14 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
                         dead.Add($"{key}: {m.Value} — короткая ссылка без названного файла-владельца");
                         continue;
                     }
-                    var total = File.ReadLines(owner).Count();
+                    var total = TestSourceAddresses.LineCount(owner);
                     var from = int.Parse(m.Groups["from"].Value);
                     var to = m.Groups["to"].Success ? int.Parse(m.Groups["to"].Value) : from;
                     if (from < 1 || from > total || to < 1 || to > total)
                         dead.Add($"{key}: {m.Value} — в файле {total} строк");
                     continue;
                 }
-                var file = ResolveSourceFile(m.Groups["path"].Success ? m.Groups["path"].Value : m.Groups["bare"].Value);
+                var file = TestSourceAddresses.Resolve(m.Groups["path"].Success ? m.Groups["path"].Value : m.Groups["bare"].Value);
                 if (file is null)
                 {
                     dead.Add($"{key}: {m.Value} — файла нет в дереве");
@@ -473,7 +476,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
                 if (!m.Groups["line"].Success) continue; // голое имя файла задало владельца; адреса строки нет
                 var line = int.Parse(m.Groups["line"].Value);
                 var lineTo = m.Groups["lineTo"].Success ? int.Parse(m.Groups["lineTo"].Value) : line;
-                var lines = File.ReadLines(file).Count();
+                var lines = TestSourceAddresses.LineCount(file);
                 if (line < 1 || line > lines || lineTo < 1 || lineTo > lines)
                     dead.Add($"{key}: {m.Value} — в файле {lines} строк");
             }
@@ -484,31 +487,6 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             $"битых адресов в KnownViolations: {dead.Count}. Причина обязана вести в существующую "
             + "строку существующего файла: формат адреса сторож мерил и раньше, местоположение — "
             + "нет. Все битые адреса:\n" + string.Join("\n", dead));
-    }
-
-    // Адрес причины в трёх формах; порядок альтернатив важен: полный адрес снимается целым до
-    // того, как его хвост разберётся короткой ссылкой — вместе со своим диапазоном «:NN-MM»,
-    // обе границы которого меряются так же, как у короткой ссылки (п. 2 хвоста eaf0be70).
-    // Голое имя файла — не адрес, а владелец: оно задаёт файл, к которому относятся идущие
-    // после него короткие ссылки «Имя (:NN)» и «Имя (:NN-MM)» (п. 3 хвоста d3e0ddf8).
-    private static readonly Regex ReasonAddress = new(
-        @"(?<path>[\w.\-/]+\.cs):(?<line>\d+)(?:-(?<lineTo>\d+))?|(?<bare>[\w.\-/]+\.cs)|(?<short>[A-Za-z_]\w*)\s*\(:\s*(?<from>\d+)(?:-(?<to>\d+))?\)",
-        RegexOptions.Compiled);
-
-    // Путь из адреса → файл дерева: как записан (от корня) или коротким путём Main-проекта.
-    // Единственный найденный; ни одного — null, и адрес красный. Проба через общий хелпер:
-    // он бросает на отсутствующем файле — здесь это ответ «нет», а не падение стора.
-    private static string? ResolveSourceFile(string path)
-    {
-        var parts = path.Split('/');
-        string?[] candidates = [TryRepoFile(parts), TryRepoFile(["backend", "ClaudeHomeServer", ..parts])];
-        return candidates.FirstOrDefault(c => c is not null);
-    }
-
-    private static string? TryRepoFile(string[] parts)
-    {
-        try { return TestRepoFiles.RepoFile(parts); }
-        catch (InvalidOperationException) { return null; }
     }
 
     private static async Task<List<string>> LiveKeysAsync(TestWebApplicationFactory factory) =>

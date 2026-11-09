@@ -15,15 +15,28 @@ namespace ClaudeHomeServer.Tests;
 /// </summary>
 internal static class TestRepoFiles
 {
+    /// Корень дерева — тот же подъём, что у <see cref="RepoFile"/>. Отдельный доступ нужен
+    /// сторожам, которые перечисляют файлы дерева (не один названный путь): SourceLinkGuardTests.
+    public static string RepoRoot
+    {
+        get
+        {
+            var dir = new DirectoryInfo(AppContext.BaseDirectory);
+            while (dir is not null
+                   && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
+                   && !File.Exists(Path.Combine(dir.FullName, ".git")))
+                dir = dir.Parent;
+            if (dir is null)
+                throw new InvalidOperationException(
+                    "корень репозитория не найден — сторож не может читать файлы дерева");
+            return dir.FullName;
+        }
+    }
+
     public static string RepoFile(params string[] parts)
     {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
+        var path = Path.Combine([RepoRoot, .. parts]);
+        if (!File.Exists(path))
             throw new InvalidOperationException(
                 $"{Path.Combine(parts)} не найден — сторож не может читать файл репозитория");
         return path;

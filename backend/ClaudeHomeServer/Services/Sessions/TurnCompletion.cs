@@ -240,7 +240,7 @@ public sealed class TurnCompletion : ITurnMessageSink
                         entry.Info.RestartResumeAttempts = 0;
                         _store.SaveSessions();
                     }
-                    _costs.TryTrackFalCost(sessionId, m.Content); // fire-and-forget: стоимость придёт позже
+                    _costs.TryTrackFalCost(sessionId, m.Content, m.FinishedAt); // fire-and-forget: стоимость придёт позже
                     _costs.TryTrackGlifCost(sessionId, m.Content); // синхронно: кредиты уже в tool_result
                     break;
                 case WorkflowProgressMessage m:
@@ -387,7 +387,20 @@ public sealed class TurnCompletion : ITurnMessageSink
                     // Актор читается здесь, пока ход жив: переход статуса по result и снятие
                     // актора идут ниже по методу (ApplyStatusQueuedAsync) — потребитель после
                     // конца хода получил бы null (урок R-S2a-6c).
-                    _costs.RecordTurnSpend(entry?.Info, m);
+                    // Инициатор: защёлку снимает только result текущего прогона (иначе автономный
+                    // ход при живых фоновых агентах приписался бы человеку). Хвост доживающего
+                    // процесса — чужой runId, доезжает через ветку turn=null адаптера
+                    // (FallbackLlmSessionAdapter.cs:356): это терминал хода, который ядро этой
+                    // подачей не поднимало, — он не снимает защёлку уже идущего хода человека
+                    // (тот записался бы agent) и сам не человек (ревью R-S-SPEND-ИНИЦ, п.3;
+                    // та же привязка к прогону, что у страховки drainOnDeadRun ниже).
+                    // runId == 0 — привязки нет (вызовы без id прогона): прежнее поведение,
+                    // снять на каждом result. Нет записи хода — «не назван» (null).
+                    var currentRun = entry is not null && (runId == 0 || runId == entry.RunId);
+                    var spendInitiator = entry is null ? null
+                        : currentRun && Interlocked.Exchange(ref entry.TurnFromHuman, 0) == 1
+                            ? SpendInitiators.Human : SpendInitiators.Agent;
+                    _costs.RecordTurnSpend(entry?.Info, m, spendInitiator);
                     break;
                 case ProviderSwitchedMessage m:
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,

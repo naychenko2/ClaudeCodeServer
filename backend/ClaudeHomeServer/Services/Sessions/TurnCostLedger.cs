@@ -72,20 +72,24 @@ public sealed class TurnCostLedger
     // сюда переехал вызов вместе с телом конца хода (S3-6): обе стороны записи (ISpendCollector
     // и LlmProviderRegistry) уже здесь, а реестр актора — стор (GetTurnActor: актор жив,
     // пока мы в разборе сообщения, — урок R-S2a-6c).
-    internal void RecordTurnSpend(Session? s, ResultMessage m) =>
-        SpendMapping.RecordTurnSpend(_spend, _llmProviders, _store.ResolveOwnerId, _log, s, m, _store);
+    internal void RecordTurnSpend(Session? s, ResultMessage m, string? initiator = null) =>
+        SpendMapping.RecordTurnSpend(_spend, _llmProviders, _store.ResolveOwnerId, _log, s, m, _store, initiator);
 
     // Запись расхода Higgsfield-генерации по tool_use того же хода.
     internal void RecordHiggsfieldGeneration(Session s) =>
         SpendMapping.RecordHiggsfieldGeneration(_spend, _store.ResolveOwnerId, _log, s);
 
     // Ставит результат генерации fal.ai на отслеживание стоимости (опрос billing-events — в фоне).
-    internal void TryTrackFalCost(string sessionId, string content)
+    // finishedAtMs — время прихода результата: service построит по нему окно запроса, если не
+    // сможет прочитать время из самого request_id (дефект S-SPEND-4).
+    internal void TryTrackFalCost(string sessionId, string content, long? finishedAtMs)
     {
         if (!_falCost.Enabled) return;
-        var requestId = SpendMapping.TryExtractFalRequestId(content);
-        if (!string.IsNullOrEmpty(requestId))
-            _falCost.Track(sessionId, requestId);
+        // Пакетный ответ (submit_jobs/wait_for_jobs) несёт несколько id одним tool_result:
+        // каждый id идёт своим Track'ом — дедуп _seen в сервисе (FalCostService.cs:129) не
+        // даёт ни двойной публикации, ни второго сетевого цикла по тому же id.
+        foreach (var requestId in SpendMapping.TryExtractFalRequestIds(content))
+            _falCost.Track(sessionId, requestId, finishedAtMs);
     }
 
     // Догоняет стоимость для СТАРЫХ генераций fal.ai в истории, у которых ещё нет fal_cost
@@ -99,9 +103,18 @@ public sealed class TurnCostLedger
         foreach (var m in history)
         {
             if (m is not StoredToolUseMessage t || t.IsError || string.IsNullOrEmpty(t.Result)) continue;
-            var rid = SpendMapping.TryExtractFalRequestId(t.Result);
-            if (rid != null && !have.Contains(rid))
-                _falCost.Track(sessionId, rid);
+            // Пакетный tool_result несёт несколько id: каждый проверяется по have отдельно —
+            // тот же id мог попасть и в другой tool_result той же истории (submit_jobs, затем
+            // wait_for_jobs тех же запросов), и в учёт он должен войти один раз.
+            foreach (var rid in SpendMapping.TryExtractFalRequestIds(t.Result))
+            {
+                if (have.Contains(rid)) continue;
+                have.Add(rid);
+                // t.FinishedAt — время генерации из истории (null для истории до 02.10.2026):
+                // без окна запроса older 24 ч цена не находилась никогда (дефект S-SPEND-4);
+                // для старых записей service возьмёт время из request_id (UUIDv7).
+                _falCost.Track(sessionId, rid, t.FinishedAt);
+            }
         }
     }
 

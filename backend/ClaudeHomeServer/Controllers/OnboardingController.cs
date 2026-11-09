@@ -352,7 +352,10 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         if (!imageGen.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
         try
         {
-            var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
+            // Трата этой генерации — на владельца персоны (он известен под рукой, S-SPEND-2c)
+            // и с человеческим инициатором: итог знакомства применяет человек из UI (S-SPEND-8)
+            var images = await imageGen.GenerateManyAsync(
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, AvatarOwnerId(persona), SpendInitiators.Human);
             if (images.Count == 0) return EnqueueAvatarBackfill(persona, prompt);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
@@ -366,14 +369,22 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         }
     }
 
+    // Единственный вход этой очереди в онбординге — действие человека из UI, поэтому и
+    // инициатор заявки здесь человеческий (S-SPEND-8)
     private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
     {
         // Очереди догона нет вместе с выключенной вертикалью images — просить догон нечего
         if (imageBackfill is null) return persona;
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
+            persona.Id, AvatarOwnerId(persona), prompt, SpendInitiators.Human);
         return persona;
     }
+
+    // Владелец аватара этой персоны — один на оба пути (генерация и заявка в очередь): у
+    // заготовки он всегда текущий пользователь, но форма берётся из persona.OwnerId:
+    // разнесённый владелец не должен молча менять адресата траты (S-SPEND-2c)
+    private string AvatarOwnerId(Persona persona) =>
+        string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId;
 
     private static bool ValidColor(string? c) =>
         c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";

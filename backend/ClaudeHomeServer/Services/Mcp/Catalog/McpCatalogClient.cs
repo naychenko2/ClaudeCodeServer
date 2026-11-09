@@ -110,6 +110,14 @@ public class McpCatalogClient
         {
             response = await _http.GetAsync(url, ct);
         }
+        // «Стоп» пользователя — не отказ реестра: отмена уходит наверх, а не в
+        // «Реестр MCP не отвечает». Разделение — по признаку хоста, а не по типу:
+        // и таймаут, и внешняя отмена приходят TaskCanceledException (замерено,
+        // HttpClientCancellationContractTests).
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
             or OperationCanceledException or InvalidOperationException or UriFormatException)
         {
@@ -126,10 +134,18 @@ public class McpCatalogClient
             {
                 body = await response.Content.ReadAsStringAsync(ct);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // оборвано «Стопом» хода, а не размером ответа
+            }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                 or OperationCanceledException or ObjectDisposedException)
             {
-                // Слишком большое тело падает именно здесь: MaxResponseContentBufferSize
+                // Тело сверх MaxResponseContentBufferSize падает НЕ здесь, а на GetAsync
+                // выше: буферирование целиком делает сам транспорт, и даёт он при этом
+                // HttpRequestException «Cannot write more bytes…» (замерено,
+                // HttpClientCancellationContractTests). Сюда доходит только обрыв чтения
+                // уже принятого ответа.
                 throw new McpCatalogUnavailableException("Ответ реестра слишком большой");
             }
             try
@@ -225,6 +241,11 @@ public class McpCatalogClient
         {
             response = await _http.GetAsync(url, ct);
         }
+        // Тот же порядок, что у FetchAndMapAsync: «Стоп» хода — отмена, а не отказ реестра.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
             or OperationCanceledException or InvalidOperationException or UriFormatException)
         {
@@ -239,6 +260,10 @@ public class McpCatalogClient
             try
             {
                 return await response.Content.ReadAsStringAsync(ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw; // оборвано «Стопом» хода, а не размером ответа
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                 or OperationCanceledException or ObjectDisposedException)

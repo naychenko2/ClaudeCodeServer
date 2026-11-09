@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
@@ -658,6 +659,114 @@ public class McpOAuthServiceTests : IDisposable
         json.Should().Contain("\"HasTokens\":true");
     }
 
+    // ── отмена хоста vs молчание сервера (хвост линии траты) ─────────────────────────
+
+    // Что делает HttpClient при отменённом токене хоста: TaskCanceledException с этим
+    // токеном. Тот же тип, что при client.Timeout (замерено, HttpClientCancellationContractTests)
+    // — различает их только признак «хост отменил».
+    private sealed class CancelOnTokenHandler : HttpMessageHandler
+    {
+        public int Calls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken ct)
+        {
+            Calls++;
+            return Task.FromException<HttpResponseMessage>(
+                new TaskCanceledException("запрос отменён хостом", null, ct));
+        }
+    }
+
+    // Таймаут клиента: TaskCanceledException с внутренним TimeoutException, токен живой.
+    private sealed class TimeoutLikeHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken ct) =>
+            Task.FromException<HttpResponseMessage>(
+                new TaskCanceledException("the request was canceled", new TimeoutException(), ct));
+    }
+
+    [Fact]
+    public async Task Вход_ОтменаХостаНеПродолжаетDiscoveryПослеПервогоЗапроса()
+    {
+        Directory.CreateDirectory(_dir);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+        }).Build();
+        var registry = new McpRegistry(config, new McpSecretStore(config));
+        var handler = new CancelOnTokenHandler();
+        var service = new McpOAuthService(registry, new McpSecretStore(config), new McpStatusStore(config),
+            new StubHttpClientFactory(handler), config, NullLogger<McpOAuthService>.Instance);
+        var record = NewRecord(registry);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = () => service.StartAsync(Owner, record, Redirect, input: null, cts.Token);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "«Стоп» — отмена входа, а не «молчащий сервер»");
+        handler.Calls.Should().Be(1,
+            "после «Стопа» новых запросов быть не должно: без guard'а цепочка прошла бы "
+            + "все дефолтные пути и регистрацию клиента");
+    }
+
+    [Fact]
+    public async Task Discovery_GetJson_ОтменаХостаНеТихийПропуск()
+    {
+        var service = ServiceOn(new CancelOnTokenHandler());
+        var reachType = typeof(McpOAuthService).GetNestedType("DiscoveryReach", BindingFlags.NonPublic)!;
+        var getJson = typeof(McpOAuthService)
+            .GetMethod("GetJsonAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = new Func<Task>(async () => _ = await (Task<JsonElement?>)getJson.Invoke(
+            service, ["https://auth.example.com/.well-known/oauth-authorization-server",
+                Activator.CreateInstance(reachType)!, cts.Token, cts.Token])!);
+        await act.Should().ThrowAsync<OperationCanceledException>(
+            "получить null на «Стопе» — значит молча продолжить дисквери после отмены");
+    }
+
+    [Fact]
+    public async Task Токен_ОтменаХостаНеНазываетсяОтказомСервераТокенов()
+    {
+        var service = ServiceOn(new CancelOnTokenHandler());
+        var requestToken = typeof(McpOAuthService)
+            .GetMethod("RequestTokenAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var form = new Dictionary<string, string> { ["grant_type"] = "refresh_token" };
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var act = new Func<Task>(async () => await (Task)requestToken.Invoke(
+            service, ["https://auth.example.com/token", form, Owner, null, cts.Token])!);
+        var thrown = await act.Should().ThrowAsync<OperationCanceledException>();
+        (thrown.Which is McpOAuthException).Should().BeFalse(
+            "«Сервер токенов недоступен» на «Стоп» лжёт о причине: хост сам отменил ход");
+    }
+
+    [Fact]
+    public async Task Токен_ТаймаутНазываетсяТаймаутомAНеПересказомИсключения()
+    {
+        Directory.CreateDirectory(_dir);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+        }).Build();
+        var registry = new McpRegistry(config, new McpSecretStore(config));
+        var service = new McpOAuthService(registry, new McpSecretStore(config), new McpStatusStore(config),
+            new StubHttpClientFactory(new TimeoutLikeHandler()), config, NullLogger<McpOAuthService>.Instance);
+        var requestToken = typeof(McpOAuthService)
+            .GetMethod("RequestTokenAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var form = new Dictionary<string, string> { ["grant_type"] = "refresh_token" };
+
+        var act = async () => await (Task)requestToken.Invoke(
+            service, ["https://auth.example.com/token", form, Owner, null, CancellationToken.None])!;
+        var thrown = await act.Should().ThrowAsync<McpOAuthException>();
+        var message = ((McpOAuthException)thrown.Which).Message;
+        (message.Contains("не отвечает") && !message.Contains("canceled")).Should().BeTrue(
+            "прежний текст пересказывал исключение: «Сервер токенов недоступен: A task was canceled»");
+    }
+
     // ── обвязка ──────────────────────────────────────────────────────────────────────
 
     private const string Redirect = "https://home.example.com/api/mcp/oauth/callback";
@@ -678,6 +787,20 @@ public class McpOAuthServiceTests : IDisposable
         var service = new McpOAuthService(registry, secrets, statuses,
             new StubHttpClientFactory(handler), config, NullLogger<McpOAuthService>.Instance);
         return (service, registry, secrets, statuses, handler);
+    }
+
+    // Тот же сервис, но на произвольном обработчике транспорта — для кейсов, где важна
+    // не заготовка ответа, а поведение отмены (CancelOnTokenHandler и т. п.)
+    private McpOAuthService ServiceOn(HttpMessageHandler handler)
+    {
+        Directory.CreateDirectory(_dir);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_dir, "projects.json"),
+        }).Build();
+        var secrets = new McpSecretStore(config);
+        return new McpOAuthService(new McpRegistry(config, secrets), secrets, new McpStatusStore(config),
+            new StubHttpClientFactory(handler), config, NullLogger<McpOAuthService>.Instance);
     }
 
     private static McpServerRecord NewRecord(McpRegistry registry) =>

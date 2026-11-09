@@ -97,8 +97,21 @@ public sealed class SpendRecord
     public long DurationMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
     public string? Label { get; init; }
-    // Кто запустил трату в редакторе картинок (ADR-018 §2): SpendInitiators.*. null — трата
-    // не из редактора либо запись до этого поля. В дневные агрегаты не сворачивается.
+    // Кто запустил платную генерацию: SpendInitiators.*. Носители значения: ходы чата —
+    // главный после R-S-SPEND-ИНИЦ: ядро выводит признак из защёлки SessionEntry.TurnFromHuman
+    // (human — ход поднял человек; agent — автономный ход CLI или подача агента); медиальные
+    // операции (редактор картинок, ADR-018 §2; генерация и догонящие заявки картинок, видео-
+    // и аудиоредактор) и генерация аватаров — по тому, кто подал операцию: REST из UI — human,
+    // MCP-инструменты агента — agent; агентские генерации хода через внешний MCP
+    // (fal/glif/higgsfield, S-SPEND-8) — всегда agent. Source (Free и пр.) о наличии инициатора
+    // не говорит: ход чата на локальной модели (SpendMapping, инициатор из защёлки) и сборка
+    // видео (FilmAssembler, human/agent) пишут Source = Free с названным инициатором. None
+    // (значения нет) пишут именно эти места: фоновые one-shot — OneShotClaudeRunner:424 и
+    // CloudCheapClient:323 (Source OneShot или Free) и прямые вызовы локальных движков —
+    // OllamaClient:140 и LlamaServerClient:601 (Source Free): инициатор там смешанный —
+    // автоматика, кнопка человека или инструмент агента; None = не назван и в разрезе
+    // человек/агент не сворачивается (решение aaf97b9c). Прочие Free-записи в разрезе остаются.
+    // null — не размечено либо запись до этого поля. В дневные агрегаты не сворачивается.
     public string? Initiator { get; init; }
 
     [JsonIgnore]

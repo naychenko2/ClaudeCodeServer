@@ -973,6 +973,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     public Access.TurnFrameKind GetTurnFrame(string? sessionId, string ownerId) =>
         _store.GetTurnFrame(sessionId, ownerId);
 
+    // Живой ход чата начал человек (защёлка траты) — тело в SessionStore.
+    public bool IsTurnFromHuman(string sessionId, string ownerId) => _store.IsTurnFromHuman(sessionId, ownerId);
+
     public bool IsOwnerOrTurnAuthor(string sessionId, string userId) =>
         _store.IsOwnerOrTurnAuthor(sessionId, userId);
 
@@ -3191,11 +3194,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         _completion.OnMessageQueuedAsync(sessionId, acc, msg, runId);
 
     // Цены хода (трекинг/догоняющий учёт/публикация fal и glif) — в TurnCostLedger (S3-2).
-    // Здесь только делегирующие обёртки: вызывающие места (приём хода, загрузка истории)
-    // остаются в ядре, а их тело — в роли.
-    private void TryTrackFalCost(string sessionId, string content) => _costs.TryTrackFalCost(sessionId, content);
-
-    private void TryTrackGlifCost(string sessionId, string content) => _costs.TryTrackGlifCost(sessionId, content);
+    // Вызывающие места: приём хода — в роли (TurnCompletion: TryTrack* на tool_result хода),
+    // загрузка истории — здесь, в GetHistoryAsync выше (Backfill* по загруженной ленте), и
+    // в роли ChatNaming (та же склейка ленты). Отдельных обёрток трекинга/бэкфилла в ядре
+    // нет: бэкфилл вызывается прямо из тела загрузки истории — это боевой вход догоняющего
+    // учёта, защищён FalCostProductionPathTests (БэкфиллИсторииСПакетнымToolResult…).
 
     // Публикация учёта glif-генерации: запись в историю (дедуп) + broadcast клиентам.
     public Task PublishGlifCostAsync(string sessionId, GlifCostMessage msg) => _costs.PublishGlifCostAsync(sessionId, msg);

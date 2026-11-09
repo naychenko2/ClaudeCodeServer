@@ -479,7 +479,9 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         if (!systemDirective)
             entry.Info.LastMessage = ChatPreview(text);
         SessionStore.NoteRunDelegation(entry, agentDepth, suppressTasksExecute, fromHuman: !auto && !systemDirective);
-        _store.NoteTurnActor(entry, senderUserId, fromHuman: !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute);
+        var humanTurn = !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute;
+        _store.NoteTurnActor(entry, senderUserId, humanTurn);
+        Volatile.Write(ref entry.TurnFromHuman, humanTurn ? 1 : 0);
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
@@ -720,6 +722,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         entry.Info.LastMessage = ChatPreview(text);
         SessionStore.NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
         _store.NoteTurnActor(entry, senderUserId, fromHuman: false);
+        Volatile.Write(ref entry.TurnFromHuman, 0); // chats_send — всегда агентский ход, даже с id человека
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();

@@ -131,7 +131,11 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
 # служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|111
+# R-ТРАТА (слияние линии траты с ядром): PersonasController 111→118 — CallerSpendAttribution и
+# avatar/generate берут id вызывающего аргументом в GetTurnActor/IsTurnFromHuman/GetOwned только для
+# атрибуции расхода (инициатор/актор хода). Ключом хранилищ он не служит: запись траты ключуется
+# владельцем из RequestScope, id — лишь адрес чата-вызывателя.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|118
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 # R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
 # IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной

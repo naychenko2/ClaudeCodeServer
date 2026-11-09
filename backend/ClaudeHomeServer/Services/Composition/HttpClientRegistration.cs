@@ -29,7 +29,18 @@ public static class HttpClientRegistration
         services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
             Category: "ClaudeHomeServer.Media.Fal",
             Subject: "сервисом fal.ai",
-            Consequence: "Генерация изображений и учёт расхода недоступны."));
+            Consequence: "Генерация изображений и учёт расхода недоступны."))
+            // Свой таймаут клиента (хвосты ревью R-S-SPEND-4, п.2; S-SPEND-TAIL-2): без него — дефолт
+            // HttpClient 100 с, а слот гейта троттлинга в FalCostService держится на всё время запроса:
+            // один зависший опрос биллинга стопорил бы весь бэкфилл цен на 100 с. 15 с — конвенция
+            // проекта для внешних API (ObservabilityExtensions, VideoSubsystem); опрос billing-events —
+            // короткий JSON GET. Длинные вызовы под этот номер не попадают: FalImageService/
+            // FalVideoEngine/FalAudioEngine/FalImageEditor берут этот же именованный клиент и ставят
+            // свой больший таймаут на полученном экземпляре до первого запроса (180 с / 120 с / 60 с).
+            // Опрос цен это не задевает: фабрика отдаёт новый экземпляр на каждый CreateClient, и
+            // перезапись одного потребителя живёт только на его экземпляре — опрос биллинга и короткие
+            // запросы аккаунта (FalAccountService) остаются на 15 с (сторож: FalHttpClientRegistrationTests).
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15));
         // Озвучка голосового режима чата переехала в TtsSubsystem (волна 1.4).
         // Контракт фолбэка на голос браузера живёт в TtsController: 503 not_configured / 502 upstream.
         services.AddQuietHttpClient(

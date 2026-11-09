@@ -38,6 +38,11 @@ public class FalImageService : IImageGenerator
     // он остаётся выбором в пикере.
     public const string DefaultModel = "fal-ai/nano-banana-2";
 
+    // Контракт IImageGenerator: при model = null драйвер идёт на _model (ниже в
+    // GenerateManyAsync: endpoint = model ?? _model). Здесь эффективная модель, а не
+    // константа: с Fal:ImageModel пошёл бы другой endpoint, и учёт о нём соврал бы.
+    string? IImageGenerator.DefaultModel => _model;
+
     // Курируемый список для пикера: актуальные модели (сверено с живым каталогом fal
     // 2026-08-16) плюс модель из конфига, если админ прописал в Fal:ImageModel что-то
     // своё (иначе она бы не выбиралась в UI).
@@ -63,45 +68,74 @@ public class FalImageService : IImageGenerator
     // Сгенерировать одно квадратное изображение (первый вариант).
     public async Task<GeneratedImage?> GenerateAsync(string prompt, CancellationToken ct = default)
     {
-        var many = await GenerateManyAsync(prompt, 1, ct);
+        var many = (await GenerateManyAsync(prompt, 1, ct)).Images;
         return many.Count > 0 ? many[0] : null;
     }
 
     // Сгенерировать несколько вариантов изображения по описанию (для выбора аватара).
-    // Возвращает пустой список, если fal выключен/ошибка.
-    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    // Возвращает пустой Images, если fal выключен/ошибка.
+    public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, CancellationToken ct = default) =>
         GenerateManyAsync(prompt, count, null, ct);
 
     // Перегрузка с явной моделью (null — дефолт из конфига Fal:ImageModel).
-    public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public async Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
+        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return ImageGenerationResult.Empty;
         count = Math.Clamp(count, 1, 4);
         var endpoint = string.IsNullOrWhiteSpace(model) ? _model : model.Trim().Trim('/');
+        // Поднят над try: исключение после ответа (разбор тела, скачивание) не должно терять id —
+        // до ответа он остаётся null (запрос не был принят).
+        string? requestId = null;
         try
         {
             // Именованный клиент, общий с FalAccountService/FalCostService: под ним висит
             // тихий логгер (Program.cs), иначе заблокированный fal печатает Error со стектрейсом.
             var client = _http.CreateClient("fal");
-            client.Timeout = TimeSpan.FromSeconds(180);
+            // Дальше 180 с ждём только приход заголовков: с ResponseHeadersRead (ниже) клиент
+            // отдаёт ответ сразу после них, и до тела этот таймаут не дотягивается —
+            // потолок чтения тела делает своим токеном, ResponseBodyTimeout.
+            client.Timeout = HeadersTimeout;
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{endpoint}");
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
             req.Content = JsonContent.Create(BuildRequestBody(endpoint, prompt, count));
 
-            using var resp = await client.SendAsync(req, ct);
+            // Тело читается отдельно от заголовков (п.2 хвоста R-S-SPEND-9a). С дефолтным
+            // ResponseContentRead HttpClient буферизует тело внутри SendAsync: обрыв по своему
+            // таймауту оставлял ответ невидимым, и id, который fal уже отправил заголовком,
+            // терялся вместе с ним (проверяется мутацией на тесте ТаймаутЧтенияТела_IdСохраняется).
+            // С ResponseHeadersRead ответ и его заголовки достаются сразу; скачивание картинок
+            // это не касается — оно идёт своим путём через SafeMediaDownloader.
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+            // Идентификатор запроса берётся сразу после ответа, ДО проверки статуса и разбора
+            // тела: у синхронного fal.run его в теле нет, он в заголовке (см. ResponseRequestId),
+            // а запрос мог быть принят и оплачен даже при 4xx или без картинок.
+            requestId = ResponseRequestId(resp);
+
+            // Явный потолок чтения тела (свои 180 с, ResponseBodyTimeout). С headers-read клиент
+            // сам тело не ограничивает (docs HttpCompletionOption), и без этого токена зависшее
+            // тело висело бы до отмены вызывающего. Потолки пофазные: общий предел запроса —
+            // TotalTimeout (заголовки + тело, ровно 360 с), а не прежние 180 с целиком.
+            using var body = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            body.CancelAfter(ResponseBodyTimeout);
+
             if (!resp.IsSuccessStatusCode)
             {
                 _logger.LogWarning("fal генерация вернула {Status}: {Body}",
-                    resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
-                return [];
+                    resp.StatusCode, await resp.Content.ReadAsStringAsync(body.Token));
+                return new ImageGenerationResult([], requestId);
             }
 
-            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
-            if (!json.TryGetProperty("images", out var images) || images.ValueKind != JsonValueKind.Array)
-                return [];
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(body.Token);
+            // Не-объектное тело ([] , скаляр) — своя ветка, а не исключение в catch: TryGetProperty
+            // на массиве бросает InvalidOperationException, и штатный случай выглядел в логе как
+            // сбой связи (п.3 хвоста R-S-SPEND-9a). Поведение то же: id отдаётся и там и там.
+            if (json.ValueKind != JsonValueKind.Object
+                || !json.TryGetProperty("images", out var images)
+                || images.ValueKind != JsonValueKind.Array)
+                return new ImageGenerationResult([], requestId);
 
             var result = new List<GeneratedImage>();
             foreach (var img in images.EnumerateArray())
@@ -114,14 +148,71 @@ public class FalImageService : IImageGenerator
                 var (bytes, contentType) = await DownloadAsync(url, declared, ct);
                 if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
             }
-            return result;
+            return new ImageGenerationResult(result, requestId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested && requestId is null)
+        {
+            // Отмена вызывающего ДО ответа: id не пришёл — нечего ни тарифицировать, ни терять
+            // (принят ли запрос, неизвестно: тот же задокументированный остаток, что в
+            // RecordNoImagesSpend у роутера). Отмена идёт к вызывающему, как в соседнем драйвере
+            // того же провайдера (FalImageEditor) и в опросе цены (FalCostService): проглотить её
+            // здесь значит оставить ход работающим после того, как человек его отменил.
+            _logger.LogInformation("Генерация через fal отменена вызывающим до ответа");
+            throw;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Отмена ПОСЛЕ принятого ответа: запрос принят и, скорее всего, уже оплачен, id в руках.
+            // Просто пробросить её нельзя — вместе с исключением потерялся бы id, а оплаченный
+            // запрос исчез из учёта; id идёт обычным пустым результатом ([], id), по которому
+            // роутер сам спросит цену и запишет трату, только если она есть (RecordNoImagesSpend),
+            // а отмену продолжит сам — свой токен он знает (ImageGenerationService).
+            _logger.LogInformation(
+                "Генерация через fal отменена вызывающим после принятия запроса {RequestId}: id передан для учёта",
+                requestId);
+            return new ImageGenerationResult([], requestId);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            // Свой потолок, а не сбой связи: ct вызывающего жив (его отмены разобраны выше), значит
+            // не уложились заголовки (client.Timeout) или тело (ResponseBodyTimeout). Фазу выдаёт
+            // id: он берётся из заголовков, так что есть id — не уложилось тело, нет — заголовки.
+            // Поведение то же: пустой результат, id остаётся, если ответ был.
+            _logger.LogWarning(
+                "fal генерация не уложилась в потолок фазы {Phase} ({Headers}с на заголовки + {Body}с на тело, предел фаз HTTP-запроса {Total}с); id запроса: {RequestId}",
+                requestId is null ? "заголовков" : "тела",
+                HeadersTimeout.TotalSeconds, ResponseBodyTimeout.TotalSeconds, TotalTimeout.TotalSeconds, requestId);
+            return new ImageGenerationResult([], requestId);
         }
         catch (Exception ex)
         {
+            // Сбой связи или разбора тела: поведение как раньше, пустой результат; id остаётся,
+            // если ответ был. Отменённый вызывающим ход и свои таймауты сюда не доходят: они
+            // разобраны ветками выше.
             _logger.LogWarning(ex, "Ошибка генерации аватара через fal");
-            return [];
+            return new ImageGenerationResult([], requestId);
         }
     }
+
+    // Потолки пофазные: с ResponseHeadersRead client.Timeout до тела не дотягивается
+    // (docs: HttpCompletionOption), поэтому на приход заголовков и на чтение тела свои 180 с.
+    // Предел фаз HTTP-запроса к fal — их сумма, ровно 360 с (180 + 180: CTS тела создаётся сразу
+    // после возврата заголовков, зазора нет). Скачивание картинок сюда не входит: у него свой
+    // потолок (SafeMediaDownloader.Timeout, 60 с).
+    private static readonly TimeSpan HeadersTimeout = TimeSpan.FromSeconds(180);
+    private static readonly TimeSpan ResponseBodyTimeout = TimeSpan.FromSeconds(180);
+    private static readonly TimeSpan TotalTimeout = HeadersTimeout + ResponseBodyTimeout;
+
+    // Идентикатор запроса — из заголовка x-fal-request-id: синхронный fal.run его в тело
+    // не кладёт (тело — вывод модели, форма зависит от схемы), а фал отдаёт его заголовком
+    // и тем же id ключуется billing-events (docs fal: «Request Headers», «Billing Events»).
+    // Существующий SpendMapping.TryExtractFalRequestIds здесь неприменим: он разбирает ТЕЛО
+    // tool_result чата (JSON/текст с маркером изображения) и живёт в сборке Main, куда
+    // вертикаль Images не ссылается. Своего разбора не заводим — поля читать не надо.
+    private static string? ResponseRequestId(HttpResponseMessage resp) =>
+        resp.Headers.TryGetValues("x-fal-request-id", out var values)
+            ? values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))
+            : null;
 
     // Тело запроса собирается ПО МОДЕЛИ: схемы входа у семейств fal разные, и лишний
     // параметр возвращает 422 (nano-banana не знает image_size, у recraft-вектора нет

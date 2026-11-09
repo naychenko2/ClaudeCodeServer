@@ -71,7 +71,7 @@ public sealed class KnowledgeSubsystem : IAppSubsystem
 
     // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) требует
     // WorkspaceKnowledgeStore и KnowledgeService; та же цепочка — через обязательный ядру
-    // сессий PersonaBindingsService (Services/PersonaBindingsService.cs:138): фасад его не держит, нужда ядра
+    // сессий PersonaBindingsService (Services/PersonaBindingsService.cs:138-139): фасад его не держит, нужда ядра
     // несут резолверы ролей AddSessionCore (Services/Sessions/SessionCoreRegistration.cs:175/:187/:197 →
     // BuiltinMcpContexts, PersonaLayerBuilder, ExternalMcpContexts), а эти роли фасад держит
     // обязательными параметрами конструктора (Services/SessionManager.cs:275-276).

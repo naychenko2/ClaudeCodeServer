@@ -49,9 +49,11 @@ public sealed class SkillsSubsystem : IAppSubsystem
 
     public string Title => "Навыки";
 
-    // Ядро (CanDisable=false, S2b-1): PersonaBindingsService (Services/PersonaBindingsService.cs:139),
-    // обязательный ядру сессий (Services/SessionManager.cs:745), требует SkillsService
-    // обязательным параметром.
+    // Ядро (CanDisable=false, S2b-1): PersonaBindingsService (Services/PersonaBindingsService.cs:139) требует
+    // SkillsService обязательным параметром; сам он обязателен ядру сессий: фасад его не держит, нужда
+    // ядра несут резолверы ролей AddSessionCore (Services/Sessions/SessionCoreRegistration.cs:175/:187/:197 →
+    // BuiltinMcpContexts, PersonaLayerBuilder, ExternalMcpContexts), а эти роли фасад держит
+    // обязательными параметрами конструктора (Services/SessionManager.cs:275-276).
     public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)

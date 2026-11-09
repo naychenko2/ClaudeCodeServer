@@ -29,9 +29,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // → SessionManager → PersonaBindingsService → INoteAccessor → форвардер (NotesSubsystem.cs:71)
     // → NotesService — на повторном GetOrAdd того же синглтона StartAsync хоста виснет
     // навсегда (бисект 2026-10-29: все тесты с WebApplicationFactory). Тот же приём, что
-    // с реестром тулсетов в SessionManager (SessionManager.cs:829): в конструкторе — провайдер,
-    // точка доступа — лениво при первом обращении, когда создание синглона уже завершено
-    // и ре-энтри нет.
+    // с реестром тулсетов в BuiltinMcpContexts (Services/Sessions/BuiltinMcpContexts.cs:199):
+    // в конструкторе — провайдер, точка доступа — лениво при первом обращении, когда
+    // создание синглона уже завершено и ре-энтри нет.
     // Вне DI (тестовые конструирования) точка передаётся напрямую internal-конструктором
     // или не передаётся вовсе — ProjectScope остаётся на владении, fail-closed.
     private readonly IServiceProvider? _services;

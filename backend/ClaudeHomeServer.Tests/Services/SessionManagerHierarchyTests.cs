@@ -724,7 +724,18 @@ public partial class SessionManagerHierarchyTests : SessionManagerTestBase
     {
         var (project, _) = await MkRepoWithWorktreeAsync("iswt-empty");
 
-        (await _sut.IsProjectWorktreeAsync(project.Id, null, " ")).Should().BeFalse();
+        // Ветка «пустой путь» — своя ассерция, отдельно от «нет такого проекта».
+        // Пробельный путь отсекает guard ChatWorktree.IsProjectWorktreeAsync (:324, IsNullOrWhiteSpace)
+        // и дальше не идёт. Снятие guard'а этот тест не краснит (ревью 8b40dc2a, M1): пустой путь
+        // приводит к исключению, которое ловит catch (:328), и метод возвращает тот же false —
+        // здесь фиксируется поведение (пустой путь → false), а не сам guard.
+        var blank = "   ";
+        // Фиксация намерения входа (пробельный путь), а не доказательство не-вакуумности:
+        // не-вакуумность доказана мутацией guard'а на return true (краснеет ровно этот тест).
+        string.IsNullOrWhiteSpace(blank).Should().BeTrue("вход этой ветки — пробельный путь");
+        (await _sut.IsProjectWorktreeAsync(project.Id, null, blank)).Should().BeFalse();
+
+        // Ветка «нет такого проекта» — валидный путь, несуществующий проект.
         (await _sut.IsProjectWorktreeAsync("нет-такого-проекта", null, _tempDir)).Should().BeFalse();
     }
 

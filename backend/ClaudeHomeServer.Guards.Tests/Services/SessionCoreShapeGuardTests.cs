@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Text;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Sessions;
@@ -215,27 +216,49 @@ public class SessionCoreShapeGuardTests
     /// хвост 3abaaab0). Проверка — точное равенство типа: сканер даёт declaring-тип вызванного метода
     /// (IL-опкод call) и тип параметра из сигнатуры, обе формы в него попадают. Точка сборки вне
     /// <see cref="CoreTypes"/> по пространству имён (Composition) и резолвит фасад ленивыми швами —
-    /// это допустимо, её охраняет правило 4.</summary>
+    /// это допустимо, её охраняет правило 4. Ссылка на generic-тип фасада в закрытой форме
+    /// (<c>GenericFacade&lt;int&gt;</c>) приводится к открытому определению (<see cref="OpenGenericForm"/>):
+    /// набор держит определения, а сканер даёт закрытое вхождение — без приведения ссылка прошла бы
+    /// незамеченной (тот же класс тихого пропуска, что лечился арностью в <see cref="FacadeTopLevelTypes"/>).</summary>
     internal static IEnumerable<string> CoreNoFacadeRefs(IEnumerable<Type> coreTypes,
         IReadOnlySet<Type> facadeTopLevel) =>
         from t in coreTypes
         let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
             .FirstOrDefault(r => r == typeof(SessionManager)
-                || r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(r))
+                || r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(OpenGenericForm(r)))
         where hit is not null
         select $"{t.FullName} ссылается на {hit.FullName}: ребро «ядро → фасад» закрыто — контракты "
             + "ядра живут в Services.Sessions, а сам фасад не является типом роли";
+
+    /// <summary>Форма ссылки для мерки против набора top-level типов: открытое generic-определение.
+    /// Набор построен <c>assembly.GetTypes()</c> и держит определения (<c>GenericFacade`1</c>), сканер
+    /// даёт закрытое вхождение (<c>GenericFacade&lt;int&gt;</c>): сравнение по закрытой форме молча
+    /// пропустило бы ссылку ядра на generic-тип фасада (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада).
+    /// Для неgeneric-типа — без изменений; для открытого определения GetGenericTypeDefinition возвращает
+    /// его же, поэтому приведение безопасно для обеих форм.</summary>
+    private static Type OpenGenericForm(Type r) =>
+        r.IsGenericType ? r.GetGenericTypeDefinition() : r;
 
     /// <summary>Top-level типы, объявленные в файле фасада SessionManager.cs: по рефлексии они ничем не
     /// отличаются от прочих типов Services, поэтому набор берётся разбором объявлений в колонке 0
     /// самого файла и разрешается в сборке Main. Сам <see cref="SessionManager"/> в набор не входит:
     /// он проверяется точным равенством типа в <see cref="CoreNoFacadeRefs"/> (R-ФИНАЛ c1),
     /// вложенные — по DeclaringType.</summary>
-    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource)
+    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource) =>
+        FacadeTopLevelTypes(facadeSource, Main, FacadeNamespace);
+
+    /// <summary>Тот же разбор над произвольной сборкой и пространством имён: боевой вызов — Main и
+    /// пространство имён фасада; самопроверка резолвит по тестовой сборке — Main generic-типов не
+    /// содержит (проверено поиском по его исходникам), и generic top-level тип фасада моделируем только
+    /// на тестовой стороне (фикстура GenericHolder, Самопроверка_разбор_фасада_видит_generic_top_level_тип).</summary>
+    internal static HashSet<Type> FacadeTopLevelTypes(string facadeSource, Assembly assembly, string ns)
     {
         var names = FacadeTopLevelNames(facadeSource);
-        return Main.GetTypes()
-            .Where(t => t.DeclaringType is null && t.Namespace == FacadeNamespace && names.Contains(t.Name)
+        // Мерка — по имени без арности, как в FileStaticDictionaryFields: узор берёт имя до «&lt;»
+        // («GenericHolder»), Type.Name — «GenericHolder`1»; мерка по t.Name молча выкинула бы generic
+        // top-level тип фасада из трипвайра «ядро → фасад» (Самопроверка_разбор_фасада_видит_generic_top_level_тип).
+        return assembly.GetTypes()
+            .Where(t => t.DeclaringType is null && t.Namespace == ns && names.Contains(WithoutArity(t.Name))
                 && t != typeof(SessionManager))
             .ToHashSet();
     }
@@ -247,28 +270,186 @@ public class SessionCoreShapeGuardTests
             .Select(m => m.Value.Trim())
             .ToList();
 
-    internal static HashSet<string> FacadeTopLevelNames(string facadeSource) =>
+    // Модификаторы объявления top-level типа — не перечень «во что упирался»: доступ (public/internal,
+    // отсутствие — internal по умолчанию), область файла (file, C# 14), вид объявления
+    // (static/abstract/partial/sealed/readonly/ref/unsafe). Токен перед ключевым словом вне этого
+    // набора — не тихий пропуск: неизвестный модификатор даёт громкий отказ с его названием
+    // (Самопроверка_полноты_модификатор_вне_списка_громкий_и_файл_с_модификатором_file_в_полном_отказе).
+    private static readonly HashSet<string> KnownTypeModifiers =
+        ["public", "internal", "file", "sealed", "static", "abstract", "partial", "readonly", "unsafe", "ref"];
+
+    internal static HashSet<string> FacadeTopLevelNames(string facadeSource)
+    {
         // Raw-строки и комментарии вырезаются до разбора: «объявление» в колонке 0 внутри них — не объявление.
-        // Атрибут допускает строковые и char-литералы с «]» и вложенные скобки в аргументе: [Obsolete("see Foo[0]")],
-        // [Foo(']')], [Foo(new[]{1})] — вложенность держит балансирующая группа d, а «]» внутри литерала
-        // не закрывает атрибут: литерал разбирается своей альтернативой целиком. Char-альтернатива держит
-        // любое число юнитов — одиночный символ и многосимвольный escape-литерал ('\x41'), — та же форма,
-        // что char-литерал в StripRawStringsAndComments.
-        Regex.Matches(StripRawStringsAndComments(facadeSource),
-                @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:public|internal)\s+(?:(?:sealed|static|abstract|partial|readonly)\s+)*(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(\w+)",
-                RegexOptions.Multiline)
-            .Select(m => m.Groups[1].Value)
-            .ToHashSet();
+        // Атрибут допускает строковые, char-, verbatim- и интерполированные литералы с «]» и вложенные
+        // скобки в аргументе: [Obsolete("see Foo[0]")], [Foo(']')], [Foo(new[]{1})], [Obsolete($"{m["k;v"]}")] —
+        // вложенность держит балансирующая группа d, а «]» внутри литерала не закрывает атрибут: литерал
+        // разбирается своей альтернативой целиком. Литералы — тот же узор StringLiteralsPattern, что у
+        // границы и очистки (третьей копии узора больше нет): прежде attribute-узор держал свою форму
+        // (обычная строка без line-continuation, интерполированной нет вовсе) и расходился с ними:
+        // атрибут с продолжением строки в литерале не матчился вовсе — объявление на той же строке
+        // выпадало из names молча (сверка полноты проверяет только «распарсенное имя → тип»);
+        // пример с интерполяцией [Obsolete($"{m["k;v"]}")] прежняя форма покрывала лишь случайно —
+        // балансной группой d со вложенным обычным литералом, самой интерполяции в узоре не было.
+        // Литеральные альтернативы стоят ПЕРЕД обычного класса: иначе класс съедает «$» префикса как
+        // текст, и интерполяционная альтернатива не получает своей «$"» — тот же тихий пропуск.
+        // Char-альтернатива держит любое число юнитов — одиночный символ и многосимвольный escape-литерал
+        // ('\x41') — та же форма, что в StringLiteralsPattern.
+        // Модификатор доступа необязателен: top-level тип без модификатора (static class Foo — в C# internal
+        // по умолчанию) — тип файла, и его словари в сверке полноты; строгое требование public|internal
+        // молча снимало бы такой тип из списка имён. Префикс «namespace X;» в той же строке тоже в узоре:
+        // объявление после него — top-level.
+        // Модификаторы — общий ряд слов перед ключевым словом (ленивая группа mods), а не фиксированное
+        // перечисление: прежнее перечисление молча выкидало объявление с модификатором вне списка
+        // (file/unsafe/ref struct) — имя не попадало в names, unresolved пуст, громкого отказа нет.
+        // Теперь каждый токен ряда проверяется по KnownTypeModifiers, и неизвестный токен — громкий
+        // отказ с его названием. Ленивость обязательна: жадный ряд съел бы «record» из «record class Foo»
+        // в модификаторы и краснул бы на законном объявлении.
+        // «delegate» — в альтернативации как известная, но не поддерживаемая форма: class/record/struct/
+        // enum/interface + delegate — весь набор top-level объявлений типа в C#, и без этой ветки
+        // delegate-объявление не матнилось вовсе — тип молча выпадал из полноты (тот же класс тихого
+        // пропуска, что лечился модификатором вне списка). Теперь оно даёт громкий отказ с названием
+        // формы и строки: сначала научи разбор формы, потом вводи объявление (тот же порядок, что у
+        // директив условной компиляции в Файл_фасада_без_директив_условной_компиляции).
+        var (stripped, map) = StripRawStringsAndComments(facadeSource);
+        var names = new HashSet<string>();
+        foreach (Match m in Regex.Matches(stripped,
+                     @"^(?:\[(?:" + StringLiteralsPattern + @"|[^\[\]\r\n""']|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?<mods>(?:\w+\s+)*?)(?<kw>class|record(?:\s+(?:class|struct))?|struct|enum|interface|delegate)\s+(?<name>\w+)",
+                     RegexOptions.Multiline))
+        {
+            foreach (var token in m.Groups["mods"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (!KnownTypeModifiers.Contains(token))
+                    throw new InvalidOperationException(
+                        "Неизвестный модификатор «" + token + "» перед объявлением top-level типа «" + m.Groups["name"].Value +
+                        "» (строка \"" + m.Value.Trim() + "\"): узор его не знает — тип молча выпал бы из полноты");
+            }
+            if (m.Groups["kw"].Value == "delegate")
+            {
+                // Имя делегата живёт после типа возвращаемого, а матч доходит до типа. Объявление берётся
+                // из исходника до конца логического объявления: у делегата нет тела — его конец это «;»,
+                // а если «;» нет — пустая строка или конец исходника; берётся ближайшая граница. Не по «\n»:
+                // в многострочном объявлении имя живёт за типом возвращаемого на следующей строке, и отказ
+                // обязан называть тип (Самопроверка_полноты_delegate...). Граница ищется от ключевого слова:
+                // «;» префикса «namespace X;» в той же строке — не конец объявления. Первый «;» подряд —
+                // и «;» внутри строкового литерала ([Obsolete("use X; instead")]): отказ обрывался на
+                // полуслове и с незакрытой кавычкой. Пустая строка прежним регулярком по тексту — та же
+                // ошибка в другой форме: пустая строка внутри многострочного verbatim-аргумента атрибута
+                // ([Obsolete] с аргументом @"…", содержащим пустую строку) давала отсечение внутри
+                // литерала: хвост объявления терялся. Граница — ближайшая «;» или пустая строка вне
+                // литералов (FirstDeclarationBoundaryOutsideLiterals). Тот же класс у двух других
+                // форм литералов: «;» внутри интерполяционной дыры ([Obsolete($"{m["k;v"]}")]) и
+                // «;» внутри литерала с line-continuation ([Obsolete("a;b\<NL>c")]) — прежний узор
+                // их не съедал целиком и граница вставала на внутреннем «;». Отказ — текст
+                // объявления из исходника (OriginalSpan по карте индексов очистки): комментарий или
+                // raw-строка внутри объявления в отказ не теряются; границы span — те же, что у
+                // границы объявления, поэтому текст за объявлением в отказ не входит по-прежнему.
+                int kwAt = m.Groups["kw"].Index;
+                int cut = FirstDeclarationBoundaryOutsideLiterals(stripped, kwAt);
+                string line = OriginalSpan(facadeSource, map, m.Index, cut).Trim();
+                throw new InvalidOperationException(
+                    "Неизвестная форма объявления «delegate» top-level типа (строка \"" + line +
+                    "\"): узор её не разбирает — тип молча выпал бы из полноты; сначала научи разбор формы, потом вводи объявление");
+            }
+            names.Add(m.Groups["name"].Value);
+        }
+        return names;
+    }
+
+    /// <summary>Альтернативы строковых литералов — ОДНА форма на три стороны разбора: её использует
+    /// и граница объявления (<see cref="FirstDeclarationBoundaryOutsideLiterals"/>), и очистка
+    /// исходника (<see cref="StripRawStringsAndComments"/>), и attribute-узор разбора объявлений
+    /// (<see cref="FacadeTopLevelNames"/>), чтобы стороны не расходились в том, что считается
+    /// литералом. Верbatim-строка; обычная строка — escape-пара <c>\\[\s\S]</c> держит и
+    /// обычный escape (экранированная кавычка <c>\"</c>), и line-continuation (обратная косой перед
+    /// переводом строки), поэтому литерал с продолжением строки потребляется целиком и «;» внутри
+    /// него границей не считается; char-строка (escape-пара); интерполированная строка — тело без
+    /// кавычек и фигурных скобок, пары <c>{{</c>/<c>}}</c>, escapes и интерполяционные дыры <c>{…}</c>
+    /// с балансом скобок: внутри дыры — текст, escapes и вложенные литералы (обычный, verbatim, char),
+    /// поэтому «;» внутри <c>{m["k;v"]}</c> — не граница.
+    /// Балансный сторож <c>(?(hole)(?!))</c> (условие <c>(?(hole)</c> истинно, пока баланс группы
+    /// ненулевой — по состоянию на момент проверки; пустая негативная ретроспекция <c>(?!)</c>
+    /// ложна всегда, поэтому весь конструкт падает ровно при ненулевом балансе) из конца дыры
+    /// убран — он ничего не менял и при этом читался как проверка
+    /// следующего символа, которой не является. Он никогда не отрезал путь, который не отрезала бы
+    /// закрывающая <c>}</c>: балансная группа потребляет <c>}</c> внутри дыры только при ненулевом
+    /// балансе, поэтому внутренний матч может остановиться на <c>}</c> лишь при нулевом балансе —
+    /// ровно там, где закрывающая <c>}</c> проходит; на любом другом символе (кавычка, косая, конец
+    /// строки) она падает сама. Балансная группа <c>hole</c> остаётся: без неё вложенные <c>{…}</c>
+    /// в выражении дыры (<c>new[]{1}</c>, object-initializer) в неё не войдут.
+    /// Границы формы: интерполированная строка с вложенной интерполированной внутри дыры целиком не
+    /// разбирается — тогда работает откат: обычная альтернатива съедает текст от первой кавычки до
+    /// следующей, как было до расширения (отказ остаётся громким). Префиксные формы <c>$@</c>/<c>$:</c>
+    /// разбираются с позиции <c>@</c> как verbatim, <c>$"</c> — как интерполированная.</summary>
+    private const string StringLiteralsPattern =
+        "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\[\\s\\S])*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'|" +
+        "\\$\"(?:\\{\\{|\\}\\}|[^\"\\\\{}\\r\\n]|\\\\[\\s\\S]|\\{(?:[^{}\"\\\\\\r\\n]|\\\\[\\s\\S]|" +
+        "\"(?:[^\"\\\\\\r\\n]|\\\\[\\s\\S])*\"|@\"(?:[^\"]|\"\")*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'|" +
+        "(?<hole>\\{)|(?<-hole>\\}))*\\})*\"";
+
+    /// <summary>Конец логического объявления delegate от позиции <c>from</c>: позиция после ближайшей
+    /// границы — «;» вне строковых литералов или пустой строки вне литералов (для пустой строки — её
+    /// начало, хвост пробелов снимает Trim вызывающего); границы нет — конец исходника. Литералы
+    /// разбираются тем же узором <see cref="StringLiteralsPattern"/>, что сохраняет и
+    /// <see cref="StripRawStringsAndComments"/> (дословно та же форма, порядок тот же): в очищенном
+    /// исходнике raw-строк и комментариев нет, остальные литералы — как в оригинале, и «;» или пустая
+    /// строка внутри литерала (многострочный verbatim-аргумент атрибута, аргумент с line-continuation,
+    /// «;» внутри интерполяционной дыры) концом объявления не считаются. Каждая конструкция
+    /// потребляется целиком, поэтому граница после закрытой кавычки — обычная граница; обход слева
+    /// направо — первая найденная граница ближайшая. Обе границы в одном объявлении — берётся
+    /// ближайшая, а не последняя: пустая строка раньше — «;» за ней не граница, «;» раньше — пустая
+    /// строка за ним не граница (Самопроверка_полноты_delegate_из_двух_границ_берётся_ближайшая_а_не_последняя).
+    /// Пустой строковый литерал матчится и ничего не
+    /// сдвигает; граница после конца исходника — нет.</summary>
+    private static int FirstDeclarationBoundaryOutsideLiterals(string stripped, int from)
+    {
+        foreach (Match t in Regex.Matches(stripped.Substring(from),
+                     StringLiteralsPattern + "|(?<semi>;)|(?<blank>[ \t]*\r?\n[ \t]*\r?\n)"))
+        {
+            if (t.Groups["semi"].Success) return from + t.Index + 1;
+            if (t.Groups["blank"].Success) return from + t.Index;
+        }
+        return stripped.Length;
+    }
 
     /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
     /// разбирается с её собственного начала, поэтому посторонняя <c>"""</c> внутри комментария или обычной
-    /// строки не сопрягается с настоящей raw-строкой и не вырезает объявления между ними. Обычные, verbatim-
-    /// и char-литералы проходят как есть (в них «//» и «"""» — просто текст).</summary>
-    private static string StripRawStringsAndComments(string src) =>
-        Regex.Replace(src,
-            "\"\"\"[\\s\\S]*?\"\"\"|//[^\\n]*|/\\*[\\s\\S]*?\\*/|@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\\\.|[^'\\\\\\r\\n])+'",
-            m => m.Value.StartsWith("\"\"\"", StringComparison.Ordinal) || m.Value.StartsWith("//", StringComparison.Ordinal)
-                || m.Value.StartsWith("/*", StringComparison.Ordinal) ? "" : m.Value);
+    /// строки не сопрягается с настоящей raw-строкой и не вырезает объявления между ними. Обычные, verbatim-,
+    /// char- и интерполированные литералы (узор <see cref="StringLiteralsPattern"/>) проходят как есть
+    /// (в них «//» и «"""» — просто текст). Вместе с очищенным текстом возвращает карту индексов:
+    /// <c>map[i]</c> — позиция в исходнике символа <c>stripped[i]</c>; по ней span очищенного
+    /// ставится обратно в исходный текст (<see cref="OriginalSpan"/>) — то, что вырезано, остаётся
+    /// в исходном тексте на своём месте.</summary>
+    private static (string Stripped, int[] Map) StripRawStringsAndComments(string src)
+    {
+        var sb = new StringBuilder(src.Length);
+        var map = new List<int>(src.Length);
+        int pos = 0;
+        foreach (Match m in Regex.Matches(src,
+                     "\"\"\"[\\s\\S]*?\"\"\"|//[^\\n]*|/\\*[\\s\\S]*?\\*/|" + StringLiteralsPattern))
+        {
+            bool removed = m.Value.StartsWith("\"\"\"", StringComparison.Ordinal)
+                || m.Value.StartsWith("//", StringComparison.Ordinal)
+                || m.Value.StartsWith("/*", StringComparison.Ordinal);
+            for (int i = pos; i < m.Index; i++) { sb.Append(src[i]); map.Add(i); }
+            if (!removed)
+            {
+                for (int i = m.Index; i < m.Index + m.Value.Length; i++) { sb.Append(src[i]); map.Add(i); }
+            }
+            pos = m.Index + m.Value.Length;
+        }
+        for (int i = pos; i < src.Length; i++) { sb.Append(src[i]); map.Add(i); }
+        return (sb.ToString(), map.ToArray());
+    }
+
+    /// <summary>Текст span <c>[from,to)</c> очищенного исходника в исходном тексте: начало — позиция
+    /// <c>from</c> в исходнике, конец — сразу за позицией <c>to-1</c>; <c>to</c> за последним символом
+    /// очищенного (границы нет) — конец исходника. Внутри span остаются вырезанные очисткой
+    /// комментарии и raw-строки — они часть исходного текста объявления.</summary>
+    private static string OriginalSpan(string src, int[] map, int from, int to) =>
+        to >= map.Length
+            ? src.Substring(map[from])
+            : src.Substring(map[from], map[to - 1] - map[from] + 1);
 
     /// <summary>Ключи индексаторных инициализаторов <c>Dictionary&lt;string, string&gt; Имя = new() { ["ключ"] = … }</c>
     /// по тексту исходника: имя словаря → ПОЛНЫЕ ключи в порядке объявления, с повторами. Индексатор при
@@ -346,6 +527,9 @@ public class SessionCoreShapeGuardTests
             var next = i + 1 < source.Length ? source[i + 1] : '\0';
             if (c == '@' && next == '"')
             {
+                // Verbatim-строка: «""» — содержание, закрывает только непарная кавычка, в том числе
+                // сразу после «\»: обычная строковая ветка съела бы «\"» как escape и проглотила
+                // конец строки вместе с последующей «}» инициализатора.
                 sb.Append("@\"");
                 for (i += 2; i < source.Length; i++)
                 {
@@ -545,20 +729,41 @@ public class SessionCoreShapeGuardTests
     }
 
     /// <summary>Статические <c>Dictionary&lt;string, string&gt;</c> ВСЕХ типов файла: top-level типы по тексту
-    /// (имя + пространство имён якоря) вместе со вложенными на любую глубину. Нестатические поля и локальные
-    /// переменные в сверку полноты не входят; файловый тип, не найденный в сборке, — громкий отказ.</summary>
+    /// (имя + пространство имён якоря) вместе со вложенными на любую глубину. Имена меряются без арности
+    /// («`1»): текст называет generic-тип как «Holder», Type.Name — «Holder`1». Нестатические поля и локальные
+    /// переменные в сверку полноты не входят. Generic-определения рантаймом не мерятся: статическое поле
+    /// открытого generic не имеет значения (FieldInfo.GetValue бросает), его Count неизмерим — граница
+    /// названа здесь и самопроверена (Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно).
+    /// Имя текста, не разрешённое в тип пространства имён якоря, — громкий отказ с перечнем имён
+    /// (Самопроверка_отказ_полноты_несфальшивированное_имя_громкий_и_называет_причину).</summary>
     internal static List<FieldInfo> FileStaticDictionaryFields(Type anchor, string source)
     {
         var names = FacadeTopLevelNames(source);
         var roots = anchor.Assembly.GetTypes()
-            .Where(t => !t.IsNested && t.Namespace == anchor.Namespace && names.Contains(t.Name)).ToList();
-        names.Except(roots.Select(t => t.Name)).Should().BeEmpty("top-level тип файла не найден в сборке: сверка полноты была бы неполной");
+            .Where(t => !t.IsNested && t.Namespace == anchor.Namespace && names.Contains(WithoutArity(t.Name))).ToList();
+        // Причина отказа — не «нет в сборке» вообще: тип может быть в сборке, но в другом пространстве имён
+        // (второй namespace-блок файла) или в другой сборке; либо имя вообще не объявление типа
+        // (ложное имя из строки-фикстуры). Формулировка обязана называть фактическую причину.
+        var unresolved = names.Except(roots.Select(t => WithoutArity(t.Name))).ToList();
+        if (unresolved.Count > 0)
+            throw new InvalidOperationException(
+                "Имена top-level типов текста не разрешены в типы пространства имён якоря: " + string.Join(", ", unresolved) +
+                " — такой тип не в этой сборке или вне пространства имён якоря (второй namespace-блок файла); "
+                + "или имя не объявление типа: сверка полноты была бы неполной");
         return roots.SelectMany(WithNested)
+            // Открытый generic вне рантайм-сверки намеренно: FieldInfo.GetValue(null) по статическому полю
+            // generic-определения бросает — Count неизмерим, сверить нельзя. Граница не тихая: текст-разбор
+            // словарь generic-типа видит (фикстура GenericHolder), а исключение поля названо тестом
+            // Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно.
             .Where(t => !t.IsGenericTypeDefinition)
             .SelectMany(t => t.GetFields(BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
             .Where(f => f.FieldType == typeof(Dictionary<string, string>))
             .ToList();
     }
+
+    /// <summary>Имя типа без арности: «Holder`1» → «Holder» — так текст (regex ловит \w+ до «&lt;»)
+    /// сопоставляется с generic-типом сборки. Для неgeneric-имён — без изменений.</summary>
+    private static string WithoutArity(string name) => name.Split('`')[0];
 
     private static IEnumerable<Type> WithNested(Type t) =>
         new[] { t }.Concat(t.GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic).SelectMany(WithNested));
@@ -595,7 +800,12 @@ public class SessionCoreShapeGuardTests
         // Char-литералы со скобкой и кавычкой в значении.
         InitializerKeys(head + "    [\"a\"] = '}'.ToString(),\n    [\"b\"] = '\"'.ToString(),\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
             .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b"], ["E"] = ["e"] });
-        // Verbatim: удвоенная кавычка, обратная косая перед закрывающей, скобка и «//» внутри.
+        // Verbatim: первая строка держит «}» и «//» внутри себя (после экранированной кавычки «""»),
+        // вторая заканчивается обратной косой сразу перед закрывающей кавычкой. Первая: без verbatim-ветки
+        // удвоенные кавычки разбились бы на соседние обычные строки, и «//» оказался внутри «строки» лишь
+        // случайно. Вторая — решающая: без verbatim-ветки кавычка после обратной косой съедается как escape,
+        // закрывающая кавычка теряется, и следующие ключи вместе с закрывающей «}» проглатываются как текст
+        // строки — verbatim-ветка обязана доесть строку до настоящей (непарной) границы.
         InitializerKeys(head + "    [\"a\"] = @\"x\"\"}\"\" // y\",\n    [\"b\"] = @\"C:\\\",\n    [\"c\"] = \"3\",\n};\nDictionary<string, string> E = new() { [\"e\"] = \"1\" };")
             .Should().BeEquivalentTo(new Dictionary<string, List<string>> { ["D"] = ["a", "b", "c"], ["E"] = ["e"] });
         // Незакрытый блок-комментарий — громкий отказ.
@@ -610,8 +820,269 @@ public class SessionCoreShapeGuardTests
             .Select(f => f.Name).ToList();
         names.Should().Contain("CoreDataReferrerAllowList", "словарь самого класса");
         names.Should().Contain(nameof(FakeNestedDicts.Inner.NestedDict), "словарь вложенного типа");
-        names.Should().Contain(nameof(ForeignNames.ForeignDict), "словарь другого top-level класса файла");
+        names.Should().Contain(nameof(ForeignDictHolder.ForeignDict), "словарь другого top-level класса файла");
         names.Should().NotContain(nameof(FakeNestedDicts.InstanceDict), "нестатический словарь в сверку не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_объявление_без_модификатора_или_после_namespace_состоит_в_сверке()
+    {
+        // Top-level тип без модификатора доступа (в C# internal по умолчанию) — тип файла: без опционального
+        // модификатора в узоре FacadeTopLevelNames его имя не попадало в names, и его словари выпадали
+        // из полноты молча. Фикстура BareNamedDicts обязана быть в перечне полей сверки.
+        var names = FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests), ReadGuardsSource("SessionCoreShapeGuardTests.cs"))
+            .Select(f => f.Name).ToList();
+        names.Should().Contain(nameof(BareNamedDicts.BareDict),
+            "тип без модификатора доступа — top-level тип файла: его словарь обязан в сверке полноты");
+
+        // Тот же случай на стороне текста: объявление после «namespace X;» в той же строке — без префиксной
+        // группы узора его имя не попадало в names, и весь тип выпадал из полноты молча.
+        FacadeTopLevelNames("namespace ClaudeHomeServer.Tests.Services; static class Prefixed {}")
+            .Should().Contain("Prefixed", "объявление после «namespace X;» в той же строке — top-level тип файла");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_модификатор_вне_списка_громкий_и_файл_с_модификатором_file_в_полном_отказе()
+    {
+        // Модификатор «file» (C# 14) теперь в узоре: прежде его не было в перечислении, объявление не
+        // попадало в names, unresolved пуст — тип и его словари выпадали из полноты молча.
+        FacadeTopLevelNames("file static class FileNamedDicts { }").Should().Contain("FileNamedDicts",
+            "объявление с модификатором «file» — top-level тип файла: его имя обязано в names");
+
+        // Названная граница: в метаданных сборки имя file-типа манглено ("<…>HEX__SimpleName"), мерка по
+        // имени до «<» его не достанет — поэтому file-тип в файле-страже даёт полный отказ с названием
+        // типа, а не тихое выпадение из полноты (проба мутацией: живой file-тип с словарём краснит
+        // боевые полноты именно этим отказом). Живой file-фикстуры в этом файле нет: она была бы
+        // постоянным красным.
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "file static class FileNamedDicts { }\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*FileNamedDicts*");
+
+        // Неизвестная конструкция в файле даёт громкий отказ с названием причины, а не тихое выпадение
+        // типа из полноты: токен перед ключевым словом вне KnownTypeModifiers — отказ с его именем.
+        FluentActions.Invoking(() => FacadeTopLevelNames("volatile class UnknownModifierThing {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*volatile*");
+
+        // «record class» — целое ключевое слово, не модификатор + класс: ленивость ряда mods обязательна
+        // (жадный ряд взял бы «record» в модификаторы и дал бы громкий отказ на законном объявлении).
+        FacadeTopLevelNames("record class RecordClassThing(int X);").Should().Contain("RecordClassThing",
+            "«record class» — ключевое слово записи: модификатором оно не считается");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_объявление_в_колонке_0_громкий_и_называет_причину()
+    {
+        // «delegate» — единственная форма top-level объявления типа в C# вне прежних ключевых слов узора
+        // (class/record/struct/enum/interface + delegate — весь набор). Прежний узор её не матнил вовсе:
+        // тип молча выпадал из полноты (и из трипвайра «ядро → фасад»), громкого отказа не было — тот же
+        // класс тихого пропуска, что лечился модификатором вне списка. Теперь форма даёт громкий отказ
+        // с названием формы и строки. Живой delegate-фикстуры в этом файле нет: она была бы постоянным
+        // красным (тот же порядок, что с живым file-типом выше).
+        // Отказ обязан приходить именно из delegate-ветки узора, а не из ветки неизвестного модификатора:
+        // подстрока «delegate» есть в сообщении обеих веток — если «delegate» попадёт в ряд mods (жадный
+        // ряд), отказ придёт из чужой ветки, а WithMessage («*delegate*») всё равно зеленел бы.
+        // Маркер «Неизвестная форма объявления» несёт только delegate-ветка: по нему и проверяю.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void Handler(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
+        // Форма не зависит от префикса: без модификатора доступа (internal по умолчанию), с атрибутом,
+        // после «namespace X;» в той же строке — та же полнота, тот же отказ.
+        FluentActions.Invoking(() => FacadeTopLevelNames("delegate void BareHandler();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
+        FluentActions.Invoking(() => FacadeTopLevelNames("[Obsolete] public delegate void AttrHandler();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
+        FluentActions.Invoking(() => FacadeTopLevelNames("namespace ClaudeHomeServer.Tests.Services; internal delegate void AfterNs();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
+        // Отказ называет строку объявления, а не только слово: без неё не найти, где вводить разбор формы.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void NamedLine(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*NamedLine*");
+        // Многострочное объявление: имя делегата живёт за типом возвращаемого на следующей строке.
+        // Взятие строки по «\n» оставило бы отказ без имени типа; граница — конец логического
+        // объявления («;»), поэтому имя названо и через перенос строки.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate\nvoid MultiLineHandler(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("MultiLineHandler", "отказ называет имя типа и в многострочном объявлении");
+        // Без «;» граница — пустая строка: имя до неё названо, текст за пустой строкой в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate\nvoid NoSemiBoundary()\n\ninternal static class AfterTheBlank {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("NoSemiBoundary", "без «;» граница — пустая строка: имя до неё названо").And
+            .NotContain("AfterTheBlank", "за пустой строкой — не часть объявления, в отказ не входит");
+        // «;» внутри строкового литерала — не конец объявления: без разбора литералов граница вставала
+        // на «;» внутри «"use X; instead"» и отказ обрывался на полуслове с незакрытой кавычкой
+        // («…([Obsolete("use X»). Теперь: имя названо, текст объявления до настоящего «;» цел —
+        // включая часть за внутренним «;»), а текст за настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void SemiInStringHandler([Obsolete(\"use X; instead\")] int x); internal static class AfterTheSemi {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("SemiInStringHandler", "имя типа названо").And
+            .Contain("instead\")] int x);", "граница — настоящий «;», а не «;» внутри литерала: текст объявления цел").And
+            .NotContain("AfterTheSemi", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_пустая_строка_в_verbatim_литерале_не_граница_отказ_цел()
+    {
+        // Пустая строка внутри строкового литерала — не граница объявления: прежний поиск пустой
+        // строки регулярком по тексту ставил границу на пустой строке внутри многострочного
+        // verbatim-аргумента атрибута ([Obsolete] с аргументом @"…", содержащим пустую строку) —
+        // отказ обрывался внутри литерала, хвост объявления терялся. Теперь: имя названо, текст
+        // объявления до настоящего «;» цел — включая часть за пустой строкой внутри литерала,
+        // а текст за настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void BlankInVerbatimHandler([Obsolete(@\"use X\n\ninstead\")] int x); internal static class AfterTheBlankVerbatim {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("BlankInVerbatimHandler", "имя типа названо").And
+            .Contain("instead\")] int x);", "граница — настоящий «;», а не пустая строка внутри литерала: текст объявления цел").And
+            .NotContain("AfterTheBlankVerbatim", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_точка_с_запятой_в_интерполированной_строке_не_граница_отказ_цел()
+    {
+        // «;» внутри интерполяционной дыры — не граница объявления: прежний узор литералов
+        // останавливался на первой кавычке «$"», литерал не матчился вовсе, и «;» внутри
+        // {m["k;v"]} принимался за конец объявления — отказ обрывался внутри литерала, хвост
+        // объявления терялся. Теперь интерполированная строка потребляется целиком (дыра с
+        // балансом скобок, внутри — вложенный литерал): имя названо, текст объявления до
+        // настоящего «;» цел — включая часть за внутренним «;»), а текст за настоящим «;»
+        // в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void InterpSemiHandler([Obsolete($\"{m[\"k;v\"]}\")] int x); internal static class AfterTheInterp {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("InterpSemiHandler", "имя типа названо").And
+            .Contain("v\"]}\")] int x);", "граница — настоящий «;», а не «;» внутри интерполяционной дыры: текст объявления цел").And
+            .NotContain("AfterTheInterp", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_продолжение_строки_в_литерале_не_граница_отказ_цел()
+    {
+        // Line-continuation внутри обычного литерала — не граница объявления: в прежнем узоре
+        // escape-пара «\\.» не матчала перевод строки, литерал "a;b\<NL>c" не матчился вовсе,
+        // и «;» внутри него принимался за конец объявления — отказ обрывался на полуслове.
+        // Очистка StripRawStringsAndComments не видела такой литерал так же — стороны теперь
+        // одной формы (StringLiteralsPattern): escape-пара «\\[\s\S]» держит продолжение
+        // строки, литерал потребляется целиком: имя названо, текст объявления до настоящего
+        // «;» цел — включая часть за внутренним «;» и за продолжением строки), а текст за
+        // настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void ContinuationHandler([Obsolete(\"a;b\\\nc\")] int x); internal static class AfterTheContinuation {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("ContinuationHandler", "имя типа названо").And
+            .Contain("b\\\nc\")] int x);", "граница — настоящий «;», а не «;» внутри литерала с продолжением строки: текст объявления цел").And
+            .NotContain("AfterTheContinuation", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_экранированная_кавычка_в_литерале_не_граница_отказ_цел()
+    {
+        // «;» внутри обычного литерала перед экранированной кавычкой — не граница объявления:
+        // escape-пара «\\[\s\S]» обычной альтернативы потребляет литерал "a;\"b" целиком, граница —
+        // настоящий «;» в конце объявления. «;» стоит ПЕРЕД escape, а не после него («a\"b;c»):
+        // после escape поломка escape-пары невидима — обычная альтернатива перепаривает от
+        // экранированной кавычки до закрывающей («"b;c"»), внутренний «;» оказывается внутри
+        // этого «литерала», граница всё равно настоящая. Перед escape перепаривание до «;»
+        // не дотягивает: альтернатива без обычного escape (или с одной лишь строкой-продолжением
+        // «\\[\r\n]») ставит границу на внутреннем «;» — это ровно та ветка escape-пары, которой
+        // в прежнем наборе не держал никто: «use X; instead» берёт «;» без escape, «a;b\<NL>c» —
+        // только продолжение строки. Теперь: имя названо, текст объявления до настоящего «;» цел —
+        // включая часть за «;» внутри литерала, а текст за настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void EscapeHandler([Obsolete(\"a;\\\"b\")] int x); internal static class AfterTheEscape {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("EscapeHandler", "имя типа названо").And
+            .Contain("b\")] int x);", "граница — настоящий «;», а не «;» внутри литерала перед escape: текст объявления цел").And
+            .NotContain("AfterTheEscape", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_комментарий_внутри_объявления_виден_в_отказе()
+    {
+        // Отказ печатает текст объявления из исходного файла, а не из очищенного: прежде
+        // span брался из очищенного текста (StripRawStringsAndComments), и комментарий или
+        // raw-строка внутри объявления в отказ не попадали — диагностика показывала объявление
+        // без части его текста. Теперь span ставится обратно в исходник по карте индексов
+        // очистки (OriginalSpan): комментарий внутри объявления виден в отказе дословно.
+        // Границы span — те же, что у границы объявления: текст за объявлением в отказ
+        // по-прежнему не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void CommentedHandler([Obsolete(/* keep me */ see X)] int x); internal static class AfterTheComment {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("CommentedHandler", "имя типа названо").And
+            .Contain("/* keep me */", "комментарий внутри объявления — часть исходного текста объявления, в отказ не теряется").And
+            .NotContain("AfterTheComment", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_из_двух_границ_берётся_ближайшая_а_не_последняя()
+    {
+        // В объявлении обе границы сразу — пустая строка и «;». Прежние самопроверки держали по
+        // одной границе: на них проба «берётся последняя граница вместо ближайшей» зелёная — при
+        // сломаном правиле «ближайшая» никто бы не заметил (minor ревью b08cfba4). Здесь обе
+        // границы в одном объявлении, в обоих порядках: берётся ближайшая, а не последняя.
+        // Пустая строка раньше «;»: ближайшая граница — пустая строка. Имя названо, текст до неё
+        // цел, текст за ней — даже тот, что стоит ПЕРЕД «;» (маркер TailAfterBlank), и тем более
+        // после «;» — в отказ не входит. Маркер между пустой строкой и «;» обязателен: без него
+        // проба «последняя граница» дотянула бы span до «;» и не задела бы ни одного имени —
+        // разница «пустая строка или «;»» осталась бы невидимой для утверждений.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void BlankThenSemi([Obsolete(\"x\")] int a\n\n) TailAfterBlank; internal static class AfterTheBlankFirst {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("BlankThenSemi", "имя типа названо").And
+            .Contain("[Obsolete(\"x\")] int a", "текст до ближайшей границы (пустой строки) цел").And
+            .NotContain("TailAfterBlank", "граница — ближайшая пустая строка, а не «;» за ней: текст между ними в отказ не входит").And
+            .NotContain("AfterTheBlankFirst", "и тем более текст за «;» — не часть объявления");
+        // «;» раньше пустой строки: ближайшая граница — «;», он потребляется как конец объявления.
+        // Текст между «;» и пустой строкой — уже не часть объявления — в отказ не входит. Оба
+        // порядка обязательны: один зафиксировал бы «берётся первая найденная», но не показал бы,
+        // что «первая» — это «ближайшая», а не «предпочитаемая форма границы».
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void SemiThenBlank(); internal static class BetweenTheBoundaries {}\n\ninternal static class AfterTheBlank {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("SemiThenBlank();", "ближайший «;» назван и потреблён как граница").And
+            .NotContain("BetweenTheBoundaries", "за ближайшим «;» — не часть объявления: пустая строка дальше «;» границей не стала");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно()
+    {
+        var source = ReadGuardsSource("SessionCoreShapeGuardTests.cs");
+        // Текст-разбор словарь внутри generic-типа НЕ слеп: фикстура GenericHolder разбирается.
+        InitializerKeys(source).Should().ContainKey("GenericDict",
+            "generic-тип файла текстовым разбором видим: иначе его словарь исчезал бы и из текста");
+        // Рантайм-сверка для открытого generic невозможна: FieldInfo.GetValue по его статическому полю
+        // бросает, Count неизмерим — поле исключено, и это названная граница, а не тихое выпадение:
+        // без фильтра !IsGenericTypeDefinition в FileStaticDictionaryFields эта проверка краснеет,
+        // а боевая полнота падает с тем самым исключением GetValue.
+        var fields = FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests), source)
+            .Select(f => f.Name).ToList();
+        fields.Should().NotContain("GenericDict",
+            "открытый generic вне рантайм-сверки намеренно (Count неизмерим) — граница описана в FileStaticDictionaryFields");
+    }
+
+    [Fact]
+    public void Самопроверка_отказ_полноты_несфальшивированное_имя_громкий_и_называет_причину()
+    {
+        // «Громкий отказ» FileStaticDictionaryFields самопроверен здесь: оба случая обязаны его вызвать,
+        // и отказ обязан назвать имя. Случай 1: имя вообще не тип в сборке.
+        const string absent = "NotATypeInAssembly";
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "internal static class " + absent + " {}\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*" + absent + "*");
+        // Случай 2: имя поймано узором через префиксную группу (объявление после «namespace X;»), тип ЕСТЬ
+        // в сборке, но вне пространства имён якоря — фикстура живёт во втором namespace-блоке тестового
+        // проекта (OtherNamespaceShapeFixture.cs). Прежде этот случай не отличался от первого: тип не
+        // существовал ни в одном namespace, и оба вызова падали на один путь «нет в сборке», а различие
+        // причин жило только в тексте сообщения. Строка про тип в сборке и есть различение: перенести
+        // фикстуру в пространство имён якоря — и второй Invoking перестанет бросать (краснеет);
+        // убрать её из сборки — краснеет эта строка.
+        const string foreign = "NamedInAnotherNamespace";
+        typeof(SessionCoreShapeGuardTests).Assembly
+            .GetType("ClaudeHomeServer.Tests.OtherNamespace." + foreign).Should().NotBeNull(
+                "тип второго случая обязан существовать в сборке вне пространства имён якоря: "
+                + "иначе случай сводится к первому (имя вообще не тип)");
+        FluentActions.Invoking(() => FileStaticDictionaryFields(typeof(SessionCoreShapeGuardTests),
+                "namespace ClaudeHomeServer.Tests.OtherNamespace;\ninternal static class " + foreign + " {}\n"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*" + foreign + "*");
     }
 
     internal sealed class FakeNestedDicts
@@ -672,6 +1143,19 @@ public class SessionCoreShapeGuardTests
         FacadeTopLevelNames("[Obsolete] public class WithAttr {}\n[A][B(1)] internal sealed record Two(int X);")
             .Should().BeEquivalentTo("WithAttr", "Two");
         FacadeTopLevelNames("[Obsolete(\"see Foo[0]\")] public class BracketAttr {}").Should().BeEquivalentTo("BracketAttr");
+        // Ведущий атрибут с интерполированной строкой, в дыре которой вложенная строка: прежде
+        // attribute-узор держал свою копию литералов (интерполированной в ней не было вовсе) — группа
+        // атрибута не матчилась, объявление на той же строке выпадало из names молча: сверка полноты
+        // проверяет только «распарсенное имя → тип», обратного сравнения нет. Теперь литералы атрибута —
+        // тот же StringLiteralsPattern: имя в наборе.
+        FacadeTopLevelNames("[Obsolete($\"{m[\"k;v\"]}\")] public class InterpAttr {}").Should().BeEquivalentTo("InterpAttr");
+        // Решающий случай именно этой копии: литерал атрибута с продолжением строки. Прежний
+        // attribute-узор («\\.» не матчает перевод строки) не матчил атрибут вовсе — объявление на той
+        // же строке молча выпадало из набора (тот же тихий пропуск, что на стороне границы лечился
+        // «\\[\\s\\S]»). Прежняя копия краснеет ровно на этой строке: интерполяция выше — нет
+        // (её в прежнем узоре не было, но балансная группа d со вложенным литералом покрывала
+        // и этот пример случайно).
+        FacadeTopLevelNames("[Obsolete(\"a;b\\\nc\")] public class ContinuationAttr {}").Should().BeEquivalentTo("ContinuationAttr");
         FacadeTopLevelNames("var s = \"\"\"\npublic class InRaw {}\n\"\"\";\npublic class Real {}").Should().BeEquivalentTo("Real");
         // Посторонняя «"""» в комментарии не сопрягается с настоящей raw-строкой: объявление между ними сохраняется.
         FacadeTopLevelNames("// лишняя \"\"\" в комментарии\npublic class Between {}\nvar s = \"\"\"\npublic class InRaw {}\n\"\"\";\npublic class Real {}")
@@ -688,6 +1172,24 @@ public class SessionCoreShapeGuardTests
             .Should().BeEquivalentTo("PlainChar", "HexChar");
         FacadeConditionalDirectives("#if false\npublic class Hidden {}\n  #endif\n#region R").Should()
             .BeEquivalentTo("#if false", "#endif");
+    }
+
+    [Fact]
+    public void Самопроверка_разбор_фасада_видит_generic_top_level_тип_без_арности()
+    {
+        // Generic top-level тип файла фасада: узор берёт имя до «<» («GenericHolder»), Type.Name —
+        // «GenericHolder`1». Мерка по t.Name молча выкидала бы такой тип из трипвайра «ядро → фасад»:
+        // ссылка ядра на него проходила бы незамеченной. Main generic-типов не содержит (проверено
+        // поиском по его исходникам), поэтому граница моделируется на тестовой сборке и
+        // тестовом пространстве имён (фикстура GenericHolder): без WithoutArity в мерке
+        // FacadeTopLevelTypes вторая проверка краснеет.
+        const string decl = "internal static class GenericHolder<T> { }";
+        FacadeTopLevelNames(decl).Should().Contain("GenericHolder",
+            "текстовый разбор generic-объявление видит: имя берётся до «<»");
+        FacadeTopLevelTypes(decl, typeof(SessionCoreShapeGuardTests).Assembly, "ClaudeHomeServer.Tests.Services")
+            .Should().Contain(typeof(GenericHolder<>),
+                "мерка — по имени без арности, как в FileStaticDictionaryFields: generic top-level тип "
+                + "фасада обязан в наборе, а не молча выпадать из трипвайра");
     }
 
     [Fact]
@@ -783,6 +1285,122 @@ public class SessionCoreShapeGuardTests
         SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithNestedClass)]).Should().ContainSingle()
             .Which.Should().Contain("FakeRootWithNestedClass+Role");
 
+    [Fact]
+    public void Самопроверка_вложенный_record_struct_распознаётся_как_record_а_обычная_struct_нет()
+    {
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.RecStruct)).Should().BeTrue(
+            "у record struct нет <Clone>$, признак — PrintMembers плюс синтезированное равенство");
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithStructs.PlainStruct)).Should().BeFalse();
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithStructs)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithStructs+PlainStruct");
+    }
+
+    [Fact]
+    public void Самопроверка_рукописный_PrintMembers_в_обычной_struct_не_делает_её_записью()
+    {
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithHandwrittenPrint.HandStruct)).Should().BeFalse(
+            "признак записи — синтезированный компилятором PrintMembers, а не метод с тем же именем");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithHandwrittenPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithHandwrittenPrint+HandStruct");
+    }
+
+    [Fact]
+    public void Самопроверка_record_struct_с_объявленным_автором_PrintMembers_остаётся_записью()
+    {
+        // Х9: своя декларация PrintMembers заменяет синтезированный член (спека C# 10.0 «Record structs»),
+        // поэтому признак структуры-записи держится на синтезированной машинерии равенства.
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithOwnPrint.RecordWithOwnPrint)).Should().BeTrue(
+            "record struct с собственным PrintMembers остаётся записью: op_Equality/Equals/GetHashCode синтезированы");
+        SessionCoreFacadeContracts.IsRecord(typeof(FakeRootWithOwnPrint.PlainWithOwnPrint)).Should().BeFalse(
+            "рукописный PrintMembers без синтезированного равенства — обычная структура; её синтезированные "
+            + "акцессоры авто-свойств get_/set_ признаком не считаются");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithOwnPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("FakeRootWithOwnPrint+PlainWithOwnPrint");
+    }
+
+    [Fact]
+    public void Самопроверка_диагностика_неопознанной_записи_называет_найденные_члены()
+    {
+        // Смена формы синтезированного равенства (новый компилятор) обязана красить сторож
+        // причиной, а не молча: описание нарушения называет, какие [CompilerGenerated]-методы в типе
+        // есть на самом деле. Фикстура — обычная структура с рукописным PrintMembers и
+        // авто-свойством: его акцессоры синтезированы, а машинерии равенства нет — по списку это видно.
+        var plain = typeof(FakeRootWithOwnPrint.PlainWithOwnPrint);
+        // Состав списка — поэлементно, а не по подстроке: акцессоры авто-свойств есть, машинерии
+        // равенства нет, порядок — по имени (сортировка в GeneratedMethodNames). Фикстура объявляет
+        // свойства Y, затем A — обратному алфавитному порядку, поэтому без сортировки список был бы
+        // «get_Y, set_Y, get_A, set_A» и эта строка краснеет. Диагностика, которая называет лишнее
+        // или не называет акцессоров («врёт в другую сторону»), краснеет здесь же.
+        SessionCoreFacadeContracts.GeneratedMethodNames(plain).Should().Equal("get_A", "get_Y", "set_A", "set_Y");
+        SessionCoreFacadeContracts.RecordShapeNote(plain).Should().Contain("get_Y")
+            .And.Contain("set_Y", "акцессоры авто-свойства должны быть в диагностике: их нет среди членов равенства")
+            .And.NotContain("op_Equality", "диагностика не придумывает машинерию равенства там, где её нет")
+            .And.NotContain("GetHashCode");
+        SessionCoreFacadeContracts.NestedShapeViolations([typeof(FakeRootWithOwnPrint)]).Should().ContainSingle()
+            .Which.Should().Contain("признак записи не найден");
+        // У опознанной записи диагностики нет: она не шумит в passing-пути.
+        SessionCoreFacadeContracts.RecordShapeNote(typeof(FakeRootWithOwnPrint.RecordWithOwnPrint)).Should().BeEmpty();
+    }
+
+    private sealed class FakeRootWithOwnPrint
+    {
+        public readonly record struct RecordWithOwnPrint(int X)
+        {
+            private bool PrintMembers(System.Text.StringBuilder sb) => sb.Append(X).Length > 0;
+        }
+
+        public struct PlainWithOwnPrint
+        {
+            public int X;
+            // Порядок объявления — обратный алфавитному (Y, затем A): GetMethods отдаёт акцессоры
+            // в порядке объявления, поэтому без сортировки в GeneratedMethodNames список и текст
+            // диагностики зависели бы от порядка метаданных — самопроверка диагностики краснеет
+            // на удалении сортировки.
+            public int Y { get; set; }
+            public int A { get; set; }
+            private bool PrintMembers(System.Text.StringBuilder sb) => false;
+        }
+    }
+
+    private sealed class FakeRootWithStructs
+    {
+        public readonly record struct RecStruct(int X);
+        public struct PlainStruct { public int X; }
+    }
+
+    private sealed class FakeRootWithHandwrittenPrint
+    {
+        public struct HandStruct
+        {
+            public int X;
+            private bool PrintMembers(System.Text.StringBuilder sb) => false;
+        }
+    }
+
+    [Fact]
+    public void Самопроверка_роль_в_перечне_контрактов_фасада_краснеет_по_форме() =>
+        SessionCoreFacadeContracts.CriterionViolations(
+                ["ClaudeHomeServer.Services.Sessions.SessionStore"], Main, typeof(SessionManager), CoreNamespace)
+            .Should().ContainSingle().Which.Should().Contain("не record/enum/исключение");
+
+    [Fact]
+    public void Самопроверка_прицепка_диагностики_в_описании_формы_контракта_краснеет_на_значении()
+    {
+        // Ветка «не record/enum/исключение» в CriterionViolations на реальных контрактах недостижима
+        // (все строки All — данные, а на классе вроде SessionStore прицепка пуста): она живёт
+        // «на будущее» и проверяется здесь напрямую. На значении без машинерии равенства описание
+        // обязано назвать найденные методы — снять прицепку в ContractShapeViolation, и первый
+        // случай краснеет. На классе прицепки нет: лишняя диагностика шумела бы в реальном
+        // нарушении формы.
+        SessionCoreFacadeContracts.ContractShapeViolation("PlainWithOwnPrint", typeof(FakeRootWithOwnPrint.PlainWithOwnPrint))
+            .Should().Contain("не record/enum/исключение")
+            .And.Contain("признак записи не найден")
+            .And.Contain("get_Y").And.Contain("set_Y", "на значении описание обязано назвать найденные методы");
+        SessionCoreFacadeContracts.ContractShapeViolation("Role", typeof(FakeRootWithNestedClass.Role))
+            .Should().Contain("не record/enum/исключение")
+            .And.NotContain("признак записи не найден", "у класса диагностики нет: она пуста по построению");
+    }
+
     private sealed class FakeRootWithNestedClass
     {
         public sealed class Role { public void Act() { } }
@@ -853,6 +1471,26 @@ public class SessionCoreShapeGuardTests
     private sealed class FakeUsesFacadeTop { public FakeFacadeTop? Top; }
 
     private sealed class FakeUsesFacadeNested { public SessionManager.TeamRunQuota Quota; }
+
+    // Закрытая generic-форма ссылки на top-level generic-тип фасада: полем static-класса объявить
+    // нельзя (CS0723), поэтому форма — typeof(GenericHolder<int>): ldtoken с TypeSpec закрытой
+    // инстанциации, который сканер резолвит закрытой формой. Набор держит открытое определение —
+    // без приведения формы ссылка прошла бы незамеченной
+    // (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада).
+    private static class FakeUsesClosedGenericFacadeTop
+    {
+        public static object Holder() => typeof(GenericHolder<int>);
+    }
+
+    // Посторонний generic для третьей стороны самопроверки
+    // (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада): его определения
+    // нет в наборе top-level типов фасада, и ссылка закрытой формой не должна дать ложного срабатывания.
+    private sealed class ForeignGeneric<T> { }
+
+    private static class FakeUsesForeignGeneric
+    {
+        public static object Holder() => typeof(ForeignGeneric<int>);
+    }
 
     // Формы ссылки на сам фасад (R-ФИНАЛ c1): параметр метода (правило 1 до него не дотягивается)
     // и статический вызов (сканер даёт declaring-тип вызванного метода по IL-опкоду call;
@@ -958,6 +1596,30 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
+    public void Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада()
+    {
+        // Набор держит открытое определение generic-типа (его даёт assembly.GetTypes), а сканер —
+        // закрытое вхождение ссылки («GenericHolder`1[System.Int32]»): прямое сравнение молча
+        // пропустило бы ссылку ядра на generic-тип фасада — тот же класс тихого пропуска, который
+        // лечился арностью в прошлом шаге, только на стороне ссылки. Граница моделируется на тестовой
+        // сборке (Main generic-типов не содержит — см. Самопроверка_разбор_фасада_видит_generic_top_level_тип_без_арности).
+        var top = FacadeTopLevelTypes("internal static class GenericHolder<T> { }",
+            typeof(SessionCoreShapeGuardTests).Assembly, "ClaudeHomeServer.Tests.Services");
+        top.Should().Contain(typeof(GenericHolder<>), "набор — открытое определение: без него проверка ниже вакуумна");
+        CoreNoFacadeRefs([typeof(FakeUsesClosedGenericFacadeTop)], top).Should().ContainSingle(
+            "ссылка закрытой формой «GenericHolder<int>» приводится к определению из набора: "
+            + "без приведения формы трипвайр слеп к generic-форме ссылки");
+        CoreNoFacadeRefs([typeof(FakeUsesClosedGenericFacadeTop)], new HashSet<Type>()).Should().BeEmpty(
+            "ловит именно membership в наборе, а не форма ссылки: без набора слеп и с приведением");
+        // Третья сторона самопроверки: в наборе — определение фасадного generic, а ссылка — на посторонний
+        // generic. Приведение OpenGenericForm даёт «ForeignGeneric<>», которого в наборе нет: ложного
+        // срабатывания быть не должно. Без этой стороны любое ослабление меры (срабатывание «по любому
+        // generic» вместо membership) проходила бы незамеченной.
+        CoreNoFacadeRefs([typeof(FakeUsesForeignGeneric)], top).Should().BeEmpty(
+            "ForeignGeneric<> не в наборе top-level типов фасада: ссылка на посторонний generic — не срабатывание");
+    }
+
+    [Fact]
     public void Самопроверка_правило4_краснеет_на_ссылке_постороннего_типа_на_стор() =>
         Rule4OnlyFacadeReferences([typeof(FakeReferrer)]).Should().ContainSingle();
 
@@ -1039,10 +1701,10 @@ public class SessionCoreShapeGuardTests
 }
 
 // Одноимённики допустимых типов в чужом (вложенном) пространстве имён — нарушители самопроверок правил 3 и 5.
+// Фикстур полноты здесь нет: поддерживающий правила 3/5 не должен искать их под этим именем
+// (словарь другого top-level класса — в ForeignDictHolder).
 internal static class ForeignNames
 {
-    internal static readonly Dictionary<string, string> ForeignDict = new() { ["f"] = "1" };
-
     internal interface ITurnStarter { }
 
     internal sealed class FakeLazyForeignSeam
@@ -1056,6 +1718,29 @@ internal static class ForeignNames
         public BuiltinMcpContexts(IServiceProvider services) { S = services; }
         public IServiceProvider S { get; }
     }
+}
+
+// Фикстура полноты: отдельный top-level класс файла со своим словарём — его словари обязан
+// достать FileStaticDictionaryFields (Самопроверка_полнота_видит_статические_словари_...).
+internal static class ForeignDictHolder
+{
+    internal static readonly Dictionary<string, string> ForeignDict = new() { ["f"] = "1" };
+}
+
+// Фикстура полноты: top-level тип БЕЗ модификатора доступа (C# — internal по умолчанию).
+// Без опционального модификатора в узоре FacadeTopLevelNames его имя не попадало в names,
+// и его словари выпадали из сверки молча (Самопроверка_полноты_объявление_без_модификатора_или_после_namespace_...).
+static class BareNamedDicts
+{
+    internal static readonly Dictionary<string, string> BareDict = new() { ["b"] = "1" };
+}
+
+// Фикстура границы полноты: generic-тип файла. Его словарь видим текстовым разбором, но
+// рантаймовый Count открытого generic неизмерим (FieldInfo.GetValue по статическому полю бросает) —
+// поле исключено из сверки явной границей (Самопроверка_полноты_generic_тип_исключён_...).
+internal static class GenericHolder<T>
+{
+    internal static readonly Dictionary<string, string> GenericDict = new() { ["g"] = "1" };
 }
 
 // Подставляемый тип самопроверки правила 4: одноимённый допустимой регистрации

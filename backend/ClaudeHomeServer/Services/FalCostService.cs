@@ -633,7 +633,7 @@ public class FalCostService : IFalRequestCost
             }
 
             var client = _httpFactory.CreateClient("fal");
-            // Клиент "fal" имеет свой таймаут регистрации (15 с, Program.cs; хвосты ревью R-S-SPEND-4,
+            // Клиент "fal" имеет свой таймаут регистрации (15 с, Composition/HttpClientRegistration.cs; хвосты ревью R-S-SPEND-4,
             // п.2): без него дефолт HttpClient 100 с держал бы слот гейта на всё время зависшего
             // запроса. На экземпляре здесь ничего не ставим: HttpClient.Timeout нельзя задать после
             // первого запроса на инстансе (а инстанс может быть переиспользован), и короткий

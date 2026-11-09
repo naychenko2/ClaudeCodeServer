@@ -4,12 +4,16 @@ using System.Text.RegularExpressions;
 namespace ClaudeHomeServer.Tests;
 
 /// <summary>
-/// Адрес «Файл.cs:строка» в тексте исходника: разбор, резолв пути, число строк файла.
-/// Общий для двух сторожей: SubsystemDisableMatrixTests (причины KnownViolations обязаны вести
-/// в существующее место) и SourceLinkGuardTests (комментарии исходников — хвост ревью e013789e:
-/// в копию вернули протухшую ссылку Program.cs:621-622, и ни один тест этого не увидел).
-/// Разбор адреса и резолв пути были приватными в SubsystemDisableMatrixTests; вынесены сюда,
-/// чтобы второй сторож не писал их копией (постановка S3-СТОРОЖ-ССЫЛКИ).
+/// Адрес «Файл.cs:строка» в тексте исходника: разбор, границы диапазона и их порядок, резолв
+/// пути, число строк файла. Общий для двух сторожей: SubsystemDisableMatrixTests (причины
+/// KnownViolations обязаны вести в существующее место) и SourceLinkGuardTests (комментарии
+/// исходников — хвост ревью e013789e: в копию вернули протухшую ссылку Program.cs:621-622,
+/// и ни один тест этого не увидел). Разбор адреса и резолв пути были приватными в
+/// SubsystemDisableMatrixTests; вынесены сюда, чтобы второй сторож не писал их копией
+/// (постановка S3-СТОРОЖ-ССЫЛКИ). Разбор диапазона и порядка границ (<see
+/// cref="BadRangeReason"/>) вынесен тем же порядком: после хвоста 49e7b2e6 он остался
+/// приватным в первом стороже, а второй остался на своём int.Parse и проверке только
+/// диапазона, без порядка (п. 2 хвоста ffa6c795).
 ///
 /// Число строк файла кешируется: один и тот же файл зовут несколько строк одного словаря и
 /// несколько комментариев дерева; без кеша прогон сторожа перечитывал бы SessionManager.cs
@@ -66,6 +70,27 @@ internal static class TestSourceAddresses
     /// Число строк файла дерева. Полные пути, полученные <see cref="Resolve"/>.
     public static int LineCount(string fullPath) =>
         LineCounts.Value.GetOrAdd(fullPath, static p => File.ReadLines(p).Count());
+
+    /// Обе границы диапазона адреса: разбор, диапазон, порядок. Число длиннее int — не номер
+    /// строки, а запись в списке битых, а не OverflowException (п. 3 хвоста 49e7b2e6). Диапазон
+    /// проверяется раньше порядка: главное в паре «(:9999-50)» — граница вне файла, переворот
+    /// называется только когда обе границы внутри файла (п. 1 хвоста 49e7b2e6). Сообщение
+    /// называет ровно ту причину, по которой адрес красный, а не все сразу. Зовётся обоими
+    /// сторожами по своим группам regex: «line»/«lineTo» у полного адреса, «from»/«to» у
+    /// короткой ссылки (п. 2 хвоста ffa6c795).
+    public static string? BadRangeReason(Match m, string fromGroup, string toGroup, int total)
+    {
+        var fromOk = int.TryParse(m.Groups[fromGroup].Value, out var from);
+        var to = from;
+        var toOk = !m.Groups[toGroup].Success || int.TryParse(m.Groups[toGroup].Value, out to);
+        if (!fromOk || !toOk)
+            return "число строки не помещается в int";
+        if (from < 1 || from > total || to < 1 || to > total)
+            return $"в файле {total} строк";
+        if (from > to)
+            return "границы диапазона перевёрнуты";
+        return null;
+    }
 
     private static string? TryRepo(string[] parts)
     {

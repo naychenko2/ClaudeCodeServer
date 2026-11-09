@@ -414,8 +414,9 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// Skip в прогоне. Формат адреса мерился и раньше; теперь мерится и местоположение: файла
     /// из адреса не быть в дереве — красный, строки вне диапазона файла («:0» и «:999» в верном
     /// файле) — красный: «Файл.cs:0» проходил по одному «line > total» (п. 2 хвоста d3e0ddf8);
-    /// адреса, и их порядок: нулевая верхняя «(:59-0)» и верхняя вне файла «(:9999-50)» красны
-    /// как вне [1..total] в обеих формах (п. 1–2 хвоста eaf0be70), а перевёрнутая пара «(:50-30)»,
+    /// адреса, и их порядок: нулевая вторая граница «(:59-0)» и первая граница вне файла
+    /// «(:9999-50)» красны как вне [1..total] в обеих формах (п. 1–2 хвоста eaf0be70),
+    /// а перевёрнутая пара «(:50-30)»,
     /// обе границы которой внутри файла, красна по порядку границ (п. 1 хвоста 49e7b2e6);
     /// число длиннее int «(:99999999999999999999)» — запись в списке битых, а не
     /// OverflowException (п. 3 хвоста 49e7b2e6). Короткая ссылка «Имя (:NN-MM)» без своего файла
@@ -435,14 +436,15 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             .Should().BeEmpty("причина пропущенной строки обязана называть файл:строку того, что падает");
 
         // Вторая половина — существование места. Полный адрес — путь:строка или путь:строка-строка.
-        // Разбор адреса и резолв пути — общие с SourceLinkGuardTests в TestSourceAddresses:
+        // Разбор адреса, диапазона и порядка границ, резолв пути — общие с SourceLinkGuardTests
+        // в TestSourceAddresses:
         // путь принимается в двух записанных в словаре формах (от корня репозитория backend/…
         // и коротким путём Main-проекта Controllers/…, Program.cs — обе ведут к одному файлу),
         // дальше — единственный файл дерева с таким путём или именем (для этого словаря он
         // ничего не добавляет: его адреса резолвятся первыми двумя формами).
         // Строка и обе границы диапазона меряются [1..total] в обеих формах, и их порядок: «:0» — не
         // существующая строка (п. 2 хвоста d3e0ddf8); «Файл.cs:138-139» мерилось нижней
-        // половиной, а «(:9999-50)» (верхняя граница вне файла) и нулевая верхняя «(:59-0)»
+        // половиной, а «(:9999-50)» (первая граница вне файла) и нулевая вторая граница «(:59-0)»
         // проходили зелёными (п. 1–2 хвоста eaf0be70); перевёрнутая пара «(:50-30)» оставалась
         // зелёной и после той правки: её границы внутри файла, а порядок не мерился
         // (п. 1 хвоста 49e7b2e6). Короткая ссылка без своего файла относится к
@@ -463,7 +465,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
                         dead.Add($"{key}: {m.Value} — короткая ссылка без названного файла-владельца");
                         continue;
                     }
-                    bad = BadRangeReason(m, "from", "to", TestSourceAddresses.LineCount(owner));
+                    bad = TestSourceAddresses.BadRangeReason(m, "from", "to", TestSourceAddresses.LineCount(owner));
                     if (bad is not null) dead.Add($"{key}: {m.Value} — {bad}");
                     continue;
                 }
@@ -476,7 +478,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
                 }
                 owner = file;
                 if (!m.Groups["line"].Success) continue; // голое имя файла задало владельца; адреса строки нет
-                bad = BadRangeReason(m, "line", "lineTo", TestSourceAddresses.LineCount(file));
+                bad = TestSourceAddresses.BadRangeReason(m, "line", "lineTo", TestSourceAddresses.LineCount(file));
                 if (bad is not null) dead.Add($"{key}: {m.Value} — {bad}");
             }
         }
@@ -500,25 +502,6 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
             .Should().Be(1, "закрытая форма — ровно то, как словарь записывает короткую ссылку");
         TestSourceAddresses.DictionaryAddress.Matches("TurnCostLedger (:59-68 без скобки").Count
             .Should().Be(0, "незакрытая «Имя (:NN» — не адрес");
-    }
-
-    /// Обе границы диапазона адреса: разбор, диапазон, порядок. Число длиннее int — не номер
-    /// строки, а запись в списке битых, а не OverflowException (п. 3 хвоста 49e7b2e6). Диапазон
-    /// проверяется раньше порядка: главное в паре «(:9999-50)» — граница вне файла, переворот
-    /// называется только когда обе границы внутри файла (п. 1 хвоста 49e7b2e6). Сообщение
-    /// называет ровно ту причину, по которой адрес красный, а не все сразу.
-    private static string? BadRangeReason(Match m, string fromGroup, string toGroup, int total)
-    {
-        var fromOk = int.TryParse(m.Groups[fromGroup].Value, out var from);
-        var to = from;
-        var toOk = !m.Groups[toGroup].Success || int.TryParse(m.Groups[toGroup].Value, out to);
-        if (!fromOk || !toOk)
-            return "число строки не помещается в int";
-        if (from < 1 || from > total || to < 1 || to > total)
-            return $"в файле {total} строк";
-        if (from > to)
-            return "границы диапазона перевёрнуты";
-        return null;
     }
 
     private static async Task<List<string>> LiveKeysAsync(TestWebApplicationFactory factory) =>

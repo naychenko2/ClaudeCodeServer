@@ -6,7 +6,10 @@ namespace ClaudeHomeServer.Tests.Subsystems;
 /// <summary>
 /// Сторож ссылок вида «Файл.cs:строка» (и «Файл.cs:строка-строка») в комментариях исходников
 /// (S3-СТОРОЖ-ССЫЛКИ). Мерится ровно это: файл адреса есть в дереве, обе границы диапазона —
-/// в [1..число строк] этого файла. Ничего сверх этого не мерится: сторож не смотрит, что
+/// в [1..число строк] этого файла и в порядке (первая не больше второй); число длиннее int —
+/// запись в списке мёртвых, а не OverflowException. Разбор границ — общий с
+/// SubsystemDisableMatrixTests через TestSourceAddresses.BadRangeReason: сам сторож своей копии
+/// разбора не содержит (п. 2 хвоста ffa6c795). Ничего сверх этого не мерится: сторож не смотрит, что
 /// записано под указанным номером — семантическая сверка («строка содержит то, о чём говорит
 /// комментарий») отдельная работа (шаг S3-ССЫЛКИ-PROGRAM, 6ccbde39). До этого сторожа адресов
 /// в комментариях исходников не мерил никто (KnownViolations мерит только свой словарь).
@@ -108,11 +111,9 @@ public class SourceLinkGuardTests
                         dead.Add((rel, address, line, "файла нет в дереве"));
                         continue;
                     }
-                    var from = int.Parse(m.Groups["line"].Value);
-                    var to = m.Groups["lineTo"].Success ? int.Parse(m.Groups["lineTo"].Value) : from;
-                    var total = TestSourceAddresses.LineCount(file);
-                    if (from < 1 || to < 1 || from > total || to > total)
-                        dead.Add((rel, address, line, $"в файле {total} строк"));
+                    var bad = TestSourceAddresses.BadRangeReason(
+                        m, "line", "lineTo", TestSourceAddresses.LineCount(file));
+                    if (bad is not null) dead.Add((rel, address, line, bad));
                 }
             }
         }
@@ -126,7 +127,8 @@ public class SourceLinkGuardTests
 
         fresh.Should().BeEmpty(
             $"новых протухших ссылок в комментариях исходников: {fresh.Count}. Ссылка на строку "
-            + "обязана вести в существующий файл и в номер в пределах его строк; на то, что "
+            + "обязана вести в существующий файл и в номер в пределах его строк, границы "
+            + "диапазона — в порядке; на то, что "
             + "записано под этим номером, сторож не смотрит — семантическая сверка относится "
             + "к отдельному шагу S3-ССЫЛКИ-PROGRAM (6ccbde39). Все новые:\n"
             + string.Join("\n", fresh.Select(d => $"{d.File}:{d.Line} — {d.Address} — {d.Why}")));

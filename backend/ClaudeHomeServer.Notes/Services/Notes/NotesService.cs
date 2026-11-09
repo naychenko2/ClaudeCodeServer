@@ -29,9 +29,9 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     // → SessionManager → PersonaBindingsService → INoteAccessor → форвардер (NotesSubsystem.cs:71)
     // → NotesService — на повторном GetOrAdd того же синглтона StartAsync хоста виснет
     // навсегда (бисект 2026-10-29: все тесты с WebApplicationFactory). Тот же приём, что
-    // с реестром тулсетов в SessionManager (SessionManager.cs:829): в конструкторе — провайдер,
-    // точка доступа — лениво при первом обращении, когда создание синглона уже завершено
-    // и ре-энтри нет.
+    // с реестром тулсетов в BuiltinMcpContexts (Services/Sessions/BuiltinMcpContexts.cs:199):
+    // в конструкторе — провайдер, точка доступа — лениво при первом обращении, когда
+    // создание синглона уже завершено и ре-энтри нет.
     // Вне DI (тестовые конструирования) точка передаётся напрямую internal-конструктором
     // или не передаётся вовсе — ProjectScope остаётся на владении, fail-closed.
     private readonly IServiceProvider? _services;
@@ -42,7 +42,7 @@ public sealed partial class NotesService : ClaudeHomeServer.Services.Composition
     private readonly Composition.IFeatureFlagGate? _flags;
     private readonly string _dataDir;
     // S3-3c1: журнал правок человека (S3-3) — зовётся из *Core после УСПЕШНОЙ записи/удаления/
-    // переименования заметки общего проекта человеком (byHuman). В DI он всегда (Program.cs:621-622);
+    // переименования заметки общего проекта человеком (byHuman). В DI он всегда (Program.cs:438-439);
     // опциональным оставлен как остальные необязательные зависимости: бесхостовые тесты собирают
     // сервис напрямую и подставляют фейк.
     private readonly Composition.IHumanEditJournal? _humanEdits;

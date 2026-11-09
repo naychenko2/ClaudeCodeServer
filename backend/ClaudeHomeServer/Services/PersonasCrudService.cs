@@ -28,8 +28,6 @@ public sealed class PersonasCrudService(
     PersonaMemoryService memory,
     PersonaBindingsService bindings,
     SkillsService skills,
-    Services.Images.ImageGenerationService images,
-    Services.Images.ImageBackfillService imageBackfill,
     Services.Llm.OneShotClaudeRunner oneShot,
     Services.Llm.ICheapTextRunner cheap,
     SpecialtyTemplatesService specialtyTemplates,
@@ -38,7 +36,13 @@ public sealed class PersonasCrudService(
     ILogger<PersonasCrudService> log,
     ISessionBroadcaster broadcaster,
     INoteAccessor? notes = null,
-    Services.Spheres.ISphereDirectory? spheres = null)
+    Services.Spheres.ISphereDirectory? spheres = null,
+    // `= null` — при Subsystems:images:Enabled=false генерация и её очередь догона в контейнер
+    // не попадают; без значения по умолчанию резолв сервиса падал, не поднимая весь хост (S2a-2,
+    // ADR-014). Явный вызов генерации отвечает отказом с причиной, автогенерация аватара —
+    // best-effort путь: персона остаётся с инициалами
+    Services.Images.ImageGenerationService? images = null,
+    Services.Images.ImageBackfillService? imageBackfill = null)
 {
     // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
     private const string ImageGenerationOffError =
@@ -60,9 +64,16 @@ public sealed class PersonasCrudService(
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
     // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
-    // голос был задан явно (в т.ч. пустым объектом) — не вызывается
+    // голос был задан явно (в т.ч. пустым объектом) — не вызывается.
+    // initiator — кто подал создание: человек из формы или агент из чата (учёт траты аватара,
+    // S-SPEND-2c). Сервис его не вычисывает: у него два входа, REST и MCP, и называет его
+    // вызывающий — параметр обязательный, чтобы «забыл» не читалось молча как человек (S-SPEND-8)
+    // actorUserId — актор траты аватара (п.2 хвоста R-S-SPEND-2): тот же порядок, что у
+    // GenerateAvatarAsync: в REST это сам обратившийся человек, в MCP-тулсете — актор хода
+    // (GetTurnActor), а не владелец песочницы; не назван — актор равняется обратившемуся
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
-        string? callerSessionId, CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
+        string? callerSessionId, string initiator, string? actorUserId = null,
+        CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
             return BadRequest("Не задано имя персоны");
@@ -165,7 +176,7 @@ public sealed class PersonasCrudService(
         // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
         if (req.AutoAvatar == true)
-            persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt);
+            persona = await TryAutoGenerateAvatarAsync(userId, persona, req.AvatarPrompt, initiator, actorUserId);
         // Голос: явный (непустой) — пишем как есть; явный пустой объект — «без голоса», не
         // подбираем; не передан — подбираем по характеру (best-effort). Последним шагом —
         // после всех прочих one-shot вызовов создания, так их порядок не меняется
@@ -520,12 +531,52 @@ public sealed class PersonasCrudService(
 
     // --- Аватар ---
 
+    // Атрибуция траты аватара (п.3-4 ревью R-S-SPEND-2): ключ хранилища — владелец-арендатор,
+    // актор — разрез, проект называется, если персона проектная. Аватар персоны проекта —
+    // достояние проекта: трата адресуется арендатору (владелец проекта — тот же резолв, что у
+    // чатового пути, SessionManager.ResolveOwnerId), а не «совпавшему» владельцу персоны;
+    // исполнивший назван актором. Персона вне проекта: владелец и актор — один человек,
+    // проект не называется. Осиротевший проект не называется: «Расход» не получает
+    // несуществующий проект.
+    // actorUserId — актор, названный вызывающим (п.2 хвоста R-S-SPEND-2): в REST это сам
+    // обратившийся человек (userId), в MCP-тулсете — актор хода (GetTurnActor), а не владелец
+    // песочницы: токен арендатора, а ход принадлежит участнику. Не назван — актор равняется
+    // обратившемуся (как было).
+    private (string OwnerId, string? ActorUserId, string? ProjectId) AvatarSpendAttribution(
+        Persona persona, string userId, string? actorUserId = null)
+    {
+        var actor = string.IsNullOrWhiteSpace(actorUserId) ? userId : actorUserId;
+        var project = persona.ProjectId is { Length: > 0 } pid ? projects.GetById(pid) : null;
+        return project is { } p && !string.IsNullOrEmpty(p.OwnerId)
+            ? (p.OwnerId, actor, p.Id)
+            : (userId, actor, null);
+    }
+
     // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото по описанию (для выбора); провайдера
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
-    public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req)
+    // initiator — кто подал операцию (SpendInitiators.*): REST из UI — человек, MCP-тулсет из
+    // чата — агент; трату роутер пишет с тем же инициатором, что назвал вызывающий (S-SPEND-2c).
+    // Параметр обязательный: у метода ровно два входа, и каждый называет свой (S-SPEND-8).
+    // actorUserId — актор операции (п.2 хвоста R-S-SPEND-2): называет его вызывающий —
+    // MCP-тулсет передаёт актора хода, а не владельца песочницы; не назван (REST) — актор
+    // равняется обратившемуся.
+    public async Task<ActionResult> GenerateAvatarAsync(string userId, string id, GenerateAvatarRequest req,
+        string initiator, string? actorUserId = null)
     {
+        // Вертикаль генерации выключена: ни генерировать, ни ставить в очередь нечем — их
+        // сервисов нет в контейнере. Отказ с настоящей причиной, а не «провайдер не подключён»
+        // (ADR-014 форма 3 — 503 с причиной, а не 400; R-S2b-1 п.4). Гейт ДО разбора персоны:
+        // на выключенном хосте причина отказа — вертикаль, а не отсутствие пробы; иначе
+        // 404 «персоны нет» мерял бы эту половину матрицы вместо отказа вертикали.
+        if (images is null || imageBackfill is null)
+            return StatusCode(503, new
+            {
+                error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+                queued = false,
+            });
+
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
@@ -540,21 +591,33 @@ public sealed class PersonasCrudService(
         var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile);
 
+        // Атрибуция траты одна на оба пути этого вызова — и на генерацию, и на заявку, если
+        // генерации не будет: персона известна здесь, догоняющая генерация её не вычислит
+        // (п.1-4 ревью R-S-SPEND-2)
+        var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
+
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят
         if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId,
+                prompt, initiator, spendActor, spendProject);
             return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
-        var generated = await images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, count);
+        // Трату пишем на арендатора области персоны (проектная — на владельца проекта), актор
+        // и проект называет атрибутция (п.3-4 ревью R-S-SPEND-2); инициатор — тот, который
+        // назвал вызывающий (S-SPEND-2, S-SPEND-2c)
+        var generated = await images.GenerateManyAsync(
+            Services.Images.ImagePlaces.PersonaAvatar, prompt, count, spendOwner, initiator,
+            spendActor, spendProject, ct: CancellationToken.None);
         // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
         // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
         // «появится сам», а не «генератор не ответил, аватар остался прежним».
         if (generated.Count == 0)
         {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId, prompt);
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, userId,
+                prompt, initiator, spendActor, spendProject);
             return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
         }
 
@@ -614,17 +677,30 @@ public sealed class PersonasCrudService(
     // quick-create одной персоны, пакетная команда из ai/team.
     // Не получилось (провайдера нет, отказ, сбой) — персона остаётся с инициалами, а аватар
     // догонит её из очереди, когда генерация заработает.
-    public async Task<Persona> TryAutoGenerateAvatarAsync(string userId, Persona persona, string? avatarPrompt)
+    // initiator — тот, кто подал создание персоны (через CreateAsync или quick-create из UI):
+    // человек или агент; дальше он идёт и в запись траты роутера, и в заявку очереди
+    // (S-SPEND-2c, S-SPEND-8). Параметр обязательный: здесь он не вычисляется
+    // actorUserId — актор траты (п.2 хвоста R-S-SPEND-2): называет его вызывающий через
+    // CreateAsync — в MCP это актор хода, а не владелец песочницы; не назван (REST,
+    // quick-create) — актор равняется обратившемуся
+    public async Task<Persona> TryAutoGenerateAvatarAsync(string userId, Persona persona, string? avatarPrompt,
+        string initiator, string? actorUserId = null)
     {
         var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
             ? BuildAvatarPrompt(persona)
             : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
 
-        if (!images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(userId, persona, prompt);
+        // Вертикаль генерации выключена (её сервисов нет) или провайдера нет: персона остаётся
+        // с инициалами, а догонять аватар нечем — очередь принадлежит той же вертикали
+        if (images is null || !images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
+            return EnqueueAvatarBackfill(userId, persona, prompt, initiator, actorUserId);
         try
         {
-            var generated = await images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
-            if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt);
+            var (spendOwner, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
+            var generated = await images.GenerateManyAsync(
+                Services.Images.ImagePlaces.PersonaAvatar, prompt, 1, spendOwner, initiator,
+                spendActor, spendProject, ct: CancellationToken.None);
+            if (generated.Count == 0) return EnqueueAvatarBackfill(userId, persona, prompt, initiator, actorUserId);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
             var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(generated[0].ContentType)}";
@@ -633,14 +709,25 @@ public sealed class PersonasCrudService(
         }
         catch
         {
-            return EnqueueAvatarBackfill(userId, persona, prompt);
+            return EnqueueAvatarBackfill(userId, persona, prompt, initiator, actorUserId);
         }
     }
 
-    private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt)
+    // Инициатор и атрибуция траты сохраняются вместе с заявкой: догоняющая генерация идёт в
+    // другом потоке и сама их решить не может (S-SPEND-8, п.1 хвоста R-S-SPEND-2). Атрибуция —
+    // та же AvatarSpendAttribution, что у интерактивной генерации: догоняющая запись проектной
+    // персоны попадает в тот же разрез по проекту и называет того же актора. Ключом заявки
+    // остаётся владелец сущности (по нему Resolve сверяет, что персона не ушла к другому)
+    private Persona EnqueueAvatarBackfill(string userId, Persona persona, string prompt, string initiator,
+        string? actorUserId = null)
     {
+        // Очереди догона нет вместе с выключенной вертикалью images — просить догон нечего
+        if (imageBackfill is null) return persona;
+
+        var (_, spendActor, spendProject) = AvatarSpendAttribution(persona, userId, actorUserId);
         imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
-            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt);
+            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? userId : persona.OwnerId, prompt, initiator,
+            spendActor, spendProject);
         return persona;
     }
 

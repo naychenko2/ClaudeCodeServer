@@ -5,7 +5,7 @@ using Microsoft.Extensions.Hosting;
 
 namespace ClaudeHomeServer.Tests.Composition;
 
-// Сторож фильтра inspectionMode в Program.cs:1211+ — снимает ВСЕ hosted-сервисы
+// Сторож фильтра inspectionMode в Program.cs:938+ — снимает ВСЕ hosted-сервисы
 // из наших сборок (`ClaudeHomeServer` и `ClaudeHomeServer.*`, минус `*.Tests`).
 // До этой правки фильтр брал только сборку ClaudeHomeServer, и вынесенные вертикали
 // (Llm, Images, Tasks, Notes…) продолжали ехать в инспекции молча. Без этого
@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.Composition;
 //
 // InspectionMode пробрасывается через переменную окружения: WebApplication.CreateBuilder
 // подключает env-провайдер ДО любых TestWebApplicationFactory.ConfigureAppConfiguration,
-// поэтому чтение в Program.cs:1211 видит значение. (ExtraConfig приходит позже —
+// поэтому чтение в Program.cs:938 видит значение. (ExtraConfig приходит позже —
 // фильтр в Program.cs должен иметь своё позднее чтение, см. комментарий там.)
 //
 // Тест живёт в ОТДЕЛЬНОЙ коллекции с DisableParallelization: env-переменная

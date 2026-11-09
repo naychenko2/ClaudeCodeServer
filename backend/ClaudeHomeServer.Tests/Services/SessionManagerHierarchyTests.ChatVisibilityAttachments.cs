@@ -3,6 +3,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
 using FluentAssertions;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -154,7 +155,7 @@ public partial class SessionManagerHierarchyTests
     {
         session.Status = SessionStatus.Working;
         var outcome = await _sut.SendMessageAsync(session.Id, text, paths, senderUserId: TestUserId);
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued, "занятый чат: сообщение встаёт в очередь");
+        outcome.Should().Be(SendUserOutcome.Queued, "занятый чат: сообщение встаёт в очередь");
     }
 
     // Файл в рабочей папке проекта по относительному пути (для чужого пути вне .cc-attachments).
@@ -262,7 +263,7 @@ public partial class SessionManagerHierarchyTests
             var sent = await enqueue.WaitAsync(TimeSpan.FromSeconds(10));
             var result = await toggle.WaitAsync(TimeSpan.FromSeconds(10));
 
-            sent.Should().Be(SessionManager.SendUserOutcome.Queued, $"итерация {i}");
+            sent.Should().Be(SendUserOutcome.Queued, $"итерация {i}");
             result.Outcome.Should().Be(ChatVisibilityOutcome.Ok, $"итерация {i}");
             var moved = result.AttachmentMoves!.Should().ContainKey(priv).WhoseValue;
 

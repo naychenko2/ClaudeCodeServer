@@ -77,9 +77,10 @@ public class ProjectCapabilitiesGuardTests
         // Швы оркестрации фичи: «локальный исполнитель» — персона, чья модель уходит в локального
         // провайдера (IModelResolver.IsLocal в комментарии к LocalExecutor), не локальный проект.
         ["backend/ClaudeHomeServer.Core/Services/FeatureOrchestrationSeams.cs"] = (1, "чужой смысл: локальный провайдер модели"),
-        // Реализация шва: resolver.IsLocal(key) провайдера модели персоны плюс приватный IsLocal(persona)
-        // и его вызов и упоминание в комментарии — все про провайдера, не про локальный проект.
-        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (4, "чужой смысл: локальный провайдер модели"),
+        // Реализация шва: resolver.IsLocal(key) провайдера — в разборе модели персоны и модели
+        // задачи (LocalTurnOf, 07.11) плюс упоминание в комментарии — все про провайдера,
+        // не про локальный проект. Приватный метод переименован в IsLocalPersona (не вхождение).
+        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (3, "чужой смысл: локальный провайдер модели"),
         // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),

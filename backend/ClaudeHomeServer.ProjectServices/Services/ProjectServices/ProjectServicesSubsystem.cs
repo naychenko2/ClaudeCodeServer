@@ -23,6 +23,10 @@ public sealed class ProjectServicesSubsystem : IAppSubsystem
 
     public string Title => "Сервисы проекта";
 
+    // Ядро (CanDisable=false, S2b-1): ядро чата (Hubs/SessionHub.cs:27) требует DevServerService
+    // обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Последний известный порт сервиса: без него живой дев-сервер после перезапуска

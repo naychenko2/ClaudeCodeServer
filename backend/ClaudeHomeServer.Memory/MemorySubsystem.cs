@@ -6,10 +6,10 @@ namespace ClaudeHomeServer.Services.Memory;
 // Регистрирует два фасада стора (per-persona и per-project), их сервисы консолидации,
 // авто-память по итогам ходов и общий слой Dify-синка.
 //
-// Состав (ранее жил блоком в Program.cs:212-221):
+// Состав (ранее жил блоком в Program.cs):
 // - PersonaMemoryService — фасад персональной памяти: стор `data/persona-memory.json`
 //   + Dify-датасет per-persona, дебаунс 15 с, recall по relevance×recency×typeWeight;
-//   реализует `IKnowledgeSyncParticipant` (форвардер регистрации остаётся в Program.cs).
+//   реализует `IKnowledgeSyncParticipant` (форвардер регистрации — Services/Composition/CoreSeamsGlue.cs:36-37).
 // - PersonaMemoryConsolidationService (BackgroundService) — LLM-merge дублей/родственных
 //   (операции merge/drop) + вытеснение по retention-скорингу. Singleton + hosted через
 //   AddGatedHostedFrom (тот же инстанс, что и в DI: autolearn ставит заявки через
@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Services.Memory;
 //   завершённого хода персонной сессии. Singleton + hosted через AddGatedHostedFrom.
 // - TeamMemoryService — фасад общей памяти команды: стор `data/team-memory.json`
 //   + Dify-датасет `{username}:team:{projectName}`, та же дебаунс-семантика, recall
-//   из всех сессий проекта. Реализует `IKnowledgeSyncParticipant` (форвардер в Program.cs).
+//   из всех сессий проекта. Реализует `IKnowledgeSyncParticipant` (форвардер — Services/Composition/CoreSeamsGlue.cs:38-39).
 // - TeamMemoryConsolidationService (BackgroundService) — командный аналог
 //   Persona-консолидации: merge дублей по типу + вытеснение по TeamMemory:MaxEntries.
 //   Singleton + hosted через AddGatedHostedFrom.
@@ -28,7 +28,8 @@ namespace ClaudeHomeServer.Services.Memory;
 //   consolidation/autolearn сервисами).
 //
 // ⚠ Два форвардера `IKnowledgeSyncParticipant → {PersonaMemoryService, TeamMemoryService}`
-// (Program.cs:~688-691) остаются в композиционном корне сознательно — кросс-вертикальный
+// (Services/Composition/CoreSeamsGlue.cs:36-39) остаются в композиционном корне
+// сознательно — кросс-вертикальный
 // клей реконсайлера error-документов Dify (KnowledgeIndexReconciler). Перенос в
 // подсистему дал бы Memory прямые ссылки на чужую Knowledge-вертикаль; см. шапку
 // `KnowledgeSubsystem.cs` — те же форвардеры для DossierStore/NotesKnowledgeService/
@@ -73,6 +74,11 @@ public sealed class MemorySubsystem : IAppSubsystem
 
     public string Title => "Память персон и команды";
 
+    // Ядро (CanDisable=false, S2b-1): шов контекста хода PersonaRecallSourceAdapter
+    // (Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов
+    // (Controllers/ProjectsController.cs:26) требуют PersonaMemoryService обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Персональная память — фасад стора + Dify-датасет, recall по типизированным
@@ -109,5 +115,12 @@ public sealed class MemorySubsystem : IAppSubsystem
         // тип оказывается отсутствующим). Прецедент — `PersonaMemoryAutolearnService`.
         services.AddSingleton<TeamMemoryAutolearnService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<TeamMemoryAutolearnService>());
+
+        // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих
+        // слоёв памяти (S6-2: перенесён из Program.cs). Тип живёт в этой же сборке
+        // (`MemoryWriteResolver.cs`), потребители — только фасады выше (все берут его
+        // опциональным параметром): за пределами вертикали его никто не резолвит, поэтому
+        // он собственность Memory, а не композиционный корень.
+        services.AddSingleton<MemoryWriteResolver>();
     }
 }

@@ -54,14 +54,258 @@ public class ImageBackfillTests : IDisposable
     private ImageBackfillStore NewStore() => new(_config, NullLogger<ImageBackfillStore>.Instance);
 
     private ImageBackfillService Service(FakeGenerator generator, ImageBackfillStore? store = null)
+        => ServiceWithSpend(generator, null, store);
+
+    // Тот же сервис, но с коллектором трат: чтобы видеть, что и на кого записывает очередь
+    private ImageBackfillService ServiceWithSpend(FakeGenerator generator,
+        ClaudeHomeServer.Services.Spend.ISpendCollector? spend, ImageBackfillStore? store = null)
     {
         var settings = new ImageGenerationSettingsStore(_config);
-        var images = new ImageGenerationService([generator], settings);
+        var images = new ImageGenerationService([generator], settings, null, spend);
         return new ImageBackfillService(store ?? NewStore(), images, _personas, _personas,
             _broadcaster, new FakeLifetime(), NullLogger<ImageBackfillService>.Instance)
         {
             RetryDelay = TimeSpan.Zero,
         };
+    }
+
+    private sealed class CapturingSpend : ClaudeHomeServer.Services.Spend.ISpendCollector
+    {
+        private readonly List<SpendRecord> _records = [];
+        public IReadOnlyList<SpendRecord> Records { get { lock (_records) return [.. _records]; } }
+        public void Record(SpendRecord record) { lock (_records) _records.Add(record); }
+    }
+
+    // Трата догоняющей генерации (S-SPEND-2c): она пишется на владельца заявки — он известен
+    // с момента постановки, а Resolve снимает заявку, если персона ушла к другому владельцу
+    [Fact]
+    public async Task Прогон_пишет_трату_на_владельца_заявки()
+    {
+        var persona = NewPersona();
+        var generator = new FakeGenerator();
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        // трата догоняющей генерации — на владельца заявки
+        var rec = Assert.Single(spend.Records);
+        Assert.Equal(_owner.Id, rec.OwnerId);
+        // Запись опознаём по её роли в паре: число вариантов + источник. Текст подписи —
+        // продуктовый текст, он меняется вместе с продуктом и не может быть признаком.
+        Assert.Equal(1, rec.Generations);
+        Assert.Equal(SpendSources.Fal, rec.Source);
+        // Инициатор — тот, кто поставил заявку: он сохранён в ней и доходит до фоновой
+        // траты, роутер его не выдумывает (S-SPEND-8)
+        Assert.Equal(SpendInitiators.Human, rec.Initiator);
+    }
+
+    // Заявку поставил агент (путь MCP-тулсета): фоновая трата обязана нести agent —
+    // признак агентской траты один, «null + очередь» вторым способом быть не может
+    [Fact]
+    public async Task ЗаявкаОтАгента_ФоноваяТратаСИнициаторомАгента()
+    {
+        var persona = NewPersona();
+        var generator = new FakeGenerator();
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Agent);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        var rec = Assert.Single(spend.Records);
+        Assert.Equal(_owner.Id, rec.OwnerId);
+        Assert.Equal(SpendInitiators.Agent, rec.Initiator);
+    }
+
+    // Старая заявка (файл до появления поля Initiator): читается как human — так её и
+    // ставили до S-SPEND-8, выдумывать другой инициатор не будем
+    [Fact]
+    public async Task СтараяЗаявкаБезИнициатора_ЧитаетсяКакЧеловек()
+    {
+        var persona = NewPersona();
+        // Формат очереди до S-SPEND-8: поля Initiator в заявке нет вовсе
+        File.WriteAllText(Path.Combine(_tempDir, ImageBackfillStore.FileName),
+            $$"""
+            {"Version":1,"Requests":[{"Kind":"persona-avatar","EntityId":"{{persona.Id}}","OwnerId":"{{_owner.Id}}","Prompt":"аватар","Attempts":0,"CreatedAt":"2026-11-01T00:00:00Z"}]}
+            """);
+        var old = NewStore();
+        Assert.Single(old.All);
+
+        var generator = new FakeGenerator();
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend, old);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        Assert.Equal(SpendInitiators.Human, Assert.Single(spend.Records).Initiator);
+    }
+
+    // П.1 хвоста S-SPEND-8: заявка до появления поля (Initiator = null) перепоставляется
+    // агентом с новым промптом — инициатор новой постановки не теряется, фоновая трата
+    // идёт как agent, а не как human. Мутация (убрать дозаполнение в Enqueue) краснит тест
+    [Fact]
+    public async Task ПерепостановкаСтаройЗаявки_ПринимаетИнициатораНовойПостановки()
+    {
+        var persona = NewPersona();
+        File.WriteAllText(Path.Combine(_tempDir, ImageBackfillStore.FileName),
+            $$"""
+            {"Version":1,"Requests":[{"Kind":"persona-avatar","EntityId":"{{persona.Id}}","OwnerId":"{{_owner.Id}}","Prompt":"старый","Attempts":0,"CreatedAt":"2026-11-01T00:00:00Z"}]}
+            """);
+        var store = NewStore();
+
+        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "новый",
+            SpendInitiators.Agent));
+
+        var queued = Assert.Single(NewStore().All);
+        Assert.Equal("новый", queued.Prompt);
+        Assert.Equal(SpendInitiators.Agent, queued.Initiator);
+
+        var spend = new CapturingSpend();
+        var summary = await ServiceWithSpend(new FakeGenerator(), spend, store).RunAsync(_owner.Id);
+        Assert.Equal(1, summary.Generated);
+        Assert.Equal(SpendInitiators.Agent, Assert.Single(spend.Records).Initiator);
+    }
+
+    // П.2 хвоста S-SPEND-8: «не назван» и «человек» — разные значения. Пустой инициатор даёт
+    // warning в лог и трату без инициатора (null), а не human; заявка без поля (старая) —
+    // по-прежнему human. Мутация (писать пустой как null) краснит тест
+    [Fact]
+    public async Task ПустойИнициатор_ПредупреждениеИТратаБезИнициатора()
+    {
+        var persona = NewPersona();
+        var log = new ListLogger<ImageBackfillStore>();
+        var store = new ImageBackfillStore(_config, log);
+
+        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", ""));
+
+        Assert.Contains(log.Warnings, m => m.Contains("не назвал инициатора"));
+        Assert.Equal("", Assert.Single(store.All).Initiator);
+
+        var spend = new CapturingSpend();
+        var summary = await ServiceWithSpend(new FakeGenerator(), spend, store).RunAsync(_owner.Id);
+        Assert.Equal(1, summary.Generated);
+        Assert.Null(Assert.Single(spend.Records).Initiator);
+    }
+
+    private sealed class ListLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public List<string> Warnings { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId,
+            TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            if (logLevel == Microsoft.Extensions.Logging.LogLevel.Warning) Warnings.Add(formatter(state, exception));
+        }
+    }
+
+    // Инициатор относится к заявке, а не к конкретной попытке: транзиентный отказ оставил
+    // заявку в очереди — следующий прогон обязан вести её с тем же инициатором (Copy
+    // заявки несёт поле, а не пересобирает её заново)
+    [Fact]
+    public async Task ИнициаторЗаявкиПереживаетПовторВСледующемПрогоне()
+    {
+        var persona = NewPersona();
+        var store = NewStore();
+        // Первый прогон — провайдер молчит обе попытки, второй отвечает
+        var generator = new FakeGenerator(answers: call => call > 2);
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend, store);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Agent);
+
+        Assert.Equal(new ImageBackfillSummary(0, 0, 1), await service.RunAsync(_owner.Id));
+        // Заявка осталась в очереди со своим инициатором
+        Assert.Equal(SpendInitiators.Agent, Assert.Single(store.All).Initiator);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        Assert.Equal(SpendInitiators.Agent, Assert.Single(spend.Records).Initiator);
+    }
+
+    // П.6 хвоста ревью R-S-SPEND-2: обратная совместимость формата заявки. Файл до появления
+    // полей ActorUserId/ProjectId читается штатно (аддитивные поля, FormatVersion не двигался):
+    // заявка не теряется, названный Initiator не теряется вместе с ними, а отсутствие атрибуции
+    // читается как «нет поля → владелец, проект не назван» — то есть null, а не выдуманное значение
+    [Fact]
+    public void СтараяЗаявкаБезАтрибуции_ЧитаетсяБезПотериИнициатора()
+    {
+        var persona = NewPersona();
+        // Формат очереди до п.1 хвоста R-S-SPEND-2: полей атрибуции в заявке нет вовсе
+        File.WriteAllText(Path.Combine(_tempDir, ImageBackfillStore.FileName),
+            $$"""
+            {"Version":1,"Requests":[{"Kind":"persona-avatar","EntityId":"{{persona.Id}}","OwnerId":"{{_owner.Id}}","Prompt":"аватар","Initiator":"agent","Attempts":0,"CreatedAt":"2026-11-01T00:00:00Z"}]}
+            """);
+        var old = NewStore();
+        var queued = Assert.Single(old.All);
+        Assert.Equal(SpendInitiators.Agent, queued.Initiator);
+        Assert.Null(queued.ActorUserId);
+        Assert.Null(queued.ProjectId);
+    }
+
+    // П.6 хвоста ревью R-S-SPEND-2: атрибуция относится к заявке, а не к конкретной попытке.
+    // Смена промпта (повторный Enqueue на существующую заявку) и неудачная попытка (MarkFailed)
+    // идут через Copy — поля переносятся с заявкой и не подменяются значениями нового вызова.
+    // Мутация (снять перенос ActorUserId/ProjectId в Copy) краснит этот тест
+    [Fact]
+    public void АтрибуцияЗаявкиПереживаетСменуПромптаИПовторПопытки()
+    {
+        var persona = NewPersona();
+        var store = NewStore();
+        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар",
+            SpendInitiators.Agent, "actor-x", "project-y"));
+
+        // Перепостановка той же заявки с другим промптом и другими значениями: меняется
+        // только промпт, атрибуция остаётся заявкой
+        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "новый промпт",
+            SpendInitiators.Human, "other-actor", "other-project"));
+        var afterPrompt = Assert.Single(NewStore().All);
+        Assert.Equal("новый промпт", afterPrompt.Prompt);
+        Assert.Equal("actor-x", afterPrompt.ActorUserId);
+        Assert.Equal("project-y", afterPrompt.ProjectId);
+        Assert.Equal(SpendInitiators.Agent, afterPrompt.Initiator);
+
+        // Неудачная попытка — то же: Attempts двигаются, атрибуция остаётся
+        Assert.Equal(1, NewStore().MarkFailed(ImageBackfillKinds.PersonaAvatar, persona.Id, "no-image"));
+        var afterFail = NewStore().Find(ImageBackfillKinds.PersonaAvatar, persona.Id)!;
+        Assert.Equal(1, afterFail.Attempts);
+        Assert.Equal("actor-x", afterFail.ActorUserId);
+        Assert.Equal("project-y", afterFail.ProjectId);
+    }
+
+    // П.6 хвоста ревью R-S-SPEND-2, сквозной (образец — ИнициаторЗаявкиПереживаетПовтор…):
+    // транзиентный отказ оставил заявку в очереди — следующий прогон обязан довести её
+    // с той же атрибуцией: фоновая трата несёт актора и проект заявки, а не «нет поля»
+    [Fact]
+    public async Task АтрибуцияЗаявкиПереживаетПовторВСледующемПрогоне()
+    {
+        var persona = NewPersona();
+        var store = NewStore();
+        // Первый прогон — провайдер молчит обе попытки, второй отвечает
+        var generator = new FakeGenerator(answers: call => call > 2);
+        var spend = new CapturingSpend();
+        var service = ServiceWithSpend(generator, spend, store);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар",
+            SpendInitiators.Agent, "actor-x", "project-y");
+
+        Assert.Equal(new ImageBackfillSummary(0, 0, 1), await service.RunAsync(_owner.Id));
+        // Заявка осталась в очереди со своей атрибуцией
+        var queued = Assert.Single(store.All);
+        Assert.Equal("actor-x", queued.ActorUserId);
+        Assert.Equal("project-y", queued.ProjectId);
+
+        var summary = await service.RunAsync(_owner.Id);
+
+        Assert.Equal(1, summary.Generated);
+        var rec = Assert.Single(spend.Records);
+        Assert.Equal("actor-x", rec.ActorUserId);
+        Assert.Equal("project-y", rec.ProjectId);
+        Assert.Equal(SpendInitiators.Agent, rec.Initiator);
     }
 
     [Fact]
@@ -71,7 +315,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator();
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         var summary = await service.RunAsync(_owner.Id);
 
@@ -91,7 +335,7 @@ public class ImageBackfillTests : IDisposable
     {
         var persona = NewPersona();
         var service = Service(new FakeGenerator());
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, null);
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, null, SpendInitiators.Human);
 
         var summary = await service.RunAsync(_owner.Id);
 
@@ -116,7 +360,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator();
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         await service.RunAsync(_owner.Id);
         var avatarAfterFirst = _personas.GetByIdInternal(persona.Id)!.Avatar.ImageFile;
@@ -137,7 +381,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator();
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         // Человек успел выбрать/загрузить свою картинку раньше прогона
         _personas.SetAvatarImage(persona.Id, _owner.Id, "avatar-manual.png");
@@ -156,7 +400,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator();
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, "нет-такой-персоны", _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, "нет-такой-персоны", _owner.Id, "аватар", SpendInitiators.Human);
 
         var summary = await service.RunAsync(_owner.Id);
 
@@ -172,7 +416,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator(enabled: false);
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         var summary = await service.RunAsync(_owner.Id);
 
@@ -190,7 +434,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         // Заявка пережила прогон при выключенном провайдере…
         var offline = Service(new FakeGenerator(enabled: false), store);
-        offline.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        offline.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
         await offline.RunAsync(_owner.Id);
         Assert.Single(store.All);
 
@@ -211,7 +455,7 @@ public class ImageBackfillTests : IDisposable
         // Первый вызов — провайдер картинок не отдал, второй отвечает
         var generator = new FakeGenerator(answers: call => call > 1);
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         var summary = await service.RunAsync(_owner.Id);
 
@@ -228,7 +472,7 @@ public class ImageBackfillTests : IDisposable
         var store = NewStore();
         var generator = new FakeGenerator(answers: _ => false);
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         // По две попытки за прогон: на пятой упирается в потолок, следующий прогон снимает заявку
         for (var i = 0; i < 4; i++) await service.RunAsync(_owner.Id);
@@ -254,9 +498,9 @@ public class ImageBackfillTests : IDisposable
         // Два владельца — прогоны идут параллельно, потолок держит общий семафор
         var second = _users.Add("imgfill2_" + Guid.NewGuid().ToString("N")[..8], "pwd", "admin");
         foreach (var _ in Enumerable.Range(0, 4))
-            service.Enqueue(ImageBackfillKinds.PersonaAvatar, NewPersona().Id, _owner.Id, "аватар");
+            service.Enqueue(ImageBackfillKinds.PersonaAvatar, NewPersona().Id, _owner.Id, "аватар", SpendInitiators.Human);
         foreach (var _ in Enumerable.Range(0, 4))
-            service.Enqueue(ImageBackfillKinds.PersonaAvatar, NewPersona(second.Id).Id, second.Id, "аватар");
+            service.Enqueue(ImageBackfillKinds.PersonaAvatar, NewPersona(second.Id).Id, second.Id, "аватар", SpendInitiators.Human);
 
         var summary = await service.RunAllAsync();
 
@@ -275,7 +519,7 @@ public class ImageBackfillTests : IDisposable
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var generator = new FakeGenerator(gate: (entered, gate));
         var service = Service(generator, store);
-        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар");
+        service.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Human);
 
         var first = service.RunAsync(_owner.Id);
         // Ждём СОБЫТИЕ входа в генерацию, а не таймер (CI слабее)
@@ -295,15 +539,17 @@ public class ImageBackfillTests : IDisposable
         var persona = NewPersona();
         var store = NewStore();
 
-        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар"));
-        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар"));
+        Assert.True(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Agent));
+        Assert.False(store.Enqueue(ImageBackfillKinds.PersonaAvatar, persona.Id, _owner.Id, "аватар", SpendInitiators.Agent));
         Assert.Single(store.All);
 
-        // Новый экземпляр читает тот же файл — заявка на месте
+        // Новый экземпляр читает тот же файл — заявка на месте, вместе с инициатором:
+        // догоняющая генерация назовёт его именно из заявки (S-SPEND-8)
         var reloaded = NewStore();
         var queued = Assert.Single(reloaded.All);
         Assert.Equal(persona.Id, queued.EntityId);
         Assert.Equal("аватар", queued.Prompt);
+        Assert.Equal(SpendInitiators.Agent, queued.Initiator);
 
         Assert.Equal(1, reloaded.MarkFailed(ImageBackfillKinds.PersonaAvatar, persona.Id, "no-image"));
         Assert.Equal("no-image", NewStore().Find(ImageBackfillKinds.PersonaAvatar, persona.Id)!.LastFailReason);
@@ -334,7 +580,7 @@ public class ImageBackfillTests : IDisposable
         public int MaxConcurrent => Volatile.Read(ref _maxConcurrent);
         public string? LastPrompt { get; private set; }
 
-        public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        public async Task<ImageGenerationResult> GenerateManyAsync(
             string prompt, int count, string? model, CancellationToken ct = default)
         {
             var call = Interlocked.Increment(ref _calls);
@@ -357,8 +603,8 @@ public class ImageBackfillTests : IDisposable
                     await pairUp.Task.WaitAsync(ct);
                 }
                 return answers?.Invoke(call) == false
-                    ? []
-                    : [new GeneratedImage([0x89, 0x50, 0x4E, 0x47], "image/png")];
+                    ? ImageGenerationResult.Empty
+                    : new ImageGenerationResult([new GeneratedImage([0x89, 0x50, 0x4E, 0x47], "image/png")], null);
             }
             finally
             {

@@ -41,11 +41,10 @@ namespace ClaudeHomeServer.Services.Notes;
 // сборке. Дефолт `Subsystems:Notes:Enabled = true`. Гейт вертикали
 // (закрыть контроллеры при `Enabled=false` — 404 на `/api/notes/*` вместо 500
 // от DI-резолва) — забота КОМПОЗИЦИИ Main (`ConfigureApplicationPartManager` в
-// Program.cs): MSBuild генерирует `[assembly: ApplicationPart("ClaudeHomeServer.Notes")]`
-// в `obj/*/ClaudeHomeServer.MvcApplicationPartsAssemblyInfo.cs` благодаря тому,
-// что Notes.csproj собран под `Microsoft.NET.Sdk.Web`, и подсистема этот атрибут
-// обойти не может. Сравнение по имени сборки; обратной ссылки Main → Notes
-// избежать нельзя, но она узкая (один метод `ConfigureApplicationPartManager`).
+// Program.cs). Изоляция маршрутов — составом загрузки: Notes — динамический модуль
+// (ReferenceOutputAssembly="false" в Main.csproj), его `ApplicationPart` подключается
+// только загруженной сборки (по списку ModuleLoader); не загрузился модуль или выключен
+// гейт — части нет, маршруты дают 404. Компиляционной обратной ссылки Main → Notes нет.
 public sealed class NotesSubsystem : IAppSubsystem
 {
     public string Key => "notes";

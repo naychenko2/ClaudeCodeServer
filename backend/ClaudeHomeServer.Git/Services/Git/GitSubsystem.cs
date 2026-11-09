@@ -28,6 +28,11 @@ public sealed class GitSubsystem : IAppSubsystem
 
     public string Title => "Git";
 
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) и
+    // ReviewTreePool (Services/ReviewTreePool.cs:49) требуют GitService обязательным параметром;
+    // git — ещё и нижний слой вертикалей (Program.cs:594).
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         services.AddSingleton<GitService>();

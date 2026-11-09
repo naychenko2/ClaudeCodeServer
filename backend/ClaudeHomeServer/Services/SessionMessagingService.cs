@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services;
 
@@ -186,9 +187,9 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
             : await sessions.ReportUpAsync(sessionId, trimmed, ownerId, withTurn: false);
         return result switch
         {
-            SessionManager.ReportUpResult.NotFound => new ReportOutcome.NotFound(),
-            SessionManager.ReportUpResult.NoParent => new ReportOutcome.NoParent(),
-            SessionManager.ReportUpResult.TooDeep => new ReportOutcome.TooDeep(),
+            ReportUpResult.NotFound => new ReportOutcome.NotFound(),
+            ReportUpResult.NoParent => new ReportOutcome.NoParent(),
+            ReportUpResult.TooDeep => new ReportOutcome.TooDeep(),
             _ => new ReportOutcome.Delivered(),
         };
     }

@@ -82,9 +82,12 @@ public class PersonasToolsetVoiceAndLeaderTests : IClassFixture<PersonasToolsetV
         return (projectId, (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!);
     }
 
+    // Вызов «от лица чата» (S2a-3): рамка хода читается по заголовку X-Caller-Session-Id,
+    // вызов без него считается узким (fail-closed, S2a-3b). Тесты зовут от лица чата личного
+    // проекта — рамка широкая, как в живом ходу (конфиг хода кладёт этот заголовок статикой)
     private async Task<JsonElement> CallAsync(string sessionId, string tool, object args)
     {
-        var resp = await _client.PostAsJsonAsync($"/mcp/personas/{sessionId}", new
+        var resp = await _client.AsCaller(sessionId).PostAsJsonAsync($"/mcp/personas/{sessionId}", new
         {
             jsonrpc = "2.0", id = 1, method = "tools/call", @params = new { name = tool, arguments = args },
         });

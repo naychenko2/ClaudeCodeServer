@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Services.Spend;
@@ -18,10 +19,19 @@ namespace ClaudeHomeServer.Controllers;
 // не загружена через `DynamicModules:N:Enabled=false`) DI-резолв вернёт null, и запросы,
 // которым нужна аналитика расхода, отдают честный 503 — пользователь понимает, что подсистема
 // выключена, а не получает «пустые данные» как при рабочей аналитике или 500.
+//
+// Свой сервис вертикали (`YandexAccountService`) — опциональный по той же причине: при
+// Subsystems:yandex:Enabled=false его в контейнере нет, и контроллер отвечает 503 с причиной
+// вместо 500 активации (ADR-014, S2a-2).
 [ApiController]
 [Authorize]
 [Route("api/yandex")]
-public class YandexController(YandexAccountService yandex, ISpendAnalytics? analytics = null)
+[SubsystemUsage("yandex")]
+public class YandexController(
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
+    // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
+    YandexAccountService? yandex = null,
+    ISpendAnalytics? analytics = null)
     : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
@@ -30,6 +40,15 @@ public class YandexController(YandexAccountService yandex, ISpendAnalytics? anal
     [HttpGet("account")]
     public async Task<IActionResult> Account(int days = 30, CancellationToken ct = default)
     {
+        // Гейт своей вертикали — первым: без сервисов вертикали отвечать нечем ни админу,
+        // ни «остальным» (и `yandex.Enabled` здесь же).
+        if (yandex is null)
+            return StatusCode(503, new
+            {
+                reason = "yandex_disabled",
+                error = "Подсистема Yandex Cloud выключена (Subsystems:yandex:Enabled=false)",
+            });
+
         var period = days is >= 1 and <= 365 ? days : 30;
 
         // Без подсистемы Spend расход за окно собрать нечем — гейт ДО похода в биллинг:

@@ -182,11 +182,13 @@ public class ChatHistoryService
 
     private string GetPendingPath(string id) => Path.Combine(_basePath, id, "pending.json");
 
-    public PendingQueueFile? LoadPending(string key) =>
-        JsonFileStore.Load<PendingQueueFile>(GetPendingPath(key), _pendingOpts);
+    // Формат очереди живёт в ядре сессий (Services/Sessions/PendingQueue.cs): здесь только
+    // чтение/запись файла, как с history.json.
+    public Sessions.PendingQueueFile? LoadPending(string key) =>
+        JsonFileStore.Load<Sessions.PendingQueueFile>(GetPendingPath(key), _pendingOpts);
 
     // items пуст — файл удаляется (нечего восстанавливать); иначе атомарная запись
-    public void SavePending(string key, PendingQueueFile state)
+    public void SavePending(string key, Sessions.PendingQueueFile state)
     {
         var path = GetPendingPath(key);
         if (state.Items.Count == 0)
@@ -199,7 +201,4 @@ public class ChatHistoryService
         JsonFileStore.Save(path, state, _pendingOpts);
     }
 }
-
-// Содержимое pending.json: очередь по порядку и признак заморозки «Стоп»
-public sealed record PendingQueueFile(bool Frozen, List<SessionManager.QueuedMessage> Items);
 

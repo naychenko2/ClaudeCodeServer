@@ -230,7 +230,7 @@ public class SpendDisabledTests : IClassFixture<SpendDisabledTests.Hosts>
         var response = await _disabled.CreateAuthenticatedClient()
             .GetAsync("/api/spend/overview");
 
-        // 404 приходит из `MapFallback("/api/{**rest}")` (Program.cs:1858) — fallback-
+        // 404 приходит из `MapFallback("/api/{**rest}")` (Program.cs:1429) — fallback-
         // эндпоинт, более специфичный, чем MapFallbackToFile, но проигрывающий реальным
         // контроллерам. До фикса (`app.Map("/api", ...)`) тот же запрос рубился ВСЕ
         // РАНЬШЕ любого эндпоинта — здесь это видно по живому API в контрольном кейсе.
@@ -295,7 +295,7 @@ public class SpendDisabledTests : IClassFixture<SpendDisabledTests.Hosts>
 
         // Запись обходит оба цикла в Program.cs (`RecordActive` через ModuleLoader,
         // `RecordDisabled` через `!m.Enabled`) — отдельный цикл по
-        // `m.Enabled && !SubsystemGate.IsEnabled` (Program.cs:191-203 после фикса) обязан
+        // `m.Enabled && !SubsystemGate.IsEnabled` (Services/DynamicModules/ModuleRegistry.cs:55, цикл в Program.cs:315) обязан
         // дать запись, иначе `SpendController.GetAsync` отдаст 401/404 без следов
         // подсистемы.
         spend.GetProperty("key").GetString().Should().Be("spend",

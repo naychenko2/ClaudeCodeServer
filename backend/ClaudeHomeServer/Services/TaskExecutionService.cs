@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services;
 
@@ -1136,7 +1137,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                                     leakAttempts, SessionManager.MaxSubagentNudges);
                             }
                             await _sessions.SendMessageAsync(session.Id, directive, [],
-                                systemDirective: true, cause: SessionManager.DeliveryCause.ToolCallLeakNudge);
+                                systemDirective: true, cause: DeliveryCause.ToolCallLeakNudge);
                         }
                         else
                         {
@@ -1542,7 +1543,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             try
             {
                 await _sessions.SendMessageAsync(t.LinkedSessionId, HoldResumePrompt, [], auto: true,
-                    cause: SessionManager.DeliveryCause.HoldResume);
+                    cause: DeliveryCause.HoldResume);
             }
             catch (Exception ex)
             {
@@ -1733,7 +1734,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         try
         {
             await _sessions.SendMessageAsync(sessionId, text, [], auto: true,
-                cause: SessionManager.DeliveryCause.HoldCard);
+                cause: DeliveryCause.HoldCard);
             return true;
         }
         catch (Exception ex)
@@ -2118,7 +2119,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
                 await _sessions.SendOrEnqueueAsync(sourceId, text,
                     senderOrigin: "task-stall-alert", silent: true, suppressTasksExecute: true,
                     staffNote: waitingForBlocker ? StaleAlertWaitingForBlockerStaffNote : StaleAlertStaffNote,
-                    kind: SessionManager.PendingKind.Report);
+                    kind: Sessions.PendingKind.Report);
             }
             catch (Exception ex)
             {
@@ -2566,7 +2567,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             BuildDelegatorReactionPrompt(task, executor),
             senderPersonaId: delegator?.Id, silent: true, suppressTasksExecute: true,
             staffNote: DelegatorReactionStaffNote,
-            kind: SessionManager.PendingKind.Report);
+            kind: Sessions.PendingKind.Report);
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }

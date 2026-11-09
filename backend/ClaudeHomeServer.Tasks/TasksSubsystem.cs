@@ -51,6 +51,10 @@ public sealed class TasksSubsystem : IAppSubsystem
 
     public string Title => "Задачи";
 
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) и
+    // TeamWaveService (Services/Team/TeamWaveService.cs:89) требуют TaskManager обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Задачи: in-memory + data/tasks.json (порядок критичен — TaskManager создаётся

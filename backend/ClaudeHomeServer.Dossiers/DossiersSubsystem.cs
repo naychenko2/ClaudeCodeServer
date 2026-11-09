@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // коммитов и обсуждений, автовыгрузку в локальную ветку ccs/dossiers/v1 и автоимпорт
 // по новому tip, плюс recall-сервис для пассивного канала паспортов в промпте персон.
 //
-// Состав (ранее жил одним блоком в Program.cs:166-183):
+// Состав (ранее жил одним блоком в Program.cs):
 // - InstanceSecretsProvider — точные значения секретов инстанса для SecretRedactor;
 // - DossierStore — JSON-стор паспортов (data/dossiers/{owner}/{project}.json),
 //   плюс Dify-датасет для семантического recall (graceful degradation);
@@ -23,8 +23,9 @@ namespace ClaudeHomeServer.Services.Dossiers;
 //   в StartAsync встали на ТОТ ЖЕ экземпляр, что и в DI;
 // - DossierAutoImporter (hosted) — наблюдение за tip ветки, тик 60 с.
 //
-// ⚠ Форвардер `IKnowledgeSyncParticipant → DossierStore` живёт в блоке Knowledge
-// (Program.cs:~688-689) — участник реконсайлера error-документов Dify. После
+// ⚠ Форвардер `IKnowledgeSyncParticipant → DossierStore` живёт в композиционном клее
+// (Services/Composition/CoreSeamsGlue.cs:40-41) — участник реконсайлера error-документов
+// Dify. После
 // выделения `KnowledgeSubsystem` (волна 3, шаг 3) он ОСТАЁТСЯ в композиционном
 // корне сознательно: это кросс-вертикальный клей пяти владельцев стора
 // «запись → {DocId, Hash}», и перенос в Knowledge дал бы ей прямую ссылку на
@@ -63,6 +64,11 @@ public sealed class DossiersSubsystem : IAppSubsystem
     public string Key => "dossiers";
 
     public string Title => "Паспорта изменений";
+
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) требует
+    // DossierStore обязательным параметром; та же зависимость — у MemoryToolset
+    // (Services/Mcp/Http/MemoryToolset.cs:45).
+    public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)
     {

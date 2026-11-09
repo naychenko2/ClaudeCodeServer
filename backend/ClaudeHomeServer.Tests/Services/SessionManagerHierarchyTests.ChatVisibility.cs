@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Access;
 using FluentAssertions;
 
@@ -246,8 +247,8 @@ public partial class SessionManagerHierarchyTests
         var session = await SharedChatAsync("restored-queue");
         var entry = GetEntry(session.Id);
         var lk = VisibilityLockOf(session.Id);
-        var queued = new SessionManager.QueuedMessage("q1", "после рестарта", null, null, 0, DateTime.UtcNow,
-            Kind: SessionManager.PendingKind.User, SenderUserId: TestUserId);
+        var queued = new QueuedMessage("q1", "после рестарта", null, null, 0, DateTime.UtcNow,
+            Kind: PendingKind.User, SenderUserId: TestUserId);
         var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         Task send;
@@ -272,8 +273,8 @@ public partial class SessionManagerHierarchyTests
     {
         var session = await SharedChatAsync("restored-queue-first");
         var entry = GetEntry(session.Id);
-        var queued = new SessionManager.QueuedMessage("q2", "после рестарта", null, null, 0, DateTime.UtcNow,
-            Kind: SessionManager.PendingKind.User, SenderUserId: TestUserId);
+        var queued = new QueuedMessage("q2", "после рестарта", null, null, 0, DateTime.UtcNow,
+            Kind: PendingKind.User, SenderUserId: TestUserId);
         var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
 

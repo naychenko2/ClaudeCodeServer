@@ -92,7 +92,7 @@ public class TeamWaveRestartApiTests : IClassFixture<TestWebApplicationFactory>
         // обязана работать и по этому пути (GetTeamPlanAsync читает историю с диска).
         // Аккумулятор обнуляем рефлексией: живой (пустой в памяти) не видит прямой записи.
         var entries = (System.Collections.IDictionary)typeof(SessionManager)
-            .GetField("_sessions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetProperty("_sessions", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
             .GetValue(sessions)!;
         entries[session.Id]!.GetType().GetField("Accumulator")!
             .SetValue(entries[session.Id], null);

@@ -126,13 +126,23 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # 94c2fd37 доработка 1: PersonasController 110→111 — AskCallerIsPrivateOrUnknown: id вызывающего входит
 # только в GetOwnedVisible (видит ли человек чат-вызыватель persona_ask) для признака «приватный или
 # неизвестный» (fail-closed: запись фактов консультации в память отключена). Ключом хранилищ не стал.
-# FIN3-2 (доработка по возврату ревью cea595f7): PersonasController 111→112 — гейт «resume только
+# FIN3-2 (доработка по возврату ревью cea595f7): место входит в итоговые 111 (счётчик ниже) — гейт «resume только
 # для транскрипта, видимого вызывающему» при создании чата с персоной: id вызывающего входит только
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
 # служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|111
+# R-ТРАТА (слияние линии траты с ядром): PersonasController 111→118 — CallerSpendAttribution и
+# avatar/generate берут id вызывающего аргументом в GetTurnActor/IsTurnFromHuman/GetOwned только для
+# атрибуции расхода (инициатор/актор хода). Ключом хранилищ он не служит: запись траты ключуется
+# владельцем из RequestScope, id — лишь адрес чата-вызывателя.
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|118
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
+# R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
+# IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной
+# вертикали отказ 503 с причиной обязан идти раньше разрешения проекта, а атрибут-фильтр ответил бы
+# 404 на nonexistent id до тела действия. Ключом хранилищ id вызывающего не стал: фон и тайл
+# адресуются id проекта (ProjectManager/BackgroundsDir), право — Write/Read из RequestScope.
+backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15

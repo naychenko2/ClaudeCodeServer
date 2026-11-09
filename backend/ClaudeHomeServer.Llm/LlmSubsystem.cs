@@ -45,7 +45,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // 12) `LlmProviderRegistry` — реестр провайдеров и их прайсов; читается
 //     ModuleRegistry (динамический слой LocalActionCatalog), LlmProviderRegistry
 //     отдаёт `GetProviderProjectsDirs()`/`ProfilesDir` для пост-билд инициализации
-//     WorkflowAgentParser (Program.cs:~869). Принимает `ILocalEndpointProbe` и
+//     WorkflowAgentParser (Services/Composition/
+//     StartupWarmup.cs:29-48). Принимает `ILocalEndpointProbe` и
 //     подставляет живое `max_model_len` в `CLAUDE_CODE_MAX_CONTEXT_TOKENS` для
 //     локального провайдера (см. ADR-007 §4 — окно контекста из живого `/v1/models`).
 // 13) `ProviderBalanceService` + `IProviderBalanceService` (форвард на тот же
@@ -100,9 +101,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // CLI-провайдер», они закрывают pre-flight «локальная модель не запущена».
 //
 // Шов `services.Memory` (`MemoryWriteResolver`) лежит ВНЕ `Services.Llm`,
-// поэтому НЕ переносится сюда — отдельная вертикаль Memory, и реестр уже
-// зарегистрирован в Program.cs:~304 (без `MemorySubsystem` потому что это
-// сервис общего слоя, не фасад памяти).
+// поэтому НЕ переносится сюда — отдельная вертикаль Memory; его регистрация —
+// в самой вертикали (MemorySubsystem.cs:124, перенесена из Program.cs в S6-2).
 //
 // Шов `Services.Hubs` не нужен: Llm-слой пишет события через SessionManager
 // (который держит IHubContext<SessionHub>), не напрямую.
@@ -122,7 +122,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // страж границ их не флагает.
 //
 // Прогрев после Build:
-// - `LlmProviderRegistry` резолвится в Program.cs:~869 для регистрации корней
+// - `LlmProviderRegistry` резолвится в стартовом ряду
+//   (Services/Composition/StartupWarmup.cs:38-48) для регистрации корней
 //   провайдеров в TranscriptRoots и установки `TranscriptRoots.ProfilesRoot`.
 // - Прогрев локальной модели делает `LocalLlmWarmupService` (IHostedService
 //   из этой подсистемы, см. Register выше). Условие запуска — внутри сервиса.
@@ -131,6 +132,17 @@ public sealed class LlmSubsystem : IAppSubsystem
     public string Key => "llm";
 
     public string Title => "Модельный слой LLM";
+
+    // Ядро (CanDisable=false, финал фичи «Внутренняя оптимизация AI Home», блокер 1 ревью):
+    // ядро сессий берёт сервисы этой вертикали обязательными зависимостями: фасад держит
+    // LlmProviderRegistry параметром конструктора (Services/SessionManager.cs:282); роли ядра
+    // из регистрации AddSessionCore (Services/Sessions/SessionCoreRegistration.cs) резолвят
+    // через GetRequiredService LlmProviderRegistry, ClaudeSubscriptionPool, ModelAssignmentResolver,
+    // SubscriptionLimitRecorder и ILlmSessionAdapterFactory: TurnCostLedger (:59-68), CliRoute (:75-86),
+    // ProviderMigration (:113-119), ChatSettings (:147-158), ChatCreation (:318-327),
+    // TurnProcessHost (:255-276). Без них SessionManager не активируется. Панель «Компоненты»
+    // показывает её группой ядра, без тумблера.
+    public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)
     {
@@ -298,7 +310,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         // живёт от IHttpClientFactory, не от реестра. До этой правки конфиг жил руками —
         // за сутки значение 71 680 → 61 440 → 65 536, и CLI считал по объявленному
         // (57345 + 8192 < 71680), не сжимал вовремя и ход падал на одном токене.
-        // Резолвится в Program.cs:~869 для регистрации корней в TranscriptRoots.
+        // Резолвится в стартовом ряду (Services/Composition/StartupWarmup.cs:38-48)
+        // для регистрации корней в TranscriptRoots.
         services.AddSingleton<LlmProviderRegistry>(sp =>
             new LlmProviderRegistry(
                 sp.GetRequiredService<IConfiguration>(),
@@ -466,8 +479,8 @@ public sealed class LlmSubsystem : IAppSubsystem
         services.AddSingleton<Gateway.LocalOcrService>();
 
         // WorkflowAgentParser / WorkflowWatcher / WorkflowMetaResolver — статические
-        // парсеры транскриптов; DI не нужны (Program.cs:~788-792 ставит логгеры
-        // и кеш корней после Build).
+        // парсеры транскриптов; DI не нужны (логгеры и разрешённые корни ставит
+        // стартовый ряд Services/Composition/StartupWarmup.cs:29-53 после Build).
 
         // === Фича «Статистика локальных моделей»: поллер метрик стенда + видеокарты ===
         // Опции читаются через IOptionsMonitor ВНУТРИ поллера (тумблер подсистемы не нужен):

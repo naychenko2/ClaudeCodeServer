@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/tasks")]
+[SubsystemUsage("tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
@@ -160,6 +161,7 @@ public class ProjectTasksController(
 [ApiController]
 [Authorize]
 [Route("api/tasks")]
+[SubsystemUsage("tasks")]
 public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor,

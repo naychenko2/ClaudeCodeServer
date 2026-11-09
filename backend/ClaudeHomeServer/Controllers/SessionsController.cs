@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -103,8 +104,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
         // Глобальная персона в общем чате (R-S2a-8): 400 с машинным кодом — тот же, что при смене собеседника.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -206,9 +207,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         // Глобальная персона чату общего проекта (S2a-8): 400 с машинным кодом, чтобы фронт
         // различал этот отказ среди прочих 400 смены собеседника.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
+        catch (GlobalPersonaInSharedException ex)
         {
-            return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code });
+            return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code });
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }

@@ -31,10 +31,14 @@ public sealed class GlifImageGenerator : IImageGenerator
     private static readonly TimeSpan MinPoll = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxPoll = TimeSpan.FromSeconds(15);
 
+    // Уровень по умолчанию: одно значение держит и пикер (помечен «по умолчанию»), и
+    // DefaultModel ниже — иначе они разъедутся.
+    private const string DefaultTier = "smart";
+
     private static readonly IReadOnlyList<ImageModelInfo> Tiers =
     [
         new("lite", "Lite", "Дешевле и быстрее · простые иконки"),
-        new("smart", "Smart", "Баланс качества и цены · по умолчанию"),
+        new(DefaultTier, "Smart", "Баланс качества и цены · по умолчанию"),
         new("genius", "Genius", "Самый сильный агент · сложные сюжеты"),
     ];
 
@@ -51,6 +55,11 @@ public sealed class GlifImageGenerator : IImageGenerator
     // (intelligence). Он и играет роль «модели» в пикере.
     public IReadOnlyList<ImageModelInfo> Models => Tiers;
 
+    // Контракт IImageGenerator: при model = null мы intelligence не шлём — уровень берёт
+    // агент. В учёте стоит тот уровень, который мы сами держим дефолтным (он же предвыбран
+    // в пикере), а не пустота: её аналитика прочитала бы как «дефолт подписки» claude.
+    string? IImageGenerator.DefaultModel => DefaultTier;
+
     public GlifImageGenerator(IHttpClientFactory http, IConfiguration config, ILogger<GlifImageGenerator> logger)
     {
         _http = http;
@@ -58,10 +67,10 @@ public sealed class GlifImageGenerator : IImageGenerator
         _logger = logger;
     }
 
-    public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public async Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default)
     {
-        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
+        if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return ImageGenerationResult.Empty;
         count = Math.Clamp(count, 1, 4);
 
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -77,7 +86,7 @@ public sealed class GlifImageGenerator : IImageGenerator
             if (job.State == GlifJobState.Failed || string.IsNullOrWhiteSpace(job.JobId))
             {
                 _logger.LogWarning("glif: compose_project не стартовал ({Error})", job.Error ?? "нет jobId");
-                return [];
+                return ImageGenerationResult.Empty;
             }
 
             // Последний разобранный ответ — по нему объясняем в логе пустой финал
@@ -94,7 +103,7 @@ public sealed class GlifImageGenerator : IImageGenerator
                 if (status.State == GlifJobState.Failed)
                 {
                     _logger.LogWarning("glif: джоба {JobId} провалилась ({Error})", job.JobId, status.Error);
-                    return [];
+                    return ImageGenerationResult.Empty;
                 }
                 if (status.State == GlifJobState.Completed)
                 {
@@ -109,7 +118,7 @@ public sealed class GlifImageGenerator : IImageGenerator
             if (urls.Count == 0)
             {
                 LogEmptyResult(finished);
-                return [];
+                return ImageGenerationResult.Empty;
             }
 
             var result = new List<GeneratedImage>();
@@ -119,7 +128,7 @@ public sealed class GlifImageGenerator : IImageGenerator
                 var image = await ImageDownload.FetchAsync(url, token);
                 if (image is not null) result.Add(image);
             }
-            return result;
+            return new ImageGenerationResult(result, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -128,12 +137,12 @@ public sealed class GlifImageGenerator : IImageGenerator
         catch (OperationCanceledException)
         {
             _logger.LogWarning("glif: генерация не уложилась в {Seconds}с", TotalTimeout.TotalSeconds);
-            return [];
+            return ImageGenerationResult.Empty;
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Ошибка генерации картинки через glif");
-            return [];
+            return ImageGenerationResult.Empty;
         }
     }
 

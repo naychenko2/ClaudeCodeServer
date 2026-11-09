@@ -60,10 +60,15 @@ public sealed class ImageBackfillService(
     /// <summary>
     /// Поставить сущность в очередь на догоняющую генерацию. Зовут контроллеры, когда
     /// картинку сделать не удалось (генератор выключен или вернул отказ). Идемпотентно.
+    /// initiator — кто подал заявку (SpendInitiators.*): его знает вызывающий, он же и
+    /// доходит до фоновой траты через сохранённую заявку (S-SPEND-8).
+    /// actorUserId/projectId — атрибуция траты той же заявки (п.1 хвоста R-S-SPEND-2): её
+    /// считает тот, кто знает сущность; очередь её только переносит до фоновой генерации.
     /// </summary>
-    public void Enqueue(string kind, string entityId, string ownerId, string? prompt = null)
+    public void Enqueue(string kind, string entityId, string ownerId, string? prompt, string initiator,
+        string? actorUserId = null, string? projectId = null)
     {
-        if (store.Enqueue(kind, entityId, ownerId, prompt))
+        if (store.Enqueue(kind, entityId, ownerId, prompt, initiator, actorUserId, projectId))
             log.LogInformation("Картинка догонит позже: {Kind} {Entity} (владелец {Owner})",
                 kind, entityId, ownerId);
     }
@@ -217,6 +222,15 @@ public sealed class ImageBackfillService(
         return new ImageBackfillSummary(0, 0, 1);
     }
 
+    // Инициатор траты этой заявки — из самой заявки (S-SPEND-8). null (поля нет) — заявка
+    // поставлена до его появления: по решению постановки читаем её как human, другого
+    // инициатора не выдумываем (system не подходит: фон действует по решению человека или
+    // агента, а не по своему). Пустая строка — постановка инициатора не назвала: отдаём
+    // пустой, роутер запишет трату без инициатора, а не припишет её человеку.
+    private static string InitiatorOf(ImageBackfillRequest request) =>
+        request.Initiator is null ? Models.SpendInitiators.Human
+        : string.IsNullOrWhiteSpace(request.Initiator) ? "" : request.Initiator;
+
     // Одна попытка: null — успех, иначе причина отказа
     private async Task<string?> TryGenerateAsync(ImageBackfillRequest request, string prompt, CancellationToken ct)
     {
@@ -224,7 +238,14 @@ public sealed class ImageBackfillService(
         await _slots.WaitAsync(ct);
         try
         {
-            image = await images.GenerateAsync(request.Kind, prompt, ct);
+            // Трата догоняющей генерации — на владельца заявки (он в заявке с момента
+            // постановки, а Resolve снимает заявку, если персона ушла к другому владельцу, —
+            // чужому трата не уйдёт) и с инициатором, актором и проектом той же заявки: все
+            // три сохранены при её постановке (S-SPEND-8, п.1 хвоста R-S-SPEND-2), роутер их
+            // не выдумывает. Заявки, поставленные до полей атрибуции, читаются как раньше:
+            // «нет поля → владелец», проект не назван
+            image = await images.GenerateAsync(request.Kind, prompt, request.OwnerId,
+                InitiatorOf(request), request.ActorUserId, request.ProjectId, ct: ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

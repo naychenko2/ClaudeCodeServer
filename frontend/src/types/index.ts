@@ -3656,7 +3656,7 @@ export interface SpendTurnDto {
   provider: string | null;
   model: string | null;
   source: string;            // chat-turn | one-shot | fal | free
-  label: string | null;      // подпись one-shot действия или endpoint fal
+  label: string | null;      // подпись one-shot действия, endpoint fal или метка генерации («image-generation», «… : без картинок», «… : сумма уточняется»)
   tier?: string | null;      // ценовой класс модели хода (free|cheap|expensive)
   tokens: SpendTokens;
   generations: number;

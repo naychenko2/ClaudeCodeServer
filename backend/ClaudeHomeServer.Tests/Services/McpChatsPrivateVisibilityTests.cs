@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -128,7 +129,7 @@ public sealed class McpChatsPrivateVisibilityTests : IDisposable
         _tasks = new TaskManager(_config);
         _toolset = new WorkspaceToolset(
             _projects, null!, _sessions, _personas, null!, null!, null!, null!, null!, null!,
-            null!, null!, _users, null!, null!, new SessionMessagingService(_sessions, _projects, _tasks),
+            null!, null!, _users, null!, new SessionMessagingService(_sessions, _projects, _tasks),
             _tasks, null!, null!, null!, null!,
             access, new WideFrame(), _actors, new ActorRightGate(_actors, access, new WideFrame()));
     }
@@ -166,11 +167,28 @@ public sealed class McpChatsPrivateVisibilityTests : IDisposable
             notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projects, new ChatHistoryService(_config), _config, adapters,
-            new FalCostService(new Mock<IHttpClientFactory>().Object, _config), new UsageService(_config),
-            appSettings, _users, jwt, server.Object, llmProviders, new FeatureFlagService(_users),
-            _personas, bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, new TestSessionBroadcaster());
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(new ChatHistoryService(_config));
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(_config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(new FalCostService(new Mock<IHttpClientFactory>().Object, _config));
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(new UsageService(_config));
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(_users);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(new FeatureFlagService(_users));
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(_personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(new TestSessionBroadcaster());
+        }).Manager;
     }
 
     // Рамка Wide — широкая рамка хода (в живом вердикте S2d-1b Wide — приватному автору-

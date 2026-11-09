@@ -12,9 +12,10 @@ import { ProjectIcon } from '../features/projects/ProjectIcon';
 import { HubTabs, defaultHubTabs, subsystemTabValue, tabLabel, tabIcon, isSubsystemTab, type HubTab, type HubTabValue, isModuleTab } from './HubTabs';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { AvatarMenu } from '../features/projects/AvatarMenu';
+import { gateAvatarMenu } from './avatarMenuGates';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
-import { SubsystemsPage } from '../pages/SubsystemsPage';
+import { ComponentsPage } from '../pages/ComponentsPage';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
@@ -555,52 +556,56 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
         {/* «Что нового» своей кнопки в шапке больше не имеет: на десктопе пункт живёт
             в меню аватара (рядом с «Настройкой знаний»), на мобилке — в «⋯ Разделы».
             Сигнал о новом виден на самом пункте меню — аватар им не обвешиваем. */}
-        <AvatarMenu
-          username={auth.username}
-          displayName={auth.displayName}
-          isAdmin={isAdmin}
-          serverUrl={serverUrl}
-          onLogout={onLogout}
-          onShowChangePassword={() => setShowChangePassword(true)}
-          onShowFeatureFlags={() => setShowFeatureFlags(true)}
-          onShowModelsSpend={() => setShowModelsSpend(true)}
-          onShowMcpServers={() => setShowMcpServers(true)}
+        {/* Пункты «Знания», «Аналитика токенов», «Что нового», «Выкатить на бой»
+            дополнительно гейтятся по включённости подсистем (S2b-2b): выключенный
+            ключ → колбэк undefined → AvatarMenu сам прячет пункт. Карта — в
+            avatarMenuGates.ts; сам AvatarMenu и его поведение по undefined не меняны. */}
+        <AvatarMenu {...gateAvatarMenu({
+          username: auth.username,
+          displayName: auth.displayName,
+          isAdmin,
+          serverUrl,
+          onLogout,
+          onShowChangePassword: () => setShowChangePassword(true),
+          onShowFeatureFlags: () => setShowFeatureFlags(true),
+          onShowModelsSpend: () => setShowModelsSpend(true),
+          onShowMcpServers: () => setShowMcpServers(true),
           // Устройства — агенты локальных проектов
-          onShowDevices={devicesMenu ? () => setShowDevices(true) : undefined}
-          onShowUserManagement={() => setShowUserMgmt(true)}
-          // Админский список подсистем инстанса (Этап 5, волна 3): только
-          // чтение через GET /api/admin/subsystems, без тумблера — глобальный
-          // рубильник через API сознательно отложен (задача 7d261cde).
-          onShowSubsystems={isAdmin ? () => setShowSubsystems(true) : undefined}
-          hideStatus={isMobile || isTablet}
+          onShowDevices: devicesMenu ? () => setShowDevices(true) : undefined,
+          onShowUserManagement: () => setShowUserMgmt(true),
+          // Панель «Компоненты» (бывш. «Подсистемы»): состав инстанса с тумблером
+          // записи и использованием (шаг 2c «Внутренней оптимизации», S2c-3).
+          // Пункт только для админов; роль проверяется и на ручках.
+          onShowSubsystems: isAdmin ? () => setShowSubsystems(true) : undefined,
+          hideStatus: isMobile || isTablet,
           // «Знания», «Специальности», «Аналитика токенов» и «Что нового» живут здесь
           // на обеих платформах: в таббар они не входят, а отдельного меню разделов нет
-          onOpenKnowledge={() => onTab('knowledge')}
-          onOpenSpecialties={() => onTab('specialties')}
-          onOpenSpend={() => onTab(subsystemTabValue('spend'))}
+          onOpenKnowledge: () => onTab('knowledge'),
+          onOpenSpecialties: () => onTab('specialties'),
+          onOpenSpend: () => onTab(subsystemTabValue('spend')),
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
           // на машине, где своего раннера нет, пункт был бы кнопкой в никуда
-          onShowDeploy={isAdmin && deployEnabled ? openDeployModal : undefined}
+          onShowDeploy: isAdmin && deployEnabled ? openDeployModal : undefined,
           // Питание машины: тот же двойной замок, что и у выкатки
-          onShowPower={isAdmin && powerEnabled ? () => setShowPower(true) : undefined}
+          onShowPower: isAdmin && powerEnabled ? () => setShowPower(true) : undefined,
           // Пульт управления: тот же двойной замок плюс непустой список действий
-          onShowRemoteCommands={isAdmin && remoteCommandsEnabled ? () => setShowRemoteCommands(true) : undefined}
-          onShowHistory={openHistory}
-          historyBadge={historyBadge}
-          historyNeverSeen={neverSeen}
-          historyActive={historyActive}
+          onShowRemoteCommands: isAdmin && remoteCommandsEnabled ? () => setShowRemoteCommands(true) : undefined,
+          onShowHistory: openHistory,
+          historyBadge,
+          historyNeverSeen: neverSeen,
+          historyActive,
           // На планшете колокольчик ушёл из шапки: пункт «Уведомления» в меню
           // аватара, счётчик непрочитанных — на самом аватаре числом. На десктопе
           // и мобиле проп не передаётся — дубля счётчика и пункта не возникает.
-          onOpenNotifications={isTablet ? () => onTab('notifications') : undefined}
-          notifBadge={isTablet ? notifBadge : 0}
-          notifActive={value === 'notifications'}
-        />
+          onOpenNotifications: isTablet ? () => onTab('notifications') : undefined,
+          notifBadge: isTablet ? notifBadge : 0,
+          notifActive: value === 'notifications',
+        }, isSubsystemEnabled)} />
       </div>
 
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
-      {showSubsystems && <SubsystemsPage onClose={() => setShowSubsystems(false)} />}
+      {showSubsystems && <ComponentsPage onClose={() => setShowSubsystems(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}

@@ -14,7 +14,7 @@ public static class WorkflowMetaResolver
 {
     // Изоляция по ExecutionContext: параллельные тест-классы (а внутри них параллельные
     // WebApplicationFactory-подъёмы) пишут каждый в свой AsyncLocal и не топчут друг друга.
-    // Program.cs:863 и тесты-коллекторы задают значение через сеттер — оба видят только свою
+    // StartupWarmup.cs:32 и тесты-коллекторы задают значение через сеттер — оба видят только свою
     // запись; в чужом ExecutionContext остаётся прежнее значение (или NullLogger по умолчанию).
     // Гонка статического Log (флейк полного прогона) этим снимается.
     private static readonly AsyncLocal<ILogger?> _log = new();

@@ -7,8 +7,11 @@ namespace ClaudeHomeServer.Services.Tasks;
 
 // Счётчик локальных исполнителей в хвосте хода оркестратора: одна строка вида
 // «Локальные исполнители сейчас: занято N из M — Кира (фича «X», S2), Денис (фича «Y», R-3);
-// свободны: Кузьма.» Оркестратор просыпается только от доклада своего чата и не видит чужих
-// занятых персон — строка даёт ему картину по ВСЕМ фичам и чатам владельца.
+// свободны: Кузьма. Локальных ходов на движке: K — …» Оркестратор просыпается только от доклада
+// своего чата и не видит чужих занятых персон — строка даёт ему картину по ВСЕМ фичам и чатам
+// владельца. Числа два и они разные: персоны ростера (кого занять нельзя) и физические слоты
+// локального движка (любой локальный ход, включая ревью и доработки вне ростера) — по уроку
+// 06.11: при лимите 4 разом ушло до 12 ходов, потому что ревью на слабой модели в счёт не входило.
 //
 // Секция едет ХВОСТОМ хода (InTurnTail): текст меняется от хода к ходу и в системном блоке
 // обнулял бы prefix cache. Состав tools/list не трогаем (McpToolsetStabilityTests). Признак
@@ -55,7 +58,8 @@ public sealed class LocalExecutorsContributor(TaskManager tasks, IServiceProvide
 
         var locals = roster.For(ownerId, session.ProjectId);
         if (locals.Count == 0) return null;
-        return Format(locals, LocalExecutorLoad.BusyBy(owner, locals, sessions));
+        return Format(locals, LocalExecutorLoad.BusyBy(owner, locals, sessions),
+            LocalExecutorLoad.LocalTurnsBy(owner, sessions, roster, ownerId));
     }
 
     // Сессия — ключевой чат хотя бы одной открытой (эпик не закрыт) фичи владельца
@@ -71,8 +75,13 @@ public sealed class LocalExecutorsContributor(TaskManager tasks, IServiceProvide
         return false;
     }
 
+    // Две разные величины в одной строке: занятые персоны-исполнители (ростер) и локальные
+    // ходы на движке (любой задачи с локальной эффективной моделью, включая ревью вне ростера).
+    // «занято 3 из 3» не читается как «движок близок к потолку»: три ревью на слабой модели
+    // плюс три исполнителя — это шесть ходов, и видно какие.
     internal static string Format(IReadOnlyList<LocalExecutor> locals,
-        IReadOnlyDictionary<string, List<LocalExecutorLoad.BusyEntry>> busy)
+        IReadOnlyDictionary<string, List<LocalExecutorLoad.BusyEntry>> busy,
+        IReadOnlyList<LocalExecutorLoad.LocalTurn> turns)
     {
         var busyParts = locals.Where(l => busy.ContainsKey(l.PersonaId))
             .SelectMany(l => busy[l.PersonaId].Select(b => $"{l.Name} (фича «{b.FeatureTitle}», {b.Step})"))
@@ -82,6 +91,9 @@ public sealed class LocalExecutorsContributor(TaskManager tasks, IServiceProvide
         var text = $"Локальные исполнители сейчас: занято {busyCount} из {locals.Count}";
         if (busyParts.Count > 0) text += " — " + string.Join(", ", busyParts);
         if (free.Count > 0) text += "; свободны: " + string.Join(", ", free);
+        text += ". Локальных ходов на движке: " + turns.Count;
+        if (turns.Count > 0)
+            text += " — " + string.Join(", ", turns.Select(t => $"{t.Name} (фича «{t.FeatureTitle}», {t.Step})"));
         return text + ".";
     }
 }

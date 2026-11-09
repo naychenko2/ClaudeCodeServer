@@ -55,7 +55,7 @@ public static class SubsystemHostingExtensions
         if (subsystemKey is not null && !SubsystemGate.IsEnabled(config, subsystemKey))
             return false;
 
-        // Та же проверка, что была в Program.cs:121-130: ASP.NET Core кладёт среду
+        // Та же проверка, что была в Program.cs до выноса в этот хелпер: ASP.NET Core кладёт среду
         // в IConfiguration["ASPNETCORE_ENVIRONMENT"] при WebApplication.CreateBuilder.
         var isTesting = string.Equals(
             config["ASPNETCORE_ENVIRONMENT"], "Testing", StringComparison.OrdinalIgnoreCase);

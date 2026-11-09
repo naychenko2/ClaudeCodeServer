@@ -13,6 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ProjectCapability(ProjectCapabilityArea.FileBound)]
 [ApiController]
 [Authorize]
+[SubsystemUsage("skills")]
 public class SkillsController(
     SkillsService skills,
     SkillsCliService cli,

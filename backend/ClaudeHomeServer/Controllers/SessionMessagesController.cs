@@ -270,9 +270,9 @@ public class SessionMessagesController(SessionManager sessions, SessionMessaging
             senderOrigin = p.SenderOrigin,
             enqueuedAt = p.EnqueuedAt,
             senderChatName = p.SenderChatName,
-            kind = p.Kind == ClaudeHomeServer.Services.SessionManager.PendingKind.User ? "user" : "agent",
+            kind = p.Kind == ClaudeHomeServer.Services.Sessions.PendingKind.User ? "user" : "agent",
             attachedPaths = p.AttachedPaths,
-            mode = p.Kind == ClaudeHomeServer.Services.SessionManager.PendingKind.User ? p.Mode : null,
+            mode = p.Kind == ClaudeHomeServer.Services.Sessions.PendingKind.User ? p.Mode : null,
         }));
     }
 

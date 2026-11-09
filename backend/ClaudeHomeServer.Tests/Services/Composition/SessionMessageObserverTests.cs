@@ -4,6 +4,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services.Composition;
@@ -21,10 +22,14 @@ public class SessionMessageObserverTests
     // на контракт Attach/Detach это не влияет, подписчик видит тот же самый делегат.
     private static void FireOnSessionMessage(SessionManager sessions, Session s, ServerMessage m)
     {
-        var field = typeof(SessionManager).GetField(nameof(SessionManager.OnSessionMessage),
+        // С S3-6 событие и его backing-поле — на TurnCompletion (фасад держит только
+        // аксессоры-делегаты): поднимаем поле с экземпляра роли.
+        var completion = (TurnCompletion)typeof(SessionManager)
+            .GetField("_completion", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sessions)!;
+        var field = typeof(TurnCompletion).GetField(nameof(TurnCompletion.OnSessionMessage),
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
         field.Should().NotBeNull("backing field авто-event хранится под тем же именем");
-        var del = (Func<Session, ServerMessage, Task>?)field!.GetValue(sessions);
+        var del = (Func<Session, ServerMessage, Task>?)field!.GetValue(completion);
         if (del is null) return;
         foreach (var d in del.GetInvocationList().Cast<Func<Session, ServerMessage, Task>>())
         {
@@ -38,9 +43,16 @@ public class SessionMessageObserverTests
     // это лишнее, нужен только сам event. RuntimeHelpers.GetUninitializedObject даёт
     // «голый» экземпляр без вызова конструктора: backing field OnSessionMessage = null,
     // add/remove аксессоры на авто-event работают штатно, и наблюдатель не отличает
-    // такой объект от боевого.
-    private static SessionManager CreateSessionManager() =>
-        (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+    // такой объект от боевого. С S3-6 событие живёт в TurnCompletion — голому ядру
+    // подставляем голую же роль в поле _completion: аксессоры фасада делегируют туда.
+    private static SessionManager CreateSessionManager()
+    {
+        var sessions = (SessionManager)RuntimeHelpers.GetUninitializedObject(typeof(SessionManager));
+        typeof(SessionManager).GetField("_completion",
+                BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(sessions, RuntimeHelpers.GetUninitializedObject(typeof(TurnCompletion)));
+        return sessions;
+    }
 
     private static Session MakeSession(string projectId) => new()
     {

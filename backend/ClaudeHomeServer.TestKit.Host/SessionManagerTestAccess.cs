@@ -11,7 +11,7 @@ internal static class SessionManagerTestAccess
     public static TurnAccumulator AccumulatorOf(this SessionManager sessions, string sessionId)
     {
         var entries = (IDictionary)typeof(SessionManager)
-            .GetField("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sessions)!;
+            .GetProperty("_sessions", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(sessions)!;
         var entry = entries[sessionId]!;
         return (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
     }

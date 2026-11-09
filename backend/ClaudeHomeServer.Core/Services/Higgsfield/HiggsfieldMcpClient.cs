@@ -63,6 +63,10 @@ public sealed class HiggsfieldMcpClient(IHttpClientFactory http, IConfiguration 
             if (!resp.IsSuccessStatusCode)
                 return HiggsfieldCall.NoAccess($"Higgsfield ответил {(int)resp.StatusCode}");
         }
+        // Узкий тип уместен: транспортная беда и таймаут (с отменённым токеном чтение контента
+        // даёт тот же TaskCanceledException — замерено, HttpClientCancellationContractTests)
+        // называются «не ответил». Отмена хоста — тот же тип с отменённым ct — здесь не ловится
+        // и уходит наверх как отмена, а не как отказ Higgsfield.
         catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException && !ct.IsCancellationRequested)
         {
             return HiggsfieldCall.NoAccess("Higgsfield не ответил: " + ex.Message);

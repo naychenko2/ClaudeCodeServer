@@ -75,7 +75,7 @@ public sealed class WikiLintService : BackgroundService
     public WikiLintService(NotesService notes, WikiKeeper keeper, ISphereDirectory spheres,
         IConfiguration config, ILogger<WikiLintService> log,
         // Шов флага — необязательный параметр, как у NotesService: в приложении его даёт DI
-        // (Program.cs:1313), в тесте его даёт вызывающий — состояние флага часть проверки.
+        // (CoreSeamsGlue.cs:107), в тесте его даёт вызывающий — состояние флага часть проверки.
         Composition.IFeatureFlagGate? flags = null)
     {
         _notes = notes;

@@ -29,7 +29,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // W4-LINK-B (п.14): резолв дерева задачи, к которой привязан чат (?sessionId=).
     SessionManager sessions = null!,
     // S3-3b (разрез 4bc3d04f §3): журнал правок человека (S3-3) — зовётся после УСПЕШНОЙ записи/
-    // удаления/переноса файла. В DI он всегда (Program.cs:621-622); опциональным оставлен как
+    // удаления/переноса файла. В DI он всегда (Program.cs:438-439); опциональным оставлен как
     // остальные необязательные зависимости контроллера: бесхостовые тесты собирают его напрямую.
     IHumanEditJournal? humanEdits = null) : ControllerBase
 {

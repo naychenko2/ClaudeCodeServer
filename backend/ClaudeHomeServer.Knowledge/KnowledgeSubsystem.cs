@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // пользователя, реконсайлер error-документов Dify и каталог баз знаний
 // (общий для REST /api/knowledge/catalog и wsp-тулсета Dify).
 //
-// Состав (ранее жил тремя блоками в Program.cs:323, 388, 668-693 без форвардеров):
+// Состав (ранее жил тремя блоками в Program.cs без форвардеров):
 // - WorkspaceKnowledgeStore — JSON-стор `data/workspace-knowledge.json` (привязка
 //   «путь проекта → {DifyDatasetId, DocumentTags}»); миграция из старых полей Project
 //   выполняется ОДНОКРАТНО в блоке PostConfigure (см. ниже — причина отдельной жизни).
@@ -68,6 +68,14 @@ public sealed class KnowledgeSubsystem : IAppSubsystem
     public string Key => "knowledge";
 
     public string Title => "Знания";
+
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:26) требует
+    // WorkspaceKnowledgeStore и KnowledgeService; та же цепочка — через обязательный ядру
+    // сессий PersonaBindingsService (Services/PersonaBindingsService.cs:138-139): фасад его не держит, нужда ядра
+    // несут резолверы ролей AddSessionCore (Services/Sessions/SessionCoreRegistration.cs:175/:187/:197 →
+    // BuiltinMcpContexts, PersonaLayerBuilder, ExternalMcpContexts), а эти роли фасад держит
+    // обязательными параметрами конструктора (Services/SessionManager.cs:275-276).
+    public bool CanDisable => false;
 
     public void Register(IServiceCollection services, IConfiguration config)
     {

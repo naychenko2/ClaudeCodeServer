@@ -21,6 +21,12 @@ export interface SpendOpenContext {
   turnId?: string;            // сразу открыть паспорт хода
 }
 
+// Подпись записи платного запроса fal без единой картинки. Зеркало бэковой константы
+// ImageGenerationService.SpendLabelNoImages (backend/ClaudeHomeServer.Images/Services/ImageGenerationService.cs);
+// по ней генерацию без картинок отличают от догоняющей записи удачного запроса. Совпадение
+// со значением бэка держит тест spendTurnTitle.test.ts.
+export const SPEND_LABEL_NO_IMAGES = 'image-generation: без картинок';
+
 export const OPEN_SPEND_EVENT = 'cc-open-spend';
 export function openSpend(ctx?: SpendOpenContext) {
   stashSpendContext(ctx ?? {});

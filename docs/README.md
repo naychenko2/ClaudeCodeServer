@@ -189,6 +189,9 @@ CLI-провайдер: проверенная конфигурация стен
 (инвентарь корня `Services` и вердикт архитектора перед волной 4),
 [session-core-split-2026-09.md](research/session-core-split-2026-09.md)
 (разведка разреза `SessionManager` и план выноса штаба вертикалью),
+[session-manager-split-2026-11.md](research/session-manager-split-2026-11.md)
+(карта ролей `SessionManager` перед S3: методы и зависимости по 23 классам, три ленивых
+шва, инварианты по шагам, порядок S3-1…S3-8),
 [team-di-migration-2026-09.md](research/team-di-migration-2026-09.md)
 (что реально снимается при переводе штаба на DI: 17 обёрток против 10 фасадных,
 почему Team не выносится отдельным `.csproj`),

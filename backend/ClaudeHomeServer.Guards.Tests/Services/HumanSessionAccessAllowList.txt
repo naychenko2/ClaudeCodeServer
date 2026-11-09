@@ -14,3 +14,7 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|4
 # Сферы — не чаты: spheres.GetOwned — персональные сущности пользователя (SphereManager),
 # ни SessionManager, ни приватность чатов в них не участвуют; инвариант S2d о владении чатом.
 backend/ClaudeHomeServer/Controllers/SpheresController.cs|5
+# R-ТРАТА: PersonasController.CallerSpendAttribution — GetOwned только как проверка «чат-вызыватель
+# существует и принадлежит арендатору» для атрибуции расхода (Human/Agent); данные чата наружу не
+# отдаются, приватность PrivateToUserId на результат не влияет (ответ — пара «инициатор, актор»).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|1

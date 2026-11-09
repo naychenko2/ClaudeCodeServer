@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using ClaudeHomeServer.Controllers;
 using ClaudeHomeServer.Models;
@@ -85,11 +86,29 @@ public sealed class DeviceWaitTestHost : IDisposable
             notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        _sessions = new SessionManager(_projects, new ChatHistoryService(config), config,
-            adapters, falCost, usage, _appSettings, _userStore, jwt, server.Object, llmProviders,
-            flags, _personas, bindings, subPool,
-            NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster, deviceGate: _gate);
+        _sessions = SessionCoreTestHost.Build(_dir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(new ChatHistoryService(config));
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(_appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(_userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(_personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.IProjectDeviceGate>(_gate);
+        }).Manager;
 
         _sut = new TaskExecutionService(_tasks, _sessions, _personas, broadcaster, _push, _notif,
             NullLogger<TaskExecutionService>.Instance, config, kb: notesKb,
@@ -120,7 +139,7 @@ public sealed class DeviceWaitTestHost : IDisposable
     public TaskCompletionSource<string> StubProcess(Session chat)
     {
         var delivered = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[chat.Id]!;
         var adapter = new Mock<ILlmSessionAdapter>();

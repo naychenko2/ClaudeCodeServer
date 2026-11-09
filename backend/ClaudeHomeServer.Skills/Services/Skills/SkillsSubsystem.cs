@@ -49,6 +49,11 @@ public sealed class SkillsSubsystem : IAppSubsystem
 
     public string Title => "Навыки";
 
+    // Ядро (CanDisable=false, S2b-1): PersonaBindingsService (Services/PersonaBindingsService.cs:139),
+    // обязательный ядру сессий (Services/SessionManager.cs:745), требует SkillsService
+    // обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Singleton-ы без внутреннего порядка между собой; SkillsSuggestService зависит

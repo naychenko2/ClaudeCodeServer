@@ -22,6 +22,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/code-graph")]
+[SubsystemUsage("code-graph")]
 public class CodeGraphController(
     CodeGraphService graphs,
     CodeGraphQueryService queries,

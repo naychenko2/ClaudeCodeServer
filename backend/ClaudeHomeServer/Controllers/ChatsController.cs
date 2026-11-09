@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -183,8 +184,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         }
         // Групповой чат общего проекта с глобальной персоной в составе (доработка R-S2a-8):
         // 400 с машинным кодом — тот же, что при смене собеседника.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
@@ -211,8 +212,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (Services.PrivateChatModeException ex)
         { return Conflict(new { error = ex.Message, code = FeatureChatDoor.PrivateChatCode }); }
         // Глобальная персона в состав чата общего проекта (доработка R-S2a-8): тот же код отказа.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
@@ -602,7 +603,7 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             var result = await sessions.RestartStuckTurnAsync(id, req?.StartFresh == true);
             return Ok(new { outcome = result.Resumed ? "restarted" : "fresh", resumed = result.Resumed, message = result.Message });
         }
-        catch (SessionManager.TurnTranscriptDamagedException ex)
+        catch (TurnTranscriptDamagedException ex)
         {
             return Conflict(new { error = ex.Message, code = "transcript_damaged" });
         }
@@ -727,8 +728,8 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
             return Ok(new { newSessionId = result.NewSessionId, handoffNoteId = result.HandoffNoteId });
         }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (ChatContinueNotSupportedException ex) { return BadRequest(new { error = ex.Message }); }
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }

@@ -132,6 +132,12 @@ public sealed class LlmSubsystem : IAppSubsystem
 
     public string Title => "Модельный слой LLM";
 
+    // Ядро (CanDisable=false, финал фичи «Внутренняя оптимизация AI Home», блокер 1 ревью):
+    // ядро сессий (Services/SessionManager.cs:739-743) берёт ILlmSessionAdapterFactory, UsageService
+    // и LlmProviderRegistry этой вертикали обязательными параметрами конструктора — без них
+    // SessionManager не активируется. Панель «Компоненты» показывает её группой ядра, без тумблера.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Слоты моделей (strong/medium/weak) per-user + глобальная таблица

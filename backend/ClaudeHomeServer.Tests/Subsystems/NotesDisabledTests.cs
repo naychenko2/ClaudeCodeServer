@@ -83,18 +83,31 @@ public class NotesDisabledTests : IClassFixture<NotesDisabledTests.Hosts>
     // а не тем, что проверка написана мимо (мимо маршрута, мимо имени тулсета, мимо ключа).
     private TestWebApplicationFactory _enabled => _hosts.Enabled;
 
-    // Два хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
+    // Три хоста на КЛАСС, а не на тест: поднимаются лениво и гасятся вместе с фикстурой.
     // Состояние хоста тесты не меняют; сток ошибок читается со сдвигом «до/после» (Skip(count)),
     // поэтому накопленные другими тестами записи ему не мешают
     public sealed class Hosts : IDisposable
     {
         public DisabledNotesFactory Disabled { get; } = new();
         public EnabledFactory Enabled { get; } = new();
+        public SubsystemsGateOffFactory GateOff { get; } = new();
 
         public void Dispose()
         {
             Disabled.Dispose();
             Enabled.Dispose();
+            GateOff.Dispose();
+        }
+    }
+
+    // Хост фактического сценария панели: модуль в реестре и в развертке, админ выключил только
+    // рубильник подсистемы. Хост поднимается на класс (вложенная фикстура Hosts), а не на тест. Механика UseSetting и почему это не гонка — в шапке класса.
+    public sealed class SubsystemsGateOffFactory : TestWebApplicationFactory
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            base.ConfigureWebHost(builder);
+            builder.UseSetting("Subsystems:Notes:Enabled", "false");
         }
     }
 
@@ -399,5 +412,60 @@ public class NotesDisabledTests : IClassFixture<NotesDisabledTests.Hosts>
 
         response.StatusCode.Should().Be(HttpStatusCode.OK,
             "с включённой подсистемой бриф записывается в дневниковую заметку и возвращается ею");
+    }
+
+    // ─── 6. Имя и описание выключенной строки (дефект «Notes вместо „Заметки”») ─────
+    //
+    // Строка панели «Компоненты» выключенного модуля обязана называться человеческим именем
+    // раздела и с его описанием — так же, как строка рабочего модуля. Имя и описание живут в
+    // классе модуля (`NotesSubsystem.Title/Description`), а реестровый дескриптор знает только
+    // свой Title — идентификатор модуля («Notes»). Запись снимка строится из класса: Program.cs
+    // читает его через `ModuleLoader.DescribeDisabled` (метаданные без Register), и лишь когда
+    // класса нет в развертке — из дескриптора (`DisabledModuleStub`).
+    //
+    // Меряются обе дороги выключения динамического модуля: `DynamicModules:1:Enabled=false`
+    // (это `_disabled`-хост) и фактический сценарий панели — только рубильник подсистемы
+    // `Subsystems:Notes:Enabled=false` при включённой записи DynamicModules (`SubsystemsGateOffFactory`).
+    // Контроль — тот же, что во всём классе: строка включённого хоста.
+
+    private static async Task<JsonElement> RowAsync(TestWebApplicationFactory factory, string key)
+    {
+        var subsystems = await factory.CreateAuthenticatedClient()
+            .GetFromJsonAsync<JsonElement>("/api/admin/subsystems");
+        return subsystems.EnumerateArray().Single(s => s.GetProperty("key").GetString() == key);
+    }
+
+    // Ассерты собраны так, чтобы тест не мог быть зелёным по неверной причине:
+    // «равно включённому» без «Заметки» прошло бы и на двух одинаково сломанных строках,
+    // а «Заметки» без сравнения с включённым не ловило бы расхождение двух состояний.
+    private static async Task AssertDisabledRowNamedLikeEnabledAsync(JsonElement off, JsonElement on)
+    {
+        off.GetProperty("active").GetBoolean().Should().BeFalse(
+            "контроль настройки: сравнивается именно выключенная строка");
+        on.GetProperty("active").GetBoolean().Should().BeTrue(
+            "контроль: строка включённого хоста активна — сравнение идёт с живой строкой раздела");
+
+        off.GetProperty("title").GetString().Should().Be("Заметки",
+            "имя раздела из класса модуля (NotesSubsystem.Title), а не идентификатор модуля "
+            + "из реестра (appsettings.json → DynamicModules[].Title = «Notes»)");
+        off.GetProperty("title").GetString().Should().Be(on.GetProperty("title").GetString(),
+            "выключенный и включённый один и тот же модуль панель называет одинаково");
+
+        off.GetProperty("description").GetString().Should().NotBeNullOrEmpty(
+            "описание раздела читается из класса так же, как имя; пустое описание — половина дефекта");
+        off.GetProperty("description").GetString().Should().Be(on.GetProperty("description").GetString(),
+            "описание выключенной строки равно описанию включённой");
+    }
+
+    [Fact]
+    public async Task ВыключеннаяСтрокаНазванаКакВключённая_МодульВыключенВРеестре()
+    {
+        await AssertDisabledRowNamedLikeEnabledAsync(await RowAsync(_disabled, "notes"), await RowAsync(_enabled, "notes"));
+    }
+
+    [Fact]
+    public async Task ВыключеннаяСтрокаНазванаКакВключённая_РубильникПодсистемы()
+    {
+        await AssertDisabledRowNamedLikeEnabledAsync(await RowAsync(_hosts.GateOff, "notes"), await RowAsync(_enabled, "notes"));
     }
 }

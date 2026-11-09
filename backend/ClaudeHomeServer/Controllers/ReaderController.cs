@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -11,17 +12,38 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Режим чтения ссылок (ADR-005): сервер сам идёт по внешнему URL и возвращает markdown статьи;
 /// проба встраиваемости для iframe-режима панели (ADR-006, §1).
+///
+/// Подсистема reader отключаемая (ADR-014, S2a-2): при Subsystems:reader:Enabled=false её
+/// сервисов в контейнере нет, поэтому зависимости опциональные (= null), а все маршруты поля
+/// отвечают честный 503 с причиной вместо 500 активации.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/reader")]
-public class ReaderController(ReaderService reader, ReaderQuotaService quota) : ControllerBase
+[SubsystemUsage("reader")]
+public class ReaderController(
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера на
+    // выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что PluginsController)
+    ReaderService? reader = null,
+    ReaderQuotaService? quota = null) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+
+    /// <summary>
+    /// Гейт выключенной вертикали (ADR-014, S2a-2): null-зависимость = подсистема выключена.
+    /// Проверку оставляют в вызывающем — дальше по коду компилятор знает, что сервисы живые.
+    /// </summary>
+    private ActionResult ReaderDisabled() => StatusCode(503, new
+    {
+        reason = "reader_disabled",
+        error = "Подсистема чтения выключена (Subsystems:reader:Enabled=false)",
+    });
 
     [HttpPost("read")]
     public async Task<IActionResult> Read([FromBody] ReadRequest req, CancellationToken ct)
     {
+        if (reader is null || quota is null) return ReaderDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -51,6 +73,8 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota) : 
     [HttpPost("embed-check")]
     public async Task<IActionResult> EmbedCheck([FromBody] ReadRequest req, CancellationToken ct)
     {
+        if (reader is null || quota is null) return ReaderDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
 
@@ -72,6 +96,8 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota) : 
     [HttpGet("image")]
     public async Task<IActionResult> Image([FromQuery] string url, CancellationToken ct)
     {
+        if (reader is null) return ReaderDisabled();
+
         var userId = UserId;
         if (userId is null) return Unauthorized();
         if (string.IsNullOrWhiteSpace(url)) return BadRequest();

@@ -180,3 +180,6 @@ backend/ClaudeHomeServer.FastRest.slnx
 
 # Сырые дампы QA-прогонов
 .qa/raw/
+
+# Файл фазы прогона QA-спека «Компоненты» (подставляется прогонщиком вручную)
+frontend/e2e/qa/.phase-components

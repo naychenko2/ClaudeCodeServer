@@ -139,6 +139,10 @@ interface Props {
   // Панели проекта: готовый контент панелек. Контент общий для обеих зон — панель
   // рисует та зона, в которой она лежит.
   panels: Partial<Record<PanelKey, ReactNode>>;
+  // Набор ключей, разрешённых рельсе (S2b-2c): объявляет страница — с панелями
+  // выключенных подсистем из него убрано (workspaceKeysFor в panelCatalog); зона
+  // этого сама не решает и без пропа остаётся на общем WORKSPACE_KEYS.
+  allowedKeys?: readonly PanelKey[];
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
   // Кружки-индикаторы на кнопках проекта в рельсе (changes/tasks/terminal/preview):
@@ -514,6 +518,7 @@ export function DesktopWorkspace(p: Props) {
         // (≥1000px) стек встаёт inline, как у правой зоны (строка 459).
         compact={p.isTablet}
         panels={zonePanels}
+        allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
@@ -700,6 +705,7 @@ export function DesktopWorkspace(p: Props) {
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
+        allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}

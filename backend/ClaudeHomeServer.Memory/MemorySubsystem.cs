@@ -73,6 +73,11 @@ public sealed class MemorySubsystem : IAppSubsystem
 
     public string Title => "Память персон и команды";
 
+    // Ядро (CanDisable=false, S2b-1): шов контекста хода PersonaRecallSourceAdapter
+    // (Services/Composition/PromptSeamAdapters.cs:18, ADR-023) и ядро проектов
+    // (Controllers/ProjectsController.cs:25) требуют PersonaMemoryService обязательным параметром.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // Персональная память — фасад стора + Dify-датасет, recall по типизированным
@@ -109,5 +114,12 @@ public sealed class MemorySubsystem : IAppSubsystem
         // тип оказывается отсутствующим). Прецедент — `PersonaMemoryAutolearnService`.
         services.AddSingleton<TeamMemoryAutolearnService>();
         services.AddGatedHostedFrom(config, sp => sp.GetRequiredService<TeamMemoryAutolearnService>());
+
+        // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих
+        // слоёв памяти (S6-2: перенесён из Program.cs). Тип живёт в этой же сборке
+        // (`MemoryWriteResolver.cs`), потребители — только фасады выше (все берут его
+        // опциональным параметром): за пределами вертикали его никто не резолвит, поэтому
+        // он собственность Memory, а не композиционный корень.
+        services.AddSingleton<MemoryWriteResolver>();
     }
 }

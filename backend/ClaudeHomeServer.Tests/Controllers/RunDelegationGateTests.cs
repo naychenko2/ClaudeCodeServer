@@ -124,7 +124,7 @@ public class RunDelegationGateTests : IDisposable
     private void EndTurn(string sessionId)
     {
         Sessions.GetById(sessionId)!.Status = SessionStatus.Active;
-        var map = (IDictionary)typeof(SessionManager).GetField("_sessions",
+        var map = (IDictionary)typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(Sessions)!;
         var entry = map[sessionId]!;
         entry.GetType().GetField("TurnWaiter")!.SetValue(entry, null);

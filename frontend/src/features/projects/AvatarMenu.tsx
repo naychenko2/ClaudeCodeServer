@@ -3,7 +3,7 @@ import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, BriefcaseBusiness, Box, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SlidersHorizontal, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, BriefcaseBusiness, Blocks, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, MonitorSmartphone, Palette, Plug, Power, Rocket, SlidersHorizontal, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -84,9 +84,11 @@ interface Props {
   // «Выкатить на бой» — публикация продукта трей-раннером. Пункт только для админов И только
   // когда фича включена в конфиге сервера, поэтому HubHeader передаёт колбэк не всегда
   onShowDeploy?: () => void;
-  // «Подсистемы» — админский список включённых/отключённых вертикалей инстанса
-  // (Этап 5, волна 3). Пункт только для админов; HubHeader передаёт колбэк не всегда.
-  // Экран сейчас только на чтение (см. задачу 7d261cde) — тумблера нет.
+  // «Компоненты» — панель составных частей инстанса с тумблером и использованием
+  // (бывш. «Подсистемы», шаг 2c «Внутренней оптимизации»; макет components-admin-v1,
+  // решение 1: тот же экран, поэтому переименованный пункт, а не второй). Пункт
+  // только для админов (проверка роли и на ручках); счётчик изменений на пункте
+  // не ставим — ожидающие перезапуска видны внутри панели.
   onShowSubsystems?: () => void;
   // «Питание компьютера» — выключить/перезагрузить/усыпить машину, на которой крутится
   // продукт. Те же условия, что у выкатки: админ И включено в конфиге сервера
@@ -337,8 +339,8 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               onClick={() => { setOpen(false); onShowSubsystems(); }}
               style={dropdownItem}
             >
-              <Box size={ICON_SIZE.xs} strokeWidth={2} />
-              Подсистемы
+              <Blocks size={ICON_SIZE.xs} strokeWidth={2} />
+              Компоненты
             </button>
           )}
           {onShowMcpServers && (

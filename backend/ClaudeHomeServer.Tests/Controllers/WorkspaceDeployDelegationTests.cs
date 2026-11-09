@@ -134,7 +134,7 @@ public class WorkspaceDeployDelegationTests : IDisposable
     {
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
         sessions.GetById(sessionId)!.Status = SessionStatus.Active;
-        var map = (System.Collections.IDictionary)typeof(SessionManager).GetField("_sessions",
+        var map = (System.Collections.IDictionary)typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!.GetValue(sessions)!;
         var entry = map[sessionId]!;
         entry.GetType().GetField("TurnWaiter")!.SetValue(entry, null);

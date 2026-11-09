@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Images;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,8 +16,19 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/image-generation")]
-public class ImageGenerationController(ImageGenerationService images) : ControllerBase
+[SubsystemUsage("images")]
+public class ImageGenerationController(
+    // `= null` — обязательность для DI: без значения по умолчанию активация контроллера
+    // на выключенной вертикали падала (500), а не отвечала гейтом (та же форма, что TtsController)
+    ImageGenerationService? images = null) : ControllerBase
 {
+    // Гейт выключенной вертикали (ADR-014, S2b-1): null-зависимость = подсистема выключена
+    // (её сервисы регистрируются только при открытом гейте). Отказ — до любой работы.
+    private ActionResult ImagesDisabled() => StatusCode(503, new
+    {
+        error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+    });
+
     // Патч-семантика PUT /api/settings: null — поле не прислали (оставить как есть),
     // "" — сброс к слою ниже (конфиг Images → дефолт драйвера). Места, которых нет в
     // Places, не трогаются вовсе.
@@ -24,12 +36,17 @@ public class ImageGenerationController(ImageGenerationService images) : Controll
     public record UpdateRequest(Dictionary<string, PlacePatch>? Places);
 
     [HttpGet]
-    public IActionResult Get() => Ok(Describe());
+    public IActionResult Get()
+    {
+        if (images is null) return ImagesDisabled();
+        return Ok(Describe(images));
+    }
 
     [HttpPut]
     [Authorize(Roles = "admin")]
     public IActionResult Update([FromBody] UpdateRequest req)
     {
+        if (images is null) return ImagesDisabled();
         if (req.Places is null || req.Places.Count == 0)
             return BadRequest(new { error = "Не указано ни одного места генерации" });
 
@@ -42,12 +59,13 @@ public class ImageGenerationController(ImageGenerationService images) : Controll
         foreach (var (place, patch) in req.Places)
             images.UpdateSettings(place, patch?.Provider, patch?.Models);
 
-        return Ok(Describe());
+        return Ok(Describe(images));
     }
 
     // Форма настройки целиком: каталог провайдеров и по строке на каждое место.
     // Один и тот же ответ у GET и PUT — фронту не нужно перечитывать после записи.
-    private object Describe() => new
+    // Сервис — параметр: вызывающие уже прошли гейт `images is null`, и здесь он живой.
+    private object Describe(ImageGenerationService images) => new
     {
         providers = images.Providers.Select(g => new
         {

@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Composition;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
@@ -29,6 +30,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// Состав постоянный (3 чтения). Сторож парности со stdio-веткой отката —
 /// CodeGraphNotificationsToolsetParityTests (index.js заморожен).
 /// </summary>
+[SubsystemUsage("code-graph")]
 public sealed class CodeGraphToolset(
     CodeGraphService graphs,
     CodeGraphQueryService queries,

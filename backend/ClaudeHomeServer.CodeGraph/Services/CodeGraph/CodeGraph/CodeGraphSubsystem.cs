@@ -18,6 +18,11 @@ public sealed class CodeGraphSubsystem : IAppPhaseSubsystem
 
     public string Title => "Граф кода";
 
+    // Ядро (CanDisable=false, S2b-1): ядро чата держит цепочку обязательных зависимостей —
+    // SessionHub (Hubs/SessionHub.cs:26) требует FileWatcherService, а он
+    // (Services/FileWatcherService.cs:103) — CodeGraphService.
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // CodeGraph: граф зависимостей кода (узлы — типы, рёбра — Calls/Implements/References)

@@ -2,8 +2,9 @@ namespace ClaudeHomeServer.Services.Team;
 
 /// <summary>
 /// Шов «ядро сессии → штаб» (этап 4, шаг 2б плана выноса штаба, §5(3) и §5(4) плана
-/// session-core-split-2026-09.md). Четыре крючка уведомления и один запрос, которыми ядро
-/// сессии сообщает вертикали штаба о событиях приёма и середины хода.
+/// session-core-split-2026-09.md). Шесть крючков уведомления и один запрос, которыми ядро
+/// сессии сообщает вертикали штаба о событиях приёма, середины и конца хода (два крючка
+/// конца хода добавлены в S3-6: bg-agent и возврат сторожа волн).
 ///
 /// В этой волне реализован внутри <see cref="Services.SessionManager"/> как обёртка над
 /// прежними приватными методами (поведение не меняется); в шаге 2г реализация переедет
@@ -63,4 +64,24 @@ internal interface ITeamNotifier
     /// завтра туда же встала вторая вертикаль с той же потребностью.
     /// </summary>
     bool IsSessionBusy(string sessionId);
+
+    /// <summary>
+    /// S3-6 (конец хода): хук на завершение фонового async-агента (BgAgentDoneMessage).
+    /// hasAsync и asked — общий снимок ядра на два решения одного case (сброс метки
+    /// AsyncAgentStallSince под TeamTurnLock и публикация карточки молчаливого тупика):
+    /// если бы hasAsync читался уже в вертикали, между её вызовом и вызовом ядра мог
+    /// прийти другой BgAgentDoneMessage, и ядро приняло бы решение по устаревшему снимку
+    /// (решения Major + Minor 2, задача b63fd8ea). Реализация — по-прежнему обёртка
+    /// SessionManager над TeamTurnCompletionService.
+    /// </summary>
+    Task HandleBgAgentDoneAsync(string sessionId, bool aborted, bool hasAsync, bool asked);
+
+    /// <summary>
+    /// S3-6 (конец хода): «вернуть отсечки сторожа волн» по ExitedMessage — ответ получен
+    /// или ход прерван; без возврата волна осталась бы без надзора (мажор этапа 4, шаг 2в).
+    /// Вызывается с одним sessionId: SessionEntry — внутренность ядра, вертикаль его не
+    /// видит. Идемпотентен (WaveStartedAt поверх себя), поэтому бэкстоп на любом исходе
+    /// безопасен рядом с вызовом из HandleTeamTurnEnd/шима.
+    /// </summary>
+    void RestoreWaveWatchdogIfPaused(string sessionId);
 }

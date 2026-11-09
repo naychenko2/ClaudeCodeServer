@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { BadgeTone } from '../../components/ui/CountBadge';
 import { GEN_PANEL_KEYS } from '../../lib/genPanelKeys';
+import { SUBSYSTEMS } from '../../lib/subsystems';
 
 // Сторона экрана. Зон ровно две, и обе равноправны: любая панель может лежать
 // в любой из них.
@@ -239,11 +240,58 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   projectGroups: 'left',
 };
 
-// Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
-export const WORKSPACE_KEYS: readonly PanelKey[] = [
+// Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys).
+// Только статические ключи реестра: семейство plugin:* разрешается маркером
+// 'pluginPanels' (keyAllowed), отдельные plugin:*-ключи в набор никогда не входят —
+// на этом держится и то, что фильтр workspaceKeysFor не проверяет плагин-синтаксис.
+export const WORKSPACE_KEYS: readonly StaticPanelKey[] = [
   'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'arch', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc', 'video', 'characters', 'localModel', 'voices', 'chatContext', 'pluginPanels',
 ];
+
+// Панель → ключ подсистемы (lib/subsystems.ts, SUBSYSTEMS): рельса воркспейса не
+// обязана показывать панели выключенной подсистемы (S2b-2c). Каждая пара сверена с
+// телом панели в WorkspacePage: changes → GitChangesRail, knowledge → KnowledgePanel,
+// graph → CodeGraphPanel/CodeGraphDocument, arch → вклад слота 'workspace-panel'
+// с именем 'architecture', skills → SkillsPanel, preview → PreviewPanelContent
+// (сервисы проекта), video → VideoPanel, dossiers → DossierHistoryPanel,
+// notes → панель заметок проекта (её контент уже гейтится useSubsystem(notes) —
+// здесь тот же ключ на уровне набора, чтобы и кнопка не появлялась),
+// tasks → TasksPanel (тело безусловное: только эта пара гейтит ключ в рельсе).
+// Вне таблицы — панели без подсистемного гейта: перечень с обоснованием каждой
+// живёт в ОДНОМ месте — allow-list сторожа полноты (__tests__/panelSubsystems.test.ts,
+// PANELS_WITHOUT_GATE); сторож проверяет обе стороны: каждый ключ карты/реестра
+// заявлен и каждая позиция allow-list — живой ключ (R-S2b-2c, п. 2).
+export const PANEL_SUBSYSTEM: Partial<Record<StaticPanelKey, string>> = {
+  changes: SUBSYSTEMS.git,
+  dossiers: SUBSYSTEMS.dossiers,
+  knowledge: SUBSYSTEMS.knowledge,
+  notes: SUBSYSTEMS.notes,
+  graph: SUBSYSTEMS.codeGraph,
+  arch: SUBSYSTEMS.architecture,
+  skills: SUBSYSTEMS.skills,
+  preview: SUBSYSTEMS.projectServices,
+  video: SUBSYSTEMS.video,
+  // «Задачи» (R-S2b-2c): вертикаль реальная и отключаемая (SUBSYSTEMS.tasks),
+  // тело панели в WorkspacePage безусловное — без этой пары кнопка оставалась
+  // в рельсе при выключенной подсистеме, а панель давала пустой список/ошибки
+  tasks: SUBSYSTEMS.tasks,
+};
+
+// WORKSPACE_KEYS без панелей выключенных подсистем — набор рельсы для данного
+// состава активных подсистем. Предикат передаёт вызывающий (isSubsystemEnabled из
+// стора): каталог сам стор не читает и состава пользователя не знает. Ключи без
+// пары в PANEL_SUBSYSTEM остаются всегда — их видимость решает не подсистема.
+// Фильтр идёт по статическим ключам реестра: plugin:* до него не доходят — семейство
+// разрешается маркером 'pluginPanels' (keyAllowed), поэтому проверка плагин-синтаксиса
+// здесь была недостижимой веткой (R-S2b-2c, п. 3).
+export function workspaceKeysFor(isEnabled: (key: string) => boolean): PanelKey[] {
+  return WORKSPACE_KEYS.filter(k => {
+    const sub = PANEL_SUBSYSTEM[k];
+    return !sub || isEnabled(sub);
+  });
+}
+
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context', 'video'];
 export const NOTES_KEYS: readonly PanelKey[] = ['notesList', 'notesGraph', ...WIKI_PANEL_KEYS];

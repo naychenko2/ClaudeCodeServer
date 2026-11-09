@@ -42,6 +42,40 @@ public sealed class ModuleLoader
         return loaded;
     }
 
+    // Имя выключенного модуля для снимка подсистем (дефект «Notes вместо „Заметки”»): человеческое
+    // имя и описание раздела живут в классе модуля (IAppSubsystem), а реестровый дескриптор знает
+    // только свой Title — идентификатор модуля. Чтобы строка панели выключенного модуля называлась
+    // так же, как строка рабочего, его сборка грузится ТОЛЬКО ради метаданных: без Register,
+    // без контроллеров, без сервисов в DI — только инстанс, чтобы прочитать Key/Title/Description.
+    // Класс недоступен в развертке (нет Backend, нет dll, ошибка загрузки/несовместимая сборка) —
+    // null: строку называет вызывающий из дескриптора реестра (DisabledModuleStub). Для модуля
+    // с Enabled=«false» отсутствие dll — норма (её может не быть в развертке вовсе, как __stub
+    // в Release), поэтому оно не логируется предупреждением.
+    public IAppSubsystem? DescribeDisabled(ModuleDescriptor desc)
+    {
+        if (desc.Backend is null) return null;
+        string? path;
+        try { path = ResolvePath(desc.Backend.AssemblyPath); }
+        catch (UnauthorizedAccessException) { return null; }
+        if (path is null || !File.Exists(path)) return null;
+
+        try
+        {
+            // Тот же дефолтный контекст, что при загрузке: собранная ранее сборка не дублируется.
+            var asm = AssemblyLoadContext.Default.LoadFromAssemblyPath(path);
+            var implType = FindSubsystemType(asm);
+            if (implType is null) return null;
+            return (IAppSubsystem)Activator.CreateInstance(implType)!;
+        }
+        catch (Exception ex)
+        {
+            // Битая или несовместимая сборка не должна портить снимок: строку называет дескриптор.
+            _log.LogWarning(ex, "Модуль «{Key}»: имя из класса не прочитано «{Path}»",
+                desc.Key, desc.Backend.AssemblyPath);
+            return null;
+        }
+    }
+
     private Assembly? TryLoadOne(IServiceCollection services, ModuleDescriptor desc)
     {
         // Единая точка истины для гейта подсистемы: `Subsystems:{Key}:Enabled` (ADR-014,
@@ -53,7 +87,8 @@ public sealed class ModuleLoader
         // только внутри AddGatedHostedService, остальная регистрация проходила.
         //
         // `DynamicModules:Enabled=false` уже отфильтрован на уровне `_registry.All.Where` —
-        // это «не загружать сборку вообще». Здесь — «загрузить, но не регистрировать»:
+        // это «не регистрировать модуль вовсе» (имя для снимка читается из класса DescribeDisabled,
+        // если сборка в развертке). Здесь — «загрузить, но не регистрировать»:
         // `Register` НЕ вызывается, hosted и контроллеры подсистемы в контейнер не попадут,
         // `AddApplicationPart` сборки НЕ подключается (возвращаем null ниже).
         //

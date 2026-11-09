@@ -58,7 +58,8 @@ public class McpToolsetStabilityTests
         return null;
     }
 
-    // Тело метода SessionManager по его сигнатуре (до начала следующего объявления).
+    // Тело метода по его сигнатуре (до начала следующего объявления): фасад это или роль из
+    // Services/Sessions — не важно, сигнатуры читаем в тех файлах, где живёт решение.
     // internal с волны 2 http входит в допустимые «следующие» — PersonasEnabled/
     // ConsultantsEnabled открыты тулсетам, и за ними могут идти internal-соседи
     private static string MethodBody(string source, string signature)
@@ -73,9 +74,33 @@ public class McpToolsetStabilityTests
         var end = source.IndexOf("\n    private ", start + signature.Length, StringComparison.Ordinal);
         if (end < 0) end = source.IndexOf("\n    public ", start + signature.Length, StringComparison.Ordinal);
         if (end < 0) end = source.IndexOf("\n    internal ", start + signature.Length, StringComparison.Ordinal);
-        end.Should().BeGreaterThan(start, "за методом обязано идти следующее объявление");
+        // Роль из Services/Sessions компактна, и проверяемый метод может быть последним в
+        // классе: тогда его конец — закрывающая скобка класса (она одна идёт в нулевой колонке).
+        if (end < 0) end = source.IndexOf("\n}", start + signature.Length, StringComparison.Ordinal);
+        end.Should().BeGreaterThan(start, "за методом обязано идти следующее объявление или конец класса");
         return string.Join('\n', source[start..end].Split('\n')
             .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+    }
+
+    // Единая точка сборки LlmSessionContext (S3-5). До выноса процесса CLI их было три в
+    // SessionManager — StartNewSessionAsync и обе ветки EnsureProcessCoreAsync, и проверки ниже
+    // ловили забытую ветку «вне проекта» по телам этих методов. После S3-5 конструкция одна
+    // (TurnLaunchContextFactory.Compose), поэтому проверка та же по смыслу, но другая по форме:
+    // что точка в Services/ ровно одна (инвариант шага закреплён в коде, а не только в разборе
+    // диффа) и что в ней — каждый проверяемый сервер. Забытый сервер дал бы личному чату другой
+    // состав инструментов на первом ходу и после перезапуска процесса — «No such tool available».
+    private static string ContextConstructionPoint()
+    {
+        var path = FindSource("Services", "Sessions", "TurnLaunchContextFactory.cs");
+        Skip.If(path is null, "TurnLaunchContextFactory.cs не найден (сборка вне дерева репозитория)");
+
+        var servicesDir = Path.GetDirectoryName(Path.GetDirectoryName(path!))!;
+        Directory.EnumerateFiles(servicesDir, "*.cs", SearchOption.AllDirectories)
+            .Sum(f => Regex.Matches(File.ReadAllText(f), @"new LlmSessionContext\(").Count)
+            .Should().Be(1, "после S3-5 конструкция LlmSessionContext в Services/ одна — "
+                + "TurnLaunchContextFactory.Compose; любая новая точка обязана пройти те же проверки ниже");
+
+        return MethodBody(File.ReadAllText(path!), "private LlmSessionContext Compose(");
     }
 
     [Fact]
@@ -116,23 +141,24 @@ public class McpToolsetStabilityTests
 
     /// <summary>
     /// Per-persona рубильники серверов (ключи personas/consultants/codegraph/notifications/
-    /// widgets): гейт обязан жить в SessionManager и решаться ТОЛЬКО по персоне — иначе состав
-    /// tools/list начнёт зависеть от хода со всеми последствиями выше.
+    /// widgets): гейт обязан жить в одной точке роли контекста запуска (S3-4) и решаться
+    /// ТОЛЬКО по персоне — иначе состав tools/list начнёт зависеть от хода со всеми
+    /// последствиями выше. Обёртки на фасаде не проверяются: они ничего не решают.
     /// </summary>
     [SkippableTheory]
-    [InlineData("private WidgetsMcpContext? BuildWidgetsContext", "widgets")]
-    [InlineData("private CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
-    [InlineData("private ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
+    [InlineData("BuiltinMcpContexts.cs", "internal WidgetsMcpContext? BuildWidgetsContext", "widgets")]
+    [InlineData("BuiltinMcpContexts.cs", "internal CodeGraphMcpContext? BuildCodeGraphContext", "codegraph")]
+    [InlineData("BuiltinMcpContexts.cs", "internal ArchitectureMcpContext? BuildArchitectureContext", "architecture")]
     // internal с волны 2 http: те же формулы резолвят тулсеты по живой сессии-вызывателю
-    [InlineData("internal bool PersonasEnabled", "personas")]
-    [InlineData("internal bool ConsultantsEnabled", "consultants")]
+    [InlineData("PersonaLayerBuilder.cs", "internal bool PersonasEnabled", "personas")]
+    [InlineData("PersonaLayerBuilder.cs", "internal bool ConsultantsEnabled", "consultants")]
     // Серверы личного реестра владельца: ключ каталога — «mcp:<ключ сервера>»,
     // выключает только Off-привязка персоны. Состав от хода не зависит.
-    [InlineData("private Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
-    public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string signature, string key)
+    [InlineData("ExternalMcpContexts.cs", "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
+    public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string file, string signature, string key)
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", file);
+        Skip.If(path is null, $"{file} не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!), signature);
 
@@ -157,11 +183,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void КаскадРеестра_AllowОсиНаМесте()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         // Общая ось 0 — рубильник самой записи реестра
         body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
@@ -219,11 +245,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "TurnPassports.cs");
+        Skip.If(path is null, "TurnPassports.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n    IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
+            "private void SafePromptSnapshotAttach(string sessionId, string snapshotId,\r\n        IReadOnlyList<string> tools, IReadOnlyList<McpServerInfo> servers)");
 
         body.Should().Contain("RecordFromInit(",
             "наблюдение из system/init обязано попадать в McpStatusStore");
@@ -241,11 +267,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ПрофильReadOnly_РежетСерверЦеликом_АНеЕгоИнструменты()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         body.Should().Contain("PersonaAccess.ReadOnly",
             "профиль персоны доезжает до резолвера доставки (McpDelivery режет RO-персону)");
@@ -267,11 +293,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void Хиггсфилд_РеестровыйЦикл_ИсключаетВстроенныеИнтеграции()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+            "internal Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         // Тело реестрового цикла обязано знать, что ключи из IntegrationKeys пропускаются —
         // иначе путь «включено в проекте/персоне» доставляет higgsfield мимо продуктовой формулы.
@@ -304,12 +330,12 @@ public class McpToolsetStabilityTests
     // Волна 3 (ADR-012): формула секций вынесена в BuildWorkspacePlan — ЕДИНУЮ точку
     // состава для конфига хода и живого tools/list тулсета wsp. Сторож смотрит на неё,
     // а не на обёртку BuildWorkspaceContext: иначе он бы молча проверял пустое место
-    [InlineData("internal WorkspaceMcpPlan? BuildWorkspacePlan", "git", "kb")]
-    [InlineData("private PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
-    public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string signature, string first, string second)
+    [InlineData("ExternalMcpContexts.cs", "internal WorkspaceMcpPlan? BuildWorkspacePlan", "git", "kb")]
+    [InlineData("PersonaLayerBuilder.cs", "internal PersonasMcpContext? BuildPersonasContext", "personas-manage", "personas-automation")]
+    public void СекцииПоРоли_ГейтятсяТолькоПоПерсоне(string file, string signature, string first, string second)
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", file);
+        Skip.If(path is null, $"{file} не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!), signature);
 
@@ -331,11 +357,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверУведомлений_РешаетсяЕдинойТочкойПоПерсоне()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private NotificationsMcpContext? BuildNotificationsContext");
+            "internal NotificationsMcpContext? BuildNotificationsContext");
 
         body.Should().Contain("NotificationsEnabled(",
             "решение принимает PersonaBindingsService.NotificationsEnabled "
@@ -352,11 +378,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void МодульЗаметок_ГейтитсяТолькоПоПерсоне()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private NotesMcpContext? BuildNotesContext");
+            "internal NotesMcpContext? BuildNotesContext");
 
         body.Should().Contain("\"notes-annotations\"",
             "модуль обязан гейтиться Tool-ключом notes-annotations");
@@ -375,8 +401,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверРедактораКартинок_ГейтитсяПоСессииФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal ImageEditorMcpContext? BuildImageEditorContext");
@@ -392,40 +418,24 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер image-editor едет и в личные чаты, поэтому контекст обязаны собирать ВСЕ три
-    /// точки сборки LlmSessionContext: StartNewSessionAsync и обе ветки EnsureProcessCoreAsync.
-    /// Забытая ветка «вне проекта» дала бы личному чату сервер на первом ходу и отняла бы его
-    /// после перезапуска процесса — другая сигнатура запуска и «No such tool available».
+    /// Сервер image-editor едет и в личные чаты, поэтому его контекст обязан быть в ЕДИНСТВЕННОЙ
+    /// точке сборки LlmSessionContext (с S3-5 это TurnLaunchContextFactory.Compose; до неё таких
+    /// мест было три в SessionManager, и сторож ловил забытую ветку «вне проекта»). Забытый сервер
+    /// дал бы личному чату другой состав инструментов на первом ходу и после перезапуска процесса —
+    /// «No such tool available».
     /// </summary>
     [SkippableFact]
     public void СерверРедактораКартинок_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildImageEditorContext(", $"{name} обязан собирать контекст image-editor");
-            body.Should().Contain("ImageEditorMcp: imageEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("imageEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildImageEditorContext(", "точка сборки обязана собирать контекст image-editor");
+        body.Should().Contain("ImageEditorMcp: imageEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("imageEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -435,8 +445,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверЗвука_ГейтитсяПоФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal AudioEditorMcpContext? BuildAudioEditorContext");
@@ -451,38 +461,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер audio-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки
-    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// Сервер audio-editor едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверЗвука_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildAudioEditorContext(", $"{name} обязан собирать контекст audio-editor");
-            body.Should().Contain("AudioEditorMcp: audioEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("audioEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildAudioEditorContext(", "точка сборки обязана собирать контекст audio-editor");
+        body.Should().Contain("AudioEditorMcp: audioEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("audioEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -492,8 +486,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверВидео_ГейтитсяПоФлагуИРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal VideoEditorMcpContext? BuildVideoEditorContext");
@@ -508,38 +502,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер video-editor едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки LlmSessionContext —
-    /// иначе после перезапуска процесса личный чат теряет сервер («No such tool available»).
+    /// Сервер video-editor едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса личный чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверВидео_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildVideoEditorContext(", $"{name} обязан собирать контекст video-editor");
-            body.Should().Contain("VideoEditorMcp: videoEditorMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("videoEditorMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildVideoEditorContext(", "точка сборки обязана собирать контекст video-editor");
+        body.Should().Contain("VideoEditorMcp: videoEditorMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("videoEditorMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -549,8 +527,8 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void СерверКонтекстаЧата_ГейтитсяПоРеестру()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
             "internal TurnContextMcpContext? BuildTurnContextContext");
@@ -565,38 +543,22 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Сервер turn-context едет и в личные чаты: контекст обязаны собирать ВСЕ три точки сборки LlmSessionContext —
-    /// иначе после перезапуска процесса чат теряет сервер («No such tool available»).
+    /// Сервер turn-context едет и в личные чаты: он обязан быть в единственной точке сборки
+    /// LlmSessionContext — иначе после перезапуска процесса чат теряет сервер
+    /// («No such tool available»).
     /// </summary>
     [SkippableFact]
     public void СерверКонтекстаЧата_ВсеТочкиСборкиКонтекстаПередаютЕгоСинхронно()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
-        var source = File.ReadAllText(path!);
+        var body = ContextConstructionPoint();
 
-        var ensure = MethodBody(source, "private async Task EnsureProcessCoreAsync(");
-        var split = ensure.IndexOf("if (entry.Info.ProjectId is null)", StringComparison.Ordinal);
-        split.Should().BeGreaterThan(0, "ветвление «вне проекта / проект» обязано существовать");
-        var elseAt = ensure.IndexOf("\n        else\n", split, StringComparison.Ordinal);
-        elseAt.Should().BeGreaterThan(split, "у ветвления обязана быть проектная ветка");
-
-        var points = new Dictionary<string, string>
-        {
-            ["StartNewSessionAsync"] = MethodBody(source, "private async Task StartNewSessionAsync("),
-            ["EnsureProcessCoreAsync, вне проекта"] = ensure[split..elseAt],
-            ["EnsureProcessCoreAsync, проект"] = ensure[elseAt..],
-        };
-        foreach (var (name, body) in points)
-        {
-            body.Should().Contain("BuildTurnContextContext(", $"{name} обязан собирать контекст turn-context");
-            body.Should().Contain("TurnContextMcp: turnContextMcp", $"{name} обязан передать его в LlmSessionContext");
-            var active = body.IndexOf("HttpMcpActive: HttpMcpActive(", StringComparison.Ordinal);
-            active.Should().BeGreaterThan(0, $"{name} обязан считать признак HttpMcpActive");
-            var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
-            body[active..activeEnd].Should().Contain("turnContextMcp",
-                $"{name}: без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
-        }
+        body.Should().Contain("BuildTurnContextContext(", "точка сборки обязана собирать контекст turn-context");
+        body.Should().Contain("TurnContextMcp: turnContextMcp", "точка сборки обязана передать его в LlmSessionContext");
+        var active = body.IndexOf("HttpMcpActive:", StringComparison.Ordinal);
+        active.Should().BeGreaterThan(0, "точка сборки обязана считать признак HttpMcpActive");
+        var activeEnd = body.IndexOf("HttpMcpEnabledProvider", active, StringComparison.Ordinal);
+        body[active..activeEnd].Should().Contain("turnContextMcp",
+            "без сервера в HttpMcpActive ход без прочих http-серверов уйдёт в прокси");
     }
 
     /// <summary>
@@ -648,11 +610,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ПровайдерКонсультантов_ГейтитсяЧерезConsultantsEnabled()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "PersonaLayerBuilder.cs");
+        Skip.If(path is null, "PersonaLayerBuilder.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider");
+            "internal Func<PersonaAgentsContext?>? BuildPersonaAgentsProvider");
 
         body.Should().Contain("ConsultantsEnabled(");
     }
@@ -1158,11 +1120,11 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void ContextList_СоставНеЗависитОтХода()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "ExternalMcpContexts.cs");
+        Skip.If(path is null, "ExternalMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
         var body = MethodBody(File.ReadAllText(path!),
-            "private WorkspaceMcpContext? BuildWorkspaceContext");
+            "internal WorkspaceMcpContext? BuildWorkspaceContext");
 
         body.Should().NotContain("ChatContext",
             "гейта фич-флага chat-context больше нет — инструмент в составе всегда");
@@ -1180,10 +1142,10 @@ public class McpToolsetStabilityTests
     [SkippableFact]
     public void MemoryDossierГейт_ВсегдаВключенаАНеХодом()
     {
-        var path = FindSource("Services", "SessionManager.cs");
-        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+        var path = FindSource("Services", "Sessions", "BuiltinMcpContexts.cs");
+        Skip.If(path is null, "BuiltinMcpContexts.cs не найден (сборка вне дерева репозитория)");
 
-        var body = MethodBody(File.ReadAllText(path!), "private MemoryMcpContext BuildMemoryContext");
+        var body = MethodBody(File.ReadAllText(path!), "internal MemoryMcpContext BuildMemoryContext");
 
         body.Should().Contain("DossierToolsEnabled: true",
             "секция dossier_* включена всегда (флаг change-dossiers-recall снят) и не зависит от хода");

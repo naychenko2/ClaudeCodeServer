@@ -18,27 +18,14 @@ namespace ClaudeHomeServer.Tests.Services;
 /// </summary>
 public class MemoryToolsetParityTests
 {
-    private static string JsPath => RepoFile("mcp", "memory-server", "index.js");
+    // Файлы репозитория — через общий хелпер TestRepoFiles (п. 5 хвоста R-S2b-2a): тот же
+    // подъём от bin-каталога до .git был дословной копией в этом и матричном стороже.
+    private static string JsPath => TestRepoFiles.RepoFile("mcp", "memory-server", "index.js");
 
     // Исходник http-ветки — второй вход сторожа write-path (см. тест ниже): паритет путей
     // записи живёт в коде тулсета, скомпилированный контракт его не различает
     private static string CsPath =>
-        RepoFile("backend", "ClaudeHomeServer", "Services", "Mcp", "Http", "MemoryToolset.cs");
-
-    // Файл репозитория по пути от корня: корень ищем от bin-каталога тестов вверх до .git
-    private static string RepoFile(params string[] parts)
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null
-               && !Directory.Exists(Path.Combine(dir.FullName, ".git"))
-               && !File.Exists(Path.Combine(dir.FullName, ".git")))
-            dir = dir.Parent;
-        var path = dir is null ? null : Path.Combine([dir.FullName, .. parts]);
-        if (path is null || !File.Exists(path))
-            throw new InvalidOperationException(
-                $"не найден {Path.Combine(parts)} — сторож парности не может работать");
-        return path;
-    }
+        TestRepoFiles.RepoFile("backend", "ClaudeHomeServer", "Services", "Mcp", "Http", "MemoryToolset.cs");
 
     private static readonly Lazy<string> Js = new(() => File.ReadAllText(JsPath));
 

@@ -188,6 +188,10 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
             }
             return null;
         }
+        // Узкий тип уместен: транспортный таймаут и чтение контента с отменённым токеном дают
+        // один TaskCanceledException (замерено, HttpClientCancellationContractTests) — с живым ct
+        // это «прайс недоступен». Отмена хоста (тот же тип с отменённым ct) не ловится и уходит
+        // наверх как отмена хода.
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
         {
             _log.LogDebug(ex, "fal: прайс {Endpoint} недоступен, беру ориентир каталога", endpoint);
@@ -254,6 +258,9 @@ public sealed class FalImageEditor : IImageEditor, IImageEditQuoter
                 return Fail(EditOutcome.Failed, null, ticket.RequestId,
                     "fal.ai вернул адрес опроса вне своих хостов — задачу не опрашиваем");
         }
+        // Узкий тип уместен: таймаут транспорта и потолок задачи (внутренний токен timeout)
+        // дают один TaskCanceledException — с живым ct это «fal.ai не ответил». Отмена хоста
+        // (тот же тип с отменённым ct) здесь не ловится и уходит наверх как отмена хода.
         catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is TaskCanceledException && !ct.IsCancellationRequested)
         {
             return Fail(EditOutcome.Unavailable, false, null, "fal.ai не ответил: " + ex.Message);

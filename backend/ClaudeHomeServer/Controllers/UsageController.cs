@@ -1,14 +1,18 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace ClaudeHomeServer.Controllers;
 
+// Ручка расхода вертикали LLM (снимки лимитов, тариф, Ollama) — привязана к ключу S2b-1:
+// обращения к ней — использование llm (учёт S1b) и её строка в матрице отключения.
 [ApiController]
 [Authorize]
 [Route("api/usage")]
+[SubsystemUsage("llm")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
     LlmProviderRegistry providers, LocalActionRouter localRouter,
     SubscriptionOAuthUsageService oauthUsage,

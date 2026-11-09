@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -399,8 +400,8 @@ public class WebSearchToolsetTests : IDisposable
             NullLogger<ReaderService>.Instance);
         var spend = new RecordingSpend();
 
-        var toolset = new WebSearchToolset(search, reader, new ReaderQuotaService(), sessions,
-            NullLogger<WebSearchToolset>.Instance, spend);
+        var toolset = new WebSearchToolset(search, sessions, NullLogger<WebSearchToolset>.Instance,
+            reader, new ReaderQuotaService(), spend);
         var context = new McpToolCallContext(TestUserId, session.Id, session.Id);
         return new Env(toolset, context, session, perplexity, site, spend, log);
     }
@@ -447,10 +448,28 @@ public class WebSearchToolsetTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return (new SessionManager(projectManager, history, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster), projectManager);
+        return (SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+        }).Manager, projectManager);
     }
 
     // Хендлер со сценарием: отдаёт заданный ответ и запоминает тело запроса. Если ответ

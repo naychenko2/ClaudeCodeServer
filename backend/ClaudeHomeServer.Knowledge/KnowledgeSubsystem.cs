@@ -69,6 +69,11 @@ public sealed class KnowledgeSubsystem : IAppSubsystem
 
     public string Title => "Знания";
 
+    // Ядро (CanDisable=false, S2b-1): ядро проектов (Controllers/ProjectsController.cs:25) требует
+    // WorkspaceKnowledgeStore и KnowledgeService; та же цепочка — через обязательный ядру
+    // сессий PersonaBindingsService (Services/PersonaBindingsService.cs:138, SessionManager.cs:745).
+    public bool CanDisable => false;
+
     public void Register(IServiceCollection services, IConfiguration config)
     {
         // WorkspaceKnowledgeStore — стор `data/workspace-knowledge.json`, миграция из Project

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -20,9 +21,9 @@ internal sealed class SilentImageGenerator : IImageGenerator
     public bool Enabled => true;
     public IReadOnlyList<ImageModelInfo> Models => [];
 
-    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+    public Task<ImageGenerationResult> GenerateManyAsync(
         string prompt, int count, string? model, CancellationToken ct = default) =>
-        Task.FromResult<IReadOnlyList<GeneratedImage>>([]);
+        Task.FromResult(ImageGenerationResult.Empty);
 }
 
 // Хост, где единственный драйвер картинок — молчащий: EnabledFor(place) = true,
@@ -105,7 +106,7 @@ public class ImageGenQueuedFlagTests : IClassFixture<SilentImageProviderFactory>
     {
         var images = _factory.Services.GetRequiredService<ImageGenerationService>();
 
-        var image = await images.GenerateAsync(ImagePlaces.PersonaAvatar, "аватар");
+        var image = await images.GenerateAsync(ImagePlaces.PersonaAvatar, "аватар", "u-any", SpendInitiators.Human);
 
         image.Should().BeNull();
     }

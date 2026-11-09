@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 ﻿using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -14,6 +15,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ClaudeHomeServer.Services.Mcp.Http;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -105,18 +107,37 @@ public class TeamBlockerResolveTests : IDisposable
         var planning = new TeamPlanningService(_personas, new StubPlanner(() => "{}"));
         // Реестр задач подключён (W4-HOLD-I): ReportBlockerAsync читает паузу фичи задачи
         // докладчика — без реестра пробуждения шли бы как раньше.
-        return new SessionManager(_projects, history, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, flags, _personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, teamPlanning: planning,
-            tasks: _tasks, broadcaster: _broadcaster);
+        return SessionCoreTestHost.Build(_dir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projects);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(_personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Team.TeamPlanningService>(planning);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Tasks.TaskManager>(_tasks);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+        }).Manager;
     }
 
     // Хелпер для тестов: достать словарь _sessions у SessionManager (нужен доступ к
     // SessionEntry.Info — у публичного типа Session такого свойства нет).
     private System.Collections.IDictionary MakeSessionEntryDict()
     {
-        var entryField = typeof(SessionManager).GetField("_sessions",
+        var entryField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         return (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
     }
@@ -410,7 +431,7 @@ public class TeamBlockerResolveTests : IDisposable
         // метод ядра, проверяем через рефлексию — единственный путь, раз он private
         var method = typeof(SessionManager).GetMethod("ResumeTeamFromDecisionOnUserInput",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
-        var entryField = typeof(SessionManager).GetField("_sessions",
+        var entryField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entryDict = (System.Collections.IDictionary)entryField.GetValue(_sessions)!;
         var sessionEntry = entryDict[stab.Id]!;
@@ -817,7 +838,7 @@ public class TeamBlockerResolveTests : IDisposable
 
         var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на паузе", UserId);
 
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "фича на паузе — координатор не будится, платное пробуждение не расходуется");
         (await _sessions.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
@@ -851,7 +872,7 @@ public class TeamBlockerResolveTests : IDisposable
         _sessions.SetParent(child.Id, stab.Id, UserId);
 
         var r = await _sessions.ReportBlockerAsync(child.Id, "застрял на черновике", UserId);
-        r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
+        r.Should().BeOneOf(ReportUpResult.Delivered, ReportUpResult.Queued);
         _sessions.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(1,
             "черновик — не пауза: доклад идёт обычным путём пробуждения, квота расходуется");
     }

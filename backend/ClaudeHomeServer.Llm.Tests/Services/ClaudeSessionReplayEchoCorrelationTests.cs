@@ -192,19 +192,12 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
     private sealed class ErrorCountLogger : ILogger
     {
         public int Errors;
-        // Сигнал первой ошибки: в сценарии без эха это ровно момент отсечки ожидания —
-        // FallbackNoEchoAsync логирует один раз (ClaudeSession.cs:6048-6054).
-        public readonly TaskCompletionSource FirstError = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
             Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            if (logLevel == LogLevel.Error)
-            {
-                Interlocked.Increment(ref Errors);
-                FirstError.TrySetResult();
-            }
+            if (logLevel == LogLevel.Error) Interlocked.Increment(ref Errors);
         }
         private sealed class NullScope : IDisposable
         {
@@ -213,11 +206,13 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         }
     }
 
-    // Живой «CLI», который печатает строки и молчит; никакого эха. gateLastOnStdin: перед
-    // последней строкой ждёт строку stdin — тест подаёт её после сигнала отсечки, и result
-    // приходит СТРОГО после неё, без сна «авось после отсечки». Платформонезависимо: echo из
-    // script-файла (cmd/sh), содержимое — ASCII.
-    private Process StartSilentEchoCli(string[] lines, bool gateLastOnStdin)
+    // Живой «CLI», который печатает строки и молчит; никакого эха. delayBeforeLastSec: перед
+    // последней строкой «CLI» сам ждёт N с — result приходит СТРОГО после этого сна, то есть
+    // после тестовой отсечки (N > EchoCutoff), без записи в stdin «CLI» после сигнала фолбэка:
+    // та запись конфликтовала с уборкой ридера (смерть «CLI» под нагрузком → FinalizeRunAsync →
+    // CloseStdin закрывал pipe раньше записи → ObjectDisposedException, флак 08.11).
+    // Платформонезависимо: echo из script-файла (cmd/sh), содержимое — ASCII.
+    private Process StartSilentEchoCli(string[] lines, int delayBeforeLastSec)
     {
         var dir = Path.Combine(Path.GetTempPath(), "ccs-noecho-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
@@ -226,7 +221,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         {
             var text = "@echo off\r\n"
                 + string.Join("\r\n", lines.Select((l, i) =>
-                    (i == lines.Length - 1 && gateLastOnStdin ? "set /p gated=\r\n" : "")
+                    (i == lines.Length - 1 && delayBeforeLastSec > 0 ? $"ping -n {delayBeforeLastSec + 1} 127.0.0.1 >nul\r\n" : "")
                     + $"echo {l}"))
                 + "\r\nping -n 60 127.0.0.1 >nul\r\n";
             var script = Path.Combine(dir, "cli.cmd");
@@ -237,7 +232,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         {
             var text = "#!/bin/sh\n"
                 + string.Join("\n", lines.Select((l, i) =>
-                    (i == lines.Length - 1 && gateLastOnStdin ? "read _\n" : "")
+                    (i == lines.Length - 1 && delayBeforeLastSec > 0 ? $"sleep {delayBeforeLastSec}\n" : "")
                     + $"echo '{l}'"))
                 + "\nsleep 60\n";
             var script = Path.Combine(dir, "cli.sh");
@@ -251,7 +246,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         return process;
     }
 
-    private async Task<(int Results, int Errors, bool TurnDone)> RunNoEchoScenarioAsync(string[] lines, bool gateLastOnStdin)
+    private async Task<(int Results, int Errors, bool TurnDone)> RunNoEchoScenarioAsync(string[] lines, int delayBeforeLastSec)
     {
         var sent = new List<ServerMessage>();
         var logger = new ErrorCountLogger();
@@ -265,7 +260,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         {
             EchoCutoff = TimeSpan.FromMilliseconds(400),
         };
-        var process = StartSilentEchoCli(lines, gateLastOnStdin);
+        var process = StartSilentEchoCli(lines, delayBeforeLastSec);
         var run = NewRun();
         CliRunType.GetProperty("Process")!.SetValue(run, process);
         CliRunType.GetField("EchoDeadlineTick")!.SetValue(run, Environment.TickCount64 + 400);
@@ -273,13 +268,11 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
         using var cts = new CancellationTokenSource();
         var loop = (Task)ReadLoopMethod.Invoke(session, [run, cts.Token])!;
 
-        if (gateLastOnStdin)
-        {
-            // Момент отсечки — по первому Error-логу (ровно FallbackNoEchoAsync, лог один).
-            // «CLI» печатает result строго после неё: stdin кормим только после сигнала.
-            await logger.FirstError.Task.WaitAsync(TimeSpan.FromSeconds(10));
-            process.StandardInput.WriteLine("go");
-        }
+        // Порядок «result после отсечки» держится не сигналом и не записью в stdin «CLI», а
+        // неравенством delayBeforeLastSec (1 с) > тестовой отсечки (400 мс): «CLI» печатает
+        // result не раньше своего сна, отсечка к тому моменту уже сработала. Записи в stdin нет
+        // — нет и гонки с CloseStdin из FinalizeRunAsync (флак 08.11: смерть «CLI» под нагрузком,
+        // ридер закрывал pipe раньше записи → ObjectDisposedException).
 
         // Ожидание завершения хода — событие продукта: TurnTcs резолвится СТРОГО после
         // TurnDone=true и CloseStdin в case "result" (ClaudeSession.cs:6496→6513), поэтому
@@ -314,7 +307,7 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
     {
         // Result приходит до отсечки и глотается как «до эха»; по отсечке он доигрывается как наш
         var (results, errors, turnDone) = await RunNoEchoScenarioAsync(
-            [MainStreamEvent, RealResult], gateLastOnStdin: false);
+            [MainStreamEvent, RealResult], delayBeforeLastSec: 0);
 
         turnDone.Should().BeTrue("без эха ход не должен висеть до IdleTimeout");
         results.Should().Be(1);
@@ -324,10 +317,10 @@ public class ClaudeSessionReplayEchoCorrelationTests : IDisposable
     [Fact]
     public async Task ЭхаНетСовсем_ResultПослеОтсечки_ЗасчитываетсяБезПропуска()
     {
-        // «CLI» печатает result строго после отсечки: тест кормит его stdin после сигнала
-        // фолбэка (FirstError), а не после сна 2 с «авось после отсечки».
+        // «CLI» печатает result строго после отсечки: его собственный сон 1 с больше тестовой
+        // отсечки 400 мс — порядок держается неравенством, а не записью в stdin после сигнала.
         var (results, errors, turnDone) = await RunNoEchoScenarioAsync(
-            [MainStreamEvent, RealResult], gateLastOnStdin: true);
+            [MainStreamEvent, RealResult], delayBeforeLastSec: 1);
 
         turnDone.Should().BeTrue();
         results.Should().Be(1);

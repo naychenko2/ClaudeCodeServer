@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -121,10 +122,28 @@ public class TaskExecutionServiceHoldTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var historyService = new ChatHistoryService(config);
-        return new SessionManager(projectManager, historyService, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster);
+        return SessionCoreTestHost.Build(Path.GetDirectoryName(config["DataPath"])!, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+        }).Manager;
     }
 
     // Сессия с «идущим ходом»: подставной адаптер с HasLiveTurn занимает место процесса CLI —
@@ -132,7 +151,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // физического прерывания.
     private Mock<ILlmSessionAdapter> SetRunningTurn(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
@@ -318,7 +337,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // прерванного хода.
     private void SetIdle(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)field.GetValue(_sessions)!)[sessionId]!;
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
@@ -952,7 +971,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // одновременно с чатом, а отказанная задача не должна порождать ни того, ни другого.
     private int LiveSessionCount()
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(_sessions)!).Count;
     }
@@ -1020,13 +1039,24 @@ public class TaskExecutionServiceHoldTests : IDisposable
     // ─── W4-HOLD-N: хвосты R-HOLD-D2 / R-HOLD-J ───────────────────────────────────────────
 
     // Лог-сборник: cause доставки наблюдаем только в строке «Доставка хода» — иначе она
-    // нигде не проявляется.
-    private sealed class CapturingLogger(List<string> sink) : ILogger<SessionManager>
+    // нигде не проявляется. Generic — потому что лог пишет не фасад, а роль-владелец
+    // (S3-7: «Доставка хода» в ядре приёма TurnIntake), у роли свой ILogger<T>.
+    private sealed class CapturingLogger<T>(List<string> sink) : ILogger<T>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null!;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel level, EventId id, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter) => sink.Add(formatter(state, exception));
+    }
+
+    // Проба к логгеру ядра приёма: поле _intake фасада — экземпляр роли, его _log и подменяем.
+    private void CaptureIntakeDeliveryLog(List<string> sink)
+    {
+        var intake = typeof(SessionManager).GetField("_intake",
+            BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(_sessions)!;
+        typeof(ClaudeHomeServer.Services.Sessions.TurnIntake)
+            .GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(intake, new CapturingLogger<ClaudeHomeServer.Services.Sessions.TurnIntake>(sink));
     }
 
     // W4-HOLD-N (хвост R-N, критерий c1): честная причина: продолжение в чат шага —
@@ -1050,8 +1080,7 @@ public class TaskExecutionServiceHoldTests : IDisposable
         SetRunningTurn(keyChat.Id);
 
         var logLines = new List<string>();
-        typeof(SessionManager).GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance)!
-            .SetValue(_sessions, new CapturingLogger(logLines));
+        CaptureIntakeDeliveryLog(logLines);
 
         _tasks.SetHold(epic.Id, FeatureHoldReasons.Manual);
         _sut.InterruptFeatureTurnsOnHold(epic.Id, user.Id);

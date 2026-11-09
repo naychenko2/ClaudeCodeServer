@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -38,7 +39,7 @@ public class ChatsControllerContinueTests(TestWebApplicationFactory factory)
     private object EntryOf(string sessionId)
     {
         var sessions = factory.Services.GetRequiredService<SessionManager>();
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(sessions)!)[sessionId]!;
     }
 
@@ -105,8 +106,8 @@ public class ChatsControllerContinueTests(TestWebApplicationFactory factory)
         ReplyWith("не должно вызываться");
         var entry = EntryOf(id);
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), "в очереди", null, null,
-            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+        pending.Add(new QueuedMessage(Guid.NewGuid().ToString("N"), "в очереди", null, null,
+            0, DateTime.UtcNow, Kind: PendingKind.User));
 
         var resp = await _client.PostAsJsonAsync($"/api/chats/{id}/continue", new { });
 

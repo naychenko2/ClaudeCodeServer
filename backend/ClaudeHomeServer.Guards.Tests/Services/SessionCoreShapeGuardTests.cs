@@ -215,16 +215,28 @@ public class SessionCoreShapeGuardTests
     /// хвост 3abaaab0). Проверка — точное равенство типа: сканер даёт declaring-тип вызванного метода
     /// (IL-опкод call) и тип параметра из сигнатуры, обе формы в него попадают. Точка сборки вне
     /// <see cref="CoreTypes"/> по пространству имён (Composition) и резолвит фасад ленивыми швами —
-    /// это допустимо, её охраняет правило 4.</summary>
+    /// это допустимо, её охраняет правило 4. Ссылка на generic-тип фасада в закрытой форме
+    /// (<c>GenericFacade&lt;int&gt;</c>) приводится к открытому определению (<see cref="OpenGenericForm"/>):
+    /// набор держит определения, а сканер даёт закрытое вхождение — без приведения ссылка прошла бы
+    /// незамеченной (тот же класс тихого пропуска, что лечился арностью в <see cref="FacadeTopLevelTypes"/>).</summary>
     internal static IEnumerable<string> CoreNoFacadeRefs(IEnumerable<Type> coreTypes,
         IReadOnlySet<Type> facadeTopLevel) =>
         from t in coreTypes
         let hit = BoundaryIlScanner.CollectAllReferencedTypes(t)
             .FirstOrDefault(r => r == typeof(SessionManager)
-                || r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(r))
+                || r.DeclaringType == typeof(SessionManager) || facadeTopLevel.Contains(OpenGenericForm(r)))
         where hit is not null
         select $"{t.FullName} ссылается на {hit.FullName}: ребро «ядро → фасад» закрыто — контракты "
             + "ядра живут в Services.Sessions, а сам фасад не является типом роли";
+
+    /// <summary>Форма ссылки для мерки против набора top-level типов: открытое generic-определение.
+    /// Набор построен <c>assembly.GetTypes()</c> и держит определения (<c>GenericFacade`1</c>), сканер
+    /// даёт закрытое вхождение (<c>GenericFacade&lt;int&gt;</c>): сравнение по закрытой форме молча
+    /// пропустило бы ссылку ядра на generic-тип фасада (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада).
+    /// Для неgeneric-типа — без изменений; для открытого определения GetGenericTypeDefinition возвращает
+    /// его же, поэтому приведение безопасно для обеих форм.</summary>
+    private static Type OpenGenericForm(Type r) =>
+        r.IsGenericType ? r.GetGenericTypeDefinition() : r;
 
     /// <summary>Top-level типы, объявленные в файле фасада SessionManager.cs: по рефлексии они ничем не
     /// отличаются от прочих типов Services, поэтому набор берётся разбором объявлений в колонке 0
@@ -283,9 +295,16 @@ public class SessionCoreShapeGuardTests
         // Теперь каждый токен ряда проверяется по KnownTypeModifiers, и неизвестный токен — громкий
         // отказ с его названием. Ленивость обязательна: жадный ряд съел бы «record» из «record class Foo»
         // в модификаторы и краснул бы на законном объявлении.
+        // «delegate» — в альтернативации как известная, но не поддерживаемая форма: class/record/struct/
+        // enum/interface + delegate — весь набор top-level объявлений типа в C#, и без этой ветки
+        // delegate-объявление не матнилось вовсе — тип молча выпадал из полноты (тот же класс тихого
+        // пропуска, что лечился модификатором вне списка). Теперь оно даёт громкий отказ с названием
+        // формы и строки: сначала научи разбор формы, потом вводи объявление (тот же порядок, что у
+        // директив условной компиляции в Файл_фасада_без_директив_условной_компиляции).
+        var stripped = StripRawStringsAndComments(facadeSource);
         var names = new HashSet<string>();
-        foreach (Match m in Regex.Matches(StripRawStringsAndComments(facadeSource),
-                     @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?<mods>(?:\w+\s+)*?)(?:class|record(?:\s+(?:class|struct))?|struct|enum|interface)\s+(?<name>\w+)",
+        foreach (Match m in Regex.Matches(stripped,
+                     @"^(?:\[(?:[^\[\]\r\n""']|""(?:[^""\\\r\n]|\\.)*""|'(?:\\.|[^'\\\r\n])+'|(?<d>\[)|(?<-d>\]))*(?(d)(?!))\]\s*)*(?:namespace\s+[\w.]+;\s*)?(?<mods>(?:\w+\s+)*?)(?<kw>class|record(?:\s+(?:class|struct))?|struct|enum|interface|delegate)\s+(?<name>\w+)",
                      RegexOptions.Multiline))
         {
             foreach (var token in m.Groups["mods"].Value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
@@ -294,6 +313,16 @@ public class SessionCoreShapeGuardTests
                     throw new InvalidOperationException(
                         "Неизвестный модификатор «" + token + "» перед объявлением top-level типа «" + m.Groups["name"].Value +
                         "» (строка \"" + m.Value.Trim() + "\"): узор его не знает — тип молча выпал бы из полноты");
+            }
+            if (m.Groups["kw"].Value == "delegate")
+            {
+                // Имя делегата живёт после типа возвращаемого, а матч доходит до типа: строка
+                // объявления берётся из исходника целиком — отказ обязан показывать, где вводить разбор.
+                int eol = stripped.IndexOf('\n', m.Index);
+                string line = stripped.Substring(m.Index, (eol < 0 ? stripped.Length : eol) - m.Index).Trim();
+                throw new InvalidOperationException(
+                    "Неизвестная форма объявления «delegate» top-level типа (строка \"" + line +
+                    "\"): узор её не разбирает — тип молча выпал бы из полноты; сначала научи разбор формы, потом вводи объявление");
             }
             names.Add(m.Groups["name"].Value);
         }
@@ -729,6 +758,30 @@ public class SessionCoreShapeGuardTests
     }
 
     [Fact]
+    public void Самопроверка_полноты_delegate_объявление_в_колонке_0_громкий_и_называет_причину()
+    {
+        // «delegate» — единственная форма top-level объявления типа в C# вне прежних ключевых слов узора
+        // (class/record/struct/enum/interface + delegate — весь набор). Прежний узор её не матнил вовсе:
+        // тип молча выпадал из полноты (и из трипвайра «ядро → фасад»), громкого отказа не было — тот же
+        // класс тихого пропуска, что лечился модификатором вне списка. Теперь форма даёт громкий отказ
+        // с названием формы и строки. Живой delegate-фикстуры в этом файле нет: она была бы постоянным
+        // красным (тот же порядок, что с живым file-типом выше).
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void Handler(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+        // Форма не зависит от префикса: без модификатора доступа (internal по умолчанию), с атрибутом,
+        // после «namespace X;» в той же строке — та же полнота, тот же отказ.
+        FluentActions.Invoking(() => FacadeTopLevelNames("delegate void BareHandler();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+        FluentActions.Invoking(() => FacadeTopLevelNames("[Obsolete] public delegate void AttrHandler();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+        FluentActions.Invoking(() => FacadeTopLevelNames("namespace ClaudeHomeServer.Tests.Services; internal delegate void AfterNs();"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+        // Отказ называет строку объявления, а не только слово: без неё не найти, где вводить разбор формы.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void NamedLine(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*NamedLine*");
+    }
+
+    [Fact]
     public void Самопроверка_полноты_generic_тип_исключён_рантайм_сверкой_явно()
     {
         var source = ReadGuardsSource("SessionCoreShapeGuardTests.cs");
@@ -1145,6 +1198,16 @@ public class SessionCoreShapeGuardTests
 
     private sealed class FakeUsesFacadeNested { public SessionManager.TeamRunQuota Quota; }
 
+    // Закрытая generic-форма ссылки на top-level generic-тип фасада: полем static-класса объявить
+    // нельзя (CS0723), поэтому форма — typeof(GenericHolder<int>): ldtoken с TypeSpec закрытой
+    // инстанциации, который сканер резолвит закрытой формой. Набор держит открытое определение —
+    // без приведения формы ссылка прошла бы незамеченной
+    // (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада).
+    private static class FakeUsesClosedGenericFacadeTop
+    {
+        public static object Holder() => typeof(GenericHolder<int>);
+    }
+
     // Формы ссылки на сам фасад (R-ФИНАЛ c1): параметр метода (правило 1 до него не дотягивается)
     // и статический вызов (сканер даёт declaring-тип вызванного метода по IL-опкоду call;
     // сам вызов в тесте ни разу не исполняется — достаточно тела).
@@ -1246,6 +1309,24 @@ public class SessionCoreShapeGuardTests
             "без набора top-level сторож слеп — поэтому боевая проверка собирает набор из файла фасада");
         FacadeTopLevelNames("public sealed record Completed(TurnResult R);\npublic enum Z { A }\ninternal static class K {}\n    public record Nested(int A);")
             .Should().BeEquivalentTo("Completed", "Z", "K");
+    }
+
+    [Fact]
+    public void Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада()
+    {
+        // Набор держит открытое определение generic-типа (его даёт assembly.GetTypes), а сканер —
+        // закрытое вхождение ссылки («GenericHolder`1[System.Int32]»): прямое сравнение молча
+        // пропустило бы ссылку ядра на generic-тип фасада — тот же класс тихого пропуска, который
+        // лечился арностью в прошлом шаге, только на стороне ссылки. Граница моделируется на тестовой
+        // сборке (Main generic-типов не содержит — см. Самопроверка_разбор_фасада_видит_generic_top_level_тип_без_арности).
+        var top = FacadeTopLevelTypes("internal static class GenericHolder<T> { }",
+            typeof(SessionCoreShapeGuardTests).Assembly, "ClaudeHomeServer.Tests.Services");
+        top.Should().Contain(typeof(GenericHolder<>), "набор — открытое определение: без него проверка ниже вакуумна");
+        CoreNoFacadeRefs([typeof(FakeUsesClosedGenericFacadeTop)], top).Should().ContainSingle(
+            "ссылка закрытой формой «GenericHolder<int>» приводится к определению из набора: "
+            + "без приведения формы трипвайр слеп к generic-форме ссылки");
+        CoreNoFacadeRefs([typeof(FakeUsesClosedGenericFacadeTop)], new HashSet<Type>()).Should().BeEmpty(
+            "ловит именно membership в наборе, а не форма ссылки: без набора слеп и с приведением");
     }
 
     [Fact]

@@ -99,6 +99,8 @@ public static class DeviceAgentRoutes
         new("POST", "files/upload"),
         new("POST", "files/save-from-url"),
         new("POST", "files/changed-by"),
+        // Архив папки собирает только сервер — агент архивов не умеет
+        new("GET", "files/zip"),
         // OnlyOffice живёт рядом с сервером и тянет файл по адресу сервера
         new("GET", "files/office-download"),
         new("GET", "files/office-config"),

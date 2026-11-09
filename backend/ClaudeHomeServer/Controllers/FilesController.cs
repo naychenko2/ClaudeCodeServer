@@ -384,6 +384,36 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         catch (UnauthorizedAccessException) { return StatusCode(403); }
     }
 
+    // Папка проекта zip-архивом («Скачать архивом» в дереве файлов). Токен — через
+    // ?access_token=, как у stream: скачивание идёт ссылкой, а она заголовков не шлёт.
+    // Служебные каталоги в архив не попадают; слишком большая папка — 413 с причиной.
+    [HttpGet("zip")]
+    public IActionResult Zip(string projectId, [FromQuery] string path = "")
+    {
+        try
+        {
+            var project = GetProject(projectId);
+            var folder = FileService.SafeJoinPublic(project.RootPath, path);
+            if (!Directory.Exists(folder)) return NotFound();
+            // Ссылка на пути (ln -s / host внутри проекта) увела бы архив на файлы хоста
+            if (FolderZip.HasLinkOnPath(project.RootPath, folder)) return StatusCode(403);
+            var name = string.IsNullOrEmpty(path.Trim('/', '\\'))
+                ? project.Name
+                : Path.GetFileName(folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            // Отмена загрузки клиентом обрывает сборку: временный файл до 2 ГБ не дособирается зря
+            var zip = FolderZip.Build(folder, HttpContext.RequestAborted);
+            if (zip.Skipped > 0)
+                logger.LogWarning("Архив папки {Path} проекта {ProjectId}: пропущено {Skipped} файлов (заняты или недоступны)",
+                    path, projectId, zip.Skipped);
+            return File(zip.Stream, "application/zip", $"{name}.zip");
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (UnauthorizedAccessException) { return StatusCode(403); }
+        catch (FolderZip.TooLargeException ex) { return StatusCode(413, new { error = ex.Message }); }
+        // 499 — клиент закрыл соединение, отвечать уже некому
+        catch (OperationCanceledException) when (HttpContext.RequestAborted.IsCancellationRequested) { return StatusCode(499); }
+    }
+
     // Отдаёт байты файла OnlyOffice Document Server (без Authorization — DS не знает API-ключ).
     // Защита: проверка download-токена, который DS получает через office-config.
     [HttpGet("office-download")]

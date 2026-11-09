@@ -327,4 +327,103 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
         var response = await _client.DeleteAsync($"/api/projects/{id}/files?path=ghost.txt");
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
+
+    // ---------- zip папки ----------
+
+    [Fact]
+    public async Task Zip_Folder_ContainsFilesAndSkipsServiceDirs()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        Directory.CreateDirectory(Path.Combine(dir, "src", "deep"));
+        File.WriteAllText(Path.Combine(dir, "src", "a.cs"), "class A {}");
+        File.WriteAllText(Path.Combine(dir, "src", "deep", "b.txt"), "bbb");
+        Directory.CreateDirectory(Path.Combine(dir, "src", "node_modules"));
+        File.WriteAllText(Path.Combine(dir, "src", "node_modules", "junk.js"), "x");
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=src");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/zip");
+        response.Content.Headers.ContentDisposition!.FileName.Should().Contain("src.zip");
+        using var zip = new System.IO.Compression.ZipArchive(await response.Content.ReadAsStreamAsync());
+        zip.Entries.Select(e => e.FullName).Should().BeEquivalentTo("a.cs", "deep/b.txt");
+        using var reader = new StreamReader(zip.GetEntry("deep/b.txt")!.Open());
+        (await reader.ReadToEndAsync()).Should().Be("bbb");
+    }
+
+    [Fact]
+    public async Task Zip_ProjectRoot_NamedAfterProject()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("root.txt", "root");
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.Content.Headers.ContentDisposition!.FileName.Should().Contain("FileProject.zip");
+        using var zip = new System.IO.Compression.ZipArchive(await response.Content.ReadAsStreamAsync());
+        zip.Entries.Select(e => e.FullName).Should().Contain("root.txt");
+    }
+
+    [Fact]
+    public async Task Zip_FileOlderThan1980_DoesNotBreakArchive()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        var old = Path.Combine(dir, "epoch.txt");
+        File.WriteAllText(old, "old");
+        File.SetLastWriteTime(old, new DateTime(1970, 1, 1));
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var zip = new System.IO.Compression.ZipArchive(await response.Content.ReadAsStreamAsync());
+        zip.GetEntry("epoch.txt")!.LastWriteTime.Year.Should().Be(1980);
+    }
+
+    [Fact]
+    public async Task Zip_KeepsBuildDir_SkipsGitAndBinObj()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        foreach (var d in new[] { "build", ".git", "bin", "obj" })
+        {
+            Directory.CreateDirectory(Path.Combine(dir, d));
+            File.WriteAllText(Path.Combine(dir, d, "f.txt"), d);
+        }
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip");
+
+        using var zip = new System.IO.Compression.ZipArchive(await response.Content.ReadAsStreamAsync());
+        var names = zip.Entries.Select(e => e.FullName).ToList();
+        names.Should().Contain("build/f.txt");
+        names.Should().NotContain(n => n.StartsWith(".git/") || n.StartsWith("bin/") || n.StartsWith("obj/"));
+    }
+
+    [Fact]
+    public async Task Zip_SymlinkedFolder_Returns403()
+    {
+        var (id, dir) = await SetupProjectWithFileAsync("root.txt", "root");
+        var outside = Path.Combine(_tempDir, "outside_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "secret.txt"), "secret");
+        try { Directory.CreateSymbolicLink(Path.Combine(dir, "host"), outside); }
+        // Windows без прав разработчика ссылок не создаёт — проверять нечего
+        catch (Exception e) when (e is UnauthorizedAccessException or IOException) { return; }
+
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=host");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Zip_MissingFolder_Returns404()
+    {
+        var id = await CreateProjectAsync("ZipMissing");
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=ghost");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Zip_PathTraversal_Returns403()
+    {
+        var id = await CreateProjectAsync("ZipTraversal");
+        var response = await _client.GetAsync($"/api/projects/{id}/files/zip?path=..");
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
 }

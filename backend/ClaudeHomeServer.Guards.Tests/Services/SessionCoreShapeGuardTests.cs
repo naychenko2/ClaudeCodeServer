@@ -323,14 +323,13 @@ public class SessionCoreShapeGuardTests
                 // обязан называть тип (Самопроверка_полноты_delegate...). Граница ищется от ключевого слова:
                 // «;» префикса «namespace X;» в той же строке — не конец объявления. Первый «;» подряд —
                 // и «;» внутри строкового литерала ([Obsolete("use X; instead")]): отказ обрывался на
-                // полуслове и с незакрытой кавычкой. Граница — первая «;» вне литералов
-                // (FirstSemicolonOutsideLiterals).
+                // полуслове и с незакрытой кавычкой. Пустая строка прежним регулярком по тексту — та же
+                // ошибка в другой форме: пустая строка внутри многострочного verbatim-аргумента атрибута
+                // ([Obsolete] с аргументом @"…", содержащим пустую строку) давала отсечение внутри
+                // литерала: хвост объявления терялся. Граница — ближайшая «;» или пустая строка вне
+                // литералов (FirstDeclarationBoundaryOutsideLiterals).
                 int kwAt = m.Groups["kw"].Index;
-                int semi = FirstSemicolonOutsideLiterals(stripped, kwAt);
-                int cut = stripped.Length;
-                Match blank = Regex.Match(stripped.Substring(kwAt), "[ \t]*\r?\n[ \t]*\r?\n");
-                if (blank.Success) cut = kwAt + blank.Index;
-                if (semi >= 0 && semi + 1 < cut) cut = semi + 1;
+                int cut = FirstDeclarationBoundaryOutsideLiterals(stripped, kwAt);
                 string line = stripped.Substring(m.Index, cut - m.Index).Trim();
                 throw new InvalidOperationException(
                     "Неизвестная форма объявления «delegate» top-level типа (строка \"" + line +
@@ -341,21 +340,25 @@ public class SessionCoreShapeGuardTests
         return names;
     }
 
-    /// <summary>Первый «;» вне строковых литералов, начиная с <c>from</c>; -1 — «;» нет. Литералы
+    /// <summary>Конец логического объявления delegate от позиции <c>from</c>: позиция после ближайшей
+    /// границы — «;» вне строковых литералов или пустой строки вне литералов (для пустой строки — её
+    /// начало, хвост пробелов снимает Trim вызывающего); границы нет — конец исходника. Литералы
     /// разбираются теми же альтернативами, что сохраняет <see cref="StripRawStringsAndComments"/>
     /// (обычная, verbatim- и char-строка — дословно та же форма, порядок тот же): в очищенном
-    /// исходнике raw-строк и комментариев нет, остальные литералы — как в оригинале, и «;» внутри
-    /// литерала концом объявления не считается. Каждая конструкция потребляется целиком, поэтому
-    /// «;» после закрытой кавычки — обычная граница. Пустой строковый литерал матчится и ничего
-    /// не сдвигает; «;» после конца исходника — нет.</summary>
-    private static int FirstSemicolonOutsideLiterals(string stripped, int from)
+    /// исходнике raw-строк и комментариев нет, остальные литералы — как в оригинале, и «;» или пустая
+    /// строка внутри литерала (многострочный verbatim-аргумент атрибута) концом объявления не
+    /// считаются. Каждая конструкция потребляется целиком, поэтому граница после закрытой кавычки —
+    /// обычная граница; обход слева направо — первая найденная граница ближайшая. Пустой строковый
+    /// литерал матчится и ничего не сдвигает; граница после конца исходника — нет.</summary>
+    private static int FirstDeclarationBoundaryOutsideLiterals(string stripped, int from)
     {
         foreach (Match t in Regex.Matches(stripped.Substring(from),
-                     "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\.|[^'\\\\\\r\\n])+'|;"))
+                     "@\"(?:[^\"]|\"\")*\"|\"(?:[^\"\\\\\\r\\n]|\\\\.)*\"|'(?:\\.|[^'\\\\\\r\\n])+'|(?<semi>;)|(?<blank>[ \t]*\r?\n[ \t]*\r?\n)"))
         {
-            if (t.Value == ";") return from + t.Index;
+            if (t.Groups["semi"].Success) return from + t.Index + 1;
+            if (t.Groups["blank"].Success) return from + t.Index;
         }
-        return -1;
+        return stripped.Length;
     }
 
     /// <summary>Вырезает raw-строки и комментарии за ОДИН проход слева направо: каждая конструкция
@@ -833,6 +836,23 @@ public class SessionCoreShapeGuardTests
             .And.Message.Should().Contain("SemiInStringHandler", "имя типа названо").And
             .Contain("instead\")] int x);", "граница — настоящий «;», а не «;» внутри литерала: текст объявления цел").And
             .NotContain("AfterTheSemi", "за концом объявления — не часть объявления, в отказ не входит");
+    }
+
+    [Fact]
+    public void Самопроверка_полноты_delegate_пустая_строка_в_verbatim_литерале_не_граница_отказ_цел()
+    {
+        // Пустая строка внутри строкового литерала — не граница объявления: прежний поиск пустой
+        // строки регулярком по тексту ставил границу на пустой строке внутри многострочного
+        // verbatim-аргумента атрибута ([Obsolete] с аргументом @"…", содержащим пустую строку) —
+        // отказ обрывался внутри литерала, хвост объявления терялся. Теперь: имя названо, текст
+        // объявления до настоящего «;» цел — включая часть за пустой строкой внутри литерала,
+        // а текст за настоящим «;» в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames(
+                "internal delegate void BlankInVerbatimHandler([Obsolete(@\"use X\n\ninstead\")] int x); internal static class AfterTheBlankVerbatim {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("BlankInVerbatimHandler", "имя типа названо").And
+            .Contain("instead\")] int x);", "граница — настоящий «;», а не пустая строка внутри литерала: текст объявления цел").And
+            .NotContain("AfterTheBlankVerbatim", "за концом объявления — не часть объявления, в отказ не входит");
     }
 
     [Fact]

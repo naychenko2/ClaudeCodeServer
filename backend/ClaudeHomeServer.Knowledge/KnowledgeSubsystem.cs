@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // пользователя, реконсайлер error-документов Dify и каталог баз знаний
 // (общий для REST /api/knowledge/catalog и wsp-тулсета Dify).
 //
-// Состав (ранее жил тремя блоками в Program.cs:323, 388, 668-693 без форвардеров):
+// Состав (ранее жил тремя блоками в Program.cs без форвардеров):
 // - WorkspaceKnowledgeStore — JSON-стор `data/workspace-knowledge.json` (привязка
 //   «путь проекта → {DifyDatasetId, DocumentTags}»); миграция из старых полей Project
 //   выполняется ОДНОКРАТНО в блоке PostConfigure (см. ниже — причина отдельной жизни).

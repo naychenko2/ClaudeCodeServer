@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Memory;
 // Регистрирует два фасада стора (per-persona и per-project), их сервисы консолидации,
 // авто-память по итогам ходов и общий слой Dify-синка.
 //
-// Состав (ранее жил блоком в Program.cs:212-221):
+// Состав (ранее жил блоком в Program.cs):
 // - PersonaMemoryService — фасад персональной памяти: стор `data/persona-memory.json`
 //   + Dify-датасет per-persona, дебаунс 15 с, recall по relevance×recency×typeWeight;
 //   реализует `IKnowledgeSyncParticipant` (форвардер регистрации остаётся в Program.cs).

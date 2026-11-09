@@ -60,9 +60,6 @@ public class SourceLinkGuardTests
         // TurnEventBus короче, чем ждёт ссылка.
         ("backend/ClaudeHomeServer.Core/Services/Turn/IPromptSectionContributor.cs", "TurnEventBus.cs:128"),
         ("backend/ClaudeHomeServer.Turn/PromptSectionContributorsRegistration.cs", "TurnEventBus.cs:128"),
-        // Program.cs короче, чем ждёт ссылка тестового хоста.
-        ("backend/ClaudeHomeServer.TestKit.Host/TestWebApplicationFactory.cs", "Program.cs:1766"),
-        ("backend/ClaudeHomeServer.TestKit.Host/TestWebApplicationFactory.cs", "Program.cs:1802"),
     ];
 
     [Fact]

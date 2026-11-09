@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // исчезает, tsc молчит (поле опциональное). Этот тест СЕРИАЛИЗУЕТ Brief теми же опциями, что веб-
 // ответ, и проверяет точный набор JSON-ключей контракта на всех уровнях: Brief и вложенные записи.
 //
-// Опции: база веб-ответа — MVC (Program.cs:169 AddJsonOptions: Web-дефолты + конвертеры string-enum
+// Опции: база веб-ответа — MVC (Program.cs:213 AddJsonOptions: Web-дефолты + конвертеры string-enum
 // и FeatureNote) и TasksController.FeatureJsonOptions (TasksController.cs:531) — та же база
 // JsonSerializerDefaults.Web, она и задаёт имена ключей. Конвертеры на имена ключей Brief не влияют:
 // enums в Brief нет (kind/planState — строки), BriefNote — не FeatureNote (конвертер для хранимого типа).

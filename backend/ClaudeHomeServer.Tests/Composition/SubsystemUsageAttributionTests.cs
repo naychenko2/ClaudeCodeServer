@@ -452,7 +452,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
     }
 
     // M1 на боевом маршруте: внешний /gw/t/{turnId}/mcp/notes/{chat} → шлюз → внутренний
-    // /mcp/notes/{chat} в свой же TestServer (тот же мидлвар, Program.cs:1082) = ровно +1.
+    // /mcp/notes/{chat} в свой же TestServer (тот же мидлвар, Program.cs:1116) = ровно +1.
     // До правки здесь было 2: внешний приписывался по сегменту mcp, внутренний — по своему пути.
     // Мутация «считать обе ноги» = прежний код, краснит ровно на этом тесте.
     [Fact]
@@ -509,7 +509,7 @@ public class SubsystemUsageAttributionTests(SubsystemUsageAttributionTests.Hosts
     // Граница мидлвара по признаку ctx.GetEndpoint(): 404 и 403 смонтированного эндпоинта —
     // ответ самого обработчика вертикали, они считаются; 404 без эндпоинта (маршрут снят
     // гейтом подсистемы) — обращения не было. 401 — отказ аутентификации ДО обработчика:
-    // в боевой сборке UseRouting стоит раньше UseAuthentication (Program.cs:1036, 1073),
+    // в боевой сборке UseRouting стоит раньше UseAuthentication (Program.cs:1070, 1107),
     // поэтому эндпоинт при 401 смонтирован всегда и он ничего не значит — не считается.
     [Fact]
     public async Task ОтказСЭндпоинтомСчитается_БезЭндпоинтаИ401Никогда()

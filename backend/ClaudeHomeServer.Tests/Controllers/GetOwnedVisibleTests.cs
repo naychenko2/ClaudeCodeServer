@@ -201,7 +201,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
     {
         services.AddSingleton<IProjectAccess>(_ => new ProjectAccessService(
             _projects, _sessions, new SharedProjectsGate(_config, new FeatureFlagService(_users))));
-        // Шов IFeatureChatLinks — как в проде: Program.cs:414 регистрирует NoFeatureChatLinks,
+        // Шов IFeatureChatLinks — как в проде: CoreRegistration.cs:121 регистрирует NoFeatureChatLinks,
         // TasksSubsystem.cs:65 замещает его настоящим FeatureChatLinks при включённой подсистеме
         // tasks. Подсистемы tasks в этой фикстуре нет — резолвится ровно то, что прод резолвит
         // без неё (та же регистрация, что в ChatVisibilityEndpointTests и ChatsControllerPrivateAttachmentUploadTests).

@@ -59,7 +59,7 @@ public class KnowledgeSubsystemRegistrationTests
     {
         var services = BuildServices(BuildConfig(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
 
-        // Синглтоны из блока Program.cs:323 и Program.cs:388 до выноса в подсистему.
+        // Синглтоны из блоков Program.cs до выноса в подсистему.
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.WorkspaceKnowledgeStore));
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeBaseCatalogService));
 
@@ -70,7 +70,7 @@ public class KnowledgeSubsystemRegistrationTests
 // IOptions<DifyOptions> резолвится уже через TestWebApplicationFactory (полный стенд).
         services.Should().Contain(s => s.ServiceType == typeof(Microsoft.Extensions.Options.IConfigureOptions<ClaudeHomeServer.Models.DifyOptions>));
 
-        // Сервисы из блока Program.cs:668-693 до выноса в подсистему (без 5 форвардеров
+        // Сервисы из блока Program.cs до выноса в подсистему (без 5 форвардеров
         // `IKnowledgeSyncParticipant → {DossierStore, ...}`, которые остаются в Program.cs).
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.KnowledgeService));
         services.Should().Contain(s => s.ServiceType == typeof(ClaudeHomeServer.Services.Knowledge.ProjectKnowledgeSyncService));

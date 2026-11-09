@@ -13,10 +13,10 @@ namespace ClaudeHomeServer.Tests.Plugins;
 // один unit-тест это не ловил (все подставляют стаб-каскад; PluginsSubsystemDisabledTests
 // шов не регистрирует). Тест на полном хосте (WebApplicationFactory, пример —
 // StubModuleEndpointTests): DI строит PluginUninstall → IPluginInstallCascade →
-// IPersonaPluginBindingPurger (реальный PluginBindingPurgerAdapter, Program.cs:480);
+// IPersonaPluginBindingPurger (реальный PluginBindingPurgerAdapter, PersonasRegistration.cs:48);
 // после удаления плагина Skill-привязка персоны plugin:{id}/… исчезает (каскад реально
 // зовёт адаптер).
-// Мутация: убрать регистрацию шва в Program.cs:480 → DI отдаёт null → каскад no-op →
+// Мутация: убрать регистрацию шва в PersonasRegistration.cs:48 → DI отдаёт null → каскад no-op →
 // привязка не снимается → тест красный.
 [Trait("Category", "Host")]
 public class PluginBindingPurgeBattleTests : IDisposable

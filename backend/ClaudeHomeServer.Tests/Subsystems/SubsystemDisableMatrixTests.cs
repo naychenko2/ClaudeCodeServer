@@ -113,7 +113,7 @@ public class SubsystemDisableMatrixTests : IClassFixture<SubsystemDisableMatrixT
     /// подсистема без строки здесь — красный тест.
     /// </summary>
     internal static readonly string[] MatrixKeys = [
-        // Статические вертикали — строки Program.cs:990..1062.
+        // Статические вертикали — строки Program.cs:593..669.
         "git", "code-graph", "dossiers", "llm", "memory", "knowledge", "video", "yandex",
         "reader", "images", "tts", "deploy", "backgrounds", "project-icons", "project-services",
         "test-runs", "changelog", "tasks", "skills", "plugins",

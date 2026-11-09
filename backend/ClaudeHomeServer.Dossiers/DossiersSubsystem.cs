@@ -6,7 +6,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // коммитов и обсуждений, автовыгрузку в локальную ветку ccs/dossiers/v1 и автоимпорт
 // по новому tip, плюс recall-сервис для пассивного канала паспортов в промпте персон.
 //
-// Состав (ранее жил одним блоком в Program.cs:166-183):
+// Состав (ранее жил одним блоком в Program.cs):
 // - InstanceSecretsProvider — точные значения секретов инстанса для SecretRedactor;
 // - DossierStore — JSON-стор паспортов (data/dossiers/{owner}/{project}.json),
 //   плюс Dify-датасет для семантического recall (graceful degradation);

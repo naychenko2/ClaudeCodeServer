@@ -643,7 +643,8 @@ public sealed class ParticipantFrameFixture : IDisposable
         {
             // IsConfigured=true без сети: DifyToolset/каталог ходят в записывающий хендлер
             // (тот же приём, что McpNarrowFramePersonalSpaceTests). PerplexityOptions подменяется
-            // целиком: Program.cs:1137 создаёт его эagerly из конфига — ExtraConfig к этому моменту
+            // целиком: AddWebSearch (Program.cs:703 → WebSearchRegistration.cs:19) создаёт его
+            // эagerly из конфига — ExtraConfig к этому моменту
             // ещё не применён, а ExtraServices идёт после встроенных регистраций. Рядом подменяется
             // сам PerplexitySearchService — на ту же заглушку: web_search с валидным query обязан
             // отработать (M1), платных запросов тест не делает. Состав websearch-tools/list

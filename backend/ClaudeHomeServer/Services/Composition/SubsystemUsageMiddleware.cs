@@ -189,7 +189,7 @@ public sealed class SubsystemUsageMiddleware(
 
     // Внешняя нога шлюза ходов: /gw/t/{turnId}/mcp/{name}/{хвост}. Не считается: шлюз проксирует её
     // на /mcp/{name}/{хвост} своего же Kestrel (McpGatewayEndpoints.cs:94 → McpBackendAccess.cs:8 →
-    // SessionManager.ResolveTasksApiUrl), и тот запрос проходит этот же мидлвар (Program.cs:1082) —
+    // SessionManager.ResolveTasksApiUrl), и тот запрос проходит этот же мидлвар (Program.cs:1116) —
     // он единственный дошёл до тулсета и он же счёт. Считать обе ноги = +2 за один вызов (R-S1b, M1).
     // Отличать внутренний запрос по X-Caller-Session-Id и считать только внешний — другой контракт
     // счётчика для всех MCP-вызовов: решение постановщика, не этот шаг.

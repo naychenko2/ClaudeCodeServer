@@ -316,10 +316,19 @@ public class SessionCoreShapeGuardTests
             }
             if (m.Groups["kw"].Value == "delegate")
             {
-                // Имя делегата живёт после типа возвращаемого, а матч доходит до типа: строка
-                // объявления берётся из исходника целиком — отказ обязан показывать, где вводить разбор.
-                int eol = stripped.IndexOf('\n', m.Index);
-                string line = stripped.Substring(m.Index, (eol < 0 ? stripped.Length : eol) - m.Index).Trim();
+                // Имя делегата живёт после типа возвращаемого, а матч доходит до типа. Объявление берётся
+                // из исходника до конца логического объявления: у делегата нет тела — его конец это «;»,
+                // а если «;» нет — пустая строка или конец исходника; берётся ближайшая граница. Не по «\n»:
+                // в многострочном объявлении имя живёт за типом возвращаемого на следующей строке, и отказ
+                // обязан называть тип (Самопроверка_полноты_delegate...). Граница ищется от ключевого слова:
+                // «;» префикса «namespace X;» в той же строке — не конец объявления.
+                int kwAt = m.Groups["kw"].Index;
+                int semi = stripped.IndexOf(';', kwAt);
+                int cut = stripped.Length;
+                Match blank = Regex.Match(stripped.Substring(kwAt), "[ \t]*\r?\n[ \t]*\r?\n");
+                if (blank.Success) cut = kwAt + blank.Index;
+                if (semi >= 0 && semi + 1 < cut) cut = semi + 1;
+                string line = stripped.Substring(m.Index, cut - m.Index).Trim();
                 throw new InvalidOperationException(
                     "Неизвестная форма объявления «delegate» top-level типа (строка \"" + line +
                     "\"): узор её не разбирает — тип молча выпал бы из полноты; сначала научи разбор формы, потом вводи объявление");
@@ -766,19 +775,34 @@ public class SessionCoreShapeGuardTests
         // класс тихого пропуска, что лечился модификатором вне списка. Теперь форма даёт громкий отказ
         // с названием формы и строки. Живой delegate-фикстуры в этом файле нет: она была бы постоянным
         // красным (тот же порядок, что с живым file-типом выше).
+        // Отказ обязан приходить именно из delegate-ветки узора, а не из ветки неизвестного модификатора:
+        // подстрока «delegate» есть в сообщении обеих веток — если «delegate» попадёт в ряд mods (жадный
+        // ряд), отказ придёт из чужой ветки, а WithMessage («*delegate*») всё равно зеленел бы.
+        // Маркер «Неизвестная форма объявления» несёт только delegate-ветка: по нему и проверяю.
         FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void Handler(int x);"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
         // Форма не зависит от префикса: без модификатора доступа (internal по умолчанию), с атрибутом,
         // после «namespace X;» в той же строке — та же полнота, тот же отказ.
         FluentActions.Invoking(() => FacadeTopLevelNames("delegate void BareHandler();"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
         FluentActions.Invoking(() => FacadeTopLevelNames("[Obsolete] public delegate void AttrHandler();"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
         FluentActions.Invoking(() => FacadeTopLevelNames("namespace ClaudeHomeServer.Tests.Services; internal delegate void AfterNs();"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*delegate*");
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*");
         // Отказ называет строку объявления, а не только слово: без неё не найти, где вводить разбор формы.
         FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate void NamedLine(int x);"))
-            .Should().Throw<InvalidOperationException>().WithMessage("*NamedLine*");
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*NamedLine*");
+        // Многострочное объявление: имя делегата живёт за типом возвращаемого на следующей строке.
+        // Взятие строки по «\n» оставило бы отказ без имени типа; граница — конец логического
+        // объявления («;»), поэтому имя названо и через перенос строки.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate\nvoid MultiLineHandler(int x);"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("MultiLineHandler", "отказ называет имя типа и в многострочном объявлении");
+        // Без «;» граница — пустая строка: имя до неё названо, текст за пустой строкой в отказ не входит.
+        FluentActions.Invoking(() => FacadeTopLevelNames("internal delegate\nvoid NoSemiBoundary()\n\ninternal static class AfterTheBlank {}"))
+            .Should().Throw<InvalidOperationException>().WithMessage("*Неизвестная форма объявления*")
+            .And.Message.Should().Contain("NoSemiBoundary", "без «;» граница — пустая строка: имя до неё названо").And
+            .NotContain("AfterTheBlank", "за пустой строкой — не часть объявления, в отказ не входит");
     }
 
     [Fact]
@@ -1208,6 +1232,16 @@ public class SessionCoreShapeGuardTests
         public static object Holder() => typeof(GenericHolder<int>);
     }
 
+    // Посторонний generic для третьей стороны самопроверки
+    // (Самопроверка_трипвайр_ядра_краснеет_на_закрытом_generic_топ_level_типе_фасада): его определения
+    // нет в наборе top-level типов фасада, и ссылка закрытой формой не должна дать ложного срабатывания.
+    private sealed class ForeignGeneric<T> { }
+
+    private static class FakeUsesForeignGeneric
+    {
+        public static object Holder() => typeof(ForeignGeneric<int>);
+    }
+
     // Формы ссылки на сам фасад (R-ФИНАЛ c1): параметр метода (правило 1 до него не дотягивается)
     // и статический вызов (сканер даёт declaring-тип вызванного метода по IL-опкоду call;
     // сам вызов в тесте ни разу не исполняется — достаточно тела).
@@ -1327,6 +1361,12 @@ public class SessionCoreShapeGuardTests
             + "без приведения формы трипвайр слеп к generic-форме ссылки");
         CoreNoFacadeRefs([typeof(FakeUsesClosedGenericFacadeTop)], new HashSet<Type>()).Should().BeEmpty(
             "ловит именно membership в наборе, а не форма ссылки: без набора слеп и с приведением");
+        // Третья сторона самопроверки: в наборе — определение фасадного generic, а ссылка — на посторонний
+        // generic. Приведение OpenGenericForm даёт «ForeignGeneric<>», которого в наборе нет: ложного
+        // срабатывания быть не должно. Без этой стороны любое ослабление меры (срабатывание «по любому
+        // generic» вместо membership) проходила бы незамеченной.
+        CoreNoFacadeRefs([typeof(FakeUsesForeignGeneric)], top).Should().BeEmpty(
+            "ForeignGeneric<> не в наборе top-level типов фасада: ссылка на посторонний generic — не срабатывание");
     }
 
     [Fact]

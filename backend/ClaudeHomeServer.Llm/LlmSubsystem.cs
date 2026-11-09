@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Services.Llm;
 // `plan-map`), живущая в `Services.Llm`. `ChatDigestService` уехал в спину
 // (`Services/ChatDigestService.cs`) — см. шапку того файла.
 //
-// Зарегистрировано здесь (ранее жило блоком в Program.cs, до переезда в подсистему):
+// Зарегистрировано здесь (ранее жило блоком в Program.cs:~156-355, 454, 457):
 // 1) `UserModelTierResolver` — слоты моделей (strong/medium/weak) per-user,
 //    глобальная таблица назначений LocalActionCatalog. Шов к слою персон.
 // 2) (свободно) — `GlmModelAliasMigration` уехала в спину (`Services/GlmModelAliasMigration.cs`,

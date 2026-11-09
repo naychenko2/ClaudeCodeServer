@@ -1,0 +1,41 @@
+{
+  // Отдельный проект для QA-спеков (docs/operations/qa-stand.md). Playwright гоняет их
+  // через esbuild без проверки типов; tsconfig.app.json (include: ["src"]) и vitest
+  // каталог не включают — без этого проекта типы спеков не проверялись нигде.
+  // Единственная точка правды для типов e2e/qa; src-файлы остаёт проверяющим tsconfig.app.json.
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.e2e.tsbuildinfo",
+    "target": "es2023",
+    // DOM — для page.evaluate: внутри колбэка браузерное окружение (document).
+    "lib": ["ES2023", "DOM"],
+    "module": "esnext",
+    "types": ["node"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "noEmit": true,
+
+    /* Linting — как в соседних конфигах (tsconfig.node.json) */
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true
+  },
+  "include": ["e2e/qa"],
+  "exclude": [
+    // Накопленный типовой долг старых спеков (дефект ef08abb3): вне проверки, список
+    // сокращается по мере починки. Новые спеки под проверкой сразу.
+    "e2e/qa/components-admin.qa.spec.ts",
+    "e2e/qa/llm-wiki-nightly.qa.spec.ts",
+    "e2e/qa/notes-wiki-unified.qa.spec.ts",
+    "e2e/qa/shared-projects-acceptance.qa.spec.ts",
+    "e2e/qa/shared-projects-privacy-extra.qa.spec.ts",
+    "e2e/qa/shared-projects-private.qa.spec.ts",
+    "e2e/qa/shared-projects-wave2-revoke.qa.spec.ts",
+    "e2e/qa/shared-projects-wave2-tasks.qa.spec.ts",
+    "e2e/qa/wiki-header-probe.qa.spec.ts",
+    "e2e/qa/wiki-night.qa.spec.ts"
+  ]
+}

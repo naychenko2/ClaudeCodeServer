@@ -1806,6 +1806,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     internal Action? FeatureNoteContended;
     internal Action? FeatureNoteInside;
 
+    // Снимок учёта фичи для строки журнала estimate_set (FS-O2a): стадия конвейера, состояние
+    // плана и счётчики шагов — те же значения, что FeatureStepProgress.PlanState/Accepted/Total
+    // (Projector/FeatureStepAccounting.cs) плюс стадия. Считает и передаёт вызывающий (FS-O2b);
+    // пока контекста нет — в журнал идут null. Имена полей — как ключи строки журнала.
+    public sealed record FeatureEstimateContext(string? Stage, string? PlanState, int? Accepted, int? Total);
+
     // Голос фичи (волна 6, B3): только эпик (role=feature), иначе null. Пустой текст (после Trim)
     // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
     // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
@@ -1813,9 +1819,12 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной после старта фичи
     // (категории draft/queued/idle — до старта). Сдвиг оценки сверх порога без why — отказ
     // (FeatureEstimateShiftException), проверка — под замком записи, против прочитанной там же
-    // текущей оценки (FS-O1).
+    // текущей оценки (FS-O1). Каждая ЗАПИСАННАЯ оценка дописывает в журнал фичи строку
+    // estimate_set (FS-O2a): числа оценки + снимок учёта из estimateContext (null — пока
+    // вызывающие контекст не передают); голос без оценки строки не пишет.
     public TaskItem? SetFeatureNote(string id, string? text, string? bySessionId, bool byUser,
-        string stageAtWrite, string stateAtWrite, FeatureEstimate? estimate = null)
+        string stageAtWrite, string stateAtWrite, FeatureEstimate? estimate = null,
+        FeatureEstimateContext? estimateContext = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature) return null;
@@ -1838,6 +1847,26 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
                 && StartedKinds.Contains(stateAtWrite))
                 task.InitialEtaMinutes = eta;
+            // FS-O2a: оценка, которая реально попала в стор, оставляет строку estimate_set
+            // (сама оценка перезаписывается — по последней строке честность оценок не проверить).
+            // Запись — под тем же _featureNoteLock, что и запись голоса: последняя строка журнала
+            // соответствует сохранённой оценке (вне замка окно между «записали голос» и
+            // «записали журнал» путает порядок при двух параллельных вызовах). Голос без оценки
+            // (пустой текст снимает и оценку) строки не пишет. Сбой журнала голос не откатывает:
+            // AppendJournal логирует и идёт дальше (см. :289).
+            if (task.Note?.Estimate is { } est)
+                AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
+                {
+                    At = now,
+                    Kind = "estimate_set",
+                    TaskId = task.Id,
+                    ExpectedSteps = est.ExpectedSteps,
+                    EtaMinutes = est.EtaMinutes,
+                    Stage = estimateContext?.Stage,
+                    PlanState = estimateContext?.PlanState,
+                    Accepted = estimateContext?.Accepted,
+                    Total = estimateContext?.Total,
+                });
             task.UpdatedAt = now;
             ScheduleSave();
             return task;

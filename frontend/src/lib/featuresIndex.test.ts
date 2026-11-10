@@ -9,7 +9,11 @@
 //   3 — живой режим: task_changed → перезапрос затронутого проекта (дебаунс
 //        1,5 с), событие без фичи игнорируется, флаг выключен → запросов нет;
 //   4 — несколько потребителей (R3, минор 5): выключенный потребитель не
-//        стирает срез и не отписывает чужую подписку; последний ушедший — чистит.
+//        стирает срез и не отписывает чужую подписку; последний ушедший —
+//        переносит срез в кэш (FI-1);
+//   5 — FI-1: возврат в проект рисует кэшированный срез без EMPTY-кадра; гонка
+//        двух запросов одного проекта (поколение _seq); сбой первичной («фич нет»,
+//        а не вечная загрузка) и сбой фонового (срез не трогать).
 //
 // Тесты независимы от пояса: время — только fake timers и ISO-строки фикстуры.
 
@@ -112,6 +116,28 @@ describe('стор индекса разделён по проекту', () => {
     expect(__test.isIndexLoading('p2')).toBe(false);
     __test.setLoading('p1', false);
     expect(__test.isIndexLoading('p1')).toBe(false);
+  });
+
+  it('FI-1: последний ушедший — срез в кэше; featureOf его не видит, ready — true', () => {
+    // срез проекта p1 (фикстура: чаты chat-cur и др.) + один активный потребитель
+    __test.setIndex('p1', FIXTURE);
+    __test.setActive('p1');
+    __test.onUnmount('p1');
+    // кэш ушедшего проекта НЕ добавляет плашку фичи в чаты (featureOf — только живой)
+    expect(featureOf('chat-cur')).toEqual([]);
+    // сам срез сохранён в кэше — тем же объектом (для возврата без EMPTY-кадра)
+    expect(__test.cache().get('p1')).toBe(FIXTURE);
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    expect(__test.ready('p1')).toBe(true);
+    // проект, по которому не было ни одного успешного ответа — не готов
+    expect(__test.ready('p2')).toBe(false);
+  });
+
+  it('FI-1: сбой первичной загрузки — EMPTY и ready (не вечная загрузка)', () => {
+    // сбой отражается через setIndex(EMPTY): срез есть (пустой) → готово
+    __test.setIndex('p1', { features: [], chats: {} });
+    expect(__test.snapshotFor('p1').features).toHaveLength(0);
+    expect(__test.ready('p1')).toBe(true);
   });
 });
 
@@ -358,20 +384,141 @@ describe('несколько потребителей одного проект�
     await flush();
   });
 
-  it('MAJOR-1: все ушли, новый потребитель — новый запрос', async () => {
+  it('MAJOR-1: все ушли, новый потребитель — новый запрос (FI-1: срез уходит в кэш, не стирается)', async () => {
     const a = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
-    // Последний ушёл — срез очищен.
+    // Последний ушёл — срез перенесён в кэш: снимок тот же объект (без EMPTY-кадра).
     a.root.unmount();
     await flush();
-    expect(__test.snapshotFor('p1').features).toHaveLength(0);
-    // Новый потребитель — первичная загрузка заново.
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    expect(__test.cache().get('p1')).toBe(FIXTURE);
+    // Новый потребитель — запрос заново (фоновый, поверх кэша).
     const b = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(2);
     expect(__test.snapshotFor('p1')).toBe(FIXTURE);
     b.root.unmount();
     await flush();
+  });
+});
+
+// ── 5: FI-1 — кэш между входами, гонка запросов, сбои (хук с ручными промисами) ──
+
+describe('FI-1: возврат в проект, гонка запросов, сбои загрузки', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('возврат при неразрешённом фоновом запросе: тот же срез и ready (без EMPTY-кадра)', async () => {
+    let resolveFirst: (v: FeaturesIndex) => void;
+    const first = new Promise<FeaturesIndex>(r => { resolveFirst = r; });
+    // Фоновый запрос возврата — никогда не резолвится: проверяем состояние в полёте.
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => first)
+      .mockImplementation(() => new Promise<FeaturesIndex>(() => {}));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { resolveFirst(FIXTURE); });
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      expect(__test.ready('p1')).toBe(true);
+
+      a.root.unmount();
+      await flush();
+      // Последний ушёл: срез перенесён в кэш, снимок — тот же объект.
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      expect(__test.cache().get('p1')).toBe(FIXTURE);
+      expect(__test.ready('p1')).toBe(true);
+
+      // Возврат, пока фоновый запрос ещё в полёте: сразу прошлый срез, та же ссылка.
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(spy).toHaveBeenCalledTimes(2); // фоновое обновление отправлено
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE); // не копия и не EMPTY
+      expect(__test.ready('p1')).toBe(true);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('гонка: ранний запрос, пришедший последним, не затирает свежий (_seq)', async () => {
+    let resolve1: (v: FeaturesIndex) => void;
+    let resolve2: (v: FeaturesIndex) => void;
+    const req1 = new Promise<FeaturesIndex>(r => { resolve1 = r; });
+    const req2 = new Promise<FeaturesIndex>(r => { resolve2 = r; });
+    const idxA: FeaturesIndex = { features: [feature('A')], chats: {} };
+    const idxB: FeaturesIndex = { features: [feature('B')], chats: {} };
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => req1) // первый вход: запрос №1
+      .mockImplementationOnce(() => req2); // возврат (кэша нет): первичный снова — №2
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      a.root.unmount(); // ушли до ответа: живого среза нет, кэш пуст
+      await flush();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+
+      await act(async () => { resolve2(idxB); }); // второй ответ пришёл первым
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+
+      await act(async () => { resolve1(idxA); }); // первый ответ — последний по времени
+      await flush();
+      // Старый ответ отброшен (его поколение уже не последнее).
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+      expect(__test.cache().get('p1')).toBe(idxB);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('сбой первичной загрузки: EMPTY и ready — «фич нет», не вечная загрузка', async () => {
+    const spy = vi.spyOn(api.tasks, 'featuresIndex').mockRejectedValue(new Error('offline'));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      expect(__test.ready('p1')).toBe(true); // пустой ответ — тоже «готово»
+      expect(__test.isIndexLoading('p1')).toBe(false);
+      a.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('сбой фонового перезапроса при живом кэше: срез не трогать', async () => {
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => Promise.resolve(FIXTURE))
+      .mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      a.root.unmount();
+      await flush();
+      const b = mount(createElement(Consumer, { projectId: 'p1' })); // фоновый запрос reject'нет
+      await flush();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE); // прошлый срез цел
+      expect(__test.ready('p1')).toBe(true);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

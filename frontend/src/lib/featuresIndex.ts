@@ -10,6 +10,8 @@
 // проектов). Каждый проект держит свой срез: fetch одного проекта не затирает
 // другой. Срез — стабильная ссылка (тот же объект, пока по этому проекту не
 // пришёл новый fetch), иначе useSyncExternalStore зациклит ререндер.
+// Последний ответ по ушедшему проекту живёт в кэше: возврат в проект сразу
+// рисует его (без EMPTY-кадра), а свежий запрос тихо заменяет его в фоне.
 //
 // Живой режим: подписка на `task_changed` (тот же канал, что в lib/tasks.ts):
 // событие (задача с featureId или role=feature) → перезапрос затронутого проекта
@@ -29,7 +31,18 @@ import type { ServerMessage } from '../types';
 const EMPTY: FeaturesIndex = { features: [], chats: {} };
 
 // Срезы по проекту: ключ — projectId, '' — область вне проектов (без projectId).
+// Только АКТИВНЫЕ проекты (есть потребитель): их читает snapshotFor (приоритетом)
+// и featureOf — плашка фичи не появляется в чатах проектов, которых сейчас не смотрят.
 let _indexByProject = new Map<string, FeaturesIndex>();
+// Кэш последнего полученного среза по проекту: переживает уход потребителей.
+// Возврат в уже открытый проект сразу рисует прошлый срез (без EMPTY-кадра),
+// свежий ответ тихо заменяет его. snapshotFor читает его как фолбэк — ссылка
+// та же, что была живой.
+let _cache = new Map<string, FeaturesIndex>();
+// Поколение запросов ПО КЛЮЧУ ПРОЕКТА: каждый запрос (первичный, фоновый,
+// live-перезапрос) берёт ++seq; ответ применяется, только если его номер ещё
+// последний для этого проекта. Иначе старый ответ, пришедший последним, затёр бы свежий.
+const _seq = new Map<string, number>();
 // Загрузка: проекты, по которым fetch в полёте (индикатор в UI).
 const _loading = new Set<string>();
 const _listeners = new Set<() => void>();
@@ -37,22 +50,27 @@ function emit() { _listeners.forEach(fn => fn()); }
 
 // «Активные» проекты — у них смонтирован хотя бы один потребитель
 // useFeaturesIndex. Только их task_changed перезапрашивает; чужие (неактивные) не
-// трогаем. Счёт — по потребителям (R3, минор 5): срез чистится, а проект снимается
-// с «активных», только когда уходит ПОСЛЕДНИЙ потребитель.
+// трогаем. Счёт — по потребителям (R3, минор 5): срез уходит в кэш, а проект
+// снимается с «активных», только когда уходит ПОСЛЕДНИЙ потребитель.
 const _activeCount = new Map<string, number>();
 // Дебаунс-таймеры по проекту: серия task_changed → один перезапрос.
 const _pending = new Map<string, ReturnType<typeof setTimeout>>();
 let _realtimeWired = false;
 
+// Живой срез проекта: тот же объект пишем и в кэш — последний полученный ответ
+// должен пережить уход потребителей (возврат без EMPTY-кадра).
 function setIndex(projectKey: string, index: FeaturesIndex) {
   _indexByProject = new Map(_indexByProject);
   _indexByProject.set(projectKey, index);
+  _cache.set(projectKey, index);
   emit();
 }
 
-// Сброс всех срезов (Map.clear).
+// Сброс всех срезов (Map.clear) — живых и кэшированных: после сброса ни живой,
+// ни кэш-фолбэк не должен держать старый ответ.
 function clearIndex() {
   _indexByProject = new Map();
+  _cache = new Map();
   emit();
 }
 
@@ -62,9 +80,47 @@ function subscribeIndex(fn: () => void): () => void {
 }
 
 // Срез по проекту — стабильная ссылка (тот же объект, пока не пришёл новый fetch
-// для этого проекта). EMPTY — если проекта ещё нет.
+// для этого проекта): живой срез, иначе — кэш последнего ответа (тот же объект,
+// что был живым), иначе EMPTY — если по проекту ещё не было успешного ответа.
 function snapshotFor(projectKey: string): FeaturesIndex {
-  return _indexByProject.get(projectKey) ?? EMPTY;
+  return _indexByProject.get(projectKey) ?? _cache.get(projectKey) ?? EMPTY;
+}
+
+// Есть ли срез проекта: живой или в кэше. Признак готовности для UI:
+// «фич нет» (пустой ответ) отличается от «ещё не загружено».
+function hasSliceFor(projectKey: string): boolean {
+  return _indexByProject.has(projectKey) || _cache.has(projectKey);
+}
+
+// Номер поколения для нового запроса проекта.
+function nextSeq(projectKey: string): number {
+  const s = (_seq.get(projectKey) ?? 0) + 1;
+  _seq.set(projectKey, s);
+  return s;
+}
+
+// Успешный ответ: в живой срез — только если проект активен (есть потребитель);
+// в кэш — всегда (ответ последний — иначе вызывающий не применяет).
+function applyFresh(projectKey: string, index: FeaturesIndex) {
+  if ((_activeCount.get(projectKey) ?? 0) > 0) {
+    setIndex(projectKey, index);
+  } else {
+    // Потребителей нет: в _indexByProject не пишем, но кэш обновляем и будим
+    // подписчиков useFeaturesIndexReady (состояние «не загружено» → «готово»).
+    _cache.set(projectKey, index);
+    emit();
+  }
+}
+
+// Возврат в проект: кэшированный срез становится живым — тот же объект, без копий.
+function moveCacheToLive(projectKey: string) {
+  const cached = _cache.get(projectKey);
+  if (!cached) return;
+  _indexByProject = new Map(_indexByProject);
+  _indexByProject.set(projectKey, cached);
+  // snapshotFor отдаёт тот же объект; будим ради featureOf: чаты проекта
+  // снова должны давать плашку.
+  emit();
 }
 
 function setLoading(projectKey: string, loading: boolean) {
@@ -110,8 +166,11 @@ function scheduleRefetch(projectKey: string) {
   if (_pending.has(projectKey)) return;
   _pending.set(projectKey, setTimeout(() => {
     _pending.delete(projectKey);
+    // Тот же счётчик поколений, что у первичного/фонового запроса: ответ
+    // применяется, только если он ещё последний для проекта.
+    const seq = nextSeq(projectKey);
     void api.tasks.featuresIndex(projectKey || undefined)
-      .then(index => setIndex(projectKey, index))
+      .then(index => { if (_seq.get(projectKey) === seq) applyFresh(projectKey, index); })
       // Сбой live-перезапроса не затирает свежий срез (в отличие от первичной загрузки).
       .catch(() => {});
   }, REFETCH_DEBOUNCE_MS));
@@ -156,9 +215,11 @@ function wireRealtime() {
 // ушедший — снимает проект с «активных», отменяет pending-таймер перезапроса
 // (M1, минор по Ф1: иначе дебаунс task_changed, поставленный ещё до
 // размонтирования, ушёл бы в REST-запрос за проектом, которого никто уже не
-// смотрит) и чистит срез (его больше никто не смотрит). Пока другие потребители
-// смотрят проект, срез и живая подписка остаются. Вынесено в функцию — cleanup
-// хука её вызывает, а тест проверяет эффект напрямую (окружение node, без jsdom).
+// смотрит) и переносит срез из живого в кэш: его больше никто не смотрит
+// (featureOf его не видит), но возврат в проект сразу рисует его, без EMPTY-кадра.
+// Пока другие потребители смотрят проект, срез и живая подписка остаются.
+// Вынесено в функцию — cleanup хука её вызывает, а тест проверяет эффект
+// напрямую (окружение node, без jsdom).
 function onUnmount(projectKey: string) {
   const n = _activeCount.get(projectKey) ?? 0;
   if (n > 1) {
@@ -168,16 +229,24 @@ function onUnmount(projectKey: string) {
   _activeCount.delete(projectKey);
   const t = _pending.get(projectKey);
   if (t) { clearTimeout(t); _pending.delete(projectKey); }
-  if (_indexByProject.has(projectKey)) setIndex(projectKey, EMPTY);
+  const live = _indexByProject.get(projectKey);
+  if (live) {
+    _indexByProject = new Map(_indexByProject);
+    _indexByProject.delete(projectKey);
+    _cache.set(projectKey, live);
+    emit();
+  }
 }
 
 // Хук: индекс фич проекта.
 //   `projectId` — область ответа; null — все проекты владельца и чаты вне проектов.
 // Запрос идемпотентен по projectId: повторный fetch — только при смене проекта;
-// cancel-метка не даёт позднему ответу затереть свежий.
+// поколение запроса (_seq по ключу проекта) не даёт позднему ответу затереть свежий.
 //
-// Потребители считаются по проекту (R3, минор 5): срез чистится, а проект
+// Потребители считаются по проекту (R3, минор 5): срез уходит в кэш, а проект
 // снимается с «активных», только когда уходит последний потребитель.
+// Возврат в проект с кэшированным срезом: срез сразу живой (тот же объект),
+// обновление — в фоне, без индикатора загрузки.
 export function useFeaturesIndex(projectId: string | null): FeaturesIndex {
   const projectKey = projectId ?? '';
   const index = useSyncExternalStore(
@@ -189,21 +258,36 @@ export function useFeaturesIndex(projectId: string | null): FeaturesIndex {
     wireRealtime();
     const prev = _activeCount.get(projectKey) ?? 0;
     _activeCount.set(projectKey, prev + 1);
-    // Первичная загрузка — только когда первый потребитель приходит
-    // (0→1): один запрос на проект, а не на каждую карточку. Ответ применяется,
-    // пока проект активен (есть хотя бы один потребитель).
+    // Начало загрузки — только когда первый потребитель приходит
+    // (0→1): один запрос на проект, а не на каждую карточку.
     if (prev === 0) {
-      setLoading(projectKey, true);
-      void api.tasks.featuresIndex(projectKey || undefined)
-        .then(index => {
-          if ((_activeCount.get(projectKey) ?? 0) > 0) setIndex(projectKey, index);
-        })
-        .catch(() => {
-          if ((_activeCount.get(projectKey) ?? 0) > 0) setIndex(projectKey, EMPTY);
-        })
-        .finally(() => {
-          if ((_activeCount.get(projectKey) ?? 0) > 0) setLoading(projectKey, false);
-        });
+      const seq = nextSeq(projectKey);
+      if (_cache.has(projectKey)) {
+        // Срез прошнего визита сразу живой; фоновый перезапрос тихо обновит его.
+        // Сбой фонового — срез не трогаем (он и так показан).
+        moveCacheToLive(projectKey);
+        void api.tasks.featuresIndex(projectKey || undefined)
+          .then(index => { if (_seq.get(projectKey) === seq) applyFresh(projectKey, index); })
+          .catch(() => {});
+      } else {
+        // Первичной загрузки нет: с нуля, с индикатором.
+        setLoading(projectKey, true);
+        void api.tasks.featuresIndex(projectKey || undefined)
+          .then(index => {
+            // Ответ последний для проекта — применяем: в живой срез, если проект
+            // ещё активен, иначе — в кэш (пришёл после ухода, но это свежий ответ).
+            if (_seq.get(projectKey) !== seq) return;
+            applyFresh(projectKey, index);
+          })
+          .catch(() => {
+            // Сбой первичной: EMPTY и «готово» — показываем «фич нет», а не вечную загрузку.
+            if (_seq.get(projectKey) !== seq) return;
+            if ((_activeCount.get(projectKey) ?? 0) > 0) setIndex(projectKey, EMPTY);
+          })
+          .finally(() => {
+            if ((_activeCount.get(projectKey) ?? 0) > 0) setLoading(projectKey, false);
+          });
+      }
     }
     return () => {
       onUnmount(projectKey);
@@ -212,10 +296,24 @@ export function useFeaturesIndex(projectId: string | null): FeaturesIndex {
   return index;
 }
 
+// Хук: готов ли срез проекта — живой или из кэша последнего ответа.
+// true и при пустом индексе (фич нет / сбой первичной загрузки): экран отличает
+// «фич нет» от «ещё не загружено». Тот же канал подписки, что у useFeaturesIndex.
+export function useFeaturesIndexReady(projectId: string | null): boolean {
+  const projectKey = projectId ?? '';
+  return useSyncExternalStore(
+    subscribeIndex,
+    () => hasSliceFor(projectKey),
+    () => hasSliceFor(projectKey),
+  );
+}
+
 // Тестовые швы (не публичное API): сброс стора + прямой доступ к внутреннему состоянию.
 export const __test = {
   reset() {
     _indexByProject = new Map();
+    _cache = new Map();
+    _seq.clear();
     _loading.clear();
     _activeCount.clear();
     _pending.forEach(t => clearTimeout(t));
@@ -226,6 +324,9 @@ export const __test = {
   setIndex,
   clearIndex,
   snapshotFor,
+  ready: hasSliceFor,
+  // Снимок кэша для проверок (копия Map; значения — те же ссылки срезов).
+  cache: () => new Map(_cache),
   setLoading,
   isIndexLoading,
   featureOf,

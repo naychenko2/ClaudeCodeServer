@@ -98,9 +98,14 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
                 _log.LogDebug("Поллер метрик локального стенда: движок LocalEngines:{Name} совпадает с именем основной дорожки — пропущен", engine.Name);
                 continue;
             }
+            var sameUrl = _tracks.Skip(1).FirstOrDefault(t => string.Equals(UrlOf(t.Name, engines), engine.Spec.MetricsUrl, StringComparison.OrdinalIgnoreCase));
+            if (sameUrl is not null)
+                _log.LogWarning("Поллер метрик локального стенда: движки LocalEngines:{Name} и LocalEngines:{Other} указывают на один MetricsUrl — их дорожки покажут одну и ту же картину", engine.Name, sameUrl.Name);
             AddTrack(BuildEngineTrack(engine));
         }
     }
+
+    private static string? UrlOf(string name, NamedLocalEngines engines) => engines.Get(name)?.Spec.MetricsUrl;
 
     // Дорожка именованного движка: источник и тип движка в снимке — по явному MetricsEngine (Б3):
     // "vllm" → VllmMetricsSource, иначе LlamaServerMetricsSource (дефолт spec — "llama-server").
@@ -259,7 +264,7 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         var engine = local.Stats.Engine.Trim().ToLowerInvariant();
         var model = FirstModel(local);
         var tensorParallel = local.Stats.TensorParallel;
-        if (engine == "vllm" && !string.IsNullOrWhiteSpace(local.Stats.MetricsUrl))
+        if (engine == LocalEngineSpec.EngineKindVllm && !string.IsNullOrWhiteSpace(local.Stats.MetricsUrl))
             return (new VllmMetricsSource(_httpFactory.CreateClient(HttpClientName), local.Stats.MetricsUrl), engine, model, tensorParallel, true);
         // llama-server / ollama / пусто — заглушка (метрики не отдают Prometheus).
         return (new NullEngineMetricsSource(), string.IsNullOrEmpty(engine) ? null : engine, model, tensorParallel, true);

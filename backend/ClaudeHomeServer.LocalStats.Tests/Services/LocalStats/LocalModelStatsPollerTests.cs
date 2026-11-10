@@ -1554,12 +1554,11 @@ public class LocalModelStatsPollerTests
         interval.Should().Be(h.Options.CurrentValue.ActivePollInterval, "busy-дорожка опрашивается активным интервалом");
     }
 
-    // (53) c4: битый ответ vLLM-дорожки → down, исключение из дорожки не выходит
-    // (VllmMetricsSource гасит HTTP-сбой в null); следующий тик с валидным ответом даёт
-    // снимок и снимает DownSince.
-    // Мутация «снять try/catch в VllmMetricsSource» → по этому же предикату краснеет
-    // VllmMetricsSourceTests.ReadAsync_HttpError_ReturnsNull (здесь дорожка держит
-    // исключение своим catch — EngineStatsTrack.cs:139 — статус тот же).
+    // (53) c4: битый ответ vLLM-дорожки → down, исключение из дорожки не выходит;
+    // следующий тик с валидным ответом даёт снимок и снимает DownSince.
+    // Тест проверяет именно дорожку: исключение держит её собственный catch
+    // (EngineStatsTrack.cs:139), а сам HTTP-сбой гасит VllmMetricsSource — это отдельно
+    // проверяет VllmMetricsSourceTests.ReadAsync_HttpError_ReturnsNull.
     [Fact]
     public async Task VllmEngineTrack_BrokenMetrics_RecoversOnNextTick()
     {
@@ -1594,6 +1593,21 @@ public class LocalModelStatsPollerTests
             await _gate.Task.WaitAsync(ct);
             return new EngineSnapshot { Running = 7 };
         }
+    }
+
+    // Два движка с одним MetricsUrl: дорожки строятся оба, но в лог уходит Warning.
+    [Fact]
+    public void TwoEnginesWithSameMetricsUrl_LogsWarning()
+    {
+        var engines = EnginesFromConfig(
+            ("a-engine", "http://127.0.0.1:18040/metrics", null),
+            ("b-engine", "http://127.0.0.1:18040/metrics", null));
+        var log = new CapturingLogger<LocalModelStatsPoller>();
+        var h = new Harness(engines: engines, log: log);
+
+        h.Poller.Find("a-engine").Should().NotBeNull();
+        h.Poller.Find("b-engine").Should().NotBeNull();
+        log.Entries.Should().ContainSingle(e => e.Level == LogLevel.Warning && e.Message.Contains("a-engine") && e.Message.Contains("b-engine"));
     }
 
     // Источник, который бросает посторонний OperationCanceledException (не отмена stoppingToken).

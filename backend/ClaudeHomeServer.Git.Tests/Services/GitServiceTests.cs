@@ -202,6 +202,85 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
             .Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
     }
 
+    // ---------- Содержимое файла из ветки по имени (FS-B2: запасной путь GET content?taskId=) ----------
+    // Worktree задачи снесли после мержа/отказа, файл остался в комменте ветки, пока жива
+    // сама ветка. Ветки здесь создаются RawGit(«branch», а не checkout -b): тест не должен
+    // двигать HEAD репозитория — остальные тесты этой же фиксации видят именно main.
+
+    [Fact]
+    public async Task FileAtBranch_ВеткаЖива_ЧитаетИзКомментаВетки()
+    {
+        await File.WriteAllTextAsync(Path.Combine(_repo, "doc.md"), "из коммита ветки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "материал фичи");
+        await RawGit("branch", "feat/material");
+
+        var res = await _git.FileAtBranchAsync(null, _repo, "feat/material", "doc.md");
+
+        res.Status.Should().Be(GitBranchFileStatus.Found);
+        res.Content.Should().Be("из коммита ветки\n");
+    }
+
+    // Ветки нет — отдельный статус: фронту нужен признак «удалён вместе с веткой», а не
+    // безликий 404. Показатель именно этого исхода: a.txt в HEAD есть, и всё равно BranchDeleted
+    // — до show дело не дошло.
+    [Fact]
+    public async Task FileAtBranch_ВеткиНет_BranchDeleted()
+    {
+        var res = await _git.FileAtBranchAsync(null, _repo, "feat/never-existed", "a.txt");
+
+        res.Status.Should().Be(GitBranchFileStatus.BranchDeleted, "ветки нет — это отдельный исход, не «файла нет»");
+        res.Content.Should().BeNull();
+    }
+
+    // Ветка жива, но файла в её комменте нет (ветка создана ДО коммита с файлом): обычный
+    // «нет такого файла», не branch_deleted — ветку-то клиент не удалял.
+    [Fact]
+    public async Task FileAtBranch_ФайлаВКомментеВеткиНет_Missing()
+    {
+        await RawGit("branch", "feat/old");
+        await File.WriteAllTextAsync(Path.Combine(_repo, "new.md"), "позже ветки\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "коммит уже после ветки");
+
+        var res = await _git.FileAtBranchAsync(null, _repo, "feat/old", "new.md");
+
+        res.Status.Should().Be(GitBranchFileStatus.Missing);
+        res.Content.Should().BeNull();
+    }
+
+    // Бинарь в ветке — не текст: тот же признак NUL, что у FileAtCommitAsync, но здесь он
+    // различим от «файла нет» (у FileAtCommitAsync оба сводятся к null).
+    [Fact]
+    public async Task FileAtBranch_БинарьВВетке_Binary()
+    {
+        await File.WriteAllBytesAsync(Path.Combine(_repo, "raw.bin"), [1, 2, 0, 3]);
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "бинарный файл");
+        await RawGit("branch", "feat/bin");
+
+        var res = await _git.FileAtBranchAsync(null, _repo, "feat/bin", "raw.bin");
+
+        res.Status.Should().Be(GitBranchFileStatus.Binary);
+        res.Content.Should().BeNull();
+    }
+
+    // Имя ветки из записи задачи обязано выглядеть как ref ДО запуска git — те же три формы,
+    // что отбивали Log/Checkout/RefExists (находка приёмки волны 3.1): «refs/heads/» к имени
+    // добавляется ПОСЛЕ валидации, иначе «--upload-pack=x» перестал бы быть ведущим «-» и git
+    // прочёл бы его как имя рефа, а не как флаг. Доказательство «git не запускался» — сам
+    // отказ с нашим текстом: без валидации был бы статус BranchDeleted, не GitCommandException.
+    [Theory]
+    [InlineData("--upload-pack=x")]
+    [InlineData("a..b")]
+    [InlineData("../x")]
+    public async Task FileAtBranch_ИмяВеткиНеКакRef_ОтказБезЗапускаGit(string branch)
+    {
+        var act = () => _git.FileAtBranchAsync(null, _repo, branch, "a.txt");
+
+        await act.Should().ThrowAsync<GitCommandException>().WithMessage("*Некорректная ревизия*");
+    }
+
     // ---------- История файла: путь — не маска ----------
 
     [Fact]

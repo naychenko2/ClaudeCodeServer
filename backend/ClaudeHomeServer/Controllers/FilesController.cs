@@ -225,7 +225,30 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 var task = OwnedTaskForRead(p, taskId);
                 if (task is null) return NotFound(new { error = "Задача не найдена" });
                 var hitTask = await locator.LocateAsync(TenantId, p, path, task.WorktreePath);
-                if (hitTask is null) return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
+                if (hitTask is null)
+                {
+                    // FS-B2: последний шаг порядка «анкер → main → прочие деревья → git show».
+                    // Файла нет ни в одном живом дереве проекта, а у задачи есть WorktreeBranch:
+                    // рабочий каталог снесли после мержа/отказа, а файл остался в коммите ветки,
+                    // пока жива сама ветка (§7.2 п.3, вариант Б §7.3). Читаем git show по этой
+                    // ветке: имя берётся ТОЛЬКО из задачи (параметр branch в запросе игнорируется),
+                    // корень — корень проекта (ref живёт в общем репозитории, дерево не нужен).
+                    // Только текст: бинарь — 404 reason=binary, ветки нет — 404 reason=branch_deleted
+                    // (фронту подпись «удалён вместе с веткой»), прочее — обычный 404. Нет подсистемы
+                    // Git — фолбэка нет, как с featureId (fail-closed).
+                    if (git is not null && !string.IsNullOrWhiteSpace(task.WorktreeBranch))
+                    {
+                        var atBranch = await git.FileAtBranchAsync(
+                            TenantId, p.RootPath, task.WorktreeBranch, path, HttpContext.RequestAborted);
+                        if (atBranch.Status == GitBranchFileStatus.Found)
+                            return Ok(new { content = atBranch.Content, branch = task.WorktreeBranch, fromCommit = true });
+                        if (atBranch.Status == GitBranchFileStatus.BranchDeleted)
+                            return NotFound(new { reason = "branch_deleted" });
+                        if (atBranch.Status == GitBranchFileStatus.Binary)
+                            return NotFound(new { reason = "binary" });
+                    }
+                    return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
+                }
                 root = hitTask.Root;
                 branch = hitTask.Branch;
                 isAnchor = hitTask.IsAnchor;

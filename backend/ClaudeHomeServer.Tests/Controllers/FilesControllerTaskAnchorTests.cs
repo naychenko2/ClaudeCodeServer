@@ -515,4 +515,135 @@ public class FilesControllerTaskAnchorTests : IClassFixture<TestWebApplicationFa
 
         resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    // ---- FS-B2: запасной путь — материал из коммита ветки задачи, когда дерева уже нет ----
+    // Worktree снесли после мержа/отказа от ветки, файл остаётся в коммите ветки, пока жива
+    // сама ветка (§7.2 п.3, вариант Б §7.3). Арранжи делаются прямым git: коммит в дерево
+    // задачи и снос ветки — то, чего сервис по этим путям сам не делает.
+
+    // Прямой git (идентичность — ключами -c, чтобы тест не зависел от глобальной настройки
+    // git на машине, как GitFixture).
+    private static void GitRun(string dir, params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = dir,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = System.Diagnostics.Process.Start(psi)!;
+        var err = proc.StandardError.ReadToEnd();
+        if (!proc.WaitForExit(30_000)) throw new InvalidOperationException("git не завершился: " + string.Join(' ', args));
+        if (proc.ExitCode != 0) throw new InvalidOperationException($"git {string.Join(' ', args)} в {dir}: {err}");
+    }
+
+    // Зафиксировать содержимое дерева задачи коммитом: файл должен выжить в ветке, когда
+    // каталог снесут.
+    private static void CommitTree(string dir)
+    {
+        GitRun(dir, "add", "-A");
+        GitRun(dir, "-c", "user.name=тест", "-c", "user.email=test@test", "commit", "-q", "-m", "материал фичи");
+    }
+
+    private GitService Git => _factory.Services.GetRequiredService<GitService>();
+
+    [Fact]
+    public async Task GetContent_TaskId_ДеревоСнесли_ВеткаЖива_200_FromCommit()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("brc");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "brc");
+        File.WriteAllText(Path.Combine(worktree, "doc.md"), "из коммента ветки");
+        CommitTree(worktree);
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        Directory.Delete(worktree, recursive: true);
+
+        var resp = await _client.GetAsync(Url(projectId, "doc.md", taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, "дерева нет, а файл живёт в комменте ветки");
+        var body = await JsonOf(resp);
+        body.GetProperty("content").GetString().Should().Be("из коммента ветки");
+        body.GetProperty("branch").GetString().Should().Be(branch);
+        body.GetProperty("fromCommit").GetBoolean().Should().BeTrue();
+    }
+
+    // Ветки тоже нет (добитая после мержа): отдельный признак для подписи фронта «удалён
+    // вместе с веткой», и это 404, а не 500. Снос ветки возможен только после worktree prune:
+    // git не отдаёт ветку, «используемую» несуществующим деревом (проверено на живом репо).
+    [Fact]
+    public async Task GetContent_TaskId_ВеткаУдалена_404_BranchDeleted_Без500()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("brdel");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "brdel");
+        File.WriteAllText(Path.Combine(worktree, "doc.md"), "было в ветке");
+        CommitTree(worktree);
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        Directory.Delete(worktree, recursive: true);
+        await Git.WorktreePruneAsync(null, mainRoot);
+        GitRun(mainRoot, "branch", "-D", branch);
+
+        var resp = await _client.GetAsync(Url(projectId, "doc.md", taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await JsonOf(resp)).GetProperty("reason").GetString().Should().Be("branch_deleted");
+    }
+
+    // Бинарь в комменте ветки — не текст: отдельный reason, чтобы фронт не рисовал пустой
+    // редактор там, где читать нечего.
+    [Fact]
+    public async Task GetContent_TaskId_БинарьВКомментеВетки_404_ReasonBinary()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("brbin");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "brbin");
+        File.WriteAllBytes(Path.Combine(worktree, "raw.bin"), [1, 2, 0, 3]);
+        CommitTree(worktree);
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        Directory.Delete(worktree, recursive: true);
+
+        var resp = await _client.GetAsync(Url(projectId, "raw.bin", taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "не текст — не отдаём");
+        (await JsonOf(resp)).GetProperty("reason").GetString().Should().Be("binary");
+    }
+
+    // Ветка берётся только из задачи: клиентский ?branch= не читается вовсе — живой файл в
+    // названной клиентом ветке остаётся непрочитанным (задача ветки не знает → фолбэка нет).
+    [Fact]
+    public async Task GetContent_TaskId_ПараметрBranchИгнорируется()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("brparam");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "brparam");
+        File.WriteAllText(Path.Combine(worktree, "doc.md"), "из ветки");
+        CommitTree(worktree);
+        var taskId = await CreateTaskAsync(projectId, worktree, null);
+        Directory.Delete(worktree, recursive: true);
+
+        var resp = await _client.GetAsync(Url(projectId, "doc.md", taskId) + "&branch=" + Uri.EscapeDataString(branch));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "ветку просил клиент, а не задача");
+        (await JsonOf(resp)).TryGetProperty("reason", out _).Should().BeFalse("фолбэк не запускался");
+    }
+
+    // Порядок «анкер → main → прочие деревья → git show» целиком: файл есть и в main, и в
+    // комменте снесённой ветки — читается живое дерево, а не коммент.
+    // Мутация: перенести ветку git show в GetContent перед locator.LocateAsync — тест краснеет.
+    [Fact]
+    public async Task GetContent_TaskId_ДеревоСнесли_ФайлВMain_ЧитаетMainНеВетку()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("brorder");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "brorder");
+        File.WriteAllText(Path.Combine(worktree, "doc.md"), "из коммента ветки");
+        CommitTree(worktree);
+        File.WriteAllText(Path.Combine(mainRoot, "doc.md"), "из main");
+        CommitTree(mainRoot);
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        Directory.Delete(worktree, recursive: true);
+
+        var resp = await _client.GetAsync(Url(projectId, "doc.md", taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await JsonOf(resp);
+        body.GetProperty("content").GetString().Should().Be("из main", "живое дерево раньше git show");
+        body.TryGetProperty("fromCommit", out _).Should().BeFalse("это обычный путь локатора");
+    }
 }

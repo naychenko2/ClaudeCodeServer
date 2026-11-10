@@ -44,6 +44,10 @@ ComfyUI, аренде от CCS или чужом GPU-процессе и воз�
 `GET /state` — `{"engine": "ready|yielded|starting|waiting-vram", "reasons", счётчики, quiet_left_s, leases}`.
 До 01.11.2026 поле состояния называлось `bonsai` — CCS читает и его, если `engine` нет.
 
+Для vLLM арбитру нужны две переменные окружения: `ARBITER_ENGINE_HEALTH=http://127.0.0.1:18020/health`
+(дефолт в `gpu-arbiter.py:28` — прежний `:18030/health`) и `ARBITER_OWN_PROCS` с именем процесса vLLM
+(иначе арбитр примет его за чужой процесс на карте и сам же уступит).
+
 ## CCS
 
 Секции — в машинном `appsettings.Local.json` (в `.gitignore`); образец —

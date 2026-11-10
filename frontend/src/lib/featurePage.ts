@@ -256,6 +256,7 @@ function fetchPage(fid: string, initial: boolean, signal?: AbortSignal, expand =
 function setPage(fid: string | null) {
   if (fid !== _fid) {
     _tab = DEFAULT_TAB;
+    _mainTab = DEFAULT_MAIN_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
     _eventsLoaded = false;
@@ -301,10 +302,14 @@ export function getFeaturePageTab(): FeaturePageTab {
 }
 
 // Установить вкладку (no-op при том же значении — лишний emit не плодим).
+// FS-FTABS: старый выбор всегда имеет и мейн-вкладку — перевод по таблице
+// toMainTab. Когда мейн-значение не меняется (chats→stats — обе «Разбор»),
+// setFeatureMainTab ранне выходит: лишнего уведомления подписчикам нет.
 export function setFeaturePageTab(t: FeaturePageTab) {
   if (_tab === t) return;
   _tab = t;
   emit();
+  setFeatureMainTab(toMainTab(t));
 }
 
 // Хук: выбранная вкладка страницы (тот же стор, что и данные).
@@ -313,6 +318,67 @@ export function useFeaturePageTab(): FeaturePageTab {
     subscribe,
     () => _tab,
     () => _tab,
+  );
+}
+
+// === Мейн-вкладка «Ход · Материалы · Разбор» (FS-FTABS, макет v4) ===
+//
+// По макету v4 (docs/mockups/feature-page-simplify-v4-clickable.md §7) страница
+// живёт на трёх вкладках, и у «Разбора» сегментов нет: стор сегмента не нужен,
+// якорь не храним — вкладка всегда открывается сверху.
+//
+// Стор живёт рядом со старым `_tab`, ничего не ломая, до FS-FP: там FeaturePage
+// и FeaturePageTabs перейдут на этот стор, а старый снимется. Умолчание —
+// 'progress'; сброс — там же, где у `_tab` (смена fid, __test.reset).
+export type FeatureMainTab = 'progress' | 'materials' | 'review';
+
+// Названия мейн-вкладок: ОДИН словарь (тот же порядок, что у FEATURE_TAB_LABEL).
+export const FEATURE_MAIN_TAB_LABEL: Record<FeatureMainTab, string> = {
+  progress: 'Ход',
+  materials: 'Материалы',
+  review: 'Разбор',
+};
+
+// Перевод старых значений в новые — строго по таблице FS-FTABS:
+// timeline/tasks → progress, plans → materials, chats/events/stats → review.
+// Полного покрытия union — нет: новая вкладка FeaturePageTab без строки здесь
+// не соберётся (tsc), перевод не «провалится» молча.
+export function toMainTab(t: FeaturePageTab): FeatureMainTab {
+  switch (t) {
+    case 'timeline':
+    case 'tasks':
+      return 'progress';
+    case 'plans':
+      return 'materials';
+    case 'chats':
+    case 'events':
+    case 'stats':
+      return 'review';
+  }
+}
+
+const DEFAULT_MAIN_TAB: FeatureMainTab = 'progress';
+let _mainTab: FeatureMainTab = DEFAULT_MAIN_TAB;
+
+// Текущая мейн-вкладка без подписки.
+export function getFeatureMainTab(): FeatureMainTab {
+  return _mainTab;
+}
+
+// Установить мейн-вкладку (no-op при том же значении — подписчики уведомляются
+// только при реальной смене, как setFeaturePageTab).
+export function setFeatureMainTab(t: FeatureMainTab) {
+  if (_mainTab === t) return;
+  _mainTab = t;
+  emit();
+}
+
+// Хук: мейн-вкладка страницы (тот же стор, что и данные).
+export function useFeatureMainTab(): FeatureMainTab {
+  return useSyncExternalStore(
+    subscribe,
+    () => _mainTab,
+    () => _mainTab,
   );
 }
 
@@ -469,6 +535,7 @@ export const __test = {
     _fid = null;
     _pending = null;
     _tab = DEFAULT_TAB;
+    _mainTab = DEFAULT_MAIN_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
     _eventsLoaded = false;
@@ -483,6 +550,9 @@ export const __test = {
   stageFocus: () => _stageFocus,
   // Выбранная вкладка (M4: клик по точке ставит 'timeline' явно).
   tab: () => _tab,
+  // Мейн-вкладка (FS-FTABS) и подписка на emit — для счётчика уведомлений в тестах.
+  mainTab: () => _mainTab,
+  subscribe,
   setState,
   state: () => _state,
   fid: () => _fid,

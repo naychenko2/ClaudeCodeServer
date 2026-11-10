@@ -291,6 +291,41 @@ public class WikiKeeperPromptsTests
 
         Assert.Contains("4. NUMBERS.", prompt);
         Assert.Contains("must stand verbatim in a quote", prompt);
+        // Сами запреты — не только заголовок правила.
+        Assert.Contains("A number not in the quotes", prompt);
+        // Подстроки не пересекают перенос строки промпта.
+        Assert.Contains("computed yourself (difference, average, rate) is not allowed", prompt);
+    }
+
+    [Fact]
+    public void Synth_УрокИзСжатойСтроки_РазрешёнПриЦитатеИзОбычной_ЦитироватьСамуюСтрокуНельзя()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.DoesNotContain("never base a claim", prompt);
+        Assert.Contains("never quote them", prompt);
+        Assert.Contains("You may derive a lesson from such a line only if the", prompt);
+        Assert.Contains("backed by a verbatim quote from an ordinary line", prompt);
+    }
+
+    [Fact]
+    public void Synth_ВердиктыПротиворечия_ПоПереченюAdr039_ПоРусски()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        foreach (var verdict in new[] { "\"ошибка\"", "\"разные периоды\"", "\"отзыв\"", "\"настоящее противоречие\"" })
+            Assert.Contains(verdict, prompt);
+        Assert.DoesNotContain("open contradiction", prompt);
+        Assert.DoesNotContain("\"error\"", prompt);
+    }
+
+    [Fact]
+    public void Synth_СхемаПоказываетДиапазонЦитат_НеОдну()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("<verbatim quote 1>", prompt);
+        Assert.Contains("<verbatim quote 3, optional>", prompt);
     }
 
     [Fact]

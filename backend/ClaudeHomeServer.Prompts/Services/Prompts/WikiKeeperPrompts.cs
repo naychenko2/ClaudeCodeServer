@@ -275,7 +275,9 @@ public static class WikiKeeperPrompts
             "done / in progress / accepted", task and card ids, worktree paths, "reconciliation:
             clean", alarms and waits, document edits item by item, assistant proposals the human
             did not confirm. Lines of the source marked "[процесс] …" are a compressed trace of
-            process: use them only as context, never quote them and never base a claim on them.
+            process: never quote them. You may derive a lesson from such a line only if the
+            lesson is backed by a verbatim quote from an ordinary line of the source; if there
+            is nothing to back it with, there is no operation.
             The criterion: is it true and useful a month later to someone who never saw the
             chat? The filter applies to the THEME, not to a line: the event "verdict returned"
             is process, but the lesson from it ("the Slow trait does not cure a flaky test, it
@@ -297,8 +299,9 @@ public static class WikiKeeperPrompts
                periods or measuring windows; an error and its correction; a withdrawn earlier
                wording; a hypothesis against a fact; a plan against a fact), or the source
                contradicts a statement of an existing page below, use "conflict": the claim
-               states both sides and the verdict — "error", "different periods", "withdrawal"
-               or "open contradiction" — and what is current; the quotes cover both sides.
+               states both sides and the verdict — "ошибка", "разные периоды", "отзыв" or
+               "настоящее противоречие" (write the verdict word in the text of the claim, in
+               the language of the source) — and what is current; the quotes cover both sides.
                "target" is the statement of the existing page, copied exactly as it is worded
                there, or the title of the page if the conflict is within the source. A
                clarification is not a contradiction: if in doubt, do not use "conflict".
@@ -345,7 +348,7 @@ public static class WikiKeeperPrompts
             {"outcome":"ok","operations":[{"op":"create|append|conflict|link",
             "kind":"decision|rule|term|state","page":"<title>",
             "claim":"<own words, up to 600 characters>",
-            "quotes":["<verbatim quote from the source>"],
+            "quotes":["<verbatim quote 1>","<verbatim quote 2, optional>","<verbatim quote 3, optional>"],
             "target":"<only for conflict and link>","as_of":"YYYY-MM-DD|unknown"}]}
 
             SECTION CATALOG (data — the pages you may align to).

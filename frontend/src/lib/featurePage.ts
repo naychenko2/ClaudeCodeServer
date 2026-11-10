@@ -136,6 +136,30 @@ export interface FeatureBriefActive {
   reason: string | null;
 }
 
+// «Нужно от тебя» (FS-E4, бэк FeatureBrief.BriefAsk, FeatureBrief.cs:148): одна фраза
+// с источником тревоги. source — вид тревоги как есть (FeatureAttention.kind: wait | merge |
+// stopped); since/personaId/sessionId — поля тревоги как есть. Бэковые DateTime?/string?
+// сериализуют null-ом — `string | null` по образцу FeatureAttention (nullable-терпимость).
+export interface FeatureAsk {
+  text: string;
+  source: 'wait' | 'merge' | 'stopped';
+  since?: string | null;
+  personaId?: string | null;
+  sessionId?: string | null;
+}
+
+// «Срок» (FS-V2, бэк FeatureBrief.BriefEta, FeatureBrief.cs:156): ОДИН срок вместо выбора
+// карточки между note.estimate и estimate: выбор источника делает бэк (note → history),
+// карточка не выбирает сама. minutes есть всегда (eta null ⇔ числа нет — «одного срока» без
+// числа не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
+// clockStopped — почему даты нет при живом сроке (wait | stopped | null).
+export interface FeatureEta {
+  minutes: number;
+  endsAt?: string | null;
+  source: 'note' | 'history';
+  clockStopped?: 'wait' | 'stopped' | null;
+}
+
 // Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
 // `GET /api/tasks/features/{featureId}` (в `FeaturePage` — опционально).
 export interface FeatureBrief {
@@ -164,6 +188,11 @@ export interface FeatureBrief {
   // Карточка читает его в строке «обновлено N назад» (briefUpdatedText). null — событий
   // состояния нет вовсе (тестовая фикстура бэка); у живой фичи заполнено.
   updatedAt?: string | null;
+  // «Нужно от тебя» (FS-E4): null — тревоги нет (бэк AskOf: Attention null).
+  ask?: FeatureAsk | null;
+  // «Срок» (FS-V2): один срок с источником; null — ни одной оценки нет. Выбор источника
+  // (note → history) делает бэк — карточка фронта не выбирает сама.
+  eta?: FeatureEta | null;
   computedAt: string;
 }
 

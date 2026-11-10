@@ -64,6 +64,11 @@ export interface FeatureTask {
   // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
   // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.
   note?: FeatureTaskNote | null;
+  // Срок первой оценки оркестратора после старта (бэк: `TaskItem.InitialEtaMinutes`,
+  // пишется один раз, TaskManager.cs:1816): нужен карточке фичи в шапке чата (FS-FCb,
+  // «обещали ≈ N»); бэк отдаёт его в run.epic — полном TaskItem. Аддитивное: старые
+  // задачи его не несут.
+  initialEtaMinutes?: number | null;
 }
 
 // Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу

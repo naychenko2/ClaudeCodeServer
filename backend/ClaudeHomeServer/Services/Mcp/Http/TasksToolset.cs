@@ -1701,13 +1701,13 @@ public sealed class TasksToolset(
                     ["featureNote"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять вместе с оценкой. Исполнитель откажет. Пиши в каждом ходе с featureEstimate.",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять с оценкой. Пиши в каждом ходе с featureEstimate.",
                     },
                     ["featureEstimate"] = FeatureEstimateSchema(),
                     ["awaitingHuman"] = new JsonObject
                     {
                         ["type"] = "object",
-                        ["description"] = "Ждёт человека: {ask} — чего ждём (1–120 симв.), null — снять. Since ставит сервер.",
+                        ["description"] = "Ждёт человека: {ask} — запрос (≤120); null — снять; Since ставит сервер.",
                         ["properties"] = new JsonObject
                         {
                             ["ask"] = new JsonObject { ["type"] = "string" },
@@ -1718,7 +1718,7 @@ public sealed class TasksToolset(
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "В другой проект (tasks_list_projects); \"\" — личная",
+                        ["description"] = "В другой проект; \"\" — личная",
                     },
                 },
             });
@@ -1906,14 +1906,14 @@ public sealed class TasksToolset(
     private static JsonObject ResultMarkdownSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Итог выполнения (markdown), заменяет целиком; \"\" — очистить",
+        ["description"] = "Итог (markdown), заменяет целиком; \"\" — очистить",
     };
 
     private static JsonObject LinkedFilesSchema() => new()
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Файлы проекта (от корня, через /); заменяют список целиком",
+        ["description"] = "Файлы проекта (от корня, через /), заменяют целиком",
     };
 
     private static JsonObject ColumnIdSchema() => new()
@@ -2062,7 +2062,7 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — причина расхождения; процента нет — его берёт трекер.",
+        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — при расхождении; процент берёт трекер.",
         ["properties"] = new JsonObject
         {
             ["remaining"] = new JsonObject

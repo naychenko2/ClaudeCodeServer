@@ -28,6 +28,7 @@ public class NotesWikiSourceTests : IDisposable
     private readonly string _dir;     // dataDir
     private readonly string _vault;   // {dir}/notes/{User} — личный vault
     private readonly string _pages;   // {dir}/wiki/{User}/pages — корень источника wiki
+    private readonly IConfiguration _config; // тот же конфиг, что у сервиса: нужен контроллеру (dataDir для учёта чтений R4)
     // Гейт фич-флагов (Core-шов): источник wiki отдаётся только при включённом llm-wiki
     // (хвост ревью S2e). Тесты этого файла — про заведённую вику с включённым флагом;
     // выключенный флаг проверяется отдельно, в разделе 6.
@@ -46,15 +47,15 @@ public class NotesWikiSourceTests : IDisposable
         Directory.CreateDirectory(_vault);
         _pages = WikiPaths.Pages(_dir, User);
 
-        var config = new ConfigurationBuilder()
+        _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var projects = new ProjectManager(config, users, new AppSettingsService(config));
-        _sut = new NotesService(projects, config, NullLogger<NotesService>.Instance, flags: _flags);
-        _kb = new NotesKnowledgeService(new NoopKnowledgeIndex(), _sut, users, config,
+        var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _sut = new NotesService(projects, _config, NullLogger<NotesService>.Instance, flags: _flags);
+        _kb = new NotesKnowledgeService(new NoopKnowledgeIndex(), _sut, users, _config,
             NullLogger<NotesKnowledgeService>.Instance);
-        _ai = new NotesAiService(_sut, config, new NoopCheapRunner());
+        _ai = new NotesAiService(_sut, _config, new NoopCheapRunner());
         _noteTasks = new NoteTaskSyncService(_sut, new NoopNoteTaskBridge(), projects, _kb,
             new RecordingNotesNotifier(), _noteTasksLog);
     }
@@ -285,7 +286,7 @@ public class NotesWikiSourceTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", User)], "test"));
-        return new NotesController(_sut, _kb, _ai, _noteTasks, new RecordingNotesNotifier())
+        return new NotesController(_sut, _kb, _ai, _noteTasks, new RecordingNotesNotifier(), _config)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };

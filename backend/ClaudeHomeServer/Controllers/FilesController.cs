@@ -168,7 +168,7 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
 
     [HttpGet("content")]
     [ProjectScope]
-    public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null, [FromQuery] string? sessionId = null)
+    public async Task<IActionResult> GetContent(string projectId, [FromQuery] string path, [FromQuery] string? featureId = null, [FromQuery] string? sessionId = null, [FromQuery] string? taskId = null)
     {
         try
         {
@@ -185,6 +185,11 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
             // WorktreePath) или «дерево заявлено, но его нет в worktree list» (сносили после
             // мержа) — НЕ 404, а поиск по main и остальным worktree; ответ несёт branch и
             // isAnchor, фолбэк не тихий. Без параметров — корень проекта (прежнее поведение).
+            // FS-B1a: ?taskId= — третий потребитель локатора: анкер — WorktreePath задачи,
+            // поиск и ответ — те же, что у ветки sessionId. Задача — среди видимых владельцу
+            // и этого проекта (OwnedTaskForRead), иначе 404; задача без дерева — поиск с main,
+            // как в ChatTreeRootForAsync. При нескольких параметрах порядок веток:
+            // featureId → sessionId → taskId (каждая называет свой контекст).
             string? root;
             string? branch = null;
             bool isAnchor = false;
@@ -208,6 +213,24 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                 isAnchor = hit.IsAnchor;
                 // TAIL-ROOTS-GATE: то же по дереву, из которого реально читаем (EffectiveRoot
                 // чата / выбранный локатором worktree), до чтения и до ETag
+                if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
+            }
+            else if (!string.IsNullOrEmpty(taskId))
+            {
+                // FS-B1a: ?taskId= — дерево автора задачи (материал фичи лежит в её worktree,
+                // а дерево эпика с ?featureId= есть у единицы эпиков). «Нет задачи» (чужая,
+                // другого проекта, несуществующая) — 404; «задача без дерева» — поиск с main,
+                // как в ChatTreeRootForAsync. Дальше — та же ветка локатора, что у sessionId:
+                // анкер → main → прочие worktree, ответ несёт branch/isAnchor.
+                var task = OwnedTaskForRead(p, taskId);
+                if (task is null) return NotFound(new { error = "Задача не найдена" });
+                var hitTask = await locator.LocateAsync(TenantId, p, path, task.WorktreePath);
+                if (hitTask is null) return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
+                root = hitTask.Root;
+                branch = hitTask.Branch;
+                isAnchor = hitTask.IsAnchor;
+                // TAIL-ROOTS-GATE: то же по дереву, из которого реально читаем (анкер задачи /
+                // выбранный локатором worktree), до чтения и до ETag
                 if (ForeignPrivateDenied(root, path) is { } treeDenied) return treeDenied;
             }
             else root = p.RootPath;
@@ -289,16 +312,24 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         return await TreeRootForAsync(project, epic.WorktreePath);
     }
 
-    // W4-LINK-B: дерево, заявленное задачей, когда у самого чата своего дерева нет. Задачи
-    // нет (несуществующая/чужая/другой проект) — null. Путь не проверяется здесь: анкер
-    // проверяет локатор (см. ChatTreeRootForAsync).
-    private string? TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId)
+    // FS-B1a: ЕДИНАЯ точка поиска задачи для чтения — её зовут ветка ?taskId= и цепочка
+    // задачи в ChatTreeRootForAsync. Задача ищется среди видимых владельцу (GetByOwner), её
+    // ProjectId обязан совпасть с проектом маршрута: чужая задача или задача другого проекта
+    // неотличима от несуществующей — null (клиенту 404, без утечки). Нет подсистемы Tasks —
+    // fail-closed, как у featureId.
+    private ClaudeHomeServer.Models.TaskItem? OwnedTaskForRead(ClaudeHomeServer.Models.Project project, string taskId)
     {
         if (tasks is null || UserId is null) return null;
         var task = tasks.GetByOwner(TenantId).FirstOrDefault(t => t.Id == taskId);
         if (task is null || task.ProjectId != project.Id) return null;
-        return task.WorktreePath;
+        return task;
     }
+
+    // W4-LINK-B: дерево, заявленное задачей, когда у самого чата своего дерева нет. Задачи
+    // нет (несуществующая/чужая/другой проект) — null. Путь не проверяется здесь: анкер
+    // проверяет локатор (см. ChatTreeRootForAsync).
+    private string? TaskTreeRootForAsync(ClaudeHomeServer.Models.Project project, string taskId) =>
+        OwnedTaskForRead(project, taskId)?.WorktreePath;
 
     // Абсолютный путь документа с проверкой, что это просматриваемый документ (pdf/docx/xlsx/pptx).
     // null → клиенту 400 (не документ). Иначе — безопасный абсолютный путь для markitdown.
@@ -480,10 +511,16 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // WriteContentDoorsGuardTests.
     [HttpPut("content")]
     [ProjectScope(Right = ProjectRight.WriteContent)]
-    public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req)
+    public async Task<IActionResult> SaveContent(string projectId, [FromQuery] string path, [FromBody] SaveContentRequest req, [FromQuery] string? taskId = null)
     {
         try
         {
+            // FS-B1a (инвариант): материал по задаче только читается — запись через якорь
+            // задачи не существует. Параметр в запросе записи — некорректный запрос: 400
+            // до любого эффекта (до гейта private, до проверки пути, до замка). featureId в
+            // PUT, как раньше, не несёт дерева и не отвергается (запись идёт в корень).
+            if (!string.IsNullOrEmpty(taskId))
+                return BadRequest(new { error = "Материал по задаче только читается" });
             // S2d-6b-5 (дефект e5d55007): запись в чужое private — 404 до любого эффекта:
             // до проверки пути и до замка. Обе ветки (с If-Match и без) — за гейтом.
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;

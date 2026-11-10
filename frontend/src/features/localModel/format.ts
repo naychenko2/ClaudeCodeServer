@@ -358,17 +358,22 @@ export function whoRows(
   // перемонтирует строки, когда кто-то закончился. Два открытых вызова одного места
   // возможны (две сессии — одно место): второму и далее — номер повтора, ключи не
   // столкуются; префикс place- отделит ключ места от ключа чата при любом имени.
+  // Имя экранируется ('\'→'\\', '#'→'\#'): '#' — разделитель номера повтора, и имя
+  // с ним столкнулся бы с ключом повтора другого имени ('X#2' против второго вызова
+  // 'X', хвост R-F2). Экранирование обоих символов инъективно: разделитель в ключе
+  // всегда неэкранированный, имена с '#' и без остаются разными ключами.
   const seen = new Map<string, number>();
   for (const c of dutyWhoRows(callsNow)) {
     const n = (seen.get(c.place) ?? 0) + 1;
     seen.set(c.place, n);
+    const enc = c.place.replace(/\\/g, '\\\\').replace(/#/g, '\\#');
     rows.push({
       kind: 'place',
       title: c.place,
       linkText: c.linkText,
       queued: c.queued,
       duration: c.duration,
-      key: n === 1 ? `place-${c.place}` : `place-${c.place}#${n}`,
+      key: n === 1 ? `place-${enc}` : `place-${enc}#${n}`,
     });
   }
   if ((othersCount ?? 0) > 0) rows.push({ kind: 'others', count: othersCount!, key: 'others' });

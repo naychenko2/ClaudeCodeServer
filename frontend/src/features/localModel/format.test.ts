@@ -262,6 +262,20 @@ describe('whoRows: строки «Кто сейчас на модели»', () =
     ]);
     expect(rows.map(r => r.key)).toEqual(['place-Заголовок чата', 'place-Заголовок чата#2']);
   });
+
+  // Хвост R-F2: имя места с '#' без экранирования столкнулось бы с ключом повтора
+  // другого имени ('place-X#2' из имени 'X#2' и из второго вызова 'X') — в едином
+  // списке F3 это дублирующий React-ключ. Имена без '#' и '\' ключ не меняют.
+  it('имя места с «#» не коллидирует с номером повтора: имена экранируются', () => {
+    const rows = whoRows(undefined, undefined, undefined, [
+      { place: 'X#2', link: 'engine', durationS: 1 },
+      { place: 'X', link: 'engine', durationS: 1 },
+      { place: 'X', link: 'insurance', durationS: 2 },
+    ]);
+    const keys = rows.map(r => r.key);
+    expect(keys).toEqual(['place-X\\#2', 'place-X', 'place-X#2']);
+    expect(new Set(keys).size).toBe(3);
+  });
 });
 
 // === Короткий статус пункта «Локальные модели» в мобильном меню «⋯» (Ф6, доработка 2) ===

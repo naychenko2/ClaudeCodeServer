@@ -130,7 +130,7 @@ test('сценарий 1 в UI: вкладка второго стенда — �
   await page.goto(`/#/project/${projectId}`);
 
   // Открыть панель «Локальные модели» в правом рельсе.
-  const railBtn = page.locator('button[aria-label="Локальные модели"]');
+  const railBtn = page.locator('button[aria-label^="Локальные модели"]');
   // Значок появляется после лёгкого опроса configured (60 с) — ждём его.
   await expect(railBtn, 'значок панели в рельсе').toBeVisible({ timeout: 120_000 });
   await railBtn.click();
@@ -195,7 +195,7 @@ test('сценарий 6: 360 и 1280 — без горизонтального 
     await page.goto(`/#/project/${projectId}`);
     // Открыть панель: на десктопе — кнопка рельса, на узкой ширине — меню «Ещё».
     // На 1280 панель — кнопка правого рельса, на 360 — пункт меню «Ещё».
-    const rail = page.locator('button[aria-label="Локальные модели"]');
+    const rail = page.locator('button[aria-label^="Локальные модели"]');
     if (await rail.count() > 0 && await rail.first().isVisible()) {
       await rail.first().click();
     } else {
@@ -243,7 +243,7 @@ test('сценарий 3 в UI: «Кто сейчас на модели» — с
   page.on('response', r => { if (r.status() >= 400) bad.push(`${r.status()} ${r.url()}`); });
   await openAsAdmin(page);
   await page.goto(`/#/project/${projectId}`);
-  const railBtn = page.locator('button[aria-label="Локальные модели"]');
+  const railBtn = page.locator('button[aria-label^="Локальные модели"]');
   await expect(railBtn, 'значок панели в рельсе').toBeVisible({ timeout: 120_000 });
   await railBtn.click();
   const panel = page.locator('[role="complementary"][aria-label="Локальные модели"]');

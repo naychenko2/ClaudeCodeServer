@@ -17,7 +17,7 @@ import { Modal, ModalActions, Button, IconButton, Chip } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
 import { FeatureGroupHeader } from './FeatureGroupHeader';
-import { useFeaturesIndex } from '../lib/featuresIndex';
+import { useFeaturesIndex, useFeaturesIndexReady } from '../lib/featuresIndex';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
   SubjectDeleteDialog, SubjectPickMenu, SubjectRenameDialog, SubjectRunBar, SubjectSectionHeader,
@@ -739,6 +739,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const subjectRun = useSubjectRun(project.id, subjectsMode);
   const featuresMode = groupBy === 'features';
   const featuresIndex = useFeaturesIndex(project.id);
+  // Готов ли срез проекта (живой или из кэша последнего ответа): «фич нет» отличается
+  // от «ещё не загружено». До готовности экран рисует строку загрузки, а не «Без фичи».
+  const featuresReady = useFeaturesIndexReady(project.id);
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
   const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());
@@ -839,13 +842,27 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const subjectGroups: SubjectChatGroup[] | null = subjectsMode
     ? groupBySubjects(treeRoots, subjects, sortOrder)
     : null;
+  // Чаты ТЕКУЩЕГО проекта. При смене проекта sessions до свежего ответа ещё держат
+  // чаты старого (кэш idb подмешивается к prev, см. :451): ни одного из них нет в
+  // индексе нового проекта, и в группировку они не должны попадать (иначе — «Без фичи»
+  // до прихода своего списка).
+  const projectSessions = useMemo(
+    () => sessions.filter(s => s.projectId === project.id),
+    [sessions, project.id],
+  );
   // Режим «Фичи»: группы по индексу фич (порядок = порядок features[] бэка, «Без фичи»
-  // в конце). На вход — ВСЕ сессии (не только корни): правило 3 контракта С0 режет
-  // межфичевые рёбра дерева, и для этого функция должна видеть детей, а не только корни
-  // (C1: исполнители обеих фич оркестратора — в своих группах, а не деревом в первой)
-  const featureGroups: FeatureChatGroup[] | null = featuresMode
-    ? groupByFeatures(sessions, featuresIndex, sortOrder)
-    : null;
+  // в конце). На вход — ВСЕ сессии ТЕКУЩЕГО проекта (не только корни): правило 3
+  // контракта С0 режет межфичевые рёбра дерева, и для этого функция должна видеть
+  // детей, а не только корни (C1: исполнители обеих фич оркестратора — в своих
+  // группах, а не деревом в первой). Мемоизирована: hover карточки (hoveredId) не
+  // пересчитывает группировку и дерево группы (buildGroupTree). Пока индекс проекта
+  // не готов (первый вход) — групп нет вовсе: экран рисует строку загрузки, а не
+  // «Без фичи» — иначе приход индекса переносит все карточки из контейнера
+  // «no-feature» в группы и весь список монтируется заново.
+  const featureGroups: FeatureChatGroup[] | null = useMemo(
+    () => featuresMode && featuresReady ? groupByFeatures(projectSessions, featuresIndex, sortOrder) : null,
+    [featuresMode, featuresReady, projectSessions, featuresIndex, sortOrder],
+  );
   // Подсказка про залежи: чаты «без темы» старше нижней границы фона модель сама не тронет
   const sweepSince = project.subjectsSweepSince ? new Date(project.subjectsSweepSince).getTime() : null;
   const startRun = () => { void startSubjectRun(project.id); };
@@ -1412,6 +1429,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
             {featureGroups ? (
               renderFeaturesMode()
+            ) : featuresMode ? (
+              // Индекс фич ещё не приехал (первый вход в проект): одна короткая строка
+              // вместо «Без фичи»/«Фич пока нет» и вместо ветки «Дни» ниже — иначе
+              // приход индекса перемонтирует весь список из «no-feature» в группы.
+              <div style={{ padding: SP.sm, fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>
+                Загружаем фичи…
+              </div>
             ) : subjectGroups ? (
               subjectGroups.map(g => renderSubjectSection(g,
                 g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (

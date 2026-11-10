@@ -7,6 +7,8 @@
 // Окружение node (без jsdom): renderToStaticMarkup (SSR) — effects не идут, поэтому
 // sessions остаются пустыми; различие режимов ловим по строке «Фич пока нет», которая
 // есть ТОЛЬКО в режиме фич (и зависит от индекса фич, а не от sessions).
+// После FI-1 reset() стора = «ещё не загружено» (в режиме фич — строка «Загружаем
+// фичи…»); «Фич пока нет» даёт только явный пустой ГОТОВЫЙ индекс (EMPTY_READY).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -67,11 +69,20 @@ const project: Project = {
   tagRegistry: [], subjectRegistry: [], subjectsSweepSince: null,
 } as Project;
 
+// Пустой ГОТОВЫЙ индекс: ответ «фич нет» — отличается от «ещё не загружено» (reset()).
+const EMPTY_READY: import('../types/featureIndex').FeaturesIndex = { features: [], chats: {} };
+
 // Рендер списка: groupBy, сохранённый в хранилище.
-// Индекс фич сбрасываем в EMPTY — в режиме фич это даёт «Фич пока нет».
-function renderList(_featuresOn: boolean, storedGroupBy: string): string {
+// Индекс фич: без index — сброшен («ещё не загружено», в режиме фич — «Загружаем
+// фичи…»); с index — положен явный срез (пустой даёт «Фич пока нет»).
+function renderList(
+  _featuresOn: boolean,
+  storedGroupBy: string,
+  index?: import('../types/featureIndex').FeaturesIndex,
+): string {
   store.clear();
   featuresIndexTest.reset();
+  if (index) featuresIndexTest.setIndex('p1', index);
   store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: storedGroupBy, sortOrder: 'newest' }));
   return renderToStaticMarkup(
     createElement(SessionList, { project, activeSession: null, onSelect: () => {} }),
@@ -86,7 +97,8 @@ beforeEach(() => {
 
 describe('SessionList: groupBy из хранилища', () => {
   it('groupBy=features → режим фич («Фич пока нет» при пустом индексе)', () => {
-    const html = renderList(true, 'features');
+    // Пустой ГОТОВЫЙ индекс: после FI-1 его надо положить явно (reset() = «не готово»)
+    const html = renderList(true, 'features', EMPTY_READY);
     // Режим фичи включился: пустой индекс → её пустое состояние
     expect(html).toContain('Фич пока нет');
   });
@@ -102,9 +114,30 @@ describe('SessionList: groupBy из хранилища', () => {
 // стояли обычные чаты. inline — контейнер по содержимому.
 describe('SessionList: M1′ «Фич пока нет» по содержимому', () => {
   it('пустой индекс: «Фич пока нет» без height:100% (inline)', () => {
-    const html = renderList(true, 'features');
+    const html = renderList(true, 'features', EMPTY_READY);
     expect(html).toContain('Фич пока нет');
     expect(html).not.toContain('height:100%');
+  });
+});
+
+// === FI-2: строка загрузки вместо «Без фичи» ===
+// Первый вход в проект (индекс ещё не готов): режим «Фичи» рисует одну строку
+// «Загружаем фичи…» — ни «Без фичи», ни «Фич пока нет», ни ветки «Дни» ниже.
+// Иначе приход индекса переносит все карточки из контейнера «no-feature» в группы
+// и весь список монтируется заново (баг Андрея). Мутация: убрать featuresReady из
+// условия featureGroups → «Без фичи» возвращается → первый кейс красный.
+describe('SessionList: FI-2 строка загрузки, пока индекс не готов', () => {
+  it('индекс не готов (reset без setIndex): «Загружаем фичи…», без «Без фичи» и «Фич пока нет»', () => {
+    const html = renderList(true, 'features');
+    expect(html).toContain('Загружаем фичи…');
+    expect(html).not.toContain('Без фичи');
+    expect(html).not.toContain('Фич пока нет');
+  });
+
+  it('пустой ГОТОВЫЙ индекс: «Загружаем фичи…» нет, «Фич пока нет» есть', () => {
+    const html = renderList(true, 'features', EMPTY_READY);
+    expect(html).not.toContain('Загружаем фичи…');
+    expect(html).toContain('Фич пока нет');
   });
 });
 
@@ -531,6 +564,9 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
   // Мутация: убрать minHeight:40 из style кнопки → на мобиле height/minHeight по xs (24), тест красный.
   it('m1: «Сбросить» minHeight 40 на 360 (десктоп — 24)', () => {
     featuresIndexTest.reset();
+    // Строка «Показаны» живёт в рендере режима фич — он требует ГОТОВОГО индекса
+    // (после FI-1 reset() = «не готово» → строка загрузки). Пустой срез кладём явно.
+    featuresIndexTest.setIndex('p1', EMPTY_READY);
     // featureKinds:['closed'] → shownFiltersModel не null → строка «Показаны» с «Сбросить»
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['closed'] }));

@@ -184,6 +184,11 @@ public sealed class NotesToolset(
                     // (ADR-036, решение 2): отказ не называет того, чего нет.
                     if (WikiSections.Parse(detail.Path) is not { } key || !visible.Contains(key))
                         return Deny($"Заметка {id} не найдена.");
+                    // R2 (ADR-039, §7 «Учитываемые пути»): видимая страница прочитана агентом —
+                    // учёт вида Read. Ключ — detail.Path (путь под pages/), взят до
+                    // RedactWikiDetail: он меняет Path на путь с живым именем раздела.
+                    // Скрытая страница выше — отказ, без учёта.
+                    RecordWikiReads(context.OwnerId, [(detail.Path, WikiReadKind.Read)]);
                     detail = RedactWikiDetail(notesSvc, context.OwnerId, detail, visible);
                 }
                 else
@@ -379,6 +384,11 @@ public sealed class NotesToolset(
                         {
                             if (WikiSections.Parse(rootDetail.Path) is not { } key || !visible.Contains(key))
                                 return Deny($"Комментарий {id} не найден.");
+                            // R2 (ADR-039, §7 «Учитываемые пути»): корень треда — видимая страница,
+                            // в ответе её полный текст — тот же вид Read, что у notes_read; ключ —
+                            // rootDetail.Path, до RedactWikiDetail. Корень-заметка и корень-
+                            // комментарий — не страницы разделов, без учёта (ветка else ниже).
+                            RecordWikiReads(context.OwnerId, [(rootDetail.Path, WikiReadKind.Read)]);
                             root = RedactWikiDetail(notesSvc, context.OwnerId, rootDetail, visible);
                         }
                         else
@@ -475,6 +485,10 @@ public sealed class NotesToolset(
                 {
                     if (WikiSections.Parse(r.Note.Path) is not { } key || !visible.Contains(key))
                         return Deny($"Заметка «{name}» не найдена.");
+                    // R2 (ADR-039, §7 «Учитываемые пути»): модель сама просит страницу по имени и
+                    // получает её целиком — вид Read, ключ — r.Note.Path. Обычная заметка и отказ
+                    // («не найдена») ниже — без учёта.
+                    RecordWikiReads(context.OwnerId, [(r.Note.Path, WikiReadKind.Read)]);
                     // Видимая страница отдаётся как в notes_read (RedactWikiDetail); фрагмент — часть
                     // текста страницы, тот же RedactLinks.
                     return Json(new
@@ -804,6 +818,19 @@ public sealed class NotesToolset(
         };
     }
 
+    /// <summary>R2 (ADR-039, §7 «Учитываемые пути»): учёт чтений страниц вики через notes_* в
+    /// сторе keeper/reads.json (WikiReadsStore, замок и отказ — там). Вызывается только после
+    /// проверки видимости и только на успешном ответе: скрытая и несуществующая страница —
+    /// отказ, без учёта. Ключ — PageKey (путь под pages/), взятый до RedactWikiDetail: он
+    /// меняет Path на путь с живым именем раздела. Сбой учёта (false стора) не меняет ответ
+    /// инструмента: счётчик не роняет ход, в котором что-то прочли. _dataDir null — обвязка
+    /// тулсета без конфига (тестовая): учёт пропускается, ответ не меняется.</summary>
+    private void RecordWikiReads(string ownerId, IEnumerable<(string PageKey, WikiReadKind Kind)> reads)
+    {
+        if (_dataDir is null) return;
+        WikiReadsStore.RecordMany(WikiPaths.Root(_dataDir, ownerId), reads, DateTimeOffset.UtcNow);
+    }
+
     private static McpToolCallResult Text(string text) => new(text);
 
     private static McpToolCallResult Json<T>(T value) =>
@@ -1127,6 +1154,11 @@ public sealed class NotesToolset(
                 sb.Append("\n—— ").Append(p.Section).Append(" / ").Append(p.Rel).Append(" ——\n")
                     .Append(body.Length > MaxQueryPageChars ? body[..MaxQueryPageChars] + "\n…(обрезано)" : body);
             }
+            // R2 (ADR-039, §7 «Учитываемые пути»): каждая страница, попавшая в ответ
+            // (не больше MaxQueryPages), прочитана через запрос — вид Query. Строки каталога
+            // _index в учёт не идут: это проекция раздела, она отфильтрована при обходе
+            // (IsProjection) и в top не попадает.
+            RecordWikiReads(ownerId, top.Select(p => (p.Rel, WikiReadKind.Query)));
             return Text(sb.Append("\nПолнотекст по сырью — notes_search.").ToString());
         }
         catch (Exception e)

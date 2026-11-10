@@ -399,6 +399,26 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
         return ids;
     }
 
+    // Ключи страниц вики-хитов: id хита → путь под pages/ — тот же синтаксис ключа, что у
+    // стора учёта чтений (R1) и параметра page GET /api/wiki/page. R6 (NotesRecallContributor):
+    // исключение спящих страниц и учёт чтений кейчатся этим. Возвращаются только пути,
+    // разбираемые в раздел: неразобранный — не страница архива (DormantPages судит только
+    // разделы) и не ключ учёта (RecordMany из такого ключа отклоняет весь батч).
+    // Один поход в граф на батч, не на хит.
+    public Dictionary<string, string> WikiPageKeysOf(string userId, IEnumerable<NoteSemanticHit> hits)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        var wikiIds = hits.Where(h => h.Source == NotesService.WikiKey).Select(h => h.Id).ToList();
+        if (wikiIds.Count == 0) return result;
+        var byId = _notes.GetSummaries(userId, NotesService.WikiKey, null)
+            .Where(s => WikiSections.Parse(s.Path) is not null)
+            .ToDictionary(s => s.Id, s => s.Path);
+        foreach (var id in wikiIds)
+            if (byId.TryGetValue(id, out var path))
+                result[id] = path;
+        return result;
+    }
+
     // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
     // Цель на каждого пользователя с созданным датасетом заметок; ключ записи — noteId.
     // Мутации entry.Docs в SyncAllAsync идут под _syncLock — берём его же, внутри _saveLock.

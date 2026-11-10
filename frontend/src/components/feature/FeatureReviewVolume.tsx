@@ -1,7 +1,9 @@
 // Секция «Объём» вкладки «Разбор» (FS-FR2; записка docs/mockups/feature-page-simplify-v4-clickable.md
 // §5 «2. Объём», в макете — секция rz-vol): раскладка первого экрана «N из M» (карточку
-// FeatureVolumeCard здесь не повторяю): строки stepProgress, строки по линиям, медиана шага
-// по проекту и — только у закрытой — итоги закрытой. Все числа — из run/stats как есть,
+// FeatureVolumeCard здесь не повторяю): строки stepProgress — только у открытой (макет ov.vol
+// :513: у закрытой группа «Всего шагов/Приняты…» не рисуется, иначе рядом «Всего шагов 44»
+// и «Шагов 12» — два разных числа), строки по линиям, медиана шага по проекту
+// и — только у закрытой — итоги закрытой. Все числа — из run/stats как есть,
 // своё фронт не считает («знаменатель менялся» и «медиана этой фичи» — нужно от бэка, §5,
 // их нет). Раскладка целиком через ReviewKv (FS-FR0): на 360 те же две колонки
 // «ключ — значение», переполнения нет.
@@ -45,9 +47,15 @@ function laneLabel(lane: string): string {
 export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
   const rows: ReviewKvRow[] = [];
 
+  // Признак закрытой — общий по странице (FeatureReviewTime.tsx:56): одно значение на обе
+  // ветки секции (итоги — только у закрытой, группа шагов — только у открытой).
+  const closed = run.closed === true || run.state === 'merged' || run.state === 'closed';
+
   // 1. Шаги. stepProgress аддитивен (старые ответы его не несут) — поля нет, строк нет.
+  // У закрытой группа не рисуется вовсе (решение постановщика, макет ov.vol :513): её
+  // настоящий объём — строки итогов ниже, «Всего шагов» рядом с «Шагов» — два числа.
   const sp = run.stepProgress;
-  if (sp) {
+  if (sp && !closed) {
     rows.push(
       { label: 'Всего шагов', value: sp.total },
       { label: 'Приняты', value: sp.accepted },
@@ -77,10 +85,9 @@ export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
   const median = stats.typical?.stepMinutes?.median;
   rows.push({ label: 'Медиана шага по проекту', value: median != null ? formatDuration(median) : null });
 
-  // 4. Итоги закрытой — только у закрытой (признак закрытости — общий по странице,
-  // FeatureReviewTime.tsx:56). «Открытых шагов» здесь нет: поля summary.stepsOpen
+  // 4. Итоги закрытой — только у закрытой. «Открытых шагов» здесь нет: поля summary.stepsOpen
   // в контракте нет (записка §5) — поля нет, строки тоже.
-  if (run.closed === true || run.state === 'merged' || run.state === 'closed') {
+  if (closed) {
     const s = run.summary;
     rows.push(
       { label: 'Шагов', value: s?.steps ?? null },

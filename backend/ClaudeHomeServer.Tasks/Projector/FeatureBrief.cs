@@ -29,6 +29,11 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // вычисленный run.Attention (FeatureProjector.cs:175-216), тот же единственный элемент и тот же
 // приоритет stopped → wait → merge, второго расчёта нет; фразы по кодам остановки — словарь
 // StopReasonPhrases. Тревоги нет — null.
+//
+// FS-V2 (макет v2 «Срок»): eta — ОДИН срок с источником (EtaOf): выбор между оценкой оркестратора
+// и историей делает бэк (приоритет note → history), карточка фронта больше не выбирает сама;
+// clockStopped — признак «часы стоят» (вид тревоги), при нём endsAt=null — отсутствие даты
+// объяснено, а не молча спрятано (в note.estimate она гасилась без причины).
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -61,6 +66,16 @@ public static class FeatureBrief
 
     // estimate.source: единственный источник v1 — история проекта (разрез п.3).
     public const string EstimateSource = "history";
+
+    // eta.source (FS-V2): сначала оценка оркестратора (note), затем история (порядок — план FS-V2).
+    public const string EtaSourceNote = "note";
+    public const string EtaSourceHistory = "history";
+
+    // eta.clockStopped (FS-V2): вид тревоги, стоящей часами (run.Attention.Kind как есть:
+    // FeatureProjector.cs:175-216). merge — не «часы стоят»: фича дошла до решения человека
+    // по мержу, работа не встала.
+    public const string ClockStoppedWait = "wait";
+    public const string ClockStoppedStopped = "stopped";
 
     // «Сейчас»: = run.Now[0] либо Attention (без Now).
     public sealed record BriefNow(
@@ -131,6 +146,13 @@ public static class FeatureBrief
     public sealed record BriefAsk(
         string Text, string Source, DateTime? Since, string? PersonaId, string? SessionId);
 
+    // brief.eta (FS-V2, макет v2 «Срок»): ОДИН срок вместо выбора карточки между note.estimate
+    // и estimate. minutes — срок всегда есть (eta null ⇔ числа нет — «одного срока» без числа
+    // не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
+    // source — что именно показано (note|history); clockStopped — почему даты нет при живом
+    // сроке (wait|stopped|null).
+    public sealed record BriefEta(int Minutes, DateTime? EndsAt, string Source, string? ClockStopped);
+
     // brief: контракт ответа (разрез п. 6).
     public sealed record Brief(
         string Kind,
@@ -164,6 +186,10 @@ public static class FeatureBrief
         // FS-E4: одна фраза «что нужно от тебя» с источником тревоги (AskOf из run.Attention).
         // null — тревоги нет.
         BriefAsk? Ask,
+        // FS-V2: один «Срок» с источником и признаком «часы стоят» (EtaOf): выбор источника
+        // делает бэк (note → history), карточка фронта не выбирает сама. null — ни одной
+        // оценки нет.
+        BriefEta? Eta,
         DateTime ComputedAt);
 
     // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason, merged — по
@@ -198,6 +224,9 @@ public static class FeatureBrief
         var kind = KindOf(run);
 
         var estimate = EstimateOf(run, typical, kind);
+        // Голос считается раньше eta: оценка оркестратора для eta — та же вычисленная
+        // note.estimate (EstimateOfNote), второго расчёта по тем же входам нет.
+        var note = NoteOf(run, kind, estimate);
 
         return new Brief(
             kind,
@@ -209,12 +238,13 @@ public static class FeatureBrief
             estimate,
             Queue: null,
             QueueWaitMinutes: QueueWaitOf(run, kind, now),
-            Note: NoteOf(run, kind, estimate),
+            Note: note,
             InitialEtaMinutes: run.Epic?.InitialEtaMinutes,
             UpdatedAt: UpdatedAtOf(run),
             Active: ActiveOf(run),
             QueueStartEstimate: QueueStartEstimateOf(run, kind, typical, now, projectRuns, slotLimit),
             Ask: AskOf(run),
+            Eta: EtaOf(note?.Estimate, estimate, ClockStoppedOf(run)),
             now);
     }
 
@@ -550,6 +580,53 @@ public static class FeatureBrief
         if (minutes < history.P25) return Agreements.Below;
         return Agreements.Within;
     }
+
+    // brief.eta (FS-V2, макет v2 «Срок»): один срок — выбор источника делает бэк, карточка
+    // фронта больше не выбирает между note.estimate и estimate. Приоритет (план FS-V2):
+    // оценка оркестратора, затем история.
+    // «Оценка отдаётся» = etaMinutes есть: оценка без срока — не срок (её «что дальше» и why
+    // остаются в note.estimate), срок тогда берётся из истории — иначе карточке доставался бы
+    // пустый срок там, где число есть.
+    // minutes — всегда число (eta без числа — null: «одного срока» без числа не бывает);
+    // endsAt — дата note.estimate (от момента записи голоса, не от «сейчас» — та же база, что
+    // EstimateOfNote), у истории даты нет никогда; при непустом clockStopped — null: сейчас
+    // дата при стоящих часах просто пропадала молча, теперь её отсутствие объяснено самим
+    // признаком. Оценок нет обеих — eta null.
+    private static BriefEta? EtaOf(BriefNoteEstimate? noteEstimate, BriefEstimate? history, string? clockStopped)
+    {
+        int minutes;
+        DateTime? endsAt;
+        string source;
+        if (noteEstimate is { EtaMinutes: { } eta })
+        {
+            minutes = eta;
+            endsAt = noteEstimate.EtaEndsAt;
+            source = EtaSourceNote;
+        }
+        else if (history is not null)
+        {
+            minutes = history.RemainingMinutes;
+            endsAt = null;
+            source = EtaSourceHistory;
+        }
+        else
+        {
+            return null;
+        }
+        if (clockStopped is not null) endsAt = null;
+        return new BriefEta(minutes, endsAt, source, clockStopped);
+    }
+
+    // Признак «часы стоят» (FS-V2): вид тревоги как есть (тот же единственный источник, что
+    // ask/now/reason — run.Attention, FeatureProjector.cs:175-216, второго расчёта нет):
+    // wait — фича ждёт человека, stopped — исполнитель встал. merge — не «часы стоят»: до
+    // решения по мержу работа дошла сама; тревоги нет — null.
+    private static string? ClockStoppedOf(FeatureRun run) => run.Attention?.Kind switch
+    {
+        "wait" => ClockStoppedWait,
+        "stopped" => ClockStoppedStopped,
+        _ => null,
+    };
 
     // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,
     // если StageAtWrite ≠ текущей стадии ИЛИ категория (brief.kind) сменилась с момента записи.

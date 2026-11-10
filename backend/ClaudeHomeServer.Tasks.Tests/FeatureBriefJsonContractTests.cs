@@ -49,6 +49,7 @@ public class FeatureBriefJsonContractTests
         [new FeatureBrief.BriefActive("t1", "prod", "B2", "back", "timur", "working", NOW.AddMinutes(-12), null)],
         NOW.AddHours(1),
         new FeatureBrief.BriefAsk("Нужно решение по мержу", "merge", NOW.AddHours(-1), "mark", "sess-8"),
+        new FeatureBrief.BriefEta(90, NOW.AddMinutes(90), "note", null),
         NOW);
 
     // Точный набор ключей JSON-объекта в данной точке контракта: отсутствие ожидаемого имени или
@@ -67,6 +68,8 @@ public class FeatureBriefJsonContractTests
     // (FeatureBrief.cs:51-69) ↔ FeatureBriefNow/Done/Next/Estimate/Queue/Note (featurePage.ts:50-99).
     // FS-E4: добавлен ключ «ask» и узел BriefAsk — осознанная правка контракта: зеркало во фронт
     // (FeatureBriefAsk в featurePage.ts) приносит шаг FS-FT, ключ идёт раньше зеркала.
+    // FS-V2: добавлен ключ «eta» и узел BriefEta — тот же порядок: бэк отдаёт срок с источником,
+    // зеркало FeatureBriefEta приносит следующий шаг фронта.
     [Fact]
     public void Brief_JsonКлючиРовноКонтрактаФронта_НаВсехУровнях()
     {
@@ -75,7 +78,7 @@ public class FeatureBriefJsonContractTests
         AssertKeys(root, "brief",
             "kind", "now", "reason", "done", "next", "elapsedMinutes",
             "estimate", "queue", "queueWaitMinutes", "note", "initialEtaMinutes", "updatedAt", "active",
-            "queueStartEstimate", "ask", "computedAt");
+            "queueStartEstimate", "ask", "eta", "computedAt");
 
         AssertKeys(root!["now"], "brief.now", "stage", "taskId", "personaId", "stepRef", "lane", "since");
         AssertKeys(root["done"], "brief.done", "stepsAccepted", "stepsTotal", "loops", "planState");
@@ -85,6 +88,9 @@ public class FeatureBriefJsonContractTests
         AssertKeys(root["active"]![0], "brief.active[]",
             "taskId", "stage", "stepRef", "lane", "personaId", "state", "since", "reason");
         AssertKeys(root["ask"], "brief.ask", "text", "source", "since", "personaId", "sessionId");
+        // FS-V2: «Срок» карточки v2 — один срок с источником и признаком стоящих часов
+        // (FeatureBrief.BriefEta); зеркало во фронт приносит следующий шаг.
+        AssertKeys(root["eta"], "brief.eta", "minutes", "endsAt", "source", "clockStopped");
         AssertKeys(root["note"], "brief.note", "text", "at", "byPersonaId", "byUser", "stageAtWrite", "stale", "estimate");
         AssertKeys(root["note"]!["estimate"], "brief.note.estimate",
             "remaining", "etaMinutes", "why", "agreement", "etaEndsAt");

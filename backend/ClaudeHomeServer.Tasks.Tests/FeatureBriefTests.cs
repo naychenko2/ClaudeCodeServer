@@ -42,6 +42,10 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • FS-E4 (ask): убрать строку словаря StopReasonPhrases — рефлексивный тест «КаждыйКод…» красный;
 //    взять для merge attention.Reason («мерж») — тест «Merge…» красный; вернуть null для wait без
 //    текста — тест «WaitБезТекста…» красный; убрать clamp лимита — тест «ЛимитТекста120» красный.
+//  • FS-V2 (eta): поменять в EtaOf приоритет note/history — красные ровно три случая приоритета
+//    («ОценкаОркестратораГлавнее…», «Остановка…ДатаГасится…», «ЗначенияРовноВычисленные…» —
+//    history 40 вместо note 90), остальные зелёные; убрать строку гашения endsAt при clockStopped —
+//    красный ровно «Остановка…ДатаГасится…» (дата note.estimate остаётся при стоящих часах).
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -1214,5 +1218,168 @@ public class FeatureBriefTests
         FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().BeNull();
         run.Epic!.InitialEtaMinutes = 300;
         FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().Be(300);
+    }
+
+    // ─── eta (FS-V2): один срок с источником и признаком «часы стоят» ────────────────────────────
+
+    // Фикстура: run с нарезанным планом (историческая оценка) и по желанию — оценкой оркестратора
+    // в голосе эпика (голос на NOW−2ч; штамп совпадает с категорией — тест про eta, не про stale),
+    // вовсе без голоса (noVoice) и тревогой (вид определяет состояние, как в RunWithAttention).
+    private static FeatureRun RunWithEta(string state, int work, int notCreated, int review,
+        FeatureAttention? attention = null, FeatureEstimate? estimate = null, bool noVoice = false) => new()
+    {
+        FeatureId = "ep",
+        State = state,
+        Attention = attention,
+        Epic = noVoice
+            ? new TaskItem { Id = "ep", Role = TaskRoles.Feature }
+            : new TaskItem
+            {
+                Id = "ep",
+                Role = TaskRoles.Feature,
+                Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true, "prod", "running")
+                    with { Estimate = estimate },
+            },
+        StepProgress = new FeatureStepProgress
+        {
+            PlanState = "cut", Total = work + notCreated + review,
+            Work = work, NotCreated = notCreated, Review = review,
+        },
+    };
+
+    private static FeatureAttention AttentionOf(string kind) => new()
+    {
+        Kind = kind, TaskId = "t1", Since = NOW.AddHours(-1), Reason = "причина", PersonaId = "denis",
+    };
+
+    // Случай 1 (c1): «note есть» — оценка оркестратора главнее истории: минуты и дата из
+    // note.estimate (то же вычисленное подполе), признака стоящих часов нет.
+    [Fact]
+    public void Eta_ОценкаОркестратораГлавнееИстории_МинутыИДатаИзNote()
+    {
+        var run = RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90));
+        var at = run.Epic!.Note!.At;
+
+        var eta = FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("note");
+        eta.Minutes.Should().Be(90, "у истории тоже есть число (40) — приоритет у оценки оркестратора");
+        eta.EndsAt.Should().Be(at.AddMinutes(90), "дата — от момента записи голоса, та же база, что у note.estimate");
+        eta.ClockStopped.Should().BeNull("тревоги нет — часы идут");
+    }
+
+    // Случай 2 (c1): «note скрыт + история есть» — число истории, даты нет никогда.
+    // «Скрыт» в обеих формах: голос есть, оценки в нём нет; и голоса нет вовсе.
+    [Fact]
+    public void Eta_БезОценкиВГолосеБерётИсторию_ДатыНикогдаНет()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var hidden = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, typical, NOW).Eta!;
+        hidden.Source.Should().Be("history");
+        hidden.Minutes.Should().Be(40, "10 × 1 + 30 — число истории");
+        hidden.EndsAt.Should().BeNull("у истории даты нет: «осталось», а не «к чему»");
+        hidden.ClockStopped.Should().BeNull();
+
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, noVoice: true), null, typical, NOW)
+            .Eta!.Source.Should().Be("history");
+    }
+
+    // Случай 3 (c1): «ничего → null» — ни одной оценки ни из одного источника.
+    [Fact]
+    public void Eta_НиОднойОценкиNull()
+    {
+        // Голос без оценки + нет выборки (истории не из чего строить).
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, null, NOW).Eta.Should().BeNull();
+        // Ни голоса, ни плана (обычная тестовая фикстура RunOf) — то же.
+        FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Eta.Should().BeNull();
+    }
+
+    // Случай 4 (c1): «wait» — clockStopped=wait и endsAt=null; число оставшей работы при этом
+    // сохраняется (часы стоят — работа до конца всё ещё есть).
+    [Fact]
+    public void Eta_ЖдётВасЧасыСтоятПризнакWaitИБезДаты()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Waiting, 0, 1, 1, attention: AttentionOf("wait")),
+            null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("history");
+        eta.Minutes.Should().Be(45, "10 × (0 + 1 + 0.5) + 30");
+        eta.ClockStopped.Should().Be("wait");
+        eta.EndsAt.Should().BeNull();
+    }
+
+    // Случай 5 (c1): «stopped» — clockStopped=stopped, даты нет. В том числе главный случай
+    // правила: у note.estimate на stopped дата есть (EstimateOfNote её не гасит) — при стоящих
+    // часах она null: отсутствие объяснено признаком, а не молча спрятано.
+    [Fact]
+    public void Eta_ОстановкаЧасыСтоятПризнакStoppedИДатаГаситсяДажеУОценкиNote()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var fromNote = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped"), estimate: Est(eta: 90)),
+            null, typical, NOW).Eta!;
+        fromNote.Source.Should().Be("note");
+        fromNote.Minutes.Should().Be(90);
+        fromNote.ClockStopped.Should().Be("stopped");
+        fromNote.EndsAt.Should().BeNull("дата note.estimate при стоящих часах гасится");
+
+        // Та же оценка без тревоги — дата остаётся: гасит признак, а не состояние как таковое.
+        var running = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW).Eta!;
+        running.EndsAt.Should().NotBeNull();
+
+        var fromHistory = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped")), null, typical, NOW).Eta!;
+        fromHistory.Source.Should().Be("history");
+        fromHistory.Minutes.Should().Be(40);
+        fromHistory.ClockStopped.Should().Be("stopped");
+        fromHistory.EndsAt.Should().BeNull();
+    }
+
+    // Край: оценка без срока — не срок (её «что дальше» и why остаются в note.estimate), срок
+    // берётся из истории: иначе карточка получила бы пустый срок там, где число есть.
+    [Fact]
+    public void Eta_ОценкаБезСрокаНеСрокБерётИсторию()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: null)), null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("history");
+        eta.Minutes.Should().Be(40);
+        eta.EndsAt.Should().BeNull();
+    }
+
+    // «Мерж» — не «часы стоят» (план FS-V2): фича дошла до решения по мержу сама, работа
+    // не встала. (Дата здесь гасится EstimateOfNote по kind=waiting_you — та же база, что у
+    // note.estimate, к признаку отношения не имеет.)
+    [Fact]
+    public void Eta_МержНеЧасыСтоят()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.MergePending, 1, 0, 0, attention: AttentionOf("merge"), estimate: Est(eta: 90)),
+            null, null, NOW).Eta!;
+
+        eta.Source.Should().Be("note");
+        eta.Minutes.Should().Be(90);
+        eta.ClockStopped.Should().BeNull("merge — не причина стоящих часов");
+    }
+
+    // Инвариант: значения eta — ровно вычисленные подполя brief (note.estimate / estimate),
+    // «второго расчёта» нет: расхождение основного срока карточки с её зеркалом — дефект.
+    [Fact]
+    public void Eta_ЗначенияРовноВычисленныеПодполяBrief_БезВторогоРасчёта()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var withNote = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW);
+        withNote.Eta!.Minutes.Should().Be(withNote.Note!.Estimate!.EtaMinutes!.Value);
+        withNote.Eta.EndsAt.Should().Be(withNote.Note.Estimate.EtaEndsAt);
+        withNote.Eta.Source.Should().Be("note");
+
+        var noNote = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, noVoice: true), null, typical, NOW);
+        noNote.Eta!.Minutes.Should().Be(noNote.Estimate!.RemainingMinutes);
+        noNote.Eta.Source.Should().Be("history");
     }
 }

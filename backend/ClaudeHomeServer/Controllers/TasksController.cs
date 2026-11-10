@@ -1287,8 +1287,18 @@ public class TasksController(
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
-        var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
-            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
+        TaskItem? epic;
+        try
+        {
+            // FS-O1: сдвиг оценки сверх порога без why — тот же 400-текст, что у MCP-двери
+            // (гейт в TaskManager под замком записи), а не 500 от необработанного исключения.
+            epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
+                FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
+        }
+        catch (TaskManager.FeatureEstimateShiftException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
         await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });

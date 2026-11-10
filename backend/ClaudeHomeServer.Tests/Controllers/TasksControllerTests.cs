@@ -3215,6 +3215,51 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         response.StatusCode.Should().Be(ok ? HttpStatusCode.OK : HttpStatusCode.BadRequest);
     }
 
+    // FS-O1 (возврат ревью R-FS-O1, п.1): сдвиг оценки сверх порога без why через REST — 400 с тем же
+    // текстом, что у MCP-двери (TaskManager.FeatureEstimateShiftText), а не 500 от необработанного
+    // исключения. Сам гейт — в TaskManager под замком записи (TaskManagerTests/MCP-тесты), здесь —
+    // обработка отказа контроллером. Мутация: убрать catch FeatureEstimateShiftException в
+    // SetFeatureNote — этот тест краснеет (исключение уходит в 500).
+    [Fact]
+    public async Task PutNote_SdvigOtsenkiBezWhy_400_TotZheTekstChtoUMCP()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var first = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "старт", featureEstimate = new { expectedSteps = 10, etaMinutes = 60 },
+        });
+        first.StatusCode.Should().Be(HttpStatusCode.OK, "базовая оценка записана");
+
+        // expectedSteps 10→13 (+30 % > 25 %) без why → 400, текст — тот же, что у MCP.
+        var shiftSteps = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "новый голос", featureEstimate = new { expectedSteps = 13 },
+        });
+        shiftSteps.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await shiftSteps.Content.ReadAsStringAsync()).Should()
+            .Contain(TaskManager.FeatureEstimateShiftText, "тот же текст отказа, что у MCP-двери");
+
+        // etaMinutes 60→95 (+58 % > 50 %) без why → 400.
+        var shiftEta = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "г", featureEstimate = new { etaMinutes = 95 },
+        });
+        shiftEta.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // отказ не записал ни голос, ни оценку: остались базовые
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.GetById(epicId)!.Note!.Text.Should().Be("старт");
+        tm.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10);
+
+        // с why тот же сдвиг разрешён — 400 не запрет оценки, а отказ молчаливого сдвига
+        var withWhy = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "уточняю", featureEstimate = new { expectedSteps = 13, why = "объём уточнён" },
+        });
+        withWhy.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(13, "сдвиг с why — разрешён");
+    }
+
     // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
     // не устаревший с момента записи: штамп и StaleOf берут одну базу — активную стадию конвейера
     // («prod» для шага), а не Now[0]. До правки штамп был "" (Now пуст), StaleOf сверял с "prod" →

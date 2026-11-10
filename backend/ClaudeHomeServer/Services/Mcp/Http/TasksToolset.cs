@@ -613,9 +613,23 @@ public sealed class TasksToolset(
                 if (featureNoteArg is not null)
                 {
                     var run = features.Project(existing.Id, context.OwnerId);
-                    updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
-                        run is null ? "" : FeatureBrief.ActiveStageOf(run),
-                        run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
+                    try
+                    {
+                        updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
+                            run is null ? "" : FeatureBrief.ActiveStageOf(run),
+                            run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
+                    }
+                    catch (TaskManager.FeatureEstimateShiftException ex)
+                    {
+                        // FS-O1: сдвиг оценки сверх порога без why. Гейт — в TaskManager под тем же
+                        // замком, что и запись (сравнение с актуальной оценкой, а не со снимком
+                        // тулсета); здесь отказ становится 400-текстом, без исключения наружу.
+                        // Основной Update этого же вызова уже применён (он идёт выше) — о нём
+                        // досвидательим, голос и оценка при этом не записаны.
+                        await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId,
+                            new TaskChangedMessage("updated", updated));
+                        return Deny(ex.Message);
+                    }
                 }
                 // FS-E1: ожидание человека — после Update (тот же приём, что голос выше): в закрытую
                 // этим же вызовом задачу ожидание не ставим (Update уже снял его при переходе в Done)
@@ -1435,7 +1449,9 @@ public sealed class TasksToolset(
     {
         if (arguments["featureEstimate"] is not JsonObject est) return null;
         return new FeatureEstimate(
-            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize().NullIfEmpty();
+            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why"),
+            // FS-O1: оценка итога шагов; диапазон — Validate, сдвиг сверх порога — гейт TaskManager.
+            NullableIntArg(est, "expectedSteps")).Normalize().NullIfEmpty();
     }
 
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
@@ -2077,6 +2093,13 @@ public sealed class TasksToolset(
             },
             ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
             ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
+            // Описание вложенного свойства не входит в сумму верхних (SumPropertyDescriptions),
+            // лимит 1950 tasks_update не трогает.
+            ["expectedSteps"] = new JsonObject
+            {
+                ["type"] = "integer",
+                ["description"] = "Оценка итога шагов фичи, включая ещё не нарезанные; не процент. 1..500; сдвиг сверх порога — только с why",
+            },
         },
     };
 

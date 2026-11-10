@@ -1768,29 +1768,81 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private static readonly HashSet<string> StartedKinds =
         ["running", "waiting_you", "error", "paused"];
 
+    // FS-O1: молчаливый сдвиг оценки запрещён. Новая оценка, меняющая expectedSteps больше чем на
+    // 25 % или etaMinutes больше чем на 50 % от текущей, принимается только с заполненным why.
+    // Строго «больше»: ровно на пороге — разрешено. Сравниваются только поля, присутствующие в
+    // обеих оценках: новая без поля — не «сдвиг» (оценка и раньше заменялась целиком, п. B3).
+    // Наследник InvalidOperationException — старые catch-и вызывающих (400/Deny) его тоже ловят.
+    public const string FeatureEstimateShiftText = "сдвиг оценки больше порога — укажи why";
+
+    /// <summary>Отказ записать оценку фичи со сдвигом сверх порога без why (FS-O1).</summary>
+    public sealed class FeatureEstimateShiftException() : InvalidOperationException(FeatureEstimateShiftText);
+
+    internal const int ExpectedStepsShiftLimitPercent = 25;
+    internal const int EtaMinutesShiftLimitPercent = 50;
+
+    // Сдвиг prev → next за порога и без why — true. Арифметика целочисленная (|Δ|·100 > лимит·prev),
+    // ровно на пороге — не сдвиг. why новой оценки нормализован вызывающим (Normalize), проверка
+    // защитная.
+    internal static bool EstimateShiftExceeds(FeatureEstimate prev, FeatureEstimate next)
+    {
+        if (!string.IsNullOrWhiteSpace(next.Why)) return false;
+        if (prev.ExpectedSteps is { } pe && next.ExpectedSteps is { } ne
+            && Math.Abs(ne - pe) * 100 > ExpectedStepsShiftLimitPercent * pe) return true;
+        if (prev.EtaMinutes is { } pt && next.EtaMinutes is { } nt
+            && Math.Abs(nt - pt) * 100 > EtaMinutesShiftLimitPercent * pt) return true;
+        return false;
+    }
+
+    // Замок голоса (FS-O1): чтение текущей оценки, сравнение порога и запись Note — одна атомарная
+    // секция. Два параллельных tasks_update эпила: второй сравнивается с результатом первого,
+    // а не с общим снимком до записи (контраст с проверкой в тулсете до вызова). Отдельный листовой
+    // замок: SetFeatureNote не держит его, входя в другой; ScheduleSave берёт свой _saveLock изнутри
+    // — порядка «сначала _saveLock, потом _featureNoteLock» нигде нет.
+    private readonly Lock _featureNoteLock = new();
+
+    // Тестовые швы (образец: ClearHoldContended/ClearHoldInside): «замок занят» и точка внутри
+    // критической секции — окно между «прочитали текущую оценку» и «записали». В бою null.
+    internal Action? FeatureNoteContended;
+    internal Action? FeatureNoteInside;
+
     // Голос фичи (волна 6, B3): только эпик (role=feature), иначе null. Пустой текст (после Trim)
     // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
     // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
     // estimate (макет 2) пишется только вместе с голосом: пустой текст снимает и голос, и оценку.
     // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной после старта фичи
-    // (категории draft/queued/idle — до старта).
+    // (категории draft/queued/idle — до старта). Сдвиг оценки сверх порога без why — отказ
+    // (FeatureEstimateShiftException), проверка — под замком записи, против прочитанной там же
+    // текущей оценки (FS-O1).
     public TaskItem? SetFeatureNote(string id, string? text, string? bySessionId, bool byUser,
         string stageAtWrite, string stateAtWrite, FeatureEstimate? estimate = null)
     {
         var task = _tasks.GetValueOrDefault(id);
         if (task is null || task.Role != TaskRoles.Feature) return null;
-        var trimmed = (text ?? "").Trim();
-        if (trimmed.Length > FeatureNote.MaxTextLength) trimmed = trimmed[..FeatureNote.MaxTextLength];
-        var now = DateTime.UtcNow;
-        task.Note = trimmed.Length == 0
-            ? null
-            : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite, estimate);
-        if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
-            && StartedKinds.Contains(stateAtWrite))
-            task.InitialEtaMinutes = eta;
-        task.UpdatedAt = now;
-        ScheduleSave();
-        return task;
+        if (!_featureNoteLock.TryEnter())
+        {
+            FeatureNoteContended?.Invoke();
+            _featureNoteLock.Enter();
+        }
+        try
+        {
+            if (FeatureNoteInside is { } hook) hook();
+            if (estimate is not null && task.Note?.Estimate is { } prev && EstimateShiftExceeds(prev, estimate))
+                throw new FeatureEstimateShiftException();
+            var trimmed = (text ?? "").Trim();
+            if (trimmed.Length > FeatureNote.MaxTextLength) trimmed = trimmed[..FeatureNote.MaxTextLength];
+            var now = DateTime.UtcNow;
+            task.Note = trimmed.Length == 0
+                ? null
+                : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite, estimate);
+            if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
+                && StartedKinds.Contains(stateAtWrite))
+                task.InitialEtaMinutes = eta;
+            task.UpdatedAt = now;
+            ScheduleSave();
+            return task;
+        }
+        finally { _featureNoteLock.Exit(); }
     }
 
     // FeatureHoldException переехал в Core (дефект 79d0fa9a): его бросает и корневой

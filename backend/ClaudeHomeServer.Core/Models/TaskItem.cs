@@ -264,13 +264,16 @@ public record FeatureNote(string Text, DateTime At, string? BySessionId, bool By
 // Оценка оркестратора (FeatureNote.Estimate): только срок и «что дальше». Процент готовности здесь не
 // живёт — он один, из run.stepProgress (FeatureStepAccounting). Remaining — ещё не начатое (первый
 // пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся оценить), Why — почему срок
-// заметно отличается от обычного. Старые записи с done/total/inProgress/percent читаются: лишние ключи
-// JSON игнорируются. Ограничения — Validate.
-public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why)
+// заметно отличается от обычного, ExpectedSteps — сколько всего шагов в фиче по оценке оркестатора,
+// включая ещё не нарезанные (FS-O1; хранится как есть, нижней границы «не меньше трекерного total»
+// нет; на экран не идёт — FeatureBrief.EstimateOfNote перечисляет поля явно). Старые записи с
+// done/total/inProgress/percent читаются: лишние ключи JSON игнорируются. Ограничения — Validate.
+public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why, int? ExpectedSteps = null)
 {
     public const int MaxRemaining = 8;
     public const int MaxRemainingLength = 40;
     public const int MaxWhyLength = 160;
+    public const int MaxExpectedSteps = 500;
 
     // Текст отказа или null. Remaining/Why вызывающий нормализует Normalize до проверки.
     public string? Validate()
@@ -281,13 +284,18 @@ public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? 
             return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
         if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
         if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        if (ExpectedSteps is < 1 or > MaxExpectedSteps)
+            return $"featureEstimate.expectedSteps: целое от 1 до {MaxExpectedSteps}";
         // Пустую оценку (ни срока, ни remaining) вызывающий отбрасывает через NullIfEmpty до Validate.
         return null;
     }
 
-    // Без срока и без «что дальше» (в т.ч. {} и одни старые done/total) оценка бессодержательна: её молча
-    // отбрасывают (null), а не отказывают — голос, с которым она пришла, при этом сохраняется. Вызывать после Normalize.
-    public FeatureEstimate? NullIfEmpty() => EtaMinutes is null && (Remaining ?? []).Count == 0 ? null : this;
+    // Без срока, без «что дальше» и без оценки итога шагов (в т.ч. {} и одни старые done/total) оценка
+    // бессодержательна: её молча отбрасывают (null), а не отказывают — голос, с которым она пришла, при
+    // этом сохраняется. ExpectedSteps — содержание: «значение хранится как есть» (FS-O1).
+    // Вызывать после Normalize.
+    public FeatureEstimate? NullIfEmpty() =>
+        EtaMinutes is null && ExpectedSteps is null && (Remaining ?? []).Count == 0 ? null : this;
 
     // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
     // Normalize Remaining не null.

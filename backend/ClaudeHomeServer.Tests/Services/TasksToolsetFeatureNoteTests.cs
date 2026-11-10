@@ -27,6 +27,13 @@ namespace ClaudeHomeServer.Tests.Services;
 // • вернуть чтение Now.FirstOrDefault()?.Stage в штампе TasksToolset — тест
 //   «БезИдущихЗадачей» краснеет (B14 возврат FIN: штамп — FeatureBrief.ActiveStageOf,
 //   та же база, что у StaleOf; R-B4 минор 2 закрыт).
+// FS-O1 (expectedSteps, порог сдвига):
+// • убрать порог в SetFeatureNote (EstimateShiftExceeds) — тесты «СдвигExpectedSteps…»,
+//   «СдвигEta…» краснеют; «порог 25 % → 1000 %» — краснеют ровно сдвиги expectedSteps без why;
+// • перенести проверку порога в тулсете до блокировки (чтение оценки вне замка) —
+//   «ДваСдвига_Параллельно_ВторойСравниваетсяСПервым» краснеет (B читает 10, отказывается
+//   до SetFeatureNote, shwa contended не срабатывает);
+// • убрать диапазон expectedSteps в Validate — «ХранитсяКакЕстьИДиапазон» краснеет на 0/501.
 [Trait("Category", "Integration")]
 [Trait("Category", "Host")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
@@ -383,10 +390,14 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
             var props = (JsonObject)tools.Single(t => t.Name == "tasks_update").InputSchema["properties"]!;
             props.ContainsKey("featureEstimate").Should().BeTrue($"{label}: featureEstimate в tools/list всегда");
             var est = (JsonObject)props["featureEstimate"]!;
+            // FS-O1: expectedSteps — аддитивное поле оценки, статично как остальные.
             ((JsonObject)est["properties"]!).Select(p => p.Key).Should()
-                .BeEquivalentTo("remaining", "etaMinutes", "why");
+                .BeEquivalentTo("remaining", "etaMinutes", "why", "expectedSteps");
             est.ContainsKey("required").Should().BeFalse($"{label}: обязательных полей у оценки нет");
             est["description"]!.GetValue<string>().Should().Contain("в каждом ходе").And.Contain("why");
+            var expectedStepsProp = (JsonObject)((JsonObject)est["properties"]!)["expectedSteps"]!;
+            expectedStepsProp["description"]!.GetValue<string>()
+                .Should().Contain("Оценка итога шагов фичи").And.Contain("не процент");
             props["featureNote"]!["description"]!.GetValue<string>().Should().Contain("в каждом ходе");
         }
     }
@@ -546,5 +557,226 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         isError.Should().BeTrue();
         text.Should().Contain("Голос фичи пишет оркестратор или человек");
         Tasks.GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // ─── FS-O1: expectedSteps и запрет молчаливого сдвига оценки ──────────────────────────────
+
+    private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(10);
+
+    // Ожидание события с потолком (xUnit1031: без blocking-операций в тесте).
+    private static async Task AwaitOrTimeout(Task signal, string why)
+    {
+        var done = await Task.WhenAny(signal, Task.Delay(Watchdog));
+        done.Should().Be(signal, why);
+        await signal;
+    }
+
+    private async Task WriteEstimateAsync(string sessionId, string epicId, object estimate, string note = "г")
+    {
+        var (_, isError) = await CallToolAsync(sessionId, "tasks_update",
+            new { id = epicId, featureNote = note, featureEstimate = estimate });
+        isError.Should().BeFalse();
+    }
+
+    // c1: expectedSteps хранится как есть (12 — и в сторе, и в ответе); вне диапазона 1..500 — 400
+    // (Validate ловит до порога сдвига); граница 500 принимается; значение меньше трекерного total
+    // (у второй фичи 2 шага, первая оценка 1) сохраняется без отказа — нижней границы нет.
+    [Fact]
+    public async Task FeatureEstimate_ExpectedSteps_ХранитсяКакЕстьИДиапазон()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("esteps");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "esteps");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "оценка итога", featureEstimate = new { expectedSteps = 12 },
+        });
+        isError.Should().BeFalse(text);
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(12);
+        JsonSerializer.Deserialize<JsonElement>(text).GetProperty("note").GetProperty("estimate")
+            .GetProperty("expectedSteps").GetInt32().Should().Be(12);
+
+        var (t0, e0) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { expectedSteps = 0 },
+        });
+        e0.Should().BeTrue(); t0.Should().Contain("expectedSteps");
+        var (t501, e501) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { expectedSteps = 501 },
+        });
+        e501.Should().BeTrue(); t501.Should().Contain("expectedSteps");
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(12, "отказ ничего не перезаписал");
+
+        // Верхняя граница диапазона принимается Validate (сдвиг 12→500 закрыт why — не предмет теста).
+        (await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { expectedSteps = 500, why = "граница диапазона" },
+        })).IsError.Should().BeFalse();
+
+        // Нижняя граница и «меньше трекерного total»: первая оценка второй фичи (2 шага) = 1 —
+        // хранится без отказа, сравнивать не с чем (прежней оценки нет). Вторая фича — из своего
+        // штаба: привязанный к первой фиче чат второй эпик не создаёт (FeatureChatBinding).
+        var (curator2Id, epic2, _) = await CreateFeatureFromCuratorAsync(projectId, "esteps2");
+        Tasks.Create(projectId, OwnerId, new CreateTaskRequest("Шаг 2", Role: TaskRoles.Step, FeatureId: epic2));
+        (await CallToolAsync(curator2Id, "tasks_update", new
+        {
+            id = epic2, featureNote = "г", featureEstimate = new { expectedSteps = 1 },
+        })).IsError.Should().BeFalse();
+        Tasks.GetById(epic2)!.Note!.Estimate!.ExpectedSteps.Should().Be(1);
+    }
+
+    // c2: сдвиг expectedSteps 10→13 (+30 %) без why — 400 с текстом порога, в сторе ничего не
+    // изменилось; та же оценка с why — записана.
+    [Fact]
+    public async Task FeatureEstimate_СдвигExpectedSteps_БезWhy_Отказ_СWhy_Записан()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estshift");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estshift");
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 10 }, "старт");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "новый голос", featureEstimate = new { expectedSteps = 13 },
+        });
+        isError.Should().BeTrue(text);
+        text.Should().Contain("сдвиг оценки больше порога — укажи why");
+        Tasks.GetById(epicId)!.Note!.Text.Should().Be("старт", "отказ не записал ни голос, ни оценку");
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10);
+
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 13, why = "объём уточнён" }, "уточняю");
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(13, "сдвиг с why — разрешён");
+    }
+
+    // c2: сдвиг etaMinutes 60→95 (+58 %) без why — 400; 60→85 (+42 %) — записано; ровно 50 %
+    // (60→90) — сдвиг не «больше» порога, записано.
+    [Fact]
+    public async Task FeatureEstimate_СдвигEta_БезWhy_ПорогСтрогий()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("etashift");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "etashift");
+        await WriteEstimateAsync(curatorId, epicId, new { etaMinutes = 60 }, "старт");
+
+        var (text, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { etaMinutes = 95 },
+        });
+        isError.Should().BeTrue(text);
+        text.Should().Contain("сдвиг оценки больше порога");
+        Tasks.GetById(epicId)!.Note!.Estimate!.EtaMinutes.Should().Be(60);
+
+        await WriteEstimateAsync(curatorId, epicId, new { etaMinutes = 85 });
+        Tasks.GetById(epicId)!.Note!.Estimate!.EtaMinutes.Should().Be(85, "+42 % — под порогом");
+
+        await WriteEstimateAsync(curatorId, epicId, new { etaMinutes = 60 });
+        Tasks.GetById(epicId)!.Note!.Estimate!.EtaMinutes.Should().Be(60);
+        await WriteEstimateAsync(curatorId, epicId, new { etaMinutes = 90 });
+        Tasks.GetById(epicId)!.Note!.Estimate!.EtaMinutes.Should().Be(90, "ровно 50 % — не «больше» порога");
+    }
+
+    // Порог expectedSteps строгий («больше 25 %») и двусторонний: ровно 25 % (8→10) и −23 % (13→10)
+    // записаны без why; +30 % (10→13) и −31 % (13→9) — 400.
+    [Fact]
+    public async Task FeatureEstimate_СдвигExpectedSteps_ГраницаИУменьшение()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estbnd");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estbnd");
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 8 }, "старт");
+
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 10 });
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10, "ровно 25 % — не «больше» порога");
+
+        var (_, e1) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { expectedSteps = 13 },
+        });
+        e1.Should().BeTrue("+30 % без why");
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10);
+
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 13, why = "уточняю" });
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 10 });
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10, "−23 % — под порогом");
+
+        var (_, e2) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "г", featureEstimate = new { expectedSteps = 7 },
+        });
+        e2.Should().BeTrue("−30 % без why — сужение тоже сдвиг");
+        Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10);
+    }
+
+    // Новая оценка без поля — не «сдвиг» (сравниваются только поля, присутствующие в обеих):
+    // eta та же, expectedSteps просто исчезает — записано, оценка заменяется целиком.
+    [Fact]
+    public async Task FeatureEstimate_НоваяБезПоля_НеСдвиг()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estdrop");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estdrop");
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 10, etaMinutes = 60 }, "старт");
+
+        await WriteEstimateAsync(curatorId, epicId, new { etaMinutes = 60 });
+        var est = Tasks.GetById(epicId)!.Note!.Estimate!;
+        est.EtaMinutes.Should().Be(60);
+        est.ExpectedSteps.Should().BeNull("оценка заменяется целиком, поле снято без отказа");
+    }
+
+    // c3 (конкурентность): два tasks_update эпила параллельно. Порог сравнивается с оценкой,
+    // прочитанной под тем же замком, что и запись: B (13→16, +23 %) сравнивается с итогом A
+    // (10→13), а не с начальным 10 (10→16 было бы +60 % и отказ). Швы FeatureNoteInside/
+    // FeatureNoteContended (образец: TaskManagerHoldRaceTests) делают порядок детерминированным:
+    // A держится в критической секции, пока B не упрётся в занятый замок. Мутация «проверка
+    // порога в тулсете до блокировки»: B читает 10, отказывается до SetFeatureNote, shwa contended
+    // не срабатывает — A выходит по watchdog, B красный; проверено прогоном.
+    [Fact]
+    public async Task ДваСдвига_Параллельно_ВторойСравниваетсяСПервым()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estrace");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estrace");
+        await WriteEstimateAsync(curatorId, epicId, new { expectedSteps = 10 }, "старт");
+
+        var tasksMgr = Tasks;
+        var insideEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contended = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inside = 0;
+        tasksMgr.FeatureNoteContended = () => contended.TrySetResult();
+        tasksMgr.FeatureNoteInside = () =>
+        {
+            if (Interlocked.Increment(ref inside) == 1)
+            {
+                insideEntered.TrySetResult();
+                Task.WhenAny(contended.Task, secondInside.Task).Wait(Watchdog);
+            }
+            else
+            {
+                secondInside.TrySetResult();
+            }
+            Interlocked.Decrement(ref inside);
+        };
+        try
+        {
+            var a = Task.Run(() => CallToolAsync(curatorId, "tasks_update", new
+            {
+                id = epicId, featureNote = "сдвиг A", featureEstimate = new { expectedSteps = 13, why = "дроблю объём" },
+            }));
+            await AwaitOrTimeout(insideEntered.Task, "A обязан войти в критическую секцию записи");
+            var b = Task.Run(() => CallToolAsync(curatorId, "tasks_update", new
+            {
+                id = epicId, featureNote = "сдвиг B", featureEstimate = new { expectedSteps = 16 },
+            }));
+            await AwaitOrTimeout(contended.Task, "B обязан упереться в занятый замок: сравнение — под ним");
+
+            var results = await Task.WhenAll(a, b).WaitAsync(Watchdog);
+            var (ra, rb) = (results[0], results[1]);
+            ra.IsError.Should().BeFalse(ra.Text);
+            rb.IsError.Should().BeFalse(
+                "13→16 — +23 %, под порогом: B сравнивается с итогом A, а не с начальной 10 (10→16 было бы +60 %)");
+            Tasks.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(16);
+        }
+        finally
+        {
+            tasksMgr.FeatureNoteContended = null;
+            tasksMgr.FeatureNoteInside = null;
+        }
     }
 }

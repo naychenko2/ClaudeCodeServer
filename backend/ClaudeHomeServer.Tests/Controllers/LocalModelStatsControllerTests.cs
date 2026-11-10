@@ -1499,6 +1499,23 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         main.GetProperty("chats").GetArrayLength().Should().Be(0, "чаты чужой дорожки во вкладку main не попадают");
     }
 
+    // B7 c2: running=3, 1 свой чат, 1 вызов места → othersCount == 1.
+    [Fact]
+    public async Task StatsEngine_Engine_OthersCount_ВычитаетЧатыИВызовыМест()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working", Running = 3, Waiting = 0 };
+        var meter = new FakeMeter();
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader(), meter: meter);
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        meter.ByTrack["gemma"] = [new TurnChatLive("sess-mine", myId, "proj-1", "Мой чат", 30.0, "generating")];
+        factory.Services.GetRequiredService<EngineCallLedger>().Begin("gemma", "chat-retitle");
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("othersCount").GetInt32().Should().Be(1);
+    }
+
     // B7: подписи именованного движка из LocalEngines (EngineLabel/ModelLabel); пустая — как не заданная.
     [Fact]
     public async Task StatsEngine_Engine_ПодписиИзСпецификации()

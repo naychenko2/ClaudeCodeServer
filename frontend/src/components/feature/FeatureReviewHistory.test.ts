@@ -43,9 +43,12 @@ function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
     featureId: 'f1', state: 'running', steps: [], reviews: [], qa: [], final: null, merge: null,
     verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
     progress: 0, ready: false,
+    // approxMinutes (999) заведомо отличается от минут интервалов (30): иначе тест
+    // длительности не различает факт «30 мин» и оценку «≈ 16 ч 39 мин» — подмена
+    // приоритета факт/≈ в компоненте проходила бы незамеченной (находка ревью).
     stages: [
-      mkStage({ key: 'prod', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T10:00:00Z', approxMinutes: 30, taskIds: ['t-prod'], executors: [mkExec()] }),
-      mkStage({ key: 'review', state: 'done', firstStartedAt: '2026-10-20T11:00:00Z', approxMinutes: 30, taskIds: ['t-rev'] }),
+      mkStage({ key: 'prod', state: 'active', tone: 'run', firstStartedAt: '2026-10-20T10:00:00Z', approxMinutes: 999, taskIds: ['t-prod'], executors: [mkExec()] }),
+      mkStage({ key: 'review', state: 'done', firstStartedAt: '2026-10-20T11:00:00Z', approxMinutes: 999, taskIds: ['t-rev'] }),
     ],
     ...over,
   } as FeatureRun;
@@ -131,9 +134,12 @@ describe('дорожки этапов (c2)', () => {
     expect(h.indexOf('data-testid="lane-axis"')).toBeLessThan(h.indexOf('data-testid="review-history-lane-prod"'));
   });
 
-  it('длительность справа от дорожки — факт времени модели (30 мин интервала prod)', () => {
+  it('длительность справа от дорожки — факт времени модели, а не оценка «≈» (30 мин интервала prod)', () => {
     const h = html();
     expect(h).toContain('30 мин');
+    // Инвариант: факт приоритетнее «≈». Оценка этапа (999) отличается от минут
+    // интервала (30), поэтому «≈» в DOM означает, что приоритет подменён.
+    expect(h).not.toContain('≈');
   });
 
   it('нет журнала (intervalsByStage=null) → 0 дорожек и строка о журнале времени (c2)', () => {

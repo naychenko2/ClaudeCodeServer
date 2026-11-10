@@ -30,19 +30,14 @@ namespace ClaudeHomeServer.Tests.Guards;
 ///    Плагин вики не отдаёт — в учёт не идёт. Если граница когда-нибудь пустит wiki, этот тест
 ///    красный и путь надо завести в таблицу.
 ///
-/// Классификация каждой записи прочитана по коду ветки. Записи «найдено R3» — точки, которые
-/// отдают текст страницы вики и не названы в перечне ADR-039 §7 (notes_thread, notes_resolve,
-/// NotesController.Resolve): код не тронут, решение — Александр.
+/// Классификация каждой записи прочитана по коду ветки.
 ///
-/// Оговорка о имени: в этой сборке уже есть одноимённый сторож Services/Wiki/
-/// WikiReadPathsGuardTests (namespace ClaudeHomeServer.Tests.Services, S6g-2) — он держит
-/// видимость путей чтения (ADR-036), а не учёт. Это разные задачи, поэтому этот — в
-/// namespace ClaudeHomeServer.Tests.Guards. Переименование одного из них — решение постановщика.
+/// Сторож видимости — Services/Wiki/WikiReadPathsGuardTests.cs (S6g-2), этот — полнота учёта.
 ///
 /// Тест без хоста: TestWebApplicationFactory не поднимается, меток Host/Slow нет —
 /// сторож идёт в быстром наборе.
 /// </summary>
-public class WikiReadPathsGuardTests : IDisposable
+public class WikiReadCountingGuardTests : IDisposable
 {
     private enum PathKind { Rest, Mcp, Ref }
 
@@ -50,8 +45,7 @@ public class WikiReadPathsGuardTests : IDisposable
     {
         /// <summary>Путь учитывается в reads.json; StepRef — шаг, который его закрывает.</summary>
         Counted,
-        /// <summary>Путь назван в ADR-039 §7 как не учитываемый, или найден R3 как путь к тексту
-        /// страницы вне перечня — решение за Александром.</summary>
+        /// <summary>Путь назван в ADR-039 §7 как не учитываемый.</summary>
         NotCounted,
         /// <summary>Точка не отдаёт текст страницы: список, дерево, статус, запись.</summary>
         NoPageText,
@@ -81,9 +75,8 @@ public class WikiReadPathsGuardTests : IDisposable
         Rest("NotesController.Graph", PathClass.NoPageText,
             "граф связей: узлы и рёбра без текста (Note.cs:80-95)"),
         Rest("NotesController.Resolve", PathClass.NotCounted,
-            "найдено R3, решение — Александр: ResolveByName возвращает полный NoteDetail цели "
-            + "(NotesService.cs:744,753), ручка отдаёт его с содержимым (NotesController.cs:113) — "
-            + "текст видимой страницы; в перечне ADR-039 §7 нет"),
+            "hover-preview и встраивание ![[…]] — интерфейс зовёт сам при наведении и отрисовке, "
+            + "не открытие (ADR-039 §7)"),
         Rest("NotesController.Attachment", PathClass.NoPageText,
             "файл вложения (картинка для <img>), не текст страницы"),
         Rest("NotesController.Caps", PathClass.NoPageText,
@@ -176,16 +169,15 @@ public class WikiReadPathsGuardTests : IDisposable
         Mcp("notes_annotations", PathClass.NoPageText,
             "список комментариев; документ — файл личного vault/проекта, пути вики — не область документа"),
         Mcp("notes_reply", PathClass.NoPageText, "запись"),
-        Mcp("notes_thread", PathClass.NotCounted,
-            "найдено R3, решение — Александр: корень треда берётся GetDetail (NotesToolset.cs:374), "
-            + "видимая страница-корень возвращается полным текстом через RedactWikiDetail "
-            + "(NotesToolset.cs:382); в перечне ADR-039 §7 нет"),
+        Mcp("notes_thread", PathClass.Counted,
+            "корень треда — видимая страница вики, в ответе её полный текст; вид Read, "
+            + "тот же, что у notes_read (ADR-039 §7, таблица «Учитываемые пути»)", step: "R2"),
         Mcp("notes_set_status", PathClass.NoPageText, "запись"),
         Mcp("notes_daily", PathClass.NoPageText,
             "дневниковая заметка — обычная заметка личного vault, не страница"),
-        Mcp("notes_resolve", PathClass.NotCounted,
-            "найдено R3, решение — Александр: видимая страница отдаётся целиком через RedactWikiDetail "
-            + "(NotesToolset.cs:482), пул резолва глобален (NotesService.cs:744); в перечне ADR-039 §7 нет"),
+        Mcp("notes_resolve", PathClass.Counted,
+            "модель сама просит страницу по имени и получает её целиком через RedactWikiDetail; "
+            + "вид Read (ADR-039 §7, таблица «Учитываемые пути»)", step: "R2"),
         Mcp("notes_promote_task", PathClass.NoPageText,
             "результат — созданная задача из чекбокса, не текст страницы"),
 
@@ -296,7 +288,7 @@ public class WikiReadPathsGuardTests : IDisposable
     private readonly IConfiguration _config;
     private NotesService? _notes;
 
-    public WikiReadPathsGuardTests()
+    public WikiReadCountingGuardTests()
     {
         Directory.CreateDirectory(_dir);
         _config = new ConfigurationBuilder()

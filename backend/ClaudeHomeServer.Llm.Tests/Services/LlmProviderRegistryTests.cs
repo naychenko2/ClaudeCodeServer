@@ -8,6 +8,10 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
+// Часть тестов (блок «Warning о дубле id») перехватывает Console.Error — он процесс-глобален:
+// параллельный класс со своим SetError/восстановлением в finally отдал бы нам чужой поток
+// посреди ассерта. Лечится коллекцией (см. TestCollections.cs), как в ClaudeSessionBareArgsTests.
+[Collection(TestCollections.ProcessGlobalState)]
 public class LlmProviderRegistryTests
 {
     private static LlmProviderRegistry Create(Dictionary<string, string?>? extra = null)
@@ -1787,5 +1791,145 @@ public class LlmProviderRegistryTests
         var probe = new FakeLocalProbe(knownWindow: 65536);
         var env = CreateWithLocal(settings, probe).BuildCliEnv("qwen3.8-27b")!;
         env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("65536");
+    }
+
+    // ─── B1 «Сводка состояния фичи»: Warning о дубле id и дорожка провайдера ────────────
+    // Конструктор реестра пишет ОДИН Warning на каждый id модели, объявленный в каталогах
+    // двух и более провайдеров (id и ключи всех владельцев). Поведение ResolveByModel
+    // (первое совпадение) не меняется — последний ассерт первого теста ровно это проверяет.
+
+    private static List<string> DuplicateWarnings(string console) =>
+        console.Split('\n').Select(l => l.Trim())
+            .Where(l => l.Contains("Дубль id модели"))
+            .ToList();
+
+    [Fact]
+    public void Ctor_ДубльIdУДвухПровайдеров_ОдинWarningSIDomIKlyuchami()
+    {
+        var prev = Console.Error;
+        using var sw = new StringWriter();
+        Console.SetError(sw);
+        LlmProviderRegistry reg;
+        try
+        {
+            // Тот же qwen38-27b объявлен ещё и у openrouter — форма реального конфликта:
+            // модель локального стенда, объявленная в каталогах двух провайдеров.
+            reg = CreateLocal(new Dictionary<string, string?>
+            {
+                ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api/anthropic",
+                ["LlmProviders:openrouter:ApiKey"] = "sk-or-test",
+                ["LlmProviders:openrouter:Models:0:Id"] = "qwen38-27b",
+            });
+        }
+        finally { Console.SetError(prev); }
+
+        var warnings = DuplicateWarnings(sw.ToString());
+        warnings.Should().HaveCount(1, "один Warning на каждый дублирующийся id, не на пару владельцев");
+        warnings[0].Should().Contain("qwen38-27b")
+            .And.Contain("local-qwen").And.Contain("openrouter");
+
+        // Поведение не изменилось: ResolveByModel — первое совпадение (local-qwen раньше в конфиге)
+        reg.ResolveByModel("qwen38-27b")!.Key.Should().Be("local-qwen");
+    }
+
+    [Fact]
+    public void Ctor_ДубльIdТрёхПровайдеров_ОдинWarningСТремяКлючами()
+    {
+        var prev = Console.Error;
+        using var sw = new StringWriter();
+        Console.SetError(sw);
+        try
+        {
+            CreateLocal(new Dictionary<string, string?>
+            {
+                ["LlmProviders:openrouter:AnthropicBaseUrl"] = "https://openrouter.ai/api/anthropic",
+                ["LlmProviders:openrouter:ApiKey"] = "sk-or-test",
+                ["LlmProviders:openrouter:Models:0:Id"] = "qwen38-27b",
+                // Тот же id в другом регистре — тот же id (сравнение как у FindModel)
+                ["LlmProviders:lmarena:AnthropicBaseUrl"] = "http://127.0.0.1:8099",
+                ["LlmProviders:lmarena:ApiKey"] = "k",
+                ["LlmProviders:lmarena:Models:0:Id"] = "QWEN38-27B",
+            });
+        }
+        finally { Console.SetError(prev); }
+
+        var warnings = DuplicateWarnings(sw.ToString());
+        warnings.Should().HaveCount(1, "один Warning на id, не на каждую пару владельцев");
+        // id в тексте — как в первом встретившемся каталоге (здесь «QWEN38-27B»): сравнение
+        // регистронезависимо, поэтому и проверка — по строке в нижнем регистре.
+        var line = warnings[0].ToLowerInvariant();
+        line.Should().Contain("qwen38-27b")
+            .And.Contain("local-qwen").And.Contain("openrouter").And.Contain("lmarena");
+    }
+
+    [Fact]
+    public void Ctor_БезДубля_НиОдногоWarning()
+    {
+        var prev = Console.Error;
+        using var sw = new StringWriter();
+        Console.SetError(sw);
+        try { Create(); CreateLocal(); }
+        finally { Console.SetError(prev); }
+        DuplicateWarnings(sw.ToString()).Should().BeEmpty("обычный конфиг не должен шуметь");
+    }
+
+    [Fact]
+    public void StatsTrackOf_ЯвныйStatsEngine_ГлавнееПравилаMain()
+    {
+        var reg = CreateLocal(new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-video:AnthropicBaseUrl"] = "http://127.0.0.1:8081",
+            ["LlmProviders:local-video:IsLocal"] = "true",
+            ["LlmProviders:local-video:StatsEngine"] = "gemma",
+        });
+        // Явный StatsEngine выигрывает и у не-основного провайдера; имя — как в конфиге
+        reg.StatsTrackOf("local-video").Should().Be("gemma");
+    }
+
+    [Theory]
+    // Не основной локальный и без своего StatsEngine — null: ходы такого провайдера ни в
+    // какую дорожку не пишутся. Облачный без StatsEngine, локальный без Stats (main — сосед
+    // с Stats), пустой и неизвестный ключ.
+    [InlineData("deepseek")]
+    [InlineData("local-a")]
+    [InlineData("local-qwen")]
+    [InlineData("")]
+    [InlineData("nope")]
+    [InlineData(null)]
+    public void StatsTrackOf_НеMainБезStatsEngine_Null(string? key)
+    {
+        var reg = CreateLocal(new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-a:AnthropicBaseUrl"] = "http://127.0.0.1:8082",
+            ["LlmProviders:local-a:IsLocal"] = "true",
+            ["LlmProviders:local-z:AnthropicBaseUrl"] = "http://127.0.0.1:8083",
+            ["LlmProviders:local-z:IsLocal"] = "true",
+            ["LlmProviders:local-z:Stats:Engine"] = "vllm",
+            ["LlmProviders:local-z:Stats:MetricsUrl"] = "http://127.0.0.1:8084/metrics",
+        });
+        reg.StatsTrackOf(key).Should().BeNull();
+        // Сам основной в этом же конфиге — «main»: первый IsLocal с Stats
+        reg.StatsTrackOf("local-z").Should().Be("main");
+    }
+
+    // Выбор main не зависит от порядка ключей, когда Stats ровно у одного провайдера:
+    // здесь он то раньше IsLocal-соседей без Stats (local-a), то позже (local-z) — main
+    // он в обоих порядках (тот же порядок, что MainLocalProvider в LocalModelStatsController).
+    [Theory]
+    [InlineData("local-a")]
+    [InlineData("local-z")]
+    public void StatsTrackOf_MainНеЗависитОтПорядкаКлючей(string withStats)
+    {
+        var reg = CreateLocal(new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-a:AnthropicBaseUrl"] = "http://127.0.0.1:8082",
+            ["LlmProviders:local-a:IsLocal"] = "true",
+            ["LlmProviders:local-z:AnthropicBaseUrl"] = "http://127.0.0.1:8083",
+            ["LlmProviders:local-z:IsLocal"] = "true",
+            [$"LlmProviders:{withStats}:Stats:Engine"] = "vllm",
+            [$"LlmProviders:{withStats}:Stats:MetricsUrl"] = "http://127.0.0.1:8084/metrics",
+        });
+        reg.StatsTrackOf(withStats).Should().Be("main");
+        reg.StatsTrackOf(withStats == "local-z" ? "local-a" : "local-z").Should().BeNull();
     }
 }

@@ -80,6 +80,14 @@ public class LlmProviderConfig
     // не задаётся, источник метрик = заглушка (NullEngineMetricsSource), автоугадывания нет.
     public LlmProviderStatsConfig? Stats { get; set; }
 
+    // Статистическая дорожка ходов этого провайдера (фича «Сводка состояния фичи», B1):
+    // имя секции `LocalEngines:{name}` — ходы провайдера пишутся в статистику этого
+    // именованного движка (потребители значения — B5 счётчик хода и B7 контроллер).
+    // Пусто — не явная: «main», если провайдер — основной локальный (первый IsLocal с
+    // Stats, то же правило, что MainLocalProvider в LocalModelStatsController), иначе
+    // статистики нет. Решает LlmProviderRegistry.StatsTrackOf.
+    public string? StatsEngine { get; set; }
+
     public bool Enabled =>
         (IsLocal || !string.IsNullOrWhiteSpace(ApiKey)) && !string.IsNullOrWhiteSpace(AnthropicBaseUrl);
 

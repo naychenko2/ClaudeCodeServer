@@ -9,6 +9,7 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
@@ -17,8 +18,8 @@ namespace ClaudeHomeServer.Tests.Services.Gateway;
 /// <summary>
 /// Шлюз LLM с наблюдателем метрик локальной модели (статистика локальных моделей, шаг 16):
 /// побайтность (вход апстрима = выход клиенту), устойчивость к исключению наблюдателя,
-/// условия создания наблюдателя (локальный маршрут + SSE + метрики включены) и
-/// неизменность поведения с нормализатором.
+/// условия создания наблюдателя (локальный маршрут + SSE + метрики включены),
+/// неизменность поведения с нормализатором и атрибуция по ProviderKey маршрута (B6).
 /// </summary>
 public sealed class LlmGatewayObserverTests : IAsyncDisposable
 {
@@ -32,8 +33,14 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         public int TokenCountCalls;
         // Подсказочные заголовки (ADR-029): последний полученный набор (null — не было).
         public GatewayHintHeaders? LastHints;
+        // providerKey (B6): последний полученный ключ провайдера (null — шлюз передал null).
+        public string? LastProviderKey;
 
-        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null) => Interlocked.Increment(ref Started);
+        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null)
+        {
+            Interlocked.Increment(ref Started);
+            LastProviderKey = providerKey;
+        }
         public void OnFirstToken(string requestId, string turnId) => Interlocked.Increment(ref FirstToken);
         public void OnRequestCompleted(string requestId, string turnId, RequestUsage usage)
         {
@@ -123,15 +130,21 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
     // Сборка тестового приложения шлюза с заданным приёмником (шов для теста сбоя приёмника).
     // LlmProviderRegistry/ILocalModelRequestSink — опциональные швы из DI (GetService в шлюзе):
     // в тесте без них наблюдатель не создаётся, поведение прежнее.
-    private (WebApplication App, HttpClient Client) BuildApp(ILocalModelRequestSink sink)
+    private (WebApplication App, HttpClient Client) BuildApp(ILocalModelRequestSink sink) =>
+        BuildApp(sink, _kit.Selector, _kit.Providers);
+
+    // То же, но с собственным селектором и реестром провайдеров (тест атрибуции по маршруту:
+    // реестр с провайдером, которого нет в общем наборе кита).
+    private (WebApplication App, HttpClient Client) BuildApp(ILocalModelRequestSink sink,
+        UpstreamSelector selector, LlmProviderRegistry providers)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddRouting();
         builder.Services.AddSingleton<IOptionsMonitor<LlmGatewayOptions>>(_kit.Options);
         builder.Services.AddSingleton(_tokens);
-        builder.Services.AddSingleton(_kit.Selector);
-        builder.Services.AddSingleton(_kit.Providers);
+        builder.Services.AddSingleton(selector);
+        builder.Services.AddSingleton(providers);
         builder.Services.AddSingleton(new SubscriptionLimitRecorder(_kit.Usage, _kit.Pool));
         builder.Services.AddSingleton<IOptionsMonitor<LocalModelStatsOptions>>(_statsOptions);
         builder.Services.AddSingleton<ILocalModelRequestSink>(sink);
@@ -167,9 +180,13 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
     }
 
     // SSE-ответ: upstream отдаёт поток из Pipe, тест пишет в него кусками.
-    private (Pipe Pipe, Func<Task<HttpResponseMessage>> Send) SseUpstream(IssuedTurnToken t, HttpClient? client = null)
+    // model — модель в теле запроса (по умолчанию локальная LocalModel): тест атрибуции шлёт
+    // модель своего маршрута, как это делает CLI.
+    private (Pipe Pipe, Func<Task<HttpResponseMessage>> Send) SseUpstream(IssuedTurnToken t,
+        HttpClient? client = null, string? model = null)
     {
         var c = client ?? _client;
+        var m = model ?? LocalModel;
         var pipe = new Pipe();
         _upstream.Respond = _ =>
         {
@@ -177,7 +194,7 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
             r.Content.Headers.ContentType = new("text/event-stream");
             return r;
         };
-        return (pipe, () => c.SendAsync(Req(t, "v1/messages", $"{{\"model\":\"{LocalModel}\"}}"),
+        return (pipe, () => c.SendAsync(Req(t, "v1/messages", $"{{\"model\":\"{m}\"}}"),
             HttpCompletionOption.ResponseHeadersRead));
     }
 
@@ -185,9 +202,10 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures", "LocalStats", "vllm-messages-stream.sse"));
 
     // Пишет фикстуру в pipe кусками заданного размера и возвращает, что клиент получил.
-    private async Task<string> StreamFixtureAsync(IssuedTurnToken t, int chunk, HttpClient? client = null)
+    private async Task<string> StreamFixtureAsync(IssuedTurnToken t, int chunk, HttpClient? client = null,
+        string? model = null)
     {
-        var (pipe, send) = SseUpstream(t, client);
+        var (pipe, send) = SseUpstream(t, client, model);
         var resp = await send();
         var bytes = Encoding.UTF8.GetBytes(ReadFixture());
         for (var i = 0; i < bytes.Length; i += chunk)
@@ -248,6 +266,61 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
             .Should().BeFalse("request-class не переслан upstream");
         upstreamReq.Headers.TryGetValues(GatewayHintHeaders.AgentTypeHeader, out var at)
             .Should().BeFalse("agent-type не переслан upstream");
+    }
+
+    // (а2) Атрибуция по маршруту (B6): третий аргумент OnRequestStarted — ProviderKey маршрута
+    //     гранта, а не результат разрешения модели.
+    //     (1) Локальный провайдерский маршрут «local-video-gemma» → приёмник получает ровно
+    //         этот ключ (свой реестр: провайдера нет в общем наборе кита).
+    //     (2) Подписочный маршрут без провайдера с ЛОКАЛЬНОЙ моделью: наблюдатель создаётся
+    //         (гейт по модели не менялся), но приёмник получает null — атрибуция по маршруту.
+    //     Дословный «грант без Route» сюда не доходит: шлюз отвечает 403 до приёмника
+    //     (LlmGatewayEndpoints.cs:88). Мутация: передавать null вместо grant.Route?.ProviderKey
+    //     → (1) краснеет.
+    [Fact]
+    public async Task ПриёмникПолучаетProviderKeyМаршрута_ПодпискаБезПровайдераПолучаетNull()
+    {
+        // (1) Собственный реестр с локальным провайдером «local-video-gemma» (тот же ключ,
+        //     что в конфигах статистики локальных моделей): его модель резолвится в этот маршрут.
+        var gemmaConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-video-gemma:DisplayName"] = "Local Video Gemma",
+            ["LlmProviders:local-video-gemma:AnthropicBaseUrl"] = "http://127.0.0.1:8081",
+            ["LlmProviders:local-video-gemma:IsLocal"] = "true",
+            ["LlmProviders:local-video-gemma:Models:0:Id"] = "gemma-4-26b-a4b",
+        }).Build();
+        var gemmaProviders = new LlmProviderRegistry(gemmaConfig);
+        var gemmaSelector = new UpstreamSelector(_kit.Pool, gemmaProviders, _kit.Options);
+        var gemmaSink = new SpySink();
+        var (app, client) = BuildApp(gemmaSink, gemmaSelector, gemmaProviders);
+        try
+        {
+            var start = gemmaSelector.StartTurn(_tokens, "owner", "chat", _device.Id, "gemma-4-26b-a4b");
+            start.Token.Should().NotBeNull(start.FailureText);
+            start.Token!.Grant.Route!.ProviderKey.Should().Be("local-video-gemma",
+                "маршрут решён по модели в провайдер кита");
+
+            await StreamFixtureAsync(start.Token!, 7, client, "gemma-4-26b-a4b");
+
+            gemmaSink.Started.Should().Be(1, "наблюдатель создан: запрос начался");
+            gemmaSink.LastProviderKey.Should().Be("local-video-gemma",
+                "приёмник получил ProviderKey маршрута, а не другой провайдер");
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
+
+        // (2) Подписочный маршрут без провайдера (st1), модель — локальная qwen:
+        //     наблюдатель создаётся по модели (гейт CreateUsageObserver не менялся),
+        //     но атрибуция идёт по маршруту: провайдера у него нет → приёмник получает null.
+        var sub = _tokens.Issue("owner", "chat", _device.Id,
+            new GatewayRoute(GatewayUpstreamKind.Subscription, LocalModel, SubscriptionKey: "st1"));
+        await StreamFixtureAsync(sub, 7);
+
+        _sink.Started.Should().Be(1, "модель локальная — наблюдатель создан (гейт не менялся)");
+        _sink.LastProviderKey.Should().BeNull(
+            "маршрут подписки без провайдера: шлюз передаёт null, а не провайдера из разрешения модели");
     }
 
     // (б) Исключение наблюдателя/приёмника: клиент получил ВСЕ байты (поток не искажён),

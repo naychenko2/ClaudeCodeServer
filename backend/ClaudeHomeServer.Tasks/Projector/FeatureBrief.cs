@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
@@ -431,9 +432,25 @@ public static class FeatureBrief
             _ => null,
         };
         if (text is null) return null;
-        if (text.Length > TaskManager.AwaitingAskMaxLength) text = text[..TaskManager.AwaitingAskMaxLength];
+        if (text.Length > TaskManager.AwaitingAskMaxLength) text = TrimToTextElements(text, TaskManager.AwaitingAskMaxLength);
 
         return new BriefAsk(text, attention.Kind, attention.Since, attention.PersonaId, attention.LinkedSessionId);
+    }
+
+    // Обрезка под лимит по границе text-элемента (StringInfo), а не по индексу UTF-16: суррогатная
+    // пара (эмодзи) и кластер с комбинингом не рвутся пополам — cut встаёт на последнюю границу
+    // текста, укладывающуюся в лимит. Лимит остаётся в единицах UTF-16: тот же, что проверяет
+    // SetAwaitingHuman (TaskManager.cs:1641).
+    private static string TrimToTextElements(string text, int limit)
+    {
+        var cut = 0;
+        while (cut < text.Length)
+        {
+            var next = cut + StringInfo.GetNextTextElement(text, cut).Length;
+            if (next > limit) break;
+            cut = next;
+        }
+        return text[..cut];
     }
 
     // «Дальше»: стадии ПОСЛЕ активной со state pending (skipped/absent пропускаются), ≤ MaxNext.

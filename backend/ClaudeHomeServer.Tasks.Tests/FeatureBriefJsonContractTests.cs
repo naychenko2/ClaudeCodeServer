@@ -56,8 +56,10 @@ public class FeatureBriefJsonContractTests
     private static void AssertKeys(JsonNode? node, string path, params string[] expected)
     {
         node.Should().BeAssignableTo<JsonObject>($"узел '{path}' сериализован объектом");
+        // Хвосты ревью R-E4 (минор 4): формулировка нейтральная — «контракт фронтового типа»
+        // обещала зеркало, которого ещё нет (ask придёт во фронт только с FS-FT).
         node!.AsObject().Select(p => p.Key).Should().BeEquivalentTo(expected,
-            $"JSON-ключи '{path}' — ровно контракт фронтового типа (featurePage.ts)");
+            $"JSON-ключи '{path}' — контракт ответа фичи");
     }
 
     // Перечень — record Brief (FeatureBrief.cs:72-92) ↔ FeatureBrief (featurePage.ts:103-124) и

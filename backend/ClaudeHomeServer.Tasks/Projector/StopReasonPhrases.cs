@@ -17,11 +17,13 @@ internal static class StopReasonPhrases
         [ExecutorStopClassifier.AuthFailedReason] = "Нужна авторизация — исполнитель не вошёл",
         [ExecutorStopClassifier.SubagentTruncatedReason] = "Сабагент оборвался на середине работы",
         [ExecutorStopClassifier.SubagentStuckReason] = "Сабагент обрывается раз за разом — нужно решение",
-        [ExecutorStopClassifier.ToolCallLeakedReason] = "Модель вывела вызов инструмента текстом",
+        // Хвосты ревью R-E4 (минор 1): формулировка «что нужно от тебя» вместо описания симптома
+        // или действия самого человека; тексты согласованы продактом, каждая в лимите ask.
+        [ExecutorStopClassifier.ToolCallLeakedReason] = "Исполнитель сбился — перезапустите шаг",
         [ExecutorStopClassifier.ToolCallLeakStuckReason] = "Вызовы инструмента уходят текстом раз за разом — нужно решение",
-        [ExecutorStopClassifier.InterruptedByUserReason] = "Исполнителя остановили вручную",
+        [ExecutorStopClassifier.InterruptedByUserReason] = "Исполнитель остановлен вами — запустите снова или оставьте",
         [ExecutorStopClassifier.DeviceWaitExpiredReason] = "Устройство не вышло в онлайн за потолок ожидания",
-        [ExecutorStopClassifier.FeatureHeldReason] = "Фичу поставили на паузу",
+        [ExecutorStopClassifier.FeatureHeldReason] = "Фича на паузе — снимите паузу, когда будете готовы",
         [ExecutorStopClassifier.FeatureHeldExpiredReason] = "Чат прерванного исполнителя удалён — шаг нужно перезапустить",
     };
 

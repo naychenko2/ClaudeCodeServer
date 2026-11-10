@@ -385,10 +385,14 @@ public class FeatureBriefTests
     }
 
     // c1: stopped — человеческая фраза по коду ExecutorStopReason (словарь StopReasonPhrases).
-    // Золотые фразы трёх кодов: переформулировка словаря — осознанная правка.
+    // Золотые фразы кодов словаря; хвосты ревью R-E4 (минор 1): три из них переформулированы под
+    // вопрос «что нужно от тебя» (feature_held, interrupted_by_user, tool_call_leaked) — тексты
+    // согласованы продактом, это осознанная правка словаря.
     [Theory]
     [InlineData(ExecutorStopClassifier.AuthFailedReason, "Нужна авторизация — исполнитель не вошёл")]
-    [InlineData(ExecutorStopClassifier.InterruptedByUserReason, "Исполнителя остановили вручную")]
+    [InlineData(ExecutorStopClassifier.InterruptedByUserReason, "Исполнитель остановлен вами — запустите снова или оставьте")]
+    [InlineData(ExecutorStopClassifier.FeatureHeldReason, "Фича на паузе — снимите паузу, когда будете готовы")]
+    [InlineData(ExecutorStopClassifier.ToolCallLeakedReason, "Исполнитель сбился — перезапустите шаг")]
     [InlineData(ExecutorStopClassifier.FeatureHeldExpiredReason, "Чат прерванного исполнителя удалён — шаг нужно перезапустить")]
     public void Ask_StoppedФразаПоКодуИзСловаря(string code, string expected)
     {
@@ -408,13 +412,15 @@ public class FeatureBriefTests
             .Ask!.Text.Should().Be(StopReasonPhrases.Fallback);
 
     // Инвариант: у каждого кода ExecutorStopClassifier есть своя фраза в словаре. Коды берутся
-    // рефлексией по public const string класса (тот же образец, что таблица FeatureStates):
-    // новый код без строки словаря или удалённая строка — красный этот тест (c2).
+    // рефлексией по const string класса — public И internal (хвосты ревью R-E4, минор 3: код,
+    // объявленный internal const, тоже обязан иметь фразу; тот же образец, что таблица
+    // FeatureStates). Новый код без строки словаря или удалённая строка — красный этот тест (c2).
+    // Мутация: добавить в классификатор internal const без фразы — тест красный.
     [Fact]
     public void Ask_КаждыйКодОстановкиИмеетСвоюФразу()
     {
         var codes = typeof(ExecutorStopClassifier)
-            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string)f.GetRawConstantValue()!)
             .ToList();
@@ -438,6 +444,22 @@ public class FeatureBriefTests
             null, null, NOW).Ask!.Text;
 
         text.Should().HaveLength(TaskManager.AwaitingAskMaxLength);
+    }
+
+    // Хвосты ревью R-E4 (минор 2): обрезка под лимит — по границе text-элемента (StringInfo), а не
+    // по индексу UTF-16: суррогатная пара не рвётся пополам. Фикстура: 119 BMP-символов + эмодзи
+    // (2 единицы UTF-16, позиции 119–120 → в 121-ю единицу не влезает) + хвост: префикс — 119
+    // символов, граница ДО эмодзи; одинокого high surrogate в результате нет.
+    // Мутация: вернуть text[..120] — тест красный (120 единиц, обрезанная пополам пара).
+    [Fact]
+    public void Ask_ЛимитНеРвётСуррогатнуюПару()
+    {
+        var text = FeatureBrief.Build(RunWithAttention("wait", new string('р', 119) + "\U0001F600" + new string('с', 10),
+            NOW, null, null), null, null, NOW).Ask!.Text;
+
+        text.Should().HaveLength(119, "эмодзи занимает 121-ю единицу — граница обрезки до него");
+        text.Should().NotContain("\uD83D", "одинокий high surrogate — разорванная суррогатная пара");
+        text.Should().EndWith(new string('р', 119));
     }
 
     // Виды attention — ровно три; иной (аномальные данные) — null: фразы неизвестному смыслу нет

@@ -14,6 +14,12 @@ namespace ClaudeHomeServer.Services.Llm;
 //   • `MetricsUrl`    — GET /metrics движка (флаг --metrics у llama-server): с ним поллер
 //                       LocalModelStatsPoller заводит дорожку статистики на этот движок (Б2b);
 //                       пусто — движок в панели «Локальные модели» не показывается;
+//   • `MetricsEngine` — тип движка формата метрик: "vllm" | "llama-server"; не задан — "llama-server".
+//                       Тип задаётся явно (ADR-029 п.5): неизвестное значение — Warning и дефолт,
+//                       автоугадывания нет;
+//   • `EngineLabel`   — подпись движка, когда MetricsEngine — формат метрик, а не сам движок
+//                       (как Stats:EngineLabel основной локали);
+//   • `ModelLabel`    — имя модели для панели (как Stats:Model основной локали);
 //   • `FallbackRoute` — шаг после неудачи движка, перед финальным claude: `direct:<model>`
 //                       (прямой адаптер, например MiniMax) — других значений нет;
 //   • `Title`         — короткое название модели на вкладке панели «Локальные модели»;
@@ -23,9 +29,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //                       переопределил место в UI (приоритет: выбор админа → `Ollama:Actions` →
 //                       `LocalEngines:*:Actions` → дефолт каталога).
 // Движок без BaseUrl/Model или без мест — не регистрируется (warning), остальные работают.
-// MetricsUrl и Model — init-свойства, не позиционные параметры: у spec positional-конструкторы
-// живут в чужих тестах (графли Б3a: новый позиционный аргумент занял чужую позицию), а эти поля
-// нужны только дорожке статистики (Б2b) и не меняют существующие вызовы.
+// MetricsUrl, Model, MetricsEngine и подписи — init-свойства, не позиционные параметры: у spec
+// positional-конструкторы живут в чужих тестах (графли Б3a: новый позиционный аргумент занял чужую
+// позиция), а эти поля нужны только дорожке статистики (Б2b) и панели (Б7) и не меняют существующие вызовы.
 public sealed record LocalEngineSpec(
     string Name,
     string? ReadyUrl,
@@ -43,6 +49,23 @@ public sealed record LocalEngineSpec(
     // Короткое название модели на вкладке панели «Локальные модели» (LocalEngines:<имя>:Title);
     // пусто — ключ движка с заглавной буквы.
     public string? Title { get; init; }
+
+    // Допустимые значения MetricsEngine — тип движка формата метрик. Та же лексика, что у
+    // Stats.Engine основной локали (LocalModelStatsPoller).
+    public const string EngineKindVllm = "vllm";
+    public const string EngineKindLlamaServer = "llama-server";
+
+    // Тип движка формата метрик (LocalEngines:<имя>:MetricsEngine): "vllm" | "llama-server".
+    // Не задан — "llama-server". Тип задаётся явно (ADR-029 п.5): неизвестное значение в конфиге —
+    // Warning и дефолт, автоугадывания по подстроке нет.
+    public string MetricsEngine { get; init; } = EngineKindLlamaServer;
+
+    // Подпись движка, когда MetricsEngine — формат метрик, а не сам движок (Strata за адаптером
+    // отдаёт метрики с именами vLLM; как Stats:EngineLabel основной локали); null — не задана.
+    public string? EngineLabel { get; init; }
+
+    // Имя модели для панели (как Stats:Model основной локали); null — не задано.
+    public string? ModelLabel { get; init; }
 }
 
 public sealed class LocalEngine(LocalEngineSpec spec, ILocalLlmClient client,
@@ -113,7 +136,26 @@ public sealed class NamedLocalEngines
             }
             var spec = new LocalEngineSpec(name, section["ReadyUrl"]?.Trim(), section["StateUrl"]?.Trim(),
                 fallback, int.TryParse(section["NumCtx"], out var numCtx) && numCtx > 0 ? numCtx : null, actions)
-            { MetricsUrl = section["MetricsUrl"]?.Trim() };
+            {
+                MetricsUrl = section["MetricsUrl"]?.Trim(),
+                EngineLabel = section["EngineLabel"]?.Trim(),
+                ModelLabel = section["ModelLabel"]?.Trim(),
+            };
+            // Тип движка формата метрик задаётся явно (ADR-029 п.5): нет MetricsEngine в конфиге —
+            // дефолт поля ("llama-server"); известное значение — как задано (регистр нормализуется,
+            // как у Stats.Engine основной локали); неизвестное — один Warning и дефолт.
+            var metricsEngine = section["MetricsEngine"]?.Trim().ToLowerInvariant();
+            if (!string.IsNullOrEmpty(metricsEngine))
+            {
+                if (metricsEngine == LocalEngineSpec.EngineKindVllm)
+                    spec = spec with { MetricsEngine = LocalEngineSpec.EngineKindVllm };
+                else if (metricsEngine == LocalEngineSpec.EngineKindLlamaServer)
+                    spec = spec with { MetricsEngine = LocalEngineSpec.EngineKindLlamaServer };
+                else
+                    log.LogWarning(
+                        "LocalEngines:{Name}:MetricsEngine «{Engine}» — известны только vllm и llama-server, считаю llama-server",
+                        name, metricsEngine);
+            }
             // Свой ключ слота на каждый движок: потолок не делится ни с основным LocalLlm, ни с соседями
             var maxConcurrency = int.TryParse(section["MaxConcurrency"], out var mc) && mc > 0
                 ? mc : TrackedLocalLlmClient.DefaultLimit;

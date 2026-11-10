@@ -1838,6 +1838,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // на первой же оценке после старта, часто до плана, и как база не годился. Без снимка учёта
     // (estimateContext == null — в живых путях это только отсутствие проекции) базовый срок
     // не пишется вовсе.
+    // BaselineSteps (FS-PB1) — база плана: знаменатель «было N» для строки «план расширен»
+    // (решение Андрея 11.11). Берётся ТОЛЬКО из контекста вызова (estimateContext.Total, нового
+    // FeatureProjector.Build здесь нет) и пишется один раз при первой оценке, записанной при
+    // НАРЕЗАННОМ или полностью ПРИНЯТОМ плане (planState == "cut" или "done" — окно «cut»
+    // закрывается само при accepted == total, FeatureStepAccounting). Фичи без оценки: null.
     // Сдвиг оценки сверх порога без why — отказ
     // (FeatureEstimateShiftException), проверка — под замком записи, против прочитанной там же
     // текущей оценки (FS-O1). Каждая ЗАПИСАННАЯ оценка дописывает в журнал фичи строку
@@ -1870,6 +1875,18 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
                 && estimateContext?.PlanState == FeatureStepAccounting.PlanCut)
                 task.InitialEtaMinutes = eta;
+            // FS-PB1: база плана — отдельная проверка, не надстройка InitialEtaMinutes: оценка только
+            // с expectedSteps (без срока) тоже фиксирует базу; без записанной оценки (фичи без
+            // оценки) — нет. «cut» или «done» — поправка постановщика 11.11: без «done» база не
+            // записалась бы у фичи, чью первую оценку дали после приёмки всех шагов. Записанное
+            // значение не меняется никогда. Проверка «базы ещё нет» и запись — под тем же
+            // _featureNoteLock: параллельные первые оценки при cut дают ровно одну базу (тест
+            // ПервыеОценкиПриCut_Параллельно_БазаОдна_BaselineSteps).
+            if (task.Note?.Estimate is not null && task.BaselineSteps is null
+                && estimateContext is not null
+                && estimateContext.PlanState is FeatureStepAccounting.PlanCut or FeatureStepAccounting.PlanDone
+                && estimateContext.Total is > 0)
+                task.BaselineSteps = estimateContext.Total;
             // FS-O2a: оценка, которая реально попала в стор, оставляет строку estimate_set
             // (сама оценка перезаписывается — по последней строке честность оценок не проверить).
             // Запись — под тем же _featureNoteLock, что и запись голоса: последняя строка журнала

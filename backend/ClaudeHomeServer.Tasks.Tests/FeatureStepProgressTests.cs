@@ -723,32 +723,32 @@ public class FeatureStepProgressTests
         new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
     }
 
-    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:41-47):
-    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), done вне класса не
-    // потребляется — private. С FS-O2b к internal поднят PlanCut: его сравнивает правило
-    // базового срока в TaskManager (InitialEtaMinutes пишется только при нарезанном плане) —
-    // это не «для удобства», а новый потребитель значения, и он сравнивает ту же константу,
-    // а не второй литерал "cut". Поднимать дальше (done) оснований нет.
-    // Мутация: вернуть PlanCut в private — красный на его строке (проверено прогоном:
-    // до правки теста этот же прогон падал с «Expected IsPrivate to be True … but found False»).
+    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:46-56):
+    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf). С FS-O2b к internal
+    // поднят PlanCut: его сравнивает правило базового срока в TaskManager (InitialEtaMinutes
+    // пишется только при нарезанном плане) — это не «для удобства», а новый потребитель значения,
+    // и он сравнивает ту же константу, а не второй литерал "cut". С FS-PB1 тем же основанием
+    // поднят PlanDone: его сравнивает правило базы плана в TaskManager (BaselineSteps пишется при
+    // cut ИЛИ done — поправка постановщика 11.11: окно cut закрывается само при accepted == total).
+    // Мутации: вернуть PlanCut или PlanDone в private — красный на его строке (для PlanDone
+    // проверено прогоном FS-PB1: «Expected IsPrivate to be True … but found False»).
     [Fact]
-    public void ПланКонстанты_ВидимостьПоКонтракту_PlanCutInternal_PlanDonePrivate()
+    public void ПланКонстанты_ВидимостьПоКонтракту_PlanCutInternal_PlanDoneInternal()
     {
         var t = typeof(FeatureStepAccounting);
-        foreach (var (name, shouldBeInternal) in new[]
+        foreach (var name in new[]
         {
-            (nameof(FeatureStepAccounting.PlanPending), true),
-            (nameof(FeatureStepAccounting.PlanPartial), true),
-            ("PlanCut", true),
-            ("PlanDone", false),
+            nameof(FeatureStepAccounting.PlanPending),
+            nameof(FeatureStepAccounting.PlanPartial),
+            "PlanCut",
+            "PlanDone",
         })
         {
             var field = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
             field.Should().NotBeNull($"константа {name} должна существовать");
-            if (shouldBeInternal)
-                field!.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
-            else
-                field!.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
+            field!.IsAssembly.Should().BeTrue(
+                $"{name} — internal: её сравнивает потребитель вне класса (FeatureBrief.EstimateOf, "
+                + "правило базового срока и правило базы плана в TaskManager), а не второй литерал");
         }
     }
 

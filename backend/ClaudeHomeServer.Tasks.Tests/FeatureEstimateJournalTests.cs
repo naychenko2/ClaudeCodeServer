@@ -23,6 +23,14 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // тем же замком (ПервыеОценкиПриCut_Параллельно_БазаОдна). Само правило и его мутация
 // «вернуть условие StartedKinds» — SetFeatureNote_InitialEtaMinutes_... в TaskManagerTests.
 //
+// FS-PB1: база плана BaselineSteps фиксируется один раз — из контекста первой оценки, записанной
+// при нарезанном ИЛИ полностью принятом плане (planState == "cut" или "done"; поправка
+// постановщика 11.11: окно «cut» закрывается само при accepted == total, FeatureStepAccounting).
+// Проверка отдельна от InitialEtaMinutes: оценка только с expectedSteps (без срока) тоже
+// фиксирует базу; без записанной оценки (фичи без оценки) — нет. Записанное значение не меняется
+// никогда; проверка «базы ещё нет» и запись — под тем же замком
+// (ПервыеОценкиПриCut_Параллельно_БазаОдна_BaselineSteps).
+//
 // Мутации (критерии c2/c4, прогонялись в копии дерева):
 //  • «AppendJournal после finally» (за окна _featureNoteLock) → красный
 //    СтрокаОценки_ПодЗамком_ШовАппендаПервойРаньшеХукаВторой — детерминированно, через
@@ -652,6 +660,156 @@ public class FeatureEstimateJournalTests : IDisposable
             // Дальше база не двигается: следующая оценка при cut её не перезаписывает.
             _sut.SetFeatureNote(epic.Id, "позже", null, false, "prod", "running", Estimate(30, 900), ctx);
             _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300);
+        }
+        finally
+        {
+            _sut.FeatureNoteInside = null;
+            _sut.FeatureNoteContended = null;
+        }
+    }
+
+    // ─── База плана: ровно одна, при нарезанном или принятом плане (FS-PB1) ────────────────────
+
+    // Правило (решение Андрея 11.11, поправка постановщика 11.11): BaselineSteps — из контекста
+    // первой ЗАПИСАННОЙ оценки при planState == "cut" ИЛИ "done" с Total > 0; пишется один раз и
+    // не меняется никогда (ни другой оценкой, ни снятием голоса). Отказы: без снимка учёта, при
+    // pending, при Total == 0 — база не пишется, исключения наружу нет. Мутации (прогон в копии
+    // дерева, вывод в отчёте задачи):
+    //  • убрать условие BaselineSteps is null — вторая оценка при cut (Total 15) перезапишет 12 →
+    //    красный Should «не меняется никогда»;
+    //  • убрать "done" из условия — красный SetFeatureNote_ПерваяОценкаПриDone_БазаЕсть;
+    //  • читать task.BaselineSteps вне блокировки (до TryEnter) — красный
+    //    ПервыеОценкиПриCut_Параллельно_БазаОдна_BaselineSteps (все десять видят null, база
+    //    становится последним Total очереди).
+    [Fact]
+    public void SetFeatureNote_BaselineSteps_ПишетсяОдинРазПриНарезанномИлиПринятомПлане()
+    {
+        var epic = CreateEpic();
+
+        // Без снимка учёта базы нет вовсе (в живых путях снимка нет только когда нет проекции).
+        _sut.SetFeatureNote(epic.Id, "без снимка", null, false, "prod", "running", Estimate(5, 100));
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().BeNull("нет снимка учёта — нет базы");
+
+        // План не нарезан: оценку при pending не о чём мерить.
+        _sut.SetFeatureNote(epic.Id, "план не нарезан", null, false, "prod", "running", Estimate(5, 100),
+            new TaskManager.FeatureEstimateContext("prod", "pending", 0, 0));
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().BeNull("оценка до нарезки плана — не база");
+
+        // Пустой знаменатель (Total == 0) — отказ, без исключения наружу.
+        _sut.SetFeatureNote(epic.Id, "пустой план", null, false, "prod", "running", Estimate(5, 100),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 0));
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().BeNull("Total == 0 — не база");
+
+        // Первая оценка при cut: база = Total снимка вызывающего.
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(10, 300),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 12));
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(12);
+
+        // Повторная оценка при cut с другим Total базу не двигает; снятие голоса — тоже.
+        _sut.SetFeatureNote(epic.Id, "дольше", null, false, "prod", "running", Estimate(13, 400),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 4, 15));
+        _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running");
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(12,
+            "записанная база не меняется никогда: ни другой оценкой, ни снятием голоса");
+    }
+
+    // Поправка постановщика 11.11: окно «cut» закрывается само при accepted == total
+    // (FeatureStepAccounting.cs:428) — без «done» база не записалась бы у фичи, чью первую оценку
+    // дали после приёмки всех шагов.
+    [Fact]
+    public void SetFeatureNote_ПерваяОценкаПриDone_БазаЕсть()
+    {
+        var epic = CreateEpic();
+
+        _sut.SetFeatureNote(epic.Id, "всё принято", null, false, "prod", "running", Estimate(10, 300),
+            new TaskManager.FeatureEstimateContext("prod", "done", 12, 12));
+
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(12);
+    }
+
+    // Проверка базы отдельна от InitialEtaMinutes: оценка только с expectedSteps (без срока) при
+    // cut тоже фиксирует базу; базовый срок при этом не пишется.
+    [Fact]
+    public void SetFeatureNote_ОценкаБезСрока_БазуФиксирует_InitialEtaMinutesНеТронут()
+    {
+        var epic = CreateEpic();
+
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running",
+            new(["шаг"], null, "проверка базы", 9),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 9));
+
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(9, "база не зависит от наличия срока");
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("оценка без срока — не базовый срок");
+    }
+
+    // Голос без оценки (и снятие голоса) — не оценка: база не пишется, даже при cut с Total > 0
+    // («фичи без оценки: BaselineSteps остаётся null»).
+    [Fact]
+    public void SetFeatureNote_БезОценки_БазыНет_ДажеПриCut()
+    {
+        var epic = CreateEpic();
+        var ctx = new TaskManager.FeatureEstimateContext("prod", "cut", 0, 12);
+
+        _sut.SetFeatureNote(epic.Id, "голос без оценки", null, false, "prod", "running", null, ctx);
+        _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running", null, ctx);
+
+        _sut.GetById(epic.Id)!.BaselineSteps.Should().BeNull();
+    }
+
+    // Десять первых оценок при cut идут параллельно, у каждой — свой Total (12…21). Проверка
+    // «базы ещё нет» и её запись — под одним _featureNoteLock (TaskManager.cs), поэтому базу ставит
+    // тот, кто первым держал замок: в тесте это A — он задержан в своей критической секции (шов
+    // FeatureNoteInside), пока остальные девять не уперлись в занятый замок (шов
+    // FeatureNoteContended, порядок детерминирован, не пауза). Мутация «читать task.BaselineSteps
+    // до TryEnter»: все десять видят null и каждая пишет свой Total → база становится последним
+    // значением очереди, первый Should красный (проверено прогоном в копии дерева).
+    [Fact]
+    public async Task ПервыеОценкиПриCut_Параллельно_БазаОдна_BaselineSteps()
+    {
+        var epic = CreateEpic();
+
+        var aInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var othersQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var insideCount = 0;
+        var contendedCount = 0;
+        _sut.FeatureNoteInside = () =>
+        {
+            // Первый вошедший — A: держим его в критической секции, пока остальные не встали в
+            // очередь замка; их критические секции сквозные (хук ничего не делает).
+            if (++insideCount == 1)
+            {
+                aInside.TrySetResult();
+                othersQueued.Task.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        _sut.FeatureNoteContended = () =>
+        {
+            if (++contendedCount == 9) othersQueued.TrySetResult();
+        };
+        try
+        {
+            var a = Task.Run(() => _sut.SetFeatureNote(
+                epic.Id, "база A", null, false, "prod", "running", Estimate(10, 300),
+                new TaskManager.FeatureEstimateContext("prod", "cut", 0, 12)));
+            await aInside.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var others = Enumerable.Range(0, 9)
+                .Select(i => Task.Run(() => _sut.SetFeatureNote(
+                    epic.Id, $"ход {i}", null, false, "prod", "running", Estimate(11 + i, 400 + i),
+                    new TaskManager.FeatureEstimateContext("prod", "cut", 0, 13 + i))))
+                .ToArray();
+            await othersQueued.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var results = await Task.WhenAll([a, .. others]).WaitAsync(TimeSpan.FromSeconds(30));
+            results.Should().HaveCount(10);
+
+            _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(12,
+                "базу пишет тот, кто первым держал замок: остальные видят уже записанную");
+
+            // Дальше база не двигается: следующая оценка при cut с другим Total её не перезаписывает.
+            _sut.SetFeatureNote(epic.Id, "позже", null, false, "prod", "running", Estimate(30, 900),
+                new TaskManager.FeatureEstimateContext("prod", "cut", 5, 30));
+            _sut.GetById(epic.Id)!.BaselineSteps.Should().Be(12);
         }
         finally
         {

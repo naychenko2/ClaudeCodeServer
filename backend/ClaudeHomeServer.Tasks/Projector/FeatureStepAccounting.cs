@@ -47,11 +47,14 @@ internal static class FeatureStepAccounting
     // определение одно, сравнение не разъезжается с значением молча (возврат ревью B2b).
     // cut — internal с FS-O2b: его сравнивает правило базового срока в TaskManager (InitialEtaMinutes
     // фиксируется только при нарезанном плане); вне класса он больше не сравнивается молча литералом.
-    // done — остаётся private (снаружи не потребляется, возврат R-DB B2b).
+    // done — internal с FS-PB1: его сравнивает правило базы плана в TaskManager (BaselineSteps
+    // пишется при cut ИЛИ done: окно cut закрывается само при accepted == total — :428, и без done
+    // база не записалась бы у фичи, чью первую оценку дали после приёмки всех шагов). Тот же
+    // порядок: литерала «done» снаружи нет.
     internal const string PlanPending = "pending";
     internal const string PlanPartial = "partial";
     internal const string PlanCut = "cut";
-    private const string PlanDone = "done";
+    internal const string PlanDone = "done";
 
     // Единый сравнитель кодов шагов (решение 4 ревью Александра): «Б1» и «б1» — один шаг.
     // OrdinalIgnoreCase: детерминизм без зависимости от культуры; им пользуются ВСЕ ключи

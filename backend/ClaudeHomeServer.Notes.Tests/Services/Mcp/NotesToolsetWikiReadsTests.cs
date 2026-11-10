@@ -26,6 +26,10 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   раздела, в учёт не идёт;
 /// - notes_resolve: видимая страница → Read; скрытая и обычная заметка — без учёта;
 /// - notes_thread: корень-страница → Read; корень-скрытая и корень-обычная заметка — без учёта;
+/// - ключ в reads.json — PageKey (путь под pages/), взятый ДО RedactWikiDetail: он меняет
+///   Path на путь показа с живым именем раздела («Проекты/Проект p1/…»). Страница проекного
+///   раздела — единственная фикстура, где эти два пути различаются (ревью 7d358c09):
+///   в «Общем»/«Личном» они совпадают, и мутация «учёт после RedactWikiDetail» на них не ловится;
 /// - сбой учёта (нечитаемый стор → RecordMany=false) не меняет ответ инструмента.
 ///
 /// Видимость и состав tools/list здесь не проверяются — это NotesToolsetWikiTests и
@@ -41,6 +45,11 @@ public class NotesToolsetWikiReadsTests : IDisposable
 
     private const string VisibleKey = "Общее/Прочитанная.md";
     private const string HiddenKey = "Личное/Скрытая.md";
+    // PageKey страницы проекного раздела: единственный раздел, где путь показа
+    // («Проекты/Проект p1/…», живое имя проекта из AddProject) отличается от ключа —
+    // на этой грани и проверяется «ключ ДО RedactWikiDetail».
+    private const string ProjectPageKey = "Проекты/p1/Проектная.md";
+    private const string ProjectDisplayPath = "Проекты/Проект p1/Проектная.md";
 
     private readonly string _dir;
     private readonly IConfiguration _config;
@@ -124,7 +133,8 @@ public class NotesToolsetWikiReadsTests : IDisposable
         res.Text.Should().Be(because, $"причина отказа: {res.Text}");
     }
 
-    // ── вики-фикстура: видимая (common) и скрытая в проектном ходу (personal) страницы ──
+    // ── вики-фикстура: видимая (common), скрытая в проектном ходу (personal) и проектного
+    // раздела (projects/p1) страницы ──
 
     private static string TopicPage(string title, string summary) => $$"""
         ---
@@ -157,6 +167,7 @@ public class NotesToolsetWikiReadsTests : IDisposable
     {
         Write(WikiSections.Common, VisibleKey, TopicPage("Прочитанная", "Видимая страница для учёта."));
         Write(WikiSections.Personal, HiddenKey, TopicPage("Скрытая", "Скрытая в проектном ходу страница."));
+        Write(Own, ProjectPageKey, TopicPage("Проектная", "Проектная страница для учёта ключа."));
     }
 
     /// <summary>Id страницы — детерминированный (base64url(sourceKey|relPath), как NotesService.EncodeId).</summary>
@@ -185,6 +196,29 @@ public class NotesToolsetWikiReadsTests : IDisposable
         snap.Pages[VisibleKey].Recall.Should().Be(0);
         snap.Pages[VisibleKey].Query.Should().Be(0);
         snap.Pages[VisibleKey].Human.Should().Be(0);
+    }
+
+    [Fact]
+    public void Рид_СтраницаПроектногоРазделаУчитываетсяПоPageKey()
+    {
+        Seed();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_read", Args(("id", PageId(ProjectPageKey))));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().Contain("Проектная страница для учёта ключа");
+        // Путь показа отличается от PageKey живым именем проекта: только на этой грани
+        // «учёт после RedactWikiDetail» отличается от «до» (в «Общем» пути совпадают).
+        res.Text.Should().Contain(ProjectDisplayPath, "ответ несёт путь показа (RedactWikiDetail)");
+
+        var snap = Reads();
+        snap.Valid.Should().BeTrue();
+        // Мутация (ревью 7d358c09) «учёт после RedactWikiDetail»: этот тест красный —
+        // ключом стал бы путь показа «Проекты/Проект p1/…».
+        snap.Pages.Keys.Should().BeEquivalentTo(new[] { ProjectPageKey },
+            "ключ — detail.Path ДО RedactWikiDetail (NotesToolset.cs:191), не путь показа");
+        snap.Pages[ProjectPageKey].Read.Should().Be(1);
     }
 
     [Fact]
@@ -267,6 +301,25 @@ public class NotesToolsetWikiReadsTests : IDisposable
     }
 
     [Fact]
+    public void Резолв_СтраницаПроектногоРазделаУчитываетсяПоPageKey()
+    {
+        Seed();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_resolve", Args(("name", "Проектная")));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().Contain(ProjectDisplayPath, "ответ несёт путь показа (RedactWikiDetail)");
+
+        var snap = Reads();
+        snap.Valid.Should().BeTrue();
+        // Мутация «учёт после RedactWikiDetail» (NotesToolset.cs:491): ключ — r.Note.Path ДО него.
+        snap.Pages.Keys.Should().BeEquivalentTo(new[] { ProjectPageKey },
+            "ключ — r.Note.Path ДО RedactWikiDetail, не путь показа");
+        snap.Pages[ProjectPageKey].Read.Should().Be(1);
+    }
+
+    [Fact]
     public void Резолв_СкрытаяСтраницаНеУчитывается()
     {
         Seed();
@@ -307,6 +360,25 @@ public class NotesToolsetWikiReadsTests : IDisposable
         res.Text.Should().Contain("Видимая страница для учёта");
         Reads().Pages.Keys.Should().BeEquivalentTo(new[] { VisibleKey });
         Reads().Pages[VisibleKey].Read.Should().Be(1);
+    }
+
+    [Fact]
+    public void Тред_КореньСтраницыПроектногоРазделаУчитываетсяПоPageKey()
+    {
+        Seed();
+        var (toolset, ctx) = McpEnv("p1");
+
+        var res = Call(toolset, ctx, "notes_thread", Args(("id", PageId(ProjectPageKey))));
+
+        res.IsError.Should().BeFalse(res.Text);
+        res.Text.Should().Contain(ProjectDisplayPath, "ответ несёт путь показа (RedactWikiDetail)");
+
+        var snap = Reads();
+        snap.Valid.Should().BeTrue();
+        // Мутация «учёт после RedactWikiDetail» (NotesToolset.cs:391): ключ — rootDetail.Path ДО него.
+        snap.Pages.Keys.Should().BeEquivalentTo(new[] { ProjectPageKey },
+            "ключ — rootDetail.Path ДО RedactWikiDetail, не путь показа");
+        snap.Pages[ProjectPageKey].Read.Should().Be(1);
     }
 
     [Fact]

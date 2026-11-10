@@ -9,8 +9,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // других дорожек (M1 ревью Б2b). Дорожка `main` — основная модель, её отдаёт
 // ILocalModelStatsReader. Дополнительно — дорожка на каждый именованный движок
 // LocalEngines:{name} с MetricsUrl (имя дорожки = имя движка; движок с именем «main»
-// пропускается — main однозначен, хвост m1 ревью Б2b): источник — LlamaServerMetricsSource
-// через тихий клиент EngineMetricsHttpClientName.
+// пропускается — main однозначен, хвост m1 ревью Б2b): источник и тип движка в снимке —
+// по явному MetricsEngine (Б3): "vllm" → VllmMetricsSource, иначе LlamaServerMetricsSource;
+// оба — через тихий клиент EngineMetricsHttpClientName.
 // Источник метрик main выбирается по провайдеру, помеченному IsLocal, и его секции Stats:
 //   • нет локального провайдера / нет Stats → notConnected (configured=false), сеть не трогаем;
 //   • Stats.Engine = "vllm" + MetricsUrl → VllmMetricsSource (именованный HttpClient);
@@ -35,10 +36,6 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
     // Имя тихого HttpClient для /metrics именованных движков (регистрация — в LlmSubsystem):
     // своя категория, чтобы мёртвый сосед не глушил жалобы основного стенда (и наоборот).
     public const string EngineMetricsHttpClientName = "local-engine-metrics";
-
-    // Тип движка в снимке дорожки: именованные LocalEngines — всегда llama-server
-    // (транспорт NamedLocalEngines.ReadOptions).
-    private const string EngineKindLlamaServer = "llama-server";
 
     // При Enabled=false не ходим в сеть: цикл ждёт и перечитывает настройку раз в 5 с.
     private static readonly TimeSpan DisabledPollInterval = TimeSpan.FromSeconds(5);
@@ -105,21 +102,26 @@ public sealed class LocalModelStatsPoller : BackgroundService, ILocalModelStatsR
         }
     }
 
-    // Дорожка именованного движка: источник — LlamaServerMetricsSource (единственный транспорт
-    // LocalEngines), имя дорожки = имя движка, тип в снимке — llama-server.
-    // Клиент состояния арбитра достается только движкам с StateUrl (Б3b): без StateUrl арбитра
-    // нет — молчание /metrics для такой дорожки — обычный down, как у main.
+    // Дорожка именованного движка: источник и тип движка в снимке — по явному MetricsEngine (Б3):
+    // "vllm" → VllmMetricsSource, иначе LlamaServerMetricsSource (дефолт spec — "llama-server").
+    // Автоугадывания движка нет: значение нормализовано и проверено в NamedLocalEngines (ADR-029 п.5).
+    // Имя дорожки = имя движка. Клиент состояния арбитра достается только движкам с StateUrl (Б3b):
+    // без StateUrl арбитра нет — молчание /metrics для такой дорожки — обычный down, как у main.
     private EngineStatsTrack BuildEngineTrack(LocalEngine engine)
     {
         var metricsUrl = engine.Spec.MetricsUrl!;
         var model = engine.Spec.Model;
+        var engineKind = engine.Spec.MetricsEngine;
+        var isVllm = engineKind == LocalEngineSpec.EngineKindVllm;
         Func<CancellationToken, Task<EngineArbiterSnapshot?>>? arbiter =
             string.IsNullOrWhiteSpace(engine.Spec.StateUrl)
                 ? null
                 : ct => _arbiter.GetAsync(engine.Name, ct);
         return new EngineStatsTrack(engine.Name, _options, () => (
-            new LlamaServerMetricsSource(_httpFactory.CreateClient(EngineMetricsHttpClientName), metricsUrl),
-            EngineKindLlamaServer, model, null, true), _time, _log, arbiter);
+            isVllm
+                ? (IEngineMetricsSource)new VllmMetricsSource(_httpFactory.CreateClient(EngineMetricsHttpClientName), metricsUrl)
+                : new LlamaServerMetricsSource(_httpFactory.CreateClient(EngineMetricsHttpClientName), metricsUrl),
+            engineKind, model, null, true), _time, _log, arbiter);
     }
 
     public LocalModelStatsCurrent Current => _main.Current;

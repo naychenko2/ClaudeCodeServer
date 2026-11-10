@@ -129,7 +129,8 @@ public class LocalModelStatsPollerTests
         public Harness(
             bool enabled = true,
             NamedLocalEngines? engines = null,
-            ILogger<LocalModelStatsPoller>? log = null)
+            ILogger<LocalModelStatsPoller>? log = null,
+            IHttpClientFactory? httpFactory = null)
         {
             Options = new FakeOptionsMonitor<LocalModelStatsOptions>(
                 new LocalModelStatsOptions { Enabled = enabled });
@@ -147,7 +148,7 @@ public class LocalModelStatsPollerTests
                 Options, registry,
                 engines ?? new NamedLocalEngines([]), // без именованных движков: их заводят отдельные тесты Б2b
                 Arbiter, // Б3b: поллер получает клиент арбитра; он достается только дорожкам с StateUrl
-                new FakeHttpClientFactory(), // main-источник подменяется Override; именованные дорожки идут через 503
+                httpFactory ?? new FakeHttpClientFactory(), // main-источник подменяется Override; именованные дорожки идут через эту фабрику
                 Time,
                 log ?? NullLogger<LocalModelStatsPoller>.Instance);
             // Фейковый источник: подменяем фабрику, чтобы не ходить в реальную сеть.
@@ -1109,9 +1110,13 @@ public class LocalModelStatsPollerTests
     // Реальный конструктор NamedLocalEngines (тот же путь, что на бою); HTTP при построении
     // не делается — сеть трогает только опрос дорожки.
     private static NamedLocalEngines EnginesFromConfig(params (string Name, string? MetricsUrl, string? StateUrl)[] engines)
+        => EnginesFromConfig(engines.Select(e => (e.Name, e.MetricsUrl, e.StateUrl, (string?)null)).ToArray());
+
+    // Вариант с MetricsEngine (Б3): тип движка формата метрик задаётся в конфиге явно.
+    private static NamedLocalEngines EnginesFromConfig(params (string Name, string? MetricsUrl, string? StateUrl, string? MetricsEngine)[] engines)
     {
         var dict = new Dictionary<string, string?>();
-        foreach (var (name, metricsUrl, stateUrl) in engines)
+        foreach (var (name, metricsUrl, stateUrl, metricsEngine) in engines)
         {
             dict[$"LocalEngines:{name}:BaseUrl"] = "http://127.0.0.1:18030";
             dict[$"LocalEngines:{name}:Model"] = "gemma-4-26b-a4b";
@@ -1119,6 +1124,8 @@ public class LocalModelStatsPollerTests
                 dict[$"LocalEngines:{name}:MetricsUrl"] = metricsUrl;
             if (stateUrl is not null)
                 dict[$"LocalEngines:{name}:StateUrl"] = stateUrl;
+            if (metricsEngine is not null)
+                dict[$"LocalEngines:{name}:MetricsEngine"] = metricsEngine;
         }
         return new NamedLocalEngines(
             new FakeHttpClientFactory(), new ConfigurationBuilder().AddInMemoryCollection(dict).Build(),
@@ -1455,6 +1462,124 @@ public class LocalModelStatsPollerTests
 
         h.Poller.CurrentOf("gemma")!.Status.Should().Be("yielded");
         h.Poller.CurrentOf("gemma")!.DownSince.Should().BeNull("движок не мёртв — «момент сбоя» из снимка уходит");
+    }
+
+    // ─── Б3: vLLM-источник у именованной дорожки ───────────────────────────────────────────
+
+    // Фейковый IHttpClientFactory: очередь ответов /metrics: добавленный текст → 200 OK,
+    // пустая очередь → 503 («движок не отвечает»). Тесты Б3 подают через него фикстуру vLLM.
+    private sealed class ScriptedHttp : IHttpClientFactory
+    {
+        public Queue<string?> Bodies { get; } = new();
+
+        public HttpClient CreateClient(string name) => new(new ScriptedHandler(Bodies));
+        public HttpClient CreateClient(Type type, string name) => CreateClient(name);
+
+        private sealed class ScriptedHandler(Queue<string?> bodies) : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            {
+                var body = bodies.Count > 0 ? bodies.Dequeue() : null;
+                var resp = body is null
+                    ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
+                return Task.FromResult(resp);
+            }
+        }
+    }
+
+    // Фикстура живого vLLM /metrics (тот же файл, что в VllmMetricsSourceTests): настоящий
+    // ответ движка, num_requests_running=1, kv_cache_usage_perc заполнен.
+    private static string VllmFixture()
+    {
+        var path = Path.Combine(AppContext.BaseDirectory, "Fixtures", "LocalStats", "vllm-metrics.txt");
+        File.Exists(path).Should().BeTrue($"фикстура не скопирована в {path}");
+        return File.ReadAllText(path);
+    }
+
+    // (51) c1: MetricsEngine=vllm → дорожка читает /metrics как vLLM: снимок Engine="vllm",
+    // vLLM-метрики заполнены (KvUsagePerc не null), после второго тика с выросшими счётчиками
+    // есть скорость генерации; Unsupported не содержит KvUsagePerc. Та же фикстура через
+    // LlamaServerMetricsSource дала бы null-поля и KvUsagePerc в Unsupported (его
+    // UnsupportedBlocks — LlamaServerMetricsSource.cs:81-92).
+    // Мутация: вернуть код до Б3 (источник всегда LlamaServerMetricsSource, тип — константой
+    // EngineKindLlamaServer) — краснеет на Engine и на KvUsagePerc.
+    [Fact]
+    public async Task VllmEngineTrack_MetricsEngineVllm_ReadsVllmMetrics()
+    {
+        var engines = EnginesFromConfig(("vllm-engine", "http://127.0.0.1:18040/metrics", null, "vllm"));
+        var http = new ScriptedHttp();
+        http.Bodies.Enqueue(VllmFixture());
+        var h = new Harness(engines: engines, httpFactory: http);
+        var track = h.Poller.Find("vllm-engine")!;
+
+        await h.Poller.PollTrackAsync(track);
+
+        var cur = h.Poller.CurrentOf("vllm-engine")!;
+        cur.Configured.Should().BeTrue();
+        cur.Engine.Should().Be("vllm", "тип движка в снимке — из spec (LocalEngineSpec.MetricsEngine)");
+        cur.Kv!.UsagePerc.Should().NotBeNull("vLLM отдаёт kv_cache_usage_perc");
+        cur.Unsupported.Should().NotContain(nameof(EngineSnapshot.KvUsagePerc),
+            "vLLM-источник не относит читаемые им блоки к неподдерживаемым");
+
+        // Скорость генерации: второй тик с выросшими счётчиками (generation +600 токенов,
+        // inter-token-время +10 с) даёт живую дельту и скорость на поток.
+        h.Time.Advance(TimeSpan.FromSeconds(5));
+        http.Bodies.Enqueue(VllmFixture()
+            .Replace("3.916204e+06", "3.916804e+06")
+            .Replace("64492.1099384452", "64502.1099384452"));
+        await h.Poller.PollTrackAsync(track);
+
+        cur = h.Poller.CurrentOf("vllm-engine")!;
+        cur.Speed.Should().NotBeNull("Δgeneration_tokens за 5 с — живая скорость");
+        cur.Kv!.GenPerStream.Should().NotBeNull("Δgeneration/Δinter-token за окно 60 с — скорость на поток");
+    }
+
+    // (52) c2: фикстура vLLM с num_requests_running=1 → статус дорожки busy, Running==1
+    // (EngineStatsTrack.cs:198 читает Running, который vLLM отдаёт).
+    [Fact]
+    public async Task VllmEngineTrack_RunningOne_StatusBusy()
+    {
+        var engines = EnginesFromConfig(("vllm-engine", "http://127.0.0.1:18040/metrics", null, "vllm"));
+        var http = new ScriptedHttp();
+        http.Bodies.Enqueue(VllmFixture());
+        var h = new Harness(engines: engines, httpFactory: http);
+        var track = h.Poller.Find("vllm-engine")!;
+
+        var interval = await h.Poller.PollTrackAsync(track);
+
+        var cur = h.Poller.CurrentOf("vllm-engine")!;
+        cur.Status.Should().Be("busy");
+        cur.Running.Should().Be(1);
+        interval.Should().Be(h.Options.CurrentValue.ActivePollInterval, "busy-дорожка опрашивается активным интервалом");
+    }
+
+    // (53) c4: битый ответ vLLM-дорожки → down, исключение из дорожки не выходит
+    // (VllmMetricsSource гасит HTTP-сбой в null); следующий тик с валидным ответом даёт
+    // снимок и снимает DownSince.
+    // Мутация «снять try/catch в VllmMetricsSource» → по этому же предикату краснеет
+    // VllmMetricsSourceTests.ReadAsync_HttpError_ReturnsNull (здесь дорожка держит
+    // исключение своим catch — EngineStatsTrack.cs:139 — статус тот же).
+    [Fact]
+    public async Task VllmEngineTrack_BrokenMetrics_RecoversOnNextTick()
+    {
+        var engines = EnginesFromConfig(("vllm-engine", "http://127.0.0.1:18040/metrics", null, "vllm"));
+        var http = new ScriptedHttp(); // пустая очередь → 503: движок не отвечает
+        var h = new Harness(engines: engines, httpFactory: http);
+        var track = h.Poller.Find("vllm-engine")!;
+
+        var interval = await h.Poller.PollTrackAsync(track);
+        h.Poller.CurrentOf("vllm-engine")!.Status.Should().Be("down");
+        interval.Should().Be(h.Options.CurrentValue.DownPollInterval, "молчащий /metrics опрашивается интервалом down");
+
+        http.Bodies.Enqueue(VllmFixture());
+        h.Time.Advance(TimeSpan.FromSeconds(15));
+        await h.Poller.PollTrackAsync(track);
+
+        var cur = h.Poller.CurrentOf("vllm-engine")!;
+        cur.Status.Should().Be("busy", "следующий тик с валидным ответом даёт снимок");
+        cur.Running.Should().Be(1);
+        cur.DownSince.Should().BeNull("возврат снимает момент сбоя");
     }
 
     // Источник, который висит в сети, пока тест не разрешит (медленный движок).

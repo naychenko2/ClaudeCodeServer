@@ -489,6 +489,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.Verification = null;
             task.Outcome = null;
         }
+        // Самоснятие при рождении (§8.4 путь 5): тот же гард, что в Update. Вердикт живёт только
+        // у рождённой закрытой задачи (обнулён выше) — гард смотрит на оставленный вердикт.
+        // Исполнитель здесь — создатель, назначивший задачу себе (task.PersonaId == CreatedByPersonaId):
+        // иного признака исполнителя в момент создания нет. Человек (CreatedByHuman) — свободно.
+        EnsureSelfWithdrawalAllowed(task.Role, task.Verification,
+            isAgentCall: !req.CreatedByHuman,
+            callerIsExecutor: task.PersonaId is not null && task.PersonaId == req.CreatedByPersonaId);
         InsertWithPlanReplacement(task, ownerId);
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
@@ -665,6 +672,30 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         verification.ReturnReason = string.IsNullOrWhiteSpace(verification.ReturnReason)
             ? null : verification.ReturnReason.Trim();
         TaskReturnReasons.Validate(verification.Verdict, verification.ReturnReason, verification.Notes);
+    }
+
+    // Самоснятие (X3, docs/research/features-simplify-architecture-2026-11.md §8.3–§8.5): шаг уходит
+    // из знаменателя только по вердикту, поставленному постановщиком, оркестратором или человеком;
+    // исполнитель своего step/rework вердикт «withdrawn» не ставит — продолжение правила
+    // «исполнитель не меняет критерии приёмки» (Update). Агентский путь (MCP, REST под сервисным
+    // токеном) требует непустых Notes: без причины шаг не снимается, она идёт в журнал витка.
+    // Человек — свободно. Роли вне step/rework (виток ревью, план) гард не трогает: ревьюер вправе
+    // снять шаг по существу (§8.4 путь 4), снятие плана — не снятие шага (путь 9). Проверяется
+    // только НОВЫЙ вердикт из запроса: унаследованный (verification = null) — не постановка.
+    // Один предикат для Update и Create (обе двери, MCP и REST), до записи.
+    private static void EnsureSelfWithdrawalAllowed(
+        string? role, TaskVerification? verification, bool isAgentCall, bool callerIsExecutor)
+    {
+        if (verification is null || verification.Verdict != TaskVerdicts.Withdrawn) return;
+        if (role is not (TaskRoles.Step or TaskRoles.Rework)) return;
+        if (callerIsExecutor)
+            throw new InvalidOperationException(
+                "Снять шаг может постановщик или человек: исполнитель не ставит вердикт «withdrawn» "
+                + "на своём step/rework.");
+        if (isAgentCall && string.IsNullOrWhiteSpace(verification.Notes))
+            throw new InvalidOperationException(
+                "Снятие шага/доработки (вердикт «withdrawn») с агентского пути требует причины "
+                + "в verification.notes.");
     }
 
     private void ValidateFeatureFields(
@@ -1050,6 +1081,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
         EnsureReturnReason(req.Verification);
+        // Самоснятие (X3): исполнитель своего step/rework «withdrawn» не ставит; агентский снятие —
+        // только с Notes. Роль — ЭФФЕКТИВНАЯ (req ?? task): запрос, сделавший задачу шагом в том же
+        // ходе, — тоже снятие шага. Только вердикт из req: унаследованный хранимый — не постановка
+        // (переоткрытие из Done обнуляет его ниже, путь 13 без изменений).
+        EnsureSelfWithdrawalAllowed(effRole, req.Verification, isAgentCall, callerIsExecutor);
 
         // Человек-исполнитель (S2b-2a): задача с персоной-исполнителем человеку не отдаётся.
         // Назначить человека — значит поставить Assignee=Me (смысл AssigneeUserId — только при

@@ -1957,7 +1957,11 @@ public sealed class TasksToolset(
             {
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskVerdicts.All),
-                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn",
+                // Текст парный VERIFICATION_SCHEMA в mcp/tasks-server/index.js (TasksToolsetParityTests
+                // сверяет узел verification целиком). Вложенные описания не входят в сумму параметров
+                // (SumPropertyDescriptions считает только верхние) — лимит 1950 tasks_update не трогает.
+                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn. "
+                    + "Исполнитель своего step/rework не снимает; агентский withdrawn — только с notes.",
             },
             ["returnReason"] = new JsonObject
             {

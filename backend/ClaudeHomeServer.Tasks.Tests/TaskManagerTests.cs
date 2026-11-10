@@ -2820,4 +2820,227 @@ public class TaskManagerTests : IDisposable
         var task = _sut.Create("p", "u", new CreateTaskRequest("t"));
         _sut.Update(task.Id, req)!.AwaitingHumanSince.Should().BeNull();
     }
+
+    // ─── Самоснятие (X3): исполнитель своего шага из знаменателя не выводит ────────────────
+    // Инвариант §8.4 (docs/research/features-simplify-architecture-2026-11.md): шаг уходит из
+    // stepProgress.total только по вердикту «withdrawn», поставленному постановщиком, оркестратором
+    // или человеком. Сторожа путей 1 (tasks_complete), 2 (tasks_update на закрытой), 3 (REST PUT
+    // под сервисным токеном), 5 (Create сразу в Done) — ниже; границы гарда (виток ревью — путь 4,
+    // снятие плана — путь 9) — там же. Мутация «снять clause callerIsExecutor» краснит
+    // Исполнитель_СвойШагWithdrawnСNotes / Исполнитель_СвояДоработка / Путь1 / Путь2 / Путь3;
+    // мутация «гард только в Update» краснит ровно Путь5-тесты.
+
+    private TaskItem FeatureTask(string role, string stepRef = "X1")
+    {
+        var epic = CreateEpic("u");
+        var reviewOf = role == TaskRoles.Rework
+            ? new List<string> { _sut.Create(null, "u", new CreateTaskRequest("ревью",
+                FeatureId: epic.Id, Role: TaskRoles.Review, StepRef: "R0")).Id }
+            : null;
+        return _sut.Create(null, "u", new CreateTaskRequest($"{role} {stepRef}",
+            FeatureId: epic.Id, Role: role, StepRef: stepRef, ReviewOf: reviewOf));
+    }
+
+    private static TaskVerification WithdrawnVerdict(string? notes = null) =>
+        new() { Verdict = TaskVerdicts.Withdrawn, Notes = notes, VerifiedAt = DateTime.UtcNow };
+
+    // Путь 1: MCP tasks_complete (Status=Done + Verification) — исполнитель своего шага.
+    [Fact]
+    public void Путь1_CompleteWithdrawn_ИсполнительСвоегоШага_Отказ()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, ResultMarkdown: "готово", Verification: WithdrawnVerdict()),
+            isAgentCall: true, callerIsExecutor: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("Снять шаг может постановщик или человек");
+        var stored = _sut.GetById(step.Id)!;
+        stored.Status.Should().Be(TaskItemStatus.Todo, "отказ до записи: ни статус, ни вердикт не применены");
+        stored.Verification.Should().BeNull();
+    }
+
+    // Путь 2: MCP tasks_update — вердикт на уже закрытой задаче шага (без смены статуса).
+    [Fact]
+    public void Путь2_ВердикНаЗакрытомШаге_Исполнитель_Отказ()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+        _sut.Update(step.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done),
+            isAgentCall: true, callerIsExecutor: true); // штатное закрытие исполнителем, без вердикта
+
+        var act = () => _sut.Update(step.Id,
+            new UpdateTaskRequest(Verification: WithdrawnVerdict("сам себе снял")),
+            isAgentCall: true, callerIsExecutor: true);
+
+        act.Should().Throw<InvalidOperationException>()
+            .Which.Message.Should().Contain("Снять шаг может постановщик или человек");
+        _sut.GetById(step.Id)!.Verification.Should().BeNull("при отказе состояние не меняется");
+    }
+
+    // Первая clause сильнее Notes-правила: причина от исполнителя не открывает ему снятие.
+    [Fact]
+    public void Исполнитель_СвойШагWithdrawnСNotes_ВсёРавноОтказ()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("причину сам написал")),
+            isAgentCall: true, callerIsExecutor: true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");
+    }
+
+    // Доработка — та же роль знаменателя (цепочка шага): гард тот же.
+    [Fact]
+    public void Исполнитель_СвояДоработкаWithdrawn_Отказ()
+    {
+        var rework = FeatureTask(TaskRoles.Rework, "X2");
+
+        var act = () => _sut.Update(rework.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("причина есть")),
+            isAgentCall: true, callerIsExecutor: true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");
+    }
+
+    // Путь 3: REST PUT под сервисным токеном без валидной сессии-вызывающей — combination flags
+    // (isAgentCall=true по заголовку, callerIsExecutor=true по claim typ=svc, TasksController.cs:654–670):
+    // любой такой вызывающий считается исполнителем. Гард в TaskManager общий для дверей —
+    // отдельной правки контроллера нет.
+    [Fact]
+    public void Путь3_RESTПодСервиснымТокеномБезСессии_ТотЖеГард()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("снятие без причины")),
+            isAgentCall: true, callerIsExecutor: true);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");
+    }
+
+    // Оркестратор (агентский вызов, не исполнитель) снимает шаг — только с Notes: причина идёт
+    // в журнал витка (FeatureProjector: reason = Verification.Notes).
+    [Fact]
+    public void Оркестратор_СнимаетШагСNotes_Проходит()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var done = _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("три возврата, снимаем с выкладки")),
+            isAgentCall: true, callerIsExecutor: false)!;
+
+        done.Status.Should().Be(TaskItemStatus.Done);
+        done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
+
+    [Fact]
+    public void Оркестратор_СнимаетШагБезNotes_Отказ()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("  ")),
+            isAgentCall: true, callerIsExecutor: false);
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("notes");
+        _sut.GetById(step.Id)!.Status.Should().Be(TaskItemStatus.Todo, "отказ до записи");
+    }
+
+    // Человек (REST без агентских признаков) — свободно: ему принадлежит решение о снятии.
+    [Fact]
+    public void Человек_СнимаетШагБезNotes_Проходит()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var done = _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict()))!;
+
+        done.Status.Should().Be(TaskItemStatus.Done);
+        done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
+
+    // Путь 5: Create шага сразу в Done с «withdrawn» (TaskManager, блок после обнуления вердикта
+    // у незакрытой). Агентский путь (CreatedByHuman=false) без Notes — отказ, задача не рождается.
+    [Fact]
+    public void Путь5_СозданиеСнятогоШагаБезNotes_Отказ()
+    {
+        var epic = CreateEpic("u");
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("снятый при рождении",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X5", Status: TaskItemStatus.Done,
+            Verification: WithdrawnVerdict()));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("notes");
+        _sut.GetAll().Should().NotContain(t => t.Title == "снятый при рождении", "отказ до вставки в стор");
+    }
+
+    [Fact]
+    public void Путь5_СозданиеСнятогоШагаСNotes_Проходит()
+    {
+        var epic = CreateEpic("u");
+
+        var step = _sut.Create(null, "u", new CreateTaskRequest("снятый с причиной",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X5", Status: TaskItemStatus.Done,
+            Verification: WithdrawnVerdict("план переписан, шаг не выполняется")));
+
+        step.Status.Should().Be(TaskItemStatus.Done);
+        step.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
+
+    // Человеческий путь Create (CreatedByHuman=true — его ставят только UI/API) — свободно.
+    [Fact]
+    public void Путь5_Человек_СозданиеСнятогоШагаБезNotes_Проходит()
+    {
+        var epic = CreateEpic("u");
+
+        var step = _sut.Create(null, "u", new CreateTaskRequest("снял человек",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X5", Status: TaskItemStatus.Done,
+            CreatedByHuman: true, Verification: WithdrawnVerdict()));
+
+        step.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
+
+    // Исполнитель при Create — создатель, назначивший задачу себе (CreatedPersona == исполнителю):
+    // иного признака исполнителя в момент создания нет; self-назначение + снятие — тот же отказ.
+    [Fact]
+    public void Путь5_СоздательНазначилСебяИсполнителем_СнятьНеМожет()
+    {
+        var epic = CreateEpic("u");
+
+        var act = () => _sut.Create(null, "u", new CreateTaskRequest("снял себя сам",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X5", Status: TaskItemStatus.Done,
+            PersonaId: "prs-exec", CreatedByPersonaId: "prs-exec",
+            Verification: WithdrawnVerdict("причину написал сам")));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");
+    }
+
+    // Граница гарда (путь 4): виток ревью/проверки/финала снимает ревьюер или оркестратор —
+    // это не самоснятие, исполнитель витком не владеет. Роль вне step/rework — гард молчит.
+    [Fact]
+    public void Ревьюер_ВитокWithdrawn_ГардНеТрогает()
+    {
+        var review = FeatureTask(TaskRoles.Review, "R9");
+
+        var done = _sut.Update(review.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("шаг снят по существу")),
+            isAgentCall: true, callerIsExecutor: false)!;
+
+        done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
+
+    // Граница гарда (путь 9): снятие плана — не снятие шага, Notes не требуются.
+    [Fact]
+    public void СнятиеПланаWithdrawnБезNotes_ГардНеТрогает()
+    {
+        var plan = CreatePlan("u", CreateEpic("u").Id, "X1");
+
+        var done = _sut.Update(plan.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict()),
+            isAgentCall: true, callerIsExecutor: false)!;
+
+        done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+    }
 }

@@ -2,17 +2,19 @@ import { C, FONT, FS } from '../../lib/design';
 import { ICON_SIZE } from '../ui/icons';
 import { BackButton } from '../ui';
 import { useFeatureBackNav, useFeatureBackNavForTask, consumeFeatureViewReturn } from '../../lib/featureBackNav';
-import { setFeaturePageTab, FEATURE_TAB_LABEL } from '../../lib/featurePage';
+import { setFeatureMainTab, FEATURE_MAIN_TAB_LABEL } from '../../lib/featurePage';
 
-// «← к фиче «{название}» · {вкладка}» (Ф-pl-b + Ф9b): чат открыт переходом ИЗ страницы
-// фичи — в шапке кнопка возврата на ту же вкладку, с которой ушли («Чаты», «Статистика» …).
-// Вкладку запоминает recordFeatureReturn в момент перехода; клик ставит её в стор страницы
-// и открывает страницу (cc-open-feature, fromChat=false: крошка ведёт в список, не в чат).
+// «← к фиче «{название}» · {мейн-вкладка}» (Ф-pl-b + Ф9b, FS-FBACK): чат открыт переходом
+// ИЗ страницы фичи — в шапке кнопка возврата на ту же мейн-вкладку, с которой ушли
+// («Ход», «Разбор» …). Вкладку запоминает recordFeatureReturn в момент перехода; клик
+// ставит её в мейн-стор страницы и открывает страницу (cc-open-feature, fromChat=false:
+// крошка ведёт в список, не в чат).
 // Нет перехода из фичи → null. useFeatureBackNav — useSyncExternalStore: хук неусловный.
 //
 // major 1: из попапа/панели/шторки (showTab=false) — чип БЕЗ вкладки («← к фиче {название}»),
 // но возврат ведёт на последнюю использованную вкладку (featureBack.tab).
-// minor 1: название вкладки — из ЕДИНОГО словаря FEATURE_TAB_LABEL (чип и полоса не разъезжаются).
+// minor 1: название вкладки — из ЕДИНОГО словаря мейн-вкладок FEATURE_MAIN_TAB_LABEL
+// (чип и полоса не разъезжаются).
 // minor 4: длинное название — обрезка с многоточием (min-width:0 + text-overflow), полное
 // название в title/aria-label (кнопка может сжиматься: flexShrink:1 + overflow:hidden).
 //
@@ -28,7 +30,7 @@ export function FeatureBackChip({ sessionId, taskId, projectId, isCompact = fals
   // Личный чат (нет проекта): воркспейса нет, запасному переходу некуда вести — чип был бы
   // мёртвым. Не рисуем.
   if (!featureBack || !projectId) return null;
-  const tabName = FEATURE_TAB_LABEL[featureBack.tab];
+  const tabName = FEATURE_MAIN_TAB_LABEL[featureBack.tab];
   // Полное название (title/aria-label): название фичи + (если есть вкладка) её имя.
   const fullLabel = `К фиче${featureBack.title ? ` «${featureBack.title}»` : ''}${featureBack.showTab ? `, вкладка «${tabName}»` : ''}`;
   return (
@@ -46,9 +48,9 @@ export function FeatureBackChip({ sessionId, taskId, projectId, isCompact = fals
         // стираться раньше восстановления). Только клик чипа значит «возврат»:
         // открытие страницы из списка или из плашки чата этот путь не проходит.
         consumeFeatureViewReturn(featureBack.featureId);
-        // Вернуться на ТУ ЖЕ вкладку, с которой ушли: ставим явно — вкладку могли сменить,
-        // пока страница была скрыта.
-        setFeaturePageTab(featureBack.tab);
+        // Вернуться на ТУ ЖЕ мейн-вкладку, с которой ушли: ставим явно в мейн-стор —
+        // вкладку могли сменить, пока страница была скрыта.
+        setFeatureMainTab(featureBack.tab);
         const detail: { featureId: string; fromChat: boolean; handled?: boolean } = { featureId: featureBack.featureId, fromChat: false };
         window.dispatchEvent(new CustomEvent('cc-open-feature', { detail }));
         // Вне проекта (раздел «Чаты») воркспейса нет, и событие никто не принял: открываем

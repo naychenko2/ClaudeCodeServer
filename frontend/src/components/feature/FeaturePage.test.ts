@@ -491,14 +491,16 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     });
 
     // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
-    for (const [tab, rowPrefix, label, btnId] of [
-      ['events', 'event-row-', 'История', 'nav-target-chat'],
-      ['tasks', 'step-row-B', 'Шаги', 'nav-target-chat'],
-      ['stats', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
+    // FS-FBACK: точка возврата хранит мейн-вкладку — старая вкладка страницы переводится
+    // по таблице (events/stats → review, tasks → progress).
+    for (const [tab, mainTab, rowPrefix, label, btnId] of [
+      ['events', 'review', 'event-row-', 'История', 'nav-target-chat'],
+      ['tasks', 'progress', 'step-row-B', 'Шаги', 'nav-target-chat'],
+      ['stats', 'review', 'loss-longest-nav', 'Статистика', 'nav-target-chat'],
       // «Статистика»: кнопки задач под лентой времени (TaskButtons) — отдельный путь записи.
-      ['stats', 'stats-tasks', 'Статистика', 'nav-target-task'],
+      ['stats', 'review', 'stats-tasks', 'Статистика', 'nav-target-task'],
     ] as const) {
-      it(`клик по «${btnId === 'nav-target-chat' ? 'чат' : 'задача'}» на вкладке «${label}» (${rowPrefix}) → точка возврата помнит вкладку «${tab}»`, async () => {
+      it(`клик по «${btnId === 'nav-target-chat' ? 'чат' : 'задача'}» на вкладке «${label}» (${rowPrefix}) → точка возврата помнит мейн-вкладку «${mainTab}»`, async () => {
         withData();
         const c = render({});
         await settle();
@@ -514,7 +516,7 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         await act(async () => { (reactProps(btn)!.onClick as () => void)(); });
         const back = backNavTest.getBackNav();
         expect(back?.fromKind).toBe('feature');
-        expect(back?.fromTab, `вкладка перехода (${label})`).toBe(tab);
+        expect(back?.fromTab, `мейн-вкладка перехода (${label})`).toBe(mainTab);
         expect(back?.fromTitle).toBe('Моя фича');
       });
     }

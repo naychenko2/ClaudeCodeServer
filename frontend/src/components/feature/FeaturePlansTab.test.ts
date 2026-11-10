@@ -613,9 +613,10 @@ describe('FeaturePlansTab', () => {
     clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'plan-t', projectId: 'proj-epic' }]);
-    // Точка возврата: на задаче рисуется чип «← к фиче · Планы».
-    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'plan-t' }, fromTab: 'plans' });
-    expect(featureBackNavFromTask('plan-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
+    // Точка возврата: на задаче рисуется чип «← к фиче · Материалы» (FS-FBACK: вкладка
+    // возврата — мейн-вкладка, 'plans' переводится в 'materials').
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'plan-t' }, fromTab: 'materials' });
+    expect(featureBackNavFromTask('plan-t')).toMatchObject({ featureId: 'f1', tab: 'materials' });
   });
 
   it('карточка макета: «задача макета» → openTaskInSection с projectId эпика', async () => {
@@ -627,7 +628,7 @@ describe('FeaturePlansTab', () => {
     clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'mock-t', projectId: 'proj-epic' }]);
-    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'mock-t' }, fromTab: 'plans' });
-    expect(featureBackNavFromTask('mock-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'mock-t' }, fromTab: 'materials' });
+    expect(featureBackNavFromTask('mock-t')).toMatchObject({ featureId: 'f1', tab: 'materials' });
   });
 });

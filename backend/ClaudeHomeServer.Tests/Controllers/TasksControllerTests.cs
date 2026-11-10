@@ -5418,4 +5418,76 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         Timestamp = timestamp,
     };
 
+    // ─── FS-XT3: самоснятие на двери REST — агентский путь по типу вызывающего ─────────────────
+    // Инвариант §8.4: шаг выходит из знаменателя только по вердикту withdrawn от человека,
+    // оркестратора или кнопки мержа; агентское снятие — только с непустым Notes. Дверь REST
+    // под сервисным токеном (typ=svc — Node mcp/tasks-server, вызывающий без сессии) —
+    // агентский путь: находка 1 ревью (495d9c83) — Create ставил CreatedByHuman = true всем,
+    // включая сервисный токен, и снятый при рождении шаг проходил 200 вместо 400.
+
+    // Эпик + шаг фичи человеческим путём (дверь создания открыта человеку): id шага.
+    private async Task<string> CreateFeatureStepAsync(string tag)
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-" + tag + "-" + Guid.NewGuid().ToString("N")[..6], role = "feature" });
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг-" + tag + "-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epic.GetProperty("id").GetString(), role = "step", stepRef = "X3",
+        });
+        return step.GetProperty("id").GetString()!;
+    }
+
+    // PUT /api/tasks/{id} под сервисным токеном без сессии-вызывающей: вызывающий — исполнитель
+    // по claim (TasksController.cs:680-682) → исполнитель не ставит «withdrawn» своему шагу → 400,
+    // запись целая. Notes здесь есть: первая clause сильнее Notes-правила — отказ решает тип
+    // вызывающего, а не отсутствие причины. Мутация (c2): снять передачу callerIsExecutor в
+    // tasks.Update (TasksController.cs:694) — этот тест красный: без заголовка isAgentCall=false,
+    // гард молчит → 200.
+    [Fact]
+    public async Task PutStepWithdrawn_СервисныйТокенБезСессии_400()
+    {
+        var stepId = await CreateFeatureStepAsync("xt3-put");
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.Update(stepId, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            Verification: new TaskVerification
+            {
+                Verdict = TaskVerdicts.Withdrawn,
+                Notes = "причина есть — отказ решает тип вызывающего",
+            }));
+
+        result.Should().BeOfType<BadRequestObjectResult>().Which.StatusCode.Should().Be(400);
+        var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!;
+        stored.Status.Should().Be(TaskItemStatus.Todo, "отказ до записи: ни статус, ни вердикт не применены");
+        stored.Verification.Should().BeNull();
+    }
+
+    // POST /api/tasks под сервисным токеном: шаг сразу в Done с «withdrawn» без Notes → 400
+    // (проба Глеба: до правки было 200 — признак ставился по эндпоинту, а не по типу токена).
+    // Мутация (c2): «CreatedByHuman = true для всех» (TasksController.cs:151/:429) — этот тест
+    // красный: isAgentCall=false, гард Create молчит → 200.
+    [Fact]
+    public async Task CreateWithdrawnStep_СервисныйТокенБезNotes_400()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-xt3-create-" + Guid.NewGuid().ToString("N")[..6], role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var title = "снятый-при-рождении-" + Guid.NewGuid().ToString("N")[..6];
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.Create(JsonSerializer.SerializeToElement(new
+        {
+            title = title,
+            featureId = epicId,
+            role = "step",
+            stepRef = "X3",
+            status = "done",
+            verification = new { verdict = "withdrawn" },
+        }));
+
+        result.Should().BeOfType<BadRequestObjectResult>().Which.StatusCode.Should().Be(400);
+        _factory.Services.GetRequiredService<TaskManager>().GetByOwner(OwnerId)
+            .Should().NotContain(t => t.Title == title, "отказ до вставки в стор");
+    }
+
 }

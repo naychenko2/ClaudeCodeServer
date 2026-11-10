@@ -2824,10 +2824,15 @@ public class TaskManagerTests : IDisposable
     // ─── Самоснятие (X3): исполнитель своего шага из знаменателя не выводит ────────────────
     // Инвариант §8.4 (docs/research/features-simplify-architecture-2026-11.md): шаг уходит из
     // stepProgress.total только по вердикту «withdrawn», поставленному постановщиком, оркестратором
-    // или человеком. Сторожа путей 1 (tasks_complete), 2 (tasks_update на закрытой), 3 (REST PUT
-    // под сервисным токеном), 5 (Create сразу в Done) — ниже; границы гарда (виток ревью — путь 4,
-    // снятие плана — путь 9) — там же. Мутация «снять clause callerIsExecutor» краснит
-    // Исполнитель_СвойШагWithdrawnСNotes / Исполнитель_СвояДоработка / Путь1 / Путь2 / Путь3;
+    // или человеком. Сторожа путей 1 (tasks_complete), 2 (tasks_update на закрытой), 5 (Create
+    // сразу в Done) — ниже; границы гарда (виток ревью — путь 4, снятие плана — путь 9) — там же.
+    // Путь 3 (REST под сервисным токеном) здесь не тестируется: его тест был побайтным
+    // дубликатом Исполнитель_СвойШагWithdrawnСNotes и не проверял дверь (FS-XT3, находка 2
+    // ревью 495d9c83). Combination flags контроллера — isAgentCall по заголовку и
+    // callerIsExecutor по claim typ=svc (TasksController.cs:666-682) — сторожат host-тесты
+    // PutStepWithdrawn_СервисныйТокенБезСессии_400 и CreateWithdrawnStep_СервисныйТокенБезNotes_400
+    // (TasksControllerTests). Мутация «снять clause callerIsExecutor» краснит
+    // Исполнитель_СвойШагWithdrawnСNotes / Исполнитель_СвояДоработка / Путь1 / Путь2;
     // мутация «гард только в Update» краснит ровно Путь5-тесты.
 
     private TaskItem FeatureTask(string role, string stepRef = "X1")
@@ -2899,22 +2904,6 @@ public class TaskManagerTests : IDisposable
 
         var act = () => _sut.Update(rework.Id, new UpdateTaskRequest(
             Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("причина есть")),
-            isAgentCall: true, callerIsExecutor: true);
-
-        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");
-    }
-
-    // Путь 3: REST PUT под сервисным токеном без валидной сессии-вызывающей — combination flags
-    // (isAgentCall=true по заголовку, callerIsExecutor=true по claim typ=svc, TasksController.cs:654–670):
-    // любой такой вызывающий считается исполнителем. Гард в TaskManager общий для дверей —
-    // отдельной правки контроллера нет.
-    [Fact]
-    public void Путь3_RESTПодСервиснымТокеномБезСессии_ТотЖеГард()
-    {
-        var step = FeatureTask(TaskRoles.Step);
-
-        var act = () => _sut.Update(step.Id, new UpdateTaskRequest(
-            Status: TaskItemStatus.Done, Verification: WithdrawnVerdict("снятие без причины")),
             isAgentCall: true, callerIsExecutor: true);
 
         act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("постановщик или человек");

@@ -39,6 +39,13 @@ public class ProjectTasksController(
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
+    // Признак сервисного токена (FS-XT3, находка 1 ревью 495d9c83): тот же claim, что у гарда
+    // Update и у тулсета задач (JwtService.TokenKindClaim). Node mcp/tasks-server зовёт ручку
+    // создания под сервисным токеном (mcp/tasks-server/index.js: path = /api/projects/…/tasks)
+    // — это агентский путь, не человеческий.
+    private bool IsServiceToken =>
+        User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind;
+
     // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
     private Project? OwnProject(string projectId) => projects.GetById(projectId);
 
@@ -127,9 +134,13 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
-            // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
-            // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
+            // Явный признак происхождения (S2b-1, доработка): признак ставит сервер, а не тело
+            // запроса. Эндпоинт — человеческий путь только под пользовательским токеном: под
+            // сервисным (typ=svc — Node mcp/tasks-server) он агентский, тот же признак, что у
+            // гарда Update ниже по файлу: самоснятие шага (withdrawn при рождении) этому пути
+            // доступно только с причиной (FS-XT3, находка 1 ревью 495d9c83). Агентские и
+            // серверные внутренние пути (тулсет задач, волна, merge, сборка архитектора) зовут
+            // TaskManager напрямую.
             // Ключ записи — арендатор проекта (Project.OwnerId, тот же источник, что у
             // RequestScope.TenantOwnerId в [ProjectScope]), автор — вызывающий (F2-T1): задача
             // участника общего проекта лежит под тем же ключом, что задачи владельца («ключ
@@ -137,7 +148,7 @@ public class ProjectTasksController(
             // выдачи арендатора; CreatedByUserId — тот, кто её поставил, по нему решается
             // удаление. Для владельца проекта оба id совпадают — прежний путь.
             task = tasks.Create(projectId, tenantId,
-                req with { CreatedByHuman = true, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
+                req with { CreatedByHuman = !IsServiceToken, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -412,9 +423,10 @@ public class TasksController(
             // TeamWaveService) могут слать personal-карточки в review-колонку своих
             // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
             // обычный кейс гейта.
-            // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
-            // как в проектной ветке Create выше.
-            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): человеческий путь — только под
+            // пользовательским токеном, как в проектной ветке Create выше; под сервисным
+            // (Node mcp/tasks-server) эндпоинт агентский (FS-XT3, находка 1 ревью 495d9c83).
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = !IsServiceToken, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {

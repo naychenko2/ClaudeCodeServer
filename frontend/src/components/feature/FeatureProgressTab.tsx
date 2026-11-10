@@ -9,6 +9,7 @@ import type { ReactNode } from 'react';
 import { C, FS, FONT, SP } from '../../lib/design';
 import { Button } from '../ui/Button';
 import { formatDuration } from '../../lib/chatGroups';
+import { plural } from '../../lib/plural';
 import type { FeatureStage } from '../../types/featureRun';
 import type { FeatureBriefActive, FeatureBriefNext } from '../../lib/featurePage';
 import { ActiveList } from './FeatureBriefActive';
@@ -80,11 +81,11 @@ export function FeatureProgressTab({
                 ariaExpanded={stepsOpen}
                 onClick={() => setStepsOpen(v => !v)}
                 style={{
-                  alignSelf: 'flex-start', height: 'auto', minHeight: isMobile ? 40 : 40,
+                  alignSelf: 'flex-start', height: 'auto', minHeight: 40,
                   background: 'transparent', border: 'none', color: C.accent, fontSize: FS.sm,
                 }}
               >
-                {stepsTotal != null ? `Все ${stepsTotal} шагов этапа ›` : 'Все шаги этапа ›'}
+                {stepsTotal != null ? `Все ${stepsTotal} ${plural(stepsTotal, 'шаг', 'шага', 'шагов')} этапа ›` : 'Все шаги этапа ›'}
               </Button>
               {stepsOpen && <div data-testid="progress-steps">{stepsSlot}</div>}
             </>

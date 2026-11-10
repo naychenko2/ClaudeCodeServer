@@ -68,7 +68,7 @@ export function FeatureClosedSummary({
         data-testid="closed-summary-tiles"
         style={{
           display: 'grid',
-          gridTemplateColumns: isMobile ? 'repeat(2, 1fr)' : `repeat(${tiles.length}, 1fr)`,
+          gridTemplateColumns: isMobile ? 'repeat(2, minmax(0, 1fr))' : `repeat(${tiles.length}, minmax(0, 1fr))`,
           gap: isMobile ? SP.sm : SP.md,
         }}
       >

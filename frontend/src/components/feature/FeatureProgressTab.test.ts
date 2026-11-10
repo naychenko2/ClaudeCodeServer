@@ -1,7 +1,8 @@
 // Вкладка «Ход» (FS-FH). Рендер-тесты на данных формы run.stages / brief.active / brief.next.
 // Покрытие: прошлые этапы — ровно одна строка «… · готово»; текущий — строки «Сейчас» по числу
 // active; кнопка «Все N шагов этапа» — только у prod и только со stepsSlot, клик монтирует
-// слот, второй снимает; будущие и «Дальше»; клик по строке «Сейчас» → onOpenActive(taskId).
+// слот, второй снимает; подпись склоняется (1 шаг / 2 шага / 5 шагов), без stepsTotal —
+// «Все шаги этапа»; будущие и «Дальше»; клик по строке «Сейчас» → onOpenActive(taskId).
 // Мутация (в отчёте): рисовать каждый прошлый этап отдельной строкой → красный тест сжатия.
 
 import { act, createElement } from 'react';
@@ -78,6 +79,18 @@ describe('Вкладка «Ход»', () => {
     expect(count(c, 'slot')).toBe(1);
     act(() => { (reactProps(btn)!.onClick as () => void)(); });
     expect(count(c, 'slot')).toBe(0);
+  });
+
+  it('склонение подписи: 1 шаг / 2 шага / 5 шагов; без stepsTotal — «Все шаги этапа»', () => {
+    const slot = createElement('div', null, 'шаги');
+    for (const [n, word] of [[1, 'шаг'], [2, 'шага'], [5, 'шагов']] as const) {
+      const c = render({ stepsSlot: slot, stepsTotal: n });
+      const btn = findNodeByAttr(c, 'data-testid', 'progress-steps-toggle')!;
+      expect(textNodes(btn).join('')).toContain(`Все ${n} ${word} этапа`);
+    }
+    const c = render({ stepsSlot: slot });
+    const btn = findNodeByAttr(c, 'data-testid', 'progress-steps-toggle')!;
+    expect(textNodes(btn).join('')).toContain('Все шаги этапа');
   });
 
   it('нет stepsSlot — кнопки нет; текущий не prod (review) — кнопки нет', () => {

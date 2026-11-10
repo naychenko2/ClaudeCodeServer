@@ -2,8 +2,11 @@
 //   · смерженная — «Смержена … · шла …», ровно 3 плитки, четвёртой «точности срока» нет;
 //   · initialEtaMinutes задан — «обещали ≈ …», не задан — слова «обещали» нет;
 //   · без даты мержа — текст CLOSED_NO_MERGE_STATUS;
-//   · isMobile — сетка 2 колонки, десктоп — 3;
+//   · isMobile — сетка 2 колонки (minmax), десктоп — 3;
 //   · «Разбор ›» есть только при onOpenReview и вызывает его.
+// Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
+// (Europe/Moscow): на CI (TZ=UTC) подмена «локальная зона → UTC» неотличима от правильной,
+// а 12:00Z в зоне ≥ UTC+12 — уже следующий день. Пин — как в FeatureLaneAxis.test.ts.
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -11,8 +14,17 @@ import { FeatureClosedSummary, type FeatureClosedSummaryProps } from './FeatureC
 import { CLOSED_NO_MERGE_STATUS } from '../../lib/chatGroups';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 
-beforeEach(() => installFakeDom());
-afterEach(() => uninstallFakeDom());
+const ORIGINAL_TZ = process.env.TZ;
+
+beforeEach(() => {
+  process.env.TZ = 'Europe/Moscow';
+  installFakeDom();
+});
+afterEach(() => {
+  uninstallFakeDom();
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+});
 
 function mountSummary(over: Partial<FeatureClosedSummaryProps> = {}) {
   const props: FeatureClosedSummaryProps = {
@@ -62,11 +74,11 @@ describe('FeatureClosedSummary', () => {
   it('сетка: мобила — 2 колонки, десктоп — 3', () => {
     const m = mountSummary({ isMobile: true });
     const grid = findNodeByAttr(m.container, 'data-testid', 'closed-summary-tiles')!;
-    expect(grid.style.gridTemplateColumns).toBe('repeat(2, 1fr)');
+    expect(grid.style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
     uninstallFakeDom(); installFakeDom();
     const d = mountSummary();
     const gridD = findNodeByAttr(d.container, 'data-testid', 'closed-summary-tiles')!;
-    expect(gridD.style.gridTemplateColumns).toBe('repeat(3, 1fr)');
+    expect(gridD.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))');
   });
 
   it('«Разбор ›» — только при onOpenReview, клик вызывает его', () => {

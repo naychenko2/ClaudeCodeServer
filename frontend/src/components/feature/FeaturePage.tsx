@@ -130,9 +130,6 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   const page = useFeaturePage(featureId);
   const index = useFeaturesIndex(projectId);
   const feature = index.features.find(f => f.featureId === featureId) ?? null;
-  // «Открыть ключевой чат» (общее пустое «Материалы»): тот же переход, что в шапке.
-  const keyChat = feature?.keySessionId ?? null;
-  const onOpenKeyChat = keyChat ? () => { void openChatById(keyChat); } : undefined;
   // Корень «просмотра» — для правила «скрытый центр не перехватывает Esc» (useEscapeClose):
   // если страница скрыта (display:none → offsetParent=null), Esc её не закрывает. Как у файла.
   const rootRef = useRef<HTMLDivElement>(null);
@@ -147,6 +144,18 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // Название: из индекса, фолбэк — эпик страницы, затем нейтральное. Контракт:
   // UI обязан пережить отсутствие любого поля ответа — эпик без title не роняет страницу.
   const title = feature?.title ?? (page.status === 'ok' ? (page.page.run.epic?.title ?? 'Фича') : 'Фича');
+
+  // Ключевой чат: id нужен вкладке «Чаты», а общее пустое «Материалы» — переход в него.
+  // Переход — тот же, что у остальных мест страницы (FS-FKEY): сначала запись возврата
+  // к фиче (плашка «← к фиче {название}» в чате), потом открытие. Объявлен под `title`:
+  // запись требует название.
+  const keyChat = feature?.keySessionId ?? null;
+  const onOpenKeyChat = keyChat
+    ? () => {
+        recordFeatureReturn(featureId, { kind: 'chat', id: keyChat }, title);
+        void openChatById(keyChat);
+      }
+    : undefined;
 
   // Глиф + тег: тег — run.state (9 состояний), фолбэк — индекс (старые данные);
   // глиф — как раньше (из индекса, display state).

@@ -556,9 +556,13 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // У фичи в очереди главной кнопки нет: «Снять паузу» там был бы запуском вне очереди без предупреждения.
   const holdAction: 'unpause' | 'start' | null = paused && !queued ? 'unpause' : draft ? 'start' : null;
   const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null || (notStarted && keyChat != null));
+  // Название фичи для плашки «← к фиче {название}» в открытом чате — из пропов
+  // компонента, как в блоке тревоги: переход в чат из шапки тоже пишет возврат (FS-FKEY).
+  const featureTitle = run?.epic?.title ?? null;
   const onPrimary = () => {
     if (holdAction) { clearClick(); return; }
     if (effectivePrimary?.kind === 'chat' && effectivePrimary.chatId) {
+      recordFeatureReturn(fid, { kind: 'chat', id: effectivePrimary.chatId }, featureTitle);
       void openChatById(effectivePrimary.chatId);
       return;
     }
@@ -566,7 +570,10 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onMerge?.();
       return;
     }
-    if (notStarted && keyChat) void openChatById(keyChat);
+    if (notStarted && keyChat) {
+      recordFeatureReturn(fid, { kind: 'chat', id: keyChat }, featureTitle);
+      void openChatById(keyChat);
+    }
   };
 
   // Пункты ⋯: только существующие (ветки/эпика/ключевого чата нет — пункта нет).

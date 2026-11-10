@@ -161,7 +161,23 @@ vi.mock('../../lib/signalr', async (importOriginal) => {
 vi.mock('../../lib/toast', () => ({ showToast: (title: string, detail?: string) => { toasts.push([title, detail]); } }));
 // Журнал openChatById: тесты чипа «ведёт» (W4-1F) проверяют, куда ведёт клик.
 const openChatCalls = vi.hoisted(() => [] as string[]);
-vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); return true; } }));
+// Крюк момента открытия: тест снимает состояние в тот момент, когда openChatById уже
+// вызван (FS-FKEY: доказать, что запись точки возврата идёт раньше перехода).
+const openChatHook = vi.hoisted(() => ({ fn: null as ((id: string) => void) | null }));
+vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); openChatHook.fn?.(id); return true; } }));
+// Журнал recordFeatureReturn: делегирующий обёртка — настоящий модуль делает работу,
+// журнал даёт точное число вызовов и их аргументы (FS-FKEY).
+const recFeatureReturnCalls = vi.hoisted(() => [] as { featureId: string; to: { kind: string; id: string }; title: string | null }[]);
+vi.mock('../../lib/featureBackNav', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/featureBackNav')>();
+  return {
+    ...orig,
+    recordFeatureReturn: (featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, ...rest: unknown[]) => {
+      recFeatureReturnCalls.push({ featureId, to, title: title ?? null });
+      return (orig.recordFeatureReturn as (...a: unknown[]) => void)(featureId, to, title, ...rest);
+    },
+  };
+});
 // Модели: вкладка «Статистика» (Breakdown) читает каталог — в тесте он пуст.
 vi.mock('../../lib/models', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../lib/models')>();
@@ -297,6 +313,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
@@ -500,6 +518,35 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         expect(back?.fromTitle).toBe('Моя фича');
       });
     }
+
+    // === FS-FKEY: общее пустое «Материалы» — «Открыть ключевой чат» пишет возврат, как остальные места ===
+    // Мутации: убрать recordFeatureReturn из onOpenKeyChat → atOpen.records = 0 (записи в момент
+    // открытия нет) и пустой recFeatureReturnCalls → тест красный; порядок «открыл, потом записал»
+    // даёт тот же atOpen.records = 0.
+    it('пустое «Материалы»: «Открыть ключевой чат» → ровно одна запись возврата, раньше openChatById', async () => {
+      const c = render({});
+      await settle();
+      act(() => { setFeaturePageTab('plans'); });
+      const btn = findNodeByAttr(c, 'data-testid', 'plans-open-key-chat');
+      expect(btn, 'кнопка «Открыть ключевой чат» в пустом состоянии').not.toBeNull();
+      // Снимок в момент openChatById: запись уже сделана → порядок «запись → переход».
+      const atOpen: { records: number; from: string | null; toId: string | null } = { records: -1, from: null, toId: null };
+      openChatHook.fn = () => {
+        atOpen.records = recFeatureReturnCalls.length;
+        const nav = backNavTest.getBackNav();
+        atOpen.from = nav?.from ?? null;
+        atOpen.toId = nav?.to?.id ?? null;
+      };
+      try {
+        await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+      } finally {
+        openChatHook.fn = null;
+      }
+      expect(openChatCalls, 'переход в ключевой чат').toEqual(['chat-key']);
+      expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
+      expect(recFeatureReturnCalls[0], 'аргументы записи: фича → её чат, с названием').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-key' }, title: 'Моя фича' });
+      expect(atOpen, 'в момент открытия чата запись уже стоит').toEqual({ records: 1, from: 'f1', toId: 'chat-key' });
+    });
   });
 
   // === 2в. Переключение вкладок Чаты/Задачи/История → свои компоненты (мутация: ComingSoon → red) ===
@@ -923,6 +970,8 @@ describe('Ш5: ветка и ведущий в сводке', () => {
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
@@ -1130,6 +1179,8 @@ describe('W4-HOLD-F2: пауза и черновик в шапке и блоке
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -1391,6 +1442,8 @@ describe('F2: «Закрыть фичу» — пункт ⋯ (Ш4: кнопки 
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -1654,6 +1707,8 @@ describe('F3: кнопка «Возобновить» на закрытой фи
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -1794,6 +1849,8 @@ describe('Q5B: очередь фич в шапке', () => {
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -1950,6 +2007,8 @@ describe('Q5I-2: блок «Фича в очереди» на странице �
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -2141,6 +2200,8 @@ describe('F6: блок «Сводка» на вкладке «Хронологи
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -2338,6 +2399,8 @@ describe('Ш8-wire: риски мержа в диалоге подтвержде
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;
@@ -2443,6 +2506,8 @@ describe('GC-F11R4: окно возврата и страница', () => {
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = pageData();
     mockGetFeature.error = null;
@@ -2527,6 +2592,8 @@ describe('Ш2: тег этапа в тулбаре — из brief.now.stage', ()
     mockIndex.chats = {};
     mockChats.clear();
     openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
     mockGetFeature.pending = false;
     mockGetFeature.result = null;
     mockGetFeature.error = null;

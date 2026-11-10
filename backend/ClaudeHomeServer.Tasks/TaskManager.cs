@@ -480,6 +480,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.ReviewOf, task.PersonaId, ownerId,
             planSteps: task.PlanSteps, enforceReworkReviewOf: true);
         EnsureReturnReason(task.Verification);
+        // Origin из тела не принимается (§8.4): та же единственная точка нормализации, что у
+        // ReturnReason; дальше по методу идут валидаторы и самоснятие — они видят чистый вердикт.
+        StripOriginFromBody(task.Verification);
         // Инвариант (шов Александра 63a69b77 п.1, замечание 7): вердикт и исход дефекта — только
         // у закрытой задачи, по образцу Update (при уходе из Done обнуляются и они, и CompletedAt).
         // Без этого незакрытая задача получила бы вердикт, и опора «без CompletedAt остаются только
@@ -672,6 +675,18 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         verification.ReturnReason = string.IsNullOrWhiteSpace(verification.ReturnReason)
             ? null : verification.ReturnReason.Trim();
         TaskReturnReasons.Validate(verification.Verdict, verification.ReturnReason, verification.Notes);
+    }
+
+    // Инвариант §8.4 (доработка ревью d27c643c): Origin вердикта ставит только серверный путь
+    // снятия закрытого хвоста (WithdrawMergeTail, FS-XT1) — он не проходит через тело запроса.
+    // Из тела обеих дверей (REST и MCP, Create и Update) поле не пишется: любое присланное
+    // значение снимается здесь, в той же точке, что санируется ReturnReason. Без этого POST/PUT
+    // с origin=merge_tail сохранял бы подделку, а FeatureStepAccounting считал бы её по Origin
+    // в stepProgress.withdrawnAtMerge (FeatureStepAccounting.cs:396-401). Хранимый Origin,
+    // поставленный сервером, не трогается: Update с Verification=null — «не менять».
+    private static void StripOriginFromBody(TaskVerification? verification)
+    {
+        if (verification is not null) verification.Origin = null;
     }
 
     // Самоснятие (X3, docs/research/features-simplify-architecture-2026-11.md §8.3–§8.5): шаг уходит
@@ -1081,6 +1096,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
         EnsureReturnReason(req.Verification);
+        // Та же норма на двери Update (major ревью d27c643c: раньше защищался только контроллер):
+        // applied ниже — task.Verification = req.Verification, поэтому без снятия сюда подделка
+        // уходила в стор и в withdrawnAtMerge. Самоснятие ниже видит вердикт без Origin.
+        StripOriginFromBody(req.Verification);
         // Самоснятие (X3): исполнитель своего step/rework «withdrawn» не ставит; агентский снятие —
         // только с Notes. Роль — ЭФФЕКТИВНАЯ (req ?? task): запрос, сделавший задачу шагом в том же
         // ходе, — тоже снятие шага. Только вердикт из req: унаследованный хранимый — не постановка

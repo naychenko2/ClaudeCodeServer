@@ -3051,4 +3051,71 @@ public class TaskManagerTests : IDisposable
 
         done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
     }
+
+    // ─── FS-XT0 (доработка ревью d27c643c): Origin вердикта из тела задачи не принимается ──────
+    // Инвариант §8.4: значение Origin ставит только серверный путь снятия закрытого хвоста
+    // (WithdrawMergeTail, FS-XT1) — оно не проходит через тело запроса. Create и Update обеих
+    // дверей (REST и MCP) его снимают (TaskManager.StripOriginFromBody): иначе POST/PUT с
+    // origin=merge_tail оставил бы в сторе подделку, а FeatureStepAccounting посчитал бы её по
+    // Origin в stepProgress.withdrawnAtMerge (FeatureStepAccounting.cs:396-401). Дверь POST
+    // сторожит host-тест CreateOriginИзТела_НеДоходитДоСчёта (TasksControllerTests); PUT и MCP
+    // были закрыты и раньше — пересборкой вердикта по списку полей (TasksController.cs:643-652,
+    // в MCP-тулсете поля origin нет), теперь норма одна на все пути.
+    // Мутации: убрать StripOriginFromBody в Create → красные Create_ВердикИзТела_OriginНеПишется
+    // и ТелоСOriginMergeTail_НеНадуваетWithdrawnAtMerge; убрать в Update → красный
+    // Update_ВердикИзТела_OriginНеПишется.
+
+    private static TaskVerification BodyVerdictWithFakeOrigin() => new()
+    {
+        Verdict = TaskVerdicts.Withdrawn,
+        Notes = "постановщик снял",
+        Origin = TaskVerificationOrigins.MergeTail,
+    };
+
+    // Create (путь 5, человеческий — ему снятие принадлежит): вердикт остаётся, Origin из тела — нет.
+    [Fact]
+    public void Create_ВердикИзТела_OriginНеПишется()
+    {
+        var epic = CreateEpic("u");
+
+        var step = _sut.Create(null, "u", new CreateTaskRequest("снятый при рождении",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X5", Status: TaskItemStatus.Done,
+            CreatedByHuman: true, Verification: BodyVerdictWithFakeOrigin()));
+
+        step.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn, "нормализуется только Origin");
+        step.Verification!.Origin.Should().BeNull("Origin ставит только серверный путь снятия хвоста");
+        _sut.GetById(step.Id)!.Verification!.Origin.Should().BeNull("то же в сохранённой записи");
+    }
+
+    // Update (тело MCP/PUT): та же норма — вердикт пишется, присланный Origin снимается.
+    [Fact]
+    public void Update_ВердикИзТела_OriginНеПишется()
+    {
+        var step = FeatureTask(TaskRoles.Step);
+
+        var done = _sut.Update(step.Id, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done, Verification: BodyVerdictWithFakeOrigin()),
+            isAgentCall: true, callerIsExecutor: false)!;
+
+        done.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        done.Verification!.Origin.Should().BeNull();
+        _sut.GetById(step.Id)!.Verification!.Origin.Should().BeNull("то же в сохранённой записи");
+    }
+
+    // Счётчик подделки не видит: шаг, «снятый при мерже» самим телом, остаётся снятием по существу
+    // — withdrawn есть, withdrawnAtMerge нет.
+    [Fact]
+    public void ТелоСOriginMergeTail_НеНадуваетWithdrawnAtMerge()
+    {
+        var epic = CreateEpic("u");
+        CreatePlan("u", epic.Id, "X1");
+        _sut.Create(null, "u", new CreateTaskRequest("снятый телом",
+            FeatureId: epic.Id, Role: TaskRoles.Step, StepRef: "X1", Status: TaskItemStatus.Done,
+            CreatedByHuman: true, Verification: BodyVerdictWithFakeOrigin()));
+
+        var run = FeatureProjector.Build(epic, _sut.GetAll(), DateTime.UtcNow);
+
+        run.StepProgress.Withdrawn.Should().Be(1, "снятие по вердикту считается как обычно");
+        run.StepProgress.WithdrawnAtMerge.Should().Be(0, "Origin из тела до учёта не дошёл");
+    }
 }

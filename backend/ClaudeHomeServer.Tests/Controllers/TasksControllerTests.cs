@@ -5575,4 +5575,44 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             .Should().NotContain(t => t.Title == title, "отказ до вставки в стор");
     }
 
+    // ─── FS-XT0 (доработка ревью d27c643c): POST /api/tasks не принимает Origin вердикта ──────
+    // Дверь создания отдавала клиентский объект как есть (TasksController.cs:150 → TaskManager.Create
+    // присваивал req.Verification целиком): POST с verification.origin=merge_tail сохранялся, и
+    // FeatureStepAccounting считал бы подделку в stepProgress.withdrawnAtMerge
+    // (FeatureStepAccounting.cs:396-401). PUT и MCP были защищены пересборкой по списку полей —
+    // теперь норма одна и та же в TaskManager (StripOriginFromBody) на Create и Update обеих дверей.
+    // Мутация (c2): убрать вызов санитайзера в TaskManager.Create → красный этот тест и
+    // Create_ВердикИзТела_OriginНеПишется (TaskManagerTests).
+    [Fact]
+    public async Task CreateOriginИзТела_НеДоходитДоСчёта()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "план xt0-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epicId, role = "plan",
+            planSteps = new[] { new { stepRef = "A1", title = "шаг один" } },
+        });
+
+        // Человеческая дверь (пользовательский токен): снятие шага человеку принадлежит —
+        // вердикт принимается, Origin из тела — нет.
+        var created = await CreateTaskAsync(new
+        {
+            title = "снятый телом xt0-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epicId, role = "step", stepRef = "A1", status = "done",
+            verification = new { verdict = "withdrawn", notes = "постановщик снял", origin = "merge_tail" },
+        });
+        var stepId = created.GetProperty("id").GetString()!;
+
+        var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!;
+        stored.Verification.Should().NotBeNull("вердикт человеческой двери остаётся");
+        stored.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        stored.Verification!.Origin.Should().BeNull(
+            "Origin ставит только серверный путь снятия хвоста (WithdrawMergeTail), не тело запроса");
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.StepProgress.Withdrawn.Should().Be(1, "снятие по вердикту считается как обычно");
+        run.StepProgress.WithdrawnAtMerge.Should().Be(0, "подделка merge_tail в счётчик не попала");
+    }
+
 }

@@ -19,7 +19,8 @@
 // — поля из `unsupported` (Кэш, Вытеснения, время агентов) скрыты целиком;
 // — видеокарта — своя карточка «Видеокарта · Video» с чипом «общая с ComfyUI»
 //   (данные с узла ComfyUI на Video; «Железо» — хост CCS, ссылки туда нет);
-// — «Кто сейчас на модели» — места сервера из duty.callsNow, не чаты;
+// — «Кто сейчас на модели» — одна карточка на оба стенда: чаты дорожки (свой — кликабелен)
+//   и места сервера из duty.callsNow (не кликабельны); счётчик = чаты + места + «прочие»;
 // — «Дежурство» (DutyBlock) — последним блоком, только у выбранного второго движка и только
 //   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели;
 // — «семантика llama-server» (подпись «чтение промпта» без «с ожиданием», подпись про
@@ -39,7 +40,6 @@ import {
   formatGpuMem, formatPower, formatSince, formatTps, formatUpdatedAt, gpuCountLabel, notReportedText, whoRows,
   standDot, standHint, statusPill, type StatusTone, type WhoRow,
 } from './format';
-import { dutyWhoRows } from './dutyFormat';
 import { DutyBlock } from './DutyBlock';
 import { useAllProjects } from '../projects/useAllProjects';
 import { HwLinkRow } from './HwLinkRow';
@@ -380,10 +380,20 @@ function ChartCard({ data, window, onWindowChange, isMobile }: {
 }
 
 // === «Кто сейчас на модели» ===
-// Строка — кнопка (36 desktop / 44 touch): аватар 24, имя FS.sm 600 с
+// Строка чата — кнопка (36 desktop / 44 touch): аватар 24, имя FS.sm 600 с
 // многоточием, проект FS.xs C.textMuted, справа скорость. Свой чат — клик
 // открывает его; чужой — «Чат другого пользователя» без названия и перехода;
-// «Прочие запросы: N» — хвост списка.
+// строка места — div без перехода; «Прочие запросы: N» — хвост списка.
+const WHO_AVATAR: CSSProperties = {
+  width: 24, height: 24, flex: '0 0 24px', borderRadius: R.full,
+  background: C.accentMuted, color: C.textHeading, fontSize: 10, fontWeight: 700,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+const WHO_TITLE: CSSProperties = {
+  display: 'block', fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+};
+
 function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean; onOpen: (id: string) => void }) {
   const minH = isMobile ? 44 : 36;
   if (row.kind === 'others') {
@@ -396,9 +406,31 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
       </div>
     );
   }
-  // Строка места здесь не встречается: WhoCard основной вкладки не передаёт места в whoRows
-  // (совместная карточка второго стенда и её рендер — F3). Guard сужает union до строки чата.
-  if (row.kind === 'place') return null;
+  const base: CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: minH,
+    padding: `${SP.sm}px ${SP.sm}px`, borderRadius: R.md, width: '100%',
+    background: 'transparent', border: 'none', color: 'inherit', cursor: 'default',
+  };
+  // Строка места — действие сервера из журнала вызовов (duty.callsNow), а не чат:
+  // div без перехода (разрез v2, §4). Вместо проекта — звено цепочки; справа —
+  // длительность вызова: ждущий (ещё не начался) — warning, та же, что строка «Дежурства».
+  if (row.kind === 'place') {
+    return (
+      <div style={base}>
+        <span style={WHO_AVATAR}>{(row.title[0] ?? '·').toUpperCase()}</span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <b style={WHO_TITLE}>{row.title}</b>
+          <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>{row.linkText}</span>
+        </span>
+        {row.duration && (
+          <span style={{
+            fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap',
+            color: row.queued ? C.warningText : C.textSecondary,
+          }}>{row.duration}</span>
+        )}
+      </div>
+    );
+  }
   const speedColor = row.tone === 'wait' ? C.warningText : row.tone === 'read' ? C.textMuted : C.textSecondary;
   const speedStyle: CSSProperties = {
     fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap',
@@ -406,16 +438,9 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
   };
   const inner = (
     <>
-      <span style={{
-        width: 24, height: 24, flex: '0 0 24px', borderRadius: R.full,
-        background: C.accentMuted, color: C.textHeading, fontSize: 10, fontWeight: 700,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }}>{(row.title[0] ?? '·').toUpperCase()}</span>
+      <span style={WHO_AVATAR}>{(row.title[0] ?? '·').toUpperCase()}</span>
       <span style={{ flex: 1, minWidth: 0 }}>
-        <b style={{
-          display: 'block', fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-        }}>{row.title}</b>
+        <b style={WHO_TITLE}>{row.title}</b>
         {row.project && (
           <span style={{
             display: 'block', fontSize: FS.xs, color: C.textMuted,
@@ -426,11 +451,6 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
       <span style={speedStyle}>{row.speed}</span>
     </>
   );
-  const base: CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: minH,
-    padding: `${SP.sm}px ${SP.sm}px`, borderRadius: R.md, width: '100%',
-    background: 'transparent', border: 'none', color: 'inherit', cursor: 'default',
-  };
   // Чужой чат — div без перехода; свой — кнопка (клик открывает чат)
   if (!row.own || !row.sessionId) {
     return <div style={base}>{inner}</div>;
@@ -445,18 +465,26 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
   );
 }
 
-function WhoCard({ data, isMobile, onOpen }: { data: LocalModelStats; isMobile: boolean; onOpen: (id: string) => void }) {
+// «Кто сейчас на модели» — одна карточка на оба стенда (F3): main — только чаты
+// (без мест, прежний рендер); named — чаты своего снимка и места из duty.callsNow
+// в одном списке (порядок whoRows: чаты → места → «прочие»). Места читает только
+// named: рендер ровно того, что отдал /stats?engine= выбранного стенда, без склейки
+// с чужим снимком (инвариант: чат на стенде X — только во вкладке X).
+function WhoCard({ data, isMobile, onOpen, named }: { data: LocalModelStats; isMobile: boolean; onOpen: (id: string) => void; named?: boolean }) {
   // Имя проекта — из общего стора проектов по projectId (бэк отдаёт только id,
   // и только для своих чатов); чужой чат проекта не получает вовсе
   const projects = useAllProjects();
-  if (data.chats == null && (data.othersCount ?? 0) === 0) {
+  const callsNow = named ? data.duty?.callsNow : undefined;
+  // main: движок ничего не сообщил о чатах — «Движок это не сообщает». У named этой
+  // ветки нет: журнал вызовов — дело сервера, а не движка, пустой список — «Пока никто»
+  if (!named && data.chats == null && (data.othersCount ?? 0) === 0) {
     return (
       <Card title="Кто сейчас на модели">
         <NotReported data={data} />
       </Card>
     );
   }
-  const rows = whoRows(data.chats, data.othersCount, id => id ? projects.find(p => p.id === id)?.name : undefined);
+  const rows = whoRows(data.chats, data.othersCount, id => id ? projects.find(p => p.id === id)?.name : undefined, callsNow);
   if (rows.length === 0) {
     return (
       <Card title="Кто сейчас на модели">
@@ -464,9 +492,10 @@ function WhoCard({ data, isMobile, onOpen }: { data: LocalModelStats; isMobile: 
       </Card>
     );
   }
-  // Честный счётчик: число чатов + «прочие запросы» (строка «Прочие: N» — один элемент
+  // Честный счётчик: чаты + места + «прочие запросы» (строка «Прочие: N» — один элемент
   // списка, но N запросов). Не rows.length: он считал бы «прочие» за 1.
-  const total = (data.chats?.length ?? 0) + (data.othersCount ?? 0);
+  const total = (data.chats?.length ?? 0) + (callsNow?.length ?? 0) + (data.othersCount ?? 0);
+  const hasPlaces = rows.some(r => r.kind === 'place');
   return (
     <Card
       title="Кто сейчас на модели"
@@ -475,56 +504,12 @@ function WhoCard({ data, isMobile, onOpen }: { data: LocalModelStats; isMobile: 
       <div style={{ display: 'flex', flexDirection: 'column', margin: `0 ${-SP.sm}px` }}>
         {rows.map(r => <WhoRowView key={r.key} row={r} isMobile={isMobile} onOpen={onOpen} />)}
       </div>
-    </Card>
-  );
-}
-
-// === «Кто сейчас на модели» (стенд на Video): места сервера, не чаты (макет §3/§4) ===
-// Строки из duty.callsNow (журнал EngineCallLedger): не кликабельны, владельца и
-// промпта нет; вместо проекта — звено цепочки («локальная» / «MiniMax · страховка» /
-// «ждёт в очереди»); справа — длительность вызова. Подпись говорит, что это не чаты,
-// чтобы строку не пытались открыть.
-function WhoPlacesCard({ data, isMobile }: { data: LocalModelStats; isMobile: boolean }) {
-  const rows = dutyWhoRows(data.duty?.callsNow);
-  const minH = isMobile ? 44 : 36;
-  return (
-    <Card
-      title="Кто сейчас на модели"
-      right={rows.length ? <span style={{ fontSize: FS.xs, color: C.textMuted, fontWeight: 400 }}>{rows.length}</span> : undefined}
-    >
-      {rows.length === 0 ? (
-        <p style={{ margin: 0, fontSize: FS.sm, color: C.textMuted }}>Пока никто</p>
-      ) : (
-        <>
-          <div style={{ display: 'flex', flexDirection: 'column', margin: `0 ${-SP.sm}px` }}>
-            {rows.map(r => (
-              <div key={r.key} style={{ display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: minH, padding: `${SP.sm}px ${SP.sm}px` }}>
-                <span style={{
-                  width: 24, height: 24, flex: '0 0 24px', borderRadius: R.full,
-                  background: C.accentMuted, color: C.textHeading, fontSize: 10, fontWeight: 700,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}>{(r.place[0] ?? '·').toUpperCase()}</span>
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <b style={{
-                    display: 'block', fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                  }}>{r.place}</b>
-                  <span style={{ display: 'block', fontSize: FS.xs, color: C.textMuted }}>{r.linkText}</span>
-                </span>
-                {/* длительность ждущего вызова — warning: он ещё не начался */}
-                {r.duration && (
-                  <span style={{
-                    fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap',
-                    color: r.queued ? C.warningText : C.textSecondary,
-                  }}>{r.duration}</span>
-                )}
-              </div>
-            ))}
-          </div>
-          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm }}>
-            Здесь места сервера, а не чаты: строки не кликабельны, владельца и промпта нет.
-          </div>
-        </>
+      {/* Строка места выглядит как строка чата, но перехода нет — подпись говорит об
+          этом, чтобы её не пытались открыть (макет §3/§4) */}
+      {hasPlaces && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm }}>
+          Места в списке — это вызовы сервера, а не чаты: они не кликабельны, владельца и промпта нет.
+        </div>
       )}
     </Card>
   );
@@ -720,9 +705,9 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
         {named
           ? <VideoCard data={data} />
           : <GpusCard data={data} onOpenHardware={onOpenHardware} />}
-        {named
-          ? <WhoPlacesCard data={data} isMobile={isMobile} />
-          : <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} />}
+        {/* «Кто сейчас на модели» — одна карточка: main без мест, named — чаты своего
+            снимка и места из duty.callsNow (F3) */}
+        <WhoCard data={data} isMobile={isMobile} onOpen={onOpenChat} named={named} />
         {/* «Дежурство» — последний блок стенда на Video (макет §3/§5): только у выбранного
             второй движок; без duty блока нет — DutyBlock сам возвращает null (DutyBlock.tsx:222).
             Внешний guard по data.duty повторял это условие и маскировал в тестах условие

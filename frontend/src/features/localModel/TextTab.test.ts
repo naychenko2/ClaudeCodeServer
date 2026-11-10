@@ -5,7 +5,8 @@
 // сокрытие полей из `unsupported` (не заглушки, а ничего), состояние 'yielded'
 // (нейтральный тон, не нули), карточка Video и «места сервера» вместо чатов, блок
 // «Дежурство» (только у выбранного второй движок; без duty — пустого: блок сам
-// возвращает null; без арбитра — строка «Арбитр не подключён»).
+// возвращает null; без арбитра — строка «Арбитр не подключён»), совместная карточка
+// «Кто сейчас на модели» второго стенда: чаты дорожки + места из duty.callsNow (F3).
 // Рендер — через linkedom (как tasks/acceptanceBlock.test.ts); ResizeObserver
 // стабится: ThroughputChart меряет им свою ширину.
 
@@ -37,7 +38,7 @@ const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { TextTab } = await import('./TextTab');
 const { notReportedText, standDot, standHint, statusPill } = await import('./format');
-const { mockEngineStats, mockLocalModelStats, mockNamedVllmStats } = await import('./localModel.fixtures');
+const { mockEngineStats, mockLocalModelStats, mockNamedMixedStats, mockNamedVllmStats } = await import('./localModel.fixtures');
 const { dutyWhoRows } = await import('./dutyFormat');
 const ENGINES_BOTH = [
   { name: 'main' as const, title: 'Основная', configured: true },
@@ -213,7 +214,8 @@ describe('подстрока под статусом (макет §3, .html:414)
   });
   it('main — прежняя «N карты, TP=N», без «Video»', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
-    expect(html).toContain('vLLM · 2 карты, TP=2');
+    // engine — lowercase-тип с wire (бэк нормализует: LocalModelStatsPoller ToLowerInvariant)
+    expect(html).toContain('vllm · 2 карты, TP=2');
     expect(html).not.toContain('Video');
   });
   it('main с подписями из Stats — движок и раскладка вместо engine и «TP=N», модель — из model', () => {
@@ -305,7 +307,8 @@ describe('карточка Video и «места сервера» (стенд в
     expect(html).toContain('Классификация задачи');
     expect(html).toContain('MiniMax · страховка');
     expect(html).toContain('2,1 с');
-    expect(html).toContain('Здесь места сервера');
+    // совместная карточка F3: строки мест по-прежнему не кнопки, и их поясняет подпись
+    expect(html).toContain('Места в списке — это вызовы сервера');
     const { window: w2, document: d2 } = parseHTML(`<!doctype html><body>${html}</body>`);
     const buttons = Array.from(d2.querySelectorAll('button')).map(b => b.textContent ?? '');
     expect(buttons.some(t => t.includes('Классификация задачи'))).toBe(false);
@@ -356,6 +359,65 @@ describe('именованный vLLM-стенд: подписи и кэш по 
     expect(html).not.toContain('Нагрузка и кэш');
     expect(html).not.toContain('Кэш, %');
     expect(html).not.toContain('ступеньками');
+  });
+});
+
+// F3: «Кто сейчас на модели» второго стенда — одна карточка: чаты своей дорожки
+// (свой — кнопка, клик зовёт onOpen(sessionId); чужой — без перехода) + места из
+// duty.callsNow (без перехода) + «прочие». Счётчик = чаты + места + прочие запросы.
+// main не затронут: его WhoCard не читает duty и не передаёт места в whoRows
+// (инвариант: чат на стенде X — только во вкладке X). Мутация «счётчик без мест»
+// краснит ровно первый тест.
+describe('«Кто сейчас на модели»: чаты и места в одной карточке (named, F3)', () => {
+  const data = mockNamedMixedStats();
+
+  // Счётчик из шапки карточки: span-сосед h3 с заголовком
+  function whoCardCounter(html: string): string | null {
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const h3 = Array.from(d.querySelectorAll('h3')).find(h => (h.textContent ?? '').trim() === 'Кто сейчас на модели');
+    const span = h3?.parentElement?.querySelector('span');
+    return span?.textContent?.trim() ?? null;
+  }
+
+  it('счётчик в шапке = чаты + места: 1 свой + 1 чужой + 1 место = 3', () => {
+    expect(whoCardCounter(renderTab({ data, engine: 'gemma' }))).toBe('3');
+  });
+
+  it('свой чат — кнопка, клик по ней зовёт onOpen(sessionId)', () => {
+    const opened: string[] = [];
+    const { host, root } = mountTab({ data, engine: 'gemma', onOpenChat: (id: string) => opened.push(id) });
+    const btn = Array.from(host.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Ревью Video-стенда'));
+    expect(btn).toBeTruthy();
+    act(() => btn!.click());
+    expect(opened).toEqual(['s-named-1']);
+    act(() => { root.unmount(); });
+    host.remove();
+  });
+
+  it('чужой чат и место — не кнопки; место подписано звеном, длительностью и пояснением', () => {
+    const html = renderTab({ data, engine: 'gemma' });
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const buttons = Array.from(d.querySelectorAll('button')).map(b => b.textContent ?? '');
+    expect(buttons.some(t => t.includes('Чат другого пользователя'))).toBe(false);
+    expect(buttons.some(t => t.includes('Заголовок чата'))).toBe(false);
+    // строка места: звено цепочки и длительность — тот же маппинг, что «Дежурство»
+    expect(html).toContain('Заголовок чата');
+    expect(html).toContain('локальная');
+    expect(html).toContain('1,4 с');
+    expect(html).toContain('Места в списке — это вызовы сервера');
+  });
+
+  it('порядок строк: чаты, затем места (порядок whoRows)', () => {
+    const html = renderTab({ data, engine: 'gemma' });
+    expect(html.indexOf('Ревью Video-стенда')).toBeLessThan(html.indexOf('Чат другого пользователя'));
+    expect(html.indexOf('Чат другого пользователя')).toBeLessThan(html.indexOf('Заголовок чата'));
+  });
+
+  it('мобила: строка своего чата ≥ 40 px по высоте (44 на 360)', () => {
+    const html = renderTab({ data, engine: 'gemma', isMobile: true });
+    const { document: d } = parseHTML(`<!doctype html><body>${html}</body>`);
+    const btn = Array.from(d.querySelectorAll('button')).find(b => (b.textContent ?? '').includes('Ревью Video-стенда'));
+    expect((btn?.getAttribute('style') ?? '')).toContain('min-height:44px');
   });
 });
 

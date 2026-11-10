@@ -1225,6 +1225,8 @@ interface ChatHeaderBarProps {
   // пустого рендера, и шапка приняла бы его за заполненный — гасила бы линию тулбара и
   // ставила пустой div (ревью F2, major 2; решает ChatPanel).
   featureBar?: ReactNode;
+  // Фичи карточки в слоте (FS-FC-chip): на них чип «к фиче» в тулбаре не рисуется — возврат ведёт кнопка «К фиче» карточки; список даёт ChatPanel (FS-FCi)
+  featureBarFeatureIds?: readonly string[];
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
   // отделять нечего, и черта лежала бы поперёк пустого чата без причины
   scrolled?: boolean;
@@ -1336,7 +1338,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, featureBarFeatureIds, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1723,7 +1725,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // кнопка возврата на страницу фичи (на ту же вкладку: стор страницы её держит).
   // Клик — cc-open-feature (fromChat=false: крошка страницы фичи ведёт в список, не в чат).
   // useFeatureBackNav — useSyncExternalStore: вызов неусловный, порядок хуков стабилен.
-  const featureBackEl = <FeatureBackChip sessionId={session.id} projectId={session.projectId} isCompact={isCompact} />;
+  const featureBackEl = <FeatureBackChip sessionId={session.id} projectId={session.projectId} isCompact={isCompact} hideForFeatureIds={featureBarFeatureIds} />;
   // Бейдж последней запущенной механики команды (только на десктопе)
   // Видимость пилюль (индикаторов) — тем же глазиком, что и кнопки действий, но
   // только в ОБЫЧНОЙ шапке: на стене пилюль нет вовсе. По умолчанию показаны все —

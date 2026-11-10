@@ -12,7 +12,7 @@
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { FeatureBackChip } from './FeatureBackChip';
+import { FeatureBackChip, returnToFeature } from './FeatureBackChip';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from './__tests__/fakeDom';
 import { __test as backNav } from '../../lib/featureBackNav';
 import { __test as pageStore, setFeatureMainTab, setFeaturePageTab, type FeatureMainTab } from '../../lib/featurePage';
@@ -266,5 +266,87 @@ describe('FeatureBackChip: вне проекта', () => {
     };
     click(container);
     expect(log).toEqual(['cc-open-feature']);
+  });
+});
+
+// FS-FC-chip (макет v5 §4): пока в шапке чата есть карточка той же фичи, чип не рисуется —
+// возврат ведёт её кнопка «К фиче». Скрытие только по совпадению featureId; указатель на
+// другую фичу и без пропа — чип как раньше. На экране задачи (taskId) проп не передаётся.
+describe('FeatureBackChip: hideForFeatureIds (FS-FC-chip)', () => {
+  function renderHidden(hideForFeatureIds: readonly string[]) {
+    installFakeDom();
+    const { root, container } = mount(createElement(FeatureBackChip, { sessionId: 'c1', projectId: 'p1', hideForFeatureIds }));
+    roots.push(root);
+    return container;
+  }
+  it('hideForFeatureIds=[f1], указатель на f1 → чипа нет; указатель на f2 → чип; без пропа → чип', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    expect(findNodeByAttr(renderHidden(['f1']), 'data-testid', 'feature-back-chip'), 'вторая кнопка рядом с карточкой').toBeNull();
+    expect(findNodeByAttr(render('c1'), 'data-testid', 'feature-back-chip'), 'чип пропал без пропа').not.toBeNull();
+    backNav.recordFeatureReturn('f2', { kind: 'chat', id: 'c1' }, 'Другая фича');
+    const chip = findNodeByAttr(renderHidden(['f1']), 'data-testid', 'feature-back-chip');
+    expect(chip, 'чип скрылся и для другой фичи').not.toBeNull();
+    expect(textNodes(chip!).join('')).toContain('Другая фича');
+  });
+  // Конкурентность: указатель переписывают на живом компоненте — «побеждает последний»:
+  // пока он на фиче карточки — чипа нет, после записи на другую фичу — чип появляется.
+  it('указатель переписан на живом компоненте (f1→f2): чип появляется', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    const c = renderHidden(['f1']);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-back-chip'), 'вторая кнопка рядом с карточкой').toBeNull();
+    act(() => { backNav.recordFeatureReturn('f2', { kind: 'chat', id: 'c1' }, 'Другая фича'); });
+    const chip = findNodeByAttr(c, 'data-testid', 'feature-back-chip');
+    expect(chip, 'последняя запись не победила').not.toBeNull();
+    expect(textNodes(chip!).join('')).toContain('Другая фича');
+  });
+});
+
+// FS-FC-chip: поведение клика вынесено в returnToFeature — кнопка «К фиче» карточки (FS-FC)
+// зовёт её же, чип зовёт её же. Порядок и кратность: consumeFeatureViewReturn — ровно один
+// раз ДО cc-open-feature (GC-F11). Мерка: seq pending в момент диспатча = 1 (первый consume
+// после reset) и тот же после вызова (второго consume нет).
+describe('FeatureBackChip: returnToFeature (FS-FC-chip)', () => {
+  type Row = { type: string; detail: unknown; pendingSeqAtDispatch: number | null };
+  function probeLog(): Row[] {
+    const log: Row[] = [];
+    (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent = (e: Event) => {
+      const p = backNav.pendingFeatureView('f1');
+      log.push({ type: e.type, detail: (e as CustomEvent).detail, pendingSeqAtDispatch: p ? p.seq : null });
+      return true;
+    };
+    return log;
+  }
+  // Указатель со снимком вида: consume наблюдаем по каналу pending.
+  function setupWithView() {
+    setFeatureMainTab('progress');
+    backNav.registerFeatureViewProvider('f1', () => ({ stageKey: 'prod', expandedKey: 'ST-F9', scrollTop: 1234 }));
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    setFeatureMainTab('review'); // вкладку могли сменить, пока страница была скрыта — возврат на записанную
+  }
+  function expectReturnSequence(log: Row[]) {
+    const ev = log.find(d => d.type === 'cc-open-feature');
+    expect(ev, 'cc-open-feature не диспатчен').toBeDefined();
+    expect(ev!.detail).toEqual({ featureId: 'f1', fromChat: false });
+    expect(pageStore.mainTab(), 'вернулись не на записанную вкладку').toBe('progress');
+    expect(ev!.pendingSeqAtDispatch, 'consume не раньше события или был не один').toBe(1);
+    const after = backNav.pendingFeatureView('f1');
+    expect(after, 'снимок не лёг в канал').not.toBeNull();
+    expect(after!.seq, 'consume был больше одного раза').toBe(1);
+  }
+  it('прямой вызов: consume один раз и до события; вкладка выставлена; событие cc-open-feature (fromChat:false)', () => {
+    setupWithView();
+    const info = backNav.featureBackNavFrom('c1');
+    expect(info, 'указателя нет').not.toBeNull();
+    const log = probeLog();
+    returnToFeature(info!, 'p1', 'c1');
+    expectReturnSequence(log);
+  });
+  it('клик чипа даёт ту же последовательность', () => {
+    setupWithView();
+    const c = render('c1');
+    const log = probeLog();
+    const btn = findNodeByAttr(c, 'role', 'button')!;
+    act(() => { (reactProps(btn)!.onClick as () => void)(); });
+    expectReturnSequence(log);
   });
 });

@@ -21,7 +21,11 @@
 //   (данные с узла ComfyUI на Video; «Железо» — хост CCS, ссылки туда нет);
 // — «Кто сейчас на модели» — места сервера из duty.callsNow, не чаты;
 // — «Дежурство» (DutyBlock) — последним блоком, только у выбранного второго движка и только
-//   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели.
+//   если снимок принёс duty (макет §3/§5); переход «→ Медиа» — через onOpenMedia от панели;
+// — «семантика llama-server» (подпись «чтение промпта» без «с ожиданием», подпись про
+//   ступеньки счётчиков) — по data.engine из снимка, а не по имени стенда: именованный
+//   движок на Video может быть и vLLM (LocalEngines:<name>:MetricsEngine) — у него
+//   prompt-время включает очередь, а ступенчатая модель счётчиков к нему не относится.
 
 import { type CSSProperties } from 'react';
 import { AlertTriangle, CirclePause, Plug, FolderOpen, Unplug } from 'lucide-react';
@@ -240,14 +244,24 @@ function NowCard({ data }: { data: LocalModelStats }) {
   );
 }
 
+// «Семантика llama-server» — модель отсчётов движка: prompt-время чистое (очереди в
+// нём нет), счётчики прирастают по завершении запроса (ступеньки на графике). Определяется
+// типом движка из снимка, а НЕ именем стенда: именованный движок на Video бывает и vLLM
+// (LocalEngines:<name>:MetricsEngine) — у него prompt-время включает очередь, а
+// ступенчатая модель к нему не относится. Тип — как кладёт бэк: 'llama-server' (lowercase).
+function isLlamaServer(data: LocalModelStats): boolean {
+  return data.engine === 'llama-server';
+}
+
 // === «Скорость»: генерация и чтение промпта, ток/с на поток, «сейчас» (окно ~60 с) ===
 // Два KPI — «сейчас» (genPerStream/prefillPerStream, как чувствует отдельный чат).
 // Среднее и пик за окно графика — ТОЛЬКО у графика (дубль под KPI убран).
 // «Чтение промпта С ОЖИДАНИЕМ»: знаменатель — время prefill запроса от старта до
 // первого токена, а оно включает ожидание очереди шагов, поэтому величина ниже
 // реальной скорости вычисления. Без слова «с ожиданием» показатель вводит в
-// заблуждение.
-function SpeedCard({ data, named }: { data: LocalModelStats; named?: boolean }) {
+// заблуждение — это про vLLM на любом стенде; у llama-server prompt_seconds_total —
+// чистое время чтения, там слово было бы неправдой.
+function SpeedCard({ data }: { data: LocalModelStats }) {
   if (data.status === 'yielded') {
     return <Card title="Скорость"><UnloadedNote text="Нет данных, пока модель выгружена. Последнее значение — на графике слева от разрыва." /></Card>;
   }
@@ -261,10 +275,10 @@ function SpeedCard({ data, named }: { data: LocalModelStats; named?: boolean }) 
           value={formatTps(data.speed.genPerStream)}
           label="генерация на запрос, ток/с, за последнюю минуту"
         />
-        {/* «с ожиданием» — про vLLM: его prompt-время включает очередь шагов. У
-            llama-server (стенд на Video) prompt_seconds_total — чистое время чтения,
+        {/* «с ожиданием» — по типу движка: у vLLM prompt-время включает очередь шагов
+            (на любом стенде); у llama-server prompt_seconds_total — чистое время чтения,
             очередь в него не входит, слово было бы неправдой (макет §3) */}
-        <Kpi value={formatTps(data.speed.prefillPerStream)} label={named
+        <Kpi value={formatTps(data.speed.prefillPerStream)} label={isLlamaServer(data)
           ? 'чтение промпта, ток/с, за последнюю минуту'
           : 'чтение промпта с ожиданием, ток/с, за последнюю минуту'} />
       </div>
@@ -336,15 +350,18 @@ function VideoCard({ data }: { data: LocalModelStats }) {
 // на общей оси времени. Окно держит LocalModelPanel (его же читает серверный опрос),
 // переключатель стоит в шапке карточки (как в макете).
 // Поля, названные в data.unsupported, ThroughputChart прячет целиком (макет §3:
-// заглушки «Движок это не сообщает» трижды подряд были бы шумом). Когда скрыто всё
-// кэш-содержание, карточка называется «Нагрузка» (макет §3), и к графику добавляется
-// подпись про ступеньки: счётчики llama-server прирастают по завершении запроса.
+// заглушки «Движок это не сообщает» трижды подряд были бы шумом) — это про ЛЮБОЙ стенд,
+// «named» к сокрытию не причём. Когда скрыто всё кэш-содержание, карточка называется
+// «Нагрузка» (макет §3), и к графику добавляется подпись про ступеньки — только для
+// llama-server-семантики (isLlamaServer): ступенчатые счётчики прирастают по завершении
+// запроса у него; vLLM-именованный стенд сообщает непрерывно, подпись про него была бы
+// неправдой даже при скрытом KV.
 function kvHidden(data: LocalModelStats): boolean {
   return (data.unsupported ?? []).includes('KvUsagePerc');
 }
 
-function ChartCard({ data, window, onWindowChange, isMobile, named }: {
-  data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean; named?: boolean;
+function ChartCard({ data, window, onWindowChange, isMobile }: {
+  data: LocalModelStats; window: Window; onWindowChange: (w: Window) => void; isMobile: boolean;
 }) {
   const hideKv = kvHidden(data);
   return (
@@ -353,7 +370,7 @@ function ChartCard({ data, window, onWindowChange, isMobile, named }: {
         history={data.history} window={window} engine={data.engine}
         cleanStepMs={data.cleanStepMs ?? null} unsupported={data.unsupported}
       />
-      {named && hideKv && (
+      {isLlamaServer(data) && hideKv && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: SP.sm, lineHeight: 1.45 }}>
           llama-server обновляет счётчики, когда запрос закончен, поэтому график идёт ступеньками.
         </div>
@@ -693,8 +710,8 @@ export function TextTab({ data, loading, error, isMobile, onOpenChat, onRefetch,
       <StatusSubline data={data} named={named} />
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md, ...stale }}>
         <NowCard data={data} />
-        <SpeedCard data={data} named={named} />
-        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} named={named} />
+        <SpeedCard data={data} />
+        <ChartCard data={data} window={window} onWindowChange={onWindowChange} isMobile={isMobile} />
         {/* Видеокарты: основной стенд — строка-ссылка на «Железо» (хост CCS, только
             админ); второй движок — своя карточка Video, ссылка на «Железо» была бы неправдой */}
         {named

@@ -37,7 +37,7 @@ const { act, createElement } = await import('react');
 const { createRoot } = await import('react-dom/client');
 const { TextTab } = await import('./TextTab');
 const { notReportedText, standDot, standHint, statusPill } = await import('./format');
-const { mockEngineStats, mockLocalModelStats } = await import('./localModel.fixtures');
+const { mockEngineStats, mockLocalModelStats, mockNamedVllmStats } = await import('./localModel.fixtures');
 const { dutyWhoRows } = await import('./dutyFormat');
 const ENGINES_BOTH = [
   { name: 'main' as const, title: 'Основная', configured: true },
@@ -318,14 +318,44 @@ describe('карточка Video и «места сервера» (стенд в
 });
 
 describe('подпись «Скорость» (макет §3)', () => {
+  // «с ожиданием» / «без ожидания» — по типу движка из снимка (data.engine), а не по
+  // имени стенда: vLLM бывает и main, и именованным (MetricsEngine 'vllm');
+  // чистое время чтения — только у llama-server.
   it('main — «с ожиданием» (prompt-время vLLM включает очередь)', () => {
     const html = renderTab({ data: mockLocalModelStats('working') });
     expect(html).toContain('чтение промпта с ожиданием');
   });
-  it('второй движок — без «с ожиданием» (у llama-server это чистое время чтения)', () => {
+  it('второй движок llama-server — без «с ожиданием» (у llama-server это чистое время чтения)', () => {
     const html = renderTab({ data: mockEngineStats('ready'), engine: 'gemma' });
     expect(html).toContain('чтение промпта, ток/с');
     expect(html).not.toContain('с ожиданием');
+  });
+});
+
+// F1: «именованный стенд» и «семантика llama-server» — разные вещи. Именованный движок
+// на Video бывает и vLLM (LocalEngines:<name>:MetricsEngine): его prompt-время включает
+// очередь (нужно «с ожиданием»), ступенчатых счётчиков нет, KV и prefix-попадания
+// сообщаются (карточка «Нагрузка и кэш» открыта). Мутация «вернуть условие named в
+// подписи чтения промпта» краснит первый тест; «вернуть named в условии ступенек» — второй.
+describe('именованный vLLM-стенд: подписи и кэш по типу движка (F1)', () => {
+  it('vLLM на Video — «с ожиданием» есть, ступенек нет, карточка «Нагрузка и кэш» открыта', () => {
+    const html = renderTab({ data: { ...mockNamedVllmStats(), history: historyWithKv() }, engine: 'gemma' });
+    expect(html).toContain('чтение промпта с ожиданием');
+    expect(html).not.toContain('чтение промпта, ток/с');
+    expect(html).not.toContain('ступеньками');
+    expect(html).toContain('Нагрузка и кэш');
+    expect(html).toContain('Кэш, %');
+  });
+  it('тот же vLLM с KvUsagePerc в unsupported — «Нагрузка» без ступеньки: сокрытие по unsupported, как у main', () => {
+    // Состояние искусственное ровно затем, чтобы проверить УСЛОВИЕ: сокрытие — по
+    // unsupported (kvHidden), а не по named; подпись ступеньки — по типу движка, а не
+    // по named (у vLLM её нет даже при скрытом KV)
+    const d = { ...mockNamedVllmStats(), history: historyWithKv(), unsupported: ['KvUsagePerc'] };
+    const html = renderTab({ data: d, engine: 'gemma' });
+    expect(html).toContain('>Нагрузка</h3>');
+    expect(html).not.toContain('Нагрузка и кэш');
+    expect(html).not.toContain('Кэш, %');
+    expect(html).not.toContain('ступеньками');
   });
 });
 

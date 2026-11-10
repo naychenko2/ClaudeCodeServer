@@ -356,3 +356,31 @@ export function mockEngineStats(state: EngineMockState = 'yielded'): LocalModelS
       };
   }
 }
+
+// === Именованный стенд на Video с vLLM-движком (LocalEngines:<name>:MetricsEngine = 'vllm') ===
+// Тот же именованный стенд на той же карте Video, но тип движка в снимке — vLLM:
+// engine 'vllm' (lowercase, как нормализует бэк — NamedLocalEngines.cs), KV-кэш и prefix-
+// попадания сообщаются (kv заполнен, 'KvUsagePerc' в unsupported нет → карточка
+// «Нагрузка и кэш» открыта), prompt-время включает очередь (подпись «с ожиданием» здесь
+// правильная), ступенчатой модели счётчиков нет. RAM-тиера офлойда в этой сборке нет —
+// полей ramTier в kv нет вовсе. duty в фикстуре нет: она — про подписи и кэш-карточку,
+// состояния дежурства покрыты mockEngineStats.
+export function mockNamedVllmStats(): LocalModelStats {
+  return {
+    configured: true,
+    engine: 'vllm',
+    model: 'gemma-27b',
+    status: 'working',
+    running: 1,
+    waiting: 0,
+    othersCount: 0,
+    speed: { genPerStream: 24, prefillPerStream: 780 },
+    kv: { usagePerc: 0.42, prefixHitPerc: 0.83, preemptions15m: 0 },
+    gpus: [
+      { index: 0, name: 'RTX 3090', utilPerc: 34, memUsedMb: 8192, memTotalMb: 24576, tempC: 52, powerW: 88, powerLimitW: 350 },
+    ],
+    history: [],
+    chats: [],
+    unsupported: [],
+  };
+}

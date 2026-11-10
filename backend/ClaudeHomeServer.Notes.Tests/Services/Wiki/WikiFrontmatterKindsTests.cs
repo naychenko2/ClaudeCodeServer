@@ -106,4 +106,15 @@ public class WikiFrontmatterKindsTests
         first.Errors.Should().BeEmpty();
         first.Model!.Render().Should().NotContain("as_of");
     }
+
+    // —— Равенство и хеш по as_of: две модели, различающиеся только as_of, не равны ——
+
+    [Fact]
+    public void Равенство_и_хеш_модели_различающиеся_только_as_of_не_равны()
+    {
+        var dated = WikiFrontmatter.Parse(Fm("decision", "as_of: 2026-11-10\n")).Model!;
+        var unknown = WikiFrontmatter.Parse(Fm("decision", "as_of: unknown\n")).Model!;
+        dated.Should().NotBe(unknown);
+        dated.GetHashCode().Should().NotBe(unknown.GetHashCode());
+    }
 }

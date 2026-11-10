@@ -388,8 +388,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
     // без шва — null. GenTps — средняя скорость завершённых запросов текущего хода (токены/сек);
     // null — первый запрос ещё не завершён.
     // B5: дорожка чата = StatsTrackOf провайдера последнего начатого запроса сессии (ключ —
-    // в записи запроса, под _gate); null-провайдер, null-дорожка или нет реестра — «main»
-    // (поведение до фичи: все чаты на основной дорожке). Порядок списка — прежний.
+    // в записи запроса, под _gate); null-провайдер, неизвестный ключ или нет реестра — «main»
+    // (поведение до фичи); известный провайдер без дорожки — ни в одной вкладке (B8). Порядок списка — прежний.
     public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main")
     {
         var now = _time.GetUtcNow();
@@ -440,11 +440,15 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         return key;
     }
 
-    // B5: дорожка по провайдеру: явная (StatsTrackOf) или «main» для null-провайдера,
-    // null-дорожки и счётчика без реестра.
-    private string TrackOf(string? providerKey) =>
-        providerKey is null ? LocalModelStatsPoller.MainTrackName
-            : _providers?.StatsTrackOf(providerKey) ?? LocalModelStatsPoller.MainTrackName;
+    // B5/B8: дорожка по провайдеру: явная (StatsTrackOf) или «main» для null-провайдера, счётчика
+    // без реестра и неизвестного реестру ключа. Известный провайдер, которого «в статистику движков
+    // не пишут» (StatsTrackOf = null, контракт B1), дорожки не имеет: null не равен ни одной вкладке.
+    private string? TrackOf(string? providerKey)
+    {
+        if (providerKey is null || _providers is null || _providers.GetByKey(providerKey) is null)
+            return LocalModelStatsPoller.MainTrackName;
+        return _providers.StatsTrackOf(providerKey);
+    }
 
     // Итог последнего завершённого хода сессии; null — ходов не было (или сессия не известна,
     // в т.ч. выгружена по idle-окну, B3: та же семантика, что после рестарта бэкенда).

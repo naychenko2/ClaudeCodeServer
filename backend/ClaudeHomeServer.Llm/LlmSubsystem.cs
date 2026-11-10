@@ -440,7 +440,8 @@ public sealed class LlmSubsystem : IAppSubsystem
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetService<ILocalModelStatsReader>(),
                 sp.GetService<ILocalModelLiveSink>(),
-                sp.GetService<ISessionDirectory>());
+                sp.GetService<ISessionDirectory>(),
+                sp.GetService<LlmProviderRegistry>());
             meter.Subscribe(sp.GetRequiredService<Turn.ITurnEventBus>());
             return meter;
         });

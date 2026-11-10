@@ -929,6 +929,34 @@ public sealed class LocalModelTurnMeterTests
             "ключ сохраняется как есть, дорожка — main");
     }
 
+    // (B8) Известный провайдер без дорожки (не локальный, без StatsEngine: StatsTrackOf = null,
+    //      «в статистику движков не пишется») не попадает ни в одну вкладку — ни main, ни gemma.
+    //      Мутация «null-дорожка → main» (старый `?? MainTrackName`): чат появляется на main → краснеет.
+    [Fact]
+    public void B8_ПровайдерБезДорожки_НеПопадаетНиВОднуВкладку()
+    {
+        var registry = new LlmProviderRegistry(TestConfig.Build(new()
+        {
+            ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:8080",
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Stats:Engine"] = "vllm",
+            ["LlmProviders:local-qwen:Stats:MetricsUrl"] = "http://127.0.0.1:8084/metrics",
+            ["LlmProviders:local-video-gemma:AnthropicBaseUrl"] = "http://127.0.0.1:8081",
+            ["LlmProviders:local-video-gemma:IsLocal"] = "true",
+            ["LlmProviders:local-video-gemma:StatsEngine"] = "gemma",
+            ["LlmProviders:cloud-x:AnthropicBaseUrl"] = "https://cloud.example",
+        }));
+        registry.StatsTrackOf("cloud-x").Should().BeNull("предпосылка: у облачного провайдера дорожки нет");
+
+        var (meter, tokens, _) = BuildTrackedMeter(registry);
+        meter.OnRequestStarted("r", IssueFor(tokens, "chat-X"), "cloud-x");
+        meter.OnRequestStarted("r2", IssueFor(tokens, "chat-A"), "local-qwen");
+
+        meter.ActiveChats("main").Select(c => c.SessionId).Should().Equal(new[] { "chat-A" },
+            "чат провайдера без дорожки не уезжает в main");
+        meter.ActiveChats("gemma").Should().BeEmpty("и не попадает в named-вкладку");
+    }
+
     // (B5-3) Устаревший ответ: завершение запроса A (main-провайдер, стартовал раньше) не
     //      меняет провайдер активного запроса B (gemma) той же сессии: чат остаётся на «gemma».
     //      Мутация «брать провайдер самого раннего активного запроса»: чат на main с начала →

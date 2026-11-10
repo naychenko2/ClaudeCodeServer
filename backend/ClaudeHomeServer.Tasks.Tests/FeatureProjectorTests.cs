@@ -4203,6 +4203,20 @@ public class FeatureProjectorTests
         FeatureProjector.BuildMergeRisks(new FeatureStepProgress(), 0).Should().BeEmpty();
     }
 
+    // Х0 (§8.3): «open» — живое (Work + Review минус закрытый хвост), «tail» — сам хвост.
+    // Порядок not_created → open → tail → tracker; сумма open + tail — то же число, что был один «open».
+    [Fact]
+    public void BuildMergeRisks_ЖивоеИХвост_ОтдельныеРискиВСуммеПрежнийOpen()
+    {
+        var progress = new FeatureStepProgress { NotCreated = 1, Work = 4, Review = 3, ClosedTail = 2 };
+
+        FeatureProjector.BuildMergeRisks(progress, trackerCount: 1).Should().Equal(
+            new FeatureMergeRisk("not_created", 1),
+            new FeatureMergeRisk("open", 5),
+            new FeatureMergeRisk("tail", 2),
+            new FeatureMergeRisk("tracker", 1));
+    }
+
     [Fact]
     public void Build_МержСНезаведённымиШагами_AttentionНесётMergeRisks()
     {

@@ -20,7 +20,12 @@ internal static class FeatureStepAccounting
         // второй точки правды и нового прохода нет.
         Dictionary<string, ChainFacts> Facts,
         // Id действующих планов (результат ActivePlans этого же прохода) — для признака плана в run.
-        List<string> ActivePlanIds);
+        List<string> ActivePlanIds,
+        // Ключи закрытого хвоста (разрез Александра 10.11, §8.3): цепочки, где все задачи сданы,
+        // открытой доработки нет, шаг не принят и не снят. Тот же проход и тот же порядок, что у
+        // Chains. WithdrawMergeTail (Х1) и риски мержа берут ключи отсюда: второго предиката нигде
+        // не заводим — учёт единственное место, где решается «закрытый хвост».
+        List<string> ClosedTailKeys);
 
     // Факты цепочки для трекера: последняя сданная задача и витки — оба уже посчитаны в этом проходе.
     internal sealed record ChainFacts(
@@ -260,6 +265,10 @@ internal static class FeatureStepAccounting
         var laneByKey = new Dictionary<string, string>(StepKeyComparer);
         var returnedKeys = new HashSet<string>(StepKeyComparer);
         var inMasterKeys = new HashSet<string>(StepKeyComparer);
+        // Порядок ключей хвоста — тот же, что у Chains (порядок шагов учёта): вызывающий видит
+        // те же цепочки в том же порядке, что и лента шагов.
+        var closedTailKeys = new List<string>();
+        int withdrawnAtMerge = 0;
         var personasByLane = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var (key, groupTasks) in groups)
         {
@@ -374,6 +383,22 @@ internal static class FeatureStepAccounting
 
             bucketByKey[key] = bucket;
             if (inMasterAt is not null) inMasterKeys.Add(key);
+            // Закрытый хвост (§8.3): все задачи цепочки сданы, открытой доработки нет, шаг не принят
+            // и не снят и сам ничего не ведёт: последний вердикт — отсутствие вердикта (витков нет,
+            // «ждёт ревью») или возврат, за которым не последовала доработка («закрыт без повторного
+            // ревью»). Идущий виток (открытые витки сортируются последними → lastVerdict == "running")
+            // и незакрытая задача — живая работа, её здесь нет. По корзинам это ровно Review/pending
+            // и Work/returned. Снятие «при мерже» — тот же источник, что решил снятие выше
+            // (последний виток-снятие либо задача-шаг), но с Origin = merge_tail.
+            if (allDone && !reworkOpen && !withdrawn
+                && (lastVerdict is null || lastVerdict == TaskVerdicts.Returned))
+                closedTailKeys.Add(key);
+            if (withdrawn && (
+                    lastVerdict == TaskVerdicts.Withdrawn && rounds.Count > 0
+                    && rounds[^1].Verification?.Origin == TaskVerificationOrigins.MergeTail
+                    || ordered.Any(t => t.Role == TaskRoles.Step
+                        && t.Verification is { Verdict: TaskVerdicts.Withdrawn, Origin: TaskVerificationOrigins.MergeTail })))
+                withdrawnAtMerge++;
             string lane = FeatureProjector.NormalizeLane(head.Lane);
             laneByKey[key] = lane;
             if (loops > 0) returnedKeys.Add(key);
@@ -438,6 +463,13 @@ internal static class FeatureStepAccounting
             UnlinkedReworks = unlinked,
             // Ортогональный счётчик к корзинам (не пятая корзина и не вторая точка правды процента).
             InMaster = inMasterKeys.Count,
+            // Закрытый хвост — НЕ ортогональный счётчик: это подмножество Review + Work (их деление
+            // «сдано / ещё живо»), поэтому open = Work + Review − ClosedTail и open + tail равен
+            // прежнему open (сторож FeatureStepProgressTests). Знаменатель им не меняется.
+            ClosedTail = closedTailKeys.Count,
+            // Снятых при мерже (Origin = merge_tail) — часть Withdrawn, не пятая корзина: доля
+            // «смержено без ревью» считается отдельно от снятых по существу (§8.3).
+            WithdrawnAtMerge = withdrawnAtMerge,
         };
 
         // Линии: порядок — по первому появлению (сначала заведённые шаги, затем шаги плана без задачи).
@@ -463,6 +495,6 @@ internal static class FeatureStepAccounting
             });
         }
 
-        return new Result(chains, progress, lanes, facts, countedPlans.Select(p => p.Id).ToList());
+        return new Result(chains, progress, lanes, facts, countedPlans.Select(p => p.Id).ToList(), closedTailKeys);
     }
 }

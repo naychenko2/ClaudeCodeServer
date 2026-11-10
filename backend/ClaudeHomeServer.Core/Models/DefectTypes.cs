@@ -38,4 +38,10 @@ public class TaskVerification
     // Структурированная причина возврата из TaskReturnReasons; только при Verdict == returned,
     // пусто = «причина не указана». Аддитивное nullable-поле: старые данные читаются как есть.
     public string? ReturnReason { get; set; }
+    // Признак происхождения вердикта из TaskVerificationOrigins; пусто = вердикт поставлен обычным
+    // путём (ревью/проверка/финал через MCP или REST). merge_tail ставит только серверный метод
+    // снятия закрытого хвоста при мерже — MCP и REST его не принимают. По нему считается доля
+    // «смержено без ревью» (stepProgress.withdrawnAtMerge), поэтому свободной строкой он не может быть.
+    // Аддитивное nullable-поле: старые данные читаются как есть.
+    public string? Origin { get; set; }
 }

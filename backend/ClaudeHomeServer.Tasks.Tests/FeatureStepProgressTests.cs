@@ -787,6 +787,159 @@ public class FeatureStepProgressTests
         p.Total.Should().Be(5);
     }
 
+    // ─── Закрытый хвост (§8.3, Х0): ключи отдаёт учёт, риск мержа делит «живое» и «хвост» ──────
+
+    // Тот же проход, что и корзины: ключ — stepRef (а без него id задачи), порядок — тот же, что
+    // у цепочек. Вызывается напрямую, чтобы тест видел ключи, а не только счётчик за ними.
+    private static FeatureStepAccounting.Result Account(params TaskItem[] tasks) =>
+        FeatureStepAccounting.Build(
+            tasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList(),
+            tasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList(),
+            tasks.Where(t => t.Role == TaskRoles.Plan).ToList(),
+            T0.AddDays(1), Array.Empty<FeatureIndexSession>());
+
+    // Фикстура всех корзин: хвост — ровно «ждёт ревью» (сдан, витков нет) и «закрыт без повторного
+    // ревью» (вернули, всё закрыто). Идущий исполнитель, идущий виток, принятый шаг и снятый — вне.
+    [Fact]
+    public void ЗакрытыйХвост_КлючиРовноЦепочкиPendingИReturned_ЖивоеПринятыеИСнятыеВне()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back"),
+                ("Ш5", "back"), ("Ш6", "back"), ("Ш7", "back"), ("Ш8", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),          // принят
+            Step("s2", "Ш2", 2),                                                                          // ждёт ревью → хвост
+            Step("s3", "Ш3", 3), Verdict("r3", TaskRoles.Review, TaskVerdicts.Returned, 6, "s3"),         // вернули, всё закрыто → хвост
+            Step("s4", "Ш4", 4, TaskItemStatus.InProgress),                                             // идёт
+            Step("s5", "Ш5", 5), Verdict("r5", TaskRoles.Review, null, 7, "s5"),                         // виток идёт
+            Step("s6", "Ш6", 6), Verdict("r6", TaskRoles.Review, TaskVerdicts.Withdrawn, 8, "s6"),       // снят
+            Step("s7", "Ш7", 7), Verdict("r7", TaskRoles.Review, TaskVerdicts.Accepted, 9, "s7"),
+            Rework("w7", "Ш7", 10, status: TaskItemStatus.InProgress),                                   // принят, но доработка открыта
+        };
+
+        var acct = Account(tasks);
+        var tailFromChains = acct.Chains.Where(c => c.Outcome is "pending" or "returned").Select(c => c.StepRef).ToList();
+
+        tailFromChains.Should().Equal(new[] { "Ш2", "Ш3" }, "фикстура правда: в хвосте только эти две цепочки");
+        acct.ClosedTailKeys.Should().Equal(tailFromChains, "ключи хвоста — тот же проход и тот же предикат, что корзины");
+        acct.Progress.ClosedTail.Should().Be(2);
+        acct.Chains.Select(c => c.Outcome).Distinct().OrderBy(x => x, StringComparer.Ordinal)
+            .Should().Equal(new[] { "accepted", "pending", "returned", "running", "withdrawn" },
+                "фикстура даёт все исходы, иначе равенство выше пустое");
+
+        var run = Run(tasks);
+        run.StepProgress.ClosedTail.Should().Be(acct.ClosedTailKeys.Count, "проектор берёт ключи учёта, а не пересчитывает их");
+    }
+
+    // Открытая доработка, принятый шаг с доработкой, снятый шаг и идущая задача — не хвост:
+    // кнопка мержа их не трогает (§8.3, «что кнопка не трогает»).
+    [Fact]
+    public void ЗакрытыйХвост_НеТрогаетЖивуюРаботуПринятыеИСнятыеШаги()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back")),
+            Step("s1", "Ш1", 1), Rework("w1", "Ш1", 3, status: TaskItemStatus.InProgress),
+            Step("s2", "Ш2", 2), Verdict("r2", TaskRoles.Review, TaskVerdicts.Accepted, 6, "s2"),
+            Rework("w2", "Ш2", 7, status: TaskItemStatus.InProgress),
+            Step("s3", "Ш3", 4), Verdict("r3", TaskRoles.Review, TaskVerdicts.Withdrawn, 8, "s3"),
+            Step("s4", "Ш4", 5, TaskItemStatus.InProgress),
+        };
+
+        Account(tasks).ClosedTailKeys.Should().BeEmpty();
+
+        var p = Run(tasks).StepProgress;
+        p.ClosedTail.Should().Be(0);
+        p.Withdrawn.Should().Be(1, "Ш3 снят: он вне знаменателя и не хвост");
+    }
+
+    // Идущий виток — живая работа (§8.3): «на ревью, которое идёт», в отличие от «ждёт ревью»
+    // (витков нет), в хвост не входит — его никто не снимает без человека.
+    [Fact]
+    public void ЗакрытыйХвост_ИдущийВитокНеВХвосте()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, null, 5, "s1"),
+        };
+
+        Account(tasks).ClosedTailKeys.Should().BeEmpty();
+        Run(tasks).StepProgress.ClosedTail.Should().Be(0);
+    }
+
+    // Ключ и порядок — как в учёте: у шага без stepRef ключ — id задачи, порядок — по появлению.
+    [Fact]
+    public void ЗакрытыйХвост_КлючБезСтепРефаIdЗадачи_ПорядокКакУЦепочек()
+    {
+        var tasks = new[] { Feature(), Step("b", null, 2), Step("a", null, 1) };
+
+        var acct = Account(tasks);
+
+        acct.ClosedTailKeys.Should().Equal(new[] { "b", "a" }, "тот же порядок появления, что у Chains");
+        acct.Chains.Select(c => c.StepRef).Should().Equal(acct.ClosedTailKeys);
+    }
+
+    // Снятие «при мерже» (Origin = merge_tail) — часть Withdrawn с тем же источником, что решил
+    // снятие: задача-шаг или последний виток-снятие. Без Origin — снятие по существу; снятая
+    // доработка шага не касается и в хвост остаётся.
+    [Fact]
+    public void WithdrawnAtMerge_СчитаетТолькоВердикСOriginMergeTail()
+    {
+        var s1 = Step("s1", "Ш1", 1);
+        s1.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn, Origin = TaskVerificationOrigins.MergeTail };
+        var r2 = Verdict("r2", TaskRoles.Review, TaskVerdicts.Withdrawn, 6, "s2");
+        r2.Verification!.Origin = TaskVerificationOrigins.MergeTail;
+        var s3 = Step("s3", "Ш3", 2);
+        var r3 = Verdict("r3", TaskRoles.Review, TaskVerdicts.Withdrawn, 7, "s3"); // без Origin — по существу
+        var w4 = Rework("w4", "Ш4", 3, status: TaskItemStatus.Done, verdict: TaskVerdicts.Withdrawn);
+        w4.Verification!.Origin = TaskVerificationOrigins.MergeTail;
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back")),
+            s1, Step("s2", "Ш2", 4), r2, s3, r3, Step("s4", "Ш4", 5), w4,
+        };
+
+        var p = Run(tasks).StepProgress;
+
+        p.Withdrawn.Should().Be(3);
+        p.WithdrawnAtMerge.Should().Be(2, "только вердикт с Origin = merge_tail: задача-шаг и последний виток");
+        p.ClosedTail.Should().Be(1, "снятая доработка шага не касается: Ш4 остаётся закрытым непринятым");
+    }
+
+    // Диалог мержа: «живое» и «хвост» — два отдельных риска; их сумма — то же число, что был
+    // один «open» (сторож разбиения, §8.3).
+    [Fact]
+    public void РискиМержа_ЖивоеИХвостОтдельно_СуммаРавнаПрежнемуOpen()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back"), ("Ш5", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),
+            Step("s2", "Ш2", 2),
+            Step("s3", "Ш3", 3), Verdict("r3", TaskRoles.Review, TaskVerdicts.Returned, 6, "s3"),
+            Step("s4", "Ш4", 4, TaskItemStatus.InProgress),
+            Step("s5", "Ш5", 5), Verdict("r5", TaskRoles.Review, null, 7, "s5"),
+            Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 30, "s1"),
+        };
+
+        var run = Run(tasks);
+
+        // Живое — Ш4 (идёт) и Ш5 (виток идёт); хвост — Ш2 (ждёт ревью) и Ш3 (вернули без доработки).
+        // «tracker» — тот же закрытый хвост глазами сверки (§8.1: unreviewed / returned_no_rework):
+        // отдельная ось, её число этим шагом не меняется.
+        var risks = run.Attention!.MergeRisks;
+        risks.Should().Equal(new[]
+        {
+            new FeatureMergeRisk("open", 2),
+            new FeatureMergeRisk("tail", 2),
+            new FeatureMergeRisk("tracker", 2),
+        }, "порядок фиксирован: живое → хвост → сверка трекера");
+        (risks.Single(r => r.Kind == "open").Count + risks.Single(r => r.Kind == "tail").Count)
+            .Should().Be(run.StepProgress.Work + run.StepProgress.Review, "open + tail = прежний open");
+        run.StepProgress.ClosedTail.Should().Be(2);
+    }
+
     // ─── Контракт: SlimRun, индекс, StepsOpen ────────────────────────────────────────────────
 
     // Рефлексией по ВСЕМ свойствам FeatureRun: следующее добавленное поле, не скопированное в
@@ -889,6 +1042,9 @@ public class FeatureStepProgressTests
         json.Should().Contain("\"stepProgress\"");
         json.Should().Contain("\"planState\"");
         json.Should().Contain("\"stepsOpen\"");
+        // Х0 (§8.3): имена новых счётчиков — часть контракта, фронт (Ф1) читает ровно их.
+        json.Should().Contain("\"closedTail\"");
+        json.Should().Contain("\"withdrawnAtMerge\"");
 
         var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
         var rowJson = JsonSerializer.Serialize(row, opts);

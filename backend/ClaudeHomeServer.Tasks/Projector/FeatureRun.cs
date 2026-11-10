@@ -208,8 +208,13 @@ public static class FeatureMergeRiskKinds
 {
     // Шагов плана без задач (NotCreated).
     public const string NotCreated = "not_created";
-    // Заведены, но не приняты (Work + Review).
+    // Заведены, но не приняты и ещё живые: работа идёт или идёт виток (Work.running + Review.running).
+    // Разделены с tail (разрез Александра 10.11, §8.3): раньше «open» был суммой Work + Review целиком.
     public const string Open = "open";
+    // Закрытый хвост: сданные, но не принятые шаги (Review/pending + Work/returned) — ключи отдаёт
+    // учёт (FeatureStepAccounting.Result.ClosedTailKeys). Это риск решения («снять или оставить»),
+    // а не живой работы: снимается только явным выбором человека при мерже.
+    public const string Tail = "tail";
     // Расхождения сверки трекера.
     public const string Tracker = "tracker";
 }
@@ -471,6 +476,14 @@ public sealed class FeatureStepProgress
     // Сколько шагов уже в master (FeatureStepChain.InMaster). Ортогональный счётчик: в Total и в
     // сумму корзин не входит, процент им не считается.
     public int InMaster { get; init; }
+    // Закрытый хвост (§8.3): сданные, но не принятые шаги — подмножество Review + Work (их деление
+    // «сдано / ещё живо»), а не пятая корзина: в Total и в сумму корзин не входит, знаменатель им
+    // не меняется. Ровно эти ключи отдаёт учёт (FeatureStepAccounting.Result.ClosedTailKeys) —
+    // второй предикат нигде не заводится. Из него: риск tail диалога мержа и снятие по выбору.
+    public int ClosedTail { get; init; }
+    // Снятых при мерже (вердикт withdrawn с Origin = merge_tail): часть Withdrawn, ортогональный
+    // корзинам счётчик — доля «смержено без ревью», отделённая от снятых по существу (§8.3).
+    public int WithdrawnAtMerge { get; init; }
 }
 
 // Состояния фичи (FeatureRun.State) — единая точка правды: 11 значений, camelCase (как в JSON).

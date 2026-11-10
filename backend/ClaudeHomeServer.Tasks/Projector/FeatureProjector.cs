@@ -998,12 +998,17 @@ public sealed class FeatureProjector(TaskManager tasks)
     // (витки — задачи-носители вердикта returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
     // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
+    // «open» — живое (Work + Review минус закрытый хвост), «tail» — закрытый хвост (§8.3): сданные,
+    // но не принятые шаги. Деление точное: ClosedTail ⊆ Review + Work, поэтому open + tail равен
+    // прежнему open (сторож FeatureStepProgressTests) — диалог мержа видит то же число, что и раньше,
+    // но разделённым на «ещё можно вести» и «решение о снятии».
     internal static List<FeatureMergeRisk> BuildMergeRisks(FeatureStepProgress progress, int trackerCount)
     {
         var risks = new List<FeatureMergeRisk>();
         if (progress.NotCreated > 0) risks.Add(new(FeatureMergeRiskKinds.NotCreated, progress.NotCreated));
-        int open = progress.Work + progress.Review;
+        int open = progress.Work + progress.Review - progress.ClosedTail;
         if (open > 0) risks.Add(new(FeatureMergeRiskKinds.Open, open));
+        if (progress.ClosedTail > 0) risks.Add(new(FeatureMergeRiskKinds.Tail, progress.ClosedTail));
         if (trackerCount > 0) risks.Add(new(FeatureMergeRiskKinds.Tracker, trackerCount));
         return risks;
     }

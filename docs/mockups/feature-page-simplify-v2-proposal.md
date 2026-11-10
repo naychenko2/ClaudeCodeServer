@@ -6,6 +6,8 @@
 - **Основа:** features-simplify-v1-proposal.md (R1–R12), итоги интервью 10.11 (описание эпика), контракт — docs/research/features-simplify-architecture-2026-11.md
 - **Файлы:** feature-page-simplify-v2.html, feature-page-simplify-v2-proposal.md
 
+Кликабельный прототип тех же экранов — [feature-page-simplify-v3-clickable.html](feature-page-simplify-v3-clickable.html) (записка [-v3-clickable.md](feature-page-simplify-v3-clickable.md)).
+
 Код продукта не меняется. Шаги, которые воспользуются макетом, разрежут после решения Андрея: какой счёт объёма берём (§3) и какие величины «Б» заказываем бэку (§4).
 
 ## 1. Что сказал Андрей и что из этого следует

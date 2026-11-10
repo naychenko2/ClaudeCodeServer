@@ -11,7 +11,7 @@
 // НЕТ ни одной группы фичи, НЕТ строки «Загружаем фичи…» и при этом видны карточки
 // чатов — то есть все чаты висят в «Без фичи» (исходный баг Андрея).
 
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { api, collectConsoleErrors, login, type Api } from './helpers';
 
 const A_ID = 'fedfe8c3-eaab-48ae-a5bd-1661bb68f7cc';   // «AI Home»
@@ -71,7 +71,7 @@ function badFrames(samples: Sample[]): Sample[] {
   return samples.filter(s => s.groups === 0 && !s.loading && s.cards > 0);
 }
 
-async function setupPage(page: Page, context: { addInitScript: (fn: unknown, arg: unknown) => Promise<void> }) {
+async function setupPage(_page: Page, context: BrowserContext) {
   await context.addInitScript(
     ([tk, a, b]) => {
       localStorage.setItem('cc_token', tk as string);

@@ -87,6 +87,40 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
                     cited.Add(id);
             if (cited.Count > 0)
                 hits = hits.Where(h => h.Source == NotesService.WikiKey || !cited.Contains(h.Id)).ToList();
+
+            // R6 (ADR-039, реш. 7): спящая страница в блок не попадает — освободившийся слот
+            // добирается следующим хитом. Отбрасывание — до Take(topK), порядок по score
+            // сохраняется (фильтр порядка не меняет). Снимок стора учёта — один на ход.
+            // Свой try: сбой архива не отменяет блок — ход получает recall как без него.
+            string? wikiRoot = null;
+            var pageKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+            try
+            {
+                // dataDir — та же формула, что у всех сервисов вертикали (DataPath указывает на projects.json).
+                var dataDir = Path.GetDirectoryName(Path.GetFullPath(
+                    _config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!;
+                wikiRoot = WikiPaths.Root(dataDir, sessionContext.OwnerId);
+                pageKeys = _notes.WikiPageKeysOf(sessionContext.OwnerId, hits);
+                if (pageKeys.Count > 0)
+                {
+                    var snapshot = WikiReadsStore.Read(wikiRoot);
+                    var dormant = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var section in pageKeys.Values.Select(WikiSections.Parse)
+                                 .Where(k => k is not null).Distinct(StringComparer.Ordinal))
+                        dormant.UnionWith(WikiDormancy.DormantPages(
+                            wikiRoot, section!, snapshot, DateTimeOffset.UtcNow));
+                    if (dormant.Count > 0)
+                        hits = hits.Where(h => !pageKeys.TryGetValue(h.Id, out var key) || !dormant.Contains(key)).ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                // сбой архива — ни исключения, ни учёта: блок тот же, что без них
+                _log.LogWarning(ex, "Исключение спящих страниц вики для {Owner}", sessionContext.OwnerId);
+                wikiRoot = null;
+                pageKeys = new Dictionary<string, string>(StringComparer.Ordinal);
+            }
+
             hits = hits.Take(topK).ToList();
             if (hits.Count == 0) return null;
             var blockText = NotesKnowledgeService.BuildRecallBlock(hits, minScore, topK);
@@ -94,6 +128,27 @@ public sealed class NotesRecallContributor : IPromptSectionContributor
             var items = hits
                 .Select(h => new RecallItem("note", h.Id, h.Title, h.Snippet))
                 .ToList();
+
+            // R6: учёт чтений, попавших в блок: вид Recall (слабый), ключ — путь страницы под
+            // pages/ (стор R1). Учёт — после отбора, синхронно, вне бюджета поиска. Свой try:
+            // сбой учёта не отменяет блок.
+            try
+            {
+                if (wikiRoot is not null)
+                {
+                    var readItems = hits
+                        .Where(h => pageKeys.TryGetValue(h.Id, out _))
+                        .Select(h => (pageKeys[h.Id], WikiReadKind.Recall))
+                        .ToList();
+                    if (readItems.Count > 0)
+                        WikiReadsStore.RecordMany(wikiRoot, readItems, DateTimeOffset.UtcNow);
+                }
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Учёт чтений страниц вики для {Owner}", sessionContext.OwnerId);
+            }
+
             return new PromptSectionContribution(
                 Sections: [new PromptSection(Key, blockText)],
                 ManifestItems: items);

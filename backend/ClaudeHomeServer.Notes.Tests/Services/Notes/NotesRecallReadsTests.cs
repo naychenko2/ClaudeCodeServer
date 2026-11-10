@@ -41,11 +41,8 @@ public class NotesRecallReadsTests : IDisposable
         var root = Path.Combine(_dir, "projects", "p1");
         Directory.CreateDirectory(Path.Combine(root, "notes"));
         _projects.Items["p1"] = new Project { Id = "p1", OwnerId = User, Name = "Проект p1", RootPath = root };
-        // Гейт HasIndex контрибьютора требует проиндексированной обычной заметки (:notes-доки
-        // реестра) — без неё путь вики в ход не доходит вовсе. Служебная заметка держит гейт
-        // открытым; в выдачу она не попадает: для :notes-датасета ответ не подменён.
-        File.WriteAllText(Path.Combine(root, "notes", "Служебная.md"),
-            "# Служебная\n\nЗаметка для открытия индекса: гейт HasIndex считает :notes-доки.");
+        // Служебной заметки-обхода гейта здесь нет (дефект f4bf5a2f): HasIndex учитывает и
+        // :wiki-доки — весь класс ниже работает как сценарий «владелец только с викой».
 
         _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, flags: new WikiFlagOn());
         _kb = new NotesKnowledgeService(_index, _notes, users, _config,
@@ -58,13 +55,37 @@ public class NotesRecallReadsTests : IDisposable
         if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
     }
 
+    // Дефект f4bf5a2f: HasIndex считал только :notes-доки — владельцу без обычных заметок
+    // auto-recall был закрыт. Теперь индекс вики — тоже индекс: такой владелец получает блок.
+    [Fact]
+    public async Task ВладелецТолькоСВикой_HasIndexИRecall()
+    {
+        WritePage("Проекты/p1/Живая.md");
+        await _kb.SyncAllAsync(User);
+        _kb.HasIndex(User).Should().BeTrue(
+            "пустой :notes при непустом :wiki — всё равно индекс: авто-recall открыт");
+
+        _index.Response[DatasetIdOf(":wiki")] = [ChunkOf("Живая", 0.9)];
+        var contribution = await New().BuildAsync(Ctx(), "живая страница");
+
+        contribution.Should().NotBeNull("гейт контрибьютора не закрывает путь только с викой");
+        contribution!.Sections[0].Text.Should().Contain("[[Живая]]");
+    }
+
+    // Пустой реестр: ни :notes-, ни :wiki-индекса — гейт закрыт, ход без recall.
+    [Fact]
+    public void НиОдногоИндекса_HasIndexЛожь()
+    {
+        _kb.HasIndex(User).Should().BeFalse("пустой реестр: ни :notes, ни :wiki");
+    }
+
     // Вики-хит в блоке → учтён ровно один раз и именно как Recall: слабый путь не двигает
     // сильное время страницы (LastStrongRead остаётся null).
     [Fact]
     public async Task ВикиХитВБлоке_УчтёнКакRecall()
     {
         WritePage("Проекты/p1/Живая.md");
-        (await _kb.SyncAllAsync(User)).Should().Be(2); // служебная заметка (:notes) + страница (:wiki)
+        (await _kb.SyncAllAsync(User)).Should().Be(1); // только страница (:wiki): обычных заметок нет
         _index.Response[DatasetIdOf(":wiki")] = [ChunkOf("Живая", 0.9)];
 
         var contribution = await New().BuildAsync(Ctx(), "живая страница");

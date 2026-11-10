@@ -70,12 +70,15 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
 
     public bool Available => _knowledge.IsConfigured;
 
-    // Есть ли у пользователя хоть один проиндексированный документ (без похода в Dify —
-    // дешёвая отсечка для auto-recall на пустом индексе)
+    // Есть ли у пользователя хоть один проиндексированный документ — в датасете заметок
+    // ИЛИ в датасете вики (дефект f4bf5a2f: счёт только :notes закрал auto-recall владельцу
+    // без обычных заметок). Без похода в Dify — дешёвая отсечка для auto-recall на пустом
+    // индексе.
     public bool HasIndex(string userId)
     {
         var entry = GetEntry(userId);
-        return !string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0;
+        return (!string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0)
+            || (!string.IsNullOrEmpty(entry.WikiDatasetId) && entry.WikiDocs.Count > 0);
     }
 
     // Id Dify-датасета заметок владельца («{username}:notes»); null — индекс ещё не создавался.

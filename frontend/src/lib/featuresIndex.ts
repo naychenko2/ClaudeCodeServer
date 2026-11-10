@@ -31,18 +31,27 @@ import type { ServerMessage } from '../types';
 const EMPTY: FeaturesIndex = { features: [], chats: {} };
 
 // Срезы по проекту: ключ — projectId, '' — область вне проектов (без projectId).
-// Только АКТИВНЫЕ проекты (есть потребитель): их читает snapshotFor (приоритетом)
-// и featureOf — плашка фичи не появляется в чатах проектов, которых сейчас не смотрят.
+// Только АКТИВНЫЕ проекты (есть потребитель) держат живой срез: их читает
+// snapshotFor (приоритетом) и featureOf — плашка фичи не появляется в чатах
+// проектов, которых сейчас не смотрят. Ушедший последний потребитель оставляет
+// в Map метку EMPTY на СВОЁМ месте (FI-3): ключ не пересоздаётся — порядок
+// обхода featureOf не зависит от повторных входов; сам срез живёт в кэше.
 let _indexByProject = new Map<string, FeaturesIndex>();
 // Кэш последнего полученного среза по проекту: переживает уход потребителей.
 // Возврат в уже открытый проект сразу рисует прошлый срез (без EMPTY-кадра),
 // свежий ответ тихо заменяет его. snapshotFor читает его как фолбэк — ссылка
-// та же, что была живой.
+// та же, что была живой. Гасится при смене владельца (resetFeaturesIndexOwner).
 let _cache = new Map<string, FeaturesIndex>();
 // Поколение запросов ПО КЛЮЧУ ПРОЕКТА: каждый запрос (первичный, фоновый,
-// live-перезапрос) берёт ++seq; ответ применяется, только если его номер ещё
-// последний для этого проекта. Иначе старый ответ, пришедший последним, затёр бы свежий.
+// live-перезапрос) берёт следующий номер; ответ применяется, только если его
+// номер ещё последний для этого проекта. Иначе старый ответ, пришедший
+// последним, затёр бы свежий.
 const _seq = new Map<string, number>();
+// Моноотонный счётчик поколений (НЕ обнуляется при смене владельца): после
+// сброса _seq новый запрос любого проекта получает номер больше любого
+// уже отпущенного, поэтому поздний ответ прежнего владельца отбивается даже
+// когда новый владелец уже начал свой запрос по тому же проекту.
+let _seqGen = 0;
 // Загрузка: проекты, по которым fetch в полёте (индикатор в UI).
 const _loading = new Set<string>();
 const _listeners = new Set<() => void>();
@@ -82,8 +91,12 @@ function subscribeIndex(fn: () => void): () => void {
 // Срез по проекту — стабильная ссылка (тот же объект, пока не пришёл новый fetch
 // для этого проекта): живой срез, иначе — кэш последнего ответа (тот же объект,
 // что был живым), иначе EMPTY — если по проекту ещё не было успешного ответа.
+// Метка неактивного проекта (EMPTY в живом Map, FI-3) не ответ — за ней тот же
+// кэш, что был живым; возврат в проект не должен давать EMPTY-кадр.
 function snapshotFor(projectKey: string): FeaturesIndex {
-  return _indexByProject.get(projectKey) ?? _cache.get(projectKey) ?? EMPTY;
+  const live = _indexByProject.get(projectKey);
+  if (live !== undefined && live !== EMPTY) return live;
+  return _cache.get(projectKey) ?? EMPTY;
 }
 
 // Есть ли срез проекта: живой или в кэше. Признак готовности для UI:
@@ -92,11 +105,31 @@ function hasSliceFor(projectKey: string): boolean {
   return _indexByProject.has(projectKey) || _cache.has(projectKey);
 }
 
-// Номер поколения для нового запроса проекта.
+// Номер поколения для нового запроса проекта: из общего моноотонного счётчика
+// (не из текущего числа этого ключа) — после смены владельца и сброса _seq он
+// всё равно больше номера любого запроса, ушедшего раньше.
 function nextSeq(projectKey: string): number {
-  const s = (_seq.get(projectKey) ?? 0) + 1;
+  const s = ++_seqGen;
   _seq.set(projectKey, s);
   return s;
+}
+
+// Сброс состояния владельца (линия OWN, см. вызовы в App.tsx: logout и
+// cc-unauthorized): кэш и срезы прежнего владельца не должны пережить смену —
+// следующий вход до своего ответа обязан быть пустым («ещё не загружено»),
+// а не срезом чужого человека. Поколения (номера в _seq) гасим, счётчик —
+// нет: поздний ответ прежнего владельца отбивается по номеру (см. _seqGen).
+// Подписки и wiring realtime не трогаем: это канал соединения, не данные
+// владельца; при выходе компоненты отписываются сами.
+export function resetFeaturesIndexOwner(): void {
+  _indexByProject = new Map();
+  _cache = new Map();
+  _seq.clear();
+  _loading.clear();
+  _activeCount.clear();
+  _pending.forEach(t => clearTimeout(t));
+  _pending.clear();
+  emit();
 }
 
 // Успешный ответ: в живой срез — только если проект активен (есть потребитель);
@@ -134,8 +167,10 @@ export function isIndexLoading(projectKey: string): boolean {
 }
 
 // Лукап: фичи, к которым принадлежит чат (по chats всех загруженных срезов),
-// с ролью чата в каждой. Порядок — порядок срезов в сторе; дубли по featureId
-// сняты (чат одного проекта может быть виден и в глобальном срезе).
+// с ролью чата в каждой. Порядок — порядок ключей в сторе: он стабилен, потому
+// что уход потребителя не удаляет ключ, а оставляет метку на своём месте
+// (FI-3); дубли по featureId сняты (чат одного проекта может быть виден и в
+// глобальном срезе).
 export interface FeatureOfEntry {
   feature: FeatureIndexFeature;
   link: FeatureChatLink;
@@ -231,8 +266,11 @@ function onUnmount(projectKey: string) {
   if (t) { clearTimeout(t); _pending.delete(projectKey); }
   const live = _indexByProject.get(projectKey);
   if (live) {
+    // FI-3: не delete, а метка EMPTY на своём месте: срез — в кэш, ключ живого
+    // Map остаётся — порядок обхода featureOf не зависит от повторного входа
+    // (delete+set переставлял ключ в конец, и плашки одного чата меняли порядок).
     _indexByProject = new Map(_indexByProject);
-    _indexByProject.delete(projectKey);
+    _indexByProject.set(projectKey, EMPTY);
     _cache.set(projectKey, live);
     emit();
   }
@@ -314,6 +352,7 @@ export const __test = {
     _indexByProject = new Map();
     _cache = new Map();
     _seq.clear();
+    _seqGen = 0;
     _loading.clear();
     _activeCount.clear();
     _pending.forEach(t => clearTimeout(t));

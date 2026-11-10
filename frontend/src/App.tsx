@@ -54,6 +54,7 @@ import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { resetCacheWarnOnLogout, setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
+import { resetFeaturesIndexOwner } from './lib/featuresIndex'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -580,6 +581,7 @@ export default function App() {
       resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+      resetFeaturesIndexOwner() // срез индекса фич прежнего владельца (FI-3)
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
       // пользователя — при смене аккаунта человек видел бы чужой раздел
@@ -1362,6 +1364,7 @@ export default function App() {
     resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
+    resetFeaturesIndexOwner() // срез индекса фич прежнего владельца — см. cc-unauthorized выше
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
     localStorage.setItem(HUB_TAB_KEY, 'projects')

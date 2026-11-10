@@ -51,6 +51,7 @@ describe('FeatureAskBlock', () => {
     expect(h).toContain(ASK_LABEL.need);
     expect(h).toContain('Решить по мержу');
     expect(h).not.toContain(ASK_LABEL.blocker);
+    expect(h).toContain('data-tone="warning"');
   });
 
   it('source = stopped: «Что мешает», «Денис стоит 40 мин», «Открыть чат Дениса»', () => {
@@ -71,17 +72,22 @@ describe('FeatureAskBlock', () => {
     expect(h).toContain('Александр ждёт 25 мин');
   });
 
-  it('нет personaId: подстроки нет; у wait кнопка «Открыть чат»', () => {
+  it('нет personaId: подстроки нет (имени нет в разметке); у wait кнопка «Открыть чат»', () => {
     const h = html(ask({ personaId: null }), false, () => {});
-    expect(h).not.toContain('ждёт');
+    // Точнее: имя не встречается нигде — ни в подстроке, ни в кнопке
+    // («ждёт» по всей разметке ловило бы и законный текст фразы с этим словом).
+    expect(h).not.toContain('Александр');
     expect(h).toContain('Открыть чат');
     expect(h).not.toContain('Ответить');
   });
 
-  it('нет since: подстрока без давности, «Александр ждёт»', () => {
+  it('нет since: подстрока ровно «Александр ждёт», без «null»/«undefined»', () => {
     const h = html(ask({ since: null }), false, () => {});
-    expect(h).toContain('Александр ждёт');
-    expect(h).not.toContain('Александр ждёт 25 мин');
+    // Точный текст подстроки целиком: она обрывается сразу после «ждёт» —
+    // «Александр ждёт null» (снятый guard давности) сюда не попадает.
+    expect(h).toContain('Александр ждёт</div>');
+    expect(h).not.toContain('null');
+    expect(h).not.toContain('undefined');
   });
 
   it('мобила: кнопка на 100 % ширины и min-height 40; десктоп — без этих свойств', () => {

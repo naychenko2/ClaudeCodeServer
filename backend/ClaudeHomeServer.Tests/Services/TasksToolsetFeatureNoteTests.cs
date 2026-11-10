@@ -6,6 +6,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp.Http;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -34,6 +35,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //   «ДваСдвига_Параллельно_ВторойСравниваетсяСПервым» краснеет (B читает 10, отказывается
 //   до SetFeatureNote, shwa contended не срабатывает);
 // • убрать диапазон expectedSteps в Validate — «ХранитсяКакЕстьИДиапазон» краснеет на 0/501.
+// FS-O2b (снимок учёта в строке estimate_set):
+// • убрать estimateContext из вызова SetFeatureNote в TasksToolset — «КонтекстУчёта_ПишетсяВСтроку
+//   Журнала» красный на PlanState/Stage/Total.
 [Trait("Category", "Integration")]
 [Trait("Category", "Host")]
 public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFactory>
@@ -557,6 +561,48 @@ public class TasksToolsetFeatureNoteTests : IClassFixture<TestWebApplicationFact
         isError.Should().BeTrue();
         text.Should().Contain("Голос фичи пишет оркестратор или человек");
         Tasks.GetById(epicId)!.Note.Should().BeNull();
+    }
+
+    // FS-O2b (c1): MCP-путь передаёт снимок учёта в строку estimate_set: stage — активная стадия
+    // той же проекции, planState/accepted/total — из run.StepProgress (run строится ОДИН раз,
+    // второго Build нет). Фикстура: план с двумя шагами → planState == "cut", знаменатель > 0.
+    // Тот же снимок становится базовым сроком фичи (InitialEtaMinutes) — живой путь кормит
+    // правило TaskManager, а не только журнал.
+    // Мутации: убрать estimateContext из вызова SetFeatureNote в TasksToolset → красные
+    // PlanState/Stage/Total; не поднимать run.StepProgress, а писать null → те же три.
+    [Fact]
+    public async Task FeatureEstimate_КонтекстУчёта_ПишетсяВСтрокуЖурнала()
+    {
+        var (projectId, _) = await CreateProjectWithSessionAsync("estctx");
+        var (curatorId, epicId, _) = await CreateFeatureFromCuratorAsync(projectId, "estctx");
+        var (planText, planErr) = await CallToolAsync(curatorId, "tasks_create", new
+        {
+            title = "План контекста", role = "plan", featureId = epicId,
+            planSteps = new[] { new { stepRef = "A1", title = "шаг один" }, new { stepRef = "A2", title = "шаг два" } },
+        });
+        planErr.Should().BeFalse(planText);
+
+        var (_, isError) = await CallToolAsync(curatorId, "tasks_update", new
+        {
+            id = epicId, featureNote = "план нарезан, идём",
+            featureEstimate = new { etaMinutes = 180, expectedSteps = 3, why = "по плану" },
+        });
+        isError.Should().BeFalse();
+
+        var run = Features.Project(epicId, OwnerId)!;
+        run.StepProgress.PlanState.Should().Be("cut", "фикстура: план с шагами, других планов нет");
+        run.StepProgress.Total.Should().BeGreaterThan(0);
+
+        var entry = _factory.Services.GetRequiredService<FeatureJournalStore>().Read(OwnerId, epicId).Entries
+            .Single(e => e.Kind == "estimate_set");
+        entry.PlanState.Should().Be("cut");
+        entry.Stage.Should().NotBeNull().And.NotBeEmpty().And.Be(FeatureBrief.ActiveStageOf(run),
+            "stage строки — та же активная стадия, что штамп голоса");
+        entry.Accepted.Should().Be(run.StepProgress.Accepted);
+        entry.Total.Should().Be(run.StepProgress.Total);
+
+        Tasks.GetById(epicId)!.InitialEtaMinutes.Should().Be(180,
+            "первая оценка при cut по живому пути фиксирует базовый срок");
     }
 
     // ─── FS-O1: expectedSteps и запрет молчаливого сдвига оценки ──────────────────────────────

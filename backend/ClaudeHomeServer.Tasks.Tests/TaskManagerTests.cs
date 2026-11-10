@@ -2583,22 +2583,41 @@ public class TaskManagerTests : IDisposable
         _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running", Estimate())!.Note.Should().BeNull();
     }
 
-    // Мутация: убрать условие InitialEtaMinutes is null — второй вызов перезапишет срок, тест краснеет.
+    // FS-O2b: базовый срок — из первой оценки, записанной при НАРЕЗАННОМ плане (снимок вызывающего
+    // planState == "cut"), а не «после старта»: до нарезки плана оценка не о чём мерить, и прежний
+    // признак фиксировал базу на первой оценке сразу после старта. Мутации (каждая — прогон в копии
+    // дерева, вывод в отчёте задачи):
+    // • вернуть прежнее условие «категория ∈ StartedKinds» (TaskManager до FS-O2b) — красный первый
+    //   же Should: оценка при running и без снимка/при «pending» была бы записана базой 500;
+    // • убрать условие InitialEtaMinutes is null — вторая оценка при cut перезапишет 300 → 400,
+    //   красный последний Should.
     [Fact]
-    public void SetFeatureNote_InitialEtaMinutes_ПишетсяОдинРазИзПервойОценкиПослеСтарта()
+    public void SetFeatureNote_InitialEtaMinutes_ПишетсяОдинРазИзПервойОценкиПриНарезанномПлане()
     {
         var epic = CreateEpic("u");
 
-        _sut.SetFeatureNote(epic.Id, "до старта", null, false, "cut", "queued", Estimate(500));
-        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("очередь — до старта");
-        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(null));
+        // Без снимка учёта базовый срок не пишется вовсе (в живых путях снимка нет только когда нет
+        // проекции) — даже когда фича идёт.
+        _sut.SetFeatureNote(epic.Id, "без снимка", null, false, "prod", "running", Estimate(500));
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("нет снимка учёта — нет базы");
+
+        // Фича уже идёт, плана нет: прежний признак пустил бы эту оценку как базу.
+        _sut.SetFeatureNote(epic.Id, "план не нарезан", null, false, "prod", "running", Estimate(500),
+            new TaskManager.FeatureEstimateContext("prod", "pending", 0, 0));
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("оценка до нарезки плана — не база");
+
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(null),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 3));
         _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().BeNull("оценка без срока не считается");
 
-        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(300));
-        _sut.SetFeatureNote(epic.Id, "дольше", null, false, "prod", "running", Estimate(400));
+        _sut.SetFeatureNote(epic.Id, "идёт", null, false, "prod", "running", Estimate(300),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 3));
+        _sut.SetFeatureNote(epic.Id, "дольше", null, false, "prod", "running", Estimate(400),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 1, 3));
         _sut.SetFeatureNote(epic.Id, "", null, false, "prod", "running");
 
-        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300, "первая после старта, не перезаписывается, снятие голоса не трогает");
+        _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300,
+            "первая оценка при cut, не перезаписывается, снятие голоса не трогает");
     }
 
     [Fact]

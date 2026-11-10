@@ -1765,9 +1765,6 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         finally { _holdLock.Exit(); }
     }
 
-    private static readonly HashSet<string> StartedKinds =
-        ["running", "waiting_you", "error", "paused"];
-
     // FS-O1: молчаливый сдвиг оценки запрещён. Новая оценка, меняющая expectedSteps больше чем на
     // 25 % или etaMinutes больше чем на 50 % от текущей, принимается только с заполненным why.
     // Строго «больше»: ровно на пороге — разрешено. Сравниваются только поля, присутствующие в
@@ -1816,8 +1813,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // снимает голос; длиннее FeatureNote.MaxTextLength обрезается. At штампуем здесь, этап и
     // состояние на момент записи передаёт вызывающий из проекции (клиентских значений нет).
     // estimate (макет 2) пишется только вместе с голосом: пустой текст снимает и голос, и оценку.
-    // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной после старта фичи
-    // (категории draft/queued/idle — до старта). Сдвиг оценки сверх порога без why — отказ
+    // InitialEtaMinutes — один раз, из первой оценки со сроком, записанной при НАРЕЗАННОМ плане
+    // (снимок вызывающего planState == "cut", FS-O2b): до нарезки плана оценка не о чём мерить —
+    // прежний признак «после старта» (категории running/waiting_you/error/paused) фиксировал базу
+    // на первой же оценке после старта, часто до плана, и как база не годился. Без снимка учёта
+    // (estimateContext == null — в живых путях это только отсутствие проекции) базовый срок
+    // не пишется вовсе.
+    // Сдвиг оценки сверх порога без why — отказ
     // (FeatureEstimateShiftException), проверка — под замком записи, против прочитанной там же
     // текущей оценки (FS-O1). Каждая ЗАПИСАННАЯ оценка дописывает в журнал фичи строку
     // estimate_set (FS-O2a): числа оценки + снимок учёта из estimateContext (null — пока
@@ -1844,8 +1846,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             task.Note = trimmed.Length == 0
                 ? null
                 : new FeatureNote(trimmed, now, bySessionId, byUser, stageAtWrite, stateAtWrite, estimate);
+            // Проверка «ещё не записан» и запись — под одним _featureNoteLock: две первые оценки
+            // при cut параллельно дают ровно одну базу (тест ПервыеОценкиПриCut_Параллельно_БазаОдна).
             if (task.Note is not null && task.InitialEtaMinutes is null && estimate?.EtaMinutes is { } eta
-                && StartedKinds.Contains(stateAtWrite))
+                && estimateContext?.PlanState == FeatureStepAccounting.PlanCut)
                 task.InitialEtaMinutes = eta;
             // FS-O2a: оценка, которая реально попала в стор, оставляет строку estimate_set
             // (сама оценка перезаписывается — по последней строке честность оценок не проверить).

@@ -723,19 +723,23 @@ public class FeatureStepProgressTests
         new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
     }
 
-    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:24-26):
-    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), cut/done вне класса
-    // не потребляются — private. Поднять их «для удобства» — значит пустить значение за единственную
-    // точку определения. Мутация: PlanCut до internal — тест красный.
+    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:41-47):
+    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), done вне класса не
+    // потребляется — private. С FS-O2b к internal поднят PlanCut: его сравнивает правило
+    // базового срока в TaskManager (InitialEtaMinutes пишется только при нарезанном плане) —
+    // это не «для удобства», а новый потребитель значения, и он сравнивает ту же константу,
+    // а не второй литерал "cut". Поднимать дальше (done) оснований нет.
+    // Мутация: вернуть PlanCut в private — красный на его строке (проверено прогоном:
+    // до правки теста этот же прогон падал с «Expected IsPrivate to be True … but found False»).
     [Fact]
-    public void ПланКонстанты_ВидимостьПоКонтракту_CutDoneНеInternal()
+    public void ПланКонстанты_ВидимостьПоКонтракту_PlanCutInternal_PlanDonePrivate()
     {
         var t = typeof(FeatureStepAccounting);
         foreach (var (name, shouldBeInternal) in new[]
         {
             (nameof(FeatureStepAccounting.PlanPending), true),
             (nameof(FeatureStepAccounting.PlanPartial), true),
-            ("PlanCut", false),
+            ("PlanCut", true),
             ("PlanDone", false),
         })
         {

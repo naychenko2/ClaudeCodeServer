@@ -40,10 +40,12 @@ internal static class FeatureStepAccounting
     private const string NotCreated = "notCreated";
     // Значения PlanState, которые сравнивает FeatureBrief.EstimateOf (pending/partial), — internal:
     // определение одно, сравнение не разъезжается с значением молча (возврат ревью B2b).
-    // cut/done вне класса не потребляются (возврат R-DB B2b) — private.
+    // cut — internal с FS-O2b: его сравнивает правило базового срока в TaskManager (InitialEtaMinutes
+    // фиксируется только при нарезанном плане); вне класса он больше не сравнивается молча литералом.
+    // done — остаётся private (снаружи не потребляется, возврат R-DB B2b).
     internal const string PlanPending = "pending";
     internal const string PlanPartial = "partial";
-    private const string PlanCut = "cut";
+    internal const string PlanCut = "cut";
     private const string PlanDone = "done";
 
     // Единый сравнитель кодов шагов (решение 4 ревью Александра): «Б1» и «б1» — один шаг.

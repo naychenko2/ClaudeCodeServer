@@ -610,14 +610,22 @@ public sealed class TasksToolset(
                 // конвейера (FeatureBrief.ActiveStageOf, та же база, что у StaleOf — B14 возврат
                 // FIN), категория — FeatureBrief.KindAtWriteOf (та же величина, что brief.kind —
                 // B15, дефект 415c1c80); пустой текст снимает голос внутри SetFeatureNote.
+                // FS-O2b: снимок учёта для строки estimate_set (stage/planState/accepted/total) —
+                // из той же проекции, что стадия и категория: run строится ОДИН раз, второй Build
+                // нет. run == null (проекции нет) — контекста нет, в журнал идут null.
                 if (featureNoteArg is not null)
                 {
                     var run = features.Project(existing.Id, context.OwnerId);
+                    var stageAtWrite = run is null ? "" : FeatureBrief.ActiveStageOf(run);
+                    var estimateContext = run is null ? null
+                        : new TaskManager.FeatureEstimateContext(stageAtWrite,
+                            run.StepProgress.PlanState, run.StepProgress.Accepted, run.StepProgress.Total);
                     try
                     {
                         updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
-                            run is null ? "" : FeatureBrief.ActiveStageOf(run),
-                            run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
+                            stageAtWrite,
+                            run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg,
+                            estimateContext) ?? updated;
                     }
                     catch (TaskManager.FeatureEstimateShiftException ex)
                     {

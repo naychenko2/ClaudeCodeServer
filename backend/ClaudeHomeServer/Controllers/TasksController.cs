@@ -1256,7 +1256,8 @@ public class TasksController(
     // сервер из проекции; стадия — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же
     // база, что у StaleOf — B14 возврат FIN); категория — FeatureBrief.KindAtWriteOf, та же
     // величина, что brief.kind (B15, дефект 415c1c80); пустой text снимает голос. Не-эпик → 400,
-    // чужой/кривой id → 404.
+    // чужой/кривой id → 404. Снимок учёта для журнала оценок (FS-O2b) — тот же run: stage из
+    // активной стадии, planState/accepted/total из run.StepProgress.
 
     // Тело PUT note: text и необязательная оценка оркестратора (featureEstimate) — прочих полей FeatureNote
     // у клиента нет.
@@ -1292,8 +1293,14 @@ public class TasksController(
         {
             // FS-O1: сдвиг оценки сверх порога без why — тот же 400-текст, что у MCP-двери
             // (гейт в TaskManager под замком записи), а не 500 от необработанного исключения.
+            // FS-O2b: снимок учёта для строки estimate_set — из той же проекции, что штамп
+            // (run построена выше, одного раза): базовый срок TaskManager пишет только при
+            // planState == "cut", без контекста он не пишется вовсе.
+            var stageAtWrite = FeatureBrief.ActiveStageOf(run);
             epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
-                FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
+                stageAtWrite, FeatureBrief.KindAtWriteOf(run), estimate,
+                new TaskManager.FeatureEstimateContext(stageAtWrite,
+                    run.StepProgress.PlanState, run.StepProgress.Accepted, run.StepProgress.Total));
         }
         catch (TaskManager.FeatureEstimateShiftException ex)
         {

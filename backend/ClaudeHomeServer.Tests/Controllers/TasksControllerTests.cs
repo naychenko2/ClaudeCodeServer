@@ -3117,6 +3117,46 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         note.ByUser.Should().BeTrue();
     }
 
+    // FS-O2b (c1): человеческая дверь (PUT note) передаёт в журнал тот же снимок учёта, что и
+    // MCP-путь: stage — активная стадия, planState/accepted/total — из run.StepProgress той же
+    // единственной run. Фикстура: план с двумя шагами (planState == "cut") + шаг A1 → знаменатель
+    // ненулевой, активная стадия есть. Мутации: не передавать estimateContext в SetFeatureNote из
+    // TasksController → красные PlanState/Stage/Total; брать их из отдельного второго Project() —
+    // не ловится тестом, ловится чтением кода (run выше одна).
+    [Fact]
+    public async Task PutNote_КонтекстУчёта_ПишетсяВСтрокуЖурнала()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "план контекста", featureId = epicId, role = "plan",
+            planSteps = new[] { new { stepRef = "A1", title = "шаг один" }, new { stepRef = "A2", title = "шаг два" } },
+        });
+        await CreateTaskAsync(new { title = "шаг A1", featureId = epicId, role = "step", stepRef = "A1" });
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "план нарезан, идём",
+            featureEstimate = new { etaMinutes = 210, expectedSteps = 2, why = "по плану" },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.StepProgress.PlanState.Should().Be("cut", "фикстура: план с шагами, других планов нет");
+        run.StepProgress.Total.Should().BeGreaterThan(0);
+
+        var entry = _factory.Services.GetRequiredService<FeatureJournalStore>().Read(OwnerId, epicId).Entries
+            .Single(e => e.Kind == "estimate_set");
+        entry.PlanState.Should().Be("cut");
+        entry.Stage.Should().NotBeNull().And.NotBeEmpty().And.Be(FeatureBrief.ActiveStageOf(run),
+            "stage строки — та же активная стадия, что штамп голоса");
+        entry.Accepted.Should().Be(run.StepProgress.Accepted);
+        entry.Total.Should().Be(run.StepProgress.Total);
+
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.InitialEtaMinutes
+            .Should().Be(210, "первая оценка при cut по живому пути фиксирует базовый срок");
+    }
+
     // ─── оценка оркестратора в PUT note (макет 2 сводки) ─────────────────────────────────
 
     [Fact]

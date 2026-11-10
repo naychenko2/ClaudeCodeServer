@@ -1,22 +1,32 @@
 // Тесты секции «Возвраты и потери» (FS-FR3): ровно одна плитка «Возвраты» (only=['loops']),
-// 4 строки вердиктов + «Откуда возвраты» (полные пары, без дублей), «Главные потери» как есть
-// (nowMs и isMobile проброшены). Окружение node: разметка — renderToStaticMarkup (счёт,
-// порядок и текст — по html); кликов здесь нет (переходы «чат»/«задача» проверяет
+// 4 строки вердиктов — без строки «Откуда возвраты» (те же числа печатает хвост плитки,
+// ревью-находка 2, решение постановщика), «Главные потери» как есть (nowMs, isMobile и nav
+// проброшены). Окружение node: разметка — renderToStaticMarkup (счёт, порядок и текст — по
+// html); проброс nav проверяется единственным тестом на fakeDom: у перехода «задача» клик
+// записывает точку возврата «к фиче» (сами переходы «чат»/«задача» проверяет
 // FeatureStatsLosses.test.ts).
 //
-// Мутации (проверены прогоном в копии дерева, 10.11): (1) «рисовать строку при null как 0»
-// (if (run.returnsBySource) → без условия, с нулевой разбивкой по умолчанию) — краснеет ровно
-// «returnsBySource нет — строки нет»; после отката зелёный. (2) убрать only=['loops'] (полные
-// плитки) — краснеет «ровно одна плитка». (3) не пробросить nowMs в FeatureStatsLosses
-// (Date.now()) — краснеет «nowMs пробрасывается» (минуты живой карточки считались бы от
-// реального «сейчас»). (4) не пробросить isMobile — краснеет «isMobile пробрасывается».
+// Мутации (проверены прогоном в копии дерева, 10.11): (1) убрать nav={nav} в FeatureStatsLosses
+// — краснеет ровно «nav пробрасывается в потери…» (кнопка на месте, но точка возврата не
+// записана); после отката зелёный. (2) вернуть строку «Откуда возвраты» — краснеет «ровно
+// 4 пар». (3) убрать only=['loops'] (полные плитки) — краснеет «ровно одна плитка».
+// (4) не пробросить nowMs в FeatureStatsLosses (Date.now()) — краснеет «nowMs пробрасывается»
+// (минуты живой карточки считались бы от реального «сейчас»). (5) не пробросить isMobile —
+// краснеет «isMobile пробрасывается».
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { FeatureReviewReturns } from './FeatureReviewReturns';
+import { getBackNav, clearBackNav } from '../../lib/featureBackNav';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+
+// Переход «задача» моким: проверяем аргументы, не трогая настоящий window
+// (тот же приём, что в FeatureStatsLosses.test.ts).
+const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
+vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
 
 // Фиксированное «сейчас» (как в FeatureStatsLosses.test.ts): даты — относительно него.
 const NOW = Date.parse('2026-10-24T12:00:00Z');
@@ -122,50 +132,35 @@ describe('состав секции (c1)', () => {
   });
 });
 
-describe('вердикты и «Откуда возвраты» (c1)', () => {
-  // Полное равенство списков: ровно 5 строк, порядок по постановке, дублей нет
-  // (плитка/потери в «ключ — значение» не повторяются).
-  it('4 строки вердиктов с числами фикстуры + «Откуда возвраты» — ровно 5 пар', () => {
-    expect(kvPairs(html(C1_RUN))).toEqual([
+describe('вердикты (c1)', () => {
+  // Полное равенство списков: ровно 4 строки, порядок по постановке, дублей нет.
+  // «Откуда возвраты» убрана (находка 2): те же три числа — в хвосте плитки «Возвраты»
+  // (FeatureStatsTiles.tsx:105-106), в макете v4 (:740) они стоят один раз.
+  // Мутация (2): вернуть строку — этот тест краснеет.
+  it('4 строки вердиктов с числами фикстуры — ровно 4 пар, строки «Откуда возвраты» нет', () => {
+    const h = html(C1_RUN);
+    expect(kvPairs(h)).toEqual([
       ['Приняты', '5'],
       ['С замечаниями', '1'],
       ['Возвращены', '1'],
       ['Отозваны', '0'],
-      ['Откуда возвраты', 'ревью 2 (открыт 1) · проверка 0 · финал 0'],
     ]);
+    expect(h).not.toContain('Откуда возвраты');
   });
 
-  // Мутация (1): рисовать строку при returnsBySource == null как 0 — этот тест краснеет.
-  it('returnsBySource нет (старый ответ) — строки нет, остальное есть', () => {
+  // Старый ответ без returnsBySource: секция ведёт себя так же — 4 строки, плитка и потери
+  // на месте (полные пары — в тесте выше, на фикстуре с разбивкой).
+  it('returnsBySource нет (старый ответ) — 4 строки, плитка и потери на месте', () => {
     const h = html(mkRun({ verdicts: { accepted: 3, acceptedWithRemarks: 0, returned: 2, withdrawn: 1, loops: 2 } }));
-    expect(h).not.toContain('Откуда возвраты');
     expect(kvPairs(h)).toEqual([
       ['Приняты', '3'],
       ['С замечаниями', '0'],
       ['Возвращены', '2'],
       ['Отозваны', '1'],
     ]);
+    expect(h).not.toContain('Откуда возвраты');
     expect(h).toContain('data-testid="tile-loops"');
     expect(h).toContain('data-testid="stats-losses"');
-  });
-
-  it('все нули — строка есть, без скобок (0 — значение, «возвратов не было» не придумываем)', () => {
-    const run = mkRun({
-      verdicts: { accepted: 17, acceptedWithRemarks: 2, returned: 0, withdrawn: 0, loops: 2 },
-      returnsBySource: { review: { count: 0, open: 0 }, qa: { count: 0, open: 0 }, final: { count: 0, open: 0 } },
-    });
-    expect(kvPairs(html(run))).toContainEqual(['Откуда возвраты', 'ревью 0 · проверка 0 · финал 0']);
-  });
-
-  it('склонение открытых: 1 — «открыт», 2 и 5 — «открыто»', () => {
-    for (const [open, word] of [[1, 'открыт 1'], [2, 'открыто 2'], [5, 'открыто 5']] as const) {
-      const run = mkRun({
-        verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: open, withdrawn: 0, loops: open },
-        returnsBySource: { review: { count: open, open }, qa: { count: 0, open: 0 }, final: { count: 0, open: 0 } },
-      });
-      const value = kvPairs(html(run)).find((p) => p[0] === 'Откуда возвраты')?.[1] ?? '';
-      expect(value, `«${word}» не найдено`).toContain(word);
-    }
   });
 });
 
@@ -186,7 +181,7 @@ describe('«Главные потери» как есть', () => {
     expect(h).toContain('1 ч 30 мин'); // formatDuration((NOW - since)/60000)
   });
 
-  // Мутация (4): isMobile не пробросен — краснеет этот тест (плитки 4 колонки, потери 3).
+  // Мутация (5): isMobile не пробросен — краснеет этот тест (плитки 4 колонки, потери 3).
   it('isMobile пробрасывается в плитки и потери: 360 — 2 колонки и 1 колонка', () => {
     const h = html(C1_RUN, mkStats(), true);
     expect(h).toContain('grid-template-columns:repeat(2, 1fr)'); // сетка плиток на 360
@@ -194,5 +189,38 @@ describe('«Главные потери» как есть', () => {
     const d = html(C1_RUN);
     expect(d).toContain('grid-template-columns:repeat(4, 1fr)');
     expect(d).toContain('grid-template-columns:repeat(3, 1fr)');
+  });
+});
+
+describe('проброс nav в «Главные потери» (c1)', () => {
+  // Эффект проброса nav, наблюдаемый в этой фикстуре (без nav.marks), — точка возврата
+  // «к фиче» при клике «задача» (recordFeatureReturn): без nav кнопка на месте, но возврата
+  // не будет. Мутация (1): убрать nav={nav} в FeatureStatsLosses — краснеет ровно этот тест.
+  it('nav пробрасывается в потери: клик «задача» пишет точку возврата «к фиче»', async () => {
+    mockOpenTask.calls.length = 0;
+    // Фикстура карточки 3 из FeatureStatsLosses.test.ts:364-366: ненулевой longestNow —
+    // карточка «Дольше всех сейчас» с парой переходов «чат»/«задача».
+    const stats: FeatureStats = {
+      ...mkStats(),
+      longestNow: { taskId: 't-live', chatId: 's-1', personaId: 'p-kira', stepRef: 'ST-F6', minutes: 90, tokens: 1200, share: 0.42 },
+    };
+    installFakeDom();
+    try {
+      const { container } = mount(createElement(FeatureReviewReturns, {
+        run: C1_RUN, stats, nav: { featureId: 'f-1', featureTitle: 'Фича' }, nowMs: NOW,
+      }));
+      const btn = findNodeByAttr(container, 'data-testid', 'nav-target-task');
+      expect(btn, 'перехода «задача» в секции нет').toBeTruthy();
+      await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+      expect(mockOpenTask.calls, 'openTaskInSection не вызван').toEqual([{ id: 't-live' }]);
+      const back = getBackNav();
+      expect(back?.from, 'точка возврата — фича f-1').toBe('f-1');
+      expect(back?.fromKind, 'дискриминатор — feature').toBe('feature');
+      expect(back?.to, 'цель — задача t-live').toEqual({ kind: 'task', id: 't-live' });
+      expect(back?.fromTitle, 'имя фичи для точки возврата').toBe('Фича');
+    } finally {
+      clearBackNav(); // указатель не оставляем в сторе другим тестам
+      uninstallFakeDom();
+    }
   });
 });

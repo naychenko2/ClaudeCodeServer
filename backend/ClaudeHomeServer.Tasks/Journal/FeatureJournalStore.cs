@@ -195,6 +195,13 @@ public sealed class FeatureJournalStore
     // Ключ — "{ownerId}/{featureId}"; ConcurrentDictionary гарантирует атомарность GetOrAdd.
     private readonly ConcurrentDictionary<string, object> _locks = new();
 
+    // Тестовый шов (образец: FeatureNoteContended/FeatureNoteInside в TaskManager.cs:1803-1804):
+    // вызывается внутри per-key замка непосредственно перед записью строки — наблюдаемый момент
+    // «append начался, строки ещё нет», которого у File.AppendAllText нет. В бою null.
+    // Шов внутри замка: per-key замок держится на всё время «шов + запись»; исключение шва
+    // ловится общим catch Append (как сбой диска) — запись вызывающего не откатывается.
+    internal Action<string>? JournalAppending;
+
     // Счётчик строк в памяти (под тем же замком на featureId): раньше потолок
     // пересчитывал файл построчно (CountLines) на КАЖДЫЙ turn-append — O(n) на горячем
     // пути (~2–4 МБ чтения на ход при 20 000 строк). Ключ — "{ownerId}/{featureId}".
@@ -244,6 +251,9 @@ public sealed class FeatureJournalStore
                 // Переходы (created/started/stopped/…) пишутся всегда.
                 // Счётчик — в памяти (инициализация при первом обращении), не перечитывание.
                 if (entry.Kind == "turn" && GetLineCount(key, path) >= MaxLines) return;
+
+                // Шов — только для записей, которые реально пишутся (после проверки потолка).
+                JournalAppending?.Invoke(key);
 
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOpts) + "\n");

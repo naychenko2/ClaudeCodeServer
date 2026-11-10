@@ -269,6 +269,38 @@ public class FilesControllerTaskAnchorTests : IClassFixture<TestWebApplicationFa
         File.ReadAllText(inTree).Should().Be("ветка до", "дерево задачи не тронуто");
     }
 
+    // ---- FS-B1b: Р1 (хвост ревью FS-B1a: гонка «дерево пропало между locate и чтением») ----
+
+    // Настоящую гонку «дерево пропало внутри одного запроса» HTTP-тест не делает детерминированной:
+    // локатор отсекает несуществующее дерево до чтения (ProjectTreeLocator.cs:101,134), и поток
+    // выходит 404 на :228, не доходя до catch на :255/:257. Что держат эти catch — проверяю
+    // детерминированной формой той же гонки: файл читался из дерева задачи (200), дерево снесли,
+    // повтор того же пути — уже без анкера: безанкерная ветка (root = корень проекта, :236) читает
+    // без предваряющего File.Exists, и исчезнувший файл ловится catch на :255/:257 — 404, не 500.
+    // Мутация: убрать catch (FileNotFoundException/DirectoryNotFoundException) в GetContent —
+    // тест краснеет (500). Краснеет и базовый GetContent_NonExistentFile_Returns404: тот же
+    // catch и тот же поток — «ровно этот тест» на этой правке недостижим в принципе.
+    [Fact]
+    public async Task GetContent_ДеревоИсчезлоМеждуЧтениемИПовтором_404_Без500()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("vanished");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "vanished");
+        File.WriteAllText(Path.Combine(worktree, "doc.md"), "из ветки");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+
+        // Первое чтение — из дерева задачи: файл был.
+        (await _client.GetAsync(Url(projectId, "doc.md", taskId))).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+
+        Directory.Delete(worktree, recursive: true);
+
+        // Повтор без анкера: в безанкерной ветке нет проверки File.Exists до чтения —
+        // ReadFile бросает на исчезнувшем файле, catch оборачивает это в 404.
+        var resp = await _client.GetAsync($"/api/projects/{projectId}/files/content?path=doc.md");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "исчезнувший файл — 404, а не 500");
+    }
+
     // ---- FS-B1b: Р2 (порядок веток content) ----
 
     // content: sessionId + taskId одновременно — порядок featureId → sessionId → taskId, побеждает

@@ -1103,7 +1103,10 @@ public class TasksController(
             Breakdown: breakdown,
             LongestNow: longestNow,
             Spend: featureSpend,
-            Typical: typical);
+            Typical: typical,
+            // FS-M56 (величина 5): медиана шага этой фичи — по уже посчитанным run.StepChains,
+            // второго прохода по задачам нет.
+            StepMedianMinutes: FeatureStats.StepMedianOf(run));
         // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
         // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
         // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.

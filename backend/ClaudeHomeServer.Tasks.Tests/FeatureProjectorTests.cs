@@ -698,6 +698,11 @@ public class FeatureProjectorTests
         return (epic, [epic, plan, stepTask]);
     }
 
+    // FS-V1 (разрез §2.1 П2): активной становится стадия первой идущей задачи, поэтому «pending с
+    // идущей задачей» теперь требует второй идущей задачи в поздней стадии: ревью стартовало
+    // позже — оно и есть Now[0], prod остаётся pending со своей идущей задачей. Покрытие
+    // (runningSince при State ≠ active) сохранено; мутация `state == "active" ? … : null` по-прежнему
+    // краснит тест.
     [Fact]
     public void Build_СтадияPendingСИдущейЗадачей_RunningSinceЕсть_StateПрежний()
     {
@@ -707,11 +712,19 @@ public class FeatureProjectorTests
             Id = "s1", Role = TaskRoles.Step, StepRef = "Ш1", Status = TaskItemStatus.InProgress,
             PersonaId = "Тимур", ClaudeStartedAt = t,
         });
+        all.Add(new TaskItem
+        {
+            Id = "r1", FeatureId = "epic-rs1", Role = TaskRoles.Review, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Глеб", ClaudeStartedAt = t.AddMinutes(10),
+        });
 
         var run = FeatureProjector.Build(epic, all);
 
+        run.Now.Should().NotBeEmpty();
+        run.Now[0].TaskId.Should().Be("r1", "Now[0] — самая свежая идущая (стартовала позже)");
+        Stage(run, "review").State.Should().Be("active", "текущая стадия — стадия идущей задачи");
         var stage = run.Stages.Single(s => s.Key == "prod");
-        stage.State.Should().Be("pending", "активна ранняя стадия — State не трогаем");
+        stage.State.Should().Be("pending", "работа на review — prod остаётся pending");
         stage.RunningSince.Should().Be(t);
     }
 
@@ -2327,6 +2340,84 @@ public class FeatureProjectorTests
         Stage(run, "prod").State.Should().Be("active",
             "план пройден, шагов нет → «Производство» active (ждём шагов), не Мерж");
         Stage(run, "merge").State.Should().NotBe("active");
+    }
+
+    // ─── FS-V1 (разрез §2.1 П2): одна «текущая стадия» на все четыре потребителя ──────────────────
+
+    // Сторож инварианта: работа реально идёт на «review» (ревью принятого шага Ш1), а по старому
+    // правилу первой активной оставалась «prod» (шаг Ш2 ещё не начат). Все четыре пути величины
+    // дают «review»: FeatureBrief.CurrentStageOf и ActiveStageOf (штамп голоса), brief.now.stage,
+    // stages[].state = "active", row.now0.stage.
+    // Мутации: вернуть в FeatureProjector старый выбор activeIndex (без стадии идущей задачи) —
+    // красные проверки stages[] и row.now0; вернуть в FeatureBrief.ActiveStageOf первую активную
+    // стадию — красные CurrentStageOf/brief.now/ActiveStageOf.
+    [Fact]
+    public void CurrentStageOf_ИдущееРевьюПриНезакрытомProd_ВсеПотребителиОтдаютReview()
+    {
+        var t = new DateTime(2026, 11, 10, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-cur-stage";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-3) };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.Done, PersonaId = "Денис",
+            ClaudeStartedAt = t.AddHours(-2), CompletedAt = t.AddHours(-1),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш2",
+            Status = TaskItemStatus.Todo,
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Глеб", ClaudeStartedAt = t,
+        };
+        var tasks = new[] { epic, s1, s2, r1 };
+
+        var run = FeatureProjector.Build(epic, tasks, t.AddMinutes(10));
+
+        run.Now.Select(n => n.TaskId).Should().Equal(new[] { "r1" }, "идущая задача одна — ревью");
+        FeatureBrief.CurrentStageOf(run).Should().Be("review", "одна функция");
+        FeatureBrief.ActiveStageOf(run).Should().Be("review", "внешний вход штампа голоса — та же база");
+        FeatureBrief.Build(run, null, null, t.AddMinutes(10)).Now!.Stage.Should().Be("review",
+            "brief.now.stage");
+        Stage(run, "review").State.Should().Be("active", "stages[].state = active");
+        Stage(run, "prod").State.Should().NotBe("active",
+            "prod с незакрытым шагом больше не «текущая»: работа не там");
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        row.Now0!.Stage.Should().Be("review", "row.now0.stage");
+    }
+
+    // Идущих задач нет — activeIndex остаётся старой половиной правила (первая непройденная
+    // стадия с работой / следующая после последней заполненной): существующие тесты
+    // Build_ПланDoneБезШагов_ProdActive, Build_ВсеЗадачиDropped_НеМерж покрывают это. Здесь —
+    // что holding-задача (ждёт человека) НЕ двигает активность: она не идущая (IsHeld), и
+    // активной остаётся её же стадия, а не та, где стоит тревога.
+    [Fact]
+    public void CurrentStageOf_ДержащаясяЗадачаНеДвигаетАктивность_АктивнаЕёСтадия()
+    {
+        var t = new DateTime(2026, 11, 10, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-cur-stage-held";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-3) };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "Ш1",
+            Status = TaskItemStatus.InProgress, PersonaId = "Денис",
+            ClaudeStartedAt = t.AddHours(-2), AwaitingHumanSince = t.AddHours(-1),
+        };
+        var r1 = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, StepRef = "Ш1",
+            Status = TaskItemStatus.Todo,
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1, r1], t);
+
+        run.Now.Should().BeEmpty("держащаяся задача — не «Сейчас» (дефект 4a241bee)");
+        FeatureBrief.CurrentStageOf(run).Should().Be("prod", "база — первая непройденная стадия с работой");
+        Stage(run, "prod").State.Should().Be("active");
+        Stage(run, "review").State.Should().NotBe("active", "todo-ревью не «текущая стадия»");
     }
 
     // Мутация: consult НЕ входит в cut (только Role == Cut) → все стадии пусты →

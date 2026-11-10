@@ -35,6 +35,10 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • B15 (дефект 415c1c80): вернуть штамп голоса к состоянию (run.State) вместо категории —
 //    тесты «голос в очереди» красные; не достраивать старый штамп-состояние через KindByState —
 //    тест «старый штамп» красный.
+//  • FS-V1 (разрез §2.1 П2): взять в CurrentStageOf только первую активную стадию (без Now[0]) —
+//    тест «CurrentStageOf_СтадияИдущейЗадачи…» красный; убрать fallback при пустом Now —
+//    «CurrentStageOf_БезИдущихЗадачей…» красный; вернуть в StaleOf первую активную —
+//    «Note_ШтампПервойАктивной…» красный.
 //  • FS-E4 (ask): убрать строку словаря StopReasonPhrases — рефлексивный тест «КаждыйКод…» красный;
 //    взять для merge attention.Reason («мерж») — тест «Merge…» красный; вернуть null для wait без
 //    текста — тест «WaitБезТекста…» красный; убрать clamp лимита — тест «ЛимитТекста120» красный.
@@ -660,9 +664,11 @@ public class FeatureBriefTests
 
     // Фикстура: run с активной стадией activeStage и голосом эпика, записанным на stageAtWrite /
     // stateAtWrite (штамп как ставит контроллер B3). bySessionId в хранимом голосе есть — наружу
-    // он не должен выйти ни при каком раскладе.
+    // он не должен выйти ни при каком раскладе. runningStage — идущая задача в этой стадии
+    // (FS-V1: стадия идущей задачи и есть текущая); без него идущих нет — работает вторая
+    // половина правила (первая активная стадия).
     private static FeatureRun RunWithVoice(string activeStage, string state, FeatureHold? hold,
-        string stageAtWrite, string stateAtWrite) => new()
+        string stageAtWrite, string stateAtWrite, string? runningStage = null) => new()
     {
         FeatureId = "ep",
         State = state,
@@ -675,6 +681,12 @@ public class FeatureBriefTests
                 stageAtWrite, stateAtWrite),
         },
         Stages = [Stage(activeStage, "active")],
+        Now = runningStage is null
+            ? new List<FeatureNow>()
+            : new List<FeatureNow>
+            {
+                new() { TaskId = "r1", Stage = runningStage, PersonaId = "Глеб", StartedAt = NOW.AddHours(-1) },
+            },
     };
 
     // c1: смена активной стадии после записи → stale = true (prod → review, категория та же).
@@ -856,6 +868,52 @@ public class FeatureBriefTests
         kinds.Should().NotBeEmpty();
         FeatureBrief.Kinds.All.Should().BeEquivalentTo(kinds,
             "в наборе категорий — ровно по строке на каждую константу FeatureBrief.Kinds");
+    }
+
+    // ─── FS-V1 (разрез §2.1 П2): одна «текущая стадия» на всех потребителей ───────────────────────
+
+    // Единая функция (FeatureBrief.CurrentStageOf): стадия первой идущей задачи прежде «первой
+    // активной стадии» конвейера. Фикстура — ровно то, что до FS-V1 давало расхождение: stages[]
+    // активна на prod (первая непройденная), а работа идёт на review. Мутация: взять в
+    // CurrentStageOf только FirstActiveStageOf (без Now[0]) — тест красный ("prod" ≠ "review").
+    [Fact]
+    public void CurrentStageOf_СтадияИдущейЗадачиПреждеПервойАктивной()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", runningStage: "review");
+
+        FeatureBrief.CurrentStageOf(run).Should().Be("review",
+            "работа идёт на review — текущая стадия review, а не первая активная prod");
+        FeatureBrief.ActiveStageOf(run).Should().Be("review",
+            "внешний вход штампа голоса (TasksController/TasksToolset) — та же база, своего правила он не держит");
+        FeatureBrief.Build(run, null, null, NOW).Now!.Stage.Should().Be("review", "brief.now.stage");
+    }
+
+    // Идущих задач нет — работает вторая половина правила: первая активная стадия (B14: голос на
+    // паузе/idle/waiting/stopped не устаревший с первой секунды). Мутация: убрать fallback
+    // FirstActiveStageOf (пусто при пустом Now) — тест «ГолосНаСостоянииБезИдущихЗадачей…» красный.
+    [Fact]
+    public void CurrentStageOf_БезИдущихЗадачей_ПерваяАктивнаяСтадия()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running");
+
+        FeatureBrief.CurrentStageOf(run).Should().Be("prod", "идущих нет — база та же, что у B14");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod");
+    }
+
+    // Следствие, принятое разрезом: голос, записанный со штампом «первой активной» стадии (prod),
+    // пока работа шла на review, по новому правилу устаревает. До FS-V1 он был свежим: штамп и
+    // сравнение держались одной «первой активной». Мутация: вернуть в StaleOf первую активную
+    // стадию вместо CurrentStageOf — тест красный (Stale = false).
+    [Fact]
+    public void Note_ШтампПервойАктивнойПриРаботеВДругойСтадииДаётStale()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", runningStage: "review");
+
+        var note = FeatureBrief.Build(run, null, null, NOW).Note!;
+
+        note.StageAtWrite.Should().Be("prod", "хранимый штамп не переписывается");
+        note.Stale.Should().BeTrue(
+            "текущая стадия — review (стадия идущей задачи), голос написан на prod");
     }
 
     // ─── updatedAt (B6, дефект f2da9354): время последнего записанного события состояния, не момента ответа ─

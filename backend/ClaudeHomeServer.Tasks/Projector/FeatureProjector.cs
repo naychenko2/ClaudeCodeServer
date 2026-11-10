@@ -308,31 +308,50 @@ public sealed class FeatureProjector(TaskManager tasks)
                 && stageDefs[i].tasks.All(t => t.Status == TaskItemStatus.Done))
             .ToArray();
 
-        // activeIndex: текущая стадия конвейера.
-        // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
-        // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
-        //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
-        //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
-        //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
-        //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
-        //    нет) — частный случай: последняя с задачами = final → active = merge.
-        //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
-        // 3) -1 — все стадии пройдены (merge done).
+        // activeIndex: ТЕКУЩАЯ стадия фичи — та же величина, что FeatureBrief.CurrentStageOf
+        // (FS-V1, разрез §2.1 П2): стадия первой ИДУЩЕЙ задачи, иначе — первая непройденная
+        // стадия с работой. До FS-V1 здесь жила только вторая половина, а brief.now и row.now0
+        // брали первую: два разных ответа на один вопрос, и Гант с шапкой расходились.
+        // nowList построен выше и пуст там, где идущих нет намеренно (пауза — W4-HOLD-D, гашение
+        // nowList в BuildCore), поэтому «первая идущая задача» здесь ровно та, что станет run.Now[0].
         int activeIndex = -1;
-        for (int i = 0; i < isDone.Length; i++)
+        if (nowList.Count > 0)
         {
-            if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
-        }
-        if (activeIndex == -1 && !isDone[^1])
-        {
-            int lastWithTasks = -1;
+            // Стадия идущей задачи — ключ из stageDefs (RoleToStage отдаёт только их). Задача без
+            // роли даёт «prod»: по ней активной может стать стадия без своих задач — тот же
+            // случай, что «фича дошла и ждёт следующую» ниже.
             for (int i = 0; i < stageDefs.Length; i++)
-                if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
-            activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
-            // Пустая необязательная «design» не может быть активной: активность
-            // уходит на следующую стадию (W4-DES-B).
-            if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
-                activeIndex++;
+            {
+                if (stageDefs[i].key == nowList[0].Stage) { activeIndex = i; break; }
+            }
+        }
+        if (activeIndex == -1)
+        {
+            // Идущих задач нет.
+            // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
+            // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
+            //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
+            //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
+            //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
+            //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
+            //    нет) — частный случай: последняя с задачами = final → active = merge.
+            //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
+            // 3) -1 — все стадии пройдены (merge done).
+            for (int i = 0; i < isDone.Length; i++)
+            {
+                if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
+            }
+            if (activeIndex == -1 && !isDone[^1])
+            {
+                int lastWithTasks = -1;
+                for (int i = 0; i < stageDefs.Length; i++)
+                    if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
+                activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+                // Пустая необязательная «design» не может быть активной: активность
+                // уходит на следующую стадию (W4-DES-B).
+                if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
+                    activeIndex++;
+            }
         }
 
         // W4-3B: множество id этого run — фильтр связи «оценивает →» у исполнителей стадии.

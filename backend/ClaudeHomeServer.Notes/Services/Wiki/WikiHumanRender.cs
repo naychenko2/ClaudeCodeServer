@@ -305,11 +305,13 @@ internal static class WikiHumanRender
             case "owns": owns = List(value); break;
             default: return null;
         }
+        // as_of и written — поля кода: правка summary/aliases/owns их не стирает (S2-1h).
         return new WikiFrontmatter
         {
-            Type = fm.Type, Kind = fm.Kind, Summary = summary, Aliases = aliases, Owns = owns,
+            Type = fm.Type, Kind = fm.Kind, Summary = summary, AsOf = fm.AsOf, Aliases = aliases, Owns = owns,
             Sources = fm.Sources, Updated = fm.Updated, Status = fm.Status,
             Origin = fm.Origin, Ref = fm.Ref, Hash = fm.Hash, Captured = fm.Captured, Signal = fm.Signal,
+            Written = fm.Written,
         };
     }
 

@@ -187,7 +187,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         private sealed class SwapMeter : ILocalModelTurnMeter
         {
             public ILocalModelTurnMeter Target { get; set; } = new FakeMeter();
-            public IReadOnlyList<TurnChatLive> ActiveChats() => Target.ActiveChats();
+            public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main") => Target.ActiveChats(track);
             public LocalModelTurnSummary? GetLastTurn(string sessionId) => Target.GetLastTurn(sessionId);
         }
 
@@ -1524,7 +1524,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     public sealed class FakeMeter : ILocalModelTurnMeter
     {
         public List<TurnChatLive> Chats { get; set; } = [];
-        public IReadOnlyList<TurnChatLive> ActiveChats() => Chats;
+        public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main") => Chats;
         public LocalModelTurnSummary? GetLastTurn(string sessionId) => null;
     }
 

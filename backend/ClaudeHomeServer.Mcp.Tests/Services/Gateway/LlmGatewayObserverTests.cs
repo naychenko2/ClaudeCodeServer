@@ -33,7 +33,7 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         // Подсказочные заголовки (ADR-029): последний полученный набор (null — не было).
         public GatewayHintHeaders? LastHints;
 
-        public void OnRequestStarted(string requestId, string turnId) => Interlocked.Increment(ref Started);
+        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null) => Interlocked.Increment(ref Started);
         public void OnFirstToken(string requestId, string turnId) => Interlocked.Increment(ref FirstToken);
         public void OnRequestCompleted(string requestId, string turnId, RequestUsage usage)
         {
@@ -55,7 +55,7 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         public int FirstToken;
         public int Completed;
 
-        public void OnRequestStarted(string requestId, string turnId) => Interlocked.Increment(ref Started);
+        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null) => Interlocked.Increment(ref Started);
         public void OnFirstToken(string requestId, string turnId)
         {
             Interlocked.Increment(ref FirstToken);
@@ -76,7 +76,7 @@ public sealed class LlmGatewayObserverTests : IAsyncDisposable
         public int Completed;
         public int TokenCountCalls;
 
-        public void OnRequestStarted(string requestId, string turnId) => Interlocked.Increment(ref Started);
+        public void OnRequestStarted(string requestId, string turnId, string? providerKey = null) => Interlocked.Increment(ref Started);
         public void OnFirstToken(string requestId, string turnId) => Interlocked.Increment(ref FirstToken);
         public void OnRequestCompleted(string requestId, string turnId, RequestUsage usage) => Interlocked.Increment(ref Completed);
         public void OnTokenCount(string requestId, string turnId, int cumulativeTokens)

@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Llm.Gateway;
 using ClaudeHomeServer.Services.Turn;
+using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Tests.Services.Gateway;
 using FluentAssertions;
 using Microsoft.Extensions.Options;
@@ -852,5 +853,144 @@ public sealed class LocalModelTurnMeterTests
         await _bus.PublishAsync(new SessionDeleted(new TurnContext("chat-A", "owner", 0, 0, null)));
 
         _meter.GetLastTurn("chat-A").Should().BeNull("после SessionDeleted записи нет — и итога нет");
+    }
+
+    // ─── B5: провайдер у чата и ActiveChats по дорожке ───────────────────────────────────────
+
+    // Реестр для тестов дорожки: два IsLocal-провайдера — local-qwen (основной: IsLocal с Stats,
+    // тот же выбор, что MainLocalProvider → дорожка «main») и local-video-gemma (явный
+    // StatsEngine=gemma → своя дорожка). Конфиг — как в StatsTrackOf-тестах LlmProviderRegistryTests.
+    private static LlmProviderRegistry BuildTrackRegistry() => new(TestConfig.Build(new()
+    {
+        ["LlmProviders:local-qwen:AnthropicBaseUrl"] = "http://127.0.0.1:8080",
+        ["LlmProviders:local-qwen:IsLocal"] = "true",
+        ["LlmProviders:local-qwen:Stats:Engine"] = "vllm",
+        ["LlmProviders:local-qwen:Stats:MetricsUrl"] = "http://127.0.0.1:8084/metrics",
+        ["LlmProviders:local-video-gemma:AnthropicBaseUrl"] = "http://127.0.0.1:8081",
+        ["LlmProviders:local-video-gemma:IsLocal"] = "true",
+        ["LlmProviders:local-video-gemma:StatsEngine"] = "gemma",
+    }));
+
+    // Отдельный счётчик с реестром: независные fixed'ры (свой bus/tokens/часы), без подписки
+    // на шину — тестам дорожки не нужен конец хода. _options — экземплярный на тест (xUnit).
+    private (LocalModelTurnMeter Meter, TurnTokenService Tokens, ManualTime Time) BuildTrackedMeter(LlmProviderRegistry? providers)
+    {
+        var bus = new TurnEventBus();
+        var time = new ManualTime(new DateTimeOffset(2026, 11, 1, 10, 0, 0, TimeSpan.Zero));
+        var tokens = new TurnTokenService(bus, time);
+        var meter = new LocalModelTurnMeter(tokens, _options, time, providers: providers);
+        return (meter, tokens, time);
+    }
+
+    private static string IssueFor(TurnTokenService tokens, string sessionId) =>
+        tokens.Issue("owner", sessionId, "device").Grant.TurnId;
+
+    // (B5-1) ActiveChats по дорожке: чат на провайдере основной локальный → «main», чат на
+    //      провайдере с явным StatsEngine=gemma → «gemma», чат без провайдера → «main».
+    //      ProviderKey записи — ключ провайдера последнего начатого запроса чата.
+    //      Мутация «убрать фильтр по дорожке» (ActiveChats отдаёт все чаты): main содержит
+    //      chat-B, gemma содержит все три → тест краснеет.
+    [Fact]
+    public void B5_ActiveChats_РазделениеПоДорожкам()
+    {
+        var (meter, tokens, _) = BuildTrackedMeter(BuildTrackRegistry());
+        var tA = IssueFor(tokens, "chat-A");
+        var tB = IssueFor(tokens, "chat-B");
+        var tC = IssueFor(tokens, "chat-C");
+
+        meter.OnRequestStarted("rA", tA, "local-qwen");
+        meter.OnRequestStarted("rB", tB, "local-video-gemma");
+        meter.OnRequestStarted("rC", tC); // без провайдера
+
+        var main = meter.ActiveChats(); // default «main»
+        main.Select(c => c.SessionId).Should().Equal(new[] { "chat-A", "chat-C" },
+            "main: основной локальный провайдер и чат без провайдера");
+        main.First(c => c.SessionId == "chat-A").ProviderKey.Should().Be("local-qwen");
+        main.First(c => c.SessionId == "chat-C").ProviderKey.Should().BeNull("без провайдера — null");
+
+        var gemma = meter.ActiveChats("gemma");
+        gemma.Select(c => c.SessionId).Should().Equal(new[] { "chat-B" },
+            "gemma: только чат провайдера с явным StatsEngine");
+        gemma.Single().ProviderKey.Should().Be("local-video-gemma");
+    }
+
+    // (B5-2) Отказ: неизвестный провайдер → «main» (StatsTrackOf → null → main), исключений
+    //      наружу нет. Мутация «бросать при неизвестном провайдере» → тест краснеет.
+    [Fact]
+    public void B5_НеизвестныйПровайдер_ДорожкаMain_БезИсключений()
+    {
+        var (meter, tokens, _) = BuildTrackedMeter(BuildTrackRegistry());
+        var t = IssueFor(tokens, "chat-A");
+        meter.OnRequestStarted("r", t, "no-such-provider");
+
+        meter.ActiveChats().Should().HaveCount(1, "неизвестный провайдер → main");
+        meter.ActiveChats("gemma").Should().BeEmpty();
+        meter.ActiveChats().Single().ProviderKey.Should().Be("no-such-provider",
+            "ключ сохраняется как есть, дорожка — main");
+    }
+
+    // (B5-3) Устаревший ответ: завершение запроса A (main-провайдер, стартовал раньше) не
+    //      меняет провайдер активного запроса B (gemma) той же сессии: чат остаётся на «gemma».
+    //      Мутация «брать провайдер самого раннего активного запроса»: чат на main с начала →
+    //      первая проверка краснеет. Мутация «двигать провайдера по завершению запроса»
+    //      (rA закончился — чат на main): вторая проверка краснеет.
+    [Fact]
+    public void B5_УстаревшийОтвет_НеМеняетПровайдераАктивногоЗапроса()
+    {
+        var (meter, tokens, time) = BuildTrackedMeter(BuildTrackRegistry());
+        var t = IssueFor(tokens, "chat-A");
+
+        // rA (main-провайдер) стартовал раньше, rB (gemma) — позже: чат на «gemma».
+        meter.OnRequestStarted("rA", t, "local-qwen");
+        time.Advance(TimeSpan.FromSeconds(1));
+        meter.OnRequestStarted("rB", t, "local-video-gemma");
+        meter.ActiveChats("gemma").Select(c => c.SessionId).Should().Equal(new[] { "chat-A" },
+            "провайдер чата — последнего начатого запроса");
+        meter.ActiveChats().Should().BeEmpty("тот же чат не на main");
+
+        // Завершение старого rA: провайдер активного rB не двигается.
+        meter.OnRequestCompleted("rA", t, Usage(5));
+        meter.ActiveChats("gemma").Should().HaveCount(1, "завершение A не меняет провайдера B");
+        meter.ActiveChats().Should().BeEmpty();
+    }
+
+    // (B5-4) Тест на гонку: 2×50 OnRequestStarted параллельно — сессия A на local-qwen,
+    //      сессия B на local-video-gemma. Запись и чтение провайдера — под _gate, ключ —
+    //      requestId: сессии не затирают друг друга при любом порядке interleaving.
+    //      Мутация «один поле счётчика вместо записи запроса»: оба чата получают провайдера
+    //      последнего из 100 вызовов → одна из двух проверок краснеет при любом исходе гонки.
+    [Fact]
+    public async Task ActiveChats_ParallelSessions_SplitByTrack()
+    {
+        var (meter, tokens, _) = BuildTrackedMeter(BuildTrackRegistry());
+        var tA = IssueFor(tokens, "chat-A");
+        var tB = IssueFor(tokens, "chat-B");
+
+        var tasks = new List<Task>(100);
+        for (var i = 0; i < 50; i++)
+        {
+            var n = i;
+            tasks.Add(Task.Run(() => meter.OnRequestStarted($"rA{n}", tA, "local-qwen")));
+            tasks.Add(Task.Run(() => meter.OnRequestStarted($"rB{n}", tB, "local-video-gemma")));
+        }
+        await Task.WhenAll(tasks);
+
+        meter.ActiveChats("main").Select(c => c.SessionId).Should().Equal(new[] { "chat-A" },
+            "сессия A на основном провайдере — только на main");
+        meter.ActiveChats("gemma").Select(c => c.SessionId).Should().Equal(new[] { "chat-B" },
+            "сессия B на gemma-провайдере — только на gemma");
+    }
+
+    // (B5-5) Счётчик без реестра (providers=null): все чаты на «main», с providerKey в записи
+    //      или без него — поведение до фичи. Мутация «требовать реестр / падать без него» →
+    //      тест краснеет.
+    [Fact]
+    public void B5_БезРеестра_ВсеЧатыНаMain()
+    {
+        var t = Issue("chat-A");
+        var r = ReqId();
+        _meter.OnRequestStarted(r, t, "local-video-gemma"); // провайдер есть, реестра нет
+        _meter.ActiveChats().Should().HaveCount(1, "нет реестра → main (прежнее поведение)");
+        _meter.ActiveChats("gemma").Should().BeEmpty();
     }
 }

@@ -46,6 +46,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    («ОценкаОркестратораГлавнее…», «Остановка…ДатаГасится…», «ЗначенияРовноВычисленные…» —
 //    history 40 вместо note 90), остальные зелёные; убрать строку гашения endsAt при clockStopped —
 //    красный ровно «Остановка…ДатаГасится…» (дата note.estimate остаётся при стоящих часах).
+//  • FS-V2 доработка (ревью f03f4f60): убрать проверку Stale: false в EtaOf — красный ровно
+//    «УстаревшийГолосБерётИсторию…» (note 90 вместо history 40), остальные зелёные (голос их
+//    фикстур свежий); убрать нижний порог < 1 — красный ровно «МеньшеОднойМинуты…» (0 вместо null).
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -1222,11 +1225,14 @@ public class FeatureBriefTests
 
     // ─── eta (FS-V2): один срок с источником и признаком «часы стоят» ────────────────────────────
 
-    // Фикстура: run с нарезанным планом (историческая оценка) и по желанию — оценкой оркестратора
-    // в голосе эпика (голос на NOW−2ч; штамп совпадает с категорией — тест про eta, не про stale),
-    // вовсе без голоса (noVoice) и тревогой (вид определяет состояние, как в RunWithAttention).
+    // Фикстура: run с нарезанным планом (историческая оценка), активной стадией «prod» и по желанию —
+    // оценкой оркестратора в голосе эпика (голос на NOW−2ч). Штамп голоса свежий: стадия stageAtWrite
+    // («prod», совпадает с активной) и категория = категории состояния (ExpectedKinds) — тест про eta,
+    // не про stale; stageAtWrite другой («cut») — голос устарел по смене стадии. Голоса нет вовсе
+    // (noVoice) и тревога (вид определяет состояние, как в RunWithAttention).
     private static FeatureRun RunWithEta(string state, int work, int notCreated, int review,
-        FeatureAttention? attention = null, FeatureEstimate? estimate = null, bool noVoice = false) => new()
+        FeatureAttention? attention = null, FeatureEstimate? estimate = null, bool noVoice = false,
+        string stageAtWrite = "prod") => new()
     {
         FeatureId = "ep",
         State = state,
@@ -1237,9 +1243,11 @@ public class FeatureBriefTests
             {
                 Id = "ep",
                 Role = TaskRoles.Feature,
-                Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true, "prod", "running")
+                Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true,
+                    stageAtWrite, ExpectedKinds[state])
                     with { Estimate = estimate },
             },
+        Stages = [Stage("prod", "active")],
         StepProgress = new FeatureStepProgress
         {
             PlanState = "cut", Total = work + notCreated + review,
@@ -1381,5 +1389,46 @@ public class FeatureBriefTests
         var noNote = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, noVoice: true), null, typical, NOW);
         noNote.Eta!.Minutes.Should().Be(noNote.Estimate!.RemainingMinutes);
         noNote.Eta.Source.Should().Be("history");
+    }
+
+    // FS-V2 доработка (ревью f03f4f60): устаревшая оценка — не срок: пока голос устарел, число из
+    // него не берётся, источник — история (то же правило, что у фронта, estimateView). Причина
+    // устаревания — смена стадии: голос записан на «cut», фича идёт на «prod». Симметрично: свежий
+    // голос даёт note — инвариант eta.source == "note" ⇒ note.stale == false.
+    // Мутация: убрать проверку Stale: false в EtaOf — красный ровно этот тест (note 90 вместо history 40).
+    [Fact]
+    public void Eta_УстаревшийГолосБерётИсторию_СвежийДаётNote()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var stale = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90), stageAtWrite: "cut"),
+            null, typical, NOW);
+        stale.Note!.Stale.Should().BeTrue("голос записан на старте, стадия сменилась (cut → prod)");
+        stale.Eta!.Source.Should().Be("history", "устаревшая оценка — не срок");
+        stale.Eta.Minutes.Should().Be(40, "число истории, не голоса (90)");
+        stale.Eta.EndsAt.Should().BeNull("у истории даты нет никогда");
+        stale.Eta.ClockStopped.Should().BeNull("тревоги нет");
+
+        var fresh = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW);
+        fresh.Note!.Stale.Should().BeFalse("стадия и категория не менялись");
+        fresh.Eta!.Source.Should().Be("note");
+        fresh.Eta.Minutes.Should().Be(90);
+    }
+
+    // Нижний порог: меньше минуты — не срок: ни история «0 минут», ни нулевая оценка свежего голоса
+    // (фронт отбрасывает remainingMinutes < 1, FeatureBriefModel.ts:589).
+    // Мутация: убрать нижний порог в EtaOf — красный ровно этот тест (0 вместо null).
+    [Fact]
+    public void Eta_МеньшеОднойМинутыНеОтдаётся()
+    {
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, TypicalOf(0, 0, 0, 0, 0, 0, 5), NOW)
+            .Eta.Should().BeNull("история с нулевым числом — не срок");
+
+        var zeroEstimate = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 0)), null, typical: TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+        zeroEstimate.Source.Should().Be("history", "нулевая оценка — не срок, срок — истории");
+        zeroEstimate.Minutes.Should().Be(40);
     }
 }

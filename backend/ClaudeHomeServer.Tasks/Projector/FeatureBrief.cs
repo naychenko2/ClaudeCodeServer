@@ -34,6 +34,8 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // и историей делает бэк (приоритет note → history), карточка фронта больше не выбирает сама;
 // clockStopped — признак «часы стоят» (вид тревоги), при нём endsAt=null — отсутствие даты
 // объяснено, а не молча спрятано (в note.estimate она гасилась без причины).
+// FS-V2 доработка (ревью f03f4f60): устаревший голос срока не даёт — при brief.note.stale
+// источник history (тот же предикат StaleOf, что у brief.note.stale, без второго расчёта).
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -244,7 +246,7 @@ public static class FeatureBrief
             Active: ActiveOf(run),
             QueueStartEstimate: QueueStartEstimateOf(run, kind, typical, now, projectRuns, slotLimit),
             Ask: AskOf(run),
-            Eta: EtaOf(note?.Estimate, estimate, ClockStoppedOf(run)),
+            Eta: EtaOf(note, estimate, ClockStoppedOf(run)),
             now);
     }
 
@@ -587,23 +589,30 @@ public static class FeatureBrief
     // «Оценка отдаётся» = etaMinutes есть: оценка без срока — не срок (её «что дальше» и why
     // остаются в note.estimate), срок тогда берётся из истории — иначе карточке доставался бы
     // пустый срок там, где число есть.
+    // FS-V2 доработка (ревью f03f4f60): устаревшая оценка — не срок: пока голос устарел
+    // (note.stale), число из голоса не берётся, источник — история (то же правило, что у фронта,
+    // FeatureBriefModel.ts estimateView). Предикат один: StaleOf, уже вычисленный NoteOf
+    // (тот же brief.note.stale), второго расчёта нет. Инвариант: eta.source == "note"
+    // ⇒ note.stale == false.
+    // Нижний порог: меньше минуты — не срок (фронт отбрасывает remainingMinutes < 1,
+    // FeatureBriefModel.ts:589): такая оценка считается отсутствующей.
     // minutes — всегда число (eta без числа — null: «одного срока» без числа не бывает);
     // endsAt — дата note.estimate (от момента записи голоса, не от «сейчас» — та же база, что
     // EstimateOfNote), у истории даты нет никогда; при непустом clockStopped — null: сейчас
     // дата при стоящих часах просто пропадала молча, теперь её отсутствие объяснено самим
     // признаком. Оценок нет обеих — eta null.
-    private static BriefEta? EtaOf(BriefNoteEstimate? noteEstimate, BriefEstimate? history, string? clockStopped)
+    private static BriefEta? EtaOf(BriefNote? note, BriefEstimate? history, string? clockStopped)
     {
         int minutes;
         DateTime? endsAt;
         string source;
-        if (noteEstimate is { EtaMinutes: { } eta })
+        if (note is { Stale: false, Estimate: { EtaMinutes: >= 1 } est })
         {
-            minutes = eta;
-            endsAt = noteEstimate.EtaEndsAt;
+            minutes = est.EtaMinutes!.Value;
+            endsAt = est.EtaEndsAt;
             source = EtaSourceNote;
         }
-        else if (history is not null)
+        else if (history is { RemainingMinutes: >= 1 })
         {
             minutes = history.RemainingMinutes;
             endsAt = null;

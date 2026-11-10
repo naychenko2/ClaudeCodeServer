@@ -141,6 +141,69 @@ public class NotesRecallReadsTests : IDisposable
         snap.Pages[KeyAlive].Recall.Should().Be(1);
     }
 
+    // Минор 1 (ревью 759c478e): правило «страница остаётся, заметка уступает» считается ПОСЛЕ
+    // отбрасывания спящих. Спящая страница W цитирует живую заметку N, обе в выдаче: W в блок
+    // не попадает, поэтому N не должна уступать ей место — иначе из блока ушли бы обе.
+    [Fact]
+    public async Task СпящаяСтраницаЦитируетЖивуюЗаметку_ЗаметкаОстаётсяВБлоке()
+    {
+        var root = Path.Combine(_dir, "projects", "p1");
+        File.WriteAllText(Path.Combine(root, "notes", "Цитируемая.md"),
+            "# Цитируемая\n\nЖивая заметка, на которую ссылается страница вики.");
+        var noteId = Convert.ToBase64String(Encoding.UTF8.GetBytes("p1|Цитируемая.md"))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+        var wikiPages = WikiPaths.Pages(_dir, User);
+        var cardPath = Path.Combine(wikiPages, "Проекты", "p1", "Источники", "Карточка.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(cardPath)!);
+        File.WriteAllText(cardPath,
+            "---\ntype: source\nsummary: карточка\norigin: note\nref: note:" + noteId +
+            "\nhash: h1\ncaptured: 2026-10-30\nstatus: active\n---\n\n# Карточка\n\n> цитата.\n");
+        var sleeping = WritePage("Проекты/p1/Спящая.md");
+        File.WriteAllText(sleeping,
+            "---\ntype: topic\nsummary: тест\nstatus: active\n---\n\n# Спящая\n\n" +
+            "## Сводка\n\n- Утверждение.[^s1]\n\n## Хронология\n\n## Противоречия\n\n## История\n\n" +
+            "[^s1]: [[Карточка]] — «цитата»\n");
+        File.SetLastWriteTimeUtc(sleeping, DateTimeOffset.UtcNow.AddDays(-60).UtcDateTime);
+        await _kb.SyncAllAsync(User);
+        WikiReadsStore.RecordMany(WikiPaths.Root(_dir, User), [(KeySleeping, WikiReadKind.Read)],
+            DateTimeOffset.UtcNow.AddDays(-60)).Should().BeTrue();
+
+        _index.Response[DatasetIdOf(":wiki")] = [ChunkOf("Спящая", 0.9)];
+        _index.Response[DatasetIdOf(":notes")] = [ChunkOf("Цитируемая", 0.8)];
+
+        var contribution = await New().BuildAsync(Ctx(), "цитируемая заметка");
+
+        contribution.Should().NotBeNull();
+        var text = contribution!.Sections[0].Text;
+        text.Should().NotContain("[[Спящая]]", "спящая страница в блок не попадает");
+        text.Should().Contain("[[Цитируемая]]",
+            "спящая страница выбыла до правила цитирования — живая заметка остаётся в блоке");
+    }
+
+    // Минор 3 (ревью 759c478e): учёт хода не зависит от успеха архива. Скан раздела бросает —
+    // блок тот же, что без архива, и страница, попавшая в блок, всё равно учтена как Recall.
+    [Fact]
+    public async Task СбойСканаАрхива_БлокКакБезАрхива_УчётСохранён()
+    {
+        WritePage("Проекты/p1/Живая.md");
+        await _kb.SyncAllAsync(User);
+        WikiReadsStore.RecordMany(WikiPaths.Root(_dir, User), [(KeyAlive, WikiReadKind.Read)],
+            DateTimeOffset.UtcNow.AddDays(-1)).Should().BeTrue(); // стор валиден: скан доходит до вызова
+        _index.Response[DatasetIdOf(":wiki")] = [ChunkOf("Живая", 0.9)];
+
+        var contributor = new NotesRecallContributor(_kb, _config, NullLogger<NotesRecallContributor>.Instance)
+        {
+            DormantScan = (_, _, _, _) => throw new InvalidOperationException("сбой скана раздела"),
+        };
+        var contribution = await contributor.BuildAsync(Ctx(), "живая страница");
+
+        contribution.Should().NotBeNull("сбой архива не отменяет блок");
+        contribution!.Sections[0].Text.Should().Contain("[[Живая]]");
+        var snap = WikiReadsStore.Read(WikiPaths.Root(_dir, User));
+        snap.Pages[KeyAlive].Recall.Should().Be(1, "учёт хода не зависит от успеха архива");
+    }
+
     // Поиск, пришедший после таймаута, не учитывается: return null — до учёта.
     [Fact]
     public async Task ТаймаутПоиска_УчётаНет()

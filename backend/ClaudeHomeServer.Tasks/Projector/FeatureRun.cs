@@ -153,7 +153,9 @@ public sealed record FeaturePlan(
     // Есть ли текст (ResultMarkdown не пуст после Trim).
     bool HasText,
     // Пути файлов документа: макеты из ResultMarkdown (docs/mockups/….{html,md}), затем файлы
-    // из LinkedFiles задачи. distinct, общий потолок 20, пустые и пути с «..» отброшены.
+    // из LinkedFiles задачи, прошедшие правило материала (FeatureMaterials.IsMaterial / IsMockup:
+    // код и файлы вне docs/ не входят никогда). distinct регистронезависимо, пустые и пути с «..»
+    // отброшены; потолок общий на фичу — FeatureMaterials.Cap (30), свежие задачи сверху.
     List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).

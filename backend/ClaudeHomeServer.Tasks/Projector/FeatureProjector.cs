@@ -795,10 +795,16 @@ public sealed class FeatureProjector(TaskManager tasks)
     // TaskItem.Role как есть (step в документы не попадает, догадок по заголовку нет). hasText —
     // ResultMarkdown не пуст после Trim; mockupPaths — пути файлов документа: макеты из
     // ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача сама приложила через
-    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе):
-    // distinct, порядок появления (сначала текст, потом linkedFiles), ≤ 20, пути с «..» отброшены.
+    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе).
+    // FS-B0: в LinkedFiles берётся только материал или макет (FeatureMaterials.IsMaterial /
+    // IsMockup) — код, тесты и файлы вне docs/ в «Прочие документы» не едут никогда.
+    // distinct регистронезависимо, порядок появления (сначала текст, потом linkedFiles),
+    // пути с «..» отброшены.
     //
     // Порядок списка: роль (cut → design → plan → consult), внутри роли — по CreatedAt.
+    // Общий потолок — 30 путей на фичу (FeatureMaterials.Cap), а не 20 на задачу: кандидаты
+    // обходятся свежие-сверху (по CreatedAt desc) — пути свежих задач занимают бюджет первыми,
+    // старые обрезаются. Внутри задачи порядок кандидатов сохраняется.
     public static List<FeaturePlan> BuildPlans(FeatureRun run)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -819,6 +825,21 @@ public sealed class FeatureProjector(TaskManager tasks)
         ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
         ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
 
+        // Бюджет на фичу (FS-B0): задачи обходятся свежие-сверху; дубли (в т.ч. между задачами)
+        // схлопываются регистронезависимо; суммарно не более FeatureMaterials.Cap путей.
+        var budget = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pathsByTask = new Dictionary<string, List<string>>();
+        foreach (var t in ordered.OrderByDescending(t => t.CreatedAt))
+        {
+            var kept = new List<string>();
+            foreach (var p in MockupPaths(t))
+            {
+                if (budget.Count >= FeatureMaterials.Cap) break;
+                if (budget.Add(p)) kept.Add(p);
+            }
+            pathsByTask[t.Id] = kept;
+        }
+
         return ordered
             .Select(t => new FeaturePlan(
                 t.Id,
@@ -828,7 +849,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 t.CreatedAt,
                 t.CompletedAt,
                 HasText(t),
-                MockupPaths(t)))
+                pathsByTask[t.Id]))
             .ToList();
     }
 
@@ -838,11 +859,16 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пути файлов документа (M5): макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы,
     // которые задача приложила через LinkedFiles (ADR, спеки, записки — вне docs/mockups).
     // Порядок: сначала пути из текста (порядок появления), затем из LinkedFiles (как приложены).
-    // distinct, общий потолок 20, пустые и пути с «..» (pathtraversal) отброшены.
+    // FS-B0: из LinkedFiles берётся только материал или макет (FeatureMaterials.IsMaterial /
+    // IsMockup): код, тесты и файлы вне docs/ — шум группы «Прочие документы», в список не
+    // входят никогда; макеты остаются — их читает «Упомянут в» у карточки макета.
+    // distinct регистронезависимо, пустые и пути с «..» (pathtraversal) отброшены.
+    // Потолок — общий на фичу в BuildPlans (FeatureMaterials.Cap), не на задачу.
     // Пустой источник → [].
     private static List<string> MockupPaths(TaskItem t)
     {
         var paths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var text = t.ResultMarkdown;
         if (!string.IsNullOrEmpty(text))
         {
@@ -851,17 +877,16 @@ public sealed class FeatureProjector(TaskManager tasks)
                 var p = m.Value;
                 // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
                 if (p.Contains("..")) continue;
-                if (!paths.Contains(p)) paths.Add(p);
-                if (paths.Count >= 20) return paths;
+                if (seen.Add(p)) paths.Add(p);
             }
         }
-        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /): берём как
-        // есть, та же безопасность: пустые и с «..» отброшены, дубли схлопнуты, потолок общий.
+        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /):
+        // та же безопасность (пустые и с «..» отброшены), плюс правило материала (FS-B0).
         foreach (var p in t.LinkedFiles)
         {
             if (string.IsNullOrWhiteSpace(p) || p.Contains("..")) continue;
-            if (!paths.Contains(p)) paths.Add(p);
-            if (paths.Count >= 20) break;
+            if (!FeatureMaterials.IsMaterial(p) && !FeatureMaterials.IsMockup(p)) continue;
+            if (seen.Add(p)) paths.Add(p);
         }
         return paths;
     }

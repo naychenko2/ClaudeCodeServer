@@ -396,6 +396,9 @@ function WhoRowView({ row, isMobile, onOpen }: { row: WhoRow; isMobile: boolean;
       </div>
     );
   }
+  // Строка места здесь не встречается: WhoCard основной вкладки не передаёт места в whoRows
+  // (совместная карточка второго стенда и её рендер — F3). Guard сужает union до строки чата.
+  if (row.kind === 'place') return null;
   const speedColor = row.tone === 'wait' ? C.warningText : row.tone === 'read' ? C.textMuted : C.textSecondary;
   const speedStyle: CSSProperties = {
     fontFamily: FONT.mono, fontSize: FS.sm, whiteSpace: 'nowrap',

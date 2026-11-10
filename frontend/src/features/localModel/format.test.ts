@@ -212,6 +212,56 @@ describe('whoRows: строки «Кто сейчас на модели»', () =
     expect(whoRows(undefined, undefined)).toEqual([]);
     expect(whoRows([], 0)).toEqual([]);
   });
+
+  // Строки мест (второй стенд, duty.callsNow): после чатов, до «прочих» (порядок карточки F3).
+  // Подписи звена и длительности — те же, что строк «Кто сейчас» в «Дежурстве» (dutyWhoRows):
+  // карточка и блок называют один вызов одинаково.
+  it('места: чаты → места → прочие; строки мест не кликабельны (нет sessionId)', () => {
+    const rows = whoRows(
+      [{ own: true, title: 'Свой чат', phase: 'generating', genTps: 30 }],
+      1,
+      undefined,
+      [
+        { place: 'Заголовок чата', link: 'engine', durationS: 1.4 },
+        { place: 'Сводка хода', link: null },
+      ],
+    );
+    expect(rows.map(r => r.kind)).toEqual(['chat', 'place', 'place', 'others']);
+    const p1 = rows[1];
+    const p2 = rows[2];
+    if (p1.kind !== 'place' || p2.kind !== 'place') throw new Error('не может быть');
+    expect(p1.title).toBe('Заголовок чата');
+    expect(p1.linkText).toBe('локальная');
+    expect(p1.queued).toBe(false);
+    expect(p1.duration).toBe('1,4 с');
+    // ждущий вызов (link:null): «ждёт в очереди», без длительности
+    expect(p2.title).toBe('Сводка хода');
+    expect(p2.linkText).toBe('ждёт в очереди');
+    expect(p2.queued).toBe(true);
+    expect(p2.duration).toBe('');
+    // у строк мест нет sessionId вовсе: рендер не делает их кликабельными
+    expect('sessionId' in p1).toBe(false);
+    expect('sessionId' in p2).toBe(false);
+  });
+
+  it('места без чатов — только места и «прочие»', () => {
+    const rows = whoRows(undefined, 2, undefined, [
+      { place: 'Классификация задачи', link: 'insurance', durationS: 2.1 },
+    ]);
+    expect(rows.map(r => r.kind)).toEqual(['place', 'others']);
+    const row = rows[0];
+    if (row.kind !== 'place') throw new Error('не может быть');
+    expect(row.linkText).toBe('MiniMax · страховка');
+    expect(row.duration).toBe('2,1 с');
+  });
+
+  it('ключ строки места — по имени места; повтор того же места — с номером повтора', () => {
+    const rows = whoRows(undefined, undefined, undefined, [
+      { place: 'Заголовок чата', link: 'engine', durationS: 1 },
+      { place: 'Заголовок чата', link: 'insurance', durationS: 2 },
+    ]);
+    expect(rows.map(r => r.key)).toEqual(['place-Заголовок чата', 'place-Заголовок чата#2']);
+  });
 });
 
 // === Короткий статус пункта «Локальные модели» в мобильном меню «⋯» (Ф6, доработка 2) ===

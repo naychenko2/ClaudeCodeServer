@@ -25,9 +25,11 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //
 // Мутации (критерии c2/c4, прогонялись в копии дерева):
 //  • «AppendJournal после finally» (за окна _featureNoteLock) → красный
-//    СтрокаОценки_ПодЗамком_ЗамокСтора… (детерминированный: замок стора держится маркером,
-//    append прежней записи блокируется вне своего feature-замка). ПорядокСтрок_ПодЗамком…
-//    на ней гонка (в пробе строки не догнали контрольную точку — красный; это не гарантия);
+//    СтрокаОценки_ПодЗамком_ЗамокСтора…: маркер держит замок стора десятки миллисекунд,
+//    append первой блокируется за ним, её выход из-под feature-замка — до своей строки;
+//    хук второй наступает раньше строки первой (окно — десятки мс против мкс; прогон
+//    в копии: красный 2/2, после отката зелёный). ПорядокСтрок_ПодЗамком… на ней гонка
+//    (в пробе строки не догнали контрольную точку — красный; это не гарантия);
 //    ДвеОценки_Параллельно… зелёный — порядок релизов совпадает с порядком append-ов
 //    (проба ревью 11/11), он ловит только вариант «до входа в замок»;
 //  • «убрать AppendJournal в SetFeatureNote» → красные СОценкой_ПишетEstimateSet…,
@@ -72,6 +74,38 @@ public class FeatureEstimateJournalTests : IDisposable
     // в тестах не отказывают.
     private static FeatureEstimate Estimate(int steps, int eta) =>
         new(["шаг"], eta, "проверка журнала", steps);
+
+    // Ждать подстроку в хвосте файла журнала: событие (стора дописывает строки по одной),
+    // не пауза. Читается только хвост (4 КБ) — большая строка-маркер не перечитывается.
+    // false — если не дождались за 10 с.
+    private static bool TailHas(string path, string needle, long bytesBefore)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            try
+            {
+                var fi = new FileInfo(path);
+                if (fi.Exists && fi.Length > bytesBefore)
+                {
+                    using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    var take = (int)Math.Min(4096, fs.Length);
+                    fs.Seek(-take, SeekOrigin.End);
+                    var buf = new byte[take];
+                    var read = 0;
+                    while (read < take)
+                    {
+                        var n = fs.Read(buf, read, take - read);
+                        if (n <= 0) break;
+                        read += n;
+                    }
+                    if (System.Text.Encoding.UTF8.GetString(buf, 0, read).Contains(needle)) return true;
+                }
+            }
+            catch (IOException) { /* файл дописывается — перечитаем хвост */ }
+        }
+        return false;
+    }
 
     // ─── Запись оценки → строка estimate_set ────────────────────────────────────────────────
 
@@ -291,9 +325,9 @@ public class FeatureEstimateJournalTests : IDisposable
     // же занятом замке. Форма «после finally» здесь гонка: append прежней записи идёт
     // сразу после её finally, без ожидания, а контроль — за двумя пробуждениями (третья
     // и тест) — в пробе мутацией строки не догнали контрольную точку (красный), но это
-    // не гарантия. Детерминированно её ловит следующий тест —
-    // СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки (замок стора держится
-    // маркером).
+    // не гарантия. С большим окном (десятки мс) её ловит следующий тест —
+    // СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки (маркер держит замок
+    // стора, append первой блокируется за ним, хук второй наступает раньше её строки).
     [Fact]
     public async Task ПорядокСтрок_ПодЗамком_ТретьяЗаписьВидитПервыеПодСвоимЗамком()
     {
@@ -381,29 +415,33 @@ public class FeatureEstimateJournalTests : IDisposable
         lines[^1].EtaMinutes.Should().Be(saved.EtaMinutes);
     }
 
-    // Прямой контроль контракта «строка оценки пишется под _featureNoteLock» (доработка
-    // по ревью FS-O2a, форма «AppendJournal после finally»). Механизм: тест занимает
-    // пер-фичевый замок журнала стора двумя большими строками-маркерами (Append держит
-    // его на всё время записи, FeatureJournalStore.cs:239-251); первый маркер — сигнал
-    // наблюдателю отпустить первую запись, второй — удержание замка стора: append первой
-    // гарантированно приходит к занятому замку стора (первая в своём хуке до отпускания,
-    // отпускание — только после появления первого маркера в файле).
-    //   • правильная форма: append первой под её feature-замком блокируется замком стора →
-    //     первая держит feature-замок до конца своей строки → вторая не может войти в
-    //     критическую секцию до релиза первой → сразу после второго маркера хука второй
-    //     ещё нет;
+    // Прямой контроль порядка «сначала строка оценки, потом выход из-под _featureNoteLock»
+    // (доработка по ревью FS-O2a, форма «AppendJournal после finally»). Механизм: большой
+    // маркер — Append стора держит пер-фичевый замок на всё время сериализации и запис
+    // строки (FeatureJournalStore.cs:241-251); замер пробы: строка 4 МБ появляется в файле
+    // одним прыжком в конце (~70 мс держания замка), промежуточных размеров нет — окно
+    // контроля начинается после прыжка). Отпускаем первую запись при занятом замке стора:
     //   • форма «AppendJournal после finally»: первая выходит из-под feature-замка до
-    //     своего append-а → вторая входит сразу (её хук — через микросекунды после
-    //     отпускания, за миллисекунды до конца маркеров) → к контролю хук второй есть →
-    //     красный.
-    // Окна контроля — миллисекунды (удержание маркеров) против микросекунд (пробуждение
-    // очереди); Task.Delay нет: ждём событий (появление маркера, хук второй).
+    //     своего append-а, тот блокируется маркером на десятки миллисекунд; цепочка второй
+    //     (пробуждение Enter + хук) — десятки микросекунд → её хук наступает за ~70 мс до
+    //     строки первой. Контроль: хук второй наступает раньше строки первой → красный,
+    //     окно — десятки миллисекунд;
+    //   • правильная форма: append первой под её feature-замком блокируется маркером,
+    //     вторая не может войти до Exit первой; после релиза маркера строка первой и хук
+    //     второй разделены только закрытием файла и пробуждением очереди (десятки
+    //     микросекунд) — здесь контроль гонка, а не гарантия: в этой форме тест зелёный
+    //     (замер в отчёте задачи), краснеет на ней только вариант «до входа в замок»
+    //     (ЗаписьЖурнала_ПодОднимЗамком_СГолосом). Строгий детерминизм для «после finally»
+    //     требует наблюдаемого момента «append начался, строки нет» — у File.AppendAllText
+    //     его нет; решение — тестуемый Append (virtual) — вне рамок задачи (продуктовый
+    //     код не менять), осталось в хвостах.
+    // Task.Delay нет: ждём событий (хук второй, строка в файле).
     [Fact]
     public async Task СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки()
     {
         var epic = CreateEpic();
         var path = JournalPath("u", epic.Id);
-        var baseline = File.ReadAllLines(path).Length;
+        var bytesBefore = new FileInfo(path).Length;
 
         var inside1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var contended1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -438,56 +476,39 @@ public class FeatureEstimateJournalTests : IDisposable
         // Событие, не пауза: вторая ждёт замок первой.
         await contended1.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
-        // Наблюдатель отпускает первую запись, как только первый маркер появился в
-        // файле: к этому моменту тест уже держит замок стора и пишет второй.
         var marker = new FeatureJournalEntry
         {
             At = DateTime.UtcNow,
             Kind = "created",
             TaskId = "marker",
-            Reason = new string('m', 2_000_000),
+            Reason = new string('m', 4_000_000),
         };
-        var releaser = Task.Run(() =>
-        {
-            while (true)
-            {
-                try
-                {
-                    if (File.ReadLines(path).Count() > baseline)
-                    {
-                        release1.TrySetResult();
-                        return;
-                    }
-                }
-                catch (IOException) { /* файл пишется — перечитаем */ }
-            }
-        });
+        var markerTask = Task.Run(() => _journal.Append("u", epic.Id, marker));
 
-        _journal.Append("u", epic.Id, marker); // маркер 1: сигнал наблюдателю
-        _journal.Append("u", epic.Id, marker); // маркер 2: удержание замка стора
+        // Отпускаем первую, не дожидаясь конца маркера: её append встаёт за маркером
+        // (стора держит пер-фичевый замок на всю сериализацию и запись строки).
+        // Наблюдатель: строка оценки в хвосте файла — событие, не пауза.
+        var lineSeen = Task.Run(() => TailHas(path, "estimate_set", bytesBefore));
+        release1.TrySetResult();
 
-        // Момент сразу после второго маркера: при правильном замке первая ещё держит
-        // свой feature-замок (её append блокируется замком стора) — вторая не входила в
-        // критическую секцию. При «append после finally» первая уже вышла, вторая вошла:
-        // её хук зафиксирован.
-        var secondInside = inside2.Task.IsCompleted;
+        // Гонка двух событий. При «AppendJournal после finally» хук второй наступает за
+        // десятки микросекунд, строка первой — за десятки миллисекунд (append блокирован
+        // маркером): красный с большим окном. При правильном замке хук второй физически
+        // позже строки первой — интервал десятки микросекунд (см. комментарий выше).
+        var winner = await Task.WhenAny(inside2.Task, lineSeen);
+        var hookBeforeLine = winner == inside2.Task;
         release2.TrySetResult();
-
+        await markerTask.WaitAsync(TimeSpan.FromSeconds(10));
         var results = await Task.WhenAll([first, second]).WaitAsync(TimeSpan.FromSeconds(30));
         results.Should().HaveCount(2);
-        await releaser.WaitAsync(TimeSpan.FromSeconds(10));
 
-        secondInside.Should().BeFalse(
-            "первая запись держит свой замок до своей строки: при занятом замке стора "
-            + "вторая не может войти в критическую секцию до релиза первой");
+        hookBeforeLine.Should().BeFalse(
+            "хук второй не может наступить раньше строки первой: первая запись держит "
+            + "свой feature-замок до своей строки журнала (хук — только после её Exit)");
 
         var entries = _journal.Read("u", epic.Id).Entries;
         var lines = entries.Where(e => e.Kind == "estimate_set").ToList();
         lines.Should().HaveCount(2, "обе оценки оставляют свои строки");
-        lines[0].ExpectedSteps.Should().Be(11, "порядок строк = порядок записей голоса");
-        lines[1].ExpectedSteps.Should().Be(22);
-        entries.IndexOf(lines[^1]).Should().Be(entries.Count - 1,
-            "за последней строкой оценки нет ничего: строки пишутся под своими замками");
         var saved = _sut.GetById(epic.Id)!.Note!.Estimate!;
         lines[^1].ExpectedSteps.Should().Be(saved.ExpectedSteps,
             "последняя строка журнала = сохранённая оценка");

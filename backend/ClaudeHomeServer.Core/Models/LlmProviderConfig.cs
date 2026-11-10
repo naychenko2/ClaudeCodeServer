@@ -81,7 +81,8 @@ public class LlmProviderConfig
     public LlmProviderStatsConfig? Stats { get; set; }
 
     // Статистическая дорожка ходов этого провайдера (фича «Сводка состояния фичи», B1):
-    // имя секции `LocalEngines:{name}` — ходы провайдера пишутся в статистику этого
+    // значение — имя дорожки без префикса `LocalEngines:` (например, `gemma` для секции
+    // `LocalEngines:gemma`); ходы провайдера пишутся в статистику этого
     // именованного движка (потребители значения — B5 счётчик хода и B7 контроллер).
     // Пусто — не явная: «main», если провайдер — основной локальный (первый IsLocal с
     // Stats, то же правило, что MainLocalProvider в LocalModelStatsController), иначе

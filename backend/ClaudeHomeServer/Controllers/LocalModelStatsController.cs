@@ -198,8 +198,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private static string TitleOf(string name) =>
         name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
 
-    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт по алфавиту
-    // ключей, и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
+    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт в порядке
+    // конфига, и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
     private LlmProviderConfig? MainLocalProvider() =>
         _providers?.All.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
 
@@ -697,18 +697,18 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Тип движка ("vllm" | "llama-server" | "ollama"); null — не задан.
         public string? Engine { get; init; }
 
-        // Подпись движка из Stats:EngineLabel (только основной стенд); нет — поля нет
+        // Подпись движка: Stats:EngineLabel основного стенда или LocalEngines:{имя}:EngineLabel именованного; нет — поля нет
         // в ответе (WhenWritingNull: без подписей ответ побайтно прежний), фронт покажет Engine.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? EngineLabel { get; init; }
 
-        // Модель стенда: Stats:Model, иначе идентификатор из каталога провайдера; null — неизвестна.
+        // Модель стенда: Stats:Model (у именованного — LocalEngines:{имя}:ModelLabel), иначе идентификатор из каталога провайдера; null — неизвестна.
         public string? Model { get; init; }
 
         // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
         public int? TensorParallel { get; init; }
 
-        // Раскладка по картам из Stats:Topology (только основной стенд) — фронт пишет её
+        // Раскладка по картам из Stats:Topology (только основной стенд; у именованного — null) — фронт пишет её
         // вместо «TP=N»; нет — поля нет в ответе, как у EngineLabel.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? Topology { get; init; }
@@ -741,7 +741,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Точки кольца: t, genThroughput, waiting, running.
         public HistoryPointDto[] History { get; init; } = [];
 
-        // Чаты на стенде; пока пусто (шаг 19).
+        // Живые чаты дорожки стенда (main — ходы основного провайдера; именованная — ходы провайдеров с её StatsEngine).
         public ChatDto[] Chats { get; init; } = [];
 
         // Метрики, которых движок не сообщил (отсутствуют в /metrics). Единый словарь сокрытия

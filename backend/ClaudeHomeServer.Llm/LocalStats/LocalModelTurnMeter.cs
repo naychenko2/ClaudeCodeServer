@@ -426,7 +426,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
 
     // B5: провайдер чата — ключ последнего начатого запроса сессии (под _gate, InWork —
     // только запросы в работе: завершённый запрос не держит свой провайдер — «устаревший
-    // ответ» не меняет провайдер активного). Нет реестра или нет провайдера/дорожки — «main».
+    // ответ» не меняет провайдер активного). Нет запросов в работе — null; дорожку по ключу решает TrackOf (пустая дорожка — там).
     private string? LastStartedProviderKey(SessionState s)
     {
         string? key = null;
@@ -442,7 +442,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
 
     // B5/B8: дорожка по провайдеру: явная (StatsTrackOf) или «main» для null-провайдера, счётчика
     // без реестра и неизвестного реестру ключа. Известный провайдер, которого «в статистику движков
-    // не пишут» (StatsTrackOf = null, контракт B1), дорожки не имеет: null не равен ни одной вкладке.
+    // не пишут» (StatsTrackOf = null, контракт B1), имеет пустую дорожку: null не равен ни одной вкладке.
     private string? TrackOf(string? providerKey)
     {
         if (providerKey is null || _providers is null || _providers.GetByKey(providerKey) is null)

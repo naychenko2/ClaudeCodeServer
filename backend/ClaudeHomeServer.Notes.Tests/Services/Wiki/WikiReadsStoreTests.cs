@@ -161,6 +161,39 @@ public class WikiReadsStoreTests : IDisposable
         pages[other].LastStrongRead.Should().Be(T0);
     }
 
+    // ─── набор видов: ровно четыре, Recall — единственный слабый (таблица путей ADR-039) ──
+    // Мутация (критерий c2): в Add() не двигать LastStrongRead для Human — красный этот тест.
+    // Краснеет и ВидыЧтенийСчитаютсяРаздельно: он держит тот же контракт («сильные —
+    // Query, Read, Human»), а запись Human>0 без своего времени отвергает сам стор
+    // (IsValidPage) — «ровно один красный» при этой мутации невозможен ни одним тестом.
+
+    [Fact]
+    public void НаборВидовРовноЧетыре_RecallЕдинственныйСлабый()
+    {
+        Enum.GetValues<WikiReadKind>().Should().BeEquivalentTo(
+            new[] { WikiReadKind.Recall, WikiReadKind.Query, WikiReadKind.Read, WikiReadKind.Human },
+            "набор видов закрыт таблицей путей ADR-039: новый вид — это новый путь чтения");
+
+        foreach (var kind in Enum.GetValues<WikiReadKind>())
+        {
+            var pageKey = $"Общее/Вид{kind}.md";
+            WikiReadsStore.RecordMany(Root(), [(pageKey, kind)], T0).Should().BeTrue();
+
+            var p = WikiReadsStore.Read(Root()).Pages[pageKey];
+            p.LastRead.Should().Be(T0, $"{kind} — чтение: оно двигает LastRead");
+            if (kind == WikiReadKind.Recall)
+            {
+                p.LastRecall.Should().Be(T0, "recall — единственный слабый: своё время LastRecall");
+                p.LastStrongRead.Should().BeNull("recall не двигает LastStrongRead");
+            }
+            else
+            {
+                p.LastRecall.Should().BeNull($"{kind} — сильный путь: LastRecall он не двигает");
+                p.LastStrongRead.Should().Be(T0, $"{kind} — сильный путь по таблице ADR-039: двигает LastStrongRead");
+            }
+        }
+    }
+
     // ─── форма входа: ключ обязан быть путём под pages/ ──────────────────────────
 
     [Theory]

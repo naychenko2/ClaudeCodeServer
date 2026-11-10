@@ -221,7 +221,7 @@ public class LlmProviderRegistry
     public LlmProviderConfig? GetByKey(string? key) =>
         key is not null && _providers.TryGetValue(key, out var p) ? p : null;
 
-    // Статистическая дорожка ходов провайдера (фича «Сводка состояния фичи», B1; ключи
+    // Статистическая дорожка ходов провайдера (фича «Локальные модели: Qwen 27B на Video, vLLM», B1; ключи
     // дорожки — контракт с B5/B7): явный StatsEngine провайдера; иначе MainTrackName
     // («main»), если провайдер — основной локальный (тот же выбор, что MainLocalProvider
     // в LocalModelStatsController:218: первый IsLocal с секцией Stats); иначе null —
@@ -236,7 +236,7 @@ public class LlmProviderRegistry
 
     // Основной локальный провайдер — порядок выбора повторяет MainLocalProvider в
     // LocalModelStatsController:218-219: среди IsLocal предпочтение у тех, у кого есть
-    // Stats; при равенстве — первый по порядку загрузки конфига. Когда Stats ровно у
+    // Stats; при равенстве — первый по алфавиту ключей. Когда Stats ровно у
     // одного провайдера, порядок ключей на выбор не влияет.
     private LlmProviderConfig? MainLocalProvider() =>
         _providers.Values.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();

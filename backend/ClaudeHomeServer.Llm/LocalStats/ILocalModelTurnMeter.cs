@@ -22,7 +22,7 @@ public interface ILocalModelTurnMeter
 {
     // Чаты с запросом в работе на локальном движке указанной дорожки: фаза, скорость,
     // владелец, проект и название. Дорожка чата — дорожка его провайдера
-    // (LlmProviderRegistry.StatsTrackOf); null-провайдер или null-дорожка — «main».
+    // (LlmProviderRegistry.StatsTrackOf); в «main» уходят только null-провайдер и неизвестный ключ; у известного провайдера без дорожки чат не попадает ни в одну вкладку.
     // Пусто — движок не занят (или ходы не идут через шлюз).
     IReadOnlyList<TurnChatLive> ActiveChats(string track = "main");
 

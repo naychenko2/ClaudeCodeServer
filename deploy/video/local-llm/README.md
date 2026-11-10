@@ -22,6 +22,14 @@
 `--served-model-name` на Video (прод-конфиг — у Андрея); `Model` в `LocalEngines` и id модели
 в каталоге провайдера обязаны с ним совпадать.
 
+**Id модели не должен коллидировать.** Id `qwen3.8-27b` уже объявлен у `local-qwen` в базовом
+`appsettings.json`, а `ResolveByModel` берёт первое совпадение — ход чата с таким id уйдёт на
+основной стенд, а не на Video. Поэтому у vLLM на Video задаётся второй
+`--served-model-name qwen3.8-27b-video`; этот id — в каталоге моделей провайдера
+`local-video-gemma` и в `LocalEngines:gemma:Model`; у провайдера `StatsEngine=gemma`, у движка
+`MetricsEngine=vllm`. Признак правильной настройки: в логе старта нет Warning о дубле id модели,
+а в `turn-runs` ходы идут с `startProvider: local-video-gemma`.
+
 Карту не делит: **gpu-arbiter** в режиме `exclusive` останавливает модель при любом задании
 ComfyUI, аренде от CCS или чужом GPU-процессе и возвращает после тишины, предварительно выгрузив
 кэш моделей ComfyUI (`/free`).

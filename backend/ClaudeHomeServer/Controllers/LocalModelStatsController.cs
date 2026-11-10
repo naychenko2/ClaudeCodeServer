@@ -198,8 +198,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private static string TitleOf(string name) =>
         name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
 
-    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт в порядке
-    // конфига, и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
+    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт в алфавите
+    // ключей (так их отдаёт IConfiguration), и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
     private LlmProviderConfig? MainLocalProvider() =>
         _providers?.All.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
 

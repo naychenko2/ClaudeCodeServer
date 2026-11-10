@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks.Journal;
@@ -15,6 +16,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     private readonly ConcurrentDictionary<string, TaskItem> _tasks = new();
     private readonly string _storePath;
     private readonly Lock _saveLock = new();
+    // Пара AwaitingHumanSince/Reason: set и clear пишут её целиком под этим локом
+    private readonly Lock _awaitLock = new();
 
     /// <summary>
     /// Формат записи ТОЛЬКО этого стора. <see cref="JsonFileStore"/> общий для всех сторов,
@@ -1577,15 +1580,55 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // (момент мутации, не значение снятого поля).
     public TaskItem? ClearAwaitingHuman(string id)
     {
-        var task = _tasks.GetValueOrDefault(id);
-        if (task is null || task.AwaitingHumanSince is null) return null;
-        var before = Capture(task);
-        task.AwaitingHumanSince = null;
-        task.AwaitingHumanReason = null;
-        task.UpdatedAt = DateTime.UtcNow;
-        WriteJournalTransitions(task, before);
-        ScheduleSave();
-        return task;
+        lock (_awaitLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null || task.AwaitingHumanSince is null) return null;
+            var before = Capture(task);
+            task.AwaitingHumanSince = null;
+            task.AwaitingHumanReason = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            WriteJournalTransitions(task, before);
+            ScheduleSave();
+            return task;
+        }
+    }
+
+    // Лимит текста «чего ждём от человека» (Reason): 1–120 символов после Trim.
+    public const int AwaitingAskMaxLength = 120;
+
+    // Текст отказа для ask или null, если он годен. Единый предикат для MCP-двери и SetAwaitingHuman.
+    public static string? AwaitingAskError(string? ask)
+    {
+        var trimmed = (ask ?? "").Trim();
+        if (trimmed.Length == 0) return "awaitingHuman.ask: нужен непустой текст — чего ждём от человека";
+        if (trimmed.Length > AwaitingAskMaxLength)
+            return $"awaitingHuman.ask: не длиннее {AwaitingAskMaxLength} символов (сейчас {trimmed.Length})";
+        return null;
+    }
+
+    // Постановка ожидания человека: единственный продюсер — MCP tasks_update (awaitingHuman: {ask}).
+    // REST-тела Create/Update поле не принимают ([JsonIgnore]). Since штампует сервер; Since и Reason
+    // пишутся парой под _awaitLock (там же клир), поэтому параллельные set/clear не оставляют
+    // половинчатого состояния. Повторный set перезаписывает Since и Reason (последний побеждает).
+    // Журнал: waiting — по изменению Since в WriteJournalTransitions. null — задача не найдена;
+    // невалидный ask — InvalidOperationException (400-семантика, как у прочих гейтов TaskManager).
+    public TaskItem? SetAwaitingHuman(string id, string? ask)
+    {
+        if (AwaitingAskError(ask) is { } error) throw new InvalidOperationException(error);
+        lock (_awaitLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null) return null;
+            var before = Capture(task);
+            var now = DateTime.UtcNow;
+            task.AwaitingHumanSince = now;
+            task.AwaitingHumanReason = ask!.Trim();
+            task.UpdatedAt = now;
+            WriteJournalTransitions(task, before);
+            ScheduleSave();
+            return task;
+        }
     }
 
     // Удержание фичи (W4-HOLD-B2, контракт §1): ставят/снимают только ручки человека
@@ -2068,9 +2111,9 @@ public record CreateTaskRequest(
     List<string>? ReviewOf = null,
     // Структурный список шагов плана (только у role=plan); null — не задано
     List<PlannedStep>? PlanSteps = null,
-    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика
-    DateTime? AwaitingHumanSince = null,
-    string? AwaitingHumanReason = null,
+    // «Ждёт вас»: REST-тело поле не принимает (продюсер — только MCP tasks_update → SetAwaitingHuman)
+    [property: JsonIgnore] DateTime? AwaitingHumanSince = null,
+    [property: JsonIgnore] string? AwaitingHumanReason = null,
     // Вердикт (TaskVerification.Verdict): accepted · accepted_with_remarks · returned · withdrawn;
     // null = старая семантика «проверено»
     TaskVerification? Verification = null,
@@ -2147,9 +2190,9 @@ public record UpdateTaskRequest(
     List<string>? ReviewOf = null,
     // Структурный список шагов плана (только у role=plan); null = не менять, список = задать целиком
     List<PlannedStep>? PlanSteps = null,
-    // «Ждёт вас»: null = не менять, значение = задать
-    DateTime? AwaitingHumanSince = null,
-    string? AwaitingHumanReason = null,
+    // «Ждёт вас»: REST-тело поле не принимает (см. CreateTaskRequest); null = не менять
+    [property: JsonIgnore] DateTime? AwaitingHumanSince = null,
+    [property: JsonIgnore] string? AwaitingHumanReason = null,
     // Критерии приёмки: null = не менять, список = задать целиком (пустой — снять все).
     // Исполнитель-чат своей задачи критерии не меняет (TaskManager.Update, callerIsExecutor)
     List<AcceptanceCriterion>? Acceptance = null,

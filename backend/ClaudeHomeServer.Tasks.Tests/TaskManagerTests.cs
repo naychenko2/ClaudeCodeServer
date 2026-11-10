@@ -2718,4 +2718,106 @@ public class TaskManagerTests : IDisposable
         _sut.FeatureHoldRefusal(new TaskItem { Title = "план", FeatureId = epic.Id, Role = TaskRoles.Plan })
             .Should().BeNull("подготовка разрешена, как при черновике");
     }
+
+    // ─── FS-E1: ожидание человека ────────────────────────────────────────────
+
+    [Fact]
+    public void SetAwaitingHuman_ТримитШтампуетSinceИПишетПару()
+    {
+        var task = _sut.Create("p", "u", new CreateTaskRequest("Задача"));
+        var before = DateTime.UtcNow;
+
+        var set = _sut.SetAwaitingHuman(task.Id, "  выбрать вариант A или B  ");
+
+        set.Should().NotBeNull();
+        set!.AwaitingHumanReason.Should().Be("выбрать вариант A или B");
+        set.AwaitingHumanSince.Should().NotBeNull();
+        set.AwaitingHumanSince!.Value.Should().BeOnOrAfter(before, "Since штампует сервер");
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(null)]
+    public void SetAwaitingHuman_ПустойAsk_Отказ(string? ask)
+    {
+        var task = _sut.Create("p", "u", new CreateTaskRequest("Задача"));
+        var act = () => _sut.SetAwaitingHuman(task.Id, ask);
+        act.Should().Throw<InvalidOperationException>();
+        _sut.GetById(task.Id)!.AwaitingHumanSince.Should().BeNull("отказ ничего не записал");
+    }
+
+    // Граница: ровно 120 — можно, 121 — отказ (считается после Trim).
+    [Fact]
+    public void SetAwaitingHuman_ГраницаЛимита_120Можно121Отказ()
+    {
+        var task = _sut.Create("p", "u", new CreateTaskRequest("Задача"));
+        _sut.SetAwaitingHuman(task.Id, " " + new string('я', 120) + " ")!
+            .AwaitingHumanReason!.Length.Should().Be(120);
+
+        var act = () => _sut.SetAwaitingHuman(task.Id, new string('я', 121));
+        act.Should().Throw<InvalidOperationException>().WithMessage("*120*");
+    }
+
+    [Fact]
+    public void SetAwaitingHuman_НетЗадачи_Null()
+    {
+        _sut.SetAwaitingHuman("нет-такой", "ждём").Should().BeNull();
+    }
+
+    [Fact]
+    public void SetAwaitingHuman_ПотомClear_СнимаетПару()
+    {
+        var task = _sut.Create("p", "u", new CreateTaskRequest("Задача"));
+        _sut.SetAwaitingHuman(task.Id, "ждём");
+        _sut.ClearAwaitingHuman(task.Id);
+
+        var stored = _sut.GetById(task.Id)!;
+        stored.AwaitingHumanSince.Should().BeNull();
+        stored.AwaitingHumanReason.Should().BeNull();
+    }
+
+    // Мутация: записать Since и Reason двумя отдельными шагами вне _awaitLock — параллельный
+    // clear между ними оставит Since без Reason (или наоборот) → тест краснеет.
+    [Fact]
+    public async Task SetClear_Параллельно_ПолейПара()
+    {
+        var task = _sut.Create("p", "u", new CreateTaskRequest("Задача"));
+        var tasks = Enumerable.Range(0, 50).Select(i => Task.Run(() =>
+        {
+            if (i % 2 == 0) _sut.SetAwaitingHuman(task.Id, "ждём " + i);
+            else _sut.ClearAwaitingHuman(task.Id);
+        })).ToArray();
+        await Task.WhenAll(tasks);
+
+        var stored = _sut.GetById(task.Id)!;
+        (stored.AwaitingHumanSince is null).Should().Be(stored.AwaitingHumanReason is null,
+            "Since и Reason пишутся парой: оба null или оба заданы");
+    }
+
+    // REST-лазейка закрыта: поле в теле игнорируется десериализацией ([JsonIgnore]).
+    // Мутация: снять [property: JsonIgnore] с CreateTaskRequest/UpdateTaskRequest — красные ровно эти два.
+    [Fact]
+    public void CreateTaskRequest_AwaitingHumanВТеле_Игнорируется()
+    {
+        var req = System.Text.Json.JsonSerializer.Deserialize<CreateTaskRequest>(
+            """{"title":"t","awaitingHumanSince":"2026-11-10T10:00:00Z","awaitingHumanReason":"подмена"}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        req!.AwaitingHumanSince.Should().BeNull();
+        req.AwaitingHumanReason.Should().BeNull();
+        var task = _sut.Create("p", "u", req);
+        task.AwaitingHumanSince.Should().BeNull();
+    }
+
+    [Fact]
+    public void UpdateTaskRequest_AwaitingHumanВТеле_Игнорируется()
+    {
+        var req = System.Text.Json.JsonSerializer.Deserialize<UpdateTaskRequest>(
+            """{"title":"t2","awaitingHumanSince":"2026-11-10T10:00:00Z","awaitingHumanReason":"подмена"}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        req!.AwaitingHumanSince.Should().BeNull();
+        req.AwaitingHumanReason.Should().BeNull();
+        var task = _sut.Create("p", "u", new CreateTaskRequest("t"));
+        _sut.Update(task.Id, req)!.AwaitingHumanSince.Should().BeNull();
+    }
 }

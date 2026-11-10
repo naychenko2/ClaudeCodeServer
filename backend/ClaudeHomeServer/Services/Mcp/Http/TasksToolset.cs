@@ -371,13 +371,12 @@ public sealed class TasksToolset(
                     if (arguments["featureEstimate"] is not JsonObject) return Deny("featureEstimate: ожидается объект");
                     featureEstimateArg = FeatureEstimateArg(arguments);
                 }
-                if (featureNoteArg is not null)
+                // Право голоса фичи: членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый
+                // шов (в проде null): через него тест подменяет ОДНУ связь (session, feature) вне
+                // белого списка, и решение гейта зависит от предиката CanWriteFeatureVoice, а не
+                // от «не executor». Общий предикат для featureNote и awaitingHuman на эпике.
+                bool CanWriteVoiceHere()
                 {
-                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
-                        return Deny("Голос пишется только у фичи (role=feature)");
-                    // Членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый шов (в проде
-                    // null): через него тест подменяет ОДНУ связь (session, feature) вне белого списка,
-                    // и решение гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
                     FeatureChatMembership.Link? voiceLink = null;
                     if (TestVoiceLinkOverride is { } testLink)
                     {
@@ -390,11 +389,33 @@ public sealed class TasksToolset(
                         if (membership.TryGetValue(session.Id, out var memberFeatures)
                             && memberFeatures.TryGetValue(existing.Id, out var prodLink)) voiceLink = prodLink;
                     }
-                    if (voiceLink is null || !CanWriteFeatureVoice(voiceLink))
+                    return voiceLink is not null && CanWriteFeatureVoice(voiceLink);
+                }
+                if (featureNoteArg is not null)
+                {
+                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
+                        return Deny("Голос пишется только у фичи (role=feature)");
+                    if (!CanWriteVoiceHere())
                         return Deny("Голос фичи пишет оркестратор или человек");
                     // Права проверены — теперь ограничения таблицы оценки
                     if (featureEstimateArg?.Validate() is { } invalidEstimate) return Deny(invalidEstimate);
                 }
+
+                // FS-E1: ожидание человека. {ask} ставит, null снимает; Since штампует сервер. Гейты те
+                // же, что у остального tasks_update (выше), на эпике — ещё право голоса. Отказ — до
+                // первой мутации.
+                var awaitingPresent = arguments.ContainsKey("awaitingHuman");
+                string? awaitingAsk = null;
+                if (awaitingPresent && arguments["awaitingHuman"] is { } awaitingNode)
+                {
+                    if (awaitingNode is not JsonObject awaitingObj)
+                        return Deny("awaitingHuman: ожидается объект {ask} или null");
+                    awaitingAsk = awaitingObj["ask"] is JsonValue askValue && askValue.TryGetValue<string>(out var askText)
+                        ? askText : null;
+                    if (TaskManager.AwaitingAskError(awaitingAsk) is { } askError) return Deny(askError);
+                }
+                if (awaitingPresent && existing.Role == TaskRoles.Feature && !CanWriteVoiceHere())
+                    return Deny("Ожидание на эпике фичи ставит оркестратор или человек");
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
@@ -595,6 +616,18 @@ public sealed class TasksToolset(
                     updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
                         run is null ? "" : FeatureBrief.ActiveStageOf(run),
                         run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
+                }
+                // FS-E1: ожидание человека — после Update (тот же приём, что голос выше): в закрытую
+                // этим же вызовом задачу ожидание не ставим (Update уже снял его при переходе в Done)
+                if (awaitingPresent)
+                {
+                    if (awaitingAsk is not null)
+                    {
+                        if (updated.Status != TaskItemStatus.Done)
+                            updated = tasks.SetAwaitingHuman(existing.Id, awaitingAsk) ?? updated;
+                    }
+                    else
+                        updated = tasks.ClearAwaitingHuman(existing.Id) ?? updated;
                 }
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
@@ -1671,6 +1704,15 @@ public sealed class TasksToolset(
                         ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять вместе с оценкой. Исполнитель откажет. Пиши в каждом ходе с featureEstimate.",
                     },
                     ["featureEstimate"] = FeatureEstimateSchema(),
+                    ["awaitingHuman"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["description"] = "Ждёт человека: {ask} — чего ждём (1–120 симв.), null — снять. Since ставит сервер.",
+                        ["properties"] = new JsonObject
+                        {
+                            ["ask"] = new JsonObject { ["type"] = "string" },
+                        },
+                    },
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject

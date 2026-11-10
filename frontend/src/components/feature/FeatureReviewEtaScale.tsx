@@ -93,12 +93,15 @@ const CARD: CSSProperties = {
   background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
   padding: SP.lg, display: 'flex', flexDirection: 'column', gap: SP.sm, boxSizing: 'border-box',
 };
+// Макет .w360 .etab { padding:var(--sp-md) }: на мобиле поля карточки уже.
+const CARD_MOBILE: CSSProperties = { padding: SP.md };
 
 // Строка «подпись | дорожка | значение» (макет .erow: 150px 1fr 76px). На 360 — две колонки
-// (подпись и значение), дорожка уходит на свою строку на всю ширину (макет .w360 .erow .track
-// { grid-column:1/-1; order:3 }): подпись стоит над дорожкой, горизонтального переполнения нет.
+// (1fr 64px, макет .w360 .erow), дорожка уходит на свою строку на всю ширину (макет
+// .w360 .erow .track { grid-column:1/-1; order:3 }): подпись стоит над дорожкой,
+// горизонтального переполнения нет.
 const ROW: CSSProperties = { display: 'grid', gridTemplateColumns: '150px 1fr 76px', gap: SP.sm, alignItems: 'center' };
-const ROW_MOBILE: CSSProperties = { gridTemplateColumns: '1fr 76px' };
+const ROW_MOBILE: CSSProperties = { gridTemplateColumns: '1fr 64px' };
 // Дорожка — геометрия ProgressBar default: высота 4, скругление R.max; риска выступает за
 // её край на 3 px (макет .tick), поэтому overflow не скрыт.
 const TRACK: CSSProperties = { position: 'relative', height: 4, borderRadius: R.max, background: C.bgInset };
@@ -120,7 +123,7 @@ export function FeatureReviewEtaScale({ brief, stats, nameOf, isMobile = false }
   const agreement = brief?.note?.estimate?.agreement ?? null;
 
   return (
-    <div data-testid="review-eta" style={CARD}>
+    <div data-testid="review-eta" style={isMobile ? { ...CARD, ...CARD_MOBILE } : CARD}>
       {rows.map((r) => {
         const left = pct(r.from);
         const width = Math.max(pct(r.to) - left, 0);

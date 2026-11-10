@@ -11,6 +11,8 @@
 //     «Обещали — риска на точке шкалы» и «шкала по одним «обещали»»;
 // (3) max шкалы взят из левых краёв полос (from) вместо правых (to) — краснеют «Обещали —
 //     риска», «проценты полос» и «знак шкалы».
+// (4) «padding SP.lg безусловно» (в стиле карточки не хватает CARD_MOBILE) — краснеет ровно
+//     «поля SP.md (12px), строка «1fr 64px»…» (14/15 зелёные).
 // После отката каждой мутации — зелёные (15/15).
 
 import { createElement } from 'react';
@@ -190,17 +192,21 @@ describe('«Согласие оценок» (ReviewKv)', () => {
 });
 
 describe('мобильная раскладка (360)', () => {
-  it('дорожка — своей строкой на всю ширину под подписью (grid-column 1/-1, order 3), поля SP.md', () => {
+  it('поля SP.md (12px), строка «1fr 64px»; дорожка — своей строкой на всю ширину под подписью (grid-column 1/-1, order 3)', () => {
     const h = renderToStaticMarkup(createElement(FeatureReviewEtaScale, { brief: mkBrief(), stats: mkStats(), nameOf, isMobile: true }));
+    expect(h).toContain('padding:12px');
+    expect(h).toContain('grid-template-columns:1fr 64px');
     expect(h).toContain('grid-column:1 / -1');
     expect(h).toContain('order:3');
-    expect(h).toContain('grid-template-columns:1fr 76px');
+    expect(h).not.toContain('padding:16px');
     expect(h).not.toContain('grid-template-columns:150px 1fr 76px');
   });
 
-  it('без сигнала мобилы — три колонки, дорожка не перенесена', () => {
+  it('без сигнала мобилы — три колонки 150px 1fr 76px, поля SP.lg (16px), дорожка не перенесена', () => {
     const h = html(mkBrief());
     expect(h).toContain('grid-template-columns:150px 1fr 76px');
+    expect(h).toContain('padding:16px');
+    expect(h).not.toContain('padding:12px');
     expect(h).not.toContain('grid-column:1 / -1');
   });
 });

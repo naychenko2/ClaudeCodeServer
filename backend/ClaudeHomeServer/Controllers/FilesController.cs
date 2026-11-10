@@ -1154,14 +1154,30 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
     // параметра — прежнее поведение: корень проекта.
     [HttpGet("stream")]
     [ProjectScope]
-    public async Task<IActionResult> Stream(string projectId, [FromQuery] string path, [FromQuery] string? sessionId = null)
+    public async Task<IActionResult> Stream(string projectId, [FromQuery] string path, [FromQuery] string? sessionId = null, [FromQuery] string? taskId = null)
     {
+        // FS-B1b: sessionId и taskId — два разных анкера; оба сразу — неоднозначно (в отличие
+        // от content, где порядок веток задан), поэтому здесь отказ
+        if (!string.IsNullOrEmpty(sessionId) && !string.IsNullOrEmpty(taskId))
+            return BadRequest(new { error = "Укажите либо sessionId, либо taskId" });
         try
         {
             // S2d-6b-2: поток отдаёт содержимое файла — читающая ручка (тот же 404, что у content)
             if (ForeignPrivateDenied(GetRoot(projectId), path) is { } denied) return denied;
             string abs;
-            if (!string.IsNullOrEmpty(sessionId))
+            if (!string.IsNullOrEmpty(taskId))
+            {
+                // FS-B1b: ?taskId= — анкер WorktreePath задачи через общий OwnedTaskForRead,
+                // дальше то же, что у sessionId: локатор и вторая линия гейта по корню чтения
+                var p = GetProject(projectId);
+                var task = OwnedTaskForRead(p, taskId);
+                if (task is null) return NotFound(new { error = "Задача не найдена" });
+                var hit = await locator.LocateAsync(TenantId, p, path, task.WorktreePath);
+                if (hit is null) return NotFound();
+                if (ForeignPrivateDenied(hit.Root, path) is { } treeDenied) return treeDenied;
+                abs = hit.FullPath;
+            }
+            else if (!string.IsNullOrEmpty(sessionId))
             {
                 var p = GetProject(projectId);
                 var s = GetOwnedSession(projectId, sessionId);
@@ -1198,11 +1214,22 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
         var paths = req.Paths ?? [];
         if (paths.Count > MaxLocatePaths)
             return BadRequest(new { error = $"Не более {MaxLocatePaths} путей за запрос" });
+        // FS-B1b: два анкера сразу — неоднозначно (как у stream)
+        if (!string.IsNullOrEmpty(req.SessionId) && !string.IsNullOrEmpty(req.TaskId))
+            return BadRequest(new { error = "Укажите либо sessionId, либо taskId" });
         try
         {
             var p = GetProject(projectId);
             string? anchor = null;
-            if (!string.IsNullOrEmpty(req.SessionId))
+            if (!string.IsNullOrEmpty(req.TaskId))
+            {
+                // FS-B1b: анкер — дерево задачи (общий OwnedTaskForRead); задача без дерева —
+                // поиск с main, как у content
+                var task = OwnedTaskForRead(p, req.TaskId);
+                if (task is null) return NotFound(new { error = "Задача не найдена" });
+                anchor = task.WorktreePath;
+            }
+            else if (!string.IsNullOrEmpty(req.SessionId))
             {
                 var s = GetOwnedSession(projectId, req.SessionId);
                 if (s is null) return NotFound(new { error = "Чат не найден" });
@@ -1600,7 +1627,7 @@ public record FileConflictResponse(
     DateTimeOffset? ChangedAt,
     object? Source);
 public record FileAuthorRef(string? UserId, string DisplayName);
-public record LocateRequest(List<string>? Paths, string? SessionId);
+public record LocateRequest(List<string>? Paths, string? SessionId, string? TaskId = null);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);
 public record OOCallbackPayload(int Status, string? Url, string? Key);

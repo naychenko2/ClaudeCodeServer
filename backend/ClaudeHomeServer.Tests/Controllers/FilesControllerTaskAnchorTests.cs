@@ -268,4 +268,216 @@ public class FilesControllerTaskAnchorTests : IClassFixture<TestWebApplicationFa
         File.ReadAllText(inMain).Should().Be("main до", "корень проекта не тронут");
         File.ReadAllText(inTree).Should().Be("ветка до", "дерево задачи не тронуто");
     }
+
+    // ---- FS-B1b: Р2 (порядок веток content) ----
+
+    // content: sessionId + taskId одновременно — порядок featureId → sessionId → taskId, побеждает
+    // дерево чата. Мутация: в GetContent поменять местами ветки sessionId и taskId — тест краснеет.
+    [Fact]
+    public async Task GetContent_SessionIdИTaskId_Одновременно_SessionIdВыигрывает()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("order");
+        var (taskTree, taskBranch) = await AddWorktreeAsync(mainRoot, "ordertask");
+        var (chatTree, _) = await AddWorktreeAsync(mainRoot, "orderchat");
+        File.WriteAllText(Path.Combine(taskTree, "draft.md"), "из дерева задачи");
+        File.WriteAllText(Path.Combine(chatTree, "draft.md"), "из дерева чата");
+        var taskId = await CreateTaskAsync(projectId, taskTree, taskBranch);
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto, name: "chat with own tree");
+        (await sessions.AttachWorktreeAsync(session.Id, chatTree)).Should().BeTrue();
+
+        var resp = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/content?path=draft.md&sessionId={session.Id}&taskId={taskId}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await JsonOf(resp)).GetProperty("content").GetString().Should().Be("из дерева чата",
+            "sessionId стоит в цепочке веток раньше taskId");
+    }
+
+    // ---- FS-B1b: GET files/stream?taskId= ----
+
+    private string StreamUrl(string projectId, string path, string taskId) =>
+        $"/api/projects/{projectId}/files/stream?path={Uri.EscapeDataString(path)}&taskId={taskId}";
+
+    [Fact]
+    public async Task Stream_TaskId_ОтдаётБайтыИзWorktreeЗадачи_НеИзMain()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("stream");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "stream");
+        File.WriteAllText(Path.Combine(worktree, "clip.mp4"), "байты ветки");
+        File.WriteAllText(Path.Combine(mainRoot, "clip.mp4"), "байты main");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+
+        var resp = await _client.GetAsync(StreamUrl(projectId, "clip.mp4", taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await resp.Content.ReadAsStringAsync()).Should().Be("байты ветки");
+    }
+
+    [Fact]
+    public async Task Stream_TaskId_ЧужаяЗадача_404()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("streamforeign");
+        var (worktree, _) = await AddWorktreeAsync(mainRoot, "streamforeign");
+        File.WriteAllText(Path.Combine(worktree, "clip.mp4"), "чужое");
+        File.WriteAllText(Path.Combine(mainRoot, "clip.mp4"), "main");
+        var otherUserId = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        var foreignTask = _factory.Services.GetRequiredService<TaskManager>().Create(
+            projectId, otherUserId, new CreateTaskRequest("чужая задача"));
+        foreignTask.WorktreePath = worktree;
+
+        var resp = await _client.GetAsync(StreamUrl(projectId, "clip.mp4", foreignTask.Id));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound, "отказ, а не фолбэк на main");
+    }
+
+    [Fact]
+    public async Task Stream_TaskId_ЧужоеPrivate_ПоКорнюПроекта_404()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("streampriv");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "streampriv");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        var other = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        var rel = PrivateAttachments.Build(other, Guid.NewGuid(), "чужое.png")!;
+        var abs = Path.Combine(worktree, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+        File.WriteAllText(abs, "чужое");
+
+        var resp = await _client.GetAsync(StreamUrl(projectId, rel, taskId));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Мутация: снять второй ForeignPrivateDenied в ветке taskId у Stream — чужое отдаётся 200.
+    [Fact]
+    public async Task Stream_TaskId_ЧужоеPrivate_ЧерезСсылкуВДереве_404_Своё_200()
+    {
+        if (OperatingSystem.IsWindows()) return; // ссылка на каталог требует привилегий
+        var (projectId, mainRoot) = await CreateGitProjectAsync("streamlink");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "streamlink");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        var users = _factory.Services.GetRequiredService<UserStore>();
+        var me = users.FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+        var other = users.FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+
+        string ViaLink(string author, string content)
+        {
+            var rel = PrivateAttachments.Build(author, Guid.NewGuid(), "файл.txt")!;
+            var abs = Path.Combine(worktree, rel);
+            Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+            File.WriteAllText(abs, content);
+            var link = Path.Combine(worktree, "L");
+            if (!Directory.Exists(link)) Directory.CreateSymbolicLink(link, TreeExcludes.AttachmentsDir);
+            return "L/" + rel[(TreeExcludes.AttachmentsDir.Length + 1)..];
+        }
+
+        var foreign = ViaLink(other, "чужое");
+        var own = ViaLink(me, "своё");
+
+        (await _client.GetAsync(StreamUrl(projectId, foreign, taskId))).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "ссылка в дереве задачи не обходит гейт по фактическому корню");
+        var ok = await _client.GetAsync(StreamUrl(projectId, own, taskId));
+        ok.StatusCode.Should().Be(HttpStatusCode.OK, "своё через ссылку читается — значит 404 выше дал именно гейт");
+        (await ok.Content.ReadAsStringAsync()).Should().Be("своё");
+    }
+
+    [Fact]
+    public async Task Stream_SessionIdИTaskId_400()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("streamboth");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "streamboth");
+        File.WriteAllText(Path.Combine(worktree, "clip.mp4"), "x");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat");
+
+        var resp = await _client.GetAsync(
+            $"/api/projects/{projectId}/files/stream?path=clip.mp4&sessionId={session.Id}&taskId={taskId}");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    // ---- FS-B1b: POST files/locate {taskId} ----
+
+    private Task<HttpResponseMessage> LocateAsync(string projectId, object body) =>
+        _client.PostAsJsonAsync($"/api/projects/{projectId}/files/locate", body);
+
+    // Файл только в дереве задачи — hit с её веткой и isAnchor; файл только в чужом дереве —
+    // не анкер (ветка того дерева, isAnchor=false): подпись «из ветки» не врёт.
+    [Fact]
+    public async Task Locate_TaskId_АнкерЗадачи_ВеткаИIsAnchor()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("loc");
+        var (taskTree, taskBranch) = await AddWorktreeAsync(mainRoot, "loctask");
+        var (otherTree, otherBranch) = await AddWorktreeAsync(mainRoot, "locother");
+        File.WriteAllText(Path.Combine(taskTree, "mine.md"), "моё");
+        File.WriteAllText(Path.Combine(otherTree, "theirs.md"), "чужое");
+        var taskId = await CreateTaskAsync(projectId, taskTree, taskBranch);
+
+        var resp = await LocateAsync(projectId, new { paths = new[] { "mine.md", "theirs.md" }, taskId });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await JsonOf(resp);
+        body.GetArrayLength().Should().Be(2);
+        var mine = body.EnumerateArray().Single(e => e.GetProperty("path").GetString() == "mine.md");
+        mine.GetProperty("isAnchor").GetBoolean().Should().BeTrue();
+        mine.GetProperty("branch").GetString().Should().Be(taskBranch);
+        var theirs = body.EnumerateArray().Single(e => e.GetProperty("path").GetString() == "theirs.md");
+        theirs.GetProperty("isAnchor").GetBoolean().Should().BeFalse("файл не из дерева задачи");
+        theirs.GetProperty("branch").GetString().Should().Be(otherBranch);
+    }
+
+    [Fact]
+    public async Task Locate_TaskId_ЧужаяИНесуществующаяЗадача_404()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("locforeign");
+        var (worktree, _) = await AddWorktreeAsync(mainRoot, "locforeign");
+        File.WriteAllText(Path.Combine(worktree, "a.md"), "x");
+        var otherUserId = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        var foreignTask = _factory.Services.GetRequiredService<TaskManager>().Create(
+            projectId, otherUserId, new CreateTaskRequest("чужая задача"));
+        foreignTask.WorktreePath = worktree;
+
+        (await LocateAsync(projectId, new { paths = new[] { "a.md" }, taskId = foreignTask.Id })).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "чужая задача");
+        (await LocateAsync(projectId, new { paths = new[] { "a.md" }, taskId = Guid.NewGuid().ToString() })).StatusCode
+            .Should().Be(HttpStatusCode.NotFound, "несуществующая задача");
+    }
+
+    // Чужой private выпадает из запроса до локатора и при taskId: в ответе его нет.
+    [Fact]
+    public async Task Locate_TaskId_ЧужоеPrivate_ВОтветеНет()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("locpriv");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "locpriv");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        var other = _factory.Services.GetRequiredService<UserStore>()
+            .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
+        var rel = PrivateAttachments.Build(other, Guid.NewGuid(), "чужое.txt")!;
+        var abs = Path.Combine(worktree, rel);
+        Directory.CreateDirectory(Path.GetDirectoryName(abs)!);
+        File.WriteAllText(abs, "чужое");
+
+        var resp = await LocateAsync(projectId, new { paths = new[] { rel }, taskId });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await JsonOf(resp)).GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Locate_SessionIdИTaskId_400()
+    {
+        var (projectId, mainRoot) = await CreateGitProjectAsync("locboth");
+        var (worktree, branch) = await AddWorktreeAsync(mainRoot, "locboth");
+        var taskId = await CreateTaskAsync(projectId, worktree, branch);
+        var session = await _factory.Services.GetRequiredService<SessionManager>()
+            .CreateAsync(projectId, ClaudeMode.Auto, name: "chat");
+
+        var resp = await LocateAsync(projectId, new { paths = new[] { "a.md" }, sessionId = session.Id, taskId });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
 }

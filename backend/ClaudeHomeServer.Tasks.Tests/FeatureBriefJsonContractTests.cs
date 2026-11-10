@@ -48,6 +48,7 @@ public class FeatureBriefJsonContractTests
         NOW.AddHours(-3),
         [new FeatureBrief.BriefActive("t1", "prod", "B2", "back", "timur", "working", NOW.AddMinutes(-12), null)],
         NOW.AddHours(1),
+        new FeatureBrief.BriefAsk("Нужно решение по мержу", "merge", NOW.AddHours(-1), "mark", "sess-8"),
         NOW);
 
     // Точный набор ключей JSON-объекта в данной точке контракта: отсутствие ожидаемого имени или
@@ -62,6 +63,8 @@ public class FeatureBriefJsonContractTests
     // Перечень — record Brief (FeatureBrief.cs:72-92) ↔ FeatureBrief (featurePage.ts:103-124) и
     // вложенные записи BriefNow/BriefDone/BriefNext/BriefEstimate/BriefQueue/BriefNote
     // (FeatureBrief.cs:51-69) ↔ FeatureBriefNow/Done/Next/Estimate/Queue/Note (featurePage.ts:50-99).
+    // FS-E4: добавлен ключ «ask» и узел BriefAsk — осознанная правка контракта: зеркало во фронт
+    // (FeatureBriefAsk в featurePage.ts) приносит шаг FS-FT, ключ идёт раньше зеркала.
     [Fact]
     public void Brief_JsonКлючиРовноКонтрактаФронта_НаВсехУровнях()
     {
@@ -69,7 +72,8 @@ public class FeatureBriefJsonContractTests
 
         AssertKeys(root, "brief",
             "kind", "now", "reason", "done", "next", "elapsedMinutes",
-            "estimate", "queue", "queueWaitMinutes", "note", "initialEtaMinutes", "updatedAt", "active", "queueStartEstimate", "computedAt");
+            "estimate", "queue", "queueWaitMinutes", "note", "initialEtaMinutes", "updatedAt", "active",
+            "queueStartEstimate", "ask", "computedAt");
 
         AssertKeys(root!["now"], "brief.now", "stage", "taskId", "personaId", "stepRef", "lane", "since");
         AssertKeys(root["done"], "brief.done", "stepsAccepted", "stepsTotal", "loops", "planState");
@@ -78,6 +82,7 @@ public class FeatureBriefJsonContractTests
         AssertKeys(root["queue"], "brief.queue", "position", "total");
         AssertKeys(root["active"]![0], "brief.active[]",
             "taskId", "stage", "stepRef", "lane", "personaId", "state", "since", "reason");
+        AssertKeys(root["ask"], "brief.ask", "text", "source", "since", "personaId", "sessionId");
         AssertKeys(root["note"], "brief.note", "text", "at", "byPersonaId", "byUser", "stageAtWrite", "stale", "estimate");
         AssertKeys(root["note"]!["estimate"], "brief.note.estimate",
             "remaining", "etaMinutes", "why", "agreement", "etaEndsAt");

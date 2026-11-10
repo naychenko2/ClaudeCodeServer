@@ -1,5 +1,7 @@
 using System.Reflection;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
@@ -33,6 +35,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • B15 (дефект 415c1c80): вернуть штамп голоса к состоянию (run.State) вместо категории —
 //    тесты «голос в очереди» красные; не достраивать старый штамп-состояние через KindByState —
 //    тест «старый штамп» красный.
+//  • FS-E4 (ask): убрать строку словаря StopReasonPhrases — рефлексивный тест «КаждыйКод…» красный;
+//    взять для merge attention.Reason («мерж») — тест «Merge…» красный; вернуть null для wait без
+//    текста — тест «WaitБезТекста…» красный; убрать clamp лимита — тест «ЛимитТекста120» красный.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -299,6 +304,144 @@ public class FeatureBriefTests
         FeatureBrief.Build(RunOf(FeatureStates.Paused, queue), null, null, NOW).Reason.Should().Be("queue");
         FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Reason.Should().BeNull();
     }
+
+    // ─── ask (FS-E4): одна фраза «что нужно от тебя» из уже вычисленной тревоги ────────────────
+    // Источник — run.Attention (FeatureProjector.cs:175-216): приоритет stopped → wait → merge решён
+    // там, здесь только отображение единственного элемента — второго расчёта нет.
+
+    // Фикстура тревоги: поля attention (не задачи) — тест доказывает, что ask берётся из Attention.
+    private static FeatureRun RunWithAttention(string kind, string? reason, DateTime? since,
+        string? personaId, string? sessionId) => new()
+    {
+        FeatureId = "ep",
+        State = kind switch
+        {
+            "stopped" => FeatureStates.Stopped,
+            "wait" => FeatureStates.Waiting,
+            "merge" => FeatureStates.MergePending,
+            _ => FeatureStates.Idle,
+        },
+        Attention = new FeatureAttention
+        {
+            Kind = kind, TaskId = "t1", Since = since, Reason = reason,
+            PersonaId = personaId, LinkedSessionId = sessionId,
+        },
+    };
+
+    // c1: тревоги нет — null. В том числе у идущей фичи с записями Now: ask только из Attention
+    // (тот же источник, что now/reason, а не второй расчёт).
+    [Fact]
+    public void Ask_БезТревогиNull_ДажеУИдущейФичеСNow()
+    {
+        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, null, NOW).Ask.Should().BeNull();
+
+        var running = RunOf(FeatureStates.Running);
+        running.Now.Add(new FeatureNow { TaskId = "t1", Stage = "prod", StartedAt = NOW.AddMinutes(-10) });
+        FeatureBrief.Build(running, null, null, NOW).Ask.Should().BeNull("тревоги нет — нет и ask");
+    }
+
+    // c1: wait — text = AwaitingHumanReason (attention.Reason как есть), source = "wait",
+    // since/personaId/sessionId — поля тревоги как есть.
+    [Fact]
+    public void Ask_WaitБерётТекстОжиданияИзТревоги()
+    {
+        var since = NOW.AddMinutes(-30);
+        var ask = FeatureBrief.Build(
+            RunWithAttention("wait", "нужен ответ по макету", since, "sofya", "sess-9"), null, null, NOW).Ask!;
+
+        ask.Text.Should().Be("нужен ответ по макету");
+        ask.Source.Should().Be("wait");
+        ask.Since.Should().Be(since);
+        ask.PersonaId.Should().Be("sofya");
+        ask.SessionId.Should().Be("sess-9");
+    }
+
+    // Реальный wait всегда с текстом (SetAwaitingHuman пишет Since и Reason парой, TaskManager.cs:1611-1626).
+    // Аномальные данные (null/пусто/пробелы) — общая фраза: сигнал «ждёт вас» не должен теряться.
+    // Мутация: вернуть null вместо фразы — тест красный.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Ask_WaitБезТекстаДаётОбщуюФразуОжидания(string? reason) =>
+        FeatureBrief.Build(RunWithAttention("wait", reason, NOW, null, null), null, null, NOW)
+            .Ask!.Text.Should().Be(FeatureBrief.WaitAskFallback);
+
+    // c1: merge — фиксированная фраза, а не attention.Reason («мерж» — техническое слово тревоги,
+    // не «что нужно от человека»). Мутация: взять attention.Reason — тест красный («мерж»).
+    [Fact]
+    public void Ask_MergeФиксированнаяФразаАНеТехническийReasonТревоги()
+    {
+        var since = NOW.AddHours(-2);
+        var ask = FeatureBrief.Build(RunWithAttention("merge", "мерж", since, "mark", "sess-8"), null, null, NOW).Ask!;
+
+        ask.Text.Should().Be(FeatureBrief.MergeAskText).And.NotBe("мерж");
+        ask.Source.Should().Be("merge");
+        ask.Since.Should().Be(since);
+    }
+
+    // c1: stopped — человеческая фраза по коду ExecutorStopReason (словарь StopReasonPhrases).
+    // Золотые фразы трёх кодов: переформулировка словаря — осознанная правка.
+    [Theory]
+    [InlineData(ExecutorStopClassifier.AuthFailedReason, "Нужна авторизация — исполнитель не вошёл")]
+    [InlineData(ExecutorStopClassifier.InterruptedByUserReason, "Исполнителя остановили вручную")]
+    [InlineData(ExecutorStopClassifier.FeatureHeldExpiredReason, "Чат прерванного исполнителя удалён — шаг нужно перезапустить")]
+    public void Ask_StoppedФразаПоКодуИзСловаря(string code, string expected)
+    {
+        var ask = FeatureBrief.Build(RunWithAttention("stopped", code, NOW.AddHours(-1), "denis", null),
+            null, null, NOW).Ask!;
+
+        ask.Text.Should().Be(expected);
+        ask.Source.Should().Be("stopped");
+    }
+
+    // c1: неизвестный код или пометка остановки без кода — общая фраза, не сам код.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("нет_такого_кода")]
+    public void Ask_StoppedНеизвестныйИлиПустойКодДаётОбщуюФразу(string? code) =>
+        FeatureBrief.Build(RunWithAttention("stopped", code, NOW, null, null), null, null, NOW)
+            .Ask!.Text.Should().Be(StopReasonPhrases.Fallback);
+
+    // Инвариант: у каждого кода ExecutorStopClassifier есть своя фраза в словаре. Коды берутся
+    // рефлексией по public const string класса (тот же образец, что таблица FeatureStates):
+    // новый код без строки словаря или удалённая строка — красный этот тест (c2).
+    [Fact]
+    public void Ask_КаждыйКодОстановкиИмеетСвоюФразу()
+    {
+        var codes = typeof(ExecutorStopClassifier)
+            .GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        codes.Should().NotBeEmpty("в классификаторе есть коды-константы");
+        foreach (var code in codes)
+        {
+            var phrase = StopReasonPhrases.PhraseFor(code);
+            phrase.Should().NotBeNullOrEmpty().And.NotBe(StopReasonPhrases.Fallback,
+                $"код «{code}» не имеет своей фразы в StopReasonPhrases");
+            phrase.Length.Should().BeLessThanOrEqualTo(TaskManager.AwaitingAskMaxLength);
+        }
+    }
+
+    // Лимит text ≤ 120 — тот же, что у хранимого текста ожидания (TaskManager.AwaitingAskMaxLength);
+    // здесь — защита от данных, записанных минуя продюсера. Мутация: убрать clamp — тест красный (150).
+    [Fact]
+    public void Ask_ЛимитТекста120()
+    {
+        var text = FeatureBrief.Build(RunWithAttention("wait", new string('р', 150), NOW, null, null),
+            null, null, NOW).Ask!.Text;
+
+        text.Should().HaveLength(TaskManager.AwaitingAskMaxLength);
+    }
+
+    // Виды attention — ровно три; иной (аномальные данные) — null: фразы неизвестному смыслу нет
+    // и её не выдумываем.
+    [Fact]
+    public void Ask_НеизвестныйВидТревогиNull() =>
+        FeatureBrief.Build(RunWithAttention("whatever", "текст", NOW, null, null), null, null, NOW)
+            .Ask.Should().BeNull();
 
     // ─── queueWaitMinutes (B8, MAJOR-1 ревью R-F8): время в очереди, не из work-интервалов ──────
 

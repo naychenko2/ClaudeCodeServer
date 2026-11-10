@@ -23,6 +23,11 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // момента постановки удержания (FeatureHold.Since) до now, НЕ из work-интервалов (у фичи в очереди
 // elapsed = WorkWallMinutes = 0, и подпись «в очереди N мин» была бы недостижима). Null — фича
 // не в очереди.
+//
+// FS-E4: ask — одна фраза «что нужно от тебя» с источником тревоги (AskOf): источник — уже
+// вычисленный run.Attention (FeatureProjector.cs:175-216), тот же единственный элемент и тот же
+// приоритет stopped → wait → merge, второго расчёта нет; фразы по кодам остановки — словарь
+// StopReasonPhrases. Тревоги нет — null.
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -113,6 +118,18 @@ public static class FeatureBrief
         string TaskId, string Stage, string? StepRef, string? Lane, string? PersonaId,
         string State, DateTime Since, string? Reason);
 
+    // FS-E4: фиксированные фразы brief.ask — для тревоги merge и для реального wait без текста
+    // причины (аномальные данные: wait пишется с текстом — SetAwaitingHuman пишет Since и Reason
+    // парой, TaskManager.cs:1611-1626).
+    public const string MergeAskText = "Нужно решение по мержу";
+    public const string WaitAskFallback = "Жду вашего решения";
+
+    // brief.ask (FS-E4): одна фраза «что нужно от тебя» с источником тревоги. text — фраза
+    // (≤ TaskManager.AwaitingAskMaxLength), source — вид тревоги (stopped|wait|merge,
+    // run.Attention.Kind как есть), since/personaId/sessionId — поля тревоги как есть.
+    public sealed record BriefAsk(
+        string Text, string Source, DateTime? Since, string? PersonaId, string? SessionId);
+
     // brief: контракт ответа (разрез п. 6).
     public sealed record Brief(
         string Kind,
@@ -143,6 +160,9 @@ public static class FeatureBrief
         // Оценка старта фичи в очереди по впереди стоящим фичам и их remainingMinutes
         // (QueueStartEstimateOf); null — не в очереди или данных нет.
         DateTime? QueueStartEstimate,
+        // FS-E4: одна фраза «что нужно от тебя» с источником тревоги (AskOf из run.Attention).
+        // null — тревоги нет.
+        BriefAsk? Ask,
         DateTime ComputedAt);
 
     // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason, merged — по
@@ -193,6 +213,7 @@ public static class FeatureBrief
             UpdatedAt: UpdatedAtOf(run),
             Active: ActiveOf(run),
             QueueStartEstimate: QueueStartEstimateOf(run, kind, typical, now, projectRuns, slotLimit),
+            Ask: AskOf(run),
             now);
     }
 
@@ -368,6 +389,33 @@ public static class FeatureBrief
     {
         if (!string.IsNullOrEmpty(run.Attention?.Reason)) return run.Attention!.Reason;
         return kind is Kinds.Paused or Kinds.Queued ? run.Hold?.Reason : null;
+    }
+
+    // brief.ask (FS-E4): одна фраза «что нужно от тебя». Источник — уже вычисленный run.Attention
+    // (FeatureProjector.cs:175-216): приоритет stopped → wait → merge и выбор задачи решены там;
+    // здесь отображение единственного элемента, второго расчёта тревоги нет (как NowOf/ReasonOf).
+    // Тревоги нет — null. Текст: wait — AwaitingHumanReason задачи (пишется парой с Since, ≤120 —
+    // TaskManager.SetAwaitingHuman); merge — фиксированная; stopped — StopReasonPhrases по коду
+    // (неизвестный код или пометка без кода — общая фраза). Реальный wait без текста (аномальные
+    // данные) — общая фраза: сигнал «ждёт вас» не должен теряться. Лимит держится и здесь: хранилище
+    // могло быть правлено минуя продюсера.
+    private static BriefAsk? AskOf(FeatureRun run)
+    {
+        var attention = run.Attention;
+        if (attention is null) return null;
+
+        var text = attention.Kind switch
+        {
+            "wait" => string.IsNullOrWhiteSpace(attention.Reason) ? WaitAskFallback : attention.Reason!.Trim(),
+            "merge" => MergeAskText,
+            "stopped" => StopReasonPhrases.PhraseFor(attention.Reason),
+            // Виды attention — только эти три (FeatureProjector.cs:175-216); иное — аномальные данные.
+            _ => null,
+        };
+        if (text is null) return null;
+        if (text.Length > TaskManager.AwaitingAskMaxLength) text = text[..TaskManager.AwaitingAskMaxLength];
+
+        return new BriefAsk(text, attention.Kind, attention.Since, attention.PersonaId, attention.LinkedSessionId);
     }
 
     // «Дальше»: стадии ПОСЛЕ активной со state pending (skipped/absent пропускаются), ≤ MaxNext.

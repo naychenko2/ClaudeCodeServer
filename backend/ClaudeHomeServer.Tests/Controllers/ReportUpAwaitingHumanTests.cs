@@ -17,14 +17,17 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // пропуск. Оба пути к инварианту — MCP chats_report_up (/mcp/wsp) и REST POST /report —
 // идут через SessionMessagingService.ReportUpAsync, по тесту на каждый.
 // Мутации:
-// • убрать вызов SetAwaitingHuman в TrySetAwaitingHumanForBlocker — краснеют ровно два
-//   теста путей (MCP, REST);
-// • снять проверку Done в TrySetAwaitingHumanForBlocker — краснеет тест на гонку
-//   «Блокер_И_Done_Параллельно» (прямой Update быстрее HTTP-пути доклада, поэтому исход
-//   «Done раньше» детерминирован);
+// • убрать вызов SetAwaitingHuman в TrySetAwaitingHumanForBlocker — краснеют тесты путей
+//   (MCP, REST) и «БлокерВещаетTaskChanged» (нет состояния — нечего и вещать);
+// • убрать вещание task_changed в TrySetAwaitingHumanForBlocker — краснеет ровно
+//   «БлокерВещаетTaskChanged_ПоЗадаче» (хелпер AssertBroadcasts: «не вызвало task_changed»);
+// • снять проверку Done в TrySetAwaitingHumanForBlocker — краснеет «БлокерПослеDone»
+//   (переход в Done выполняется до доклада — без проверки expectation поставился бы на
+//   закрытой задаче);
 // • снять условие blocker — краснеет «ОбычныйДоклад»;
 // • перенести постановку до доклада — краснеет «NoParent» (несостоявшийся доклад не ставит);
-// • правка FirstPhrase (граница, лимит, жёсткая граница) — краснеют юнит-тесты FirstPhrase.
+// • правка FirstPhrase (граница, лимит, жёсткая граница, точка внутри URL) — краснеют
+//   юнит-тесты FirstPhrase.
 [Trait("Category", "Host")]
 public class ReportUpAwaitingHumanTests : IClassFixture<TestWebApplicationFactory>
 {
@@ -157,6 +160,33 @@ public class ReportUpAwaitingHumanTests : IClassFixture<TestWebApplicationFactor
         stored.AwaitingHumanSince!.Value.Should().BeOnOrAfter(t0);
     }
 
+    // --- вещание (FS-E2 ревью, Major 1) ---
+
+    // Стор фронта живёт только по task_changed (lib/tasks.ts, lib/featurePage.ts): молча поставленное
+    // ожидание оставляло доску устаревшей — тот же класс дефекта, что линия паузы W4. Сервис собран
+    // с тестовым вещателем (тот же приём, что TaskChangedBroadcastContractTests): DI-вещатель здесь
+    // не видим. Мутация «убрать вещание» краснит ровно этот тест.
+    [Fact]
+    public async Task БлокерВещаетTaskChanged_ПоЗадаче()
+    {
+        var (taskId, exec) = await ExecutorScenarioAsync("broadcast");
+        var bc = new TestSessionBroadcaster();
+        var messaging = new SessionMessagingService(Sessions,
+            _factory.Services.GetRequiredService<ProjectManager>(), Tasks, null, bc);
+
+        var caught = await bc.AssertBroadcasts("task_changed", taskId, OwnerId,
+            async () => (await messaging.ReportUpAsync(OwnerId, exec,
+                    "Застрял на доступе к репозиторию. Работа дальше не идёт.", blocker: true))
+                .Should().BeOfType<SessionMessagingService.ReportOutcome.Delivered>());
+
+        var msg = caught.Should().ContainSingle().Subject
+            .Should().BeAssignableTo<Protocol.TaskChangedMessage>().Subject;
+        msg.Action.Should().Be("updated");
+        msg.Task.Id.Should().Be(taskId);
+        msg.Task.AwaitingHumanReason.Should().Be("Застрял на доступе к репозиторию",
+            "событие несёт уже поставленное состояние, а не состояние до ручки");
+    }
+
     // --- что ожидания НЕ ставит ---
 
     [Fact]
@@ -214,26 +244,24 @@ public class ReportUpAwaitingHumanTests : IClassFixture<TestWebApplicationFactor
         stored.AwaitingHumanReason.Should().BeNull();
     }
 
-    // --- устаревший сигнал и гонка ---
+    // --- устаревший сигнал ---
 
-    // Гонка «переход в Done vs блокер»: прямой Update(Done) — микросекунды, HTTP-путь доклада —
-    // миллисекунды (до проверки статуса лежит весь ReportBlockerAsync с записью в историю),
-    // поэтому исход «Done раньше» в этом тесте детерминирован. Финал один при любом порядке:
-    // закрытая задача не «ждёт вас» — либо пропуск по статусу, либо снятие переходом в Done
-    // (TaskManager.cs:1198–1204). Мутация «снять проверку Done» краснит этот тест.
+    // Блокер после закрытия: переход в Done выполняется ДО доклада (находка ревью: прежняя
+    // «параллельная» версия была порядково-зависимой — её итог зависел от скорости прямого
+    // Update против HTTP-пути доклада). Финал тот же: закрытая задача не «ждёт вас» — пропуск по
+    // статусу в TrySetAwaitingHumanForBlocker (переход в Done сам снимает ожидание:
+    // TaskManager.Update вызывает ClearAwaitingHuman). Мутация «снять проверку Done» краснит
+    // этот тест: без проверки ожидание поставилось бы на закрытой задаче.
     [Fact]
-    public async Task Блокер_И_Done_Параллельно_ОжиданияНетУDone()
+    public async Task БлокерПослеDone_ОжиданияНет()
     {
         var (taskId, exec) = await ExecutorScenarioAsync("race");
 
-        var closing = Task.Run(() => Tasks.Update(taskId, new UpdateTaskRequest { Status = TaskItemStatus.Done }));
-        var reporting = ReportRestAsync(exec, "Застрял на доступе к репозиторию.", blocker: true);
-        // оба запущены параллельно; awaited — по одному, без blocking-операций (xUnit1031)
-        var reported = await reporting;
-        var closed = await closing;
+        var closed = Tasks.Update(taskId, new UpdateTaskRequest { Status = TaskItemStatus.Done });
         closed.Should().NotBeNull("переход в Done выполнен");
 
-        reported.StatusCode.Should().Be(HttpStatusCode.OK, "гонка не роняет сам доклад");
+        var reported = await ReportRestAsync(exec, "Застрял на доступе к репозиторию.", blocker: true);
+        reported.StatusCode.Should().Be(HttpStatusCode.OK, "закрытие не роняет сам доклад");
         var stored = Tasks.GetById(taskId)!;
         stored.Status.Should().Be(TaskItemStatus.Done);
         stored.AwaitingHumanSince.Should().BeNull("блокер после закрытия — устаревший сигнал");
@@ -275,6 +303,20 @@ public class ReportUpAwaitingHumanTests : IClassFixture<TestWebApplicationFactor
         result.Length.Should().BeLessThanOrEqualTo(120);
         // 20 целых слов по 5 + 19 пробелов = 119: слово не разрезано, хвост-пробел снят
         result.Should().Be(string.Join(' ', Enumerable.Repeat("слово", 20)));
+    }
+
+    // FS-E2 ревью (минор): точка внутри URL/домена — не конец предложения, иначе причина
+    // блокера, ссылающегося на документ, резалась по первой точке ссылки.
+    [Fact]
+    public void FirstPhrase_ТочкаВнутриUrl_НеГраница()
+    {
+        SessionMessagingService.FirstPhrase("Детали в docs/adr/012.md. Помоги")
+            .Should().Be("Детали в docs/adr/012.md");
+        SessionMessagingService.FirstPhrase("Документ: https://example.com/page. Дальше")
+            .Should().Be("Документ: https://example.com/page");
+        // точка с пробелом после неё — граница, точки внутри ссылки — нет
+        SessionMessagingService.FirstPhrase("См https://example.com/page. Дальше")
+            .Should().Be("См https://example.com/page");
     }
 
     [Fact]

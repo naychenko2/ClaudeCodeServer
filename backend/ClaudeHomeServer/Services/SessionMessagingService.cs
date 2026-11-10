@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Sessions;
 using Microsoft.Extensions.Logging;
@@ -23,14 +25,20 @@ namespace ClaudeHomeServer.Services;
 /// <param name="projects">Резолв чипа-источника «откуда прилетело сообщение».</param>
 /// <param name="tasks">Резолв задачи по сессии (гейт B5) и постановка ожидания человека (FS-E2).</param>
 /// <param name="log">Логирование отказа постановки ожидания; null — без логирования (тесты).</param>
+/// <param name="broadcaster">Вещание task_changed после постановки ожидания (FS-E2 ревью, Major 1);
+/// null — без вещания (прямые construction-вызовы тестов, не проверяющих событие). В DI —
+/// синглтон ISessionBroadcaster (CoreSeamsGlue), как у остальных производителей события.</param>
 public sealed class SessionMessagingService(SessionManager sessions, ProjectManager projects,
-    TaskManager tasks, ILogger<SessionMessagingService>? log = null)
+    TaskManager tasks, ILogger<SessionMessagingService>? log = null,
+    ISessionBroadcaster? broadcaster = null)
 {
     // FS-E2: логгер нужен одной ветке — отказ постановки ожидания логируется, а не роняет
     // доклад (контракт «отказ установки ожидания доклад не роняет»). Optional-параметр —
     // как в соседних сервисах (WatchdogNotifier): DI подаёт ILogger<T> сам, прямые
-    // construction-вызовы тестов не затронуты.
+    // construction-вызовы тестов не затронуты. Тот же приём у broadcaster: в DI он
+    // синглтон (CoreSeamsGlue), в тестах без проверки вещания — null.
     private readonly ILogger? _log = log;
+    private readonly ISessionBroadcaster? _broadcaster = broadcaster;
 
     /// <summary>Исход отправки сообщения в сессию (chats_send).</summary>
     public abstract record SendOutcome
@@ -215,23 +223,31 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         // доклад (Queued — тоже доставлен, в очередь родителя). Обычный доклад (blocker=false)
         // ожидания не ставит: промежуточная сводка по ходу работы — не «жду тебя».
         if (blocker && outcome is ReportOutcome.Delivered)
-            TrySetAwaitingHumanForBlocker(linkedTask, trimmed);
+            await TrySetAwaitingHumanForBlocker(linkedTask, trimmed);
 
         return outcome;
     }
 
     // FS-E2: чат без задачи — ожидание не ставится (тот же null, что у гейта B5); Done-задача —
-    // сигнал устарел: переход в Done уже снял ожидание (TaskManager.cs:1198–1204), и ставить
-    // его после закрытия — «мёртвый» waiting_you на выполненной карточке. Исключение
-    // SetAwaitingHuman (несогласованный ask — сегодня единственный источник исключения)
-    // ловится и логируется: отказ установки ожидания не роняет доклад — постановщик
-    // блокер уже получил.
-    private void TrySetAwaitingHumanForBlocker(TaskItem? task, string reportText)
+    // сигнал устарел: переход в Done уже снял ожидание (TaskManager.Update при переходе в Done
+    // вызывает ClearAwaitingHuman), и ставить его после закрытия — «мёртвый» waiting_you на
+    // выполненной карточке. Исключение SetAwaitingHuman (несогласованный ask — сегодня
+    // единственный источник исключения) ловится и логируется: отказ установки ожидания не
+    // роняет доклад — постановщик блокер уже получил.
+    private async Task TrySetAwaitingHumanForBlocker(TaskItem? task, string reportText)
     {
         if (task is null || task.Status == TaskItemStatus.Done) return;
         try
         {
-            tasks.SetAwaitingHuman(task.Id, FirstPhrase(reportText));
+            var updated = tasks.SetAwaitingHuman(task.Id, FirstPhrase(reportText));
+            // FS-E2 ревью (Major 1): стор фронта живёт только по task_changed (lib/tasks.ts,
+            // lib/featurePage.ts) — молчаливая постановка ожидания оставляла доску устаревшей
+            // (тот же класс дефекта, что линия паузы W4). Образец — TasksToolset: тот же
+            // TaskChangedMessage("updated") через ToTaskBoard. После await: событие несёт уже
+            // поставленное ожидание (payload = обновлённый TaskItem), а не состояние до ручки.
+            if (updated is not null && _broadcaster is not null)
+                await _broadcaster.ToTaskBoard(task.OwnerId ?? "", task.ProjectId,
+                    new TaskChangedMessage("updated", updated));
         }
         catch (InvalidOperationException e)
         {
@@ -251,17 +267,35 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         while (true)
         {
             var end = start;
-            while (end < text.Length && !IsSentenceEnd(text[end])) end++;
+            while (end < text.Length && !IsSentenceEndAt(text, end)) end++;
             var phrase = text[start..end].Trim();
-            if (phrase.Length > 0) return LimitToWordBoundary(phrase);
-            // Отрезок пуст (текст начинается с разделителя) — следующий за ним; непустых
-            // вовсе нет (текст из одних разделителей) — весь текст, тоже под лимитом.
+            // Отрезок без буквы/цифры — не фраза («...» — пунктуация, а не причина): пропускаем.
+            // Фраз нет вовсе (текст из одних разделителей) — весь текст, тоже под лимитом
+            // (причина не пустеет).
+            if (phrase.Length > 0 && HasWordChar(phrase)) return LimitToWordBoundary(phrase);
             if (end == text.Length) return LimitToWordBoundary(text.Trim());
             start = end + 1;
         }
     }
 
-    private static bool IsSentenceEnd(char c) => c is '.' or '!' or '?' or '\r' or '\n';
+    // FS-E2 ревью (минор): '.' '!' '?' — конец предложения только за концом текста или за
+    // пробелом: точка внутри URL (docs/adr/012.md) или домена — не граница, иначе причина
+    // блокера резалась по первой точке ссылки. '\r' '\n' — безусловны: перевод строки —
+    // граница строки независимо от следующего символа.
+    private static bool IsSentenceEndAt(string text, int i) => text[i] switch
+    {
+        '\r' or '\n' => true,
+        '.' or '!' or '?' => i + 1 == text.Length || char.IsWhiteSpace(text[i + 1]),
+        _ => false,
+    };
+
+    // В отрезке есть буква или цифра — он несёт текст; нет — это пунктуация/пробелы.
+    private static bool HasWordChar(string s)
+    {
+        foreach (var c in s)
+            if (char.IsLetterOrDigit(c)) return true;
+        return false;
+    }
 
     private static string LimitToWordBoundary(string phrase)
     {

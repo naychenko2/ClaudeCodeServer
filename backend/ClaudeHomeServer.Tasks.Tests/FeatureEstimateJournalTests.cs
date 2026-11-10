@@ -9,14 +9,27 @@ namespace ClaudeHomeServer.Tasks.Tests;
 
 // FS-O2a: журнал оценок фичи (событие estimate_set). Каждая запись голоса с непустой оценкой
 // (TaskManager.SetFeatureNote) дописывает в журнал фичи строку kind=estimate_set:
-// expectedSteps/etaMinutes — из самой оценки; stage/planState/accepted/total — из необязательного
-// контекста вызывающего (FeatureEstimateContext; в FS-O2a вызывающие его не передают → в журнале
-// null). Голос без оценки строки не пишет; снятие голоса пустым текстом — тоже. Запись идёт под
+// expectedSteps/etaMinutes — из самой оценки; stage/planState/accepted/total — из контекста
+// вызывающего (FeatureEstimateContext). С FS-O2b живые пути (MCP tasks_update, REST PUT note)
+// передают его из своей же проекции → в журнале он есть; без снимка (проекции нет) — null.
+// Живые пути проверяются в своих сборках: TasksToolsetFeatureNoteTests (MCP) и
+// TasksControllerTests (REST) — здесь только сам контракт записи.
+// Голос без оценки строки не пишет; снятие голоса пустым текстом — тоже. Запись идёт под
 // тем же _featureNoteLock, что и запись голоса: последняя строка журнала соответствует
 // сохранённой оценке (тест гонки).
 //
+// FS-O2b: базовый срок InitialEtaMinutes фиксируется один раз — при первой оценке, записанной
+// при нарезанном плане (снимок planState == "cut"); проверка «базы ещё нет» и её запись — под
+// тем же замком (ПервыеОценкиПриCut_Параллельно_БазаОдна). Само правило и его мутация
+// «вернуть условие StartedKinds» — SetFeatureNote_InitialEtaMinutes_... в TaskManagerTests.
+//
 // Мутации (критерии c2/c4, прогонялись в копии дерева):
-//  • «AppendJournal вне _featureNoteLock» → ДвеОценки_Параллельно… красный;
+//  • «AppendJournal после finally» (за окна _featureNoteLock) → красный
+//    СтрокаОценки_ПодЗамком_ЗамокСтора… (детерминированный: замок стора держится маркером,
+//    append прежней записи блокируется вне своего feature-замка). ПорядокСтрок_ПодЗамком…
+//    на ней гонка (в пробе строки не догнали контрольную точку — красный; это не гарантия);
+//    ДвеОценки_Параллельно… зелёный — порядок релизов совпадает с порядком append-ов
+//    (проба ревью 11/11), он ловит только вариант «до входа в замок»;
 //  • «убрать AppendJournal в SetFeatureNote» → красные СОценкой_ПишетEstimateSet…,
 //    ДвеОценки_ДвеСтроки…, Переполнение_EstimateSet_НеОтбрасывается… (список в отчёте задачи).
 // Платформонезависимые: пути от Path.GetTempPath(); гонка — события, не паузы.
@@ -220,9 +233,10 @@ public class FeatureEstimateJournalTests : IDisposable
     // ни строку — ни одной новой строки журнала, пока занят замок.
     // Мутация «запись журнала вне блокировки» (AppendJournal до входа в _featureNoteLock):
     // вторая строка появляется при занятом замке → красный (проверено прогоном в копии дерева).
-    // Форма «AppendJournal после finally» инвариант не ломает: append после релиза всё равно
-    // раньше append следующего ожидающего — тест на неё не краснеет, и это свойство формулы,
-    // а не слабость теста (см. отчёт задачи).
+    // Форма «AppendJournal после finally» на этот тест не красная: к моменту проверки первый
+    // ещё не вышел из критической секции, его append ещё не случилось — строки нет при любом
+    // порядке. Её ловит тест СтрокаОценки_ПодЗамком_ЗамокСтора… (замок стора держится
+    // маркером, append первой блокируется вне своего feature-замка).
     [Fact]
     public async Task ЗаписьЖурнала_ПодОднимЗамком_СГолосом()
     {
@@ -262,6 +276,221 @@ public class FeatureEstimateJournalTests : IDisposable
         lines[0].ExpectedSteps.Should().Be(11, "порядок строк = порядок записей голоса");
         lines[1].ExpectedSteps.Should().Be(22);
         _sut.GetById(epic.Id)!.Note!.Estimate!.ExpectedSteps.Should().Be(22);
+    }
+
+    // Детерминированный контроль инварианта «последняя строка журнала = сохранённая оценка»
+    // (доработка по ревью FS-O2a). Три записи с форсированным порядком: первая держится в
+    // своей критической секции (шов FeatureNoteInside), вторая и третья встают в очередь
+    // (швы Contended: третья — только после того, как вторая подтвердила ожидание; см.
+    // прецедент SessionManagerTests «Гонка снятия и отсрочка»).
+    // Первая часть: при занятом замке первой — ни одной новой строки (её строка ещё не
+    // записана при любом порядке). Вторая часть — контрольная точка под замом третьей
+    // (шов FeatureNoteInside): голоса первых двух уже в сторе, свой третьей ещё не
+    // написан — строки первых двух уже в файле, порядок строк = порядок записей голоса.
+    // Форма «до входа в замок» краснеет в первой части: строка первой появляется при её
+    // же занятом замке. Форма «после finally» здесь гонка: append прежней записи идёт
+    // сразу после её finally, без ожидания, а контроль — за двумя пробуждениями (третья
+    // и тест) — в пробе мутацией строки не догнали контрольную точку (красный), но это
+    // не гарантия. Детерминированно её ловит следующий тест —
+    // СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки (замок стора держится
+    // маркером).
+    [Fact]
+    public async Task ПорядокСтрок_ПодЗамком_ТретьяЗаписьВидитПервыеПодСвоимЗамком()
+    {
+        var epic = CreateEpic();
+        var path = JournalPath("u", epic.Id);
+        var baseline = File.ReadAllLines(path).Length;
+
+        var inside1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contended1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contended2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inside3 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release3 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var insideCount = 0;
+        var contendedCount = 0;
+        _sut.FeatureNoteInside = () =>
+        {
+            switch (++insideCount)
+            {
+                case 1:
+                    // Первый под своим замком: держим его, пока вторая и третья не встали в очередь.
+                    inside1.TrySetResult();
+                    contended2.Task.Wait(TimeSpan.FromSeconds(10));
+                    break;
+                case 2:
+                    // Второй: сквозной хук — проходит свою критическую секцию целиком.
+                    break;
+                default:
+                    // Третий под своим замком, своей оценки ещё нет — это контрольная точка.
+                    inside3.TrySetResult();
+                    release3.Task.Wait(TimeSpan.FromSeconds(10));
+                    break;
+            }
+        };
+        _sut.FeatureNoteContended = () =>
+        {
+            if (++contendedCount == 1) contended1.TrySetResult();
+            else contended2.TrySetResult();
+        };
+
+        var first = Task.Run(() => _sut.SetFeatureNote(
+            epic.Id, "первый", null, false, "prod", "running", Estimate(11, 111)));
+        await inside1.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var second = Task.Run(() => _sut.SetFeatureNote(
+            epic.Id, "второй", null, false, "prod", "running", Estimate(22, 222)));
+        // Событие, не пауза: вторая ждёт замок — ставим третью в очередь после неё.
+        await contended1.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        var third = Task.Run(() => _sut.SetFeatureNote(
+            epic.Id, "третий", null, false, "prod", "running", Estimate(33, 333)));
+        await contended2.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // При занятом замке первой — ни одной новой строки: её строка ещё не записана при
+        // любом порядке (под замком — до выхода из критической секции, после finally —
+        // тоже до выхода).
+        File.ReadAllLines(path).Length.Should().Be(baseline,
+            "при занятом замке первой нет ни одной новой строки журнала");
+
+        // Отпускаем первого — цепочка идёт по очереди замка: второй (целиком), затем третий
+        // (до своей контрольной точки).
+        await inside3.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // Контрольная точка: третий под своим замком, своей оценки ещё не записал.
+        var atCheckpoint = File.ReadAllLines(path).Length;
+        release3.TrySetResult();
+
+        var results = await Task.WhenAll(first, second, third).WaitAsync(TimeSpan.FromSeconds(30));
+        results.Should().HaveCount(3);
+
+        // Под правильным замком строки первой и второй — под их собственными замками, до
+        // релиза: третий, удерживая свой замок, видит обе.
+        atCheckpoint.Should().Be(baseline + 2,
+            "строки оценок пишутся только пока их замок удержан: под замком третьего "
+            + "строки первых двух уже в файле");
+
+        var saved = _sut.GetById(epic.Id)!.Note!.Estimate!;
+        saved.ExpectedSteps.Should().Be(33);
+        var lines = _journal.Read("u", epic.Id).Entries
+            .Where(e => e.Kind == "estimate_set").ToList();
+        lines.Should().HaveCount(3);
+        lines[0].ExpectedSteps.Should().Be(11, "порядок строк = порядок записей голоса");
+        lines[1].ExpectedSteps.Should().Be(22);
+        lines[2].ExpectedSteps.Should().Be(33);
+        // Инвариант: последняя строка = сохранённая оценка.
+        lines[^1].ExpectedSteps.Should().Be(saved.ExpectedSteps);
+        lines[^1].EtaMinutes.Should().Be(saved.EtaMinutes);
+    }
+
+    // Прямой контроль контракта «строка оценки пишется под _featureNoteLock» (доработка
+    // по ревью FS-O2a, форма «AppendJournal после finally»). Механизм: тест занимает
+    // пер-фичевый замок журнала стора двумя большими строками-маркерами (Append держит
+    // его на всё время записи, FeatureJournalStore.cs:239-251); первый маркер — сигнал
+    // наблюдателю отпустить первую запись, второй — удержание замка стора: append первой
+    // гарантированно приходит к занятому замку стора (первая в своём хуке до отпускания,
+    // отпускание — только после появления первого маркера в файле).
+    //   • правильная форма: append первой под её feature-замком блокируется замком стора →
+    //     первая держит feature-замок до конца своей строки → вторая не может войти в
+    //     критическую секцию до релиза первой → сразу после второго маркера хука второй
+    //     ещё нет;
+    //   • форма «AppendJournal после finally»: первая выходит из-под feature-замка до
+    //     своего append-а → вторая входит сразу (её хук — через микросекунды после
+    //     отпускания, за миллисекунды до конца маркеров) → к контролю хук второй есть →
+    //     красный.
+    // Окна контроля — миллисекунды (удержание маркеров) против микросекунд (пробуждение
+    // очереди); Task.Delay нет: ждём событий (появление маркера, хук второй).
+    [Fact]
+    public async Task СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки()
+    {
+        var epic = CreateEpic();
+        var path = JournalPath("u", epic.Id);
+        var baseline = File.ReadAllLines(path).Length;
+
+        var inside1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contended1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release1 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var inside2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release2 = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var insideCount = 0;
+        _sut.FeatureNoteInside = () =>
+        {
+            switch (++insideCount)
+            {
+                case 1:
+                    // Первый под своим замком: ждём отпускания наблюдателем.
+                    inside1.TrySetResult();
+                    release1.Task.Wait(TimeSpan.FromSeconds(10));
+                    break;
+                default:
+                    // Второй под своим замком: держим до отпускания тестом.
+                    inside2.TrySetResult();
+                    release2.Task.Wait(TimeSpan.FromSeconds(10));
+                    break;
+            }
+        };
+        _sut.FeatureNoteContended = () => contended1.TrySetResult();
+
+        var first = Task.Run(() => _sut.SetFeatureNote(
+            epic.Id, "первый", null, false, "prod", "running", Estimate(11, 111)));
+        await inside1.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        var second = Task.Run(() => _sut.SetFeatureNote(
+            epic.Id, "второй", null, false, "prod", "running", Estimate(22, 222)));
+        // Событие, не пауза: вторая ждёт замок первой.
+        await contended1.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        // Наблюдатель отпускает первую запись, как только первый маркер появился в
+        // файле: к этому моменту тест уже держит замок стора и пишет второй.
+        var marker = new FeatureJournalEntry
+        {
+            At = DateTime.UtcNow,
+            Kind = "created",
+            TaskId = "marker",
+            Reason = new string('m', 2_000_000),
+        };
+        var releaser = Task.Run(() =>
+        {
+            while (true)
+            {
+                try
+                {
+                    if (File.ReadLines(path).Count() > baseline)
+                    {
+                        release1.TrySetResult();
+                        return;
+                    }
+                }
+                catch (IOException) { /* файл пишется — перечитаем */ }
+            }
+        });
+
+        _journal.Append("u", epic.Id, marker); // маркер 1: сигнал наблюдателю
+        _journal.Append("u", epic.Id, marker); // маркер 2: удержание замка стора
+
+        // Момент сразу после второго маркера: при правильном замке первая ещё держит
+        // свой feature-замок (её append блокируется замком стора) — вторая не входила в
+        // критическую секцию. При «append после finally» первая уже вышла, вторая вошла:
+        // её хук зафиксирован.
+        var secondInside = inside2.Task.IsCompleted;
+        release2.TrySetResult();
+
+        var results = await Task.WhenAll([first, second]).WaitAsync(TimeSpan.FromSeconds(30));
+        results.Should().HaveCount(2);
+        await releaser.WaitAsync(TimeSpan.FromSeconds(10));
+
+        secondInside.Should().BeFalse(
+            "первая запись держит свой замок до своей строки: при занятом замке стора "
+            + "вторая не может войти в критическую секцию до релиза первой");
+
+        var entries = _journal.Read("u", epic.Id).Entries;
+        var lines = entries.Where(e => e.Kind == "estimate_set").ToList();
+        lines.Should().HaveCount(2, "обе оценки оставляют свои строки");
+        lines[0].ExpectedSteps.Should().Be(11, "порядок строк = порядок записей голоса");
+        lines[1].ExpectedSteps.Should().Be(22);
+        entries.IndexOf(lines[^1]).Should().Be(entries.Count - 1,
+            "за последней строкой оценки нет ничего: строки пишутся под своими замками");
+        var saved = _sut.GetById(epic.Id)!.Note!.Estimate!;
+        lines[^1].ExpectedSteps.Should().Be(saved.ExpectedSteps,
+            "последняя строка журнала = сохранённая оценка");
     }
 
     // ─── Таймлайн новый вид игнорирует ─────────────────────────────────────────────────────
@@ -344,9 +573,13 @@ public class FeatureEstimateJournalTests : IDisposable
 
     // 20 параллельных записей оценки одной фичи. Голос и строка журнала пишутся под одним
     // _featureNoteLock (TaskManager.cs), поэтому ровно 20 строк и последняя — та же оценка,
-    // что осталась в сторе. Мутация «AppendJournal вне _featureNoteLock» (после finally):
-    // окно между «записали голос» и «записали журнал» путает порядок → последняя строка
-    // не совпадает с Note.Estimate (красный; проверено прогоном в копии дерева).
+    // что осталась в сторе. Мутация «AppendJournal до входа в _featureNoteLock»: окно между
+    // «записали голос» и «записали журнал» путает порядок → последняя строка не совпадает с
+    // Note.Estimate (красный). Форма «AppendJournal после finally» на этот тест зелёная:
+    // порядок релизов почти всегда совпадает с порядком append-ов — гонка, а не гарантия
+    // (проба ревью: 11 прогонов мутации — зелёные). Её детерминированно ловит
+    // СтрокаОценки_ПодЗамком_ЗамокСтораДержитПервуюДоСвоейСтроки (замок стора держится
+    // маркером).
     [Fact]
     public async Task ДвеОценки_Параллельно_ПоследняяСтрокаРавнаСохранённой()
     {
@@ -374,5 +607,69 @@ public class FeatureEstimateJournalTests : IDisposable
         lastEntry.ExpectedSteps.Should().Be(saved.ExpectedSteps,
             "последняя строка журнала соответствует сохранённой оценке");
         lastEntry.EtaMinutes.Should().Be(saved.EtaMinutes);
+    }
+
+    // ─── Базовый срок: ровно один, при нарезанном плане (FS-O2b) ────────────────────────────
+
+    // Десять первых оценок при planState == "cut" идут параллельно. Проверка «базы ещё нет» и её
+    // запись — под одним _featureNoteLock (TaskManager.cs), поэтому базу ставит тот, кто первым
+    // вошёл в замок: в тесте это A — он держится в своей критической секции (шов FeatureNoteInside),
+    // пока остальные девять не уперлись в занятый замок (шов FeatureNoteContended, порядок
+    // детерминирован, не пауза). Мутация «проверка InitialEtaMinutes вне блокировки» (читать
+    // task.InitialEtaMinutes до TryEnter): все десять видят null и каждая пишет свой срок — база
+    // становится последней из очереди, а не A → первый Should красный (проверено прогоном в копии
+    // дерева). Само правило и его мутация «вернуть условие StartedKinds» —
+    // SetFeatureNote_InitialEtaMinutes_... в TaskManagerTests.
+    [Fact]
+    public async Task ПервыеОценкиПриCut_Параллельно_БазаОдна()
+    {
+        var epic = CreateEpic();
+        var ctx = new TaskManager.FeatureEstimateContext("prod", "cut", 0, 3);
+
+        var aInside = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var othersQueued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var insideCount = 0;
+        var contendedCount = 0;
+        _sut.FeatureNoteInside = () =>
+        {
+            // Первый вошедший — A: держим его в критической секции, пока остальные не встали в
+            // очередь замка; их критические секции сквозные (хук ничего не делает).
+            if (++insideCount == 1)
+            {
+                aInside.TrySetResult();
+                othersQueued.Task.Wait(TimeSpan.FromSeconds(10));
+            }
+        };
+        _sut.FeatureNoteContended = () =>
+        {
+            if (++contendedCount == 9) othersQueued.TrySetResult();
+        };
+        try
+        {
+            var a = Task.Run(() => _sut.SetFeatureNote(
+                epic.Id, "база A", null, false, "prod", "running", Estimate(10, 300), ctx));
+            await aInside.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var others = Enumerable.Range(0, 9)
+                .Select(i => Task.Run(() => _sut.SetFeatureNote(
+                    epic.Id, $"ход {i}", null, false, "prod", "running", Estimate(11 + i, 400 + i), ctx)))
+                .ToArray();
+            await othersQueued.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var results = await Task.WhenAll([a, .. others]).WaitAsync(TimeSpan.FromSeconds(30));
+            results.Should().HaveCount(10);
+
+            _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300,
+                "базу пишет тот, кто первым держал замок: остальные видят уже записанную");
+
+            // Дальше база не двигается: следующая оценка при cut её не перезаписывает.
+            _sut.SetFeatureNote(epic.Id, "позже", null, false, "prod", "running", Estimate(30, 900), ctx);
+            _sut.GetById(epic.Id)!.InitialEtaMinutes.Should().Be(300);
+        }
+        finally
+        {
+            _sut.FeatureNoteInside = null;
+            _sut.FeatureNoteContended = null;
+        }
     }
 }

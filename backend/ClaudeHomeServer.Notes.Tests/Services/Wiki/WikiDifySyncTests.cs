@@ -140,13 +140,21 @@ public class WikiDifySyncTests : IDisposable
     // ─── Подменённый Dify ─────────────────────────────────────────────────────
 
     // Записывающий хендлер Dify: помнит созданные датасеты (id↔имя — их листингом
-    // пользуется каскад), разворачивает create_by_text в (datasetId, имя, doc_metadata)
-    // и держит журнал DELETE — по нему проверяется каскад датасетов.
+    // пользуется каскад), разворачивает двухшаговую запись метаданных (дефект 87bb0af6:
+    // Dify отбрасывает doc_metadata из тела create_by_text): create даёт (datasetId, docId,
+    // имя), значения живут только в documents/metadata; объявление поля — GET/POST metadata
+    // по датасету. Журнал DELETE — по нему проверяется каскад датасетов.
     private sealed class FakeDify : HttpMessageHandler
     {
         private readonly List<(string Method, string Path, string? Body)> _calls = [];
         private readonly List<(string Id, string Name)> _datasets = [];
-        private int _docs;
+        private readonly List<(string DatasetId, string DocId, string Name)> _docs = [];
+        // datasetId → объявленные поля метаданных (id у каждого датасета свой)
+        private readonly Dictionary<string, List<(string Id, string Name)>> _fields = [];
+        // docId → назначенные значения (name → value)
+        private readonly Dictionary<string, Dictionary<string, string>> _docMeta = [];
+        private int _docsSeq;
+        private int _fieldsSeq;
 
         public string? DatasetIdOf(string name) => _datasets.FirstOrDefault(d => d.Name == name).Id;
 
@@ -155,22 +163,20 @@ public class WikiDifySyncTests : IDisposable
             get
             {
                 var res = new List<(string, string, Dictionary<string, string>)>();
-                foreach (var (_, path, body) in _calls.Where(c => c.Path.Contains("/document/create_by_text")))
-                {
-                    var root = JsonDocument.Parse(body!).RootElement;
-                    var meta = new Dictionary<string, string>();
-                    if (root.TryGetProperty("doc_metadata", out var dm))
-                        foreach (var p in dm.EnumerateObject())
-                            if (p.Value.ValueKind == JsonValueKind.String) meta[p.Name] = p.Value.GetString()!;
-                    var seg = path.Split('/');
-                    res.Add((seg[Array.IndexOf(seg, "datasets") + 1], root.GetProperty("name").GetString()!, meta));
-                }
+                foreach (var (ds, docId, name) in _docs)
+                    res.Add((ds, name, _docMeta.GetValueOrDefault(docId) ?? []));
                 return res;
             }
         }
 
         public IReadOnlyList<string> DeletedPaths =>
             _calls.Where(c => c.Method == "DELETE").Select(c => c.Path).ToList();
+
+        private string DatasetOf(string path)
+        {
+            var seg = path.Split('/');
+            return seg[Array.IndexOf(seg, "datasets") + 1];
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
@@ -192,7 +198,38 @@ public class WikiDifySyncTests : IDisposable
                     _datasets.Select(d => $"{{\"id\":\"{d.Id}\",\"name\":\"{d.Name}\"}}"))
                     + "],\"has_more\":false}");
             if (path.Contains("/document/create_by_text"))
-                return Json($"{{\"document\":{{\"id\":\"doc-{++_docs}\",\"name\":\"doc\",\"indexing_status\":\"completed\"}}}}");
+            {
+                var name = JsonDocument.Parse(body!).RootElement.GetProperty("name").GetString()!;
+                var docId = "doc-" + (++_docsSeq);
+                _docs.Add((DatasetOf(path), docId, name));
+                return Json($"{{\"document\":{{\"id\":\"{docId}\",\"name\":\"doc\",\"indexing_status\":\"completed\"}}}}");
+            }
+            if (request.Method == HttpMethod.Post && path.EndsWith("/documents/metadata"))
+            {
+                foreach (var op in JsonDocument.Parse(body!).RootElement.GetProperty("operation_data").EnumerateArray())
+                {
+                    var docId = op.GetProperty("document_id").GetString()!;
+                    if (!_docMeta.TryGetValue(docId, out var meta)) _docMeta[docId] = meta = [];
+                    foreach (var item in op.GetProperty("metadata_list").EnumerateArray())
+                        if (item.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.String)
+                            meta[item.GetProperty("name").GetString()!] = v.GetString()!;
+                }
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
+            }
+            if (request.Method == HttpMethod.Get && path.EndsWith("/metadata"))
+            {
+                var fields = string.Join(",", _fields.GetValueOrDefault(DatasetOf(path), [])
+                    .Select(f => $"{{\"id\":\"{f.Id}\",\"name\":\"{f.Name}\",\"type\":\"string\"}}"));
+                return Json($"{{\"doc_metadata\":[{fields}]}}");
+            }
+            if (request.Method == HttpMethod.Post && path.EndsWith("/metadata"))
+            {
+                var name = JsonDocument.Parse(body!).RootElement.GetProperty("name").GetString()!;
+                var id = "f-" + (++_fieldsSeq);
+                if (!_fields.TryGetValue(DatasetOf(path), out var list)) _fields[DatasetOf(path)] = list = [];
+                list.Add((id, name));
+                return Json($"{{\"id\":\"{id}\",\"name\":\"{name}\",\"type\":\"string\"}}");
+            }
             return new HttpResponseMessage(HttpStatusCode.NoContent);
         }
 

@@ -482,6 +482,17 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         var humanTurn = !auto && !systemDirective && agentDepth == 0 && !suppressTasksExecute;
         _store.NoteTurnActor(entry, senderUserId, humanTurn);
         Volatile.Write(ref entry.TurnFromHuman, humanTurn ? 1 : 0);
+        // Факт «человек ответил» на шину (FS-E3a): по нему подписчик снимает ожидание человека
+        // в задачах. Fire-and-forget по контракту Notification: наблюдатель не держит ход, его
+        // падение гасит шина. Признак ровно тот же, что у актора и защёлки траты выше: агентская,
+        // авто- и директивная подача — не ответ человека. Ключи — из хода (Owner — резолв сессии,
+        // не «текущий пользователь»). Номер хода — ближайший будущий: SubmitTurn присвоит его
+        // этой подаче (контракт события); у локального голосового хода CLI-прогона нет — 0.
+        if (humanTurn)
+            _ = _process.TurnEvents?.PublishAsync(new Turn.HumanMessageAccepted(
+                new Turn.TurnContext(sessionId, _store.ResolveOwnerId(entry.Info),
+                    localVoice ? 0 : (int)entry.Process!.SubmittedTurnSeq + 1, agentDepth,
+                    entry.Info.ProjectId)));
         // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
         // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
         // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).

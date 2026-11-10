@@ -83,6 +83,12 @@ public sealed class TurnProcessHost
     // маршрут уже есть. Делегация ровно та же, что у фасадной обёртки SessionManager.
     internal void TryPoolFailover(string sessionId, SessionEntry entry) => _route.TryPoolFailover(sessionId, entry);
 
+    // Шина событий хода — тот же синглтон DI, что держит фасад. Ядру приёма хода она нужна,
+    // чтобы издать факт о человеческом сообщении (turn/human-message-accepted): одиннадцатой
+    // зависимости TurnIntake она не даёт — тот же путь делегации, что у TryPoolFailover выше
+    // (правило 2 сторожа формы ядра). null — шина не резолвилась (сборка без DI): события нет.
+    internal Turn.ITurnEventBus? TurnEvents => _turnEvents;
+
     // --- Старт и переподключение процесса ---
 
     // Начало нового процесса сессии (тело переехало из StartNewSessionAsync).

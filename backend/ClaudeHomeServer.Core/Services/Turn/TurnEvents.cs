@@ -143,3 +143,19 @@ public sealed record SessionContinued(TurnContext Turn, string SourceSessionId) 
 {
     public const string Event = "session/continued";
 }
+
+// turn/human-message-accepted — человек ответил в чате, и его сообщение принято как ход.
+// Издатель — приём хода (TurnIntake.SendDirectAsync): после записи актора (NoteTurnActor) и до
+// диспетчеризации в CLI, ровно одна публикация на человеческий ход. Фолбэк попыток в неё не
+// попадает: он живёт внутри адаптера и новый ход не начинает. Агентские (agentDepth > 0),
+// авто- и директивные подачи — не ответ человека, их этот факт не касается.
+// Ключи — из хода: Turn.SessionId/OwnerId (per-owner изоляция подписчика, а не «текущий
+// пользователь»). TurnSeq — номер хода, который это сообщение начнёт: на приёме его ещё не
+// присвоил SubmitTurn (ClaudeSession.cs:3338), поэтому берётся ближайший будущий — +1 к
+// последнему отданному прогону (тот же пер-прогона смысл, что у turn/completed). 0 — локальный
+// голосовой ход: CLI-прогона нет, та же конвенция «синтетического хода», что у
+// SessionEntry.LastTurnSeq. Подписчик — снятие ожидания человека в задачах (FS-E3b).
+public sealed record HumanMessageAccepted(TurnContext Turn) : ITurnNotification
+{
+    public const string Event = "turn/human-message-accepted";
+}

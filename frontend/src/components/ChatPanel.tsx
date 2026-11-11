@@ -38,7 +38,7 @@ import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries, type TurnTree } from '../lib/turnWorktree';
-import { retryableInterruptedIndex, turnAlreadyEnded } from '../lib/chatReducer';
+import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { toolLiveness, isToolGroupDone, pickActiveTool, activeToolLabel, awaitsToolStart, stageCaptionOf } from '../lib/toolTiming';
 import { BUILD_TOOL, RUN_TESTS_TOOL, operationOf } from '../lib/toolLabels';
 import { useCtxThresholds } from '../lib/contextPrefs';
@@ -58,9 +58,7 @@ import { ContextRow } from './chat/ContextRow';
 import { chatContextApi } from '../lib/chatContext/api';
 import { C, R, SHADOW, SP, FS, PANEL_ANIM, CHAT_MAX_W, CHAT_GUTTER_L, CHAT_GUTTER_MOBILE, SCROLL_DOWN_SIZE } from '../lib/design';
 import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
-import { navPush, getNav, type NavSnapshot } from '../lib/nav';
-import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
-import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
+import { navPush, type NavSnapshot } from '../lib/nav';
 import { FeatureChatCard } from './chat/feature/FeatureChatCard';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
@@ -1362,88 +1360,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     }
   }, [session.id, project]);
 
-  // «Продолжить в новом чате»: диалог, запрос и переход. Ошибки (409 «чат занят», 400 «нет
-  // ходов агента») несут человеческий текст — показываем его тостом и бросаем дальше, чтобы
-  // диалог снял блокировку и остался открытым. Запрос идёт десятки секунд (агент пишет
-  // записку), поэтому диалог держит состояние «выполняется» сам.
-  const [continueOpen, setContinueOpen] = useState(false);
-  const handleContinue = useCallback(async (note: string) => {
-    try {
-      const result = await api.chats.continue(session.id, note || undefined);
-      setContinueOpen(false);
-      // Живое событие chat_continued могло уже увести в новый чат (гонка с ответом POST) —
-      // не дублируем navPush, если мы уже там.
-      if (getNav()?.chatId !== result.newSessionId) {
-        navPush(project
-          ? { screen: 'project', project, chatId: result.newSessionId, view: 'chat', file: null }
-          : { screen: 'chats', chatId: result.newSessionId });
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Не удалось продолжить в новом чате';
-      // 409 «уже продолжен»: тост с текстом и ссылкой на новый чат, если ссылка пришла
-      const link = continuedLinkFromError(err);
-      if (link) {
-        showToast('Продолжение чата', msg, 'info', {
-          label: 'Открыть новый чат',
-          onClick: () => { void openChatById(link); },
-        });
-        throw err;
-      }
-      // Долгий запрос оборвался (таймаут/сеть): не показываем ошибку сразу, а перечитываем
-      // сессию — если продолжение состоялось на сервере, уводим в новый чат
-      try {
-        const fresh = await api.chats.get(session.id);
-        if (fresh.continuedInSessionId) {
-          onSessionUpdated?.(fresh);
-          setContinueOpen(false);
-          navPush(project
-            ? { screen: 'project', project, chatId: fresh.continuedInSessionId, view: 'chat', file: null }
-            : { screen: 'chats', chatId: fresh.continuedInSessionId });
-          return;
-        }
-      } catch { /* не перечитали — показываем ошибку */ }
-      showToast('Продолжение чата', msg);
-      throw err;
-    }
-  }, [session.id, project, onSessionUpdated]);
-  const openContinue = useCallback(() => setContinueOpen(true), []);
-  // Пункт меню шапки (ChatHeaderBar) сообщает через событие — как cc-ai-run
-  useEffect(() => {
-    const onEvt = (e: Event) => {
-      if ((e as CustomEvent<{ sessionId?: string }>).detail?.sessionId === session.id) setContinueOpen(true);
-    };
-    window.addEventListener('cc-chat-continue', onEvt);
-    return () => window.removeEventListener('cc-chat-continue', onEvt);
-  }, [session.id]);
-
-  // Подсказка при большом контексте: «Не сейчас» запоминает размер контекста, новая
-  // подсказка — после роста на CONTINUE_HINT_SNOOZE_STEP. Сбрасывается при смене чата.
-  const [hintSnoozedAt, setHintSnoozedAt] = useState<number | undefined>(undefined);
-  useEffect(() => { setHintSnoozedAt(undefined); }, [session.id]);
-  const showContinueHint = !embedded && online && !isWaiting && !session.continuedInSessionId
-    && shouldShowContinueHint({ tokens: ctxEstimate.tokens, windowTokens: ctxEstimate.window, snoozedAt: hintSnoozedAt });
-
-  // Связи продолжения: имя чата-источника для плашки вверху нового чата
-  const { from: continuedFromId, into: continuedIntoId } = continuationLinks(session);
-  const [continuedFromName, setContinuedFromName] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    setContinuedFromName(undefined);
-    if (!continuedFromId) return;
-    let cancelled = false;
-    api.chats.get(continuedFromId).then(s => { if (!cancelled) setContinuedFromName(s.name ?? undefined); }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [continuedFromId]);
-  const lastAssistantIdx = useMemo(() => lastAssistantTextIndex(items), [items]);
-  // Кнопка «Продолжить в новом чате» под последним ответом: прячем, пока ход ещё идёт
-  // (последний элемент ленты не result/error — ответ стримится) и если чат уже продолжен
-  // (кнопка дублировала бы плашку-связь). isWaiting — отдельный признак занятости редьюсера
-  const continueGate = continueButtonGate({
-    online,
-    isWaiting,
-    turnRunning: !turnAlreadyEnded(items),
-    continuedInto: !!continuedIntoId,
-  });
-
   // «Продолжить в стандартном окне 200K» под карточкой отказа Window1MUnavailable: снимает
   // суффикс [1m] с чата. Возврат { ok: false, error } при 400/404 — карточка показывает
   // серверный текст под кнопкой (не молчит). request() бросает Error с прикреплёнными
@@ -2157,7 +2073,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
       onBranch={onBranchForItem}
-      onContinue={continueGate && i === lastAssistantIdx ? openContinue : undefined}
       availableChatIds={availableChatIds}
       taskPlan={batchByIndex.get(i)}
       isCurrentPlan={i === lastPlanIndex}
@@ -2202,7 +2117,7 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, handleBranch, branchAvailable, lastAssistantIdx, continueGate, openContinue, handleDropWindow1M, branchAnchors, branchAnchorText, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, handleBranch, branchAvailable, handleDropWindow1M, branchAnchors, branchAnchorText, batchByIndex, lastPlanIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta, availableChatIds,
@@ -2925,10 +2840,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           )
         )}
 
-        {continuedFromId && (
-          <ContinuationBanner kind="from" name={continuedFromName} onOpen={() => { void openChatById(continuedFromId); }} />
-        )}
-
         {/* Окно рендера: якорь авто-догрузки и кнопка «Показать предыдущие» —
             видны, только пока сверху ленты остаются скрытые узлы */}
         {hidden > 0 && (
@@ -3102,10 +3013,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
           );
         })()}
 
-        {continuedIntoId && (
-          <ContinuationBanner kind="into" onOpen={() => { void openChatById(continuedIntoId); }} />
-        )}
-
         <div ref={bottomRef} />
       </div></div>
       </div>
@@ -3188,16 +3095,10 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             />
           )}
           {/* Строка контекста над композером: ветка, «С чем», что подключено (ADR-023).
-              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать.
-              Подсказка «Продолжить в новом чате» (вариант C) — тонкой полосой внутри строки,
-              над полем: строка снова прилегает к карточке, а не висит в воздухе */}
+              Офлайн её нет: композер — одна заглушка, и губе не к чему прилегать. */}
           {!embedded && online && (
             <ContextRow session={session} project={project ?? null} turnTree={turnTree} isMobile={isMobile === true}
               onCommitOwn={handleCommitOwn} onCommitAll={handleCommitAll}
-              notice={showContinueHint
-                ? <ContinueHint tokens={ctxEstimate.tokens!} isMobile={isMobile === true} onOpen={openContinue}
-                    onSnooze={() => setHintSnoozedAt(ctxEstimate.tokens)} />
-                : undefined}
             />
           )}
           {/* Подъём композера над лентой даёт сама белая карточка (Composer), а не эта
@@ -3211,7 +3112,6 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
             style={{ display: 'none' }}
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) void handleComposerFiles(fs); }}
           />
-          {continueOpen && <ContinueChatDialog onConfirm={handleContinue} onClose={() => setContinueOpen(false)} />}
           <Composer
             // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
             // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,

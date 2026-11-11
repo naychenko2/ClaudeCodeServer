@@ -332,7 +332,11 @@ public class NotesRecallReadsTests : IDisposable
         return full;
     }
 
-    private string DocIdOf(string title) => _index.Indexed.First(i => i.Title == title).DocId;
+    // Имя документа вики — «заголовок · префикс хеша версии» (дефект 0b4c2164), :notes — заголовок.
+    private static bool TitleMatches(string name, string title) =>
+        name == title || name.StartsWith(title + " · ");
+
+    private string DocIdOf(string title) => _index.Indexed.First(i => TitleMatches(i.Title, title)).DocId;
 
     private string DatasetIdOf(string suffix) =>
         _index.Datasets.First(d => d.Name.EndsWith(suffix, StringComparison.Ordinal)).Id;

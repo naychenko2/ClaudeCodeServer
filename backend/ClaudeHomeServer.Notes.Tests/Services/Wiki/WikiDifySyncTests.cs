@@ -96,11 +96,18 @@ public class WikiDifySyncTests : IDisposable
         wikiDs.Should().NotBeNull("датасет вики создаётся тем же механизмом");
 
         // Страница и карточка источника — в :wiki, обе с метаданной раздела (ключ из
-        // WikiSections.Parse — тот же, что у видимости).
+        // WikiSections.Parse — тот же, что у видимости). Имя документа вики — «заголовок ·
+        // префикс хеша версии» (дефект 0b4c2164): Dify переиспользует документ по занятому
+        // имени, голое имя заголовка превращало правку страницы в удаление её документа.
         var inWiki = _dify.IndexedDocs.Where(d => d.DatasetId == wikiDs).ToList();
-        inWiki.Select(d => d.Name).Should().BeEquivalentTo("Знание", "Карточка");
-        foreach (var d in inWiki) d.Meta.Should().ContainKey("wiki_section");
-        foreach (var d in inWiki) d.Meta["wiki_section"].Should().Be("projects/" + _projectId);
+        inWiki.Should().HaveCount(2);
+        foreach (var title in new[] { "Знание", "Карточка" })
+        {
+            var doc = inWiki.Single(d => TitleMatches(d.Name, title));
+            doc.Name.Should().StartWith(title + " · ");
+            doc.Meta.Should().ContainKey("wiki_section");
+            doc.Meta["wiki_section"].Should().Be("projects/" + _projectId);
+        }
 
         // :notes — только личная заметка: ни одной страницы вики в датасете заметок.
         _dify.IndexedDocs.Where(d => d.DatasetId == notesDs).Select(d => d.Name)
@@ -252,7 +259,7 @@ public class WikiDifySyncTests : IDisposable
         await _sut.SyncAllAsync(_userId);
 
         var wikiDs = _dify.DatasetIdOf(_username + ":wiki")!;
-        var second = _dify.IndexedDocs.Single(d => d.Name == "Вторая");
+        var second = _dify.IndexedDocs.Single(d => TitleMatches(d.Name, "Вторая"));
         second.DatasetId.Should().Be(wikiDs);
         second.Meta.Should().ContainKey("wiki_section");
         second.Meta["wiki_section"].Should().Be(WikiSections.Common);
@@ -345,6 +352,58 @@ public class WikiDifySyncTests : IDisposable
         await Assert.ThrowsAsync<HttpRequestException>(() => _sut.SyncAllAsync(_userId));
     }
 
+    // ─── 10. Правка текста страницы: ровно один документ, реестр на нём (дефект 0b4c2164) ──
+    //     Dify create_by_text с занятым именем возвращает id существующего; при имени
+    //     «заголовок» порядок «создать → удалить старый» удалял единственный документ
+    //     страницы (созданный «новый» — он же старый). Имя уникально на версию — не сходится.
+
+    [Fact]
+    public async Task Синк_ПравкаТекстаСтраницы_ВДатасетеРовноОдинДокумент_РеестрНаНегоУказывает()
+    {
+        await SeedWikiAsync();
+        await _sut.SyncAllAsync(_userId);
+        var oldDocId = _dify.DocIdOf("Знание")!;
+
+        (await _keeper.WritePageAsync(_userId, "projects/" + _projectId, $"Проекты/{_projectId}/Знание.md",
+            "---\ntype: topic\n---\n# Знание\n\nНовый текст страницы.\n")).Status.Should().Be(WikiOpStatus.Applied);
+        await _sut.SyncAllAsync(_userId);
+
+        // В датасете — ровно один документ страницы: новый создан, старый удалён.
+        var docs = DocsOfTitleInWiki("Знание");
+        docs.Should().HaveCount(1, "правка создаёт новый документ и удаляет старый, а не переиспользует его по имени");
+        docs[0].Meta["wiki_section"].Should().Be("projects/" + _projectId);
+        _dify.DeletedPaths.Should().Contain(p => p.EndsWith("/documents/" + oldDocId));
+
+        // Реестр указывает на существующий документ (тот самый, живой в датасете).
+        var liveId = _dify.DocIdOf("Знание")!;
+        liveId.Should().NotBe(oldDocId);
+        RegistryWikiDocs(ReadRegistry()).Should().Contain(e => e.DocId == liveId)
+            .And.NotContain(e => e.DocId == oldDocId);
+    }
+
+    // ─── 11. Перенос страницы в другой раздел: ровно один документ с текущим разделом ──
+    //     Тот же дефект на пути переезда (дефект 0b4c2164): заголовок тот же, имя занято.
+
+    [Fact]
+    public async Task Синк_ПереносСтраницыВДругойРаздел_РовноОдинДокумент_СТекущимРазделом()
+    {
+        await SeedWikiAsync();
+        await _sut.SyncAllAsync(_userId);
+
+        File.Delete(Path.Combine(WikiPaths.Pages(_dir, _userId), "Проекты", _projectId, "Знание.md"));
+        _notes.Invalidate(_userId);
+        (await _keeper.WritePageAsync(_userId, WikiSections.Common, "Общее/Знание.md",
+            "---\ntype: topic\n---\n# Знание\n\nТекст страницы.\n")).Status.Should().Be(WikiOpStatus.Applied);
+        await _sut.SyncAllAsync(_userId);
+
+        var docs = DocsOfTitleInWiki("Знание");
+        docs.Should().HaveCount(1, "переезд не должен оставлять старый документ ни выбивать страницу из индекса");
+        docs[0].Meta["wiki_section"].Should().Be(WikiSections.Common);
+
+        var liveId = _dify.DocIdOf("Знание")!;
+        RegistryWikiDocs(ReadRegistry()).Should().Contain(e => e.DocId == liveId);
+    }
+
     // Реестр на диске (notes-knowledge.json): { userId: { Docs: { id: { DocId, Hash } },
     // WikiDocs: … } } — имена свойств как в Entry/DocRef (JsonFileStore.Save без опций).
     private JsonDocument ReadRegistry() =>
@@ -360,9 +419,22 @@ public class WikiDifySyncTests : IDisposable
             .Select(p => p.Value.GetProperty("DocId").GetString()!)
             .ToList();
 
-    private int CountCreateCalls(string name) => _dify.Calls.Count(c =>
+    // Имя документа вики — «{заголовок} · {префикс хеша версии}» (дефект 0b4c2164), имя :notes —
+    // заголовок точно. Предикат «документ этого заголовка» общий: точное имя или «заголовок · ».
+    private static bool TitleMatches(string? name, string title) =>
+        name == title || (name is not null && name.StartsWith(title + " · "));
+
+    private int CountCreateCalls(string title) => _dify.Calls.Count(c =>
         c.Method == "POST" && c.Path.Contains("/document/create_by_text") &&
-        c.Body is not null && JsonDocument.Parse(c.Body).RootElement.GetProperty("name").GetString() == name);
+        c.Body is not null && TitleMatches(JsonDocument.Parse(c.Body).RootElement.GetProperty("name").GetString()!, title));
+
+    // Документов этого заголовка в датасете вики (после полного прохода — ровно один,
+    // tests 10–11: правка/перенос не должен ни оставлять старый, ни выбивать страницу).
+    private List<(string DatasetId, string Name, Dictionary<string, string> Meta)> DocsOfTitleInWiki(string title)
+    {
+        var wikiDs = _dify.DatasetIdOf(_username + ":wiki")!;
+        return _dify.IndexedDocs.Where(d => d.DatasetId == wikiDs && TitleMatches(d.Name, title)).ToList();
+    }
 
     // ─── Подменённый Dify ─────────────────────────────────────────────────────
 
@@ -392,7 +464,7 @@ public class WikiDifySyncTests : IDisposable
 
         public IReadOnlyList<(string Method, string Path, string? Body)> Calls => _calls;
         public Dictionary<string, string> MetaOf(string docId) => _docMeta.GetValueOrDefault(docId) ?? [];
-        public string? DocIdOf(string name) => _docs.Where(d => d.Name == name).Select(d => d.DocId).LastOrDefault();
+        public string? DocIdOf(string title) => _docs.Where(d => TitleMatches(d.Name, title)).Select(d => d.DocId).LastOrDefault();
 
         public IReadOnlyList<(string DatasetId, string Name, Dictionary<string, string> Meta)> IndexedDocs
         {
@@ -438,9 +510,22 @@ public class WikiDifySyncTests : IDisposable
                 var name = JsonDocument.Parse(body!).RootElement.GetProperty("name").GetString()!;
                 if (FailCreateFor.Contains(name))
                     return new HttpResponseMessage(HttpStatusCode.InternalServerError); // без записи в _docs
+                // Поведение Dify (дефект 0b4c2164): занятое имя в том же датасете —
+                // create_by_text не создаёт новый документ, а возвращает id существующего.
+                var existing = _docs.FirstOrDefault(d => d.DatasetId == DatasetOf(path) && d.Name == name);
+                if (existing.DocId is not null)
+                    return Json($"{{\"document\":{{\"id\":\"{existing.DocId}\",\"name\":\"doc\",\"indexing_status\":\"completed\"}}}}");
                 var docId = "doc-" + (++_docsSeq);
                 _docs.Add((DatasetOf(path), docId, name));
                 return Json($"{{\"document\":{{\"id\":\"{docId}\",\"name\":\"doc\",\"indexing_status\":\"completed\"}}}}");
+            }
+            if (request.Method == HttpMethod.Delete && path.Contains("/documents/"))
+            {
+                // Удалённый документ освобождает имя: следующий create с тем же именем создаёт
+                // новый (иначе фейк возвращал бы id уже удалённого).
+                var docId = path.Split('/').Last();
+                _docs.RemoveAll(d => d.DocId == docId);
+                return new HttpResponseMessage(HttpStatusCode.NoContent);
             }
             if (request.Method == HttpMethod.Post && path.EndsWith("/documents/metadata"))
             {
@@ -453,8 +538,9 @@ public class WikiDifySyncTests : IDisposable
                             items.Add((item.GetProperty("name").GetString()!, v.GetString()!));
                     ops.Add((op.GetProperty("document_id").GetString()!, items));
                 }
-                // Отказ назначения — по имени документа (имя — из журнала создания по document_id)
-                if (ops.Any(o => FailAssignFor.Contains(_docs.FirstOrDefault(d => d.DocId == o.DocId).Name)))
+                // Отказ назначения — по заголовку (имя — из журнала создания по document_id;
+                // имя вики — «заголовок · префикс хеша», предикат общий с поиском документов)
+                if (ops.Any(o => FailAssignFor.Any(t => TitleMatches(_docs.FirstOrDefault(d => d.DocId == o.DocId).Name, t))))
                     return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                 foreach (var (docId, items) in ops)
                 {

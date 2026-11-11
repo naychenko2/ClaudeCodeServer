@@ -215,11 +215,18 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                         // назначения IndexFileByTextAsync удалит новый документ и бросает —
                         // порядок «удалить старый → создать новый» оставил бы страницу вообще
                         // без документа в индексе, пока назначение отказывает.
+                        // Имя уникально на версию страницы (дефект 0b4c2164): при занятом имени
+                        // create_by_text не создаёт новый документ, а возвращает id существующего —
+                        // «имя = заголовок» превращает порядок «создать → удалить» в удаление
+                        // единственного документа страницы (правка текста выбивала её из индекса).
+                        // Префикс хеша версии — часть имени; ветка :notes этим не касается.
                         var info = await _knowledge.IndexFileByTextAsync(
-                            entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
+                            entry.WikiDatasetId!, $"{detail.Title} · {hash[..8]}", detail.Content, detail.Tags.ToList(),
                             metadata: new Dictionary<string, string> { ["wiki_section"] = section });
 
-                        if (wdoc is not null)
+                        // Страховка на случай совпадения имени: если create вернул тот же документ,
+                        // что уже в реестре, — удалять его нельзя: страница осталась бы без документа.
+                        if (wdoc is not null && info.Id != wdoc.DocId)
                             try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
                             catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
 

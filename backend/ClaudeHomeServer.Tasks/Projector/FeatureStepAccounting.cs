@@ -454,7 +454,10 @@ internal static class FeatureStepAccounting
             if (!followUp)
             {
                 laneByKey[key] = lane;
-                if (loops > 0) returnedKeys.Add(key);
+                // Возврат шага линии — только настоящий: у цепочки есть виток с вердиктом returned.
+                // «Принято с замечаниями» (loops их считает) работу к исполнителю не возвращал —
+                // в счётчик линии не входит; ось «сколько раз возвращали» (Loops) остаётся как есть.
+                if (featureRounds.Any(r => r.Verdict == TaskVerdicts.Returned)) returnedKeys.Add(key);
             }
 
             // Длительность: от старта первой задачи до закрытия последней; у идущей — до сейчас.

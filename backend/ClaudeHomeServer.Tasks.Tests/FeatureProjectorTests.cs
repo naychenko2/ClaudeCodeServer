@@ -460,8 +460,9 @@ public class FeatureProjectorTests
         run.ReturnsBySource.Final.Open.Should().Be(0);
     }
 
-    // Одна база возвратов: Count источника — витки (задача-ревью/проверка/финал несёт ровно один
-    // вердикт), сумма по источникам обязана равняться verdicts.loops (Ш6).
+    // Одна база возвратов: Count источника — витки returned (задача-ревью/проверка/финал несёт ровно
+    // один вердикт), сумма Count по источникам = verdicts.returned, сумма Count+Remarks = виткам
+    // (verdicts.loops, Ш6). Фикстура без замечаний: обе суммы совпадают числами.
     [Fact]
     public void Build_ВозвратыПоИсточникам_СуммаРавнаВиткам()
     {
@@ -469,13 +470,15 @@ public class FeatureProjectorTests
         var run = FeatureProjector.Build(epic, tasks);
 
         var rb = run.ReturnsBySource;
-        (rb.Review.Count + rb.Qa.Count + rb.Final.Count).Should().Be(run.Verdicts.Loops);
+        (rb.Review.Count + rb.Qa.Count + rb.Final.Count).Should().Be(run.Verdicts.Returned);
+        (rb.Review.Count + rb.Qa.Count + rb.Final.Count + rb.Review.Remarks + rb.Qa.Remarks + rb.Final.Remarks)
+            .Should().Be(run.Verdicts.Loops);
         run.Verdicts.Loops.Should().BeGreaterThan(0);
     }
 
-    // accepted_with_remarks — тоже виток: мутация IsReturn без него обязана покраснеть.
+    // accepted_with_remarks — виток (Loops), но не возврат: в Count его нет, он в Remarks.
     [Fact]
-    public void Build_ВозвратыПоИсточникам_AcceptedWithRemarksСчитаетсяВитком()
+    public void Build_ВозвратыПоИсточникам_AcceptedWithRemarks_ВитокНоНеВозврат()
     {
         const string epicId = "epic-awr";
         var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
@@ -489,8 +492,9 @@ public class FeatureProjectorTests
 
         var run = FeatureProjector.Build(epic, [epic, step, review]);
 
-        run.ReturnsBySource.Review.Count.Should().Be(1, "accepted_with_remarks — виток-возврат");
-        run.Verdicts.Loops.Should().Be(1);
+        run.ReturnsBySource.Review.Count.Should().Be(0, "accepted_with_remarks — не возврат");
+        run.ReturnsBySource.Review.Remarks.Should().Be(1, "он в отдельной оси замечаний");
+        run.Verdicts.Loops.Should().Be(1, "ось «сколько раз возвращали» замечания считает по-прежнему");
     }
 
     // Мутация (а): связь шага с ревью идёт ТОЛЬКО через пересечение ReviewOf.

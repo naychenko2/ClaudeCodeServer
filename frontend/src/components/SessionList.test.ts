@@ -312,7 +312,9 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
 
 // === FS-FL2b: режим «Фичи» — секции вместо фильтра, «Закрытые · N ›» свёрнуты ===
 // Раскладку даёт featureListSections (по kind, FS-FL2a): «Ждут тебя»/«Стоят» → «В работе» →
-// «Закрытые» (merged и closed). Фронт ничего не отбрасывает; сохранённый featureKinds не читается.
+// «Закрытые» (closed). merged — в «В работе» (FS-AC3a, решение Андрея 11.11): после мержа
+// фича открыта, пока человек сам не нажмёт «Закрыть». Фронт ничего не отбрасывает;
+// сохранённый featureKinds не читается.
 describe('SessionList: FS-FL2b режим фич секциями', () => {
   const feat = (id: string, kind: FeatureKind, title: string, projectId = 'p1') => ({
     featureId: id, title, projectId,
@@ -385,16 +387,17 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
     return null;
   }
 
-  it('секции по порядку: «Ждут тебя» → «В работе»; «Закрытые · 2 ›» свёрнуты, их фич на экране нет', async () => {
+  it('секции по порядку: «Ждут тебя» → «В работе»; «Закрытые · 1 ›» свёрнуты, их фич на экране нет', async () => {
     const { container } = await renderFeatures();
     const titles = allTestIds(container, 'feature-section-title').map(textOf);
     expect(titles, 'подписи секций или их порядок').toEqual(['Ждут тебя', 'В работе']);
     for (const t of ['FICH_W', 'FICH_S', 'FICH_Q']) expect(countTitle(container, t), `${t} должна быть один раз`).toBe(1);
+    // FS-AC3a: merged — в «В работе», видна без раскрытия
+    expect(countTitle(container, 'FICH_G'), 'merged видна в «В работе»').toBe(1);
     const toggle = findTestId(container, 'closed-section-toggle');
     expect(toggle, 'строки «Закрытые · N ›» нет').not.toBeNull();
-    expect(textOf(toggle!), 'число в строке «Закрытые»').toContain('2');
+    expect(textOf(toggle!), 'число в строке «Закрытые»').toContain('1');
     expect(toggle!._attrs['aria-expanded']).toBe('false');
-    expect(countTitle(container, 'FICH_G'), 'merged видна в свёрнутой секции').toBe(0);
     expect(countTitle(container, 'FICH_C'), 'closed видна в свёрнутой секции').toBe(0);
   });
 

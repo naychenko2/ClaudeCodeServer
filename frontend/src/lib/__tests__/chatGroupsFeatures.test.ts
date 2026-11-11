@@ -619,11 +619,13 @@ describe('Ф-1.3: сторож — featureMatchesKinds/featureKindCounts не ч
 // Чистая функция featureListSections: делит ТОЛЬКО по kind из индекса (записка v2 §6,
 // R1, R3). Инвариант: каждая фича входа ровно в одной секции, ни одна не теряется;
 // пустые секции не возвращаются; порядок секций attention → active → closed.
+// FS-AC3a (решение Андрея 11.11): merged — «В работе», а не «Закрытые»: после мержа
+// фича остаётся «смержена», пока человек сам не нажмёт «Закрыть».
 
 describe('FS-FL2a: featureListSections — деление по kind (таблица «Пути к инварианту»)', () => {
   const expectedKey = (k: FeatureKind): 'attention' | 'active' | 'closed' =>
     k === 'waiting_you' || k === 'error' ? 'attention'
-      : k === 'merged' || k === 'closed' ? 'closed'
+      : k === 'closed' ? 'closed'
         : 'active';
 
   it('каждое из 9 значений kind → своя секция, одна фича входа', () => {
@@ -639,7 +641,8 @@ describe('FS-FL2a: featureListSections — деление по kind (табли�
     expect(featureListSections([withKind('W', 'waiting_you')])[0].title).toBe('Ждут тебя');
     expect(featureListSections([withKind('E', 'error')])[0].title).toBe('Стоят');
     expect(featureListSections([withKind('R', 'running')])[0].title).toBe('В работе');
-    expect(featureListSections([withKind('M', 'merged')])[0].title).toBe('Закрытые');
+    // FS-AC3a: merged — «В работе» (после мержа фича открыта, пока её не закрыли)
+    expect(featureListSections([withKind('M', 'merged')])[0].title).toBe('В работе');
   });
 
   it('kind=null (старый индекс) и неизвестный kind → active, фича не теряется', () => {
@@ -689,9 +692,10 @@ describe('FS-FL2a: порядок секций и внутри секций', ()
     // waiting_you нет → заголовок attention «Стоят»
     expect(secs[0].title).toBe('Стоят');
     expect(secs[0].features.map(f => f.featureId)).toEqual(['e1']);
-    // active и closed: порядок входного массива сохранён (бэк уже упорядочил)
-    expect(secs[1].features.map(f => f.featureId)).toEqual(['a1', 'q1']);
-    expect(secs[2].features.map(f => f.featureId)).toEqual(['c1', 'm1']);
+    // active и closed: порядок входного массива сохранён (бэк уже упорядочил);
+    // merged — в active рядом со своей позицией входа (FS-AC3a)
+    expect(secs[1].features.map(f => f.featureId)).toEqual(['a1', 'm1', 'q1']);
+    expect(secs[2].features.map(f => f.featureId)).toEqual(['c1']);
   });
 
   it('внутри attention: waiting_you раньше error, несмотря на порядок входа', () => {

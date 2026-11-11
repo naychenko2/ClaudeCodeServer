@@ -1070,8 +1070,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const groupById = new Map<string, FeatureChatGroup>();
     for (const g of featureGroups) if (g.feature) groupById.set(g.feature.featureId, g);
     const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
-    // Секции с группами: фича без группы (нет чатов) не рисуется и в счёт не идёт
-    const sections = featureListSections(allFeatures)
+    // Секции с группами: фича без группы (нет чатов) не рисуется и в счёт не идёт.
+    // rawSections — деление ДО фильтра по группам: по нему же считается «все закрыты»
+    // (замечание ревью FL2b): единственный источник «закрытости» — таблица секций.
+    const rawSections = featureListSections(allFeatures);
+    const sections = rawSections
       .map(sec => ({ ...sec, groups: sec.features.map(f => groupById.get(f.featureId)).filter((g): g is FeatureChatGroup => !!g) }))
       .filter(sec => sec.groups.length > 0);
 
@@ -1103,9 +1106,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       .pop();
     const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
-    // Спокойное состояние: фичи ЕСТЬ, но все они закрытые (по kind). noFeatures отдельно:
+    // Спокойное состояние: фичи ЕСТЬ, но все они в секции closed — по тому же источнику,
+    // что и секции (rawSections, а не литерал kind: замечание ревью FL2b; merged после
+    // FS-AC3a — «В работе», и она не даёт спокойного состояния). noFeatures отдельно:
     // там свой EmptyState «Фич пока нет», а не «Открытых фич нет».
-    const allClosed = !noFeatures && allFeatures.every(f => f.kind === 'closed');
+    const allClosed = !noFeatures && rawSections.every(s => s.key === 'closed');
     const calm = allClosed && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,

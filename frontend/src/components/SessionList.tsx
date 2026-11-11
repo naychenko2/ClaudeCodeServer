@@ -1095,11 +1095,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     );
 
     // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая
-    // фича (по kind, не по bucket). Сортируем по времени (Date), а не строкой: выбор
+    // фича — из секции «closed» деления featureListSections, того же источника, что секции
+    // и allClosed (FS-T12, минор ревью R-AC3a: отдельный литерал `kind === 'closed'` здесь
+    // больше не второй источник истины). Сортируем по времени (Date), а не строкой: выбор
     // фичи не зависит от пояса, а дату показываем ЛОКАЛЬНО (dateOnly, как везде в
     // режиме фичи) — в МСК 23:30Z это уже следующий день.
-    const lastMerged = allFeatures
-      .filter(f => f.kind === 'closed')
+    const closedSection = rawSections.find(s => s.key === 'closed');
+    const lastMerged = (closedSection?.features ?? [])
       .map(f => f.summary?.mergedAt)
       .filter((d): d is string => !!d)
       .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())

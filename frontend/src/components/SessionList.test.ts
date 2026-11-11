@@ -402,7 +402,9 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
   });
 
   // Инвариант: после раскрытия каждая из 5 фич — ровно один раз; повторный клик сворачивает.
-  // Мутация: в closed-ветке не рисовать sec.groups при closedExpanded → тест красный.
+  // Мутация 1: в closed-ветке не рисовать sec.groups при closedExpanded → тест красный.
+  // Мутация 2 (FS-T12, минор ревью R-AC3a): вернуть merged в секцию «Закрытые»
+  // (FEATURE_LIST_SECTION_OF_KIND в chatGroups.ts) → краснеет assert про FICH_G после сворачивания.
   it('клик по «Закрытые» раскрывает: все пять фич ровно по разу; повторный клик сворачивает', async () => {
     const { container } = await renderFeatures();
     await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
@@ -412,6 +414,9 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
     }
     await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
     expect(countTitle(container, 'FICH_C'), 'после повторного клика закрытая осталась').toBe(0);
+    // FS-AC3a: merged не относится к «Закрытым» — она остаётся видимой и после сворачивания
+    // закрытых (FS-T12).
+    expect(countTitle(container, 'FICH_G'), 'смерженная пропала после сворачивания').toBe(1);
     expect(countTitle(container, 'FICH_W'), 'открытые пропали').toBe(1);
   });
 

@@ -1,12 +1,14 @@
-// Секция «Объём» вкладки «Разбор» (FS-FR2; записка docs/mockups/feature-page-simplify-v4-clickable.md
-// §5 «2. Объём», в макете — секция rz-vol): раскладка первого экрана «N из M» (карточку
-// FeatureVolumeCard здесь не повторяю): строки stepProgress — только у открытой (макет ov.vol
+// Секция «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv; записка
+// docs/mockups/feature-page-simplify-v4-clickable.md §5 «2. Объём», в макете — секция rz-vol):
+// раскладка первого экрана «N из M» (карточку FeatureVolumeCard здесь не повторяю): строки
+// stepProgress и строки плана (исходный знаменатель, расширение, доработки после мержа —
+// решение Андрея 11.11 «новые задачи в почти готовой фиче») — только у открытой (макет ov.vol
 // :513: у закрытой группа «Всего шагов/Приняты…» не рисуется, иначе рядом «Всего шагов 44»
-// и «Шагов 12» — два разных числа), строки по линиям, медиана шага по проекту
-// и — только у закрытой — итоги закрытой. Все числа — из run/stats как есть,
-// своё фронт не считает («знаменатель менялся» и «медиана этой фичи» — нужно от бэка, §5,
-// их нет). Раскладка целиком через ReviewKv (FS-FR0): на 360 те же две колонки
-// «ключ — значение», переполнения нет.
+// и «Шагов 12» — два разных числа), строки по линиям, медиана шага по проекту, медиана шага
+// этой фичи и смены знаменателя (величины 5 и 8 — бэк их отдаёт: FS-M56/FS-M478; в карточке
+// FS-FR2 они стояли «вне шага», здесь — в секции) и — только у закрытой — итоги закрытой.
+// Все числа — из run/stats как есть, своё фронт не считает. Раскладка целиком через ReviewKv
+// (FS-FR0): на 360 те же две колонки «ключ — значение», переполнения нет.
 
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
 import { formatDuration } from './FeatureStatsBits';
@@ -67,6 +69,27 @@ export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
       { label: 'Уже в master', value: sp.inMaster ?? null },
       { label: 'Состояние плана', value: PLAN_STATE_LABEL[sp.planState] },
     );
+
+    // 1a. План и доработки (решение Андрея 11.11 «новые задачи в почти готовой фиче»;
+    // те же условия, что в FeatureVolumeCard.tsx:40,43 — там одна строка на всё, здесь три
+    // отдельные). «Исходный план» — знаменатель на момент первой оценки: baselineTotal null
+    // или отсутствует (не зафиксирована, старый ответ) — строки нет. «Расширение» — только
+    // если план реально рос (total > baselineTotal): при равном знаменателе «+0» — ложь.
+    // «Доработки после мержа» — только при followUpTotal > 0 (вне total, отдельная строка).
+    const grew = sp.baselineTotal != null && sp.total > sp.baselineTotal;
+    rows.push(
+      {
+        label: 'Исходный план',
+        value: sp.baselineTotal != null
+          ? `${sp.baselineTotal} ${plural(sp.baselineTotal, 'шаг', 'шага', 'шагов')}`
+          : null,
+      },
+      { label: 'Расширение', value: grew ? `+${sp.total - (sp.baselineTotal ?? 0)}` : null },
+      {
+        label: 'Доработки после мержа',
+        value: (sp.followUpTotal ?? 0) > 0 ? `${sp.followUpAccepted ?? 0} из ${sp.followUpTotal}` : null,
+      },
+    );
   }
 
   // 2. Линии (макет .lanes): одна строка на линию — «{линия}: N шагов · принято A ·
@@ -84,6 +107,16 @@ export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
   // меньше трёх, B2a) — значения нет, строки нет.
   const median = stats.typical?.stepMinutes?.median;
   rows.push({ label: 'Медиана шага по проекту', value: median != null ? formatDuration(median) : null });
+
+  // 3a. Медиана шага ЭТОЙ фичи (величина 5, stats.stepMedianMinutes: null — принятых
+  // цепочек нет; аддитивное поле, старый ответ его не несёт) — строки нет. Смены знаменателя
+  // (величина 8, estimateDrift.denominatorChanges): строка есть, только если estimateDrift
+  // есть — 0 здесь значение («знаменатель не менялся»), а не «нет данных».
+  const featureMedian = stats.stepMedianMinutes;
+  rows.push(
+    { label: 'Медиана шага этой фичи', value: featureMedian != null ? formatDuration(featureMedian) : null },
+    { label: 'Смены знаменателя', value: stats.estimateDrift ? stats.estimateDrift.denominatorChanges : null },
+  );
 
   // 4. Итоги закрытой — только у закрытой. «Открытых шагов» здесь нет: поля summary.stepsOpen
   // в контракте нет (записка §5) — поля нет, строки тоже.

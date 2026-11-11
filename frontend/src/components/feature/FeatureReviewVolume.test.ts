@@ -1,8 +1,10 @@
-// Тесты секции «Объём» вкладки «Разбор» (FS-FR2): строки stepProgress (7 числовых +
-// «Состояние плана») — только у открытой, строки по линиям, медиана шага по проекту и
-// итоги закрытой — только у закрытой. Порядок пар «ключ — значение» проверяется целиком по
-// html: (у открытой) шаги → линии → медиана; (у закрытой) линии → медиана → итоги.
-// Окружение node: renderToStaticMarkup.
+// Тесты секции «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv): строки stepProgress (7 числовых +
+// «Состояние плана») и строки плана («Исходный план», «Расширение», «Доработки после мержа») —
+// только у открытой, строки по линиям, медиана шага по проекту, медиана шага этой фичи и
+// смены знаменателя, итоги закрытой — только у закрытой. Порядок пар «ключ — значение»
+// проверяется
+// целиком по html: (у открытой) шаги → план → линии → медиана по проекту → медиана фичи →
+// смены знаменателя; (у закрытой) линии → медианы → итоги. Окружение node: renderToStaticMarkup.
 //
 // Мутации (краснеющие тесты — по фактическим прогонам в копии дерева, 10.11):
 // (1) `if (sp && !closed)` → `if (sp)` (группа шагов рисуется и у закрытой) — краснеет ровно
@@ -25,7 +27,7 @@ import { FeatureReviewVolume } from './FeatureReviewVolume';
 import { formatDuration } from './FeatureStatsBits';
 import type { StepProgress } from '../../lib/featureProgress';
 import type { FeatureRun, FeatureTask, FeatureMergeMark } from '../../types/featureRun';
-import type { FeatureStats, FeatureTimeline, TypicalPercentiles } from '../../types/featureStats';
+import type { FeatureStats, FeatureTimeline, TypicalPercentiles, FeatureEstimateDrift } from '../../types/featureStats';
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   return {
@@ -82,6 +84,13 @@ function mkTypical(over: Partial<TypicalPercentiles> = {}): TypicalPercentiles {
   return { median: 70, p25: 40, p75: 90, ...over };
 }
 
+function mkDrift(over: Partial<FeatureEstimateDrift> = {}): FeatureEstimateDrift {
+  return {
+    initialEtaMinutes: 60, firstEtaMinutes: 60, currentEtaMinutes: 90, shiftMinutes: 30,
+    denominatorChanges: 2, accuracy: null, ...over,
+  };
+}
+
 const html = (run: FeatureRun, stats: FeatureStats = mkStats()): string =>
   renderToStaticMarkup(createElement(FeatureReviewVolume, { run, stats }));
 
@@ -128,6 +137,66 @@ describe('шаги (c1)', () => {
     const h = html(mkRun());
     expect(h).not.toContain('Всего шагов');
     expect(kvPairs(h).length).toBe(0);
+  });
+});
+
+// Фикстура c1: план вырос с 12 до 15, после мержа 1 доработка из 3 принята.
+const PLAN_GROWN = mkProgress({
+  total: 15, accepted: 10, review: 2, work: 2, notCreated: 1,
+  baselineTotal: 12, followUpTotal: 3, followUpAccepted: 1,
+});
+
+describe('план и доработки (c1)', () => {
+  it('рост знаменателя и доработки: «Исходный план» 12 шагов, «Расширение» +3, «Доработки» 1 из 3 — после строк шагов', () => {
+    const pairs = kvPairs(html(mkRun({ stepProgress: PLAN_GROWN })));
+    expect(pairs).toEqual([
+      ['Всего шагов', '15'],
+      ['Приняты', '10'],
+      ['На ревью', '2'],
+      ['В работе', '2'],
+      ['Не заведены', '1'],
+      ['Сняты', '3'],
+      ['Уже в master', '20'],
+      ['Состояние плана', 'частично'],
+      ['Исходный план', '12 шагов'],
+      ['Расширение', '+3'],
+      ['Доработки после мержа', '1 из 3'],
+    ]);
+  });
+
+  it('baselineTotal null или нет (не зафиксирована, старый ответ) и followUpTotal 0 — этих строк нет', () => {
+    for (const p of [
+      mkProgress({ total: 15, accepted: 10, review: 2, work: 2, notCreated: 1, baselineTotal: null, followUpTotal: 0 }),
+      mkProgress({ total: 15, accepted: 10, review: 2, work: 2, notCreated: 1 }),
+    ]) {
+      const pairs = kvPairs(html(mkRun({ stepProgress: p })));
+      for (const label of ['Исходный план', 'Расширение', 'Доработки после мержа']) {
+        expect(pairs.some((r) => r[0] === label)).toBe(false);
+      }
+    }
+  });
+
+  it('знаменатель не рос (total == baselineTotal) — «Расширения» нет, «Исходный план» есть', () => {
+    const pairs = kvPairs(html(mkRun({ stepProgress: mkProgress({ baselineTotal: 44, followUpTotal: 0 }) })));
+    expect(pairs).toContainEqual(['Исходный план', '44 шага']);
+    expect(pairs.some((r) => r[0] === 'Расширение')).toBe(false);
+  });
+
+  it('baselineTotal больше total (знаменатель сжимался) — «Расширения» нет (никакого «−N» и «+0»)', () => {
+    const pairs = kvPairs(html(mkRun({ stepProgress: mkProgress({ total: 10, accepted: 6, review: 1, work: 1, notCreated: 2, baselineTotal: 12 }) })));
+    expect(pairs.some((r) => r[0] === 'Расширение')).toBe(false);
+  });
+
+  it('доработки без принятого счётчика: followUpAccepted нет → «0 из N» (0 — значение)', () => {
+    const pairs = kvPairs(html(mkRun({ stepProgress: mkProgress({ followUpTotal: 2 }) })));
+    expect(pairs).toContainEqual(['Доработки после мержа', '0 из 2']);
+  });
+
+  it('закрытая с полными полями плана — строк плана нет (группа stepProgress не рисуется вовсе)', () => {
+    const pairs = kvPairs(html(mkRun({ state: 'closed', stepProgress: PLAN_GROWN })));
+    for (const label of ['Исходный план', 'Расширение', 'Доработки после мержа', 'Всего шагов']) {
+      expect(pairs.some((r) => r[0] === label)).toBe(false);
+    }
   });
 });
 
@@ -182,6 +251,46 @@ describe('медиана шага по проекту', () => {
     expect(html(mkRun(), mkStats())).not.toContain('Медиана шага по проекту');
     const noSteps = mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 0, stepMinutes: null } });
     expect(html(mkRun(), noSteps)).not.toContain('Медиана шага по проекту');
+  });
+});
+
+const TYPICAL_STATS: FeatureStats = mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 4, stepMinutes: mkTypical() } });
+
+describe('медиана этой фичи и смены знаменателя (c2)', () => {
+  it('stepMedianMinutes и estimateDrift: строки через formatDuration и числом — после медианы по проекту', () => {
+    const pairs = kvPairs(html(C1_RUN, mkStats({ typical: TYPICAL_STATS.typical, stepMedianMinutes: 90, estimateDrift: mkDrift() })));
+    expect(pairs).toContainEqual(['Медиана шага этой фичи', formatDuration(90)]); // 1 ч 30 мин
+    expect(pairs).toContainEqual(['Смены знаменателя', '2']);
+    const iProject = pairs.findIndex((p) => p[0] === 'Медиана шага по проекту');
+    const iFeature = pairs.findIndex((p) => p[0] === 'Медиана шага этой фичи');
+    const iDrift = pairs.findIndex((p) => p[0] === 'Смены знаменателя');
+    expect(iProject).toBeGreaterThanOrEqual(0);
+    expect(iProject).toBeLessThan(iFeature);
+    expect(iFeature).toBeLessThan(iDrift);
+  });
+
+  it('полей нет (старый ответ) или stepMedianMinutes null (принятых цепочек нет) — этих строк нет', () => {
+    const h = html(C1_RUN, TYPICAL_STATS);
+    expect(h).not.toContain('Медиана шага этой фичи');
+    expect(h).not.toContain('Смены знаменателя');
+    expect(html(C1_RUN, mkStats({ stepMedianMinutes: null, estimateDrift: null }))).not.toContain('Смены знаменателя');
+  });
+
+  it('estimateDrift есть и denominatorChanges 0 — строка есть со значением «0» (не менялся — факт)', () => {
+    const pairs = kvPairs(html(C1_RUN, mkStats({ estimateDrift: mkDrift({ denominatorChanges: 0 }) })));
+    expect(pairs).toContainEqual(['Смены знаменателя', '0']);
+  });
+
+  it('закрытая: медианы и смены знаменателя — перед итогами закрытой', () => {
+    const closedRun = mkRun({
+      state: 'closed',
+      summary: { mergedAt: '2026-10-30T12:00:00Z', durationMinutes: 200, tasks: 21, steps: 12, loops: 1 },
+    });
+    const pairs = kvPairs(html(closedRun, mkStats({ typical: TYPICAL_STATS.typical, stepMedianMinutes: 90, estimateDrift: mkDrift() })));
+    const iDrift = pairs.findIndex((p) => p[0] === 'Смены знаменателя');
+    const iSteps = pairs.findIndex((p) => p[0] === 'Шагов');
+    expect(iDrift).toBeGreaterThanOrEqual(0);
+    expect(iDrift).toBeLessThan(iSteps);
   });
 });
 

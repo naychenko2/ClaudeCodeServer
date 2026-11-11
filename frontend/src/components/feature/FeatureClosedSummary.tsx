@@ -2,6 +2,9 @@
 // фичи вместо «от тебя» и «Объём | Срок» (макет v2, состояние «Закрыта»).
 // Только рендер: числа берём из run.summary как есть, ничего не пересчитываем.
 // Четвёртой плитки «точность срока» нет — этой величины в контракте нет.
+// У смерженной — подсказка «Закройте фичу, когда доработки не нужны» под строкой
+// итога (FS-AC3b): фича остаётся «смержена», пока человек сам не нажмёт «Закрыть»
+// (FeaturePageHeader); у закрытой без мержа подсказки нет.
 
 import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
@@ -42,16 +45,24 @@ const BIG: CSSProperties = {
 
 const LABEL: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary };
 
-// Строка доработок после мержа: «Доработки: 1 из 3» (FS-FVp); числа без склонений.
-const FOLLOWUP: CSSProperties = { margin: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted };
+// Малые приглушённые строки под итогом: «Доработки: 1 из 3» (FS-FVp; числа без
+// склонений) и подсказка «Закройте…» (FS-AC3b).
+const SUBTLE: CSSProperties = { margin: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted };
+
+// Дата мержа: валидная mergedAt — есть, null/мусор — нет. Тот же критерий задаёт
+// наличие подсказки «Закройте…»: «смержена» обязана значить в компоненте одно и то же.
+function mergedDate(summary: FeatureSummary): Date | null {
+  const merged = summary.mergedAt ? new Date(summary.mergedAt) : null;
+  return merged && !Number.isNaN(merged.getTime()) ? merged : null;
+}
 
 // Строка итога: «Смержена 10 ноября · шла 3 ч 20 мин, обещали ≈ 2 ч»;
 // без даты мержа — «закрыта без мержа · шла …» (текст — CLOSED_NO_MERGE_STATUS).
 function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null | undefined): string {
   const took = `шла ${formatDuration(summary.durationMinutes)}`;
   const promised = initialEtaMinutes != null ? `, обещали ≈ ${formatDuration(initialEtaMinutes)}` : '';
-  const merged = summary.mergedAt ? new Date(summary.mergedAt) : null;
-  if (!merged || Number.isNaN(merged.getTime())) {
+  const merged = mergedDate(summary);
+  if (!merged) {
     const status = CLOSED_NO_MERGE_STATUS;
     return `${status.charAt(0).toUpperCase()}${status.slice(1)} · ${took}${promised}`;
   }
@@ -73,8 +84,11 @@ export function FeatureClosedSummary({
   return (
     <div data-testid="closed-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       <p data-testid="closed-summary-line" style={LINE}>{summaryLine(summary, initialEtaMinutes)}</p>
+      {mergedDate(summary) && (
+        <p data-testid="closed-summary-close-hint" style={SUBTLE}>Закройте фичу, когда доработки не нужны</p>
+      )}
       {followUp && followUp.total > 0 && (
-        <p data-testid="closed-summary-followup" style={FOLLOWUP}>Доработки: {followUp.accepted} из {followUp.total}</p>
+        <p data-testid="closed-summary-followup" style={SUBTLE}>Доработки: {followUp.accepted} из {followUp.total}</p>
       )}
       <div
         data-testid="closed-summary-tiles"

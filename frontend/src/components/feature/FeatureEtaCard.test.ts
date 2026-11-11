@@ -1,12 +1,16 @@
 // Тесты карточки «Срок» (FS-FE): остаток словами, дата и автор оценки (source=note),
 // «по похожим фичам» (source=history), «часы стоят» (wait), «оценка до остановки» (stopped),
 // пустое состояние без оценки, «прошло N», «устарела» и отсутствие полосы времени.
-// Окружение node: разметка — renderToStaticMarkup.
+// Плюс инвариант R-F8: «сейчас» — состояние, привязанное к данным, а не часы рендера
+// (доработка по ревью c77c3985): та же data — те же строки, новая ссылка данных — новое «сейчас».
+// Окружение node: разметка — renderToStaticMarkup; инвариант R-F8 — живой mount (fakeDom),
+// как в FeatureBriefBlock.test.ts:420-450.
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureEtaCard, type FeatureEtaCardProps } from './FeatureEtaCard';
+import { installFakeDom, uninstallFakeDom, mount, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
 import type { FeatureEta } from '../../lib/featurePage';
 
 // iso(-60) — час назад: readyAtText даёт «к ЧЧ:ММ» (тот же путь, что у живой оценки,
@@ -89,5 +93,53 @@ describe('FeatureEtaCard', () => {
   it('мобила: число крупностью FS.xl (18), десктоп — FS.h2 (22)', () => {
     expect(html({ eta: eta(), isMobile: true })).toContain('font-size:18px');
     expect(html({ eta: eta(), isMobile: false })).toContain('font-size:22px');
+  });
+});
+
+// ── Одно «сейчас» на ответ (R-F8, доработка по ревью c77c3985) ──────────────────────────
+// Дата «к HH:ММ» и давность «оценка … N ч назад» считаются от момента, привязанного к данным
+// (state + effect по props, как FeatureBriefBlock.tsx:434-438), а не от Date.now() в рендере:
+// иначе после встраивания (FS-FS) любая перерисовка тех же props пересчитывала бы строки от
+// нового часа — два разных «сейчас» на одном экране.
+
+// «Сейчас» теста — фиксированное системное время; iso(…) при fake timers даёт даты от него.
+const NOW = new Date(2026, 10, 11, 14, 10).getTime();
+
+describe('FeatureEtaCard: одно «сейчас» на ответ (R-F8)', () => {
+  beforeEach(() => { installFakeDom(); vi.useFakeTimers(); vi.setSystemTime(NOW); });
+  afterEach(() => { uninstallFakeDom(); vi.useRealTimers(); });
+
+  // Живой каркас: endsAt час назад и noteAt два часа назад от «сейчас» теста — обе строки
+  // подписи (дата и давность) зависят от nowMs.
+  const liveProps = (): FeatureEtaCardProps => ({
+    eta: eta({ endsAt: iso(-60), source: 'note' }),
+    noteAt: iso(-120), noteByPersonaId: 'gleb', nameOf, isMobile: false,
+  });
+  const caption = (c: ReturnType<typeof mount>['container']): string =>
+    textNodes(findNodeByAttr(c, 'data-testid', 'eta-caption')!).join('');
+
+  it('перерисовка тех же props не сдвигает строки карточки: «сейчас» не из часов рендера', () => {
+    const props = liveProps();
+    const { root, container } = mount(createElement(FeatureEtaCard, props));
+    const cap1 = caption(container);
+    expect(cap1, 'при «сейчас» 14:10: дата «к ЧЧ:ММ» и «2 ч назад»').toMatch(DATE_RE);
+    expect(cap1).toContain('оценка Глеба 2 ч назад');
+    // +10 часов: при часах в рендере давность стала бы «12 ч назад» — сдвиг обязан быть таким,
+    // чтобы он менял строку (сдвиг на 10 мин оставил бы её той же и при поломке).
+    vi.setSystemTime(NOW + 10 * 3600_000);
+    // Новый элемент и новые props (те же ссылки на данные): компонент обязан пройти тело рендера ещё раз.
+    act(() => { root.render(createElement(FeatureEtaCard, { ...props })); });
+    expect(caption(container), 'те же данные — те же строки, часы в рендере не участвуют').toBe(cap1);
+  });
+
+  it('новая ссылка данных → «сейчас» пересчитан: deps эффекта — данные, а не пустой список', () => {
+    const props = liveProps();
+    const { root, container } = mount(createElement(FeatureEtaCard, props));
+    expect(caption(container), 'при «сейчас» 14:10').toContain('оценка Глеба 2 ч назад');
+    // Новый ответ — новый объект тех же данных: часы обязаны свериться (поломка deps=[] это красит):
+    // 00:10 следующих суток − noteAt 12:10 = 12 ч.
+    vi.setSystemTime(NOW + 10 * 3600_000);
+    act(() => { root.render(createElement(FeatureEtaCard, { ...props, eta: { ...props.eta! } })); });
+    expect(caption(container), 'новая ссылка данных — новое «сейчас»').toContain('оценка Глеба 12 ч назад');
   });
 });

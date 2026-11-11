@@ -6,7 +6,7 @@
 // (FeatureBriefModel: те же, чем строка «Срок» сводки выводит etaEndsAt). Полоса времени и
 // строка «из ≈ 3 д» — величины «Б», не рисуются (записка §8). Встраивание — шаг FS-FS.
 
-import { type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { formatDuration } from '../../lib/chatGroups';
 import type { FeatureEta } from '../../lib/featurePage';
@@ -42,7 +42,16 @@ type CaptionPart = { text: string; warn?: boolean };
 export function FeatureEtaCard({
   eta, noteAt, noteByPersonaId, noteStale, elapsedMinutes, nameOf, isMobile,
 }: FeatureEtaCardProps) {
-  const nowMs = Date.now();
+  // Одно «сейчас» на ответ (R-F8): дата «к HH:ММ» и давность «оценка … N ч назад» считаются от
+  // одного момента, привязанного к данным, а не от часов в каждом рендере: перерисовка тех же
+  // eta/noteAt не сдвигает строки, новые данные — новое «сейчас». Паттерн — FeatureBriefBlock.tsx:434-438:
+  // начальное значение при монтировании, сверка часов на смену данных — в effect; таймера нет
+  // намеренно.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  // deps — ровно те данные, к которым применяется «сейчас» (eta.endsAt, noteAt): та же ссылка
+  // на них = тот же момент, новая — новое «сейчас».
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- часы живут вне React (тот же приём, что FeatureBriefBlock.tsx:437)
+  useEffect(() => { setNowMs(Date.now()); }, [eta, noteAt]);
 
   if (!eta) {
     // Оценки нет вовсе: пустое состояние вместо числа (тот же язык, что «Оценки пока нет» сводки).

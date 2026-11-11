@@ -565,6 +565,39 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       expect(textNodes(findTab(c, 'Разбор')!).join('')).toBe('Разбор');
     });
 
+    // Клик по role="tab" доходит до стора вкладки и меняет тело страницы.
+    it('клик по вкладкам: «Материалы» → тело материалов, «Разбор» → тело разбора, «Ход» → ход', async () => {
+      withData();
+      const c = render({});
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), 'старт на «Ход»').not.toBeNull();
+      await act(async () => { (reactProps(findTab(c, 'Материалы')! as never)!.onClick as () => void)(); });
+      expect(getFeatureMainTab()).toBe('materials');
+      expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), '«Ход» размонтирован').toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'plans-all-empty') ?? findNodeByAttr(c, 'data-testid', 'plans-grid'), 'тело «Материалов»').not.toBeNull();
+      await act(async () => { (reactProps(findTab(c, 'Разбор')! as never)!.onClick as () => void)(); });
+      expect(getFeatureMainTab()).toBe('review');
+      expect(findNodeByAttr(c, 'data-testid', 'feature-review-tab'), 'тело «Разбора»').not.toBeNull();
+      await act(async () => { (reactProps(findTab(c, 'Ход')! as never)!.onClick as () => void)(); });
+      expect(getFeatureMainTab()).toBe('progress');
+      expect(findNodeByAttr(c, 'data-testid', 'progress-tab')).not.toBeNull();
+    });
+
+    // Счётчик «Материалов» = plansTabCount; у соседей цифры нет.
+    it('счётчик у «Материалов» равен числу карточек (2), у «Хода» и «Разбора» цифры нет', async () => {
+      withData();
+      const d = mockGetFeature.result!;
+      d.plans = [
+        { taskId: 'p1', role: 'cut', title: 'Разрез', authorPersonaId: null, createdAt: '2026-10-18T07:00:00Z', completedAt: null, hasText: true, mockupPaths: [] },
+        { taskId: 'p2', role: 'consult', title: 'Консультация', authorPersonaId: null, createdAt: '2026-10-18T08:00:00Z', completedAt: null, hasText: true, mockupPaths: [] },
+      ];
+      const c = render({});
+      await settle();
+      expect(textNodes(findTab(c, 'Материалы')! as never).join('')).toBe('Материалы2');
+      expect(textNodes(findTab(c, 'Ход')! as never).join('')).toBe('Ход');
+      expect(textNodes(findTab(c, 'Разбор')! as never).join('')).toBe('Разбор');
+    });
+
     // === FS-FKEY: общее пустое «Материалы» — «Открыть ключевой чат» пишет возврат, как остальные места ===
     // Мутации: убрать recordFeatureReturn из onOpenKeyChat → atOpen.records = 0 (записи в момент
     // открытия нет) и пустой recFeatureReturnCalls → тест красный; порядок «открыл, потом записал»

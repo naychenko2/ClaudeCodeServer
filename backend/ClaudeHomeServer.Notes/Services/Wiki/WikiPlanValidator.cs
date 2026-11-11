@@ -848,8 +848,13 @@ public static class WikiPlanValidator
         else
             sections[targetIdx].Lines.Add(line);
 
+        // Цитата в сноску складывается в одну строку (тот же помощник, что у хроники):
+        // определение сноски — одна строка, многострочное FootnoteDefRx не читает и гейт
+        // отвергает весь пакет (дефект 3b6cef0e). Дословность это не трогает: она проверена
+        // вызывающим по исходному тексту пакета, а сверка гейта нормализует whitespace
+        // с обеих сторон (QuoteMatcher.ContainsVerbatim).
         var footnotes = page.Footnotes
-            .Concat(quotes.Select(q => new WikiPage.WikiFootnote(new WikiPage.Target(true, cardTitle), q)))
+            .Concat(quotes.Select(q => new WikiPage.WikiFootnote(new WikiPage.Target(true, cardTitle), WikiPage.OneLine(q))))
             .ToList();
 
         return new WikiGate.Draft(op.Page, new WikiPage

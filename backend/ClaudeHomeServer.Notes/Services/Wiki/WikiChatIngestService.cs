@@ -596,9 +596,6 @@ public sealed class WikiChatIngestService
             ? WikiSections.Folder(home) + ChronicleDirName + "/" + sessionId + ".md"
             : null;
 
-    private static string OneLine(string text) =>
-        text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
-
     /// <summary>Дописать хронику чата утверждениями применённых пакетов. Первой
     /// успешный разбор создаёт страницу, следующий — дописывает «Что выяснили».
     /// Хроника продолжения несёт строку-ссылку на хронику прежнего чата в «О чём»
@@ -641,13 +638,13 @@ public sealed class WikiChatIngestService
                 // строка «Что выяснили» несёт УТВЕРЖДЕНИЕ (Claim, у старого пакета без Quotes —
                 // Text), а сноска — дословную цитату (Quotes, у старого пакета — Text). Текст с
                 // переводом строки складываем в одну строку: формат страницы строчный (WikiPage).
-                var statement = OneLine(op.Claim is { Length: > 0 } ? op.Claim : op.Text);
+                var statement = WikiPage.OneLine(op.Claim is { Length: > 0 } ? op.Claim : op.Text);
                 IEnumerable<string> candidates = op.Quotes is { Count: > 0 } ? op.Quotes : [op.Text];
                 // Мера контракта гейта (8–300, одна с гейтом) — только на сноске: цитату не
                 // обрезаем, она обязана остаться дословной, а пропускаем — иначе гейт отвергает
                 // все последующие записи раздела. Утверждение без единой годной сноски гейт
                 // тоже отвергает, поэтому такая строка не пишется вовсе.
-                var quotes = candidates.Select(OneLine)
+                var quotes = candidates.Select(WikiPage.OneLine)
                     .Where(q => !QuoteMatcher.MeasureQuoteLength(q).OutOfContract)
                     .ToList();
                 if (quotes.Count == 0)

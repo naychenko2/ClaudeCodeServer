@@ -279,6 +279,60 @@ public class WikiApplyClaimTests : IDisposable
         r.Reason.Should().Contain("цитата не выводится");
     }
 
+    // Дефект 3b6cef0e (QA-3): цитата с переносом строки из многострочного фрагмента
+    // источника (абзац с пустой строкой, markdown-таблица) писалась в сноску как есть —
+    // FootnoteDefRx её не читал, и гейт отвергал весь пакет. Рендер складывает цитату
+    // в одну строку тем же помощником, что у хроники (WikiPage.OneLine); дословность
+    // проверена по исходному тексту, а сверка гейта нормализует whitespace — она это переживает.
+    private const string MultiSource =
+        "Прежний план был остаться на Windows.\n\n" +
+        "Сначала строка абзаца:\n\nпродолжение абзаца на второй строке.\n\n" +
+        "| узел | сборка |\n|---|---|\n| прод | Linux |";
+
+    private static readonly WikiApplyService.ApplyContext MultiCtx = new(CardTitle, MultiSource);
+
+    [Fact]
+    public async Task Синтез_МногострочныеЦитаты_СноскиОднойСтрокой()
+    {
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, "Сборку переносят на другой машине",
+            ["Сначала строка абзаца:\n\nпродолжение абзаца на второй строке.",
+             "| узел | сборка |\n|---|---|\n| прод | Linux |"]));
+
+        var r = await _sut.PrepareAsync(User, pkg, MultiCtx);
+
+        r.Ready.Should().BeTrue(r.Reason);
+        var content = r.Rendered.Single(d => d.Path == PagePath).Content;
+        content.Should().Contain("Сборку переносят на другой машине [^s2][^s3]");
+        // Сноска читается форматом страницы: Parse — тот же FootnoteDefRx, который
+        // раньше её не определял. Мутация «убрать складывание в рендере» краснит раньше
+        // этой строки: сноска расползается, и уже гейт отвергает пакет («ссылка на
+        // несуществующую сноску») — Ready ложный.
+        var parsed = WikiPage.Parse(content);
+        parsed.Errors.Should().BeEmpty(string.Join("; ", parsed.Errors));
+        parsed.Model!.Footnotes.Should().HaveCount(3);
+        foreach (var f in parsed.Model.Footnotes)
+            f.Quote.Should().NotContain("\n").And.NotContain("\r");
+        parsed.Model.Footnotes[1].Quote.Should().Contain("Сначала строка абзаца:").And.Contain("продолжение абзаца");
+        parsed.Model.Footnotes[2].Quote.Should().Contain("| прод | Linux |");
+    }
+
+    [Fact]
+    public async Task Синтез_МногострочнаяЦитатаНеДословная_Отказ()
+    {
+        // Складывание не ослабило меру 1: недословная цитата с переносом строки
+        // отклоняется по-прежнему — проверка идёт по исходному тексту операции.
+        await WriteCardAndPage();
+        var pkg = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, "Сборку переносят на другой машине",
+            ["этого в источнике нет:\nи продолжения тоже"]));
+
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
+
+        r.Ready.Should().BeFalse();
+        r.Code.Should().Be(WikiApplyService.CodeSource);
+        r.Reason.Should().Contain("цитата не выводится");
+    }
+
     [Fact]
     public async Task Синтез_АвтоСНеподтверждённымЧислом_НеПрименяется()
     {

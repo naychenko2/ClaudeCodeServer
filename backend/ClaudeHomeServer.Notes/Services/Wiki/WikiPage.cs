@@ -45,6 +45,15 @@ public sealed class WikiPage
     private static readonly Regex LinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
     private static readonly Regex SessionRefRx = new(@"^session:([A-Za-z0-9_-]+)#m([0-9]+)-([0-9]+)\z", RegexOptions.CultureInvariant);
 
+    /// <summary>Сложить текст в одну строку: формат страницы строчный — строки секций и
+    /// определения сносок читаются построчно (FootnoteDefRx). Складывать — задача пишущего
+    /// в страницу (общий рендер RenderApply, хроника), а не Render'а: модель и её чтение
+    /// должны совпадать. Дословность цитаты при этом проверяется по исходному тексту:
+    /// обе стороны сверки нормализуют whitespace (QuoteMatcher.ContainsVerbatim), складывание
+    /// её ни ослабляет, ни усиливает.</summary>
+    internal static string OneLine(string text) =>
+        text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
+
     public required string Title { get; init; }
     public required WikiFrontmatter Frontmatter { get; init; }
     // Секции в фиксированном для типа порядке; ссылки сносок в строках уже канонические (s1…sN).

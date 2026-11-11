@@ -4,7 +4,7 @@
 // там же (type-only импорт, цикла рантайма нет).
 import { request } from '../../lib/offline';
 import type { BoardItem, CreateTaskDto, FeatureSummaryResult, Task, UpdateTaskDto } from './types';
-import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 import type { FeaturesIndex, FeaturePage } from '../../types/featureIndex';
 
 export const tasksApi = {
@@ -84,8 +84,17 @@ export const tasksApi = {
     // 503 (подсистема выключена), 404 (нет/чужой эпик), 409 (финал не принят / 0 или >1
     // исполнителей DevOps) — причина в err.body.error (и err.message). Идемпотентна:
     // открытая merge-задача → вернуть её (повторный вызов — та же задача, вторую не заводим).
-    mergeFeature: (fid: string) =>
-      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, { method: 'POST' }),
+    // FS-XT1 (§8.3): при непустом закрытом хвосте решение о нём обязательно — тело
+    // { tail: 'withdraw' | 'keep' }; без него 409 { code: 'tail_decision_required',
+    // tailSteps } (TasksController.cs:1645). «withdraw», часть шагов к моменту замка
+    // перестала быть хвостом → 409 { code: 'tail_withdraw_not_applied', tailSteps }
+    // (:1670-1678): мерж не начат, решение — по свежему состоянию. При пустом хвосте
+    // тело не нужно вовсе: вызов без tail работает как раньше (бэк игнорирует тело).
+    mergeFeature: (fid: string, tail?: MergeTailDecision) =>
+      request<Task>(`/tasks/features/${encodeURIComponent(fid)}/merge`, {
+        method: 'POST',
+        ...(tail ? { body: JSON.stringify({ tail }) } : {}),
+      }),
     // Пауза/черновик фичи (W4-HOLD-F2, ручки W4-HOLD-B2): POST hold {reason} —
     // удержание (reason: 'manual' — пауза человека, 'draft' — черновик), DELETE — снять.
     // Fail-closed: 403 (сервисный токен — удержание ставит только человек), 404, 409

@@ -50,14 +50,16 @@ const mockGetFeature = vi.hoisted(() => ({
   calls: [] as { fid: string; eventsLimit?: string }[],
   perCall: [] as ({ result?: FeaturePageData; error?: Error & { status?: number } })[],
 }));
-// Управляемый ответ api.tasks.mergeFeature: calls — журнал (двойной клик → 1 вызов),
-// pending (запрос в полёте → кнопка заблокирована), error (409/сбой, body.error — причина),
+// Управляемый ответ api.tasks.mergeFeature: calls — журнал (двойной клик → 1 вызов;
+// FS-XF1: поле tail — решение о закрытом хвосте в теле запроса, undefined — тела нет),
+// pending (запрос в полёте → кнопка заблокирована), error (409/сбой, body.error — причина,
+// body.code — машинный код tail_decision_required / tail_withdraw_not_applied),
 // result (успех → задача мержа).
 const mockMergeFeature = vi.hoisted(() => ({
   pending: false,
   result: null as Task | null,
   error: null as (Error & { status?: number; body?: unknown }) | null,
-  calls: [] as string[],
+  calls: [] as { fid: string; tail?: string }[],
 }));
 // Управляемые ответы api.tasks.setFeatureHold/clearFeatureHold (W4-HOLD-F2): calls —
 // журнал (fid + метод + reason), pending (запрос в полёте), error (409/сбой).
@@ -101,8 +103,8 @@ vi.mock('../../lib/api', () => ({
         if (mockGetFeature.error) return Promise.reject(mockGetFeature.error);
         return Promise.resolve(mockGetFeature.result!);
       },
-      mergeFeature: (fid: string) => {
-        mockMergeFeature.calls.push(fid);
+      mergeFeature: (fid: string, tail?: string) => {
+        mockMergeFeature.calls.push({ fid, tail });
         if (mockMergeFeature.pending) return new Promise<Task>(() => {});
         if (mockMergeFeature.error) return Promise.reject(mockMergeFeature.error);
         return Promise.resolve(mockMergeFeature.result!);
@@ -2486,6 +2488,215 @@ describe('Ш8-wire: риски мержа в диалоге подтвержде
     const cancel = findButtonWithText(body, 'Отмена');
     expect(cancel, '«Отмена» в модалке').not.toBeNull();
     await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  });
+});
+
+// === FS-XF1: закрытый хвост в диалоге мержа (§8.3, после FS-XT1) ===
+// Страница держит решение о хвосте (tailChoice) и передаёт его в тело POST merge;
+// состав — только из данных бэка (attention.mergeRisks tail + run.closedTailKeys).
+// Без выбора «Мерж» неактивна; без хвоста диалог и запрос — прежние. 409 с
+// машинным кодом tail_* — не закрытие диалога и не красная ошибка: выбор
+// сбрасывается, риски перечитываются перезапросом страницы.
+// Мутации (в отчёте): (1) убрать гард mergeInFlight в FeaturePage.tsx → «двойной
+// клик — один запрос» краснеет (2 вызова); (2) не передавать tail в mergeFeature →
+// «выбор уходит в тело» краснеет (tail undefined); (3) не различать 409 по коду →
+// «показан выбор» краснеет (диалог закрыт, блока нет).
+describe('FS-XF1: закрытый хвост в диалоге мержа', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.result = null;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.pending = false;
+    mockMergeFeature.result = null;
+    mockMergeFeature.error = null;
+    mockMergeFeature.calls = [];
+    toasts.length = 0;
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const bodyNode = () => (globalThis as { document: { body: unknown } }).document.body as unknown as FNodeLike;
+
+  // Кнопка в body по ТОЧНОЙ подписи («Мерж» не должен ловить сегмент
+  // «Мержить, хвост оставить» — отсюда точное сравнение, не includes).
+  function exactButton(text: string): FNodeLike | null {
+    let hit: FNodeLike | null = null;
+    const walk = (x: FNodeLike) => {
+      if (hit) return;
+      if (x.nodeType === 1 && x.nodeName === 'BUTTON' && textNodes(x as never).join('') === text) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(bodyNode());
+    return hit;
+  }
+
+  const isDisabled = (btn: FNodeLike | null): boolean => {
+    if (!btn) return true; // кнопки нет — действие невозможно в любом случае
+    return Boolean(reactProps(btn)?.disabled);
+  };
+
+  // Страница merge_pending с тревогой «мерж»: риски — attention.mergeRisks,
+  // состав хвоста — run.closedTailKeys (тот же учёт бэка).
+  function mergePage(risks?: FeatureMergeRisk[], tailKeys?: string[]): FeaturePageData {
+    const pd = pageData();
+    pd.run = {
+      ...pd.run,
+      state: 'merge_pending',
+      attention: {
+        kind: 'merge', taskId: 'f-fin', since: '2026-10-19T11:00:00Z', reason: 'мерж',
+        mergeRisks: risks,
+      },
+      closedTailKeys: tailKeys,
+    } as never;
+    return pd;
+  }
+
+  // Открыть диалог главным действием «Мерж…» (тот же путь, что в Ш8-wire).
+  async function openMerge(c: ReturnType<typeof render>) {
+    const main = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
+    expect(main, 'главное действие «Мерж…»').not.toBeNull();
+    let btn: FNodeLike | null = null;
+    const walk = (x: FNodeLike) => {
+      if (btn) return;
+      if (x.nodeType === 1 && x.nodeName === 'BUTTON') { btn = x; return; }
+      for (const c2 of x.childNodes) walk(c2);
+    };
+    walk(main as unknown as FNodeLike);
+    expect(btn, 'кнопка внутри главного действия').not.toBeNull();
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+  }
+
+  const closeMerge = async () => {
+    const cancel = exactButton('Отмена');
+    expect(cancel, '«Отмена» в модалке').not.toBeNull();
+    await act(async () => { (reactProps(cancel!)!.onClick as () => void)(); });
+  };
+
+  it('хвост: диалог показывает его поимённо и требует выбора; без выбора «Мерж» неактивна', async () => {
+    mockGetFeature.result = mergePage([{ kind: 'tail', count: 2 }], ['Ф1', 'Ф2']);
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'модалка открыта').toContain('Смержить «Моя фича» в master?');
+    const tailBlock = findNodeByAttr(body as never, 'data-testid', 'feature-merge-tail');
+    expect(tailBlock, 'блок хвоста').not.toBeNull();
+    const keys = textNodes(findNodeByAttr(body as never, 'data-testid', 'feature-merge-tail-keys')!).join(' ');
+    expect(keys, 'хвост поимённо').toContain('Ф1');
+    expect(keys, 'хвост поимённо').toContain('Ф2');
+    expect(exactButton('Мерж'), 'кнопка «Мерж» на месте').not.toBeNull();
+    expect(isDisabled(exactButton('Мерж')), '«Мерж» активна без решения о хвосте').toBe(true);
+    await closeMerge();
+  });
+
+  it('выбор «keep» → «Мерж» активна, решение уходит в тело запроса', async () => {
+    mockGetFeature.result = mergePage([{ kind: 'tail', count: 2 }], ['Ф1', 'Ф2']);
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const seg = exactButton('Мержить, хвост оставить');
+    expect(seg, 'вариант «keep»').not.toBeNull();
+    await act(async () => { (reactProps(seg!)!.onClick as () => void)(); });
+    const btn = exactButton('Мерж');
+    expect(isDisabled(btn), '«Мерж» неактивна после выбора').toBe(false);
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockMergeFeature.calls, 'тело запроса — { tail: keep }').toEqual([{ fid: 'f1', tail: 'keep' }]);
+  });
+
+  it('хвоста нет — блока выбора нет, запрос без тела (диалог прежний)', async () => {
+    mockGetFeature.result = mergePage();
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    expect(findNodeByAttr(bodyNode() as never, 'data-testid', 'feature-merge-tail'), 'блока выбора нет').toBeNull();
+    const btn = exactButton('Мерж');
+    expect(isDisabled(btn), '«Мерж» без хвоста').toBe(false);
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(mockMergeFeature.calls, 'без хвоста — тело не шлётся').toEqual([{ fid: 'f1', tail: undefined }]);
+  });
+
+  it('двойной клик «Мерж» — один запрос (мутация: убрать гард mergeInFlight → red)', async () => {
+    mockGetFeature.result = mergePage();
+    mockMergeFeature.pending = true; // запрос в полёте не разрешается
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const btn = exactButton('Мерж');
+    expect(btn, 'кнопка «Мерж»').not.toBeNull();
+    // Два клика в одном тике: state ещё не обновился, гард — ref (FeaturePage.tsx).
+    await act(async () => {
+      (reactProps(btn!)!.onClick as () => void)();
+      (reactProps(btn!)!.onClick as () => void)();
+    });
+    expect(mockMergeFeature.calls.length, 'двойной клик дал больше одного запроса').toBe(1);
+    await closeMerge();
+  });
+
+  it('409 tail_decision_required — показан выбор, не ошибка (диалог открыт, risks перечитаны)', async () => {
+    // Снимок устарел: хвоста в нём нет, а бэк его видит → 409 с кодом.
+    mockGetFeature.perCall = [
+      { result: mergePage() }, // call 1: хвоста не видно
+      { result: mergePage([{ kind: 'tail', count: 2 }], ['Ф1', 'Ф2']) }, // call 2: перечитано
+    ];
+    mockMergeFeature.error = { name: 'HttpError', status: 409, body: { error: 'Нужно решение о закрытом хвосте', code: 'tail_decision_required', tailSteps: 2 } } as Error & { status?: number; body?: unknown };
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const btn = exactButton('Мерж');
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    await settle();
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'диалог закрылся (должен ждать новый выбор)').toContain('Смержить «Моя фича» в master?');
+    expect(findNodeByAttr(body as never, 'data-testid', 'feature-merge-tail'), 'выбор показан после перечитывания').not.toBeNull();
+    expect(findNodeByAttr(body as never, 'data-testid', 'feature-merge-error'), 'красной ошибки нет').toBeNull();
+    await closeMerge();
+  });
+
+  it('409 tail_withdraw_not_applied — «хвост изменился», выбор сброшен, риски перечитаны', async () => {
+    // Хвост изменился, пока шёл запрос: часть шагов перестала быть хвостом.
+    mockGetFeature.perCall = [
+      { result: mergePage([{ kind: 'tail', count: 2 }], ['Ф1', 'Ф2']) }, // call 1: два шага
+      { result: mergePage([{ kind: 'tail', count: 1 }], ['Ф2']) }, // call 2: один остался
+    ];
+    mockMergeFeature.error = { name: 'HttpError', status: 409, body: { error: 'Снятие не применено', code: 'tail_withdraw_not_applied', tailSteps: 1 } } as Error & { status?: number; body?: unknown };
+    const c = render({});
+    await settle();
+    await openMerge(c);
+    const seg = exactButton('Снять хвост и мержить');
+    expect(seg, 'вариант «withdraw»').not.toBeNull();
+    await act(async () => { (reactProps(seg!)!.onClick as () => void)(); });
+    const btn = exactButton('Мерж');
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    await settle();
+    const body = bodyNode();
+    expect(textNodes(body).join(' '), 'диалог закрылся (должен ждать новый выбор)').toContain('Смержить «Моя фича» в master?');
+    const notice = findNodeByAttr(body as never, 'data-testid', 'feature-merge-tail-notice');
+    expect(notice, 'предупреждение об изменении хвоста').not.toBeNull();
+    expect(textNodes(notice!).join(''), 'текст — «хвост изменился, проверь список»').toContain('Хвост изменился, проверь список');
+    expect(findNodeByAttr(body as never, 'data-testid', 'feature-merge-error'), 'красной ошибки нет').toBeNull();
+    // Выбор сброшен: без нового решения «Мерж» снова неактивна.
+    expect(isDisabled(exactButton('Мерж')), 'выбор не сброшен (кнопка активна)').toBe(true);
+    // Риски перечитаны: второй GET страницы был.
+    expect(mockGetFeature.calls.length, 'перечитывания не было').toBeGreaterThanOrEqual(2);
+    await closeMerge();
   });
 });
 

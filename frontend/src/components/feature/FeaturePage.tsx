@@ -36,7 +36,7 @@ import {
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
-import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
 //   chat — в исходный чат (указатель back-nav «чат → фича»);
@@ -194,17 +194,29 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
   // Состояния: pending (запрос в полёте, кнопка «Запускаю…» заблокирована),
-  // успех (тост + state → merging через перезапрос), 409 (state → merging, без
-  // красной ошибки — идемпотентность), прочий сбой (сообщение сервера + «Повторить»).
+  // успех (тост + state → merging через перезапрос), 409 без кода (state → merging,
+  // без красной ошибки — идемпотентность), прочий сбой (сообщение сервера + «Повторить»).
+  // Закрытый хвост (FS-XF1, §8.3): решение о нём — состояние страницы, диалог
+  // его только показывает; без решения при хвосте «Мерж» неактивен (и гард ниже).
+  // 409 с машинным кодом tail_* — не закрытие и не красная ошибка: диалог ждёт
+  // новый выбор по перечитанным рискам (FS-XT1, TasksController.cs:1645,1670).
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergePending, setMergePending] = useState(false);
   const [mergeError, setMergeError] = useState<string | null>(null);
+  const [tailChoice, setTailChoice] = useState<MergeTailDecision | null>(null);
+  const [tailNotice, setTailNotice] = useState<string | null>(null);
   // Синхронный гард от двойного клика: state батчится (два клика в одном тике оба
   // видят pending=false), ref — нет. Сбрасывается, когда запрос завершился.
   const mergeInFlight = useRef(false);
 
+  // Есть ли закрытый хвост по последнему снимку (тот же источник, что у диалога:
+  // attention.mergeRisks). Фронт сам хвост не выводит.
+  const hasMergeTail = () => (run?.attention?.mergeRisks ?? []).some((r) => r.kind === 'tail');
+
   const openMergeDialog = () => {
     setMergeError(null);
+    setTailChoice(null);
+    setTailNotice(null);
     setMergeOpen(true);
   };
 
@@ -212,23 +224,38 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     setMergeOpen(false);
     setMergePending(false);
     setMergeError(null);
+    setTailChoice(null);
+    setTailNotice(null);
     mergeInFlight.current = false;
   };
 
   const confirmMerge = async () => {
     if (mergeInFlight.current) return;
+    // Диалог блокирует «Мерж» без решения, но это тот же гард и на странице:
+    // мерж с хвостом без решения бэк отвергает 409 tail_decision_required.
+    if (hasMergeTail() && !tailChoice) return;
     mergeInFlight.current = true;
     setMergePending(true);
     setMergeError(null);
     try {
-      await api.tasks.mergeFeature(featureId);
+      await api.tasks.mergeFeature(featureId, tailChoice ?? undefined);
       // Успех: тост + state → merging (перезапрос страницы).
       showToast('Задача мержа создана', 'Марк начал мерж');
       refetchFeaturePage(featureId);
       closeMergeDialog();
     } catch (e) {
-      const err = e as Error & { status?: number };
-      if (err.status === 409) {
+      const err = e as Error & { status?: number; body?: { code?: string } };
+      const code = err.status === 409 ? err.body?.code : undefined;
+      if (code === 'tail_decision_required' || code === 'tail_withdraw_not_applied') {
+        // Хвост требует решения (или изменился, пока шёл запрос): диалог остаётся
+        // открытым, это не сбой сети и не красная ошибка. Выбор сбрасывается,
+        // риски перечитываются перезапросом страницы; при «изменился» — предупреждение.
+        mergeInFlight.current = false;
+        setMergePending(false);
+        setTailChoice(null);
+        setTailNotice(code === 'tail_withdraw_not_applied' ? 'Хвост изменился, проверь список' : null);
+        refetchFeaturePage(featureId);
+      } else if (err.status === 409) {
         // «Мерж уже идёт» (идемпотентность): обновить состояние, красной ошибки нет.
         refetchFeaturePage(featureId);
         closeMergeDialog();
@@ -447,6 +474,11 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
             // момента открытия — при перезапросе страницы диалог перерисовывается с
             // новыми рисками (исчезли — блока нет). Отсутствия поля UI обязан пережить.
             risks={run?.attention?.mergeRisks}
+            // Состав закрытого хвоста — только из данных бэка (FS-XF1): ключи страницы.
+            tailKeys={run?.closedTailKeys}
+            tailChoice={tailChoice}
+            onTailChoice={setTailChoice}
+            tailNotice={tailNotice}
             onCancel={closeMergeDialog}
             onConfirm={confirmMerge}
           />

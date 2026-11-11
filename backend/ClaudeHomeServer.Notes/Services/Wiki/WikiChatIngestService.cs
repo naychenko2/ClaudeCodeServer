@@ -329,6 +329,139 @@ public sealed class WikiChatIngestService
             return _last.TryGetValue(ownerId + "|" + sessionId, out var last) ? last : null;
     }
 
+    /// <summary>Вернуть курсор разбора чата на from-1, чтобы окно from…N разбиралось заново
+    /// (хвост apply_failed: окно закрылось отказанным применением, а курсор остался на его
+    /// конце — финал 630b8b12, разрез плана 12554ff8). Ночь берёт чат только при дельте не
+    /// меньше MinHumanDelta реплик человека (WikiNightlyService.cs:505): окно меньше этого
+    /// ночь не возьёт вовсе — его переразбирает только кнопка «Разобрать». Ручное окно с тем же
+    /// ref даёт лишний переразбор: повторные утверждения гасит дедup (S4d), а не курсор.
+    ///
+    /// Откат — поля самого разбора (cursor/cursorHash/zone/reason): поля скорера и ступени 2
+    /// стор переносит из прежней записи сам (M2), streak-поля не меняются: откат — не исход
+    /// разбора, прежний исход снимает следующий разбор, а не он. AdvanceCursor («курсор назад
+    /// не уходит») не трогается: этот возврат — отдельная намеренная назад-операция вне
+    /// разбора, она не про результат окна.
+    ///
+    /// Условия: живой курсор не меньше from (решающая проверка — по записи, прочитанной
+    /// внутри блока стора; предчтение лишь бережёт пустую запись); чат существует, принадлежит
+    /// этому владельцу, не приватный и не помечен «не разбирать»; история не короче from-1.
+    /// При любом невыполнении — записи нет, причина в лог вызывающего (тот же optional ILogger,
+    /// что у стора), исключения наружу нет. Формулировка отказа в логе для чужого/приватного/
+    /// удалённого — одна («чат не существует»), как в AnalyzeAsync: лог не выдаёт приватность
+    /// или существование чата тому, кто их не видит. Конкурентность: чат в прогоне — откат
+    /// откладывается до конца прогона и делается ровно один раз, иначе финальный AdvanceCursor
+    /// прогона затёр бы возврат. true — курсор возвращён; false — ничего не произошло.</summary>
+    public Task<bool> ReturnWindowAsync(string ownerId, string sessionId, int from, ILogger? log = null)
+    {
+        // Fail-closed входа, как у AnalyzeAsync: кривая заявка не доходит до стора.
+        if (string.IsNullOrWhiteSpace(ownerId) || string.IsNullOrWhiteSpace(sessionId) || from < 1)
+            return Task.FromResult(false);
+        if (!IsSessionIdSafe(sessionId))
+            return Task.FromResult(false);
+
+        // Чат в прогоне: немедленный откат затёр бы финальный AdvanceCursor прогона (тот
+        // читает и пишет стор после него). Ждём задачу прогона и пробуем один раз: повторный
+        // приезд — ответственность вызывающего (T-A2), не этого метода.
+        Task<ChatResult>? running;
+        lock (_inFlightLock)
+        {
+            var prefix = ownerId + "|" + sessionId + "|";
+            running = null;
+            foreach (var (key, task) in _inFlight)
+                if (key.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    running = task;
+                    break;
+                }
+        }
+        if (running is null)
+            return ReturnWindowGuardedAsync(ownerId, sessionId, from, log);
+        return Task.Run(async () =>
+        {
+            try { await running.ConfigureAwait(false); }
+            catch (Exception) { /* прогон отдал отказ — попытка отката от этого не теряется */ }
+            return await ReturnWindowGuardedAsync(ownerId, sessionId, from, log).ConfigureAwait(false);
+        });
+    }
+
+    private async Task<bool> ReturnWindowGuardedAsync(string ownerId, string sessionId, int from, ILogger? log)
+    {
+        try
+        {
+            return await ReturnWindowCoreAsync(ownerId, sessionId, from, log);
+        }
+        catch (Exception e)
+        {
+            // Тот же порядок, что у защищённого прогона: неожиданный сбой — запись в лог,
+            // не исключение вызывающему.
+            log?.LogWarning("Возврат окна: курсор не возвращён (внутренний сбой): {Message}", e.Message);
+            return false;
+        }
+    }
+
+    private async Task<bool> ReturnWindowCoreAsync(string ownerId, string sessionId, int from, ILogger? log)
+    {
+        bool No(string reason)
+        {
+            log?.LogInformation("Возврат окна: курсор не возвращён ({Reason}): {SessionId}", reason, sessionId);
+            return false;
+        }
+
+        var session = _sessions.GetById(sessionId);
+        if (session is null || _sessions.ResolveOwnerId(session) != ownerId)
+            return No("чат не существует");
+        if (session.PrivateToUserId is not null)
+            return No("чат не существует");
+        if (session.WikiMark == WikiMarks.Skip)
+            return No("чат помечен «не разбирать»");
+
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        if (!WikiPaths.IsInitialized(_dataDir, ownerId))
+            return No("вики этого владельца не заведена");
+
+        var history = await _sessions.GetHistoryAsync(sessionId);
+        if (history is null || history.Count < from - 1)
+            return No($"история короче целевого курсора {from - 1}");
+
+        // Предчтение: не звать Update, когда возвращать нечего (записи нет или курсор уже
+        // под окном) — лишняя запись стора с новой датой была бы «изменением» там, где
+        // должно быть «ничего». Решающее условие — внутри Update, по живой записи.
+        var read = WikiChatTriageStore.Get(root, log);
+        if (read.State == WikiTriageFileState.Invalid)
+            return No("стор разбора чатов нечитается");
+        var entry = read.Entries.FirstOrDefault(e => e.SessionId == sessionId);
+        if (entry is null)
+            return No("записи разбора этого чата нет");
+        if (entry.Cursor < from)
+            return No($"курсор {entry.Cursor} уже под окном {from}");
+
+        var back = from - 1;
+        var rewound = false;
+        var up = WikiChatTriageStore.Update(root, sessionId, cur =>
+        {
+            // Решающая проверка — по живой записи блока: между предчтением и блоком параллельный
+            // разбор или удаление могли сдвинуть её (старое прочтение не доказательство).
+            if (cur is null || cur.Cursor < from)
+                // Запись исчезла под блоком: пустая с курсором 0 — та же законная форма, что
+                // у UpdateScoring на несуществующем чате; возвращать нечего.
+                return cur ?? new WikiChatTriageEntry(sessionId, 0, null, null, null, 0, default);
+            rewound = true;
+            return cur with
+            {
+                Cursor = back,
+                // Хэш границы — та же система, что у курсора прогона (from==1 → 0 и null).
+                CursorHash = back == 0 ? null : HashOfRecord(history[back - 1]),
+                Zone = null,
+                Reason = null,
+            };
+        }, log);
+        if (!up.Ok)
+            return No($"откат курсора не записан: {up.Reason}");
+        if (!rewound)
+            return No("живая запись уже под окном (параллельный разбор или удаление)");
+        return true;
+    }
+
     /// <summary>Записать последний исход вне прогона (предпрогонный отказ, F3): тот же
     /// ключ и тот же потолок, что у записи прогона.</summary>
     private void RecordLast(string ownerId, string sessionId, ChatResult result)
@@ -813,7 +946,9 @@ public sealed class WikiChatIngestService
     ///
     /// Обратная совместимость: курсоры, записанные прежним полным хэшем, при смене формата
     /// дают разовый сброс в 0 — допустимо: переразбор гасит дедup, потеря данных не.</summary>
-    private static string HashOfRecord(StoredMessage record)
+    // internal — виден тестовым сборкам (InternalsVisibleTo): тест возврата окна сверяет
+    // записанный CursorHash с хэшем границы по той же функции, а не копией алгоритма.
+    internal static string HashOfRecord(StoredMessage record)
     {
         var node = JsonSerializer.SerializeToNode<StoredMessage>(record)!.AsObject();
         if (node["kind"] is JsonValue kind && ServiceFieldsByKind.TryGetValue(kind.GetValue<string>(), out var fields))

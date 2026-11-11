@@ -369,7 +369,7 @@ Html не разбираем вовсе: прототип идёт в «Файл
 `GET features/{id}` ([TasksController.cs:652](../../backend/ClaudeHomeServer/Controllers/TasksController.cs))
 отдаёт прежний объект плюс `brief` (:884); индекс `features/index` и `features?sessionId=`
 его не несут — лёгкий путь (:646). Верхние ключи ответа сторожит снапшот: прежние
-девять + `brief` ([TasksControllerTests.cs:1397](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
+девять + `materials` — десять ключей ([TasksControllerTests.cs:1397-1400](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
 
 `brief` строит чистая функция `FeatureBrief.Build`
 ([FeatureBrief.cs:115](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)):
@@ -532,11 +532,11 @@ Html не разбираем вовсе: прототип идёт в «Файл
   Имя поля — прежний JSON-контракт (FeatureRun.cs:105).
 - **Асимметрия состава — решение D1:** файлы документ-ролей → `plans[].mockupPaths`;
   `LinkedFiles` остальных ролей (step/review/qa/final/merge) и безролевых задач (безролевые
-  вошли в состав этой волной, М8 — TasksController.cs:1221-1223) идут только в каталог
+  вошли в состав этой волной, М8 — состав `AllRunTasks`, TasksController.cs:1483-1484, :1497) идут только в каталог
   макетов `mockups[]` — запасным путём каталога, и там только `.html` под `docs/mockups/`
   ([MockupCatalog.cs:62-77](../../backend/ClaudeHomeServer.Docs/MockupCatalog.cs)); состав задач —
-  локальный `allFeatureTasks` (TasksController.cs:925-936), с фильтром по проекту эпика (`AllLinkedFiles`
-  :1244-1251). Обычные файлы шагов в раздел не попадают — золотой тест
+  по `AllRunTasks` (TasksController.cs:1486-1499), с фильтром по проекту эпика (`AllLinkedFiles`
+  :1501-1513). Обычные файлы шагов в раздел не попадают — золотой тест
   [FeaturePlansTests.cs:330-341](../../backend/ClaudeHomeServer.Tasks.Tests/FeaturePlansTests.cs)
   (`BuildPlans_LinkedFiles_ШагаНеДокументнойРоли_НеПопадают`).
 - **`mockups` — макеты:** записка `.md` с шапкой «**Фича:** / **Статус:** / **Файлы:**»
@@ -690,7 +690,7 @@ worktree проекта; без вердикта `exists=false`, `branch=null` (
 - `stats.estimateDrift` = `{ initialEtaMinutes, firstEtaMinutes, currentEtaMinutes, shiftMinutes,
   denominatorChanges, accuracy }` ([FeatureEstimateDrift.cs:17-28](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEstimateDrift.cs)):
   `shiftMinutes` = последний − первый срок по строкам журнала `estimate_set`, `null` при менее чем
-  двух (:46); `denominatorChanges` — сколько раз `total` менялся между соседними строками с `total`
+  двух (:44); `denominatorChanges` — сколько раз `total` менялся между соседними строками с `total`
   (:49-54); `accuracy` — `Summary.DurationMinutes / InitialEtaMinutes`, только у закрытой фичи с
   базовым сроком больше нуля (:57-59);
 - `stats.spend.cacheShare` = `CacheReadTokens / (Input + CacheRead + CacheCreation)`, `null` при

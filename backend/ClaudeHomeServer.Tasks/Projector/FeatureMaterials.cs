@@ -1,3 +1,5 @@
+using ClaudeHomeServer.Models;
+
 namespace ClaudeHomeServer.Services.Tasks.Projector;
 
 // Правило материала фичи (FS-B0, волна 3 «Обзор фич», docs/research/
@@ -35,4 +37,40 @@ public static class FeatureMaterials
         !string.IsNullOrWhiteSpace(path) &&
         (path.StartsWith("docs/mockups/", StringComparison.OrdinalIgnoreCase) ||
          path.Equals("docs/mockups", StringComparison.OrdinalIgnoreCase));
+
+    // FeatureMaterial (FS-B3a, §7.4): одна строка materials[] ответа фичи. TaskId — задача,
+    // в linkedFiles которой этот путь (для дубля — самая свежая); At = CompletedAt ?? UpdatedAt
+    // этой задачи. По taskId фронт открывает файл из дерева автора задачи.
+    public sealed record FeatureMaterial(string Path, string TaskId, DateTime At);
+
+    // Build (FS-B3a): materials[] по задачам ЭТОЙ фичи (состав даёт вызывающий — AllRunTasks
+    // контроллера, его полноту держит сторож AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли).
+    // Чистая функция: запись не меняется. Фильтр по проекту эпика — как в AllLinkedFiles
+    // (linkedFiles задачи другого проекта — не из дерева этой фичи); отбор — IsMaterial
+    // (код/тесты/индексы/макеты не материал никогда). Дубль пути (у нескольких задач) —
+    // один раз, от самой свежей задачи (at больше); сравнение дублей регистронезависимое,
+    // как в IsMaterial (пути на Windows-машине живут без учёта регистра). Порядок: at убыванием,
+    // ties — путь (детерминизм, как в BuildMockups). Потолок — Cap на всю фичу.
+    public static List<FeatureMaterial> Build(IEnumerable<TaskItem> tasks, string? epicProjectId)
+    {
+        var bestByPath = new Dictionary<string, FeatureMaterial>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in tasks)
+        {
+            // Проект эпика — мерило: задача чужого проекта не даёт путь в materials (тот же
+            // фильтр, что AllLinkedFiles; эпик без проекта (null) — только задачи без проекта).
+            if (t.ProjectId != epicProjectId) continue;
+            var at = t.CompletedAt ?? t.UpdatedAt;
+            foreach (var path in t.LinkedFiles)
+            {
+                if (!IsMaterial(path)) continue;
+                if (!bestByPath.TryGetValue(path, out var prev) || at > prev.At)
+                    bestByPath[path] = new FeatureMaterial(path, t.Id, at);
+            }
+        }
+        return bestByPath.Values
+            .OrderByDescending(m => m.At)
+            .ThenBy(m => m.Path, StringComparer.Ordinal)
+            .Take(Cap)
+            .ToList();
+    }
 }

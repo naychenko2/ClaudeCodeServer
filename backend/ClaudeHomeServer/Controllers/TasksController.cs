@@ -930,6 +930,11 @@ public class TasksController(
         allFeatureTasks.AddRange(run.Plan);
         allFeatureTasks.AddRange(run.Unroled);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
+        // FS-B3a: materials[] — документы (материалы) всех задач фичи с taskId автора (состав
+        // allFeatureTasks = тот же, что у ленты событий и chats[]; полноту состава держит
+        // сторож AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли). Отбор, дубли, порядок и
+        // потолок — в FeatureMaterials.Build (чистая функция); здесь только вызов.
+        var materials = FeatureMaterials.Build(allFeatureTasks, run.Epic.ProjectId);
         // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
         // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
         // Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи: чтение журнала
@@ -1123,7 +1128,7 @@ public class TasksController(
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
-        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, stats,
+        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, materials, stats,
             brief, mockups, mockupsUnavailable });
     }
 

@@ -1155,6 +1155,83 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         runPlan.GetProperty("resultMarkdown").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // ─── FS-B3a: materials[] — документы всех задач фичи с taskId автора ──────────────────────
+
+    // Инвариант: в materials только задачи ЭТОЙ фичи (AllRunTasks по уже проверенному run) и
+    // только из проекта эпика. Чужая задача той же фичи (ProjectId другой) и задача ДРУГОЙ
+    // фичи с тем же путём не дают своего taskId. Мутация «взять GetByOwner вместо allFeatureTasks»
+    // → чужой шаг того же владельца с тем же путём попадает (краснеет); «снять фильтр ProjectId
+    // в Build» → foreign.md в выдаче (краснеет). Индекс materials не несёт (тяжёлый ключ —
+    // только страница).
+    [Fact]
+    public async Task GetFeature_Materials_ЧужаяЗадача()
+    {
+        // Эпик с живым чатом — как в Brief_Индекс: строка индекса по нему гарантирована.
+        var chatId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chatId });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var own = await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "docs/research/own.md" },
+        });
+        var ownId = own.GetProperty("id").GetString()!;
+        // Та же фича, но чужой проект: linkedFiles не из дерева фичи — отброшен (тот же
+        // фильтр AllLinkedFiles). Проект ставим напрямую в сторе (проект-фикстура не нужна).
+        var foreignProject = await CreateTaskAsync(new
+        {
+            title = "шаг чужого проекта", featureId = epicId, role = "step", stepRef = "Ш2",
+            linkedFiles = new[] { "docs/research/foreign.md" },
+        });
+        _factory.Services.GetRequiredService<TaskManager>().GetById(foreignProject.GetProperty("id").GetString()!)!
+            .ProjectId = "proj-foreign";
+        // Другая фича того же владельца, тот же путь: не задача этого run — не попадает.
+        var otherEpic = await CreateTaskAsync(new { title = "чужая фича", role = "feature" });
+        var otherStep = await CreateTaskAsync(new
+        {
+            title = "чужой шаг", featureId = otherEpic.GetProperty("id").GetString(), role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "docs/research/own.md" },
+        });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        var materials = body.GetProperty("materials");
+        materials.ValueKind.Should().Be(JsonValueKind.Array);
+        var m = materials.EnumerateArray().Single();
+        m.GetProperty("path").GetString().Should().Be("docs/research/own.md");
+        m.GetProperty("taskId").GetString().Should().Be(ownId);
+        m.TryGetProperty("at", out _).Should().BeTrue("at — дата задачи (CompletedAt ?? UpdatedAt)");
+
+        // Индекс: строка фичи materials не несёт (тяжёлый ключ — только страница).
+        var index = await GetIndexAsync();
+        var row = index.GetProperty("features").EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        row.TryGetProperty("materials", out _).Should().BeFalse("индекс materials не несёт");
+    }
+
+    // Инвариант IsMaterial на живой ручке: код, макеты и индексы из linkedFiles задачи в
+    // materials не попадают никогда — только документ под docs/. Мутация «не звать IsMaterial»
+    // → backend/A.cs в выдаче (краснеет).
+    [Fact]
+    public async Task GetFeature_Materials_КодНеМатериал()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "backend/A.cs", "docs/mockups/m.html", "docs/README.md", "docs/research/ok.md" },
+        });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("materials").EnumerateArray()
+            .Select(x => x.GetProperty("path").GetString())
+            .Should().Equal("docs/research/ok.md");
+    }
+
     // Б5a/Б5b: stats (график времени) в ответе GET features/{id}: timeline с from/to/stages/
     // segments/totals. Б5b: журнал фичи пишется TaskManager'ом (created) → полный → source=journal
     // (точный режим). Индекс (features/index) и список (features?sessionId=) stats НЕ несут
@@ -1312,9 +1389,9 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
             .Content.ReadFromJsonAsync<JsonElement>();
 
-        // Снапшот верхних ключей: прежние восемь + brief, ничего больше.
+        // Снапшот верхних ключей: прежние девять + materials (FS-B3a), ничего больше.
         body.EnumerateObject().Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal)
-            .Should().Equal("brief", "chats", "events", "eventsTotal", "mockups",
+            .Should().Equal("brief", "chats", "events", "eventsTotal", "materials", "mockups",
                 "mockupsUnavailable", "plans", "run", "stats");
 
         var brief = body.GetProperty("brief");

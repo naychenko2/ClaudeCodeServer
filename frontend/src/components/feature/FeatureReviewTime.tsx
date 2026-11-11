@@ -1,8 +1,10 @@
 // Секция «Время и срок» вкладки «Разбор» (FS-FR1; записка docs/mockups/feature-page-simplify-v4-clickable.md
 // §5 «1. Время и срок», в макете — секция rz-time): сверху плитки «Работали» / «Ждали вас»
-// (FeatureStatsTiles с only), ниже — «Прошло» и «Ошибки» (ReviewKv), затем полоса состава
-// времени с легендой. Все числа — из stats.timeline.totals и run.summary как есть; своё
-// фронт считает только в одном месте — доли в % в легенде (сумма долей видимых видов = 100 ± 1).
+// (FeatureStatsTiles с only), ниже — «Прошло», «Ошибки», «Сдвиг срока с начала» и «Точность
+// срока» (ReviewKv), затем полоса состава времени с легендой. Все числа — из
+// stats.timeline.totals, run.summary и stats.estimateDrift как есть; своё фронт считает только
+// в одном месте — доли в % в легенде (сумма долей видимых видов = 100 ± 1).
+// Величины 4 и 7 (сдвиг срока, точность) — здесь по решению Андрея 11.11, не в «Вне шага».
 // Шкалу срока (etaScale) делает FS-FR1b: приходит пропом и рисуется последней.
 
 import { type CSSProperties, type ReactNode } from 'react';
@@ -38,6 +40,18 @@ function kindMinutes(totals: FeatureTimeline['totals'], kind: CompositionKind): 
   }
 }
 
+// «Сдвиг срока с начала» (величина 4, estimateDrift.shiftMinutes): знак + formatDuration от
+// модуля; 0 — «без сдвига» (сдвиг есть, он нулевой — это факт, а не «нет данных»).
+function shiftText(shift: number): string {
+  return shift === 0 ? 'без сдвига' : `${shift > 0 ? '+' : '−'}${formatDuration(Math.abs(shift))}`;
+}
+
+// «Точность срока» (величина 7, estimateDrift.accuracy = факт / базовая оценка): одна цифра
+// после запятой, десятичная запятая — как остальные числа страницы.
+function accuracyText(acc: number): string {
+  return `×${acc.toFixed(1).replace('.', ',')} от обещанного`;
+}
+
 // Полоса — геометрия полосы корзин FeatureVolumeCard (высота 8, зазор 2, flex по минутам),
 // скругление pill (R.max): тонкая полоса читается цельной, ноль и null в полосу не входят.
 const BAR: CSSProperties = { display: 'flex', gap: 2, height: 8, borderRadius: R.max, overflow: 'hidden' };
@@ -64,9 +78,17 @@ export function FeatureReviewTime({ run, stats, isMobile = false, etaScale }: Fe
     errorParts.push(`${totals.errorCount} ${plural(totals.errorCount, 'эпизод', 'эпизода', 'эпизодов')}`);
   }
 
+  // Величины 4 и 7 — из stats.estimateDrift (аддитивное поле: старый ответ его не несёт,
+  // null — бэк не считал; строки тогда нет). «Точность срока» есть только у закрытой: бэк
+  // отдаёт accuracy null у открытой, своей проверки на закрытость здесь нет.
+  const shift = stats.estimateDrift?.shiftMinutes ?? null;
+  const accuracy = stats.estimateDrift?.accuracy ?? null;
+
   const kvRows: ReviewKvRow[] = [
     { label: 'Прошло', value: elapsed > 0 ? formatDuration(elapsed) : null },
     { label: 'Ошибки', value: errorParts.length > 0 ? errorParts.join(' · ') : null },
+    { label: 'Сдвиг срока с начала', value: shift != null ? shiftText(shift) : null },
+    { label: 'Точность срока', value: accuracy != null ? accuracyText(accuracy) : null },
   ];
 
   // Состав: вид со значением null (approx) или 0 в полосу и легенду не попадает.

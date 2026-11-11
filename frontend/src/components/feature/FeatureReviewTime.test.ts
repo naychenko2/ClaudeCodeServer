@@ -1,17 +1,23 @@
-// Тесты секции «Время и срок» (FS-FR1): полоса состава (null/0 в неё нет), доли легенды,
+// Тесты секции «Время и срок» (FS-FR1 + FS-FRt): полоса состава (null/0 в неё нет), доли легенды,
 // «Прошло» (открытая — elapsed, закрытая — summary.durationMinutes), «Ошибки» с эпизодами,
-// ровно две плитки, порядок секции и слот шкалы срока. Окружение node: разметка —
-// renderToStaticMarkup (счёт и порядок — по html), состояний и кликов здесь нет.
+// «Сдвиг срока с начала» (знак + formatDuration по модулю, 0 → «без сдвига») и «Точность срока»
+// («×1,5 от обещанного», одна цифра после запятой); нет stats.estimateDrift — обеих строк нет,
+// секция остаётся как в FS-FR1. Ровно две плитки, порядок строк kv и слот шкалы срока.
+// Окружение node: разметка — renderToStaticMarkup (счёт и порядок — по html), состояний и
+// кликов здесь нет.
 //
 // Мутации (проверены прогоном): (1) «рисовать вид с null как 0-сегмент» — в kindMinutes
 // `?? null` → `?? 0` и в filter `p.minutes > 0` → `p.minutes >= 0`: краснеют «полоса из трёх
 // частей» и «null и 0 в полосу нет» (появляется 0-сегмент queued); после отката зелёные.
 // (2) closed-ветка «Прошло» убрана (всегда elapsedMinutes): краснеет «закрытая — итог
 // summary»; (3) знаменатель долей — elapsedMinutes вместо суммы видимых видов
-// (FeatureReviewTime.tsx:98 `p.minutes / sum` → `p.minutes / elapsed`): краснеет
+// (FeatureReviewTime.tsx:120 `p.minutes / sum` → `p.minutes / elapsed`): краснеет
 // «approx (waiting/idle null) — только ненулевые виды» (ниже): при фикстуре 90/100
 // доля стала бы 90 % вместо ожидаемых 100 %. «доли 60/30/10» остаётся зелёным:
 // в фикстуре C1 сумма видимых видов равна elapsed (120+60+20=200), знаменатель не меняется.
+// (4) FS-FRt: «показывать accuracy null как ×0» (FeatureReviewTime.tsx:91 `: null` →
+// `: '×0,0 от обещанного'`): краснеют «shiftMinutes null и accuracy null», «estimateDrift null
+// — …» и «старый ответ без поля» — 3 теста; после отката зелёные.
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -20,7 +26,7 @@ import { FeatureReviewTime } from './FeatureReviewTime';
 import { formatDuration } from './FeatureStatsBits';
 import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureRun } from '../../types/featureRun';
-import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureEstimateDrift, FeatureStats, FeatureTimeline } from '../../types/featureStats';
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   return {
@@ -54,7 +60,7 @@ function mkTotals(over: Partial<FeatureTimeline['totals']> = {}): FeatureTimelin
   };
 }
 
-function mkStats(totals: Partial<FeatureTimeline['totals']> = {}): FeatureStats {
+function mkStats(totals: Partial<FeatureTimeline['totals']> = {}, over: Partial<FeatureStats> = {}): FeatureStats {
   return {
     source: 'journal',
     truncated: false,
@@ -62,6 +68,15 @@ function mkStats(totals: Partial<FeatureTimeline['totals']> = {}): FeatureStats 
     breakdown: { personas: [], models: [], roles: [] },
     longestNow: null,
     spend: null,
+    ...over,
+  };
+}
+
+// Дрейф оценок (величины 4, 7, 8): сдвиг +300 мин (5 ч), точность ×1,5.
+function mkDrift(over: Partial<FeatureEstimateDrift> = {}): FeatureEstimateDrift {
+  return {
+    initialEtaMinutes: 600, firstEtaMinutes: 600, currentEtaMinutes: 900, shiftMinutes: 300,
+    denominatorChanges: 0, accuracy: 1.5, ...over,
   };
 }
 
@@ -72,6 +87,15 @@ const html = (run: FeatureRun, stats: FeatureStats, etaScale?: unknown): string 
 const C1 = { workWallMinutes: 120, waitingMinutes: 60, queuedMinutes: null, errorMinutes: 0, errorCount: 0, idleMinutes: 20, elapsedMinutes: 200, agentsSumMinutes: 150 };
 
 const segCount = (h: string): number => (h.match(/data-testid="review-time-seg"/g) ?? []).length;
+// Плитки: сам якорь `tile-<key>` (без `-big`/`-hint` — они со дефисом и в шаблон не входят).
+const tileCount = (h: string): number => (h.match(/data-testid="tile-[a-z]+"/g) ?? []).length;
+
+// Пары «ключ — значение» всех строк ReviewKv в порядке html (строки с value=null
+// в html нет — ReviewKv их не рендерит).
+const kvPairs = (h: string): [string, string][] =>
+  [...h.matchAll(/data-testid="review-kv-row"[^>]*><span[^>]*>([^<]*)<\/span><span[^>]*>([^<]*)<\/span>/g)]
+    .map((m) => [m[1], m[2]] as [string, string]);
+const kvValue = (h: string, label: string): string | undefined => kvPairs(h).find((p) => p[0] === label)?.[1];
 
 describe('полоса состава и легенда (c1)', () => {
   const h = html(mkRun(), mkStats(C1));
@@ -151,6 +175,75 @@ describe('«Прошло» и «Ошибки» (c2)', () => {
   it('эпизоды без минут (errorMinutes null) — только число', () => {
     const h = html(mkRun(), mkStats({ ...C1, errorMinutes: null, errorCount: 3 }));
     expect(h).toContain('3 эпизода');
+  });
+});
+
+describe('«Сдвиг срока с начала» и «Точность срока» (c1)', () => {
+  it('shiftMinutes 300 → «+5 ч», accuracy 1.5 → «×1,5 от обещанного»', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift() }));
+    expect(kvValue(h, 'Сдвиг срока с начала')).toBe('+5 ч');
+    expect(kvValue(h, 'Точность срока')).toBe('×1,5 от обещанного');
+  });
+
+  it('отрицательный сдвиг — знак и модуль: −40 → «−40 мин»', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ shiftMinutes: -40 }) }));
+    expect(kvValue(h, 'Сдвиг срока с начала')).toBe('−40 мин');
+  });
+
+  it('сдвиг 0 — «без сдвига»: строка есть, это факт, а не «нет данных»', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ shiftMinutes: 0 }) }));
+    expect(kvValue(h, 'Сдвиг срока с начала')).toBe('без сдвига');
+  });
+
+  it('сдвиг за порог дней — тот же formatDuration по модулю: −3000 → «−2 дн»', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ shiftMinutes: -3000 }) }));
+    expect(kvValue(h, 'Сдвиг срока с начала')).toBe(`−${formatDuration(3000)}`); // «−2 дн»
+  });
+
+  it('точность — одна цифра после запятой, запятая: 2 → «×2,0», 0.8 → «×0,8»', () => {
+    const h2 = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ accuracy: 2 }) }));
+    expect(kvValue(h2, 'Точность срока')).toBe('×2,0 от обещанного');
+    const h08 = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ accuracy: 0.8 }) }));
+    expect(kvValue(h08, 'Точность срока')).toBe('×0,8 от обещанного');
+  });
+
+  it('shiftMinutes null и accuracy null — обеих строк нет (открытой бэк точность не даёт)', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift({ shiftMinutes: null, accuracy: null }) }));
+    expect(h).not.toContain('Сдвиг срока');
+    expect(h).not.toContain('Точность срока');
+  });
+
+  it('порядок строк: «Прошло» → «Ошибки» → «Сдвиг срока с начала» → «Точность срока»', () => {
+    const h = html(mkRun(), mkStats({ ...C1, errorMinutes: 30, errorCount: 2 }, { estimateDrift: mkDrift() }));
+    expect(kvPairs(h).map((p) => p[0])).toEqual(['Прошло', 'Ошибки', 'Сдвиг срока с начала', 'Точность срока']);
+  });
+
+  it('строки дрейфа не трогают полосу и шкалу: сегментов те же 3, полоса и etaScale — после kv', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: mkDrift() }), createElement('div', { 'data-testid': 'eta-scale' }, 'шкала'));
+    expect(segCount(h)).toBe(3);
+    const iKv = h.indexOf('data-testid="review-kv"');
+    const iBar = h.indexOf('data-testid="review-time-bar"');
+    const iEta = h.indexOf('data-testid="eta-scale"');
+    expect(iKv).toBeGreaterThanOrEqual(0);
+    expect(iKv).toBeLessThan(iBar);
+    expect(iBar).toBeLessThan(iEta);
+  });
+});
+
+describe('нет estimateDrift — обеих строк нет (c2)', () => {
+  it('estimateDrift null — строк нет, секция как в FS-FR1: ровно 2 плитки, полоса и шкала на месте', () => {
+    const h = html(mkRun(), mkStats(C1, { estimateDrift: null }), createElement('div', { 'data-testid': 'eta-scale' }, 'шкала'));
+    expect(h).not.toContain('Сдвиг срока');
+    expect(h).not.toContain('Точность срока');
+    expect(tileCount(h)).toBe(2);
+    expect(segCount(h)).toBe(3);
+    expect(h).toContain('data-testid="eta-scale"');
+  });
+
+  it('старый ответ без поля (undefined) — той же двух строк нет', () => {
+    const h = html(mkRun(), mkStats(C1));
+    expect(h).not.toContain('Сдвиг срока');
+    expect(h).not.toContain('Точность срока');
   });
 });
 

@@ -6,7 +6,9 @@
 // (bgCard/borderLight/R.lg, поля SP.lg, на мобиле SP.md); дорожка — в геометрии ProgressBar
 // (высота 4, R.max). Все числа — из brief и stats.typical как есть, формат один —
 // formatDuration; своих величин фронт не считает. Встраивание — FS-FR: проп etaScale у
-// FeatureReviewTime.
+// FeatureReviewTime. Подпись «Смены знаменателя: N» (величина 8, FP-R2: перенесена из
+// «Объёма» — «это качество оценки, к объёму не относится», feature-review-returns-v1.md):
+// из stats.estimateDrift.denominatorChanges; нет estimateDrift или 0 — подписи нет.
 
 import { type CSSProperties } from 'react';
 import { C, R, SP, FS, FONT } from '../../lib/design';
@@ -112,6 +114,8 @@ const LABEL: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.sm, color: C.
 const HINT: CSSProperties = { display: 'block', fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted };
 const VALUE: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, textAlign: 'right', fontVariantNumeric: 'tabular-nums' };
 const CAPTION: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted };
+// Подпись «Смены знаменателя» — тем же стилем подписей шкалы, что LABEL (FS.sm, C.textSecondary).
+const DENOM: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary };
 
 export function FeatureReviewEtaScale({ brief, stats, nameOf, isMobile = false }: FeatureReviewEtaScaleProps) {
   const rows = buildRows(brief, stats, nameOf);
@@ -121,6 +125,9 @@ export function FeatureReviewEtaScale({ brief, stats, nameOf, isMobile = false }
   const max = Math.max(...rows.map((r) => r.to));
   const pct = (v: number) => Math.max(0, Math.min(100, Math.round((v / max) * 100)));
   const agreement = brief?.note?.estimate?.agreement ?? null;
+  // Смены знаменателя (величина 8): здесь 0 — «не менялся», подписи нет (в «Объёме» 0 был
+  // значением-строкой; в шкалу срока перенесена как отметка качества оценки, не как факт).
+  const denom = stats.estimateDrift?.denominatorChanges ?? 0;
 
   return (
     <div data-testid="review-eta" style={isMobile ? { ...CARD, ...CARD_MOBILE } : CARD}>
@@ -143,6 +150,9 @@ export function FeatureReviewEtaScale({ brief, stats, nameOf, isMobile = false }
         );
       })}
       <div data-testid="review-eta-scale" style={CAPTION}>{`шкала: 0 — ${formatDuration(max)}`}</div>
+      {denom > 0 ? (
+        <div data-testid="review-eta-denominator" style={DENOM}>{`Смены знаменателя: ${denom}`}</div>
+      ) : null}
       <ReviewKv rows={[{ label: 'Согласие оценок', value: agreement ? AGREEMENT_LABEL[agreement] : null }]} />
     </div>
   );

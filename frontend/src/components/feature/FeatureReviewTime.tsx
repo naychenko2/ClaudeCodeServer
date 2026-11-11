@@ -1,10 +1,14 @@
 // Секция «Время и срок» вкладки «Разбор» (FS-FR1; записка docs/mockups/feature-page-simplify-v4-clickable.md
 // §5 «1. Время и срок», в макете — секция rz-time): сверху плитки «Работали» / «Ждали вас»
-// (FeatureStatsTiles с only), ниже — «Прошло», «Ошибки», «Сдвиг срока с начала» и «Точность
-// срока» (ReviewKv), затем полоса состава времени с легендой. Все числа — из
+// (FeatureStatsTiles с only), ниже — «Прошло», «Ошибки», «Сдвиг срока с начала», «Точность
+// срока» и медианы шага («по проекту», «этой фичи») (ReviewKv), затем полоса состава времени
+// с легендой. Все числа — из
 // stats.timeline.totals, run.summary и stats.estimateDrift как есть; своё фронт считает только
 // в одном месте — доли в % в легенде (сумма долей видимых видов = 100 ± 1).
 // Величины 4 и 7 (сдвиг срока, точность) — здесь по решению Андрея 11.11, не в «Вне шага».
+// Медианы шага (B2a и величина 5) перенесены из «Объёма» (FP-R2, таблица
+// feature-review-returns-v1.md: «это время, а не объём»); источники и формат — те же, что
+// были в «Объёме» (FeatureReviewVolume, до FP-R3).
 // Шкалу срока (etaScale) делает FS-FR1b: приходит пропом и рисуется последней.
 
 import { type CSSProperties, type ReactNode } from 'react';
@@ -85,11 +89,20 @@ export function FeatureReviewTime({ run, stats, isMobile = false, etaScale }: Fe
   const shift = stats.estimateDrift?.shiftMinutes ?? null;
   const accuracy = stats.estimateDrift?.accuracy ?? null;
 
+  // Медианы шага (FP-R2, перенесены из «Объёма»): источники и формат — те же, что были
+  // в «Объёме» (FeatureReviewVolume, до FP-R3). «Медиана шага по проекту» (B2a): null — фич с шагами
+  // меньше трёх. «Медиана шага этой фичи» (величина 5, аддитивное поле): null — принятых
+  // цепочек нет, старый ответа его не несёт. Нет данных — строки нет.
+  const median = stats.typical?.stepMinutes?.median;
+  const featureMedian = stats.stepMedianMinutes;
+
   const kvRows: ReviewKvRow[] = [
     { label: 'Прошло', value: elapsed > 0 ? formatDuration(elapsed) : null },
     { label: 'Ошибки', value: errorParts.length > 0 ? errorParts.join(' · ') : null },
     { label: 'Сдвиг срока с начала', value: shift != null ? shiftText(shift) : null },
     { label: 'Точность срока', value: accuracy != null ? accuracyText(accuracy) : null },
+    { label: 'Медиана шага по проекту', value: median != null ? formatDuration(median) : null },
+    { label: 'Медиана шага этой фичи', value: featureMedian != null ? formatDuration(featureMedian) : null },
   ];
 
   // Состав: вид со значением null (approx) или 0 в полосу и легенду не попадает.

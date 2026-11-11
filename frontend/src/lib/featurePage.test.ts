@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   __test,
-  FEATURE_TAB_LABEL,
   FEATURE_MAIN_TAB_LABEL,
   getFeatureMainTab,
   setFeatureMainTab,
@@ -315,20 +314,8 @@ describe('brief: ответ страницы с brief и без него', () =>
 // p.15/p.16 («Показать все») — замороженный блок: функция refetchFeaturePageAll убрана,
 // её тесты (персист режима + тост при сбое) — с ней.
 
-// ── 6. Названия вкладок (Ш1b) ──────────────────────────────────────────────────
-describe('названия вкладок (Ш1b, разрез упрощения страницы)', () => {
-  // Разворот словаря по разрезу: лента событий — «История» фичи, планы и макеты —
-  // «Материалы». Мутация: вернуть старое имя → red.
-  it('events → «История», plans → «Материалы»', () => {
-    expect(FEATURE_TAB_LABEL.events).toBe('История');
-    expect(FEATURE_TAB_LABEL.plans).toBe('Материалы');
-  });
-
-  // Ш7: вкладка «Шаги» (бывшая «Задачи»), счётчик — знаменатель трекера.
-  it('tasks → «Шаги»', () => {
-    expect(FEATURE_TAB_LABEL.tasks).toBe('Шаги');
-  });
-
+// ── 6. Названия вкладок и счётчик ────────────────────────────────────────────────
+describe('названия вкладок и счётчик шагов', () => {
   it('stepsTabCount: stepProgress.total, а не число задач; без прогресса — число цепочек', () => {
     const chains = [{ stepRef: 'A' }, { stepRef: 'B' }] as FeatureRun['stepChains'];
     const withProgress = { stepProgress: { total: 98 }, stepChains: chains, steps: [{}, {}, {}] } as unknown as FeatureRun;
@@ -382,7 +369,7 @@ describe('мейн-вкладка (FS-FTABS)', () => {
     expect(FEATURE_MAIN_TAB_LABEL.review).toBe('Разбор');
   });
 
-  it('chats, затем stats: main=review, второй вызов мейн-значение не меняет', () => {
+  it('chats, затем stats: main=review, второй вызов мейн-значение не меняет и подписчиков не будит', () => {
     setFeaturePageTab('chats'); // main → review (до подписки — не считаем)
     let n = 0;
     const off = __test.subscribe(() => {
@@ -391,9 +378,15 @@ describe('мейн-вкладка (FS-FTABS)', () => {
     setFeaturePageTab('stats'); // main тот же (review): setFeatureMainTab ранне выходит
     off();
     expect(getFeatureMainTab()).toBe('review');
-    // Одно уведомление — только от смены старой вкладки; мейн-emit добавился бы
-    // без раннего выхода (мутация: 2 вместо 1).
-    expect(n).toBe(1);
+    // Лишнего уведомления нет: мутация «emit в setFeaturePageTab» даёт 1 вместо 0.
+    expect(n).toBe(0);
+  });
+
+  it('повтор того же старого значения после ручной смены вкладки снова открывает нужную', () => {
+    setFeaturePageTab('events');
+    setFeatureMainTab('progress');
+    setFeaturePageTab('events');
+    expect(getFeatureMainTab()).toBe('review');
   });
 
   it('setFeatureMainTab: no-op при равном значении, уведомление только при смене', () => {

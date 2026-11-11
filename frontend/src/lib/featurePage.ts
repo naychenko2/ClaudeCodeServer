@@ -303,51 +303,19 @@ export type FeaturePageTab = 'timeline' | 'plans' | 'chats' | 'tasks' | 'events'
 const DEFAULT_TAB: FeaturePageTab = 'timeline';
 let _tab: FeaturePageTab = DEFAULT_TAB;
 
-// Названия вкладок: ОДИН словарь (minor 1, ревью Ф9b) — единый источник для полосы
-// вкладок (FeaturePageTabs) И для чипа возврата «← к фиче · {вкладка}» в шапке чата (Ф9b):
-// названия не разъезжаются (раньше у чипа был отдельный короткий словарь, «Планы»).
-// Ш1b (разрез упрощения страницы фичи): «События» → «История», «Планы и макеты» →
-// «Материалы». Вкладка «Материалы» в чипе недостижима (из неё перехода в чат нет — только
-// в задачу, а чип рисуется на chat-переходе), но запись НЕ мёртвая: её использует полоса
-// вкладок.
-export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
-  timeline: 'Хронология',
-  plans: 'Материалы',
-  chats: 'Чаты',
-  tasks: 'Шаги',
-  events: 'История',
-  stats: 'Статистика',
-};
-
 // Счётчик вкладки «Шаги»: знаменатель трекера (stepProgress.total — тот же, что на полосе
 // готовности), а не число задач. Нет агрегата прогресса (старый ответ) — число цепочек.
 export function stepsTabCount(run: FeatureRun): number {
   return run.stepProgress?.total ?? run.stepChains?.length ?? 0;
 }
 
-// Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.
-export function getFeaturePageTab(): FeaturePageTab {
-  return _tab;
-}
-
-// Установить вкладку (no-op при том же значении — лишний emit не плодим).
-// FS-FTABS: старый выбор всегда имеет и мейн-вкладку — перевод по таблице
-// toMainTab. Когда мейн-значение не меняется (chats→stats — обе «Разбор»),
-// setFeatureMainTab ранне выходит: лишнего уведомления подписчикам нет.
+// Внешняя точка перехода на вкладку (старые значения): перевод по таблице toMainTab.
+// Раннего выхода по прошлому значению нет: пользователь мог переключить вкладку руками
+// (setFeatureMainTab), и повторный переход на то же старое значение обязан её открыть.
+// Лишних уведомлений нет: setFeatureMainTab ранне выходит при том же мейн-значении.
 export function setFeaturePageTab(t: FeaturePageTab) {
-  if (_tab === t) return;
   _tab = t;
-  emit();
   setFeatureMainTab(toMainTab(t));
-}
-
-// Хук: выбранная вкладка страницы (тот же стор, что и данные).
-export function useFeaturePageTab(): FeaturePageTab {
-  return useSyncExternalStore(
-    subscribe,
-    () => _tab,
-    () => _tab,
-  );
 }
 
 // === Мейн-вкладка «Ход · Материалы · Разбор» (FS-FTABS, макет v4) ===
@@ -361,7 +329,7 @@ export function useFeaturePageTab(): FeaturePageTab {
 // 'progress'; сброс — там же, где у `_tab` (смена fid, __test.reset).
 export type FeatureMainTab = 'progress' | 'materials' | 'review';
 
-// Названия мейн-вкладок: ОДИН словарь (тот же порядок, что у FEATURE_TAB_LABEL).
+// Названия мейн-вкладок: ОДИН словарь.
 export const FEATURE_MAIN_TAB_LABEL: Record<FeatureMainTab, string> = {
   progress: 'Ход',
   materials: 'Материалы',

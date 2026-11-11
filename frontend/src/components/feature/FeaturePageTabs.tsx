@@ -1,12 +1,11 @@
 import { useEffect, useRef } from 'react';
 import { C } from '../../lib/design';
 import { Tabs, type TabItem } from '../ui/Tabs';
-import { FEATURE_TAB_LABEL, type FeaturePageTab } from '../../lib/featurePage';
+import { FEATURE_MAIN_TAB_LABEL, type FeatureMainTab } from '../../lib/featurePage';
 
-// Вкладки страницы фичи (волна 3, Ф1): «Хронология» (по умолчанию) · «Планы и
-// макеты» · «Чаты» · «Шаги» · «События» · «Статистика». Кит ui/Tabs (size md,
-// R-1: 38/44, поля 10/12) — самодельных не заводить; счётчики (Чаты/Шаги/События)
-// и точка «ждёт ответа» у «Чатов» — по макету §4.
+// Вкладки страницы фичи (макет v4): «Ход» (по умолчанию) · «Материалы» · «Разбор».
+// Кит ui/Tabs (size md, R-1: 38/44, поля 10/12) — самодельных не заводить; счётчик
+// есть только у «Материалов».
 //
 // Полоса липкая к верху тела (R-7: zIndex 1 в собственном контексте наложения
 // страницы), фон bgWhite, линия снизу borderLight, горизонтальная прокрутка БЕЗ
@@ -23,19 +22,14 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-feature-page
 
 export interface FeaturePageTabsProps {
   // Выбранная вкладка (стор страницы: переживает скрытие/возврат).
-  value: FeaturePageTab;
-  onChange: (t: FeaturePageTab) => void;
+  value: FeatureMainTab;
+  onChange: (t: FeatureMainTab) => void;
   isMobile: boolean;
-  // Счётчики; 0/null — без счётчика (макет: нулевые не рисуются).
+  // Счётчик «Материалов»; 0/null — без счётчика.
   plansCount?: number | null;
-  chatsCount?: number | null;
-  tasksCount?: number | null;
-  eventsCount?: number | null;
-  // Точка «ждёт вашего ответа» у «Чатов»: фича ждёт ответа в чате.
-  waitingDot?: boolean;
 }
 
-export function FeaturePageTabs({ value, onChange, isMobile, plansCount, chatsCount, tasksCount, eventsCount, waitingDot }: FeaturePageTabsProps) {
+export function FeaturePageTabs({ value, onChange, isMobile, plansCount }: FeaturePageTabsProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // На 360: активная вкладка в видимости (макет §4).
@@ -45,17 +39,10 @@ export function FeaturePageTabs({ value, onChange, isMobile, plansCount, chatsCo
     el?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
   }, [value, isMobile]);
 
-  const items: TabItem<FeaturePageTab>[] = [
-    { value: 'timeline', label: FEATURE_TAB_LABEL.timeline },
-    { value: 'plans', label: FEATURE_TAB_LABEL.plans, count: plansCount != null && plansCount > 0 ? plansCount : undefined },
-    {
-      value: 'chats', label: FEATURE_TAB_LABEL.chats,
-      count: chatsCount != null && chatsCount > 0 ? chatsCount : undefined,
-      dot: waitingDot || undefined,
-    },
-    { value: 'tasks', label: FEATURE_TAB_LABEL.tasks, count: tasksCount != null && tasksCount > 0 ? tasksCount : undefined },
-    { value: 'events', label: FEATURE_TAB_LABEL.events, count: eventsCount != null && eventsCount > 0 ? eventsCount : undefined },
-    { value: 'stats', label: FEATURE_TAB_LABEL.stats },
+  const items: TabItem<FeatureMainTab>[] = [
+    { value: 'progress', label: FEATURE_MAIN_TAB_LABEL.progress },
+    { value: 'materials', label: FEATURE_MAIN_TAB_LABEL.materials, count: plansCount != null && plansCount > 0 ? plansCount : undefined },
+    { value: 'review', label: FEATURE_MAIN_TAB_LABEL.review },
   ];
 
   return (

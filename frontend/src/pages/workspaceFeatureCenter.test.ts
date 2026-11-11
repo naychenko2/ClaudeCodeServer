@@ -501,13 +501,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((reactProps(taAfterReturn!) as any).value, 'черновик композера не пережил возврат').toBe(draft);
   });
 
-  // M4: страница открыта на «Чатах» → клик по точке (cc-open-feature с stage) → вкладка
-  // ЯВНО «Хронология» (setPage сбрасывает _tab только при смене fid — повторный клик по
-  // точке на уже открытой фиче вкладку бы не сменил) + якорь этапа; вкладка «Хронология»
-  // читает якорь и ГАСИТ его (clearFeatureStageFocus) — «Фича →» без stage старый этап
-  // не раскроет. Мутации: убрать setFeaturePageTab('timeline') → вкладка «chats» → red;
-  // убрать clearFeatureStageFocus → stageFocus() не null → red.
-  it('M4: страница на «Чатах» → точка (stage) → «Хронология» + якорь гашен; «Фича →» без stage → якоря нет', async () => {
+  // M4: страница открыта на «Разборе» (старое значение chats) → клик по точке (cc-open-feature
+  // с stage) → вкладка ЯВНО «Ход» (setPage сбрасывает вкладку только при смене fid — повторный
+  // клик по точке на уже открытой фиче вкладку бы не сменил). Вкладки «Хронология» больше нет:
+  // якорь этапа никто не гасит, поэтому на гашение тест не опирается.
+  // Мутация: убрать setFeaturePageTab('timeline') → вкладка «review» → red.
+  it('M4: страница на «Разборе» → точка (stage) → «Ход»; «Фича →» без stage → вкладка не меняется', async () => {
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -521,13 +520,13 @@ describe('WorkspacePage: центр — страница фичи соседом
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.tab(), 'дефолтная вкладка — «Хронология»').toBe('timeline');
+    expect(pageTest.mainTab(), 'дефолтная вкладка — «Ход»').toBe('progress');
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница фичи не открыта').not.toBeNull();
 
-    // 2. Пользователь на вкладке «Чаты».
+    // 2. Пользователь на вкладке «Разбор».
     setFeaturePageTab('chats');
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.tab()).toBe('chats');
+    expect(pageTest.mainTab()).toBe('review');
 
     // 3. Клик по точке: cc-open-feature с stage.
     act(() => {
@@ -537,10 +536,8 @@ describe('WorkspacePage: центр — страница фичи соседом
     });
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // 4. Вкладка ЯВНО «Хронология» (не «Чаты» — старый дефект).
-    expect(pageTest.tab(), 'клик по точке не переключил на «Хронологию»').toBe('timeline');
-    // 5. «Хронология» смонтирована и ГАСИТ якорь (clearFeatureStageFocus после прочтения).
-    expect(pageTest.stageFocus(), 'якорь этапа не гашен вкладкой «Хронология»').toBeNull();
+    // 4. Вкладка ЯВНО «Ход» (не «Разбор» — старый дефект).
+    expect(pageTest.mainTab(), 'клик по точке не переключил на «Ход»').toBe('progress');
 
     // 6. «Фича →» без stage: якорь не ставится заново (старый этап не раскроется).
     act(() => {
@@ -549,8 +546,7 @@ describe('WorkspacePage: центр — страница фичи соседом
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.stageFocus(), '«Фича →» без stage не должна ставить якорь').toBeNull();
-    expect(pageTest.tab(), 'вкладка осталась «Хронология»').toBe('timeline');
+    expect(pageTest.mainTab(), 'вкладка осталась «Ход»').toBe('progress');
   });
 
   it('системное «назад» (popstate): setOpenFeatureId по снимку — в исходнике центра', () => {

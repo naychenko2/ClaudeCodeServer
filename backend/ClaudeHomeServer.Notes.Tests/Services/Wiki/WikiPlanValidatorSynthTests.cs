@@ -304,4 +304,52 @@ public class WikiPlanValidatorSynthTests
         WikiPlanValidator.ValidateSynth(null, Src, Section, [], [], new()).Violations.Should().NotBeEmpty();
         Run(Array.Empty<WikiPlanValidator.SynthOp>()).Accepted.Should().BeEmpty();
     }
+
+    [Fact]
+    public void ValidateSynth_ЧислоБлизкоеНоНеТо_2_28ПриЦитате2_27_ВоВходящих()
+    {
+        var src = new WikiPlanValidator.Source(WikiGate.OriginSession, CardTitle, "Версия 2.27 вышла вчера, замеры идут.");
+        var r = WikiPlanValidator.ValidateSynth(
+            new([Op(WikiPackage.OpAppend, "Сущность", "Версия 2.28 вышла вчера", ["Версия 2.27 вышла вчера"])]),
+            src, Section, [WikiSections.Common], [new(CardPath, CardFile), new(PagePath, PageFile)], new());
+
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("2.28");
+    }
+
+    [Fact]
+    public void RenderApply_ДвеЦитатыПринятойОперации_ТочнаяСтрокаДвеСноскиИЧистыйГейт()
+    {
+        const string claim = "Сборка уходит на Linux, Windows оставляем";
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", claim, [QLinux, QWindows]));
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        List<WikiGate.Draft> state = [new(CardPath, CardFile), new(PagePath, PageFile)];
+        var baseState = state.ToArray();
+
+        var draft = WikiPlanValidator.RenderApply(state, op, op.Quotes!, CardTitle)!.Value;
+
+        var page = WikiPage.Parse(draft.Content).Model!;
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().ContainSingle()
+            .Which.Should().Be($"{claim} [^s1][^s2]");
+        page.Footnotes.Should().HaveCount(2).And.OnlyContain(f => f.Target.IsLink && f.Target.Text == CardTitle);
+        state.RemoveAll(d => d.Path == PagePath);
+        state.Add(draft);
+        WikiGate.Check(state, Section, [WikiSections.Common], new Dictionary<string, string> { [CardPath] = SourceText },
+            WikiGate.VerbatimScope.GivenOnly, WikiPackage.AuthorAi, baseState).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void RenderApply_CreateState_ШапкаСодержитTypeИAsOfИНеСодержитKind()
+    {
+        var op = Run(Op(WikiPackage.OpCreate, "Состояние", "Сборка уходит на Linux", [QLinux], kind: "state", asOf: "2026-11-01"))
+            .Accepted.Should().ContainSingle().Subject;
+        List<WikiGate.Draft> state = [new(CardPath, CardFile)];
+
+        var content = WikiPlanValidator.RenderApply(state, op, op.Quotes!, CardTitle)!.Value.Content;
+
+        var lines = content.Split('\n');
+        lines.Should().Contain("type: state").And.Contain("as_of: 2026-11-01");
+        lines.Should().NotContain(l => l.StartsWith("kind:"));
+    }
 }

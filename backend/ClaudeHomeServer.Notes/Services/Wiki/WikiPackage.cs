@@ -221,7 +221,7 @@ public sealed record WikiPackage
         /// <summary>Цитаты-доказательства: 1–3 элемента, каждый 8–300 символов после Trim
         /// (границы — WikiPage.MinQuoteLength/MaxQuoteLength). Порядок сохраняется: номера
         /// сносок берутся по нему (S2-7). null — старый пакет, где доказательство в `Text`
-        /// (WikiIngestService.VerifiedQuote).</summary>
+        /// (цитата прежнего прохода A).</summary>
         public IReadOnlyList<string>? Quotes { get; init; }
         /// <summary>Вид создаваемой страницы: при применении становится полем шапки `type`
         /// (ADR-039 §3), а НЕ полем шапки `kind` (WikiFrontmatter.Kind — другое поле).

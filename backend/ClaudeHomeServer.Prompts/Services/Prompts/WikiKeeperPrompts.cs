@@ -106,8 +106,8 @@ public static class WikiKeeperPrompts
             start and finish of executors, review verdicts ("returned", "accepted"), statuses
             "done / in progress / accepted", task and card ids, worktree paths, "reconciliation:
             clean", alarms and waits, document edits item by item, assistant proposals the human
-            did not confirm. Lines of the source marked "[процесс] …" are a compressed trace of
-            process: never quote them. You may derive a lesson from such a line only if the
+            did not confirm. Lines of the source marked "[процесс] …" are only a marker that a
+            process event happened; the marker carries no source text: never quote them. You may derive a lesson from such a line only if the
             lesson is backed by a verbatim quote from an ordinary line of the source; if there
             is nothing to back it with, there is no operation.
             The criterion: is it true and useful a month later to someone who never saw the

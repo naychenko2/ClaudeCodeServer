@@ -50,8 +50,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // Плюс доработка R-N7a M1: ключ вне каталога LocalActionCatalog — отказ с причиной на
 // входе очереди заявок, модель не зовётся (неведомое место не уходит в облако).
 //
-// Утверждение модели — дословная цитата реплики (text == quote): в финальном пакете
-// op.Text — подтверждённая цитата (WikiIngestService.cs:335 VerifiedQuote), дедup меры 2
+// Утверждение модели в фейке совпадает с цитатой реплики (claim == quote): в пакете
+// op.Text = Claim (синтез, S2-8b), дедup меры 2
 // (WikiDedup.IsDuplicateStatement → HasSameText) опознаёт повтор именно по тексту
 // утверждения на странице (WikiPlanValidator.cs:211) — пересказ он бы не поймал.
 public class WikiChatIngestTests : IDisposable

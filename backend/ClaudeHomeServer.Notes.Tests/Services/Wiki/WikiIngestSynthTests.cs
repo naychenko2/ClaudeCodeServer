@@ -191,11 +191,12 @@ public class WikiIngestSynthTests : IDisposable
         WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
     }
 
-    [Fact]
-    public async Task ОперацияБезQuotes_НеВПакет_ПричинаВидаВРемонте()
+    [Theory]
+    [InlineData("""{"outcome":"ok","operations":[{"op":"append","page":"Сущность","claim":"Сборку решено перенести"}]}""")]
+    [InlineData("""{"outcome":"ok","operations":[{"op":"append","page":"Сущность","claim":"Сборку решено перенести","quotes":[]}]}""")]
+    public async Task ОперацияБезQuotes_НеВПакет_ПричинаВидаВРемонте(string noQuotes)
     {
-        // Ключа quotes в ответе нет: ParseSynthPlan отдаёт пустой список, ValidateSynth отказывает.
-        var noQuotes = """{"outcome":"ok","operations":[{"op":"append","page":"Сущность","claim":"Сборку решено перенести"}]}""";
+        // Ключа quotes нет или он пуст: ParseSynthPlan отдаёт пустой список, ValidateSynth отказывает.
         var llm = new FakeLlm(noQuotes, repair: WikiSynthJson.Nothing("нечего"));
 
         var res = await Sut(llm).IngestAsync(User, Req());

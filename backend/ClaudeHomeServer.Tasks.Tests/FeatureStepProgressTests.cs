@@ -1276,4 +1276,65 @@ public class FeatureStepProgressTests
         json.Should().Contain("\"baselineTotal\":3").And.Contain("\"followUpTotal\":1")
             .And.Contain("\"followUpAccepted\":0").And.Contain("\"followUp\":true");
     }
+    // Критерий c1: 10 принятых базовых шагов + 3 доработки после мержа (1 принята) через полный
+    // FeatureProjector.Build: итог (Total/Accepted/Summary) тот же, что без доработок.
+    [Fact]
+    public void Доработки_ПослеМержа_ИтогИSummaryНеМеняются()
+    {
+        List<TaskItem> Base()
+        {
+            var l = new List<TaskItem> { Feature(), Plan("p", 0, Enumerable.Range(1, 10).Select(n => ($"B{n}", (string?)"back")).ToArray()) };
+            for (var n = 1; n <= 10; n++)
+            {
+                l.Add(Step($"s{n}", $"B{n}", n));
+                l.Add(Verdict($"r{n}", TaskRoles.Review, TaskVerdicts.Accepted, n + 1, $"s{n}"));
+            }
+            l.Add(Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 30, "s1"));
+            l.Add(MergeDone("m", 40));
+            return l;
+        }
+        var tasks = Base();
+        var before = FeatureProjector.Build(tasks[0], tasks.ToList(), T0.AddDays(1));
+        tasks.Add(Step("f1", "F1", 60));
+        tasks.Add(Step("f2", "F2", 61));
+        tasks.Add(Step("f3", "F3", 62));
+        tasks.Add(Verdict("rf3", TaskRoles.Review, TaskVerdicts.Accepted, 64, "f3"));
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.Total.Should().Be(10);
+        run.StepProgress.Accepted.Should().Be(10);
+        run.StepProgress.PlanState.Should().Be(FeatureStepAccounting.PlanDone);
+        run.StepProgress.FollowUpTotal.Should().Be(3);
+        run.StepProgress.FollowUpAccepted.Should().Be(1);
+        run.StepChains.Count(c => c.FollowUp).Should().Be(3);
+        // Состояние фичи при доработках после мержа (WaveAfterMerge) — открытый вопрос Андрею и здесь
+        // не фиксируется; Summary строится из тех же Total/Accepted, поэтому сверяем источник итога.
+        before.State.Should().Be(FeatureStates.Merged);
+        before.Summary!.Steps.Should().Be(run.StepProgress.Total);
+        before.Summary.StepsOpen.Should().Be(run.StepProgress.Total - run.StepProgress.Accepted);
+    }
+
+    // Критерий c3: две открытые доработки → open=2 в рисках второго мержа; плановый шаг-«хвост» не мешает.
+    [Fact]
+    public void РискиМержа_ДвеОткрытыеДоработки_OpenДва()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("f1", "F1", 40, TaskItemStatus.InProgress), Step("f2", "F2", 41, TaskItemStatus.InProgress));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 2);
+    }
+
+    // Критерий c4: BaselineSteps эпика доезжает до stepProgress.baselineTotal; без него — null.
+    [Fact]
+    public void BaselineTotal_ИзЭпика_ПробрасываетсяВStepProgress()
+    {
+        var epic = Feature();
+        epic.BaselineSteps = 12;
+        var withBase = FeatureProjector.Build(epic, [epic, Step("s1", "A", 1)], T0.AddDays(1));
+        withBase.StepProgress.BaselineTotal.Should().Be(12);
+        var epic2 = Feature();
+        FeatureProjector.Build(epic2, [epic2, Step("s1", "A", 1)], T0.AddDays(1)).StepProgress.BaselineTotal.Should().BeNull();
+    }
 }

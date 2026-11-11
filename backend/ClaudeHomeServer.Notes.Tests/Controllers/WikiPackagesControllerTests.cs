@@ -5,6 +5,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -41,6 +42,9 @@ public class WikiPackagesControllerTests : IDisposable
     private readonly WikiRetractService _retract;
     private readonly SessionsStub _sessions = new();
     private readonly WikiKeeper _keeper;
+    // T-A2: хук возврата окна в AfterDecision. Цепка настоящая (тот же порядок, что в
+    // WikiChatWindowReturnTests), модель — отказный раннер: ReturnWindow модель не зовёт.
+    private readonly WikiChatIngestService _chat;
 
     public WikiPackagesControllerTests()
     {
@@ -59,6 +63,10 @@ public class WikiPackagesControllerTests : IDisposable
         _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _revert = new WikiPackageRevert(_notes, _keeper, _config);
         _retract = new WikiRetractService(_notes, _keeper, _revert, _sessions, new NoSpheres(), _config);
+        _chat = new WikiChatIngestService(
+            new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
+            new WikiIngestService(new NoopCheapRunner(), new NoSpheres(), _apply, _config),
+            _sessions, _keeper, _config);
     }
 
     public void Dispose()
@@ -929,6 +937,162 @@ public class WikiPackagesControllerTests : IDisposable
         StatusOnDisk(id).Should().Be(WikiPackage.StatusApplied);
     }
 
+    // ─── 20. T-A2: возврат окна решённого, но неприменившегося пакета ────────────────────
+    //
+    // Инвариант: пакет, который человек решил, но который не применился («apply_failed»/
+    // «stale»), не теряет окно: курсор разбора возвращается на его начало. Фикстура — метод
+    // WikiChatWindowReturnTests: чат в каталоге, курсор 9 — прямая запись стора. Окно в тестах
+    // m1…9 → from=1 → целевой курсор 0.
+
+    [Fact]
+    public async Task ОтказПримененияРешённогоПакета_ВозвращаетОкно_КурсорНаНоль()
+    {
+        // c1: пакет с источником session:chat-1#m1-9 и решением человека; применение отказано
+        // (две карточки источника — точная выбор невозможен, тот же приём, что в тесте
+        // «ДвеКарточкиОдногоИсточника») → «apply_failed» → курсор возвращается на начало
+        // окна (from=1 → 0, хэша записи 0 нет), зона прежнего исхода снята.
+        // Мутация (c3): убрать вызов ReturnDecidedWindowsAsync в AfterDecision — курсор
+        // остаётся 9: этот тест и stale-тест краснеют.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        var id = await NewRealPackage([RealOp()]);
+        await WriteViaKeeper("Общее/Прежняя-версия-карточки.md", """
+            ---
+            type: source
+            origin: session
+            ref: session:chat-1#m1-9
+            hash: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+            captured: 2026-10-20
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Прежняя версия карточки
+            """);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeSourceUnavailable);
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplyFailed);
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
+
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(0, "решённое, но неприменённое окно разбирается заново с его начала");
+        entry.CursorHash.Should().BeNull("записи 0 нет — хэша нет");
+        entry.Zone.Should().BeNull("прежний исход снимает следующий разбор, а не откат");
+        entry.Reason.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task StaleРешённогоПакета_ВозвращаетОкно_КурсорНаНоль()
+    {
+        // Второй статус инварианта: база намерения исчезла → «stale» с кодом CodeStale (не
+        // заявка и не статус — отказ по существу, не проигранная гонка) → окно возвращается
+        // так же. Мутация та же, что у c1: без хука курсор остаётся 9.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        var id = await NewRealPackage([RealOp(basePage: "Общее/Нет.md")]);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Code.Should().Be(WikiApplyService.CodeStale);
+        dto.Package.Status.Should().Be(WikiPackage.StatusStale);
+        TriageEntry("chat-1").Cursor.Should().Be(0, "устаревшее решённое окно тоже возвращается в разбор");
+    }
+
+    [Fact]
+    public async Task УспешноеПрименение_ОкноНеВозвращается_КурсорПрежний()
+    {
+        // c2: «applied» — не сбой: окно закрылось удачным применением, его результат на месте,
+        // курсор не трогается и к стору никто не обращался (TriagedAt прежний). Мутация
+        // «убрать условие статуса»: здесь краснеет курсор 9 → 0.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        var before = TriageEntry("chat-1");
+        var id = await NewRealPackage([RealOp()]);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplied);
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(9, "удачное применение окно не возвращает");
+        entry.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
+        entry.TriagedAt.Should().Be(before.TriagedAt, "пустого обращения к стору не было");
+    }
+
+    [Fact]
+    public async Task РешённыйПакетСNoteИсточникомСФормойОкна_ОкноНеТрогается()
+    {
+        // c2: ключ хука — origin источника, а не форма ref: note-источник с ref, похожим на
+        // окно чата («session:chat-1#m1-9»), — не источник чата: применение отказано по
+        // отсутствию его карточки («apply_failed»), курсор прежний. Мутация «разбирать ref
+        // без origin»: здесь краснеет курсор 9 → 0.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        await _keeper.EnsureInitializedAsync(User);
+        await WriteViaKeeper(CardPageKey, SourceCardFile);
+        await WriteViaKeeper(Page, BasePage);
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef("note", "session:chat-1#m1-9")],
+            Operations = [new WikiPackage.Operation
+            {
+                Op = WikiPackage.OpSupersede,
+                Page = Page,
+                Text = Claim,
+                Target = OldClaim,
+                Class = WikiPackage.ClassKey("note", WikiPackage.OpSupersede),
+                Decision = WikiPackage.DecisionInbox,
+                Reason = "замещает действующее утверждение",
+                BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+            }],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(WikiPaths.Root(_dir, User), pkg).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(WikiPaths.Root(_dir, User), pkg.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+
+        var dto = ((OkObjectResult)await Controller().Decide(pkg.Id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusApplyFailed, "отказ применения по существу — но не чатный источник");
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(9, "несессионный источник окна не имеет");
+        entry.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
+    }
+
+    [Fact]
+    public async Task ОтказПоЗаявкеCodeClaim_ОкноНеВозвращается_КурсорПрежний()
+    {
+        // Конкурентность: пакета на диске уже нет (гонка с удалением) — применение отказано
+        // заявкой («wiki_apply_claim»), статуса на диске нет вовсе: окно возвращает только
+        // прочитанный с диска пакет (after), а не карточка из памяти вызывающего (decided).
+        // Мутация «брать sources из decided»: здесь краснеет курсор 9 → 0.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        var id = await NewRealPackage([RealOp()]);
+        var root = WikiPaths.Root(_dir, User);
+        var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
+        decided.Ok.Should().BeTrue(decided.Reason);
+        File.Delete(Path.Combine(WikiPaths.Keeper(_dir, User), "packages", id + ".json"));
+
+        var dto = ((OkObjectResult)await Controller().AfterDecision(User, root, decided.Package!))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeClaim, "пакета нет на диске: применять нечего");
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(9, "проигранная заявка окно не возвращает");
+        entry.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
+    }
+
     // ─── 12. Откат через REST: «уже в состоянии «до пакета»» — отдельное поле ответа (W3-3) ─────
 
     [Fact]
@@ -1139,6 +1303,24 @@ public class WikiPackagesControllerTests : IDisposable
         BaseHashes = new Dictionary<string, string> { [page] = Hash },
     };
 
+    // ─── Фикстура T-A2 (метод WikiChatWindowReturnTests): чат в каталоге + курсор в сторе ───
+
+    private void AddChatSession(string id = "chat-1", string owner = User) =>
+        _sessions.Known[id] = new Session { Id = id, OwnerId = owner, Name = "Чат про сборку" };
+
+    // Состояние «разбор закрыл окно курсором»: прямая запись стора с зоной прежнего исхода
+    // (откат обязан её снять; в негативных тестах она обязана остаться).
+    private void SeedTriage(string sessionId, int cursor)
+    {
+        var r = WikiChatTriageStore.Upsert(WikiPaths.Root(_dir, User), new WikiChatTriageEntry(
+            sessionId, cursor, "old-hash", WikiChatIngestService.ZoneNothingNew, "не о чём писать", 1,
+            DateTimeOffset.UtcNow));
+        r.Ok.Should().BeTrue(r.Reason);
+    }
+
+    private WikiChatTriageEntry TriageEntry(string sessionId) =>
+        WikiChatTriageStore.Get(WikiPaths.Root(_dir, User)).Entries.Single(e => e.SessionId == sessionId);
+
     private string StatusOnDisk(string id)
     {
         var res = WikiPackageStore.TryRead(WikiPaths.Root(_dir, User), id);
@@ -1165,7 +1347,7 @@ public class WikiPackagesControllerTests : IDisposable
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, user) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         http.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
-        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions)
+        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions, _chat)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -1174,7 +1356,7 @@ public class WikiPackagesControllerTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions)
+        return new WikiPackagesController(_projects, _config, _apply, _revert, _retract, _sessions, _chat)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -1186,7 +1368,7 @@ public class WikiPackagesControllerTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, User)], "test"));
-        return new WikiPackagesController(_projects, _config, apply, _revert, _retract, _sessions)
+        return new WikiPackagesController(_projects, _config, apply, _revert, _retract, _sessions, _chat)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -1227,5 +1409,28 @@ public class WikiPackagesControllerTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
         public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
+    }
+
+    // Модель в этих тестах не зовётся ни разу (ReturnWindow — без модели, тот же отказной
+    // раннер, что в соседних файлах): если что-то позвал — пусть будет видно.
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException("ИИ-действие не ожидалось: " + actionKey));
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
     }
 }

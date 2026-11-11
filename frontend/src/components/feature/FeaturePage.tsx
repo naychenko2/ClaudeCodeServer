@@ -36,6 +36,7 @@ import {
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
+import { analysisLineState } from './FeatureAnalysisModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
@@ -348,6 +349,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
     // на все вкладки, шапку и тревогу.
     const marks = buildNavMarks(okRun, page.page.chats);
+    // Состояния, которых первый экран не закрывает: сторож («без движения / молчит / тихо»,
+    // только когда attention нет — иначе то же говорит плашка «от тебя») и «ещё не начата».
+    const lineKey = okRun.attention ? null : analysisLineState(okRun, Date.now()).key;
+    const watchdogOrIdle = okRun.state === 'not_started' || lineKey === 'stuck' || lineKey === 'nudged' || lineKey === 'quiet';
     body = (
       <>
         <FeatureFirstScreen
@@ -360,9 +365,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           onOpenSteps={() => setFeatureMainTab('progress')}
           onOpenReview={() => setFeatureMainTab('review')}
           onRetry={() => refetchFeaturePage(featureId)}
-          // Пауза, черновик и очередь несут свои действия («Запустить», «Возобновить»), а ответ
-          // без brief плашку строить не из чего: прежний блок состояния остаётся на её месте.
-          stateBlock={holdLike || !page.page.brief ? <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} /> : undefined}
+          // Пауза, черновик и очередь несут свои действия («Запустить», «Возобновить»), ответ
+          // без brief плашку строить не из чего, а тревога сторожа и «не начата» плашкой «от
+          // тебя» не покрыты: во всех этих случаях блок состояния остаётся на её месте.
+          stateBlock={holdLike || !page.page.brief || watchdogOrIdle ? <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} /> : undefined}
         />
         <FeaturePageTabs
           value={tab}

@@ -799,6 +799,41 @@ describe('Единая тревога (Ш4)', () => {
     expect(textNodes(alarm!).join('')).toContain('тихо 24 ч');
   });
 
+  // Живой путь: бэк отдаёт brief всегда (TasksController), поэтому тревога сторожа и
+  // «не начата» обязаны остаться над вкладками и при непустом brief.
+  const withBrief = (page: FeaturePageData): FeaturePageData => ({
+    ...page,
+    brief: {
+      kind: 'running', now: null, reason: null,
+      done: { stepsAccepted: 1, stepsTotal: 3, loops: 0, planState: 'cut' },
+      next: [], elapsedMinutes: null, estimate: null, queue: null, note: null,
+      ask: null, eta: null, computedAt: new Date(NOW).toISOString(),
+    },
+  });
+
+  it('brief есть: «без движения» сторожа остаётся над вкладками, тон stop', async () => {
+    mockGetFeature.result = withBrief(stuckRun());
+    const c = render({});
+    await settle();
+    for (const tab of TABS) {
+      act(() => { setFeaturePageTab(tab); });
+      const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+      expect(alarm, `вкладка ${tab}: тревоги нет`).not.toBeNull();
+      expect(countAlarms(c), `вкладка ${tab}: тревог не одна`).toBe(1);
+      expect(attr(alarm!, 'data-tone')).toBe('stop');
+      expect(textNodes(alarm!).join('')).toContain('без движения');
+    }
+  });
+
+  it('brief есть: «Фича ещё не начата» остаётся над вкладками', async () => {
+    mockGetFeature.result = withBrief(pageData({ state: 'not_started' }));
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(alarm).not.toBeNull();
+    expect(textNodes(alarm!).join('')).toContain('Фича ещё не начата');
+  });
+
   it('тега «стоит/тихо» в шапке нет — ни на 1280, ни на 360', async () => {
     for (const isMobile of [false, true]) {
       mockGetFeature.result = stuckRun();

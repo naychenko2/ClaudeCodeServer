@@ -209,12 +209,16 @@ public class LocalActionRoutingTests
         {
             ["Ollama:Model"] = "qwen3:14b",
             ["Ollama:Profiles:large:NumPredict"] = "2048",
-            ["Ollama:Profiles:large:TimeoutMs"] = "90000",
+            // TimeoutMs берётся ОТЛИЧАЮЩИМ от дефолта Large (90000): иначе конфиг-путь по
+            // этому лимиту не доказан (минор ревью C2R-Sh3).
+            ["Ollama:Profiles:large:TimeoutMs"] = "120000",
         });
         var nightly = router.ProfileFor(LocalActionCatalog.WikiNightly);
         Assert.Equal(16_384, nightly.NumPredict);
         Assert.Equal(600_000, nightly.TimeoutMs);
-        Assert.Equal(2048, router.ProfileFor(LocalActionCatalog.DocSummary).NumPredict);
+        var doc = router.ProfileFor(LocalActionCatalog.DocSummary);
+        Assert.Equal(2048, doc.NumPredict);
+        doc.TimeoutMs.Should().Be(120_000, "профильный лимит переопределён конфигом — не остался дефолтом");
     }
 
     // Пер-местный NumCtx (сверка Марка, С2-доработка Ш7): профильное окно Large (16384)
@@ -546,6 +550,9 @@ public class LocalActionRoutingTests
 
         public LocalEngineBusyTracker Tracker => _tracker;
         public int Calls;
+        // Лимиты последнего detailed-вызова — тест пер-местных лимитов ночи (минор ревью C2R-Sh3).
+        public int? LastNumPredict;
+        public int? LastNumCtx;
 
         public bool Enabled => true;
         public string BaseUrl => "http://localhost:11434";
@@ -576,11 +583,21 @@ public class LocalActionRoutingTests
         public Task<(string? Text, Protocol.UsageInfo? Usage)> ChatJsonDetailedAsync(
             string systemPrompt, string userPrompt, object jsonFormat, CancellationToken ct = default,
             string? model = null, int? timeoutMs = null, int? numPredict = null, int? numCtx = null,
-            string? ownerId = null, string? label = null) => Result();
+            string? ownerId = null, string? label = null)
+        {
+            LastNumPredict = numPredict;
+            LastNumCtx = numCtx;
+            return Result();
+        }
 
         public Task<(string? Text, Protocol.UsageInfo? Usage)> GenerateTextDetailedAsync(
             string prompt, string? model, TimeSpan timeout, int numPredict, int numCtx,
-            string? ownerId = null, string? label = null, CancellationToken ct = default) => Result();
+            string? ownerId = null, string? label = null, CancellationToken ct = default)
+        {
+            LastNumPredict = numPredict;
+            LastNumCtx = numCtx;
+            return Result();
+        }
     }
 
     // busy — занятость движка ходом: его собственный трекер протягивается роутеру, как в DI
@@ -667,6 +684,25 @@ public class LocalActionRoutingTests
         result.Usage.OutputTokens.Should().Be(120);
         result.Usage.CostUsd.Should().Be(0, "локальный вызов бесплатный");
         Assert.Empty(claude.Calls);
+    }
+
+    // Контракт «потребитель берёт лимиты из ProfileFor» (минор ревью C2R-Sh3): локальный шаг
+    // ночи обязан дойти до клиента с пер-местными лимитами wiki-места, а не профиля. Тест
+    // краснеет, если раннер подставит ProfileSpec(profile) вместо ProfileFor(actionKey):
+    // клиент получил бы профильные 1024/16384 (CheapTextRunner.RunLocalAsync, :391).
+    [Fact]
+    public async Task Detailed_ЛокальныйШагНочиИспользуетПерМестныеЛимиты()
+    {
+        var (runner, _, engine) = DetailedNoCloudRunner(
+            "ответ-ночи", new Protocol.UsageInfo(1_000, 50, 0, 0));
+
+        var result = await runner.RunLocalOrChosenDetailedAsync(
+            LocalActionCatalog.WikiNightly, "prompt-text", jsonFormat: "json");
+
+        result.Should().NotBeNull();
+        engine.Calls.Should().Be(1, "шаг локали должен быть пройден ровно один раз");
+        engine.LastNumPredict.Should().Be(16_384, "пер-местный num_predict wiki-места, не профильный 1024");
+        engine.LastNumCtx.Should().Be(65_536, "пер-местный num_ctx wiki-места, не профильный 16384");
     }
 
     [Theory]

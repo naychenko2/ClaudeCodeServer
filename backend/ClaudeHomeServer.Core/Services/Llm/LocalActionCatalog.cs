@@ -43,11 +43,14 @@ public sealed record CheapProfileSpec(
 // CloudNumPredict — пер-местный потолок ВЫВОДА облачного шага (max_tokens) вместо
 // профильного CloudNumPredict: для мест, чей ответ не влезает в профильный лимит,
 // не трогая лимит остальных мест того же профиля. null = профиль.
-// NumCtx / NumPredict / TimeoutMs — локальные пер-местные лимиты (окно входа num_ctx,
-// потолок вывода num_predict и потолок времени локального шага): для мест, где большое
-// окно не влезает в профильное окно, ответ — в потолок вывода, а работа — в профильное
-// время. Пер-местное значение сильнее профиля и переопределения Ollama:Profiles
-// (склейка — LocalActionRouter.ProfileFor). null = профиль.
+// NumCtx / NumPredict / TimeoutMs — локальные пер-местные лимиты: num_predict (потолок
+// вывода) и TimeoutMs (потолок времени локального шага) работают как облачные Cloud*;
+// NumCtx у разных движков — разное: у Ollama это окно входа модели (num_ctx едет в
+// запросе), у llama-server/Strata окно фиксируется ключом -c при старте сервера и NumCtx
+// окно модели НЕ расширяет — это только бюджет обрезки промпта до отправки
+// (LlamaServerClient). Для мест, где большое окно не влезает в профильное, ответ — в
+// потолок вывода, а работа — в профильное время. Пер-местное значение сильнее профиля и
+// переопределения Ollama:Profiles (склейка — LocalActionRouter.ProfileFor). null = профиль.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,

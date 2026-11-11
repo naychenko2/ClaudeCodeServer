@@ -35,6 +35,25 @@ function click(container: FNode, testId: string): void {
   act(() => { (props!.onClick as (e: unknown) => void)({ stopPropagation: () => {}, preventDefault: () => {} }); });
 }
 
+// Клик по кнопке С МОДЕЛЬЮ ВСПЛЫТИЯ: после onClick кнопки зовём onClick области, только
+// если событие не погашено — так же React всплывает клик в реальном DOM. Без
+// e.stopPropagation() у кнопки (FeatureMockups.tsx) дошёл бы до области и openMain
+// сработал бы дважды.
+function clickWithBubbling(container: FNode, btnTestId: string, areaTestId: string): void {
+  const btn = findNodeByAttr(container, 'data-testid', btnTestId);
+  const area = findNodeByAttr(container, 'data-testid', areaTestId);
+  expect(btn, `node ${btnTestId}`).not.toBeNull();
+  expect(area, `node ${areaTestId}`).not.toBeNull();
+  const btnProps = reactProps(btn!);
+  const areaProps = reactProps(area!);
+  expect(btnProps?.onClick, `onClick on ${btnTestId}`).toBeTruthy();
+  expect(areaProps?.onClick, `onClick on ${areaTestId}`).toBeTruthy();
+  let stopped = false;
+  const e = { stopPropagation: () => { stopped = true; }, preventDefault: () => {} };
+  act(() => { (btnProps!.onClick as (e: unknown) => void)(e); });
+  if (!stopped) act(() => { (areaProps!.onClick as (e: unknown) => void)(e); });
+}
+
 // Enter по data-testid: вызываем onKeyDown из reactProps (тот же путь, что реальная клавиша).
 function pressEnter(container: FNode, testId: string): void {
   const node = findNodeByAttr(container, 'data-testid', testId);
@@ -73,12 +92,13 @@ describe('MockupCard: открытие файла макета (FS-F1f)', () => 
     expect(onOpenFile).toHaveBeenCalledWith('docs/mockups/x.html', { taskId: 't1', branch: 'b' });
   });
 
-  // === 3. Кнопка «Открыть макет» → те же opts, ровно один вызов ===
-  // Мутация «не передавать opts в onClick кнопки» краснеет здесь.
-  it('клик по кнопке «Открыть макет» → onOpenFile(main, { taskId: ownerTaskId, branch })', () => {
+  // === 3. Кнопка «Открыть макет» → те же opts, ровно один вызов (всплытие гасится) ===
+  // Мутации «не передавать opts в onClick кнопки» и «убрать e.stopPropagation() у кнопки»
+  // краснеют здесь: без гашения всплытие дошло бы до области и openMain вызвался бы дважды.
+  it('клик по кнопке «Открыть макет» → onOpenFile(main, { taskId: ownerTaskId, branch }) ровно один раз', () => {
     const onOpenFile = vi.fn();
     const container = mountCard(mockup({ ownerTaskId: 't1' }), onOpenFile);
-    click(container, 'mockup-open-btn');
+    clickWithBubbling(container, 'mockup-open-btn', 'mockup-open-area');
     expect(onOpenFile).toHaveBeenCalledTimes(1);
     expect(onOpenFile).toHaveBeenCalledWith('docs/mockups/x.html', { taskId: 't1', branch: 'b' });
   });
@@ -96,7 +116,18 @@ describe('MockupCard: открытие файла макета (FS-F1f)', () => 
     expect(onOpenFile.mock.calls[1]).toEqual(['docs/mockups/x.html']);
   });
 
-  // === 5. Нет существующего html (exists=false) → открытия нет (прежнее поведение) ===
+  // === 5. Клик по кнопке без ownerTaskId → onOpenFile(main) одним аргументом ===
+  // Мутация «всё равно передавать opts (taskId: null…)» краснеет здесь: WithArguments
+  // сравнивает весь список аргументов.
+  it('клик по кнопке без ownerTaskId → onOpenFile(main) одним аргументом', () => {
+    const onOpenFile = vi.fn();
+    const container = mountCard(mockup(), onOpenFile);
+    click(container, 'mockup-open-btn');
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(onOpenFile).toHaveBeenCalledWith('docs/mockups/x.html');
+  });
+
+  // === 6. Нет существующего html (exists=false) → открытия нет (прежнее поведение) ===
   it('exists=false → onOpenFile не вызывается', () => {
     const onOpenFile = vi.fn();
     const container = mountCard(mockup({ files: [{ path: 'docs/mockups/x.html', exists: false }] }), onOpenFile);

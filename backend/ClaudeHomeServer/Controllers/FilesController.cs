@@ -238,14 +238,25 @@ public class FilesController(FileService files, ProjectManager projects, IProjec
                     // Git — фолбэка нет, как с featureId (fail-closed).
                     if (git is not null && !string.IsNullOrWhiteSpace(task.WorktreeBranch))
                     {
-                        var atBranch = await git.FileAtBranchAsync(
-                            TenantId, p.RootPath, task.WorktreeBranch, path, HttpContext.RequestAborted);
-                        if (atBranch.Status == GitBranchFileStatus.Found)
-                            return Ok(new { content = atBranch.Content, branch = task.WorktreeBranch, fromCommit = true });
-                        if (atBranch.Status == GitBranchFileStatus.BranchDeleted)
-                            return NotFound(new { reason = "branch_deleted" });
-                        if (atBranch.Status == GitBranchFileStatus.Binary)
-                            return NotFound(new { reason = "binary" });
+                        try
+                        {
+                            var atBranch = await git.FileAtBranchAsync(
+                                TenantId, p.RootPath, task.WorktreeBranch, path, HttpContext.RequestAborted);
+                            if (atBranch.Status == GitBranchFileStatus.Found)
+                                return Ok(new { content = atBranch.Content, branch = task.WorktreeBranch, fromCommit = true });
+                            if (atBranch.Status == GitBranchFileStatus.BranchDeleted)
+                                return NotFound(new { reason = "branch_deleted" });
+                            if (atBranch.Status == GitBranchFileStatus.Binary)
+                                return NotFound(new { reason = "binary" });
+                        }
+                        catch (GitCommandException)
+                        {
+                            // FS-B2 (доработка по ревью R-FS-B2): имя ветки берётся из записи задачи и
+                            // не обязано быть ревизией — «a..b», «--upload-pack=x», «../x» отвергает
+                            // ValidateRevision, а бросает он ДО своего try в FileAtBranchAsync
+                            // (GitService.cs:869). Фолбэка нет — ниже обычный 404: ручка files/content
+                            // отвечает только 200/404/403 (500 и Error в лог здесь не нужны).
+                        }
                     }
                     return NotFound(new { error = "Файл не найден ни в одном дереве проекта" });
                 }

@@ -646,4 +646,26 @@ public class FilesControllerTaskAnchorTests : IClassFixture<TestWebApplicationFa
         body.GetProperty("content").GetString().Should().Be("из main", "живое дерево раньше git show");
         body.TryGetProperty("fromCommit", out _).Should().BeFalse("это обычный путь локатора");
     }
+
+    // FS-B2 (доработка по ревью R-FS-B2): WorktreeBranch в запись задачи ложится без валидации
+    // (TaskManager.cs:402) и не обязан быть ревизией: «a..b» («..»), «--upload-pack=x» (ведущий
+    // «-»), «../x» отвергает ValidateRevision (GitService.cs:564), а бросает он ДО своего try
+    // в FileAtBranchAsync (:869) — до вызова доходит только когда файла нет ни в одном живом
+    // дереве. Фолбэка нет: обычный 404 «ни в одном дереве», а не 500.
+    // Мутация: снять catch (GitCommandException) вокруг FileAtBranchAsync в GetContent —
+    // тест краснеет (500).
+    [Fact]
+    public async Task GetContent_TaskId_НедовереннаяВеткаЗадачи_404_Без500()
+    {
+        var (projectId, _) = await CreateGitProjectAsync("brbad");
+        foreach (var badBranch in new[] { "a..b", "--upload-pack=x", "../x" })
+        {
+            var taskId = await CreateTaskAsync(projectId, null, badBranch);
+
+            var resp = await _client.GetAsync(Url(projectId, "doc.md", taskId));
+
+            resp.StatusCode.Should().Be(HttpStatusCode.NotFound,
+                $"имя ветки «{badBranch}» из записи задачи недоверенно — фолбэка нет, и это 404, а не 500");
+        }
+    }
 }

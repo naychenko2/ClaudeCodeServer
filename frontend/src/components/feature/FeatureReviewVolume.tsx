@@ -1,25 +1,31 @@
-// Секция «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv; записка
-// docs/mockups/feature-page-simplify-v4-clickable.md §5 «2. Объём», в макете — секция rz-vol):
-// раскладка первого экрана «N из M» (карточку FeatureVolumeCard здесь не повторяю): строки
-// stepProgress и строки плана (исходный знаменатель, расширение, доработки после мержа —
-// решение Андрея 11.11 «новые задачи в почти готовой фиче») — только у открытой (макет ov.vol
-// :513: у закрытой группа «Всего шагов/Приняты…» не рисуется, иначе рядом «Всего шагов 44»
-// и «Шагов 12» — два разных числа), строки по линиям, медиана шага по проекту, медиана шага
-// этой фичи и смены знаменателя (величины 5 и 8 — бэк их отдаёт: FS-M56/FS-M478; в карточке
-// FS-FR2 они стояли «вне шага», здесь — в секции) и — только у закрытой — итоги закрытой.
-// Все числа — из run/stats как есть, своё фронт не считает. Раскладка целиком через ReviewKv
-// (FS-FR0): на 360 те же две колонки «ключ — значение», переполнения нет.
+// Секция «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv; FP-R3: записка
+// docs/mockups/feature-review-returns-v1.md, раздел «„Объём“: что оставить, что убрать»,
+// в макете — секция rz-volume, режим vol=new): итоги закрытой фичи — ровно три строки
+// (решение Андрея 11.11): «Шагов» = summary.steps с подписью-пояснением «бэк N · фронт M»
+// из линий (есть линия 'other' с total > 0 — «· прочее K»), «Слияний» = merges,
+// «Доработок после мержа» = postMergeTails (переименовано: прежнее название — жаргон
+// «хвост», а эта формулировка уже есть у открытой фичи). Убрано из секции: строки по линиям
+// («возвратов» дублирует блок «Возвраты и потери»), счётчики задач и пачек ревью (внутренняя
+// кухня конвейера), медианы шага и смены знаменателя (их перенёс FP-R2: в «Время» и в шкалу
+// срока). Группа stepProgress и строки плана — только у открытой (у закрытой не рисуется
+// вовсе — решение постановщика, макет ov.vol :513): настоящий объём закрытой — эти три
+// строки. Все числа — из run/stats как есть, своё фронт не считает. Раскладка целиком
+// через ReviewKv (FS-FR0): на 360 те же две колонки «ключ — значение», переполнения нет.
 
+import { type CSSProperties } from 'react';
+import { C, FS } from '../../lib/design';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
-import { formatDuration } from './FeatureStatsBits';
 import { laneWord } from '../../lib/roleLabel';
 import { plural } from '../../lib/plural';
 import type { PlanState } from '../../lib/featureProgress';
-import type { FeatureRun } from '../../types/featureRun';
+import type { FeatureRun, FeatureLane } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 
 export interface FeatureReviewVolumeProps {
   run: FeatureRun;
+  // stats не читается с FP-R3: медианы шага и смены знаменателя перенесены в «Время»
+  // и в шкалу срока (FP-R2). Проп остался под единый сигнатур секций «Разбора» —
+  // вызывающий передаёт его всем секциям одним списком (FeatureReviewTab.tsx).
   stats: FeatureStats;
   // isMobile — различий в раскладке нет: ReviewKv на 360 и 1280 одинаковые две колонки
   // (контракт «Мобила»); проп — под единый сигнатур секций «Разбора» (FS-FR).
@@ -39,23 +45,39 @@ const PLAN_STATE_LABEL: Record<PlanState, string> = {
   done: 'готово',
 };
 
-// Подпись линии: laneWord (roleLabel.ts:8) — «бэк»/«фронт»; третья нормализованная
-// линия бэка (FeatureLane.lane = 'other', featureRun.ts:301) — «прочее» (подпись макета,
-// feature-page-simplify-v4-clickable.html:487).
-function laneLabel(lane: string): string {
-  return laneWord(lane) || 'прочее';
+// Подпись-пояснение к «Шагов» (макет .sub): отдельная строка в колонке значения,
+// приглушённая, не жирная.
+const STEPS_SUB: CSSProperties = { display: 'block', fontSize: FS.xs, fontWeight: 400, color: C.textMuted };
+
+// Пояснение к «Шагов» (FP-R3): суммы total по нормализованным линиям — «бэк N · фронт M»
+// (слова — laneWord, roleLabel.ts:8, та же нормализация, что у прежних строк по линиям).
+// Третья нормализованная линия бэка ('other', featureRun.ts:311-312) — «прочее K»,
+// только при total > 0. Линий нет (старый ответ) или все суммы нулевые — пояснения нет,
+// число стоит одно.
+function stepsSub(lanes: FeatureLane[] | undefined): string | null {
+  if (!lanes?.length) return null;
+  const totalOf = (pred: (lane: FeatureLane) => boolean): number =>
+    lanes.reduce((acc, l) => (pred(l) ? acc + l.total : acc), 0);
+  const back = totalOf((l) => laneWord(l.lane) === 'бэк');
+  const front = totalOf((l) => laneWord(l.lane) === 'фронт');
+  const other = totalOf((l) => !laneWord(l.lane));
+  const parts: string[] = [];
+  if (back > 0) parts.push(`бэк ${back}`);
+  if (front > 0) parts.push(`фронт ${front}`);
+  if (other > 0) parts.push(`прочее ${other}`);
+  return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
+export function FeatureReviewVolume({ run }: FeatureReviewVolumeProps) {
   const rows: ReviewKvRow[] = [];
 
-  // Признак закрытой — общий по странице (FeatureReviewTime.tsx:56): одно значение на обе
-  // ветки секции (итоги — только у закрытой, группа шагов — только у открытой).
+  // Признак закрытой — общий по странице (тот же, что в «Время и срок», FeatureReviewTime):
+  // одно значение на обе ветки секции (итоги — только у закрытой, группа шагов — только у открытой).
   const closed = run.closed === true || run.state === 'merged' || run.state === 'closed';
 
   // 1. Шаги. stepProgress аддитивен (старые ответы его не несут) — поля нет, строк нет.
   // У закрытой группа не рисуется вовсе (решение постановщика, макет ov.vol :513): её
-  // настоящий объём — строки итогов ниже, «Всего шагов» рядом с «Шагов» — два числа.
+  // настоящий объём — строки итогов ниже, «Всего шагов» рядом с «Шагов» — два разных числа.
   const sp = run.stepProgress;
   if (sp && !closed) {
     rows.push(
@@ -91,42 +113,29 @@ export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
     );
   }
 
-  // 2. Линии (макет .lanes): одна строка на линию — «{линия}: N шагов · принято A ·
-  // возвратов R» (значение — вторая колонка ReviewKv).
-  for (const l of run.lanes ?? []) {
-    const value = [
-      `${l.total} ${plural(l.total, 'шаг', 'шага', 'шагов')}`,
-      `принято ${l.accepted}`,
-      `возвратов ${l.returns}`,
-    ].join(' · ');
-    rows.push({ label: laneLabel(l.lane), value });
-  }
-
-  // 3. Медиана шага по проекту: stats.typical.stepMinutes.median (null — фич с шагами
-  // меньше трёх, B2a) — значения нет, строки нет.
-  const median = stats.typical?.stepMinutes?.median;
-  rows.push({ label: 'Медиана шага по проекту', value: median != null ? formatDuration(median) : null });
-
-  // 3a. Медиана шага ЭТОЙ фичи (величина 5, stats.stepMedianMinutes: null — принятых
-  // цепочек нет; аддитивное поле, старый ответ его не несёт) — строки нет. Смены знаменателя
-  // (величина 8, estimateDrift.denominatorChanges): строка есть, только если estimateDrift
-  // есть — 0 здесь значение («знаменатель не менялся»), а не «нет данных».
-  const featureMedian = stats.stepMedianMinutes;
-  rows.push(
-    { label: 'Медиана шага этой фичи', value: featureMedian != null ? formatDuration(featureMedian) : null },
-    { label: 'Смены знаменателя', value: stats.estimateDrift ? stats.estimateDrift.denominatorChanges : null },
-  );
-
-  // 4. Итоги закрытой — только у закрытой. «Открытых шагов» здесь нет: поля summary.stepsOpen
-  // в контракте нет (записка §5) — поля нет, строки тоже.
+  // 2. Итоги закрытой — ровно три строки (FP-R3, вместо прежних пяти плюс строки по линиям
+  // и медианы; переименование третьей строки — см. начало файла).
   if (closed) {
-    const s = run.summary;
+    // «Шагов» — главный объём (summary бывает только у терминальной фичи,
+    // FeatureProjector.cs:572-601): поля нет (старый ответ) — строки нет.
+    const steps = run.summary?.steps;
+    if (steps != null) {
+      const sub = stepsSub(run.lanes);
+      rows.push({
+        label: 'Шагов',
+        value: sub === null ? steps : (
+          <>
+            {steps}
+            <span data-testid="volume-steps-sub" style={STEPS_SUB}>{sub}</span>
+          </>
+        ),
+      });
+    }
+    // «Слияний» и «Доработок после мержа» — счётчики списков; поля аддитивны (старые
+    // ответы их не несут) — 0, отсутствие мержей и доработок (0 — значение, не «нет данных»).
     rows.push(
-      { label: 'Шагов', value: s?.steps ?? null },
-      { label: 'Задач всего', value: s?.tasks ?? null },
-      { label: 'Пачек ревью', value: run.reviews.length },
       { label: 'Слияний', value: run.merges?.length ?? 0 },
-      { label: 'Хвостов после мержа', value: run.postMergeTails?.length ?? 0 },
+      { label: 'Доработок после мержа', value: run.postMergeTails?.length ?? 0 },
     );
   }
 

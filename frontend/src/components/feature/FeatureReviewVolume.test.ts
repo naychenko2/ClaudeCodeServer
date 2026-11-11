@@ -1,39 +1,27 @@
-// Тесты секции «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv): строки stepProgress (7 числовых +
+// Тесты секции «Объём» вкладки «Разбор» (FS-FR2 + FS-FRv; FP-R3): строки stepProgress (7 числовых +
 // «Состояние плана») и строки плана («Исходный план», «Расширение», «Доработки после мержа») —
-// только у открытой, строки по линиям, медиана шага по проекту, медиана шага этой фичи и
-// смены знаменателя, итоги закрытой — только у закрытой. Порядок пар «ключ — значение»
-// проверяется
-// целиком по html: (у открытой) шаги → план → линии → медиана по проекту → медиана фичи →
-// смены знаменателя; (у закрытой) линии → медианы → итоги. Окружение node: renderToStaticMarkup.
+// только у открытой, как прежде; итоги закрытой — ровно три строки: «Шагов» с подписью-пояснением
+// из линий («бэк N · фронт M», при линии 'other' с total > 0 — «· прочее K»), «Слияний»,
+// «Доработок после мержа» (прежнее «Хвостов после мержа»). Убраны из секции строки по линиям,
+// медианы (по проекту и этой фичи) и смены знаменателя (их перенёс FP-R2: в «Время» и в шкалу
+// срока), «Задач всего» и «Пачек ревью» (решение Андрея 11.11, feature-review-returns-v1.md).
+// Порядок пар «ключ — значение» проверяется целиком: (у открытой) шаги → план; (у закрытой)
+// ровно три строки. Окружение node: renderToStaticMarkup.
 //
-// Мутации (краснеющие тесты — по фактическим прогонам в копии дерева, 10.11):
-// (1) `if (sp && !closed)` → `if (sp)` (группа шагов рисуется и у закрытой) — краснеет ровно
-//     «закрытая со stepProgress: группы шагов нет — только строки итогов»;
-// (2) из признака закрытой убран `closed === true` — краснеет ровно «closed: true при
-//     незакрытом state — тоже закрытая: итоги есть»;
-// (3) `sp.inMaster ?? null` → `?? 0` (строка появляется без поля) — краснеет ровно
-//     «inMaster: поля нет — строки нет»;
-// (4) строка «Состояние плана» убрана из строк — краснеют «полные пары stepProgress…»,
-//     «словарь «Состояния плана»» и «2 линии → 2 строки…» (тот ищет индекс этой строки через
-//     findIndex и требует его ≥ 0).
-// (5) `grew = base != null && sp.total > base` → `grew = base != null` (без условия роста) —
-//     краснеют ровно «знаменатель не рос (total == baselineTotal)…» и «baselineTotal больше
-//     total…» (11.11);
-// (6) блок плана («Исходный план»/«Расширение»/«Доработки после мержа») перенесён после цикла
-//     линий — краснеет ровно «рост знаменателя и доработки…до линий» (11.11; без lanes в
-//     фикстуре этого теста прежняя мутация давала 28 из 28 зелёных — lanes добавлены).
-// Прежняя здесь формулировка «признак закрытой → всегда true — краснеет ровно один тест»
-// была неверна: проба Глеба (задача edff6e94) — при всегда-true краснеют четыре теста.
+// Мутации (краснеющие тесты — по фактическим прогонам в копии дерева, 11.11):
+// (1) вернуть строку «Пачек ревью» в итоги закрытой — краснеет ровно «volume: ровно 3 строки…»;
+// (2) в stepsSub убрать часть «прочее» — краснеет ровно «volume: lanes back 33 / front 45 →
+//     подпись «бэк 33 · фронт 45»; с other 2 → «· прочее 2»»;
+// (3) «Доработок после мержа» → «Хвостов после мержа» — краснеет ровно «volume: ровно 3 строки…».
 // После отката каждой мутации — зелёные.
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, it, expect } from 'vitest';
 import { FeatureReviewVolume } from './FeatureReviewVolume';
-import { formatDuration } from './FeatureStatsBits';
 import type { StepProgress } from '../../lib/featureProgress';
-import type { FeatureRun, FeatureTask, FeatureMergeMark } from '../../types/featureRun';
-import type { FeatureStats, FeatureTimeline, TypicalPercentiles, FeatureEstimateDrift } from '../../types/featureStats';
+import type { FeatureRun, FeatureMergeMark } from '../../types/featureRun';
+import type { FeatureStats } from '../../types/featureStats';
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   return {
@@ -51,7 +39,7 @@ function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   };
 }
 
-function mkTotals(over: Partial<FeatureTimeline['totals']> = {}): FeatureTimeline['totals'] {
+function mkTotals(over: Partial<FeatureStats['timeline']['totals']> = {}): FeatureStats['timeline']['totals'] {
   return {
     elapsedMinutes: 0,
     workWallMinutes: 0,
@@ -86,29 +74,23 @@ function mkProgress(over: Partial<StepProgress> = {}): StepProgress {
   };
 }
 
-function mkTypical(over: Partial<TypicalPercentiles> = {}): TypicalPercentiles {
-  return { median: 70, p25: 40, p75: 90, ...over };
-}
-
-function mkDrift(over: Partial<FeatureEstimateDrift> = {}): FeatureEstimateDrift {
-  return {
-    initialEtaMinutes: 60, firstEtaMinutes: 60, currentEtaMinutes: 90, shiftMinutes: 30,
-    denominatorChanges: 2, accuracy: null, ...over,
-  };
-}
-
 const html = (run: FeatureRun, stats: FeatureStats = mkStats()): string =>
   renderToStaticMarkup(createElement(FeatureReviewVolume, { run, stats }));
 
 // Пары «ключ — значение» всех строк ReviewKv в порядке html (строки с value=null
-// в html отсутствуют — ReviewKv их не рендерит).
+// в html отсутствуют — ReviewKv их не рендерит). Значение с подстрокой («Шагов»
+// с пояснением) — весь текст значения, подстрока через '\n' (подстрока — отдельная строка).
 function kvPairs(h: string): [string, string][] {
-  return [...h.matchAll(/data-testid="review-kv-row"[^>]*><span[^>]*>([^<]*)<\/span><span[^>]*>([^<]*)<\/span>/g)]
-    .map((m) => [m[1], m[2]] as [string, string]);
+  return [...h.matchAll(/<div data-testid="review-kv-row"[^>]*>([\s\S]*?)<\/div>/g)]
+    .map((m) => {
+      const parts = [...m[1].matchAll(/<span[^>]*>([\s\S]*?)<\/span>/g)]
+        .map((s) => s[1].replace(/<span[^>]*>/g, '\n').replace(/<[^>]*>/g, ''));
+      return [parts[0], parts.slice(1).join('\n')] as [string, string];
+    });
 }
 
 // Фикстура c1: stepProgress {total 44, accepted 30, review 3, work 2, notCreated 6,
-// withdrawn 3, inMaster 20} + lanes из 2 элементов.
+// withdrawn 3, inMaster 20} + lanes из 2 элементов (прежняя — тесты порядка и слов линий).
 const C1_RUN = mkRun({ stepProgress: mkProgress(), lanes: [
   { lane: 'back', personaIds: ['p-1'], total: 24, accepted: 3, returns: 1 },
   { lane: 'front', personaIds: ['p-2'], total: 17, accepted: 3, returns: 0 },
@@ -116,7 +98,7 @@ const C1_RUN = mkRun({ stepProgress: mkProgress(), lanes: [
 
 describe('шаги (c1)', () => {
   it('полные пары stepProgress: 7 числовых строк + «Состояние плана», в порядке', () => {
-    // Без линий и медианы: ровно 8 строк — 7 числовых + состояние плана.
+    // Без линий: ровно 8 строк — 7 числовых + состояние плана.
     expect(kvPairs(html(mkRun({ stepProgress: mkProgress() })))).toEqual([
       ['Всего шагов', '44'],
       ['Приняты', '30'],
@@ -153,9 +135,9 @@ const PLAN_GROWN = mkProgress({
 });
 
 describe('план и доработки (c1)', () => {
-  it('рост знаменателя и доработки: «Исходный план» 12 шагов, «Расширение» +3, «Доработки» 1 из 3 — после строк шагов, до линий', () => {
-    // Линии в фикстуре (как C1_RUN): полный toEqual фиксирует и порядок «Доработки после
-    // мержа → линии» — перенос блока плана после цикла линий краснит этот тест.
+  it('рост знаменателя и доработки: «Исходный план» 12 шагов, «Расширение» +3, «Доработки» 1 из 3 — после строк шагов', () => {
+    // Полный toEqual фиксирует порядок: блок плана — сразу после группы шагов (прежний
+    // порядок «…до линий» снят: строк по линиям в секции больше нет).
     const pairs = kvPairs(html(mkRun({ stepProgress: PLAN_GROWN, lanes: [
       { lane: 'back', personaIds: ['p-1'], total: 24, accepted: 3, returns: 1 },
       { lane: 'front', personaIds: ['p-2'], total: 17, accepted: 3, returns: 0 },
@@ -172,8 +154,6 @@ describe('план и доработки (c1)', () => {
       ['Исходный план', '12 шагов'],
       ['Расширение', '+3'],
       ['Доработки после мержа', '1 из 3'],
-      ['бэк', '24 шага · принято 3 · возвратов 1'],
-      ['фронт', '17 шагов · принято 3 · возвратов 0'],
     ]);
   });
 
@@ -223,150 +203,106 @@ describe('словарь «Состояния плана»', () => {
   });
 });
 
-describe('линии', () => {
-  it('2 линии → 2 строки «{линия}: N шагов · принято A · возвратов R», после строк шагов', () => {
-    const pairs = kvPairs(html(C1_RUN));
-    // Склонение по plural: 24 → «шага», 17 → «шагов».
-    expect(pairs).toContainEqual(['бэк', '24 шага · принято 3 · возвратов 1']);
-    expect(pairs).toContainEqual(['фронт', '17 шагов · принято 3 · возвратов 0']);
-    const iSteps = pairs.findIndex((p) => p[0] === 'Состояние плана');
-    const iBack = pairs.findIndex((p) => p[0] === 'бэк');
-    const iFront = pairs.findIndex((p) => p[0] === 'фронт');
-    expect(iSteps).toBeGreaterThanOrEqual(0);
-    expect(iSteps).toBeLessThan(iBack);
-    expect(iBack).toBeLessThan(iFront);
-  });
-
-  it('прочая линия и русские значения линии — та же подпись, что в существующем коде', () => {
-    const pairs = kvPairs(html(mkRun({ lanes: [
-      { lane: 'other', personaIds: [], total: 3, accepted: 2, returns: 0 },
-      { lane: 'бэк', personaIds: [], total: 1, accepted: 1, returns: 0 },
-    ] })));
-    expect(pairs).toContainEqual(['прочее', '3 шага · принято 2 · возвратов 0']);
-    expect(pairs).toContainEqual(['бэк', '1 шаг · принято 1 · возвратов 0']);
-  });
-
-  it('lines нет (старый ответ) — строк линий нет', () => {
-    expect(kvPairs(html(mkRun({ stepProgress: mkProgress() }))).some((p) => p[0] === 'бэк')).toBe(false);
-  });
-});
-
-describe('медиана шага по проекту', () => {
-  it('stats.typical.stepMinutes.median — через formatDuration, после линий', () => {
-    const pairs = kvPairs(html(C1_RUN, mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 4, stepMinutes: mkTypical() } })));
-    expect(pairs).toContainEqual(['Медиана шага по проекту', formatDuration(70)]); // 1 ч 10 мин
-    const iFront = pairs.findIndex((p) => p[0] === 'фронт');
-    const iMed = pairs.findIndex((p) => p[0] === 'Медиана шага по проекту');
-    expect(iFront).toBeLessThan(iMed);
-  });
-
-  it('typical нет или stepMinutes null (фич с шагами <3) — строки нет', () => {
-    expect(html(mkRun(), mkStats())).not.toContain('Медиана шага по проекту');
-    const noSteps = mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 0, stepMinutes: null } });
-    expect(html(mkRun(), noSteps)).not.toContain('Медиана шага по проекту');
-  });
-});
-
-const TYPICAL_STATS: FeatureStats = mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 4, stepMinutes: mkTypical() } });
-
-describe('медиана этой фичи и смены знаменателя (c2)', () => {
-  it('stepMedianMinutes и estimateDrift: строки через formatDuration и числом — после медианы по проекту', () => {
-    const pairs = kvPairs(html(C1_RUN, mkStats({ typical: TYPICAL_STATS.typical, stepMedianMinutes: 90, estimateDrift: mkDrift() })));
-    expect(pairs).toContainEqual(['Медиана шага этой фичи', formatDuration(90)]); // 1 ч 30 мин
-    expect(pairs).toContainEqual(['Смены знаменателя', '2']);
-    const iProject = pairs.findIndex((p) => p[0] === 'Медиана шага по проекту');
-    const iFeature = pairs.findIndex((p) => p[0] === 'Медиана шага этой фичи');
-    const iDrift = pairs.findIndex((p) => p[0] === 'Смены знаменателя');
-    expect(iProject).toBeGreaterThanOrEqual(0);
-    expect(iProject).toBeLessThan(iFeature);
-    expect(iFeature).toBeLessThan(iDrift);
-  });
-
-  it('полей нет (старый ответ) или stepMedianMinutes null (принятых цепочек нет) — этих строк нет', () => {
-    const h = html(C1_RUN, TYPICAL_STATS);
-    expect(h).not.toContain('Медиана шага этой фичи');
-    expect(h).not.toContain('Смены знаменателя');
-    expect(html(C1_RUN, mkStats({ stepMedianMinutes: null, estimateDrift: null }))).not.toContain('Смены знаменателя');
-  });
-
-  it('estimateDrift есть и denominatorChanges 0 — строка есть со значением «0» (не менялся — факт)', () => {
-    const pairs = kvPairs(html(C1_RUN, mkStats({ estimateDrift: mkDrift({ denominatorChanges: 0 }) })));
-    expect(pairs).toContainEqual(['Смены знаменателя', '0']);
-  });
-
-  it('закрытая: медианы и смены знаменателя — перед итогами закрытой', () => {
-    const closedRun = mkRun({
-      state: 'closed',
-      summary: { mergedAt: '2026-10-30T12:00:00Z', durationMinutes: 200, tasks: 21, steps: 12, loops: 1 },
-    });
-    const pairs = kvPairs(html(closedRun, mkStats({ typical: TYPICAL_STATS.typical, stepMedianMinutes: 90, estimateDrift: mkDrift() })));
-    const iDrift = pairs.findIndex((p) => p[0] === 'Смены знаменателя');
-    const iSteps = pairs.findIndex((p) => p[0] === 'Шагов');
-    expect(iDrift).toBeGreaterThanOrEqual(0);
-    expect(iDrift).toBeLessThan(iSteps);
-  });
-});
-
-describe('итоги закрытой (c2)', () => {
+describe('итоги закрытой — ровно три строки (FP-R3)', () => {
+  // Фикстура — закрытая фича образца (78 шагов, 2 мержа, 32 доработки после мержа).
   const CLOSED_RUN = mkRun({
     state: 'closed',
     closed: true,
-    summary: { mergedAt: '2026-10-30T12:00:00Z', durationMinutes: 200, tasks: 21, steps: 12, loops: 1 },
-    reviews: [1, 2, 3].map((n): FeatureTask => ({ id: `r-${n}`, title: `ревью ${n}` })),
+    summary: { mergedAt: '2026-10-30T12:00:00Z', durationMinutes: 200, tasks: 21, steps: 78, loops: 1 },
     merges: [
       { taskId: 'm-1', at: '2026-10-28T10:00:00Z', stepRefs: ['Ш1'] },
       { taskId: 'm-2', at: '2026-10-30T12:00:00Z', stepRefs: ['Ш2'] },
     ] as FeatureMergeMark[],
-    postMergeTails: ['t-1', 't-2'],
+    postMergeTails: Array.from({ length: 32 }, (_, i) => `t-${i + 1}`),
   });
-  // Та же закрытая, но с stepProgress (фича, у которого был план): группа «Всего шагов/Приняты…»
-  // не рисуется — настоящий объём закрытой дают строки итогов (макет ov.vol :513).
-  const CLOSED_SP_RUN: FeatureRun = { ...CLOSED_RUN, stepProgress: mkProgress() };
+  // Та же закрытая, но с stepProgress и линиями (фича с планом): группы шагов и строк по
+  // линиям нет — настоящий объём закрытой дают ровно три строки итогов (макет ov.vol :513).
+  const CLOSED_FULL: FeatureRun = {
+    ...CLOSED_RUN,
+    stepProgress: mkProgress(),
+    lanes: [
+      { lane: 'back', personaIds: ['p-1'], total: 33, accepted: 30, returns: 2 },
+      { lane: 'front', personaIds: ['p-2'], total: 45, accepted: 40, returns: 1 },
+    ],
+  };
 
-  it('закрытая: «Шагов», «Задач всего», «Пачек ревью», «Слияний», «Хвостов» — после медианы', () => {
-    const pairs = kvPairs(html(CLOSED_RUN, mkStats({ typical: { count: 5, waitingCount: 0, duration: mkTypical(), waiting: null, loops: mkTypical(), stepCount: 4, stepMinutes: mkTypical() } })));
-    expect(pairs).toContainEqual(['Шагов', '12']);
-    expect(pairs).toContainEqual(['Задач всего', '21']);
-    expect(pairs).toContainEqual(['Пачек ревью', '3']);
-    expect(pairs).toContainEqual(['Слияний', '2']);
-    expect(pairs).toContainEqual(['Хвостов после мержа', '2']);
-    const iMed = pairs.findIndex((p) => p[0] === 'Медиана шага по проекту');
-    const iTail = pairs.findIndex((p) => p[0] === 'Хвостов после мержа');
-    expect(iMed).toBeGreaterThanOrEqual(0);
-    expect(iMed).toBeLessThan(iTail);
-  });
-
-  it('«Открытых шагов» нет: поля summary.stepsOpen в контракте нет', () => {
-    expect(html(CLOSED_RUN)).not.toContain('Открытых шагов');
-  });
-
-  it('закрытая со stepProgress: группы шагов нет — только строки итогов', () => {
-    // Ни одной строки группы stepProgress (решение постановщика: рядом «Всего шагов 44» и
-    // «Шагов 12» — два разных числа), и весь список строк закрытой — ровно строки итогов.
-    const pairs = kvPairs(html(CLOSED_SP_RUN));
+  it('volume: ровно 3 строки — Шагов, Слияний, Доработок после мержа', () => {
+    // Закрытая со всем возможным (план, линии, reviews): ни одной строки сверх трёх —
+    // ни группы stepProgress, ни строк по линиям, ни «Задач всего»/«Пачек ревью».
+    const pairs = kvPairs(html(CLOSED_FULL));
     expect(pairs).toEqual([
-      ['Шагов', '12'],
-      ['Задач всего', '21'],
-      ['Пачек ревью', '3'],
+      ['Шагов', '78\nбэк 33 · фронт 45'],
       ['Слияний', '2'],
-      ['Хвостов после мержа', '2'],
+      ['Доработок после мержа', '32'],
     ]);
-    for (const label of ['Всего шагов', 'Приняты', 'На ревью', 'В работе', 'Не заведены', 'Сняты', 'Уже в master', 'Состояние плана']) {
-      expect(pairs.some((p) => p[0] === label)).toBe(false);
+  });
+
+  it('volume: lanes back 33 / front 45 → подпись «бэк 33 · фронт 45»; с other 2 → «· прочее 2»', () => {
+    // Без линии 'other' — только две части; с 'other' total 2 — третья часть. Строки
+    // по линиям («N шагов · принято · возвратов») нет: прежняя разбивка снята полностью.
+    const withoutOther = kvPairs(html(CLOSED_FULL));
+    expect(withoutOther[0]).toEqual(['Шагов', '78\nбэк 33 · фронт 45']);
+    const withOther = kvPairs(html({
+      ...CLOSED_FULL,
+      lanes: [...CLOSED_FULL.lanes!, { lane: 'other', personaIds: [], total: 2, accepted: 1, returns: 0 }],
+    }));
+    expect(withOther[0]).toEqual(['Шагов', '78\nбэк 33 · фронт 45 · прочее 2']);
+    expect(withOther.length).toBe(3);
+  });
+
+  it('«прочее» при total 0 — нет; «бэк»/«фронт» — только по существующим линиям', () => {
+    // 'other' total 0 — пояснения нет (0 — не факт, FP-R3); линии 'бэк' нет — части нет.
+    const pairs = kvPairs(html({
+      ...CLOSED_RUN,
+      lanes: [
+        { lane: 'front', personaIds: [], total: 45, accepted: 40, returns: 0 },
+        { lane: 'other', personaIds: [], total: 0, accepted: 0, returns: 0 },
+      ],
+    }));
+    expect(pairs[0]).toEqual(['Шагов', '78\nфронт 45']);
+  });
+
+  it('нет lanes (старый ответ) — только число, подстроки нет', () => {
+    const h = html(CLOSED_RUN);
+    expect(h).not.toContain('volume-steps-sub');
+    expect(h).not.toContain('бэк');
+    expect(kvPairs(h)[0]).toEqual(['Шагов', '78']);
+  });
+
+  it('линии с русскими значениями — те же слова, что у laneWord (существующая нормализация)', () => {
+    const pairs = kvPairs(html({ ...CLOSED_RUN, lanes: [
+      { lane: 'бэк', personaIds: [], total: 3, accepted: 2, returns: 0 },
+      { lane: 'фронт', personaIds: [], total: 1, accepted: 1, returns: 0 },
+    ] }));
+    expect(pairs[0]).toEqual(['Шагов', '78\nбэк 3 · фронт 1']);
+  });
+
+  it('«Задач всего», «Пачек ревью», «Хвостов после мержа», медианы, смены знаменателя — сняты полностью', () => {
+    const h = html(CLOSED_FULL);
+    for (const s of ['Задач всего', 'Пачек ревью', 'Хвостов', 'Медиана', 'Смены знаменателя']) {
+      expect(h).not.toContain(s);
     }
+  });
+
+  it('закрытая без summary/merges/tails (старый ответ): итогов по summary нет, счётчики — 0', () => {
+    const pairs = kvPairs(html(mkRun({ state: 'closed' })));
+    expect(pairs).toEqual([
+      ['Слияний', '0'],
+      ['Доработок после мержа', '0'],
+    ]);
   });
 
   it('открытая — строк итогов нет (0 строк)', () => {
     const h = html(mkRun({ reviews: [{ id: 'r-1', title: 'ревью' }] }));
     expect(h).not.toContain('Слияний');
-    expect(h).not.toContain('Хвостов после мержа');
-    expect(h).not.toContain('Пачек ревью');
+    expect(h).not.toContain('Доработок после мержа');
+    expect(kvPairs(h).length).toBe(0);
   });
 
   it('признак закрытости — closed или state merged/closed', () => {
     const byState = html(mkRun({ state: 'merged' }));
     expect(byState).toContain('Слияний');
-    expect(byState).toContain('Хвостов после мержа');
+    expect(byState).toContain('Доработок после мержа');
     // closed:false при state running — не закрытая.
     expect(html(mkRun({ closed: false }))).not.toContain('Слияний');
   });
@@ -376,19 +312,9 @@ describe('итоги закрытой (c2)', () => {
     // state merged/closed: ветка closed === true оставалась непроверенной).
     const pairs = kvPairs(html(mkRun({ closed: true })));
     expect(pairs).toEqual([
-      ['Пачек ревью', '0'],
       ['Слияний', '0'],
-      ['Хвостов после мержа', '0'],
+      ['Доработок после мержа', '0'],
     ]);
-  });
-
-  it('закрытая без summary/merges/tails (старый ответ): итогов по summary нет, счётчики — 0', () => {
-    const pairs = kvPairs(html(mkRun({ state: 'closed' })));
-    expect(pairs.some((p) => p[0] === 'Шагов')).toBe(false);
-    expect(pairs.some((p) => p[0] === 'Задач всего')).toBe(false);
-    expect(pairs).toContainEqual(['Пачек ревью', '0']);
-    expect(pairs).toContainEqual(['Слияний', '0']);
-    expect(pairs).toContainEqual(['Хвостов после мержа', '0']);
   });
 });
 

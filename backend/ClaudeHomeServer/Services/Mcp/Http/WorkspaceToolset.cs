@@ -84,8 +84,7 @@ public sealed partial class WorkspaceToolset(
     // и без значения по умолчанию резолв тулсета падал, не поднимая весь хост (S2a-2, ADR-014).
     // Состав tools/list не меняется: три deploy-ручки остаются объявленными и отвечают отказом
     DeployService? deploy = null,
-    INoteAccessor? notes = null,
-    ChatContinueService? continuation = null) : IMcpParameterizedToolset
+    INoteAccessor? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -177,7 +176,6 @@ public sealed partial class WorkspaceToolset(
             ["chats_report_up"] = "chats",
             ["chats_update"] = "chats",
             ["chats_archive"] = "chats",
-            ["chats_continue"] = "chats",
             ["files_delete"] = "destructive",
             ["chats_delete"] = "destructive",
             ["deploy_start"] = "deploy",
@@ -1515,7 +1513,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция chats ---
 
     // Чужой приватный чат не виден актору хода ни в одной рамке (FIN3-1, пункт critical FINAL-3):
-    // та же точка, что у chats_list (S2d-4e) и chats_continue (S2d-7b-1). Актор — из реестра хода;
+    // та же точка, что у chats_list (S2d-4e). Актор — из реестра хода;
     // актор неизвестен (фон, исполнитель без инициатора) — приватный не виден (fail-closed).
     // Отказ неотличим от несуществующего чата: «не найдена», существование не раскрываем.
     // Владение (GetOwned) и зона (ProjectDenied) остаются как раньше — гейт добавляет только приватность.
@@ -1705,49 +1703,6 @@ public sealed partial class WorkspaceToolset(
                 return archivedSession is null
                     ? Deny($"Сессия {sid} не найдена.")
                     : Json(new { id = archivedSession.Id, isArchived = archivedSession.IsArchived });
-            }
-
-            case "chats_continue":
-            {
-                if (continuation is null) return Deny("Продолжение в новом чате недоступно на этом сервере");
-                // Без sessionId — текущий чат агента (ротация на границе этапа)
-                var sid = StringArg(arguments, "sessionId");
-                var isSelf = sid.Length == 0 || sid == session.Id;
-                if (isSelf) sid = session.Id;
-                var target = sessions.GetOwned(sid, context.OwnerId);
-                if (target is null) return Deny($"Сессия {sid} не найдена.");
-                // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта; актор неизвестен
-                // (фон, исполнитель без инициатора) — приватный чат не виден (fail-closed, как в chats_list)
-                var continueActor = turnActors.Actor(session.Id, context.OwnerId);
-                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
-                if (target.ProjectId is { } targetPid
-                    && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
-                    return Deny(zoneDenied);
-                // Чужой чат делегированный ход не продолжает (тот же гейт, что у chats_send/chats_archive);
-                // собственный — можно: это ротация своей работы, а не вмешательство в чужую
-                if (!isSelf && DelegatedDenied(context, session, "Продолжение чата в новом") is { } gateDenied)
-                    return Deny(gateDenied);
-                if (target.Participants is { Count: > 0 } || target.TeamImplement is not null)
-                    return Deny("Групповой чат и режим «Командная реализация» нельзя продолжить в новом");
-                var userNote = OptionalArg(arguments, "note");
-                // Из собственного хода дождаться его конца нельзя — продолжение встаёт в очередь
-                // и стартует, когда ход кончится; чужой чат продолжаем сразу, но фоном
-                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf,
-                    actorUserId: continueActor);
-                return queued
-                    ? Json(new
-                    {
-                        status = "scheduled",
-                        hint = isSelf
-                            ? "продолжение стартует после завершения этого хода: завершай ход коротким сообщением "
-                              + "(записку-передачу попросит система отдельным ходом), в новом чате появится записка"
-                            : "продолжение запущено фоном: агент чата напишет записку, затем откроется новый чат",
-                    })
-                    : Json(new
-                    {
-                        status = "already_scheduled",
-                        hint = "продолжение этого чата уже стоит в очереди — повторно не ставь",
-                    });
             }
 
             case "chats_send":

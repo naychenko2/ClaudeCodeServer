@@ -98,7 +98,6 @@ public class HostPerClassRatchetGuardTests
         ["ClaudeHomeServer.Tests.Controllers.SpecialtyPromptSectionsControllerTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.WatchHttpToolsetTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.WorkspaceDeployDelegationTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
-        ["ClaudeHomeServer.Tests.Controllers.WorkspaceHttpChatsContinueTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.WorkspaceHttpChatsSendPreemptTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.WorkspaceHttpContextListTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.WorkspaceHttpOwnerIsolationTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
@@ -139,7 +138,7 @@ public class HostPerClassRatchetGuardTests
     };
 
     // Потолки списков: запись в Remainder/UndoneH0 не лазейка, а долг — размер только уменьшается
-    internal const int UndoneH0Ceiling = 69;
+    internal const int UndoneH0Ceiling = 68;
     internal const int RemainderCeiling = 29;
 
     // Скан решения (все тестовые сборки по метаданным и IL) — Slow по «Правилу новой метки» testing.md

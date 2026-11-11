@@ -6,11 +6,14 @@
 // Что защищается (постановка): ни одного aria-expanded в карточке; в ключевом чате —
 // бейдж вместо кнопки «Ключевой чат»; «К фиче» с указателем ведёт на записанную
 // вкладку (returnToFeature), без указателя — на «Ход» (cc-open-feature, fromChat:true);
-// действие тревоги в своём чате — фокус поля, не переход; мобила — кнопки 40, тега нет.
+// действие тревоги в своём чате — фокус поля, не переход; мобила — кнопки 40, тега нет;
+// подпись тревоги («Нужно от тебя:» / «Что мешает:») — отдельный элемент перед текстом
+// вопроса только при бэковом ask (FS-FCi); без ask и на мобиле подписи нет.
 //
 // Мутации (в отчёте): (1) рисовать «Ключевой чат» и в ключевом чате → краснеет ровно
 // тест ключевого чата; (2) «К фиче» без указателя не ставит «Ход» → краснеет клик
-// без указателя; (3) опустить minHeight 40 на мобиле → краснеет тест 360.
+// без указателя; (3) опустить minHeight 40 на мобиле → краснеет тест 360;
+// (4) убрать рендер подписи фразы → краснеет ровно тест подписи (FS-FCi).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -264,6 +267,48 @@ describe('FeatureChatCard: действие тревоги и приход run (
     expect(count(), 'числа run не победили').toContain('6 из 44');
     expect(count(), 'срока из run нет').toContain('≈');
     expect(findNodeByAttr(c, 'data-testid', 'feature-chat-card'), 'карточка перемонтирована').not.toBeNull();
+  });
+});
+
+describe('FeatureChatCard: подпись тревоги (FS-FCi, макет v5 §2)', () => {
+  it('ask на десктопе: подпись — отдельный элемент до текста вопроса; без ask и на мобиле — подписи нет', async () => {
+    // wait → «Нужно от тебя:» (слова только ASK_LABEL), текст вопроса — после подписи.
+    seedIndex(feat({
+      ...indexProgress, state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
+      ask: { text: 'нужно решение по отступам', source: 'wait', personaId: 'p-kira', sessionId: 's-alex' },
+    }));
+    const cWait = await renderCard();
+    const labelWait = findNodeByAttr(cWait, 'data-testid', 'feature-card-phrase-label');
+    expect(labelWait, 'подписи ask wait нет').not.toBeNull();
+    expect(textOf(labelWait!), 'подпись не слова модели').toBe('Нужно от тебя:');
+    expect(textOf(findNodeByAttr(cWait, 'data-testid', 'feature-card-phrase')!)).toBe('Нужно от тебя: нужно решение по отступам');
+
+    // stopped → «Что мешает:».
+    seedIndex(feat({
+      ...indexProgress, state: 'stopped',
+      attention: { kind: 'stop', since: null, reason: 'локальный движок недоступен', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
+      ask: { text: 'локальный движок недоступен', source: 'stopped', personaId: 'p-kira', sessionId: 's-alex' },
+    }));
+    const cStop = await renderCard();
+    const labelStop = findNodeByAttr(cStop, 'data-testid', 'feature-card-phrase-label');
+    expect(labelStop, 'подписи ask stopped нет').not.toBeNull();
+    expect(textOf(labelStop!), 'подпись не слова модели').toBe('Что мешает:');
+    expect(textOf(findNodeByAttr(cStop, 'data-testid', 'feature-card-phrase')!)).toBe('Что мешает: локальный движок недоступен');
+
+    // Без ask (идущая фича): фраза та же, подписи нет.
+    seedIndex(feat({ ...indexProgress, nowPersonaIds: ['p-kira'] }));
+    const cRun = await renderCard();
+    expect(findNodeByAttr(cRun, 'data-testid', 'feature-card-phrase-label'), 'подпись без ask').toBeNull();
+
+    // Мобила: модель не даёт подписи (featureChatCardModel:115 — на мобиле ask=null).
+    seedIndex(feat({
+      ...indexProgress, state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
+      ask: { text: 'нужно решение по отступам', source: 'wait', personaId: 'p-kira', sessionId: 's-alex' },
+    }));
+    const cMob = await renderCard({ isMobile: true });
+    expect(findNodeByAttr(cMob, 'data-testid', 'feature-card-phrase-label'), 'подпись на мобиле').toBeNull();
   });
 });
 

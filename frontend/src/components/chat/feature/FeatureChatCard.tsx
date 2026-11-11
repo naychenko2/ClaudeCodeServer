@@ -131,7 +131,11 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
   const btnStyle = isMobile ? { flexShrink: 0, minHeight: 40 } : { flexShrink: 0 };
 
   // Фраза: текст модели как есть; её name — <b> внутри текста (поле name модели — для этого).
-  const { text: phraseText, name: phraseName, tone: phraseTone } = model.phrase;
+  // Подпись тревоги (v5 §2 «подпись „Нужно от тебя:“ / „Что мешает:“ 600»): отдельный элемент
+  // перед текстом, только когда модель отдала label — это ASK_LABEL и только по бэковому ask
+  // (featureChatCardModel:120, на мобиле ask=null — подписи нет). Цвет — тон строки: наследуется
+  // от span ниже (TONE_COLOR[phraseTone]), своих слов и цветов нет.
+  const { label: phraseLabel, text: phraseText, name: phraseName, tone: phraseTone } = model.phrase;
   const at = phraseName ? phraseText.indexOf(phraseName) : -1;
   const phrase = at < 0 || !phraseName
     ? phraseText
@@ -242,6 +246,12 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
           data-testid="feature-card-phrase"
           style={{ flex: '1 1 auto', minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: TONE_COLOR[phraseTone] }}
         >
+          {phraseLabel ? (
+            <>
+              <span data-testid="feature-card-phrase-label" style={{ fontWeight: 600 }}>{phraseLabel}:</span>
+              {' '}
+            </>
+          ) : null}
           {phrase}
         </span>
         {model.action && (

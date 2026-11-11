@@ -2849,6 +2849,44 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         }
     }
 
+    // FS-XT1 (доработка ревью 786941ae): состояние фичи изменилось между снимком хвоста (:1603)
+    // и замком стора в WithdrawMergeTail — в этом окне ревьюер завёл виток на хвостовой шаг.
+    // Снятие к нему не применяется, мерж с составом, отличным от решённого человеком, не
+    // начинается: 409 tail_withdraw_not_applied, без 500 и без молчаливой лжи. Детерминировано
+    // швом MergeTailInterleaveHook (тот же приём, что PlanReplaceInterleaveHook в TaskManagerTests),
+    // окон времени нет. Мутация «не проверять NotAppliedKeys в MergeFeature» → красный: мерж ушёл
+    // бы с живым ревью внутри фичи, а шаг был бы закрыт как «снят при мерже».
+    [Fact]
+    public async Task MergeFeature_ХвостСталЖивым_409СнятиеНеПрименено()
+    {
+        var (epicId, stepId, projectId, persona) = await CreateMergeTailFixtureAsync("DevOps-tailchanged");
+        Features.Project(epicId, OwnerId)!.StepProgress.ClosedTail.Should().Be(1, "фикстура: закрытый хвост");
+
+        try
+        {
+            Tasks.MergeTailInterleaveHook = () => Tasks.Create(projectId, OwnerId, new CreateTaskRequest(
+                "ревью Ш1", FeatureId: epicId, Role: TaskRoles.Review, ReviewOf: [stepId]));
+
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("code").GetString().Should().Be("tail_withdraw_not_applied");
+            body.GetProperty("error").GetString().Should().Contain("не применено");
+            body.GetProperty("tailSteps").GetInt32().Should().Be(1, "409 несёт число неприменённых шагов");
+
+            // Хозяин класса общий на все тесты — виток ищется по фиче, а не по владельцу.
+            var review = Tasks.GetByOwner(OwnerId).Single(t => t.Role == TaskRoles.Review && t.FeatureId == epicId);
+            review.Status.Should().NotBe(TaskItemStatus.Done, "живой виток снятием хвоста не закрыт");
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("шаг с живым витком не снят");
+            Features.Project(epicId, OwnerId)!.Merge.Should().BeNull("мерж не начался");
+        }
+        finally
+        {
+            Tasks.MergeTailInterleaveHook = null;
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
     // §2.3 разбора: сторож делегированного хода на мерже держится только на атрибуте, а теста,
     // читающего его, не было. Мутация «снять [DenyOnDelegatedTurn] с MergeFeature» → null →
     // красный. Настройки не копируются в тест: сверяется сам атрибут на методе (образец —

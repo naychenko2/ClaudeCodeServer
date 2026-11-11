@@ -1030,6 +1030,25 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             }
         }
 
+        // Защита вердикта «снят при мерже» (FS-XT1, возврат ревью 786941ae): вердикт с
+        // Origin = merge_tail — единственный признак «смержено без ревью» (stepProgress.withdrawnAtMerge,
+        // FeatureStepAccounting.cs:447-452) и запись журнала с этим Origin. Обычный Update
+        // перестирал его accepted/returned: признак терялся, журнал хранил две противоречивые
+        // записи verdict. Гард по образцу DroppedByHumanAt выше: агентскому пути — внятный отказ
+        // (иначе «200 OK и ничего не изменилось»), человеческому — вердикт не меняется, остальные
+        // поля сохраняются штатно. Переоткрытие (Status извне Done) снимает вердикт общим блоком
+        // ниже: шаг возвращается в знаменатель (§8.4 п.13) — это легальный путь, не перетирание.
+        if (task.Verification is { Origin: TaskVerificationOrigins.MergeTail } && req.Verification is not null)
+        {
+            bool reopensMergeTail = req.Status is not null && req.Status != TaskItemStatus.Done;
+            if (isAgentCall && !reopensMergeTail)
+                throw new InvalidOperationException(
+                    $"Задача «{task.Title}» снята при мерже: её вердикт защищён от перетирания. "
+                    + "Чтобы вернуть шаг в работу, переоткройте её (status: todo/inProgress).");
+            if (!reopensMergeTail)
+                req = req with { Verification = null };
+        }
+
         var effective = new TaskItem
         {
             Kind = task.Kind,
@@ -1356,30 +1375,42 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // Отдельный от _planLocks: тот держит пересечение планов, здесь — состав фичи при мерже.
     private readonly ConcurrentDictionary<string, object> _mergeTailLocks = new(StringComparer.Ordinal);
 
+    // Тестовый шов (образец — PlanReplaceInterleaveHook, :528): внутри лока, ПЕРЕД чтением состояния
+    // стора — детерминированная точка «между снимком вызывающего (TasksController.MergeFeature) и
+    // перепроверкой хвоста»: тест заводит в ней виток ревью на хвостовой шаг. Без окон времени.
+    internal Action? MergeTailInterleaveHook { get; set; }
+
     /// <summary>
     /// Снять закрытый хвост шагов при мерже (разрез §8.3; путь 6 инварианта §8.4): единственный
     /// серверный путь вердикта с Origin = merge_tail — ни REST, ни MCP его не ставят
-    /// (StripOriginFromBody). Ключи — только из учёта (FeatureRun.ClosedTailKeys ←
-    /// FeatureStepAccounting.Result.ClosedTailKeys): своего предиката «что такое хвост» здесь нет,
-    /// как и своего состава цепочек — общий индекс FeatureStepAccounting.IndexChains.
-    /// Под одним локом на featureId:
-    /// - голове цепочки (role=step) каждого ключа — вердикт withdrawn с Notes «снят при мерже»,
-    ///   Origin = merge_tail, PersonaId = null (снял человек по кнопке мержа);
-    /// - незакрытым виткам ревью/проверки/финала, ВСЕ цели которых уходят в хвост, — тот же
+    /// (StripOriginFromBody). Ключи — только из учёта: заявленные вызывающим перепроверяются под ЭТИМ
+    /// ЖЕ замком по свежему проходу FeatureStepAccounting (тот же Build и тот же состав по ролям,
+    /// что отдал ключи фронту — FeatureProjector.cs:130): своего предиката «что такое хвост» здесь
+    /// нет, как и своего состава цепочек — общий индекс FeatureStepAccounting.IndexChains.
+    /// Между снимком контроллера и этим местом ревьюер мог завести виток или поставить вердикт:
+    /// цепочка с живым витком или вердиктом уже не закрытый хвост (§8.3: живую работу кнопка не
+    /// трогает) — её ключ идёт в NotAppliedKeys, а не в вердикт. Под одним локом на featureId:
+    /// - голове цепочки (role=step) каждого подтверждённого ключа — вердикт withdrawn с Notes
+    ///   «снят при мерже», Origin = merge_tail, PersonaId = null (снял человек по кнопке мержа);
+    /// - незакрытым виткам ревью/проверки/финала, ВСЕ цели которых уходят вместе с хвостом, — тот же
     ///   вердикт, и они закрываются (вердикт бывает только у закрытой задачи; образец — снятие
-    ///   плана WithdrawPlan). Хоть одна цель живёт вне хвоста — виток живой, его не трогаем.
+    ///   плана WithdrawPlan). Хоть одна цель остаётся живой — виток живой, его не трогаем.
     /// Идемпотентен: задача с уже существующим вердиктом не переписывается — повторное нажатие
-    /// не даёт второй волны записей. Незакрытую задачу-шаг не трогаем: вердикт на открытом шаге
-    /// незаконен, снять открытый шаг — другой путь (DroppedByHumanAt, решение человека отдельно).
-    /// Возвращает фактически снятые задачи — по ним вызывающий вещает task_changed. Пусто —
-    /// снимать нечего (хвоста нет или его сняли раньше).
+    /// не даёт второй волны записей; шаг, уже снятый самим этим путём (Origin = merge_tail), —
+    /// решение исполнено раньше, оно не «не применено». Незакрытую задачу-шаг не трогаем: вердикт
+    /// на открытом шаге незаконен, снять открытый шаг — другой путь (DroppedByHumanAt, решение
+    /// человека отдельно). Результат — снятые задачи (по ним вызывающий вещает task_changed) и
+    /// ключи, НЕ применённые из-за изменившегося состояния: «не применено» — ответ вызывающему,
+    /// а не сбой; при пустом хвосте мерж остаётся прежним путём.
     /// </summary>
-    public IReadOnlyList<TaskItem> WithdrawMergeTail(string featureId, IReadOnlyCollection<string> keys, string ownerId)
+    public MergeTailResult WithdrawMergeTail(string featureId, IReadOnlyCollection<string> keys, string ownerId)
     {
-        if (keys.Count == 0) return [];
-        var result = new List<TaskItem>();
+        if (keys.Count == 0) return new MergeTailResult([], []);
+        var withdrawn = new List<TaskItem>();
+        var notApplied = new List<string>();
         lock (_mergeTailLocks.GetOrAdd(featureId, _ => new object()))
         {
+            MergeTailInterleaveHook?.Invoke();
             var now = DateTime.UtcNow;
             // Ключи читаются под локом из текущего состояния стора, а не из ответа, который видел
             // вызывающий: первый вызов мог снять их раньше, удалённая задача ключа не даст.
@@ -1389,18 +1420,42 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 .Where(t => t.OwnerId == ownerId
                     && string.Equals(t.FeatureId, featureId, StringComparison.Ordinal))
                 .ToList();
-            var index = FeatureStepAccounting.IndexChains(
-                featureTasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList(),
-                featureTasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList());
+            var steps = featureTasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
+            var verdictTasks = featureTasks
+                .Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList();
+            var index = FeatureStepAccounting.IndexChains(steps, verdictTasks);
 
+            // Перепроверка хвоста под тем же замком, где пишется снятие: решает тот же проход учёта,
+            // что показал ключи фронту (тот же Build, те же составы по ролям). Ключ, у которого
+            // появился живой виток или вердикт, из этого списка выпадает сам — предиката здесь нет.
+            var tail = new HashSet<string>(
+                FeatureStepAccounting.Build(
+                    steps, verdictTasks,
+                    featureTasks.Where(t => t.Role == TaskRoles.Plan).ToList(),
+                    now, null,
+                    featureTasks.Where(t => t.Role == TaskRoles.Merge).ToList()).ClosedTailKeys,
+                FeatureStepAccounting.StepKeyComparer);
+            tail.IntersectWith(wanted);
+
+            var withdrawnKeys = new HashSet<string>(FeatureStepAccounting.StepKeyComparer);
             foreach (var key in wanted)
             {
-                if (!index.MembersByKey.TryGetValue(key, out var members)) continue;
+                if (!index.MembersByKey.TryGetValue(key, out var members)) { notApplied.Add(key); continue; }
                 // Голова цепочки — та же, что в учёте: первый role=step по старту задачи.
                 var head = members.OrderBy(FeatureProjector.TaskStart)
                     .FirstOrDefault(t => t.Role == TaskRoles.Step);
-                if (head is null || head.Status != TaskItemStatus.Done) continue;
-                if (WithdrawMergeTailVerdict(head, now)) result.Add(head);
+                if (head is null || head.Status != TaskItemStatus.Done) { notApplied.Add(key); continue; }
+                // Уже снят этим же путём раньше (повторное нажатие «Мерж»): решение исполнено,
+                // повтор не даёт ни записи, ни журнала — и не является «не применено».
+                if (head.Verification is { Verdict: TaskVerdicts.Withdrawn, Origin: TaskVerificationOrigins.MergeTail })
+                    continue;
+                if (!tail.Contains(key)) { notApplied.Add(key); continue; }
+                if (WithdrawMergeTailVerdict(head, now))
+                {
+                    withdrawn.Add(head);
+                    withdrawnKeys.Add(key);
+                }
+                else notApplied.Add(key);   // вердикт уже поставлен другим путём — снятие не исполняется
             }
 
             foreach (var v in index.VerdictById.Values)
@@ -1409,14 +1464,14 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 if (v.Verification?.Verdict is not null) continue;      // вердикт уже поставлен
                 if (v.ReviewOf is not { Count: > 0 }) continue;         // без связи — не виток цепочки
                 var targets = FeatureStepAccounting.ExtractTargetKeys(v, index, [v.Id]);
-                // Снимается весь виток или не снимается вовсе: хоть одна цель живёт вне хвоста —
-                // ревью зван и на неё, снятием хвоста его «мёртвым» не сделать.
-                if (targets.Count == 0 || !targets.All(k => wanted.Contains(k))) continue;
-                if (WithdrawMergeTailVerdict(v, now)) result.Add(v);
+                // Снимается весь виток или не снимается вовсе: хоть одна цель осталась живой
+                // (хвост её не снял) — ревью зван и на неё, снятием хвоста его «мёртвым» не сделать.
+                if (targets.Count == 0 || !targets.All(k => withdrawnKeys.Contains(k))) continue;
+                if (WithdrawMergeTailVerdict(v, now)) withdrawn.Add(v);
             }
         }
-        if (result.Count > 0) ScheduleSave();
-        return result;
+        if (withdrawn.Count > 0) ScheduleSave();
+        return new MergeTailResult(withdrawn, notApplied);
     }
 
     // Вердикт «снят при мерже» (Origin = merge_tail) на задаче: только если своего вердикта ещё
@@ -2484,3 +2539,10 @@ public record UpdateTaskRequest(
     List<AcceptanceEvidence>? Evidence = null);
 
 public record UpdateSubtaskRequest(string Id, string Title, bool IsDone);
+
+/// <summary>Итог снятия закрытого хвоста при мерже (TaskManager.WithdrawMergeTail, FS-XT1):
+/// Withdrawn — фактически снятые задачи (по ним вещается task_changed); NotAppliedKeys — ключи
+/// шагов из заявленных, которые к моменту применения перестали быть закрытым хвостом (у цепочки
+/// появился живой виток или вердикт). «Не применено» — ответ вызывающему (он решает заново по
+/// свежему состоянию), а не сбой: состояние фичи изменилось между его снимком и замком стора.</summary>
+public sealed record MergeTailResult(IReadOnlyList<TaskItem> Withdrawn, IReadOnlyList<string> NotAppliedKeys);

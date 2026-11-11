@@ -199,7 +199,13 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
 # тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
 # гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|98
+# FS-XT1 (e0e74d018, доработка по ревью 786941ae): TasksController 98→102 — тело мержа { tail }:
+# «tasks.WithdrawMergeTail(featureId, tailKeys, UserId)» (снятие делает стор по владельцу фичи),
+# два «ToTaskBoard(UserId, …)» на снятые задачи и эпик (адресат — владелец записей, тот же класс,
+# что SetFeatureHold выше) и «journal?.Append(UserId, featureId, …)» на решение «оставить» (журнал
+# фичи адресован владельцу). Ключом хранилищ ничто из этого не стало: задачи и журнал лежат у
+# арендатора, вызывающий входит только в право действия человека. Доработка новых мест не добавила.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|102
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

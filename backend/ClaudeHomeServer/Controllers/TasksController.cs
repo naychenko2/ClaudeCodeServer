@@ -1648,15 +1648,29 @@ public class TasksController(
 
             if (tailKeys.Count > 0 && tail == "withdraw")
             {
-                var withdrawn = tasks.WithdrawMergeTail(featureId, tailKeys, UserId);
+                var res = tasks.WithdrawMergeTail(featureId, tailKeys, UserId);
                 // События по каждой снятой задаче и по эпику: его процент и лента шагов изменились,
                 // страница фичи обязана пересчитаться, как на любой мутации (образец — SetFeatureHold).
-                foreach (var t in withdrawn)
+                foreach (var t in res.Withdrawn)
                     await broadcaster.ToTaskBoard(UserId, t.ProjectId,
                         new TaskChangedMessage("updated", t), sessions, projects);
-                if (withdrawn.Count > 0)
+                if (res.Withdrawn.Count > 0)
                     await broadcaster.ToTaskBoard(UserId, run.Epic.ProjectId,
                         new TaskChangedMessage("updated", run.Epic), sessions, projects);
+                // Состояние фичи изменилось между снимком выше и замком стора: у части шагов
+                // появился живой виток или вердикт — они больше не закрытый хвост, и снятие к ним
+                // не применялось (живую работу кнопка не трогает, §8.3). Мерж с составом, отличным
+                // от решённого человеком, не идёт: 409 с машинным кодом вместо молчаливой лжи;
+                // уже снятое остаётся снятым, решение — по свежему состоянию (фронт перечитает).
+                if (res.NotAppliedKeys.Count > 0)
+                    return Conflict(new
+                    {
+                        error = $"Снятие не применено: {res.NotAppliedKeys.Count} из {tailKeys.Count} шагов "
+                            + "перестали быть закрытым хвостом (у них появился живой виток или вердикт). "
+                            + "Мерж не начат — решите заново по текущему состоянию.",
+                        code = "tail_withdraw_not_applied",
+                        tailSteps = res.NotAppliedKeys.Count,
+                    });
             }
             else if (tailKeys.Count > 0)
             {

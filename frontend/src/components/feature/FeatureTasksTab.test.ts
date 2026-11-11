@@ -5,13 +5,16 @@
 //     «не заведено» без навигации;
 //   • фильтры = корзины stepProgress (нули скрыты), сумма строк по ним = stepProgress.total;
 //     «в master» — отдельно, «служебные» — задачи вне цепочек;
+//   • доработки после мержа (chain.followUp) — вне фильтров и их счётчиков, отдельная группа
+//     после основных строк с заголовком «Доработки после мержа · {accepted} из {total}» (FS-FTTp);
 //   • статус из task.status не выводится: задача inProgress в цепочке accepted — «принято».
 //
 // Мутации (в отчёте):
 //   (1) bucket берётся из task.status, а не из корзины цепочки → «корзина из цепочки» краснеет;
 //   (2) фильтр не фильтрует → «фильтр: принято» краснеет;
 //   (3) «ждёт вас» вместо BRIEF_WAIT_WORD → «нужен ответ» краснеет;
-//   (4) служебные идут в «все» → «служебные отдельно» краснеет.
+//   (4) служебные идут в «все» → «служебные отдельно» краснеет;
+//   (5) доработки не исключены из фильтров (steps = rows) → «сумма = total» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -106,6 +109,33 @@ function fullRun(): FeatureRun {
   } as unknown as FeatureRun;
 }
 
+// Агрегат с доработками после мержа (FS-FTTp): 4 основные цепочки (total=4: work=1, review=1,
+// accepted=2) + 2 цепочки followUp=true (F1 — принят, F2 — в работе). followUpTotal=2,
+// followUpAccepted=1 — вне total и корзин (зеркало бэка FeatureStepAccounting:304–434).
+function followRun(): FeatureRun {
+  const done = (id: string) => stepTask(id, { status: 'done', completedAt: '2026-10-20T12:00:00Z' });
+  const run = fullRun();
+  run.plan = [];
+  run.stepChains = [
+    chain('R1', ['r1'], { chatId: 'c-r1', durationMinutes: 65 }),
+    chain('V1', ['v1'], { outcome: 'pending', status: 'ждёт ревью' }),
+    chain('A1', ['a1'], { outcome: 'accepted', status: 'принят', inMaster: true }),
+    chain('A2', ['a2'], { outcome: 'accepted', status: 'принят', inMaster: true }),
+    chain('F1', ['f1'], { outcome: 'accepted', status: 'принят', followUp: true }),
+    chain('F2', ['f2'], { followUp: true, chatId: 'c-f2' }),
+  ];
+  run.steps = [
+    stepTask('r1', { status: 'inProgress' }),
+    done('v1'), done('a1'), done('a2'), done('f1'),
+    stepTask('f2', { status: 'inProgress', linkedSessionId: 'c-f2' }),
+  ];
+  run.stepProgress = {
+    planState: 'cut', total: 4, accepted: 2, review: 1, work: 1, notCreated: 0, withdrawn: 0,
+    unlinkedReworks: 0, inMaster: 2, followUpTotal: 2, followUpAccepted: 1,
+  };
+  return run;
+}
+
 // Корни всех mount'ов: unmount в afterEach (иначе два живых корня дёргают общий стор).
 const roots: import('react-dom/client').Root[] = [];
 function render(props: { run: FeatureRun; isMobile?: boolean }) {
@@ -145,6 +175,17 @@ const rowIds = (c: ReturnType<typeof render>, prefix: string) => {
   const walk = (x: { childNodes?: unknown; getAttribute?: (a: string) => string | null }) => {
     const id = x.getAttribute?.('data-testid') ?? '';
     if (id.startsWith(prefix)) ids.push(id);
+    for (const ch of Array.from((x.childNodes ?? []) as ArrayLike<never>)) walk(ch);
+  };
+  walk(c as never);
+  return ids;
+};
+// Все data-testid в порядке обхода DOM — для проверки порядка групп.
+const testIdOrder = (c: ReturnType<typeof render>) => {
+  const ids: string[] = [];
+  const walk = (x: { childNodes?: unknown; getAttribute?: (a: string) => string | null }) => {
+    const id = x.getAttribute?.('data-testid') ?? '';
+    if (id) ids.push(id);
     for (const ch of Array.from((x.childNodes ?? []) as ArrayLike<never>)) walk(ch);
   };
   walk(c as never);
@@ -285,6 +326,94 @@ describe('Рендер вкладки', () => {
   it('«все» по умолчанию: aria-pressed', () => {
     const c = render({ run: fullRun() });
     expect(findNodeByAttr(c, 'data-testid', 'tasks-filter-all')!.getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+// ═══ 2b. Доработки после мержа: отдельная группа (FS-FTTp) ════════════════════════
+describe('Доработки после мержа', () => {
+  it('доработки вне фильтров: сумма счётчиков = total (мутация: не исключать followUp из фильтров → red)', () => {
+    const run = followRun();
+    const m = buildStepsTab(run);
+    const by = (b: string) => m.steps.filter(r => r.bucket === b).length;
+    expect(by('work') + by('review') + by('accepted') + by('notCreated')).toBe(run.stepProgress!.total);
+    expect([by('work'), by('review'), by('accepted')]).toEqual([1, 1, 2]);
+    // Сами доработки — в отдельном списке модели, не в steps.
+    expect(m.followUp.map(r => r.card.stepRef).sort()).toEqual(['F1', 'F2']);
+    // Чипы: ни одна корзина доработками не нарастает.
+    expect(stepsFilterChips(m).map(c => `${c.key}:${c.count}`)).toEqual([
+      'all:4', 'work:1', 'review:1', 'accepted:2', 'inMaster:2', 'service:2',
+    ]);
+  });
+
+  it('группа после основных строк: заголовок «Доработки после мержа · 1 из 2» и обе строки', () => {
+    const c = render({ run: followRun() });
+    expect(rowIds(c, 'step-row-').sort()).toEqual(['step-row-A1', 'step-row-A2', 'step-row-R1', 'step-row-V1']);
+    expect(rowIds(c, 'followup-row-').sort()).toEqual(['followup-row-F1', 'followup-row-F2']);
+    const header = findNodeByAttr(c, 'data-testid', 'tasks-followup-header')!;
+    expect(textNodes(header).join('')).toContain('Доработки после мержа');
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'tasks-followup-count')!).join('')).toBe('1 из 2');
+    // Порядок: заголовок — после последней основной строки, до поясняющей строки (служебные — за ней).
+    const order = testIdOrder(c);
+    const lastStep = Math.max(...order.map((id, i) => (id.startsWith('step-row-') ? i : -1)));
+    const fuIdx = order.indexOf('tasks-followup-header');
+    expect(fuIdx).toBeGreaterThan(lastStep);
+    expect(fuIdx).toBeLessThan(order.indexOf('tasks-nav-note'));
+  });
+
+  it('строка доработки — та же разметка, что у шага: название · роль · корзина · «чат · задача»', async () => {
+    const c = render({ run: followRun() });
+    const row = findNodeByAttr(c, 'data-testid', 'followup-row-F2')!;
+    expect(textNodes(findNodeByAttr(row, 'data-testid', 'task-title')!).join('')).toBe('Шаг F2');
+    expect(textNodes(findNodeByAttr(row, 'data-testid', 'task-role')!).join('')).toBe('F2 · фронт');
+    expect(textNodes(findNodeByAttr(row, 'data-testid', 'task-status')!).join('')).toBe('в работе');
+    expect(findNodeByAttr(row, 'data-testid', 'nav-target-chat')).not.toBeNull();
+    expect(findNodeByAttr(row, 'data-testid', 'nav-target-task')).not.toBeNull();
+    // Переходы — те же, что у шагов: openTaskInSection + openChatById.
+    await act(async () => { (reactProps(findNodeByAttr(row, 'data-testid', 'nav-target-task')!)!.onClick as () => void)(); });
+    expect(mockOpenTask.calls).toEqual([{ id: 'f2' }]);
+    await act(async () => { (reactProps(findNodeByAttr(row, 'data-testid', 'nav-target-chat')!)!.onClick as () => void)(); });
+    expect(mockOpenChat.calls).toEqual(['c-f2']);
+  });
+
+  it('без followUp (old-агрегат): группы нет, поведение прежнее', () => {
+    const c = render({ run: fullRun() });
+    expect(findNodeByAttr(c, 'data-testid', 'tasks-followup-header')).toBeNull();
+    expect(rowIds(c, 'followup-row-')).toEqual([]);
+  });
+
+  it('followUpTotal = 0: группы нет (единственная доработка — снятая, она вне знаменателя)', () => {
+    const run = followRun();
+    run.stepChains = run.stepChains!.map(ch => (ch.stepRef === 'F2' ? { ...ch, outcome: 'withdrawn', status: 'снят с выкладки' } : ch));
+    run.stepProgress = { ...run.stepProgress!, followUpTotal: 0, followUpAccepted: 0 };
+    const c = render({ run });
+    expect(findNodeByAttr(c, 'data-testid', 'tasks-followup-header')).toBeNull();
+    expect(rowIds(c, 'followup-row-')).toEqual([]);
+    expect(rowIds(c, 'step-row-').sort()).toEqual(['step-row-A1', 'step-row-A2', 'step-row-R1', 'step-row-V1']);
+  });
+
+  it('группа показывается целиком; порог «Показать все» — только для основных строк', async () => {
+    const run = followRun();
+    for (let i = 0; i < 6; i++) {
+      run.steps.push(stepTask(`d${i}`, { status: 'done', completedAt: '2026-10-20T12:00:00Z' }));
+      run.stepChains.push(chain(`S${i}`, [`d${i}`], { outcome: 'accepted', status: 'принят' }));
+    }
+    run.stepProgress = { ...run.stepProgress!, total: 10, accepted: 8 };
+    const c = render({ run });
+    expect(rowIds(c, 'step-row-')).toHaveLength(8);
+    expect(rowIds(c, 'followup-row-')).toHaveLength(2);
+    const showAll = findNodeByAttr(c, 'data-testid', 'tasks-show-all')!;
+    expect(textNodes(showAll).join('')).toContain('10');
+    await click(c, 'tasks-show-all');
+    expect(rowIds(c, 'step-row-')).toHaveLength(10);
+    expect(rowIds(c, 'followup-row-')).toHaveLength(2);
+  });
+
+  it('«служебные»: строк шагов и группы доработок нет', async () => {
+    const c = render({ run: followRun() });
+    await click(c, 'tasks-filter-service');
+    expect(rowIds(c, 'step-row-')).toEqual([]);
+    expect(rowIds(c, 'followup-row-')).toEqual([]);
+    expect(rowIds(c, 'task-row-').sort()).toEqual(['task-row-epic', 'task-row-rv1']);
   });
 });
 

@@ -39,7 +39,7 @@ public class WikiRetractFootnoteTests : IDisposable
     private const string ClaimBoth = "Решение: перенести сборку на Linux";
     private const string ClaimBOnly = "Сборка на Linux проходит зелёной";
     private const string ClaimSynth = "Контейнер и граница интервала зафиксированы";
-    private const string SourceTextA =ClaimAOnly + ". " + ClaimA2 + ". " + ClaimA3 + ". " + ClaimBoth + ".";
+    private const string SourceTextA = ClaimAOnly + ". " + ClaimA2 + ". " + ClaimA3 + ". " + ClaimBoth + ".";
     private const string SourceTextB = ClaimBOnly + ". " + ClaimBoth + ".";
 
     private static readonly WikiApplyService.ApplyContext CtxA = new(CardTitleA, SourceTextA);

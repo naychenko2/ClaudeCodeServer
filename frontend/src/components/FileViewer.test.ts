@@ -472,6 +472,100 @@ describe('FileViewer: гард fromRoot внутри обработчиков з
   });
 });
 
+// FS-F1b: проп taskId — чтение из дерева автора задачи, только просмотр. Бэк не пишет под
+// taskId вовсе (FilesController.SaveContent → 400), поэтому кнопок правки нет при любом
+// ответе; 404 с причиной (FS-B2) доходит до фронта полем reason (features/files/api.ts) —
+// вьюер показывает состояние, а не ошибку загрузки. Мутации:
+//   • не передать taskId в основной getContent (:778) → красный тест про аргументы;
+//   • снять `!taskId` из fromRoot → красный тест про «Править»;
+//   • снять проверку ключа перед setState в эффекте загрузки → красный тест-гонка.
+describe('FileViewer: проп taskId — дерево автора, только просмотр', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  // Реалистичный ответ taskId-ветки бэка: локатор всегда несёт branch (и из коммита тоже).
+  const taskTree = (content: string) => ({
+    content, isBinary: false, isImage: false, mimeType: 'text/plain', fileSize: 12,
+    branch: 'feat/x', isAnchor: true,
+  });
+
+  // Свой mount: не «readme.txt», а другой путь (для .mid — проверки fileUrl).
+  function mountAt(filePath: string, extra: Record<string, unknown>) {
+    installFakeDom();
+    wireWindow();
+    const { root, container } = mount(createElement(FileViewer, {
+      project, filePath, onClose: vi.fn(), isMobile: false, ...extra,
+    }));
+    return { root, container };
+  }
+
+  it('при taskId getContent получает {taskId}; «Править» и Diff нет, diff корня не запрошен', async () => {
+    const diffSpy = vi.spyOn(api.files, 'getDiff').mockResolvedValue({ diff: '+a\n-b' });
+    contentSpy!.mockResolvedValue(taskTree('hello world'));
+    const { container } = mountViewer(vi.fn(), false, { taskId: 't1' });
+    await flush();
+    expect(contentSpy!.mock.calls[0][3], 'taskId передан opts-аргументом getContent').toEqual({ taskId: 't1' });
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'только просмотр: кнопки правки нет').toBeNull();
+    expect((textNodes(container as never).includes('Diff') ? {} : null), 'вкладка Diff скрыта').toBeNull();
+    expect(diffSpy, 'дифф корня не запрашивается для файла из дерева задачи').not.toHaveBeenCalled();
+  });
+
+  it('при taskId URL картинки внутри md получает taskId', async () => {
+    // Картинки markdown резолвятся в том же дереве, что и документ (resolveMarkdownImage):
+    // без якоря они ушли бы из main, а документ — из дерева задачи
+    contentSpy!.mockResolvedValue({ content: '![pic](pic.png)', isBinary: false, isImage: false, mimeType: 'text/markdown', fileSize: 15 });
+    mountAt('docs/report.md', { taskId: 't1' });
+    await flush();
+    expect(api.files.fileUrl as never, 'картинка md резолвится в дереве задачи').toHaveBeenCalledWith('p1', 'docs/pic.png', undefined, 't1');
+  });
+
+  it('404 reason=branch_deleted — состояние «Материал удалён вместе с веткой»', async () => {
+    // Так выглядит ответ features/files/api.ts после 404 {reason}: поле, не исключение
+    contentSpy!.mockResolvedValue({ content: null, isBinary: false, isImage: false, reason: 'branch_deleted' });
+    const { container } = mountViewer(vi.fn(), false, { taskId: 't1' });
+    await flush();
+    const text = textNodes(container as never).join(' ');
+    expect(text, 'текст удалённого состояния').toContain('Материал удалён вместе с веткой');
+    expect(text, 'обычный текст файла не рендерится').not.toContain('hello world');
+    expect(findNodeByAttr(container as never, 'title', 'Править'), 'кнопки правки нет').toBeNull();
+  });
+
+  it('404 reason=binary — «Файл из ветки можно открыть только как текст»', async () => {
+    contentSpy!.mockResolvedValue({ content: null, isBinary: false, isImage: false, reason: 'binary' });
+    const { container } = mountViewer(vi.fn(), false, { taskId: 't1' });
+    await flush();
+    const text = textNodes(container as never).join(' ');
+    expect(text, 'текст состояния бинаря из коммита').toContain('Файл из ветки можно открыть только как текст');
+  });
+
+  // Контракт ключа (projectId, path, sessionId, taskId): смена taskId во время загрузки —
+  // новая загрузка, и только её ответ применяется. Мутация «снять проверку ключа перед
+  // setState» в эффекте загрузки FileViewer → старый ответ вытесняет новый → красный.
+  it('смена taskId во время загрузки — показан файл нового ключа', async () => {
+    let resolveFirst: (v: unknown) => void = () => {};
+    const spy = contentSpy as unknown as {
+      mockImplementationOnce: (fn: () => Promise<unknown>) => void;
+      mockResolvedValue: (v: unknown) => void;
+    };
+    spy.mockImplementationOnce(() => new Promise(r => { resolveFirst = r; })); // запрос t1 висит
+    spy.mockResolvedValue(taskTree('BBBB новый ключ'));                        // запрос t2 готов сразу
+    const { root, container } = mountViewer(vi.fn(), false, { taskId: 't1' });
+    act(() => {
+      root.render(createElement(FileViewer, {
+        project, filePath: 'docs/readme.txt', onClose: vi.fn(), isMobile: false, taskId: 't2',
+      }));
+    });
+    await flush();
+    expect(contentSpy!.mock.calls.map(c => c[3]), 'смена taskId — новая загрузка со своим якорем')
+      .toEqual([{ taskId: 't1' }, { taskId: 't2' }]);
+    resolveFirst(taskTree('AAAA старый ключ'));
+    await flush();
+    const text = textNodes(container as never).join('');
+    expect(text, 'ответ нового ключа применён').toContain('BBBB новый ключ');
+    expect(text, 'устаревший ответ отброшен').not.toContain('AAAA старый ключ');
+  });
+});
+
 // Кнопка закрытия (X) — ToolbarIconButton с title «Закрыть»; ищем по title.
 function findCloseButton(container: unknown): unknown {
   let hit: unknown = null;

@@ -140,12 +140,20 @@ interface Props {
   // шаг F2b): файл и картинки внутри md читаются из worktree чата, а не из анкера проекта.
   // Не задано — старое поведение (корень проекта), вызывающие без чата не меняются.
   sessionId?: string;
+  // FS-F1b: якорь — дерево автора задачи (материал фичи лежит в её worktree). С этим пропом
+  // просмотрщик только на чтение: бэк отвечает 400 на PUT с taskId, поэтому кнопок правки и
+  // сохранения нет. Не задано — старое поведение.
+  taskId?: string;
 }
 
 interface FileContent {
   content: string | null;
   isBinary: boolean;
   isImage: boolean;
+  // Причина неудачного чтения из дерева задачи (FS-F1b, бэк FS-B2): 404 с reason доходит
+  // до фронта полем, а не исключением (features/files/api.ts): 'branch_deleted' — рабочий
+  // каталог снесли вместе с веткой, 'binary' — бинарь из коммита не читается.
+  reason?: 'binary' | 'branch_deleted';
   isVideo?: boolean;
   isAudio?: boolean;
   isDocument?: boolean;
@@ -448,7 +456,7 @@ const writeHooks: { current: WriteActionHooks | null } = { current: null };
 const diagramSave: { current: ((xml: string) => Promise<void>) | null } = { current: null };
 export const __test = { writeHooks, diagramSave };
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId, taskId }: Props) {
   const online = useOnline();
   // Подсистема заметок выключена: vault-рендер (NoteView), редактор заметки, граф
   // связей и комментарии документа пропадают. Файл из папки notes/*.md показывается
@@ -540,8 +548,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const viaAgent = filesRoute === 'agent';
   // Файл из корня проекта (основного дерева): только с него разрешены правка, откат, дифф и
   // история — они пишут и читают корень, а не дерево чата. branch в ответе непуст у любого
-  // неосновного дерева; без sessionId (и на relay-пути, где ветки нет) файл всегда из корня
-  const fromRoot = !sessionId || fileContent?.branch == null;
+  // неосновного дерева; без sessionId (и на relay-пути, где ветки нет) файл всегда из корня.
+  // taskId (FS-F1b): файл всегда из дерева задачи — бэк не пишет под taskId вовсе (PUT → 400),
+  // поэтому только чтение при любом branch в ответе.
+  const fromRoot = !taskId && (!sessionId || fileContent?.branch == null);
   // Палитре AI нужен тот же признак: «Сохранить как Markdown» пишет в корень (см. lib/ai/fileContext)
   useEffect(() => {
     setFileContext(filePath, fromRoot);
@@ -596,7 +606,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const resolveMarkdownImage = (src: string): string | undefined => {
     const target = resolveDocImage(filePath, src);
     if (!target) return undefined;
-    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target, sessionId);
+    return viaAgent ? resolveAgentImage(target) : api.files.fileUrl(project.id, target, sessionId, taskId);
   };
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
   const gitSt = useGitState(project.id);
@@ -749,6 +759,11 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     : api.files.getDiff(project.id, filePath),
   [project.id, filePath, gitStagePath]);
 
+  // Содержимое привязано к ключу (проект, путь, якорь дерева — sessionId/taskId): ответ
+  // уже заменённого ключа (например taskId сменился во время загрузки) не должен вытеснить
+  // текущий — проверка ключа перед каждым setState в этом эффекте. Тот же паттерн, что у
+  // набора картинок агента (agentImagesAsked выше).
+  const contentKey = useRef('');
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- массовый сброс промежуточного UI-состояния перед загрузкой нового файла
     setEditing(false);
@@ -775,29 +790,39 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     // Новый файл — ни прочитанной версии (etag), ни открытого конфликта (S2c-F2b)
     versionEtag.current = null;
     setSaveConflict(null);
-    // sessionId (F2b): читать из дерева чата; featureId здесь нет — FileViewer не читает
-    // документы эпика, только путь, названный вызывающим
+    const key = `${project.id}\n${filePath}\n${sessionId ?? ''}\n${taskId ?? ''}`;
+    contentKey.current = key;
+    // sessionId (F2b) / taskId (FS-F1b): якорь чтения — дерево чата или дерево задачи;
+    // featureId здесь нет — FileViewer не читает документы эпика, только путь, названный
+    // вызывающим. Два якоря сразу сервер отвергает 400, поэтому при taskId sessionId не шлётся.
     const contentPromise = isHostMode
       ? api.hostFiles.getContent(filePath)
-      : api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
+      : api.files.getContent(project.id, filePath, undefined, taskId ? { taskId } : sessionId ? { sessionId } : undefined);
     // Дифф — понятие проектного git-репо; у файла вне проекта его нет, а у файла из
     // неосновного дерева он был бы корня, а не показанного содержимого. Поэтому ветка ответа
     // известна только после содержимого: дифф запрашиваем следом и только для файла из корня
     setDiff(null);
     contentPromise.then(r => {
+      if (contentKey.current !== key) return; // ключ заменён новой загрузкой — ответ устарел
       setFileContent(r);
       setEditContent(r.content ?? '');
       // etag (S2c-F2b): тег прочитанной версии — с него следующее сохранение пойдёт по If-Match
       versionEtag.current = ('etag' in r ? r.etag : undefined) ?? null;
-      if (!isHostMode && !(sessionId && 'branch' in r && r.branch != null)) {
+      // reason (FS-F1b): файла нет ни в одном дереве (или он бинарь из коммита) —
+      // диффа корня к такому «файлу» нет; branch: файл не из корня — его дифф был бы корня
+      if (!isHostMode && !('reason' in r && r.reason) && !((sessionId || taskId) && 'branch' in r && r.branch != null)) {
         // diff недоступен офлайн — мягко игнорируем ошибку
         fetchDiff().then(d => setDiff(d.diff)).catch(() => setDiff(null));
       }
     }).catch(e => {
+      if (contentKey.current !== key) return;
       if (isHostMode && (e as { status?: number })?.status === 403) setLoadForbidden(true);
       setLoadError(true);
-    }).finally(() => setLoading(false));
-  }, [project.id, filePath, gitStagePath, isHostMode, sessionId, fetchDiff]);
+    }).finally(() => {
+      if (contentKey.current !== key) return;
+      setLoading(false);
+    });
+  }, [project.id, filePath, gitStagePath, isHostMode, sessionId, taskId, fetchDiff]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
@@ -862,7 +887,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       // Содержимое файла изменилось — перечитать файл и diff, вернуться на «Файл»
       setTab('file');
       setLoading(true);
-      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => {
+      api.files.getContent(project.id, filePath, undefined, taskId ? { taskId } : sessionId ? { sessionId } : undefined).then(r => {
         setFileContent(r);
         setEditContent(r.content ?? '');
         versionEtag.current = r.etag ?? null;
@@ -916,12 +941,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       if (projectId !== project.id || editing || isDrawioEditing) return;
       const norm = filePath.replace(/\\/g, '/');
       if (!paths.some(p => p.replace(/\\/g, '/') === norm)) return;
-      api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); versionEtag.current = r.etag ?? null; setLoadError(false); }).catch(() => {});
+      api.files.getContent(project.id, filePath, undefined, taskId ? { taskId } : sessionId ? { sessionId } : undefined).then(r => { setFileContent(r); setEditContent(r.content ?? ''); versionEtag.current = r.etag ?? null; setLoadError(false); }).catch(() => {});
       if (fromRoot) fetchDiff().then(r => setDiff(r.diff)).catch(() => {});
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, sessionId, fetchDiff, fromRoot]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, sessionId, taskId, fetchDiff, fromRoot]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -1049,7 +1074,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (!fromRoot) return;
     try {
       await api.files.revert(project.id, filePath);
-      const r = await api.files.getContent(project.id, filePath, undefined, sessionId ? { sessionId } : undefined);
+      const r = await api.files.getContent(project.id, filePath, undefined, taskId ? { taskId } : sessionId ? { sessionId } : undefined);
       setFileContent(r);
       setEditContent(r.content ?? '');
       versionEtag.current = r.etag ?? null;
@@ -1401,7 +1426,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // base64), и полагаться на эти поля нельзя. Вне проекта URL файла нет
   const isMidiViewing = !loading && !loadError && tab === 'file' && isMidi && !isHostMode && !!fileContent;
   const loadMidi = async () => {
-    const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath, sessionId);
+    const url = viaAgent ? await agentStreamUrl(project.id, filePath) : api.files.fileUrl(project.id, filePath, sessionId, taskId);
     const r = await fetch(url);
     if (!r.ok) throw new Error(`Не удалось загрузить MIDI-файл (код ${r.status})`);
     return r.arrayBuffer();
@@ -1859,7 +1884,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Метка дерева: файл не из корня (fromRoot=false, branch непуст) — виден всегда, и из
   // анкера тоже: иначе просмотрщик без кнопок правки остаётся без объяснения. Своё дерево
   // чата (isAnchor !== false) и чужое (isAnchor=false) различаются только текстом подсказки.
-  const treeChipVisible = showChips && !loading && !loadError && !fromRoot;
+  // branch в ответе (FS-F1b): у состояния reason (файла нет ни в одном дереве) имени ветки
+  // нет — чип без имени нечего показывать, пустое состояние выше уже объясняет
+  const treeChipVisible = showChips && !loading && !loadError && !fromRoot && fileContent?.branch != null;
   const badgesVisible = commentsChipVisible || diffChipVisible || treeChipVisible || showTabs;
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
@@ -2175,7 +2202,26 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           />
         )}
 
-        {!loading && !loadError && tab === 'file' && (
+        {/* FS-F1b: чтение из дерева задачи, когда рабочего каталога уже нет (бэк FS-B2).
+            404 с причиной доходит до фронта полем reason (features/files/api.ts) — это
+            состояние файла, его показывают, а не ловят как ошибку загрузки. */}
+        {!loading && !loadError && fileContent?.reason === 'branch_deleted' && (
+          <EmptyState
+            icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Материал удалён вместе с веткой"
+            subtitle={filePath}
+          />
+        )}
+
+        {!loading && !loadError && fileContent?.reason === 'binary' && (
+          <EmptyState
+            icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Файл из ветки можно открыть только как текст"
+            subtitle={filePath}
+          />
+        )}
+
+        {!loading && !loadError && tab === 'file' && !fileContent?.reason && (
           <>
             {fileContent?.isImage && fileContent.base64 && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>

@@ -7,7 +7,10 @@
 // «Не разбирать» взаимоисключающие (один PUT, пометка перекрывает бейдж зоны); чат исполнения
 // задач — кнопки disabled с подсказкой и без действия; 200 чатов рендерятся; пустой список —
 // пустое состояние; отказ чтения — плашка с «Повторить»; отказ пометки — текст по коду, строка
-// не меняется.
+// не меняется;
+// действие важнее пометки (возврат QA-2, дефект 82567033): в action-зоне (awaiting_human,
+// rejected_skipped) бейдж действия стоит ПЕРВЫМ, пометка — вторым бейджем строки и не теряется;
+// в обычной зоне (triage/skipped) пометка по-прежнему одна и перекрывает зону.
 //
 // Мокан только транспорт (offline.request, signalr) — тот же приём, что WikiJournal.test/WikiApplySettings.test:
 // «один вызов setWikiChatMark» проверяется телом PUT, которое реально ушло на прово; сервер PUT
@@ -21,7 +24,9 @@
 //     «не разбирать»» краснеют;
 // (4) убрать проверку task в onClick (дать действие чату исполнения) → «0 PUT по клику» краснеет;
 // (5) в подписях зон слить skipped и nothing_new в одну → «нечего добавить» краснеет;
-// (6) в ZONE_META удалить запись awaiting_human → «строка awaiting_human» краснеет (Sh6d).
+// (6) в ZONE_META удалить запись awaiting_human → «строка awaiting_human» краснеет (Sh6d);
+// (7) в rowBadgesOf вернуть «пометка важнее зоны» для всех зон (убрать ветку ACTION_ZONES) →
+//     «действие поверх пометки» краснеет (Sh6d, дефект 82567033).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -199,6 +204,38 @@ describe('блок «Отбор чатов» (S7d-2)', () => {
     // действия строки не тронуты: пометки на месте
     expect(markBtn(c, 'important', 'a1')).toBeTruthy();
     expect(markBtn(c, 'skip', 'a1')).toBeTruthy();
+  });
+
+  it('действие поверх пометки: «важный» + awaiting_human — бейдж действия первым, пометка вторым бейджем', async () => {
+    // возврат QA-2 (дефект 82567033): пометка не должна прятать действие, требующее человека.
+    // Порядок проверяется точными узлами по документу: бейдж действия обязан идти раньше
+    // бейджа пометки (кнопка «Важный» — с заглавной, её текст в сравнение не попадает)
+    serverItems = [item({ sessionId: 'am1', name: 'Важный ожидающий', zone: 'awaiting_human', score: 12, reason: '2 операции на решении', mark: 'important' })];
+    const c = render();
+    await settle();
+    const ts = texts(c);
+    const iAction = ts.indexOf('ждёт решения во «Входящих»');
+    const iMark = ts.indexOf('важный');
+    expect(iAction).toBeGreaterThanOrEqual(0);
+    expect(iMark).toBeGreaterThan(iAction);
+    expect(has(c, 'Почему: 2 операции на решении')).toBe(true);
+    // пометка не потеряна: её кнопка остаётся нажатой
+    expect(pressed(markBtn(c, 'important', 'am1'))).toBe('true');
+  });
+
+  it('действие поверх пометки: «не разбирать» + rejected_skipped — бейдж действия первым, пометка вторым бейджем', async () => {
+    // та же проверка для второй action-зоны и другой пометки: «не разбирать» (строчная) —
+    // узел бейджа, кнопка строки — «Не разбирать» (заглавная), узлы не пересекаются
+    serverItems = [item({ sessionId: 'rs1', name: 'Отвергнутый важный', zone: 'rejected_skipped', score: 9, reason: 'отказ: модель не ответила', mark: 'skip' })];
+    const c = render();
+    await settle();
+    const ts = texts(c);
+    const iAction = ts.indexOf('пропущено после 3 отказов');
+    const iMark = ts.indexOf('не разбирать');
+    expect(iAction).toBeGreaterThanOrEqual(0);
+    expect(iMark).toBeGreaterThan(iAction);
+    expect(has(c, 'Почему: отказ: модель не ответила')).toBe(true);
+    expect(pressed(markBtn(c, 'skip', 'rs1'))).toBe('true');
   });
 
   it('клик «Не разбирать» — ровно один PUT {mark:"skip"}; повторный снимает (null)', async () => {

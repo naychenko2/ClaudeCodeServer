@@ -76,15 +76,14 @@ export function FeatureReviewVolume({ run, stats }: FeatureReviewVolumeProps) {
     // или отсутствует (не зафиксирована, старый ответ) — строки нет. «Расширение» — только
     // если план реально рос (total > baselineTotal): при равном знаменателе «+0» — ложь.
     // «Доработки после мержа» — только при followUpTotal > 0 (вне total, отдельная строка).
-    const grew = sp.baselineTotal != null && sp.total > sp.baselineTotal;
+    const base = sp.baselineTotal;
+    const grew = base != null && sp.total > base;
     rows.push(
       {
         label: 'Исходный план',
-        value: sp.baselineTotal != null
-          ? `${sp.baselineTotal} ${plural(sp.baselineTotal, 'шаг', 'шага', 'шагов')}`
-          : null,
+        value: base != null ? `${base} ${plural(base, 'шаг', 'шага', 'шагов')}` : null,
       },
-      { label: 'Расширение', value: grew ? `+${sp.total - (sp.baselineTotal ?? 0)}` : null },
+      { label: 'Расширение', value: grew ? `+${sp.total - base}` : null },
       {
         label: 'Доработки после мержа',
         value: (sp.followUpTotal ?? 0) > 0 ? `${sp.followUpAccepted ?? 0} из ${sp.followUpTotal}` : null,

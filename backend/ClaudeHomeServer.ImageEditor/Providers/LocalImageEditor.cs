@@ -24,6 +24,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     public const string ProviderKey = "local";
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
     public const string FluxKlein = LocalImageModels.Klein;
+    public const string MiniMaxH3Image = LocalImageModels.H3Image;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -75,6 +76,36 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 1664, MaxMegapixels: 1.8),
         null, "один размер ~1,7 Мп");
 
+    // MiniMax-H3-Image: родная площадь 2048² — таблица Qwen, приведённая к ней (зеркало
+    // ComfyWorkflows.H3ImageSizes); «Высокое» — родные ~16 Мп из карточки модели (4096², 5472×3072…).
+    // Стороны кратны 32 (шаблон ComfyUI: «scale to multiple» 32)
+    public static readonly IReadOnlyDictionary<string, FormatSize> H3Sizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
+    {
+        ["1:1"] = new(2048, 2048),
+        ["16:9"] = new(2752, 1536),
+        ["9:16"] = new(1536, 2752),
+        ["4:3"] = new(2368, 1760),
+        ["3:4"] = new(1760, 2368),
+        ["3:2"] = new(2496, 1664),
+        ["2:3"] = new(1664, 2496),
+    };
+
+    public static readonly IReadOnlyDictionary<string, FormatSize> H3SizesHigh = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
+    {
+        ["1:1"] = new(4096, 4096),
+        ["16:9"] = new(5472, 3072),
+        ["9:16"] = new(3072, 5472),
+        ["4:3"] = new(4736, 3552),
+        ["3:4"] = new(3552, 4736),
+        ["3:2"] = new(5024, 3360),
+        ["2:3"] = new(3360, 5024),
+    };
+
+    private static readonly MediaFormatCaps H3Format = new("MiniMax H3 Image",
+        [.. H3Sizes.Keys],
+        [new FormatTierSpec(FormatTier.Standard, "~4 Мп", H3Sizes), new FormatTierSpec(FormatTier.High, "~16 Мп", H3SizesHigh)],
+        new ExactSizeSpec(Step: 32, MinSide: 512, MaxSide: 6272, MaxMegapixels: 16.8));
+
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
     // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
     // он отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит. Персонажа
@@ -84,6 +115,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         QwenModel(QwenImageTurbo, "Qwen-Image 2.1 Turbo — быстро", QwenFormat, 1),
         QwenModel(FluxKlein, "FLUX 3 Klein — текст и точная правка", KleinFormat, LocalImageModels.KleinCharacterPhotos),
         QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat, 1),
+        QwenModel(MiniMaxH3Image, "MiniMax H3 Image — детали и 4K", H3Format, LocalImageModels.H3ImageCharacterPhotos),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
@@ -144,9 +176,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     // Модель, на которой запуск пойдёт на самом деле, — грубо, по признакам котировки: точный
     // выбор делает шов (LocalImageModels.Effective) по готовому запросу. Персонаж Klein не уводит
     private static string EtaVariant(string id, ImageEditQuoteRequest request, int images) =>
-        id == FluxKlein && (request.HasMask
+        LocalImageModels.TakesCharacterByPhotos(id) && (request.HasMask
                             || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
-                            || images + 1 > LocalImageModels.KleinMaxImages)
+                            || images + 1 > LocalImageModels.MaxImagesOf(id))
             ? QwenImage
             : id;
 
@@ -291,10 +323,10 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
     }
 
-    // Запуск пойдёт на Klein: LoRA персонажа обучены под Qwen-Image, поэтому ни её, ни триггера
-    private static bool IsKlein(LocalImageRequest run) => LocalImageModels.Effective(run) == FluxKlein;
+    // Запуск пойдёт на Klein или H3-Image: LoRA персонажа обучены под Qwen-Image, поэтому ни её, ни триггера
+    private static bool IsKlein(LocalImageRequest run) => LocalImageModels.TakesCharacterByPhotos(LocalImageModels.Effective(run));
 
-    // Генерация Klein по фото персонажа (A/B 2026-10-22): без чужих образцов роли картинок не
+    // Генерация Klein и H3-Image по фото персонажа (A/B 2026-10-22): без чужих образцов роли картинок не
     // нумеруются, а запрос начинается с «человек с фотографий-образцов» и описания персонажа.
     // С другими образцами — промпт композера с ролями по номерам; null — персонажа нет
     internal static string? KleinCharacterPrompt(ImageEditRequest req)

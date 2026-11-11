@@ -283,6 +283,12 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   один человек, схожесть 0,765 против 0,692 у Qwen с LoRA): набор собирает `CharacterPhotoPicker.Diverse`,
   LoRA и триггер к Klein не едут (обучены под Qwen). Подстановку на лицо Klein отдаёт Qwen, поэтому у неё
   свой потолок `MaxFaceCropPhotos: 1` — иначе Qwen получил бы пять фото и нарисовал пять человек.
+  **MiniMax-H3-Image (`minimax-h3-image`, с 2026-11-11) — так же, как Klein, но три фото**: персонаж по фото
+  без LoRA (замер: один человек, схожесть 0,60–0,64; пять фото не прибавляют, а время почти удваивают),
+  маски, дорисовка, подстановка на лицо и больше 16 картинок — на Qwen «качественно»
+  (`LocalImageModels.TakesCharacterByPhotos`/`NeedsQwen`). Формат свой: ~4 Мп (таблица Qwen на площади
+  2048², зеркало `ComfyWorkflows.H3ImageSizes`) и «Высокое» ~16 Мп, стороны кратны 32; холст правки —
+  исходник, приведённый к 2048². Нужен ComfyUI 0.45+ (узел `MiniMaxH3ImageConditioning`).
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

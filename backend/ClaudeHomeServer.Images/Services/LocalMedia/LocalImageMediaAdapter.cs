@@ -148,6 +148,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
     public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
+        LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsH3Image(model) => LocalMediaService.H3ImageGenerateEta(Math.Max(1, count)),
+        LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) => LocalMediaService.H3ImageEditEta(images),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsKlein(model) => LocalMediaService.KleinGenerateEta(Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 => LocalMediaService.GenerateImageEta(ComfyWorkflows.StepsFor(model), Math.Max(1, count)),
         LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsKlein(model) => LocalMediaService.KleinEditEta(images),
@@ -273,11 +275,11 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
         }
 
-        // Фактическая модель: Klein в непроверенных для него случаях идёт на Qwen «качественно»
+        // Фактическая модель: Klein и H3-Image в непроверенных для них случаях идут на Qwen «качественно»
         var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
 
-        // Графы Klein LoRA не применяют — и не проверяют
-        if (request.Lora is { } requested && !ComfyWorkflows.IsKlein(model))
+        // Графы Klein и H3-Image LoRA не применяют — и не проверяют
+        if (request.Lora is { } requested && !LocalImageModels.TakesCharacterByPhotos(model))
         {
             var name = requested.Name ?? "";
             if (name.Length == 0 || name.Contains("..") || name.StartsWith('/') || name.StartsWith('\\') || name.Contains(':'))
@@ -314,7 +316,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 + "Попробуйте позже или выберите другого поставщика.", busy: true);
 
         if (model is not null && model != request.Model)
-            log.LogInformation("Запуск редактора {Op} на {Model} вместо {Requested}: Klein для него не проверен",
+            log.LogInformation("Запуск редактора {Op} на {Model} вместо {Requested}: модель для него не проверена",
                 request.Op, model, request.Model);
 
         var id = Guid.NewGuid().ToString("N");
@@ -371,6 +373,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             {
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsKlein(model) =>
                     KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
+                LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) =>
+                    H3ImageGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request with { Model = model }, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: model),
@@ -455,6 +459,28 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         return ComfyWorkflows.KleinEdit(prompt, names, ComfyWorkflows.KleinCanvas(width, height), seed, prefix, faceRefs,
             upsampler, upsamplerKeep: 1);
     }
+
+    // H3-Image: генерация по тексту и по образцам (холст из формата или из таблицы H3) и правка
+    // (холст — исходник, приведённый к родной площади модели)
+    private System.Text.Json.Nodes.JsonObject H3ImageGraph(string prompt, LocalImageRequest request, IReadOnlyList<string> names,
+        IReadOnlyList<byte[]> images, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
+    {
+        var size = request.Width is > 0 && request.Height is > 0
+            ? (request.Width.Value, request.Height.Value)
+            : H3ImageSizeFor(request.Aspect);
+        if (names.Count == 0)
+            return ComfyWorkflows.H3ImageGenerate(prompt, size.Item1, size.Item2, seed, count, prefix);
+        if (request.Op == LocalImageOp.Generate)
+            return ComfyWorkflows.H3ImageEdit(prompt, names, size, seed, prefix, faceRefs, count);
+        var (width, height) = SourceSize(images[0]) ?? size;
+        return ComfyWorkflows.H3ImageEdit(prompt, names, ComfyWorkflows.H3ImageCanvas(width, height), seed, prefix, faceRefs, count);
+    }
+
+    // Размер из таблицы H3-Image; соотношение не из таблицы — пропорция Qwen, приведённая к площади H3
+    internal static (int Width, int Height) H3ImageSizeFor(string? aspect) =>
+        ComfyWorkflows.H3ImageSizes.TryGetValue(aspect?.Trim() ?? "", out var exact)
+            ? exact
+            : ComfyWorkflows.H3ImageCanvas(SizeFor(aspect).Width, SizeFor(aspect).Height);
 
     private (int Width, int Height)? SourceSize(byte[] image) =>
         raster?.Probe(image) is { } probe ? (probe.DisplayWidth, probe.DisplayHeight) : ImageDimensions.Read(image);

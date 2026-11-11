@@ -507,8 +507,13 @@ Html не разбираем вовсе: прототип идёт в «Файл
 
 ### 5. Материалы фичи: документы и макеты, не заметки
 
-Материалы фичи в ответе — `plans` и `mockups`; поля «notes» в ответе нет (верхние ключи —
-ровно девять, [TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
+Материалы фичи в ответе — `plans`, `materials` и `mockups`; поля «notes» в ответе нет. Верхние
+ключи ответа ручки одной фичи теперь десять: `run`, `events`, `eventsTotal`, `chats`, `plans`,
+`materials`, `stats`, `brief`, `mockups`, `mockupsUnavailable`
+([TasksController.cs:1136-1137](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
+«девять» в подписи снапшота
+([TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs))
+устарели с появлением `materials` (§8).
 
 - **`plans` — задачи-документы:** задачи с ролью `cut`/`design`/`plan`/`consult`
   ([FeatureRun.cs:99-123](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs),
@@ -616,6 +621,103 @@ Html не разбираем вовсе: прототип идёт в «Файл
 не поднят (TaskItem.cs:151-153). Новых файлов в `data/` и новых SignalR-событий нет:
 голос разносится штатным `task_changed`. Блок не под новым флагом — он заменяет
 мини-сводку на той же поверхности ([FeaturePage.tsx:333](../../frontend/src/components/feature/FeaturePage.tsx)).
+
+### 8. Доработка «Упрощение раздела «Фичи»»: новые ключи ответа (ветка `feat/features-simplify`)
+
+Все ключи — аддитивные; индекс (`features/index`, `features?sessionId=`) `materials`, `stats` и
+`brief` не несёт (лёгкий путь). Каждое утверждение — файл:строка.
+
+**Материалы фичи: `materials[]`.** Строка `{ path, taskId, at }`
+([FeatureMaterials.cs:44](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureMaterials.cs)),
+собирает `FeatureMaterials.Build` над `AllRunTasks` эпика
+([TasksController.cs:938-942](../../backend/ClaudeHomeServer/Controllers/TasksController.cs)):
+
+- берутся `linkedFiles` задач только проекта эпика (:61); `at` = `CompletedAt ?? UpdatedAt`
+  задачи (:62);
+- материал — файл под `docs/`, но не макет (`docs/mockups/…`), не индекс (`README.md`, `index.md`,
+  `docs/CHANGELOG.md`), без `..` ([FeatureMaterials.cs:17-31](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureMaterials.cs));
+- дубль пути схлопывается без учёта регистра, остаётся запись самой свежей задачи (:64-67);
+  порядок — `at` убыванием, при равенстве по пути (:71-72); потолок — `Cap = 30` на фичу (:13).
+
+**Чтение материала по `?taskId=`** (`GET /api/projects/{id}/files/content`,
+[FilesController.cs:171](../../backend/ClaudeHomeServer/Controllers/FilesController.cs)):
+
+- порядок якорей при нескольких параметрах — `featureId → sessionId → taskId` (:188-192); это не
+  отказ, а приоритет: `featureId` вместе с `taskId` даёт чтение из дерева эпика и 400 **не**
+  возвращает (в коде такой проверки нет);
+- задача — среди видимых владельцу и этого проекта, иначе 404 (:226); анкер — `WorktreePath`
+  задачи, дальше тот же локатор «анкер → main → прочие worktree» (:227);
+- запасной путь: файла нет ни в одном живом дереве, а у задачи есть `WorktreeBranch` — `git show`
+  по ветке из записи задачи, параметр `branch` запроса игнорируется (:239-247); успех — `{ content,
+  branch, fromCommit: true }` (:246); ветки нет — 404 `reason=branch_deleted` (:248); бинарь —
+  404 `reason=binary` (:250);
+- запись с `taskId` — 400 до любого эффекта: «Материал по задаче только читается»
+  ([FilesController.cs:548-557](../../backend/ClaudeHomeServer/Controllers/FilesController.cs));
+- ручки `stream` и `locate` принимают `sessionId` и `taskId` как два разных анкера: оба сразу — 400
+  «Укажите либо sessionId, либо taskId» (:1195-1196, :1252-1253).
+
+**Макеты:** `mockups[].ownerTaskId` — задача-автор записи (записка с шапкой — та же `OwnerTask`, что
+даёт `taskId`; запасной путь `linkedFiles` — задача, приложившая путь), по ней фронт открывает файл
+анкером автора ([DocsIndex.cs:203-216](../../backend/ClaudeHomeServer.Core/Models/DocsIndex.cs),
+[TasksController.cs:1453-1461](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
+`mockups[].files[].branch` — ветка, из которой открывается файл, по вердикту локатора по main и всем
+worktree проекта; без вердикта `exists=false`, `branch=null` (:1436-1446,
+[DocsIndex.cs:196](../../backend/ClaudeHomeServer.Core/Models/DocsIndex.cs)).
+
+**Счётчик шагов `run.stepProgress`** ([FeatureRun.cs:473-504](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs)).
+Все новые поля вне `total` и вне суммы корзин:
+
+- `baselineTotal` — база плана из `TaskItem.BaselineSteps`; `null` — не зафиксирована (:497);
+- `followUpTotal` / `followUpAccepted` — доработки после мержа, кроме снятых, и сколько из них
+  принято; итог фичи они не меняют (:499-500);
+- `closedTail` — сданные, но не принятые шаги, подмножество `review + work` (:495);
+- `withdrawnAtMerge` — часть `withdrawn`, снятая при мерже (вердикт `withdrawn` с
+  `Origin = merge_tail`) (:503).
+
+`BaselineSteps` ([TaskItem.cs:199](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs)) пишет
+только `TaskManager.SetFeatureNote` — один раз, при первой записанной оценке и плане `cut`/`done`
+с `total > 0`, и больше не меняет ([TaskManager.cs:2066-2070](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)).
+Проектор отдаёт его только как `stepProgress.baselineTotal` ([FeatureProjector.cs:131](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
+`FeatureEstimate.expectedSteps` — сколько всего шагов по оценке оркестратора, 1…500, хранится как
+есть и на экран не идёт ([TaskItem.cs:272-293](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs));
+сдвиг `expectedSteps` больше 25 % (и `etaMinutes` больше 50 %) без `why` отвергается
+([TaskManager.cs:1978-1990](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)).
+
+**Статистика и сводка:**
+
+- `stats.stepMedianMinutes` — медиана `DurationMinutes` принятых цепочек этой фичи, `null` — принятых
+  нет ([FeatureTimeline.cs:108-111, 123](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs),
+  [TasksController.cs:1123](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
+- `stats.estimateDrift` = `{ initialEtaMinutes, firstEtaMinutes, currentEtaMinutes, shiftMinutes,
+  denominatorChanges, accuracy }` ([FeatureEstimateDrift.cs:17-27](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEstimateDrift.cs)):
+  `shiftMinutes` = последний − первый срок по строкам журнала `estimate_set`, `null` при менее чем
+  двух (:46); `denominatorChanges` — сколько раз `total` менялся между соседними строками с `total`
+  (:49-54); `accuracy` — `Summary.DurationMinutes / InitialEtaMinutes`, только у закрытой фичи с
+  базовым сроком больше нуля (:57-59);
+- `stats.spend.cacheShare` = `CacheReadTokens / (Input + CacheRead + CacheCreation)`, `null` при
+  нулевом знаменателе ([FeatureTimeline.cs:158-170](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs));
+- `brief.ask` = `{ text, source, since, personaId, sessionId }` — одна фраза «что нужно от тебя»
+  из `run.Attention`; `source` — `stopped|wait|merge` ([FeatureBrief.cs:154, 461-477](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs));
+- `brief.eta` = `{ minutes, endsAt, source, clockStopped }` — один срок вместо выбора между голосом
+  и историей: свежий голос с `etaMinutes ≥ 1` (`source=note`), иначе история с остатком ≥ 1
+  (`source=history`), иначе `null`; при стоящих часах `endsAt` не выдаётся (:162, 618-640).
+
+**Решение о хвосте при мерже** (`POST features/{id}/merge`,
+[TasksController.cs:1600-1621](../../backend/ClaudeHomeServer/Controllers/TasksController.cs)):
+
+- тело `{ tail: "withdraw" | "keep" }` (`MergeFeatureRequest`, :1592) обязательно, если закрытый хвост
+  по свежему снимку не пуст; иначе 409 `tail_decision_required` с `tailSteps` (:1711-1719); при пустом
+  хвосте тело игнорируется;
+- `withdraw` — `TaskManager.WithdrawMergeTail`: ключи перепроверяются под замком стора, шаги, у
+  которых появился живой виток или вердикт, не снимаются (:1722-1724,
+  [TaskManager.cs:1406-1453](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)); если часть не
+  применена — 409 `tail_withdraw_not_applied`, мерж не начат, уже снятое остаётся снятым
+  ([TasksController.cs:1738-1746](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
+- `keep` — запись журнала `merge_with_tail` с `tailSteps` (:1749-1760);
+- `Origin = merge_tail` у вердикта ставит только этот серверный путь: из тела REST `Origin` не
+  копируется ([TasksController.cs:656-660](../../backend/ClaudeHomeServer/Controllers/TasksController.cs)),
+  на MCP-двери его снимает `StripOriginFromBody`
+  ([TaskManager.cs:684-690, 488, 1124](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)).
 
 ## Волна 6: очередь фич
 

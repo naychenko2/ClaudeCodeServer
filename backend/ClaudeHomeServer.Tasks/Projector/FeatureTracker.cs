@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //   orphans_in_closed     — эпик Done, в нём остались не-Done задачи;
 //   unplanned_step        — цепочка шага со stepRef, которого нет в действующем плане (InPlan, B3),
 //                           не снята, план нарезан (cut/partial), старше порога.
+//
 // Убран вид epic_open_after_merge (решение Андрея 11.11, FS-AC1): открытый эпик после мержа —
 // не расхождение, фичу закрывает человек кнопкой.
 internal static class FeatureTracker

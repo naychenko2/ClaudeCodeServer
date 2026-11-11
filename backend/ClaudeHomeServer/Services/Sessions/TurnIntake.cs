@@ -664,6 +664,10 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         {
             var queued = await _pending.EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
                 senderChatName: senderChatName, senderUserId: senderUserId);
+            // Ответ человека через REST принят в очередь — факт «человек ответил» уходит на шину
+            // сразу, не дожидаясь доставки (дубль уже публиковался при первой постановке)
+            if (queued is SendAndWaitResult.Queued { Duplicate: false })
+                PublishRestHumanMessage(sessionId, entry, agentDepth, senderPersonaId, senderUserId);
             // Агентское сообщение по умолчанию (preempt=true) прерывает текущий ход
             // (доставится сразу по его концу), но НЕ рушит цикл «до готово» и штаб
             // «Командной реализации» — там доклад ждёт штатного конца хода, как раньше.
@@ -718,8 +722,13 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         // прерывания (чужой ход только стартует, рубить его чужим сообщением нельзя)
         var tcs = new TaskCompletionSource<TurnResult>(TaskCreationOptions.RunContinuationsAsynchronously);
         if (Interlocked.CompareExchange(ref entry.TurnWaiter, tcs, null) is not null)
-            return await _pending.EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
+        {
+            var raced = await _pending.EnqueuePendingAsync(sessionId, entry, text, senderPersonaId, senderOrigin, agentDepth,
                 senderChatName: senderChatName, senderUserId: senderUserId);
+            if (raced is SendAndWaitResult.Queued { Duplicate: false })
+                PublishRestHumanMessage(sessionId, entry, agentDepth, senderPersonaId, senderUserId);
+            return raced;
+        }
         entry.TurnWaiterBaseline = entry.Accumulator?.GetAll().Count ?? 0;
 
         await _store.ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
@@ -734,6 +743,7 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         SessionStore.NoteRunDelegation(entry, agentDepth, suppressTasksExecute: false, fromHuman: false);
         _store.NoteTurnActor(entry, senderUserId, fromHuman: false);
         Volatile.Write(ref entry.TurnFromHuman, 0); // chats_send — всегда агентский ход, даже с id человека
+        PublishRestHumanMessage(sessionId, entry, agentDepth, senderPersonaId, senderUserId);
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
 
         if (timeout <= TimeSpan.Zero) return new SendAndWaitResult.Running();
@@ -741,6 +751,20 @@ public sealed class TurnIntake : ITurnStarter, Team.ITeamTurnIntake
         return completed == tcs.Task
             ? new SendAndWaitResult.Completed(await tcs.Task)
             : new SendAndWaitResult.Running(); // ход продолжается, ожидатель очистит OnMessageAsync
+    }
+
+    // REST-канал (POST /sessions/{id}/messages) принимает ответ человека мимо SendDirectAsync,
+    // поэтому его факт на шину издаёт отдельно (FS-E3 доработка): без этого ответ в чате задачи
+    // не снимал ожидание человека. Человек — тот же признак, что у автора реплики истории
+    // (HumanAuthorOf): глубина 0, персоны-отправителя нет, id пользователя известен. Агентская
+    // подача (caller-сессия → глубина ≥ 1), будильник сторожа (без пользователя) события не дают.
+    private void PublishRestHumanMessage(string sessionId, SessionEntry entry, int agentDepth,
+        string? senderPersonaId, string? senderUserId)
+    {
+        if (SessionStore.HumanAuthorOf(senderUserId, agentDepth, senderPersonaId) is null) return;
+        _ = _process.TurnEvents?.PublishAsync(new Turn.HumanMessageAccepted(
+            new Turn.TurnContext(sessionId, _store.ResolveOwnerId(entry.Info),
+                (int)(entry.Process?.SubmittedTurnSeq ?? 0) + 1, agentDepth, entry.Info.ProjectId)));
     }
 
     // Отправить сообщение сразу либо, если чат занят, поставить в очередь — единая точка

@@ -179,4 +179,76 @@ public sealed class HumanMessageAcceptedTests : SessionManagerTestBase
         await act.Should().NotThrowAsync("падение подписчика гасит шина, ход не падает");
         AssertTurnWasSent(adapter);
     }
+
+    // --- REST-канал: POST /sessions/{id}/messages → SendMessageAndWaitAsync (FS-E3 доработка) ---
+    // Ответ человека через REST идёт мимо SendDirectAsync; без своего издателя ожидание человека
+    // в задаче не снималось (дефект QA 46a4b6ff). Человек — глубина 0, без персоны, с id пользователя.
+
+    [Fact]
+    public async Task REST_ответ_человека_в_свободном_чате_даёт_событие()
+    {
+        var (session, adapter) = await MkCountingChatAsync("rest-free");
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "Беру срок: неделя.", TimeSpan.Zero,
+            senderUserId: TestUserId);
+
+        AssertTurnWasSent(adapter);
+        var events = await WaitForEventsAsync(1);
+        events.Should().HaveCount(1);
+        events[0].Turn.SessionId.Should().Be(session.Id);
+        events[0].Turn.OwnerId.Should().Be(TestUserId);
+        events[0].Turn.AgentDepth.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task REST_ответ_человека_в_занятом_чате_даёт_событие_при_постановке_в_очередь()
+    {
+        var session = await MkBusySessionAsync("rest-busy", SessionStatus.Working);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "Беру срок: неделя.", TimeSpan.Zero,
+            senderUserId: TestUserId);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>();
+        var events = await WaitForEventsAsync(1);
+        events.Should().HaveCount(1, "ответ принят в очередь — ожидание человека снимается сразу, не по концу хода");
+        events[0].Turn.SessionId.Should().Be(session.Id);
+    }
+
+    [Fact]
+    public async Task REST_дубль_в_очереди_второго_события_не_даёт()
+    {
+        var session = await MkBusySessionAsync("rest-dup", SessionStatus.Working);
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "повтор", TimeSpan.Zero, senderUserId: TestUserId);
+        var again = await _sut.SendMessageAndWaitAsync(session.Id, "повтор", TimeSpan.Zero, senderUserId: TestUserId);
+
+        again.Should().BeOfType<SendAndWaitResult.Queued>().Which.Duplicate.Should().BeTrue();
+        await Task.Delay(100);
+        Events().Should().HaveCount(1);
+    }
+
+    [Fact]
+    public async Task REST_сообщение_агента_события_не_даёт()
+    {
+        var (session, adapter) = await MkCountingChatAsync("rest-agent");
+
+        // chats_send: глубина ≥ 1 — делегированный ход, даже с id человека-актора
+        await _sut.SendMessageAndWaitAsync(session.Id, "доклад", TimeSpan.Zero, agentDepth: 1,
+            senderUserId: TestUserId);
+
+        AssertTurnWasSent(adapter);
+        Events().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task REST_сообщение_без_пользователя_события_не_даёт()
+    {
+        var (session, adapter) = await MkCountingChatAsync("rest-anon");
+
+        // будильник сторожа: ни вызывателя, ни пользователя
+        await _sut.SendMessageAndWaitAsync(session.Id, "будильник", TimeSpan.Zero);
+
+        AssertTurnWasSent(adapter);
+        Events().Should().BeEmpty();
+    }
 }

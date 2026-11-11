@@ -51,7 +51,6 @@ import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
 import { useReadStateVersion } from '../lib/chatReadState';
-import { autoNavigateToContinued } from '../lib/chatContinue';
 
 // Единый focus-visible ring (клавиатура) для строк-ссылок «+N чат в группе …» (F3.3):
 // проектный паттерн (один инжект <style> на модуль), не inline onFocus (минор).
@@ -560,18 +559,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         setSessions(prev => prev.map(s =>
           s.id === msg.sessionId
             ? { ...s, name: msg.name, topic: msg.topic ?? s.topic }
-            : s
-        ));
-        return;
-      }
-      // «Продолжить в новом чате»: исходный чат продолжён — обновляем continuedInSessionId
-      // в списке (пометка «Продолжен в новом чате») и, если открыт именно он, переходим
-      // в новый (тост). Открыт другой чат/экран — только стор, без перехода.
-      if (msg.type === 'chat_continued') {
-        autoNavigateToContinued(msg);
-        setSessions(prev => prev.map(s =>
-          s.id === msg.sessionId
-            ? { ...s, continuedInSessionId: msg.newSessionId }
             : s
         ));
         return;

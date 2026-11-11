@@ -1,5 +1,5 @@
 import { memo, useCallback, useState, useRef, useEffect, useLayoutEffect, type CSSProperties, type ReactNode } from 'react';
-import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, BookOpen, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MessageSquareShare, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
+import { AlertCircle, AlarmClock, Archive, ArchiveRestore, Bell, BellOff, Bot, BookOpen, CheckCircle2, Clock, Columns3, FileText, GitCommitVertical, History, Hourglass, Eye, EyeOff, Layers, MoreVertical, Pencil, Pin, Tags, Terminal, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT, FS } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem, Tooltip, handlePressableKey } from './ui';
@@ -1187,13 +1187,6 @@ function ChatCardView({
             // наводимой, и плашка поднимается от неё, а не от центра карточки.
             return isKey ? <Tooltip content={KEY_SESSION_TOOLTIP} focused={cardFocused} style={{ zIndex: 3 }}>{chip}</Tooltip> : chip;
           })()}
-          {/* Чат из цепочки «Продолжить в новом чате»: значок-признак с пояснением */}
-          {(s.continuedFromSessionId || s.continuedInSessionId) && (
-            <span data-testid="chat-continued-mark" style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted }}
-              title={s.continuedInSessionId ? 'Продолжен в новом чате' : 'Продолжение другого чата'}>
-              <MessageSquareShare size={11} strokeWidth={2} aria-hidden />
-            </span>
-          )}
           {/* Закрепление: иконка-признак, сама кнопка живёт в блоке действий */}
           {s.isPinned && (
             <Pin size={11} strokeWidth={2} fill="currentColor" style={{ color: C.textMuted, flexShrink: 0 }} />

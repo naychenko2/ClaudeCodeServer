@@ -39,7 +39,6 @@ import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 import { isArchivedChat, matchChatFilter, loadChatFilters } from '../lib/chatFilters';
-import { autoNavigateToContinued } from '../lib/chatContinue';
 import { useWatchdogPresence } from '../lib/watchdogPresence';
 import { acceptDraftReplyByChat } from '../lib/draftReply';
 
@@ -135,15 +134,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
         // Событие несёт и тему: она меняется тем же ходом, что уточняет заголовок
         setChats(prev => prev.map(c => c.id === msg.sessionId
           ? { ...c, name: msg.name, topic: msg.topic ?? c.topic }
-          : c));
-      }
-      // «Продолжить в новом чате»: исходный чат продолжён — обновляем continuedInSessionId
-      // в списке (пометка «Продолжен в новом чате») и, если открыт именно он, переходим
-      // в новый (тост). Открыт другой чат/экран — только стор, без перехода.
-      if (msg.type === 'chat_continued') {
-        autoNavigateToContinued(msg);
-        setChats(prev => prev.map(c => c.id === msg.sessionId
-          ? { ...c, continuedInSessionId: msg.newSessionId }
           : c));
       }
       // Чат убран/возвращён из архива на другом клиенте/устройстве: сервер шлёт

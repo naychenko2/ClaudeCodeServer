@@ -29,10 +29,18 @@ const CARD: CSSProperties = {
 };
 
 export function FeatureVolumeCard({ progress, isMobile, onOpenSteps }: FeatureVolumeCardProps) {
-  const { total, accepted, review, work, notCreated, planState } = progress;
+  const { total, accepted, review, work, notCreated, planState, baselineTotal, followUpTotal, followUpAccepted } = progress;
   // «Разрезан» — cut или done; pending/partial — знаменатель может вырасти.
   const planUncut = planState === 'pending' || planState === 'partial';
   const inFlight = work + review;
+  // «план расширен» (FS-FVp): знаменатель вырос после фиксации базовой оценки нарезанного
+  // плана (бэк: stepProgress.baselineTotal) — объясняет падение процента. baselineTotal
+  // null/undefined (не зафиксирована, старый ответ) или total == baselineTotal (план не рос)
+  // — строки нет. Проценты и корзин не пересчитываются: они уже по total.
+  const planGrew = baselineTotal != null && total > baselineTotal;
+  // Доработки после мержа (FS-PB2, бэк: followUpTotal/followUpAccepted): вне total и
+  // корзин, отдельной строкой. 0 или отсутствие поля — строки нет.
+  const hasFollowUps = (followUpTotal ?? 0) > 0;
 
   const tailParts: string[] = [];
   if (inFlight > 0) tailParts.push(`${inFlight} в работе`);
@@ -58,6 +66,16 @@ export function FeatureVolumeCard({ progress, isMobile, onOpenSteps }: FeatureVo
               />
             ))}
           </div>
+          {planGrew && (
+            <div data-testid="volume-plan-grew" style={{ fontSize: FS.sm, color: C.textMuted }}>
+              {`план расширен: было ${baselineTotal}, стало ${total}`}
+            </div>
+          )}
+          {hasFollowUps && (
+            <div data-testid="volume-followups" style={{ fontSize: FS.sm, color: C.textMuted }}>
+              {`Доработки: ${followUpAccepted ?? 0} из ${followUpTotal}`}
+            </div>
+          )}
           {tailParts.length > 0 && (
             <div data-testid="volume-caption" style={{ fontSize: FS.sm, color: C.textSecondary }}>
               {`ещё ${tailParts.join(', ')}`}

@@ -1,17 +1,15 @@
-// Секция «Возвраты и потери» вкладки «Разбор» (FS-FR3; записка docs/mockups/feature-page-simplify-v4-clickable.md
-// §5 «3. Возвраты и потери», в макете — секция rz-ret): собрана из готовых блоков, своей
-// вёрстки нет — только порядок: плитка «Возвраты» (FeatureStatsTiles с only=['loops'],
-// в ней уже витки ✓/↩ и разбивка по источникам в хвосте), строки вердиктов (ReviewKv),
-// затем «Главные потери» (FeatureStatsLosses как есть). Все числа — из run.verdicts как
-// есть, своё фронт не считает. «Цена возврата во времени» и «главная потеря одной
-// фразой» — «нужно от бэка» (§5, «Б»), здесь не рисуем.
-// «Откуда возвраты» здесь не дублируется (FS-FR3, ревью-находка 2, решение постановщика):
-// те же три числа печатает хвост плитки «Возвраты» (FeatureStatsTiles.tsx:105-106),
-// в макете v4 (:740) они стоят один раз.
+// Секция «Возвраты и потери» вкладки «Разбор» (FP-R1, вариант Б: записка
+// docs/mockups/feature-review-returns-v1.md «Рекомендация — Б», «Состояния для реализации (Б)»).
+// Состав: карточка «Исход ревью» (FeatureReturnsOutcomeBar: доля «с первого раза», полоса
+// «сразу/с замечаниями/возвращены», легенда-чипы) и ниже «Главные потери» (FeatureStatsLosses
+// как есть). Прежние плитка «Возвраты» (FeatureStatsTiles only=['loops']) и строки вердиктов
+// (ReviewKv) убраны: одно и то же число читалось трижды на разных базах, а «52 возврата»
+// путал замечания с возвратами (разбор Майи, п. 4–5). Данные — только run.verdicts как есть;
+// verdicts.loops и returnsBySource здесь не используются. «Цены возврата во времени» и
+// «главной потери одной фразой» здесь нет — «нужно от бэка» (тот же §5, «Б»).
 
 import { SP } from '../../lib/design';
-import { FeatureStatsTiles } from './FeatureStatsTiles';
-import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
+import { FeatureReturnsOutcomeBar } from './FeatureReturnsOutcomeBar';
 import { FeatureStatsLosses } from './FeatureStatsLosses';
 import type { FeatureNavCtx } from '../../lib/featureNavMarks';
 import type { FeatureRun } from '../../types/featureRun';
@@ -28,23 +26,10 @@ export interface FeatureReviewReturnsProps {
   nowMs?: number;
 }
 
-// Подписи вердиктов — по макету (feature-page-simplify-v4-clickable.html:489):
-// «Приняты / С замечаниями / Возвращены / Отозваны» — по run.verdicts. Нули рисуются:
-// 0 — значение («возвратов не было»), а не «нет данных».
-const VERDICT_ROWS: [keyof FeatureRun['verdicts'], string][] = [
-  ['accepted', 'Приняты'],
-  ['acceptedWithRemarks', 'С замечаниями'],
-  ['returned', 'Возвращены'],
-  ['withdrawn', 'Отозваны'],
-];
-
 export function FeatureReviewReturns({ run, stats, nav, isMobile = false, nowMs }: FeatureReviewReturnsProps) {
-  const rows: ReviewKvRow[] = VERDICT_ROWS.map(([key, label]) => ({ label, value: run.verdicts[key] }));
-
   return (
     <div data-testid="review-returns" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
-      <FeatureStatsTiles run={run} stats={stats} isMobile={isMobile} only={['loops']} />
-      <ReviewKv rows={rows} />
+      <FeatureReturnsOutcomeBar verdicts={run.verdicts} isMobile={isMobile} />
       <FeatureStatsLosses run={run} stats={stats} nav={nav} isMobile={isMobile} nowMs={nowMs} />
     </div>
   );

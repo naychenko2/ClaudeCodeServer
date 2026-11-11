@@ -125,6 +125,35 @@ public class WikiIngestSynthTests : IDisposable
 
     private IReadOnlyList<WikiPackage> PackagesOnDisk() => WikiPackageStore.List(Root).Packages;
 
+    // 20 открытых пакетов на всю вики (лимит ADR-035, решение 4): следующий Create отказан
+    // (CodeLimit) — так ставится сбой хранилища пакета на живом пути разбора.
+    private void FillOpenPackages()
+    {
+        for (var i = 0; i < WikiPackage.MaxOpenPackages; i++)
+        {
+            var created = WikiPackageStore.Create(Root, new WikiPackage
+            {
+                Id = WikiPackageStore.NewId(),
+                Section = Section,
+                Sources = [new WikiPackage.SourceRef("session", "session:s0#m1-1")],
+                Operations =
+                [
+                    new WikiPackage.Operation
+                    {
+                        Op = WikiPackage.OpAppend,
+                        Page = PagePath,
+                        Text = "утверждение " + i,
+                        Class = WikiPackage.ClassKey("session", WikiPackage.OpAppend),
+                        Decision = WikiPackage.DecisionAuto,
+                    },
+                ],
+                Status = WikiPackage.StatusChecking,
+            });
+            created.Ok.Should().BeTrue($"пакет для лимита обязан быть поставлен: {created.Reason ?? created.Code}");
+        }
+        WikiPackageStore.CountOpen(Root).Should().Be(WikiPackage.MaxOpenPackages);
+    }
+
     // ── первый вызов ──
 
     [Fact]
@@ -284,7 +313,8 @@ public class WikiIngestSynthTests : IDisposable
         res.Dropped.Should().Be(1);
         res.DropReasons.Should().ContainSingle().Which.Should().Contain("отсутствует в источнике дословно");
         var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
-        pkg.Operations.Select(o => o.Claim).Should().BeEquivalentTo(Claim1, "Контейнер собран отдельно");
+        pkg.Operations.Select(o => o.Claim)
+            .Should().BeEquivalentTo(new[] { Claim1, "Контейнер собран отдельно" }, "в пакете ровно две принятые операции");
     }
 
     [Fact]
@@ -300,6 +330,28 @@ public class WikiIngestSynthTests : IDisposable
         res.Dropped.Should().Be(0);
         res.DropReasons.Should().BeNull();
         WikiPackageStore.TryRead(Root, res.PackageId!).Package!.Operations.Should().HaveCount(2);
+    }
+
+    // Минор ревью C2R-Sh1, п.3: сбой хранилища пакета не отменяет, что часть операций была
+    // отброшена при его сборке. Мутация «вернуть RejectedUsed(...) без WithSectionIssues» →
+    // Dropped 0 и пустые причины, тест красный.
+    [Fact]
+    public async Task Поштучно_МагазинНеПринялПакет_DroppedИПричиныДоходят()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
+            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]),
+            WikiSynthJson.Op("append", PageTitle, "Третье утверждение", [BadQuote]));
+        FillOpenPackages();
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("магазин пакетов не принял пакет");
+        res.Dropped.Should().Be(2, "отказ записи пакета не отменяет двух отброшенных при его сборке операций");
+        res.DropReasons.Should().NotBeEmpty("причины отброшенных доходят и на этом пути");
+        res.InputTokens.Should().BeGreaterThan(0, "вызов модели был — расход понесён");
     }
 
     [Fact]

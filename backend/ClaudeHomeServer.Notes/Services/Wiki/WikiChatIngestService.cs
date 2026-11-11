@@ -139,7 +139,9 @@ public sealed class WikiChatIngestService
     /// поля не считать, стоимость облачного пути — OneShotUsage.CostUsd. Сумма — независимо от исхода
     /// окна (отказанный план расход не отменяет) и независимо от исхода разбора; 0 — когда метрик не
     /// было: модель ни разу не звалась (отказ ступеней до модели, «новых сообщений нет») либо движок
-    /// их не отдал.</summary>
+    /// их не отдал. Dropped/FirstDropReason — операции синтеза, отброшенные поштучным приёмом по
+    /// всем разобранным окнам: число и первая причина из первого окна с отказами; отказ
+    /// позднего окна не стирает то, что было отброшено раньше (минор ревью C2R-Sh1).</summary>
     public readonly record struct ChatResult(
         string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
         int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null, bool Partial = false,
@@ -431,11 +433,13 @@ public sealed class WikiChatIngestService
         // разбора (курсор на месте, хроника не начинается), серия отказов растёт только если
         // модель ответила (afterModel). Есть разобранное — частичный исход: запомнить причину,
         // цикл дальше не идёт — отказ позднего окна не перечёркивает разобранное (WC-3).
-        // Расход разобранных до отказа окон остаётся в исходе: он был (WC-4a).
+        // Расход и отброшенные операции разобранных до отказа окон остаются в исходе: они
+        // были независимо от того, на каком окне разбор оборвался (WC-4a; минор ревью C2R-Sh1).
         ChatResult? WindowFailure(string reason, bool afterModel, int windowTo)
         {
             if (applied.Count > 0 || awaiting > 0) { failedReason = reason; return null; }
-            return RecordRejection(root, sessionId, history, reason, afterModel, windowTo, inputTokens);
+            return RecordRejection(root, sessionId, history, reason, afterModel, windowTo, inputTokens,
+                dropped, firstDropReason);
         }
 
         foreach (var window in windows)
@@ -840,10 +844,10 @@ public sealed class WikiChatIngestService
     // переходит через окно (зона rejected_skipped с причиной последнего отказа); вручную чат
     // по-прежнему разбирается пунктом меню чата.
     private ChatResult RecordRejection(string root, string sessionId, IReadOnlyList<StoredMessage> history,
-        string reason, bool afterModel, int windowTo, long inputTokens)
+        string reason, bool afterModel, int windowTo, long inputTokens, int dropped, string? firstDropReason)
     {
         if (!afterModel)
-            return Refused(null, reason, inputTokens);
+            return Refused(null, reason, inputTokens, dropped, firstDropReason);
         var skipped = false;
         var up = WikiChatTriageStore.Update(root, sessionId, cur =>
         {
@@ -860,12 +864,18 @@ public sealed class WikiChatIngestService
                 with { RejectStreak = streak };
         });
         if (!up.Ok)
-            return Refused(null, $"{reason}; серия отказов не записана: {up.Reason}", inputTokens);
+            return Refused(null, $"{reason}; серия отказов не записана: {up.Reason}", inputTokens,
+                dropped, firstDropReason);
         return Refused(null, skipped
             ? $"окно пропущено после {RejectSkipAfter} отказов подряд: {reason}"
-            : reason, inputTokens);
+            : reason, inputTokens, dropped, firstDropReason);
     }
 
-    private static ChatResult Refused(string? code, string reason, long inputTokens = 0) =>
-        new(OutcomeRejected, reason, [], code, InputTokens: inputTokens);
+    /// <summary>Отказ разбора: то, что было понесено до отказа (токены вызовов и отброшенные
+    /// операции разобранных окон), остаётся в исходе — отказ его не обнуляет (WC-4a; минор
+    /// ревью C2R-Sh1).</summary>
+    private static ChatResult Refused(string? code, string reason, long inputTokens = 0,
+        int dropped = 0, string? firstDropReason = null) =>
+        new(OutcomeRejected, reason, [], code, InputTokens: inputTokens,
+            Dropped: dropped, FirstDropReason: firstDropReason);
 }

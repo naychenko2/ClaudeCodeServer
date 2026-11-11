@@ -1724,4 +1724,89 @@ public class WikiChatIngestTests : IDisposable
     [InlineData(25, "операций")]
     public void OperationsWord_СклонениеПоЧислу(int n, string word) =>
         WikiChatIngestService.OperationsWord(n).Should().Be(word);
+
+    // Цитаты нет ни в одном окне: операция с ней отклоняется кодом и уходит в Dropped окна.
+    private const string NoQuote = "Цитаты в источнике нет вообще";
+
+    // 20 открытых пакетов на всю вики (лимит ADR-035, решение 4): следующий пакет, который
+    // просит окно разбора, хранилище не примет — так ставится сбой записи пакета.
+    private void FillOpenPackages()
+    {
+        for (var i = 0; i < WikiPackage.MaxOpenPackages; i++)
+        {
+            var created = WikiPackageStore.Create(Root, new WikiPackage
+            {
+                Id = WikiPackageStore.NewId(),
+                Section = Section,
+                Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, "session:other-" + i + "#m1-1")],
+                Operations =
+                [
+                    new WikiPackage.Operation
+                    {
+                        Op = WikiPackage.OpAppend,
+                        Page = PagePath,
+                        Text = "утверждение " + i,
+                        Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+                        Decision = WikiPackage.DecisionAuto,
+                    },
+                ],
+                Status = WikiPackage.StatusChecking,
+            });
+            created.Ok.Should().BeTrue($"пакет для лимита обязан быть поставлен: {created.Reason ?? created.Code}");
+        }
+        WikiPackageStore.CountOpen(Root).Should().Be(WikiPackage.MaxOpenPackages);
+    }
+
+    // Минор ревью C2R-Sh1, п.1: отброшенные поштучным приёмом суммируются по всем окнам,
+    // первая причина — из первого окна с отказами. Мутации: «убрать dropped += ing.Dropped»
+    // → 2 вместо 3; «брать причину последнего окна» → чужая причина. Обе красные.
+    [Fact]
+    public async Task ДваОкна_DroppedСуммируются_ПерваяПричинаИзПервогоОкна()
+    {
+        AddSession();
+        var history = TwoWindowHistory();
+        history.Add(new StoredUserMessage($"{Claim2}. Детали: {Marker2}."));
+        SetHistory(ChatId, history);
+        EndOfFirstWindow(history);
+
+        var llm = new FakeLlm(
+            ("S", WikiSynthJson.Ok(
+                WikiSynthJson.Op("append", PageTitle, Claim1, [Claim1]),
+                WikiSynthJson.Op("append", PageTitle, "Отброленное первого окна", [NoQuote]))),
+            ("S", WikiSynthJson.Ok(
+                WikiSynthJson.Op("append", PageTitle, Claim2, [Claim2]),
+                WikiSynthJson.Op("append", PageTitle, "Отброленное второго окна, первое", [NoQuote]),
+                WikiSynthJson.Op("append", PageTitle, "Отброленное второго окна, второе", [NoQuote]))));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Dropped.Should().Be(3, "1 из первого окна и 2 из второго: сумма по всем разобранным окнам");
+        res.FirstDropReason.Should().NotBeNull().And.Contain("отсутствует в источнике дословно",
+            "первая причина принадлежит первому окну с отказами");
+    }
+
+    // Миноры ревью C2R-Sh1, п.2 + п.3 на живом пути: окно, чей пакет не принят хранилищем,
+    // отказывает весь разбор — и отброшенное при сборке этого пакета доходит до результата.
+    // Мутации: «RejectedUsed без WithSectionIssues» или «не нести dropped/firstDropReason в
+    // Refused» → Dropped 0 и пустая причина. Обе красные.
+    [Fact]
+    public async Task МагазинНеПринялПакетОкна_ОтказРазбораНесётDroppedИПервуюПричину()
+    {
+        AddSession();
+        SetShortHistory();
+        FillOpenPackages();
+
+        var llm = new FakeLlm(("S", WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Claim1]),
+            WikiSynthJson.Op("append", PageTitle, "Отброленное первое", [NoQuote]),
+            WikiSynthJson.Op("append", PageTitle, "Отброленное второе", [NoQuote]))));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("магазин пакетов не принял пакет");
+        res.Dropped.Should().Be(2, "отказанное окно не стирает отброшенное: оно было понесено");
+        res.FirstDropReason.Should().NotBeNull().And.Contain("отсутствует в источнике дословно",
+            "причина отброшенной операции доходит вместе с числом");
+        llm.CountOf("S").Should().Be(1, "разбор оборвался на первом окне");
+    }
 }

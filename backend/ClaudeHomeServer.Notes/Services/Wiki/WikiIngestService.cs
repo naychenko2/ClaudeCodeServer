@@ -454,13 +454,18 @@ public sealed class WikiIngestService
                     .ToList(),
                 Status = WikiPackage.StatusChecking,
             };
+            // Сбой хранилища пакета — не отмена разбора: операции, отброшенные поштучным
+            // приёмом, были отброшены независимо от того, дожил ли пакет. Эти отказы идут
+            // через WithSectionIssues, как остальные исходы после вердикта (минор ревью C2R-Sh1).
             var created = WikiPackageStore.Create(root, package);
             if (!created.Ok || created.Package is null)
-                return RejectedUsed($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}"), verdict);
 
             var proposed = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusProposed);
             if (!proposed.Ok)
-                return RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}"), verdict);
 
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
                 return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
@@ -470,7 +475,8 @@ public sealed class WikiIngestService
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)
-                return RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}"), verdict);
 
             return WithSectionIssues(
                 await ApplyAutoAsync(ownerId, root, created.Package,

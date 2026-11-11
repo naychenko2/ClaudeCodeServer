@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
+import { anchorFor, nextFileTaskAnchor, type FileTaskAnchor } from '../lib/featureOpenFile';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
@@ -502,9 +503,8 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   const [openFileChat, setOpenFileChat] = useState<{ path: string; sessionId: string } | null>(null);
   const openFileSessionId = openFileChat && openFileChat.path === openFile ? openFileChat.sessionId : undefined;
   // Материал задачи со страницы фичи (FS-F1c): якорь чтения — дерево задачи; взаимоисключается с openFileChat
-  const [openFileTask, setOpenFileTask] = useState<{ path: string; taskId?: string; branch?: string } | null>(null);
-  const openFileTaskId = openFileTask && openFileTask.path === openFile ? openFileTask.taskId : undefined;
-  const openFileBranch = openFileTask && openFileTask.path === openFile ? openFileTask.branch : undefined;
+  const [openFileTask, setOpenFileTask] = useState<FileTaskAnchor | null>(null);
+  const { taskId: openFileTaskId, branch: openFileBranch } = anchorFor(openFileTask, openFile);
   // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
   // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
   // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
@@ -2132,7 +2132,7 @@ const windowWidth = useWindowWidth();
   // Без opts — ровно открытие из дерева (taskId/branch сброшены, вьюер читает корень проекта).
   const handleOpenFileFromFeature = (filePath: string, opts?: { taskId?: string; branch?: string }) => {
     handleOpenFileFromTree(filePath);
-    if (opts?.taskId || opts?.branch) setOpenFileTask({ path: filePath, taskId: opts.taskId, branch: opts.branch });
+    setOpenFileTask(nextFileTaskAnchor(filePath, opts));
   };
 
   // «История решений» из файлового менеджера: открываем файл (панель фильтрует

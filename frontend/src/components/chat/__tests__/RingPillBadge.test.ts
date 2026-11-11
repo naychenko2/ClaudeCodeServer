@@ -8,30 +8,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-// Перенос (F-4): запрос handoff идёт через offline.request — подменяем его до импорта
-// api (сети в тестах нет); переход в новый чат — через openChatById, его тоже подменяем,
-// чтобы не тянуть навигацию в тест шапки
-const handoff = vi.hoisted(() => ({ fn: () => Promise.resolve({}) }));
-const openedChats = vi.hoisted(() => [] as string[]);
-// Управляемый ответ openChatById и собраные тосты (F-4r): провал перехода — отдельный тест
-const openOk = vi.hoisted(() => ({ value: true }));
-const toasts = vi.hoisted(() => [] as string[]);
+// Сети в тестах нет: offline подменяем до импорта api. request — пустой ответ: путь
+// mount с sessionId зовёт localModel.lastTurn через useLocalModelLive — «данных о ходе
+// нет», состояние хука не трогается
 vi.mock('../../../lib/offline', () => ({
   __esModule: true,
-  request: (url: string, opts?: { method?: string; timeoutMs?: number }) => handoff.fn(url, opts),
+  request: () => Promise.resolve({ lastTurn: null }),
   readStoredToken: () => 'tok',
   cachedToken: () => 'tok',
   invalidateTokenCache: () => {},
   onPassiveEvict: () => () => {},
   parseFileContentCacheKey: () => null,
-}));
-vi.mock('../../../lib/openChat', () => ({
-  __esModule: true,
-  openChatById: (id: string) => { openedChats.push(id); return Promise.resolve(openOk.value); },
-}));
-vi.mock('../../../lib/toast', () => ({
-  __esModule: true,
-  showToast: (title: string, body?: string) => { toasts.push(`${title} · ${body ?? ''}`); },
 }));
 // Хаб в тесте не поднимаем: useLocalModelLive с sessionId подписывается на signalr —
 // в node-окружении '/hubs/session' не разрешится
@@ -129,6 +116,29 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
   // Обвязка циферблата (сам циферблат, строка в подсказке, секция поповера) показывается всегда;
   // сброс флагов перед каждым тестом.
   beforeEach(() => setAllFlags({}));
+  // Тест про секцию поповера монтирует пилюлю в fakeDom: контент поповера живёт только
+  // при открытии (open в BadgeShell) — открываем клик по самой пилюле (её кнопка —
+  // первая BUTTON в контейнере)
+  beforeAll(() => installFakeDom());
+  afterAll(() => uninstallFakeDom());
+
+  const mountPill = () => mount(createElement(RingPillBadge, {
+    estimate, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
+    online: true, assistantName: 'Тест',
+    isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
+    items: [cacheItem()], sessionId: 's1',
+  }));
+
+  type Node = { nodeType: number; nodeName: string; childNodes?: Node[] };
+  const walk = (x: Node, f: (n: Node) => void): void => {
+    if (x.nodeType === 1) f(x);
+    for (const c of x.childNodes ?? []) walk(c, f);
+  };
+  const openPopover = (container: Node) => {
+    let pill: Node | null = null;
+    walk(container, (x) => { if (!pill && x.nodeName === 'BUTTON') pill = x; });
+    act(() => { (reactProps(pill as never)!.onClick as () => void)(); });
+  };
 
   it('до первого result’а с данными кэша — ни циферблата, ни разделителя', () => {
     const html = renderPill([plainResult()]);
@@ -198,6 +208,24 @@ describe('RingPillBadge: циферблат кэша промпта (F-1b)', () 
     expect(html).not.toContain('<svg width="14"');
     expect(ariaOf(html)).not.toContain('Кэш');
   });
+
+  // Дефект QA: кнопка порогов и вся секция «Кэш промпта» оставались при выключенном
+  // флаге — секция поповера гейтуется целиком тем же promptCacheOn, что и циферблат.
+  // Инвариант F-3: в секции остаются причина промаха («Последний промах») и порог —
+  // кнопки «Перенести в новый чат» больше нет: перенос удалён из шапки целиком.
+  it('в поповере секция «Кэш промпта»: с причиной промаха и порогом, без кнопки переноса', () => {
+    const { root, container } = mountPill();
+    try {
+      openPopover(container);
+      const text = textNodes(container as never).join(' ');
+      expect(text, 'при включённом флаге секция и кнопка на месте').toContain('Кэш промпта');
+      expect(text).toContain('Когда предупреждать об остывании');
+      expect(text).toContain('Последний промах');
+      expect(text, 'перенос чата удалён из шапки').not.toContain('Перенести в новый чат');
+    } finally {
+      act(() => root.unmount());
+    }
+  });
 });
 
 // Мини-циферблат строки подсказки (tip) — тот же компонент, что в подсказке пилюли (F-1b-r)
@@ -255,183 +283,5 @@ describe('ChatHeaderBar: лента кэша без нового литерал�
     expect(feedGuard.test('const heads = props.items.map(h => h);'), 'props.items.map( — целевая форма').toBe(true);
     expect(feedGuard.test('items.slice(0, 3)'), 'bare items.slice( — тоже ловится').toBe(true);
     expect(feedGuard.test('dialog.items.filter(t => t.sel)'), 'dialog.items.filter( — не лента').toBe(false);
-  });
-});
-
-// === Перенос в новый чат (F-4): вторая точка входа и кнопка ===
-// Мутации:
-//  • убрать строку предложения в parts (уровень danger) → первый тест краснеет;
-//  • убрать `&& cache` в условии предложения → тест про гейт краснеет (F-4r);
-//  • убрать вывод handoffError → тест про 409 краснеет;
-//  • сделать тост успеха безусловным (до ok) → тест про openChatById=false краснеет (F-4r);
-//  • убрать маппинг 404 без тела → тест про «Чат не найден или удалён» краснеет (F-4r);
-//  • убрать проверку фич-флага у кнопки → красный негативный тест про флаг;
-//  • убрать promptCacheOn из гейта секции/циферблата → краснеют тесты «флаг выкл»
-//    (дефект QA: обвязка циферблата без флага).
-const fullEstimate: ContextEstimate = { window: 200000, pct: 92, fresh: false, level: 'danger' };
-
-function renderPillWith(est: ContextEstimate, items: ChatItem[]): string {
-  return renderToStaticMarkup(createElement(RingPillBadge, {
-    estimate: est, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
-    online: true, assistantName: 'Тест',
-    isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
-    items, sessionId: 's1',
-  }));
-}
-
-describe('RingPillBadge: предложение переноса при полном контексте (F-4, вторая точка входа)', () => {
-  it('флаг вкл, уровень danger — подсказка предлагает новый чат с запиской', () => {
-    const html = renderPillWith(fullEstimate, [cacheItem()]);
-    expect(ariaOf(html), 'предложение — в подсказке и aria-label пилюли').toContain('можно начать новый чат с запиской');
-  });
-
-  it('уровень normal — предложения нет, даже с включённым флагом', () => {
-    expect(ariaOf(renderPillWith(estimate, [cacheItem()]))).not.toContain('можно начать новый чат');
-  });
-
-  it('нет данных кэша — предложения нет: обещание гейтится тем же `cache`, что кнопка (F-4r)', () => {
-    // Danger-контекст без строк кэша в ленте: в таком чате перенос нечем подтвердить —
-    // обещание без действия (тупик)
-    expect(ariaOf(renderPillWith(fullEstimate, []))).not.toContain('можно начать новый чат');
-  });
-});
-
-describe('RingPillBadge: кнопка «Перенести в новый чат» (F-4)', () => {
-  const pendingStore: Record<string, string> = {};
-  beforeAll(() => {
-    installFakeDom();
-    // В node-окружении нет sessionStorage — заглушка под проверку префилла композера
-    (globalThis as { sessionStorage?: unknown }).sessionStorage = {
-      setItem: (k: string, v: string) => { pendingStore[k] = v; },
-      getItem: (k: string) => pendingStore[k] ?? null,
-      removeItem: (k: string) => { delete pendingStore[k]; },
-    };
-  });
-  afterAll(() => uninstallFakeDom());
-
-  const mountPill = () => mount(createElement(RingPillBadge, {
-    estimate, isWaiting: false, isCompacting: false, canCompact: false, onCompact: () => {},
-    online: true, assistantName: 'Тест',
-    isCliProvider: false, providerName: 'Claude', cost, falCost, glifCost, balance, billing, windows,
-    items: [cacheItem()], sessionId: 's1',
-  }));
-
-  type Node = { nodeType: number; nodeName: string; childNodes?: Node[] };
-  const walk = (x: Node, f: (n: Node) => void): void => {
-    if (x.nodeType === 1) f(x);
-    for (const c of x.childNodes ?? []) walk(c, f);
-  };
-  const buttonByLabel = (root: Node, label: string): Node | null => {
-    let hit: Node | null = null;
-    walk(root, (x) => {
-      if (!hit && x.nodeName === 'BUTTON' && textNodes(x as never).join('').includes(label)) hit = x;
-    });
-    return hit;
-  };
-  // Контент поповера монтируется только при открытии (open в BadgeShell) — открываем
-  // клик по самой пилюле: её кнопка — первая BUTTON в контейнере
-  const openPopover = (container: Node) => {
-    let pill: Node | null = null;
-    walk(container, (x) => { if (!pill && x.nodeName === 'BUTTON') pill = x; });
-    act(() => { (reactProps(pill as never)!.onClick as () => void)(); });
-  };
-
-  it('кнопка переноса в поповере', () => {
-    let { root, container } = mountPill();
-    try {
-      openPopover(container);
-      expect(textNodes(container as never).join(' '), 'кнопка за включённым флагом').toContain('Перенести в новый чат');
-    } finally {
-      act(() => root.unmount());
-    }
-  });
-
-  // Дефект QA: кнопка порогов и вся секция «Кэш промпта» оставались при выключенном
-  // флаге — секция поповера гейтуется целиком тем же promptCacheOn, что и циферблат.
-  it('в поповере секция «Кэш промпта» с кнопкой порогов', () => {
-    let { root, container } = mountPill();
-    try {
-      openPopover(container);
-      const text = textNodes(container as never).join(' ');
-      expect(text, 'при включённом флаге секция и кнопка на месте').toContain('Кэш промпта');
-      expect(text).toContain('Когда предупреждать об остывании');
-    } finally {
-      act(() => root.unmount());
-    }
-  });
-
-  it('409: текст ошибки бэка показывается как есть, а не «сбой»', async () => {
-    handoff.fn = () => Promise.reject(
-      Object.assign(new Error('чат занят другим ходом: просьба о передаче поставлена в очередь'), { status: 409 }),
-    );
-    openedChats.length = 0;
-    const { root, container } = mountPill();
-    try {
-      openPopover(container);
-      const btn = buttonByLabel(container, 'Перенести в новый чат');
-      expect(btn, 'кнопка смонтирована').not.toBeNull();
-      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-      expect(textNodes(container as never).join(' ')).toContain('чат занят другим ходом');
-      expect(openedChats, 'перехода нет — преемника не создано').length === 0;
-    } finally {
-      act(() => root.unmount());
-    }
-  });
-
-  it('успех: переход в новый чат, черновик — в префилл композера', async () => {
-    handoff.fn = () => Promise.resolve({ chatId: 'new-chat', projectId: null, draft: 'Короткая запись о разговоре', warm: true });
-    openedChats.length = 0;
-    toasts.length = 0;
-    delete pendingStore['cc_pending_chat_prompt'];
-    const { root, container } = mountPill();
-    try {
-      openPopover(container);
-      const btn = buttonByLabel(container, 'Перенести в новый чат');
-      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-      expect(openedChats).toEqual(['new-chat']);
-      expect(pendingStore['cc_pending_chat_prompt'], 'черновик ждёт композер нового чата').toBe('Короткая запись о разговоре');
-      expect(toasts.some(t => t.includes('Новый чат открыт')), 'тост успеха — после состоявшегося перехода').toBe(true);
-      expect(textNodes(container as never).join(' ')).not.toContain('Переношу…');
-    } finally {
-      act(() => root.unmount());
-    }
-  });
-
-  it('openChatById=false — тоста «открыт» нет, черновик снят (F-4r)', async () => {
-    handoff.fn = () => Promise.resolve({ chatId: 'ghost-chat', projectId: null, draft: 'Запись о разговоре', warm: false });
-    openOk.value = false;
-    openedChats.length = 0;
-    toasts.length = 0;
-    delete pendingStore['cc_pending_chat_prompt'];
-    const { root, container } = mountPill();
-    try {
-      openPopover(container);
-      const btn = buttonByLabel(container, 'Перенести в новый чат');
-      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-      expect(toasts.some(t => t.includes('открыт')), 'перехода нет — тоста об успехе тоже нет').toBe(false);
-      expect(pendingStore['cc_pending_chat_prompt'], 'черновик не утекает в следующий открытый чат').toBeUndefined();
-    } finally {
-      act(() => root.unmount());
-      openOk.value = true;
-    }
-  });
-
-  it('404 без тела — человек читает «Чат не найден или удалён», а не «Not Found» (F-4r)', async () => {
-    // Так приходит 404 без тела: message = statusText (offline.ts), текст нечеловеческий
-    handoff.fn = () => Promise.reject(Object.assign(new Error('Not Found'), { status: 404 }));
-    openedChats.length = 0;
-    const { root, container } = mountPill();
-    try {
-      openPopover(container);
-      const btn = buttonByLabel(container, 'Перенести в новый чат');
-      act(() => { (reactProps(btn as never)!.onClick as () => void)(); });
-      await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-      expect(textNodes(container as never).join(' ')).toContain('Чат не найден или удалён');
-    } finally {
-      act(() => root.unmount());
-    }
   });
 });

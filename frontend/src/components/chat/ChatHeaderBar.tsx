@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef, useMemo, Fragment, type ReactNode } from 'react';
-import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, MessageSquareShare, BookOpen } from 'lucide-react';
+import { Plus, Menu as MenuIcon, Tags, Layers, Bell, BellOff, History, Hourglass, ListChecks, Pencil, Pin, Columns3, Trash2, Eye, EyeOff, MoreHorizontal, Archive, ArchiveRestore, HardDrive, ChevronLeft, ChevronRight, Sparkles, SlidersHorizontal, BookOpen } from 'lucide-react';
 import { OPEN_AI_EVENT } from '../../lib/ai/openAiEvent';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag, ChatItem } from '../../types';
 import { api } from '../../lib/api';
 import { chatFieldsErrorText } from '../../features/chat/api';
-import { openChatById } from '../../lib/openChat';
 import { isArchivedChat } from '../../lib/chatFilters';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName, useProviders } from '../../lib/models';
@@ -583,42 +582,9 @@ function ContextActions({ estimate, isWaiting, isCompacting, canCompact, compact
 // не перерисовывает всю пилюлю, F-1b-r), доля — готовая dialFrac, не свой счёт (F-1b-r).
 // Личный порог «остывает» (F-3): здесь он нужен — статус пересчитывается на момент
 // открытия поповера и на тике своих часов, по тому же личному порогу, что и на пилюле.
-function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCacheState; isWaiting: boolean; sessionId: string }) {
+function PromptCacheSection({ state, isWaiting }: { state: PromptCacheState; isWaiting: boolean }) {
   const warn = useCacheWarnThresholds();
   const [showWarn, setShowWarn] = useState(false);
-  // «Перенести в новый чат» (F-4): тёплый путь — записку пишет сам чат (видимый ход до
-  // 5 мин), холодный — быстрый раннер по транскрипту. Успех: переход в новый чат,
-  // черновик — в поле ввода (префилл тот же, что у «Попросить агента исправить»,
-  // без авто-сабмита). 409/502 несут человеческий текст с бэка — показываем его,
-  // а не «сбой»; клик можно повторить
-  const [handoffBusy, setHandoffBusy] = useState(false);
-  const [handoffError, setHandoffError] = useState<string | null>(null);
-  const runHandoff = async () => {
-    setHandoffBusy(true);
-    setHandoffError(null);
-    try {
-      const r = await api.chats.handoff(sessionId);
-      if (r.draft) sessionStorage.setItem('cc_pending_chat_prompt', r.draft);
-      // Тост успеха — только если переход состоялся (F-4r): пропавший чат называет сам
-      // openChatById. На провале черновик снимается — иначе он утечёт в следующий
-      // открытый чат.
-      const ok = await openChatById(r.chatId);
-      if (!ok) {
-        sessionStorage.removeItem('cc_pending_chat_prompt');
-        return;
-      }
-      showToast('Перенос чата', 'Новый чат открыт с передаточной запиской', 'info');
-    } catch (e) {
-      const err = e as Error & { status?: number };
-      // 404 без тела (страховка к бэковому B-4r3): statusText «Not Found» человек не
-      // прочитает — называем причину словами
-      setHandoffError(err.status === 404 && (!err.message || err.message === 'Not Found')
-        ? 'Чат не найден или удалён'
-        : err.message || 'Перенос не получился — попробуйте позже');
-    } finally {
-      setHandoffBusy(false);
-    }
-  };
   // Те же часы, что у циферблата: пока поповер открыт, остаток живёт своей строкой,
   // не перерисовывая всю пилюлю (F-1b-r)
   const live = liveState(state, useLiveNow(state), warn);
@@ -649,23 +615,11 @@ function PromptCacheSection({ state, isWaiting, sessionId }: { state: PromptCach
       <BadgeRow k="Срок кэша" v={ttlText} />
       <BadgeRow k="Последний промах" v={miss} />
       <div style={{ marginTop: SP.sm, display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
-        <Button variant="ghost" size="xs" disabled={!sessionId || isWaiting} loading={handoffBusy}
-          onClick={() => void runHandoff()}
-          title={isWaiting ? 'Дождитесь завершения текущего хода' : 'Новый чат начнётся с короткой запиской об этом разговоре'}>
-          {handoffBusy ? 'Переношу…' : 'Перенести в новый чат'}
-        </Button>
         <Button variant="ghost" size="xs" onClick={() => setShowWarn(true)} style={{ marginLeft: 'auto' }}
           leftIcon={<SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
           Когда предупреждать об остывании
         </Button>
       </div>
-      {/* Ошибка переноса — текст бэка как есть (409 «чат занят…», 502 «модель не дала
-          записку»), не «сбой»: его можно прочитать и повторить клик */}
-      {handoffError && (
-        <div style={{ ...meterSubStyle, marginTop: SP.sm, padding: `${SP.xs + 2}px ${SP.sm}px`, background: C.dangerBg, color: C.dangerText, borderRadius: R.md }}>
-          {handoffError}
-        </div>
-      )}
       {showWarn && <CacheWarnDialog onClose={() => setShowWarn(false)} />}
     </>
   );
@@ -1029,13 +983,6 @@ export function RingPillBadge(props: {
   const ctxPip = { slot: 0 as const, level: estimate.level };
   if (isCompacting) parts.push({ text: 'Контекст: идёт сжатие', pip: ctxPip });
   else if (showCtx) parts.push({ text: estimate.pct !== undefined ? `Контекст ${estimate.pct}%` : 'Контекст сжат', pip: ctxPip });
-  // Вторая точка входа переноса (F-4): окно почти полное — в подсказке предлагаем перенос.
-  // Только предложение: само действие — кнопка в поповере, за этим же флагом. То же
-  // условие, что и у секции кнопки — `cache` (F-4r): в чате без данных кэша обещание
-  // без действия — тупик.
-  if (showCtx && estimate.level === 'danger' && cache) {
-    parts.push({ text: 'Контекст почти полон — можно начать новый чат с запиской' });
-  }
   // Локальная модель: живой хвост (десктоп) или слово-лицо (мобила) — озвучиваем,
   // чтобы на мобиле скринридер не читал только «Ctx 61k», а и состояние модели.
   // Нет активного состояния (idle без скорости / не локальный чат) — строки нет.
@@ -1147,7 +1094,7 @@ export function RingPillBadge(props: {
       {/* Секция «Кэш промпта» показывается всегда, когда с бэка пришли данные кэша (с кнопкой порогов) */}
       {cache && (
         <div style={(lmActive || wfActive || showCtx || showCost) ? sectionDivider : undefined}>
-          <PromptCacheSection state={cache} isWaiting={props.isWaiting} sessionId={props.sessionId ?? ''} />
+          <PromptCacheSection state={cache} isWaiting={props.isWaiting} />
         </div>
       )}
       {hasFal && (
@@ -2123,10 +2070,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     const i = overflowActionItems.findIndex(x => x.key === 'expiry');
     if (i > 0) { const [e] = overflowActionItems.splice(i, 1); overflowActionItems.unshift(e); }
   }
-  // «Продолжить в новом чате»: диалог живёт в ChatPanel, шапка шлёт ему событие по id чата.
-  // Нужны ответы агента (hasMessages) и связь; чат, который уже продолжили, не предлагаем
-  const canContinue = online && hasMessages && !session.continuedInSessionId;
-  const runContinue = () => window.dispatchEvent(new CustomEvent('cc-chat-continue', { detail: { sessionId: session.id } }));
   const headerOverflow = headerActions.length > 0 ? (
     <ToolbarOverflowMenu title="Ещё" isMobile={isCompact}
       items={[
@@ -2138,10 +2081,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         disabled: !!actionDenied('rename'),
         sublabel: actionDenied('rename') ?? undefined,
         onClick: () => window.dispatchEvent(new Event(OPEN_AI_EVENT)),
-      }] : []),
-      ...(canContinue ? [{
-        key: 'continue-chat', icon: <MessageSquareShare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
-        label: 'Продолжить в новом чате', onClick: runContinue,
       }] : []),
       ...badgeItems,
     ] as OverflowItem[]}
@@ -2278,13 +2217,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           label="Вики"
           action={visAction('wiki')}
           onClick={() => { const a = ctxMenu; setCtxMenu(null); requestWikiOpen(a); }}
-        />
-      )}
-      {canContinue && (
-        <MenuItem
-          icon={<MessageSquareShare size={15} strokeWidth={2} />}
-          label="Продолжить в новом чате"
-          onClick={() => { setCtxMenu(null); runContinue(); }}
         />
       )}
       {online && hasMessages && (

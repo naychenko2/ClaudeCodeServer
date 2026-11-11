@@ -634,13 +634,24 @@ public sealed class WikiChatIngestService
             {
                 if (op.Op == WikiPackage.OpLink || op.Text is not { Length: > 0 })
                     continue; // «link» — связь, не утверждение; утверждения без цитаты нет.
-                // Утверждение хроники — цитата, подтверждённая кодом (S6b-3, M1). Цитату
-                // с переводом строки складываем в одну строку: формат страницы строчный
-                // (WikiPage), целая цитата остаётся на странице знаний.
-                var quote = op.Text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
-                statements.Add($"{quote} [^s{nextRef}]");
-                footnotes.Add(new(new(true, cardTitle), quote));
-                nextRef++;
+                // Утверждение хроники — цитата, подтверждённая кодом (S6b-3, M1). У пакета с
+                // Quotes (ADR-039) Text — это Claim своими словами, до 600 символов, а не
+                // цитата: берём сами Quotes. Старый пакет (без Quotes) несёт цитату в Text.
+                // Цитату с переводом строки складываем в одну строку: формат страницы
+                // строчный (WikiPage), целая цитата остаётся на странице знаний.
+                IEnumerable<string> candidates = op.Quotes is { Count: > 0 } ? op.Quotes : [op.Text];
+                foreach (var candidate in candidates)
+                {
+                    var quote = candidate.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
+                    // Хроника не пишет файл вне контракта гейта раздела (8–300, одна мера с
+                    // гейтом): цитату не обрезаем — она обязана остаться дословной, — а
+                    // пропускаем, иначе гейт отвергает все последующие записи раздела.
+                    if (QuoteMatcher.MeasureQuoteLength(quote).OutOfContract)
+                        continue;
+                    statements.Add($"{quote} [^s{nextRef}]");
+                    footnotes.Add(new(new(true, cardTitle), quote));
+                    nextRef++;
+                }
             }
         }
         if (statements.Count == 0)

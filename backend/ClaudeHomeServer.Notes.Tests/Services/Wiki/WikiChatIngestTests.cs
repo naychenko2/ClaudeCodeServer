@@ -239,6 +239,31 @@ public class WikiChatIngestTests : IDisposable
         StatementLines(page, Claim2).Should().Be(1);
     }
 
+    // Дефект 2d9df07a: хроника брала Text (= claim, до 600 символов) как цитату сноски,
+    // и страница с цитатой 375 символов отвергалась гейтом раздела — рушила остальные записи.
+    // Мутация «брать op.Text вместо op.Quotes» (WikiChatIngestService.AppendChronicleAsync) — красное здесь.
+    [Fact]
+    public async Task C1b_ДлинныйClaim_ХроникаПишетЦитатуАНеClaim_КонтрактГейтаСоблюдён()
+    {
+        AddSession();
+        SetShortHistory();
+        var longClaim = Claim1 + " — " + new string('в', 350);
+        longClaim.Length.Should().BeGreaterThan(WikiPage.MaxQuoteLength);
+
+        var llm = new FakeLlm(("S", WikiSynthJson.Append(PageTitle, longClaim, Claim1)));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+
+        var chronicles = ChronicleFiles();
+        chronicles.Should().HaveCount(1);
+        var text = File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8);
+        StatementLines(text, Claim1).Should().Be(1, "в хронику идёт дословная цитата");
+        text.Should().NotContain(longClaim, "claim — не цитата и в хронику не попадает");
+        var parsed = WikiPage.Parse(text).Model!;
+        parsed.Footnotes.Should().NotBeEmpty();
+        parsed.Footnotes.Should().OnlyContain(f => !QuoteMatcher.MeasureQuoteLength(f.Quote).OutOfContract);
+    }
+
     // ── c2: подмена записи N — курсор сброшен в 0, повторные утверждения не дублируются ──
 
     [Fact]

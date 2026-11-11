@@ -219,7 +219,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
         ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
-        FeatureSummaryService? summary = null)
+        FeatureSummaryService? summary = null, ProjectTreeLocator? locator = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -238,7 +238,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             journal: journal,
             spend: spend,
             summary: summary,
-            queue: _factory.Services.GetService<FeatureQueueService>());
+            queue: _factory.Services.GetService<FeatureQueueService>(),
+            locator: locator);
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         var identity = new ClaimsIdentity(claims, "test");
@@ -251,6 +252,10 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
 
     // Реальный GitService из DI (worktree-гард проходит штатно).
     private GitService RealGit() => _factory.Services.GetRequiredService<GitService>();
+
+    // Реальный ProjectTreeLocator из DI (TaskGlue регистрирует его безусловно): exists/branch
+    // файлов макета по всем деревьям проекта (FS-B3b).
+    private ProjectTreeLocator RealLocator() => _factory.Services.GetRequiredService<ProjectTreeLocator>();
 
     // Статический словарь гейтов мержа (MergeGates) — для проверки, что запись убрана после мержа.
     private static ConcurrentDictionary<string, SemaphoreSlim> MergeGatesDict() =>
@@ -1595,6 +1600,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
+        // FS-B3b: ownerTaskId запасного пути LinkedFiles — задача, приложившая этот path.
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(stepId, "автор запасного пути — приложившая его задача");
     }
 
     // M1: задача role=design входит в AllRunTasks — её linkedFiles доходят до каталога, а
@@ -1791,9 +1798,9 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
 
     // Проверенный worktree эпика (числится в `git worktree list` проекта): Find вызывается
     // дважды — сначала по дереву эпика, затем по корню; слияние по относительному пути:
-    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла
-    // проверяется по дереву фичи: в дереве файла нет (есть только в main) → exists=false,
-    // иначе карточка обещала бы файл, которого читатель по ?featureId= не отдаст (W4-R1).
+    // запись дерева побеждает (tree="feature", title по корню дерева). FS-B3b: exists файла
+    // решает локатор по всем деревьям проекта: на диске файла нет ни в одном дереве
+    // (заглушка его не создавала) → exists=false, обещания читателю нет.
     [Fact]
     public async Task GetFeature_Mockups_ПроверенныйWorktree_КаталогЧитаетДеревоЭпика()
     {
@@ -1801,7 +1808,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var mainRoot = Projects.GetById(projectId)!.RootPath;
 
         var catalog = new RootsMockupCatalog(mainRoot);
-        var controller = BuildController(RealGit(), catalog: catalog);
+        var controller = BuildController(RealGit(), catalog: catalog, locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
@@ -1811,7 +1818,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
         mockup.GetProperty("title").GetString().Should().Be("mockup@" + worktree);
         mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
-            .GetBoolean().Should().BeFalse("файл только в main — запись дерева его не обещает");
+            .GetBoolean().Should().BeFalse("файла нет ни в одном дереве проекта — обещания нет");
     }
 
     // Фолбэк: у эпика нет worktreePath — каталог вызывается один раз, по корню проекта,
@@ -1863,17 +1870,120 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mockup.GetProperty("tree").GetString().Should().Be("main");
     }
 
-    // Сквозной сценарий W4-R1 (major 1+2) на НАСТОЯщем MockupCatalog и настоящем git-worktree:
-    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
-    // дереве, другой только в main, третий — в обоих. Каталог записывает путь под tree="feature"
-    // (запись дерева побеждает), Files — объединение путей: файл только из main не исчезает
-    // (major 2), но его exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404
-    // (major 1). Файл, есть в обоих деревьях → exists=true (минор R1B).
-    // Мутация: убрать объединение Files в слиянии — этот тест краснеет (main_only пропадает).
+    // FS-B3b ядро (дефект «не в master»): файл макета в worktree шага — ни в main, ни в дереве
+    // эпика. Прежде: каталог смотрел ровно эти два дерева → exists=false, карточка говорила
+    // «не в master», хотя файл открывается по taskId шага. Теперь: локатор находит файл в
+    // worktree проекта → exists=true, branch — ветка шага; ownerTaskId — шаг, приложивший
+    // path, и читатель по этому анкеру отдаёт 200.
+    // Мутация «вернуть exists по двум деревьям» (убрать шаг recompute в BuildMockups): этот
+    // тест краснеет — в двух деревьях файла нет.
     [Fact]
-    public async Task GetFeature_Mockups_ФайлТолькоВMain_ДеревоНеОбещаетExists()
+    public async Task GetFeature_Mockups_ФайлТолькоВВорктриШага_ExistsBranchАвтор()
     {
-        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var projectRoot = Projects.GetById(projectId)!.RootPath;
+
+        // Worktree шага — реальный worktree того же проекта (git worktree add -b);
+        // файл только в нём.
+        var stepWt = Path.Combine(_host.TempDir, "mk_stepwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(stepWt);
+        var stepBranch = "feat/step-" + Guid.NewGuid().ToString("N")[..6];
+        var git = RealGit();
+        await git.WorktreeAddAsync(null, projectRoot, stepWt, stepBranch);
+        const string relPath = "docs/mockups/only_step.html";
+        Directory.CreateDirectory(Path.Combine(stepWt, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(stepWt, "docs", "mockups", "only_step.html"), "step only");
+
+        // Шаг — проектная задача (личная обнуляет worktree), linkedFiles — на файл.
+        var step = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            worktreePath = stepWt, worktreeBranch = stepBranch,
+            linkedFiles = new[] { relPath },
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var controller = BuildController(git,
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        var file = mockup.GetProperty("files").EnumerateArray().Single();
+        file.GetProperty("path").GetString().Should().Be(relPath);
+        file.GetProperty("exists").GetBoolean().Should().BeTrue(
+            "файл в worktree проекта — exists=true, «не в master» нет");
+        file.GetProperty("branch").GetString().Should().Be(stepBranch, "branch — ветка дерева, где найден");
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(stepId, "автор — задача, приложившая path");
+
+        // Читатель подтверждает новый контракт: exists=true + анкер автора ⇒ файл открывается.
+        var content = await _client.GetAsync($"/api/projects/{projectId}/files/content?path={relPath}&taskId={stepId}");
+        content.StatusCode.Should().Be(HttpStatusCode.OK, "exists=true ⇒ файл открывается по taskId автора");
+    }
+
+    // Инвариант: материал ищется только в деревьях своего проекта. Файл — в реальном worktree
+    // ДРУГОГО проекта (отдельный git-репозиторий), worktree шага указывает туда; этого же
+    // относительного пути в деревьях проекта эпика нет. Корни локатора — только деревья
+    // проекта эпика (IsLinkedWorktree: .git-файл ведёт под <main>/.git/worktrees) →
+    // exists=false, ветки нет. Мутация «принять WorktreePath задачи как корень без
+    // проверки» — этот тест краснеет.
+    [Fact]
+    public async Task GetFeature_Mockups_ВорктриДругогоПроектаТогоЖеПути_ExistsНеДаёт()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+
+        // Отдельный git-репозиторий со своим worktree — файл только там.
+        var foreign = Path.Combine(_host.TempDir, "mk_foreign_" + Guid.NewGuid().ToString("N")[..8]);
+        var foreignRepo = Path.Combine(foreign, "repo");
+        var foreignWt = Path.Combine(foreign, "wt");
+        Directory.CreateDirectory(foreignRepo);
+        Directory.CreateDirectory(foreignWt);
+        var fgit = RealGit();
+        await fgit.InitAsync(null, foreignRepo);
+        await fgit.WorktreeAddAsync(null, foreignRepo, foreignWt, "feat/foreign");
+        const string relPath = "docs/mockups/x.html";
+        Directory.CreateDirectory(Path.Combine(foreignWt, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(foreignWt, "docs", "mockups", "x.html"), "foreign");
+
+        // Шаг этой фичи: linkedFiles — на path, worktree — чужой worktree (тот же путь).
+        await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            worktreePath = foreignWt, worktreeBranch = "feat/foreign",
+            linkedFiles = new[] { relPath },
+        });
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        var file = mockup.GetProperty("files").EnumerateArray().Single();
+        file.GetProperty("path").GetString().Should().Be(relPath, "запись есть (linkedFiles), файла в проекте нет");
+        file.GetProperty("exists").GetBoolean().Should().BeFalse(
+            "worktree чужого проекта — не корень этого проекта, exists нет");
+        file.GetProperty("branch").ValueKind.Should().Be(JsonValueKind.Null,
+            "ветки нет — ни в одном дереве проекта файла нет");
+    }
+
+    // Сквозной сценарий W4-5 + FS-B3b на НАСТОЯщем MockupCatalog и настоящем git-worktree:
+    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
+    // дереве, другой только в main, третий — в обоих. Слияние прежнее: запись дерева побеждает
+    // (tree="feature"), Files — объединение путей (файл только из main не исчезает, major 2).
+    // FS-B3b: exists/branch файлов — вердикт локатора, а не дерево записи: main_only →
+    // exists=true без ветки (прежнее «дерево не обещает, exists=false» заменено: карточка не
+    // должна говорить «не в master» про файл, который открывается из main), tree_only →
+    // exists=true, branch — ветка эпика, both → exists=true без ветки (main — первый корень).
+    // Задача, приложившая записку, — автор (ownerTaskId).
+    // Мутации: убрать объединение Files в слиянии — main_only пропадает, красный;
+    // «вернуть exists по двум деревьям» — main_only и branch теряются, красный.
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВMain_ExistsПоЛокаторуБезВетки()
+    {
+        var (epicId, worktree, epicBranch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         var mainRoot = Projects.GetById(projectId)!.RootPath;
         var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html, both.html\n";
         Directory.CreateDirectory(Path.Combine(mainRoot, "docs", "mockups"));
@@ -1885,32 +1995,49 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Файл в ОБОИХ деревьях: есть и в дереве, и в main.
         File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "both.html"), "both");
         File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "both.html"), "both");
+        // Автор записки — задача, приложившая её path (ownerTaskId для записки с шапкой).
+        var author = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг-автор", featureId = epicId, role = "step", stepRef = "Ш2",
+            linkedFiles = new[] { "docs/mockups/note.md" },
+        });
+        var authorId = author.GetProperty("id").GetString()!;
 
         var controller = BuildController(RealGit(),
-            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
-        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main (W4-5)");
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(authorId, "автор записки с шапкой — та же OwnerTask");
         var files = mockup.GetProperty("files").EnumerateArray()
-            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f.GetProperty("exists").GetBoolean());
+            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f);
         files.Keys.Should().Contain("docs/mockups/main_only.html",
-            "файл, существующий только в main, не исчезает из каталога");
-        files["docs/mockups/main_only.html"].Should().BeFalse(
-            "в дереве файла нет — exists=false, обещания читателю нет");
-        files["docs/mockups/tree_only.html"].Should().BeTrue("файл в дереве — обещание честное");
-        files["docs/mockups/both.html"].Should().BeTrue(
-            "файл существует в обоих деревьях — exists=true (минор R1B)");
+            "файл, существующий только в main, не исчезает из каталога (W4-5)");
+        files["docs/mockups/main_only.html"].GetProperty("exists").GetBoolean()
+            .Should().BeTrue("файл в main — exists=true, «не в master» нет");
+        files["docs/mockups/main_only.html"].GetProperty("branch").ValueKind
+            .Should().Be(JsonValueKind.Null, "найден в main — branch null");
+        files["docs/mockups/tree_only.html"].GetProperty("exists").GetBoolean().Should().BeTrue("файл в дереве — exists=true");
+        files["docs/mockups/tree_only.html"].GetProperty("branch").GetString()
+            .Should().Be(epicBranch, "branch — ветка дерева, где найден");
+        files["docs/mockups/both.html"].GetProperty("exists").GetBoolean().Should().BeTrue("файл в обоих деревьях — exists=true");
+        files["docs/mockups/both.html"].GetProperty("branch").ValueKind
+            .Should().Be(JsonValueKind.Null, "main — первый корень, branch null");
 
-        // Читатель подтверждает контракт: по ?featureId= файла из main нет, фолбэка на main нет.
+        // Читатель с ?featureId= прежний: он читает ровно дерево эпика, фолбэка на main нет.
+        // FS-B3b снимает только обещание exists этому читателю: по нему файл из main не
+        // открывается — фронт ведёт его анкером автора/ветки (FS-F1f).
         var content = await _client.GetAsync(
             $"/api/projects/{projectId}/files/content?path=docs/mockups/main_only.html&featureId={epicId}");
         content.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    // Вторая половина контракта: файл макета есть только в проверенном дереве — каталог
-    // говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл откроется).
+    // Вторая половина контракта: файл макета есть только в проверенном дереве — локатор
+    // (FS-B3b) говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл
+    // откроется в дереве фичи).
     [Fact]
     public async Task GetFeature_Mockups_ФайлТолькоВДереве_ExistsTrue_ЧитательОтдаёт200()
     {
@@ -1921,7 +2048,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.LinkedFiles = [relPath];
 
         var controller = BuildController(RealGit(),
-            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);

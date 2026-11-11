@@ -219,7 +219,12 @@ public class TasksController(
     // null — подсистема Tasks выключена: фолбэк на собственные задачи (GetByOwner).
     MyTasksQuery? myTasks = null,
     // Лимит слотов очереди для brief.queueStartEstimate (FeatureQueuePolicy.Limit): тот же ключ, что у снятия очереди.
-    IConfiguration? config = null) : ControllerBase
+    IConfiguration? config = null,
+    // FS-B3b: локатор деревьев проекта (единая точка резолвинга относительных путей по worktree,
+    // как в FilesController): exists/branch файлов макета считаются им по main и всем worktree
+    // проекта. null — прямая сборка без DI (тесты): exists остаётся таким, как его посчитали
+    // каталог и слияние W4-5 (прежнее поведение), без 500.
+    ProjectTreeLocator? locator = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -1364,16 +1369,21 @@ public class TasksController(
     //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
     //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
-    //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
-    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
-    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей, а exists
-    //      записи дерева проверяется по дереву фичи (W4-R1: читатель с ?featureId= читает
-    //      ровно дерево). Дерева нет или проверка не прошла — только main, как раньше.
-    //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
     //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
-    // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
-    // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
-    // убыв., null в конце (детерминизм — путь).
+    //      W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
+    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
+    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей. Дерева нет
+    //      или проверка не прошла — только main, как раньше.
+    //   4. FS-B3b: exists/branch каждого файла решает НЕ пара деревьев, а локатор: один
+    //      LocateManyAsync на ответ по main и всем worktree проекта (ProjectTreeLocator).
+    //      Найден → exists=true, branch — ветка дерева, где найден (null — main); нет →
+    //      exists=false. Без локатора (null) — значения каталога/слияния (прежнее поведение).
+    //   5. TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
+    //      которой есть path макета или любой из его files; иначе null. ownerTaskId (FS-B3b) —
+    //      автор записи: для записки с шапкой — та же OwnerTask; для запасного пути LinkedFiles —
+    //      задача, которая приложила path (см. AuthorTask).
+    //   6. Сортировка: ModifiedAt убыв., null в конце (детерминизм — путь).
     private async Task<(IReadOnlyList<MockupEntry> Mockups, string? Unavailable)> BuildMockups(FeatureRun run, MockupCatalog? catalog)
     {
         // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
@@ -1402,18 +1412,15 @@ public class TasksController(
         {
             if (merged.TryGetValue(e.Path, out var fromTree))
             {
-                // W4-R1 (вариант А): запись дерева побеждает (tree="feature"), Files —
-                // объединение путей: файл, существующий только в main, не исчезает из
-                // каталога. Для дерева фичи exists проверяется ПО дереву фичи: читатель
-                // с ?featureId= читает ровно дерево (фолбэка на main нет), поэтому
-                // exists=true обязан гарантировать, что файл откроется. Пути, лежащие
-                // только в main, остаются в списке с exists=false.
+                // W4-5: запись дерева побеждает (tree="feature"), Files — объединение
+                // путей: файл, существующий только в main, не исчезает из каталога.
+                // FS-B3b: Exists записей здесь не решает ни одно дерево — шаг 4 ниже.
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var files = new List<MockupFile>();
                 foreach (var f in fromTree.Files)
                     if (seen.Add(f.Path)) files.Add(f);
                 foreach (var f in e.Files)
-                    if (seen.Add(f.Path)) files.Add(f with { Exists = false });
+                    if (seen.Add(f.Path)) files.Add(f);
                 merged[e.Path] = fromTree with { Files = files };
             }
             else
@@ -1421,19 +1428,41 @@ public class TasksController(
                 merged[e.Path] = e with { Tree = MockupTree.Main };
             }
         }
+
+        // 4. FS-B3b: exists/branch файлов — вердикт локатора по main и всем worktree проекта,
+        //    а не по паре деревьев: карточка не должна говорить «не в master» про файл, который
+        //    открывается из ветки шага. Без локатора (null) — значения каталога/слияния
+        //    (прежнее поведение W4-5).
+        var located = await LocateMockupFilesAsync(project, merged);
+        if (located is not null)
+        {
+            foreach (var key in merged.Keys.ToArray())
+            {
+                var entry = merged[key];
+                var files = new List<MockupFile>(entry.Files.Count);
+                foreach (var f in entry.Files)
+                    files.Add(located.TryGetValue(f.Path, out var hit)
+                        ? f with { Exists = true, Branch = hit.Branch }
+                        : f with { Exists = false, Branch = null });
+                merged[key] = entry with { Files = files };
+            }
+        }
         var found = merged.Values;
 
-        // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
-        //    path макета или любой из его files; иначе null.
+        // 5. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
+        //    path макета или любой из его files; иначе null. FS-B3b: ownerTaskId — автор записи
+        //    (по ней фронт открывает файл анкером автора, FS-F1f): для записки с шапкой — та же
+        //    OwnerTask; для запасного пути LinkedFiles — задача, которая приложила path.
         var attributed = found
             .Select(e =>
             {
                 var owner = OwnerTask(run, e);
-                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId };
+                var author = e.Source == MockupSource.LinkedFiles ? AuthorTask(run, e) : owner;
+                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId, OwnerTaskId = author?.Id };
             })
             .ToList();
 
-        // 5. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
+        // 6. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
         attributed = attributed
             .OrderBy(e => e.ModifiedAt is null)
             .ThenByDescending(e => e.ModifiedAt ?? DateTime.MinValue)
@@ -1492,12 +1521,51 @@ public class TasksController(
     {
         var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
         foreach (var f in entry.Files) targets.Add(f.Path);
+        return FirstLinkingTask(run, targets);
+    }
+
+    // Тело OwnerTask (одна копия, общий с AuthorTask): первая (по CreatedAt) задача проекта
+    // эпика, в linkedFiles которой есть один из targets.
+    private static TaskItem? FirstLinkingTask(FeatureRun run, HashSet<string> targets)
+    {
         var epicProject = run.Epic.ProjectId;
         return AllRunTasks(run)
             .Where(t => t.ProjectId == epicProject)
             .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
             .OrderBy(t => t.CreatedAt)
             .FirstOrDefault();
+    }
+
+    // FS-B3b: автор записи (ownerTaskId). Для записки с шапкой — та же OwnerTask (author — тот,
+    // кто приложил записку или её файл). Для запасного пути LinkedFiles — задача, которая
+    // приложила именно этот path: запись создана из его linkedFiles, её Files — тот же путь,
+    // поэтому сверка только по path записи (без «или любой из files»).
+    private static TaskItem? AuthorTask(FeatureRun run, MockupEntry entry)
+    {
+        if (entry.Source != MockupSource.LinkedFiles) return OwnerTask(run, entry);
+        return FirstLinkingTask(run, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path });
+    }
+
+    // FS-B3b: exists/branch файлов макета — ОДИН LocateManyAsync на ответ (не на файл) по main и
+    // всем worktree проекта: все пути файлов слитых записей, дубли схлопнуты регистронезависимо.
+    // Ответ — карта найденных (ключ — путь как передан, регистронезависимая); не найденных нет.
+    // Без локатора (null) — null: вызывающий оставляет значения каталога/слияния (прежнее
+    // поведение). Ключ owner — текущий владелец: проект взят GetByOwner, вызывающий — его
+    // владелец (тот же ключ, что у git-гардов этого контроллера).
+    private async Task<Dictionary<string, LocatedPath>?> LocateMockupFilesAsync(
+        Project project, Dictionary<string, MockupEntry> merged)
+    {
+        if (locator is null) return null;
+        var paths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in merged.Values)
+            foreach (var f in entry.Files)
+                if (seen.Add(f.Path)) paths.Add(f.Path);
+        var byPath = new Dictionary<string, LocatedPath>(StringComparer.OrdinalIgnoreCase);
+        if (paths.Count == 0) return byPath; // пустого вызова локатора нет
+        foreach (var hit in await locator.LocateManyAsync(UserId, project, paths))
+            byPath[hit.Path] = hit;
+        return byPath;
     }
 
     // Нормализация пути linkedFiles для сравнения с путями каталога: прямые слэши, без

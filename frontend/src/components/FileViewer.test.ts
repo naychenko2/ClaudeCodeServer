@@ -578,3 +578,40 @@ function findCloseButton(container: unknown): unknown {
   walk(container);
   return hit;
 }
+
+// FS-F1g: плашка «Из ветки … · только просмотр» — только при taskId; подпись возврата — backLabel.
+// Мутации: убрать `taskId &&` у Notice → «без taskId» краснеет; closeLabel вернуть "Файлы" → тест backLabel краснеет.
+describe('FileViewer: плашка ветки и подпись возврата (FS-F1g)', () => {
+  beforeEach(setupMocks);
+  afterEach(teardown);
+
+  it('taskId + branch — плашка с именем ветки', async () => {
+    const { container } = mountViewer(vi.fn(), true, { taskId: 't1', branch: 'feat/x' });
+    await flush();
+    expect(textNodes(container as never).join(' ')).toContain('Из ветки feat/x · только просмотр');
+  });
+
+  it('taskId без branch — «Из ветки задачи · только просмотр»', async () => {
+    const { container } = mountViewer(vi.fn(), true, { taskId: 't1' });
+    await flush();
+    expect(textNodes(container as never).join(' ')).toContain('Из ветки задачи · только просмотр');
+  });
+
+  it('без taskId плашки нет, даже если передан branch', async () => {
+    const { container } = mountViewer(vi.fn(), true, { branch: 'feat/x' });
+    await flush();
+    expect(textNodes(container as never).join(' ')).not.toContain('только просмотр');
+  });
+
+  it('мобила: backLabel подменяет «Файлы», по умолчанию — «Файлы»', async () => {
+    const a = mountViewer(vi.fn(), true, { backLabel: 'К фиче' });
+    await flush();
+    expect(findButtonByText(a.container, 'К фиче'), 'кнопка «К фиче»').not.toBeNull();
+    expect(findButtonByText(a.container, 'Файлы'), '«Файлы» заменена').toBeNull();
+  });
+  it('мобила: без backLabel — «Файлы»', async () => {
+    const { container } = mountViewer(vi.fn(), true);
+    await flush();
+    expect(findButtonByText(container, 'Файлы')).not.toBeNull();
+  });
+});

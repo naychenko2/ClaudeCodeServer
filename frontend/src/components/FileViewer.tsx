@@ -1,5 +1,5 @@
 import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote, SquareStack } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote, SquareStack, GitBranch } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -63,7 +63,7 @@ import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
 import { ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
-import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem, Chip } from './ui';
+import { Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem, Chip, Notice } from './ui';
 import { DiffView } from './DiffView';
 import { SaveConflictDialog } from './SaveConflictDialog';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
@@ -144,6 +144,10 @@ interface Props {
   // просмотрщик только на чтение: бэк отвечает 400 на PUT с taskId, поэтому кнопок правки и
   // сохранения нет. Не задано — старое поведение.
   taskId?: string;
+  // FS-F1g: имя ветки задачи для плашки «Из ветки … · только просмотр» (только вместе с taskId)
+  branch?: string;
+  // FS-F1g: подпись кнопки «назад» на мобиле; по умолчанию «Файлы» (со страницы фичи — «К фиче»)
+  backLabel?: string;
 }
 
 interface FileContent {
@@ -456,7 +460,7 @@ const writeHooks: { current: WriteActionHooks | null } = { current: null };
 const diagramSave: { current: ((xml: string) => Promise<void>) | null } = { current: null };
 export const __test = { writeHooks, diagramSave };
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId, taskId }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat, sessionId, taskId, branch, backLabel }: Props) {
   const online = useOnline();
   // Подсистема заметок выключена: vault-рендер (NoteView), редактор заметки, граф
   // связей и комментарии документа пропадают. Файл из папки notes/*.md показывается
@@ -1944,7 +1948,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       stripRef={stripRef}
       fixedLeftRef={fixedLeftRef}
       gap={rowGap}
-      closeLabel="Файлы"
+      closeLabel={backLabel ?? 'Файлы'}
       mobileTitle="К списку файлов"
       closeTitle="Закрыть"
       name={
@@ -2172,6 +2176,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             </button>
           ))}
         </div>
+      )}
+
+      {/* FS-F1g: файл из дерева задачи — только просмотр; плашка под шапкой, над содержимым */}
+      {taskId && (
+        <Notice tone="info" icon={GitBranch} data-testid="file-task-notice" style={{ margin: `${SP.sm}px ${SP.md}px 0`, flexShrink: 0 }}>
+          {branch ? `Из ветки ${branch} · только просмотр` : 'Из ветки задачи · только просмотр'}
+        </Notice>
       )}
 
       {/* Содержимое. Для .md (просмотр и редактирование) — белый «лист» вместо

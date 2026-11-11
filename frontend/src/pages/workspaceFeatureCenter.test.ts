@@ -1068,6 +1068,35 @@ describe('WorkspacePage: центр — страница фичи соседом
       'контейнер страницы не виден (мобила)').toBe('flex');
   });
 
+  // FS-F1g (мобила): макет с автором-задачей открыт со страницы фичи → под шапкой плашка
+  // «Из ветки {branch} · только просмотр», кнопка возврата подписана «К фиче».
+  // Мутации: backLabel={undefined} в WorkspacePage → «К фиче» нет; убрать {taskId && …} в FileViewer → плашки нет.
+  it('FS-F1g (мобила): файл из «Материалов» — плашка «Из ветки … · только просмотр» и «К фиче»', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true, branch: 'feat/x' }], source: 'header', taskId: 'T1', ownerTaskId: 'T1', authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const text = textNodes(container as never).join('|');
+    expect(text, 'плашка с веткой').toContain('Из ветки feat/x · только просмотр');
+    expect(text, 'подпись возврата к фиче').toContain('К фиче');
+  });
+
   // (г) зонд A Глеба: страница A → «Открыть макет» (файл открыт, страница уступила) →
   // «Фича →» на ДРУГУЮ фичу B → страница B ВИДНА (смена фичи = новое открытие → страница
   // снова поверх файла). Старый баг: признак «свой файл» сбрасывался только при ЗАКРЫТИИ

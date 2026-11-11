@@ -2576,7 +2576,7 @@ const windowWidth = useWindowWidth();
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} taskId={openFileTaskId} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} taskId={openFileTaskId} branch={openFileBranch} backLabel={pageYieldsToFile ? 'К фиче' : undefined} />
           </div>
         )}
         {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.

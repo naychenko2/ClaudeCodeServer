@@ -450,7 +450,9 @@ public static class FeatureBrief
     // (неизвестный код или пометка без кода — общая фраза). Реальный wait без текста (аномальные
     // данные) — общая фраза: сигнал «ждёт вас» не должен теряться. Лимит держится и здесь: хранилище
     // могло быть правлено минуя продюсера.
-    private static BriefAsk? AskOf(FeatureRun run)
+    // FS-V4: internal — ту же функцию зовёт строка индекса (FeatureProjector.BuildRow): своей копии
+    // логики в индексе нет, инвариант row.ask == brief.ask держится одной функцией.
+    internal static BriefAsk? AskOf(FeatureRun run)
     {
         var attention = run.Attention;
         if (attention is null) return null;
@@ -548,7 +550,9 @@ public static class FeatureBrief
     // служит только StaleOf. ByPersonaId — null: хранимый FeatureNote (B3) persona автора не несёт
     // (только чат BySessionId); заполнить его — аддитивная правка модели, не проектора.
     // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
-    private static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
+    // FS-V4: internal — вход EtaOf для строки индекса (FeatureProjector.BuildRow): тот же голос и
+    // тот же StaleOf, без истории (history там null); логики здесь нет — только видимость.
+    internal static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
     {
         var note = run.Epic?.Note;
         if (note is null) return null;
@@ -601,7 +605,9 @@ public static class FeatureBrief
     // EstimateOfNote), у истории даты нет никогда; при непустом clockStopped — null: сейчас
     // дата при стоящих часах просто пропадала молча, теперь её отсутствие объяснено самим
     // признаком. Оценок нет обеих — eta null.
-    private static BriefEta? EtaOf(BriefNote? note, BriefEstimate? history, string? clockStopped)
+    // FS-V4: internal — ту же функцию зовёт строка индекса (FeatureProjector.BuildRow) с history=null:
+    // срок по истории в индексе не считаем (ADR-031 §3.4), поэтому source там только "note" или null.
+    internal static BriefEta? EtaOf(BriefNote? note, BriefEstimate? history, string? clockStopped)
     {
         int minutes;
         DateTime? endsAt;
@@ -630,7 +636,8 @@ public static class FeatureBrief
     // ask/now/reason — run.Attention, FeatureProjector.cs:175-216, второго расчёта нет):
     // wait — фича ждёт человека, stopped — исполнитель встал. merge — не «часы стоят»: до
     // решения по мержу работа дошла сама; тревоги нет — null.
-    private static string? ClockStoppedOf(FeatureRun run) => run.Attention?.Kind switch
+    // FS-V4: internal — вход EtaOf для строки индекса (тот же признак, что у страницы).
+    internal static string? ClockStoppedOf(FeatureRun run) => run.Attention?.Kind switch
     {
         "wait" => ClockStoppedWait,
         "stopped" => ClockStoppedStopped,

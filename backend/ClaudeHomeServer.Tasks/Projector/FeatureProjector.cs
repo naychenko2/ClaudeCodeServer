@@ -1695,6 +1695,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
         var key = KeySession(run.Epic, featureTasks, sessions);
         var keySession = key is null ? null : sessions.FirstOrDefault(s => s.Id == key);
+        // FS-V4: категория — одна величина для поля Kind и для штампа голоса в NoteOf (тот же
+        // FeatureBrief.KindOf, что у brief.kind); вне таблицы — null (строка не роняет индекс, Б-1.2 к.3).
+        var kind = FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null;
         return new FeatureIndexRow(
             run.FeatureId,
             run.Epic.Title,
@@ -1732,8 +1735,18 @@ public sealed class FeatureProjector(TaskManager tasks)
             // kind — из той же таблицы и той же функции, что brief.kind (FeatureBrief.KindOf, Б-1.1):
             // своего маппинга здесь нет. Отличие от brief: состояние вне таблицы — null, не исключение
             // (строка индекса не роняет индекс, Б-1.2 к.3).
-            Kind: FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null,
-            TrackerIssues: run.Tracker.Count);
+            Kind: kind,
+            TrackerIssues: run.Tracker.Count,
+            // FS-V4 (макет v2 «Срок», карточка чата v5): ask/eta строки — те же функции, что у
+            // страницы (FeatureBrief.AskOf/EtaOf), своего расчёта здесь нет. Eta — только оценка
+            // оркестратора: history=null (срок по истории требует FeatureTypical и журналов; индекс
+            // лёгкий, ADR-031 §3.4), note — тот же NoteOf с той же StaleOf, часы — тот же
+            // ClockStoppedOf. Нет оценки оркестратора — null: карточка фронта срока не показывает.
+            Ask: FeatureBrief.AskOf(run),
+            // Состояние вне таблицы (только синтетический run) — категории нет: NoteOf без неё не
+            // зовём, eta null (тот же fail-closed, что у Kind поля).
+            Eta: kind is null ? null : FeatureBrief.EtaOf(FeatureBrief.NoteOf(run, kind, null), null,
+                FeatureBrief.ClockStoppedOf(run)));
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

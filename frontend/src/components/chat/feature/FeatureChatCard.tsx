@@ -221,7 +221,8 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
             {model.count && (countParts
               ? <><b style={{ fontWeight: 700, color: C.textHeading }}>{countParts[1]}</b>{countParts[2]}</>
               : model.count)}
-            {model.eta ? ` · ${model.eta}` : ''}
+            {/* «часы стоят» — C.warningText (макет §2): цвет только по признаку модели. */}
+            {model.eta ? <span style={model.etaPaused ? { color: C.warningText } : undefined}> · {model.eta}</span> : ''}
           </span>
         )}
         {!isMobile && (

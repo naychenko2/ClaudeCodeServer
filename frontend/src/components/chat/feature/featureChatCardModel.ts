@@ -1,7 +1,8 @@
 // FS-FCm · карточка фичи в шапке чата (макет feature-page-simplify-v5-chat-header, §2–§3, §6):
 // ЧИСТАЯ модель — две строки FeatureChatCard без DOM, запросов и новой семантики. Компонент
-// (FS-FC) рисует только по этой модели; подписи «Нужно от тебя / Что мешает», текст вопроса
-// и «часы стоят» добавляет FS-FCb.
+// (FS-FC) рисует только по этой модели. FS-FCb добавил три величины от бэка: текст вопроса
+// с подписью ASK_LABEL (row.ask), «часы стоят» (eta.clockStopped) и «обещали ≈ N» у закрытой
+// (run.epic.initialEtaMinutes) — все три читаются только из полей бэка, фронт состояние не выводит.
 //
 // Вход — строка индекса (FeatureIndexFeature) и run чата (FeatureRun | null): features/{id}
 // не читаем (записка §6). Все величины — бэковые (run.stepProgress / фолбэк индекса
@@ -15,7 +16,10 @@
 // на страницу фичи, не в чат, — остаётся и в своём чате (toMerge — маршрут компонента).
 
 import { featurePageStatusTag, type FeatureRunTag } from '../../feature/FeatureStatusTag';
+// Общий словарь подписей тревоги (FS-FY): карточка и плашка страницы говорят одними словами.
+import { ASK_LABEL } from '../../feature/FeatureAskBlock';
 import { formatDuration } from '../../feature/FeatureStatsBits';
+import { getPersonaById } from '../../../lib/personas';
 import { plural } from '../../../lib/plural';
 import { stepProgressFromIndex } from '../../../lib/featureProgress';
 import { featureRowModel } from './FeatureBanner';
@@ -29,7 +33,8 @@ import type { FeatureRun } from '../../../types/featureRun';
 export type ChatCardGlyph = 'info' | 'warning' | 'danger' | 'success';
 
 export interface FeatureChatCardPhrase {
-  // «Нужно от тебя» / «Что мешает» — FS-FCb (нужен бэковый ask); в этом шаге всегда null.
+  // «Нужно от тебя» / «Что мешает» — только ASK_LABEL (общий словарь плашки страницы,
+  // FeatureAskBlock) и только по бэковому row.ask (FS-FCb); без ask — null.
   label: string | null;
   text: string;
   tone: 'muted' | 'warn' | 'danger';
@@ -54,7 +59,10 @@ export interface FeatureChatCardModel {
   // «6 из 44»; у закрытой с итогом — «12 шагов»; null — чисел нет (старые ответы).
   count: string | null;
   // «≈ 2 д» по оценке оркестратора; у закрытой с итогом — длительность; без run — null.
+  // «часы стоят» — по бэковому eta.clockStopped (FS-FCb).
   eta: string | null;
+  // true — срок «часы стоят»: компонент красит его C.warningText (макет §2).
+  etaPaused: boolean;
   phrase: FeatureChatCardPhrase;
   // Единственный источник кнопки тревоги карточки (компонент сам ничего не выводит).
   action: FeatureChatCardAction | null;
@@ -91,23 +99,44 @@ export function featureChatCardModel(
   const count = summary
     ? `${summary.steps} ${plural(summary.steps, 'шаг', 'шага', 'шагов')}`
     : sp ? `${sp.accepted} из ${sp.total}` : null;
-  const eta = summary
-    ? formatDuration(summary.durationMinutes)
-    : run ? featureEstimateView(run, nowMs)?.rowEta ?? null : null;
+  // «часы стоят» — только по бэковому eta.clockStopped (макет §6 «Б», «ключи»): при живом
+  // сроке часы не идут (ждёт/стоит); своей догадки о состоянии нет.
+  const etaPaused = feature.eta?.clockStopped != null;
+  const eta = etaPaused
+    ? 'часы стоят'
+    : summary
+      ? formatDuration(summary.durationMinutes)
+      : run ? featureEstimateView(run, nowMs)?.rowEta ?? null : null;
 
-  // Фраза: приоритет тот же, что у featureRowModel (тревога → закрыта → «Сейчас» → состояние).
+  // Фраза: приоритет тот же, что у featureRowModel (тревога → закрыта → «Сейчас» → состояние),
+  // но слово бэкового ask важнее слов alarmView (макет §6 «Б»): десктоп — подпись ASK_LABEL и
+  // вопрос как есть (бэк режет text ≤ 120, строка компонента — с многоточием); мобила — подписи
+  // и вопроса нет, короткая фраза FS-FCm (на 360 вопрос не помещается). Нет ask — как в FS-FCm.
+  const ask = isMobile ? null : feature.ask ?? null;
   let phrase: FeatureChatCardPhrase;
-  if (row.alarm) {
+  if (ask) {
+    // Тон — по виду тревоги, тот же, что у плашки страницы: wait/merge — warn, stopped — danger.
+    phrase = {
+      label: ask.source === 'stopped' ? ASK_LABEL.blocker : ASK_LABEL.need,
+      text: ask.text,
+      tone: ask.source === 'stopped' ? 'danger' : 'warn',
+      name: ask.personaId ? getPersonaById(ask.personaId)?.name ?? null : null,
+    };
+  } else if (row.alarm) {
     // Тревога — тоном целиком (имя уже внутри alarmText, отдельного <b> нет).
     phrase = { label: null, text: row.alarmText, tone: row.alarm === 'wait' ? 'warn' : 'danger', name: null };
   } else if (closed) {
     // «Смержена 19 октября» — тот же формат даты, что у «Итогов» страницы (FeatureClosedSummary);
     // даты мержа нет — слово состояния («закрыта без мержа»), выдуманной даты нет.
     const at = summary?.mergedAt ? new Date(summary.mergedAt) : null;
+    // «обещали ≈ N» — первая оценка оркестратора (бэк: TaskItem.InitialEtaMinutes, пишется один
+    // раз): хвост только при дате мержа и живом поле; нет поля — без хвоста.
+    const promised = run?.epic?.initialEtaMinutes;
+    const promisedTail = promised != null && promised > 0 ? ` · обещали ≈ ${formatDuration(promised)}` : '';
     phrase = {
       label: null,
       text: at && !Number.isNaN(at.getTime())
-        ? `Смержена ${at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}`
+        ? `Смержена ${at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })}${promisedTail}`
         : `${row.statusWord ?? ''}${row.statusWordPost}`,
       tone: 'muted', name: null,
     };
@@ -141,6 +170,7 @@ export function featureChatCardModel(
     tag,
     count,
     eta,
+    etaPaused,
     phrase,
     action,
     isKeyChat: feature.keySessionId != null && feature.keySessionId === sessionId,

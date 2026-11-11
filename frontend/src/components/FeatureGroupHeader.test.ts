@@ -335,16 +335,22 @@ describe('FeatureGroupHeader: v2 в строке нет аватаров, ⚠ и
       personaById: (id: string) => ({ id, ownerId: 'o1', name: 'Кира', handle: id, scope: 'global', avatar: { kind: 'initials' }, memoryEnabled: false } as never),
     });
     const region = rowsRegion(html);
-    // Стопки аватаров и «Сейчас {Имя}» нет (нахлёст −5 и имя-<b> — их подписи).
-    expect(region).not.toContain('margin-left:-5px');
-    expect(html).not.toContain('feature-group-now-name');
-    // ⚠ расхождений трекера переехал на страницу фичи (R2).
-    expect(region).not.toContain('⚠');
-    expect(html).not.toContain('feature-group-tracker-issues');
-    // Процента нет: полоса ниже говорит о прогрессе глазами.
+    // Страж — по самим элементам, а не по подписям старой реализации (R2, ревью bd0aded1):
+    // круг-аватар и AlertTriangle «в новом стиле» — без test-id, символа «⚠» и нахлёста −5 —
+    // обязаны краснить этот тест, а не проходить мимо.
+    // Аватар: в проекте это круг (R.full '50%' / R.max '999px' — PersonaAvatar, UserAvatar)
+    // или <img> картинки. Ни той, ни другой ноды в строке нет.
+    expect(region).not.toContain('<img');
+    expect(region).not.toMatch(/border-radius:\s*(50%|100%|999px)/);
+    // Иконка предупреждения: единственный svg в регионе строк — глиф состояния
+    // (FeatureGlyph в row1). Любая добавленная svg-иконка — lucide AlertTriangle
+    // (⚠ расхождений трекера — на странице фичи) или своя — даёт второй svg.
+    expect((region.match(/<svg/g) ?? []).length).toBe(1);
+    // Процента и символа «⚠» в строке нет: полоса ниже говорит о прогрессе глазами.
     expect(region).not.toContain('%');
-    expect(html).not.toContain('feature-group-percent');
-    // Давности активности нет.
+    expect(region).not.toContain('⚠');
+    // «Сейчас {Имя}» и давности активности нет (R2).
+    expect(html).not.toContain('feature-group-now-name');
     expect(html).not.toContain('feature-group-age');
   });
 

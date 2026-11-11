@@ -180,8 +180,8 @@ public class WikiPackagesControllerTests : IDisposable
             Target = OldClaim,
             Claim = "Сборка ведётся на Linux",
             Quotes = ["сборка падает на Windows", "CI гоняет тесты на ubuntu"],
-            Kind = "decision",
-            AsOf = "2026-11-09",
+            Kind = "state",
+            AsOf = "2026-08-21",
             Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
             Decision = WikiPackage.DecisionInbox,
             Reason = "замещает действующее утверждение",
@@ -194,8 +194,8 @@ public class WikiPackagesControllerTests : IDisposable
         op.Claim.Should().Be("Сборка ведётся на Linux");
         // Порядок цитат сохраняется как в пакете: номера сносок берутся по нему (S2-7).
         op.Quotes.Should().Equal("сборка падает на Windows", "CI гоняет тесты на ubuntu");
-        op.Kind.Should().Be("decision");
-        op.AsOf.Should().Be("2026-11-09");
+        op.Kind.Should().Be("state");
+        op.AsOf.Should().Be("2026-08-21");
 
         // Старая операция без доказательств: все четыре поля null, quotes — null, а не [].
         var legacy = ((OkObjectResult)Controller().Get(

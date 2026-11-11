@@ -280,4 +280,41 @@ public sealed class HumanMessageAcceptedTests : SessionManagerTestBase
         await Task.Delay(100);
         Events().Should().BeEmpty();
     }
+
+    // --- Путь гонки (TurnIntake.cs:724-731): вторая подача проиграла гонку за ход ---
+    // Код ветки гонки идентичен покрытому пути очереди, но это другое состояние: чат по статусу
+    // свободен, а ожидатель хода первой подачи уже выставлен. В тестовой сборке окно «свободный
+    // чат → смена статуса» у первой подачи целиком синхронное (зафиксировано в
+    // SessionManagerQueueTests.cs:731), поэтому честный барьер двух Task.Run не гарантирует, что
+    // вторая успеет пройти проверку занятости до Working, — она могла бы уйти в покрытый путь
+    // очереди. Детерминизм даёт шов этого файла (тест «Два_сообщения…»: статус возвращается в
+    // Active): он фиксирует ровно то состояние, в которое попадает проигравшая гонка подача.
+    // Мутация «убрать PublishRestHumanMessage в ветке гонки» краснит этот тест.
+    [Fact]
+    public async Task ГонкаДвухПодач_КаждаяДаётРовноОдноСобытие()
+    {
+        var (session, adapter) = await MkCountingChatAsync("race-both");
+
+        // Первая подача выиграла гонку: ход начат и не завершён (мока не отдаёт result —
+        // TurnWaiter жив, как в живой гонке), событие — по прямому пути.
+        var first = await _sut.SendMessageAndWaitAsync(session.Id, "первая", TimeSpan.Zero,
+            senderUserId: TestUserId);
+        first.Should().BeOfType<SendAndWaitResult.Running>();
+        (await WaitForEventsAsync(1)).Should().HaveCount(1);
+
+        // Вторая подача — состояние проигравшей гонки: чат свободен по статусу, но TurnWaiter
+        // первой жив. Она проходит гейт занятости и не доходит до старта хода: встаёт в очередь
+        // без прерывания чужого хода (ветка гонки, TurnIntake.cs:724-731).
+        session.Status = SessionStatus.Active;
+        var second = await _sut.SendMessageAndWaitAsync(session.Id, "вторая", TimeSpan.Zero,
+            senderUserId: TestUserId);
+
+        second.Should().BeOfType<SendAndWaitResult.Queued>();
+        adapter.Verify(a => a.Interrupt(), Times.Never(), "ветка гонки не прерывает начатый чужой ход");
+        var events = await WaitForEventsAsync(2);
+        events.Should().HaveCount(2, "по одному событию на подачу: победитель по прямому пути, проигравший по ветке гонки");
+        events.Select(e => e.Turn.TurnSeq).Distinct().Should().HaveCount(2,
+            "второе событие — второй подачи, а не повтор первого");
+        AssertTurnWasSent(adapter);
+    }
 }

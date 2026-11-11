@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { AlertTriangle, Inbox, RotateCw } from 'lucide-react';
-import { C, R, FS, SP } from '../../lib/design';
+import { Inbox } from 'lucide-react';
+import { R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeaturePageTab, setFeaturePageTab, useFeatureMainTab, setFeatureMainTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -35,6 +35,7 @@ import {
   featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
+import { FeatureFirstScreen } from './FeatureFirstScreen';
 import type { FeatureRun } from '../../types/featureRun';
 
 // Куда ведёт закрытие (кнопка «Закрыть»):
@@ -58,25 +59,6 @@ export interface FeaturePageProps {
   onBack: (target: FeaturePageBackTarget) => void;
   // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Материалы»).
   onOpenFile?: (path: string) => void;
-}
-
-// Скелет загрузки (макет §5.7): 6 полос 14 px разной ширины (bgSelected, R 6, gap 10,
-// пульс 1,4 с) + блок 120 (marginTop 6). При prefers-reduced-motion пульс выключен
-// (инжект в шапке).
-const SKELETON_WIDTHS = [70, 92, 84, 60, 88, 76];
-function LoadingSkeleton() {
-  return (
-    <div data-testid="feature-page-skeleton" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      {SKELETON_WIDTHS.map((w, i) => (
-        <div
-          key={i}
-          className="cc-feature-page-skeleton"
-          style={{ height: 14, width: `${w}%`, background: C.bgSelected, borderRadius: R.sm }}
-        />
-      ))}
-      <div className="cc-feature-page-skeleton" style={{ height: 120, marginTop: SP.xs, background: C.bgSelected, borderRadius: R.sm }} />
-    </div>
-  );
 }
 
 // Пульс скелета загрузки (1,4 с); при prefers-reduced-motion — без анимации (макет §5.7).
@@ -172,6 +154,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
 
   // Вкладка: из стора страницы (сохраняется при скрытии/возврате).
   const tab = useFeaturePageTab();
+  const mainTab = useFeatureMainTab();
 
   // Регистрация страницы в канале окна возврата (GC-F11R4): окно снимка живёт ради этого
   // открытия страницы — закрытие гасит его (отложенная проверка в featureBackNav), а
@@ -266,25 +249,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // вкладки, содержимое вкладки.
   let body: ReactNode;
   if (page.status === 'loading') {
-    body = <LoadingSkeleton />;
+    body = <FeatureFirstScreen status="loading" mainTab={mainTab} isMobile={isMobile} onRetry={() => refetchFeaturePage(featureId)} />;
   } else if (page.status === 'error') {
-    body = (
-      <Notice
-        tone="danger"
-        icon={AlertTriangle}
-        title="Не удалось загрузить фичу."
-        action={
-          // m1: на 360 у всех ui/Button страницы minHeight 40 (тач-цель, §6).
-          <Button size="xs" variant="ghost" style={{ background: C.bgWhite, ...(isMobile ? { minHeight: 40 } : {}) }}
-            onClick={() => refetchFeaturePage(featureId)}>
-            <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            Повторить
-          </Button>
-        }
-      >
-        Сервер не ответил; список и чаты работают как обычно.
-      </Notice>
-    );
+    body = <FeatureFirstScreen status="error" mainTab={mainTab} isMobile={isMobile} onRetry={() => refetchFeaturePage(featureId)} />;
   } else if (page.status === 'notFound') {
     body = (
       <EmptyState
@@ -337,13 +304,39 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       recordFeatureReturn(featureId, { kind: 'chat', id: chat }, title);
       void openChatById(chat);
     };
+    // «Ответить …» плашки «от тебя»: мерж — диалог мержа; иначе чат тревоги (запись
+    // возврата к фиче + открытие). Чата нет — кнопки нет.
+    const ask = page.page.brief?.ask ?? null;
+    const askChat = ask?.sessionId ?? null;
+    const onAnswerAsk = ask?.source === 'merge'
+      ? openMergeDialog
+      : askChat
+        ? () => {
+            recordFeatureReturn(featureId, { kind: 'chat', id: askChat }, title);
+            void openChatById(askChat);
+          }
+        : undefined;
+    const holdLike = okRun.hold?.reason === 'queue' || okRun.state === 'paused' || okRun.state === 'draft';
     const chatsCount = (page.page.chats ?? []).filter(c => !c.archived).length;
     // Пометки «в архиве»/«задача закрыта» — из данных страницы (задачи run + чаты): одни
     // на все вкладки, шапку и тревогу.
     const marks = buildNavMarks(okRun, page.page.chats);
     body = (
       <>
-        <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} />
+        <FeatureFirstScreen
+          status="ok"
+          brief={page.page.brief ?? null}
+          run={okRun}
+          mainTab={mainTab}
+          isMobile={isMobile}
+          onAnswer={onAnswerAsk}
+          onOpenSteps={() => setFeatureMainTab('progress')}
+          onOpenReview={() => setFeatureMainTab('review')}
+          onRetry={() => refetchFeaturePage(featureId)}
+          // Пауза, черновик и очередь несут свои действия («Запустить», «Возобновить»), а ответ
+          // без brief плашку строить не из чего: прежний блок состояния остаётся на её месте.
+          stateBlock={holdLike || !page.page.brief ? <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} /> : undefined}
+        />
         <FeaturePageTabs
           value={tab}
           onChange={setFeaturePageTab}

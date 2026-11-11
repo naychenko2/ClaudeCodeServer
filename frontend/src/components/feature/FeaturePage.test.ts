@@ -16,7 +16,7 @@ import { createElement, StrictMode } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { featureRunStatusTag } from './FeaturePageHeader';
-import { __test as pageTest, setFeaturePageTab, refetchFeaturePage, type FeatureBrief } from '../../lib/featurePage';
+import { __test as pageTest, setFeaturePageTab, refetchFeaturePage, getFeatureMainTab, type FeatureBrief } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest, recordBackNav, clearBackNav } from '../../lib/featureBackNav';
 import { setAllFlags } from '../../lib/featureFlags';
@@ -662,13 +662,13 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
     expect(all).toContain('Страница фичи недоступна');
   });
 
-  // === 5. error: Notice «Не удалось загрузить фичу.» + «Повторить» ===
-  it('error: Notice «Не удалось загрузить фичу.» + кнопка «Повторить»', async () => {
+  // === 5. error: «Не загрузилось» + «Повторить» ===
+  it('error: «Не загрузилось» + кнопка «Повторить»', async () => {
     mockGetFeature.error = { name: 'HttpError', status: 500 } as Error & { status?: number };
     const c = render({});
     await settle();
     const all = textNodes(c).join('');
-    expect(all).toContain('Не удалось загрузить фичу.');
+    expect(all).toContain('Не загрузилось');
     expect(all).toContain('Повторить');
   });
 
@@ -2666,5 +2666,131 @@ describe('Ш2: тег этапа в тулбаре — из brief.now.stage', ()
     const t = await tagText(render({}));
     expect(t).toContain('идёт');
     expect(t, 'этапа в теге нет').not.toContain('·');
+  });
+});
+
+// FS-FS: первый экран — плашка «от тебя», «Объём | Срок» (только на «Ходе»), «Итоги»
+// закрытой фичи, скелет и сбой с «Повторить».
+describe('FeaturePage: первый экран (FS-FS)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    pageTest.reset();
+    indexTest.reset();
+    backNavTest.reset();
+    personaMap.clear();
+    mockIndex.features = [feat()];
+    mockIndex.chats = {};
+    mockChats.clear();
+    openChatCalls.length = 0;
+    recFeatureReturnCalls.length = 0;
+    mockGetFeature.pending = false;
+    mockGetFeature.error = null;
+    mockGetFeature.calls = [];
+    mockGetFeature.perCall = [];
+    mockMergeFeature.calls = [];
+    indexTest.setIndex('p1', mockIndex as FeaturesIndex);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  const brief = (over: Partial<FeatureBrief> = {}): FeatureBrief => ({
+    kind: 'running', now: null, reason: null,
+    done: { stepsAccepted: 2, stepsTotal: 5, loops: 1, planState: 'cut' },
+    next: [], elapsedMinutes: null, estimate: null, queue: null, note: null,
+    computedAt: '2026-10-19T11:50:00Z',
+    ...over,
+  });
+  const withProgress = (over: Partial<FeaturePageData> = {}): FeaturePageData => {
+    const d = pageData(over);
+    d.run = { ...d.run, state: 'running', stepProgress: { total: 5, accepted: 2, review: 1, work: 1, notCreated: 1, planState: 'cut' } as never };
+    return d;
+  };
+  const has = (c: ReturnType<typeof render>, id: string) => findNodeByAttr(c, 'data-testid', id) !== null;
+
+  it('открытая фича на «Ходе»: плашка, потом «Объём» и «Срок»; на «Материалах» — только плашка', async () => {
+    mockGetFeature.result = withProgress({ brief: brief() });
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-ask')).toBe(true);
+    expect(has(c, 'volume-card')).toBe(true);
+    expect(has(c, 'eta-card')).toBe(true);
+    await act(async () => { setFeaturePageTab('plans'); });
+    expect(has(c, 'feature-ask')).toBe(true);
+    expect(has(c, 'volume-card')).toBe(false);
+    expect(has(c, 'eta-card')).toBe(false);
+  });
+
+  it('закрытая фича: только «Итоги», плашки и карточек нет; «Разбор ›» → вкладка «Разбор»', async () => {
+    const d = withProgress({ brief: brief({ kind: 'merged' }) });
+    d.run = { ...d.run, summary: { steps: 5, loops: 1, durationMinutes: 200, mergedAt: '2026-10-18T10:00:00Z' } as never };
+    mockGetFeature.result = d;
+    const c = render({});
+    await settle();
+    expect(has(c, 'closed-summary')).toBe(true);
+    expect(has(c, 'feature-ask')).toBe(false);
+    expect(has(c, 'volume-card')).toBe(false);
+    const btn = findNodeByAttr(c, 'data-testid', 'closed-summary-review');
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(getFeatureMainTab()).toBe('review');
+  });
+
+  it('«Ответить» плашки: чат тревоги — запись возврата и ровно один переход; мерж — диалог, чат не открывается', async () => {
+    personaMap.set('p-den', 'Денис');
+    const ask = { text: 'Нужен ответ', source: 'wait' as const, personaId: 'p-den', sessionId: 'chat-ask' };
+    mockGetFeature.result = withProgress({ brief: brief({ kind: 'waiting_you', ask }) });
+    const c = render({});
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-ask-answer');
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(openChatCalls).toEqual(['chat-ask']);
+    expect(recFeatureReturnCalls).toHaveLength(1);
+    expect(recFeatureReturnCalls[0].to).toEqual({ kind: 'chat', id: 'chat-ask' });
+  });
+
+  it('«Ответить» при source=merge открывает диалог мержа, а не чат', async () => {
+    const ask = { text: 'Принять мерж', source: 'merge' as const, personaId: null, sessionId: 'chat-ask' };
+    mockGetFeature.result = withProgress({ brief: brief({ kind: 'waiting_you', ask }) });
+    const c = render({});
+    await settle();
+    const btn = findNodeByAttr(c, 'data-testid', 'feature-ask-answer');
+    await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+    expect(openChatCalls).toEqual([]);
+    expect(textNodes((globalThis as { document: { body: unknown } }).document.body as never).join(' ')).toContain('Смержить «Моя фича» в master?');
+  });
+
+  it('нет sessionId у плашки — кнопки «Ответить» нет', async () => {
+    const ask = { text: 'Нужен ответ', source: 'wait' as const, personaId: null, sessionId: null };
+    mockGetFeature.result = withProgress({ brief: brief({ kind: 'waiting_you', ask }) });
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-ask')).toBe(true);
+    expect(has(c, 'feature-ask-answer')).toBe(false);
+  });
+
+  it('загрузка: скелет первого экрана; сбой: «Не загрузилось · Повторить», два клика подряд — один перезапрос', async () => {
+    mockGetFeature.pending = true;
+    const c0 = render({});
+    await settle();
+    expect(has(c0, 'feature-page-skeleton')).toBe(true);
+    uninstallFakeDom();
+
+    pageTest.reset();
+    mockGetFeature.pending = false;
+    mockGetFeature.error = { name: 'HttpError', status: 500 } as Error & { status?: number };
+    mockGetFeature.calls = [];
+    const c = render({});
+    await settle();
+    expect(textNodes(c).join('')).toContain('Не загрузилось');
+    const before = mockGetFeature.calls.length;
+    const btn = findNodeByAttr(c, 'data-testid', 'first-screen-retry');
+    await act(async () => {
+      const onClick = reactProps(btn!)!.onClick as () => void;
+      onClick(); onClick();
+    });
+    expect(mockGetFeature.calls.length - before).toBe(1);
   });
 });

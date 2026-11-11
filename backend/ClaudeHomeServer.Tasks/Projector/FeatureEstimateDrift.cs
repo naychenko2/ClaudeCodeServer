@@ -11,9 +11,10 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // - ShiftMinutes — Current − First (null, если строк с оценкой меньше двух);
 // - DenominatorChanges — сколько раз total менялся между соседними строками estimate_set,
 //   где total не null (строки без total пропускаются, сменой не считаются);
-// - Accuracy — только у закрытой фичи (run.Closed — эпик Done, FeatureProjector.cs:559–560):
-//   Summary.DurationMinutes / InitialEtaMinutes. Summary есть и у merged с открытым эпиком
-//   (FeatureProjector.cs:573–601), но такая фича не закрыта — accuracy у неё null.
+// - Accuracy — у закрытой и у смерженной фичи (FS-T10, разрез feature-no-autoclose-on-merge
+//   §Ш5/Q3, решение Андрея 11.11): Summary.DurationMinutes / InitialEtaMinutes. Summary есть и у
+//   merged с открытым эпиком (FeatureProjector.cs:573–601), DurationMinutes у неё считается до
+//   mergedAt — такая фича тоже даёт accuracy. Ни смержена, ни закрыта → null.
 public sealed record FeatureEstimateDrift(
     // Базовая оценка срока эпика; null — не зафиксирована.
     int? InitialEtaMinutes,
@@ -24,7 +25,8 @@ public sealed record FeatureEstimateDrift(
     int? ShiftMinutes,
     // Число смен total между соседними строками estimate_set с total (0 — знаменатель не менялся).
     int DenominatorChanges,
-    // Точность срока закрытой фичи: факт / базовая оценка; null — фича открыта или базовой оценки нет.
+    // Точность срока закрытой или смерженной фичи: факт / базовая оценка;
+    // null — ни мержа, ни закрытия, или базовой оценки нет.
     double? Accuracy)
 {
     public static FeatureEstimateDrift Build(FeatureRun run, FeatureJournalReadResult? journal)
@@ -52,9 +54,11 @@ public sealed record FeatureEstimateDrift(
             if (totals[i] != totals[i - 1]) changes++;
         }
 
-        // Точность — только у закрытой фичи (эпик Done) с ненулевой базовой оценкой: Summary есть
-        // и у смерженной с открытым эпиком, но она не закрыта; без базовой оценки делить не на что.
-        double? accuracy = run.Closed && run.Summary is { } summary && initial is > 0
+        // Точность — у закрытой (эпик Done) и у смерженной (Summary.MergedAt, даже с открытым
+        // эпиком) с ненулевой базовой оценкой: DurationMinutes у смерженной уже считается до
+        // mergedAt (FeatureProjector.cs:585–590). «Честный мерж» без merge-задачи (MergedAt=null)
+        // идёт через run.Closed. Без базовой оценки делить не на что.
+        double? accuracy = (run.Closed || run.Summary?.MergedAt is not null) && run.Summary is { } summary && initial is > 0
             ? summary.DurationMinutes / initial.Value
             : null;
 

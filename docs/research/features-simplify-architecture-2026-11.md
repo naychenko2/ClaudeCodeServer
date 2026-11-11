@@ -108,16 +108,16 @@
 | **Состояние** | `run.state` (11 значений, `ComputeState` FP:1828) → `bucket` (5) → `chips` → `brief.kind` = `row.kind` (9, `KindOf`); рядом `closed`, `ready`, `quiet`, `attention.kind`, `stages[].state/tone`, `rail` | 5 путей к тегу: шапка — `run.state`, сводка — `brief.kind`, фолбэк — `bucket/state` индекса, тревога — `analysisLineState`, глиф — `featureDisplayState` (`chatGroups.ts:483`) | П13 и косвенно П2 |
 | **Прогресс** | `run.progress` (доля витков), `run.stepsAccepted/Total` (копия `stepProgress`), `run.stepProgress`, `run.lanes` (те же корзины по линиям), `brief.done` (копия), плоские поля строки индекса, `summary.steps/stepsOpen` | `stepProgress` (сегменты, строка над гантом), `brief.done` (фолбэк «Готовность», `FeatureBriefModel.ts:463`), `note.estimate` (база «Готовности», П1) | П1 |
 | **Текущая стадия** | `run.now[].stage`, `run.stages[].state=active`, `brief.now.stage`, `FeatureBrief.ActiveStageOf` (штамп голоса), `rail`, `row.now0.stage` | тулбар — `brief.now`, гант — `stages[].state` | **П2**: правила расходятся на бэке. `ActiveStageOf` и `stages[].active` — «первая активная стадия», `brief.now` — «стадия первой идущей задачи» |
-| **«Сейчас»** | `run.now[]`, `brief.now` (документ сам называет его «для совместимости», `FeatureBrief.cs:141`), `brief.active[]`, `row.now0`, `row.nowPersonaIds`, `stages[].runningSince`, `stages[].executors[].status`, `stats.longestNow`, `timeline.current` | сводка, раскрытый этап, «Сейчас работают» и «Дольше всех» в статистике | повтор ×4 |
+| **«Сейчас»** | `run.now[]`, `brief.now` (документ сам называет его «для совместимости», `FeatureBrief.cs:191`), `brief.active[]`, `row.now0`, `row.nowPersonaIds`, `stages[].runningSince`, `stages[].executors[].status`, `stats.longestNow`, `timeline.current` | сводка, раскрытый этап, «Сейчас работают» и «Дольше всех» в статистике | повтор ×4 |
 | **Время** | `summary.durationMinutes`, `stage.approxMinutes`, `lane.totalMinutes` (фронт), `totals.elapsed/workWall/agentsSum`, `brief.elapsedMinutes` (= `workWall`) | мета считает от `createdAt` сама; сводка — `brief.elapsedMinutes`; hero — `totals.elapsed` | П3, П4, П6 |
 | **Возвраты** | `verdicts.loops`, `returnsBySource`, `stepChains[].loops`, `lanes[].returns`, `stages[].passes`, `summary.loops` | крупно — `loops` (витки), хвост — `returnsBySource` (задачи) | П5 |
 | **Срок** | `brief.estimate` (история), `brief.note.estimate` (оркестратор), `brief.initialEtaMinutes`, `brief.queueStartEstimate` | «Готовность» берёт `note.estimate` | П1, П7 |
-| **Очередь** | `run.queue` (Position, Length) и `brief.queue` — **всегда `null`** (`FeatureBrief.cs:189`, ADR-031:389) | `briefTag` читает `brief.queue` — читает пустоту | — |
+| **Очередь** | `run.queue` (Position, Length) и `brief.queue` — **всегда `null`** (`FeatureBrief.cs:249`, ADR-031:389) | `briefTag` читает `brief.queue` — читает пустоту | — |
 | **Стадии во времени** | `run.stages[]` (FirstStartedAt, BarEnd, ApproxMinutes) и `stats.timeline.stages[]` (StartedAt, BarEnd) | гант — `run.stages` + `intervalsByStage`; `timeline.stages` никто не читает | П6 |
 
 На бэке тот же дубль виден в коде. Список «все задачи run» собирается **четыре раза**:
 `TasksController.AllRunTasks` :1413, inline `allFeatureTasks` :904–915,
-`FeatureBrief.AllTasksOf` :542 и внутри `FeatureChatDoor.MaskRunChats`. Хвосты волны 3 из
+`FeatureBrief.AllTasksOf` :767 и внутри `FeatureChatDoor.MaskRunChats`. Хвосты волны 3 из
 ADR-031 §5 не закрыты: копия правила активности в `FeatureTimeline`, `AllTasks` в двух модулях,
 пять inline-копий «вернули» вместо `IsReturn`.
 
@@ -166,7 +166,7 @@ ADR-031 §5 не закрыты: копия правила активности 
 |---|---|---|
 | `run.progress` (доля витков) | только копия в `SlimRun` (FP:910) | убрать: тест «0 читателей» плюс ADR-строка «процент только из `stepProgress`» |
 | `run.lanes` | только `SlimRun` (FP:920); на фронте `lanesModel.lanes` — своя модель, не это поле | убрать из `SlimRun`; в проекторе `accounting.Lanes` оставить, если нужен индексу |
-| `run.stepsAccepted/stepsTotal` | `brief.done` (FeatureBrief:185) и индекс | из ответа `run` убрать; источник для `brief.done` брать из `StepProgress` |
+| `run.stepsAccepted/stepsTotal` | `brief.done` (FeatureBrief:245) и индекс | из ответа `run` убрать; источник для `brief.done` брать из `StepProgress` |
 | `run.awaitingHumanSince/Reason` | — (фронт читает их у задач) | кандидат, но проверить MCP/промпт |
 | `stats.typical` | **нужен бэку** (`brief.estimate`) | из ответа убрать, вычисление оставить |
 | `stats.timeline.stages[]` | — | убрать из ответа |
@@ -338,12 +338,12 @@ flowchart LR
 | **Объём, факт** | Единица — шаг (`stepRef`, без него — id задачи). Корзины: `accepted` (последний виток принят и нет открытой доработки), `review`, `work`, `notCreated` (шаг плана без карточки). `total = accepted + review + work + notCreated` | `FeatureStepAccounting.cs:12–92`, итог `:424` |
 | **План** | Действующие планы — не снятые и не вытесненные более поздним планом с пересекающимися ключами. `planState`: `pending` (шагов в плане нет), `partial` (списки есть не у всех планов), `cut`, `done` | `ActivePlans` `:72`, состояние `:133` |
 | **Процент** | Только по трекеру: `trackerPercent(accepted, total)`, подпись «Готовность · по трекеру». Оценка оркестратора в процент не входит (решение B1/Ш3, паспорта `e960986`, `266867c`) | `FeatureBriefModel.ts:455–494`, `TaskItem.cs:264–269` |
-| **Срок по истории** | `≈ stepMinutes × (work + notCreated + 0,5 × review) + tailMinutes`, медиана и p25–p75 по смерженным фичам того же проекта. Нет оценки: `queued/paused/closed/draft/merged`, план `pending/partial`, выборка < 3 фич | `FeatureBrief.EstimateOf` `:400–430`, `FeatureTypical.cs:161` |
-| **Срок оркестратора** | `featureEstimate {remaining ≤8, etaMinutes, why}` пишется только вместе с голосом (`tasks_update` эпика). `etaEndsAt = note.At + eta`; на паузе, в очереди и в «ждёт вас» срок не отдаётся | `TasksToolset.cs:366–396`, `FeatureBrief.EstimateOfNote` `:450` |
-| **Сверка двух сроков** | `agreement`: вне [p25, p75] истории и разница ≥ 30 мин → `above/below` | `AgreementOf` `:462` |
+| **Срок по истории** | `≈ stepMinutes × (work + notCreated + 0,5 × review) + tailMinutes`, медиана и p25–p75 по смерженным фичам того же проекта. Нет оценки: `queued/paused/closed/draft/merged`, план `pending/partial`, выборка < 3 фич | `FeatureBrief.EstimateOf` `:512–553`, `FeatureTypical.cs:161` |
+| **Срок оркестратора** | `featureEstimate {remaining ≤8, etaMinutes, why}` пишется только вместе с голосом (`tasks_update` эпика). `etaEndsAt = note.At + eta`; на паузе, в очереди и в «ждёт вас» срок не отдаётся | `TasksToolset.cs:366–396`, `FeatureBrief.EstimateOfNote` `:579` |
+| **Сверка двух сроков** | `agreement`: вне [p25, p75] истории и разница ≥ 30 мин → `above/below` | `AgreementOf` `:591` |
 | **Базовый срок** | `InitialEtaMinutes` — `etaMinutes` первой оценки, записанной после старта фичи. Пишется один раз | `TaskManager.SetFeatureNote` `:1699–1711` |
-| **Напоминание оркестратору** | В ключевом чате: «голоса нет» или «голос устарел». Устаревание — **только смена активной стадии** | `FeatureVoiceReminderContributor.cs:87–89`, `StaleOf` `:481`, `ActiveStageOf` |
-| **Полнота трекера** | Сверка `run.Tracker`: `unplanned_step`, `unreviewed`, `returned_no_rework`, `dead_verdict`, `reported_open`, `epic_open_after_merge`, `orphans_in_closed` | `FeatureTracker.cs:32–38` |
+| **Напоминание оркестратору** | В ключевом чате: «голоса нет» или «голос устарел». Устаревание — **только смена активной стадии** | `FeatureVoiceReminderContributor.cs:87–89`, `StaleOf` `:686`, `ActiveStageOf` |
+| **Полнота трекера** | Сверка `run.Tracker`: `unplanned_step`, `unreviewed`, `returned_no_rework`, `dead_verdict`, `reported_open`, `orphans_in_closed` (вид `epic_open_after_merge` убран 11.11 по решению Андрея: открытый эпик после мержа не расхождение) | `FeatureTracker.cs:34–39` |
 
 Получается, что гибрид в зачатке **уже есть**: факт по карточкам, срок по истории, срок модели
 и сверка между ними. Не хватает двух вещей. Модель не участвует в **объёме**, а сверка не
@@ -778,7 +778,7 @@ flowchart LR
 | Риски мержа | `not_created`, `open` (= `Work + Review`), `tracker`. Диалог печатает их как есть | `FeatureProjector.cs:982–990`, `FeatureMergeDialog.tsx:40–44` |
 | Ручка мержа | `POST features/{id}/merge` без тела. Гарды: смержена, закрыта, финал не принят, worktree, DevOps. Шаги не трогает | `TasksController.cs:1482–1600` |
 | После мержа | Открытые дочерние задачи становятся `postMergeTails`, тревога гаснет. Закрытый непринятый шаг (`Review` по корзине, Status Done) в хвосты **не попадает**, он просто навсегда держит процент ниже 100 | `FeatureProjector.cs:89–100`, `:267` |
-| Трекер | `unreviewed` и `returned_no_rework` видят тот же закрытый хвост. Снятый шаг трекер уже пропускает | `FeatureTracker.cs:32–33, 156` |
+| Трекер | `unreviewed` и `returned_no_rework` видят тот же закрытый хвост. Снятый шаг трекер уже пропускает | `FeatureTracker.cs:34–35, 83` |
 
 Важная деталь последней строки: 217 шагов Тимура — это не `postMergeTails`. Хвосты после
 мержа — открытые задачи. Шаги Тимура закрыты, но не приняты. Поэтому чинить нужно корзину
@@ -843,7 +843,7 @@ flowchart LR
   плана. Оставляем риском в диалоге. Если Андрей захочет и их снимать, то через заглушку: она
   укладывается в существующую механику без новых полей (вопрос 3 ниже);
 - открытые ревью и проверки, нацеленные на снимаемый шаг. После снятия цели трекер покажет их
-  как `dead_verdict` (`FeatureTracker.cs:156`). Кнопка закрывает их вердиктом `withdrawn` с той же
+  как `dead_verdict` (`FeatureTracker.cs:157`). Кнопка закрывает их вердиктом `withdrawn` с той же
   пометкой, но только если **все** их цели уходят в хвост. Иначе виток живой и остаётся.
 
 **Признак происхождения.** Свободный текст `Notes` для метрик не годится. Добавляем

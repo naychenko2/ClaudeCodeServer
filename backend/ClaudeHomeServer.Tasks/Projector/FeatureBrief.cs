@@ -156,9 +156,11 @@ public static class FeatureBrief
 
     // brief.eta (FS-V2, макет v2 «Срок»): ОДИН срок вместо выбора карточки между note.estimate
     // и estimate. minutes — срок всегда есть (eta null ⇔ числа нет — «одного срока» без числа
-    // не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
-    // source — что именно показано (note|history); clockStopped — почему даты нет при живом
-    // сроке (wait|stopped|null).
+    // не бывает); endsAt — дата от оценки оркестратора (note.estimate), у «истории» её нет
+    // никогда; при clockStopped='wait' гасится, при 'stopped' остаётся прежней оценкой —
+    // «оценка до остановки» (FS-T2, EtaOf ниже); source — что именно показано (note|history);
+    // clockStopped — почему часы стоят: stopped — остановка, wait — ждём ответа человека,
+    // null — часы идут.
     public sealed record BriefEta(int Minutes, DateTime? EndsAt, string Source, string? ClockStopped);
 
     // brief: контракт ответа (разрез п. 6).
@@ -610,9 +612,12 @@ public static class FeatureBrief
     // FeatureBriefModel.ts:589): такая оценка считается отсутствующей.
     // minutes — всегда число (eta без числа — null: «одного срока» без числа не бывает);
     // endsAt — дата note.estimate (от момента записи голоса, не от «сейчас» — та же база, что
-    // EstimateOfNote), у истории даты нет никогда; при непустом clockStopped — null: сейчас
-    // дата при стоящих часах просто пропадала молча, теперь её отсутствие объяснено самим
-    // признаком. Оценок нет обеих — eta null.
+    // EstimateOfNote), у истории даты нет никогда. Оценок нет обеих — eta null.
+    // FS-T2 (решение Андрея 11.11, карточка 47a8f163): дата гасится только при 'wait' — часы
+    // стоят из-за ожидания человека, и обещание «к чему» при таких часах не держится. При
+    // 'stopped' дата остаётся: оценка при остановке — оценка «до остановки», её дата прежняя
+    // (макет v2: подпись «оценка до остановки» — на фронте, отдельная карточка). Раньше дата
+    // гасилась при любом непустом clockStopped.
     // FS-V4: internal — ту же функцию зовёт строка индекса (FeatureProjector.BuildRow) с history=null:
     // срок по истории в индексе не считаем (ADR-031 §3.4), поэтому source там только "note" или null.
     internal static BriefEta? EtaOf(BriefNote? note, BriefEstimate? history, string? clockStopped)
@@ -636,7 +641,7 @@ public static class FeatureBrief
         {
             return null;
         }
-        if (clockStopped is not null) endsAt = null;
+        if (clockStopped == ClockStoppedWait) endsAt = null;
         return new BriefEta(minutes, endsAt, source, clockStopped);
     }
 

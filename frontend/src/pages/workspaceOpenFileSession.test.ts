@@ -473,9 +473,16 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     wsState.activeSession = session;
     wsState.openFile = null;
     wsState.leftTab = undefined;
+    // FS-T12: значения грязнятся здесь и тут же сбрасываются — guard-тест ниже проверяет
+    // именно сброс: тест FS-F1g заканчивается рендером «из дерева», который сам обнуляет
+    // viewerBranch, — assert по его остаткам не ловил бы убранного сброса.
+    cap.viewerBranch = 'feat/x';
+    cap.viewerBackLabel = 'К фиче';
     cap.chatOnOpenFile = null;
     cap.viewer = null;
     cap.viewerTaskId = undefined;
+    cap.viewerBranch = undefined;
+    cap.viewerBackLabel = undefined;
     cap.viewerOnOpenFile = null;
     cap.featureOnOpenFile = null;
     treeCap.onOpenFile = null;
@@ -586,6 +593,16 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     expect(cap.viewerTaskId, 'из дерева taskId сброшен').toBeUndefined();
     expect(cap.viewerBranch, 'из дерева branch сброшен').toBeUndefined();
     expect(cap.viewerBackLabel, 'подпись по назначению: страница под файлом жива — «К фиче»').toBe('К фиче');
+  });
+
+  // FS-T3/FS-T12: beforeEach грязит viewerBranch/viewerBackLabel значениями и сбрасывает их —
+  // этот тест, ничего не рендеря, читает undefined. Грязнение — здесь, а не в прошлом тесте:
+  // FS-F1g заканчивается рендером «из дерева», который сам обнуляет viewerBranch, и assert
+  // по его остаткам был бы пустым. Мутация: убрать или изменить сброс viewerBranch/
+  // viewerBackLabel в beforeEach → краснеет здесь.
+  it('сброс в beforeEach: без рендера поля читаются undefined, не остатки прошлого теста', () => {
+    expect(cap.viewerBranch, 'branch прошлого теста не доехал').toBeUndefined();
+    expect(cap.viewerBackLabel, 'backLabel прошлого теста не доехал').toBeUndefined();
   });
 
   it('FS-F1g: страница фичи не открыта — подпись возврата не ставится', async () => {

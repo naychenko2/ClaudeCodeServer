@@ -328,7 +328,9 @@ describe('расхождения трекера: перевод видов Featu
     });
     const issues = featureTrackerIssues(r);
     expect(issues[0].text).toBe('сдан без ревью — шаг Ш5');
-    expect(issues[1].text).toBe('мерж закрыт, эпик открыт');
+    // epic_open_after_merge убран из словаря (FS-AC1, бэк вида не присылает): старый
+    // ответ с этим видом — неизвестный, проходит словом как есть, без падения.
+    expect(issues[1].text).toBe('epic_open_after_merge');
     expect(issues[2].text).toBe('future_kind — шаг Ш7');
   });
 

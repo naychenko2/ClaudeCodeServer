@@ -220,10 +220,12 @@ public class FeatureVoiceReminderContributorTests : IDisposable
         (await Build(KeyChat)).Should().BeNull("merged — тот же отсев, что у закрытой");
     }
 
-    // П1 (волна после мержа): новый шаг после мержа снимает merged → открытый эпик становится
-    // расхождением, и оно в хвосте: это правит оркестратор, сервер только показывает.
+    // П1 (волна после мержа) + FS-AC1: новый шаг после мержа снимает merged → волна говорит
+    // через цепочечный вид (unreviewed). Открытый эпик после мержа — не расхождение и не повод
+    // (решение Андрея 11.11): строка не должна ссылаться на закрытие эпика. Мутация «вернуть
+    // ветку эпика» в FeatureTracker краснит тест (вид вернулся бы в строку).
     [Fact]
-    public async Task ВолнаПослеМержа_ЭпикОткрытПослеМержа_РасхождениеВХвосте()
+    public async Task ВолнаПослеМержа_ТолькоЦепочечныйВидБезЗакрытияЭпика()
     {
         var epic = NewFeature();
         AcceptedFinalAndMerge(epic.Id);
@@ -235,8 +237,8 @@ public class FeatureVoiceReminderContributorTests : IDisposable
 
         var line = TrackerLine(await Build(KeyChat));
 
-        line.Should().Contain("epic_open_after_merge ×1", "эпик открыт, вся работа сдана, мерж закрыт");
         line.Should().Contain("unreviewed ×1", "новый шаг сдан без покрывающего витка");
+        line.Should().NotContain("epic_open_after_merge", "открытый эпик после мержа — не расхождение (FS-AC1)");
     }
 
     // Ключевой чат фичи — не чат эпика: цепочка ведёт его по задачам, которые он запускал

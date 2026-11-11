@@ -109,8 +109,9 @@ public sealed record FeatureStats(
     // фичи в корзине «принят» (run.StepChains); null — принятых цепочек нет. В JSON —
     // stats.stepMedianMinutes. Вычисление — StepMedianOf ниже.
     double? StepMedianMinutes = null,
-    // Отклонение оценок (FS-M478, величины 4, 7, 8): сдвиг срока с начала, смены знаменателя,
-    // точность срока закрытой. В JSON — stats.estimateDrift. Вычисление — FeatureEstimateDrift.Build
+    // Отклонение оценок (FS-M478, величины 4, 7, 8; FS-T10 — точность и у смерженной): сдвиг срока
+    // с начала, смены знаменателя, точность срока закрытой и смерженной. В JSON — stats.estimateDrift.
+    // Вычисление — FeatureEstimateDrift.Build
     // над тем же journalResult, что читается для Timeline (второго чтения журнала нет).
     FeatureEstimateDrift? EstimateDrift = null)
 {

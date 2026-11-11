@@ -225,6 +225,50 @@ function pageData(over: Partial<FeaturePageData> = {}): FeaturePageData {
   };
 }
 
+// Страница с настоящими данными (чаты c-live/c-arch, шаги t-open/t-done, лента, статистика):
+// общая фикстура блока «Ф9b: пометки переходов» и блока про вкладки (FS-FP).
+function withData() {
+  mockGetFeature.result = pageData({
+    run: {
+      featureId: 'f1', epic: { id: 'f1', title: 'Моя фича' },
+      steps: [
+        { id: 't-open', title: 'Открытая', status: 'inProgress', role: 'step', linkedSessionId: 'c-live' },
+        { id: 't-done', title: 'Закрытая', status: 'done', role: 'step', linkedSessionId: 'c-arch' },
+      ],
+      reviews: [], qa: [], final: null, merge: null,
+      stepChains: [
+        { stepRef: 'A', title: 'Открытая', taskIds: ['t-open'], outcome: 'running', status: 'идёт', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-live' },
+        { stepRef: 'B', title: 'Закрытая', taskIds: ['t-done'], outcome: 'accepted', status: 'принят', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-arch' },
+      ],
+      stages: [{ key: 'prod', state: 'active', passes: 1, taskIds: ['t-open', 't-done'], rounds: [] }],
+      verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+      progress: 0, ready: false,
+    } as never,
+    chats: [
+      { id: 'c-live', kind: 'executor', taskId: 't-open', archived: false, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+      { id: 'c-arch', kind: 'executor', taskId: 't-done', archived: true, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
+    ],
+    events: [
+      // Лента — at desc (как отдаёт бэк): сначала поздняя.
+      { at: '2026-10-19T11:00:00Z', kind: 'accepted', taskId: 't-done', role: null, stepRef: null, personaId: null, sessionId: 'c-arch', round: null, reason: null },
+      { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't-open', role: null, stepRef: null, personaId: null, sessionId: 'c-live', round: null, reason: null },
+    ] as never,
+    eventsTotal: 2,
+    stats: {
+      source: 'journal', truncated: false,
+      timeline: {
+        from: '2026-10-19T09:00:00Z', to: '2026-10-19T12:00:00Z', stages: [],
+        segments: [{ from: '2026-10-19T09:00:00Z', to: '2026-10-19T10:00:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-done' }],
+        current: null,
+        totals: { elapsedMinutes: 0, workWallMinutes: 0, agentsSumMinutes: 0, notWorkingMinutes: 0, waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null, errorCount: null, errorMinutes: null },
+      },
+      breakdown: { personas: [], models: [], roles: [] },
+      longestNow: { taskId: 't-done', chatId: 'c-arch', personaId: null, stepRef: null, minutes: 5, tokens: null, share: null },
+      spend: null,
+    } as never,
+  });
+}
+
 function render(props: { featureId?: string; projectId?: string | null; projectOwnerId?: string | null; isMobile?: boolean; onBack?: (t: FeaturePageBackTarget) => void }) {
   installFakeDom();
   // fakeDom'ов window/document без addEventListener/querySelector — ставим минимальные:
@@ -423,48 +467,6 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
         };
       });
     };
-    const withData = () => {
-      mockGetFeature.result = pageData({
-        run: {
-          featureId: 'f1', epic: { id: 'f1', title: 'Моя фича' },
-          steps: [
-            { id: 't-open', title: 'Открытая', status: 'inProgress', role: 'step', linkedSessionId: 'c-live' },
-            { id: 't-done', title: 'Закрытая', status: 'done', role: 'step', linkedSessionId: 'c-arch' },
-          ],
-          reviews: [], qa: [], final: null, merge: null,
-          stepChains: [
-            { stepRef: 'A', title: 'Открытая', taskIds: ['t-open'], outcome: 'running', status: 'идёт', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-live' },
-            { stepRef: 'B', title: 'Закрытая', taskIds: ['t-done'], outcome: 'accepted', status: 'принят', durationMinutes: 0, loops: 0, rounds: [], chatId: 'c-arch' },
-          ],
-          stages: [{ key: 'prod', state: 'active', passes: 1, taskIds: ['t-open', 't-done'], rounds: [] }],
-          verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
-          progress: 0, ready: false,
-        } as never,
-        chats: [
-          { id: 'c-live', kind: 'executor', taskId: 't-open', archived: false, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
-          { id: 'c-arch', kind: 'executor', taskId: 't-done', archived: true, personaId: null, taskRole: null, stepRef: null, lane: null, modelLabel: null, modelFull: null },
-        ],
-        events: [
-          // Лента — at desc (как отдаёт бэк): сначала поздняя.
-          { at: '2026-10-19T11:00:00Z', kind: 'accepted', taskId: 't-done', role: null, stepRef: null, personaId: null, sessionId: 'c-arch', round: null, reason: null },
-          { at: '2026-10-19T10:00:00Z', kind: 'started', taskId: 't-open', role: null, stepRef: null, personaId: null, sessionId: 'c-live', round: null, reason: null },
-        ] as never,
-        eventsTotal: 2,
-        stats: {
-          source: 'journal', truncated: false,
-          timeline: {
-            from: '2026-10-19T09:00:00Z', to: '2026-10-19T12:00:00Z', stages: [],
-            segments: [{ from: '2026-10-19T09:00:00Z', to: '2026-10-19T10:00:00Z', kind: 'work', track: 'main', stage: 'prod', taskId: 't-done' }],
-            current: null,
-            totals: { elapsedMinutes: 0, workWallMinutes: 0, agentsSumMinutes: 0, notWorkingMinutes: 0, waitingMinutes: null, idleMinutes: null, waitingCount: null, longestWaitMinutes: null, errorCount: null, errorMinutes: null },
-          },
-          breakdown: { personas: [], models: [], roles: [] },
-          longestNow: { taskId: 't-done', chatId: 'c-arch', personaId: null, stepRef: null, minutes: 5, tokens: null, share: null },
-          spend: null,
-        } as never,
-      });
-    };
-
     // Вкладка запоминается при реальном клике из вкладки: чип в чате покажет её название.
     // FS-FBACK: точка возврата хранит мейн-вкладку — старая вкладка страницы переводится
     // по таблице (events/stats → review, tasks → progress).
@@ -498,7 +500,41 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       });
     }
 
-    // === FS-FP: три вкладки «Ход · Материалы · Разбор» ===
+    // === FS-FKEY: общее пустое «Материалы» — «Открыть ключевой чат» пишет возврат, как остальные места ===
+    // Мутации: убрать recordFeatureReturn из onOpenKeyChat → atOpen.records = 0 (записи в момент
+    // открытия нет) и пустой recFeatureReturnCalls → тест красный; порядок «открыл, потом записал»
+    // даёт тот же atOpen.records = 0.
+    it('пустое «Материалы»: «Открыть ключевой чат» → ровно одна запись возврата, раньше openChatById', async () => {
+      const c = render({});
+      await settle();
+      act(() => { setFeaturePageTab('plans'); });
+      const btn = findNodeByAttr(c, 'data-testid', 'plans-open-key-chat');
+      expect(btn, 'кнопка «Открыть ключевой чат» в пустом состоянии').not.toBeNull();
+      // Снимок в момент openChatById: запись уже сделана → порядок «запись → переход».
+      const atOpen: { records: number; from: string | null; toId: string | null } = { records: -1, from: null, toId: null };
+      openChatHook.fn = () => {
+        atOpen.records = recFeatureReturnCalls.length;
+        const nav = backNavTest.getBackNav();
+        atOpen.from = nav?.from ?? null;
+        atOpen.toId = nav?.to?.id ?? null;
+      };
+      try {
+        await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
+      } finally {
+        openChatHook.fn = null;
+      }
+      expect(openChatCalls, 'переход в ключевой чат').toEqual(['chat-key']);
+      expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
+      expect(recFeatureReturnCalls[0], 'аргументы записи: фича → её чат, с названием').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-key' }, title: 'Моя фича' });
+      expect(atOpen, 'в момент открытия чата запись уже стоит').toEqual({ records: 1, from: 'f1', toId: 'chat-key' });
+    });
+  });
+
+  // === FS-FP: вкладки «Ход · Материалы · Разбор» ===
+  // Сами вкладки: состав и порядок, внешние переходы старой вкладки, клики и счётчик
+  // «Материалов». Пометки переходов из этих вкладок — в блоке выше (Ф9b), они про
+  // точку возврата, а не про вкладки (хвост ревью, карточка b7488536, п.4).
+  describe('FeaturePage: вкладки «Ход · Материалы · Разбор» (FS-FP)', () => {
     it('вкладки: ровно три в порядке Ход, Материалы, Разбор; по умолчанию «Ход»', async () => {
       withData();
       const c = render({});
@@ -557,19 +593,14 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       expect(mockGetFeature.calls.length, 'загрузки страницы не выросли').toBe(before);
     });
 
-    it('счётчик только у «Материалов»: у «Хода» и «Разбора» цифры нет', async () => {
+    // Клик по role="tab" доходит до стора вкладки и меняет тело страницы. Хвост ревью
+    // (карточка b7488536, п.2): тот же инвариант, что на пути стора, — и для клика:
+    // смена вкладки НЕ перечитывает страницу (число вызовов getFeature не растёт).
+    it('клик по вкладкам: «Материалы» → тело материалов, «Разбор» → тело разбора, «Ход» → ход; getFeature не зовётся', async () => {
       withData();
       const c = render({});
       await settle();
-      expect(textNodes(findTab(c, 'Ход')!).join('')).toBe('Ход');
-      expect(textNodes(findTab(c, 'Разбор')!).join('')).toBe('Разбор');
-    });
-
-    // Клик по role="tab" доходит до стора вкладки и меняет тело страницы.
-    it('клик по вкладкам: «Материалы» → тело материалов, «Разбор» → тело разбора, «Ход» → ход', async () => {
-      withData();
-      const c = render({});
-      await settle();
+      const calls = mockGetFeature.calls.length;
       expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), 'старт на «Ход»').not.toBeNull();
       await act(async () => { (reactProps(findTab(c, 'Материалы')! as never)!.onClick as () => void)(); });
       expect(getFeatureMainTab()).toBe('materials');
@@ -581,9 +612,13 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       await act(async () => { (reactProps(findTab(c, 'Ход')! as never)!.onClick as () => void)(); });
       expect(getFeatureMainTab()).toBe('progress');
       expect(findNodeByAttr(c, 'data-testid', 'progress-tab')).not.toBeNull();
+      expect(mockGetFeature.calls.length, 'смена вкладки перечитала страницу').toBe(calls);
     });
 
-    // Счётчик «Материалов» = plansTabCount; у соседей цифры нет.
+    // Счётчик «Материалов» = plansTabCount (FeaturePlansTab.tsx:340-346): видимые документы
+    // + живые макеты + «прочие документы». Случай только из планов — ниже; случай со всеми
+    // тремя составляющими — следом (хвост ревью, карточка b7488536, п.1: правка в части
+    // макетов снимала цифру с вкладки, тест оставался зелёным).
     it('счётчик у «Материалов» равен числу карточек (2), у «Хода» и «Разбора» цифры нет', async () => {
       withData();
       const d = mockGetFeature.result!;
@@ -598,37 +633,42 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       expect(textNodes(findTab(c, 'Разбор')! as never).join('')).toBe('Разбор');
     });
 
-    // === FS-FKEY: общее пустое «Материалы» — «Открыть ключевой чат» пишет возврат, как остальные места ===
-    // Мутации: убрать recordFeatureReturn из onOpenKeyChat → atOpen.records = 0 (записи в момент
-    // открытия нет) и пустой recFeatureReturnCalls → тест красный; порядок «открыл, потом записал»
-    // даёт тот же atOpen.records = 0.
-    it('пустое «Материалы»: «Открыть ключевой чат» → ровно одна запись возврата, раньше openChatById', async () => {
+    // Все три составляющие plansTabCount сразу, с точной суммой и правилами каждой:
+    // дедуп планов (показан последний по createdAt), неизвестная роль не считается,
+    // путь, уже покрытый каталогом макетов, — не второй документ.
+    it('счётчик «Материалы» = планы + макеты + прочие документы (4), у соседей цифры нет', async () => {
+      withData();
+      const d = mockGetFeature.result!;
+      d.plans = [
+        { taskId: 'p-cut', role: 'cut', title: 'Разрез', authorPersonaId: null, createdAt: '2026-10-18T07:00:00Z', completedAt: null, hasText: true, mockupPaths: [] },
+        { taskId: 'p-old', role: 'plan', title: 'Старый план', authorPersonaId: null, createdAt: '2026-10-18T07:10:00Z', completedAt: null, hasText: true, mockupPaths: [] },
+        { taskId: 'p-new', role: 'plan', title: 'Новый план', authorPersonaId: null, createdAt: '2026-10-18T08:00:00Z', completedAt: null, hasText: true, mockupPaths: ['docs/mockups/panel.dc.html', 'docs/adr/031.md'] },
+        { taskId: 'p-step', role: 'step', title: 'Шаг (не документ)', authorPersonaId: null, createdAt: '2026-10-18T09:00:00Z', completedAt: null, hasText: true, mockupPaths: [] } as never,
+      ];
+      // Живой макет: группа из одного файла без суффикса версии, не отклонён.
+      d.mockups = [{
+        path: 'docs/mockups/panel.dc.html', title: 'Панель', status: null,
+        files: [{ path: 'docs/mockups/panel.dc.html', exists: true }],
+        source: 'header', taskId: null, authorPersonaId: null,
+      } as never];
       const c = render({});
       await settle();
-      act(() => { setFeaturePageTab('plans'); });
-      const btn = findNodeByAttr(c, 'data-testid', 'plans-open-key-chat');
-      expect(btn, 'кнопка «Открыть ключевой чат» в пустом состоянии').not.toBeNull();
-      // Снимок в момент openChatById: запись уже сделана → порядок «запись → переход».
-      const atOpen: { records: number; from: string | null; toId: string | null } = { records: -1, from: null, toId: null };
-      openChatHook.fn = () => {
-        atOpen.records = recFeatureReturnCalls.length;
-        const nav = backNavTest.getBackNav();
-        atOpen.from = nav?.from ?? null;
-        atOpen.toId = nav?.to?.id ?? null;
-      };
-      try {
-        await act(async () => { (reactProps(btn!)!.onClick as () => void)(); });
-      } finally {
-        openChatHook.fn = null;
-      }
-      expect(openChatCalls, 'переход в ключевой чат').toEqual(['chat-key']);
-      expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
-      expect(recFeatureReturnCalls[0], 'аргументы записи: фича → её чат, с названием').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-key' }, title: 'Моя фича' });
-      expect(atOpen, 'в момент открытия чата запись уже стоит').toEqual({ records: 1, from: 'f1', toId: 'chat-key' });
+      // 1 разрез + 1 последний план («p-old» дедупнут) + 1 живой макет + 1 прочий документ
+      // («docs/adr/031.md» нет в каталоге макетов; «panel.dc.html» уже макет — не второй).
+      expect(textNodes(findTab(c, 'Материалы')! as never).join('')).toBe('Материалы4');
+      expect(textNodes(findTab(c, 'Ход')! as never).join('')).toBe('Ход');
+      expect(textNodes(findTab(c, 'Разбор')! as never).join('')).toBe('Разбор');
+      // Путь materials[] (FS-F1e): «прочие документы» берутся из них, а не из mockupPaths.
+      d.materials = [
+        { path: 'docs/adr/031.md', taskId: 'p-new', at: '2026-10-18T09:30:00Z' },
+        { path: 'docs/spec.md', taskId: 'p-cut', at: '2026-10-18T09:31:00Z' },
+      ];
+      await act(async () => { refetchFeaturePage('f1'); });
+      await settle();
+      // 2 документа + 1 макет + 2 материала = 5.
+      expect(textNodes(findTab(c, 'Материалы')! as never).join('')).toBe('Материалы5');
     });
   });
-
-
 
   // === 3. notFound (404): EmptyState «Фичи больше нет» + «К списку чатов» ===
   it('notFound (404): EmptyState «Фичи больше нет» + кнопка «К списку чатов»', async () => {

@@ -43,9 +43,12 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    взять для merge attention.Reason («мерж») — тест «Merge…» красный; вернуть null для wait без
 //    текста — тест «WaitБезТекста…» красный; убрать clamp лимита — тест «ЛимитТекста120» красный.
 //  • FS-V2 (eta): поменять в EtaOf приоритет note/history — красные ровно три случая приоритета
-//    («ОценкаОркестратораГлавнее…», «Остановка…ДатаГасится…», «ЗначенияРовноВычисленные…» —
-//    history 40 вместо note 90), остальные зелёные; убрать строку гашения endsAt при clockStopped —
-//    красный ровно «Остановка…ДатаГасится…» (дата note.estimate остаётся при стоящих часах).
+//    («ОценкаОркестратораГлавнее…», «Остановка…ДатаОстаётся…», «ЗначенияРовноВычисленные…» —
+//    history 40 вместо note 90), остальные зелёные.
+//  • FS-T2 (решение Андрея 11.11, карточка 47a8f163): вернуть гашение endsAt при любом
+//    clockStopped (старый код) — красный ровно «Остановка…ДатаОстаётся…» (при stopped дата
+//    оценки остаётся); убрать строку гашения в EtaOf целиком — красный ровно «ЖдётВас…БезДаты»
+//    (случай note: при wait дату держит именно эта строка).
 //  • FS-V2 доработка (ревью f03f4f60): убрать проверку Stale: false в EtaOf — красный ровно
 //    «УстаревшийГолосБерётИсторию…» (note 90 вместо history 40), остальные зелёные (голос их
 //    фикстур свежий); убрать нижний порог < 1 — красный ровно «МеньшеОднойМинуты…» (0 вместо null).
@@ -1411,28 +1414,44 @@ public class FeatureBriefTests
         eta.Minutes.Should().Be(45, "10 × (0 + 1 + 0.5) + 30");
         eta.ClockStopped.Should().Be("wait");
         eta.EndsAt.Should().BeNull();
+
+        // FS-T2: дата гасится при wait и у оценки note. Фикстура — running, не waiting: при
+        // WaitingYou дату гасит EstimateOfNote (FeatureBrief.cs:580), и строка гашения EtaOf
+        // здесь не проверялась бы. Мутация «убрать строку гашения в EtaOf» — красный ровно
+        // этот случай (дата note.estimate осталась бы).
+        var fromNote = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, attention: AttentionOf("wait"), estimate: Est(eta: 90)),
+            null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+        fromNote.Source.Should().Be("note");
+        fromNote.Minutes.Should().Be(90);
+        fromNote.ClockStopped.Should().Be("wait");
+        fromNote.EndsAt.Should().BeNull("при wait дата гасится: часы стоят из-за ожидания человека");
     }
 
-    // Случай 5 (c1): «stopped» — clockStopped=stopped, даты нет. В том числе главный случай
-    // правила: у note.estimate на stopped дата есть (EstimateOfNote её не гасит) — при стоящих
-    // часах она null: отсутствие объяснено признаком, а не молча спрятано.
+    // Случай 5 (c1): «stopped» — clockStopped=stopped, дата ОСТАЁТСЯ (FS-T2, решение Андрея 11.11
+    // по карточке 47a8f163): оценка при остановке — оценка «до остановки», её дата прежняя;
+    // подпись на фронте — отдельная карточка, макет не меняется. Раньше дата гасилась при любом
+    // непустом clockStopped, хотя EstimateOfNote её не гасил.
+    // Мутация «обнулять при любом clockStopped» (старый код строки гашения) — красный ровно этот тест.
     [Fact]
-    public void Eta_ОстановкаЧасыСтоятПризнакStoppedИДатаГаситсяДажеУОценкиNote()
+    public void Eta_ОстановкаЧасыСтоятПризнакStoppedИДатаОстаётся()
     {
         var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
 
-        var fromNote = FeatureBrief.Build(
-            RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped"), estimate: Est(eta: 90)),
-            null, typical, NOW).Eta!;
+        var run = RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped"), estimate: Est(eta: 90));
+        var at = run.Epic!.Note!.At;
+        var fromNote = FeatureBrief.Build(run, null, typical, NOW).Eta!;
         fromNote.Source.Should().Be("note");
         fromNote.Minutes.Should().Be(90);
         fromNote.ClockStopped.Should().Be("stopped");
-        fromNote.EndsAt.Should().BeNull("дата note.estimate при стоящих часах гасится");
+        fromNote.EndsAt.Should().Be(at.AddMinutes(90), "FS-T2: при stopped дата оценки остаётся");
 
-        // Та же оценка без тревоги — дата остаётся: гасит признак, а не состояние как таковое.
+        // Та же оценка без тревоги — дата остаётся (здесь ничего не изменилось).
         var running = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW).Eta!;
         running.EndsAt.Should().NotBeNull();
 
+        // У истории даты нет никогда — при stopped тоже null: не потому что гасится признаком,
+        // а потому что даты нет ни у одной оценки из истории.
         var fromHistory = FeatureBrief.Build(
             RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped")), null, typical, NOW).Eta!;
         fromHistory.Source.Should().Be("history");

@@ -1070,8 +1070,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     const groupById = new Map<string, FeatureChatGroup>();
     for (const g of featureGroups) if (g.feature) groupById.set(g.feature.featureId, g);
     const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
-    // Секции с группами: фича без группы (нет чатов) не рисуется и в счёт не идёт
-    const sections = featureListSections(allFeatures)
+    // Секции с группами: фича без группы (нет чатов) не рисуется и в счёт не идёт.
+    // rawSections — деление ДО фильтра по группам: по нему же считается «все закрыты»
+    // (замечание ревью FL2b): единственный источник «закрытости» — таблица секций.
+    const rawSections = featureListSections(allFeatures);
+    const sections = rawSections
       .map(sec => ({ ...sec, groups: sec.features.map(f => groupById.get(f.featureId)).filter((g): g is FeatureChatGroup => !!g) }))
       .filter(sec => sec.groups.length > 0);
 
@@ -1092,20 +1095,24 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     );
 
     // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая
-    // фича (по kind, не по bucket). Сортируем по времени (Date), а не строкой: выбор
+    // фича — из секции «closed» деления featureListSections, того же источника, что секции
+    // и allClosed (FS-T12, минор ревью R-AC3a: отдельный литерал `kind === 'closed'` здесь
+    // больше не второй источник истины). Сортируем по времени (Date), а не строкой: выбор
     // фичи не зависит от пояса, а дату показываем ЛОКАЛЬНО (dateOnly, как везде в
     // режиме фичи) — в МСК 23:30Z это уже следующий день.
-    const lastMerged = allFeatures
-      .filter(f => f.kind === 'closed')
+    const closedSection = rawSections.find(s => s.key === 'closed');
+    const lastMerged = (closedSection?.features ?? [])
       .map(f => f.summary?.mergedAt)
       .filter((d): d is string => !!d)
       .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
       .pop();
     const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
-    // Спокойное состояние: фичи ЕСТЬ, но все они закрытые (по kind). noFeatures отдельно:
+    // Спокойное состояние: фичи ЕСТЬ, но все они в секции closed — по тому же источнику,
+    // что и секции (rawSections, а не литерал kind: замечание ревью FL2b; merged после
+    // FS-AC3a — «В работе», и она не даёт спокойного состояния). noFeatures отдельно:
     // там свой EmptyState «Фич пока нет», а не «Открытых фич нет».
-    const allClosed = !noFeatures && allFeatures.every(f => f.kind === 'closed');
+    const allClosed = !noFeatures && rawSections.every(s => s.key === 'closed');
     const calm = allClosed && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,

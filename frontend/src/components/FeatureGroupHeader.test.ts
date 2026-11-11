@@ -87,11 +87,35 @@ function renderHeader(f: FeatureIndexFeature, over: Record<string, unknown> = {}
 
 // Регион текста строки: от row1 до полосы (полоса — не «строка»: её aria-подпись
 // «Готовность N %» несёт % по своему назначению и к строке отношения не имеет).
+// Граница — начало узла полосы, а не позиция атрибута: test-id и aria-label стоят в
+// одном теге FeatureTrackerBar.tsx, и позиция подстроки `data-testid="…"` в теге
+// зависит от порядка атрибутов — если aria-label пойдёт первым, его «Готовность N %»
+// попадёт в регион (ревью e30a3583, минор 2). Последний '<' перед test-id — это '<'
+// открывающего тега полосы: ни test-id, ни aria-подпись '<' не содержат.
 function rowsRegion(html: string): string {
   const a = html.indexOf('data-testid="feature-group-row1"');
   if (a < 0) throw new Error('row1 не найден в разметке');
-  const b = html.indexOf('data-testid="feature-group-bar"');
+  const bar = html.indexOf('data-testid="feature-group-bar"');
+  const b = bar === -1 ? html.length : html.lastIndexOf('<', bar);
+  return html.slice(a, b);
+}
+
+// Регион первой строки: от открывающего тега row1 до конца узла. Внутри row1 нет
+// вложенных div (спан глифа, span названия, span срока) — первый '</div>' после
+// test-id и есть граница узла, не зависящая от порядка атрибутов в теге.
+function row1Region(html: string): string {
+  const a = html.indexOf('data-testid="feature-group-row1"');
+  if (a < 0) throw new Error('row1 не найден в разметке');
+  const b = html.indexOf('</div>', a);
   return html.slice(a, b === -1 ? html.length : b);
+}
+
+// Текст строки: содержимое региона row1..bar без разметки (теги → пробелы).
+// Процент и инициалы ищем по тексту строки, а не по любому «%»/форме в разметке:
+// законный layout-процент в style (width:50%, borderRadius:'50%') — не процент
+// прогресса (хвосты ревью, карточка 1f36f30d).
+function rowsText(html: string): string {
+  return rowsRegion(html).replace(/<[^>]*>/g, ' ');
 }
 
 // Текст ноды срока (между её открывающим тегом и текстом — style/title, поэтому
@@ -335,20 +359,31 @@ describe('FeatureGroupHeader: v2 в строке нет аватаров, ⚠ и
       personaById: (id: string) => ({ id, ownerId: 'o1', name: 'Кира', handle: id, scope: 'global', avatar: { kind: 'initials' }, memoryEnabled: false } as never),
     });
     const region = rowsRegion(html);
-    // Страж — по самим элементам, а не по подписям старой реализации (R2, ревью bd0aded1):
-    // круг-аватар и AlertTriangle «в новом стиле» — без test-id, символа «⚠» и нахлёста −5 —
-    // обязаны краснить этот тест, а не проходить мимо.
-    // Аватар: в проекте это круг (R.full '50%' / R.max '999px' — PersonaAvatar, UserAvatar)
-    // или <img> картинки. Ни той, ни другой ноды в строке нет.
+    const text = rowsText(html);
+    // Страж — по самим элементам, а не по подписям старой реализации (R2, ревью bd0aded1),
+    // и НЕ по форме разметки (хвосты ревью, карточки 1f36f30d/b7488536): законный
+    // layout-процент (R.full '50%' тумблера, R.max '999px' чипа) — не аватар и не прогресс,
+    // а не-svg форма глифа состояния — не нарушение R2.
+    // Аватар: в проекте это <img> картинки или круг с инициалами (PersonaAvatar, UserAvatar).
+    // Страж — по данным персоны: ни имени, ни инициала (однобуквенного токена) в тексте строки.
     expect(region).not.toContain('<img');
-    expect(region).not.toMatch(/border-radius:\s*(50%|100%|999px)/);
-    // Иконка предупреждения: единственный svg в регионе строк — глиф состояния
-    // (FeatureGlyph в row1). Любая добавленная svg-иконка — lucide AlertTriangle
-    // (⚠ расхождений трекера — на странице фичи) или своя — даёт второй svg.
-    expect((region.match(/<svg/g) ?? []).length).toBe(1);
-    // Процента и символа «⚠» в строке нет: полоса ниже говорит о прогрессе глазами.
-    expect(region).not.toContain('%');
+    expect(text).not.toContain('Кира');
+    expect(text).not.toMatch(/(^|\s)[А-ЯЁ](\s|$)/);
+    // Глиф состояния есть В ПЕРВОЙ СТРОКЕ: состояние объявлено атрибутом data-feature-state,
+    // сам глиф — декоративный svg FeatureGlyph (aria-hidden) — страж ищет его в узле row1,
+    // а не где угодно в регионе строк: «aria-hidden в регионе» удовлетворялась любой
+    // декоративной нодой, даже в row2 (ревью e30a3583, минор 1). Иконки предупреждения
+    // нет: lucide-family (⚠ расхождений трекера — на странице фичи) рисуется с
+    // class="lucide", FeatureGlyph — не lucide; и символа «⚠» в строке нет. Счёт svg —
+    // не страж: он краснит и при не-svg глифе, который R2 не запрещает.
+    expect(html).toContain('data-feature-state="run"');
+    expect(row1Region(html)).toMatch(/<svg[^>]*aria-hidden="true"/);
+    expect(region).not.toMatch(/class="lucide/);
     expect(region).not.toContain('⚠');
+    // Процента в строке нет (R2): процент ищем по тексту строки и test-id процента, а не по
+    // любому «%» в разметке; полоса ниже говорит о прогрессе глазами.
+    expect(html).not.toContain('feature-group-percent');
+    expect(text).not.toContain('%');
     // «Сейчас {Имя}» и давности активности нет (R2).
     expect(html).not.toContain('feature-group-now-name');
     expect(html).not.toContain('feature-group-age');
@@ -643,9 +678,11 @@ describe('FeatureGroupHeader: v2 — полоса и title, процента н�
     expect(html).toContain('data-testid="feature-bar-accepted"');
     expect(html).toContain('data-testid="feature-bar-review"');
     expect(html).not.toContain('data-testid="feature-bar-master"');
-    // процента в строке нет (R2): ни ноды, ни «N %» в тексте строк.
+    // процента в строке нет (R2): ни ноды процента, ни «N %» в ТЕКСТЕ строк. По любому «%»
+    // в разметке не ищем: законный layout-процент в style (width:50%) — не процент
+    // прогресса (хвост ревью, карточка 1f36f30d: мутация «width:50%» краснила этот тест).
     expect(html).not.toContain('feature-group-percent');
-    expect(rowsRegion(html)).not.toContain('%');
+    expect(rowsText(html)).not.toContain('%');
   });
 });
 

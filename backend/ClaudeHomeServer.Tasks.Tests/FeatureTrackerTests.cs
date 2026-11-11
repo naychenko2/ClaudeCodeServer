@@ -4,15 +4,17 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 namespace ClaudeHomeServer.Tasks.Tests;
 
 // TR-B1a+TR-B1b+B4: «Сверка трекера» (разрез Александра 26.10) — FeatureTracker.Build: список
-// расхождений на том же проходе, что учёт шагов. Семь видов: unreviewed, returned_no_rework,
-// dead_verdict, reported_open, epic_open_after_merge, orphans_in_closed, unplanned_step.
+// расхождений на том же проходе, что учёт шагов. Шесть видов: unreviewed, returned_no_rework,
+// dead_verdict, reported_open, orphans_in_closed, unplanned_step. (epic_open_after_merge убран
+// FS-AC1, решение Андрея 11.11: открытый эпик после мержа — не расхождение, его закрывает человек.)
 // Эталон каждого теста — условие таблицы разреза, а не вывод реализации.
 //
 // Мутации: TrackerGraceMinutes = 0 — тест порога красный (сданная 29 мин назад тоже попадает);
 // убрать ветку «виток ещё открыт» — тест «открытое пачечное ревью покрывает шаг» красный;
 // убрать метку из исключения — тест метки красный; убрать проверку статуса эпика в orphans —
 // тест «открытый эпик» красный; заменить `> t.CompletedAt` на `!= null` в dead_verdict —
-// тест «ревью по свежей доработке» красный; убрать требование merge-задачи в epic_open_after_merge — тест «без мержа» красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
+// тест «ревью по свежей доработке» красный; вернуть выдачу epic_open_after_merge — тест
+// «открытый эпик после мержа» красный; опустить трим/регистр в метке — тест метки красный; убрать проверку chatBusy в
 // reported_open — тест «чат занят» красный; убрать условие PlanState в unplanned_step —
 // тест «план pending» красный; убрать выдержку unplanned_step — тест «моложе выдержки» красный.
 public class FeatureTrackerTests
@@ -308,35 +310,17 @@ public class FeatureTrackerTests
         OfKind(Track(Feature(), new[] { Chat(null) }, t), FeatureTracker.ReportedOpen).Should().BeEmpty();
     }
 
-    // ─── epic_open_after_merge / orphans_in_closed ────────────────────────────────────────────
+    // ─── эпик после мержа (FS-AC1) / orphans_in_closed ─────────────────────────────────────────
 
     [Fact]
-    public void EpicOpenAfterMerge_МержDoneЭпикОткрыт_Расхождение()
+    public void ОткрытыйЭпикПослеМержа_НеРасхождение()
     {
+        // FS-AC1 (решение Андрея 11.11): мерж Done, все дочерние Done, эпик открыт — штатное
+        // состояние смерженной фичи, которую закрывает человек кнопкой, а не расхождение:
+        // сверка молчит. Мутация «вернуть ветку эпика» (выдачу epic_open_after_merge) краснит тест.
         var issues = Track(Feature(), Merge(30));
 
-        var ep = OfKind(issues, FeatureTracker.EpicOpenAfterMerge).Single();
-        ep.TaskId.Should().Be("m");
-        ep.StepRef.Should().BeNull();
-        ep.Since.Should().Be(T0 + TimeSpan.FromMinutes(31));
-    }
-
-    [Fact]
-    public void EpicOpenAfterMerge_ВсеДочерниеDoneБезМержа_Нет()
-    {
-        // Без закрытой merge-задачи сигнала нет, даже если всё закрыто.
-        var issues = Track(Feature(), Step("s", "Ш1", 1),
-            Verdict("r", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s"));
-
-        OfKind(issues, FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
-    }
-
-    [Fact]
-    public void EpicOpenAfterMerge_МержDoneНоЕстьОткрытаяЗадача_Нет()
-    {
-        var open = Step("o", "Ш2", 3, TaskItemStatus.InProgress);
-
-        OfKind(Track(Feature(), Merge(30), open), FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
+        issues.Should().BeEmpty();
     }
 
     [Fact]
@@ -368,20 +352,6 @@ public class FeatureTrackerTests
             Verdict("r", TaskRoles.Review, null, 5), Verdict("q", TaskRoles.Qa, null, 6));
 
         OfKind(issues, FeatureTracker.Unreviewed).Should().ContainSingle();
-    }
-
-    [Fact]
-    public void EpicOpenAfterMerge_ЭпикЗакрытИЛИМержНеЗакрыт_Нет()
-    {
-        // Эпик закрыт — расхождения нет.
-        OfKind(Track(Feature(TaskItemStatus.Done), Merge(30)), FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
-        // Мерж ещё не закрыт — мерж идёт, это не «смержили и не закрыли».
-        var openMerge = new TaskItem
-        {
-            Id = "m", FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.InProgress,
-            CreatedAt = T0.AddMinutes(30),
-        };
-        OfKind(Track(Feature(), openMerge), FeatureTracker.EpicOpenAfterMerge).Should().BeEmpty();
     }
 
     [Fact]

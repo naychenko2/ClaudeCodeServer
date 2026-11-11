@@ -79,8 +79,9 @@ export function FeatureReviewTime({ run, stats, isMobile = false, etaScale }: Fe
   }
 
   // Величины 4 и 7 — из stats.estimateDrift (аддитивное поле: старый ответ его не несёт,
-  // null — бэк не считал; строки тогда нет). «Точность срока» есть только у закрытой: бэк
-  // отдаёт accuracy null у открытой, своей проверки на закрытость здесь нет.
+  // null — бэк не считал; строки тогда нет). «Точность срока» есть у закрытой и у смерженной
+  // (бэк: FeatureEstimateDrift.cs:14-17), null — пока фича идёт; своей проверки на закрытость
+  // здесь нет.
   const shift = stats.estimateDrift?.shiftMinutes ?? null;
   const accuracy = stats.estimateDrift?.accuracy ?? null;
 

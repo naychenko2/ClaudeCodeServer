@@ -5,7 +5,8 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// FS-M478 (величины 4, 7, 8 §6): stats.estimateDrift — точность срока закрытой фичи, сдвиг
+// FS-M478 (величины 4, 7, 8 §6) + FS-T10 (разрез feature-no-autoclose-on-merge §Ш5/Q3):
+// stats.estimateDrift — точность срока закрытой и смерженной фичи, сдвиг
 // срока с начала, смены знаменателя по журналу estimate_set. Эталон каждого теста считан
 // руками из сценария, а не из вывода реализации.
 public class FeatureEstimateDriftTests
@@ -161,7 +162,7 @@ public class FeatureEstimateDriftTests
         FeatureEstimateDrift.Build(run, journal).DenominatorChanges.Should().Be(1);
     }
 
-    // ─── 4: точность срока закрытой ──────────────────────────────────────────────────────────
+    // ─── 4: точность срока закрытой и смерженной ─────────────────────────────────────────────
 
     // К3: закрытая фича (DurationMinutes=900), базовая оценка 600 → accuracy = 1.5.
     [Fact]
@@ -173,7 +174,7 @@ public class FeatureEstimateDriftTests
         FeatureEstimateDrift.Build(run, null).Accuracy.Should().Be(1.5);
     }
 
-    // Открытая фича (Summary = null) → accuracy = null, даже с базовой оценкой.
+    // Открытая фича без мержа (Summary = null) → accuracy = null, даже с базовой оценкой.
     [Fact]
     public void Точность_Открытая_Null()
     {
@@ -182,12 +183,13 @@ public class FeatureEstimateDriftTests
         FeatureEstimateDrift.Build(run, null).Accuracy.Should().BeNull();
     }
 
-    // Доработка по ревью (FS-M478): Summary есть и у смерженной с открытым эпиком
-    // (FeatureProjector.cs:573–574), но фича не закрыта (Closed требует эпика Done,
-    // FeatureProjector.cs:559–560) → accuracy = null. Тот же набор задач с эпиком Done —
-    // закрытая фича → 1.5. Образец состояния — FeatureQuietTests.cs:62–86.
+    // FS-T10 (разрез feature-no-autoclose-on-merge §Ш5/Q3, решение Андрея 11.11): смерженная с
+    // открытым эпиком (Summary.MergedAt есть, Closed=false — FeatureProjector.cs:559–560) даёт
+    // accuracy: DurationMinutes у неё уже считается до mergedAt (FeatureProjector.cs:585–590).
+    // Тот же набор задач с эпиком Done — закрытая фича → та же величина. Образец состояния —
+    // FeatureQuietTests.cs:62–86.
     [Fact]
-    public void Точность_СмерженаЭпикОткрыт_Null_АЭпикDone_Полтора()
+    public void Точность_СмерженаЭпикОткрыт_Полтора_ИЭпикDone_Полтора()
     {
         var final = new TaskItem
         {
@@ -203,12 +205,13 @@ public class FeatureEstimateDriftTests
             ClaudeStartedAt = T0.AddMinutes(110), CompletedAt = T0.AddMinutes(900),
         };
 
-        // Смержена, эпик открыт: Summary есть, Closed=false → accuracy = null.
+        // Смержена, эпик открыт: Summary.MergedAt есть, Closed=false → accuracy = 900/600 = 1.5.
         var openRun = Run(Feature(initialEta: 600), final, merge);
         openRun.State.Should().Be(FeatureStates.Merged);
         openRun.Closed.Should().BeFalse("эпик остаётся открытым");
-        openRun.Summary.Should().NotBeNull("итог у смерженной виден — на нём и ошибались");
-        FeatureEstimateDrift.Build(openRun, null).Accuracy.Should().BeNull();
+        openRun.Summary.Should().NotBeNull("итог у смерженной виден — на нём и считаем");
+        openRun.Summary!.DurationMinutes.Should().Be(900.0);
+        FeatureEstimateDrift.Build(openRun, null).Accuracy.Should().Be(1.5);
 
         // Те же задачи, эпик Done: фича закрыта → accuracy = 900/600 = 1.5.
         var doneEpic = Feature(initialEta: 600);

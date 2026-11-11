@@ -756,10 +756,12 @@ export interface FeatureListSection {
 
 // Секция каждого из 9 значений — по белому списку ALL_FEATURE_KINDS (таблица «Пути к
 // инварианту»): attention — ждущие человека и остановленные; closed — архив.
+// merged — 'active' (FS-AC3a, решение Андрея 11.11): фича после мержа остаётся
+// «смержена» на своём месте порядка бэка, пока человек сам не нажмёт «Закрыть».
 const FEATURE_LIST_SECTION_OF_KIND: Record<FeatureKind, FeatureListSectionKey> = {
   waiting_you: 'attention', error: 'attention',
   running: 'active', queued: 'active', paused: 'active', draft: 'active', idle: 'active',
-  merged: 'closed', closed: 'closed',
+  merged: 'active', closed: 'closed',
 };
 
 // Разделение для списка фич (чистая функция, без React): секции attention → active →

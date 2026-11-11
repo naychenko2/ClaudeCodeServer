@@ -3,6 +3,9 @@
 //   • gap — зазор шапки (strip + fixedLeft) прокинут пропсом: файл передаёт rowGap
 //     (4 в tight, иначе TB.gap), страница — TB.gap (дефолт). Мутация «зашить gap:8»
 //     (убрать пропс) красит: strip теряет заданный зазор.
+//   • FS-T8 (дефект c27d286c): мобильная кнопка возврата — тач-цель ≥ 40 (TB.iconHitMobile);
+//     десктопный close (IconButton md = 32) — без изменений. Мутация «вернуть height: 32»
+//     в мобильной ветке красит мобильный тест.
 //
 // Окружение node (без jsdom): fakeDom (mount) + wireWindow (useEscapeClose вешает
 // window.addEventListener('keydown')). Имя — span[data-testid=shell-name], его родитель
@@ -60,5 +63,45 @@ describe('CenterViewShell: gap пропсом (п.2)', () => {
   it('gap по умолчанию = TB.gap (8px) — страница фичи', () => {
     const c = renderShell({});
     expect(stripGap(c), 'strip gap = TB.gap (8px) по умолчанию').toBe(`${TB.gap}px`);
+  });
+});
+
+// Close-контроль: span[data-testid=closeTestId] → его первый элементный ребёнок и есть
+// кнопка (мобила — BackButton/PressableArea, десктоп — IconButton).
+function renderClose(isMobile: boolean) {
+  installFakeDom();
+  wireWindow();
+  const { container } = mount(createElement(CenterViewShell, {
+    isMobile,
+    onClose: () => {},
+    closeLabel: 'К списку',
+    mobileTitle: 'К списку файлов',
+    closeTestId: 'shell-close',
+    name: 'имя',
+    nameTestId: 'shell-name',
+    rootTestId: 'shell-root',
+    children: createElement('div', { 'data-testid': 'shell-body' }),
+  }));
+  const wrap = findNodeByAttr(container, 'data-testid', 'shell-close');
+  return wrap?.children[0] ?? null;
+}
+
+describe('CenterViewShell: тач-цель кнопки возврата (FS-T8, дефект c27d286c)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); uninstallFakeDom(); vi.restoreAllMocks(); });
+
+  it('мобильная кнопка возврата — min-height ≥ 40 (TB.iconHitMobile)', () => {
+    const btn = renderClose(true);
+    expect(btn, 'мобильный close (BackButton) смонтирован').toBeTruthy();
+    const minH = Number.parseFloat((btn as { style: Record<string, string> }).style.minHeight ?? '');
+    expect(minH >= TB.iconHitMobile, `min-height ${minH} < тач-порога ${TB.iconHitMobile}`).toBe(true);
+  });
+
+  it('десктопный close не тронут: IconButton md = 32, без min-height 40', () => {
+    const btn = renderClose(false);
+    expect(btn, 'десктопный close (IconButton) смонтирован').toBeTruthy();
+    const st = (btn as { style: Record<string, string> }).style;
+    expect(st.height, 'десктопный close остаётся 32px').toBe('32px');
+    expect(Number.parseFloat(st.minHeight ?? '0') >= TB.iconHitMobile, 'десктопному close не задан min-height 40').toBe(false);
   });
 });

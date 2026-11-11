@@ -312,7 +312,9 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
 
 // === FS-FL2b: режим «Фичи» — секции вместо фильтра, «Закрытые · N ›» свёрнуты ===
 // Раскладку даёт featureListSections (по kind, FS-FL2a): «Ждут тебя»/«Стоят» → «В работе» →
-// «Закрытые» (merged и closed). Фронт ничего не отбрасывает; сохранённый featureKinds не читается.
+// «Закрытые» (closed). merged — в «В работе» (FS-AC3a, решение Андрея 11.11): после мержа
+// фича открыта, пока человек сам не нажмёт «Закрыть». Фронт ничего не отбрасывает;
+// сохранённый featureKinds не читается.
 describe('SessionList: FS-FL2b режим фич секциями', () => {
   const feat = (id: string, kind: FeatureKind, title: string, projectId = 'p1') => ({
     featureId: id, title, projectId,
@@ -385,21 +387,24 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
     return null;
   }
 
-  it('секции по порядку: «Ждут тебя» → «В работе»; «Закрытые · 2 ›» свёрнуты, их фич на экране нет', async () => {
+  it('секции по порядку: «Ждут тебя» → «В работе»; «Закрытые · 1 ›» свёрнуты, их фич на экране нет', async () => {
     const { container } = await renderFeatures();
     const titles = allTestIds(container, 'feature-section-title').map(textOf);
     expect(titles, 'подписи секций или их порядок').toEqual(['Ждут тебя', 'В работе']);
     for (const t of ['FICH_W', 'FICH_S', 'FICH_Q']) expect(countTitle(container, t), `${t} должна быть один раз`).toBe(1);
+    // FS-AC3a: merged — в «В работе», видна без раскрытия
+    expect(countTitle(container, 'FICH_G'), 'merged видна в «В работе»').toBe(1);
     const toggle = findTestId(container, 'closed-section-toggle');
     expect(toggle, 'строки «Закрытые · N ›» нет').not.toBeNull();
-    expect(textOf(toggle!), 'число в строке «Закрытые»').toContain('2');
+    expect(textOf(toggle!), 'число в строке «Закрытые»').toContain('1');
     expect(toggle!._attrs['aria-expanded']).toBe('false');
-    expect(countTitle(container, 'FICH_G'), 'merged видна в свёрнутой секции').toBe(0);
     expect(countTitle(container, 'FICH_C'), 'closed видна в свёрнутой секции').toBe(0);
   });
 
   // Инвариант: после раскрытия каждая из 5 фич — ровно один раз; повторный клик сворачивает.
-  // Мутация: в closed-ветке не рисовать sec.groups при closedExpanded → тест красный.
+  // Мутация 1: в closed-ветке не рисовать sec.groups при closedExpanded → тест красный.
+  // Мутация 2 (FS-T12, минор ревью R-AC3a): вернуть merged в секцию «Закрытые»
+  // (FEATURE_LIST_SECTION_OF_KIND в chatGroups.ts) → краснеет assert про FICH_G после сворачивания.
   it('клик по «Закрытые» раскрывает: все пять фич ровно по разу; повторный клик сворачивает', async () => {
     const { container } = await renderFeatures();
     await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
@@ -409,6 +414,9 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
     }
     await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
     expect(countTitle(container, 'FICH_C'), 'после повторного клика закрытая осталась').toBe(0);
+    // FS-AC3a: merged не относится к «Закрытым» — она остаётся видимой и после сворачивания
+    // закрытых (FS-T12).
+    expect(countTitle(container, 'FICH_G'), 'смерженная пропала после сворачивания').toBe(1);
     expect(countTitle(container, 'FICH_W'), 'открытые пропали').toBe(1);
   });
 

@@ -224,8 +224,8 @@ export interface TypicalFeatureStats {
 }
 
 // Отклонение оценок фичи (FS-M478, величины 4, 7, 8; бэк: `FeatureEstimateDrift`,
-// FeatureEstimateDrift.cs:17): сдвиг срока с начала, смены знаменателя, точность срока
-// закрытой. Строки estimate_set пишет бэк; фронт ничего не считает.
+// Projector/FeatureEstimateDrift.cs:18): сдвиг срока с начала, смены знаменателя, точность
+// срока закрытой и смерженной. Строки estimate_set пишет бэк; фронт ничего не считает.
 export interface FeatureEstimateDrift {
   // Базовая оценка срока эпика (фиксируется один раз); null — не зафиксирована.
   initialEtaMinutes: number | null;
@@ -237,7 +237,8 @@ export interface FeatureEstimateDrift {
   shiftMinutes: number | null;
   // Число смен total между соседними строками estimate_set с total (0 — не менялся).
   denominatorChanges: number;
-  // Точность срока закрытой фичи: факт / базовая оценка; null — фича открыта или базовой оценки нет.
+  // Точность срока закрытой или смерженной фичи (FeatureEstimateDrift.cs:14-17): факт / базовая
+  // оценка; null — пока фича идёт (ни мержа, ни закрытия) или базовой оценки нет.
   accuracy: number | null;
 }
 

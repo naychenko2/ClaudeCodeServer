@@ -6,27 +6,27 @@ using ClaudeHomeServer.Protocol;
 namespace ClaudeHomeServer.Services.Sessions;
 
 // Создание чата (S3-5, docs/research/session-manager-split-2026-11.md §1 «жизненный цикл», §2):
-// обычный чат проекта, чат вне проекта, чат от лица персоны, групповой чат, а также три
-// способа породить чат из существующего — ветка по транскрипту, перенос разговора в новый чат
-// и продолжение с запиской. Тела перенесены из SessionManager дословно; фасад держит
-// делегирующие обёртки прежних публичных сигнатур (на них сидят контроллеры, тулсеты и
-// ChatContinueService). Класс internal: его никто не принимает в публичном конструкторе —
-// фасад собирает его сам (переходный режим) или через AddSessionCore.
+// обычный чат проекта, чат вне проекта, чат от лица персоны, групповой чат, а также два
+// способа породить чат из существующего — ветка по транскрипту и перенос разговора в новый
+// чат. Тела перенесены из SessionManager дословно; фасад держит делегирующие обёртки
+// прежних публичных сигнатур (на них сидят контроллеры и тулсеты). Класс internal: его
+// никто не принимает в публичном конструкторе — фасад собирает его сам (переходный режим)
+// или через AddSessionCore.
 //
 // Зависимостей девять: стор (реестр, видимость, рассылка), ChatHistoryService (чтение и
 // запись истории ветки), маршрут (резолв модели/подписки, корни профиля, cwd, архивная
 // копия), хост процесса (старт нового чата, гейт ожидания устройства), проекты, роль слоя
 // персоны (резолв персоны — PersonaManager в конструкторы ролей ядра не входит), резолвер
 // назначений моделей, настройки чатов (рамка видимости персоны, состав группы) и шина
-// событий хода (SessionBranched / SessionContinued).
+// событий хода (SessionBranched).
 //
 // Отклонения от таблицы плана §2 (каждое — с комментарием у места; отдельным решением они не
 // подтверждены — на проверке у Александра):
 // — pluginDir в конструктор не взят: ни одно тело этой роли его не читает (--plugin-dir
 //   относится к контексту запуска и живёт в TurnLaunchContextFactory); вместо него —
 //   резолвер назначений и роль слоя персоны, которые здесь нужны;
-// — EnsureSuccessorAllowed, ContinuationName и WarmHandoffBlocker — здесь же, где их
-//   вызывающие (таблица плана их разделяла только по файлам);
+// — EnsureSuccessorAllowed — здесь же, где его вызывающие (таблица плана их разделяла
+//   только по файлам);
 // — публичные вложенные типы фасада (ChatBranchResult, ChatBranchInclude) не переезжают:
 //   на них смотрит контракт контроллера и тестов, здесь они используются (алиасы выше);
 // — GetPersonaChats читает реестр стора напрямую (тот же фильтр, что был в фасаде).
@@ -369,27 +369,6 @@ public sealed class ChatCreation
     internal void EnsureHandoffAllowed(Session source) =>
         EnsureSuccessorAllowed(source, "переносить", "нового чата");
 
-    // Почему тёплый перенос (передачу пишет сам чат своим ходом, читая префикс из тёплого
-    // кэша) сейчас нельзя; null — можно. Любая причина — тихий уход на холодный путь.
-    // Ход передачи не должен ни ждать в очереди, ни прерывать чужое: идущий ход, очередь,
-    // живые фоновые агенты. Группа и штаб — ход ушёл бы спикерам/координатору. Архивный чат
-    // от хода вернулся бы из архива, а офлайн-устройство припарковало бы ход до своего
-    // возвращения.
-    internal string? WarmHandoffBlocker(string sessionId)
-    {
-        if (!_sessions.TryGetValue(sessionId, out var entry)) return "чат не найден";
-        var s = entry.Info;
-        if (s.ClaudeSessionId is null) return "разговора в CLI ещё не было";
-        if (s.Status is SessionStatus.Working or SessionStatus.Waiting || SessionStore.HasTurnInFlight(entry))
-            return "идёт ход или ждёт очередь";
-        if (s.WorkLoop is not null) return "цикл «до готово»";
-        if (entry.Process is { } p && (p.HasLiveBgAgents || p.HasTrackedBg)) return "живые фоновые агенты";
-        if (s.Participants is { Count: > 0 } || s.TeamImplement is not null) return "групповой чат или штаб";
-        if (s.IsArchived) return "архивный чат";
-        if (_process.DeviceWaitGate(entry) is not null) return "устройство проекта офлайн";
-        return null;
-    }
-
     // Новый чат для переноса: без resume (новый csid выдаст первый ход), с наследованием §11.
     // Источник не трогается — ни UpdatedAt, ни архив.
     internal Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
@@ -397,105 +376,6 @@ public sealed class ChatCreation
         EnsureHandoffAllowed(source);
         return CreateSuccessorChatAsync(source, ownerId, name, resumeSessionId: null);
     }
-
-    // Имя чата-продолжения: «<имя> · продолжение»; если имя уже кончается на «· продолжение»
-    // или «· продолжение N» — счётчик растёт («· продолжение 2», «· продолжение 3»…).
-    internal static string ContinuationName(string? name)
-    {
-        const string Suffix = " · продолжение";
-        var baseName = string.IsNullOrWhiteSpace(name) ? "Чат" : name.Trim();
-        var m = System.Text.RegularExpressions.Regex.Match(baseName, @"^(?<head>.*) · продолжение(?: (?<n>\d+))?$",
-            System.Text.RegularExpressions.RegexOptions.Singleline);
-        if (!m.Success) return baseName + Suffix;
-        var next = m.Groups["n"].Success && int.TryParse(m.Groups["n"].Value, out var n) ? n + 1 : 2;
-        return $"{m.Groups["head"].Value}{Suffix} {next}";
-    }
-
-    // «Продолжить в новом чате»: новый чат той же персоны с теми же настройками, но БЕЗ истории
-    // и транскрипта — только смысл (записку сервис шлёт первым сообщением). В отличие от
-    // BranchAsync не копирует транскрипт CLI, поэтому годится и локальному проекту. Групповой чат и
-    // режим «Командная реализация» не поддерживаются: их состояние живёт в Session, а не в записке.
-    // Старый чат НЕ архивируется и UpdatedAt не двигается; ссылки ставятся в обе стороны.
-    // Занятость чата проверяет вызывающий (ChatContinueService): ход передачи уже завершён.
-    internal async Task<Session> CreateContinuationAsync(string sessionId, string ownerId,
-        string? actorUserId = null)
-    {
-        // S1: участнику общего проекта отказ (GetOwned → 404): продолжение ушло бы в личное
-        // пространство вызывающего вместе с содержимым проекта. S2d-7b-1: чужой приватный чат
-        // не продолжается даже владельцем проекта. Видимость считаем по актору (MCP шлёт арендатора
-        // ownerId и человека-актора отдельно; REST — один и тот же id), поэтому не GetOwnedVisible
-        if (_store.GetOwned(sessionId, ownerId) is not { } source
-            || !_sessions.TryGetValue(sessionId, out _)
-            || (source.PrivateToUserId is not null && !VisibleTo(source, actorUserId ?? ownerId)))
-            throw new KeyNotFoundException("Чат не найден");
-
-        if (source.Participants is { Count: > 0 })
-            throw new ChatContinueNotSupportedException(
-                "Групповой чат нельзя продолжить в новом: состав спикеров живёт в чате");
-        if (source.TeamImplement is not null)
-            throw new ChatContinueNotSupportedException(
-                "Чат в режиме «Командная реализация» нельзя продолжить в новом: состояние волн живёт в чате");
-
-        var newName = ContinuationName(source.Name);
-        // Продолжение приватного чата остаётся приватным у того же автора (S2d-7b-1)
-        var privateAuthor = source.PrivateToUserId;
-        var created = !string.IsNullOrWhiteSpace(source.PersonaId)
-            ? await CreatePersonaChatAsync(ownerId, source.PersonaId!, source.Mode,
-                name: newName, contextProjectId: source.ProjectId,
-                createdByUserId: privateAuthor, privateToUserId: privateAuthor)
-            : source.ProjectId is not null
-                ? await CreateAsync(source.ProjectId, source.Mode, name: newName,
-                    model: source.Model, effort: source.Effort,
-                    createdByUserId: privateAuthor, privateToUserId: privateAuthor)
-                : await CreateChatAsync(ownerId, source.Mode, name: newName,
-                    model: source.Model, effort: source.Effort);
-
-        if (!_sessions.TryGetValue(created.Id, out var newEntry)) return created;
-        var n = newEntry.Info;
-        // Те же настройки, что у источника: персональная фабрика подставляет модель персоны, а не
-        // выбранную человеком в этом чате, поэтому модель/провайдер/effort переписываются ПОСЛЕ
-        n.Model = source.Model;
-        n.Provider = source.Provider;
-        n.Effort = source.Effort;
-        n.Mode = source.Mode;
-        n.AgentName = source.AgentName;
-        // Разрешённые «всегда» инструменты едут с работой: смысл передачи — не заставлять
-        // человека заново проходить карточек разрешений (в отличие от ветки, где это эскалация прав)
-        n.AutoAllowTools = [.. source.AutoAllowTools];
-        n.Context = [.. source.Context.Select(c => new SessionContextEntry
-            { Type = c.Type, Id = c.Id, Title = c.Title })];
-        n.VoiceMode = source.VoiceMode;
-        n.VoiceStyle = source.VoiceStyle;
-        n.NotificationsMuted = source.NotificationsMuted;
-        n.ExcludeFromDossiers = source.ExcludeFromDossiers;
-        // Рабочее дерево тот же путь, но владеет им по-прежнему источник (WorktreeOwned=false):
-        // удаление продолжения не снесёт дерево под старым чатом. Дерево есть только у проектного
-        // чата и до первого хода — как в AttachWorktreeAsync; следующий ход пересоздаст адаптер с cwd
-        if (source.WorktreePath is not null && n.ProjectId is not null)
-        {
-            n.WorktreePath = source.WorktreePath;
-            n.WorktreeBranch = source.WorktreeBranch;
-            n.WorktreeOwned = false;
-        }
-        // Model/Provider/Effort переписаны ПОСЛЕ создания адаптера (фабрика подставила модель
-        // персоны, а не выбранную человеком) — следующий ход обязан пересобрать адаптер с
-        // перенесёнными значениями, а не повторить путь персоны. Worktree-ветка тоже сюда:
-        // адаптер строится с cwd, не с дерева.
-        newEntry.AdapterStale = true;
-        n.ContinuedFromSessionId = sessionId;
-        source.ContinuedInSessionId = n.Id;
-        _store.SaveSessions();
-
-        await TurnEvents.PublishAsync(new Turn.SessionContinued(
-            new Turn.TurnContext(n.Id, ownerId, 0, 0, n.ProjectId), sessionId));
-        // Живое событие для владельца: человек, смотрящий исходный чат, перейдёт в новый
-        // (фронт решает по открытому чату). Рассылка в session- + project/user-группу
-        // исходного чата — тем же каналом, что и прочие уведомления сессии.
-        await _store.BroadcastSessionMessageAsync(sessionId, new ChatContinuedMessage(n.Id, n.ProjectId));
-        return n;
-    }
-
-    private bool VisibleTo(Session s, string userId) => _store.VisibleTo(s, userId);
 
     // === Фабрики чатов ===
 
@@ -719,7 +599,3 @@ public sealed class ChatCreation
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 }
-
-// Причина отказа «продолжить нельзя» жила в ChatContinueService (снят шагом B-1b); перенесена к
-// единственному оставшемуся бросающему (CreateContinuationAsync) и снимается шагом B-1c вместе с ним
-public sealed class ChatContinueNotSupportedException(string message) : Exception(message);

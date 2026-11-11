@@ -267,8 +267,8 @@ public class PersonasController(
         if (_personas.Get(id, UserId) is null) return NotFound();
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
         // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
-        // (contextProjectId, ChatCreation.cs:615) и чата вне проекта: ClaudeSessionId =
-        // resumeSessionId (:615/:640) — ключ истории (HistoryKeyOf) и транскрипта CLI.
+        // (contextProjectId, ChatCreation.cs:495) и чата вне проекта: ClaudeSessionId =
+        // resumeSessionId (:495/:520) — ключ истории (HistoryKeyOf) и транскрипта CLI.
         // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
         // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
         if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))

@@ -763,8 +763,8 @@ public sealed class ChatSettings
     /// каждая точка назначения обязана сама собрать набор и позвать его до записи. Точки входа:
     /// REST — создание чата с явной personaId (SessionsController.Create), чат от лица персоны
     /// (CreatePersonaChatAsync), групповой чат (CreateGroupChatAsync, SetParticipants), смена
-    /// собеседника (SetPersona), продолжение легаси-чата (ChatContinueService); MCP —
-    /// chats_create с projectId и явной personaId (WorkspaceToolset). CreateAsync рамку не
+    /// собеседника (SetPersona); MCP — chats_create с projectId и явной personaId
+    /// (WorkspaceToolset). CreateAsync рамку не
     /// проверяет — новый путь назначения обязан звать этот метод, а не писать свою проверку. Вердикт — по свойствам проекта, без актора (как в PluginDirSource):
     /// исключение приватного чата (S2d-1) здесь не реализовано — признака приватности в модели
     /// ещё нет, проверка встанет вместе с ним (см. комментарий TurnFrame.Resolve).
@@ -778,17 +778,6 @@ public sealed class ChatSettings
             if (persona is not null && persona.Scope == PersonaScope.Global)
                 throw new GlobalPersonaInSharedException(
                     $"Персона «{persona.Name}» — глобальная: в общем проекте она не может быть собеседником чата");
-    }
-
-    /// <summary>
-    /// Продолжение чата общего проекта с глобальной персоной (R-S2a-8): отказ ДО платного хода
-    /// передачи — иначе CreatePersonaChatAsync отказал бы уже после него. Чат вне проекта и
-    /// личный проект проходят (рамка Wide).
-    /// </summary>
-    public void EnsureContinuationPersonaAllowed(Session source, string ownerId)
-    {
-        if (string.IsNullOrWhiteSpace(source.PersonaId)) return;
-        EnsurePersonasVisibleInFrame(source.ProjectId, new[] { _personas.Get(source.PersonaId, ownerId) });
     }
 
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ

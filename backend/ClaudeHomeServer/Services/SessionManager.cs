@@ -896,24 +896,16 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
 
     // --- Создание и порождение чата (S3-5) ---
     // Тела ушли в Services/Sessions/ChatCreation.cs; сигнатуры фасада прежние: на них сидят
-    // контроллеры, тулсеты, ChatContinueService и ChatHandoffService. Типы ChatBranchInclude /
-    // ChatBranchResult живут в ядре (Services/Sessions/SessionCoreContracts.cs).
+    // контроллеры и тулсеты. Типы ChatBranchInclude / ChatBranchResult живут в ядре
+    // (Services/Sessions/SessionCoreContracts.cs).
     public async Task<ChatBranchResult> BranchAsync(string sessionId, string ownerId,
         int userMessageIndex, string anchorText, string include, string? name = null)
         => await _creation.BranchAsync(sessionId, ownerId, userMessageIndex, anchorText, include, name);
 
     public void EnsureHandoffAllowed(Session source) => _creation.EnsureHandoffAllowed(source);
 
-    public string? WarmHandoffBlocker(string sessionId) => _creation.WarmHandoffBlocker(sessionId);
-
     public Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
         => _creation.CreateHandoffChatAsync(source, ownerId, name);
-
-    internal static string ContinuationName(string? name) => ChatCreation.ContinuationName(name);
-
-    public async Task<Session> CreateContinuationAsync(string sessionId, string ownerId,
-        string? actorUserId = null)
-        => await _creation.CreateContinuationAsync(sessionId, ownerId, actorUserId);
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
@@ -1134,13 +1126,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     /// </summary>
     public void EnsurePersonasVisibleInFrame(string? projectId, IEnumerable<Persona?> personas) =>
         _settings.EnsurePersonasVisibleInFrame(projectId, personas);
-
-    /// <summary>
-    /// Продолжение чата общего проекта с глобальной персоной (R-S2a-8): отказ ДО платного хода
-    /// передачи. Чат вне проекта и личный проект проходят (рамка Wide).
-    /// </summary>
-    public void EnsureContinuationPersonaAllowed(Session source, string ownerId) =>
-        _settings.EnsureContinuationPersonaAllowed(source, ownerId);
 
     // Назначить/сменить собеседника чату (единый селектор): персону (personaId) ИЛИ
     // стандартного .md-агента Claude (agentName) — взаимоисключающе. Оба пустые = снять.

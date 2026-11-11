@@ -373,12 +373,35 @@ public class ChatHandoffServiceTests : IDisposable
         var events = new List<HumanMessageAccepted>();
         bus.OnNotification<HumanMessageAccepted>(e => { lock (events) events.Add(e); return Task.CompletedTask; },
             "ChatHandoffServiceTests");
-        // SendOverride не задан: подача идёт настоящим SendMessageAndWaitAsync
-        // Ход не завершится — ждём лишь, пока подача пройдёт издатель; результат не важен
+        // SendOverride не задан: подача идёт настоящим SendMessageAndWaitAsync.
+        // Ход не завершится — ждём лишь, пока просьба дойдёт до хода; результат не важен
         _ = sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
-        await Task.Delay(500);
+
+        // Положительный якорь доставки — аналог AssertTurnWasSent из HumanMessageAcceptedTests:
+        // настоящий процесс позван на подачу (MessageCount растёт на входе в
+        // ClaudeSession.SendMessageAsync). Без него «событий нет» значало бы лишь
+        // «ничего не произошло»: на медленной машине фиксированное ожидание зелёное впустую.
+        // Публикация HumanMessageAccepted (TurnIntake.PublishRestHumanMessage) стоит в пути
+        // раньше звена к процессу, а подписчики шины обходятся синхронно (TurnEventBus.
+        // PublishAsync) — к моменту якоря исход отрицательной проверки уже решён.
+        (await WaitForSentToProcessAsync(chat)).Should().BeTrue(
+            "просьба обязана дойти до хода: иначе «событий нет» значит лишь «ничего не произошло»");
 
         lock (events) events.Should().BeEmpty("передаточная просьба — не ответ человека на вопрос");
+    }
+
+    // Ожидание состояния, а не времени (тот же приём, что WaitForEventsAsync в
+    // HumanMessageAcceptedTests): пока просьба не дошла до реального процесса
+    // (MessageCount > 0) — короткий опрос; по истечении потолка тест красный на якоре.
+    private static async Task<bool> WaitForSentToProcessAsync(Session chat)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (chat.MessageCount > 0) return true;
+            await Task.Delay(20);
+        }
+        return false;
     }
 
     [Fact]

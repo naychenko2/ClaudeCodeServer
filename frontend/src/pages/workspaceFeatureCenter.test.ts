@@ -2608,3 +2608,26 @@ function toHashOf(s: any): string {
   else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
   return h;
 }
+
+// FS-F1c: onOpenFile(path, { taskId, branch }) со страницы фичи — тот же путь открытия, что из дерева
+// (navPush с file, без новых маршрутов); дерево и чат якорь задачи сбрасывают (проверка по исходнику).
+describe('FS-F1c: проводка taskId/branch со страницы фичи до FileViewer', () => {
+  const ws = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
+  const desk = readFileSync(new URL('./workspace/DesktopWorkspace.tsx', import.meta.url), 'utf8');
+  const fn = (name: string) => ws.slice(ws.indexOf(`const ${name} = `), ws.indexOf(`const ${name} = `) + 700);
+
+  it('страница фичи открывает файл через handleOpenFileFromFeature → открытие из дерева (navPush с file)', () => {
+    expect(ws).toContain('onOpenFile={handleOpenFileFromFeature}');
+    expect(desk).toContain('onOpenFile={p.onOpenFileFromFeature}');
+    expect(fn('handleOpenFileFromFeature')).toContain('handleOpenFileFromTree(filePath)');
+    expect(fn('handleOpenFileFromTree')).toContain("navPush({ screen: 'project', project, view: mobileView, file: filePath })");
+  });
+  it('taskId доходит до FileViewer на мобиле и десктопе', () => {
+    expect(ws).toContain('taskId={openFileTaskId}');
+    expect(desk.match(/taskId=\{p\.openFileTaskId\}/g)?.length).toBe(2);
+  });
+  it('открытие из дерева и из чата сбрасывает якорь задачи', () => {
+    expect(fn('handleOpenFileFromTree')).toContain('setOpenFileTask(null)');
+    expect(fn('handleOpenFileFromChat')).toContain('setOpenFileTask(null)');
+  });
+});

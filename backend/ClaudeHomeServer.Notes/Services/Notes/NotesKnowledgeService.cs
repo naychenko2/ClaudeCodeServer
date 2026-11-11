@@ -252,8 +252,13 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
             // её исключение по-прежнему пробрасывается наружу), уже записанные DocRef обязаны
             // попасть на диск — иначе после рестарта реестр указывает на удалённые документы
             // (дефект 7b3dc3db).
-            if (changed > 0) Save();
-            _syncLock.Release();
+            // Отказ самой записи не удерживает семафор и не затмевает исходное исключение
+            // прохода (ревью 48348ac9, Major 1): бросок из finally заменил бы его собой и
+            // оставил бы _syncLock занятым навсегда — поэтому ошибка записи ловится здесь
+            // и идёт отдельной строкой в лог, Release — безусловен.
+            try { if (changed > 0) Save(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Запись реестра синка заметок {User}", userId); }
+            finally { _syncLock.Release(); }
         }
     }
 

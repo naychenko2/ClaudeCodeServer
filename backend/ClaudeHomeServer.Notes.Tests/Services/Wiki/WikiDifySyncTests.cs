@@ -287,6 +287,64 @@ public class WikiDifySyncTests : IDisposable
         RegistryDocIds(ReadRegistry()).Should().Contain(docId);
     }
 
+    // ─── 8. Отказ записи реестра не удерживает семафор (ревью 48348ac9, Major 1) ──
+    //    Проба Глеба: Save() бросающий + два прохода подряд — второй обязан вернуться. ─
+
+    [Fact]
+    public async Task Синк_ОтказЗаписиРеестра_СемафорОсвобождён_ВторойПроходВозвращается()
+    {
+        // Невозможность записи — каталогом на месте файла реестра: File.Move поверх
+        // каталога падает и на Windows, и на Linux (тот же эффект, что у каталога
+        // данных только для чтения).
+        Directory.CreateDirectory(Path.Combine(_dir, "notes-knowledge.json"));
+        // Тот же порядок обхода, что в тесте 7: «Заметка-1» индексуется успешно (changed > 0),
+        // её DocRef идёт в Save() этого finally — он и отказывает.
+        var dir = Path.Combine(_dir, "notes", _userId);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Заметка-2.md"), "вторая заметка", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(dir, "Заметка-1.md"), "первая заметка", new UTF8Encoding(false));
+
+        // Первый проход: датасет создан, первая же запись реестра (сразу после создания
+        // датасета) бросает — это ещё не проверяемый путь, но состояние для него.
+        await Assert.ThrowsAsync<IOException>(() => _sut.SyncAllAsync(_userId));
+
+        // Второй проход: индексация доходит до конца, Save() в finally отказывает.
+        // С дефектом: бросок из finally наружу и семафор занят навсегда. Поэтому ожидание
+        // — гонка с таймаутом (Task.WhenAny), а не прямой await: зависший проход не вернётся никогда.
+        var second = _sut.SyncAllAsync(_userId);
+        (await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(10)))).Should().Be(second,
+            "отказ Save() не оставляет _syncLock занятым: второй проход обязан вернуться");
+        (await second).Should().Be(2);
+
+        // Третий проход — тоже возвращается: семафор свободен при любом исходе записи.
+        // Реестр на диске по-прежнему каталог (ничего не записано), в памяти — живой:
+        // хеши совпадают, повторной индексации нет.
+        var third = _sut.SyncAllAsync(_userId);
+        (await Task.WhenAny(third, Task.Delay(TimeSpan.FromSeconds(10)))).Should().Be(third);
+        (await third).Should().Be(0);
+        File.Exists(Path.Combine(_dir, "notes-knowledge.json")).Should().BeFalse();
+    }
+
+    // ─── 9. Отказ прохода и отказ записи: наружу — исключение прохода (c3) ───────
+
+    [Fact]
+    public async Task Синк_ОтказПроходаИОтказЗаписи_НаружуИдётИсключениеПрохода()
+    {
+        Directory.CreateDirectory(Path.Combine(_dir, "notes-knowledge.json")); // любой Save() падает
+        var dir = Path.Combine(_dir, "notes", _userId);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "Заметка-2.md"), "вторая заметка", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(dir, "Заметка-1.md"), "первая заметка", new UTF8Encoding(false));
+        _dify.FailCreateFor.Add("Заметка-2"); // ветка :notes бросает (тот же порядок, что в тесте 7)
+
+        await Assert.ThrowsAsync<IOException>(() => _sut.SyncAllAsync(_userId)); // как в тесте 8
+
+        // Исключение прохода (ветка :notes) идёт наружу; ошибка записи (тот же каталог) ловится
+        // в finally и логируется отдельно — с дефектом она затмила бы исходную (бросок из
+        // finally) и тест краснеет на типе исключения.
+        await Assert.ThrowsAsync<HttpRequestException>(() => _sut.SyncAllAsync(_userId));
+    }
+
     // Реестр на диске (notes-knowledge.json): { userId: { Docs: { id: { DocId, Hash } },
     // WikiDocs: … } } — имена свойств как в Entry/DocRef (JsonFileStore.Save без опций).
     private JsonDocument ReadRegistry() =>

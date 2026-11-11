@@ -192,7 +192,9 @@ public static class WikiChatSlicer
     // строка процесса цитатой разбора стать не может (Major 1 ревью 6cbc5e0a) и пометка
     // покрывает всю реплику (Major 2). Выдержка и Lines не понижаются (Excerpt — отдельный путь).
     // index и IsHuman те же — порядок и нумерация окна не двигаются. Всё остальное — как было.
-    private const string ProcessMarker = "[процесс] служебная реплика";
+    // Текст публичный: WikiPlanValidator отклоняет цитаты, составленные из маркера (хвост 78cfb639,
+    // минор 1 R-S2-5) — в продуктовом коде текст маркера один, из этой константы, не литерал.
+    public const string ProcessMarker = "[процесс] служебная реплика";
 
     private static List<Line> DemoteProcess(List<Line> lines) =>
         [.. lines.Select(l => !l.IsHuman && WikiProcessPatterns.IsProcessReply(l.Text)

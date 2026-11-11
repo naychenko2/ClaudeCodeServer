@@ -180,6 +180,38 @@ public class WikiPlanValidatorSynthTests
         r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("anti_loop");
     }
 
+    // Хвост S2-5 (минор 1 R-S2-5): строка-маркер пониженной реплики процесса буквально стоит
+    // в тексте окна, поэтому её текст проходит меру 1 как дословный. Цитата, составленная из
+    // маркера (часть, равная, с соседней строкой), отклоняется кодом; обычная цитата из того
+    // же окна проходит. Текст маркера — из константы WikiChatSlicer.ProcessMarker, не литерал.
+    private static readonly WikiPlanValidator.Source MarkerSrc = new(WikiGate.OriginSession, CardTitle,
+        "Решение: перенести сборку на Linux.\n" + WikiChatSlicer.ProcessMarker + "\nСборка занимает 12 минут.");
+
+    private static WikiPlanValidator.Result RunMarker(params WikiPlanValidator.SynthOp[] ops) =>
+        WikiPlanValidator.ValidateSynth(new([.. ops]), MarkerSrc, Section, [WikiSections.Common],
+            [new(CardPath, CardFile), new(PagePath, PageFile)], new());
+
+    [Theory]
+    [InlineData("служебная реплика")]
+    [InlineData(WikiChatSlicer.ProcessMarker)]
+    [InlineData("перенести сборку на Linux. " + WikiChatSlicer.ProcessMarker)]
+    public void ValidateSynth_ЦитатаСоставленнаяИзМаркераПроцесса_ОтказСПричиной(string quote)
+    {
+        var r = RunMarker(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", [quote]));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Be("цитата из служебной реплики");
+    }
+
+    [Fact]
+    public void ValidateSynth_ОбычнаяЦитатаИзОкнаСМаркером_Принята()
+    {
+        var r = RunMarker(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", [QLinux]));
+
+        r.Rejected.Should().BeEmpty();
+        r.Accepted.Should().ContainSingle();
+    }
+
     [Fact]
     public void ValidateSynth_ЦитатаЗанятаДругойСтраницей_Отказ()
     {

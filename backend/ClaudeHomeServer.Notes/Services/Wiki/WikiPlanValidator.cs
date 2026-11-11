@@ -535,7 +535,15 @@ public static class WikiPlanValidator
         {
             var q = quotes[n];
             if (!string.IsNullOrWhiteSpace(q) && QuoteMatcher.ContainsVerbatim(sourceText, q))
+            {
+                // Цитата из строки-маркера пониженной реплики процесса (хвост 78cfb639, минор 1
+                // R-S2-5): маркер буквально стоит в тексте окна (DemoteProcess), поэтому его текст
+                // — целый или часть — проходит меру 1 как дословный. Такая цитата — заполнитель,
+                // а не позиция участника: отклоняется, дальше операция не идёт.
+                if (IsProcessMarkerQuote(q))
+                    return "цитата из служебной реплики";
                 continue;
+            }
             var antiLoop = !string.IsNullOrWhiteSpace(q) && page.Model is not null
                 && QuoteMatcher.ContainsVerbatim(page.Content, q);
             if (antiLoop)
@@ -545,6 +553,18 @@ public static class WikiPlanValidator
                 : "цитата отсутствует в тексте источника дословно";
         }
         return null;
+    }
+
+    // Цитата, составленная из текста маркера: равна ему, содержит его или является его частью.
+    // Сверка по нормализованным строкам (та же нормализация, что у меры 1): схлопывание
+    // пробелов и сворачивание кавычек не должны делать маркер «невидимым». Текст маркера —
+    // одна константа WikiChatSlicer.ProcessMarker, не дублируемый литерал.
+    private static bool IsProcessMarkerQuote(string quote)
+    {
+        var q = QuoteMatcher.NormalizeQuote(quote);
+        if (q.Length == 0) return false;
+        var marker = QuoteMatcher.NormalizeQuote(WikiChatSlicer.ProcessMarker);
+        return q.Contains(marker, StringComparison.Ordinal) || marker.Contains(q, StringComparison.Ordinal);
     }
 
     private static string? QuoteOwnerError(

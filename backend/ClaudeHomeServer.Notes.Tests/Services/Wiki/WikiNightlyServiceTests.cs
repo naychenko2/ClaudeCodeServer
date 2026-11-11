@@ -1090,6 +1090,21 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ОтброшенныеОперации_СуммируютсяВИтогеСПервойПричиной()
+    {
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 10,
+            Dropped: chat == "c1" ? 2 : 3, FirstDropReason: "причина " + chat))));
+
+        var last = Last();
+        last.Dropped.Should().Be(5);
+        last.FirstDropReason.Should().Be("причина c1");
+    }
+
+    [Fact]
     public async Task ОтказаныНеВсеНулевойВход_ИтогCompleted_НочьНеПовторяется()
     {
         // Граница инварианта «не все разборы отказаны» (R-WN-2, находка 1): конъюнкта

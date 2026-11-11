@@ -107,9 +107,14 @@ public sealed class WikiIngestService
     /// токены этого разбора (WC-4a): 0 — пока ни один вызов модели не ответил (отказ входа,
     /// карточки, раздела; отказ вызова, после которого ничего не отвечало); после первого
     /// ответившего вызова — сумма всех состоявшихся вызовов прогона независимо от исхода:
-    /// отказанный план расход не отменяет (он понесён).</summary>
+    /// отказанный план расход не отменяет (он понесён). Dropped/DropReasons — операции синтеза,
+    /// отброшенные проверками кода при пакете из принятых (поштучный приём): число и первые
+    /// MaxDropReasons причин; 0/null — отбрасывать было нечего.</summary>
     public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
-        long InputTokens = 0);
+        long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null);
+
+    /// <summary>Сколько причин отброшенных операций нести в исходе.</summary>
+    public const int MaxDropReasons = 3;
 
     private readonly ICheapTextRunner _llm;
     private readonly ISphereDirectory _spheres;
@@ -382,7 +387,9 @@ public sealed class WikiIngestService
             // Инвариант: ни одна операция синтеза не попадает в пакет мимо ValidateSynth.
             var verdict = WikiPlanValidator.ValidateSynth(
                 plan, source, sectionKey, upChain, sectionPages, policy);
-            if (verdict.Rejected.Count > 0)
+            // Поштучный приём: пакет собирается из Accepted одного вызова, Rejected отбрасываются.
+            // Ремонт — только когда не принялось ничего, а отказы есть.
+            if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
             {
                 var issues = verdict.Rejected.Select(i => i.Reason).ToList();
                 var repairPrompt =
@@ -410,7 +417,7 @@ public sealed class WikiIngestService
                 verdict = WikiPlanValidator.ValidateSynth(
                     planR, source, sectionKey, upChain, sectionPages,
                     policy with { PackageAfterModelRepair = true });
-                if (verdict.Rejected.Count > 0)
+                if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
                     return WithSectionIssues(
                         RejectedUsed("план после одной попытки ремонта снова отклонён кодом: "
                             + FirstReason(verdict)), verdict);
@@ -827,6 +834,14 @@ public sealed class WikiIngestService
     /// отдельной частью причины исхода (ревью S6b-3, M2).</summary>
     private static IngestResult WithSectionIssues(IngestResult r, WikiPlanValidator.Result verdict)
     {
+        // Отброшенные при пакете из принятых: Rejected при Accepted > 0 — только на этом пути
+        // (при Accepted == 0 отказы ушли в ремонт или в исход rejected, это не «отбрасывание»).
+        if (verdict.Accepted.Count > 0 && verdict.Rejected.Count > 0)
+            r = r with
+            {
+                Dropped = verdict.Rejected.Count,
+                DropReasons = verdict.Rejected.Take(MaxDropReasons).Select(i => i.Reason).ToList(),
+            };
         if (verdict.Violations.Count == 0)
             return r;
         var issues = "в разделе есть нарушения: " + string.Join("; ", verdict.Violations);

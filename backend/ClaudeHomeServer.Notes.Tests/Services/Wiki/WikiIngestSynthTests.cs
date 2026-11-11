@@ -207,6 +207,75 @@ public class WikiIngestSynthTests : IDisposable
         PackagesOnDisk().Should().BeEmpty("операция без цитат в пакет не попала");
     }
 
+    // ── поштучный приём ──
+
+    private const string BadQuote = "Цитаты в источнике нет вообще";
+
+    [Fact]
+    public async Task Поштучно_ОднаОперацияНеДословна_ВПакетТолькоПринятая_БезРемонта_ПричинаВDropped()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
+            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]));
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        llm.Calls.Select(c => c.Pass).Should().Equal("S");
+        res.Outcome.Should().NotBe(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Dropped.Should().Be(1);
+        res.DropReasons.Should().ContainSingle().Which.Should().Contain("отсутствует в источнике дословно");
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        pkg.Operations.Should().ContainSingle().Which.Claim.Should().Be(Claim1);
+    }
+
+    [Fact]
+    public async Task Поштучно_ВсеПринятыДва_Dropped0()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
+            WikiSynthJson.Op("append", PageTitle, "Контейнер собран отдельно", [Quote2]));
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Dropped.Should().Be(0);
+        res.DropReasons.Should().BeNull();
+        WikiPackageStore.TryRead(Root, res.PackageId!).Package!.Operations.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task Поштучно_РемонтДалПланСОдной_Плохой_ПринятаяВПакете_ОтброшеннаяВDropped()
+    {
+        var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
+        var repaired = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
+            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]));
+        var llm = new FakeLlm(bad, repair: repaired);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        llm.Calls.Select(c => c.Pass).Should().Equal("S", "R");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.Dropped.Should().Be(1);
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        pkg.Operations.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionInbox);
+    }
+
+    [Fact]
+    public async Task Поштучно_РемонтНичегоНеПринял_Rejected_СПервойПричиной()
+    {
+        var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
+        var llm = new FakeLlm(bad, repair: bad);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("отсутствует в источнике дословно");
+        res.Dropped.Should().Be(0);
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
     // ── разбор ответа ──
 
     [Fact]

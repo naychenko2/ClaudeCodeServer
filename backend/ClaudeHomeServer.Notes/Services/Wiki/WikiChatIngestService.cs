@@ -132,7 +132,7 @@ public sealed class WikiChatIngestService
     public readonly record struct ChatResult(
         string Outcome, string? Reason, IReadOnlyList<string> PackageIds, string? Code = null,
         int OverrodeHuman = 0, IReadOnlyList<string>? DisputedPages = null, bool Partial = false,
-        long InputTokens = 0);
+        long InputTokens = 0, int Dropped = 0, string? FirstDropReason = null);
 
     /// <summary>Последний исход разбора чата с временем окончания (S7b0a, чтение
     /// analyze-status и списка).</summary>
@@ -411,6 +411,9 @@ public sealed class WikiChatIngestService
         // Входные токены разбора (WC-4a): сумма по всем разобранным окнам, независимо от их
         // исхода — окно, отказанное после ответившего вызова, расход тоже понесло.
         long inputTokens = 0;
+        // Операции синтеза, отброшенные поштучным приёмом, по всем окнам (число и первая причина).
+        var dropped = 0;
+        string? firstDropReason = null;
 
         // Отказ окна: применённого ещё нет — отказ всего разбора (курсор на месте, хроника
         // не начинается, как было). Есть применённое — частичный исход: запомнить причину,
@@ -443,6 +446,8 @@ public sealed class WikiChatIngestService
             // Расход окна прибавляется до разбора его исхода: он не зависит от того, чем
             // окно закончилось (applied, nothing_new, отказ после модели) (WC-4a).
             inputTokens += ing.InputTokens;
+            dropped += ing.Dropped;
+            if (ing.DropReasons is { Count: > 0 } dr) firstDropReason ??= dr[0];
             switch (ing.Outcome)
             {
                 case WikiIngestService.OutcomeApplied:
@@ -482,7 +487,8 @@ public sealed class WikiChatIngestService
                 ZoneNothingNew, nothingReason, (entry?.NothingNewStreak ?? 0) + 1, default));
             if (!up.Ok)
                 return Refused(null, $"исход разбора не записан: {up.Reason}", inputTokens);
-            return new ChatResult(OutcomeNothingNew, nothingReason, [], InputTokens: inputTokens);
+            return new ChatResult(OutcomeNothingNew, nothingReason, [], InputTokens: inputTokens,
+                Dropped: dropped, FirstDropReason: firstDropReason);
         }
 
         if (applied.Count == 0)
@@ -492,7 +498,7 @@ public sealed class WikiChatIngestService
             // не пишется: её утверждения — из применённых пакетов.
             return new ChatResult(OutcomeAwaitingHuman,
                 "в разборе есть спорные пакеты: их решает человек («Входящие»)", [],
-                InputTokens: inputTokens);
+                InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason);
         }
 
         var (chronicleOk, chronicleReason) = await AppendChronicleAsync(ownerId, home, session, sessionId, applied);
@@ -532,7 +538,7 @@ public sealed class WikiChatIngestService
         // перечёркнуто, но вызывающий видит, что разбор оборвался (WC-3).
         return new ChatResult(OutcomeApplied, failedReason, applied.Select(a => a.PackageId).ToList(),
             OverrodeHuman: overrodeHuman, DisputedPages: disputed, Partial: failedReason is not null,
-            InputTokens: inputTokens);
+            InputTokens: inputTokens, Dropped: dropped, FirstDropReason: firstDropReason);
     }
 
     // ── хроника чата ───────────────────────────────────────────────────────────────

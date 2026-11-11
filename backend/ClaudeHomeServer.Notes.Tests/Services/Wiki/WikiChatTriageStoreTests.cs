@@ -369,7 +369,7 @@ public class WikiChatTriageStoreTests : IDisposable
     // ─── C2R-Sh2: RejectStreak ─────────────────────────────────────────────
 
     [Fact]
-    public void RejectStreak_СтарыйФайлБезПоля_ЧитаетсяБезСерии_ИЗаписьОкругляетсяКакЕсть()
+    public void RejectStreak_СтарыйФайлБезПоля_ЧитаетсяБезСерии()
     {
         WriteRaw($$"""[{"sessionId":"old","cursor":3,"cursorHash":"{{Hash}}","zone":null,"reason":null,"nothingNewStreak":0,"triagedAt":"{{Date}}"}]""");
         var read = WikiChatTriageStore.Get(_root);

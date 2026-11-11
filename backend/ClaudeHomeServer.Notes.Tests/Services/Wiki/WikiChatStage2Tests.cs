@@ -383,6 +383,22 @@ public class WikiChatStage2Tests : IDisposable
         WikiChatsController.ShownReason(E(null, "excluded", "triage")).Should().Be("причина 1");
     }
 
+    // Доработка C2R-Sh2 (ревью 59d1dfee, M2): ветка rejected_skipped у ShownZone/ShownReason
+    // (WikiChatsController.cs:104-112) тестом не была закрыта. Зона отказа разбора — с
+    // непустой stage1Zone: она показывается поверх обеих ступеней, причина — из разбора.
+    [Fact]
+    public void ПоказаннаяЗона_ОтказРазбораПерекрываетОбеСтупени()
+    {
+        var e = new WikiChatTriageEntry("c", 0, null, WikiChatIngestService.ZoneRejectedSkipped,
+            "окно m1-m5 не удалось: модель ответила прозой", 0, default,
+            5, null, "gray", "причина 1", "triage", "причина 2", 3);
+
+        WikiChatsController.ShownZone(e).Should().Be(WikiChatIngestService.ZoneRejectedSkipped,
+            "отказ разбора показывается поверх ступени 1 и ступени 2");
+        WikiChatsController.ShownReason(e).Should().Be("окно m1-m5 не удалось: модель ответила прозой",
+            "причина — разбора, а не пересчёта");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private WikiChatStage2 Stage2() => new(_llm, _sessions, _config);

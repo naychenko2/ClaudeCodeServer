@@ -1360,6 +1360,42 @@ public class WikiChatIngestTests : IDisposable
         WikiChatTriageStore.Get(Root).Entries.Single().RejectStreak.Should().Be(0);
     }
 
+    // Доработка C2R-Sh2 (ревью 59d1dfee, M1): применённый разбор обнуляет серию отказов —
+    // писатель WikiChatIngestService.cs:543 пишет RejectStreak: 0 поверх прежней серии.
+    // Мутация «писатель сохраняет cur.RejectStreak» → красное: серия остаётся 2.
+    [Fact]
+    public async Task C2R_ПрименённыйРазбор_ОбнуляетСериюОтказов()
+    {
+        AddSession();
+        SetShortHistory();
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry(
+            ChatId, 0, null, null, null, 0, default, RejectStreak: 2)).Ok.Should().BeTrue();
+
+        var res = await Sut(new FakeLlm(("S", Synth(Claim1)))).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.RejectStreak.Should().Be(0, "разбор с применённым пакетом не продолжает ряд отказов");
+    }
+
+    // Доработка C2R-Sh2 (ревью 59d1dfee, M1): и исход «Входящих» обнуляет серию — писатель
+    // WikiChatIngestService.cs:516. Мутация «писатель сохраняет cur.RejectStreak» → красное.
+    [Fact]
+    public async Task C2R_ИсходAwaitingHuman_ОбнуляетСериюОтказов()
+    {
+        AddSession();
+        SetShortHistory();
+        DisableAppendClass();
+        WikiChatTriageStore.Upsert(Root, new WikiChatTriageEntry(
+            ChatId, 0, null, null, null, 0, default, RejectStreak: 2)).Ok.Should().BeTrue();
+
+        var res = await Sut(new FakeLlm(("S", Synth(Claim1)))).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+        WikiChatTriageStore.Get(Root).Entries.Single().RejectStreak
+            .Should().Be(0, "окно отдано человеку разобранным: серия не переносится в следующую ночь");
+    }
+
     // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──
     // Отдельного решения «само / Входящие» у этого пути нет: он зовёт WikiIngestService
     // (WikiChatIngestService.cs:238), а тот читает settings.json владельца (мера 7).

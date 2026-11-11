@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { C, FONT, FS, SP, TB } from '../../../lib/design';
 import { useFeaturesIndex, featureOf } from '../../../lib/featuresIndex';
 import { useFeatureRuns } from '../../../lib/featureRuns';
@@ -64,6 +64,10 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
   // запись после рендера перекрашивает подпись «К фиче» без перемонтирования.
   const featureBack = useFeatureBackNav(sessionId);
   const [selIdx, setSelIdx] = useState(0);
+  // Смена чата — сброс выбора: ChatPanel в воркспейсе не перемонтируется (тот же
+  // экземпляр на все чаты), иначе после «ещё N» в чате A карточка чата B показала бы
+  // его N-ю фичу вместо первой. Тот же щит, что у FeatureBanner.
+  useEffect(() => { setSelIdx(0); }, [sessionId]);
 
   // Ключ карточки: первая фича из featureOf, если не выбрана через «ещё N» (цикл — локальный индекс).
   const entries = featureOf(sessionId);

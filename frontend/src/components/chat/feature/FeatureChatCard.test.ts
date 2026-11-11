@@ -287,6 +287,44 @@ describe('FeatureChatCard: несколько фич у чата', () => {
     click(cycle);
     expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-title')!), 'цикл не показал вторую фичу').toBe('Вторая фича');
   });
+
+  it('смена чата на живом компоненте: выбор сбрасывается — карточка нового чата показывает ЕГО первую фичу', async () => {
+    // s1 и s2 — по две фичи у каждого: без сброса selIdx после «ещё 1» в s1 карточка s2
+    // показала бы вторую фичу s2. Тот же корень, что в воркспейсе (ChatPanel не перемонтируется).
+    const f1 = feat({ featureId: 'f1', title: 'Первая фича s1', ...indexProgress });
+    const f2 = feat({ featureId: 'f2', title: 'Вторая фича s1' });
+    const f3 = feat({ featureId: 'f3', title: 'Первая фича s2', ...indexProgress });
+    const f4 = feat({ featureId: 'f4', title: 'Вторая фича s2' });
+    const idx = {
+      features: [f1, f2, f3, f4],
+      chats: {
+        's1': [
+          { featureId: 'f1', kind: 'executor', taskRole: 'step', stepRef: 'Ш8', lane: 'front' },
+          { featureId: 'f2', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+        ],
+        's2': [
+          { featureId: 'f3', kind: 'executor', taskRole: 'step', stepRef: 'Ш1', lane: 'front' },
+          { featureId: 'f4', kind: 'executor', taskRole: null, stepRef: null, lane: null },
+        ],
+      },
+    } as FeaturesIndex;
+    indexStore.reset(); indexStore.setIndex('p1', idx); data.index = idx;
+    const { root, container } = mount(createElement(FeatureChatCard, {
+      sessionId: 's1', projectId: 'p1', isMobile: false,
+      onFocusComposer: () => { focusCount++; },
+    }));
+    roots.push(root);
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    const title = () => textOf(findNodeByAttr(container, 'data-testid', 'feature-card-title')!);
+    expect(title()).toBe('Первая фича s1');
+    click(findNodeByAttr(container, 'data-testid', 'feature-card-cycle'));
+    expect(title(), 'цикл внутри s1 не показал вторую фичу').toBe('Вторая фича s1');
+    // Воркспейс переключил чат: ТОТ ЖЕ корень, sessionId → s2.
+    act(() => { root.render(createElement(FeatureChatCard, { sessionId: 's2', projectId: 'p1', isMobile: false, onFocusComposer: () => { focusCount++; } })); });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-chat-card'), 'карточка перемонтирована').not.toBeNull();
+    expect(title(), 'после смены чата карточка показывает не первую фичу').toBe('Первая фича s2');
+  });
 });
 
 describe('FeatureChatCard: мобила 360', () => {

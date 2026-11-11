@@ -16,7 +16,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionList } from './SessionList';
 import { setAllFlags } from '../lib/featureFlags';
 import { __test as featuresIndexTest } from '../lib/featuresIndex';
-import { type FeatureKind } from '../lib/chatFilters';
+import { ALL_FEATURE_KINDS, type FeatureKind } from '../lib/chatFilters';
 import type { Project } from '../types';
 
 // useSubjectRun — useSyncExternalStore БЕЗ getServerSnapshot: legacy-SSR-рендерер
@@ -413,6 +413,28 @@ describe('SessionList: FS-FL2b режим фич секциями', () => {
     for (const t of ['FICH_W', 'FICH_S', 'FICH_Q']) expect(countTitle(container, t), t).toBe(1);
     expect(parentOfTextStart(container, 'Показаны'), 'строка «Показаны» осталась').toBeNull();
     expect(parentOfTextStart(container, 'Сбросить'), 'кнопка «Сбросить» оси осталась').toBeNull();
+  });
+
+  // Инвариант: индекс из 9 фич (по одной на каждый kind), «Закрытые» раскрыты → групп ровно 9.
+  // Мутация: отбор по сохранённому featureKinds (старый featureMatchesKinds) → групп меньше, красный.
+  it('инвариант: 9 фич по одной на каждый kind, «Закрытые» раскрыты → заголовков групп ровно 9, дублей нет', async () => {
+    const all = ALL_FEATURE_KINDS.map((k, i) => feat(`k${i}`, k, `KIND_${k}`));
+    const chats: Record<string, ReturnType<typeof link>> = {};
+    all.forEach((f, i) => { chats[`c${i}`] = link(f.featureId); });
+    featuresIndexTest.reset();
+    const idx9 = { features: all, chats };
+    featuresIndexTest.setIndex('p1', idx9);
+    mockIndex = idx9;
+    mockSessions = all.map((_, i) => s(`c${i}`));
+    store.clear();
+    // сохранённая ось, которая раньше сузила бы список до одной фичи
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['waiting_you'] }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(allTestIds(container, 'feature-group-header'), 'число заголовков групп').toHaveLength(9);
+    for (const k of ALL_FEATURE_KINDS) expect(countTitle(container, `KIND_${k}`), `KIND_${k}`).toBe(1);
   });
 
   it('только error → подпись секции «Стоят», не «Ждут тебя»', async () => {

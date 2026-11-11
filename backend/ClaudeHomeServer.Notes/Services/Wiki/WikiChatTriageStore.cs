@@ -54,7 +54,7 @@ public static class WikiChatTriageStore
     // Имена известных полей записи — контракт S6e-1 + S6f. Всё, что не в этом списке, — чужое
     // поле (будущие шаги): оно сохраняется при правке записи как есть.
     private static readonly string[] KnownFieldNames =
-        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "triagedAt",
+        ["sessionId", "cursor", "cursorHash", "zone", "reason", "nothingNewStreak", "rejectStreak", "triagedAt",
          "score", "signals", "stage1Zone", "stage1Reason",
          "stage2Zone", "stage2Reason", "stage2HistoryCount"];
 
@@ -110,14 +110,23 @@ public static class WikiChatTriageStore
         // Форма входа — вне блока: запись без ключа не должна держать корень.
         if (string.IsNullOrWhiteSpace(entry.SessionId))
             return Fail(CodeShape, "у записи нет sessionId — ключа чата");
-        if (entry.Cursor < 0)
-            return Fail(CodeShape, $"курсор не может быть отрицательным: {entry.Cursor}");
-        if (entry.NothingNewStreak < 0)
-            return Fail(CodeShape, $"nothingNewStreak не может быть отрицательным: {entry.NothingNewStreak}");
+        return Update(root, entry.SessionId, _ => entry, log);
+    }
+
+    /// <summary>Атомарное «прочитать → изменить → записать» записи разбора (C2R-Sh2): build
+    /// получает запись, прочитанную ВНУТРИ блока корня (null — записи ещё нет), и возвращает
+    /// новую; серия отказов и курсор считаются из неё, а не из прочтения, сделанного до блока
+    /// (иначе параллельный разбор/пересчёт той же сессии теряет поле соседа). Перенос полей
+    /// скорера, ступени 2 и чужих — как у Upsert. Форма результата проверяется здесь же.</summary>
+    public static WikiTriageOpResult Update(
+        string root, string sessionId, Func<WikiChatTriageEntry?, WikiChatTriageEntry> build, ILogger? log = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return Fail(CodeShape, "у записи нет sessionId — ключа чата");
 
         return WithRootLock<WikiTriageOpResult>(root, () =>
         {
-            var (state, nodes, _) = ReadAll(root);
+            var (state, nodes, entries) = ReadAll(root);
             if (state == WikiTriageFileState.Invalid)
             {
                 // Тот же fail-closed, что у RecordApplied: слить правку с нечитаемым файлом
@@ -125,6 +134,17 @@ public static class WikiChatTriageStore
                 log?.LogWarning("Стор разбора чатов нечитаем, запись невозможна: {Path}", TriageRelPath);
                 return Fail(CodeInvalid, "файл разбора чатов не читается — запись в него невозможна");
             }
+
+            var current = entries.FirstOrDefault(e => e.SessionId == sessionId);
+            var entry = build(current);
+            if (entry.SessionId != sessionId)
+                return Fail(CodeShape, "sessionId записи не совпадает с ключом обновления");
+            if (entry.Cursor < 0)
+                return Fail(CodeShape, $"курсор не может быть отрицательным: {entry.Cursor}");
+            if (entry.NothingNewStreak < 0)
+                return Fail(CodeShape, $"nothingNewStreak не может быть отрицательным: {entry.NothingNewStreak}");
+            if (entry.RejectStreak is < 0)
+                return Fail(CodeShape, $"rejectStreak не может быть отрицательным: {entry.RejectStreak}");
 
             var stamped = entry with { TriagedAt = DateTimeOffset.UtcNow };
             var fresh = (JsonObject)JsonSerializer.SerializeToNode(stamped, JsonOpts)!;
@@ -134,7 +154,7 @@ public static class WikiChatTriageStore
                 // Замена записи целиком канонической формой + перенос полей, которых этот
                 // писатель не касается: неизвестные (поля будущих шагов) и поля скорера —
                 // известные, но принадлежащие другому писателю (M2). Известные поля разбора
-                // всегда в порядке записи (diff стора читаем).
+                // (включая rejectStreak) всегда в порядке записи (diff стора читаем).
                 var old = (JsonObject)nodes[idx]!;
                 foreach (var (key, value) in old)
                     if (!KnownFieldNames.Contains(key) || ScorerFieldNames.Contains(key)
@@ -361,6 +381,11 @@ public static class WikiChatTriageStore
                 var stage2Count = ReadInt(obj, "stage2HistoryCount");
                 if (stage2Count is < 0)
                     return null;
+                // Серия отказов после ответа модели (C2R-Sh2): необязательна, старый файл без
+                // поля читается как 0 (аддитивное поле, BackupSchema.Version не растёт).
+                var rejectStreak = ReadInt(obj, "rejectStreak");
+                if (rejectStreak is < 0)
+                    return null;
                 var signalsNode = obj["signals"];
                 List<WikiTriageSignal>? signals = null;
                 if (signalsNode is not null && signalsNode.GetValueKind() != JsonValueKind.Null)
@@ -381,7 +406,7 @@ public static class WikiChatTriageStore
                     ReadString(obj, "stage1Reason"),
                     ReadString(obj, "stage2Zone"),
                     ReadString(obj, "stage2Reason"),
-                    stage2Count));
+                    stage2Count, rejectStreak));
             }
         }
         catch (JsonException) { return null; }
@@ -481,7 +506,8 @@ public sealed record WikiChatTriageEntry(
     string? Stage1Reason = null,
     string? Stage2Zone = null,
     string? Stage2Reason = null,
-    int? Stage2HistoryCount = null);
+    int? Stage2HistoryCount = null,
+    int? RejectStreak = null);
 
 /// <summary>Один сигнал ступени 1 в записи стора: имя — стабильный идентификатор из
 /// WikiChatScorer (метку для человека рисует вызывающий), вес — вклад в балл (штраф —

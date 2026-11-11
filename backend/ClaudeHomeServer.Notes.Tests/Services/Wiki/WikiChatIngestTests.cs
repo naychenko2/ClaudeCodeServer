@@ -435,7 +435,9 @@ public class WikiChatIngestTests : IDisposable
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("из манифеста раздела отсутствует на диске", "причина применения доходит до вызывающего");
-        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой — курсор не двигается");
+        var failed = WikiChatTriageStore.Get(Root).Entries.Single();
+        failed.Cursor.Should().Be(0, "сбой — курсор не двигается");
+        failed.RejectStreak.Should().Be(1, "отказ после ответа модели наращивает серию");
         ChronicleFiles().Should().BeEmpty("сбой не оставляет половины хроники");
     }
 
@@ -1120,7 +1122,9 @@ public class WikiChatIngestTests : IDisposable
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("окна m", "названо окно, на котором разбор оборвался");
         llm.CountOf("S").Should().Be(2, "первое окно разобрано («нечего добавить»), второе — отказано");
-        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("отказ при неприменённом курсор не двигает");
+        var refusedEntry = WikiChatTriageStore.Get(Root).Entries.Single();
+        refusedEntry.Cursor.Should().Be(0, "отказ при неприменённом курсор не двигает");
+        refusedEntry.RejectStreak.Should().Be(1, "отказ после ответа модели наращивает серию");
         ChronicleFiles().Should().BeEmpty("хроника не начинается половиной разбора");
     }
 
@@ -1268,6 +1272,90 @@ public class WikiChatIngestTests : IDisposable
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, res.Reason);
         res.InputTokens.Should().Be(100, "«нечего добавить» не отменяет понесённого расхода");
+    }
+
+    // ── C2R-Sh2: курсор при awaiting_human, RejectStreak, пропуск окна после 3 отказов ──
+
+    private void DisableAppendClass() => WikiSettingsStore.Mutate(_dir, User, s => s with
+    {
+        Classes = [new WikiSettingsStore.ClassState(
+            WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+            "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+    });
+
+    // Окно отдано во «Входящие» (одни awaiting_human): курсор встаёт на конец истории,
+    // хроники нет, повторный разбор — up_to_date и не плодит второй пакет.
+    // Мутация «не двигать курсор при applied.Count == 0» → второй разбор повторяет окно.
+    [Fact]
+    public async Task C2R_AwaitingHuman_КурсорДвигается_ПовторНеПлодитПакет()
+    {
+        AddSession();
+        SetShortHistory();
+        DisableAppendClass();
+
+        var res = await Sut(new FakeLlm(("S", Synth(Claim1)))).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(5, "окно разобрано: курсор на конце истории");
+        entry.CursorHash.Should().NotBeNullOrEmpty();
+        ChronicleFiles().Should().BeEmpty("хроника — только из применённых пакетов");
+
+        var again = await Sut(new FakeLlm()).AnalyzeAsync(User, ChatId);
+        again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
+        WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "дубль-пакета нет");
+    }
+
+    // Три отказа подряд ПОСЛЕ ответа модели: на третьем курсор переходит через окно,
+    // зона rejected_skipped с причиной последнего отказа, серия обнулена.
+    // Мутация «порог 3 → 4» или «не наращивать серию» → красное на втором/третьем прогоне.
+    [Fact]
+    public async Task C2R_ТриОтказаПослеМодели_КурсорПереходитЧерезОкно()
+    {
+        AddSession();
+        SetShortHistory();
+
+        for (var i = 1; i <= 2; i++)
+        {
+            var r = await Sut(new FakeLlm(("S", "модель ответила прозой вместо JSON"))).AnalyzeAsync(User, ChatId);
+            r.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, r.Reason);
+            var e = WikiChatTriageStore.Get(Root).Entries.Single();
+            e.RejectStreak.Should().Be(i);
+            e.Cursor.Should().Be(0, "до третьего отказа окно не пропускается");
+        }
+
+        var third = await Sut(new FakeLlm(("S", "модель ответила прозой вместо JSON"))).AnalyzeAsync(User, ChatId);
+        third.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, third.Reason);
+        third.Reason.Should().Contain("пропущено");
+        var skipped = WikiChatTriageStore.Get(Root).Entries.Single();
+        skipped.Cursor.Should().Be(5);
+        skipped.Zone.Should().Be(WikiChatIngestService.ZoneRejectedSkipped);
+        skipped.Reason.Should().Contain("не удался", "причина последнего отказа");
+        skipped.RejectStreak.Should().Be(0);
+    }
+
+    // Отказ ДО модели (InputTokens == 0) серию не наращивает; разобранный исход её обнуляет.
+    [Fact]
+    public async Task C2R_ОтказДоМодели_СерияНеРастёт_РазобранныйИсходОбнуляет()
+    {
+        AddSession();
+        SetShortHistory();
+
+        for (var i = 0; i < 4; i++)
+        {
+            var llm = new FakeLlm(("S", "ответ без JSON")) { InputTokensByCall = [0] };
+            var r = await Sut(llm).AnalyzeAsync(User, ChatId);
+            r.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, r.Reason);
+        }
+        WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("отказы до модели стор не трогают");
+
+        (await Sut(new FakeLlm(("S", "ответ без JSON"))).AnalyzeAsync(User, ChatId)).Outcome
+            .Should().Be(WikiChatIngestService.OutcomeRejected);
+        WikiChatTriageStore.Get(Root).Entries.Single().RejectStreak.Should().Be(1);
+
+        var ok = await Sut(new FakeLlm(("S", NothingJson))).AnalyzeAsync(User, ChatId);
+        ok.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, ok.Reason);
+        WikiChatTriageStore.Get(Root).Entries.Single().RejectStreak.Should().Be(0);
     }
 
     // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──

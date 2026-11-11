@@ -83,7 +83,8 @@ public class WikiChatsController : ControllerBase
     // запись из списка.
     private static readonly string[] ZoneOrder =
         [WikiChatScorer.ZoneTriage, WikiChatScorer.ZoneGray, WikiChatScorer.ZoneSkipped,
-         WikiChatIngestService.ZoneNothingNew, WikiChatScorer.ZoneExcluded];
+         WikiChatIngestService.ZoneNothingNew, WikiChatIngestService.ZoneRejectedSkipped,
+         WikiChatScorer.ZoneExcluded];
 
     private static int ZoneRank(string zone)
     {
@@ -101,12 +102,12 @@ public class WikiChatsController : ControllerBase
         e.Stage2Zone is not null && e.Stage1Zone == WikiChatScorer.ZoneGray;
 
     internal static string ShownZone(WikiChatTriageEntry e) =>
-        e.Zone == WikiChatIngestService.ZoneNothingNew
+        e.Zone is WikiChatIngestService.ZoneNothingNew or WikiChatIngestService.ZoneRejectedSkipped
             ? e.Zone
             : Stage2Applies(e) ? e.Stage2Zone! : e.Stage1Zone ?? e.Zone ?? "";
 
     internal static string? ShownReason(WikiChatTriageEntry e) =>
-        e.Zone == WikiChatIngestService.ZoneNothingNew ? e.Reason
+        e.Zone is WikiChatIngestService.ZoneNothingNew or WikiChatIngestService.ZoneRejectedSkipped ? e.Reason
             : Stage2Applies(e) ? e.Stage2Reason ?? e.Stage1Reason
             : e.Stage1Reason ?? e.Reason;
 

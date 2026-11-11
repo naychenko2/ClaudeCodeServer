@@ -87,10 +87,26 @@ function renderHeader(f: FeatureIndexFeature, over: Record<string, unknown> = {}
 
 // Регион текста строки: от row1 до полосы (полоса — не «строка»: её aria-подпись
 // «Готовность N %» несёт % по своему назначению и к строке отношения не имеет).
+// Граница — начало узла полосы, а не позиция атрибута: test-id и aria-label стоят в
+// одном теге FeatureTrackerBar.tsx, и позиция подстроки `data-testid="…"` в теге
+// зависит от порядка атрибутов — если aria-label пойдёт первым, его «Готовность N %»
+// попадёт в регион (ревью e30a3583, минор 2). Последний '<' перед test-id — это '<'
+// открывающего тега полосы: ни test-id, ни aria-подпись '<' не содержат.
 function rowsRegion(html: string): string {
   const a = html.indexOf('data-testid="feature-group-row1"');
   if (a < 0) throw new Error('row1 не найден в разметке');
-  const b = html.indexOf('data-testid="feature-group-bar"');
+  const bar = html.indexOf('data-testid="feature-group-bar"');
+  const b = bar === -1 ? html.length : html.lastIndexOf('<', bar);
+  return html.slice(a, b);
+}
+
+// Регион первой строки: от открывающего тега row1 до конца узла. Внутри row1 нет
+// вложенных div (спан глифа, span названия, span срока) — первый '</div>' после
+// test-id и есть граница узла, не зависящая от порядка атрибутов в теге.
+function row1Region(html: string): string {
+  const a = html.indexOf('data-testid="feature-group-row1"');
+  if (a < 0) throw new Error('row1 не найден в разметке');
+  const b = html.indexOf('</div>', a);
   return html.slice(a, b === -1 ? html.length : b);
 }
 
@@ -353,13 +369,15 @@ describe('FeatureGroupHeader: v2 в строке нет аватаров, ⚠ и
     expect(region).not.toContain('<img');
     expect(text).not.toContain('Кира');
     expect(text).not.toMatch(/(^|\s)[А-ЯЁ](\s|$)/);
-    // Глиф состояния есть: состояние объявлено атрибутом data-feature-state, сам глиф —
-    // декоративная нода (aria-hidden) в регионе строк. Иконки предупреждения нет: lucide-
-    // family (⚠ расхождений трекера — на странице фичи) рисуется с class="lucide", FeatureGlyph
-    // — не lucide; и символа «⚠» в строке нет. Счёт svg — не страж: он краснит и при
-    // не-svg глифе, который R2 не запрещает.
+    // Глиф состояния есть В ПЕРВОЙ СТРОКЕ: состояние объявлено атрибутом data-feature-state,
+    // сам глиф — декоративный svg FeatureGlyph (aria-hidden) — страж ищет его в узле row1,
+    // а не где угодно в регионе строк: «aria-hidden в регионе» удовлетворялась любой
+    // декоративной нодой, даже в row2 (ревью e30a3583, минор 1). Иконки предупреждения
+    // нет: lucide-family (⚠ расхождений трекера — на странице фичи) рисуется с
+    // class="lucide", FeatureGlyph — не lucide; и символа «⚠» в строке нет. Счёт svg —
+    // не страж: он краснит и при не-svg глифе, который R2 не запрещает.
     expect(html).toContain('data-feature-state="run"');
-    expect(region).toContain('aria-hidden="true"');
+    expect(row1Region(html)).toMatch(/<svg[^>]*aria-hidden="true"/);
     expect(region).not.toMatch(/class="lucide/);
     expect(region).not.toContain('⚠');
     // Процента в строке нет (R2): процент ищем по тексту строки и test-id процента, а не по

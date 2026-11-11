@@ -65,7 +65,7 @@ public static class WikiPlanValidator
 
     /// <summary>Операция синтеза (ADR-039, решения 2–3): утверждение своими словами (Claim)
     /// отдельно от цитат (Quotes, 1–3). Kind — вид создаваемой страницы, уходит в поле шапки
-    /// `type`; AsOf — «на когда» для state. Всё — недоверенный ввод модели.</summary>
+    /// `type`; AsOf — «на когда» для state; значение кодовое (дата источника), не ввод модели.</summary>
     public sealed record SynthOp(
         string? Op, string? Kind, string? Page, string? Claim, IReadOnlyList<string>? Quotes, string? Target, string? AsOf);
 

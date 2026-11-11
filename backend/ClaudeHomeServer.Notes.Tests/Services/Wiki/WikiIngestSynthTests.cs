@@ -1,4 +1,6 @@
+using System.Globalization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
@@ -74,22 +76,27 @@ public class WikiIngestSynthTests : IDisposable
         """;
 
     private readonly string _dir;
+    private readonly string _roots; // рабочие каталоги проектов — вне {data} (тот же порядок, что в WikiSourceCaptureTests)
     private readonly IConfiguration _config;
+    private readonly ProjectManager _projects;
+    private readonly NotesService _notes;
     private readonly WikiKeeper _keeper;
     private readonly WikiApplyService _apply;
 
     public WikiIngestSynthTests()
     {
         _dir = Path.Combine(Path.GetTempPath(), "wiki_ingest_synth_" + Guid.NewGuid().ToString("N"));
+        _roots = Path.Combine(Path.GetTempPath(), "wiki_ingest_synth_roots_" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_dir);
+        Directory.CreateDirectory(_roots);
         _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
         var users = new UserStore(_config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var projects = new ProjectManager(_config, users, new AppSettingsService(_config));
-        var notes = new NotesService(projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
-        _keeper = new WikiKeeper(notes, _config);
-        _apply = new WikiApplyService(notes, _keeper, new NoSpheres(), _config);
+        _projects = new ProjectManager(_config, users, new AppSettingsService(_config));
+        _notes = new NotesService(_projects, _config, NullLogger<NotesService>.Instance, null, flags: new WikiFlagOn());
+        _keeper = new WikiKeeper(_notes, _config);
+        _apply = new WikiApplyService(_notes, _keeper, new NoSpheres(), _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
         Write(Section, CardPath, CardFile);
         Write(Section, PagePath, PageBase);
@@ -97,7 +104,10 @@ public class WikiIngestSynthTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_dir)) Directory.Delete(_dir, recursive: true);
+        foreach (var d in new[] { _dir, _roots })
+        {
+            try { Directory.Delete(d, recursive: true); } catch (IOException) { }
+        }
     }
 
     private string Root => WikiPaths.Root(_dir, User);
@@ -162,6 +172,38 @@ public class WikiIngestSynthTests : IDisposable
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
         res.Reason.Should().Contain("as_of");
+    }
+
+    // ── источник-заметка: дату ставит код из даты записи заметки ──
+
+    [Fact]
+    public async Task Заметка_Источник_AsOfРавнаДатеЗаписиЗаметки_НеДатеМодели()
+    {
+        // Критерий c2 (C2R-Sh4): цепочка даты заметки — UpdatedAt (mtime файла) → written
+        // карточки (CaptureNote) → WithCodeAsOf → AsOf операции пакета. Значение модели (1999)
+        // игнорируется. Мутация «не ставить дату» (WithCodeAsOf, asOf = null): state без as_of
+        // отклоняется — тест красный.
+        var project = _projects.Create("П-note", Path.Combine(_roots, "proj_note"), User, User,
+            createDirectory: true);
+        var note = _notes.Create(User, new CreateNoteRequest("Заметка о сборке", SourceText, project.Id));
+        var cap = await new WikiSourceCapture(_notes, _projects, new NoSessions(), _config, _keeper)
+            .CaptureNote(User, note.Id);
+        cap.Ok.Should().BeTrue(cap.Reason);
+
+        var llm = new FakeLlm(WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "1999-01-01"));
+
+        var res = await Sut(llm).IngestAsync(User,
+            new("note", "note:" + note.Id, cap.CardRelPath!, cap.SourceText!, "projects/" + project.Id, null));
+
+        res.Outcome.Should().BeOneOf(WikiIngestService.OutcomeApplied,
+            WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        var op = pkg.Operations.Should().ContainSingle().Which;
+        // Та же дата и тот же формат, что ставит код (WithCodeAsOf): ГГГГ-ММ-ДД по UTC.
+        var noteDate = DateTimeOffset.Parse(note.UpdatedAt, CultureInfo.InvariantCulture)
+            .UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        op.AsOf.Should().Be(noteDate, "as_of — дата записи заметки (written карточки), значение модели (1999) игнорируется");
+        WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
     }
 
     // ── повтор при пустом разделе ──
@@ -411,5 +453,16 @@ public class WikiIngestSynthTests : IDisposable
         public bool Enabled(string ownerId) => false;
         public string? SphereName(string ownerId, string sphereId) => null;
         public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    // Каталог чатов пуст: захват заметки чаты не читает (CaptureNote зовёт только NotesService).
+    private sealed class NoSessions : ISessionDirectory
+    {
+        public Session? GetById(string id) => null;
+        public IReadOnlyCollection<Session> GetAll() => [];
+        public string? ResolveOwnerId(Session s) => s.OwnerId;
+        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
+            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public bool SetWikiMark(string sessionId, string? mark) => false;
     }
 }

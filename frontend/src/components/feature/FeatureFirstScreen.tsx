@@ -96,6 +96,7 @@ export function FeatureFirstScreen({
         summary={run.summary}
         initialEtaMinutes={brief.initialEtaMinutes}
         tailsCount={run.postMergeTails?.length ?? 0}
+        showCloseHint={brief.kind === 'merged'}
         followUp={run.stepProgress?.followUpTotal ? { total: run.stepProgress.followUpTotal, accepted: run.stepProgress.followUpAccepted ?? 0 } : null}
         isMobile={isMobile}
         onOpenReview={onOpenReview}

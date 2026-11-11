@@ -6,8 +6,9 @@
 //   · «Разбор ›» есть только при onOpenReview и вызывает его;
 //   · followUp (FS-FVp) — «Доработки: N из M» под строкой итога; при null/total=0 — строки нет;
 //     строка итога и плитки не меняются; «план расширен» в DOM 0;
-//   · merged — подсказка «Закройте фичу, когда доработки не нужны» сразу под строкой
-//     итога (FS-AC3b); у closed (mergedAt null/мусор) её нет.
+//   · merged (showCloseHint=true) — подсказка «Закройте фичу, когда доработки не нужны»
+//     сразу под строкой итога (FS-AC3b); у closed её нет: ни без мержа (mergedAt null/мусор),
+//     ни после мержа (showCloseHint=false при валидном mergedAt — бэк его оставляет).
 // Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
 // (Europe/Moscow). Пин — как в FeatureLaneAxis.test.ts. Фикстура близка к полуночи UTC
 // (22:00Z → MSK следующий день, 01:00): подмена «локальная зона → UTC» в компоненте
@@ -35,6 +36,7 @@ function mountSummary(over: Partial<FeatureClosedSummaryProps> = {}) {
   const props: FeatureClosedSummaryProps = {
     summary: { mergedAt: '2026-11-10T22:00:00Z', durationMinutes: 200, tasks: 9, steps: 7, loops: 2 },
     tailsCount: 1,
+    showCloseHint: true,
     ...over,
   };
   return mount(createElement(FeatureClosedSummary, props));
@@ -141,6 +143,18 @@ describe('FeatureClosedSummary', () => {
     const root = findNodeByAttr(container, 'data-testid', 'closed-summary')!;
     const idxOf = (id: string) => root.childNodes.findIndex((n) => n.getAttribute('data-testid') === id);
     expect(idxOf('closed-summary-close-hint')).toBe(idxOf('closed-summary-line') + 1);
+  });
+
+  // Закрытая после мержа: бэк оставляет валидный Summary.MergedAt (FeatureProjector),
+  // состояние же 'closed' — родитель передаёт showCloseHint=false. Мутация
+  // «убрать showCloseHint из условия» краснит этот тест.
+  it('closed-after-merge (mergedAt валидный, showCloseHint=false): подсказки нет, итог «Смержена …» остаётся', () => {
+    const { container } = mountSummary({ showCloseHint: false });
+    expect(findNodeByAttr(container, 'data-testid', 'closed-summary-close-hint')).toBeNull();
+    // Строка итога не зависит от состояния: дата мержа валидна — «Смержена» остаётся.
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line')))
+      .toBe('Смержена 11 ноября · шла 3 ч 20 мин');
+    // (строка итога сверяется целиком — не «содержит», а ровно как у merged)
   });
 
   it('closed (mergedAt null или мусор) — подсказки нет', () => {

@@ -65,8 +65,8 @@ const frontmatter = (content: string): Record<string, string> => {
   return fm;
 };
 
-const titleOf = (content: string, path: string): string =>
-  /^#\s+(.+)$/m.exec(content)?.[1]?.trim() ?? path.basename(path, '.md');
+const titleOf = (content: string, pageKey: string): string =>
+  /^#\s+(.+)$/m.exec(content)?.[1]?.trim() ?? pageKey.split('/').pop()!.replace(/\.md$/, '');
 
 test.beforeAll(async ({ playwright, baseURL }) => {
   request = await playwright.request.newContext({ baseURL });

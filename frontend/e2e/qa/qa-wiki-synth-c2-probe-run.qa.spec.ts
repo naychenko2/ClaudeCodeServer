@@ -35,7 +35,7 @@ test.afterAll(async () => {
 test('маршрут wiki-nightly возвращён в локальный, прочие чаты помечены «не разбирать»', async () => {
   await client.del('/api/admin/local-actions/wiki-nightly');
   for (const c of seed.chats) await client.put(`/api/wiki/chats/${c.sessionId}/mark`, { mark: 'skip' });
-  for (const [name, id] of Object.entries(probe.seeded)) {
+  for (const [, id] of Object.entries(probe.seeded)) {
     if (id !== SMALL) await client.put(`/api/wiki/chats/${id}/mark`, { mark: 'skip' });
   }
   expect(SMALL, 'чат уменьшенного окна найден').not.toBe('');

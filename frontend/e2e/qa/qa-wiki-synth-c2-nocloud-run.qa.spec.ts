@@ -11,7 +11,6 @@ const ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
 const ATT = path.join(ROOT, '.cc-attachments', 'qa-wiki-synth-c2');
 type Seed = { ownerId: string; projectId: string; dataDir: string; chats: { key: string; sessionId: string }[] };
 const seed = JSON.parse(fs.readFileSync(path.join(ATT, 'seed.json'), 'utf8')) as Seed;
-const probe = JSON.parse(fs.readFileSync(path.join(ATT, 'probe-seed.json'), 'utf8')) as { seeded: Record<string, string> };
 const WIKI = path.join(seed.dataDir, 'wiki', seed.ownerId);
 
 let request: APIRequestContext;

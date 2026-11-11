@@ -10,7 +10,6 @@ const ROOT = path.resolve(new URL('../../..', import.meta.url).pathname);
 const ATT = path.join(ROOT, '.cc-attachments', 'qa-wiki-synth-c2');
 type Seed = { ownerId: string; projectId: string; dataDir: string; chats: { key: string; sessionId: string }[] };
 const seed = JSON.parse(fs.readFileSync(path.join(ATT, 'seed.json'), 'utf8')) as Seed;
-const inboxSeed = JSON.parse(fs.readFileSync(path.join(ATT, 'inbox-seed.json'), 'utf8')) as { chatId: string };
 const SECTION = `projects/${seed.projectId}`;
 const WIKI = path.join(seed.dataDir, 'wiki', seed.ownerId);
 

@@ -20,7 +20,6 @@ public sealed class ChatContextLifecycle(
         {
             events.OnNotification<SessionDeleted>(OnDeleted, "ChatContextLifecycle.Deleted");
             events.OnNotification<SessionBranched>(OnBranched, "ChatContextLifecycle.Branched");
-            events.OnNotification<SessionContinued>(OnContinued, "ChatContextLifecycle.Continued");
         }
         return Task.CompletedTask;
     }
@@ -45,9 +44,6 @@ public sealed class ChatContextLifecycle(
     }
 
     private Task OnBranched(SessionBranched e) => CopyState(e.Turn, e.SourceSessionId, "ветку");
-
-    // Продолжение в новом чате: контекст (закреплённые материалы) переезжает вместе с работой
-    private Task OnContinued(SessionContinued e) => CopyState(e.Turn, e.SourceSessionId, "продолжение");
 
     private Task CopyState(TurnContext turn, string sourceSessionId, string target)
     {

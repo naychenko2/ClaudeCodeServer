@@ -456,15 +456,6 @@ public record ChatArchivedMessage(bool Archived)
 public record ChatVisibilityChangedMessage(bool Private)
     : ServerMessage("chat_visibility_changed");
 
-// «Продолжить в новом чате»: чат (SessionId = исходный) продолжён в NewSessionId — записка
-// передана, новый чат создан. Живое событие: человек, смотрящий ИСХОДНЫЙ чат, должен
-// автоматически перейти в новый (фронт решает по тому, какой чат открыт). ProjectId — для
-// построения навигационного объекта (проектный чат); null — чат вне проекта.
-// Эфемерное: в history.json не пишется (история нового чата подтянется по переходу).
-// SessionId — унаследованное свойство базы, рассылка проставляет его (исходный чат).
-public record ChatContinuedMessage(string NewSessionId, string? ProjectId)
-    : ServerMessage("chat_continued");
-
 public record UsageInfo(int InputTokens, int OutputTokens, int CacheReadTokens, int CacheCreationTokens);
 
 // Прогресс фоновых агентов Workflow (шлётся через SignalR по мере завершения)

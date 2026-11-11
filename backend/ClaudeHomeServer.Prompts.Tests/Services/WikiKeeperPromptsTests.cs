@@ -59,9 +59,19 @@ public class WikiKeeperPromptsTests
             < prompt.IndexOf(WikiKeeperPrompts.SourceClose(nonce), StringComparison.Ordinal));
         Assert.Contains("\"outcome\":\"" + WikiKeeperPrompts.NothingToAdd + "\"", prompt);
         Assert.Contains("\"quotes\":[", prompt);
-        Assert.Contains("\"as_of\":\"YYYY-MM-DD|unknown\"", prompt);
+        Assert.DoesNotContain("as_of", prompt);
         Assert.Contains("\"op\":\"create|append|conflict|link\"", prompt);
         Assert.Contains("\"kind\":\"decision|rule|term|state\"", prompt);
+    }
+
+    [Fact]
+    public void Synth_ПотолокОперацийИОтрицательныеПримерыШума_ЕстьВПромпте()
+    {
+        var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
+
+        Assert.Contains("At most 12 operations per window", prompt);
+        foreach (var noise in new[] { "reconciliation: clean", "committed abc1234", "verdict: returned", "worktree /home" })
+            Assert.Contains(noise, prompt);
     }
 
     [Fact]
@@ -85,7 +95,7 @@ public class WikiKeeperPromptsTests
 
         foreach (var kind in new[] { "decision", "rule", "term", "state" })
             Assert.Contains("- " + kind + " — ", prompt);
-        foreach (var key in new[] { "\"claim\"", "\"quotes\"", "\"as_of\"", "\"target\"" })
+        foreach (var key in new[] { "\"claim\"", "\"quotes\"", "\"target\"" })
             Assert.Contains(key, prompt);
         Assert.Contains("\"outcome\":\"" + WikiKeeperPrompts.NothingToAdd + "\"", prompt);
         Assert.Contains("between 8", prompt);
@@ -199,13 +209,12 @@ public class WikiKeeperPromptsTests
             () => WikiKeeperPrompts.Synth("s", "c", nonce, null, 8, 300));
 
     [Fact]
-    public void Synth_AsOf_ЭтоДатаНаКоторуюВерноСостояние_НеДатаНаписанияИсточника()
+    public void Synth_AsOf_МодельДатуНеЗадаёт_ДатуСтавитКод()
     {
         var prompt = WikiKeeperPrompts.Synth("src", "cat", "n1", null, 8, 300);
 
-        Assert.Contains("the date the described state holds for", prompt);
-        Assert.Contains("not the date the source was written", prompt);
-        Assert.DoesNotContain("date of the cut", prompt);
-        Assert.Contains("\"unknown\" if the source names no such date", prompt);
+        Assert.Contains("the code sets the date of a state page itself", prompt);
+        Assert.Contains("Never output a date field", prompt);
+        Assert.DoesNotContain("as_of", prompt);
     }
 }

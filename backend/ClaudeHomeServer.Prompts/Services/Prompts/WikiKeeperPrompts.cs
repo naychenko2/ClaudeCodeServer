@@ -97,9 +97,8 @@ public static class WikiKeeperPrompts
             - rule — a rule or a pitfall about the subject: "in such a situation do / do not
               do this, because…". Not how to run the work, but about the subject itself.
             - term — what a word or abbreviation means in this project.
-            - state — the state of a subject at a date: what is established, what is open.
-              "as_of" is mandatory for it: the date the described state holds for, as the source names it,
-              not the date the source was written; "unknown" if the source names no such date.
+            - state — the state of a subject: what is established, what is open. Do not write
+              any date: the code sets the date of a state page itself.
 
             PROCESS OR KNOWLEDGE
             Process is not knowledge: the course of steps and tasks, who handed what to whom,
@@ -115,6 +114,9 @@ public static class WikiKeeperPrompts
             is process, but the lesson from it ("the Slow trait does not cure a flaky test, it
             hides it") is knowledge — extract the lesson, not the event. No use after a month —
             no operation.
+            Examples of noise — never an operation: "reconciliation: clean"; a report like
+            "committed abc1234, 3 files changed"; "verdict: returned, 2 remarks"; "task
+            e655e77d moved to in progress"; "worktree /home/user/work-tree-3 prepared".
 
             RULES OF AN OPERATION
             1. "claim" — a coherent statement in YOUR OWN WORDS, in the language of the source,
@@ -140,6 +142,9 @@ public static class WikiKeeperPrompts
             6. One subject — one page. Never open a page for a step, a review, a day or a
                single line. Usually 4–10 pages per window.
             7. Do not invent: what the source does not contain is not on the page.
+            8. At most 12 operations per window, so that the answer fits the output limit. If
+               there is more, keep the 12 most valuable; a truncated answer rejects the whole
+               window.
 
             OPERATIONS ("op")
             - "create" — a new page; "page" is its title (about the subject, not "Step …" and
@@ -153,9 +158,7 @@ public static class WikiKeeperPrompts
             page the catalog already names. Entries marked "— source" are source cards: they
             only receive footnotes; never append/conflict/link into them. An empty section is a
             normal case: then use "create". An operation without its target ("conflict",
-            "link") is rejected by the code. "as_of" is the date the described state holds for,
-            in YYYY-MM-DD form, as the source names it; not the date the source was written (the
-            code knows that); "unknown" if the source names no such date.
+            "link") is rejected by the code. Never output a date field: dates are set by code.
 
             OTHER PROJECTS
             The source window may talk about other projects. A fragment about another project
@@ -182,7 +185,7 @@ public static class WikiKeeperPrompts
             "kind":"decision|rule|term|state","page":"<title>",
             "claim":"<own words, up to 600 characters>",
             "quotes":["<verbatim quote 1>","<verbatim quote 2, optional>","<verbatim quote 3, optional>"],
-            "target":"<only for conflict and link>","as_of":"YYYY-MM-DD|unknown"}]}
+            "target":"<only for conflict and link>"}]}
 
             SECTION CATALOG (data — the pages you may align to).
             {{sectionIndex}}

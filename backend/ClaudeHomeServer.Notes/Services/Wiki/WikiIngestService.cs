@@ -386,7 +386,7 @@ public sealed class WikiIngestService
             };
             // Инвариант: ни одна операция синтеза не попадает в пакет мимо ValidateSynth.
             var verdict = WikiPlanValidator.ValidateSynth(
-                plan, source, sectionKey, upChain, sectionPages, policy);
+                WithCodeAsOf(plan, sourceWrittenAt), source, sectionKey, upChain, sectionPages, policy);
             // Поштучный приём: пакет собирается из Accepted одного вызова, Rejected отбрасываются.
             // Ремонт — только когда не принялось ничего, а отказы есть.
             if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
@@ -415,7 +415,7 @@ public sealed class WikiIngestService
                 // Пакет после ремонта — весь в «Входящие»: признак низкого качества прохода
                 // (WikiApplyPolicy.PackageAfterModelRepair), человек решает, код не применяет.
                 verdict = WikiPlanValidator.ValidateSynth(
-                    planR, source, sectionKey, upChain, sectionPages,
+                    WithCodeAsOf(planR, sourceWrittenAt), source, sectionKey, upChain, sectionPages,
                     policy with { PackageAfterModelRepair = true });
                 if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
                     return WithSectionIssues(
@@ -749,11 +749,10 @@ public sealed class WikiIngestService
         return true;
     }
 
-    /// <summary>План синтеза: operations — массив объектов op/kind/page/claim/quotes/target/
-    /// as_of. Ответ модели НЕ десериализуется в операцию пакета напрямую (неизвестный ключ
-    /// System.Text.Json пропускает молча — дата as_of пропала бы без ошибки): поля читаются
-    /// по одному, `as_of` → SynthOp.AsOf. Отсутствующее или нераспознаваемое поле остаётся
-    /// null, отсутствующие quotes — пустой список (операцию не выбрасываем молча: ValidateSynth
+    /// <summary>План синтеза: operations — массив объектов op/kind/page/claim/quotes/target.
+    /// Ответ модели НЕ десериализуется в операцию пакета напрямую: поля читаются по одному.
+    /// `as_of` модели игнорируется — дату state ставит код (WithCodeAsOf, решение Андрея 11.11).
+    /// Отсутствующее или нераспознаваемое поле остаётся null, отсутствующие quotes — пустой список (операцию не выбрасываем молча: ValidateSynth
     /// откажет её «утверждение без цитат», причина видна в ремонте). Форму и вид судит
     /// WikiPlanValidator. nothing=true — маркер «нечего добавить».</summary>
     private static WikiPlanValidator.SynthPlan? ParseSynthPlan(string raw, out bool nothing,
@@ -796,7 +795,6 @@ public sealed class WikiIngestService
             TryStringValue(el, "page", out var page);
             TryStringValue(el, "claim", out var claim);
             TryStringValue(el, "target", out var target);
-            TryStringValue(el, "as_of", out var asOf);
             var quotes = new List<string>();
             if (el.TryGetProperty("quotes", out var q))
             {
@@ -809,9 +807,21 @@ public sealed class WikiIngestService
                 foreach (var item in q.EnumerateArray())
                     quotes.Add(item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : "");
             }
-            ops.Add(new WikiPlanValidator.SynthOp(op, kind, page, claim, quotes, target, asOf));
+            ops.Add(new WikiPlanValidator.SynthOp(op, kind, page, claim, quotes, target, null));
         }
         return new WikiPlanValidator.SynthPlan(ops);
+    }
+
+    /// <summary>`as_of` операций ставит код: дата источника (у чата — последняя реплика окна,
+    /// у заметки и файла — запись источника, всё это уже лежит в поле written карточки).
+    /// Значение модели в плане не доезжает (парсер его не читает). Нет даты — null: state без
+    /// as_of валидатор отклонит с причиной.</summary>
+    internal static WikiPlanValidator.SynthPlan? WithCodeAsOf(WikiPlanValidator.SynthPlan? plan, DateTimeOffset? at)
+    {
+        if (plan?.Operations is null) return plan;
+        var asOf = at?.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return new WikiPlanValidator.SynthPlan(
+            plan.Operations.Select(o => o with { AsOf = asOf }).ToList());
     }
 
     private static bool TryStringValue(JsonElement el, string name, out string? value)

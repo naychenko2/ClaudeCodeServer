@@ -40,6 +40,7 @@ public class WikiIngestSynthTests : IDisposable
         ref: session:s1#m1-9
         hash: 0123456789012345678901234567890123456789012345678901234567890123
         captured: 2026-10-29
+        written: 2026-11-10T12:00:00Z
         aliases: []
         owns: []
         sources: []
@@ -137,7 +138,7 @@ public class WikiIngestSynthTests : IDisposable
     public async Task ПервыйВызов_CreateState_KindИAsOfДоходятДоОперацииПакета()
     {
         // Инвариант 3: ключи kind и as_of ответа → SynthOp.Kind/AsOf → Operation.Kind/AsOf.
-        var llm = new FakeLlm(WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "2026-11-10"));
+        var llm = new FakeLlm(WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "1999-01-01"));
 
         var res = await Sut(llm).IngestAsync(User, Req());
 
@@ -145,8 +146,22 @@ public class WikiIngestSynthTests : IDisposable
         var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
         var op = pkg.Operations.Should().ContainSingle().Which;
         op.Kind.Should().Be("state");
-        op.AsOf.Should().Be("2026-11-10");
+        op.AsOf.Should().Be("2026-11-10", "as_of ставит код из written карточки; значение модели (1999) игнорируется");
         WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task СтатеБезДатыУИсточника_AsOfМодели_НеПодставляется_ОперацияОтклонена()
+    {
+        // Карточка без written: даты у кода нет, значение модели не спасает state.
+        Write(Section, CardPath, CardFile.Replace("written: 2026-11-10T12:00:00Z\n", ""));
+        var llm = new FakeLlm(WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "2026-11-10"),
+            repair: WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "2026-11-10"));
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain("as_of");
     }
 
     // ── повтор при пустом разделе ──
@@ -156,7 +171,7 @@ public class WikiIngestSynthTests : IDisposable
     {
         Write(EmptySection, EmptyCardPath, CardFile);
         var llm = new FakeLlm(WikiSynthJson.Ok(),
-            emptySection: WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "2026-11-10"));
+            emptySection: WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "1999-01-01"));
 
         var res = await Sut(llm).IngestAsync(User, Req(EmptySection, EmptyCardPath));
 
@@ -172,10 +187,10 @@ public class WikiIngestSynthTests : IDisposable
     // ── ремонт ──
 
     [Fact]
-    public async Task Ремонт_ЦитатаНеДословна_ПричинаВПромптеРемонта_КindИAsOfИзРемонтаДоходят()
+    public async Task Ремонт_ЦитатаНеДословна_ПричинаВПромптеРемонта_КindДоходит_AsOfСтавитКод()
     {
-        var bad = WikiSynthJson.Create("Состояние сборки", Claim1, "Цитаты в источнике нет вообще", "state", "2026-11-09");
-        var fixedPlan = WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "2026-11-10");
+        var bad = WikiSynthJson.Create("Состояние сборки", Claim1, "Цитаты в источнике нет вообще", "state", "1998-02-02");
+        var fixedPlan = WikiSynthJson.Create("Состояние сборки", Claim1, Quote1, "state", "1999-01-01");
         var llm = new FakeLlm(bad, repair: fixedPlan);
 
         var res = await Sut(llm).IngestAsync(User, Req());
@@ -187,7 +202,7 @@ public class WikiIngestSynthTests : IDisposable
         var op = pkg.Operations.Should().ContainSingle().Which;
         op.Decision.Should().Be(WikiPackage.DecisionInbox, "после ремонта пакет — во «Входящие»");
         op.Kind.Should().Be("state");
-        op.AsOf.Should().Be("2026-11-10", "as_of берётся из ответа ремонта, не из первого");
+        op.AsOf.Should().Be("2026-11-10", "as_of — дата карточки, не значение модели ни из первого ответа, ни из ремонта");
         WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
     }
 

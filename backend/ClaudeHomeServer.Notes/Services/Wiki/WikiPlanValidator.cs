@@ -519,7 +519,7 @@ public static class WikiPlanValidator
                 || op.Kind is WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle)
                 return $"вид «{op.Kind ?? "—"}» создаваемой страницы вне перечня (decision/rule/term/state)";
             if (op.Kind == WikiFrontmatter.TypeState && string.IsNullOrWhiteSpace(op.AsOf))
-                return "у страницы вида state не задан as_of";
+                return "у страницы вида state не задан as_of: у источника нет даты записи";
         }
         if (string.IsNullOrWhiteSpace(op.Claim))
             return "утверждение без текста";

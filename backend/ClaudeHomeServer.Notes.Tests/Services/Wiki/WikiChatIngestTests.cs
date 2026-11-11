@@ -239,28 +239,80 @@ public class WikiChatIngestTests : IDisposable
         StatementLines(page, Claim2).Should().Be(1);
     }
 
-    // Дефект 2d9df07a: хроника брала Text (= claim, до 600 символов) как цитату сноски,
-    // и страница с цитатой 375 символов отвергалась гейтом раздела — рушила остальные записи.
-    // Мутация «брать op.Text вместо op.Quotes» (WikiChatIngestService.AppendChronicleAsync) — красное здесь.
+    // Дефект 2d9df07a и возврат Глеба 3b72f9c9: «Что выяснили» несёт УТВЕРЖДЕНИЕ (Claim, до 600
+    // символов), а сноска — дословную цитату 8–300 (ADR-035:276, WikiPlanValidator.RenderApply).
+    // Мутации: «строка = цитата вместо claim» и «сноска = claim» (AppendChronicleAsync) — красное здесь.
     [Fact]
-    public async Task C1b_ДлинныйClaim_ХроникаПишетЦитатуАНеClaim_КонтрактГейтаСоблюдён()
+    public async Task C1b_ДлинныйClaim_СтрокаНесётУтверждение_СноскаЦитату_КонтрактГейтаСоблюдён()
     {
         AddSession();
         SetShortHistory();
         var longClaim = Claim1 + " — " + new string('в', 350);
         longClaim.Length.Should().BeGreaterThan(WikiPage.MaxQuoteLength);
 
-        var llm = new FakeLlm(("S", WikiSynthJson.Append(PageTitle, longClaim, Claim1)));
-        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+        var llm = new FakeLlm(
+            ("S", WikiSynthJson.Append(PageTitle, longClaim, Claim1)),
+            ("S", Synth(Claim2)));
+        var sut = Sut(llm);
+        var res = await sut.AnalyzeAsync(User, ChatId);
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
 
         var chronicles = ChronicleFiles();
         chronicles.Should().HaveCount(1);
         var text = File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8);
-        StatementLines(text, Claim1).Should().Be(1, "в хронику идёт дословная цитата");
-        text.Should().NotContain(longClaim, "claim — не цитата и в хронику не попадает");
+        StatementLines(text, longClaim).Should().Be(1, "строка «Что выяснили» — утверждение, а не цитата");
         var parsed = WikiPage.Parse(text).Model!;
-        parsed.Footnotes.Should().NotBeEmpty();
+        parsed.Footnotes.Should().ContainSingle().Which.Quote.Should().Be(Claim1, "сноска — дословная цитата");
+        parsed.Footnotes.Should().OnlyContain(f => !QuoteMatcher.MeasureQuoteLength(f.Quote).OutOfContract);
+
+        // c1: после длинного claim хроника не ломает следующий разбор того же чата.
+        _sessions.History[ChatId].Add(new StoredUserMessage($"{Claim2}. Детали: {Marker2}."));
+        _sessions.History[ChatId].Add(new StoredTextMessage("Принято."));
+        _sessions.History[ChatId].Add(new StoredTextMessage("Готово."));
+        var second = await sut.AnalyzeAsync(User, ChatId);
+        second.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, second.Reason);
+        var text2 = File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8);
+        StatementLines(text2, longClaim).Should().Be(1);
+        StatementLines(text2, Claim2).Should().Be(1, "второй разбор дописал хронику");
+    }
+
+    // Пакет старой формы (без Quotes): цитата — сам Text. Длиннее 300 — сноску не пишем, а
+    // утверждение без сноски гейт отвергает, поэтому строка не пишется вовсе: хроника в контракте.
+    [Fact]
+    public async Task C1c_ПакетБезQuotes_ДлинныйText_СноскаНеЗаписана_ХроникаВКонтракте()
+    {
+        AddSession();
+        SetShortHistory();
+        var longText = Claim1 + " — " + new string('в', 340);
+        longText.Length.Should().BeGreaterThan(WikiPage.MaxQuoteLength);
+        var shortText = Claim2;
+
+        WikiPackage.Operation Legacy(string t) => new()
+        {
+            Op = WikiPackage.OpAppend, Page = PagePath, PageSection = "Сводка", Text = t,
+            Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpAppend),
+            Decision = WikiPackage.DecisionAuto,
+            BaseHashes = new Dictionary<string, string> { [PagePath] = new string('a', 64) },
+        };
+        var pkg = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(), Section = Section,
+            Sources = [new WikiPackage.SourceRef("session", ChatId)],
+            Operations = [Legacy(longText), Legacy(shortText)],
+            Status = WikiPackage.StatusChecking,
+        };
+        var created = WikiPackageStore.Create(Root, pkg);
+        created.Ok.Should().BeTrue(created.Reason);
+
+        var (ok, reason) = await Sut(new FakeLlm()).AppendChronicleAsync(
+            User, WikiChatIngestService.HomeOf(_sessions.All[0]), _sessions.All[0], ChatId, [(pkg.Id, "Карточка")]);
+        ok.Should().BeTrue(reason);
+
+        var text = File.ReadAllText(ChronicleFiles().Single(), System.Text.Encoding.UTF8);
+        text.Should().NotContain(longText, "утверждение без годной сноски в хронику не пишется");
+        StatementLines(text, shortText).Should().Be(1);
+        var parsed = WikiPage.Parse(text).Model!;
+        parsed.Footnotes.Should().ContainSingle().Which.Quote.Should().Be(shortText);
         parsed.Footnotes.Should().OnlyContain(f => !QuoteMatcher.MeasureQuoteLength(f.Quote).OutOfContract);
     }
 

@@ -596,12 +596,15 @@ public sealed class WikiChatIngestService
             ? WikiSections.Folder(home) + ChronicleDirName + "/" + sessionId + ".md"
             : null;
 
+    private static string OneLine(string text) =>
+        text.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
+
     /// <summary>Дописать хронику чата утверждениями применённых пакетов. Первой
     /// успешный разбор создаёт страницу, следующий — дописывает «Что выяснили».
     /// Хроника продолжения несёт строку-ссылку на хронику прежнего чата в «О чём»
     /// (ContinuationLinkLine). Существующая нечитаемая хроника — отказ: её строки уже
     /// написанное, перезаписывать молча нельзя.</summary>
-    private async Task<(bool Ok, string? Reason)> AppendChronicleAsync(
+    internal async Task<(bool Ok, string? Reason)> AppendChronicleAsync(
         string ownerId, string home, Session session, string sessionId,
         IReadOnlyList<(string PackageId, string CardTitle)> applied)
     {
@@ -634,24 +637,26 @@ public sealed class WikiChatIngestService
             {
                 if (op.Op == WikiPackage.OpLink || op.Text is not { Length: > 0 })
                     continue; // «link» — связь, не утверждение; утверждения без цитаты нет.
-                // Утверждение хроники — цитата, подтверждённая кодом (S6b-3, M1). У пакета с
-                // Quotes (ADR-039) Text — это Claim своими словами, до 600 символов, а не
-                // цитата: берём сами Quotes. Старый пакет (без Quotes) несёт цитату в Text.
-                // Цитату с переводом строки складываем в одну строку: формат страницы
-                // строчный (WikiPage), целая цитата остаётся на странице знаний.
+                // Форма хроники — как у страницы знаний (ADR-035:276, WikiPlanValidator.RenderApply):
+                // строка «Что выяснили» несёт УТВЕРЖДЕНИЕ (Claim, у старого пакета без Quotes —
+                // Text), а сноска — дословную цитату (Quotes, у старого пакета — Text). Текст с
+                // переводом строки складываем в одну строку: формат страницы строчный (WikiPage).
+                var statement = OneLine(op.Claim is { Length: > 0 } ? op.Claim : op.Text);
                 IEnumerable<string> candidates = op.Quotes is { Count: > 0 } ? op.Quotes : [op.Text];
-                foreach (var candidate in candidates)
-                {
-                    var quote = candidate.Replace("\r\n", " ").Replace('\n', ' ').Replace('\r', ' ');
-                    // Хроника не пишет файл вне контракта гейта раздела (8–300, одна мера с
-                    // гейтом): цитату не обрезаем — она обязана остаться дословной, — а
-                    // пропускаем, иначе гейт отвергает все последующие записи раздела.
-                    if (QuoteMatcher.MeasureQuoteLength(quote).OutOfContract)
-                        continue;
-                    statements.Add($"{quote} [^s{nextRef}]");
+                // Мера контракта гейта (8–300, одна с гейтом) — только на сноске: цитату не
+                // обрезаем, она обязана остаться дословной, а пропускаем — иначе гейт отвергает
+                // все последующие записи раздела. Утверждение без единой годной сноски гейт
+                // тоже отвергает, поэтому такая строка не пишется вовсе.
+                var quotes = candidates.Select(OneLine)
+                    .Where(q => !QuoteMatcher.MeasureQuoteLength(q).OutOfContract)
+                    .ToList();
+                if (quotes.Count == 0)
+                    continue;
+                var refs = string.Concat(quotes.Select((_, k) => $"[^s{nextRef + k}]"));
+                statements.Add($"{statement} {refs}");
+                foreach (var quote in quotes)
                     footnotes.Add(new(new(true, cardTitle), quote));
-                    nextRef++;
-                }
+                nextRef += quotes.Count;
             }
         }
         if (statements.Count == 0)

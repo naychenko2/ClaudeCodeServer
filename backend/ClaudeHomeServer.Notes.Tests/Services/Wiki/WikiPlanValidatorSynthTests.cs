@@ -335,6 +335,19 @@ public class WikiPlanValidatorSynthTests
             .And.Contain("число не подтверждено цитатой").And.Contain("15");
     }
 
+    [Fact]
+    public void ValidateSynth_AutoПолитикаИНеподтверждённоеЧисло_ПричинаТолькоПроЧисла()
+    {
+        // Ревью aaf6dacf, находка 2: при вердикте политики «auto» его причина не дописывается —
+        // «применяется само (§12г)» противоречит тому, что из-за чисел операция ушла во «Входящие».
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 15 минут", [QMinutes]));
+
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().StartWith("число не подтверждено цитатой").And.Contain("15")
+            .And.NotContain("применяется само");
+    }
+
     [Theory]
     [InlineData("decision")]
     [InlineData("rule")]

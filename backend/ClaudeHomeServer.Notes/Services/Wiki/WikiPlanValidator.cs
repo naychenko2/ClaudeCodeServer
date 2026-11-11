@@ -4,11 +4,13 @@ using System.Text;
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Проверки плана модели до применения и до сборки пакета (ADR-035, §12б этапы 6–8,
-// §12г меры 1–3). Чистая функция без модели и без диска: на вход — утверждения прохода A,
-// операции плана прохода B, источник (origin + карточка + текст выдержки), раздел
-// назначения, цепочка вверх и снимок страниц этих разделов; на выход — операции, принятые
+// §12г меры 1–3; ADR-039, решение 1: синтез одним вызовом — отдельной разметки нет).
+// Чистая функция без модели и без диска: на вход — операции синтеза (утверждение claim
+// с цитатами), источник (origin + карточка + текст выдержки), раздел назначения,
+// цепочка вверх и снимок страниц этих разделов; на выход — операции, принятые
 // в пакет (с классом и решением политики — ставит код, не модель), операции «ждущие»
-// сверх лимита, отклонённые с причиной и общие нарушения состояния.
+// сверх лимита, отклонённые с причиной и общие нарушения состояния. Старая форма
+// (Validate: утверждения + план по индексу) судится тем же конвейером.
 //
 // Порядок: форма цепочки вверх → форма операции → разрешение страницы → подтверждение
 // цитаты (QuoteMatcher, мера 1) → анти-петля → повтор утверждения (дедуп меры 2) → цель
@@ -33,13 +35,16 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // операция применения (§12б), не намерение модели.
 public static class WikiPlanValidator
 {
-    /// <summary>Утверждение прохода A: текст + дословная цитата (ответ модели).</summary>
+    /// <summary>Утверждение старой формы плана (его читает Validate): текст + дословная
+    /// цитата (ответ модели).</summary>
     public sealed record Claim(string? Text, string? Quote);
 
-    /// <summary>Операция плана прохода B: page — заголовок или путь страницы, claim — индекс
-    /// утверждения, target — цель (замещаемое/оспариваемое утверждение или имя другой
-    /// страницы). Всё — недоверенный ввод.</summary>
-    public sealed record PlanOp(string? Op, string? Page, int? Claim, string? Target);
+    /// <summary>Операция старой формы плана (её читает Validate): page — заголовок или путь
+    /// страницы, claimIndex — индекс утверждения, target — цель (замещаемое/оспариваемое
+    /// утверждение или имя другой страницы). Всё — недоверенный ввод. Имя поля —
+    /// ClaimIndex, не Claim: рядом тип Claim этого класса и текст утверждения
+    /// Operation.Claim.</summary>
+    public sealed record PlanOp(string? Op, string? Page, int? ClaimIndex, string? Target);
 
     public sealed record Plan(IReadOnlyList<PlanOp>? Operations);
 
@@ -97,7 +102,7 @@ public static class WikiPlanValidator
                 units.Add(null);
                 continue;
             }
-            var claim = op.Claim is { } ci && claims is not null && ci >= 0 && ci < claims.Count
+            var claim = op.ClaimIndex is { } ci && claims is not null && ci >= 0 && ci < claims.Count
                 ? claims[ci]
                 : null;
             string? error = null;
@@ -420,11 +425,16 @@ public static class WikiPlanValidator
             if (synth && WikiClaimNumbers.Unconfirmed(claimText, quotes) is { Count: > 0 } unconfirmed)
             {
                 decision = WikiPackage.DecisionInbox;
-                // Причина политики не заменяется, а дописывается: человек во «Входящих» видит
-                // и риск политики, и причину чисел (ревью S2-6, M5). Если причины политики
-                // нет — только числа.
+                // Причина политики дописывается перед причиной чисел только при вердикте
+                // политики «inbox»: человек во «Входящих» видит и риск политики, и причину
+                // чисел (ревью S2-6, M5). При вердикте «auto» автопричина снимается:
+                // «применяется само (§12г)» противоречит тому, что операция ушла во
+                // «Входящие» (ревью aaf6dacf, находка 2). Если причины политики нет —
+                // только числа.
                 var numbers = $"число не подтверждено цитатой: {string.Join(", ", unconfirmed)}";
-                decisionReason = string.IsNullOrWhiteSpace(decisionReason) ? numbers : decisionReason + "; " + numbers;
+                decisionReason = verdict.Decision == WikiPackage.DecisionInbox && !string.IsNullOrWhiteSpace(decisionReason)
+                    ? decisionReason + "; " + numbers
+                    : numbers;
             }
             if (synth)
                 foreach (var q in quotes)

@@ -274,6 +274,10 @@ export interface FeatureStepChain {
   // Момент мержа, в который шаг попал в master (первый подходящий; бэк: `MergedAt`,
   // FeatureRun.cs:386); null — не в master.
   mergedAt?: string | null;
+  // Доработка после мержа (FS-PB2, бэк: `FeatureStepChain.FollowUp`, FeatureRun.cs:419): шаг
+  // заведён позже первого мержа и вне действующего плана — в знаменатель, корзины и линии не
+  // входит, цепочка в списке остаётся. Аддитивное: старые ответы не несут.
+  followUp?: boolean;
 }
 
 // Метка мержа для ганта (P1/F1, бэк: `FeatureMergeMark`, FeatureRun.cs:118-123): id задачи

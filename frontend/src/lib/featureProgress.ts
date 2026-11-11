@@ -47,6 +47,16 @@ export interface StepProgress {
   // поэтому в formatStepProgress его нет: он звучит только на полоске готовности (F1).
   // Аддитивное: старые ответы поля не несут — undefined.
   inMaster?: number;
+  // Знаменатель на момент первой оценки нарезанного плана (FS-PB1, бэк:
+  // `FeatureStepProgress.BaselineTotal`, FeatureRun.cs:497); null — не зафиксирована.
+  // Аддитивное: старые ответы поля не несут — undefined.
+  baselineTotal?: number | null;
+  // Доработки после мержа, кроме снятых (FS-PB2, бэк: `FollowUpTotal`, FeatureRun.cs:499):
+  // вне total и корзин, отдельная строка. Аддитивное: старые ответы поля не несут.
+  followUpTotal?: number;
+  // Сколько из доработок после мержа принято (бэк: `FollowUpAccepted`, FeatureRun.cs:500).
+  // Аддитивное: старые ответы поля не несут.
+  followUpAccepted?: number;
 }
 
 // «Готово»: только planState === 'done' — бэк сам гарантирует для него total > 0 и

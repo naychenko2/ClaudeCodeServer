@@ -1106,7 +1106,10 @@ public class TasksController(
             Typical: typical,
             // FS-M56 (величина 5): медиана шага этой фичи — по уже посчитанным run.StepChains,
             // второго прохода по задачам нет.
-            StepMedianMinutes: FeatureStats.StepMedianOf(run));
+            StepMedianMinutes: FeatureStats.StepMedianOf(run),
+            // FS-M478 (величины 4, 7, 8): отклонение оценок — по тому же journalResult, что уже
+            // прочитан выше (B1b: второго чтения журнала нет).
+            EstimateDrift: FeatureEstimateDrift.Build(run, journalResult));
         // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
         // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
         // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.

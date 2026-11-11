@@ -108,7 +108,11 @@ public sealed record FeatureStats(
     // Медиана шага ЭТОЙ фичи (FS-M56, величина 5): медиана DurationMinutes по цепочкам этой
     // фичи в корзине «принят» (run.StepChains); null — принятых цепочек нет. В JSON —
     // stats.stepMedianMinutes. Вычисление — StepMedianOf ниже.
-    double? StepMedianMinutes = null)
+    double? StepMedianMinutes = null,
+    // Отклонение оценок (FS-M478, величины 4, 7, 8): сдвиг срока с начала, смены знаменателя,
+    // точность срока закрытой. В JSON — stats.estimateDrift. Вычисление — FeatureEstimateDrift.Build
+    // над тем же journalResult, что читается для Timeline (второго чтения журнала нет).
+    FeatureEstimateDrift? EstimateDrift = null)
 {
     // Медиана шага этой фичи (FS-M56): DurationMinutes цепочек этой же фичи в корзине «принят».
     // Принятость — по AcceptedAt: он ненулевой ровно у принятой цепочки (FeatureStepAccounting.cs:358,

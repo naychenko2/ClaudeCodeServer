@@ -405,8 +405,18 @@ describe('FeatureChatCard: несколько фич у чата', () => {
     expect(name(), 'цикл внутри s1 не показал вторую фичу').toBe('Вторая фича s1');
     expect(inBody('feature-popover'), 'поповер должен быть открыт перед сменой чата').not.toBeNull();
     // Воркспейс переключил чат: ТОТ ЖЕ корень, sessionId → s2.
-    act(() => { root.render(createElement(FeatureChatCard, props('s2'))); });
+    // Кадр смены чата до эффектов: children зовётся на каждый рендер, и в слоте строки не
+    // должно быть поповера уже в первом же рендере s2 (иначе кадр с чужим поповером).
+    const frames: boolean[] = [];
+    const spy = (parts: FeatureHeaderParts | null) => {
+      const kids = (parts?.subtitle as { props: { children: unknown[] } } | undefined)?.props.children;
+      frames.push(Boolean(kids?.[1]));
+      return layout(parts);
+    };
+    act(() => { root.render(createElement(FeatureChatCard, { ...props('s2'), children: spy })); });
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(frames.length, 'после смены чата не было ни одного рендера').toBeGreaterThan(0);
+    expect(frames.some(Boolean), 'в кадре смены чата поповер s1 был смонтирован (открытие без привязки к sessionId)').toBe(false);
     expect(inBody('feature-popover'), 'поповер чата s1 остался висеть в чате s2').toBeNull();
     expect(subtitleOf(container).getAttribute('aria-expanded')).toBe('false');
     expect(name(), 'после смены чата показана не первая фича').toBe('Первая фича s2');
@@ -432,7 +442,45 @@ describe('FeatureChatCard: закрытие поповера', () => {
   });
 });
 
+describe('FeatureChatCard: щит всплытия слота строки', () => {
+  const slotOf = (c: N) => findNodeByAttr(c, 'data-testid', 'feature-chat-subtitle-slot')!;
+  const fire = (node: N, name: 'onClick' | 'onKeyDown', key?: string): boolean => {
+    let stopped = false;
+    (reactProps(node)![name] as (e: unknown) => void)({ key, stopPropagation: () => { stopped = true; } });
+    return stopped;
+  };
+
+  for (const isMobile of [false, true]) {
+    it(`${isMobile ? '360' : '1280'}: клик и Enter/Space гасятся (не доходят до блока заголовка), Escape и Tab — нет`, async () => {
+      seedIndex(feat({ ...indexProgress }));
+      const c = await renderCard({ isMobile });
+      const slot = slotOf(c);
+      expect(fire(slot, 'onClick'), 'клик всплывает к ссылке на персону / переключателю чатов').toBe(true);
+      expect(fire(slot, 'onKeyDown', 'Enter'), 'Enter всплывает к блоку заголовка').toBe(true);
+      expect(fire(slot, 'onKeyDown', ' '), 'Space всплывает к блоку заголовка').toBe(true);
+      expect(fire(slot, 'onKeyDown', 'Escape'), 'Escape погашен — Modal/Menu не увидят его на document').toBe(false);
+      expect(fire(slot, 'onKeyDown', 'Tab'), 'Tab погашен — обход фокуса').toBe(false);
+    });
+  }
+});
+
 describe('FeatureChatCard: мобила 360', () => {
+  it('зона цели строки 40 целиком внутри тулбара: в потоке 16, вниз не дальше запаса до низа тулбара', async () => {
+    seedIndex(feat({ ...indexProgress }));
+    const c = await renderCard({ isMobile: true });
+    const st = (subtitleOf(c) as unknown as { style: Record<string, string> }).style;
+    const slotH = parseFloat((findNodeByAttr(c, 'data-testid', 'feature-chat-subtitle-slot') as unknown as { style: Record<string, string> }).style.height);
+    const padTop = parseFloat(st.padding.split(' ')[0]);
+    const padBottom = parseFloat(st.padding.split(' ')[2]);
+    // Слот держит 16, зона = padding + строка; margin отрицательный и равен padding — раскладка не растёт.
+    expect(slotH).toBe(16);
+    expect(padTop + slotH + padBottom, 'зона ниже 40').toBeGreaterThanOrEqual(40);
+    expect(st.margin, 'margin не компенсирует padding — тулбар раздует').toBe(`-${padTop}px 0 -${padBottom}px`);
+    // Высота тулбара 56, блок заголовка ≈ 38 по центру: под подписью до низа тулбара (56 − 38) / 2 = 9 px.
+    expect(padBottom, 'зона уходит ниже тулбара — под кромку и ленту').toBeLessThanOrEqual(9);
+  });
+
+
   it('кнопки тревоги в шапке нет; строка — цель 40; шторка: действие, «К фиче», «Ключевой» на всю ширину, minHeight 40', async () => {
     seedIndex(feat({
       ...indexProgress, state: 'waiting',

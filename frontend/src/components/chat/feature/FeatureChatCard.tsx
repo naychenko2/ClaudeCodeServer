@@ -9,7 +9,7 @@ import { Button } from '../../ui';
 import { FeatureTrackerBar, trackerBarAria } from './FeatureTrackerBar';
 import { featureTruthBar, type TruthBar } from './featureTruthModel';
 import { featureChatCardModel } from './featureChatCardModel';
-import { FeatureChatSubtitle } from './FeatureChatSubtitle';
+import { FeatureChatSubtitle, MOBILE_ROW_H } from './FeatureChatSubtitle';
 import { FeatureChatPopover } from './FeatureChatPopover';
 import { stepProgressFromIndex } from '../../../lib/featureProgress';
 
@@ -131,19 +131,25 @@ export function FeatureChatCard({ sessionId, projectId, isMobile, onFocusCompose
     ? 'К фиче'
     : backHere ? `‹ К фиче${backHere.showTab ? ` · ${backTabName}` : ''}` : 'К фиче ›';
 
-  // Строка + поповер/шторка под одним якорем. На 360 строка стоит ВНУТРИ блока заголовка,
-  // который у тулбара — кнопка переключателя чатов: клик по строке и по шторке (React-события
-  // всплывают и через портал) не должен открывать ещё и переключатель — гасим всплытие.
-  // Высота блока на 360 — подпись 11 px (16), цель 40 растёт вниз от неё и тулбар не раздувает.
+  // Строка + поповер/шторка под одним якорем. Строка стоит ВНУТРИ блока заголовка: на 360 это
+  // кнопка переключателя чатов, на 1280 у чата с персоной — ссылка на её карточку
+  // (personaCardLink). Клик по строке и по поповеру/шторке (React-события всплывают и через
+  // портал) не должен уходить выше — иначе откроется ещё и переключатель / карточка персоны.
+  // Клавиши гасим тем же щитом, КРОМЕ Escape и Tab: Escape слушает Modal/Menu на document
+  // (stopPropagation React-события обрывает его на корне), а Tab — обход фокуса.
+  // Высота слота на 360 — подпись 11 px (16), цель 40 растёт padding'ом, не раздувая тулбар.
   const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
+  const stopKey = (e: { key: string; stopPropagation: () => void }) => {
+    if (e.key !== 'Escape' && e.key !== 'Tab') e.stopPropagation();
+  };
   const subtitle = (
     <span
       ref={setAnchor}
       data-testid="feature-chat-subtitle-slot"
-      onClick={isMobile ? stop : undefined}
-      onKeyDown={isMobile ? stop : undefined}
+      onClick={stop}
+      onKeyDown={stopKey}
       style={isMobile
-        ? { display: 'flex', alignItems: 'flex-start', height: 16, minWidth: 0 }
+        ? { display: 'flex', alignItems: 'flex-start', height: MOBILE_ROW_H, minWidth: 0 }
         : { display: 'inline-flex', minWidth: 0, maxWidth: '100%' }}
     >
       <FeatureChatSubtitle model={model} isMobile={isMobile} expanded={open} onOpen={() => setOpenFor(open ? null : sessionId)} />

@@ -38,6 +38,15 @@ const WORD_STYLE: Record<'muted' | 'warn' | 'danger' | 'success', CSSProperties>
   success: { color: C.successText },
 };
 
+// 360: строка — 16 px в потоке (подпись 11 px), а цель нажатия 40 px — padding + равный
+// отрицательный margin: раскладка и высота тулбара (56 + 2) не растут, а зона целиком лежит
+// внутри тулбара. Вниз зона тянется на запас под блоком заголовка до низа тулбара
+// ((56 − 38) / 2 = 9), остальное — вверх, поверх нижней части имени чата (она в тех же
+// границах, что и подпись). Ниже тулбара — кромка-трекер и лента: зону туда не растим.
+export const MOBILE_ROW_H = 16;
+export const MOBILE_ZONE_BELOW = 9;
+export const MOBILE_ZONE_ABOVE = 40 - MOBILE_ROW_H - MOBILE_ZONE_BELOW;
+
 export function FeatureChatSubtitle({ model, isMobile, onOpen, expanded }: {
   model: FeatureChatCardModel;
   isMobile: boolean;
@@ -67,11 +76,11 @@ export function FeatureChatSubtitle({ model, isMobile, onOpen, expanded }: {
       aria-expanded={expanded}
       style={{
         display: 'inline-flex', alignItems: 'center', gap: SP.xs + 2, minWidth: 0, maxWidth: '100%',
-        // 1280: поля строки 2px × SP.xs+2 (макет .fline); 360: полей нет, высота — цель 40.
-        padding: isMobile ? 0 : `2px ${SP.xs + 2}px`,
+        // 1280: поля строки 2px × SP.xs+2 (макет .fline); 360: цель 40 за счёт padding/margin (см. MOBILE_ZONE_*).
+        padding: isMobile ? `${MOBILE_ZONE_ABOVE}px 0 ${MOBILE_ZONE_BELOW}px` : `2px ${SP.xs + 2}px`,
         borderRadius: R.sm, fontSize: isMobile ? FS.xs : FS.sm, color: C.textSecondary,
         whiteSpace: 'nowrap',
-        ...(isMobile ? { minHeight: 40 } : {}),
+        ...(isMobile ? { minHeight: 40, boxSizing: 'border-box', margin: `-${MOBILE_ZONE_ABOVE}px 0 -${MOBILE_ZONE_BELOW}px` } : {}),
       }}
     >
       {isMobile ? (

@@ -13,9 +13,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // S4b-1 (ADR-035, решение 4 шаги 1–3, решение 10): проверки применения пакета до записи.
 // Эти тесты держат фазу проверок — PrepareAsync: на диске ничего не пишется, файлы раздела
 // остаются байт в байт, меняется только статус пакета и только через WikiPackageStore.Transition.
-// Две заявки одного пакета дают ровно один переход. Случай «второй на ту же страницу» построен
-// internal-разделителем Prepare/Write (тем же, которым делён сервис, WikiApplyService.cs:9-12):
-// обе проверки на одной базе, затем записи — определённо, без рандомной гонки тредов.
+// Случай «второй на ту же страницу» построен internal-разделителем Prepare/Write (тем же,
+// которым делён сервис, WikiApplyService.cs:9-12): обе проверки на одной базе, затем записи —
+// определённо, без рандомной гонки тредов.
 // Запись (шаги 4–6: прообразы, файлы, журнал, откат) и полный ApplyAsync — WikiApplyTests.
 public class WikiApplyClaimTests : IDisposable
 {
@@ -317,7 +317,7 @@ public class WikiApplyClaimTests : IDisposable
     }
 
     [Fact]
-    public async Task ParallelApply_SamePage_SecondStale()
+    public async Task InterleavedPrepare_SamePage_SecondStale()
     {
         // Инвариант: база сверяется со снимком проверки; молчаливой перезаписи чужого применения нет
         // (сверка шага 5, WikiApplyService.cs:305-314). Переплетение строит internal-разделитель

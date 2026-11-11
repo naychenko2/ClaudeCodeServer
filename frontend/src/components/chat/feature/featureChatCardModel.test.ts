@@ -3,6 +3,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { featureChatCardModel } from './featureChatCardModel';
+import { featureEstimateView } from './featureTruthModel';
 import type { FeatureIndexFeature } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
 
@@ -118,14 +119,15 @@ describe('featureChatCardModel: состояния карточки (макет 
     expect(m.phrase).toEqual({ label: null, text: 'Сейчас Кира', tone: 'muted', name: 'Кира' });
   });
 
-  it('оценка есть: eta «≈ 2 ч 40 мин» из note.estimate (rowEta общий, не своя арифметика)', () => {
+  it('оценка есть: eta — срок общего источника rowEta (featureEstimateView), не своя арифметика', () => {
     const r = run({
       stepProgress: sp(6, 44),
       epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-11-10T10:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { etaMinutes: 160 } } },
     });
     const m = featureChatCardModel(feat(), r, 's-me', false, NOW);
-    expect(m.eta).toBeTruthy();
-    expect(m.eta).toContain('≈');
+    // rowEta — часы (в UTC «≈ 12:40»), не etaMain («≈ 2 ч 40 мин»): сверяем с общим источником, TZ-независимо.
+    expect(m.eta).not.toBeNull();
+    expect(m.eta).toBe(featureEstimateView(r, NOW)?.rowEta);
   });
 
   it('никто не идёт: слово состояния (очередь), tone muted', () => {

@@ -1,10 +1,11 @@
 // Секция «Расход» вкладки «Разбор» (FS-FR5; записка docs/mockups/feature-page-simplify-v4-clickable.md
 // §5 «5. Расход», в макете — секция rz-spend): сверху одна плитка «Расход» (деньги и токены,
-// FeatureStatsTiles с only=['spend']), ниже — строки токенов, общих чатов, моделей без цены,
-// «данные с» и полноты цены (ReviewKv). Порядок строк — по записке §5: токены → общие чаты →
-// модели без цены → «данные с» → «цена неполная». Все числа — из stats.spend как есть, своё
-// фронт не считает. «Доля кэша одной цифрой», «стоимость по шагам/возвратов», «дороже
-// типичной» — «нужно от бэка» (§5, «Б»), здесь их нет.
+// FeatureStatsTiles с only=['spend']), ниже — строки токенов, доли кэша, общих чатов, моделей
+// без цены, «данные с» и полноты цены (ReviewKv). Порядок строк — по записке §5: токены →
+// доля кэша → общие чаты → модели без цены → «данные с» → «цена неполная». Все числа — из
+// stats.spend как есть, своё фронт не считает. «Доля кэша» — величина 6 (решение Андрея
+// 11.11): stats.spend.cacheShare целым процентом. «Стоимость по шагам/возвратов», «дороже
+// типичной» — величины 9–13, отложены, здесь их нет.
 //
 // spend null — одна строка «Расход по этой фиче не учитывался»: нулевых плиток и нулевых
 // строк нет (плитку «Расход» бэк не отдаёт без spend — FeatureStatsTiles.tsx:3-4).
@@ -13,7 +14,7 @@ import { C, FS, SP, FONT } from '../../lib/design';
 import { FeatureStatsTiles } from './FeatureStatsTiles';
 import { ReviewKv, type ReviewKvRow } from './FeatureReviewParts';
 import { formatDateTime } from './FeatureStatsBits';
-import { formatTokens, modelGroupLabel } from './FeatureStatsFormat';
+import { formatTokens, modelGroupLabel, sharePercent } from './FeatureStatsFormat';
 import type { FeatureRun } from '../../types/featureRun';
 import type { FeatureStats } from '../../types/featureStats';
 
@@ -46,6 +47,10 @@ export function FeatureReviewSpend({ run, stats, isMobile = false }: FeatureRevi
     { label: 'Выход', value: formatTokens(spend.outputTokens) },
     { label: 'Чтение кэша', value: formatTokens(spend.cacheReadTokens) },
     { label: 'Запись кэша', value: formatTokens(spend.cacheCreationTokens) },
+    // «Доля кэша» — величина 6 (решение Андрея 11.11): sharePercent (тот же формат процента,
+    // что в «Подробнее», FeatureStatsFormat.ts:29). cacheShare null/нет (знаменатель 0,
+    // FeatureStats.ts:189-192) — строки нет.
+    { label: 'Доля кэша', value: spend.cacheShare == null ? null : sharePercent(spend.cacheShare) },
     // «Доля общих чатов» — поле shared это объект (токены, $, ходы, метод), не процент:
     // формулировка существующая, из «Подробнее» (FeatureStatsTab.tsx:172-177) — токены
     // input+output общей части и метод оценки из shared.method (не из stats.source).

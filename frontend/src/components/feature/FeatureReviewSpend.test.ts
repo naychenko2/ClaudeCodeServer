@@ -9,7 +9,9 @@
 // (2) `spend.shared ? … : null` → `… : 'нет'` (строка «Доля общих чатов» рисуется и без
 //     shared) — краснеет «shared null — строки нет»;
 // (3) `spend.costPartial ? … : null` → `… : 'полная'` (строка «Цена неполная» при
-//     costPartial=false) — краснеет «costPartial=false — строки нет».
+//     costPartial=false) — краснеет «costPartial=false — строки нет»;
+// (4) `spend.cacheShare == null ? null : sharePercent(…)` → `sharePercent(spend.cacheShare ?? 0)`
+//     (null показывается как «0 %») — краснеют «cacheShare null — строки нет» и «поля нет — строки нет».
 // После отката каждой мутации — зелёные.
 
 import { createElement } from 'react';
@@ -123,6 +125,28 @@ describe('строки токенов (c1)', () => {
   });
 });
 
+describe('доля кэша (величина 6)', () => {
+  it('cacheShare=0.6234 — «Доля кэша» · «62 %» (целый процент), сразу после «Записи кэша»', () => {
+    const pairs = kvPairs(html(mkStats({ spend: mkSpend({ cacheShare: 0.6234 }) })));
+    expect(pairs).toContainEqual(['Доля кэша', '62 %']);
+    const labels = pairs.map((p) => p[0]);
+    expect(labels.indexOf('Доля кэша')).toBe(labels.indexOf('Запись кэша') + 1);
+  });
+
+  it('cacheShare=0 — «0 %» (значение есть, доля нулевая)', () => {
+    const pairs = kvPairs(html(mkStats({ spend: mkSpend({ cacheShare: 0 }) })));
+    expect(pairs).toContainEqual(['Доля кэша', '0 %']);
+  });
+
+  it('cacheShare null — строки нет', () => {
+    expect(kvPairs(html(mkStats({ spend: mkSpend({ cacheShare: null }) }))).some((p) => p[0] === 'Доля кэша')).toBe(false);
+  });
+
+  it('поля cacheShare нет (аддитивное, старый ответ) — строки нет', () => {
+    expect(kvPairs(html(mkStats({ spend: mkSpend() }))).some((p) => p[0] === 'Доля кэша')).toBe(false);
+  });
+});
+
 describe('доля общих чатов', () => {
   it('shared (journal) — «≈ N токенов (оценка, по журналу)», токены input+output shared', () => {
     const pairs = kvPairs(html(mkStats({
@@ -186,18 +210,19 @@ describe('«данные с» и полнота цены', () => {
   });
 });
 
-describe('общий порядок строк (записка §5)', () => {
-  it('токены → общие чаты → модели без цены → «данные с» → «цена неполная»', () => {
+describe('общий порядок строк (записка §5 + величина 6)', () => {
+  it('токены → доля кэша → общие чаты → модели без цены → «данные с» → «цена неполная»', () => {
     const pairs = kvPairs(html(mkStats({
       spend: mkSpend({
         costPartial: true,
         hiddenCostModels: ['local-qwen-7b'],
+        cacheShare: 0.6234,
         shared: { inputTokens: 1000, outputTokens: 1000, cacheReadTokens: 0, cacheCreationTokens: 0, costUsd: 0.1, turns: 2, method: 'journal' },
       }),
     })));
     expect(pairs.map((p) => p[0])).toEqual([
       'Вход', 'Выход', 'Чтение кэша', 'Запись кэша',
-      'Доля общих чатов', 'Модели без цены', 'Данные с', 'Цена неполная',
+      'Доля кэша', 'Доля общих чатов', 'Модели без цены', 'Данные с', 'Цена неполная',
     ]);
   });
 });

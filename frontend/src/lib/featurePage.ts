@@ -148,11 +148,14 @@ export interface FeatureAsk {
   sessionId?: string | null;
 }
 
-// «Срок» (FS-V2, бэк FeatureBrief.BriefEta, FeatureBrief.cs:156): ОДИН срок вместо выбора
-// карточки между note.estimate и estimate: выбор источника делает бэк (note → history),
+// «Срок» (FS-V2, бэк FeatureBrief.BriefEta, FeatureBrief.cs:162, EtaOf :621): ОДИН срок вместо
+// выбора карточки между note.estimate и estimate: выбор источника делает бэк (note → history),
 // карточка не выбирает сама. minutes есть всегда (eta null ⇔ числа нет — «одного срока» без
-// числа не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
-// clockStopped — почему даты нет при живом сроке (wait | stopped | null).
+// числа не бывает); endsAt — дата только от оценки оркестратора, у истории даты нет никогда.
+// FS-T2 (решение Андрея 11.11, карточка 47a8f163): clockStopped='stopped' — часы стоят из-за
+// остановки, дата остаётся прежней оценкой (карточка выводит подпись «оценка до остановки»);
+// 'wait' — часы стоят, пока ждём человека: дату бэк гасит (FeatureBrief.cs:642), карточка
+// вместо даты выводит жёлтую подпись «часы стоят, пока ждём тебя».
 export interface FeatureEta {
   minutes: number;
   endsAt?: string | null;

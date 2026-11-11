@@ -40,11 +40,13 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Gateway/TurnTokenService.cs"] = (1, "привязка токена хода к устройству"),
         ["backend/ClaudeHomeServer.DeviceAgent/Pairing/DevicePairing.cs"] = (1, "ответ сопряжения устройства, не проект"),
         // IsLocal — признак локального LLM-провайдера, к проектам не относится
-        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (4, "LLM-провайдер"), // четвёртое — комментарий к StatsEngine про основной локальный провайдер
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (9, "LLM-провайдер"),
+        // Девять прежних плюс три про выбор основного локального провайдера панели «Локальные
+        // модели» (два комментария и p.IsLocal в OrderBy) — локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (12, "LLM-провайдер"),
         // Признак локальности LLM-провайдера в /api/models (LlmCapabilities.IsLocal) и его
         // отдача наружу (ModelsController) — про провайдера, не про локальность проекта.
         ["backend/ClaudeHomeServer.Core/Services/Llm/LlmCapabilities.cs"] = (2, "LLM-провайдер"),

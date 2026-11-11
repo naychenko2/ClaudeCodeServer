@@ -25,6 +25,9 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
     private readonly IOptionsMonitor<LocalModelStatsOptions> _options;
     private readonly TimeProvider _time;
     private readonly ISessionDirectory? _sessionsDir;
+    // B5: реестр провайдеров — по нему чат получает дорожку панели (StatsTrackOf).
+    // Нет реестра — все чаты на «main» (поведение до фичи).
+    private readonly LlmProviderRegistry? _providers;
     private readonly object _gate = new();
     private readonly Dictionary<string, SessionState> _sessions = new();
 
@@ -63,7 +66,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         TimeProvider time,
         ILocalModelStatsReader? reader = null,
         ILocalModelLiveSink? sink = null,
-        ISessionDirectory? sessionsDir = null)
+        ISessionDirectory? sessionsDir = null,
+        LlmProviderRegistry? providers = null)
     {
         _tokens = tokens;
         _options = options;
@@ -71,6 +75,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         _reader = reader;
         _sink = sink;
         _sessionsDir = sessionsDir;
+        _providers = providers;
     }
 
     // Подписка на шину хода: ход завершён (итог) и сессия удалена (чистка состояния).
@@ -87,7 +92,10 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
     // turnId (один на процесс CLI): ResolveSession(turnId) → (sessionId, ownerId).
 
     // Запрос начался: фаза queued (есть ждущие) или prefill (нет), в работу.
-    public void OnRequestStarted(string requestId, string turnId)
+    // providerKey (B5) — ключ провайдера запроса: хранится в ЗАПИСИ запроса (по requestId),
+    // не в поле счётчика: параллельные запросы разных сессий на разных провайдерах не
+    // затирают друг друга; чат получает провайдера последнего начатого своего запроса.
+    public void OnRequestStarted(string requestId, string turnId, string? providerKey = null)
     {
         var (sessionId, ownerId) = ResolveSession(turnId);
         if (sessionId is null) return; // бесхозный: в чат не идёт
@@ -102,6 +110,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
                 Phase = phase,
                 StartedAt = now,
                 QueuedStartAt = phase == "queued" ? now : null,
+                ProviderKey = providerKey,
             };
             s.LastPhase = phase;
             s.LastActivity = now;
@@ -374,11 +383,14 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
 
     // ─── ILocalModelTurnMeter: живой вид для панели «Локальные модели» и REST ─────────────
 
-    // Чаты с запросом в работе на локальном движке. OwnerId — из токена хода (grant),
-    // название/проект — через ISessionDirectory (SessionManager); без шва — null.
-    // GenTps — средняя скорость завершённых запросов текущего хода (токены/сек);
+    // Чаты с запросом в работе на локальном движке, относящиеся к указанной дорожке.
+    // OwnerId — из токена хода (grant), название/проект — через ISessionDirectory (SessionManager);
+    // без шва — null. GenTps — средняя скорость завершённых запросов текущего хода (токены/сек);
     // null — первый запрос ещё не завершён.
-    public IReadOnlyList<TurnChatLive> ActiveChats()
+    // B5: дорожка чата = StatsTrackOf провайдера последнего начатого запроса сессии (ключ —
+    // в записи запроса, под _gate); null-провайдер, неизвестный ключ или нет реестра — «main»
+    // (поведение до фичи); известный провайдер без дорожки — ни в одной вкладке (B8). Порядок списка — прежний.
+    public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main")
     {
         var now = _time.GetUtcNow();
         lock (_gate)
@@ -396,6 +408,8 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
                 var hasFirstToken = s.InWork.Values.Any(r => r.FirstTokenAt is not null);
                 var timeout = hasFirstToken ? IdleTimeout : PrefillIdleTimeout;
                 if (now - s.LastActivity > timeout) continue;
+                var providerKey = LastStartedProviderKey(s);
+                if (TrackOf(providerKey) != track) continue;
                 var info = _sessionsDir?.GetById(sessionId);
                 list.Add(new TurnChatLive(
                     sessionId,
@@ -403,10 +417,37 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
                     info?.ProjectId,
                     info?.Name,
                     CurrentGenTps(s.Acc),
-                    s.LastPhase));
+                    s.LastPhase,
+                    providerKey));
             }
             return list;
         }
+    }
+
+    // B5: провайдер чата — ключ последнего начатого запроса сессии (под _gate, InWork —
+    // только запросы в работе: завершённый запрос не держит свой провайдер — «устаревший
+    // ответ» не меняет провайдер активного). Нет запросов в работе — null; дорожку по ключу решает TrackOf (пустая дорожка — там).
+    private string? LastStartedProviderKey(SessionState s)
+    {
+        string? key = null;
+        var lastStart = DateTimeOffset.MinValue;
+        foreach (var r in s.InWork.Values)
+            if (r.StartedAt >= lastStart)
+            {
+                lastStart = r.StartedAt;
+                key = r.ProviderKey;
+            }
+        return key;
+    }
+
+    // B5/B8: дорожка по провайдеру: явная (StatsTrackOf) или «main» для null-провайдера, счётчика
+    // без реестра и неизвестного реестру ключа. Известный провайдер, которого «в статистику движков
+    // не пишут» (StatsTrackOf = null, контракт B1), имеет пустую дорожку: null не равен ни одной вкладке.
+    private string? TrackOf(string? providerKey)
+    {
+        if (providerKey is null || _providers is null || _providers.GetByKey(providerKey) is null)
+            return LocalModelStatsPoller.MainTrackName;
+        return _providers.StatsTrackOf(providerKey);
     }
 
     // Итог последнего завершённого хода сессии; null — ходов не было (или сессия не известна,
@@ -469,6 +510,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
 
     // Запрос в работе: фаза, момент старта, момент первого токена, старт фазы queued.
     // M5: TokenCount — накопленный счётчик токенов запроса (≈1 на content_block_delta).
+    // B5: ProviderKey — ключ провайдера запроса (для дорожки чата в ActiveChats).
     private sealed class RequestState
     {
         public string Phase = "prefill";
@@ -476,6 +518,7 @@ public sealed class LocalModelTurnMeter : ILocalModelRequestSink, ILocalModelTur
         public DateTimeOffset? FirstTokenAt;
         public DateTimeOffset? QueuedStartAt;
         public int TokenCount;
+        public string? ProviderKey;
     }
 
     // Состояние сессии: запросы в работе + накопленный итог текущего хода + дроссель живых.

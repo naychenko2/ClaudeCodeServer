@@ -54,6 +54,7 @@ public class HostPerClassRatchetGuardTests
         ["ClaudeHomeServer.Tests.Controllers.TasksControllerTests"] = "класс на пуле общих хостов CORE (SharedHostPool); фабрика в отдельных тестах со своей конфигурацией",
         ["ClaudeHomeServer.Tests.Services.EngineCallLedgerDiTests"] = "проверка DI-композиции: хост на конфигурацию",
         ["ClaudeHomeServer.Tests.Services.LocalEngineGateDiTests"] = "проверка DI-композиции: хост на конфигурацию",
+        ["ClaudeHomeServer.Tests.Services.LocalStats.LocalModelTurnMeterDiTests"] = "проверка DI-композиции: хост на конфигурацию провайдеров",
         ["ClaudeHomeServer.Tests.Services.Mcp.Http.HiggsfieldRegistrationTests"] = "проверка регистрации: хост на конфигурацию",
         ["ClaudeHomeServer.Tests.Services.Reader.ReaderSubsystemRegistrationTests"] = "проверка регистрации подсистемы: хост на конфигурацию",
         ["ClaudeHomeServer.Tests.Subsystems.SpendDisabledTests"] = "тест СнапшотПриSubsystemsOffDynamicModulesOn: хост с выключенными подсистемами и включёнными динамическими модулями",
@@ -139,7 +140,7 @@ public class HostPerClassRatchetGuardTests
 
     // Потолки списков: запись в Remainder/UndoneH0 не лазейка, а долг — размер только уменьшается
     internal const int UndoneH0Ceiling = 69;
-    internal const int RemainderCeiling = 28;
+    internal const int RemainderCeiling = 29;
 
     // Скан решения (все тестовые сборки по метаданным и IL) — Slow по «Правилу новой метки» testing.md
     [Fact]

@@ -186,3 +186,4 @@ frontend/e2e/qa/.phase-components
 # Файл фазы (кладёт пронящий) и засев (пишет спека) QA-спека приёмки «неактивная вертикаль»
 frontend/e2e/qa/.phase-opt-context
 frontend/e2e/qa/.seed-opt-context.json
+frontend/e2e/qa/.phase-lmvllm

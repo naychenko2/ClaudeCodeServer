@@ -46,6 +46,12 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         public StatsHost Plain { get; } = new();
         // Второй стенд gemma: BaseUrl/Model/StateUrl/FallbackRoute/MetricsUrl из конфига
         public StatsHost Engine { get; } = new(EngineConfig(metrics: true));
+        public StatsHost EngineLabeled { get; } = new(config: [.. EngineConfig(metrics: true),
+            ("LocalEngines:gemma:EngineLabel", "Strata 1.0"),
+            ("LocalEngines:gemma:ModelLabel", "Gemma 4 26B")]);
+        public StatsHost EngineBlankLabel { get; } = new(config: [.. EngineConfig(metrics: true),
+            ("LocalEngines:gemma:EngineLabel", "  "),
+            ("LocalEngines:gemma:ModelLabel", "")]);
         public StatsHost EngineNoMetrics { get; } = new(EngineConfig(metrics: false));
         // Контракт деградации по отключаемой images: IComfyStats в хосте нет вовсе —
         // подменой регистрации (см. StatsHost.noComfy), а не ключом Subsystems:images:Enabled
@@ -69,6 +75,8 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         {
             Plain.Dispose();
             Engine.Dispose();
+            EngineLabeled.Dispose();
+            EngineBlankLabel.Dispose();
             EngineNoMetrics.Dispose();
             EngineNoComfy.Dispose();
             LabelsSet.Dispose();
@@ -153,9 +161,9 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         // Второй стенд: читатель главного — по просьбе, дорожки и арбитр — фейки
         public StatsHost UseEngine(
             FakeDirectory dir, FakeArbiterReader? arbiter = null, IComfyStats? comfy = null,
-            bool mainConfigured = false)
+            bool mainConfigured = false, ILocalModelTurnMeter? meter = null)
         {
-            Use(new FakeReader
+            Use(meter: meter, reader: new FakeReader
             {
                 Current = new LocalModelStatsCurrent
                 {
@@ -187,7 +195,7 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         private sealed class SwapMeter : ILocalModelTurnMeter
         {
             public ILocalModelTurnMeter Target { get; set; } = new FakeMeter();
-            public IReadOnlyList<TurnChatLive> ActiveChats() => Target.ActiveChats();
+            public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main") => Target.ActiveChats(track);
             public LocalModelTurnSummary? GetLastTurn(string sessionId) => Target.GetLastTurn(sessionId);
         }
 
@@ -1458,6 +1466,88 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
         reason.TryGetProperty("known", out _).Should().BeFalse("unknown остаётся unknown");
     }
 
+    // B7: чаты именованной дорожки — только во вкладке своего движка, с той же анонимизацией,
+    // что у main; main чужую дорожку не показывает; othersCount named вычитает свои чаты и callsNow.
+    // Мутация: вернуть Chats = [] в NamedStatsAsync / звать ActiveChats("main") — тест краснеет.
+    [Fact]
+    public async Task StatsEngine_Engine_ЧатыДорожкиАнонимизированыИНеПопадаютВMain()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working", Running = 4, Waiting = 1 };
+        var meter = new FakeMeter();
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader(), meter: meter);
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        var otherId = SubOf(factory.GetToken(TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword));
+        meter.ByTrack["gemma"] =
+        [
+            new TurnChatLive("sess-mine", myId, "proj-1", "Мой чат", 30.0, "generating"),
+            new TurnChatLive("sess-other", otherId, "proj-2", "Чужой", 10.0, "queued"),
+        ];
+        factory.Services.GetRequiredService<EngineCallLedger>().Begin("gemma", "chat-retitle");
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+
+        var chats = body.GetProperty("chats");
+        chats.GetArrayLength().Should().Be(2);
+        chats[0].GetProperty("sessionId").GetString().Should().Be("sess-mine");
+        chats[1].GetProperty("sessionId").ValueKind.Should().Be(JsonValueKind.Null, "чужой чат анонимен");
+        chats[1].GetProperty("title").GetString().Should().Be("Чат другого пользователя");
+        body.GetProperty("othersCount").GetInt32().Should().Be(2, "5 на движке − 2 чата − 1 вызов места");
+
+        var main = await (await admin.GetAsync("/api/local-model/stats")).Content.ReadFromJsonAsync<JsonElement>();
+        main.GetProperty("chats").GetArrayLength().Should().Be(0, "чаты чужой дорожки во вкладку main не попадают");
+    }
+
+    // B7 c2: running=3, 1 свой чат, 1 вызов места → othersCount == 1.
+    [Fact]
+    public async Task StatsEngine_Engine_OthersCount_ВычитаетЧатыИВызовыМест()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "llama-server", Status = "working", Running = 3, Waiting = 0 };
+        var meter = new FakeMeter();
+        var factory = _hosts.Engine.UseEngine(dir, new FakeArbiterReader(), meter: meter);
+        var myId = SubOf(factory.GetToken(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword));
+        meter.ByTrack["gemma"] = [new TurnChatLive("sess-mine", myId, "proj-1", "Мой чат", 30.0, "generating")];
+        factory.Services.GetRequiredService<EngineCallLedger>().Begin("gemma", "chat-retitle");
+
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("othersCount").GetInt32().Should().Be(1);
+    }
+
+    // B7: подписи именованного движка из LocalEngines (EngineLabel/ModelLabel); пустая — как не заданная.
+    [Fact]
+    public async Task StatsEngine_Engine_ПодписиИзСпецификации()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "vllm", Model = "из-снимка", Status = "working" };
+        var factory = _hosts.EngineLabeled.UseEngine(dir);
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("engineLabel").GetString().Should().Be("Strata 1.0");
+        body.GetProperty("model").GetString().Should().Be("Gemma 4 26B");
+
+        var plain = _hosts.Engine.UseEngine(dir);
+        using var admin2 = plain.CreateAuthenticatedClient();
+        var body2 = await (await admin2.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body2.TryGetProperty("engineLabel", out _).Should().BeFalse("подпись не задана — поля нет в ответе");
+        body2.GetProperty("model").GetString().Should().Be("из-снимка", "без ModelLabel — модель из снимка");
+    }
+
+    // Пустая строка подписи — null в DTO (общий Label()).
+    [Fact]
+    public async Task StatsEngine_Engine_ПустаяПодписьЭтоNull()
+    {
+        var dir = new FakeDirectory();
+        dir.Currents["gemma"] = new LocalModelStatsCurrent { Configured = true, Engine = "vllm", Model = "из-снимка", Status = "working" };
+        var factory = _hosts.EngineBlankLabel.UseEngine(dir);
+        using var admin = factory.CreateAuthenticatedClient();
+        var body = await (await admin.GetAsync("/api/local-model/stats?engine=gemma")).Content.ReadFromJsonAsync<JsonElement>();
+        body.TryGetProperty("engineLabel", out _).Should().BeFalse("пустая подпись — поля нет в ответе");
+        body.GetProperty("model").GetString().Should().Be("из-снимка");
+    }
+
     // Статус "yielded" (Б3b) проходит как есть: выгруженная под арбитром модель — не авария,
     // downSince null. Мутация: подменить "yielded" на "down" в контроллере — тест краснеет.
     [Fact]
@@ -1524,7 +1614,10 @@ public class LocalModelStatsControllerTests : IClassFixture<LocalModelStatsContr
     public sealed class FakeMeter : ILocalModelTurnMeter
     {
         public List<TurnChatLive> Chats { get; set; } = [];
-        public IReadOnlyList<TurnChatLive> ActiveChats() => Chats;
+        // Чаты именованных дорожек: ключ — имя дорожки; main — Chats
+        public Dictionary<string, List<TurnChatLive>> ByTrack { get; } = [];
+        public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main") =>
+            track == "main" ? Chats : ByTrack.GetValueOrDefault(track) ?? [];
         public LocalModelTurnSummary? GetLastTurn(string sessionId) => null;
     }
 

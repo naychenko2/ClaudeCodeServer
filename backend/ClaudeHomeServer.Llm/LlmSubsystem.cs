@@ -432,6 +432,7 @@ public sealed class LlmSubsystem : IAppSubsystem
         // ILocalModelLiveSink (рассылка живых событий в чат) регистрируется в Main (шаг 19);
         // без него счётчик работает, события уходят в никуда. ISessionDirectory (Core-шов на
         // SessionManager) — название/проект чата для ActiveChats; без шва — null.
+        // LlmProviderRegistry (седьмой шов) — дорожка хода по ProviderKey маршрута (StatsTrackOf); без реестра — «main».
         services.AddSingleton<LocalModelTurnMeter>(sp =>
         {
             var meter = new LocalModelTurnMeter(
@@ -440,7 +441,8 @@ public sealed class LlmSubsystem : IAppSubsystem
                 sp.GetRequiredService<TimeProvider>(),
                 sp.GetService<ILocalModelStatsReader>(),
                 sp.GetService<ILocalModelLiveSink>(),
-                sp.GetService<ISessionDirectory>());
+                sp.GetService<ISessionDirectory>(),
+                sp.GetService<LlmProviderRegistry>());
             meter.Subscribe(sp.GetRequiredService<Turn.ITurnEventBus>());
             return meter;
         });

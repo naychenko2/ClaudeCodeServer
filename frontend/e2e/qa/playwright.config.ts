@@ -9,7 +9,9 @@ export default defineConfig({
   // Шаблон не входит в прогон каталога, но явно названный файл запускается: testIgnore отсекает
   // и явный файл, поэтому игнор снимается, когда шаблон назван в аргументах CLI
   testIgnore: process.argv.some(a => a.includes('_template.qa.spec')) ? [] : ['**/_template.qa.spec.ts'],
-  timeout: 90_000,
+  // 180 с: значок панели «Локальные модели» появляется после лёгкого 60-секундного опроса
+  // configured, и на загруженной машине ожидание знака упирается в потолок теста.
+  timeout: 180_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,

@@ -33,7 +33,9 @@ export function mockLocalModelStats(state: LocalModelMockState = 'working'): Loc
   // working: цифры макета «Заполненное: работает» (2 идёт, 0 ждут, 38/1240 ток/с)
   const base: LocalModelStats = {
     configured: true,
-    engine: 'vLLM',
+    // engine — тип движка в том виде, как его отдаёт wire: бэк нормализует до
+    // lowercase (LocalModelStatsPoller.cs: ToLowerInvariant) — 'vllm', не 'vLLM'
+    engine: 'vllm',
     model: 'Qwen3.5-32B',
     status: 'working',
     running: 2,
@@ -268,7 +270,8 @@ export function mockEngineStats(state: EngineMockState = 'yielded'): LocalModelS
       { index: 0, name: 'RTX 3090', utilPerc: 34, memUsedMb: 8192, memTotalMb: 24576, tempC: 52, powerW: 88, powerLimitW: 350 },
     ],
     history: [],
-    // У второй движок нет чатов: «кто сейчас на модели» — места сервера, их несёт duty.callsNow
+    // Чатов у второй движок в этой фикстуре нет (их добавит B7): «кто сейчас на модели»
+    // заполняют места сервера, их несёт duty.callsNow
     chats: [],
     unsupported: [...ENGINE_UNSUPPORTED],
   };
@@ -355,4 +358,60 @@ export function mockEngineStats(state: EngineMockState = 'yielded'): LocalModelS
         duty: duty(null),
       };
   }
+}
+
+// === Именованный стенд на Video с vLLM-движком (LocalEngines:<name>:MetricsEngine = 'vllm') ===
+// Тот же именованный стенд на той же карте Video, но тип движка в снимке — vLLM:
+// engine 'vllm' (lowercase, как нормализует бэк — NamedLocalEngines.cs), KV-кэш и prefix-
+// попадания сообщаются (kv заполнен, 'KvUsagePerc' в unsupported нет → карточка
+// «Нагрузка и кэш» открыта), prompt-время включает очередь (подпись «с ожиданием» здесь
+// правильная), ступенчатой модели счётчиков нет. RAM-тиер (офлойда в CPU) — часть
+// контракта vLLM-источника: он читает offload-серии (VllmMetricsSource:
+// kv_offload_cpu_cache_usage_perc и счётчики попаданий), поэтому поля ramTier в kv есть
+// и согласованы с тестовой историей historyWithKv (ram 2/20 = 10 %), которую рисует
+// график. Состояния дежурства в этой фикстуре не моделируются — они у mockEngineStats.
+export function mockNamedVllmStats(): LocalModelStats {
+  return {
+    configured: true,
+    engine: 'vllm',
+    model: 'gemma-27b',
+    status: 'working',
+    running: 1,
+    waiting: 0,
+    othersCount: 0,
+    speed: { genPerStream: 24, prefillPerStream: 780 },
+    kv: { usagePerc: 0.42, ramTierPerc: 0.18, prefixHitPerc: 0.83, ramTierHitPerc: 0.1, preemptions15m: 0 },
+    gpus: [
+      { index: 0, name: 'RTX 3090', utilPerc: 34, memUsedMb: 8192, memTotalMb: 24576, tempC: 52, powerW: 88, powerLimitW: 350 },
+    ],
+    history: [],
+    chats: [],
+    unsupported: [],
+  };
+}
+
+// === Именованный стенд: чаты и места в одной карточке «Кто сейчас» (F3) ===
+// Тот же именованный vLLM-стенд на Video, но снимок его дорожки несёт и чаты своей
+// дорожки (живыми они станут с B7 — здесь фикстура), и один открытый вызов места:
+// 1 свой чат (кликабельный), 1 чужой и 1 место (оба не кликабельны), «прочих» нет.
+export function mockNamedMixedStats(): LocalModelStats {
+  const now = Date.now();
+  return {
+    ...mockNamedVllmStats(),
+    chats: [
+      { own: true, sessionId: 's-named-1', projectId: 'proj-ai-home', title: 'Ревью Video-стенда', phase: 'generating', genTps: 24 },
+      { own: false, title: 'Чат: тесты редактора картинок', phase: 'reading' },
+    ],
+    // Минимальное дежурство: арбитр жив ('ready'), один открытый вызов места на
+    // «локальном» звене. Состояния дежурства покрыты mockEngineStats — здесь только
+    // строка «Кто сейчас».
+    duty: {
+      arbiter: {
+        reachable: true, lastSeenAt: now, state: 'ready', mode: 'exclusive',
+        sinceAt: now - 40 * 60_000, yields: 2, returns: 2, lastYieldS: 0.2, lastReturnS: 6.1,
+        quietLeftS: null, reasons: [], leases: [],
+      },
+      callsNow: [{ place: 'Заголовок чата', link: 'engine', durationS: 1.4 }],
+    },
+  };
 }

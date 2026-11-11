@@ -193,7 +193,10 @@ public static class LlmGatewayEndpoints
             var requestId = Guid.NewGuid().ToString("N");
             if (observer is not null)
             {
-                sink!.OnRequestStarted(requestId, grant.TurnId);
+                // providerKey — ключ провайдера ИЗ МАРШРУТА гранта (B6): атрибуция по маршруту,
+                // а не по разрешению модели; у подписки провайдера нет — null. Гейт создания
+                // наблюдателя (CreateUsageObserver) не меняется: учёт хода — только шлюз (ADR-029 п.3).
+                sink!.OnRequestStarted(requestId, grant.TurnId, grant.Route?.ProviderKey);
                 // Подсказочные заголовки CLI (ADR-029): класс запроса, тип агента, компакция —
                 // бесплатная атрибуция для разреза «основной ход / субагенты / компакция».
                 // Недоверенный ввод: GatewayHintHeaders.From валидирует/обрезает; null — нет.

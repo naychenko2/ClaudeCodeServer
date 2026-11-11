@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -210,5 +211,76 @@ public class NamedLocalEngineTests
         Assert.Equal("http://192.168.7.107:18030", gemma.Client.BaseUrl);
         Assert.Null(engines.Get("plain")!.Spec.FallbackRoute);
         Assert.Equal("plain", engines.EngineFor(LocalActionCatalog.TaskClassify));
+    }
+
+    [Fact]
+    public void Config_ReadsMetricsEngineAndLabels_DefaultsWithoutThem()
+    {
+        var config = Config(new()
+        {
+            // Тип движка и подписи заданы явно (с пробелами — обрезаются).
+            ["LocalEngines:gemma:BaseUrl"] = "http://192.168.7.107:18030",
+            ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+            ["LocalEngines:gemma:Actions:0"] = LocalActionCatalog.ChatTitle,
+            ["LocalEngines:gemma:MetricsEngine"] = "vllm",
+            ["LocalEngines:gemma:EngineLabel"] = " Strata 0.2.7 ",
+            ["LocalEngines:gemma:ModelLabel"] = " Bonsai 2 ",
+            // Верхний регистр типа — нормализуется в нижний (как Stats.Engine основной локали).
+            ["LocalEngines:upper:BaseUrl"] = "http://192.168.7.107:18040",
+            ["LocalEngines:upper:Model"] = "m",
+            ["LocalEngines:upper:Actions:0"] = LocalActionCatalog.NotesTags,
+            ["LocalEngines:upper:MetricsEngine"] = "VLLM",
+            // Ни типа, ни подписей — дефолты поля: "llama-server", null.
+            ["LocalEngines:plain:BaseUrl"] = "http://192.168.7.107:18050",
+            ["LocalEngines:plain:Model"] = "m",
+            ["LocalEngines:plain:Actions:0"] = LocalActionCatalog.TaskClassify,
+        });
+        var engines = new NamedLocalEngines(new NullHttpFactory(), config, NullLoggerFactory.Instance);
+        var gemma = engines.Get("gemma")!;
+        Assert.Equal("vllm", gemma.Spec.MetricsEngine);
+        Assert.Equal("Strata 0.2.7", gemma.Spec.EngineLabel);
+        Assert.Equal("Bonsai 2", gemma.Spec.ModelLabel);
+        Assert.Equal("vllm", engines.Get("upper")!.Spec.MetricsEngine);
+        var plain = engines.Get("plain")!;
+        Assert.Equal("llama-server", plain.Spec.MetricsEngine);
+        Assert.Null(plain.Spec.EngineLabel);
+        Assert.Null(plain.Spec.ModelLabel);
+    }
+
+    [Fact]
+    public void Config_UnknownMetricsEngine_WarnsOnceAndMeansLlamaServer()
+    {
+        var config = Config(new()
+        {
+            ["LocalEngines:gemma:BaseUrl"] = "http://192.168.7.107:18030",
+            ["LocalEngines:gemma:Model"] = "gemma-4-26b-a4b",
+            ["LocalEngines:gemma:MetricsEngine"] = "tgi",
+            ["LocalEngines:gemma:Actions:0"] = LocalActionCatalog.ChatTitle,
+        });
+        var log = new RecordingLogger();
+        var engines = new NamedLocalEngines(new NullHttpFactory(), config, new SingleLoggerFactory(log));
+        Assert.Equal("llama-server", engines.Get("gemma")!.Spec.MetricsEngine);
+        var warnings = log.Entries.Where(e => e.Level == LogLevel.Warning).ToList();
+        Assert.Single(warnings);
+        Assert.Contains("gemma", warnings[0].Message);
+        Assert.Contains("tgi", warnings[0].Message);
+    }
+
+    private sealed class RecordingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter) =>
+            Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    private sealed class SingleLoggerFactory(RecordingLogger log) : ILoggerFactory
+    {
+        public ILogger CreateLogger(string categoryName) => log;
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
     }
 }

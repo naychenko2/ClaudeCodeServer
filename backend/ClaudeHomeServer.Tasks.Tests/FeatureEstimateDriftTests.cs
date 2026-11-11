@@ -182,6 +182,43 @@ public class FeatureEstimateDriftTests
         FeatureEstimateDrift.Build(run, null).Accuracy.Should().BeNull();
     }
 
+    // Доработка по ревью (FS-M478): Summary есть и у смерженной с открытым эпиком
+    // (FeatureProjector.cs:573–574), но фича не закрыта (Closed требует эпика Done,
+    // FeatureProjector.cs:559–560) → accuracy = null. Тот же набор задач с эпиком Done —
+    // закрытая фича → 1.5. Образец состояния — FeatureQuietTests.cs:62–86.
+    [Fact]
+    public void Точность_СмерженаЭпикОткрыт_Null_АЭпикDone_Полтора()
+    {
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = "ep", Role = TaskRoles.Final, Title = "финал",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = T0.AddMinutes(10), CompletedAt = T0.AddMinutes(100),
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        var merge = new TaskItem
+        {
+            Id = "m1", FeatureId = "ep", Role = TaskRoles.Merge, Title = "мерж",
+            Status = TaskItemStatus.Done,
+            ClaudeStartedAt = T0.AddMinutes(110), CompletedAt = T0.AddMinutes(900),
+        };
+
+        // Смержена, эпик открыт: Summary есть, Closed=false → accuracy = null.
+        var openRun = Run(Feature(initialEta: 600), final, merge);
+        openRun.State.Should().Be(FeatureStates.Merged);
+        openRun.Closed.Should().BeFalse("эпик остаётся открытым");
+        openRun.Summary.Should().NotBeNull("итог у смерженной виден — на нём и ошибались");
+        FeatureEstimateDrift.Build(openRun, null).Accuracy.Should().BeNull();
+
+        // Те же задачи, эпик Done: фича закрыта → accuracy = 900/600 = 1.5.
+        var doneEpic = Feature(initialEta: 600);
+        doneEpic.Status = TaskItemStatus.Done;
+        var closedRun = Run(doneEpic, final, merge);
+        closedRun.Closed.Should().BeTrue("эпик Done");
+        closedRun.Summary!.DurationMinutes.Should().Be(900.0);
+        FeatureEstimateDrift.Build(closedRun, null).Accuracy.Should().Be(1.5);
+    }
+
     // Закрытая, но базовой оценки нет (или она нулевая — делить не на что) → null.
     [Theory]
     [InlineData(null)]

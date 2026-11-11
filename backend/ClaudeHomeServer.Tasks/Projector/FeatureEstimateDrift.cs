@@ -11,8 +11,9 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // - ShiftMinutes — Current − First (null, если строк с оценкой меньше двух);
 // - DenominatorChanges — сколько раз total менялся между соседними строками estimate_set,
 //   где total не null (строки без total пропускаются, сменой не считаются);
-// - Accuracy — только у закрытой фичи: Summary.DurationMinutes / InitialEtaMinutes
-//   (Summary ненулевой ровно у merged/closed, FeatureProjector.cs:573–601).
+// - Accuracy — только у закрытой фичи (run.Closed — эпик Done, FeatureProjector.cs:559–560):
+//   Summary.DurationMinutes / InitialEtaMinutes. Summary есть и у merged с открытым эпиком
+//   (FeatureProjector.cs:573–601), но такая фича не закрыта — accuracy у неё null.
 public sealed record FeatureEstimateDrift(
     // Базовая оценка срока эпика; null — не зафиксирована.
     int? InitialEtaMinutes,
@@ -51,8 +52,9 @@ public sealed record FeatureEstimateDrift(
             if (totals[i] != totals[i - 1]) changes++;
         }
 
-        // Точность — только у закрытой фичи с ненулевой базовой оценкой (иначе делить не на что).
-        double? accuracy = run.Summary is { } summary && initial is > 0
+        // Точность — только у закрытой фичи (эпик Done) с ненулевой базовой оценкой: Summary есть
+        // и у смерженной с открытым эпиком, но она не закрыта; без базовой оценки делить не на что.
+        double? accuracy = run.Closed && run.Summary is { } summary && initial is > 0
             ? summary.DurationMinutes / initial.Value
             : null;
 

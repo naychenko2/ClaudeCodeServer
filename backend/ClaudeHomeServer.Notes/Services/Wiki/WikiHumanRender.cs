@@ -256,10 +256,17 @@ internal static class WikiHumanRender
 
     private static string WithFootnote(string text, List<WikiPage.WikiFootnote> footnotes, string cardTitle)
     {
+        // Формат страницы строчный: и строка секции, и определение сноски читаются построчно
+        // (FootnoteDefRx). Многострочная формулировка расползлась бы на две строки: верхняя
+        // — без сноски (нарушение гейта), и сноска не читалась бы разбором («ссылка на
+        // несуществующую сноску») — правка человека отбивалась целиком (дефект финала Б1,
+        // хвост 1a6a5cda). Складываем до записи: и в строку, и в сноску — тот же помощник,
+        // что у общего рендера и хроники (WikiPage.OneLine).
+        var oneLine = WikiPage.OneLine(text);
         footnotes.Add(new WikiPage.WikiFootnote(
             new WikiPage.Target(true, cardTitle),
-            text.Length <= WikiPage.MaxQuoteLength ? text : text[..WikiPage.MaxQuoteLength]));
-        return $"{text} [^s{footnotes.Count}]";
+            oneLine.Length <= WikiPage.MaxQuoteLength ? oneLine : oneLine[..WikiPage.MaxQuoteLength]));
+        return $"{oneLine} [^s{footnotes.Count}]";
     }
 
     private static (WikiPage? Page, string? Error) NewPage(string path, WikiPackage.Operation op)
@@ -305,11 +312,13 @@ internal static class WikiHumanRender
             case "owns": owns = List(value); break;
             default: return null;
         }
+        // as_of и written — поля кода: правка summary/aliases/owns их не стирает (S2-1h).
         return new WikiFrontmatter
         {
-            Type = fm.Type, Kind = fm.Kind, Summary = summary, Aliases = aliases, Owns = owns,
+            Type = fm.Type, Kind = fm.Kind, Summary = summary, AsOf = fm.AsOf, Aliases = aliases, Owns = owns,
             Sources = fm.Sources, Updated = fm.Updated, Status = fm.Status,
             Origin = fm.Origin, Ref = fm.Ref, Hash = fm.Hash, Captured = fm.Captured, Signal = fm.Signal,
+            Written = fm.Written,
         };
     }
 

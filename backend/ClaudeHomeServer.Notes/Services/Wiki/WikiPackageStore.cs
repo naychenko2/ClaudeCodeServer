@@ -53,8 +53,10 @@ public static class WikiPackageStore
     // SemaphoreSlim. Ключ решений и переходов — корень вики + id пакета: разные вики и разные
     // пакеты друг друга не держат. Для Create — отдельная блокировка на корень: лимит считается
     // на всю вики, и CountOpen с записью обязаны быть в одной критической секции, иначе счёт
-    // видит состояние до записи первого (TOCTOU). Вложения блоков нет: Create не берёт блок
-    // пакета, Decide/Transition/AcceptAll не берут блок корня — взаимной блокировки нет.
+    // видит состояние до записи первого (TOCTOU). В той же секции Create гасит прежние
+    // неприменённые попытки того же окна (дефект 03a50f53): гашение перечитывает каждый
+    // пакет под его блоком — вложение одностороннее, корень → пакет; Decide/Transition/AcceptAll
+    // блок корня не берут, обратного вложения нет — взаимной блокировки нет.
     private static readonly ConcurrentDictionary<(string Root, string Id), SemaphoreSlim> _packageLocks = new();
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> _createLocks = new();
 
@@ -78,9 +80,11 @@ public static class WikiPackageStore
     public static string NewId() => Guid.NewGuid().ToString("N");
 
     /// <summary>Создать пакет: он рождается в `checking` (вердикт проверок ещё не вынесен),
-    /// с временем сервера. Отказ: форма (CodeShape), уже существующий id (CodeExists),
-    /// 21-й открытый (CodeLimit). Намерения и решения (class/decision/reason) принесены
-    /// вызывающим — здесь они проверяются, но не вычисляются (политика — S4d).</summary>
+    /// с временем сервера. Перед записью гасятся прежние неприменённые попытки того же окна
+    /// (дефект 03a50f53, SupersedeUnappliedOfSameSources). Отказ: форма (CodeShape),
+    /// уже существующий id (CodeExists), 21-й открытый (CodeLimit). Намерения и решения
+    /// (class/decision/reason) принесены вызывающим — здесь они проверяются, но не вычисляются
+    /// (политика — S4d).</summary>
     public static WikiPackageOpResult Create(string root, WikiPackage package)
     {
         if (!WikiPackage.IsSafeId(package.Id))
@@ -98,9 +102,14 @@ public static class WikiPackageStore
         {
             if (System.IO.File.Exists(PathOf(root, package.Id)))
                 return Fail(CodeExists, "пакет с таким id уже есть");
+            // Гашение прежних неприменённых попыток того же окна (дефект 03a50f53): здесь, под
+            // блоком корня — чтение и запись гашения в одной критической секции с записью
+            // нового пакета, иначе два разбора одного окна не увидят друг друга и останутся оба.
+            SupersedeUnappliedOfSameSources(root, package.Sources);
             // Лимит открытых на всю вики: 21-й не создаётся — разбор останавливается, а не копит
-            // очередь (ADR-035, решение 4). Считается после проверки формы: битый по форме пакет
-            // не должен занимать место в лимите.
+            // очередь (ADR-035, решение 4). Считается после проверки формы (битый по форме пакет
+            // не должен занимать место в лимите) и после гашения: закрытые попытки своё место
+            // освободили, новый считается по тому, что осталось открытым.
             if (CountOpen(root) >= WikiPackage.MaxOpenPackages)
                 return Fail(CodeLimit, $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: лимит на всю вики");
 
@@ -316,6 +325,62 @@ public static class WikiPackageStore
         if (accepted == 0) return WikiPackage.StatusRejected;
         return WikiPackage.StatusPartiallyAccepted;
     }
+
+    // Гашение прежних неприменённых пакетов того же окна (дефект 03a50f53): новый разбор окна
+    // (та же ссылка «session:{id}#m{a}-{b}») заменяет свои прежние попытки — они переводятся в
+    // «stale» с причиной, а не лежат рядом со следующим пакетом. Гашение — только для оконных
+    // ссылок (тот же разбор формы, что у сносок — WikiPage.TryParseSessionRef): другие источники
+    // под тем же правилом тоже копили бы дубли, но это отдельный дефект, не этот.
+    // Статусов «заменён»/«отменён» в WikiPackage нет; «stale» — единственный терминальный с
+    // переходом из открытых состояний (таблица в WikiPackage), и по смыслу он ровно про это:
+    // пакет больше не действителен и требует нового разбора — он только что сделан. Не трогать:
+    // применённые и откатанные (результат применения), уже терминальные (из них перехода нет —
+    // они остаются историей) и решённые человеком (хоть одна операция с его решением).
+    // «checking» гасится наравне: без этого два параллельных создания одного окна не увидели бы
+    // друг друга (первый ещё не дошёл до «proposed») и остались бы оба. Каждый пакет
+    // перечитывается и пишется под его собственным блоком, проверка повторяется по живому
+    // состоянию: параллельное решение человека или его вердикт не должны быть затёрты слепым
+    // статусом. Все статусы IsSupersedable имеют переход в «stale» по таблице — прямая запись
+    // её не обходит.
+    private static void SupersedeUnappliedOfSameSources(string root, IReadOnlyList<WikiPackage.SourceRef> sources)
+    {
+        var refs = new HashSet<(string Origin, string Ref)>();
+        foreach (var s in sources)
+            if (s.Origin == WikiGate.OriginSession && WikiPage.TryParseSessionRef(s.Ref, out _, out _, out _))
+                refs.Add((s.Origin, s.Ref));
+        if (refs.Count == 0)
+            return;
+        foreach (var p in List(root).Packages)
+        {
+            if (!p.Sources.Any(s => refs.Contains((s.Origin, s.Ref))))
+                continue;
+            WithPackageLock(root, p.Id, () =>
+            {
+                var (cur, fail) = RequireValid(root, p.Id);
+                if (fail is not null || !IsSupersedable(cur!))
+                    return false;
+                Write(root, cur! with
+                {
+                    Status = WikiPackage.StatusStale,
+                    StatusReason = "заменён новым разбором того же окна",
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                return true;
+            });
+        }
+    }
+
+    // Что гасится: открытое, неприменённое и нерешённое человеком. «accepted»/
+    // «partially_accepted» без человеческого решения — авто-путь, вставший перед применением
+    // (человек такие операции не решает: DecideOperation берёт только inbox), — это ровно прежняя
+    // попытка, которую новый разбор заменяет. «applying» без человеческого решения — заявка
+    // применения, которую прогон не довёл. С человеческим решением пакет не трогается: решение
+    // его человека, а не кода.
+    private static bool IsSupersedable(WikiPackage p) =>
+        p.Status is WikiPackage.StatusChecking or WikiPackage.StatusProposed
+            or WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted
+            or WikiPackage.StatusApplying
+        && !p.Operations.Any(o => o.HumanDecision is not null);
 
     private static (WikiPackage? Pkg, WikiPackageOpResult? Fail) RequireValid(string root, string id)
     {

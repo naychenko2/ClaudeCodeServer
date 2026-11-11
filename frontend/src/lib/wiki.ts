@@ -528,6 +528,12 @@ export interface WikiPackageOperationDto {
   outputTokens: number | null;
   humanDecision: string | null;
   humanReason: string | null;
+  // Доказательства операции (null у старых): утверждение своими словами, 1–3 дословные
+  // цитаты, вид страницы (decision/rule/term/state) и «на дату» для state — строкой как есть
+  claim: string | null;
+  quotes: string[] | null;
+  kind: string | null;
+  asOf: string | null;
 }
 
 export interface WikiPackageDto {
@@ -845,8 +851,11 @@ export async function ingestWikiNote(noteId: string, target?: string | null): Pr
 // приоритетен, иначе зона ступени 1 — ShownZone на бэке) с причиной и сигналами. Нужен
 // экрану отбора (S7b): кнопка «открыть хронику» — по chroniclePath, статус «идёт» —
 // по running. Порядок — бэковый (по зонам, внутри зоны — по баллу), фронт его не меняет.
-// Зоны сегодня: 'triage' | 'gray' | 'skipped' | 'nothing_new' | 'excluded'
-// (WikiChatScorer.cs:39-42, WikiChatIngestService.cs:100); тип — string: неизвестная зона
+// Зоны сегодня: 'triage' | 'gray' | 'skipped' | 'excluded' (WikiChatScorer.cs:39-42),
+// 'nothing_new' (исход разбора, WikiChatIngestService.cs:114), 'rejected_skipped' (окно,
+// пропущенное после 3 отказов, C2R-Sh2 — WikiChatIngestService.cs:118) и 'awaiting_human'
+// (пакет во «Входящих», ждущий решения человека, C2R-Sh2b — WikiChatIngestService.cs:122);
+// тип — string: неизвестная зона
 // будущего шага — запись списка, а не отказ разбора (как на бэке, ZoneRank ведёт её в конец).
 // chroniclePath — формула бэка (WikiChatIngestService.ChroniclePath): для проектного дома
 // «Проекты/{id}/Хроники/{sessionId}.md», null для не-проектного дома (личный — с Ф2);

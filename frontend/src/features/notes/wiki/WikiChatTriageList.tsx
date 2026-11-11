@@ -6,9 +6,11 @@
 // Данные — GET /api/wiki/chats как есть: порядок бэка (по зонам, внутри зоны — по баллу) фронт
 // не меняет, причину показывает бэковую: это «причина для человека» из контракта списка.
 // Подписи зон — фронтовые, по макету: сырое слово зоны человеку ничего не говорит; пометка
-// человека перекрывает зону строки (zoneOf макета, ADR-035 §12а) — строка показывает решение
-// человека, а не зону, посчитанную до него. Пороги, фильтр по разделам и «пересчитать» — вне
-// среза 02.11; контейнер «Настройки» и подвкладка — шаг S7d-3.
+// человека перекрывает посчитанную зону (zoneOf макета, ADR-035 §12а) — строка показывает
+// решение человека, а не зону, посчитанную до него. Исключение — действия, требующие
+// человека (awaiting_human, rejected_skipped): их бейдж ставится поверх пометки, пометка
+// остаётся вторым бейджем (возврат QA-2, дефект 82567033). Пороги, фильтр по разделам и
+// «пересчитать» — вне среза 02.11; контейнер «Настройки» и подвкладка — шаг S7d-3.
 //
 // Состояния: загрузка — скелетон; отказ чтения — плашка с «Повторить»; пустой список — пустое
 // состояние. Пометка НЕ оптимистична: строка берёт значение из ответа сервера (оптимизм здесь
@@ -35,7 +37,12 @@ import { countWord, wikiErrorText } from './wikiLabels';
 type RowMeta = { tone: BadgeTone; text: string };
 
 // Зоны отбора — значения бэкового стора (WikiChatScorer.ZoneTriage/ZoneGray/ZoneSkipped/
-// ZoneExcluded + WikiChatIngestService.ZoneNothingNew). Подписи — по макету (#triage&cut).
+// ZoneExcluded + WikiChatIngestService.ZoneNothingNew/ZoneRejectedSkipped/ZoneAwaitingHuman).
+// Подписи — по макету (#triage&cut). rejected_skipped — чат, пропущенный через окно после 3
+// отказов разбора подряд (C2R-Sh2); awaiting_human — чат, чей разобранный исход — пакет во
+// «Входящих», ждущий решения человека (C2R-Sh2b); причина строки — бэковая, показывается как
+// у всех зон. awaiting_human и rejected_skipped — действия, требующие человека: их бейдж
+// ставится поверх пометки (возврат QA-2, дефект 82567033) — см. ACTION_ZONES.
 // Неизвестная зона (значение будущего шага бэка) — нейтральная подпись: строка остаётся,
 // смысл ей не выдумывается (тот же приём, что UNKNOWN_OP_TEXT в «Журнале»).
 const ZONE_META: Record<string, RowMeta> = {
@@ -43,16 +50,25 @@ const ZONE_META: Record<string, RowMeta> = {
   gray: { tone: 'warning', text: 'серая зона' },
   skipped: { tone: 'neutral', text: 'пропущено' },
   nothing_new: { tone: 'neutral', text: 'нечего добавить' },
+  rejected_skipped: { tone: 'danger', text: 'пропущено после 3 отказов' },
+  awaiting_human: { tone: 'warning', text: 'ждёт решения во «Входящих»' },
   excluded: { tone: 'neutral', text: 'не разбирается' },
 };
 const UNKNOWN_ZONE: RowMeta = { tone: 'neutral', text: 'неизвестное состояние' };
 
-// Пометка человека перекрывает автомат (ADR-035 §12а, zoneOf макета): вместо автоматической
-// зоны строка показывает то, что решил человек.
+// Пометка человека перекрывает посчитанную зону (ADR-035 §12а, zoneOf макета): вместо
+// автоматической зоны строка показывает то, что решил человек. Исключение — действия,
+// требующие человека (ACTION_ZONES ниже): там пометка не заменяет зону, а становится
+// вторым бейджем строки.
 const MARK_META: Record<WikiChatMark, RowMeta> = {
   important: { tone: 'accent', text: 'важный' },
   skip: { tone: 'neutral', text: 'не разбирать' },
 };
+
+// Действия, требующие человека: пакет во «Входящих» ждёт решения, чат отвергнут после 3
+// отказов. Их бейдж важнее пометки (решение продукта, возврат QA-2, дефект 82567033):
+// человек не должен пропустить, что Хранитель ждёт его решения именно по этому чату.
+const ACTION_ZONES = new Set(['awaiting_human', 'rejected_skipped']);
 
 // Чат исполнения задач — единственный его признак в данных списка: причина ступени 0 бэка,
 // литерал в коде бэка (WikiChatScorer.cs:167 «ступень 0: чат исполнения задачи») — отдельного
@@ -63,10 +79,17 @@ export const TASK_HINT = 'Чат исполнителя задачи: помет
 
 export const isTaskChat = (i: WikiChatTriage): boolean => i.reason === TASK_REASON;
 
-const rowMetaOf = (i: WikiChatTriage): RowMeta =>
-  isTaskChat(i) ? ZONE_META.excluded
-    : i.mark === 'important' || i.mark === 'skip' ? MARK_META[i.mark]
-      : ZONE_META[i.zone] ?? UNKNOWN_ZONE;
+// Бейджи строки. Порядок — «действие поверх пометки» (дефект 82567033): для action-зон
+// первым идёт бейдж зоны, пометка — вторым (ряд заголовка flexWrap: непоместившийся
+// бейдж уходит на вторую строку, действие остаётся видимым). Обычная зона с пометкой —
+// как раньше: один бейдж пометки перекрывает зону (ADR-035 §12а).
+const rowBadgesOf = (i: WikiChatTriage): RowMeta[] => {
+  if (isTaskChat(i)) return [ZONE_META.excluded];
+  const mark = i.mark === 'important' || i.mark === 'skip' ? MARK_META[i.mark] : null;
+  const zone = ZONE_META[i.zone] ?? UNKNOWN_ZONE;
+  if (mark && ACTION_ZONES.has(i.zone)) return [zone, mark];
+  return [mark ?? zone];
+};
 
 // Дата последней оценки — dd.mm из triagedAt (DateTimeOffset бэка) в локальном времени;
 // нечитаемое — без даты, строка не притворяется свежей
@@ -92,7 +115,7 @@ function TriageRow({ item, busy, onMark }: {
   onMark: (item: WikiChatTriage, mark: WikiChatMark | null) => void;
 }) {
   const isMobile = useIsMobile();
-  const meta = rowMetaOf(item);
+  const badges = rowBadgesOf(item);
   const task = isTaskChat(item);
   const title = item.name ?? item.sessionId;
   const metaParts = [
@@ -149,7 +172,7 @@ function TriageRow({ item, busy, onMark }: {
           <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
             {title}
           </span>
-          <Badge tone={meta.tone} size="xs">{meta.text}</Badge>
+          {badges.map(b => <Badge key={b.text} tone={b.tone} size="xs">{b.text}</Badge>)}
         </span>
         {item.reason && (
           <span style={{ display: 'block', fontSize: FS.sm, color: C.textSecondary, marginTop: 2, overflowWrap: 'break-word' }}>
@@ -230,7 +253,7 @@ export function WikiChatTriageList() {
       </h2>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
         Какие разговоры Хранитель разбирает ночью и почему. Ваша пометка «Важный» или «Не разбирать»
-        перекрывает автомат.
+        перекрывает автомат; состояния, требующие вашего решения, показываются в любом случае.
       </div>
 
       {actionError && (

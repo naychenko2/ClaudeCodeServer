@@ -123,6 +123,19 @@ internal static class QuoteMatcher
     // как содержательная.
     internal static string NormalizeQuote(string quote) => FoldQuotes(NormalizeForMatch(quote).Norm);
 
+    /// <summary>Контракт длины цитаты (8–300, WikiPage.MinQuoteLength/MaxQuoteLength) —
+    /// одна мера формы пакета (WikiPackage) и гейта (WikiGate), минор R-S2-3: раньше форма
+    /// меряла Trim().Length, а гейт — по нормализованной строке, и пакет, прошедший форму,
+    /// мог отбиться гейтом. Нижняя граница — по нормализованной строке (той же, по которой
+    /// сверяется дословность): цитата из одной разметки («*******a») не содержательна, даже
+    /// если сырая длина в контракте. Верхняя граница — по сырой: нормализация только
+    /// укорачивает, верхнюю меру она не обходит.</summary>
+    internal static (int Raw, int Norm, bool OutOfContract) MeasureQuoteLength(string quote)
+    {
+        var norm = NormalizeQuote(quote).Length;
+        return (quote.Length, norm, norm < WikiPage.MinQuoteLength || quote.Length > WikiPage.MaxQuoteLength);
+    }
+
     /// <summary>Есть ли цитата в тексте источника с точностью до пробелов, кавычек
     /// и разметки (ADR-035, §12г мера 1): обе стороны канонизированы «как рендер»,
     /// прямые двойные кавычки свёрнуты. Регистр и прочие символы значимы — цитата

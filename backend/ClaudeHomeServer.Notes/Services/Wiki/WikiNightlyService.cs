@@ -118,12 +118,14 @@ public sealed class WikiNightlyService : BackgroundService
     /// analyzed; FirstRejectReason — текст причины первого отказа (ChatResult.Reason), чтобы
     /// «completed при нулевом входе» имел, чем объясниться. Сбой разбора исключением в Rejected
     /// не идёт. Manual (WN-5) — проход запущен кнопкой вручную: он не закрывает дату, ночной тик
-    /// той же даты проходит ночь заново. В файле итога поля аддитивны: старый итог (без поля)
+    /// той же даты проходит ночь заново. Dropped — операции синтеза, отброшенные поштучным приёмом,
+    /// сумма по разборам; FirstDropReason — причина первой из них. В файле итога поля аддитивны: старый итог (без поля)
     /// читается нулями, старый Manual — false.</summary>
     public sealed record NightResult(
         string Date, int Selected, int Analyzed, int Applied, int ToInbox, long EstTokens, string Outcome,
         int OverrodeHuman = 0, int DisputedPages = 0, long InputTokens = 0,
-        int Rejected = 0, string? FirstRejectReason = null, bool Manual = false);
+        int Rejected = 0, string? FirstRejectReason = null, bool Manual = false,
+        int Dropped = 0, string? FirstDropReason = null);
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -461,6 +463,8 @@ public sealed class WikiNightlyService : BackgroundService
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
         string? firstRejectReason = null;
+        var dropped = 0;
+        string? firstDropReason = null;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
         long est = 0, inputTokens = 0;
         var outcome = OutcomeCompleted;
@@ -554,6 +558,8 @@ public sealed class WikiNightlyService : BackgroundService
                 // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
                 // Чат, упавший исключением выше, до analyzed++ не доходит: его токенов нет.
                 inputTokens += r.InputTokens;
+                dropped += r.Dropped;
+                firstDropReason ??= r.FirstDropReason;
                 // Отказанные разборы (WN-2): считаются и называются в журнале — без них ночь из
                 // 100 отказов выглядела completed и не оставила ни строки (отчёт 79e98305, Ш2).
                 if (r.Outcome == WikiChatIngestService.OutcomeRejected)
@@ -609,7 +615,7 @@ public sealed class WikiNightlyService : BackgroundService
         return Result(outcome);
 
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
-            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual);
+            overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason);
     }
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось

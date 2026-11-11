@@ -130,7 +130,16 @@ public static class WikiChatSlicer
     /// <summary>Дельта [from..to], нарезанная на окна ≤WindowTokens с перекрытием ровно
     /// WindowOverlapLines реплик. Одна реплика длиннее окна не режется: окно из неё одной
     /// превышает меру честно, чем цитата, оборванная на середине (выдержка и QuoteMatcher
-    /// работают по целым репликам).</summary>
+    /// работают по целым репликам).
+    ///
+    /// Реплика процесса (WikiProcessPatterns.IsProcessReply) понижается в тексте окна, а не
+    /// выбрасывается (ADR-039, решение 1; доработка S2-5): её место — одна фиксированная
+    /// строка-маркер без исходного текста (см. DemoteProcess): факт события остаётся, а
+    /// текст процесса в окно не попадает — ни одна строка реплики процесса не может стать
+    /// дословной цитатой (QuoteMatcher меряет дословность по тексту окна, QuoteMatcher.cs:133).
+    /// Порядок и нумерация реплик сохраняются; реплики человека не понижаются никогда.
+    /// Мера окна — по исходным строкам, как без фильтра: понижение происходит после нарезки
+    /// и не двигает границы окон.</summary>
     public static List<Window> Windows(IReadOnlyList<StoredMessage>? history, int from, int to,
         IReadOnlyCollection<string>? exactSecrets = null)
     {
@@ -145,14 +154,14 @@ public static class WikiChatSlicer
             var lineTokens = EstimateTokens(line.Text);
             if (current.Count > 0 && tokens + lineTokens > WindowTokens)
             {
-                windows.Add(new Window(current));
+                windows.Add(new Window(DemoteProcess(current)));
                 current = new List<Line>(current.Skip(Math.Max(0, current.Count - WindowOverlapLines)));
                 tokens = current.Sum(l => EstimateTokens(l.Text));
             }
             current.Add(line);
             tokens += lineTokens;
         }
-        if (current.Count > 0) windows.Add(new Window(current));
+        if (current.Count > 0) windows.Add(new Window(DemoteProcess(current)));
         return windows;
     }
 
@@ -175,6 +184,22 @@ public static class WikiChatSlicer
         }
         return sb.ToString().Trim();
     }
+
+    // Понижение процесса в тексте окна (ADR-039, решение 1; доработка S2-5): не-человеческая
+    // реплика, целиком состоящая из строк процесса (WikiProcessPatterns), заменяется ОДНОЙ
+    // фиксированной строкой без исходного текста и без перевода строки: маркер сохраняет
+    // факт события, а текст процесса в окно (то, что видит модель) не попадает — значит,
+    // строка процесса цитатой разбора стать не может (Major 1 ревью 6cbc5e0a) и пометка
+    // покрывает всю реплику (Major 2). Выдержка и Lines не понижаются (Excerpt — отдельный путь).
+    // index и IsHuman те же — порядок и нумерация окна не двигаются. Всё остальное — как было.
+    // Текст публичный: WikiPlanValidator отклоняет цитаты, составленные из маркера (хвост 78cfb639,
+    // минор 1 R-S2-5) — в продуктовом коде текст маркера один, из этой константы, не литерал.
+    public const string ProcessMarker = "[процесс] служебная реплика";
+
+    private static List<Line> DemoteProcess(List<Line> lines) =>
+        [.. lines.Select(l => !l.IsHuman && WikiProcessPatterns.IsProcessReply(l.Text)
+            ? l with { Text = ProcessMarker }
+            : l)];
 
     private static int EstimateTokens(string text) => text.Length / CharsPerTokenEstimate;
 

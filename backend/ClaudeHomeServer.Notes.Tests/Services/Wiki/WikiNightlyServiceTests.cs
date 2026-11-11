@@ -1090,6 +1090,33 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ОтброшенныеОперации_СуммируютсяВИтогеСПервойПричиной()
+    {
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
+            WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 10,
+            Dropped: chat == "c1" ? 1 : 2, FirstDropReason: "причина " + chat))));
+
+        var last = Last();
+        last.Dropped.Should().Be(3);
+        last.FirstDropReason.Should().Be("причина c1");
+    }
+
+    [Fact]
+    public void СтарыйФайлИтога_БезПолейDropped_ЧитаетсяНулём()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(LastFile())!);
+        File.WriteAllText(LastFile(),
+            """{"date":"2026-11-01","selected":1,"analyzed":1,"applied":0,"toInbox":0,"estTokens":0,"outcome":"completed"}""");
+
+        var last = Last();
+        last.Dropped.Should().Be(0);
+        last.FirstDropReason.Should().BeNull();
+    }
+
+    [Fact]
     public async Task ОтказаныНеВсеНулевойВход_ИтогCompleted_НочьНеПовторяется()
     {
         // Граница инварианта «не все разборы отказаны» (R-WN-2, находка 1): конъюнкта
@@ -1431,7 +1458,7 @@ public class WikiNightlyServiceTests : IDisposable
         // так же, как ждущий слот путь TrackedLocalLlmClient (LocalEngineSlotRefusalException).
         public Func<string, Exception?>? Throw;
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => Route;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";

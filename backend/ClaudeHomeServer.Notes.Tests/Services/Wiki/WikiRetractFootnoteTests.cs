@@ -38,6 +38,7 @@ public class WikiRetractFootnoteTests : IDisposable
     private const string ClaimA3 = "Тест на границе интервала обязателен";
     private const string ClaimBoth = "Решение: перенести сборку на Linux";
     private const string ClaimBOnly = "Сборка на Linux проходит зелёной";
+    private const string ClaimSynth = "Контейнер и граница интервала зафиксированы";
     private const string SourceTextA = ClaimAOnly + ". " + ClaimA2 + ". " + ClaimA3 + ". " + ClaimBoth + ".";
     private const string SourceTextB = ClaimBOnly + ". " + ClaimBoth + ".";
 
@@ -288,6 +289,40 @@ public class WikiRetractFootnoteTests : IDisposable
         model.Should().NotBeNull("страница после снятия сносок обязана оставаться валидной");
         model!.Footnotes.Should().HaveCount(2);
         model.Footnotes.Should().OnlyContain(f => f.Target.Text == CardTitleB);
+    }
+
+    // ─── S2-7 Ф2: строка синтеза с двумя сносками на один источник снимается целиком ───────────
+
+    [Fact]
+    public async Task Retract_СтрокаСинтезаСДвумяСносками_СтрокаИСноскиСнимаются()
+    {
+        // Мутация «строка с потерянными сносками остаётся» (в UnlinkPageUnderLock убрать
+        // `continue` при isAssertion && line.Contains("[^") && !rewritten.Contains("[^")): строка
+        // синтеза осталась бы без сносок — NotContain(ClaimSynth) краснеет (или страницу отвергает гейт).
+        await WriteCardsAndPage();
+        var synth = Op(WikiPackage.OpAppend, PagePath, ClaimSynth) with
+        {
+            Claim = ClaimSynth,
+            Quotes = [ClaimA2, ClaimA3],
+        };
+        var pkgA = await Applied(RefA, CtxA, synth);
+        await Applied(RefB, CtxB, Op(WikiPackage.OpAppend, PagePath, ClaimBOnly)); // окно: побайтного отката нет
+        File.ReadAllText(PageFull(PagePath)).Should().MatchRegex(
+            System.Text.RegularExpressions.Regex.Escape(ClaimSynth) + @" \[\^s\d+\]\[\^s\d+\]",
+            "синтез применился со строкой из двух сносок");
+
+        var r = await _sut.RetractAsync(User, RefA);
+
+        r.Ok.Should().BeTrue(r.Reason);
+        r.Failed.Should().BeEmpty();
+        ReadStatus(pkgA.Id).Item1.Should().Be(WikiPackage.StatusReverted);
+        var pageText = File.ReadAllText(PageFull(PagePath));
+        pageText.Should().NotContain(ClaimSynth, "строка потеряла все сноски и убрана");
+        pageText.Should().NotContain(CardTitleA).And.NotContain(ClaimA3);
+        var model = WikiPage.Parse(pageText).Model;
+        model.Should().NotBeNull();
+        model!.Footnotes.Should().OnlyContain(f => f.Target.Text == CardTitleB);
+        pageText.Should().Contain(ClaimBOnly);
     }
 
     // ─── B1 (ADR-038): уже лежащие карточка human и «Заметки» не мешают снятию сносок ──────────

@@ -62,7 +62,7 @@ export interface ParsedWikiPage {
   // Строки вне секций — для бэка это ошибка формата, для витрины — текст страницы
   strayLines: string[];
   // Шапка разобрана по минимуму бэковой валидности: ограда закрыта и в ней есть 'type'
-  // из семи (WikiFrontmatter.cs:125 — без type модель null). Остальное витрина терпит
+  // из десяти видов (WikiFrontmatter.cs:33-35; без type модель null — :143). Остальное витрина терпит
   frontmatterOk: boolean;
 }
 
@@ -98,7 +98,7 @@ export function parseWikiPage(text: string): ParsedWikiPage {
         else if (key === 'aliases') page.aliases = parseListValue(value);
       }
       i = close + 1;
-      // «Разобрана» — по минимуму бэка: тип из семи (WikiFrontmatter.cs:125); прочие поля
+      // «Разобрана» — по минимуму бэка: тип из десяти видов (WikiFrontmatter.cs:33-35); прочие поля
       // витрина терпит. Неразобранная — плашка на экране, а не молчаливый pageKey
       page.frontmatterOk = page.type !== null && page.type in PAGE_TYPE;
     }

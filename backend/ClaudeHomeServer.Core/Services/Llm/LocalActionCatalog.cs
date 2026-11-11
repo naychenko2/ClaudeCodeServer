@@ -43,10 +43,19 @@ public sealed record CheapProfileSpec(
 // CloudNumPredict — пер-местный потолок ВЫВОДА облачного шага (max_tokens) вместо
 // профильного CloudNumPredict: для мест, чей ответ не влезает в профильный лимит,
 // не трогая лимит остальных мест того же профиля. null = профиль.
+// NumCtx / NumPredict / TimeoutMs — локальные пер-местные лимиты: num_predict (потолок
+// вывода) и TimeoutMs (потолок времени локального шага) работают как облачные Cloud*;
+// NumCtx у разных движков — разное: у Ollama это окно входа модели (num_ctx едет в
+// запросе), у llama-server/Strata окно фиксируется ключом -c при старте сервера и NumCtx
+// окно модели НЕ расширяет — это только бюджет обрезки промпта до отправки
+// (LlamaServerClient). Для мест, где большое окно не влезает в профильное, ответ — в
+// потолок вывода, а работа — в профильное время. Пер-местное значение сильнее профиля и
+// переопределения Ollama:Profiles (склейка — LocalActionRouter.ProfileFor). null = профиль.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
-    int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false);
+    int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false,
+    int? NumCtx = null, int? NumPredict = null, int? TimeoutMs = null);
 
 // Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
 public enum ActionInput { Text, Images }
@@ -217,8 +226,14 @@ public static class LocalActionCatalog
         // была назвать. Слот medium — явный, как задано в ADR-035 §7 (не из профиля).
         // DefaultLocal: true — ночной и явный разбор начинается с локали (политика A),
         // облако — только с согласия человека (решение 9).
+        // Пер-местные локальные лимиты: профильный Large (окно 16384 / 1024 вывода / 90 с)
+        // не вывозит разбор окна в 35k — вход обрезается по num_ctx (для llama-server/Strata
+        // это бюджет обрезки промпта), ответ не влезает в потолок вывода, работа не
+        // укладывается в профильное время. Значения только у этих мест, остальные
+        // места Large — с профилем.
         new(WikiIngest, "Разбор источника в вики", "Заметки", CheapProfile.Large,
-            DefaultLocal: true, Tier: ModelTier.Medium),
+            DefaultLocal: true, Tier: ModelTier.Medium,
+            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000),
         // Факт по заявке агента (wiki_add_fact): одно утверждение с дословной цитатой.
         // Text, а не Small: на Small num_ctx обрезал бы выдержку источника, и цитата
         // не сверялась бы QuoteMatcher-ом в отсечённой части. Слот weak — явный (ADR-035 §7).
@@ -227,8 +242,11 @@ public static class LocalActionCatalog
         // Ночной разбор чатов (Ф2, ADR-035 решение 12): ночь разбирает дельту чата тем же
         // путём, что и кнопка «Разобрать». Large: на вход идёт дельта реплик человека —
         // меньший профиль молча обрезал бы хвост (num_ctx Ollama). Слот medium — явный.
+        // Те же пер-местные локальные лимиты, что у wiki-ingest: та же семантика разбора
+        // по большому окну (см. комментарий выше).
         new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
-            DefaultLocal: true, Tier: ModelTier.Medium),
+            DefaultLocal: true, Tier: ModelTier.Medium,
+            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000),
         // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
         // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
         // маленький JSON. Слот weak — явный.

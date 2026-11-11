@@ -130,11 +130,11 @@ public class WikiGateTests
     }
 
     [Fact]
-    public void Шапка_типВнеСеми_отбита()
+    public void Шапка_типВнеРазрешённых_отбита()
     {
         var r = WikiFrontmatter.Parse(Fm("notion"));
         r.Model.Should().BeNull();
-        r.Errors.Should().Contain(e => e.Contains("не из семи разрешённых"));
+        r.Errors.Should().Contain(e => e.Contains("не из десяти разрешённых"));
     }
 
     [Fact]

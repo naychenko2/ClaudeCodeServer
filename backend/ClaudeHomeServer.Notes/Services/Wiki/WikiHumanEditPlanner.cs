@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //    нет); остальное добавленное — `append`.
 //  • Секция «Заметки» — отдельная операция `notes` без цитат: целиком текстом секции.
 //  • Поля шапки: человек правит только summary, aliases, owns. Поля кода (sources, status,
-//    updated), type, kind и заголовок страницы — отказ.
+//    updated, as_of), type, kind и заголовок страницы — отказ.
 //  • Ошибки разбора и запрещённые правки — Failure с причиной; исключений наружу нет.
 public static class WikiHumanEditPlanner
 {
@@ -137,6 +137,7 @@ public static class WikiHumanEditPlanner
         var forbidden = new List<string>();
         if (was.Type != now.Type) forbidden.Add("type");
         if (was.Kind != now.Kind) forbidden.Add("kind");
+        if (was.AsOf != now.AsOf) forbidden.Add("as_of");
         if (!was.Sources.SequenceEqual(now.Sources)) forbidden.Add("sources");
         if (was.Status != now.Status) forbidden.Add("status");
         if (was.Updated != now.Updated) forbidden.Add("updated");

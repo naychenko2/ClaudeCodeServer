@@ -164,6 +164,105 @@ public class WikiPackagesControllerTests : IDisposable
         ListOf(Controller("u2").List(null)).Should().BeEmpty();
     }
 
+    // ─── 4b. Карточка пакета отдаёт доказательства операции (дефект a9d8d6eb) ───
+
+    [Fact]
+    public void КарточкаПакета_ОтдаётClaim_Quotes_Kind_AsOf_СтараяОперацияВСёNull()
+    {
+        // Мутация «маппинг Dto не несёт o.Claim» (подставить null вместо o.Claim) — проверка
+        // op.Claim ниже краснеет: «Expected ... but found <null>». Тест держит и порядок цитат
+        // (Equal по исходному порядку), и null всех четырёх полей у операции без доказательств.
+        var withProof = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Claim = "Сборка ведётся на Linux",
+            Quotes = ["сборка падает на Windows", "CI гоняет тесты на ubuntu"],
+            Kind = "state",
+            AsOf = "2026-08-21",
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "замещает действующее утверждение",
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var id = NewPackage(WikiPackage.StatusProposed, "common", withProof);
+
+        var op = ((OkObjectResult)Controller().Get(id)).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which.Operations[0];
+        op.Claim.Should().Be("Сборка ведётся на Linux");
+        // Порядок цитат сохраняется как в пакете: номера сносок берутся по нему (S2-7).
+        op.Quotes.Should().Equal("сборка падает на Windows", "CI гоняет тесты на ubuntu");
+        op.Kind.Should().Be("state");
+        op.AsOf.Should().Be("2026-08-21");
+
+        // Старая операция без доказательств: все четыре поля null, quotes — null, а не [].
+        var legacy = ((OkObjectResult)Controller().Get(
+            NewPackage(WikiPackage.StatusProposed, "common",
+                Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto)))).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which.Operations[0];
+        legacy.Claim.Should().BeNull();
+        legacy.Quotes.Should().BeNull();
+        legacy.Kind.Should().BeNull();
+        legacy.AsOf.Should().BeNull();
+    }
+
+    [Fact]
+    public void ФормаJSON_ИменаПолейCamelCase_УСтаройОперацииQuotesNull_АНеМассив()
+    {
+        // Ревью bdb28fd6 (минор к C2R-Sh5): тест выше держит C#-объект, а не сериализованный
+        // JSON. Фронт Ш6b опирается ровно на форму ответа: имена полей — camelCase от имён
+        // свойств, «null вместо []». Сериализация теми же опциями, что у MVC-ответа
+        // (JsonSerializerDefaults.Web) — здесь проверяется контракт транспорта, а не маппинг Dto.
+        var withProof = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Claim = "Сборка ведётся на Linux",
+            Quotes = ["сборка падает на Windows", "CI гоняет тесты на ubuntu"],
+            Kind = "state",
+            AsOf = "2026-08-21",
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "замещает действующее утверждение",
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var id = NewPackage(WikiPackage.StatusProposed, "common", withProof);
+
+        var dto = ((OkObjectResult)Controller().Get(id)).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var op = doc.RootElement.GetProperty("operations")[0];
+
+        // Имена полей — camelCase от имён свойств: по этим строкам их читает фронт.
+        op.GetProperty("claim").GetString().Should().Be("Сборка ведётся на Linux");
+        op.GetProperty("kind").GetString().Should().Be("state");
+        op.GetProperty("asOf").GetString().Should().Be("2026-08-21");
+        // Цитаты — массив из двух строк в исходном порядке (номера сносок — по нему, S2-7).
+        var quotes = op.GetProperty("quotes");
+        quotes.ValueKind.Should().Be(JsonValueKind.Array);
+        quotes.GetArrayLength().Should().Be(2);
+        quotes[0].GetString().Should().Be("сборка падает на Windows");
+        quotes[1].GetString().Should().Be("CI гоняет тесты на ubuntu");
+
+        // Старая операция без доказательств: все четыре поля есть в JSON как null —
+        // не отсутствие поля и не [].
+        var legacy = ((OkObjectResult)Controller().Get(
+            NewPackage(WikiPackage.StatusProposed, "common",
+                Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto)))).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which;
+        using var legacyDoc = JsonDocument.Parse(JsonSerializer.Serialize(legacy, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+        var legacyOp = legacyDoc.RootElement.GetProperty("operations")[0];
+        foreach (var name in new[] { "claim", "quotes", "kind", "asOf" })
+        {
+            legacyOp.TryGetProperty(name, out var field).Should().BeTrue($"поле «{name}» есть в JSON");
+            field.ValueKind.Should().Be(JsonValueKind.Null, $"«{name}» — null, а не [] и не отсутствие поля");
+        }
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]

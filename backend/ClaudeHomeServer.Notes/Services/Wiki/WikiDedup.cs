@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Дедуп кодом до применения (ADR-035, §12г, мера 2). Чистые функции без I/O: состояние
@@ -22,6 +24,15 @@ public static class WikiDedup
     private const string TitleField = "заголовок";
     private const string AliasField = "алиас";
     private const string OwnsField = "owns";
+
+    // Секция, чьи ссылки цитату не занимают (ADR-039, решение 2): в «Историю» утверждение
+    // переносят вытесненное — оно больше не владеет цитатой. Имя — из фиксированного набора
+    // WikiPage.SectionNames.
+    private const string HistorySectionName = "История";
+
+    // Ссылка сноски в строке — форма парсера (WikiPage.FootnoteRefRx); здесь значимы только
+    // канонические номера s1…sN, которые оставил после перенумерования разобранной модели.
+    private static readonly Regex FootnoteRefRx = new(@"\[\^(s\d+)\]", RegexOptions.CultureInvariant);
 
     /// Существующая страница, против которой ищется дубль: путь (для ссылки человеку) и
     /// разобранная модель — Title, aliases, owns: именно они дают совпадение.
@@ -51,11 +62,16 @@ public static class WikiDedup
             return false;
         foreach (var fn in page.Footnotes)
         {
-            if (fn.Target.IsLink && fn.Target.Text == sourceCard && QuoteMatcher.NormalizeQuote(fn.Quote) == normQuote)
+            if (SameCitation(fn, sourceCard, normQuote))
                 return true;
         }
         return false;
     }
+
+    // Сравнение пары (цитата, карточка) — одна на весь дедуп: цитата через QuoteMatcher,
+    // карточка — по тексту цели сноски как она написана. Второй нормализации нет (ADR-039, решение 2).
+    private static bool SameCitation(WikiPage.WikiFootnote fn, string sourceCard, string normQuote) =>
+        fn.Target.IsLink && fn.Target.Text == sourceCard && QuoteMatcher.NormalizeQuote(fn.Quote) == normQuote;
 
     // Текст утверждения сверяется с текстом секций страницы, а не с файлом целиком:
     // в сносках определений стоят цитаты источников — совпадение с ними не значит,
@@ -66,6 +82,67 @@ public static class WikiDedup
             return false;
         var body = string.Join("\n", page.Sections.SelectMany(s => s.Lines));
         return QuoteMatcher.ContainsVerbatim(body, statementText);
+    }
+
+    /// «Одна цитата — одна страница» (ADR-039, решение 2): путь первой страницы раздела,
+    /// на которой уже стоит та же нормализованная пара (цитата, карточка источника), либо null.
+    /// Ключ дедупа — цитата, а не текст утверждения: пересказ каждый раз разный.
+    ///
+    /// Занятой считается сноска, на которую ссылается строка любой секции КРОМЕ «Истории»:
+    /// сноска, на которую ссылается только «История», цитату не занимает — её вытеснили.
+    /// exceptPage — страница самой операции: её сноски не считаются (повтор на той же
+    /// странице ловит IsDuplicateStatement). Область — только данный список страниц:
+    /// цепочки вверх и соседних разделов здесь нет (их набор даёт вызывающий).
+    /// Страница без разобранной модели пропускается, исключение наружу не идёт.
+    /// При нескольких владельцах — первый по порядку sectionPages.
+    public static string? QuoteOwner(
+        IReadOnlyList<WikiGate.Draft> sectionPages,
+        string sourceCard,
+        string quote,
+        string? exceptPage)
+    {
+        if (sectionPages is null || string.IsNullOrEmpty(sourceCard))
+            return null;
+        var normQuote = QuoteMatcher.NormalizeQuote(quote ?? "");
+        if (normQuote.Length == 0)
+            return null;
+
+        foreach (var draft in sectionPages)
+        {
+            if (string.IsNullOrEmpty(draft.Path) || draft.Path == exceptPage)
+                continue;
+            var page = WikiPage.Parse(draft.Content).Model;
+            if (page is null)
+                continue;
+            var claimed = ClaimedFootnoteIds(page);
+            for (var i = 0; i < page.Footnotes.Count; i++)
+            {
+                if (!SameCitation(page.Footnotes[i], sourceCard, normQuote))
+                    continue;
+                // В разобранной модели номера сносок канонические: сноска с индексом i — s{i+1}.
+                if (!claimed.Contains($"s{i + 1}"))
+                    continue;
+                return draft.Path;
+            }
+        }
+        return null;
+    }
+
+    // Номера сносок, на которые ссылается строка любой секции, кроме «Истории»: только
+    // такая сноска занимает цитату (ADR-039, решение 2). Ссылки в разобранной модели
+    // уже канонические (s1…sN) — их оставил после перенумерования парсер (WikiPage.Parse).
+    private static HashSet<string> ClaimedFootnoteIds(WikiPage page)
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var section in page.Sections)
+        {
+            if (section.Name == HistorySectionName)
+                continue;
+            foreach (var line in section.Lines)
+                foreach (Match m in FootnoteRefRx.Matches(line))
+                    ids.Add(m.Groups[1].Value);
+        }
+        return ids;
     }
 
     /// Возможный дубль новой страницы (мера 2, третья строка): совпадение заголовка,

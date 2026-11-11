@@ -476,6 +476,8 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     cap.chatOnOpenFile = null;
     cap.viewer = null;
     cap.viewerTaskId = undefined;
+    cap.viewerBranch = undefined;
+    cap.viewerBackLabel = undefined;
     cap.viewerOnOpenFile = null;
     cap.featureOnOpenFile = null;
     treeCap.onOpenFile = null;
@@ -586,6 +588,14 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     expect(cap.viewerTaskId, 'из дерева taskId сброшен').toBeUndefined();
     expect(cap.viewerBranch, 'из дерева branch сброшен').toBeUndefined();
     expect(cap.viewerBackLabel, 'подпись по назначению: страница под файлом жива — «К фиче»').toBe('К фиче');
+  });
+
+  // FS-T3: beforeEach сбрасывает viewerBranch/viewerBackLabel (как остальные cap.*) — тест,
+  // который ничего не рендерил, читает undefined, а не остатки прошлого теста (тот оставил
+  // «feat/x»/«К фиче»). Мутация: убрать эти два сброса в beforeEach → краснеет здесь.
+  it('сброс в beforeEach: без рендера поля читаются undefined, не остатки прошлого теста', () => {
+    expect(cap.viewerBranch, 'branch прошлого теста не доехал').toBeUndefined();
+    expect(cap.viewerBackLabel, 'backLabel прошлого теста не доехал').toBeUndefined();
   });
 
   it('FS-F1g: страница фичи не открыта — подпись возврата не ставится', async () => {

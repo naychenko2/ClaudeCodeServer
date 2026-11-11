@@ -609,16 +609,22 @@ describe('FileViewer: плашка ветки и подпись возврата
     expect(findButtonByText(a.container, 'К фиче'), 'кнопка «К фиче»').not.toBeNull();
     expect(findButtonByText(a.container, 'Файлы'), '«Файлы» заменена').toBeNull();
   });
-  // title и aria-label кнопки — вместе с видимой подписью (конвенция CenterViewShell).
-  // Мутация: вернуть mobileTitle="К списку файлов" → краснеет.
-  it('мобила: backLabel задаёт и aria-label кнопки; без него — «К списку файлов»', async () => {
+  // title и aria-label кнопки — из одного выражения mobileTitle (CenterViewShell.tsx:79),
+  // поэтому проверяются на одном узле: title того же узла, что найден по aria-label.
+  // Мутации: снять `title={mobileTitle}` у BackButton (CenterViewShell) → assert title краснеет
+  // (BackButton подставит «Назад»); вернуть mobileTitle="К списку файлов" → краснеет assert «К фиче».
+  it('мобила: backLabel задаёт title и aria-label кнопки; без него — «К списку файлов»', async () => {
     const a = mountViewer(vi.fn(), true, { backLabel: 'К фиче' });
     await flush();
-    expect(findNodeByAttr(a.container, 'aria-label', 'К фиче'), 'aria-label «К фиче»').not.toBeNull();
+    const backA = findNodeByAttr(a.container, 'aria-label', 'К фиче');
+    expect(backA, 'aria-label «К фиче»').not.toBeNull();
+    expect(backA.getAttribute('title'), 'title — тот же текст, что aria-label').toBe('К фиче');
     expect(findNodeByAttr(a.container, 'aria-label', 'К списку файлов')).toBeNull();
     const b = mountViewer(vi.fn(), true);
     await flush();
-    expect(findNodeByAttr(b.container, 'aria-label', 'К списку файлов')).not.toBeNull();
+    const backB = findNodeByAttr(b.container, 'aria-label', 'К списку файлов');
+    expect(backB, 'aria-label «К списку файлов»').not.toBeNull();
+    expect(backB.getAttribute('title'), 'title — тот же текст, что aria-label').toBe('К списку файлов');
   });
   it('мобила: без backLabel — «Файлы»', async () => {
     const { container } = mountViewer(vi.fn(), true);

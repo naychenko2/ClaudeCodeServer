@@ -223,12 +223,11 @@ public class WikiChatSlicerTests
 
     // —— S2-5 (ADR-039, решение 1): реплики процесса понижаются в тексте окна ——
 
-    // Фикстура для c2/c3: 12 реплик — 4 человека (m1, m6, m9, m12), четыре агентских
-    // процесса (m3 «Сверка: чисто», m4 коммит-отчёт, m5 id карточки в строке-статусе,
-    // m8 вердикт), двухстрочный процесс (m10), смешанная (m11) и содержательная (m7)
-    // агентские. Значения Lines/Excerpt зафиксированы на этой базе: фильтр процесса их не
-    // трогает (c2); мутация «убрать проверку не-человека» краснит ровно кейс про человека
-    // (c3), мутация «хотя бы одна строка вместо каждой» — ровно смешанные кейсы (c3).
+    // Фикстура: 12 реплик — 4 человека (m1, m6, m9, m12), четыре агентских процесса
+    // (m3 «Сверка: чисто», m4 коммит-отчёт, m5 id карточки в строке-статусе, m8 вердикт),
+    // двухстрочный процесс (m10), смешанная (m11) и содержательная (m7) агентские.
+    // Значения Lines/Excerpt зафиксированы на этой базе: фильтр процесса их не трогает;
+    // в тексте окна каждая процессная реплика — одна строка-маркер без исходника (S2-5).
     private static List<StoredMessage> ProcessFixture() => History(
         new StoredUserMessage("Решили: нарезку делает код."),                                       // m1
         new StoredTextMessage("Принято, режу по диапазону."),                                      // m2
@@ -277,12 +276,13 @@ public class WikiChatSlicerTests
         w.Select(l => l.Index).Should().Equal(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12);
         w.Select(l => l.IsHuman).Should().Equal(true, false, false, false, false, true, false, false, true, false, false, true);
 
-        w[2].Text.Should().Be("[процесс] Сверка: чисто");
-        w[3].Text.Should().Be("[процесс] Коммит: 161c49c81");
-        w[4].Text.Should().Be("[процесс] Задача 599005ea заверена");
-        w[7].Text.Should().Be("[процесс] Вердикт: accepted");
-        // Двухстрочный процесс — одна строка с первыми 120 символами исходного текста.
-        w[9].Text.Should().Be("[процесс] Сверка: чисто\nКоммит: d341879bf");
+        // Каждая процессная реплика — одна фиксированная строка-маркер без исходного текста.
+        w[2].Text.Should().Be("[процесс] служебная реплика");
+        w[3].Text.Should().Be("[процесс] служебная реплика");
+        w[4].Text.Should().Be("[процесс] служебная реплика");
+        w[7].Text.Should().Be("[процесс] служебная реплика");
+        // Двухстрочный процесс — та же одна строка: без выдержки и без перевода строки (S2-5).
+        w[9].Text.Should().Be("[процесс] служебная реплика");
 
         // Та же фраза от человека — без изменений, никогда (м12 — тоже человек).
         w[5].Text.Should().Be("Сверка: чисто");
@@ -292,21 +292,23 @@ public class WikiChatSlicerTests
         w[10].Text.Should().Be("Сверка: чисто\nСодержательная позиция по делу.");
     }
 
-    // Сжатие — ровно первые ProcessExcerptChars символов исходной реплики: блок статуса
-    // хода из нескольких шаблонных строк, каждая — процесс, вся реплика понижается.
+    // Инвариант S2-5 (Major 1-2 ревью 6cbc5e0a): ни одна строка реплики процесса не может
+    // стать дословной цитатой разбора. Двухстрочная процессная реплика пониждается в одну
+    // строку-маркер: ни первая, ни вторая строка исходника не находится в тексте окна
+    // через QuoteMatcher.ContainsVerbatim.
     [Fact]
-    public void Windows_длинныйПроцесс_первые120Символов()
+    public void Windows_двухстрочныйПроцесс_неСтановитсяЦитатой()
     {
-        var longLine = "Сверка: чисто\nКоммит: 161c49c81\nЗадача 599005ea заверена\n"
-            + "Персона-исполнитель Код-ревьюер (Глеб) завершила делегированную тобой задачу";
-        longLine.Length.Should().BeGreaterThan(WikiChatSlicer.ProcessExcerptChars, "мера теста — на длинной реплике");
-
-        var windows = WikiChatSlicer.Windows(History(new StoredTextMessage(longLine)), 1, 1);
+        var twoLine = "Сверка: чисто\nКоммит: d341879bf";
+        var windows = WikiChatSlicer.Windows(History(new StoredTextMessage(twoLine)), 1, 1);
 
         var text = windows[0].Lines[0].Text;
         text.Should().StartWith("[процесс] ");
-        text.Should().Be("[процесс] " + longLine.Substring(0, WikiChatSlicer.ProcessExcerptChars));
-        text.Length.Should().Be("[процесс] ".Length + WikiChatSlicer.ProcessExcerptChars);
+        text.Should().NotContain("\n", "пометка покрывает всю реплику: одна строка окна");
+
+        var windowText = string.Join("\n", windows[0].Lines.Select(l => l.Text));
+        QuoteMatcher.ContainsVerbatim(windowText, "Сверка: чисто").Should().BeFalse();
+        QuoteMatcher.ContainsVerbatim(windowText, "Коммит: d341879bf").Should().BeFalse();
     }
 
     // Мера окна — по исходным строкам: сжатие после нарезки не двигает границы окон.

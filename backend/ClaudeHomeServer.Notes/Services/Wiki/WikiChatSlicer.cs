@@ -62,10 +62,6 @@ public static class WikiChatSlicer
     private const string HandoffMarkerContinue = "Предыдущий чат:";
     private const string HandoffMarkerDraft = "Передаточная записка:";
 
-    // Сколько исходных символов реплики процесса остаётся в сжатой строке окна (ADR-039,
-    // решение 1: «понижает, а не выбрасывает» — событие должно читаться).
-    public const int ProcessExcerptChars = 120;
-
     /// <summary>Отфильтрованная реплика. Index — номер m{Index} (1-based индекс записи
     /// истории), вызывающий строит по нему ref карточки и окна.</summary>
     public sealed record Line(int Index, bool IsHuman, string Text);
@@ -137,12 +133,13 @@ public static class WikiChatSlicer
     /// работают по целым репликам).
     ///
     /// Реплика процесса (WikiProcessPatterns.IsProcessReply) понижается в тексте окна, а не
-    /// выбрасывается (ADR-039, решение 1): её место — одна строка «[процесс] …» с первыми
-    /// ProcessExcerptChars символами — синтез видит событие и может вынести из него урок,
-    /// сжатая строка не может стать дословной цитатой (QuoteMatcher меряет по тексту окна,
-    /// WikiPlanValidator.cs:199). Порядок и нумерация реплик сохраняются; реплики человека
-    /// не понижаются никогда. Мера окна — по исходным строкам, как без фильтра: сжатие
-    /// происходит после нарезки и не двигает границы окон.</summary>
+    /// выбрасывается (ADR-039, решение 1; доработка S2-5): её место — одна фиксированная
+    /// строка-маркер без исходного текста (см. DemoteProcess): факт события остаётся, а
+    /// текст процесса в окно не попадает — ни одна строка реплики процесса не может стать
+    /// дословной цитатой (QuoteMatcher меряет дословность по тексту окна, QuoteMatcher.cs:133).
+    /// Порядок и нумерация реплик сохраняются; реплики человека не понижаются никогда.
+    /// Мера окна — по исходным строкам, как без фильтра: понижение происходит после нарезки
+    /// и не двигает границы окон.</summary>
     public static List<Window> Windows(IReadOnlyList<StoredMessage>? history, int from, int to,
         IReadOnlyCollection<string>? exactSecrets = null)
     {
@@ -188,13 +185,18 @@ public static class WikiChatSlicer
         return sb.ToString().Trim();
     }
 
-    // Понижение процесса в тексте окна (ADR-039, решение 1): не-человеческая реплика,
-    // целиком состоящая из строк процесса (WikiProcessPatterns), заменяется одной строкой
-    // «[процесс] …» с первыми ProcessExcerptChars символами; index и IsHuman те же —
-    // порядок и нумерация окна не двигаются. Всё остальное — как было.
+    // Понижение процесса в тексте окна (ADR-039, решение 1; доработка S2-5): не-человеческая
+    // реплика, целиком состоящая из строк процесса (WikiProcessPatterns), заменяется ОДНОЙ
+    // фиксированной строкой без исходного текста и без перевода строки: маркер сохраняет
+    // факт события, а текст процесса в окно (то, что видит модель) не попадает — значит,
+    // строка процесса цитатой разбора стать не может (Major 1 ревью 6cbc5e0a) и пометка
+    // покрывает всю реплику (Major 2). Выдержка и Lines не понижаются (Excerpt — отдельный путь).
+    // index и IsHuman те же — порядок и нумерация окна не двигаются. Всё остальное — как было.
+    private const string ProcessMarker = "[процесс] служебная реплика";
+
     private static List<Line> DemoteProcess(List<Line> lines) =>
         [.. lines.Select(l => !l.IsHuman && WikiProcessPatterns.IsProcessReply(l.Text)
-            ? l with { Text = "[процесс] " + l.Text.Substring(0, Math.Min(ProcessExcerptChars, l.Text.Length)) }
+            ? l with { Text = ProcessMarker }
             : l)];
 
     private static int EstimateTokens(string text) => text.Length / CharsPerTokenEstimate;

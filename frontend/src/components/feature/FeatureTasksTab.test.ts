@@ -14,7 +14,8 @@
 //   (2) фильтр не фильтрует → «фильтр: принято» краснеет;
 //   (3) «ждёт вас» вместо BRIEF_WAIT_WORD → «нужен ответ» краснеет;
 //   (4) служебные идут в «все» → «служебные отдельно» краснеет;
-//   (5) доработки не исключены из фильтров (steps = rows) → «сумма = total» краснеет.
+//   (5) доработки не исключены из фильтров (steps = rows) → «сумма = total» краснеет;
+//   (6) порог «Показать все» применён к группе доработок (slice(0,8)) → «9 доработок» краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -406,6 +407,33 @@ describe('Доработки после мержа', () => {
     await click(c, 'tasks-show-all');
     expect(rowIds(c, 'step-row-')).toHaveLength(10);
     expect(rowIds(c, 'followup-row-')).toHaveLength(2);
+  });
+
+  it('9 доработок: группа целиком и до, и после «Показать все» (мутация: slice(0,8) на группе → red)', async () => {
+    // Порог «Показать все» (8) не должен доставать до группы доработок: при 9 цепочках
+    // slice(0,8) на ней (FeatureTasksTab.tsx ~:477) обрезал бы 9-ю — тест краснеет.
+    const run = followRun();
+    // К существующим F1 (принят) и F2 (в работе) — ещё 7 принятых: всего 9 цепочек followUp.
+    for (let i = 3; i <= 9; i++) {
+      run.steps.push(stepTask(`f${i}`, { status: 'done', completedAt: '2026-10-20T12:00:00Z' }));
+      run.stepChains.push(chain(`F${i}`, [`f${i}`], { outcome: 'accepted', status: 'принят', followUp: true }));
+    }
+    // Основные строки > 8 — чтобы кнопка «Показать все» существовала и её можно было нажать.
+    for (let i = 0; i < 6; i++) {
+      run.steps.push(stepTask(`d${i}`, { status: 'done', completedAt: '2026-10-20T12:00:00Z' }));
+      run.stepChains.push(chain(`S${i}`, [`d${i}`], { outcome: 'accepted', status: 'принят' }));
+    }
+    run.stepProgress = { ...run.stepProgress!, total: 10, accepted: 8, followUpTotal: 9, followUpAccepted: 8 };
+    const c = render({ run });
+    // До «Показать все»: основные сжаты (8), все 9 доработок на месте, счётчик заголовка — 8 из 9.
+    expect(rowIds(c, 'step-row-')).toHaveLength(8);
+    expect(rowIds(c, 'followup-row-').sort()).toEqual(
+      ['F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9'].map(r => `followup-row-${r}`));
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'tasks-followup-count')!).join('')).toBe('8 из 9');
+    await click(c, 'tasks-show-all');
+    // После: раскрылись основные, группа не изменилась — все 9.
+    expect(rowIds(c, 'step-row-')).toHaveLength(10);
+    expect(rowIds(c, 'followup-row-')).toHaveLength(9);
   });
 
   it('«служебные»: строк шагов и группы доработок нет', async () => {

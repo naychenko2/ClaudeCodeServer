@@ -560,23 +560,43 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     expect(cap.viewerTaskId, 'для B якорь A не действует').toBeUndefined();
   });
 
-  // FS-F1g (конкурентность): открыли файл со страницы фичи (taskId + branch), затем тот же файл из
-  // дерева — branch и taskId сброшены (плашка «Из ветки…» исчезнет), подпись возврата не «К фиче».
-  // Мутация: убрать setOpenFileTask(null) в handleOpenFileFromTree → viewerBranch остаётся → краснеет.
-  it('FS-F1g: со страницы фичи — taskId и branch до FileViewer; затем из дерева — оба сброшены', async () => {
+  // FS-F1g (конкурентность): страница фичи открыта по-настоящему (cc-open-feature). Файл со страницы
+  // (taskId + branch) → «К фиче»; затем тот же файл из дерева — branch и taskId сброшены (плашки нет),
+  // а подпись остаётся «К фиче» по НАЗНАЧЕНИЮ: страница смонтирована и скрыта за файлом, кнопка ведёт на неё.
+  // Мутации: убрать setOpenFileTask(null) в handleOpenFileFromTree → viewerBranch остаётся → краснеет;
+  // снять backLabel у FileViewer (WorkspacePage) → viewerBackLabel undefined → краснеет.
+  it('FS-F1g: страница фичи открыта — taskId и branch до FileViewer; из дерева — оба сброшены, подпись «К фиче»', async () => {
     (globalThis as any).window.innerWidth = 360;
     wsState.leftTab = 'changes';
     mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
     await act(async () => { vi.advanceTimersByTime(100); });
     act(() => { cap.featureOnOpenFile!('docs/a.md', { taskId: 't1', branch: 'feat/x' }); });
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(cap.viewerTaskId, 'контроль: taskId со страницы фичи').toBe('t1');
     expect(cap.viewerBranch, 'branch доехал до FileViewer').toBe('feat/x');
+    expect(cap.viewerBackLabel, 'со страницы фичи — «К фиче»').toBe('К фиче');
     act(() => { treeCap.onOpenFile!('docs/a.md'); });
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(cap.viewerTaskId, 'из дерева taskId сброшен').toBeUndefined();
     expect(cap.viewerBranch, 'из дерева branch сброшен').toBeUndefined();
-    expect(cap.viewerBackLabel, 'из дерева подпись «К фиче» не ставится').toBeUndefined();
+    expect(cap.viewerBackLabel, 'подпись по назначению: страница под файлом жива — «К фиче»').toBe('К фиче');
+  });
+
+  it('FS-F1g: страница фичи не открыта — подпись возврата не ставится', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    wsState.leftTab = 'changes';
+    mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => { treeCap.onOpenFile!('docs/a.md'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer?.filePath).toBe('docs/a.md');
+    expect(cap.viewerBackLabel).toBeUndefined();
   });
 
   // ChatPanel и стена в fake-DOM целиком не монтируются — их звенья проверяем по исходнику.

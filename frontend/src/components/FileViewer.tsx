@@ -1949,7 +1949,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       fixedLeftRef={fixedLeftRef}
       gap={rowGap}
       closeLabel={backLabel ?? 'Файлы'}
-      mobileTitle="К списку файлов"
+      mobileTitle={backLabel ?? 'К списку файлов'}
       closeTitle="Закрыть"
       name={
         // Имя файла — единственный гибкий элемент. Основа — flex-item (flex:1 1 auto, minWidth:0,

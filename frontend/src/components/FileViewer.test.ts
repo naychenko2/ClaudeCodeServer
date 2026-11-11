@@ -609,6 +609,17 @@ describe('FileViewer: плашка ветки и подпись возврата
     expect(findButtonByText(a.container, 'К фиче'), 'кнопка «К фиче»').not.toBeNull();
     expect(findButtonByText(a.container, 'Файлы'), '«Файлы» заменена').toBeNull();
   });
+  // title и aria-label кнопки — вместе с видимой подписью (конвенция CenterViewShell).
+  // Мутация: вернуть mobileTitle="К списку файлов" → краснеет.
+  it('мобила: backLabel задаёт и aria-label кнопки; без него — «К списку файлов»', async () => {
+    const a = mountViewer(vi.fn(), true, { backLabel: 'К фиче' });
+    await flush();
+    expect(findNodeByAttr(a.container, 'aria-label', 'К фиче'), 'aria-label «К фиче»').not.toBeNull();
+    expect(findNodeByAttr(a.container, 'aria-label', 'К списку файлов')).toBeNull();
+    const b = mountViewer(vi.fn(), true);
+    await flush();
+    expect(findNodeByAttr(b.container, 'aria-label', 'К списку файлов')).not.toBeNull();
+  });
   it('мобила: без backLabel — «Файлы»', async () => {
     const { container } = mountViewer(vi.fn(), true);
     await flush();

@@ -53,13 +53,9 @@ public class WikiChatsControllerTests : IDisposable
     private const string Claim1 = "Решение: перенести сборку на Linux";
     private const string Marker1 = "первый сбой был 12 октября";
 
-    private static string Claims(string claim) =>
-        $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
-
-    private static readonly string Plan1 = $$"""
-        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
-        """;
+    // Ответ модели в формате синтеза: append на PageTitle, утверждение и цитата — одна и та же
+    // реплика (дедуп меры 2 опознаёт повтор по тексту утверждения на странице).
+    private static string Synth(string claim) => WikiSynthJson.Append(PageTitle, claim, claim);
 
     private static readonly string PageBase = $$"""
         ---
@@ -179,7 +175,7 @@ public class WikiChatsControllerTests : IDisposable
         AddSession("s-nowiki", projectId: "p1");
         _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = Foreign;
         SetShortHistory("s-nowiki");
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
 
         var res = await Controller(Foreign).AnalyzeCore("s-nowiki", Wait);
 
@@ -239,7 +235,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         AddSession();
         SetShortHistory();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
 
         var first = await Controller().AnalyzeCore(ChatId, Wait);
         ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
@@ -253,7 +249,7 @@ public class WikiChatsControllerTests : IDisposable
         var b2 = Body(again);
         b2.GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeUpToDate);
         b2.GetProperty("reason").GetString().Should().Contain("новых сообщений нет");
-        _llm.Calls.Should().HaveCount(2, "вторая заявка модель не звала");
+        _llm.Calls.Should().HaveCount(1, "вторая заявка модель не звала");
     }
 
     // ─── 4. Медленный прогон: 202, затем analyze-status от него ──────────────
@@ -264,7 +260,7 @@ public class WikiChatsControllerTests : IDisposable
         AddSession();
         SetShortHistory();
         var gate = new TaskCompletionSource();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
         _llm.GateA = gate;
 
         // Ожидание короче прогона: 202 с running — и прогон после отказа клиента не гасится
@@ -365,7 +361,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         AddSession();
         SetShortHistory();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
         var first = await Controller().AnalyzeCore(ChatId, Wait);
         ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
         Body(first).GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeApplied);
@@ -709,7 +705,7 @@ public class WikiChatsControllerTests : IDisposable
                 (_answers.TryGetValue(pass, out var q) ? q : _answers[pass] = new Queue<string>()).Enqueue(answer);
         }
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
@@ -731,12 +727,11 @@ public class WikiChatsControllerTests : IDisposable
         private string Answer(string actionKey, string prompt, CancellationToken ct)
         {
             var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("extract durable") ? "A"
-                : prompt.Contains("turn the claims") ? "B"
+                : prompt.Contains("single pass") ? "S"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");
-            if (pass == "A" && GateA is not null && Calls.Count(c => c.Pass == "A") == 1)
+            if (pass == "S" && GateA is not null && Calls.Count(c => c.Pass == "S") == 1)
                 GateA.Task.WaitAsync(ct).GetAwaiter().GetResult();
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;

@@ -69,13 +69,9 @@ public class WikiChatIngestTests : IDisposable
     private const string Claim2 = "Договорились: тесты гоняем через CI на Linux";
     private const string Marker2 = "грин 44 из 44";
 
-    private static string Claims(string claim) =>
-        $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
-
-    private static readonly string Plan1 = $$"""
-        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
-        """;
+    // Ответ модели в формате синтеза: append на PageTitle, утверждение и цитата — одна и та же
+    // реплика (дедуп меры 2 опознаёт повтор по тексту утверждения на странице).
+    private static string Synth(string claim) => WikiSynthJson.Append(PageTitle, claim, claim);
 
     private static readonly string NothingJson =
         $$"""{"outcome":"{{WikiKeeperPrompts.NothingToAdd}}","reason":"не о чём писать"}""";
@@ -203,8 +199,8 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", Claims(Claim2)), ("B", Plan1));
+            ("S", Synth(Claim1)),
+            ("S", Synth(Claim2)));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -224,7 +220,7 @@ public class WikiChatIngestTests : IDisposable
 
         // Мутация «дельта от 0» (взять окно с 1, а не с курсора+1): промпт второго
         // разбора содержит маркер первой дельты — тест красный.
-        var promptA2 = llm.PromptOf("A", 2);
+        var promptA2 = llm.PromptOf("S", 2);
         promptA2.Should().Contain(Marker2, "дельта дошла до модели");
         promptA2.Should().NotContain(Marker1, "закрытая курсором часть чата повторно не разбирается");
 
@@ -252,11 +248,11 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
+            ("S", Synth(Claim1)),
             // Второй разбор: история переписана → дельта заново тот же текст → тот же
             // план; дедup (мера 2) отвергает его как повтор, ремонт модели отвечает
             // «нечего добавить».
-            ("A", Claims(Claim1)), ("B", Plan1), ("R", NothingJson));
+            ("S", Synth(Claim1)), ("R", NothingJson));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -269,7 +265,7 @@ public class WikiChatIngestTests : IDisposable
 
         // Сброс курсора доказан входом модели: второй проход A видит весь чат,
         // включая маркер закрытой раньше части.
-        llm.PromptOf("A", 2).Should().Contain(Marker1, "хэш записи N не совпал — курсор сброшен в 0");
+        llm.PromptOf("S", 2).Should().Contain(Marker1, "хэш записи N не совпал — курсор сброшен в 0");
 
         // Повтор гасит дедup, а не курсор: исход — штатный «нечего добавить»,
         // причина валидатора («повтор: утверждение уже на странице…») доходит до ремонта.
@@ -316,8 +312,8 @@ public class WikiChatIngestTests : IDisposable
 
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", Claims(Claim1)), ("B", Plan1), ("R", NothingJson))
+            ("S", Synth(Claim1)),
+            ("S", Synth(Claim1)), ("R", NothingJson))
         { GateAAsync = gate };
         var ingest = new WikiIngestService(llm, new NoSpheres(), _apply, _config);
         var req1 = new WikiIngestService.Request(WikiGate.OriginSession, "session:" + ChatId + "#m1-m5",
@@ -337,8 +333,8 @@ public class WikiChatIngestTests : IDisposable
         // Мутация «вернуть ключ без версии»: again — тот же прогон (тот же пакет), один
         // проход A на обе версии: красное здесь, без нагрузки и без повторов.
         again.PackageId.Should().NotBe(first.PackageId, "версия окна — своя заявка, а не чужой прогон");
-        llm.CountOf("A").Should().Be(2, "каждая версия разбрана своим проходом A");
-        llm.PromptOf("A", 2).Should().Contain(secondTail, "вторая заявка разобрала своё содержание, а не чужое");
+        llm.CountOf("S").Should().Be(2, "каждая версия разбрана своим проходом A");
+        llm.PromptOf("S", 2).Should().Contain(secondTail, "вторая заявка разобрала своё содержание, а не чужое");
     }
 
     // ── хэш курсора — по неизменяемому содержимому реплики (хвост ревью S6e-2, п.2) ──
@@ -362,7 +358,7 @@ public class WikiChatIngestTests : IDisposable
             new StoredUserMessage("Давай."),
         ]);
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -377,7 +373,7 @@ public class WikiChatIngestTests : IDisposable
         var again = await sut.AnalyzeAsync(User, ChatId);
         again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
         again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
-        llm.Calls.Should().HaveCount(2, "модель заново не звалась");
+        llm.Calls.Should().HaveCount(1, "модель заново не звалась");
     }
 
     // Хвост живого чата — часто карточка tool_use: ранняя карточка из стрима (пустой Input)
@@ -398,7 +394,7 @@ public class WikiChatIngestTests : IDisposable
             new StoredToolUseMessage { Id = "tool-1", Name = "Bash" },
         ]);
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -413,7 +409,7 @@ public class WikiChatIngestTests : IDisposable
         var again = await sut.AnalyzeAsync(User, ChatId);
         again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
         again.Reason.Should().Contain("новых сообщений нет", "хэш тот же — курсор на месте, чат не переразобрывается");
-        llm.Calls.Should().HaveCount(2, "модель заново не звалась");
+        llm.Calls.Should().HaveCount(1, "модель заново не звалась");
     }
 
     // ── c3a: сбой при применении — курсор на месте, хроники нет ──
@@ -424,7 +420,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession();
         SetShortHistory();
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         // Сбой при применении: карточка источника исчезает с диска во время прохода B.
         // Карточку при захвате регистрирует Хранитель (дефект d144bb0f), поэтому её удаление —
         // расхождение диска с манифестом: применение стопорит шаг 2 (CheckSectionAgainstDisk,
@@ -451,7 +447,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession();
         SetShortHistory();
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson));
+        var llm = new FakeLlm(("S", NothingJson));
         var sut = Sut(llm);
 
         var res = await sut.AnalyzeAsync(User, ChatId);
@@ -473,7 +469,7 @@ public class WikiChatIngestTests : IDisposable
         var again = await sut.AnalyzeAsync(User, ChatId);
         again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate);
         again.Reason.Should().Contain("новых сообщений нет");
-        llm.Calls.Should().HaveCount(2, "пустая дельта — без обращения к модели");
+        llm.Calls.Should().HaveCount(1, "пустая дельта — без обращения к модели");
     }
 
     // ── c3c (доработка S6f, круг 2): применённый разбор снимает свой nothing_new ──
@@ -489,7 +485,7 @@ public class WikiChatIngestTests : IDisposable
 
         // Шаг 1. Исход «нечего добавить»: зона и причина разбора в сторе, streak 1 —
         // пока они не сняты, список показывает именно их (существующее поведение).
-        var llmNothing = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson));
+        var llmNothing = new FakeLlm(("S", NothingJson));
         var sut = Sut(llmNothing);
         var first = await sut.AnalyzeAsync(User, ChatId);
         first.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, first.Reason);
@@ -502,7 +498,7 @@ public class WikiChatIngestTests : IDisposable
         _sessions.History[ChatId].Add(new StoredUserMessage($"{Claim2}. Хронология: {Marker2}."));
         _sessions.History[ChatId].Add(new StoredTextMessage("Готово."));
 
-        var llmApplied = new FakeLlm(("A", Claims(Claim2)), ("B", Plan1));
+        var llmApplied = new FakeLlm(("S", Synth(Claim2)));
         var res = await Sut(llmApplied).AnalyzeAsync(User, ChatId);
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, "отказ разбора: " + res.Reason);
 
@@ -535,7 +531,7 @@ public class WikiChatIngestTests : IDisposable
     [Fact]
     public async Task C4_Ступень0_ОтказБезВызоваМодели()
     {
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         var none = await sut.AnalyzeAsync(User, "no-such-chat");
@@ -580,7 +576,7 @@ public class WikiChatIngestTests : IDisposable
     [Fact]
     public async Task КодыОтказа_Ступень0_Чат_И_НезаведённаяВики()
     {
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         AddSession("s-task", taskExecution: true);
@@ -637,7 +633,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession();
         SetShortHistory();
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -648,7 +644,7 @@ public class WikiChatIngestTests : IDisposable
             "курсор на конце истории: разбирать нечего — состояние, а не отказ");
         again.Reason.Should().Contain("новых сообщений нет");
         again.Code.Should().BeNull("up_to_date — не отказ, кода у него нет");
-        llm.Calls.Should().HaveCount(2, "повторная заявка по закрытому курсору модель не зовёт");
+        llm.Calls.Should().HaveCount(1, "повторная заявка по закрытому курсору модель не зовёт");
     }
 
     // ── S7b0a: IsRunning и последний исход (чтение analyze-status) ──
@@ -660,7 +656,7 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var gate = new TaskCompletionSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         var t = Task.Run(() => sut.AnalyzeAsync(User, ChatId));
@@ -690,7 +686,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession();
         SetShortHistory();
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         var first = await sut.AnalyzeAsync(User, ChatId);
@@ -734,7 +730,7 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var gate = new TaskCompletionSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         // Первая заявка стоит в модели; вторая приходит в середину её прогона.
@@ -751,7 +747,7 @@ public class WikiChatIngestTests : IDisposable
         // склеила бы её внутренние заявки и модель осталась бы вызвана дважды —
         // дедup нужен на уровне чата, а не только заявки.
         _sessions.HistoryReads.Should().Be(2, "один разбор: история прочитана его ReadAsync и захватом; вторая заявка своего разбора не начинает");
-        llm.Calls.Should().HaveCount(2, "одна заявка — один прогон; вторая получает её результат");
+        llm.Calls.Should().HaveCount(1, "одна заявка — один прогон; вторая получает её результат");
         results.Should().OnlyContain(r => r.Outcome == WikiChatIngestService.OutcomeApplied);
         results[0].PackageIds.Should().Equal(results[1].PackageIds);
         WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "двух пакетов на один чат нет");
@@ -768,7 +764,7 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var gate = new TaskCompletionSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         var t1 = sut.AnalyzeAsync(User, ChatId);
@@ -781,7 +777,7 @@ public class WikiChatIngestTests : IDisposable
         var r2 = await t2;
         r1.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r1.Reason);
         r2.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r2.Reason);
-        llm.Calls.Should().HaveCount(2, "один разбор: проходы модели A+B ровно по одному разу");
+        llm.Calls.Should().HaveCount(1, "один разбор: модель ровно один раз");
         r1.PackageIds.Should().Equal(r2.PackageIds);
     }
 
@@ -796,7 +792,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession("chat-night");
         SetShortHistory("chat-night");
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        var llm = new FakeLlm(("S", Synth(Claim1)))
         {
             ExpectedActionKey = LocalActionCatalog.WikiNightly,
         };
@@ -804,7 +800,7 @@ public class WikiChatIngestTests : IDisposable
 
         var res = await sut.AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
-        llm.Calls.Should().HaveCount(2, "один разбор: проходы A+B ровно по одному разу");
+        llm.Calls.Should().HaveCount(1, "один разбор: модель ровно один раз");
         llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiNightly,
             "разбор ночи — на названном месте");
     }
@@ -820,13 +816,13 @@ public class WikiChatIngestTests : IDisposable
         // кнопка на RunLocalOrChosenAsync (выставить запрет) → следующий тест красный.
         AddSession("chat-night");
         SetShortHistory("chat-night");
-        var night = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        var night = new FakeLlm(("S", Synth(Claim1)))
         {
             ExpectedActionKey = LocalActionCatalog.WikiNightly,
         };
         var nres = await Sut(night).AnalyzeAsync(User, "chat-night", actionKey: LocalActionCatalog.WikiNightly);
         nres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, nres.Reason);
-        night.NoCloudKeys.Should().HaveCount(2, "оба прохода ночи — запросом без облака");
+        night.NoCloudKeys.Should().HaveCount(1, "вызов ночи — запросом без облака");
         night.CloudKeys.Should().BeEmpty("облачная цепочка ночью не зовётся");
     }
 
@@ -835,10 +831,10 @@ public class WikiChatIngestTests : IDisposable
     {
         AddSession();
         SetShortHistory();
-        var button = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var button = new FakeLlm(("S", Synth(Claim1)));
         var bres = await Sut(button).AnalyzeAsync(User, ChatId);
         bres.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, bres.Reason);
-        button.CloudKeys.Should().HaveCount(2, "кнопка — прежняя цепочка с облаком");
+        button.CloudKeys.Should().HaveCount(1, "кнопка — прежняя цепочка с облаком");
         button.NoCloudKeys.Should().BeEmpty("запрет облака кнопке не выставляется");
     }
 
@@ -849,7 +845,7 @@ public class WikiChatIngestTests : IDisposable
         // исключения наружу нет, курсор чата не двинут.
         AddSession("chat-night");
         SetShortHistory("chat-night");
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1))
+        var llm = new FakeLlm(("S", Synth(Claim1)))
         {
             ExpectedActionKey = LocalActionCatalog.WikiNightly,
             LocalThrow = new InvalidOperationException("локальная модель недоступна"),
@@ -878,7 +874,7 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var gate = new TaskCompletionSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         var t1 = sut.AnalyzeAsync(User, ChatId);
@@ -891,7 +887,7 @@ public class WikiChatIngestTests : IDisposable
         var r2 = await t2;
         r1.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r1.Reason);
         r2.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, r2.Reason);
-        llm.Calls.Should().HaveCount(2, "один прогон: проходы A+B ровно по одному разу, своей модели у ночи нет");
+        llm.Calls.Should().HaveCount(1, "один прогон: модель ровно один раз, своей модели у ночи нет");
         llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiIngest,
             "присоединившаяся заявка получает движок того, кто пришёл первым");
     }
@@ -910,7 +906,7 @@ public class WikiChatIngestTests : IDisposable
         AddSession("chat-badkey");
         SetShortHistory("chat-badkey");
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var res = await Sut(llm).AnalyzeAsync(User, "chat-badkey", actionKey: "wiki-nighly");
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected);
@@ -990,7 +986,7 @@ public class WikiChatIngestTests : IDisposable
         // выходит за защищённый прогон (тот самый интервал F2).
         _sessions.ThrowOnRead = n => n == 1 ? new BrokenMessageException() : null;
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var sut = Sut(llm);
 
         // Мутация «убрать finally» (снять сняние и выдачу из finally): запись остаётся,
@@ -1007,8 +1003,8 @@ public class WikiChatIngestTests : IDisposable
             "следующая заявка начинает свой разбор, а не виснет на мёртвой");
 
         // Неудачный разбор не двинул курсор: второй прогон видит весь чат и доходит до модели.
-        llm.Calls.Should().HaveCount(2, "первая заявка не дошла до модели; второй разбор — A+B");
-        llm.PromptOf("A", 1).Should().Contain(Marker1, "дельта от нуля: курсор после сбоя не двигался");
+        llm.Calls.Should().HaveCount(1, "первая заявка не дошла до модели; второй разбор — один вызов");
+        llm.PromptOf("S", 1).Should().Contain(Marker1, "дельта от нуля: курсор после сбоя не двигался");
 
         sut.GetLast(User, ChatId)!.Result.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied,
             "последний исход — успешный второй разбор, неудачный его перечитывает");
@@ -1023,7 +1019,7 @@ public class WikiChatIngestTests : IDisposable
         SetShortHistory();
 
         var gate = new TaskCompletionSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         var t1 = sut.AnalyzeAsync(User, ChatId);
@@ -1038,7 +1034,7 @@ public class WikiChatIngestTests : IDisposable
         // итого 4 вместо 2 — красное. Модель при этом может остаться вызванной один раз
         // (in-flight очереди заявок S6b-3 склеивает её внутренние заявки по тому же ref):
         // именно поэтому мера — уровень чата, а не только число вызовов модели.
-        llm.Calls.Should().HaveCount(2, "две заявки — один разбор: модель A и B ровно по одному разу");
+        llm.Calls.Should().HaveCount(1, "две заявки — один разбор: модель ровно один раз");
         _sessions.HistoryReads.Should().Be(2, "один разбор: история прочитана его ReadAsync и захватом; вторая заявка своего разбора не начинает");
         results.Should().OnlyContain(r => r.Outcome == WikiChatIngestService.OutcomeApplied);
         results[0].PackageIds.Should().Equal(results[1].PackageIds);
@@ -1060,7 +1056,7 @@ public class WikiChatIngestTests : IDisposable
 
         var gate = new TaskCompletionSource();
         var cts = new CancellationTokenSource();
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1)) { GateA = gate };
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
         var sut = Sut(llm);
 
         var t1 = Task.Run(() => sut.AnalyzeAsync(User, ChatId, cts.Token));
@@ -1075,7 +1071,7 @@ public class WikiChatIngestTests : IDisposable
         second.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, second.Reason);
         (await t1).Outcome.Should().Be(WikiChatIngestService.OutcomeApplied,
             "отмена одного заявителя не отменяет сам разбор");
-        llm.Calls.Should().HaveCount(2);
+        llm.Calls.Should().HaveCount(1);
     }
 
     // ── сбой посреди окон и частичный исход (урок S6e-2; WC-3) ──────────────────────
@@ -1117,13 +1113,13 @@ public class WikiChatIngestTests : IDisposable
         SetHistory(ChatId, TwoWindowHistory());
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", NothingJson),
-            ("A", "модель ответила прозой вместо JSON"));
+            ("S", NothingJson),
+            ("S", "модель ответила прозой вместо JSON"));
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("окна m", "названо окно, на котором разбор оборвался");
-        llm.CountOf("A").Should().Be(2, "первое окно разобрано («нечего добавить»), второе — отказано");
+        llm.CountOf("S").Should().Be(2, "первое окно разобрано («нечего добавить»), второе — отказано");
         WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("отказ при неприменённом курсор не двигает");
         ChronicleFiles().Should().BeEmpty("хроника не начинается половиной разбора");
     }
@@ -1140,8 +1136,8 @@ public class WikiChatIngestTests : IDisposable
         var endOfFirst = EndOfFirstWindow(history);
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", "модель ответила прозой вместо JSON"));
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON"));
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         // Мутация «вернуть return Refused в default»: исход rejected, Partial нет,
@@ -1162,7 +1158,7 @@ public class WikiChatIngestTests : IDisposable
         StatementLines(File.ReadAllText(chronicles[0], System.Text.Encoding.UTF8), Claim1)
             .Should().Be(1, "хроника по применённому написана");
         File.ReadAllText(PathOf(PagePath)).Should().Contain(Claim1, "применённое окно осталось на странице");
-        llm.CountOf("A").Should().Be(2, "первое окно разобрано, второе отказано, дальше цикл не идёт");
+        llm.CountOf("S").Should().Be(2, "первое окно разобрано, второе отказано, дальше цикл не идёт");
     }
 
     // c3 (WC-3): хроника частичного исхода не записана — исход refused, курсор на месте
@@ -1181,20 +1177,20 @@ public class WikiChatIngestTests : IDisposable
             .Status.Should().Be(WikiOpStatus.Applied);
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", "модель ответила прозой вместо JSON"));
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON"));
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
         res.Reason.Should().Contain("не читается как хроника", "сбой хроники назван причиной отказа");
-        llm.CountOf("A").Should().Be(2, "первое окно применилось, второе отказано");
+        llm.CountOf("S").Should().Be(2, "первое окно применилось, второе отказано");
         WikiChatTriageStore.Get(Root).Entries.Should().BeEmpty("сбой хроники курсор не двигает");
     }
 
     // c2 (WC-3), гонка: две заявки одного чата при частичном исходе — один разбор:
     // один пакет, одна хроника, один курсор. Мутация «снять проверку _inFlight» в
     // AnalyzeAsync: вторая заявка начинает свой разбор — свои ReadAsync и захваты
-    // (HistoryReads больше 3) и свой вызов модели (CountOf("A") больше 2) — красное.
+    // (HistoryReads больше 3) и свой вызов модели (CountOf("S") больше 2) — красное.
     [Fact]
     public async Task ДваРазбораОдногоЧата_ЧастичныйИсход_ОдинПакетОднаХроника()
     {
@@ -1205,8 +1201,8 @@ public class WikiChatIngestTests : IDisposable
 
         var gate = new TaskCompletionSource();
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", "модель ответила прозой вместо JSON")) { GateA = gate };
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON")) { GateA = gate };
         var sut = Sut(llm);
 
         var t1 = sut.AnalyzeAsync(User, ChatId);
@@ -1220,7 +1216,7 @@ public class WikiChatIngestTests : IDisposable
         results[0].PackageIds.Should().Equal(results[1].PackageIds);
         results[0].PackageIds.Should().HaveCount(1);
         _sessions.HistoryReads.Should().Be(3, "один разбор: его ReadAsync и захваты двух окон; вторая заявка своего разбора не начинает");
-        llm.CountOf("A").Should().Be(2, "два окна одного разбора: первое применено, второе отказано");
+        llm.CountOf("S").Should().Be(2, "два окна одного разбора: первое применено, второе отказано");
 
         WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "пакет один, не на каждую заявку");
         var chronicles = ChronicleFiles();
@@ -1238,7 +1234,7 @@ public class WikiChatIngestTests : IDisposable
     // сценарии частичного исхода WC-3: окно 2 отказано ПОСЛЕ ответившего вызова, и его
     // расход понесён — он остаётся в исходе. Мутации: «не прибавлять расход окна»
     // (снять inputTokens += ing.InputTokens) → 0; «прибавлять только успешные окна»
-    // (перенести прибавление в ветки applied/awaiting/nothing_new) → 300 вместо 600.
+    // (перенести прибавление в ветки applied/awaiting/nothing_new) → 100 вместо 300.
     [Fact]
     public async Task ДваОкна_InputTokensСуммируются()
     {
@@ -1246,19 +1242,19 @@ public class WikiChatIngestTests : IDisposable
         SetHistory(ChatId, TwoWindowHistory());
 
         var llm = new FakeLlm(
-            ("A", Claims(Claim1)), ("B", Plan1),
-            ("A", "модель ответила прозой вместо JSON"))
-        { InputTokensByCall = [100, 200, 300] };
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON"))
+        { InputTokensByCall = [100, 200] };
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
         res.Partial.Should().BeTrue("тот же сценарий, что у частичного исхода WC-3");
-        llm.CountOf("A").Should().Be(2, "оба окна дошли до модели");
-        res.InputTokens.Should().Be(600,
-            "100+200 первого окна и 300 ответившего, но отказанного второго: расход не зависит от исхода окна");
+        llm.CountOf("S").Should().Be(2, "оба окна дошли до модели");
+        res.InputTokens.Should().Be(300,
+            "100 первого окна и 200 ответившего, но отказанного второго: расход не зависит от исхода окна");
     }
 
-    // c2: штатный «нечего добавить» после двух ответивших вызовов — расход не ноль: он был,
+    // c2: штатный «нечего добавить» после ответившего вызова — расход не ноль: он был,
     // даже с тем, что писать нечего. Мутация «nothing_new обнуляет расход» → 0.
     [Fact]
     public async Task ОкноНичегоНового_InputTokensНеНоль()
@@ -1266,12 +1262,12 @@ public class WikiChatIngestTests : IDisposable
         AddSession();
         SetShortHistory();
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", NothingJson))
-        { InputTokensByCall = [100, 200] };
+        var llm = new FakeLlm(("S", NothingJson))
+        { InputTokensByCall = [100] };
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeNothingNew, res.Reason);
-        res.InputTokens.Should().Be(300, "«нечего добавить» не отменяет понесённого расхода");
+        res.InputTokens.Should().Be(100, "«нечего добавить» не отменяет понесённого расхода");
     }
 
     // ── доработка S4c (ревью d857da6c): чат-разбор — та же проводка настроек владельца ──
@@ -1291,7 +1287,7 @@ public class WikiChatIngestTests : IDisposable
                 "класс выключен человеком", DateTimeOffset.UtcNow, null)],
         });
 
-        var llm = new FakeLlm(("A", Claims(Claim1)), ("B", Plan1));
+        var llm = new FakeLlm(("S", Synth(Claim1)));
         var res = await Sut(llm).AnalyzeAsync(User, ChatId);
 
         res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
@@ -1386,11 +1382,10 @@ public class WikiChatIngestTests : IDisposable
     [Fact]
     public async Task СводкаНочи_НастоящийРазбор_СчитаетТолькоАвтозаменыИОспариванияУтвержденийЧеловека()
     {
-        // Четыре операции в одном пакете: supersede по утверждению человека (считается как замена),
-        // conflict по утверждению человека (считается как «отметил противоречие»), conflict и
-        // supersede по утверждениям ИИ (не считаются). Мутации по одной: «conflict@human как
-        // замена» (в NightSummary), «снять фильтр supersede@human», «ветка Valid в разборе чата
-        // всегда continue» — каждая краснит тест.
+        // Две операции в одном пакете: conflict по утверждению человека (считается как «отметил
+        // противоречие»), conflict по утверждению ИИ (не считается). Мутации по одной:
+        // «conflict@human как замена» (в NightSummary), «ветка Valid в разборе чата всегда
+        // continue» — каждая краснит тест.
         await SeedHumanAndAiTargets();
         AddSession();
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -1402,22 +1397,19 @@ public class WikiChatIngestTests : IDisposable
             new StoredUserMessage("Давай.", timestamp: nowMs),
             new StoredTextMessage("Готово.", timestamp: nowMs),
         ]);
-        static string C(string t) => $$"""{"text":"{{t}}","quote":"{{t}}"}""";
-        var claimsJson = $$"""{"claims":[{{C(New1)}},{{C(New2)}},{{C(New3)}},{{C(New4)}}]}""";
-        var plan = $$"""
-            {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-            "operations":[
-            {"op":"supersede","page":"Один","claim":0,"target":"{{HumanOld1}}"},
-            {"op":"conflict","page":"Два","claim":1,"target":"{{HumanOld2}}"},
-            {"op":"conflict","page":"Три","claim":2,"target":"{{AiOld1}}"},
-            {"op":"supersede","page":"Четыре","claim":3,"target":"{{AiOld2}}"}]}
-            """;
+        // Синтез supersede не порождает (форма ValidateSynth: create/append/conflict/link; замена —
+        // отдельное решение С4), поэтому в бою замена человека недостижима: считается только
+        // conflict по утверждению человека. Счёт замен — в NightSummary (WikiNightlyServiceTests).
+        static Dictionary<string, object> Op(string page, string claim, string target) =>
+            WikiSynthJson.Op("conflict", page, claim + " — настоящее противоречие", [claim], target: target);
+        var synth = WikiSynthJson.Ok(
+            Op("Два", New2, HumanOld2),
+            Op("Три", New3, AiOld1));
 
-        var result = await Sut(new FakeLlm(("A", claimsJson), ("B", plan))).AnalyzeAsync(User, ChatId);
+        var result = await Sut(new FakeLlm(("S", synth))).AnalyzeAsync(User, ChatId);
 
         result.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, result.Reason);
-        File.ReadAllText(PathOf("Проекты/p1/Один.md")).Should().Contain(New1, "замена по человеку применилась сама");
-        result.OverrodeHuman.Should().Be(1, "только supersede@human, применённый ИИ сам");
+        result.OverrodeHuman.Should().Be(0, "синтез не заменяет утверждений человека");
         result.DisputedPages.Should().Equal(["Проекты/p1/Два.md"]);
     }
 
@@ -1472,7 +1464,7 @@ public class WikiChatIngestTests : IDisposable
 
         public int CountOf(string pass) => Calls.Count(c => c.Pass == pass);
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
@@ -1500,7 +1492,7 @@ public class WikiChatIngestTests : IDisposable
             var text = Answer(actionKey, prompt, ct);
             // Первый проход A стоит на асинхронном гейте: вызывающий (await CallModelAsync)
             // отдаёт управление, и к этому моменту заявка уже стоит в очереди.
-            if (GateAAsync is not null && Calls[^1].Pass == "A" && CountOf("A") == 1)
+            if (GateAAsync is not null && Calls[^1].Pass == "S" && CountOf("S") == 1)
                 await GateAAsync.Task.ConfigureAwait(false);
             // Answer уже записал этот вызов в Calls: его позиция — индекс метрик теста (WC-4a).
             var input = InputTokensByCall is { } t && Calls.Count <= t.Count ? t[Calls.Count - 1] : 10L;
@@ -1517,12 +1509,11 @@ public class WikiChatIngestTests : IDisposable
             }
             // Проход — по директиве своего промпта (порядок вызовов не угадывается).
             var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("extract durable") ? "A"
-                : prompt.Contains("turn the claims") ? "B"
+                : prompt.Contains("single pass") ? "S"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(ExpectedActionKey, "место разбора — " + ExpectedActionKey);
-            if (pass == "A" && GateA is not null && CountOf("A") == 1)
+            if (pass == "S" && GateA is not null && CountOf("S") == 1)
                 GateA.Task.WaitAsync(ct).GetAwaiter().GetResult();
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;

@@ -55,13 +55,9 @@ public class WikiChatBranchTests : IDisposable
     private const string RenewedClaim = "Итог: собрал на Linux";
     private const string ContClaim2 = "Продолжаем дальше: фиксация в хронике";
 
-    private static string Claims(string claim) =>
-        $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
-
-    private static readonly string Plan1 = $$"""
-        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
-        """;
+    // Ответ модели в формате синтеза: append на PageTitle, утверждение и цитата — одна и та же
+    // реплика (дедуп меры 2 опознаёт повтор по тексту утверждения на странице).
+    private static string Synth(string claim) => WikiSynthJson.Append(PageTitle, claim, claim);
 
     private static readonly string PageBase = $$"""
         ---
@@ -180,15 +176,15 @@ public class WikiChatBranchTests : IDisposable
         SetHistory(BranchId, branchHistory);
 
         var llm = new FakeLlm(
-            ("A", Claims(PrefixClaim)), ("B", Plan1),
-            ("A", Claims(BranchClaim)), ("B", Plan1));
+            ("S", Synth(PrefixClaim)),
+            ("S", Synth(BranchClaim)));
         var sut = Sut(llm);
 
         var parent = await sut.AnalyzeAsync(User, ParentId);
         parent.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, parent.Reason);
         // Родитель отвечает за префикс: его модель его видела. Без этой проверки отсутствие
         // префикса во втором промпте было бы проверкой пустоты, а не границы.
-        llm.PromptOf("A", 1).Should().Contain(PrefixMarker);
+        llm.PromptOf("S", 1).Should().Contain(PrefixMarker);
 
         var branch = await sut.AnalyzeAsync(User, BranchId);
         branch.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, branch.Reason);
@@ -196,7 +192,7 @@ public class WikiChatBranchTests : IDisposable
         // Вход модели для ветки — только хвост за точкой ветвления: ни маркера префикса,
         // ни последней реплики родителя в нём нет. Мутация «убрать подъём start за плашку»
         // (WikiChatSlicer.cs:94-95) краснит этот шаг.
-        var prompt = llm.PromptOf("A", 2);
+        var prompt = llm.PromptOf("S", 2);
         prompt.Should().Contain(BranchClaim, "своё содержимое ветки разбирается");
         prompt.Should().NotContain(PrefixMarker, "общий префикс не идёт во вход модели ветки");
         prompt.Should().NotContain(PrefixTail, "последняя реплика родителя — тоже префикс");
@@ -206,7 +202,7 @@ public class WikiChatBranchTests : IDisposable
         var entries = WikiChatTriageStore.Get(Root).Entries;
         entries.Single(e => e.SessionId == ParentId).Cursor.Should().Be(parentHistory.Count);
         entries.Single(e => e.SessionId == BranchId).Cursor.Should().Be(branchHistory.Count);
-        llm.CountOf("A").Should().Be(2, "по одному проходу A на чат: префикс не разобран заново");
+        llm.CountOf("S").Should().Be(2, "по одному проходу A на чат: префикс не разобран заново");
     }
 
     // ── c2: продолжение — записка-передачи нет во входе модели; хроника ссылается на прежнюю ──
@@ -234,8 +230,8 @@ public class WikiChatBranchTests : IDisposable
         ]);
 
         var llm = new FakeLlm(
-            ("A", Claims(PrefixClaim)), ("B", Plan1),
-            ("A", Claims(ContClaim)), ("B", Plan1));
+            ("S", Synth(PrefixClaim)),
+            ("S", Synth(ContClaim)));
         var sut = Sut(llm);
 
         var parent = await sut.AnalyzeAsync(User, ParentId);
@@ -247,7 +243,7 @@ public class WikiChatBranchTests : IDisposable
         // Записка-передачи — вывод модели, код её вырезает (§12б этап 4): ни метки, ни её
         // текста во входе нет; своё содержимое — есть. Мутация «убрать пропуск записки»
         // (WikiChatSlicer.cs:112) краснит этот шаг.
-        var prompt = llm.PromptOf("A", 2);
+        var prompt = llm.PromptOf("S", 2);
         prompt.Should().Contain(ContClaim, "своё содержимое продолжения разбирается");
         prompt.Should().NotContain(HandoffText, "записка-передачи вырезана из входа модели");
 
@@ -290,8 +286,8 @@ public class WikiChatBranchTests : IDisposable
         ]);
 
         var llm = new FakeLlm(
-            ("A", Claims(PrefixClaim)), ("B", Plan1),
-            ("A", Claims(ContClaim)), ("B", Plan1));
+            ("S", Synth(PrefixClaim)),
+            ("S", Synth(ContClaim)));
         var sut = Sut(llm);
 
         // Пока прежний чат принадлежит u1, его разбор пишет хронику на диск u1.
@@ -346,10 +342,10 @@ public class WikiChatBranchTests : IDisposable
         ]);
 
         var llm = new FakeLlm(
-            ("A", Claims(PrefixClaim)), ("B", Plan1),   // разбор прежнего → хроника с заголовком T1
-            ("A", Claims(ContClaim)), ("B", Plan1),     // разбор продолжения → строка со ссылкой на T1
-            ("A", Claims(RenewedClaim)), ("B", Plan1),  // прежний после смены имени → хроника с T2
-            ("A", Claims(ContClaim2)), ("B", Plan1));   // открытая дельта продолжения → перечитывание «О чём»
+            ("S", Synth(PrefixClaim)),   // разбор прежнего → хроника с заголовком T1
+            ("S", Synth(ContClaim)),     // разбор продолжения → строка со ссылкой на T1
+            ("S", Synth(RenewedClaim)),  // прежний после смены имени → хроника с T2
+            ("S", Synth(ContClaim2)));   // открытая дельта продолжения → перечитывание «О чём»
         var sut = Sut(llm);
 
         (await sut.AnalyzeAsync(User, ParentId)).Outcome.Should().Be(WikiChatIngestService.OutcomeApplied);
@@ -420,7 +416,7 @@ public class WikiChatBranchTests : IDisposable
 
         public int CountOf(string pass) => Calls.Count(c => c.Pass == pass);
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
@@ -443,8 +439,7 @@ public class WikiChatBranchTests : IDisposable
         {
             // Проход — по директиве своего промпта (порядок вызовов не угадывается).
             var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("extract durable") ? "A"
-                : prompt.Contains("turn the claims") ? "B"
+                : prompt.Contains("single pass") ? "S"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");

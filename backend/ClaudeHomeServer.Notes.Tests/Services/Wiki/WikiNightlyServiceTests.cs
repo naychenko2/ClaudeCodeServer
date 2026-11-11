@@ -1431,7 +1431,7 @@ public class WikiNightlyServiceTests : IDisposable
         // так же, как ждущий слот путь TrackedLocalLlmClient (LocalEngineSlotRefusalException).
         public Func<string, Exception?>? Throw;
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => Route;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";

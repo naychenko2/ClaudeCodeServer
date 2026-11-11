@@ -191,14 +191,17 @@ public class WikiPlanValidatorSynthTests
     }
 
     [Fact]
-    public void ValidateSynth_ЦитатаНаТойЖеСтраницеСвоейСамой_НеЗанятаДругой()
+    public void ValidateSynth_ЦитатаНаТойЖеСтраницеСвоейСамой_ПовторАНеЗанятаДругой()
     {
-        // Повтор на той же странице ловит IsDuplicateStatement, а не QuoteOwner (exceptPage).
+        // QLinux уже стоит занятой сноской на «Другой»: exceptPage исключает свою страницу
+        // из проверки владельца, поэтому отказ — «повтор» (IsDuplicateStatement), а не «цитата уже на странице».
         var r = Run([new(CardPath, CardFile), new(OtherPath, OtherFile)],
-            Op(WikiPackage.OpAppend, "Другая", "Совсем иное утверждение", [QWindows]));
+            Op(WikiPackage.OpAppend, "Другая", "Совсем иное утверждение", [QLinux]));
 
-        r.Rejected.Should().BeEmpty();
-        r.Accepted.Should().ContainSingle();
+        r.Accepted.Should().BeEmpty();
+        var reason = r.Rejected.Should().ContainSingle().Subject.Reason;
+        reason.Should().StartWith("повтор");
+        reason.Should().NotContain("цитата уже на странице");
     }
 
     [Fact]

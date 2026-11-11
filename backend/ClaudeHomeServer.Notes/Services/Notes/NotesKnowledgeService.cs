@@ -70,12 +70,15 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
 
     public bool Available => _knowledge.IsConfigured;
 
-    // Есть ли у пользователя хоть один проиндексированный документ (без похода в Dify —
-    // дешёвая отсечка для auto-recall на пустом индексе)
+    // Есть ли у пользователя хоть один проиндексированный документ — в датасете заметок
+    // ИЛИ в датасете вики (дефект f4bf5a2f: счёт только :notes закрал auto-recall владельцу
+    // без обычных заметок). Без похода в Dify — дешёвая отсечка для auto-recall на пустом
+    // индексе.
     public bool HasIndex(string userId)
     {
         var entry = GetEntry(userId);
-        return !string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0;
+        return (!string.IsNullOrEmpty(entry.DatasetId) && entry.Docs.Count > 0)
+            || (!string.IsNullOrEmpty(entry.WikiDatasetId) && entry.WikiDocs.Count > 0);
     }
 
     // Id Dify-датасета заметок владельца («{username}:notes»); null — индекс ещё не создавался.
@@ -122,6 +125,8 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     {
         if (!Available) return 0;
         await _syncLock.WaitAsync();
+        var changed = 0; // объявлен до try: сохранение реестра — в finally, отказ прохода не должен
+                         // терять уже записанные DocRef (дефект 7b3dc3db, п. Г)
         try
         {
             var entry = GetEntry(userId);
@@ -143,7 +148,6 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
             var summaries = all.Where(s => s.Source != NotesService.WikiKey).ToList();
             var wikiSummaries = all.Where(s => s.Source == NotesService.WikiKey).ToList();
             var alive = new HashSet<string>(summaries.Select(s => s.Id));
-            var changed = 0;
 
             foreach (var s in summaries)
             {
@@ -199,18 +203,43 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                     if (detail is null) continue;
                     aliveWiki.Add(s.Id);
 
-                    var hash = Hash($"{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
+                    // Раздел — часть хеша (дефект 7b3dc3db, п. А): переезд страницы между
+                    // разделами без правки текста меняет метаданное её документа, а значит —
+                    // сам документ; без раздела в хеше такой переезд не переиндексируется никогда.
+                    var hash = Hash($"{section}\n{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
                     if (entry.WikiDocs.TryGetValue(s.Id, out var wdoc) && wdoc.Hash == hash) continue;
 
-                    if (wdoc is not null)
-                        try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
-                        catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+                    try
+                    {
+                        // Сначала создать с метаданными, старый удалить после (п. Б): при отказе
+                        // назначения IndexFileByTextAsync удалит новый документ и бросает —
+                        // порядок «удалить старый → создать новый» оставил бы страницу вообще
+                        // без документа в индексе, пока назначение отказывает.
+                        // Имя уникально на версию страницы (дефект 0b4c2164): при занятом имени
+                        // create_by_text не создаёт новый документ, а возвращает id существующего —
+                        // «имя = заголовок» превращает порядок «создать → удалить» в удаление
+                        // единственного документа страницы (правка текста выбивала её из индекса).
+                        // Префикс хеша версии — часть имени; ветка :notes этим не касается.
+                        var info = await _knowledge.IndexFileByTextAsync(
+                            entry.WikiDatasetId!, $"{detail.Title} · {hash[..8]}", detail.Content, detail.Tags.ToList(),
+                            metadata: new Dictionary<string, string> { ["wiki_section"] = section });
 
-                    var info = await _knowledge.IndexFileByTextAsync(
-                        entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
-                        metadata: new Dictionary<string, string> { ["wiki_section"] = section });
-                    entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
-                    changed++;
+                        // Страховка на случай совпадения имени: если create вернул тот же документ,
+                        // что уже в реестре, — удалять его нельзя: страница осталась бы без документа.
+                        if (wdoc is not null && info.Id != wdoc.DocId)
+                            try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
+                            catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+
+                        entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
+                        changed++;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Сбой одной страницы не рвёт проход владельца (п. В): реестра не касались —
+                        // старый DocRef жив и его хеш не равен текущему, следующий проход сам
+                        // повторит индексацию (тот же механизм, что у Hash = "" в InvalidateDocsAsync).
+                        _logger.LogWarning(ex, "Синк страницы вики {Page} в Dify", s.Id);
+                    }
                 }
 
                 foreach (var stale in entry.WikiDocs.Keys.Where(k => !aliveWiki.Contains(k)).ToList())
@@ -222,10 +251,22 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                 }
             }
 
-            if (changed > 0) Save();
             return changed;
         }
-        finally { _syncLock.Release(); }
+        finally
+        {
+            // Save — здесь, а не в конце try: если любая ветка бросила (и :notes — тоже,
+            // её исключение по-прежнему пробрасывается наружу), уже записанные DocRef обязаны
+            // попасть на диск — иначе после рестарта реестр указывает на удалённые документы
+            // (дефект 7b3dc3db).
+            // Отказ самой записи не удерживает семафор и не затмевает исходное исключение
+            // прохода (ревью 48348ac9, Major 1): бросок из finally заменил бы его собой и
+            // оставил бы _syncLock занятым навсегда — поэтому ошибка записи ловится здесь
+            // и идёт отдельной строкой в лог, Release — безусловен.
+            try { if (changed > 0) Save(); }
+            catch (Exception ex) { _logger.LogWarning(ex, "Запись реестра синка заметок {User}", userId); }
+            finally { _syncLock.Release(); }
+        }
     }
 
     // Семантический поиск: чанки Dify → заметки пользователя (по маппингу docId → noteId).

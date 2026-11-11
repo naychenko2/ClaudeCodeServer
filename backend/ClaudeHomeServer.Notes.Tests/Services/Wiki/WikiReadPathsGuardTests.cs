@@ -199,8 +199,12 @@ public class WikiReadPathsGuardTests : IDisposable
         Convert.ToBase64String(Encoding.UTF8.GetBytes("wiki|" + relUnderPages))
             .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
+    // Имя документа вики — «заголовок · префикс хеша версии» (дефект 0b4c2164), :notes — заголовок.
+    private static bool TitleMatches(string name, string title) =>
+        name == title || name.StartsWith(title + " · ");
+
     private string DocIdOf(string title) =>
-        _index.Indexed.First(i => i.Title == title).DocId;
+        _index.Indexed.First(i => TitleMatches(i.Title, title)).DocId;
 
     private string DatasetIdOf(string suffix) =>
         _index.Datasets.First(d => d.Name.EndsWith(suffix, StringComparison.Ordinal)).Id;

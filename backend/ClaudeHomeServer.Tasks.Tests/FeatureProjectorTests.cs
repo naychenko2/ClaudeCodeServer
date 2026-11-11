@@ -2385,7 +2385,7 @@ public class FeatureProjectorTests
         Stage(run, "review").State.Should().Be("active", "stages[].state = active");
         Stage(run, "prod").State.Should().NotBe("active",
             "prod с незакрытым шагом больше не «текущая»: работа не там");
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, t.AddMinutes(10));
         row.Now0!.Stage.Should().Be("review", "row.now0.stage");
     }
 

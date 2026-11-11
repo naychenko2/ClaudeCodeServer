@@ -1541,7 +1541,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         DateTime? now = null)
     {
         ArgumentNullException.ThrowIfNull(sessions);
-        _ = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2); Б1 пока не трогает
+        var nowUtc = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2) и устаревания голоса (FS-O2c)
 
         // Задача по id — для OwnFeatureId («своя» фича чата — первая в своём классе).
         var byId = owner.ToDictionary(t => t.Id);
@@ -1583,12 +1583,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
         // (строка): один снимок — одна семантика, живые чаты не теряются, чужие не попадают.
         var runs = survivingEpics
-            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), nowUtc, sessions))
             .ToList();
         ApplyQueue(runs, owner);
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
-                ChatCount(map, run.FeatureId)))
+                ChatCount(map, run.FeatureId), nowUtc))
             .ToList();
         var featureOrder = new Dictionary<string, int>();
         for (var i = 0; i < rows.Count; i++)
@@ -1694,11 +1694,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Строка фичи: FeatureRun + задачи фичи (эпик + дочерние, для ключевого чата) + сессии
     // (ключевой чат: archived/project) + chatCount.
     // Чистая функция — на ней золотые тесты (FeatureIndexRowTests).
+    // FS-O2c: now — «сейчас» для StaleOf в NoteOf (возраст голоса и вердикты после записи);
+    // в BuildIndexCore — тот же nowUtc, что идёт в Build.
     internal static FeatureIndexRow BuildRow(
         FeatureRun run,
         IReadOnlyList<TaskItem> featureTasks,
         IReadOnlyCollection<FeatureIndexSession> sessions,
-        int chatCount)
+        int chatCount,
+        DateTime now)
     {
         // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
         var key = KeySession(run.Epic, featureTasks, sessions);
@@ -1753,7 +1756,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             Ask: FeatureBrief.AskOf(run),
             // Состояние вне таблицы (только синтетический run) — категории нет: NoteOf без неё не
             // зовём, eta null (тот же fail-closed, что у Kind поля).
-            Eta: kind is null ? null : FeatureBrief.EtaOf(FeatureBrief.NoteOf(run, kind, null), null,
+            Eta: kind is null ? null : FeatureBrief.EtaOf(FeatureBrief.NoteOf(run, kind, null, now), null,
                 FeatureBrief.ClockStoppedOf(run)));
     }
 

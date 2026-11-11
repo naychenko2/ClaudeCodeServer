@@ -36,6 +36,12 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // объяснено, а не молча спрятано (в note.estimate она гасилась без причины).
 // FS-V2 доработка (ревью f03f4f60): устаревший голос срока не даёт — при brief.note.stale
 // источник history (тот же предикат StaleOf, что у brief.note.stale, без второго расчёта).
+//
+// FS-O2c: в StaleOf добавлены возраст голоса (> StaleAgeHours) и число вердиктов принятия после
+// записи (≥ StaleAcceptedSteps): стадия и категория prod-этапа не меняются днями, и оценка
+// суточной давности выглядела свежей. «Сейчас» — тот же now, что у Build (чистая функция,
+// подставляемые часы в тестах); напоминание оркестратору читает brief.note.stale и начинает
+// срабатывать по возрасту само.
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -228,7 +234,7 @@ public static class FeatureBrief
         var estimate = EstimateOf(run, typical, kind);
         // Голос считается раньше eta: оценка оркестратора для eta — та же вычисленная
         // note.estimate (EstimateOfNote), второго расчёта по тем же входам нет.
-        var note = NoteOf(run, kind, estimate);
+        var note = NoteOf(run, kind, estimate, now);
 
         return new Brief(
             kind,
@@ -552,14 +558,16 @@ public static class FeatureBrief
     // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
     // FS-V4: internal — вход EtaOf для строки индекса (FeatureProjector.BuildRow): тот же голос и
     // тот же StaleOf, без истории (history там null); логики здесь нет — только видимость.
-    internal static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
+    // FS-O2c: now — «сейчас» вызывающего (тот же, что у Build; BuildRow получает его из
+    // BuildIndexCore): по нему StaleOf меряет возраст голоса.
+    internal static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history, DateTime now)
     {
         var note = run.Epic?.Note;
         if (note is null) return null;
 
         return new BriefNote(
             note.Text, note.At, null, note.ByUser, note.StageAtWrite,
-            StaleOf(run, note, kind), EstimateOfNote(note, kind, history));
+            StaleOf(run, note, kind, now), EstimateOfNote(note, kind, history));
     }
 
     // Оценка оркестратора (макет 2): устаревание — то же StaleOf, что у голоса (отдельной логики нет:
@@ -644,8 +652,16 @@ public static class FeatureBrief
         _ => null,
     };
 
-    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,
-    // если StageAtWrite ≠ текущей стадии ИЛИ категория (brief.kind) сменилась с момента записи.
+    // Пороги устаревания голоса (FS-O2c): возраст (часы) и число вердиктов принятия после записи.
+    // Значения — вопрос Андрея (план волны), правка только здесь: потребители читают признак
+    // brief.note.stale, а не пороги.
+    public const int StaleAgeHours = 12;
+    public const int StaleAcceptedSteps = 3;
+
+    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80, FS-O2c):
+    // голос устарел, если StageAtWrite ≠ текущей стадии ИЛИ категория (brief.kind) сменилась
+    // с момента записи ИЛИ голос старше StaleAgeHours ИЛИ после записи принято не меньше
+    // StaleAcceptedSteps вердиктов принятия (AcceptedVerdictsAfter).
     // Единая база: StageAtWrite штампуется той же CurrentStageOf, что и это сравнение (её зовут
     // REST PUT и MCP featureNote) — голос, записанный на «ждёт вас» / паузе / idle (Now пуст,
     // работает вторая половина правила), не устаревший с первой секунды: стадия не менялась.
@@ -657,12 +673,37 @@ public static class FeatureBrief
     // величина, что brief.kind), поэтому голос, записанный в очереди, свежий до смены категории.
     // Старые голоса (до B15) хранят СОСТОЯНИЕ — они достраиваются таблицей KindByState (fail-closed
     // для неизвестного значения).
-    private static bool StaleOf(FeatureRun run, FeatureNote note, string kind)
+    // FS-O2c (два новых условия через «или», пороги — константы выше): стадия и категория
+    // prod-этапа не меняются днями, и оценка суточной давности выглядела свежей.
+    // Возраст: строго больше StaleAgeHours (ровно StaleAgeHours — ещё не устарел).
+    // Принятые вердикты: не меньше StaleAcceptedSteps с временем вердикта позже Note.At
+    // (AcceptedVerdictsAfter). now — тот же, что у Build/BuildRow, второго источника времени нет.
+    private static bool StaleOf(FeatureRun run, FeatureNote note, string kind, DateTime now)
     {
         if (note.StageAtWrite != CurrentStageOf(run)) return true;
         var kindAtWrite = KindFromStamp(note.StateAtWrite);
         if (kindAtWrite is null) return true;
-        return kindAtWrite != kind;
+        if (kindAtWrite != kind) return true;
+        if (now - note.At > TimeSpan.FromHours(StaleAgeHours)) return true;
+        return AcceptedVerdictsAfter(run, note.At) >= StaleAcceptedSteps;
+    }
+
+    // FS-O2c: число вердиктов принятия (FeatureProjector.IsAcceptance — единый предикат, своего
+    // словаря здесь нет) задач рана с временем вердикта позже момента записи голоса. Время
+    // вердикта — Verification.VerifiedAt: его ставит сервер на всех путях вердикта
+    // (TaskManager.cs:586/1439, TasksController.cs:646, TasksToolset.cs:508/691); без отметки
+    // (старые/синтетические данные) вердикт не считается — его возраст неизвестен. Состав задач
+    // — AllTasksOf (тот же, что у UpdatedAtOf): вердикт на ревью/проверке/финале — вердикт о
+    // шаге, вердикт на самой задаче-шаге — тоже вердикт. Своего прохода по цепочкам нет,
+    // хранить ничего не нужно. Шаг с несколькими принятыми витками даёт несколько вердиктов:
+    // порог считается по вердиктам (правило задачи FS-O2c), не по шагам.
+    private static int AcceptedVerdictsAfter(FeatureRun run, DateTime after)
+    {
+        var count = 0;
+        foreach (var t in AllTasksOf(run))
+            if (t.Verification is { } v && FeatureProjector.IsAcceptance(v.Verdict) && v.VerifiedAt > after)
+                count++;
+        return count;
     }
 
     // Категория, записанная в голос: новое значение — сама категория (brief.kind); старое (до B15) —

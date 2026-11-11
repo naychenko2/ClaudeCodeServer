@@ -998,7 +998,7 @@ public class FeatureStepProgressTests
             Step("s1", "Ш1", 1), Step("s2", "Ш2", 2, TaskItemStatus.InProgress) };
         var run = FeatureProjector.Build(epic, tasks, T0.AddDays(1));
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
 
         (row.StepsReview, row.StepsWork, row.StepsNotCreated, row.PlanState).Should().Be((1, 1, 1, "cut"));
         (row.StepsAccepted, row.StepsTotal).Should().Be((0, 3));
@@ -1014,7 +1014,7 @@ public class FeatureStepProgressTests
             Rework("w1", "Нет-такого", 8), Rework("w2", null, 9) };
         var run = FeatureProjector.Build(epic, tasks, T0.AddDays(1));
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
 
         run.StepProgress.Withdrawn.Should().BeGreaterThan(0);
         run.StepProgress.UnlinkedReworks.Should().BeGreaterThan(0);
@@ -1046,7 +1046,7 @@ public class FeatureStepProgressTests
         json.Should().Contain("\"closedTail\"");
         json.Should().Contain("\"withdrawnAtMerge\"");
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
         var rowJson = JsonSerializer.Serialize(row, opts);
         rowJson.Should().Contain("\"stepsReview\"");
         rowJson.Should().Contain("\"stepsWork\"");
@@ -1069,7 +1069,7 @@ public class FeatureStepProgressTests
         merged.State.Should().Be(FeatureStates.Merged);
         merged.Summary!.StepsOpen.Should().Be(1);
         merged.Summary.Steps.Should().Be(2, "Summary.Steps = знаменатель");
-        FeatureProjector.BuildRow(merged, mergedTasks, Array.Empty<FeatureIndexSession>(), 0).Summary!.StepsOpen.Should().Be(1);
+        FeatureProjector.BuildRow(merged, mergedTasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1)).Summary!.StepsOpen.Should().Be(1);
 
         // closed: эпик Done, merge нет; два шага, принято 0.
         var epicC = Feature();

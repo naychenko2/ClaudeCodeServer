@@ -49,6 +49,11 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • FS-V2 доработка (ревью f03f4f60): убрать проверку Stale: false в EtaOf — красный ровно
 //    «УстаревшийГолосБерётИсторию…» (note 90 вместо history 40), остальные зелёные (голос их
 //    фикстур свежий); убрать нижний порог < 1 — красный ровно «МеньшеОднойМинуты…» (0 вместо null).
+//  • FS-O2c: убрать ветку возраста из StaleOf — красный ровно «ВозрастГолоса…» (случай 13 ч);
+//    убрать ветку AcceptedVerdictsAfter — красный ровно «ПринятыхВердиктов…» (случай 3);
+//    «> after» → «>= after» — красный ровно «ВердиктРовноВМоментЗаписи…»; убрать фильтр
+//    IsAcceptance — красный ровно «ВозвратИОтзыв…». Голоса существующих фикстур (NOW−2 ч)
+//    ниже обоих порогов — их тесты не затронуты.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -696,8 +701,11 @@ public class FeatureBriefTests
     // он не должен выйти ни при каком раскладе. runningStage — идущая задача в этой стадии
     // (FS-V1: стадия идущей задачи и есть текущая); без него идущих нет — работает вторая
     // половина правила (первая активная стадия).
+    // FS-O2c: noteAt — момент записи голоса (по умолчанию NOW−2 ч: свежий по возрасту);
+    // reviews — задачи-витки с вердиктами (для счёта принятых после записи).
     private static FeatureRun RunWithVoice(string activeStage, string state, FeatureHold? hold,
-        string stageAtWrite, string stateAtWrite, string? runningStage = null) => new()
+        string stageAtWrite, string stateAtWrite, string? runningStage = null,
+        DateTime? noteAt = null, List<TaskItem>? reviews = null) => new()
     {
         FeatureId = "ep",
         State = state,
@@ -706,10 +714,11 @@ public class FeatureBriefTests
         {
             Id = "ep",
             Role = TaskRoles.Feature,
-            Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true,
+            Note = new FeatureNote("ревью началось", noteAt ?? NOW.AddHours(-2), "sess-1", true,
                 stageAtWrite, stateAtWrite),
         },
         Stages = [Stage(activeStage, "active")],
+        Reviews = reviews ?? [],
         Now = runningStage is null
             ? new List<FeatureNow>()
             : new List<FeatureNow>
@@ -943,6 +952,92 @@ public class FeatureBriefTests
         note.StageAtWrite.Should().Be("prod", "хранимый штамп не переписывается");
         note.Stale.Should().BeTrue(
             "текущая стадия — review (стадия идущей задачи), голос написан на prod");
+    }
+
+    // ─── FS-O2c: возраст голоса и принятые вердикты после записи ─────────────────────────────────
+
+    // Задача-виток с вердиктом: Verification.VerifiedAt — время вердикта (его ставит сервер на
+    // живых путях; здесь — подставленное). Вердикт по умолчанию accepted; returned/withdrawn —
+    // для теста «не считаются».
+    private static TaskItem RoundWithVerdict(string id, DateTime at, string verdict = TaskVerdicts.Accepted) => new()
+    {
+        Id = id, Role = TaskRoles.Review, Status = TaskItemStatus.Done, CompletedAt = at,
+        Verification = new TaskVerification { Verdict = verdict, VerifiedAt = at },
+    };
+
+    // c1: возраст голоса. Штамп стадии и категория не менялись — сигнал ровно возраст.
+    // Порог «больше StaleAgeHours»: 11 ч — свежий, ровно 12 ч — граница вне порога (ещё не
+    // устарел), 13 ч — устарел. Мутация: убрать ветку возраста в StaleOf — красный ровно
+    // случай 13 ч (11/12 при этом зелёные).
+    [Theory]
+    [InlineData(11, false)]
+    [InlineData(12, false)]
+    [InlineData(13, true)]
+    public void Note_ВозрастГолосаБольшеПорогаДаётStale(int ageHours, bool expectedStale)
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running",
+            noteAt: NOW.AddHours(-ageHours));
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().Be(expectedStale,
+            $"{ageHours} ч с записи против порога {FeatureBrief.StaleAgeHours} ч");
+    }
+
+    // c1: принятые вердикты после записи. Голос свежий по возрасту (4 ч) и по штампу — сигнал
+    // ровно счёт: 2 — свежий, 3 (порог) — устарел. Мутация: убрать ветку AcceptedVerdictsAfter
+    // из StaleOf — красный ровно случай 3.
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(3, true)]
+    public void Note_ПринятыхВердиктовПослеЗаписиНеМеньшеПорогаДаётStale(int count, bool expectedStale)
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = Enumerable.Range(0, count)
+            .Select(i => RoundWithVerdict($"r{i}", at.AddMinutes(i + 1)))
+            .ToList();
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running",
+            noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().Be(expectedStale,
+            $"{count} вердиктов после записи против порога {FeatureBrief.StaleAcceptedSteps}");
+    }
+
+    // «После Note.At» — строго позже: вердикт ровно в момент записи и раньше не считаются.
+    // Фикстура собрана так, что граница решает исход: позже — ровно два (меньше порога), а при
+    // «>=» ровно в момент записи попал бы в счёт и дал три — тест краснеет.
+    [Fact]
+    public void Note_ВердиктРовноВМоментЗаписиИРаньшеНеСчитается()
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = new List<TaskItem>
+        {
+            RoundWithVerdict("r0", at.AddMinutes(-1)),
+            RoundWithVerdict("r1", at),
+            RoundWithVerdict("r2", at.AddMinutes(1)),
+            RoundWithVerdict("r3", at.AddMinutes(2)),
+        };
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeFalse(
+            "после записи — только r2 и r3: два вердикта, меньше порога; r0 (раньше) и r1 (ровно в момент) вне счёта");
+    }
+
+    // Порог считают только вердикты принятия (FeatureProjector.IsAcceptance): возврат и отзыв
+    // после записи — не принятие, их три — голос свежий. Мутация: считать любые вердикты
+    // (без IsAcceptance) — красный этот тест.
+    [Fact]
+    public void Note_ВозвратИОтзывПослеЗаписиНеСчитаютсяПринятыми()
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = new List<TaskItem>
+        {
+            RoundWithVerdict("r1", at.AddMinutes(1), TaskVerdicts.Returned),
+            RoundWithVerdict("r2", at.AddMinutes(2), TaskVerdicts.Withdrawn),
+            RoundWithVerdict("r3", at.AddMinutes(3), TaskVerdicts.Returned),
+        };
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeFalse(
+            "ни одного принятия после записи — счёт 0 против порога 3");
     }
 
     // ─── updatedAt (B6, дефект f2da9354): время последнего записанного события состояния, не момента ответа ─

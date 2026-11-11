@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • убрать InTurnTail — тест «хвост хода» красный (секция уехала бы в системный блок);
 //  • не сверять сессию с ключевым чатом (убрать `!= sessionId`) — тест «чужой чат» красный;
 //  • не проверять Stale — тест «свежий голос» красный; не проверять Note is null — тест «нет голоса» красный;
-//  • убрать отсев закрытых — тест «закрытая фича» красный.
+//  • убрать отсев закрытых — тест «закрытая фича» красный;
+//  • FS-O2c: убрать ветку возраста из StaleOf (FeatureBrief.cs) — красный ровно
+//    «ГолосСтаршеПорогаПоВозрасту…» (та же фикстура свежая по стадии/категории — молчит).
 //
 // P2 (расхождения трекера в том же хвосте), мутации:
 //  • убрать `lines.Add(tracker)` — тесты «расхождение…», «несколько видов…», «волна после мержа…»
@@ -109,6 +111,25 @@ public class FeatureVoiceReminderContributorTests : IDisposable
             FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
 
         (await Build(KeyChat)).Should().BeNull();
+    }
+
+    // FS-O2c (c2): возраст голоса — отдельный сигнал: та же запись, свежая по стадии и категории,
+    // но с записи прошло 13 ч — больше FeatureBrief.StaleAgeHours (12). Стадии и категории не
+    // менялись: краснеет ровно ветка возраста в StaleOf (FeatureBrief.cs).
+    [Fact]
+    public async Task ГолосСтаршеПорогаПоВозрасту_НапоминаетОбновить()
+    {
+        var epic = NewFeature();
+        var run = new FeatureProjector(_tasks).Project(epic.Id, Owner)!;
+        _tasks.SetFeatureNote(epic.Id, "всё идёт", KeyChat, byUser: false,
+            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
+        (await Build(KeyChat)).Should().BeNull("контроль: та же запись свежая по возрасту — молчит");
+
+        epic.Note = epic.Note! with { At = DateTime.UtcNow.AddHours(-13) };
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull("возраст больше порога — напоминание срабатывает по нему");
+        section!.Text.Should().Contain("устарел");
     }
 
     [Fact]

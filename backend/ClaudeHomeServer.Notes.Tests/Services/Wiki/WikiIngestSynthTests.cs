@@ -373,6 +373,32 @@ public class WikiIngestSynthTests : IDisposable
         pkg.Operations.Should().HaveCount(2).And.OnlyContain(o => o.Decision == WikiPackage.DecisionInbox);
     }
 
+    // C2R-Sh2b (M2): Operations исхода — число операций, ждущих человека (inbox), а не всех
+    // операций пакета. Мутация «Operations = всего в пакете» → красное (там было бы 2).
+    [Fact]
+    public async Task AwaitingHuman_Operations_СчитаетТолькоСпорные_ПакетИзAutoИInbox()
+    {
+        var plan = WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
+            WikiSynthJson.Op("create", "Состояние сборки", "Контейнер собран отдельно", [Quote2], kind: "state"));
+        // append класса session×append выключен человеком → inbox; create-state идёт как auto.
+        WikiSettingsStore.Mutate(_dir, User, st => st with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+        var llm = new FakeLlm(plan);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
+        pkg.Operations.Count(o => o.Decision == WikiPackage.DecisionAuto).Should().Be(1, "предпосылка: в пакете одна auto");
+        pkg.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox).Should().Be(1, "предпосылка: и одна inbox");
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.Operations.Should().Be(1);
+    }
+
     [Fact]
     public async Task Поштучно_РемонтНичегоНеПринял_Rejected_СПервойПричиной()
     {
@@ -425,32 +451,6 @@ public class WikiIngestSynthTests : IDisposable
     [Fact]
     public async Task Ночь_ОблачныйМаршрут_ОтказБезВызоваМодели()
     {
-    // C2R-Sh2b (M2): Operations исхода — число операций, ждущих человека (inbox), а не всех
-    // операций пакета. Мутация «Operations = всего в пакете» → красное (там было бы 2).
-    [Fact]
-    public async Task AwaitingHuman_Operations_СчитаетТолькоСпорные_ПакетИзAutoИInbox()
-    {
-        var plan = WikiSynthJson.Ok(
-            WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
-            WikiSynthJson.Op("create", "Состояние сборки", "Контейнер собран отдельно", [Quote2], kind: "state"));
-        // append класса session×append выключен человеком → inbox; create-state идёт как auto.
-        WikiSettingsStore.Mutate(_dir, User, st => st with
-        {
-            Classes = [new WikiSettingsStore.ClassState(
-                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
-                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
-        });
-        var llm = new FakeLlm(plan);
-
-        var res = await Sut(llm).IngestAsync(User, Req());
-
-        var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
-        pkg.Operations.Count(o => o.Decision == WikiPackage.DecisionAuto).Should().Be(1, "предпосылка: в пакете одна auto");
-        pkg.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox).Should().Be(1, "предпосылка: и одна inbox");
-        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
-        res.Operations.Should().Be(1);
-    }
-
         var llm = new FakeLlm(WikiSynthJson.Append(PageTitle, Claim1, Quote1)) { LocalRoute = false };
 
         var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);

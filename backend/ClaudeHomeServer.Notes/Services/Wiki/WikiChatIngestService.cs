@@ -578,10 +578,6 @@ public sealed class WikiChatIngestService
 
     // ── хроника чата ───────────────────────────────────────────────────────────────
 
-    /// <summary>Путь хроники чата под pages/ — та же формула, которой разбор её пишет
-    /// (AppendChronicleAsync ниже): один источник пути на весь продукт — список чатов и
-    /// фронт берут её отсюда, а не копированием построения (S7b0a). null — хроники здесь
-    /// быть не может: не-проектный дом (личный — с Ф2, сфера — следующая фича) или id,
     /// <summary>Склонение «операция» под число: 1 операция, 2–4 операции, 5+ и 11–14 — операций.</summary>
     internal static string OperationsWord(int n)
     {
@@ -590,6 +586,10 @@ public sealed class WikiChatIngestService
         return (n % 10) switch { 1 => "операция", 2 or 3 or 4 => "операции", _ => "операций" };
     }
 
+    /// <summary>Путь хроники чата под pages/ — та же формула, которой разбор её пишет
+    /// (AppendChronicleAsync ниже): один источник пути на весь продукт — список чатов и
+    /// фронт берут её отсюда, а не копированием построения (S7b0a). null — хроники здесь
+    /// быть не может: не-проектный дом (личный — с Ф2, сфера — следующая фича) или id,
     /// не представимый в пути (тот же guard, что у AnalyzeAsync).</summary>
     public static string? ChroniclePath(string home, string sessionId) =>
         WikiSections.TryProjectId(home, out _) && IsSessionIdSafe(sessionId)

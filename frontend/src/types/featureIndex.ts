@@ -11,7 +11,7 @@
 
 import type { FeatureQueue, FeatureRun, FeatureState } from './featureRun';
 import type { FeatureStats } from './featureStats';
-import type { FeaturePlan, FeatureMockup } from './featurePlans';
+import type { FeaturePlan, FeatureMockup, FeatureMaterial } from './featurePlans';
 import type { PlanState } from '../lib/featureProgress';
 // Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
@@ -238,6 +238,8 @@ export interface FeaturePage {
   plans?: FeaturePlan[];
   // Макеты; null — нет.
   mockups?: FeatureMockup[];
+  // Материалы задач фичи (FS-B3a); null — нет.
+  materials?: FeatureMaterial[];
   // 'device' — макеты недоступны (нет устройства); null — доступны.
   mockupsUnavailable?: 'device';
   // Сводка состояния фичи (волна 6, разрез п. 6). Аддитивное: старые ответы его

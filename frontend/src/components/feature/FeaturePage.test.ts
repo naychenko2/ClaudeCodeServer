@@ -512,6 +512,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       walk(tabs as unknown as AnyNode);
       expect(labels.map(l => l.replace(/\d+$/, '')), 'порядок и состав вкладок').toEqual(['Ход', 'Материалы', 'Разбор']);
       expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), '«Ход» открыт по умолчанию').not.toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-stats-tab'), 'старой «Статистики» в DOM нет').toBeNull();
+      expect(labels.length, 'role=tab ровно три').toBe(3);
     });
 
     it('внешние setFeaturePageTab: events/stats/chats → «Разбор», plans → «Материалы», timeline/tasks → «Ход»', async () => {
@@ -550,6 +552,8 @@ describe('FeaturePage: пять состояний + шапка-«файл» + �
       await settle();
       const selected = findNodeByAttr(c, 'aria-selected', 'true')!;
       expect(textNodes(selected).join(''), 'активная вкладка').toContain('Разбор');
+      expect(findNodeByAttr(c, 'data-testid', 'feature-review-tab'), 'смонтирован FeatureReviewTab').not.toBeNull();
+      expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), '«Ход» размонтирован').toBeNull();
       expect(mockGetFeature.calls.length, 'загрузки страницы не выросли').toBe(before);
     });
 

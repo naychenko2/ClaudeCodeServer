@@ -283,7 +283,7 @@ export interface MockupCardProps {
   // Планы фичи — для обратной строки «Упомянут в».
   plans: FeaturePlan[];
   // Открыть файл проекта (существующий просмотр, HTML в песочнице).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   isMobile?: boolean;
   // Версия из «Прошлых версий», не текущая в группе → чип «заменён».
   replaced?: boolean;

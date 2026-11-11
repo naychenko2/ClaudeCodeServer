@@ -31,7 +31,7 @@ import { Button } from '../ui/Button';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
 import type { FeaturePage } from '../../types/featureIndex';
-import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
+import type { FeaturePlan, FeatureMockup, FeatureMaterial } from '../../types/featurePlans';
 
 // Выбран в детали: документ (plan) или макет (mockup). null — сетка.
 type Selection = { kind: 'plan'; id: string } | { kind: 'mockup'; path: string } | null;
@@ -40,8 +40,10 @@ export interface FeaturePlansTabProps {
   // Данные страницы (plans / mockups / mockupsUnavailable).
   page: FeaturePage;
   isMobile?: boolean;
+  // Материалы задач фичи (FS-B3a); карточки taskId пока не передают — FS-F1e/F1f.
+  materials?: FeatureMaterial[];
   // Открыть файл проекта (существующий просмотр, HTML в песочнице).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   // Открыть задачу (автор → «задача»).
   onOpenTask?: (taskId: string) => void;
   // Пометки «задача закрыта» (страница даёт свои; без пропа — из run страницы данных).

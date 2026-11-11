@@ -55,7 +55,7 @@ export interface FeaturePageProps {
   // Исполнитель закрытия: закрывает страницу и ведёт в target.
   onBack: (target: FeaturePageBackTarget) => void;
   // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Материалы»).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
 }
 
 // Пульс скелета загрузки (1,4 с); при prefers-reduced-motion — без анимации (макет §5.7).
@@ -360,7 +360,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
               onOpenActive={openActiveTask}
             />
           ) : mainTab === 'materials' ? (
-            <FeaturePlansTab page={page.page} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
+            <FeaturePlansTab page={page.page} materials={page.page.materials} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
           ) : (
             <FeatureReviewTab
               run={okRun}

@@ -181,6 +181,42 @@ public class LocalActionRoutingTests
         Assert.Equal(1024, overridden.ProfileFor(LocalActionCatalog.TeamImplementPlan).NumPredict);
     }
 
+    // Пер-местные ЛОКАЛЬНЫЕ лимиты (С2-доработка Ш3): у мест разбора вики ответ на окно в
+    // 35k не влезает в профильный Large (1024 вывода / 90 с). Пер-местное значение задаёт
+    // лимит только этим местам; другие места того же профиля остаются с профильными значениями.
+    [Fact]
+    public void ProfileFor_ПерМестныеNumPredictИTimeoutMsПобеждаютПрофиль()
+    {
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b" });
+        foreach (var key in new[] { LocalActionCatalog.WikiIngest, LocalActionCatalog.WikiNightly })
+        {
+            var spec = router.ProfileFor(key);
+            Assert.Equal(16_384, spec.NumPredict);
+            Assert.Equal(600_000, spec.TimeoutMs);
+        }
+        // Сосед по профилю Large не тронут: doc-summary — значения профиля.
+        var doc = router.ProfileFor(LocalActionCatalog.DocSummary);
+        Assert.Equal(1024, doc.NumPredict);
+        Assert.Equal(90_000, doc.TimeoutMs);
+    }
+
+    // Пер-местное значение сильнее переопределения профиля конфигом (Ollama:Profiles:large):
+    // конфиг меняет профиль для мест без пер-местного значения, места вики не трогая.
+    [Fact]
+    public void ProfileFor_ПерМестныеЗначенияСильнееКонфигаПрофиля()
+    {
+        var router = Router(new()
+        {
+            ["Ollama:Model"] = "qwen3:14b",
+            ["Ollama:Profiles:large:NumPredict"] = "2048",
+            ["Ollama:Profiles:large:TimeoutMs"] = "90000",
+        });
+        var nightly = router.ProfileFor(LocalActionCatalog.WikiNightly);
+        Assert.Equal(16_384, nightly.NumPredict);
+        Assert.Equal(600_000, nightly.TimeoutMs);
+        Assert.Equal(2048, router.ProfileFor(LocalActionCatalog.DocSummary).NumPredict);
+    }
+
     // --- Админские оверрайды маршрута (рантайм-переключение из UI) ---
 
     [Fact]

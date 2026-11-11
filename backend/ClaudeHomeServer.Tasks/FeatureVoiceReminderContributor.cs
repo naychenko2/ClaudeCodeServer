@@ -10,8 +10,8 @@ namespace ClaudeHomeServer.Services.Tasks;
 // ходу, и в системном блоке он обнулял бы prefix cache всей истории (RecallInTurnText,
 // docs/architecture/llm-providers.md). Состав tools/list не трогаем — только текст.
 //
-// Условие: сессия — ключевой чат фичи (FeatureKeyChain.FirstLive — первое живое звено с
-// переходом по продолжениям, как keySessionId проектора), а голос эпика отсутствует или устарел
+// Условие: сессия — ключевой чат фичи (FeatureKeyChain.FirstLive — первое живое звено, как
+// keySessionId проектора), а голос эпика отсутствует или устарел
 // (brief.note.stale — тот же StaleOf, второго правила нет). Закрытые и смерженные фичи молчат.
 //
 // P2 (фича «Правдивый процент и гант фич»): в том же хвосте — по одной строке на фичу о
@@ -140,7 +140,6 @@ public sealed class FeatureVoiceReminderContributor(
         sessions.GetAll()
             .Where(s => sessions.ResolveOwnerId(s) == ownerId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
-                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting,
-                s.ContinuedInSessionId))
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
             .ToList();
 }

@@ -125,6 +125,8 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
     {
         if (!Available) return 0;
         await _syncLock.WaitAsync();
+        var changed = 0; // объявлен до try: сохранение реестра — в finally, отказ прохода не должен
+                         // терять уже записанные DocRef (дефект 7b3dc3db, п. Г)
         try
         {
             var entry = GetEntry(userId);
@@ -146,7 +148,6 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
             var summaries = all.Where(s => s.Source != NotesService.WikiKey).ToList();
             var wikiSummaries = all.Where(s => s.Source == NotesService.WikiKey).ToList();
             var alive = new HashSet<string>(summaries.Select(s => s.Id));
-            var changed = 0;
 
             foreach (var s in summaries)
             {
@@ -202,18 +203,36 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                     if (detail is null) continue;
                     aliveWiki.Add(s.Id);
 
-                    var hash = Hash($"{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
+                    // Раздел — часть хеша (дефект 7b3dc3db, п. А): переезд страницы между
+                    // разделами без правки текста меняет метаданное её документа, а значит —
+                    // сам документ; без раздела в хеше такой переезд не переиндексируется никогда.
+                    var hash = Hash($"{section}\n{detail.Title}\n{detail.Content}\n{string.Join(',', detail.Tags)}");
                     if (entry.WikiDocs.TryGetValue(s.Id, out var wdoc) && wdoc.Hash == hash) continue;
 
-                    if (wdoc is not null)
-                        try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
-                        catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+                    try
+                    {
+                        // Сначала создать с метаданными, старый удалить после (п. Б): при отказе
+                        // назначения IndexFileByTextAsync удалит новый документ и бросает —
+                        // порядок «удалить старый → создать новый» оставил бы страницу вообще
+                        // без документа в индексе, пока назначение отказывает.
+                        var info = await _knowledge.IndexFileByTextAsync(
+                            entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
+                            metadata: new Dictionary<string, string> { ["wiki_section"] = section });
 
-                    var info = await _knowledge.IndexFileByTextAsync(
-                        entry.WikiDatasetId!, detail.Title, detail.Content, detail.Tags.ToList(),
-                        metadata: new Dictionary<string, string> { ["wiki_section"] = section });
-                    entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
-                    changed++;
+                        if (wdoc is not null)
+                            try { await _knowledge.DeleteDocumentAsync(entry.WikiDatasetId!, wdoc.DocId); }
+                            catch (Exception ex) { _logger.LogDebug(ex, "Удаление старого документа вики {Page}", s.Id); }
+
+                        entry.WikiDocs[s.Id] = new DocRef { DocId = info.Id, Hash = hash };
+                        changed++;
+                    }
+                    catch (Exception ex)
+                    {
+                        // Сбой одной страницы не рвёт проход владельца (п. В): реестра не касались —
+                        // старый DocRef жив и его хеш не равен текущему, следующий проход сам
+                        // повторит индексацию (тот же механизм, что у Hash = "" в InvalidateDocsAsync).
+                        _logger.LogWarning(ex, "Синк страницы вики {Page} в Dify", s.Id);
+                    }
                 }
 
                 foreach (var stale in entry.WikiDocs.Keys.Where(k => !aliveWiki.Contains(k)).ToList())
@@ -225,10 +244,17 @@ public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant,
                 }
             }
 
-            if (changed > 0) Save();
             return changed;
         }
-        finally { _syncLock.Release(); }
+        finally
+        {
+            // Save — здесь, а не в конце try: если любая ветка бросила (и :notes — тоже,
+            // её исключение по-прежнему пробрасывается наружу), уже записанные DocRef обязаны
+            // попасть на диск — иначе после рестарта реестр указывает на удалённые документы
+            // (дефект 7b3dc3db).
+            if (changed > 0) Save();
+            _syncLock.Release();
+        }
     }
 
     // Семантический поиск: чанки Dify → заметки пользователя (по маппингу docId → noteId).

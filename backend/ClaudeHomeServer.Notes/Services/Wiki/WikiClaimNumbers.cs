@@ -26,36 +26,46 @@ internal static class WikiClaimNumbers
     private const char MinusAscii = '-';
     private const char MinusUnicode = (char)0x2212;
 
+    // Класс разделителей тысяч — один и тот же в хвосте числа и в охране знака
+    // (ниже), собран из констант выше: невидимых литералов в исходнике нет.
+    private static readonly string ThousandsSpaceClass = "[ " + SpaceNbsp + SpaceNarrow + "]";
+
     // Хвост числа: цифры; далее — только разделители тысяч строго перед группой ровно
     // из 3 цифр (группа из 4 цифр после пробела — уже не разделитель тысяч,
     // а другое число: «12 3456» даёт «12» и «3456»); далее — не более одного
     // десятичного разделителя «.» или «,». «0,3–0,7» — тире не входит в число:
     // два отдельных числа. «17.08» — одно число, даты тоже проверяются.
     private static readonly string NumberTail =
-        "[0-9]+(?:[ " + SpaceNbsp + SpaceNarrow + "][0-9]{3}(?![0-9]))*(?:[.,][0-9]+)?";
+        "[0-9]+(?:" + ThousandsSpaceClass + "[0-9]{3}(?![0-9]))*(?:[.,][0-9]+)?";
 
     // Число — без знака (первая ветка) или со знаком минуса (вторая). Знак входит
     // в токен и не стоит после цифры или десятичного разделителя: «123-456» и
-    // «0.3-0.7» — по-прежнему два числа, а не одно отрицательное.
+    // «0.3-0.7» — по-прежнему два числа, а не одно отрицательное. Не является знаком
+    // и после числа с любым пробелом перед ним: «12 -34» — список из двух чисел,
+    // «12» и «34» (дельта-ревью S2-2, п.8): дефис сразу после числа относится к
+    // предыдущему числу, знак здесь был бы ложным чтением. Одиночное «−12 °C»
+    // (без числа перед знаком) остаётся отрицательным.
     private static readonly Regex Number = new(
-        NumberTail + "|(?<![0-9.])[" + MinusAscii + MinusUnicode + "]" + NumberTail,
+        NumberTail + "|(?<![0-9.])(?<![0-9]" + ThousandsSpaceClass + "+)[" + MinusAscii + MinusUnicode + "]" + NumberTail,
         RegexOptions.Compiled);
 
     /// <summary>Числа из claim, которых нет ни в одной цитате (пусто — всё
     /// подтверждено). Порядок — по первому вхождению в claim, без дублей; значения
     /// — нормализованные (пробелы внутри числа убраны, запятая свёрнута к точке,
     /// знак-min U+2212 свёрнут к ASCII). Перед разбором метки сносок вырезаны и из
-    /// claim, и из цитат. Null входов — ничего проверять нечем: пустой результат
-    /// без исключения.</summary>
+    /// claim, и из цитат. Null claim — ничего проверять нечем: пустой результат.
+    /// Null цитат и пустой список — одно и то же: утверждения без цитат подтвердить
+    /// нечем, все его числа неподтверждены (дельта-ревью S2-2, п.9).</summary>
     internal static IReadOnlyList<string> Unconfirmed(string? claim, IReadOnlyList<string>? quotes)
     {
-        if (claim is null || quotes is null)
+        if (claim is null)
             return [];
 
         var confirmed = new HashSet<string>();
-        foreach (var quote in quotes)
-            foreach (var n in Numbers(FootnoteMarker.Replace(quote, "")))
-                confirmed.Add(n);
+        if (quotes is not null)
+            foreach (var quote in quotes)
+                foreach (var n in Numbers(FootnoteMarker.Replace(quote, "")))
+                    confirmed.Add(n);
 
         var result = new List<string>();
         var seen = new HashSet<string>();

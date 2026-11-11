@@ -9,7 +9,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // числа убираются, «−» U+2212 → ASCII) и сравнение целыми токенами: «12» не
 // подтверждается цитатой с «123», «−12» — цитатой без знака. Метки сносок [^1] и
 // [^sN] вырезаются из claim и из цитат до разбора — их цифры не числа утверждения
-// и не подтверждение. Null входов — пустой результат без исключения.
+// и не подтверждение. Null claim — пустой результат; null цитат — то же, что пустой
+// список: утверждения без цитат подтвердить нечем.
 public class WikiClaimNumbersTests
 {
     private const char Nbsp = (char)0x00A0;
@@ -87,6 +88,17 @@ public class WikiClaimNumbersTests
         // ровно этот тест (в результате появился бы «-456» / «-0.7»).
         WikiClaimNumbers.Unconfirmed(text, [text.Split('-')[0]]).Should().Equal(text.Split('-')[1]);
 
+    [Fact]
+    public void ДефисПослеЧислаИПробелаНеЗнак_дваЧисла()
+    {
+        // Пробел перед дефисом, после дефиса пробела нет: «12 -34» — список из двух
+        // чисел, а не отрицательное «-34» (дельта-ревью S2-2, п.8). Мутация «вернуть
+        // старое условие знака» краснит ровно этот тест: в результате был бы «-34».
+        WikiClaimNumbers.Unconfirmed("12 -34", ["12"]).Should().Equal("34");
+        // Одиночное «−12 °C» без числа перед знаком — по-прежнему отрицательное.
+        WikiClaimNumbers.Unconfirmed("−12 °C", []).Should().Equal("-12");
+    }
+
     // —— Разбор: границы и форма результата ——
 
     [Fact]
@@ -103,12 +115,14 @@ public class WikiClaimNumbersTests
         WikiClaimNumbers.Unconfirmed("в 1 случае", ["решили так [^1]"]).Should().Equal("1");
 
     [Fact]
-    public void NullVMestahPustoyRezultatBezIsklyucheniya()
+    public void NullClaimПусто_nullЦитатНечемПодтвердить()
     {
-        // Null входа — нечего проверять: пустой результат, без NRE.
+        // Null claim — нечего проверять: пустой результат, без NRE.
         WikiClaimNumbers.Unconfirmed(null, ["5"]).Should().BeEmpty();
-        WikiClaimNumbers.Unconfirmed("5", null).Should().BeEmpty();
         WikiClaimNumbers.Unconfirmed(null, null).Should().BeEmpty();
+        // Null цитат — то же, что пустой список: подтвердить нечем, число уходит
+        // в результат, а не в исключение (дельта-ревью S2-2, п.9).
+        WikiClaimNumbers.Unconfirmed("5", null).Should().Equal("5");
     }
 
     [Fact]

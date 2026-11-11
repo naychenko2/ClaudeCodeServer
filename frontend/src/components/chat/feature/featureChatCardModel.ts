@@ -15,7 +15,7 @@
 // stopped → действия нет вовсе («Перезапустить шаг» уже стоит в ленте). «К мержу» ведёт
 // на страницу фичи, не в чат, — остаётся и в своём чате (toMerge — маршрут компонента).
 
-import { featurePageStatusTag, type FeatureRunTag } from '../../feature/FeatureStatusTag';
+import { featurePageStatusTag, shortRunTagLabel, type FeatureRunTag } from '../../feature/FeatureStatusTag';
 // Общий словарь подписей тревоги (FS-FY): карточка и плашка страницы говорят одними словами.
 import { ASK_LABEL } from '../../feature/FeatureAskBlock';
 import { formatDuration } from '../../feature/FeatureStatsBits';
@@ -178,4 +178,32 @@ export function featureChatCardModel(
     // Полосы нет только у закрытой (макет §5: «закрытой — 65/71, полосы нет»).
     showTracker: !closed,
   };
+}
+
+// FP-C1 (макет chat-feature-fit-v1, вариант А, §5 «Слово состояния»): короткое слово состояния
+// для строки-подзаголовка шапки. Признак состояния — model.glyph (info/warning/danger/success),
+// НЕ разбор текста фразы:
+// · info → короткое слово из тега (shortRunTagLabel — те же слова, что у узкой шапки);
+// · warning → «ждёт тебя: {phrase.name}», danger → «стоит: {phrase.name}» — без имени нет
+//   двоеточия;
+// · success → «смержена»/«закрыта» — различие только по тону тега ('merged'/'closed');
+// · тега нет (мобильная модель) → слова нет (''): 360-строка показывает счёт/срок или слово
+//   тревоги (тревоге тег не нужен), своих слов модель не выводит.
+export interface ChatCardStateWord {
+  text: string;
+  tone: 'muted' | 'warn' | 'danger' | 'success';
+}
+
+export function chatCardStateWord(model: FeatureChatCardModel): ChatCardStateWord {
+  const name = model.phrase.name;
+  switch (model.glyph) {
+    case 'warning':
+      return { text: name ? `ждёт тебя: ${name}` : 'ждёт тебя', tone: 'warn' };
+    case 'danger':
+      return { text: name ? `стоит: ${name}` : 'стоит', tone: 'danger' };
+    case 'success':
+      return { text: model.tag ? shortRunTagLabel(model.tag.label) : '', tone: 'success' };
+    default:
+      return { text: model.tag ? shortRunTagLabel(model.tag.label) : '', tone: 'muted' };
+  }
 }

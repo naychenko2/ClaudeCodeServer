@@ -34,41 +34,15 @@ public static class FeatureKeyChain
         return chain.Distinct().ToList();
     }
 
-    // Предохранитель перехода по продолжениям (Session.ContinuedInSessionId): цепочка
-    // «чат → его продолжение → продолжение продолжения» длиннее пяти звеньев — аномалия.
-    public const int MaxContinuationDepth = 5;
-
-    // Что FirstLive знает о живом звене: куда перенесена его работа (null — никуда).
-    public readonly record struct KeyChatProbe(string? ContinuedInSessionId);
-
-    // ЕДИНСТВЕННАЯ точка правды «ключевой чат фичи»: первое ЖИВОЕ звено цепочки с переходом
-    // по ContinuedInSessionId к последнему живому продолжению. probe(id) → null, если сессии нет
-    // или она чужая (мёртвое звено пропускается), иначе — её ContinuedInSessionId. Продолжение
-    // мёртвое/чужое, цикл или глубже MaxContinuationDepth — остаёмся на последнем живом звене.
-    // Зовут все, кто берёт «первое живое звено»: карточки TaskExecutionService, KeySession
-    // проектора, FeatureVoiceReminderContributor, маршрутизация доклада, пинок простоя.
-    public static string? FirstLive(IEnumerable<string> chain, Func<string, KeyChatProbe?> probe)
-    {
-        foreach (var link in chain)
-        {
-            if (probe(link) is not { } first) continue;
-            var current = link;
-            var visited = new HashSet<string> { current };
-            var next = first.ContinuedInSessionId;
-            for (var depth = 0; depth < MaxContinuationDepth && next is not null && visited.Add(next); depth++)
-            {
-                if (probe(next) is not { } step) break;
-                current = next;
-                next = step.ContinuedInSessionId;
-            }
-            return current;
-        }
-        return null;
-    }
+    // ЕДИНСТВЕННАЯ точка правды «ключевой чат фичи»: первое ЖИВОЕ звено цепочки.
+    // isLive(id) → false, если сессии нет или она чужая (мёртвое звено пропускается).
+    // Живых звеньев нет → null. Зовут все, кто берёт «первое живое звено»: карточки
+    // TaskExecutionService, KeySession проектора, FeatureVoiceReminderContributor,
+    // маршрутизация доклада, пинок простоя.
+    public static string? FirstLive(IEnumerable<string> chain, Func<string, bool> isLive) =>
+        chain.FirstOrDefault(isLive);
 
     // Вариант по живому справочнику сессий: «живая» — есть в справочнике и принадлежит ownerId.
     public static string? FirstLive(IEnumerable<string> chain, ISessionDirectory sessions, string ownerId) =>
-        FirstLive(chain, id => sessions.GetById(id) is { } s && sessions.ResolveOwnerId(s) == ownerId
-            ? new KeyChatProbe(s.ContinuedInSessionId)
-            : null);
+        FirstLive(chain, id => sessions.GetById(id) is { } s && sessions.ResolveOwnerId(s) == ownerId);
 }

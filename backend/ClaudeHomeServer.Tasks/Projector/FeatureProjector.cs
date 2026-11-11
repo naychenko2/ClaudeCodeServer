@@ -1770,10 +1770,8 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Повтор id в снимке не роняет индекс (прежний HashSet их терпел): берётся первая запись
         var live = new Dictionary<string, FeatureIndexSession>();
         foreach (var s in sessions) live.TryAdd(s.Id, s);
-        // Цепочка звеньев и «первое живое с переходом по продолжениям» — в Core (FeatureKeyChain):
-        // второй копии правила здесь нет.
-        return FeatureKeyChain.FirstLive(FeatureKeyChain.Of(epic, featureTasks),
-            id => live.TryGetValue(id, out var s) ? new FeatureKeyChain.KeyChatProbe(s.ContinuedInSessionId) : null);
+        // Цепочка звеньев и «первое живое» — в Core (FeatureKeyChain): второй копии правила здесь нет.
+        return FeatureKeyChain.FirstLive(FeatureKeyChain.Of(epic, featureTasks), id => live.ContainsKey(id));
     }
 
     // Оркестратор фичи (W4-1B): персона, ведущая фичу. Ключевой чат приходит готовым из

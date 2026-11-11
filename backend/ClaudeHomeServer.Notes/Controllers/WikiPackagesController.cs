@@ -36,16 +36,18 @@ public class WikiPackagesController : ControllerBase
     private readonly WikiPackageRevert _revert;
     private readonly WikiRetractService _retract;
     private readonly ISessionDirectory _sessions;
+    private readonly WikiChatIngestService _chat;
     private readonly string _dataDir;
 
     public WikiPackagesController(IProjectManager projects, IConfiguration config, WikiApplyService apply,
-        WikiPackageRevert revert, WikiRetractService retract, ISessionDirectory sessions)
+        WikiPackageRevert revert, WikiRetractService retract, ISessionDirectory sessions, WikiChatIngestService chat)
     {
         _projects = projects;
         _apply = apply;
         _revert = revert;
         _retract = retract;
         _sessions = sessions;
+        _chat = chat;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -257,6 +259,10 @@ public class WikiPackagesController : ControllerBase
     /// прежний, если применять было нечего; если применение удалось, а файла уже нет —
     /// «applied», а не «accepted» из памяти вызывающего (W3-1).
     ///
+    /// Пакет, который человек решил, но который не применился («apply_failed»/«stale»),
+    /// возвращает здесь своё окно в разбор — ReturnDecidedWindowsAsync (T-A2), но в ФОНЕ,
+    /// не дожидаясь (T-A3): форма HTTP-ответа от этого не меняется и не ждёт прогона чата.
+    ///
     /// internal — граница после применения: тест ставит диск в состояние «файла пакета уже
     /// нет» и в состояние «исключение из ApplyAsync» и видит форму ответа, а не гонку
     /// (ревью S4g, M2/M3).</summary>
@@ -278,6 +284,16 @@ public class WikiPackagesController : ControllerBase
                 apply));
         if (after.State != WikiPackageFileState.Valid || after.Package is null)
             return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
+        // T-A3 (ревью T-A2, замечание 3): возврат окна — в фоне, не дожидаясь. При идущем
+        // прогоне чата ReturnWindow ждёт его конца, а человеку ответ решения нужен сразу:
+        // кнопка «Входящих» не имеет права висеть на чужом разборе. Фоне нужны только
+        // значения (владелец, карточка с диска, исход применения) и singleton _chat
+        // (NotesSubsystem.cs:109): ни HttpContext, ни scoped-зависимостей запроса в него не
+        // попадает. Задача не может быть faulted, т.е. «unobserved task exception» в логе от
+        // неё нет: ReturnWindowAsync fail-closed на входе и весь его корпус под обхватом
+        // (WikiChatIngestService.cs:359-386), остальное — разбор прочитанной карточки без
+        // обращений к вводу.
+        _ = ReturnDecidedWindowsAsync(userId, after.Package, apply);
         return Ok(new WikiDecisionDto(Dto(after.Package), apply));
     }
 
@@ -318,6 +334,48 @@ public class WikiPackagesController : ControllerBase
                 reason = $"{reason} (статус «apply_failed» не записан: {t.Reason ?? t.Code})";
         }
         return new WikiApplyOutcomeDto(false, WikiApplyService.CodeInternal, reason, [reason]);
+    }
+
+    /// <summary>T-A2: пакет, который человек решил, но который не применился, не теряет своё
+    /// окно: курсор разбора каждого чата-источника возвращается на его начало (ReturnWindowAsync,
+    /// T-A1) — дельта разбиралась заново, её попыткой станет новый пакет. Условия — все три:
+    /// статус на диске — «apply_failed» или «stale» (успешное применение окно не возвращает:
+    /// его результат на месте); в пакете есть операция с решением человека (авто-путь без
+    /// решения человека окном не владеет — его закрыл код, не человек); код применения не
+    /// «wiki_apply_claim» и не «wiki_apply_status»: такой код значит, что этот вызов гонку
+    /// проиграл — пакетом владеет тот, кто его заявляет или применил, и проигравший окно не
+    /// возвращает. Ключ — origin источника, а не форма ref: окно принадлежит чату,
+    /// несессионные источники не трогаются. Несколько окон одного чата — возврат к самому
+    /// раннему началу (min a). Отказ ReturnWindow (false, исключения наружу нет) невиден
+    /// ответу: контракт решения не меняется.
+    ///
+    /// T-A3 (ревью T-A2, замечание 3): вызывается ПОСЛЕ формы ответа, в фоне — при идущем
+    /// прогоне чата откат ждёт его конца, и ждать ответа этому вызову не за чем. Наружу из
+    /// фонового задачи выйти нечему: ReturnWindowAsync fail-closed на входе, его корпус — под
+    /// обхватом ReturnWindowGuardedAsync (WikiChatIngestService.cs:373-386), остальной код —
+    /// разбор прочитанной карточки (словарь, TryParseSessionRef, Math.Min) без обращений к
+    /// вводу; зависимости — только singleton _chat и значения вызова.</summary>
+    private async Task ReturnDecidedWindowsAsync(string userId, WikiPackage pkg, WikiApplyOutcomeDto? apply)
+    {
+        if (pkg.Status is not (WikiPackage.StatusApplyFailed or WikiPackage.StatusStale))
+            return;
+        if (!pkg.Operations.Any(o => o.HumanDecision is not null))
+            return;
+        if (apply?.Code is WikiApplyService.CodeClaim or WikiApplyService.CodeStatus)
+            return;
+
+        var windows = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var s in pkg.Sources)
+        {
+            if (s.Origin != WikiGate.OriginSession)
+                continue;
+            if (!WikiPage.TryParseSessionRef(s.Ref, out var sessionId, out var from, out _))
+                continue;
+            windows[sessionId] = windows.TryGetValue(sessionId, out var cur) ? Math.Min(cur, from) : from;
+        }
+        // log не передаём: у контроллеров вертикали логгера нет.
+        foreach (var (sessionId, from) in windows)
+            await _chat.ReturnWindowAsync(userId, sessionId, from).ConfigureAwait(false);
     }
 
     private static WikiPackageDto Dto(WikiPackage p) => new(

@@ -1,10 +1,14 @@
 // Карточка спорной операции показывает доказательства (С2 Ш6b): утверждение, цитаты по
-// порядку массива, вид страницы подписью PAGE_TYPE, для state — «на {asOf}» строкой как есть.
-// У старой операции (все поля null) блока нет вовсе.
+// порядку массива, вид страницы подписью PAGE_TYPE (kind в любом регистре — поиск по
+// нижнему), для state — «на {asOf}» строкой как есть. У старой операции (все поля null)
+// блока нет вовсе. Для синтезированных операций Text === Claim утверждение видно один раз:
+// op.text не печатается, когда он равен claim (доработка ревью 6d67a6b1).
 //
 // Мутации (вывод — в отчёте задачи):
 //  (1) quotes.map → quotes.slice(0, 1) → «цитаты — по порядку» краснеет;
-//  (2) убрать условие kind === 'state' у asOf → «kind=decision без даты» краснеет.
+//  (2) убрать условие kind === 'state' у asOf → «kind=decision без даты» краснеет;
+//  (3) печатать op.text всегда (убрать text !== claim) → «утверждение один раз» краснеет;
+//  (4) вернуть поиск PAGE_TYPE без lower-case op.kind → «kind='State'» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -46,8 +50,37 @@ function render(o: Record<string, unknown>) {
   roots.push(root);
   return container;
 }
-const texts = (c: ReturnType<typeof mount>['container']) => textNodes(c).map(t => t.trim()).filter(Boolean);
-const all = (c: ReturnType<typeof mount>['container']) => texts(c).join(' ');
+type Node = ReturnType<typeof mount>['container'];
+const texts = (c: Node) => textNodes(c).map(t => t.trim()).filter(Boolean);
+const all = (c: Node) => texts(c).join(' ');
+// Текст одного узла по data-testid — ассерт вида/утверждения по узлу, а не по экрану
+const nodeText = (c: Node, testid: string): string | null => {
+  const n = findNodeByAttr(c, 'data-testid', testid);
+  // те же trim/фильтр, что у texts: JSX делит «Состояние» и « · на …» на отдельные узлы
+  return n ? textNodes(n).map(t => t.trim()).filter(Boolean).join(' ') : null;
+};
+// Весь текст карточки, кроме блока «Предполагаемое изменение» (заголовок + DiffView
+// в общем wrapper): чтобы мерить, сколько раз утверждение видно вне диффа
+const textsOutsideDiff = (c: Node) => {
+  let block: Node | null = null;
+  const find = (x: Node): void => {
+    if (block) return;
+    if (x.nodeType === 1 && x.childNodes.some(ch => ch.nodeType === 3 && ch.nodeValue.startsWith('Предполагаемое изменение'))) {
+      block = x.parentNode;
+      return;
+    }
+    for (const ch of x.childNodes) find(ch);
+  };
+  find(c);
+  const out: string[] = [];
+  const walk = (x: Node): void => {
+    if (x === block) return;
+    if (x.nodeType === 3) out.push(x.nodeValue);
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c);
+  return out.map(t => t.trim()).filter(Boolean);
+};
 
 afterEach(() => {
   for (const r of roots) act(() => r.unmount());
@@ -85,14 +118,33 @@ describe('карточка операции: доказательства (Ш6b)
     expect(findNodeByAttr(c, 'data-testid', 'wiki-op-evidence')).not.toBeNull();
   });
 
-  it('kind=decision без даты: подпись вида, «на» нет', () => {
+  it('kind=decision без даты: подпись вида по узлу, «на» нет', () => {
     const c = render(op({ kind: 'decision', asOf: '2026-01-01' }));
-    expect(all(c)).toContain('Решение');
-    expect(all(c)).not.toContain('на 2026-01-01');
+    const kind = nodeText(c, 'wiki-op-kind');
+    expect(kind).not.toBeNull();
+    expect(kind).toContain('Решение');
+    expect(kind).not.toContain('на 2026-01-01');
+  });
+
+  it("kind в верхнем регистре ('State'): подпись маппится та же, «на asOf» при нём", () => {
+    const c = render(op({ kind: 'State', asOf: '2026-08-21' }));
+    const kind = nodeText(c, 'wiki-op-kind');
+    expect(kind).not.toBeNull();
+    expect(kind).toContain('Состояние · на 2026-08-21');
+  });
+
+  it('Text === Claim: утверждение видно в карточке ровно один раз (вне диффа)', () => {
+    const text = 'Тот же текст, что и утверждение.';
+    const c = render(op({ claim: text, text }));
+    // ровно один текстовый узел с этим текстом вне блока «Предполагаемое изменение»;
+    // в намерении для DiffView текст остаётся как есть
+    expect(textsOutsideDiff(c).filter(t => t === text)).toHaveLength(1);
+    expect(all(c)).toContain(text);
   });
 
   it('старая операция (все null): блока доказательств нет', () => {
     const c = render(op({}));
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-evidence')).toBeNull();
     expect(all(c)).not.toContain('Утверждение:');
     expect(all(c)).not.toContain('Цитаты:');
   });

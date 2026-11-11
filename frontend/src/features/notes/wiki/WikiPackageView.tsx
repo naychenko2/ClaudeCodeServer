@@ -129,6 +129,9 @@ function OperationCard({
       ? <Badge tone="danger" size="xs">отклонена</Badge>
       : null;
   const diff = intentLines(op);
+  // kind приходит из поля модели в любом регистре: подпись PAGE_TYPE ищется по
+  // нижнему регистру, и признак «state» меряется по приведённому значению
+  const kindKey = (op.kind ?? '').toLowerCase();
   return (
     <div
       data-testid="wiki-op-row"
@@ -163,7 +166,7 @@ function OperationCard({
         <div data-testid="wiki-op-evidence" style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
           {op.kind && (
             <div data-testid="wiki-op-kind" style={{ fontSize: FS.xs, color: C.textMuted }}>
-              {PAGE_TYPE[op.kind] ?? op.kind}{op.kind === 'state' && op.asOf ? ` · на ${op.asOf}` : ''}
+              {PAGE_TYPE[kindKey] ?? op.kind}{kindKey === 'state' && op.asOf ? ` · на ${op.asOf}` : ''}
             </div>
           )}
           {op.claim && (
@@ -178,7 +181,7 @@ function OperationCard({
                 <blockquote
                   key={i}
                   data-testid="wiki-op-quote"
-                  style={{ margin: `${SP.xs}px 0 0`, padding: `0 ${SP.sm}px`, borderLeft: `2px solid ${C.border}`, whiteSpace: 'pre-wrap' }}
+                  style={{ margin: `${SP.xs}px 0 0`, padding: `${SP.xs}px ${SP.sm}px`, borderLeft: `3px solid ${C.accent}`, background: C.bgInset, borderRadius: `0 ${R.md}px ${R.md}px 0`, whiteSpace: 'pre-wrap' }}
                 >
                   {q}
                 </blockquote>
@@ -193,7 +196,9 @@ function OperationCard({
           <span style={{ color: C.textPrimary }}>{op.target}</span>
         </div>
       )}
-      {op.text && (
+      {/* Для синтезированных операций Text === Claim: утверждение уже показано выше,
+          печатать op.text второй раз — показывать одно и то же дважды */}
+      {op.text && op.text !== op.claim && (
         <div style={{ marginTop: SP.xs, fontSize: FS.base, color: C.textHeading }}>{op.text}</div>
       )}
       {diff && (

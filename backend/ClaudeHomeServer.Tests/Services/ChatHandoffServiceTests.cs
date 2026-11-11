@@ -16,6 +16,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using ClaudeHomeServer.Services.Sessions;
+using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -355,6 +356,29 @@ public class ChatHandoffServiceTests : IDisposable
         sentPrompt.Should().Be(ChatHandoffService.BuildWarmPrompt());
         result.Warm.Should().BeTrue();
         result.Draft.Should().Contain("тёплый путь");
+    }
+
+    [Fact]
+    public async Task Handoff_ТёплаяПросьба_ОжиданиеЧеловекаНеСнимает()
+    {
+        // Тёплая передаточная просьба шлётся с id владельца, но это директива, а не ответ человека:
+        // HumanMessageAccepted (по нему снимается ожидание задачи) она публиковать не должна.
+        // Мутация «убрать systemDirective: true в WarmHandoffAsync» краснит этот тест
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var (sut, mgr, chat) = BuildSut(new CountingRunner("не нужна"),
+            cache: new PromptCacheState(60_000, 0, now, "5m", null, PromptCacheMissReason.None));
+        var bus = (ITurnEventBus)typeof(SessionManager)
+            .GetField("_turnEvents", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(mgr)!;
+        var events = new List<HumanMessageAccepted>();
+        bus.OnNotification<HumanMessageAccepted>(e => { lock (events) events.Add(e); return Task.CompletedTask; },
+            "ChatHandoffServiceTests");
+        // SendOverride не задан: подача идёт настоящим SendMessageAndWaitAsync
+        // Ход не завершится — ждём лишь, пока подача пройдёт издатель; результат не важен
+        _ = sut.HandoffAsync(TestUserId, chat.Id, CancellationToken.None);
+        await Task.Delay(500);
+
+        lock (events) events.Should().BeEmpty("передаточная просьба — не ответ человека на вопрос");
     }
 
     [Fact]

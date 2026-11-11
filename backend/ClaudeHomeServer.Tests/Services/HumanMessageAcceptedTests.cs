@@ -251,4 +251,33 @@ public sealed class HumanMessageAcceptedTests : SessionManagerTestBase
         AssertTurnWasSent(adapter);
         Events().Should().BeEmpty();
     }
+
+    // Директивная подача с id пользователя — ровно так её шлёт ChatContinueService.RequestHandoffAsync
+    // (systemDirective: true, actorUserId: sender) — не ответ человека: ожидание задачи не снимает
+    // (доработка 2 FS-E3b). Мутация «убрать systemDirective из PublishRestHumanMessage» краснит оба.
+    [Fact]
+    public async Task REST_директивная_подача_с_id_пользователя_в_свободном_чате_события_не_даёт()
+    {
+        var (session, adapter) = await MkCountingChatAsync("rest-directive-free");
+
+        await _sut.SendMessageAndWaitAsync(session.Id, "[передача чата]", TimeSpan.Zero,
+            systemDirective: true, senderUserId: TestUserId);
+
+        AssertTurnWasSent(adapter);
+        await Task.Delay(100);
+        Events().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task REST_директивная_подача_с_id_пользователя_в_занятом_чате_события_не_даёт()
+    {
+        var session = await MkBusySessionAsync("rest-directive-busy", SessionStatus.Working);
+
+        var result = await _sut.SendMessageAndWaitAsync(session.Id, "[передача чата]", TimeSpan.Zero,
+            preempt: false, systemDirective: true, senderUserId: TestUserId);
+
+        result.Should().BeOfType<SendAndWaitResult.Queued>("подача встала в очередь — иначе «события нет» ничего не значит");
+        await Task.Delay(100);
+        Events().Should().BeEmpty();
+    }
 }

@@ -580,6 +580,14 @@ describe('Готовность', () => {
     const empty = briefReadinessText(brief({ done: { stepsAccepted: 0, stepsTotal: 0, loops: 0, planState: 'pending' } }), { nameOf });
     expect(empty.percent).toBe(0);
   });
+
+  it('подпись склоняется по знаменателю: 1 из 1 → «шага», 2 из 3 → «шагов»', () => {
+    // «N из M» — родительный после «из M»: «из одного шага», «из трёх шагов» (не «1 из 1 шагов»).
+    const one = briefReadinessText(brief({ done: { stepsAccepted: 1, stepsTotal: 1, loops: 0, planState: 'done' } }), { nameOf });
+    expect(text(one.caption)).toBe('1 из 1 шага · 100 %');
+    const few = briefReadinessText(brief({ done: { stepsAccepted: 2, stepsTotal: 3, loops: 0, planState: 'cut' } }), { nameOf });
+    expect(text(few.caption)).toBe('2 из 3 шагов · 67 %');
+  });
 });
 
 // ── «Готовность»: пометка «в master» (F1) ───────────────────────────────────────────

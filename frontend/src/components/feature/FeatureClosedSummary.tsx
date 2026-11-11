@@ -6,6 +6,7 @@
 import { type CSSProperties } from 'react';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { CLOSED_NO_MERGE_STATUS, formatDuration } from '../../lib/chatGroups';
+import { plural } from '../../lib/plural';
 import { Button } from '../ui/Button';
 import type { FeatureSummary } from '../../types/featureRun';
 
@@ -61,10 +62,12 @@ function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null |
 export function FeatureClosedSummary({
   summary, initialEtaMinutes, tailsCount, followUp, isMobile = false, onOpenReview,
 }: FeatureClosedSummaryProps) {
+  // Метки плиток склоняются по числу (тот же приём, что «Все N шагов» в FeatureProgressTab):
+  // «1 / шаг», «2 / возврата», «7 / шагов»; 0 — родительный множественный («0 хвостов»).
   const tiles = [
-    { key: 'steps', label: 'шагов', value: summary.steps },
-    { key: 'loops', label: 'возвратов', value: summary.loops },
-    { key: 'tails', label: 'хвосты', value: tailsCount },
+    { key: 'steps', label: plural(summary.steps, 'шаг', 'шага', 'шагов'), value: summary.steps },
+    { key: 'loops', label: plural(summary.loops, 'возврат', 'возврата', 'возвратов'), value: summary.loops },
+    { key: 'tails', label: plural(tailsCount, 'хвост', 'хвоста', 'хвостов'), value: tailsCount },
   ];
 
   return (

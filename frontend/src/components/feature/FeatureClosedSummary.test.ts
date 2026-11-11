@@ -7,8 +7,9 @@
 //   · followUp (FS-FVp) — «Доработки: N из M» под строкой итога; при null/total=0 — строки нет;
 //     строка итога и плитки не меняются; «план расширен» в DOM 0.
 // Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
-// (Europe/Moscow): на CI (TZ=UTC) подмена «локальная зона → UTC» неотличима от правильной,
-// а 12:00Z в зоне ≥ UTC+12 — уже следующий день. Пин — как в FeatureLaneAxis.test.ts.
+// (Europe/Moscow). Пин — как в FeatureLaneAxis.test.ts. Фикстура близка к полуночи UTC
+// (22:00Z → MSK следующий день, 01:00): подмена «локальная зона → UTC» в компоненте
+// краснит тест (в UTC дата была бы предыдущей), чего фикстура 12:00Z не ловила.
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -30,7 +31,7 @@ afterEach(() => {
 
 function mountSummary(over: Partial<FeatureClosedSummaryProps> = {}) {
   const props: FeatureClosedSummaryProps = {
-    summary: { mergedAt: '2026-11-10T12:00:00Z', durationMinutes: 200, tasks: 9, steps: 7, loops: 2 },
+    summary: { mergedAt: '2026-11-10T22:00:00Z', durationMinutes: 200, tasks: 9, steps: 7, loops: 2 },
     tailsCount: 1,
     ...over,
   };
@@ -43,13 +44,14 @@ describe('FeatureClosedSummary', () => {
   it('смерженная: строка «Смержена … · шла …» и ровно три плитки', () => {
     const { container } = mountSummary();
     const line = textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line'));
-    expect(line).toBe('Смержена 10 ноября · шла 3 ч 20 мин');
+    expect(line).toBe('Смержена 11 ноября · шла 3 ч 20 мин');
     for (const k of ['steps', 'loops', 'tails']) {
       expect(findNodeByAttr(container, 'data-testid', `closed-tile-${k}`)).not.toBeNull();
     }
+    // Метки плиток склоняются по числу: 7 → «шагов», 2 → «возврата», 1 → «хвост».
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возвратов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвосты');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возврата');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвост');
     const tiles = findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!;
     expect(tiles.childNodes.length).toBe(3);
   });
@@ -57,7 +59,7 @@ describe('FeatureClosedSummary', () => {
   it('initialEtaMinutes задан — «обещали ≈ …»; не задан — слова нет', () => {
     const withEta = mountSummary({ initialEtaMinutes: 120 });
     expect(textOf(findNodeByAttr(withEta.container, 'data-testid', 'closed-summary-line')))
-      .toBe('Смержена 10 ноября · шла 3 ч 20 мин, обещали ≈ 2 ч');
+      .toBe('Смержена 11 ноября · шла 3 ч 20 мин, обещали ≈ 2 ч');
     uninstallFakeDom(); installFakeDom();
     const without = mountSummary({ initialEtaMinutes: null });
     expect(textOf(findNodeByAttr(without.container, 'data-testid', 'closed-summary-line'))).not.toContain('обещали');
@@ -103,8 +105,8 @@ describe('FeatureClosedSummary', () => {
     // Строка итога и числа плиток — ровно как без followUp.
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line'))).toBe(baseLine);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возвратов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвосты');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возврата');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвост');
     // «план расширен» в итогах не показываем.
     expect(textOf(container)).not.toContain('план расширен');
     uninstallFakeDom(); installFakeDom();

@@ -33,7 +33,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 // модуля, — к тому времени оба уже вычислены
 import { pendingContested, pkgErrorText } from './WikiInbox';
 import { sectionPrefix } from './WikiTab';
-import { ORIGIN_META } from './wikiLabels';
+import { ORIGIN_META, PAGE_TYPE } from './wikiLabels';
 
 // op — пять, удаления нет (WikiPackage.OpValues)
 const OP_META: Record<string, { text: string; tone: BadgeTone }> = {
@@ -157,6 +157,34 @@ function OperationCard({
         <div data-testid="wiki-op-why" style={{ display: 'flex', gap: SP.xs, alignItems: 'flex-start', marginTop: SP.xs, fontSize: FS.xs, color: C.textSecondary }}>
           <AlertTriangle size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 2 }} />
           <span><b style={{ color: C.textHeading, fontWeight: 600 }}>Почему здесь:</b> {op.reason}</span>
+        </div>
+      )}
+      {(op.claim || (op.quotes && op.quotes.length > 0) || op.kind) && (
+        <div data-testid="wiki-op-evidence" style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
+          {op.kind && (
+            <div data-testid="wiki-op-kind" style={{ fontSize: FS.xs, color: C.textMuted }}>
+              {PAGE_TYPE[op.kind] ?? op.kind}{op.kind === 'state' && op.asOf ? ` · на ${op.asOf}` : ''}
+            </div>
+          )}
+          {op.claim && (
+            <div data-testid="wiki-op-claim">
+              <b style={{ color: C.textHeading, fontWeight: 600 }}>Утверждение:</b> {op.claim}
+            </div>
+          )}
+          {op.quotes && op.quotes.length > 0 && (
+            <div style={{ marginTop: SP.xs }}>
+              <b style={{ color: C.textHeading, fontWeight: 600 }}>Цитаты:</b>
+              {op.quotes.map((q, i) => (
+                <blockquote
+                  key={i}
+                  data-testid="wiki-op-quote"
+                  style={{ margin: `${SP.xs}px 0 0`, padding: `0 ${SP.sm}px`, borderLeft: `2px solid ${C.border}`, whiteSpace: 'pre-wrap' }}
+                >
+                  {q}
+                </blockquote>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {op.target && (op.op === 'supersede' || op.op === 'conflict' || op.op === 'link') && (

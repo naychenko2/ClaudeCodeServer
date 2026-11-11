@@ -528,6 +528,12 @@ export interface WikiPackageOperationDto {
   outputTokens: number | null;
   humanDecision: string | null;
   humanReason: string | null;
+  // Доказательства операции (null у старых): утверждение своими словами, 1–3 дословные
+  // цитаты, вид страницы (decision/rule/term/state) и «на дату» для state — строкой как есть
+  claim: string | null;
+  quotes: string[] | null;
+  kind: string | null;
+  asOf: string | null;
 }
 
 export interface WikiPackageDto {

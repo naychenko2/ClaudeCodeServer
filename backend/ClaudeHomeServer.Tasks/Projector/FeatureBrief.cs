@@ -156,9 +156,11 @@ public static class FeatureBrief
 
     // brief.eta (FS-V2, макет v2 «Срок»): ОДИН срок вместо выбора карточки между note.estimate
     // и estimate. minutes — срок всегда есть (eta null ⇔ числа нет — «одного срока» без числа
-    // не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
-    // source — что именно показано (note|history); clockStopped — почему даты нет при живом
-    // сроке (wait|stopped|null).
+    // не бывает); endsAt — дата от оценки оркестратора (note.estimate), у «истории» её нет
+    // никогда; при clockStopped='wait' гасится, при 'stopped' остаётся прежней оценкой —
+    // «оценка до остановки» (FS-T2, EtaOf ниже); source — что именно показано (note|history);
+    // clockStopped — почему часы стоят: stopped — остановка, wait — ждём ответа человека,
+    // null — часы идут.
     public sealed record BriefEta(int Minutes, DateTime? EndsAt, string Source, string? ClockStopped);
 
     // brief: контракт ответа (разрез п. 6).

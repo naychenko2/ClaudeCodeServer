@@ -15,6 +15,9 @@ export interface FeatureClosedSummaryProps {
   initialEtaMinutes?: number | null;
   // run.postMergeTails.length
   tailsCount: number;
+  // Доработки после мержа (run.stepProgress.followUpTotal/followUpAccepted, FS-PB2):
+  // отдельная строка под итогом; сам итог и плитки не меняются. null / total=0 — строки нет.
+  followUp?: { total: number; accepted: number } | null;
   isMobile?: boolean;
   onOpenReview?: () => void;
 }
@@ -38,6 +41,9 @@ const BIG: CSSProperties = {
 
 const LABEL: CSSProperties = { fontFamily: FONT.sans, fontSize: FS.sm, color: C.textSecondary };
 
+// Строка доработок после мержа: «Доработки: 1 из 3» (FS-FVp); числа без склонений.
+const FOLLOWUP: CSSProperties = { margin: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted };
+
 // Строка итога: «Смержена 10 ноября · шла 3 ч 20 мин, обещали ≈ 2 ч»;
 // без даты мержа — «закрыта без мержа · шла …» (текст — CLOSED_NO_MERGE_STATUS).
 function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null | undefined): string {
@@ -53,7 +59,7 @@ function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null |
 }
 
 export function FeatureClosedSummary({
-  summary, initialEtaMinutes, tailsCount, isMobile = false, onOpenReview,
+  summary, initialEtaMinutes, tailsCount, followUp, isMobile = false, onOpenReview,
 }: FeatureClosedSummaryProps) {
   const tiles = [
     { key: 'steps', label: 'шагов', value: summary.steps },
@@ -64,6 +70,9 @@ export function FeatureClosedSummary({
   return (
     <div data-testid="closed-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
       <p data-testid="closed-summary-line" style={LINE}>{summaryLine(summary, initialEtaMinutes)}</p>
+      {followUp && followUp.total > 0 && (
+        <p data-testid="closed-summary-followup" style={FOLLOWUP}>Доработки: {followUp.accepted} из {followUp.total}</p>
+      )}
       <div
         data-testid="closed-summary-tiles"
         style={{

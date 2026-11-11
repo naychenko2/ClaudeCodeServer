@@ -3,7 +3,9 @@
 //   · initialEtaMinutes задан — «обещали ≈ …», не задан — слова «обещали» нет;
 //   · без даты мержа — текст CLOSED_NO_MERGE_STATUS;
 //   · isMobile — сетка 2 колонки (minmax), десктоп — 3;
-//   · «Разбор ›» есть только при onOpenReview и вызывает его.
+//   · «Разбор ›» есть только при onOpenReview и вызывает его;
+//   · followUp (FS-FVp) — «Доработки: N из M» под строкой итога; при null/total=0 — строки нет;
+//     строка итога и плитки не меняются; «план расширен» в DOM 0.
 // Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
 // (Europe/Moscow): на CI (TZ=UTC) подмена «локальная зона → UTC» неотличима от правильной,
 // а 12:00Z в зоне ≥ UTC+12 — уже следующий день. Пин — как в FeatureLaneAxis.test.ts.
@@ -79,6 +81,44 @@ describe('FeatureClosedSummary', () => {
     const d = mountSummary();
     const gridD = findNodeByAttr(d.container, 'data-testid', 'closed-summary-tiles')!;
     expect(gridD.style.gridTemplateColumns).toBe('repeat(3, minmax(0, 1fr))');
+  });
+
+  it('followUp: «Доработки: N из M» под строкой итога; итог и плитки не меняются', () => {
+    // Базовый рендер без followUp — эталон строки итога и плиток.
+    const base = mountSummary();
+    const baseLine = textOf(findNodeByAttr(base.container, 'data-testid', 'closed-summary-line'));
+    uninstallFakeDom(); installFakeDom();
+    const { container } = mountSummary({ followUp: { total: 2, accepted: 2 } });
+    const followup = findNodeByAttr(container, 'data-testid', 'closed-summary-followup');
+    expect(followup).not.toBeNull();
+    expect(textOf(followup!)).toBe('Доработки: 2 из 2');
+    // Порядок: строка сразу после итога, до плиток.
+    const root = findNodeByAttr(container, 'data-testid', 'closed-summary')!;
+    const idxOf = (id: string) => root.childNodes.findIndex((n) => n.getAttribute('data-testid') === id);
+    const idxLine = idxOf('closed-summary-line');
+    const idxFollow = idxOf('closed-summary-followup');
+    const idxTiles = idxOf('closed-summary-tiles');
+    expect(idxFollow).toBe(idxLine + 1);
+    expect(idxTiles).toBe(idxFollow + 1);
+    // Строка итога и числа плиток — ровно как без followUp.
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line'))).toBe(baseLine);
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возвратов');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвосты');
+    // «план расширен» в итогах не показываем.
+    expect(textOf(container)).not.toContain('план расширен');
+    uninstallFakeDom(); installFakeDom();
+    // Числа без склонений: 1 из 3.
+    const one = mountSummary({ followUp: { total: 3, accepted: 1 } });
+    expect(textOf(findNodeByAttr(one.container, 'data-testid', 'closed-summary-followup')!)).toBe('Доработки: 1 из 3');
+  });
+
+  it('followUp=null и total=0 — строки нет', () => {
+    const none = mountSummary();
+    expect(findNodeByAttr(none.container, 'data-testid', 'closed-summary-followup')).toBeNull();
+    uninstallFakeDom(); installFakeDom();
+    const zero = mountSummary({ followUp: { total: 0, accepted: 0 } });
+    expect(findNodeByAttr(zero.container, 'data-testid', 'closed-summary-followup')).toBeNull();
   });
 
   it('«Разбор ›» — только при onOpenReview, клик вызывает его', () => {

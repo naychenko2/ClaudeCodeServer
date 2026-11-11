@@ -369,7 +369,7 @@ Html не разбираем вовсе: прототип идёт в «Файл
 `GET features/{id}` ([TasksController.cs:652](../../backend/ClaudeHomeServer/Controllers/TasksController.cs))
 отдаёт прежний объект плюс `brief` (:884); индекс `features/index` и `features?sessionId=`
 его не несут — лёгкий путь (:646). Верхние ключи ответа сторожит снапшот: прежние
-девять + `brief` ([TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
+девять + `brief` ([TasksControllerTests.cs:1397](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs)).
 
 `brief` строит чистая функция `FeatureBrief.Build`
 ([FeatureBrief.cs:115](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs)):
@@ -511,9 +511,8 @@ Html не разбираем вовсе: прототип идёт в «Файл
 ключи ответа ручки одной фичи теперь десять: `run`, `events`, `eventsTotal`, `chats`, `plans`,
 `materials`, `stats`, `brief`, `mockups`, `mockupsUnavailable`
 ([TasksController.cs:1136-1137](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
-«девять» в подписи снапшота
-([TasksControllerTests.cs:1236-1239](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs))
-устарели с появлением `materials` (§8).
+подпись снапшота — список ключей
+([TasksControllerTests.cs:1397](../../backend/ClaudeHomeServer.Tests/Controllers/TasksControllerTests.cs), ключи :1398-1400).
 
 - **`plans` — задачи-документы:** задачи с ролью `cut`/`design`/`plan`/`consult`
   ([FeatureRun.cs:99-123](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs),
@@ -536,7 +535,7 @@ Html не разбираем вовсе: прототип идёт в «Файл
   вошли в состав этой волной, М8 — TasksController.cs:1221-1223) идут только в каталог
   макетов `mockups[]` — запасным путём каталога, и там только `.html` под `docs/mockups/`
   ([MockupCatalog.cs:62-77](../../backend/ClaudeHomeServer.Docs/MockupCatalog.cs)); состав задач —
-  `AllRunTasks` (TasksController.cs:1224-1237), с фильтром по проекту эпика (`AllLinkedFiles`
+  локальный `allFeatureTasks` (TasksController.cs:925-936), с фильтром по проекту эпика (`AllLinkedFiles`
   :1244-1251). Обычные файлы шагов в раздел не попадают — золотой тест
   [FeaturePlansTests.cs:330-341](../../backend/ClaudeHomeServer.Tasks.Tests/FeaturePlansTests.cs)
   (`BuildPlans_LinkedFiles_ШагаНеДокументнойРоли_НеПопадают`).
@@ -629,13 +628,13 @@ Html не разбираем вовсе: прототип идёт в «Файл
 
 **Материалы фичи: `materials[]`.** Строка `{ path, taskId, at }`
 ([FeatureMaterials.cs:44](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureMaterials.cs)),
-собирает `FeatureMaterials.Build` над `AllRunTasks` эпика
+собирает `FeatureMaterials.Build` над локальным `allFeatureTasks` эпика
 ([TasksController.cs:938-942](../../backend/ClaudeHomeServer/Controllers/TasksController.cs)):
 
 - берутся `linkedFiles` задач только проекта эпика (:61); `at` = `CompletedAt ?? UpdatedAt`
   задачи (:62);
 - материал — файл под `docs/`, но не макет (`docs/mockups/…`), не индекс (`README.md`, `index.md`,
-  `docs/CHANGELOG.md`), без `..` ([FeatureMaterials.cs:17-31](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureMaterials.cs));
+  `docs/CHANGELOG.md`), без `..` ([FeatureMaterials.cs:19-33](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureMaterials.cs));
 - дубль пути схлопывается без учёта регистра, остаётся запись самой свежей задачи (:64-67);
   порядок — `at` убыванием, при равенстве по пути (:71-72); потолок — `Cap = 30` на фичу (:13).
 
@@ -677,7 +676,7 @@ worktree проекта; без вердикта `exists=false`, `branch=null` (
 `BaselineSteps` ([TaskItem.cs:199](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs)) пишет
 только `TaskManager.SetFeatureNote` — один раз, при первой записанной оценке и плане `cut`/`done`
 с `total > 0`, и больше не меняет ([TaskManager.cs:2066-2070](../../backend/ClaudeHomeServer.Tasks/TaskManager.cs)).
-Проектор отдаёт его только как `stepProgress.baselineTotal` ([FeatureProjector.cs:131](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureProjector.cs)).
+Отдаётся как `stepProgress.baselineTotal` ([FeatureRun.cs:497](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureRun.cs), значение — [FeatureStepAccounting.cs:529](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureStepAccounting.cs)) и сырым полем в `run.epic.baselineSteps` / DTO задач ([TaskItem.cs:199](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs): без `[JsonIgnore]`, `TaskListItem.From` копирует его рефлексией, `Slim(run.Epic)` — `FeatureProjector.cs:918-920, 945`).
 `FeatureEstimate.expectedSteps` — сколько всего шагов по оценке оркестратора, 1…500, хранится как
 есть и на экран не идёт ([TaskItem.cs:272-293](../../backend/ClaudeHomeServer.Core/Models/TaskItem.cs));
 сдвиг `expectedSteps` больше 25 % (и `etaMinutes` больше 50 %) без `why` отвергается
@@ -689,13 +688,13 @@ worktree проекта; без вердикта `exists=false`, `branch=null` (
   нет ([FeatureTimeline.cs:108-111, 123](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs),
   [TasksController.cs:1123](../../backend/ClaudeHomeServer/Controllers/TasksController.cs));
 - `stats.estimateDrift` = `{ initialEtaMinutes, firstEtaMinutes, currentEtaMinutes, shiftMinutes,
-  denominatorChanges, accuracy }` ([FeatureEstimateDrift.cs:17-27](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEstimateDrift.cs)):
+  denominatorChanges, accuracy }` ([FeatureEstimateDrift.cs:17-28](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureEstimateDrift.cs)):
   `shiftMinutes` = последний − первый срок по строкам журнала `estimate_set`, `null` при менее чем
   двух (:46); `denominatorChanges` — сколько раз `total` менялся между соседними строками с `total`
   (:49-54); `accuracy` — `Summary.DurationMinutes / InitialEtaMinutes`, только у закрытой фичи с
   базовым сроком больше нуля (:57-59);
 - `stats.spend.cacheShare` = `CacheReadTokens / (Input + CacheRead + CacheCreation)`, `null` при
-  нулевом знаменателе ([FeatureTimeline.cs:158-170](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs));
+  нулевом знаменателе ([FeatureTimeline.cs:165-171](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureTimeline.cs));
 - `brief.ask` = `{ text, source, since, personaId, sessionId }` — одна фраза «что нужно от тебя»
   из `run.Attention`; `source` — `stopped|wait|merge` ([FeatureBrief.cs:154, 461-477](../../backend/ClaudeHomeServer.Tasks/Projector/FeatureBrief.cs));
 - `brief.eta` = `{ minutes, endsAt, source, clockStopped }` — один срок вместо выбора между голосом

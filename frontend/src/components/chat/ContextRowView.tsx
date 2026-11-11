@@ -17,7 +17,6 @@ import { Badge, Button, Menu, MenuItem, MenuSep, Modal } from '../ui';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { RowChip, ellipsis, FlatChips, ChipHeight, ShrinkChips, CHIP_H } from './RowChip';
 import { RowNotice } from './RowNotice';
-import { LipEarBaseContext } from './LipEar';
 import { FormatBody } from '../generation/format/FormatBody';
 import { FormatChip } from '../generation/format/FormatChip';
 import { groupExecutorRows, rowPriceShort, EXECUTOR_GROUP_LABEL, type ExecutorRow } from '../generation/ExecutorList';
@@ -78,9 +77,6 @@ export interface ContextRowViewProps {
   onClear: () => void;
   // Витрина: принудительная ступень вместо лестницы
   pick?: LadderPick;
-  // Полоса-подсказка над строкой (ContinueHint): рендерится сразу после UndoNotice, обе
-  // полосы стоят одна над другой. undefined — полосы нет
-  notice?: ReactNode;
 }
 
 export const rowFacts = (p: Pick<ContextRowViewProps, 'git' | 'primary' | 'refs' | 'exec' | 'isMobile' | 'format'>): LadderFacts => ({
@@ -565,14 +561,12 @@ export function ContextRowView(props: ContextRowViewProps) {
   }, [sig, drop, isMobile, props.pick]);
   const pick = shift !== 0 && rungs.length ? { ...base, form: rungs[at], index: at } : base;
   if (!showsRow(props)) {
-    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» и подсказка обязаны остаться.
-    // Губы нет — ушко (если есть) растёт из кромки самого поля ввода (base = 'field'); у хоста нижнего
-    // отступа нет, иначе ушко отлипнет от поля.
-    if (!props.offer && !props.notice) return null;
+    // Ни ветки, ни объекта (проект без git, личный чат): строки нет, но «Вернуть» обязан остаться.
+    // Губы нет — нижнего отступа у хоста тоже нет: полоса «Вернуть» стоит вплотную к полю ввода.
+    if (!props.offer) return null;
     return (
       <div data-context-row-host="" style={{ position: 'relative', display: 'flex', flexDirection: 'column', margin: `${SP.xs}px 0 0` }}>
         {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
-        {props.notice && <LipEarBaseContext.Provider value="field">{props.notice}</LipEarBaseContext.Provider>}
       </div>
     );
   }
@@ -656,12 +650,11 @@ export function ContextRowView(props: ContextRowViewProps) {
 
   return (
     // Десктоп — отступ сверху, как у прежней Git-полосы (10): тень губы вверх (SHADOW.liftSoft из
-    // composerLip) ложится на этот зазор, а не на низ ленты. Хост — колонка: ушко (LipEar)
-    // alignSelf: flex-end у правого края, остальные дети растягиваются на всю ширину, как в блоке.
+    // composerLip) ложится на этот зазор, а не на низ ленты. Хост — колонка: дети растягиваются
+    // на всю ширину, как в блоке.
     // zIndex 1 — губа лежит над aurora-сиянием композера (z 0): свет поднимается от её кромки, а не рисуется поверх
     <div data-context-row-host="" style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', margin: `${isMobile ? SP.xs : SP.sm + 2}px 0 0` }}>
       {props.offer && <UndoNotice offer={props.offer} onUndo={props.onUndo} />}
-      {props.notice && <LipEarBaseContext.Provider value="lip">{props.notice}</LipEarBaseContext.Provider>}
       {subNote && subNote !== dismissedNote && !menu && <FormatNote text={subNote} onClose={() => setDismissedNote(subNote)} />}
       {tip && primary && <AgentTip p={primary} onOpen={props.onOpenPrimary} onClose={() => setTip(false)} />}
       <FlatChips.Provider value>

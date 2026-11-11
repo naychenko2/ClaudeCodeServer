@@ -343,7 +343,7 @@ flowchart LR
 | **Сверка двух сроков** | `agreement`: вне [p25, p75] истории и разница ≥ 30 мин → `above/below` | `AgreementOf` `:462` |
 | **Базовый срок** | `InitialEtaMinutes` — `etaMinutes` первой оценки, записанной после старта фичи. Пишется один раз | `TaskManager.SetFeatureNote` `:1699–1711` |
 | **Напоминание оркестратору** | В ключевом чате: «голоса нет» или «голос устарел». Устаревание — **только смена активной стадии** | `FeatureVoiceReminderContributor.cs:87–89`, `StaleOf` `:481`, `ActiveStageOf` |
-| **Полнота трекера** | Сверка `run.Tracker`: `unplanned_step`, `unreviewed`, `returned_no_rework`, `dead_verdict`, `reported_open`, `epic_open_after_merge`, `orphans_in_closed` | `FeatureTracker.cs:32–38` |
+| **Полнота трекера** | Сверка `run.Tracker`: `unplanned_step`, `unreviewed`, `returned_no_rework`, `dead_verdict`, `reported_open`, `orphans_in_closed` (вид `epic_open_after_merge` убран 11.11 по решению Андрея: открытый эпик после мержа не расхождение) | `FeatureTracker.cs:33–38` |
 
 Получается, что гибрид в зачатке **уже есть**: факт по карточкам, срок по истории, срок модели
 и сверка между ними. Не хватает двух вещей. Модель не участвует в **объёме**, а сверка не

@@ -9,7 +9,7 @@
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mount, installFakeDom, uninstallFakeDom, textNodes } from '../../../../components/chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPackageView } from '../WikiPackageView';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
@@ -69,6 +69,20 @@ describe('карточка операции: доказательства (Ш6b)
     expect(i2).toBeGreaterThan(i1);
     expect(i3).toBeGreaterThan(i2);
     expect(all(c)).toContain('Состояние · на unknown-дата?');
+  });
+
+  it('claim и ровно 2 цитаты; state с asOf=2026-08-21', () => {
+    const c = render(op({ claim: 'Утверждение X', quotes: ['цитата А', 'цитата Б'], kind: 'state', asOf: '2026-08-21' }));
+    expect(all(c)).toContain('Утверждение X');
+    const quotes: unknown[] = [];
+    const walk = (n: ReturnType<typeof mount>['container']) => {
+      if (n.getAttribute?.('data-testid') === 'wiki-op-quote') quotes.push(n);
+      for (const ch of n.childNodes) walk(ch);
+    };
+    walk(c);
+    expect(quotes).toHaveLength(2);
+    expect(all(c)).toContain('Состояние · на 2026-08-21');
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-op-evidence')).not.toBeNull();
   });
 
   it('kind=decision без даты: подпись вида, «на» нет', () => {

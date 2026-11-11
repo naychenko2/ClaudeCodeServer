@@ -1267,6 +1267,30 @@ public class FeatureStepProgressTests
         risks.Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 1);
     }
 
+    // Принятая доработка после мержа мерж не держит: вычет FollowUpAccepted в BuildMergeRisks.
+    [Fact]
+    public void РискиМержа_ПринятаяДоработка_НеДержитМерж()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().NotContain(r => r.Kind == FeatureMergeRiskKinds.Open);
+    }
+
+    [Fact]
+    public void РискиМержа_ПринятаяИОткрытаяДоработки_OpenОдин()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"),
+            Step("sG", "G", 41, TaskItemStatus.InProgress));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 1);
+    }
+
     [Fact]
     public void КонтрактДоработок_ИменаПолейCamelCase()
     {

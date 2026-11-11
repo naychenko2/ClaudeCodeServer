@@ -13,8 +13,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // S4b-1 (ADR-035, решение 4 шаги 1–3, решение 10): проверки применения пакета до записи.
 // Эти тесты держат фазу проверок — PrepareAsync: на диске ничего не пишется, файлы раздела
 // остаются байт в байт, меняется только статус пакета и только через WikiPackageStore.Transition.
-// Две параллельные заявки одного пакета дают ровно один переход (окно гонки — чтение и запись
-// пакета из 200 операций, паттерн теста S4a: два старта от одного барьера, без Task.Delay).
+// Две заявки одного пакета дают ровно один переход. Случай «второй на ту же страницу» построен
+// internal-разделителем Prepare/Write (тем же, которым делён сервис, WikiApplyService.cs:9-12):
+// обе проверки на одной базе, затем записи — определённо, без рандомной гонки тредов.
 // Запись (шаги 4–6: прообразы, файлы, журнал, откат) и полный ApplyAsync — WikiApplyTests.
 public class WikiApplyClaimTests : IDisposable
 {
@@ -318,20 +319,32 @@ public class WikiApplyClaimTests : IDisposable
     [Fact]
     public async Task ParallelApply_SamePage_SecondStale()
     {
+        // Инвариант: база сверяется со снимком проверки; молчаливой перезаписи чужого применения нет
+        // (сверка шага 5, WikiApplyService.cs:305-314). Переплетение строит internal-разделитель
+        // Prepare/Write — тот же, которым делён сервис (WikiApplyService.cs:9-12): обе проверки
+        // на одной базе, затем записи по очереди. Определённо, без рандомной гонки тредов:
+        // под нагрузой параллельного батча тестов планирование сериализовало вызовы, и прежняя
+        // версия (барьер + два ApplyAsync) краснела — второй пакет законно применялся.
         await WriteCardAndPage();
         var hashes = new Dictionary<string, string> { [PagePath] = WikiManifest.Sha256Hex(PageBase) };
         var p1 = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, Claim1, [Quote], baseHashes: hashes));
         var p2 = CreateAccepted(Claim(WikiPackage.OpAppend, PagePath, "Сборку переносят туда", [Quote], baseHashes: hashes));
-        var gate = new TaskCompletionSource();
 
-        var t1 = Task.Run(async () => { await gate.Task; return await _sut.ApplyAsync(User, p1, Ctx); });
-        var t2 = Task.Run(async () => { await gate.Task; return await _sut.ApplyAsync(User, p2, Ctx); });
-        gate.SetResult();
-        var rs = await Task.WhenAll(t1, t2);
+        // Обе проверки на одной базе: между ними диск не меняется, снимки обоих — PageBase.
+        var prep1 = await _sut.PrepareAsync(User, p1, Ctx);
+        var prep2 = await _sut.PrepareAsync(User, p2, Ctx);
+        prep1.Ready.Should().BeTrue(prep1.Reason);
+        prep2.Ready.Should().BeTrue(prep2.Reason);
 
-        rs.Count(x => x.Applied).Should().Be(1);
-        // Второй отказан: база страницы изменена первым (sha256 диска ≠ снимок проверки → drift/stale).
-        rs.Single(x => !x.Applied).Code.Should().BeOneOf(WikiApplyService.CodeStale, WikiApplyService.CodeDrift);
-        File.ReadAllText(PageFull(PagePath)).Should().Contain("[^s2]").And.NotContain("[^s3]");
+        var r1 = await _sut.WriteAsync(User, p1.Id, prep1, Ctx);
+        // Диск изменён записью первого: второй остановлен сверкой базового состояния.
+        var r2 = await _sut.WriteAsync(User, p2.Id, prep2, Ctx);
+
+        r1.Applied.Should().BeTrue(r1.Reason);
+        r2.Applied.Should().BeFalse();
+        r2.Code.Should().Be(WikiApplyService.CodeDrift);
+        // Записанное первым цело, второй ничего не перезаписал.
+        var page = File.ReadAllText(PageFull(PagePath));
+        page.Should().Contain(Claim1).And.NotContain("Сборку переносят туда");
     }
 }

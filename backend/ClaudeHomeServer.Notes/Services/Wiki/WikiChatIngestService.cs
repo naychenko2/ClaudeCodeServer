@@ -677,7 +677,8 @@ public sealed class WikiChatIngestService
                     (cur?.NothingNewStreak ?? 0) + 1, default, RejectStreak: 0);
             });
             if (!up.Ok)
-                return Refused(null, $"исход разбора не записан: {up.Reason}", inputTokens);
+                return Refused(null, $"исход разбора не записан: {up.Reason}", inputTokens,
+                    dropped, firstDropReason);
             return new ChatResult(OutcomeNothingNew, nothingReason, [], InputTokens: inputTokens,
                 Dropped: dropped, FirstDropReason: firstDropReason);
         }
@@ -696,7 +697,8 @@ public sealed class WikiChatIngestService
                     $"{awaitingOps} {OperationsWord(awaitingOps)} на решении", 0, default, RejectStreak: 0);
             });
             if (!upAwait.Ok)
-                return Refused(null, $"курсор разбора не записан: {upAwait.Reason}", inputTokens);
+                return Refused(null, $"курсор разбора не записан: {upAwait.Reason}", inputTokens,
+                    dropped, firstDropReason);
             return new ChatResult(OutcomeAwaitingHuman,
                 "в разборе есть спорные пакеты: их решает человек («Входящие»)", [],
                 Partial: failedReason is not null,
@@ -705,7 +707,8 @@ public sealed class WikiChatIngestService
 
         var (chronicleOk, chronicleReason) = await AppendChronicleAsync(ownerId, home, session, sessionId, applied);
         if (!chronicleOk)
-            return Refused(null, chronicleReason ?? "хроника чата не записана", inputTokens);
+            return Refused(null, chronicleReason ?? "хроника чата не записана", inputTokens,
+                dropped, firstDropReason);
 
         // Курсор после применения — на конец дельты, с хэшем последней записи; при
         // частичном исходе — на конце последнего успешного окна, с хэшем его записи (та же
@@ -723,7 +726,8 @@ public sealed class WikiChatIngestService
             return new WikiChatTriageEntry(sessionId, c, h, null, null, 0, default, RejectStreak: 0);
         });
         if (!upApplied.Ok)
-            return Refused(null, $"курсор разбора не записан: {upApplied.Reason}", inputTokens);
+            return Refused(null, $"курсор разбора не записан: {upApplied.Reason}", inputTokens,
+                dropped, firstDropReason);
 
         var overrodeHuman = 0;
         var disputed = new List<string>();

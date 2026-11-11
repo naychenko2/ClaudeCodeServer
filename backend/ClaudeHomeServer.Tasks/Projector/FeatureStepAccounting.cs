@@ -102,7 +102,8 @@ internal static class FeatureStepAccounting
     internal static Result Build(
         List<TaskItem> steps, List<TaskItem> verdictTasks, List<TaskItem> plan, DateTime nowUtc,
         IReadOnlyCollection<FeatureIndexSession>? sessions,
-        IReadOnlyList<TaskItem>? merges = null)
+        IReadOnlyList<TaskItem>? merges = null,
+        int? baselineTotal = null)
     {
         // Закрытые мержи (Done с датой) — отсечки «в master»; порядок по моменту закрытия.
         var closedMerges = (merges ?? [])
@@ -268,6 +269,14 @@ internal static class FeatureStepAccounting
         var laneByKey = new Dictionary<string, string>(StepKeyComparer);
         var returnedKeys = new HashSet<string>(StepKeyComparer);
         var inMasterKeys = new HashSet<string>(StepKeyComparer);
+        // Доработки после мержа (решение Андрея 11.11, FS-PB2): ключ — доработка, если его первая
+        // задача-шаг создана строго позже закрытия ПЕРВОГО мержа (не последнего: от последнего итог
+        // сдвигался бы при каждом мерже) и ключа нет в действующем плане. Они вне знаменателя,
+        // корзин, линий и закрытого хвоста; считаются отдельно (FollowUpTotal/FollowUpAccepted).
+        // WaveAfterMerge (FeatureProjector) отвечает на другой вопрос — «есть ли работа после
+        // последнего мержа» для состояния фичи, — поэтому здесь не переиспользуется.
+        var firstMergeAt = closedMerges.Count > 0 ? closedMerges[0].CompletedAt : null;
+        int followUpTotal = 0, followUpAccepted = 0;
         // Порядок ключей хвоста — тот же, что у Chains (порядок шагов учёта): вызывающий видит
         // те же цепочки в том же порядке, что и лента шагов.
         var closedTailKeys = new List<string>();
@@ -384,8 +393,15 @@ internal static class FeatureStepAccounting
                     ?.CompletedAt;
             }
 
-            bucketByKey[key] = bucket;
-            if (inMasterAt is not null) inMasterKeys.Add(key);
+            bool followUp = firstMergeAt is not null && !planned.ContainsKey(key)
+                && groupTasks.Min(t => t.CreatedAt) > firstMergeAt.Value;
+            if (followUp)
+            {
+                if (bucket != Withdrawn) followUpTotal++;
+                if (bucket == Accepted) followUpAccepted++;
+            }
+            else bucketByKey[key] = bucket;
+            if (!followUp && inMasterAt is not null) inMasterKeys.Add(key);
             // Закрытый хвост (§8.3): все задачи цепочки сданы, открытой доработки нет, шаг не принят
             // и не снят и сам ничего не ведёт: последний вердикт — отсутствие вердикта (витков нет,
             // «ждёт ревью») или возврат, за которым не последовала доработка («закрыт без повторного
@@ -393,18 +409,21 @@ internal static class FeatureStepAccounting
             // и незакрытая задача — живая работа, её здесь нет. По корзинам это ровно Review/pending
             // и Work/returned. Снятие «при мерже» — тот же источник, что решил снятие выше
             // (последний виток-снятие либо задача-шаг), но с Origin = merge_tail.
-            if (allDone && !reworkOpen && !withdrawn
+            if (!followUp && allDone && !reworkOpen && !withdrawn
                 && (lastVerdict is null || lastVerdict == TaskVerdicts.Returned))
                 closedTailKeys.Add(key);
-            if (withdrawn && (
+            if (!followUp && withdrawn && (
                     lastVerdict == TaskVerdicts.Withdrawn && rounds.Count > 0
                     && rounds[^1].Verification?.Origin == TaskVerificationOrigins.MergeTail
                     || ordered.Any(t => t.Role == TaskRoles.Step
                         && t.Verification is { Verdict: TaskVerdicts.Withdrawn, Origin: TaskVerificationOrigins.MergeTail })))
                 withdrawnAtMerge++;
             string lane = FeatureProjector.NormalizeLane(head.Lane);
-            laneByKey[key] = lane;
-            if (loops > 0) returnedKeys.Add(key);
+            if (!followUp)
+            {
+                laneByKey[key] = lane;
+                if (loops > 0) returnedKeys.Add(key);
+            }
 
             // Длительность: от старта первой задачи до закрытия последней; у идущей — до сейчас.
             var start = FeatureProjector.TaskStart(ordered[0]);
@@ -424,6 +443,7 @@ internal static class FeatureStepAccounting
                 Status = status,
                 WaitingSince = waitingSince,
                 AcceptedAt = acceptedAt,
+                FollowUp = followUp,
                 InMaster = inMasterAt is not null,
                 MergedAt = inMasterAt,
                 DurationMinutes = Math.Max(0, Math.Round((end - start).TotalMinutes)),
@@ -473,11 +493,14 @@ internal static class FeatureStepAccounting
             // Снятых при мерже (Origin = merge_tail) — часть Withdrawn, не пятая корзина: доля
             // «смержено без ревью» считается отдельно от снятых по существу (§8.3).
             WithdrawnAtMerge = withdrawnAtMerge,
+            BaselineTotal = baselineTotal,
+            FollowUpTotal = followUpTotal,
+            FollowUpAccepted = followUpAccepted,
         };
 
         // Линии: порядок — по первому появлению (сначала заведённые шаги, затем шаги плана без задачи).
         var laneOrder = new List<string>();
-        foreach (var k in groups.Select(g => g.Key).Concat(notCreatedKeys))
+        foreach (var k in groups.Select(g => g.Key).Where(laneByKey.ContainsKey).Concat(notCreatedKeys))
             if (!laneOrder.Contains(laneByKey[k])) laneOrder.Add(laneByKey[k]);
         var lanes = new List<FeatureLane>(laneOrder.Count);
         foreach (var lane in laneOrder)

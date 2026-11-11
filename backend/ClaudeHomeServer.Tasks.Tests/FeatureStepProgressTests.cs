@@ -1170,4 +1170,110 @@ public class FeatureStepProgressTests
         run.StepProgress.Total.Should().Be(3, "действующий p2 [A,B] плюс заведённый C");
         AssertBucketsMatchProgress(run, tasks);
     }
+    // ─── FS-PB2: доработки после мержа вне знаменателя ──────────────────────────────────────────
+
+    private static TaskItem MergeDone(string id, int minute) => new()
+    {
+        Id = id, FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+        CreatedAt = T0.AddMinutes(minute), CompletedAt = T0.AddMinutes(minute + 1),
+    };
+
+    private static FeatureStepAccounting.Result AccountFu(int? baseline, params TaskItem[] tasks)
+    {
+        var steps = tasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
+        var verdicts = tasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList();
+        var plan = tasks.Where(t => t.Role == TaskRoles.Plan).ToList();
+        var merges = tasks.Where(t => t.Role == TaskRoles.Merge).ToList();
+        return FeatureStepAccounting.Build(steps, verdicts, plan, T0.AddDays(1), null, merges, baseline);
+    }
+
+    [Fact]
+    public void Доработка_СозданаПослеПервогоМержаВнеПлана_ВнеTotalИКорзин()
+    {
+        var acc = AccountFu(7, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40, TaskItemStatus.InProgress));
+
+        acc.Progress.Total.Should().Be(1);
+        acc.Progress.Accepted.Should().Be(1);
+        acc.Progress.Work.Should().Be(0);
+        acc.Progress.PlanState.Should().Be(FeatureStepAccounting.PlanDone);
+        acc.Progress.FollowUpTotal.Should().Be(1);
+        acc.Progress.FollowUpAccepted.Should().Be(0);
+        acc.Progress.BaselineTotal.Should().Be(7);
+        acc.Lanes.Sum(l => l.Total).Should().Be(1);
+        acc.Chains.Single(c => c.StepRef == "F").FollowUp.Should().BeTrue();
+        acc.Chains.Single(c => c.StepRef == "A").FollowUp.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Доработка_ПринятаяСчитаетсяВFollowUpAccepted_ТотальНеМеняется()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"));
+
+        acc.Progress.Total.Should().Be(1);
+        acc.Progress.FollowUpTotal.Should().Be(1);
+        acc.Progress.FollowUpAccepted.Should().Be(1);
+        acc.Progress.BaselineTotal.Should().BeNull();
+    }
+
+    [Fact]
+    public void Доработка_ПлановыйШагПослеМержа_ОстаётсяБазовым()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back"), ("B", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sB", "B", 40, TaskItemStatus.InProgress));
+
+        acc.Progress.Total.Should().Be(2);
+        acc.Progress.Work.Should().Be(1);
+        acc.Progress.FollowUpTotal.Should().Be(0);
+    }
+
+    // Граница: шаг, созданный ровно в момент закрытия мержа, — не «строго позже», значит базовый.
+    // Опорный момент — именно ПЕРВЫЙ мерж: от второго (m2) шаг, созданный между ними, сдвинул бы итог.
+    [Fact]
+    public void Доработка_ГраницаПервогоМержа_СтрогоПозжеИТолькоОтПервого()
+    {
+        var m1 = MergeDone("m1", 30); // закрыт на минуте 31
+        var onBorder = Step("sB", "B", 31, TaskItemStatus.InProgress);
+        var between = Step("sC", "C", 40, TaskItemStatus.InProgress);
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), m1, MergeDone("m2", 50), onBorder, between);
+
+        acc.Progress.Total.Should().Be(2, "A плюс B (создан ровно на границе)");
+        acc.Progress.FollowUpTotal.Should().Be(1, "C создан после первого мержа, хоть и до второго");
+        acc.Chains.Single(c => c.StepRef == "B").FollowUp.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Доработка_БезМержа_НеВыделяется_ПустаяКоллекцияНулевыеСчётчики()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), Step("sF", "F", 40));
+        acc.Progress.Total.Should().Be(2);
+        acc.Progress.FollowUpTotal.Should().Be(0);
+        acc.Progress.FollowUpAccepted.Should().Be(0);
+        AccountFu(null, Feature()).Progress.FollowUpTotal.Should().Be(0);
+    }
+
+    [Fact]
+    public void РискиМержа_ОткрытаяДоработкаУчитываетсяВOpen()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40, TaskItemStatus.InProgress));
+
+        var risks = FeatureProjector.BuildMergeRisks(acc.Progress, 0);
+        risks.Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 1);
+    }
+
+    [Fact]
+    public void КонтрактДоработок_ИменаПолейCamelCase()
+    {
+        var opts = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var acc = AccountFu(3, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), MergeDone("m1", 30), Step("sF", "F", 40));
+        var json = JsonSerializer.Serialize(new { acc.Progress, acc.Chains }, opts);
+        json.Should().Contain("\"baselineTotal\":3").And.Contain("\"followUpTotal\":1")
+            .And.Contain("\"followUpAccepted\":0").And.Contain("\"followUp\":true");
+    }
 }

@@ -408,6 +408,9 @@ public sealed class FeatureStepChain
     // Шаг «в master»: все задачи цепочки сданы строго до закрытия какого-либо мержа (у мержа с
     // reviewOf — только перечисленные шаги). Ортогонален корзине/Outcome: принятость от него не зависит.
     public bool InMaster { get; init; }
+    // Доработка после мержа (FS-PB2): шаг заведён позже первого мержа и вне действующего плана;
+    // в знаменатель, корзины и линии не входит, цепочка в списке остаётся.
+    public bool FollowUp { get; init; }
     // Момент мержа, в который шаг попал в master (первый подходящий); null — не в master.
     public DateTime? MergedAt { get; init; }
     // Число витков с возвратом (returned/accepted_with_remarks) по этому шагу.
@@ -459,7 +462,8 @@ public sealed class FeatureLane
 // Честный прогресс фичи по шагам (единица учёта — шаг, код stepRef; ключ шага без stepRef — id
 // задачи). Корзины взаимоисключающие: Total = Accepted + Review + Work + NotCreated. Вне знаменателя:
 // Withdrawn (шаг снят ревью с выкладки) и UnlinkedReworks (доработки без привязки к шагу —
-// ни stepRef, ни reviewOf; новую цепочку не заводят).
+// ни stepRef, ни reviewOf; новую цепочку не заводят) и доработки после мержа (FollowUpTotal/
+// FollowUpAccepted — отдельная строка, итог фичи они не меняют).
 public sealed class FeatureStepProgress
 {
     // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
@@ -483,6 +487,11 @@ public sealed class FeatureStepProgress
     // не меняется. Ровно эти ключи отдаёт учёт (FeatureStepAccounting.Result.ClosedTailKeys) —
     // второй предикат нигде не заводится. Из него: риск tail диалога мержа и снятие по выбору.
     public int ClosedTail { get; init; }
+    // База плана из эпика (BaselineSteps, FS-PB1); null — не зафиксирована.
+    public int? BaselineTotal { get; init; }
+    // Доработки после мержа, кроме снятых, и сколько из них принято — вне Total и корзин.
+    public int FollowUpTotal { get; init; }
+    public int FollowUpAccepted { get; init; }
     // Снятых при мерже (вердикт withdrawn с Origin = merge_tail): часть Withdrawn, ортогональный
     // корзинам счётчик — доля «смержено без ревью», отделённая от снятых по существу (§8.3).
     public int WithdrawnAtMerge { get; init; }

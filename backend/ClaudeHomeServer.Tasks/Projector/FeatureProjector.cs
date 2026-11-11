@@ -128,7 +128,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
         var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions,
-            children.Where(t => t.Role == TaskRoles.Merge).ToList());
+            children.Where(t => t.Role == TaskRoles.Merge).ToList(), epic.BaselineSteps);
         var stepChains = accounting.Chains;
 
         // TR-B1c: сверка трекера — один вызов на том же проходе, что и учёт шагов.
@@ -1031,7 +1031,9 @@ public sealed class FeatureProjector(TaskManager tasks)
     {
         var risks = new List<FeatureMergeRisk>();
         if (progress.NotCreated > 0) risks.Add(new(FeatureMergeRiskKinds.NotCreated, progress.NotCreated));
-        int open = progress.Work + progress.Review - progress.ClosedTail;
+        // Открытые доработки после мержа вне корзин, но мерж они держат так же (FS-PB2).
+        int open = progress.Work + progress.Review - progress.ClosedTail
+            + (progress.FollowUpTotal - progress.FollowUpAccepted);
         if (open > 0) risks.Add(new(FeatureMergeRiskKinds.Open, open));
         if (progress.ClosedTail > 0) risks.Add(new(FeatureMergeRiskKinds.Tail, progress.ClosedTail));
         if (trackerCount > 0) risks.Add(new(FeatureMergeRiskKinds.Tracker, trackerCount));

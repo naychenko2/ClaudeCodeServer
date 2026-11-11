@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Turn;
 using ClaudeHomeServer.Services.Tasks;
@@ -23,13 +25,17 @@ namespace ClaudeHomeServer.Tests.Services;
 //   в шину (та гасит чужие падения, TurnEventBus.cs:59–68), и собственный логгер
 //   подписчика ничего не записал бы → проверка «исключение логируется собой» краснеет;
 // • убрать строку AddGatedHostedService из TasksSubsystem.Register — краснеет
-//   «TasksSubsystem_Register» (дескриптора IHostedService нет).
+//   «TasksSubsystem_Register» (дескриптора IHostedService нет);
+// • убрать вещание ToTaskBoard в обработчике — краснеет ровно
+//   «ОтветВЧатеЗадачи_ВещаетTaskChangedОдинРаз» (отрицательные тесты «вызовов нет»
+//   остаются зелёными: без события их и так нет).
 public class AwaitingHumanAnswerSubscriberTests : IDisposable
 {
     private readonly string _dir;
     private readonly TaskManager _tasks;
     private readonly FeatureJournalStore _journal;
     private readonly TurnEventBus _bus;
+    private readonly BoardCapture _board = new();
     private readonly AwaitingHumanAnswerSubscriber _subscriber;
 
     public AwaitingHumanAnswerSubscriberTests()
@@ -45,8 +51,9 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
         _journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));
         _tasks = new TaskManager(config, journal: _journal);
         _bus = new TurnEventBus();
-        // Подписчик сам подписывается на шину в конструкторе.
-        _subscriber = new AwaitingHumanAnswerSubscriber(_tasks, _bus);
+        // Подписчик сам подписывается на шину в конструкторе; шов рассылки — мок-доска
+        // (в проде — SessionHubBroadcaster через CoreSeamsGlue).
+        _subscriber = new AwaitingHumanAnswerSubscriber(_tasks, _bus, broadcaster: _board);
     }
 
     public void Dispose()
@@ -88,6 +95,34 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
             "снятие ответом пишет waiting_cleared, как ClearAwaitingHuman(id)");
     }
 
+    // ─── Снятие удалось → ровно одно событие доски task_changed("updated") ───────────
+    // Ревью FS-E3b (Major): клир в TaskManager пишет только журнал (waiting_cleared), а
+    // доска и страница фичи живут только по task_changed (lib/tasks.ts, lib/featurePage.ts)
+    // — без события на снятом ожидании остаётся «ждёт вас». Тот же путь, что FS-E2
+    // (SessionMessagingService) и TasksToolset: ToTaskBoard(TaskChangedMessage("updated"))
+    // после успешного клира. Мутация «убрать вещание в обработчике» красит ровно этот тест.
+
+    [Fact]
+    public async Task ОтветВЧатеЗадачи_ВещаетTaskChangedОдинРаз()
+    {
+        var (_, step) = CreateAwaitingStep("sess-1");
+
+        await _bus.PublishAsync(Answer("sess-1"));
+
+        // Задача вне проекта: ToTaskBoard зовёт только ToOwner (группы проекта нет).
+        _board.OwnerCalls.Should().HaveCount(1, "снятие ожидания — ровно одно событие доски владельцу");
+        _board.ProjectCalls.Should().BeEmpty("задача вне проекта: в группу проекта ничего не идёт");
+
+        var (ownerId, message) = _board.OwnerCalls[0];
+        ownerId.Should().Be("u", "адресат — владелец задачи");
+        var msg = message.Should().BeAssignableTo<TaskChangedMessage>().Subject;
+        msg.Action.Should().Be("updated");
+        msg.Task.Id.Should().Be(step.Id);
+        msg.Task.AwaitingHumanSince.Should().BeNull(
+            "payload — обновлённая задача после клира, а не состояние до ответа");
+        msg.Task.AwaitingHumanReason.Should().BeNull("пара снята целиком");
+    }
+
     // ─── Чат без задачи → ничего не делать ──────────────────────────────────────────
 
     [Fact]
@@ -100,6 +135,8 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
 
         _tasks.GetById(step.Id)!.AwaitingHumanSince.Should().NotBeNull(
             "чат без привязанной задачи не снимает ожидание другой задачи");
+        _board.OwnerCalls.Should().BeEmpty("нет задачи — события доски нет");
+        _board.ProjectCalls.Should().BeEmpty();
     }
 
     // ─── Чужой владелец → не трогать даже при совпадении SessionId ──────────────────
@@ -114,6 +151,8 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
 
         _tasks.GetById(step.Id)!.AwaitingHumanSince.Should().NotBeNull(
             "задача чужого владельца не снимается чужим ответом");
+        _board.OwnerCalls.Should().BeEmpty("чужой владелец — события доски нет");
+        _board.ProjectCalls.Should().BeEmpty();
     }
 
     // ─── Ожидания нет → ничего не делать (ни мутации, ни журнала) ────────────────────
@@ -132,6 +171,8 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
         _tasks.GetById(step.Id)!.AwaitingHumanSince.Should().BeNull();
         _journal.Read("u", epic.Id).Entries.Should().NotContain(e => e.Kind == "waiting_cleared",
             "нет ожидания — нет мутации и нет записи журнала");
+        _board.OwnerCalls.Should().BeEmpty("клир вернул null — «updated» без изменения не шлётся");
+        _board.ProjectCalls.Should().BeEmpty();
     }
 
     // ─── Гонка с report_up: ответ старше ожидания → свежее ожидание не снимается ─────
@@ -223,6 +264,20 @@ public class AwaitingHumanAnswerSubscriberTests : IDisposable
         {
             if (exception is not null) Failures.Add(formatter(state, exception));
         }
+    }
+
+    // Мок-доски: собирает, что ушло адресатам. ToTaskBoard — расширение над интерфейсом
+    // (SessionBroadcasterExtensions): для задачи вне проекта оно зовёт только ToOwner,
+    // для проектной добавил бы ещё ToProject; здесь задачи без проекта.
+    private sealed class BoardCapture : ISessionBroadcaster
+    {
+        public List<(string OwnerId, ServerMessage Message)> OwnerCalls { get; } = new();
+        public List<(string ProjectId, ServerMessage Message)> ProjectCalls { get; } = new();
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToOwner(string ownerId, ServerMessage message) { OwnerCalls.Add((ownerId, message)); return Task.CompletedTask; }
+        public Task ToProject(string projectId, ServerMessage message) { ProjectCalls.Add((projectId, message)); return Task.CompletedTask; }
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
     }
 
     // ─── Реальная регистрация: TasksSubsystem.Register (не ручной AddSingleton) ──────

@@ -98,54 +98,26 @@ internal static class FeatureStepAccounting
         return plans.Where(accepted.Contains).ToList();
     }
 
-    // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.
-    internal static Result Build(
-        List<TaskItem> steps, List<TaskItem> verdictTasks, List<TaskItem> plan, DateTime nowUtc,
-        IReadOnlyCollection<FeatureIndexSession>? sessions,
-        IReadOnlyList<TaskItem>? merges = null,
-        int? baselineTotal = null)
+    // Индекс цепочек — «какие цепочки касается задача»: ОДНА точка правды для учёта шагов (Build)
+    // и для снятия закрытого хвоста при мерже (TaskManager.WithdrawMergeTail). Собрание ровно то,
+    // что раньше жило внутри Build; второго предиката «что такое цепочка» нигде не заводим (§8.5:
+    // учёт — единственное место, где решается и «закрытый хвост», и состав цепочки).
+    internal sealed record ChainIndex(
+        // Цепочки в порядке первого появления шага: ключ (канонический stepRef) + задачи-шаги.
+        List<(string Key, List<TaskItem> Tasks)> Groups,
+        // Ключ → задачи цепочки: шаг(ы) + неснятые доработки (снятая доработка членом не станет).
+        Dictionary<string, List<TaskItem>> MembersByKey,
+        // Id задачи → ключи цепочек, членом которых она является (одна доработка может касаться
+        // нескольких шагов — связка многие-ко-многим).
+        Dictionary<string, List<string>> KeysByTaskId,
+        // Id → задача-виток (ревью/проверка/финал): нужно для транзитивных целей ExtractTargetKeys.
+        Dictionary<string, TaskItem> VerdictById,
+        // Доработки без привязки к шагам (UnlinkedReworks учёта: ни stepRef, ни reviewOf-связи).
+        int UnlinkedReworks);
+
+    // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал.
+    internal static ChainIndex IndexChains(List<TaskItem> steps, List<TaskItem> verdictTasks)
     {
-        // Закрытые мержи (Done с датой) — отсечки «в master»; порядок по моменту закрытия.
-        var closedMerges = (merges ?? [])
-            .Where(m => m.Status == TaskItemStatus.Done && m.CompletedAt is not null)
-            .OrderBy(m => m.CompletedAt!.Value)
-            .ToList();
-        // Б7: чаты шага/витка наружу только если в снимке сессий владельца (fail-closed).
-        var sessionById = sessions is null
-            ? new Dictionary<string, FeatureIndexSession>()
-            : sessions.ToDictionary(s => s.Id);
-        string? LiveChat(string? chatId) =>
-            chatId is not null && sessionById.ContainsKey(chatId) ? chatId : null;
-
-        // ─── План: последний план вместо объединения (разрез «одна правда о проценте», B3) ─────
-        // Источник шагов — планы, не снятые (withdrawn). Если у двух планов пересекаются ключи
-        // шагов, берётся более поздний по (CreatedAt, Id), ранний вычёркивается ЦЕЛИКОМ; планы
-        // без пересечений (например, по линиям бэк/фронт) объединяются. Это отменяет объединение
-        // всех планов (шов 63a69b77 п.2а): замещённый план больше не раздувает знаменатель.
-        // Проекция не зависит от того, успел ли TaskManager.Create снять ранний план.
-        var countedPlans = ActivePlans(plan);
-        var planned = new Dictionary<string, PlannedStep>(StepKeyComparer);
-        var plannedOrder = new List<string>();
-        foreach (var p in countedPlans)
-            foreach (var ps in p.PlanSteps ?? [])
-            {
-                if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
-                // Ревью/проверка/финал (kind != step) в знаменатель не идут
-                if (!ps.IsStep) continue;
-                // Ключ шага плана тримится так же, как KeyOf (замечание 1 ревью Глеба): без трима
-                // «Б1 » в плане и «Б1» в шаге — два разных ключа, шаг считается дважды.
-                var key = ps.StepRef.Trim();
-                if (planned.TryAdd(key, ps)) plannedOrder.Add(key);
-            }
-        // Маппинг состояния плана (строки контракта не меняются): считается по тому же набору
-        // countedPlans, что и шаги, — снятые и замещённые планы не держат фичу в partial.
-        // pending — таких задач нет, или у всех planSteps пуст; partial — списки есть только у
-        // части планов; cut — у всех; done выводится ниже, когда план разобран и всё принято.
-        int plansWithSteps = countedPlans.Count(p => p.PlanSteps is not null && p.PlanSteps.Count > 0);
-        string planState = plansWithSteps == 0 ? PlanPending
-            : plansWithSteps < countedPlans.Count ? PlanPartial : PlanCut;
-
-        // ─── Шаги и доработки ───────────────────────────────────────────────────────────────
         var stepTasks = steps.Where(t => t.Role == TaskRoles.Step).ToList();
         var reworks = steps.Where(t => t.Role == TaskRoles.Rework).ToList();
 
@@ -222,25 +194,85 @@ internal static class FeatureStepAccounting
                 ks.Add(key);
             }
 
-        // Цели вердикта: шаги из ReviewOf плюс — транзитивно — цели ВОЗВРАЩЁННОГО прошлого витка,
-        // на который ссылается ReviewOf (принятый финал второго круга принимает и то, что вернул
-        // первый, а закрыла доработка). Принятый/снятый прошлый виток не раскрывается: его цели
-        // уже решены им самим.
-        HashSet<string> TargetKeys(TaskItem verdict, HashSet<string> path)
+        return new ChainIndex(groups, membersByKey, keysByTaskId, verdictById, unlinked);
+    }
+
+    // Цели вердикта: шаги из ReviewOf плюс — транзитивно — цели ВОЗВРАЩЁННОГО прошлого витка,
+    // на который ссылается ReviewOf (принятый финал второго круга принимает и то, что вернул
+    // первый, а закрыла доработка). Принятый/снятый прошлый виток не раскрывается: его цели
+    // уже решены им самим. Одна функция для учёта (roundTasksByKey) и для снятия хвоста
+    // («все ли цели витка уходят в хвост») — иначе у «целей витка» было бы два определения.
+    internal static HashSet<string> ExtractTargetKeys(TaskItem verdict, ChainIndex index, HashSet<string> path)
+    {
+        var result = new HashSet<string>(StepKeyComparer);
+        foreach (var id in verdict.ReviewOf ?? [])
         {
-            var result = new HashSet<string>(StepKeyComparer);
-            foreach (var id in verdict.ReviewOf ?? [])
+            if (index.KeysByTaskId.TryGetValue(id, out var ks)) result.UnionWith(ks);
+            else if (index.VerdictById.TryGetValue(id, out var prev)
+                && prev.Verification?.Verdict == TaskVerdicts.Returned && path.Add(prev.Id))
             {
-                if (keysByTaskId.TryGetValue(id, out var ks)) result.UnionWith(ks);
-                else if (verdictById.TryGetValue(id, out var prev)
-                    && prev.Verification?.Verdict == TaskVerdicts.Returned && path.Add(prev.Id))
-                {
-                    result.UnionWith(TargetKeys(prev, path));
-                    path.Remove(prev.Id);
-                }
+                result.UnionWith(ExtractTargetKeys(prev, index, path));
+                path.Remove(prev.Id);
             }
-            return result;
         }
+        return result;
+    }
+
+    // steps — задачи role=step/rework; verdictTasks — ревью/проверки/финал; plan — задачи role=plan.
+    internal static Result Build(
+        List<TaskItem> steps, List<TaskItem> verdictTasks, List<TaskItem> plan, DateTime nowUtc,
+        IReadOnlyCollection<FeatureIndexSession>? sessions,
+        IReadOnlyList<TaskItem>? merges = null,
+        int? baselineTotal = null)
+    {
+        // Закрытые мержи (Done с датой) — отсечки «в master»; порядок по моменту закрытия.
+        var closedMerges = (merges ?? [])
+            .Where(m => m.Status == TaskItemStatus.Done && m.CompletedAt is not null)
+            .OrderBy(m => m.CompletedAt!.Value)
+            .ToList();
+        // Б7: чаты шага/витка наружу только если в снимке сессий владельца (fail-closed).
+        var sessionById = sessions is null
+            ? new Dictionary<string, FeatureIndexSession>()
+            : sessions.ToDictionary(s => s.Id);
+        string? LiveChat(string? chatId) =>
+            chatId is not null && sessionById.ContainsKey(chatId) ? chatId : null;
+
+        // ─── План: последний план вместо объединения (разрез «одна правда о проценте», B3) ─────
+        // Источник шагов — планы, не снятые (withdrawn). Если у двух планов пересекаются ключи
+        // шагов, берётся более поздний по (CreatedAt, Id), ранний вычёркивается ЦЕЛИКОМ; планы
+        // без пересечений (например, по линиям бэк/фронт) объединяются. Это отменяет объединение
+        // всех планов (шов 63a69b77 п.2а): замещённый план больше не раздувает знаменатель.
+        // Проекция не зависит от того, успел ли TaskManager.Create снять ранний план.
+        var countedPlans = ActivePlans(plan);
+        var planned = new Dictionary<string, PlannedStep>(StepKeyComparer);
+        var plannedOrder = new List<string>();
+        foreach (var p in countedPlans)
+            foreach (var ps in p.PlanSteps ?? [])
+            {
+                if (ps is null || string.IsNullOrWhiteSpace(ps.StepRef)) continue;
+                // Ревью/проверка/финал (kind != step) в знаменатель не идут
+                if (!ps.IsStep) continue;
+                // Ключ шага плана тримится так же, как KeyOf (замечание 1 ревью Глеба): без трима
+                // «Б1 » в плане и «Б1» в шаге — два разных ключа, шаг считается дважды.
+                var key = ps.StepRef.Trim();
+                if (planned.TryAdd(key, ps)) plannedOrder.Add(key);
+            }
+        // Маппинг состояния плана (строки контракта не меняются): считается по тому же набору
+        // countedPlans, что и шаги, — снятые и замещённые планы не держат фичу в partial.
+        // pending — таких задач нет, или у всех planSteps пуст; partial — списки есть только у
+        // части планов; cut — у всех; done выводится ниже, когда план разобран и всё принято.
+        int plansWithSteps = countedPlans.Count(p => p.PlanSteps is not null && p.PlanSteps.Count > 0);
+        string planState = plansWithSteps == 0 ? PlanPending
+            : plansWithSteps < countedPlans.Count ? PlanPartial : PlanCut;
+
+        // ─── Шаги и доработки ───────────────────────────────────────────────────────────────
+        // Собрание цепочек — общий IndexChains: тот же индекс читает TaskManager.WithdrawMergeTail,
+        // когда решает, все ли цели открытого витка уходят в хвост. Здесь только выводы из индекса:
+        // витки, корзины, линии. Цели вердикта — общий ExtractTargetKeys.
+        var index = IndexChains(steps, verdictTasks);
+        var groups = index.Groups;
+        var membersByKey = index.MembersByKey;
+        int unlinked = index.UnlinkedReworks;
 
         // Витки по цепочкам. Возврат по нескольким целям возвращает только шаги, у которых заведена
         // доработка с тем же stepRef; остальным цели вердикт «вернули» не ставится и витком не
@@ -248,7 +280,7 @@ internal static class FeatureStepAccounting
         var roundTasksByKey = new Dictionary<string, List<TaskItem>>(StepKeyComparer);
         foreach (var v in verdictTasks)
         {
-            var targets = TargetKeys(v, [v.Id]);
+            var targets = ExtractTargetKeys(v, index, [v.Id]);
             // Фильтр — только у финала и проверки: ревью на несколько шагов возвращает их все (как раньше).
             bool filter = v.Verification?.Verdict == TaskVerdicts.Returned && targets.Count > 1
                 && v.Role is TaskRoles.Final or TaskRoles.Qa;
@@ -459,7 +491,8 @@ internal static class FeatureStepAccounting
         }
 
         // Шаги плана без задачи — корзина notCreated (линия — из плана).
-        var notCreatedKeys = plannedOrder.Where(k => !groupIndex.ContainsKey(k)).ToList();
+        // Ключа нет среди цепочек (ни одной задачи-шага с таким stepRef) — шаг плана без карточки.
+        var notCreatedKeys = plannedOrder.Where(k => !index.MembersByKey.ContainsKey(k)).ToList();
         foreach (var k in notCreatedKeys)
         {
             bucketByKey[k] = NotCreated;

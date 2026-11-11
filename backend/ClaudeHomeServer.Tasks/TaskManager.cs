@@ -264,7 +264,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 To = task.Status.ToString(),
             });
 
-        // verdict: смена вердикта.
+        // verdict: смена вердикта. Origin — тот же признак, что на задаче (merge_tail бывает только
+        // у снятия закрытого хвоста кнопкой мержа): журнал и задача об одном решении молчать не
+        // могут, иначе «смержено без ревью» в журнале не отличить от снятого по существу (§8.3).
         if (before.Verdict != task.Verification?.Verdict)
             AppendJournal(ownerId, featureId, new FeatureJournalEntry
             {
@@ -272,6 +274,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 Kind = "verdict",
                 TaskId = task.Id,
                 Verdict = task.Verification?.Verdict,
+                Origin = task.Verification?.Origin,
             });
 
         // dropped: DroppedByHumanAt задан (снятие человеком).
@@ -1348,6 +1351,104 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return task;
     }
 
+    // Лок на featureId для снятия закрытого хвоста (FS-XT1): два нажатия «Мерж» сериализуются —
+    // второе видит уже снятые вердикты и не пишет ни повторных записей, ни повторного журнала.
+    // Отдельный от _planLocks: тот держит пересечение планов, здесь — состав фичи при мерже.
+    private readonly ConcurrentDictionary<string, object> _mergeTailLocks = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Снять закрытый хвост шагов при мерже (разрез §8.3; путь 6 инварианта §8.4): единственный
+    /// серверный путь вердикта с Origin = merge_tail — ни REST, ни MCP его не ставят
+    /// (StripOriginFromBody). Ключи — только из учёта (FeatureRun.ClosedTailKeys ←
+    /// FeatureStepAccounting.Result.ClosedTailKeys): своего предиката «что такое хвост» здесь нет,
+    /// как и своего состава цепочек — общий индекс FeatureStepAccounting.IndexChains.
+    /// Под одним локом на featureId:
+    /// - голове цепочки (role=step) каждого ключа — вердикт withdrawn с Notes «снят при мерже»,
+    ///   Origin = merge_tail, PersonaId = null (снял человек по кнопке мержа);
+    /// - незакрытым виткам ревью/проверки/финала, ВСЕ цели которых уходят в хвост, — тот же
+    ///   вердикт, и они закрываются (вердикт бывает только у закрытой задачи; образец — снятие
+    ///   плана WithdrawPlan). Хоть одна цель живёт вне хвоста — виток живой, его не трогаем.
+    /// Идемпотентен: задача с уже существующим вердиктом не переписывается — повторное нажатие
+    /// не даёт второй волны записей. Незакрытую задачу-шаг не трогаем: вердикт на открытом шаге
+    /// незаконен, снять открытый шаг — другой путь (DroppedByHumanAt, решение человека отдельно).
+    /// Возвращает фактически снятые задачи — по ним вызывающий вещает task_changed. Пусто —
+    /// снимать нечего (хвоста нет или его сняли раньше).
+    /// </summary>
+    public IReadOnlyList<TaskItem> WithdrawMergeTail(string featureId, IReadOnlyCollection<string> keys, string ownerId)
+    {
+        if (keys.Count == 0) return [];
+        var result = new List<TaskItem>();
+        lock (_mergeTailLocks.GetOrAdd(featureId, _ => new object()))
+        {
+            var now = DateTime.UtcNow;
+            // Ключи читаются под локом из текущего состояния стора, а не из ответа, который видел
+            // вызывающий: первый вызов мог снять их раньше, удалённая задача ключа не даст.
+            var wanted = new HashSet<string>(keys, FeatureStepAccounting.StepKeyComparer);
+
+            var featureTasks = _tasks.Values
+                .Where(t => t.OwnerId == ownerId
+                    && string.Equals(t.FeatureId, featureId, StringComparison.Ordinal))
+                .ToList();
+            var index = FeatureStepAccounting.IndexChains(
+                featureTasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList(),
+                featureTasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList());
+
+            foreach (var key in wanted)
+            {
+                if (!index.MembersByKey.TryGetValue(key, out var members)) continue;
+                // Голова цепочки — та же, что в учёте: первый role=step по старту задачи.
+                var head = members.OrderBy(FeatureProjector.TaskStart)
+                    .FirstOrDefault(t => t.Role == TaskRoles.Step);
+                if (head is null || head.Status != TaskItemStatus.Done) continue;
+                if (WithdrawMergeTailVerdict(head, now)) result.Add(head);
+            }
+
+            foreach (var v in index.VerdictById.Values)
+            {
+                if (v.Status == TaskItemStatus.Done) continue;         // закрытый виток решил сам
+                if (v.Verification?.Verdict is not null) continue;      // вердикт уже поставлен
+                if (v.ReviewOf is not { Count: > 0 }) continue;         // без связи — не виток цепочки
+                var targets = FeatureStepAccounting.ExtractTargetKeys(v, index, [v.Id]);
+                // Снимается весь виток или не снимается вовсе: хоть одна цель живёт вне хвоста —
+                // ревью зван и на неё, снятием хвоста его «мёртвым» не сделать.
+                if (targets.Count == 0 || !targets.All(k => wanted.Contains(k))) continue;
+                if (WithdrawMergeTailVerdict(v, now)) result.Add(v);
+            }
+        }
+        if (result.Count > 0) ScheduleSave();
+        return result;
+    }
+
+    // Вердикт «снят при мерже» (Origin = merge_tail) на задаче: только если своего вердикта ещё
+    // нет — иначе это уже решённый шаг/виток, и его причину затирать нельзя (идемпотентность
+    // повторного нажатия «Мерж»). Открытый виток закрывается вместе с вердиктом: вердикт у
+    // незакрытой задачи незаконен (инвариант Create/Update), тот же порядок, что у снятия плана
+    // (WithdrawPlan). Переходы — общий WriteJournalTransitions: status у закрытого витка и
+    // verdict с Origin у обеих снятых задач.
+    private bool WithdrawMergeTailVerdict(TaskItem t, DateTime now)
+    {
+        if (t.Verification?.Verdict is not null) return false;
+        var before = Capture(t);
+        if (t.Status != TaskItemStatus.Done)
+        {
+            t.Status = TaskItemStatus.Done;
+            t.CompletedAt = now;
+        }
+        t.Verification = new TaskVerification
+        {
+            VerifiedAt = now,
+            Verdict = TaskVerdicts.Withdrawn,
+            Notes = "снят при мерже",
+            Origin = TaskVerificationOrigins.MergeTail,
+            // Снял человек по кнопке мержа: персоны у снятия нет (тот же смысл, что PersonaId = null
+            // на человеческом пути Update).
+            PersonaId = null,
+        };
+        t.UpdatedAt = now;
+        WriteJournalTransitions(t, before);
+        return true;
+    }
+
     // Записывает результат предгейта шага: sha — коммит, по которому гнали проверки; redKey —
     // отпечаток причины красного (имена красных проверок). На втором красном подряд по той же
     // причине поднимает PregateEscalated. null — задачи нет
@@ -1639,6 +1740,31 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         {
             var task = _tasks.GetValueOrDefault(id);
             if (task is null || task.AwaitingHumanSince is null) return null;
+            var before = Capture(task);
+            task.AwaitingHumanSince = null;
+            task.AwaitingHumanReason = null;
+            task.UpdatedAt = DateTime.UtcNow;
+            WriteJournalTransitions(task, before);
+            ScheduleSave();
+            return task;
+        }
+    }
+
+    // Снятие ожидания ответом человека (FS-E3b, подписчик AwaitingHumanAnswerSubscriber):
+    // снимает, только если ожидание поставлено НЕ ПОЗЖЕ ответа (AwaitingHumanSince <= answeredAt).
+    // Гонка «ответ человека / report_up(blocker)» на одну задачу: ожидание, поставленное
+    // после ответа, создано не этим ответом — устаревшее событие его не снимает. Решение
+    // (сравнение с Since) и запись — под тем же _awaitLock, что set и обычный клир: один
+    // writer пары, поэтому между проверкой и записью никто не вставит свежий set.
+    // Ожидания нет или оно новее ответа — null, без мутации и без журнала. Остальное —
+    // ровно как у ClearAwaitingHuman(id): тот же Capture, тот же waiting_cleared в журнал.
+    public TaskItem? ClearAwaitingHuman(string id, DateTime answeredAt)
+    {
+        lock (_awaitLock)
+        {
+            var task = _tasks.GetValueOrDefault(id);
+            if (task is null || task.AwaitingHumanSince is null) return null;
+            if (task.AwaitingHumanSince > answeredAt) return null;
             var before = Capture(task);
             task.AwaitingHumanSince = null;
             task.AwaitingHumanReason = null;

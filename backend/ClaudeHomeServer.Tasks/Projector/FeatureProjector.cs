@@ -651,6 +651,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             Closed = closed,
             Summary = summary,
             PostMergeTails = postMergeTails,
+            // Ключи закрытого хвоста — из того же прохода учёта (FeatureStepAccounting), что и
+            // корзины: второй предикат «что такое хвост» не заводится, список только переносится.
+            ClosedTailKeys = accounting.ClosedTailKeys,
             Tracker = tracker,
         };
     }
@@ -975,6 +978,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         Closed = run.Closed,
         Summary = run.Summary,
         PostMergeTails = run.PostMergeTails,
+        // Диалог мержа показывает хвост поимённо и отправляет решение по этим ключам: список
+        // обязан пережить облегчение (тот же смысл, что с PostMergeTails).
+        ClosedTailKeys = run.ClosedTailKeys,
         Tracker = run.Tracker,
     };
 

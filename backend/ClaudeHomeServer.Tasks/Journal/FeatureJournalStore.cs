@@ -16,8 +16,9 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 //   кривой id («..», слэш) не доходит до диска — отказ без исключения наружу.
 // - Потолок 20 000 строк: при переполнении записи kind=turn больше не пишутся,
 //   переходы (created/started/stopped/stop_cleared/stop_expired/waiting/waiting_cleared/
-//   device_wait/device_wait_cleared/status/verdict/dropped) и записи оценки (estimate_set)
-//   пишутся всегда — они редки (по числу мутаций и записей оценки, не по числу ходов);
+//   device_wait/device_wait_cleared/status/verdict/dropped), записи оценки (estimate_set)
+//   и решение о хвосте (merge_with_tail) пишутся всегда — они редки (по числу мутаций,
+//   записей оценки и мержей с хвостом, не по числу ходов);
 //   чтение возвращает truncated=true (lines >= MaxLines).
 // - Дедуп строк turn по (sessionId, turnSeq) при чтении; у turnSeq<=0 — по startedAt,
 //   а если startedAt==null — по endedAt, затем по outcome (уникальность хода).
@@ -55,9 +56,13 @@ public sealed record FeatureJournalEntry
     /// <summary>
     /// Вид события: created | started | stopped | stop_cleared | stop_expired | waiting |
     /// waiting_cleared | device_wait | device_wait_cleared | status | verdict | dropped | turn |
-    /// estimate_set.
+    /// estimate_set | merge_with_tail.
     /// stop_expired — смена причины стопа на терминальную без движения метки (W4-HOLD-J);
     /// таймлайн его не читает, это запись причины для журнала.
+    /// merge_with_tail — решение человека «мержить, закрытый хвост оставить» (FS-XT1, разрез §8.3):
+    /// число оставленных шагов в <see cref="TailSteps"/>. Редка (по числу мержей с хвостом):
+    /// при переполнении пишется, как переход; таймлайн её не читает. Снятие хвоста отдельной
+    /// записи не требует — оно видно по verdict с <see cref="Origin"/> = merge_tail на каждом шаге.
     /// estimate_set — запись оценки оркестратора (FS-O2a): числа оценки в <see cref="ExpectedSteps"/>/
     /// <see cref="EtaMinutes"/>, снимок учёта фичи — <see cref="Stage"/>/<see cref="PlanState"/>/
     /// <see cref="Accepted"/>/<see cref="Total"/> (из контекста вызывающего, FS-O2b). Редка (по числу
@@ -100,6 +105,23 @@ public sealed record FeatureJournalEntry
     /// <summary>Вердикт (для verdict: accepted / accepted_with_remarks / returned / withdrawn).</summary>
     [JsonPropertyName("verdict")]
     public string? Verdict { get; init; }
+
+    /// <summary>
+    /// Признак происхождения вердикта (для verdict): значение из TaskVerificationOrigins
+    /// (merge_tail — закрытый хвост снят кнопкой мержа, TaskManager.WithdrawMergeTail). Пусто —
+    /// вердикт поставлен обычным путём (ревью/проверка/финал через MCP или REST). Тот же словарь,
+    /// что у TaskVerification.Origin: журнал и задача об одном и том же решении молчать не могут.
+    /// Аддитивное nullable-поле формата v:1: старые строки читаются как есть.
+    /// </summary>
+    [JsonPropertyName("origin")]
+    public string? Origin { get; init; }
+
+    /// <summary>
+    /// Число шагов закрытого хвоста (для merge_with_tail, FS-XT1): решение «мержить, хвост
+    /// оставить» видно по тому, сколько шагов оставили непринятыми. Аддитивное nullable-поле v:1.
+    /// </summary>
+    [JsonPropertyName("tailSteps")]
+    public int? TailSteps { get; init; }
 
     /// <summary>Id сессии (для turn: чат, в котором идёт ход).</summary>
     [JsonPropertyName("sessionId")]

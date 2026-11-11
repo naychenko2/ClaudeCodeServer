@@ -2652,6 +2652,220 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mergeBody.Should().Contain("Фича не найдена");
     }
 
+    // ─── FS-XT1 (разрез §8.3): закрытый хвост при мерже — тело { tail }, снятие с Origin ──────
+    // Закрытый хвост — сданные, но не принятые шаги (по учёту: Review/pending и Work/returned).
+    // Мерж с непустым хвостом без явного решения не идёт (409 tail_decision_required с числом
+    // шагов); «withdraw» снимает хвост одним методом стора (Origin = merge_tail), «keep» пишет
+    // решение в журнал (merge_with_tail). Ключи хвоста — только из учёта (run.ClosedTailKeys).
+
+    // Фикстура «мерж с хвостом»: worktree + принятый финал + один сданный непринятый шаг
+    // (role=step, Done, витков нет → Review/pending → закрытый хвост по учёту) + персона DevOps.
+    private async Task<(string EpicId, string StepId, string ProjectId, Persona Persona)>
+        CreateMergeTailFixtureAsync(string tag, string stepRef = "Ш1")
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var step = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг " + stepRef, featureId = epicId, role = "step", stepRef, status = "done",
+        });
+        return (epicId, step.GetProperty("id").GetString()!, projectId, CreateDevopsPersona(tag));
+    }
+
+    // Тело merge с решением о хвосте: application/json обязателен, иначе [FromBody] тела не видит.
+    private static StringContent MergeTailBody(string tail) =>
+        new($"{{\"tail\":\"{tail}\"}}", System.Text.Encoding.UTF8, "application/json");
+
+    private FeatureJournalStore Journal => _factory.Services.GetRequiredService<FeatureJournalStore>();
+    private FeatureProjector Features => _factory.Services.GetRequiredService<FeatureProjector>();
+    private TaskManager Tasks => _factory.Services.GetRequiredService<TaskManager>();
+
+    // Хвост есть, тела нет → 409 tail_decision_required с числом шагов; мерж не начинается.
+    // Мутация: убрать гард решения в MergeFeature → 200 вместо 409 → тест красный.
+    [Fact]
+    public async Task MergeFeature_ХвостБезТела_409TailDecisionRequired()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tail409");
+        Features.Project(epicId, OwnerId)!.StepProgress.ClosedTail.Should().Be(1, "фикстура: сданный непринятый шаг");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("code").GetString().Should().Be("tail_decision_required");
+            body.GetProperty("tailSteps").GetInt32().Should().Be(1, "409 несёт число шагов хвоста");
+            body.GetProperty("error").GetString().Should().Contain("хвост");
+
+            Features.Project(epicId, OwnerId)!.Merge.Should().BeNull("мерж не начался");
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("шаг не тронут");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // «withdraw»: шаги хвоста сняты с Origin = merge_tail, знаменатель сузился, журнал verdict
+    // с Origin записан, задача мержа заведена. Мутации: снять Origin/Notes в WithdrawMergeTail,
+    // или снять шаг циклом Update из контроллера без Origin → красный (Origin null).
+    [Fact]
+    public async Task MergeFeature_ХвостWithdraw_СнимаетШагиИЗаводитМерж()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailwithdraw");
+        var before = Features.Project(epicId, OwnerId)!.StepProgress;
+        before.Total.Should().Be(1);
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var task = await response.Content.ReadFromJsonAsync<JsonElement>();
+            task.GetProperty("role").GetString().Should().Be("merge");
+
+            var stored = Tasks.GetById(stepId)!;
+            stored.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+            stored.Verification!.Origin.Should().Be(TaskVerificationOrigins.MergeTail);
+            stored.Verification!.Notes.Should().Be("снят при мерже");
+            stored.Verification!.PersonaId.Should().BeNull("снял человек по кнопке мержа, не персона");
+
+            var after = Features.Project(epicId, OwnerId)!.StepProgress;
+            after.Total.Should().Be(0, "снятый шаг выходит из знаменателя");
+            after.Withdrawn.Should().Be(1);
+            after.ClosedTail.Should().Be(0, "хвоста больше нет");
+            after.WithdrawnAtMerge.Should().Be(1, "доля «смержено без ревью» считается отдельно");
+
+            // Принятый финал сам пишет verdict-запись (она без Origin): ищем именно снятие хвоста.
+            var withdrawnEntries = Journal.Read(OwnerId, epicId).Entries
+                .Where(e => e.Kind == "verdict" && e.Origin == TaskVerificationOrigins.MergeTail).ToList();
+            withdrawnEntries.Should().ContainSingle()
+                .Which.TaskId.Should().Be(stepId, "журнал verdict несёт признак происхождения по снятому шагу");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // «keep»: шаги не тронуты, знаменатель тот же, в журнале ровно одна запись merge_with_tail
+    // с числом оставленных шагов. Мутация: не писать merge_with_tail → второй assertion красный.
+    [Fact]
+    public async Task MergeFeature_ХвостKeep_ШагиНеТронутыЗаписьЖурналаЕсть()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailkeep");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("keep"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("решение «оставить» вердикта не ставит");
+            var after = Features.Project(epicId, OwnerId)!.StepProgress;
+            after.Total.Should().Be(1, "знаменатель не меняется");
+            after.ClosedTail.Should().Be(1);
+
+            var entries = Journal.Read(OwnerId, epicId).Entries;
+            entries.Where(e => e.Kind == "verdict" && e.Origin is not null)
+                .Should().BeEmpty("решение «оставить» не снимает шагов");
+            entries.Should().ContainSingle(e => e.Kind == "merge_with_tail")
+                .Which.TailSteps.Should().Be(1, "решение «оставить» видно по числу оставленных шагов");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // Гонка: два параллельных «Мерж» с «withdraw» → одна задача мержа и ОДНА запись снятия.
+    // Снятие под локом TaskManager, второй вызов видит уже снятый вердикт (идемпотентность).
+    // Мутация: снять лок в WithdrawMergeTail → две волны вердиктов и журнала → красный.
+    [Fact]
+    public async Task MergeFeature_МержДважды_Параллельно_ХвостСнятОдинРаз()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailrace");
+
+        try
+        {
+            var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ =>
+                _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"))));
+
+            results.Should().OnlyContain(r => r.StatusCode == HttpStatusCode.OK);
+            var ids = new HashSet<string>();
+            foreach (var r in results)
+            {
+                var t = await r.Content.ReadFromJsonAsync<JsonElement>();
+                ids.Add(t.GetProperty("id").GetString()!);
+            }
+            ids.Should().HaveCount(1, "дубля задачи мержа нет");
+
+            Journal.Read(OwnerId, epicId).Entries
+                .Where(e => e.Kind == "verdict" && e.Origin == TaskVerificationOrigins.MergeTail)
+                .Should().ContainSingle("хвост снят один раз");
+            Features.Project(epicId, OwnerId)!.StepProgress.WithdrawnAtMerge.Should().Be(1);
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // Виток ревью, нацеленный на живую работу, снятием хвоста не закрывается: он зван и на
+    // живой шаг. Фикстура: ШД — в закрытом хвосте; ШЦ сдан, но его цепочку держит живой сам
+    // виток; ШБ открыт. Снимается только ШД. Мутация «снимать любой открытый виток фичи» →
+    // ревью тоже получил бы withdrawn → тест красный.
+    [Fact]
+    public async Task MergeFeature_Withdraw_ВитокСЖивойЦельюНеСнимается()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var stepTail = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШД", featureId = epicId, role = "step", stepRef = "ШД", status = "done" });
+        var stepLive = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШБ", featureId = epicId, role = "step", stepRef = "ШБ" });
+        var stepClosed = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШЦ", featureId = epicId, role = "step", stepRef = "ШЦ", status = "done" });
+        var review = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "ревью ШЦ и ШБ", featureId = epicId, role = "review",
+            reviewOf = new[] { stepClosed.GetProperty("id").GetString()!, stepLive.GetProperty("id").GetString()! },
+        });
+        var persona = CreateDevopsPersona("DevOps-tailround");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            Tasks.GetById(stepTail.GetProperty("id").GetString()!)!.Verification!.Verdict
+                .Should().Be(TaskVerdicts.Withdrawn, "закрытый хвост снимается");
+            Tasks.GetById(review.GetProperty("id").GetString()!)!.Verification
+                .Should().BeNull("виток с живой целью остаётся");
+            Tasks.GetById(stepClosed.GetProperty("id").GetString()!)!.Verification
+                .Should().BeNull("его цепочку держит живой открытый виток — это не хвост");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // §2.3 разбора: сторож делегированного хода на мерже держится только на атрибуте, а теста,
+    // читающего его, не было. Мутация «снять [DenyOnDelegatedTurn] с MergeFeature» → null →
+    // красный. Настройки не копируются в тест: сверяется сам атрибут на методе (образец —
+    // SessionManagerTestBase.ExecuteFilter).
+    [Fact]
+    public void MergeFeature_СторожАтрибутаDenyOnDelegatedTurn()
+    {
+        var attr = (ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute?)Attribute.GetCustomAttribute(
+            typeof(TasksController).GetMethod(nameof(TasksController.MergeFeature))!,
+            typeof(ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute));
+
+        attr.Should().NotBeNull("мерж фичи — действие человека: делегированному ходу отказ");
+        attr!.AllowInTeamImplement.Should().BeTrue("штаб волен влить фичу в пределах квоты");
+        attr.AllowedDepth.Should().Be(McpEndpoints.RunExecutorAllowedDepth,
+            "тот же порог глубины, что у запуска исполнителя");
+    }
+
     // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{id}/summary) ────────────────────────
     // Контракт ручки: 404 — тело как у GET; 502 — отказ модели с причиной; повторный вызов
     // с тем же отпечатком — из кэша (cached: true). Поведение сервиса (single-flight, LRU,
@@ -5613,6 +5827,28 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
         run.StepProgress.Withdrawn.Should().Be(1, "снятие по вердикту считается как обычно");
         run.StepProgress.WithdrawnAtMerge.Should().Be(0, "подделка merge_tail в счётчик не попала");
+    }
+
+    // FS-XT1, та же норма на двери PUT: Origin вердикта затирается вместе с VerifiedAt/PersonaId
+    // (их ставит сервер). Мутация: убрать StripOriginFromBody в TaskManager.Update (и начать
+    // копировать Origin в TasksController) → подделка дожила бы в сторе → тест красный.
+    [Fact]
+    public async Task UpdateOriginИзТела_Затирается()
+    {
+        var task = await CreateTaskAsync(new { title = "задача с поддельным origin" });
+        var id = task.GetProperty("id").GetString()!;
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new
+        {
+            status = "done",
+            verification = new { verdict = "accepted", notes = "проверено", origin = "merge_tail" },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = Tasks.GetById(id)!;
+        stored.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted, "вердикт человеческой двери остаётся");
+        stored.Verification!.Origin.Should().BeNull(
+            "Origin ставит только серверный WithdrawMergeTail, ни одна дверь его из тела не принимает");
     }
 
 }

@@ -649,6 +649,10 @@ public class TasksController(
                     // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
                     Verdict = req.Verification.Verdict,
                     ReturnReason = req.Verification.ReturnReason, // санирует TaskManager
+                    // Origin из тела не берётся нигде: его ставит только серверный путь снятия
+                    // закрытого хвоста (TaskManager.WithdrawMergeTail). Здесь поле не копируется —
+                    // тот же порядок, что у VerifiedAt/PersonaId; на MCP-двере его снимает
+                    // TaskManager.StripOriginFromBody.
                 },
             };
         }
@@ -1508,16 +1512,29 @@ public class TasksController(
         return 100;
     }
 
+    // Тело POST merge (FS-XT1): решение о закрытом хвосте. "withdraw" — снять хвост и мержить,
+    // "keep" — мержить, оставив сданные непринятые шаги. null или другое значение = решения нет
+    // (при непустом хвосте — 409). При пустом хвосте тело не нужно вовсе: старый вызов без тела
+    // работает как раньше.
+    public record MergeFeatureRequest(string? Tail);
+
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
     // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
     // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик, тело { error: "Фича не найдена" }),
     // 409 (финал не принят, уже смержено/закрыто, worktree не на диске, 0 или >1 исполнителей DevOps).
     // Идемпотентна и атомарна: открытая merge-задача → вернуть её (создание сериализовано по featureId),
     // если todo — запустить, вторую не заводить.
+    // FS-XT1 (разрез §8.3): закрытый хвост — сданные, но не принятые шаги — молча не мержится:
+    // при непустом хвосте тело { tail: "withdraw" | "keep" } обязательно, иначе 409
+    // tail_decision_required с числом шагов. «withdraw» снимает хвост одним методом стора
+    // (TaskManager.WithdrawMergeTail, Origin = merge_tail), «keep» пишет в журнал merge_with_tail
+    // с числом оставленных шагов. Порядок: гарды → gate → свежий снимок → решение о хвосте →
+    // задача мержа. Создание задачи мержа падает (400) — снятие остаётся: решение о составе
+    // фичи не зависит от того, запустился ли Марк.
     [HttpPost("features/{featureId}/merge")]
     [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
         AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
-    public async Task<IActionResult> MergeFeature(string featureId)
+    public async Task<IActionResult> MergeFeature(string featureId, [FromBody] MergeFeatureRequest? body = null)
     {
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
@@ -1612,6 +1629,48 @@ public class TasksController(
                 // Ответ — хранимая задача идемпотентной ветки: та же маска чужих приватных чатов
                 // в копии, что во всех write-ответах (S2d-4i).
                 return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(existing), sessions, projects, ChatAudience.Viewer(UserId)));
+            }
+
+            // Решение о закрытом хвосте (§8.3): хвост не пуст и решения нет → 409 с числом шагов,
+            // мерж без явного выбора не идёт. Ключи — из свежего снимка после gate (тот же учёт,
+            // что показал их фронту): снимок, который видел фронт, под локом не читается.
+            // При пустом хвосте решения не требуют: тело игнорируется, вызов без тела работает как раньше.
+            var tailKeys = freshRun?.ClosedTailKeys ?? [];
+            var tail = body?.Tail?.Trim();
+            if (tailKeys.Count > 0 && tail is not ("withdraw" or "keep"))
+                return Conflict(new
+                {
+                    error = $"Нужно решение о закрытом хвосте: {tailKeys.Count} сданных непринятых шагов. "
+                        + "tail: \"withdraw\" — снять и мержить, \"keep\" — мержить с хвостом.",
+                    code = "tail_decision_required",
+                    tailSteps = tailKeys.Count,
+                });
+
+            if (tailKeys.Count > 0 && tail == "withdraw")
+            {
+                var withdrawn = tasks.WithdrawMergeTail(featureId, tailKeys, UserId);
+                // События по каждой снятой задаче и по эпику: его процент и лента шагов изменились,
+                // страница фичи обязана пересчитаться, как на любой мутации (образец — SetFeatureHold).
+                foreach (var t in withdrawn)
+                    await broadcaster.ToTaskBoard(UserId, t.ProjectId,
+                        new TaskChangedMessage("updated", t), sessions, projects);
+                if (withdrawn.Count > 0)
+                    await broadcaster.ToTaskBoard(UserId, run.Epic.ProjectId,
+                        new TaskChangedMessage("updated", run.Epic), sessions, projects);
+            }
+            else if (tailKeys.Count > 0)
+            {
+                // «keep» — тоже решение, и оно должно быть видно: одна запись журнала с числом
+                // оставленных шагов. Снятие отдельной записи не требует: оно видно по verdict
+                // с Origin = merge_tail на каждом снятом шаге. Сбой журнала наружу не летит
+                // (глотаёт сам стор), как и остальной журнал.
+                journal?.Append(UserId, featureId, new FeatureJournalEntry
+                {
+                    At = DateTime.UtcNow,
+                    Kind = "merge_with_tail",
+                    TaskId = run.Epic.Id,
+                    TailSteps = tailKeys.Count,
+                });
             }
 
             // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.

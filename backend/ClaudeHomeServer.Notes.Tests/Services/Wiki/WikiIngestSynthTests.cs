@@ -226,8 +226,7 @@ public class WikiIngestSynthTests : IDisposable
         var res = await Sut(llm).IngestAsync(User,
             new("note", "note:" + note.Id, cap.CardRelPath!, cap.SourceText!, "projects/" + project.Id, null));
 
-        res.Outcome.Should().BeOneOf(WikiIngestService.OutcomeApplied,
-            WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.Outcome.Should().BeOneOf(WikiIngestService.OutcomeApplied, WikiIngestService.OutcomeAwaitingHuman);
         var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
         var op = pkg.Operations.Should().ContainSingle().Which;
         // Та же дата и тот же формат, что ставит код (WithCodeAsOf): ГГГГ-ММ-ДД по UTC.

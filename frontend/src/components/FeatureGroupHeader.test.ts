@@ -1,20 +1,21 @@
-// Заголовок группы фичи (FeatureGroupHeader) — волна 2 (макет features-overview-2.html,
-// вариант А: обёртка div → две СОСЕДНИЕ кнопки: шеврон (сворачивает) + тело (страница)
-// + быстрое действие) + раскладка её чатов (featureGroupChats) + пункты группировки.
+// Заголовок группы фичи (FeatureGroupHeader) — v2 (шаг FS-FL1, записка
+// features-simplify-v1 §3 R2): две строки и тонкая полоса. Строка 1: название и срок
+// справа (из feature.eta / дата мержа); строка 2: одна фраза — «{этап} · N/M» или фраза
+// тревоги (из feature.ask) или подпись закрытия. Аватаров, ⚠, процента и давности нет.
 //
 // Окружение node (без jsdom): renderToStaticMarkup (SSR) для компонента, прямые вызовы
 // чистых функций для логики. Контракт — «Контракт индекса фич — утверждён (Александр,
-// 18.10)» (bucket/attention/rail/summary/nowPersonaIds) и таблица токенов
-// features-overview-2-tokens.md §1 (плашка А: 55 px, шеврон 26/40, стопка аватаров,
-// быстрое действие, ловушки <button>).
+// 18.10)» (bucket/attention/rail/summary/ask/eta) и таблица токенов
+// features-overview-2-tokens.md §1 (плашка А: 55 px, шеврон 26/40, ловушки <button>).
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FeatureGroupHeader, featureGroupChevronClick } from './FeatureGroupHeader';
-import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureAvatarPersonaIds, featureStatusTag } from '../lib/chatGroups';
+import { featureDisplayState, featureGroupChats, featureGroupByOptions, featureQuickAction, featureStatusTag } from '../lib/chatGroups';
 import type { FeatureAttention, FeatureIndexFeature, FeatureRailSegment, FeatureRailKey } from '../types/featureIndex';
-import type { Session, Persona } from '../types';
+import type { FeatureAsk } from '../lib/featurePage';
+import type { Session } from '../types';
 
 // === Фикстуры ===
 
@@ -53,6 +54,15 @@ function attention(kind: FeatureAttention['kind'], personaId: string | null = nu
   return { kind, since: null, reason: null, personaId, sessionId: null };
 }
 
+// «Нужно от тебя» (FS-V4): строка как отдаёт бэк (text ≤ 120).
+function ask(over: Partial<FeatureAsk> = {}): FeatureAsk {
+  return { text: 'нужен ответ по счёту объёма', source: 'wait', since: null, ...over };
+}
+
+// «Сейчас» для давности тревоги: фиксированный момент (стабильные тесты).
+const NOW_MS = Date.UTC(2026, 10, 11, 12, 0, 0);
+const isoAgo = (min: number) => new Date(NOW_MS - min * 60000).toISOString();
+
 // Минимальный чат: для раскладки важны id, status, parentSessionId.
 function chat(id: string, over: Partial<Session> = {}): Session {
   return {
@@ -62,17 +72,7 @@ function chat(id: string, over: Partial<Session> = {}): Session {
   } as Session;
 }
 
-// Минимальная персона: для стопки аватаров (PersonaAvatar требует полный объект).
-function persona(id: string, name: string): Persona {
-  return {
-    id, ownerId: 'o1', name, handle: id,
-    scope: 'global',
-    avatar: { kind: 'initials' },
-    memoryEnabled: false,
-  } as Persona;
-}
-
-// Рендер заголовка (SSR). `over` — точечные пропсы (onOpen, personaById, isMobile, compact…).
+// Рендер заголовка (SSR). `over` — точечные пропсы (onOpen, isMobile, compact…).
 function renderHeader(f: FeatureIndexFeature, over: Record<string, unknown> = {}): string {
   return renderToStaticMarkup(
     createElement(FeatureGroupHeader, {
@@ -85,21 +85,59 @@ function renderHeader(f: FeatureIndexFeature, over: Record<string, unknown> = {}
   );
 }
 
+// Регион текста строки: от row1 до полосы (полоса — не «строка»: её aria-подпись
+// «Готовность N %» несёт % по своему назначению и к строке отношения не имеет).
+function rowsRegion(html: string): string {
+  const a = html.indexOf('data-testid="feature-group-row1"');
+  if (a < 0) throw new Error('row1 не найден в разметке');
+  const b = html.indexOf('data-testid="feature-group-bar"');
+  return html.slice(a, b === -1 ? html.length : b);
+}
+
+// Текст ноды срока (между её открывающим тегом и текстом — style/title, поэтому
+// берём содержимое регуляркой, а не срезом после test-id).
+const etaShown = (html: string): string => {
+  const m = /data-testid="feature-group-eta"[^>]*>([^<]*)</.exec(html);
+  if (!m) throw new Error('нода срока не найдена в разметке');
+  return m[1];
+};
+// Стиль ноды строки 2 (тот же порядок атрибутов).
+const statusStyle = (html: string): string => {
+  const m = /data-testid="feature-group-status"[^>]*style="([^"]*)"/.exec(html);
+  if (!m) throw new Error('нода строки 2 не найдена в разметке');
+  return m[1];
+};
+
+// Локальные геттеры той же Date, что использует компонент (featureTime/etaLabel):
+// ожидаемое не зависит от пояса машины (CI в UTC, разработка в МСК).
+const localDate = (iso: string) => {
+  const d = new Date(iso);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}`;
+};
+const localWeekday = (iso: string) => new Date(iso).toLocaleDateString('ru-RU', { weekday: 'short' });
+
 // === Тона (featureDisplayState + рендер заголовка) ===
 
 describe('FeatureGroupHeader: тона', () => {
-  it('идёт (run): глиф run, статус «{этап} · идёт», кромки нет', () => {
-    const f = feat({ bucket: 'running' }); // prod active run
+  it('идёт (run): глиф run, строка 2 «{этап} · N/M», кромки нет', () => {
+    const f = feat({ bucket: 'running', stepsAccepted: 4, stepsTotal: 9 }); // prod active run
     const st = featureDisplayState(f);
     expect(st.kind).toBe('run');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('Производство · идёт');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="run"')).toBe(true);
-    expect(html.includes('Производство · идёт')).toBe(true);
+    // v2 (FS-FL1): этап из активной стадии (now0 нет) и счётчики индекса как есть.
+    expect(html).toContain('Производство · 4/9');
     // M1: без тревоги левая сторона — 1px (longhand), НЕ 3px и НЕ обнулённая (UA-outset).
     expect(html.includes('border-left-width:1px')).toBe(true);
     expect(html.includes('border-left-color:var(--c-border-light)')).toBe(true);
+  });
+
+  it('этап — из now0.stage (контракт FS-FL1), не из рельсы: now0=review при активной prod', () => {
+    const f = feat({ stepsAccepted: 4, stepsTotal: 9, now0: { personaId: 'p9', stage: 'review', stepRef: 'Ш3' } });
+    const html = renderHeader(f);
+    expect(html).toContain('Ревью · 4/9');
+    expect(html).not.toContain('Производство · 4/9');
   });
 
   it('M2: заголовок группы — шрифт Hanken (не Arial): inline font-family на кнопке', () => {
@@ -113,21 +151,22 @@ describe('FeatureGroupHeader: тона', () => {
     expect(tag).toContain('Hanken Grotesk');
   });
 
-  it('доработка (loop): глиф loop, статус «{этап} · доработка», кромки нет', () => {
-    const f = feat({ bucket: 'running', rail: rail({ prod: { state: 'active', tone: 'loop' } }) });
+  it('доработка (loop): глиф loop, строка этапа тоном warningText 600, кромки нет', () => {
+    const f = feat({ bucket: 'running', stepsAccepted: 4, stepsTotal: 9, rail: rail({ prod: { state: 'active', tone: 'loop' } }) });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('loop');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('Производство · доработка');
-    expect(renderHeader(f).includes('data-feature-state="loop"')).toBe(true);
+    const html = renderHeader(f);
+    expect(html).toContain('data-feature-state="loop"');
+    expect(statusStyle(html)).toContain('var(--c-warning-text)');
+    expect(statusStyle(html)).toContain('font-weight:600');
   });
 
-  it('ждёт вас (wait): глиф wait, кромка warning (тон В2), статус «ждёт вас»', () => {
+  it('ждёт вас (wait): глиф wait, кромка warning (тон В2)', () => {
     const f = feat({ bucket: 'attention', attention: attention('wait') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
-    expect(st.status).toBe('ждёт вас');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="wait"')).toBe(true);
     // С1 (макет v4): кромка тревоги — тоны В2: «ждёт вас» — warning (не синий info), 3px longhand.
@@ -135,35 +174,35 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html.includes('border-left-color:var(--c-warning)')).toBe(true);
   });
 
-  it('ждёт согласия на мерж (merge, attention): кромка warning, статус «ждёт согласия на мерж»', () => {
+  it('ждёт согласия на мерж (merge, attention): кромка warning (тон В2)', () => {
     const f = feat({ bucket: 'attention', attention: attention('merge') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('wait');
     expect(st.alarm).toBe('wait');
-    expect(st.status).toBe('ждёт согласия на мерж');
     expect(renderHeader(f).includes('border-left-width:3px')).toBe(true);
     expect(renderHeader(f).includes('border-left-color:var(--c-warning)')).toBe(true);
   });
 
-  it('упала (stopped): глиф stopped, кромка danger, статус «стоит»', () => {
+  it('упала (stopped): глиф stopped, кромка danger', () => {
     const f = feat({ bucket: 'attention', attention: attention('stopped') });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('stopped');
     expect(st.alarm).toBe('stop');
-    expect(st.status).toBe('стоит');
     const html = renderHeader(f);
     expect(html.includes('data-feature-state="stopped"')).toBe(true);
     expect(html.includes('border-left-width:3px')).toBe(true);
     expect(html.includes('border-left-color:var(--c-danger)')).toBe(true);
   });
 
-  it('закрыта (closed, без мержа): глиф closed, статус «закрыта без мержа» (Ш1d), кромки нет', () => {
+  it('закрыта (closed, без мержа): глиф closed, «закрыта без мержа», кромки нет, срока нет', () => {
     const f = feat({ bucket: 'closed', summary: null });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('closed');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('закрыта без мержа');
-    expect(renderHeader(f).includes('data-feature-state="closed"')).toBe(true);
+    const html = renderHeader(f);
+    expect(html.includes('data-feature-state="closed"')).toBe(true);
+    expect(html).toContain('закрыта без мержа');
+    expect(etaShown(html)).toBe('—');
   });
 
   // Ш1f (хвост ревью Ш1e, решение Майи «везде одна подпись»): компактная плашка закрытой
@@ -174,13 +213,16 @@ describe('FeatureGroupHeader: тона', () => {
     expect(html).toContain('закрыта без мержа');
   });
 
-  it('смержена (closed + mergedAt): глиф done (галочка), статус «смержена»', () => {
+  it('смержена (closed + mergedAt): глиф done (галочка), «Смержена · {длительность}»', () => {
     const f = feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 } });
     const st = featureDisplayState(f);
     expect(st.kind).toBe('done');
     expect(st.alarm).toBeNull();
-    expect(st.status).toBe('смержена');
-    expect(renderHeader(f).includes('data-feature-state="done"')).toBe(true);
+    const html = renderHeader(f);
+    expect(html.includes('data-feature-state="done"')).toBe(true);
+    // v2 (FS-FL1): дата мержа — справа в строке 1, длительность — в строке 2.
+    expect(html).toContain('Смержена · 30 мин');
+    expect(etaShown(html)).toBe(localDate('2026-10-18T12:00:00Z'));
   });
 
   it('С1: мини-рельсы из точек этапов в плашке нет нигде (этапы — только на странице фичи)', () => {
@@ -190,6 +232,127 @@ describe('FeatureGroupHeader: тона', () => {
       // точек этапов (feature-dot-*) в плашке быть не должно вовсе
       expect(html).not.toContain('feature-dot-');
     }
+  });
+});
+
+// === v2 (FS-FL1): срок — только feature.eta ===
+
+describe('FeatureGroupHeader: v2 срок (feature.eta)', () => {
+  it('endsAt → «≈ {день недели}» (табличные цифры, не моно)', () => {
+    const f = feat({ eta: { minutes: 240, endsAt: '2026-11-13T15:00:00Z', source: 'note', clockStopped: null } });
+    const html = renderHeader(f);
+    const day = localWeekday('2026-11-13T15:00:00Z');
+    const m = /data-testid="feature-group-eta" style="([^"]*)">([^<]*)</.exec(html);
+    expect(m, 'нода срока не найдена').not.toBeNull();
+    expect(m![2]).toBe(`≈ ${day}`);
+    // 600 FS.sm textSecondary tabular-nums; шрифт — UI (не JetBrains Mono).
+    expect(m![1]).toContain('font-variant-numeric:tabular-nums');
+    expect(m![1]).toContain('font-weight:600');
+    expect(m![1]).toContain('var(--c-text-secondary)');
+    expect(m![1]).not.toContain('JetBrains Mono');
+  });
+
+  it('clockStopped=wait → «часы стоят», даже при живом endsAt', () => {
+    const f = feat({ eta: { minutes: 240, endsAt: '2026-11-13T15:00:00Z', source: 'note', clockStopped: 'wait' } });
+    const html = renderHeader(f);
+    expect(etaShown(html)).toBe('часы стоят');
+    expect(html).not.toContain('≈');
+  });
+
+  it('eta нет (или даты нет) → «—»', () => {
+    expect(etaShown(renderHeader(feat()))).toBe('—');
+    const f = feat({ eta: { minutes: 240, endsAt: null, source: 'history', clockStopped: null } });
+    expect(etaShown(renderHeader(f))).toBe('—');
+  });
+
+  it('закрытая/смерженная — дата мержа вместо срока; без мержа — «—»', () => {
+    const merged = feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 }, eta: { minutes: 60, endsAt: null, source: 'history', clockStopped: null } });
+    expect(etaShown(renderHeader(merged))).toBe(localDate('2026-10-18T12:00:00Z'));
+    expect(etaShown(renderHeader(feat({ bucket: 'closed', summary: null })))).toBe('—');
+  });
+});
+
+// === v2 (FS-FL1): тревога — только feature.ask ===
+
+describe('FeatureGroupHeader: v2 фраза тревоги (feature.ask)', () => {
+  it('ask wait → «Ждёт тебя: {text}» warningText 600, этапа в строке нет', () => {
+    const f = feat({ bucket: 'attention', state: 'waiting', attention: attention('wait'), ask: ask(), stepsAccepted: 4, stepsTotal: 9 });
+    const html = renderHeader(f);
+    expect(html).toContain('Ждёт тебя: нужен ответ по счёту объёма');
+    expect(html).not.toContain('Производство · 4/9');
+    expect(statusStyle(html)).toContain('var(--c-warning-text)');
+    expect(statusStyle(html)).toContain('font-weight:600');
+  });
+
+  it('ask merge → та же фраза «Ждёт тебя: {text}» (вид merge — общий тон warn)', () => {
+    const f = feat({ bucket: 'attention', state: 'merge_pending', attention: attention('merge'), ask: ask({ source: 'merge', text: 'нужен вердикт по мержу' }) });
+    const html = renderHeader(f);
+    expect(html).toContain('Ждёт тебя: нужен вердикт по мержу');
+    expect(html).not.toContain('ждёт согласия на мерж');
+  });
+
+  it('ask stopped → «Стоит {давность}: {text}» dangerText 600', () => {
+    const f = feat({
+      bucket: 'attention', state: 'stopped', attention: attention('stopped'),
+      ask: ask({ source: 'stopped', text: 'Денис не стартует', since: isoAgo(120) }),
+    });
+    const html = renderHeader(f, { now: NOW_MS });
+    // Давность — с ask.since, тот же формат длительности, что у статусов фичи.
+    expect(html).toContain('Стоит 2 ч: Денис не стартует');
+    expect(statusStyle(html)).toContain('var(--c-danger-text)');
+    expect(statusStyle(html)).toContain('font-weight:600');
+  });
+
+  it('ask stopped без since → «Стоит: {text}», давности нет', () => {
+    const f = feat({ bucket: 'attention', state: 'stopped', attention: attention('stopped'), ask: ask({ source: 'stopped', text: 'Денис не стартует' }) });
+    const html = renderHeader(f, { now: NOW_MS });
+    expect(html).toContain('Стоит: Денис не стартует');
+    expect(html).not.toMatch(/Стоит \d+ (мин|ч)/);
+  });
+
+  it('полный текст тревоги — в title (фраза на строке — одна, с многоточием)', () => {
+    const f = feat({ bucket: 'attention', state: 'waiting', attention: attention('wait'), ask: ask({ text: 'нужен ответ по счёту объёма' }) });
+    expect(renderHeader(f)).toContain('title="нужен ответ по счёту объёма"');
+  });
+
+  it('закрытой ask не рисуется: остаётся подпись закрытия', () => {
+    const f = feat({ bucket: 'closed', summary: { mergedAt: '2026-10-18T12:00:00Z', durationMinutes: 30 }, ask: ask() });
+    const html = renderHeader(f);
+    expect(html).not.toContain('Ждёт тебя');
+    expect(html).toContain('Смержена · 30 мин');
+  });
+});
+
+// === v2 (FS-FL1): чего в строке нет (R2) ===
+
+describe('FeatureGroupHeader: v2 в строке нет аватаров, ⚠ и процента', () => {
+  it('богатая фикстура (nowPersonaIds, trackerIssues, шаги): ни аватаров, ни ⚠, ни %', () => {
+    const f = feat({
+      stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial',
+      trackerIssues: 3, nowPersonaIds: ['p1', 'p2'],
+    });
+    const html = renderHeader(f, {
+      personaById: (id: string) => ({ id, ownerId: 'o1', name: 'Кира', handle: id, scope: 'global', avatar: { kind: 'initials' }, memoryEnabled: false } as never),
+    });
+    const region = rowsRegion(html);
+    // Стопки аватаров и «Сейчас {Имя}» нет (нахлёст −5 и имя-<b> — их подписи).
+    expect(region).not.toContain('margin-left:-5px');
+    expect(html).not.toContain('feature-group-now-name');
+    // ⚠ расхождений трекера переехал на страницу фичи (R2).
+    expect(region).not.toContain('⚠');
+    expect(html).not.toContain('feature-group-tracker-issues');
+    // Процента нет: полоса ниже говорит о прогрессе глазами.
+    expect(region).not.toContain('%');
+    expect(html).not.toContain('feature-group-percent');
+    // Давности активности нет.
+    expect(html).not.toContain('feature-group-age');
+  });
+
+  it('полная строка счётчиков — в title (formatStepProgress)', () => {
+    const f = feat({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial' });
+    const html = renderHeader(f);
+    expect(html).toContain('принято 3 из 5');
+    expect(html).toContain('data-testid="feature-group-bar"');
   });
 });
 
@@ -249,27 +412,6 @@ describe('FeatureGroupHeader: bucket merged (смержена, ждёт закр
   });
 });
 
-describe('FeatureGroupHeader: счётчик расхождений трекера', () => {
-  it('trackerIssues > 0: бейдж «⚠ N» (глиф + число, статус не режется) с пояснением в title', () => {
-    const html = renderHeader(feat({ trackerIssues: 3 }));
-    expect(html).toContain('data-testid="feature-group-tracker-issues"');
-    // Длинного слова нет: «расхождений: N» резало статус до «ждёт согласия на ме…».
-    expect(html).not.toContain('расхождений:');
-    expect(html).toContain('>3<');
-    expect(html).toContain('Трекер расходится с работой: 3 — оркестратор поправит');
-  });
-
-  it('нет поля или 0: бейджа нет', () => {
-    expect(renderHeader(feat())).not.toContain('feature-group-tracker-issues');
-    expect(renderHeader(feat({ trackerIssues: 0 }))).not.toContain('feature-group-tracker-issues');
-  });
-
-  it('закрытая (compact): бейджа нет', () => {
-    const html = renderHeader(feat({ bucket: 'closed', trackerIssues: 2 }), { compact: true });
-    expect(html).not.toContain('feature-group-tracker-issues');
-  });
-});
-
 describe('FeatureGroupHeader: клики (шеvron vs тело)', () => {
   it('клик по шеврону: stopPropagation + onToggle, onOpen НЕ зовёт', () => {
     let toggled = 0, stopped = 0;
@@ -303,6 +445,22 @@ describe('FeatureGroupHeader: клики (шеvron vs тело)', () => {
     const expanded = renderHeader(feat(), { expanded: true });
     expect(expanded).toContain('aria-expanded="true"');
     expect(expanded).toContain('Свернуть чаты фичи');
+  });
+});
+
+// === selected (открыта страница фичи) ===
+
+describe('FeatureGroupHeader: selected', () => {
+  it('выбранная плашка: фон accentLight, рамка accentMuted', () => {
+    const html = renderHeader(feat(), { selected: true });
+    expect(html).toContain('var(--c-accent-light)');
+    expect(html).toContain('var(--c-accent-muted)');
+  });
+
+  it('обычная: фон bgCard, рамка borderLight (selected не прилипает)', () => {
+    const html = renderHeader(feat());
+    expect(html).toContain('var(--c-bg-card)');
+    expect(html).not.toContain('var(--c-accent-light)');
   });
 });
 
@@ -344,73 +502,6 @@ describe('featureQuickAction: «Ответить» / «К мержу» / «Кл�
   it('рендер: на 360 (isMobile) быстрое действие не рендерится', () => {
     const html = renderHeader(feat({ bucket: 'attention', attention: attention('wait') }), { isMobile: true });
     expect(html).not.toContain('data-testid="feature-group-quick"');
-  });
-});
-
-// === Стопка аватаров (featureAvatarPersonaIds) ===
-
-describe('featureAvatarPersonaIds: nowPersonaIds с фолбэком на now0, затем на attention.personaId', () => {
-  it('nowPersonaIds непустой → из него (в порядке убывания старта)', () => {
-    const f = feat({ nowPersonaIds: ['p1', 'p2'] });
-    expect(featureAvatarPersonaIds(f)).toEqual(['p1', 'p2']);
-  });
-
-  it('nowPersonaIds пуст → фолбэк на now0.personaId', () => {
-    const f = feat({ nowPersonaIds: [], now0: { personaId: 'p9', stage: 'prod', stepRef: 'Ш3' } });
-    expect(featureAvatarPersonaIds(f)).toEqual(['p9']);
-  });
-
-  it('nowPersonaIds отсутствует (старый ответ) → фолбэк на now0.personaId', () => {
-    const f = feat({ now0: { personaId: 'p9', stage: 'prod', stepRef: 'Ш3' } });
-    expect(featureAvatarPersonaIds(f)).toEqual(['p9']);
-  });
-
-  it('ни nowPersonaIds, ни now0, ни attention.personaId → пусто (аватаров нет)', () => {
-    expect(featureAvatarPersonaIds(feat())).toEqual([]);
-  });
-
-  // ST-FA (дефект 4a241bee): после сужения run.now у фичи, где все исполнители
-  // ждут человека, nowPersonaIds и now0 пусты — стопка не должна пустеть.
-  it('nowPersonaIds и now0 пусты, attention.personaId задан → фолбэк на attention.personaId', () => {
-    const f = feat({ bucket: 'attention', attention: attention('wait', 'p7') });
-    expect(featureAvatarPersonaIds(f)).toEqual(['p7']);
-  });
-
-  // Приоритет: живой now не уступает тревоге.
-  it('nowPersonaIds непустой при заданном attention.personaId → прежнее поведение, не фолбэк', () => {
-    const f = feat({ nowPersonaIds: ['p1'], attention: attention('wait', 'p7') });
-    expect(featureAvatarPersonaIds(f)).toEqual(['p1']);
-  });
-
-  it('attention есть, но без personaId → пусто (фолбэк только если id задан)', () => {
-    const f = feat({ bucket: 'attention', attention: attention('stopped') });
-    expect(featureAvatarPersonaIds(f)).toEqual([]);
-  });
-
-  it('рендер: пустой nowPersonaIds → аватар из now0 (PersonaAvatar в DOM)', () => {
-    const f = feat({ nowPersonaIds: [], now0: { personaId: 'p9', stage: 'prod', stepRef: 'Ш3' } });
-    const html = renderHeader(f, { personaById: (id: string) => (id === 'p9' ? persona('p9', 'Кира') : undefined) });
-    // Аватар персоны p9 (инициалы) рендерится; PersonaFace рисует инициалы имени («Кира» → «КИ»).
-    expect(html).toContain('КИ');
-  });
-
-  it('рендер: пустой now при attention.personaId → аватар из attention (PersonaAvatar в DOM)', () => {
-    const f = feat({ bucket: 'attention', attention: attention('wait', 'p7') });
-    const html = renderHeader(f, { personaById: (id: string) => (id === 'p7' ? persona('p7', 'Тимур') : undefined) });
-    // Инициалы персоны p7 («Тимур» → «ТИ») — стопка не пустая.
-    expect(html).toContain('ТИ');
-  });
-
-  it('рендер: nowPersonaIds → стопка (несколько аватаров, нахлёст −5 со второго)', () => {
-    const f = feat({ nowPersonaIds: ['p1', 'p2'] });
-    const html = renderHeader(f, {
-      personaById: (id: string) => (id === 'p1' ? persona('p1', 'Денис') : id === 'p2' ? persona('p2', 'Кира') : undefined),
-    });
-    // Оба аватара в DOM (инициалы «Денис» → «ДЕ», «Кира» → «КИ»).
-    expect(html).toContain('ДЕ');
-    expect(html).toContain('КИ');
-    // Нахлёст −5px со второго аватара (макет: стопка).
-    expect(html).toContain('margin-left:-5px');
   });
 });
 
@@ -522,11 +613,10 @@ describe('FeatureGroupHeader: m2 высота С1 как сумма слоёв',
   });
 });
 
-// === С1: счётчики уходят в title, на виду — процент и полоса ===
-// Строка «принято N из T · …» (formatStepProgress) больше не печатается в плашке:
-// она — title процета и статуса (полная строка по тапу/наведению). На виду — «N %»
-// и полоса трекера (сравнение фич глазами, не чтением).
-describe('FeatureGroupHeader: С1 — процент и полоса, счётчики в title', () => {
+// === v2: полоса остаётся, процента нет (R2) ===
+// Счётчики «принято N из T · …» (formatStepProgress) — в title строки 2. На виду —
+// полоса трекера (сравнение фич глазами, не чтением); «N %» из строки убран.
+describe('FeatureGroupHeader: v2 — полоса и title, процента нет', () => {
   it('старый ответ (no new fields) → ни процента, ни полосы (нет данных — пустых частей нет)', () => {
     const f = feat({ stepsAccepted: 3, stepsTotal: 5 });
     const html = renderHeader(f);
@@ -534,27 +624,22 @@ describe('FeatureGroupHeader: С1 — процент и полоса, счётч
     expect(html).not.toContain('feature-group-bar');
   });
 
-  it('новые поля есть → процент «60 %» справа, полоса под строкой, полная строка — в title', () => {
+  it('новые поля есть → полоса под строкой, полная строка — в title; процента нет', () => {
     const f = feat({ stepsAccepted: 3, stepsTotal: 5, stepsReview: 2, planState: 'partial' });
     const html = renderHeader(f);
-    const m = html.match(/<span data-testid="feature-group-percent"[^>]*title="([^"]*)"[^>]*>[\s\S]*?<b[^>]*>(\d+ %)<\/b>/);
-    expect(m, 'percent-нода не найдена').not.toBeNull();
-    expect(m![2]).toBe('60 %');
-    // title — общий форматтер: «принято 3 из 5 · 2 в ревью · план частично», без голого «3/5».
+    // title статуса — общий форматтер: «принято 3 из 5 · 2 в ревью · план частично», без голого «3/5».
+    const m = /<span data-testid="feature-group-status"[^>]*title="([^"]*)"/.exec(html);
+    expect(m, 'title строки 2 не найден').not.toBeNull();
     expect(m![1]).toContain('принято 3 из 5');
     expect(m![1]).not.toMatch(/\d+\s*\/\s*\d+/);
-    // полоса: сегменты accepted (success) и review (info), без «master» (в индексе его нет)
+    // полоса: сегменты accepted (success) и review (info), без «master» (в индекса его нет)
     expect(html).toContain('data-testid="feature-group-bar"');
     expect(html).toContain('data-testid="feature-bar-accepted"');
     expect(html).toContain('data-testid="feature-bar-review"');
     expect(html).not.toContain('data-testid="feature-bar-master"');
-  });
-
-  it('«Сейчас {Имя} +N»: имя 600 textHeading, «+N» — остальные идущие', () => {
-    const f = feat({ nowPersonaIds: ['p1', 'p2', 'p3'] });
-    const html = renderHeader(f, { personaById: (id: string) => (id === 'p1' ? persona('p1', 'Кира') : undefined) });
-    expect(html).toContain('Сейчас <b data-testid="feature-group-now-name"');
-    expect(html).toContain('>Кира</b> +2');
+    // процента в строке нет (R2): ни ноды, ни «N %» в тексте строк.
+    expect(html).not.toContain('feature-group-percent');
+    expect(rowsRegion(html)).not.toContain('%');
   });
 });
 

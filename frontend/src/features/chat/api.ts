@@ -88,19 +88,6 @@ export const chatAuxApi = {
 };
 
 // «Чаты вне проекта» (вынесено из lib/api.ts, тем же порядком): тот же тонкий слой.
-// Таймауты «Продолжить/Перенести в новый чат» едут с доменом — они нужны только этим методам.
-
-// Потолок ожидания «Продолжить в новом чате»: ход записки-передачи — полноценный ход
-// агента, бэкенд ждёт его до HandoffTurnTimeout = 15 мин (ChatContinueService.cs). Берём
-// чуть больше (16 мин): обрыв по этому таймауту — RequestTimeoutError («Сервер не ответил
-// за N с»), а не OfflineError, и приложение не уводится в офлайн (offline.ts:423–447).
-const CONTINUE_TIMEOUT_MS = 16 * 60 * 1000;
-
-// Потолок ожидания «Перенести в новый чат» (фича prompt-cache, шаг F-4): тёплый путь —
-// видимый ход самого чата, бэкенд ждёт его до WarmTurnTimeout = 5 мин (ChatHandoffService.cs);
-// холодный — быстрый раннер по транскрипту. Берём 6 мин: обрыв по этому таймауту —
-// RequestTimeoutError, а не OfflineError (тот же приём, что у CONTINUE_TIMEOUT_MS).
-const HANDOFF_TIMEOUT_MS = 6 * 60 * 1000;
 
 // Методы домена; lib/api.ts подмешивает их в объект api spread'ом.
 export const chatsApi = {
@@ -264,26 +251,6 @@ export const chatsApi = {
       request<{ chatId: string; projectId: string | null; claudeSessionId: string; draft: string | null }>(
         `/chats/${id}/branch`,
         { method: 'POST', body: JSON.stringify(body) },
-      ),
-    // «Продолжить в новом чате»: агент пишет записку-передачу (один ход, десятки секунд),
-    // платформа открывает новый чат той же персоны. 409 — чат занят, 400 — нет ходов агента;
-    // оба несут человеческий текст в Error.message. timeoutMs чуть больше серверного лимита
-    // хода (15 мин) — см. CONTINUE_TIMEOUT_MS: обрыв по таймауту не уводит в офлайн
-    continue: (id: string, note?: string) =>
-      request<{ newSessionId: string; handoffNoteId: string | null }>(
-        `/chats/${id}/continue`,
-        { method: 'POST', body: JSON.stringify(note ? { note } : {}), timeoutMs: CONTINUE_TIMEOUT_MS },
-      ),
-    // «Перенести в новый чат» (фича prompt-cache, шаг F-4): путь выбирает сервер — тёплый
-    // (записку пишет сам чат, пока его кэш тёплый) или холодный (её собирает дешёвый раннер
-    // по транскрипту). Ответ — id нового чата, его проект и черновик композера. 409 — чат
-    // занят/повторный клик/не тот тип чата, 502 — модель не дала записку; текст ошибки
-    // человеческий и показывается как есть. Тёплый путь — видимый ход чата до 5 мин,
-    // таймаут фронта чуть больше — см. HANDOFF_TIMEOUT_MS.
-    handoff: (id: string) =>
-      request<{ chatId: string; projectId: string | null; draft: string | null; warm: boolean }>(
-        `/chats/${id}/handoff`,
-        { method: 'POST', timeoutMs: HANDOFF_TIMEOUT_MS },
       ),
     // Режим прав: сохраняем сразу при выборе в Composer, иначе он доехал бы до сессии
     // только вместе со следующим сообщением и терялся при уходе со страницы

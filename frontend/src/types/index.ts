@@ -361,10 +361,6 @@ export interface Session {
   // побеждает авто-связь по задаче (TaskId → Task.SourceSessionId).
   // null — корневой чат: обычный, вынесенный вручную либо с удалённой задачей
   parentSessionId?: string | null;
-  // «Продолжить в новом чате»: из какого чата продолжен этот и в какой продолжен он сам.
-  // Поля могут отсутствовать (старый бэкенд) — читать как null
-  continuedFromSessionId?: string | null;
-  continuedInSessionId?: string | null;
   // Тема чата: id из Project.subjectRegistry. Висячий id (тему
   // удалили) читается как «без темы». subjectSource: 'ai' — разложила модель, 'human' —
   // закрепил человек (в т.ч. «убрал из темы» при subjectId = null), null — никто
@@ -630,10 +626,6 @@ export type ServerMessage = { sessionId: string } & (
   // общий события не шлёт — участники догонят его поллингом списка (чата у них не было).
   | { type: 'chat_visibility_changed'; private: boolean }
   | { type: 'chat_renamed'; name: string; topic?: string | null }
-  // «Продолжить в новом чате»: исходный чат (sessionId) продолжён в newSessionId.
-  // Живое событие: если открыт именно исходный чат, фронт сам переходит в новый (тост).
-  // projectId — для построения навигации (проектный чат); null — чат вне проекта.
-  | { type: 'chat_continued'; newSessionId: string; projectId?: string | null }
   // Сторожа чатов: ПОЛНЫЙ состав id чатов и проектов владельца с активными
   // сторожами. Событие глобальное (не про один чат) и заменяет состояние стора целиком —
   // диффы потребитель не считает

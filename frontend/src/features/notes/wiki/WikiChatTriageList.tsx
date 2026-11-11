@@ -35,7 +35,9 @@ import { countWord, wikiErrorText } from './wikiLabels';
 type RowMeta = { tone: BadgeTone; text: string };
 
 // Зоны отбора — значения бэкового стора (WikiChatScorer.ZoneTriage/ZoneGray/ZoneSkipped/
-// ZoneExcluded + WikiChatIngestService.ZoneNothingNew). Подписи — по макету (#triage&cut).
+// ZoneExcluded + WikiChatIngestService.ZoneNothingNew/ZoneRejectedSkipped). Подписи — по
+// макету (#triage&cut). rejected_skipped — чат, пропущенный через окно после 3 отказов
+// разбора подряд (C2R-Sh2); причина строки — последнего отказа, показывается как у всех зон.
 // Неизвестная зона (значение будущего шага бэка) — нейтральная подпись: строка остаётся,
 // смысл ей не выдумывается (тот же приём, что UNKNOWN_OP_TEXT в «Журнале»).
 const ZONE_META: Record<string, RowMeta> = {
@@ -43,6 +45,7 @@ const ZONE_META: Record<string, RowMeta> = {
   gray: { tone: 'warning', text: 'серая зона' },
   skipped: { tone: 'neutral', text: 'пропущено' },
   nothing_new: { tone: 'neutral', text: 'нечего добавить' },
+  rejected_skipped: { tone: 'danger', text: 'пропущено после 3 отказов' },
   excluded: { tone: 'neutral', text: 'не разбирается' },
 };
 const UNKNOWN_ZONE: RowMeta = { tone: 'neutral', text: 'неизвестное состояние' };

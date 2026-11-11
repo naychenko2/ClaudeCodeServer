@@ -1301,7 +1301,9 @@ public class WikiChatIngestTests : IDisposable
         entry.CursorHash.Should().NotBeNullOrEmpty();
         ChronicleFiles().Should().BeEmpty("хроника — только из применённых пакетов");
 
-        var again = await Sut(new FakeLlm()).AnalyzeAsync(User, ChatId);
+        var againLlm = new FakeLlm();
+        var again = await Sut(againLlm).AnalyzeAsync(User, ChatId);
+        againLlm.Calls.Should().BeEmpty("повторный разбор без новых реплик модель не зовёт");
         again.Outcome.Should().Be(WikiChatIngestService.OutcomeUpToDate, again.Reason);
         WikiPackageStore.List(Root).Packages.Should().HaveCount(1, "дубль-пакета нет");
     }

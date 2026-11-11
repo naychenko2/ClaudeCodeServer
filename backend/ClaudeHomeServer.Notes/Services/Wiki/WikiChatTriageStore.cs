@@ -143,7 +143,7 @@ public static class WikiChatTriageStore
                 return Fail(CodeShape, $"курсор не может быть отрицательным: {entry.Cursor}");
             if (entry.NothingNewStreak < 0)
                 return Fail(CodeShape, $"nothingNewStreak не может быть отрицательным: {entry.NothingNewStreak}");
-            if (entry.RejectStreak is < 0)
+            if (entry.RejectStreak < 0)
                 return Fail(CodeShape, $"rejectStreak не может быть отрицательным: {entry.RejectStreak}");
 
             var stamped = entry with { TriagedAt = DateTimeOffset.UtcNow };
@@ -383,8 +383,8 @@ public static class WikiChatTriageStore
                     return null;
                 // Серия отказов после ответа модели (C2R-Sh2): необязательна, старый файл без
                 // поля читается как 0 (аддитивное поле, BackupSchema.Version не растёт).
-                var rejectStreak = ReadInt(obj, "rejectStreak");
-                if (rejectStreak is < 0)
+                var rejectStreak = ReadInt(obj, "rejectStreak") ?? 0;
+                if (rejectStreak < 0)
                     return null;
                 var signalsNode = obj["signals"];
                 List<WikiTriageSignal>? signals = null;
@@ -507,7 +507,7 @@ public sealed record WikiChatTriageEntry(
     string? Stage2Zone = null,
     string? Stage2Reason = null,
     int? Stage2HistoryCount = null,
-    int? RejectStreak = null);
+    int RejectStreak = 0);
 
 /// <summary>Один сигнал ступени 1 в записи стора: имя — стабильный идентификатор из
 /// WikiChatScorer (метку для человека рисует вызывающий), вес — вклад в балл (штраф —

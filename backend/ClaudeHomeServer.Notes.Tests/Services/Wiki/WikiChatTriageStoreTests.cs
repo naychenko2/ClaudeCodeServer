@@ -374,8 +374,11 @@ public class WikiChatTriageStoreTests : IDisposable
         WriteRaw($$"""[{"sessionId":"old","cursor":3,"cursorHash":"{{Hash}}","zone":null,"reason":null,"nothingNewStreak":0,"triagedAt":"{{Date}}"}]""");
         var read = WikiChatTriageStore.Get(_root);
         read.State.Should().Be(WikiTriageFileState.Valid, "аддитивное поле: файл до Sh2 читается строго");
-        read.Entries.Single().RejectStreak.Should().BeNull();
-        ((read.Entries.Single().RejectStreak) ?? 0).Should().Be(0);
+        var e = read.Entries.Single();
+        e.RejectStreak.Should().Be(0);
+        e.Cursor.Should().Be(3);
+        e.CursorHash.Should().Be(Hash);
+        e.NothingNewStreak.Should().Be(0);
     }
 
     [Fact]

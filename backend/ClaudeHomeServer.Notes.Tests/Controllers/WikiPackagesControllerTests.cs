@@ -942,7 +942,8 @@ public class WikiPackagesControllerTests : IDisposable
     // Инвариант: пакет, который человек решил, но который не применился («apply_failed»/
     // «stale»), не теряет окно: курсор разбора возвращается на его начало. Фикстура — метод
     // WikiChatWindowReturnTests: чат в каталоге, курсор 9 — прямая запись стора. Окно в тестах
-    // m1…9 → from=1 → целевой курсор 0.
+    // m1…9 → from=1 → целевой курсор 0. С T-A3 сам возврат — фон после формы ответа: его
+    // запись наблюдается по границе (WaitCursor), а не по факту возврата ответа.
 
     [Fact]
     public async Task ОтказПримененияРешённогоПакета_ВозвращаетОкно_КурсорНаНоль()
@@ -980,6 +981,8 @@ public class WikiPackagesControllerTests : IDisposable
         dto.Package.Status.Should().Be(WikiPackage.StatusApplyFailed);
         StatusOnDisk(id).Should().Be(WikiPackage.StatusApplyFailed);
 
+        // T-A3: ответ уже отдан, откат дописывает фон — ждём саму запись, не ответа.
+        WaitCursor("chat-1", 0);
         var entry = TriageEntry("chat-1");
         entry.Cursor.Should().Be(0, "решённое, но неприменённое окно разбирается заново с его начала");
         entry.CursorHash.Should().BeNull("записи 0 нет — хэша нет");
@@ -1002,6 +1005,7 @@ public class WikiPackagesControllerTests : IDisposable
 
         dto.Apply!.Code.Should().Be(WikiApplyService.CodeStale);
         dto.Package.Status.Should().Be(WikiPackage.StatusStale);
+        WaitCursor("chat-1", 0);
         TriageEntry("chat-1").Cursor.Should().Be(0, "устаревшее решённое окно тоже возвращается в разбор");
     }
 
@@ -1069,12 +1073,14 @@ public class WikiPackagesControllerTests : IDisposable
     }
 
     [Fact]
-    public async Task ОтказПоЗаявкеCodeClaim_ОкноНеВозвращается_КурсорПрежний()
+    public async Task ФайлаПакетаНетНаДиске_ОтказПоЗаявке_ХукДоОкнаНеДоходит()
     {
-        // Конкурентность: пакета на диске уже нет (гонка с удалением) — применение отказано
-        // заявкой («wiki_apply_claim»), статуса на диске нет вовсе: окно возвращает только
-        // прочитанный с диска пакет (after), а не карточка из памяти вызывающего (decided).
-        // Мутация «брать sources из decided»: здесь краснеет курсор 9 → 0.
+        // Замечание 2 ревью T-A2: имя было «отказ по заявке CodeClaim» — но этот сценарий
+        // гонка с удалением: файла пакета уже нет на перечитывании AfterDecision. Именно он
+        // даёт отказ «wiki_apply_claim» (применять нечего) и именно он обрывает хук ДО
+        // обращения к окну: окно возвращает прочитанный с диска пакет, здесь прочитанного
+        // нет. Ответ при этом несёт последнюю прочитанную карточку (ревью S4g, M2), а не 404.
+        // Мутация «звать хук и на Missing-ветке, по карточке decided»: здесь краснеет курсор 9 → 0.
         AddChatSession();
         SeedTriage("chat-1", 9);
         var id = await NewRealPackage([RealOp()]);
@@ -1088,9 +1094,95 @@ public class WikiPackagesControllerTests : IDisposable
 
         dto.Apply!.Applied.Should().BeFalse();
         dto.Apply.Code.Should().Be(WikiApplyService.CodeClaim, "пакета нет на диске: применять нечего");
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted, "ответ несёт последнюю прочитанную карточку, а не 404");
         var entry = TriageEntry("chat-1");
-        entry.Cursor.Should().Be(9, "проигранная заявка окно не возвращает");
+        entry.Cursor.Should().Be(9, "хук до обращения к окну не дошёл: прочитанного с диска пакета нет");
         entry.Zone.Should().Be(WikiChatIngestService.ZoneNothingNew);
+    }
+
+    // ─── 21. T-A3 (ревью T-A2, замечание 3): возврат окна — фон после ответа ────────────────
+    //
+    // Кнопка «Входящих» не висит на чужом разборе: при идущем прогоне чата ReturnWindow ждёт
+    // его конца, поэтому хук запускается не дожидаясь. Ответ решения — сразу,
+    // откат дописывает фон. Барьеры — на TCS, наблюдения — по самой записи стора, без задержек.
+
+    [Fact]
+    public async Task ПрогонЧатаИдёт_РешениеОтвечаетДоЕгоКонца_ФонДоводитКурсор()
+    {
+        // c1: прогон разбора этого же чата удержан TCS → решение человека возвращает ответ,
+        // пока прогон не закончен; после отпускания прогона курсор = началу окна.
+        // Мутация (c3): вернуть await ReturnDecidedWindowsAsync в AfterDecision — ответ
+        // дождался бы конца прогона: здесь краснеет answeredFirst.
+        AddChatSession(projectId: "p1"); // без дома чата прогон отказан до очереди заявок (HomeOf)
+        SeedTriage("chat-1", 9);
+        var id = await NewRealPackage([RealOp(basePage: "Общее/Нет.md")]);
+
+        var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _sessions.Reached = reached;
+        _sessions.Hold = hold;
+
+        var run = _chat.AnalyzeAsync(User, "chat-1");
+        SpinWait.SpinUntil(() => reached.Task.IsCompleted, 5000).Should().BeTrue("прогон реально держится на TCS");
+        _chat.IsRunning(User, "chat-1").Should().BeTrue("разбор этого чата в очереди заявок");
+
+        var decideTask = Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю"));
+        var answeredFirst = SpinWait.SpinUntil(() => decideTask.IsCompleted, 5000) && !run.IsCompleted;
+
+        // прогон отпускаем в любом случае: на красном исходе тест не должен висеть до таймаута
+        hold.SetResult();
+        var runRes = await run;
+        runRes.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, "истории у чата нет — прогон только держался на барьере");
+
+        answeredFirst.Should().BeTrue("ответ решения не ждёт конца прогона: возврат окна — в фоне");
+        var dto = ((OkObjectResult)await decideTask).Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+        dto.Package.Status.Should().Be(WikiPackage.StatusStale);
+
+        WaitCursor("chat-1", 0);
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(0, "фон вернул окно после конца прогона");
+        entry.Zone.Should().BeNull("прежний исход снимает следующий разбор, а не откат");
+    }
+
+    [Fact]
+    public async Task ВозвратОкнаОтказан_ОтветРешения_200_ЗаписьСтораПрежняя()
+    {
+        // c2: хук вызван, но возврат окна отказан (чат помечен «не разбирать») — ответ
+        // решения не меняется: 200 с карточкой и исходом применения, на диске — ничего.
+        // Мутация «после отказа ReturnWindow всё равно двигать курсор»: здесь краснеют
+        // Cursor и TriagedAt.
+        AddChatSession(wikiMark: WikiMarks.Skip);
+        SeedTriage("chat-1", 9);
+        var before = TriageEntry("chat-1");
+        var id = await NewRealPackage([RealOp(basePage: "Общее/Нет.md")]);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusStale, "отказ отката не меняет контракт решения");
+        var entry = TriageEntry("chat-1");
+        entry.Cursor.Should().Be(9, "отказанный возврат окна курсора не трогает");
+        entry.TriagedAt.Should().Be(before.TriagedAt, "пустого обращения к стору не было");
+    }
+
+    [Fact]
+    public async Task ВнутреннийСбойВозвратаОкна_ОтветРешения_200_ИсключенияНаружуНет()
+    {
+        // c2: путь возврата окна падает с исключением (история чата не читается) — сбой
+        // гасится внутри сервиса (ReturnWindowGuardedAsync, WikiChatIngestService.cs:373) и
+        // до ответа не доходит: 200 с тем же контрактом, курсор прежний, фоновая задача не
+        // faulted. До T-A3 этот путь ещё и ждался в AfterDecision; без обхвата в сервисе он
+        // бил бы в ответ как 500.
+        AddChatSession();
+        SeedTriage("chat-1", 9);
+        _sessions.ThrowHistory = true;
+        var id = await NewRealPackage([RealOp(basePage: "Общее/Нет.md")]);
+
+        var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
+            .Value.Should().BeAssignableTo<WikiDecisionDto>().Which;
+
+        dto.Package.Status.Should().Be(WikiPackage.StatusStale);
+        TriageEntry("chat-1").Cursor.Should().Be(9, "сбой отката — ничего не изменил");
     }
 
     // ─── 12. Откат через REST: «уже в состоянии «до пакета»» — отдельное поле ответа (W3-3) ─────
@@ -1305,8 +1397,14 @@ public class WikiPackagesControllerTests : IDisposable
 
     // ─── Фикстура T-A2 (метод WikiChatWindowReturnTests): чат в каталоге + курсор в сторе ───
 
-    private void AddChatSession(string id = "chat-1", string owner = User) =>
-        _sessions.Known[id] = new Session { Id = id, OwnerId = owner, Name = "Чат про сборку" };
+    // projectId — для теста гонки (T-A3): разбор чата без дома отказывается до очереди
+    // заявок (HomeOf → личный раздел), а держаться в прогоне должен именно чатный прогон.
+    private void AddChatSession(string id = "chat-1", string owner = User, string? projectId = null,
+        string? wikiMark = null) =>
+        _sessions.Known[id] = new Session
+        {
+            Id = id, OwnerId = owner, Name = "Чат про сборку", ProjectId = projectId, WikiMark = wikiMark,
+        };
 
     // Состояние «разбор закрыл окно курсором»: прямая запись стора с зоной прежнего исхода
     // (откат обязан её снять; в негативных тестах она обязана остаться).
@@ -1320,6 +1418,13 @@ public class WikiPackagesControllerTests : IDisposable
 
     private WikiChatTriageEntry TriageEntry(string sessionId) =>
         WikiChatTriageStore.Get(WikiPaths.Root(_dir, User)).Entries.Single(e => e.SessionId == sessionId);
+
+    // T-A3: возврат окна — фон после формы ответа, поэтому курсор дописывается ПОСЛЕ ответа.
+    // Наблюдение — SpinWait по самой границе (тот же приём, что в WikiChatWindowReturnTests:330),
+    // без задержек: ждём не времени, а записи.
+    private void WaitCursor(string sessionId, int expected) =>
+        SpinWait.SpinUntil(() => TriageEntry(sessionId).Cursor == expected, 5000)
+            .Should().BeTrue($"фон возврата окна дописал курсор {expected}");
 
     private string StatusOnDisk(string id)
     {
@@ -1403,11 +1508,33 @@ public class WikiPackagesControllerTests : IDisposable
     private sealed class SessionsStub : ISessionDirectory
     {
         public readonly Dictionary<string, Session> Known = new();
+
+        // Барьер теста гонки (T-A3): ПЕРВЫЙ GetHistoryAsync (его делает прогон разбора —
+        // WikiChatIngestService.cs:550) сигналит Reached и стоит на Hold, пока тест не
+        // отпустит прогон; последующие вызовы (их делает возврат окна) — без барьера, иначе
+        // откат встал бы на том же барьере. ThrowHistory: тот же путь падает с исключением —
+        // проверяется, что внутренний сбой возврата окна до ответа не доходит.
+        public TaskCompletionSource? Reached;
+        public TaskCompletionSource? Hold;
+        public bool ThrowHistory;
+        private int _historyCalls;
+
         public Session? GetById(string id) => Known.TryGetValue(id, out var s) ? s : null;
         public IReadOnlyCollection<Session> GetAll() => Known.Values;
         public string? ResolveOwnerId(Session s) => s.OwnerId;
-        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
-            Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        public async Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)
+        {
+            if (Reached is not null && Interlocked.Increment(ref _historyCalls) == 1)
+            {
+                Reached.TrySetResult();
+                if (Hold is not null) await Hold.Task.ConfigureAwait(false);
+            }
+            else if (ThrowHistory)
+            {
+                throw new IOException("история этого чата не читается");
+            }
+            return [];
+        }
         public bool SetWikiMark(string sessionId, string? mark) => Known.ContainsKey(sessionId);
     }
 

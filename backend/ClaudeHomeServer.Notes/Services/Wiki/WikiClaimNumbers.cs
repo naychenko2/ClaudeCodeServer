@@ -22,6 +22,8 @@ internal static class WikiClaimNumbers
     // Метки сносок [^1] и [^sN]: их цифры — не числа утверждения, вырезаются до
     // разбора и из claim, и из цитат: иначе номер сноски считался бы неподтверждённым
     // числом, а «[^1]» в цитате ложно подтверждал бы число claim («в 1 случае»).
+    // Вырезание — пробелом, как у меток и маркеров (хвост bdb97c26, п.13):
+    // «12[^1]34» даёт 12 и 34, а не склеенные в «1234».
     private static readonly Regex FootnoteMarker = new(@"\[\^s?\d+\]", RegexOptions.Compiled);
 
     // Основа слов-меток перед числом (дефект f68d3d82): «этап 2», «шаг 3»,
@@ -84,9 +86,15 @@ internal static class WikiClaimNumbers
     private const char MinusAscii = '-';
     private const char MinusUnicode = (char)0x2212;
 
-    // Класс разделителей тысяч — один и тот же в хвосте числа и в охране знака
-    // (ниже), собран из констант выше: невидимых литералов в исходнике нет.
+    // Класс разделителей тысяч — в хвосте числа, собран из констант выше:
+    // невидимых литералов в исходнике нет. Таб сюда не входит: «1\t000» — два
+    // числа, а не 1000 (хвост bdb97c26, п.10); таб стоит только в охране знака.
     private static readonly string ThousandsSpaceClass = "[ " + SpaceNbsp + SpaceNarrow + "]";
+
+    // Охрана знака: разделители тысяч плюс таб — «12\t-34» даёт то же, что
+    // «12 -34»: два числа (хвост bdb97c26, п.10). Отдельный класс, чтобы таб
+    // не попал в хвост числа.
+    private static readonly string SignGuardSpaceClass = "[ " + SpaceNbsp + SpaceNarrow + @"\t]";
 
     // Хвост числа: цифры; далее — только разделители тысяч строго перед группой ровно
     // из 3 цифр (группа из 4 цифр после пробела — уже не разделитель тысяч,
@@ -102,9 +110,11 @@ internal static class WikiClaimNumbers
     // и после числа с любым пробелом перед ним: «12 -34» — список из двух чисел,
     // «12» и «34» (дельта-ревью S2-2, п.8): дефис сразу после числа относится к
     // предыдущему числу, знак здесь был бы ложным чтением. Одиночное «−12 °C»
-    // (без числа перед знаком) остаётся отрицательным.
+    // (без числа перед знаком) остаётся отрицательным. Таб в охране знака — то же,
+    // что пробел: «12\t-34» — два числа (хвост bdb97c26, п.10); в разделитель
+    // тысяч таб не входит — там остаётся ThousandsSpaceClass.
     private static readonly Regex Number = new(
-        NumberTail + "|(?<![0-9.])(?<![0-9]" + ThousandsSpaceClass + "+)[" + MinusAscii + MinusUnicode + "]" + NumberTail,
+        NumberTail + "|(?<![0-9.])(?<![0-9]" + SignGuardSpaceClass + "+)[" + MinusAscii + MinusUnicode + "]" + NumberTail,
         RegexOptions.Compiled);
 
     /// <summary>Числа из claim, которых нет ни в одной цитате (пусто — всё
@@ -143,7 +153,7 @@ internal static class WikiClaimNumbers
     // «12 этап 34» не должно склеиваться в «1234».
     private static IEnumerable<string> Numbers(string text)
     {
-        text = StripEnumMarkers(AlnumToken.Replace(LabelNumber.Replace(FootnoteMarker.Replace(text, ""), " "), " "));
+        text = StripEnumMarkers(AlnumToken.Replace(LabelNumber.Replace(FootnoteMarker.Replace(text, " "), " "), " "));
         foreach (Match m in Number.Matches(text))
             yield return Normalize(m.Value);
     }

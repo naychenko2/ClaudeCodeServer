@@ -104,7 +104,33 @@ public sealed record FeatureStats(
     FeatureSpend? Spend = null,
     // «Типичная фича проекта» (ST-B1): медиана и p25–p75 по смерженным фичам того же проекта
     // и владельца; null — смерженных меньше трёх.
-    FeatureTypical.TypicalFeatureStats? Typical = null);
+    FeatureTypical.TypicalFeatureStats? Typical = null,
+    // Медиана шага ЭТОЙ фичи (FS-M56, величина 5): медиана DurationMinutes по цепочкам этой
+    // фичи в корзине «принят» (run.StepChains); null — принятых цепочек нет. В JSON —
+    // stats.stepMedianMinutes. Вычисление — StepMedianOf ниже.
+    double? StepMedianMinutes = null,
+    // Отклонение оценок (FS-M478, величины 4, 7, 8): сдвиг срока с начала, смены знаменателя,
+    // точность срока закрытой. В JSON — stats.estimateDrift. Вычисление — FeatureEstimateDrift.Build
+    // над тем же journalResult, что читается для Timeline (второго чтения журнала нет).
+    FeatureEstimateDrift? EstimateDrift = null)
+{
+    // Медиана шага этой фичи (FS-M56): DurationMinutes цепочек этой же фичи в корзине «принят».
+    // Принятость — по AcceptedAt: он ненулевой ровно у принятой цепочки (FeatureStepAccounting.cs:358,
+    // та же проверка, что в FeatureTypical.cs:230) — снятый/идущий/вернувшийся шаг вне выборки.
+    // Медиана — та же функция квантилей, что у stats.typical (FeatureTypical.Pct, линейная
+    // интерполяция, тип 7): при чётном числе — среднее двух средних. Без округления:
+    // DurationMinutes уже целые минуты (FeatureStepAccounting.cs:399), медиана может быть .5.
+    public static double? StepMedianOf(FeatureRun run)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        var durations = run.StepChains
+            .Where(c => c.AcceptedAt is not null)
+            .Select(c => c.DurationMinutes)
+            .OrderBy(v => v)
+            .ToList();
+        return durations.Count == 0 ? null : FeatureTypical.Pct(durations, 0.5);
+    }
+}
 
 // Расход фичи (GET features/{id}, stats.spend; Б9b): токены (вход/выход/кэш) + стоимость.
 // Атрибуция (шов ISpendFeatureReader): записи, чья задача — задача фичи, ИЛИ чей чат — чат
@@ -129,7 +155,22 @@ public sealed record FeatureSpend(
     // С какой даты в срезе есть данные; null — записей нет.
     string? From,
     // Доля общих чатов (Б9c); в Б9b всегда null.
-    FeatureSpendShared? Shared = null);
+    FeatureSpendShared? Shared = null)
+{
+    // Доля кэша (FS-M56, величина 6): CacheReadTokens / (InputTokens + CacheReadTokens +
+    // CacheCreationTokens) — доля прочитанного кэша во ВСЕМ входном контексте записей фичи.
+    // 0…1, без округления; null — входных токенов нет (знаменатель 0). Выводится из уже
+    // сложенных токенов записи (включая долю общего чата — они summed в этих полях выше по
+    // тексту), нового прохода нет; в JSON — stats.spend.cacheShare.
+    public double? CacheShare
+    {
+        get
+        {
+            var denominator = InputTokens + CacheReadTokens + CacheCreationTokens;
+            return denominator > 0 ? (double)CacheReadTokens / denominator : null;
+        }
+    }
+}
 
 // Доля общих (оркестраторских) чатов (Б9c): токены/стоимость/число ходов + метод оценки.
 // В Б9b поле FeatureSpend.Shared всегда null (деление придёт отдельным шагом).

@@ -16,7 +16,7 @@
 // Фронт ничего не сортирует и не считает: порядок и роль исходного чата даёт индекс фич.
 
 import { useSyncExternalStore } from 'react';
-import { getFeaturePageTab, type FeaturePageTab } from './featurePage';
+import { getFeatureMainTab, toMainTab, type FeatureMainTab, type FeaturePageTab } from './featurePage';
 
 // Куда перешли: в чат (id чата), на страницу фичи (id фичи) или в задачу (id задачи).
 export interface BackNavTarget {
@@ -36,9 +36,11 @@ export interface BackNav {
   // Название исходной фичи (fromKind='feature'): для «← к фиче {название}» в шапке чата
   // (Ф-pl-b). null — вызывающий не передал (шапка покажет «← к фиче» без имени).
   fromTitle?: string | null;
-  // Вкладка страницы фичи, с которой ушли (fromKind='feature'): чип возврата показывает её
-  // название («← к фиче · Чаты»), а возврат открывает ту же вкладку (Ф9b).
-  fromTab?: FeaturePageTab;
+  // Мейн-вкладка «Ход · Материалы · Разбор», с которой ушли (fromKind='feature', FS-FBACK):
+  // чип возврата показывает её название («← к фиче · Разбор»), а возврат открывает ту же
+  // вкладку (Ф9b). Старый FeaturePageTab в указателе не хранится: аргумент tab переводится
+  // через toMainTab при записи (вызывающие не меняются).
+  fromTab?: FeatureMainTab;
   // Показывать ли вкладку в чипе возврата (Ф9b, major 1): false — переход из попапа/
   // панели/шторки (не из вкладки страницы): чип «← к фиче», вкладки нет, но возврат
   // ведёт на последнюю использованную вкладку (fromTab). true (дефолт) — из вкладки.
@@ -128,8 +130,9 @@ export function clearBackNav(): void {
 // «вернуться на страницу фичи» (Ф9b) читает это и предлагает возврат. Использует
 // тот же указатель _back, что и «← назад» (chat → chat/feature) — один переход
 // за раз; `from` здесь — id фичи (не чата), `fromKind` = 'feature', `to.kind` — 'chat' | 'task'.
-// Вкладка берётся из стора страницы в момент перехода (tab — только для тестов/явного
-// указания): вызывающим вкладкам её передавать не нужно.
+// Вкладка берётся из мейн-стора страницы в момент перехода (FS-FBACK); аргумент tab —
+// старый FeaturePageTab только для совместимости вызывающих и тестов: он переводится
+// через toMainTab, в указателе хранится FeatureMainTab.
 //
 // ОСОЗНАННОЕ ПОВЕДЕНИЕ (minor 5, ревью Ф9b): указатель _back — ЕДИНСТВЕННЫЙ (один
 // переход за раз). Повторный переход из ДРУГОЙ вкладки/попапа/шторки ПЕРЕЗАПИСЫВАЕТ
@@ -151,7 +154,7 @@ export function recordFeatureReturn(featureId: string, to: { kind: 'chat' | 'tas
   const view = _viewProvider && _viewProvider.featureId === featureId ? _viewProvider.fn() : null;
   _back = {
     from: featureId, fromKind: 'feature', to: { kind: to.kind, id: to.id },
-    fromTitle: title ?? null, fromTab: tab ?? getFeaturePageTab(),
+    fromTitle: title ?? null, fromTab: tab !== undefined ? toMainTab(tab) : getFeatureMainTab(),
     showTab: showTab ?? true,
     view: view ?? null,
   };
@@ -320,7 +323,7 @@ export function useBackNavFrom(sessionId: string | null): string | null {
 // с fromKind='feature') и текущий чат — цель перехода (to.kind='chat', to.id=sessionId).
 // Возвращает id и название исходной фичи; null — перехода из фичи не было. Отличается от
 // backNavFrom (он — chat→chat): здесь дискриминатор fromKind='feature' обязателен.
-export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeaturePageTab; showTab: boolean }
+export interface FeatureBackNavInfo { featureId: string; title: string | null; tab: FeatureMainTab; showTab: boolean }
 // Снимок кэшируем по ссылке на запись _back: useSyncExternalStore требует стабильного
 // значения между вызовами, иначе новый объект на каждый getSnapshot зациклит рендер.
 let _infoSrc: BackNav | null = null;
@@ -329,7 +332,7 @@ export function featureBackNavFrom(sessionId: string | null): FeatureBackNavInfo
   if (!sessionId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'chat' || _back.to.id !== sessionId) return null;
   if (_infoSrc !== _back) {
     _infoSrc = _back;
-    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline', showTab: _back.showTab ?? true };
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'progress', showTab: _back.showTab ?? true };
   }
   return _info;
 }
@@ -347,7 +350,7 @@ export function featureBackNavFromTask(taskId: string | null): FeatureBackNavInf
   if (!taskId || !_back || _back.fromKind !== 'feature' || _back.to.kind !== 'task' || _back.to.id !== taskId) return null;
   if (_infoSrc !== _back) {
     _infoSrc = _back;
-    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'timeline', showTab: _back.showTab ?? true };
+    _info = { featureId: _back.from, title: _back.fromTitle ?? null, tab: _back.fromTab ?? 'progress', showTab: _back.showTab ?? true };
   }
   return _info;
 }

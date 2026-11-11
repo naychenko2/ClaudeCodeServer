@@ -69,6 +69,9 @@ vi.mock('../../lib/featurePage', async () => {
   const React = await vi.importActual<typeof import('react')>('react');
   return {
     getFeaturePageTab: () => 'events' as const,
+    // Чип возврата (featureBackNav.ts:157) при recordFeatureReturn без tab читает
+    // мейн-вкладку из стора: здесь — 'review', как toMainTab('events') в реальном сторе.
+    getFeatureMainTab: () => 'review' as const,
     expandFeaturePageEvents: mockState.expand,
     collapseFeaturePageEvents: mockState.collapse,
     useFeaturePageEventsExpanded: () =>

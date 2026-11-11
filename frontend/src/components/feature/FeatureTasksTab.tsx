@@ -4,7 +4,9 @@
 // строка, доработка корзину не плодит. Корзину шага отдаёт бэк (FeatureStepAccounting) через
 // карточку ленты (buildProdCards): статус по полям задачи фронт НЕ выводит.
 // Фильтры = корзины stepProgress: «в работе · в ревью · не заведено · принято», нулевые
-// скрыты; сумма строк по ним = stepProgress.total. «В master» — ортогональный признак
+// скрыты; сумма строк по ним = stepProgress.total. Доработки после мержа (chain.followUp) —
+// вне этой суммы: отдельная группа после основных строк, до служебных, со счётчиком из
+// stepProgress.followUpAccepted/followUpTotal. «В master» — ортогональный признак
 // (в сумму не входит), «снято» — вне знаменателя. Служебные задачи (эпик, разрез, план,
 // ревью, проверка, финал, мерж и всё, что не вошло в цепочки) — под фильтром «служебные».
 // «Нужен ответ» — слово из общего источника (BRIEF_WAIT_WORD): «ждёт вас» говорит одна тревога.
@@ -86,6 +88,9 @@ export interface StepRow {
 
 export interface StepsTabModel {
   steps: StepRow[];
+  // Доработки после мержа (chain.followUp, FS-PB2): вне steps, корзин и фильтров — отдельная
+  // группа. Порядок — тот же, что у карточек ленты (по старту).
+  followUp: StepRow[];
   // Задачи вне цепочек шагов: эпик, разрез, план, ревью, проверки, финал, мерж, сироты.
   service: FeatureTask[];
 }
@@ -98,7 +103,7 @@ export function buildStepsTab(run: FeatureRun): StepsTabModel {
   const taskById = new Map<string, FeatureTask>();
   for (const t of all) taskById.set(t.id, t);
 
-  const steps: StepRow[] = buildProdCards(run).map(card => {
+  const rows: StepRow[] = buildProdCards(run).map(card => {
     const chain = chainByRef.get(card.stepRef) ?? null;
     const own = chain ? chain.taskIds.map(id => taskById.get(id)).filter((t): t is FeatureTask => !!t) : [];
     const current = own.find(t => t.status === 'inProgress') ?? own[0] ?? null;
@@ -112,9 +117,13 @@ export function buildStepsTab(run: FeatureRun): StepsTabModel {
       needsAnswer: own.some(t => t.status === 'inProgress' && !!t.awaitingHumanSince),
     };
   });
+  // Доработки после мержа — вне steps: их нет ни в одном фильтре и ни в одном счётчике
+  // (решение Андрея 11.11); признак — только chain.followUp.
+  const steps = rows.filter(r => r.chain?.followUp !== true);
+  const followUp = rows.filter(r => r.chain?.followUp === true);
 
   const inChains = new Set(chains.flatMap(c => c.taskIds));
-  return { steps, service: sortTasksByTime(all.filter(t => !inChains.has(t.id))) };
+  return { steps, followUp, service: sortTasksByTime(all.filter(t => !inChains.has(t.id))) };
 }
 
 // Ключ сортировки служебных: последняя активность (completedAt → claudeStartedAt → createdAt).
@@ -373,9 +382,15 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
   const total = active === 'service' ? serviceRows.length : stepRows.length;
   const shownSteps = expanded ? stepRows : stepRows.slice(0, TASKS_COLLAPSED_LIMIT);
   const shownService = expanded ? serviceRows : serviceRows.slice(0, TASKS_COLLAPSED_LIMIT);
+  // Доработки после мержа: отдельная группа в любом виде, кроме «служебных»; показывается
+  // целиком, без порога «Показать все». Группы нет, когда бэк не посчитал доработок
+  // (followUpTotal отсутствует/0 — old-ответ или только снятые) или строк нет.
+  const fuTotal = run.stepProgress?.followUpTotal ?? 0;
+  const fuAccepted = run.stepProgress?.followUpAccepted ?? 0;
+  const followUpRows = active === 'service' || fuTotal === 0 ? [] : model.followUp;
 
-  // Пустое: ни шагов, ни задач (фича создана, конвейер не запускался).
-  if (model.steps.length === 0 && model.service.length === 0) {
+  // Пустое: ни шагов, ни доработок, ни задач (фича создана, конвейер не запускался).
+  if (model.steps.length === 0 && model.followUp.length === 0 && model.service.length === 0) {
     return (
       <div data-testid="tasks-empty" style={{ padding: `${SP.xl}px 0`, textAlign: 'center', fontFamily: FONT.sans }}>
         <div style={{ fontSize: FS.md, fontWeight: 700, color: C.textHeading, marginBottom: SP.xs }}>Шагов нет</div>
@@ -443,6 +458,47 @@ export function FeatureTasksTab({ run, featureId, marks: marksProp, isMobile = f
                 />
               );
             })}
+            {followUpRows.length > 0 && (
+              <>
+                {/* Заголовок группы: «Доработки после мержа · {принято} из {всего}» (FS-FTTp). */}
+                <div
+                  data-testid="tasks-followup-header"
+                  style={{
+                    display: 'flex', gap: SP.xs, alignItems: 'baseline', marginTop: SP.sm,
+                    fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, color: C.textSecondary,
+                  }}
+                >
+                  <span>Доработки после мержа</span>
+                  <span aria-hidden style={{ color: C.textMuted }}>·</span>
+                  <span data-testid="tasks-followup-count" style={{ fontFamily: FONT.mono }}>
+                    {fuAccepted} из {fuTotal}
+                  </span>
+                </div>
+                {followUpRows.map(r => {
+                  const tags: RowProps['tags'] = [{ tone: BUCKET_TONE[r.bucket], text: BUCKET_LABEL[r.bucket], testId: 'task-status' }];
+                  if (r.card.stopped) tags.push({ tone: 'danger', text: 'стоит', testId: 'task-stopped' });
+                  if (r.needsAnswer) tags.push({ tone: 'warn', text: BRIEF_WAIT_WORD, testId: 'task-wait' });
+                  const minutes = r.chain?.durationMinutes ?? 0;
+                  return (
+                    <StepsRow
+                      key={r.card.stepRef}
+                      testId={`followup-row-${r.card.stepRef}`}
+                      title={r.card.title}
+                      role={roleLabel('step', r.card.stepRef, r.chain?.lane ?? null)}
+                      personaId={r.card.personaId}
+                      tags={tags}
+                      meta={minutes > 0 ? formatDuration(minutes) : null}
+                      task={r.headTask}
+                      chatId={r.chatId}
+                      featureId={featureId}
+                      featureTitle={featureTitle}
+                      marks={marks}
+                      isMobile={isMobile}
+                    />
+                  );
+                })}
+              </>
+            )}
             {shownService.map(t => {
               const tags: RowProps['tags'] = [{
                 tone: t.status === 'done' ? 'ok' : t.status === 'inProgress' ? 'work' : 'muted',

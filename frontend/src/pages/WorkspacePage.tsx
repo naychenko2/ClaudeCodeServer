@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
+import { anchorFor, nextFileTaskAnchor, type FileTaskAnchor } from '../lib/featureOpenFile';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
@@ -501,6 +502,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Чат, из ленты которого открыт файл: пара привязана к пути, любой другой openFile её гасит сам
   const [openFileChat, setOpenFileChat] = useState<{ path: string; sessionId: string } | null>(null);
   const openFileSessionId = openFileChat && openFileChat.path === openFile ? openFileChat.sessionId : undefined;
+  // Материал задачи со страницы фичи (FS-F1c): якорь чтения — дерево задачи; взаимоисключается с openFileChat
+  const [openFileTask, setOpenFileTask] = useState<FileTaskAnchor | null>(null);
+  const { taskId: openFileTaskId, branch: openFileBranch } = anchorFor(openFileTask, openFile);
   // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
   // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
   // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
@@ -2110,6 +2114,7 @@ const windowWidth = useWindowWidth();
   // из дерева файлов → режим по глобальному предпочтению; опциональная строка для скролла
   const handleOpenFileFromTree = (filePath: string, line?: number) => {
     setOpenFileChat(null);
+    setOpenFileTask(null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2121,6 +2126,13 @@ const windowWidth = useWindowWidth();
     setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
     histDispatch({ type: 'push', entry: { path: filePath, line } });
+  };
+
+  // Со страницы фичи (FS-F1c): тот же путь открытия, что из дерева, плюс якорь дерева задачи.
+  // Без opts — ровно открытие из дерева (taskId/branch сброшены, вьюер читает корень проекта).
+  const handleOpenFileFromFeature = (filePath: string, opts?: { taskId?: string; branch?: string }) => {
+    handleOpenFileFromTree(filePath);
+    setOpenFileTask(nextFileTaskAnchor(filePath, opts));
   };
 
   // «История решений» из файлового менеджера: открываем файл (панель фильтрует
@@ -2151,6 +2163,7 @@ const windowWidth = useWindowWidth();
   // сплита нет — всегда fullscreen
   const handleOpenFileFromChat = (filePath: string, sessionId?: string) => {
     setOpenFileChat(sessionId ? { path: filePath, sessionId } : null);
+    setOpenFileTask(null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2536,7 +2549,7 @@ const windowWidth = useWindowWidth();
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} projectOwnerId={project.ownerId ?? null} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree} yielded={pageYieldsToFile}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} projectOwnerId={project.ownerId ?? null} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromFeature} yielded={pageYieldsToFile}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2563,7 +2576,7 @@ const windowWidth = useWindowWidth();
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} taskId={openFileTaskId} branch={openFileBranch} backLabel={pageYieldsToFile ? 'К фиче' : undefined} />
           </div>
         )}
         {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.
@@ -2675,6 +2688,9 @@ const windowWidth = useWindowWidth();
           onAttachedFilesChange={setAttachedFiles}
           openFile={openFile}
           openFileSessionId={openFileSessionId}
+          openFileTaskId={openFileTaskId}
+          openFileBranch={openFileBranch}
+          onOpenFileFromFeature={handleOpenFileFromFeature}
           openFileDiffMode={openFileDiffMode}
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}

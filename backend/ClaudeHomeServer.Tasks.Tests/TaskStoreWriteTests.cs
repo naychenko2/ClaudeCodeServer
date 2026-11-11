@@ -111,6 +111,31 @@ public class TaskStoreWriteTests : IDisposable
         reloaded.GetById(epic.Id)!.Note!.Text.Should().Be("жив");
     }
 
+    // FS-PB1: база плана (BaselineSteps) — аддитивное nullable-поле: круговая сериализация,
+    // перезагрузка стора, старый tasks.json без поля читается с null (ничего не мигрируем).
+    // Мутация (c3): переименовать/убрать поле — старый JSON читается, а Should на 12 падает.
+    [Fact]
+    public void BaselineSteps_КруговаяСериализацияИПерезагрузкаСтара_СтарыйJsonБезПоляКакNull()
+    {
+        var item = new TaskItem { Title = "эпик", Role = TaskRoles.Feature, BaselineSteps = 12 };
+
+        var back = JsonSerializer.Deserialize<TaskItem>(JsonSerializer.Serialize(item, Web), Web)!;
+        back.BaselineSteps.Should().Be(12);
+
+        var sut = NewManager();
+        var epic = sut.Create("proj-1", "user-1", new CreateTaskRequest("эпик", Role: TaskRoles.Feature));
+        sut.SetFeatureNote(epic.Id, "идёт", "sess", false, "prod", "running",
+            new FeatureEstimate(["шаг"], 300, "проверка стора", 10),
+            new TaskManager.FeatureEstimateContext("prod", "cut", 0, 12));
+
+        var reloaded = NewManager();
+
+        reloaded.GetById(epic.Id)!.BaselineSteps.Should().Be(12, "база переживает запись и чтение стора");
+
+        var legacy = JsonSerializer.Deserialize<TaskItem>("{\"title\":\"старая\"}", Web)!;
+        legacy.BaselineSteps.Should().BeNull();
+    }
+
     // ─── S2b-1: автор и исполнитель (совместимость формата) ───────────────────
 
     // Старый JSON без новых полей читается как null (мутация: сделать поля обязательными

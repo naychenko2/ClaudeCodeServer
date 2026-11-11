@@ -7,8 +7,10 @@
 //
 // Документы (plans): порядок cut → design → plan → consult; карточка — значок роли,
 // заголовок, автор, время, «без текста». Читалка — FeaturePlanReader (markdown через
-// общий рендер). Прочие документы (M7): файлы из plans[].mockupPaths, не покрытые
-// ни одним макетом (их пути бэк несёт из linkedFiles задач — ADR, спеки, записки):
+// общий рендер). Прочие документы (FS-F1e): materials[] из бэка (файлы задач фичи
+// с taskId автора — ADR, спеки, записки): фронт их не фильтрует — состав и порядок
+// ровно как пришли; клик — onOpenFile(path, { taskId }). Старый ответ (materials нет) —
+// прежний путь: plans[].mockupPaths, не покрытые ни одним макетом (M7).
 // карточка «имя файла + путь». Макеты — FeatureMockups (карточки-превью с миниатюрой-
 // заглушкой, карточка, «Прошлые версии»).
 //
@@ -31,7 +33,7 @@ import { Button } from '../ui/Button';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
 import type { FeaturePage } from '../../types/featureIndex';
-import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
+import type { FeaturePlan, FeatureMockup, FeatureMaterial } from '../../types/featurePlans';
 
 // Выбран в детали: документ (plan) или макет (mockup). null — сетка.
 type Selection = { kind: 'plan'; id: string } | { kind: 'mockup'; path: string } | null;
@@ -40,8 +42,10 @@ export interface FeaturePlansTabProps {
   // Данные страницы (plans / mockups / mockupsUnavailable).
   page: FeaturePage;
   isMobile?: boolean;
+  // Материалы задач фичи (FS-B3a): группа «Прочие документы» строится по ним (FS-F1e).
+  materials?: FeatureMaterial[];
   // Открыть файл проекта (существующий просмотр, HTML в песочнице).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   // Открыть задачу (автор → «задача»).
   onOpenTask?: (taskId: string) => void;
   // Пометки «задача закрыта» (страница даёт свои; без пропа — из run страницы данных).
@@ -134,7 +138,10 @@ export function visiblePlans(plans: FeaturePlan[]): FeaturePlan[] {
   ];
 }
 
-// «Прочие документы» (M7): файлы из plans[].mockupPaths, не показанные в группе «Макеты».
+// «Прочие документы» — прежний путь (M7), работает только когда ответ без materials
+// (старый ответ): с FS-F1e группа строится из materials[], состав и порядок которых
+// держит бэк (FeatureMaterials.Build: отбор, дедуп, потолок 30) и фронт не трогает.
+// Файлы из plans[].mockupPaths, не показанные в группе «Макеты».
 // Бэк (M5) несёт в mockupPaths, кроме макетов из текста, файлы, которые задача приложила
 // через LinkedFiles (ADR, спеки, записки вне docs/mockups); группа «Макеты» рисует только
 // каталог docs/mockups. Путь, не совпавший ни с одним макетом (его path или любой из его
@@ -162,8 +169,14 @@ function otherDocPaths(plans: FeaturePlan[], mockups: FeatureMockup[]): string[]
   return out;
 }
 
+// Элемент группы «Прочие документы»: материал из бэка (FS-F1e) или, для старого ответа
+// (без materials), путь из plans[].mockupPaths — без автора.
+type OtherDocItem = { path: string; taskId?: string };
+
 // Карточка «прочего документа»: имя файла + путь (mono). Клик → onOpenFile (когда дан;
-// без него карточка не интерактивна — не обещаем то, что не можем).
+// без него карточка не интерактивна — не обещаем то, что не можем). Для материала —
+// с taskId автора (вьюер откроет файл из дерева задачи); для пути старого ответа —
+// как прежде, без opts.
 function OtherDocCard({ path, onOpen }: { path: string; onOpen?: () => void }) {
   const [hover, setHover] = useState(false);
   const name = path.split('/').pop() || path;
@@ -200,7 +213,7 @@ function OtherDocCard({ path, onOpen }: { path: string; onOpen?: () => void }) {
   );
 }
 
-export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
+export function FeaturePlansTab({ page, isMobile = false, materials, onOpenFile, onOpenTask, onOpenKeyChat, marks: marksProp, featureId = null, projectId = null }: FeaturePlansTabProps) {
   const marks = useMemo(() => marksProp ?? buildNavMarks(page.run, page.chats), [marksProp, page]);
   // Проект эпика — область перехода в задачу; нет эпика — проект страницы.
   const taskProjectId = page.run.epic?.projectId ?? projectId;
@@ -213,10 +226,16 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
   const plans = useMemo(() => visiblePlans(page.plans ?? []), [page.plans]);
   const mockups: FeatureMockup[] = page.mockups ?? [];
   const device = page.mockupsUnavailable === 'device';
-  // «Прочие документы» (M7): по ВСЕМ планам (материалы фичи не зависят от того, чья
-  // карточка показана). При 'device' группы нет: файлы локального проекта на устройстве,
-  // страница их не откроет — та же причина, что у плашки макетов «на устройстве».
-  const otherDocs = device ? [] : otherDocPaths(page.plans ?? [], mockups);
+  // «Прочие документы» (FS-F1e): материалы из бэка — состав и порядок ровно как пришли
+  // (отбор, дедуп и потолок держит FeatureMaterials.Build; фронт не фильтрует и не режет).
+  // Старый ответ (materials нет) — прежний путь по ВСЕМ планам (материалы фичи не зависят
+  // от того, чья карточка показана). При 'device' группы нет: файлы локального проекта на
+  // устройстве, страница их не откроет — та же причина, что у плашки макетов «на устройстве».
+  const otherDocs: OtherDocItem[] = device
+    ? []
+    : materials
+      ? materials.map(m => ({ path: m.path, taskId: m.taskId }))
+      : otherDocPaths(page.plans ?? [], mockups).map(path => ({ path }));
 
   // Сетка — состояние по умолчанию (5В: «сначала сетка карточек»). Если выбранный
   // документ/макет исчез из данных (дедуп, обновление) — selectedPlan/selectedMockup
@@ -275,8 +294,9 @@ export function FeaturePlansTab({ page, isMobile = false, onOpenFile, onOpenTask
             <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
               <GroupHeader label="Прочие документы" count={otherDocs.length} isMobile={isMobile} />
               <div data-testid="plans-grid-other-docs" style={{ display: 'grid', gridTemplateColumns: gridColumns(isMobile), gap: SP.md }}>
-                {otherDocs.map(p => (
-                  <OtherDocCard key={p} path={p} onOpen={onOpenFile ? () => onOpenFile(p) : undefined} />
+                {otherDocs.map(d => (
+                  // Идентичность карточки — path (бэковый дедуп гарантирует уникальность), автор — taskId.
+                  <OtherDocCard key={d.path} path={d.path} onOpen={onOpenFile ? () => (d.taskId ? onOpenFile(d.path, { taskId: d.taskId }) : onOpenFile(d.path)) : undefined} />
                 ))}
               </div>
             </div>
@@ -313,13 +333,14 @@ function NoDocuments({ hasKeyChat, onOpenKeyChat, isMobile }: { hasKeyChat: bool
   );
 }
 
-// Счётчик вкладки «Планы и макеты»: видимые документы (ровно тот список, что
+// Счётчик вкладки «Материалы»: видимые документы (ровно тот список, что
 // рисует сетка: дедуп планов и неизвестные роли не считаются — хвост ревью R-M3)
-// + «прочие документы» (тот же otherDocPaths, что рисует сетку; при 'device' группы
-// нет — 0) + живые макеты (без отклонённых).
+// + «прочие документы» (тот же источник, что рисует сетку: materials — их число,
+// старый ответ — otherDocPaths; при 'device' группы нет — 0) + живые макеты (без отклонённых).
 export function plansTabCount(page: FeaturePage): number {
   const docs = visiblePlans(page.plans ?? []).length;
   const live = splitMockups(page.mockups ?? []).live.length;
-  const other = page.mockupsUnavailable === 'device' ? 0 : otherDocPaths(page.plans ?? [], page.mockups ?? []).length;
+  const other = page.mockupsUnavailable === 'device' ? 0
+    : page.materials ? page.materials.length : otherDocPaths(page.plans ?? [], page.mockups ?? []).length;
   return docs + live + other;
 }

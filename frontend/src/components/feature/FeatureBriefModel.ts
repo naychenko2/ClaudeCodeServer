@@ -14,6 +14,7 @@
 // формулировки; блок только вызывает модель и красит числа моно).
 
 import { formatDuration } from '../../lib/chatGroups';
+import { plural } from '../../lib/plural';
 import { formatClock, formatDate, minutesSince, stageLabel } from './FeatureStatsBits';
 import { trackerPercent } from '../../lib/featureProgress';
 import { laneWord } from '../../lib/roleLabel';
@@ -466,8 +467,11 @@ export function briefReadinessText(brief: FeatureBrief, opts: BriefTextOptions =
   // полосам В2/С1/П2), числитель и знаменатель бэковые, второй копии арифметики в проекте
   // нет. note.estimate в готовность не входит — она идёт только в «Срок».
   const percent = trackerPercent(stepsAccepted, stepsTotal);
+  // Склонение по знаменателю (1 из 1 → «шага», 2 из 5 → «шагов»): в конструкции «N из M»
+  // существительное — родительный падеж после «из M» («из одного шага», «из пяти шагов»),
+  // а не именовательный после числительного, как в «Все N шагов» (FeatureProgressTab).
   const caption: BriefDonePart[] = [
-    { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ' шагов · ', mono: false },
+    { text: `${stepsAccepted} из ${stepsTotal}`, mono: true }, { text: ` ${plural(stepsTotal, 'шага', 'шагов', 'шагов')} · `, mono: false },
     { text: `${percent} %`, mono: true },
   ];
   // Бэк НЕ гарантирует inMaster ≤ accepted (FeatureStepAccounting.cs:321-328): текст честно

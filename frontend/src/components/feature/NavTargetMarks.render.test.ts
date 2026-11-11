@@ -356,7 +356,7 @@ describe('пометки: Статистика', () => {
   const click = (n: N) => act(() => { (reactProps(n as never)!.onClick as () => void)(); });
   const expectBack = (to: { kind: 'chat' | 'task'; id: string }) => {
     expect(backNav.getBackNav()).toMatchObject({
-      from: 'f1', fromKind: 'feature', fromTab: 'stats', fromTitle: 'Моя фича', to,
+      from: 'f1', fromKind: 'feature', fromTab: 'review', fromTitle: 'Моя фича', to, // FS-FBACK: 'stats' → мейн-вкладка 'review'
     });
   };
 

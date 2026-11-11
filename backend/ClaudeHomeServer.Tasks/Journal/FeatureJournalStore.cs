@@ -16,8 +16,10 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 //   кривой id («..», слэш) не доходит до диска — отказ без исключения наружу.
 // - Потолок 20 000 строк: при переполнении записи kind=turn больше не пишутся,
 //   переходы (created/started/stopped/stop_cleared/stop_expired/waiting/waiting_cleared/
-//   device_wait/device_wait_cleared/status/verdict/dropped) пишутся всегда — они редки (по числу
-//   мутаций, не по числу ходов); чтение возвращает truncated=true (lines >= MaxLines).
+//   device_wait/device_wait_cleared/status/verdict/dropped), записи оценки (estimate_set)
+//   и решение о хвосте (merge_with_tail) пишутся всегда — они редки (по числу мутаций,
+//   записей оценки и мержей с хвостом, не по числу ходов);
+//   чтение возвращает truncated=true (lines >= MaxLines).
 // - Дедуп строк turn по (sessionId, turnSeq) при чтении; у turnSeq<=0 — по startedAt,
 //   а если startedAt==null — по endedAt, затем по outcome (уникальность хода).
 // - Потокобезопасность: запись под замком на featureId; сбой ловится и логируется,
@@ -38,8 +40,8 @@ namespace ClaudeHomeServer.Services.Tasks.Journal;
 ///   работа = turn (startedAt..endedAt), ожидание = waiting..waiting_cleared,
 ///   простой-ожидание-устройства = device_wait..device_wait_cleared,
 ///   ошибка = turn.outcome=error (+errorClass) / stopped.reason.
-/// - Потолок: 20 000 строк на файл; при переполнении пишутся ТОЛЬКО переходы,
-///   turn пропускаются (truncated=true при чтении, см. Read).
+/// - Потолок: 20 000 строк на файл; при переполнении пишутся переходы и записи оценки
+///   (estimate_set), turn пропускаются (truncated=true при чтении, см. Read).
 /// </summary>
 public sealed record FeatureJournalEntry
 {
@@ -53,9 +55,18 @@ public sealed record FeatureJournalEntry
 
     /// <summary>
     /// Вид события: created | started | stopped | stop_cleared | stop_expired | waiting |
-    /// waiting_cleared | device_wait | device_wait_cleared | status | verdict | dropped | turn.
+    /// waiting_cleared | device_wait | device_wait_cleared | status | verdict | dropped | turn |
+    /// estimate_set | merge_with_tail.
     /// stop_expired — смена причины стопа на терминальную без движения метки (W4-HOLD-J);
     /// таймлайн его не читает, это запись причины для журнала.
+    /// merge_with_tail — решение человека «мержить, закрытый хвост оставить» (FS-XT1, разрез §8.3):
+    /// число оставленных шагов в <see cref="TailSteps"/>. Редка (по числу мержей с хвостом):
+    /// при переполнении пишется, как переход; таймлайн её не читает. Снятие хвоста отдельной
+    /// записи не требует — оно видно по verdict с <see cref="Origin"/> = merge_tail на каждом шаге.
+    /// estimate_set — запись оценки оркестратора (FS-O2a): числа оценки в <see cref="ExpectedSteps"/>/
+    /// <see cref="EtaMinutes"/>, снимок учёта фичи — <see cref="Stage"/>/<see cref="PlanState"/>/
+    /// <see cref="Accepted"/>/<see cref="Total"/> (из контекста вызывающего, FS-O2b). Редка (по числу
+    /// записей оценки): при переполнении пишется, как переход; таймлайн её не читает.
     /// device_wait/device_wait_cleared — ожидание устройства локального проекта
     /// (DeviceWaitSince; добавлено в v:1, пока формат не застыл — рекомендация Александра).
     /// </summary>
@@ -95,6 +106,23 @@ public sealed record FeatureJournalEntry
     [JsonPropertyName("verdict")]
     public string? Verdict { get; init; }
 
+    /// <summary>
+    /// Признак происхождения вердикта (для verdict): значение из TaskVerificationOrigins
+    /// (merge_tail — закрытый хвост снят кнопкой мержа, TaskManager.WithdrawMergeTail). Пусто —
+    /// вердикт поставлен обычным путём (ревью/проверка/финал через MCP или REST). Тот же словарь,
+    /// что у TaskVerification.Origin: журнал и задача об одном и том же решении молчать не могут.
+    /// Аддитивное nullable-поле формата v:1: старые строки читаются как есть.
+    /// </summary>
+    [JsonPropertyName("origin")]
+    public string? Origin { get; init; }
+
+    /// <summary>
+    /// Число шагов закрытого хвоста (для merge_with_tail, FS-XT1): решение «мержить, хвост
+    /// оставить» видно по тому, сколько шагов оставили непринятыми. Аддитивное nullable-поле v:1.
+    /// </summary>
+    [JsonPropertyName("tailSteps")]
+    public int? TailSteps { get; init; }
+
     /// <summary>Id сессии (для turn: чат, в котором идёт ход).</summary>
     [JsonPropertyName("sessionId")]
     public string? SessionId { get; init; }
@@ -124,6 +152,42 @@ public sealed record FeatureJournalEntry
     /// <summary>Модель (для turn: какая модель выполняла ход).</summary>
     [JsonPropertyName("model")]
     public string? Model { get; init; }
+
+    /// <summary>
+    /// Оценка «сколько всего шагов» (для estimate_set, FS-O2a). Необязательное поле v:1:
+    /// старые строки без него читаются как есть (null).
+    /// </summary>
+    [JsonPropertyName("expectedSteps")]
+    public int? ExpectedSteps { get; init; }
+
+    /// <summary>Оценка срока до готовности, минуты (для estimate_set). Необязательное поле v:1.</summary>
+    [JsonPropertyName("etaMinutes")]
+    public int? EtaMinutes { get; init; }
+
+    /// <summary>Стадия конвейера фичи на момент записи оценки (для estimate_set). Необязательное поле v:1.</summary>
+    [JsonPropertyName("stage")]
+    public string? Stage { get; init; }
+
+    /// <summary>
+    /// Состояние плана фичи на момент записи оценки (для estimate_set; то же значение, что
+    /// FeatureStepProgress.PlanState). Необязательное поле v:1.
+    /// </summary>
+    [JsonPropertyName("planState")]
+    public string? PlanState { get; init; }
+
+    /// <summary>
+    /// Принятые шаги плана на момент записи оценки (для estimate_set; то же значение, что
+    /// FeatureStepProgress.Accepted). Необязательное поле v:1.
+    /// </summary>
+    [JsonPropertyName("accepted")]
+    public int? Accepted { get; init; }
+
+    /// <summary>
+    /// Всего шагов плана на момент записи оценки (для estimate_set; то же значение, что
+    /// FeatureStepProgress.Total). Необязательное поле v:1.
+    /// </summary>
+    [JsonPropertyName("total")]
+    public int? Total { get; init; }
 }
 
 /// <summary>
@@ -152,6 +216,13 @@ public sealed class FeatureJournalStore
     // Лок на featureId: сериализует append/read/delete одной фичи.
     // Ключ — "{ownerId}/{featureId}"; ConcurrentDictionary гарантирует атомарность GetOrAdd.
     private readonly ConcurrentDictionary<string, object> _locks = new();
+
+    // Тестовый шов (образец: FeatureNoteContended/FeatureNoteInside в TaskManager.cs:1803-1804):
+    // вызывается внутри per-key замка непосредственно перед записью строки — наблюдаемый момент
+    // «append начался, строки ещё нет», которого у File.AppendAllText нет. В бою null.
+    // Шов внутри замка: per-key замок держится на всё время «шов + запись»; исключение шва
+    // ловится общим catch Append (как сбой диска) — запись вызывающего не откатывается.
+    internal Action<string>? JournalAppending;
 
     // Счётчик строк в памяти (под тем же замком на featureId): раньше потолок
     // пересчитывал файл построчно (CountLines) на КАЖДЫЙ turn-append — O(n) на горячем
@@ -203,6 +274,9 @@ public sealed class FeatureJournalStore
                 // Счётчик — в памяти (инициализация при первом обращении), не перечитывание.
                 if (entry.Kind == "turn" && GetLineCount(key, path) >= MaxLines) return;
 
+                // Шов — только для записей, которые реально пишутся (после проверки потолка).
+                JournalAppending?.Invoke(key);
+
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.AppendAllText(path, JsonSerializer.Serialize(entry, JsonOpts) + "\n");
                 _lineCounts.AddOrUpdate(key, 1, (_, old) => old + 1);
@@ -235,8 +309,9 @@ public sealed class FeatureJournalStore
 
             var lines = File.ReadAllLines(path);
             // Потолок ограничивает ТОЛЬКО kind=turn: переходы (created/started/stopped/
-            // stop_cleared/waiting/waiting_cleared/status/verdict/dropped) пишутся всегда —
-            // они редки (по числу мутаций, не по числу ходов). Файл, дошедший до MaxLines,
+            // stop_cleared/waiting/waiting_cleared/status/verdict/dropped) и записи оценки
+            // (estimate_set) пишутся всегда — они редки (по числу мутаций и записей оценки,
+            // не по числу ходов). Файл, дошедший до MaxLines,
             // уже теряет turn-записи (Append пропускает turn при >= MaxLines), поэтому
             // truncated = «пропущены ходы из-за потолка» = lines >= MaxLines, а не > MaxLines
             // (при ровно потолке > не срабатывало, хотя ходы уже терялись — мутация).

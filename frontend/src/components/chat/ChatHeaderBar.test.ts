@@ -10,9 +10,10 @@
 
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { ChatHeaderBar } from './ChatHeaderBar';
 import { C } from '../../lib/design';
+import { __test as backNav } from '../../lib/featureBackNav';
 import { CHAT_ACTION_ORDER, CHAT_ACTION_LABELS, CARD_ACTIONS_HIDDEN_BY_DEFAULT, HEADER_ACTIONS_HIDDEN_BY_DEFAULT } from '../../lib/chatActions';
 import type { Session } from '../../types';
 
@@ -99,6 +100,33 @@ describe('ChatHeaderBar: слот строки фичи', () => {
   it('остров (island) без слота: узла слота нет — hero-шапка не обрастает пустым div', () => {
     const html = render({ island: true });
     expect(html).not.toContain('chat-feature-bar');
+  });
+});
+
+// FS-FC-chip (макет v5 §4): при карточке фичи в слоте чип «к фиче» в тулбаре не рисуется —
+// возврат ведёт её кнопка «К фиче» (список фич карточки даёт ChatPanel, FS-FCi). Скрытие
+// только по совпадению featureId указателя. Мутация «не передавать hideForFeatureIds в
+// ChatHeaderBar» — первый тест красный (чип рисуется). Чипу нужен projectId чата — он в
+// chatSession ниже; без него чип не рисуется и проверка была бы пустой.
+describe('ChatHeaderBar: скрытие чипа возврата при карточке фичи', () => {
+  const chatSession = { ...session, projectId: 'p1' } as Session;
+  beforeEach(() => { backNav.reset(); });
+  function renderWith(over: Record<string, unknown>): string {
+    return renderToStaticMarkup(createElement(ChatHeaderBar, { ...base, session: chatSession, ...over }));
+  }
+  const bar = { featureBar: createElement('div', { 'data-testid': 'feature-banner' }, 'строка') };
+  it('featureBarFeatureIds=[f1] и указатель на f1: чипа нет', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 's-1' }, 'Моя фича');
+    const html = renderWith({ ...bar, featureBarFeatureIds: ['f1'] });
+    expect(html, 'вторая кнопка возврата рядом с карточкой').not.toContain('feature-back-chip');
+  });
+  it('тот же указатель без пропа: чип рисуется (контроль: гасит проп, а не указатель)', () => {
+    backNav.recordFeatureReturn('f1', { kind: 'chat', id: 's-1' }, 'Моя фича');
+    expect(renderWith(bar)).toContain('feature-back-chip');
+  });
+  it('указатель на другую фичу (f2), карточка на f1: чип рисуется', () => {
+    backNav.recordFeatureReturn('f2', { kind: 'chat', id: 's-1' }, 'Другая фича');
+    expect(renderWith({ ...bar, featureBarFeatureIds: ['f1'] })).toContain('feature-back-chip');
   });
 });
 

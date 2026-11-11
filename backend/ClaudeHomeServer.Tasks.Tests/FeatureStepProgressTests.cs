@@ -723,28 +723,32 @@ public class FeatureStepProgressTests
         new FeatureStepProgress().PlanState.Should().Be(FeatureStepAccounting.PlanPending);
     }
 
-    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:24-26):
-    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf), cut/done вне класса
-    // не потребляются — private. Поднять их «для удобства» — значит пустить значение за единственную
-    // точку определения. Мутация: PlanCut до internal — тест красный.
+    // R-B11B12 минор 3: видимость констант Plan* — контракт (FeatureStepAccounting.cs:46-56):
+    // pending/partial — internal (по ним сверяет FeatureBrief.EstimateOf). С FS-O2b к internal
+    // поднят PlanCut: его сравнивает правило базового срока в TaskManager (InitialEtaMinutes
+    // пишется только при нарезанном плане) — это не «для удобства», а новый потребитель значения,
+    // и он сравнивает ту же константу, а не второй литерал "cut". С FS-PB1 тем же основанием
+    // поднят PlanDone: его сравнивает правило базы плана в TaskManager (BaselineSteps пишется при
+    // cut ИЛИ done — поправка постановщика 11.11: окно cut закрывается само при accepted == total).
+    // Мутации: вернуть PlanCut или PlanDone в private — красный на его строке (для PlanDone
+    // проверено прогоном FS-PB1: «Expected IsPrivate to be True … but found False»).
     [Fact]
-    public void ПланКонстанты_ВидимостьПоКонтракту_CutDoneНеInternal()
+    public void ПланКонстанты_ВидимостьПоКонтракту_PlanCutInternal_PlanDoneInternal()
     {
         var t = typeof(FeatureStepAccounting);
-        foreach (var (name, shouldBeInternal) in new[]
+        foreach (var name in new[]
         {
-            (nameof(FeatureStepAccounting.PlanPending), true),
-            (nameof(FeatureStepAccounting.PlanPartial), true),
-            ("PlanCut", false),
-            ("PlanDone", false),
+            nameof(FeatureStepAccounting.PlanPending),
+            nameof(FeatureStepAccounting.PlanPartial),
+            "PlanCut",
+            "PlanDone",
         })
         {
             var field = t.GetField(name, BindingFlags.NonPublic | BindingFlags.Static);
             field.Should().NotBeNull($"константа {name} должна существовать");
-            if (shouldBeInternal)
-                field!.IsAssembly.Should().BeTrue($"{name} — internal: по ней сверяет FeatureBrief.EstimateOf");
-            else
-                field!.IsPrivate.Should().BeTrue($"{name} вне класса не потребляется — private");
+            field!.IsAssembly.Should().BeTrue(
+                $"{name} — internal: её сравнивает потребитель вне класса (FeatureBrief.EstimateOf, "
+                + "правило базового срока и правило базы плана в TaskManager), а не второй литерал");
         }
     }
 
@@ -781,6 +785,159 @@ public class FeatureStepProgressTests
         (p.Accepted, p.Review, p.Work, p.NotCreated).Should().Be((1, 1, 2, 1));
         (p.Accepted + p.Review + p.Work + p.NotCreated).Should().Be(p.Total);
         p.Total.Should().Be(5);
+    }
+
+    // ─── Закрытый хвост (§8.3, Х0): ключи отдаёт учёт, риск мержа делит «живое» и «хвост» ──────
+
+    // Тот же проход, что и корзины: ключ — stepRef (а без него id задачи), порядок — тот же, что
+    // у цепочек. Вызывается напрямую, чтобы тест видел ключи, а не только счётчик за ними.
+    private static FeatureStepAccounting.Result Account(params TaskItem[] tasks) =>
+        FeatureStepAccounting.Build(
+            tasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList(),
+            tasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList(),
+            tasks.Where(t => t.Role == TaskRoles.Plan).ToList(),
+            T0.AddDays(1), Array.Empty<FeatureIndexSession>());
+
+    // Фикстура всех корзин: хвост — ровно «ждёт ревью» (сдан, витков нет) и «закрыт без повторного
+    // ревью» (вернули, всё закрыто). Идущий исполнитель, идущий виток, принятый шаг и снятый — вне.
+    [Fact]
+    public void ЗакрытыйХвост_КлючиРовноЦепочкиPendingИReturned_ЖивоеПринятыеИСнятыеВне()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back"),
+                ("Ш5", "back"), ("Ш6", "back"), ("Ш7", "back"), ("Ш8", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),          // принят
+            Step("s2", "Ш2", 2),                                                                          // ждёт ревью → хвост
+            Step("s3", "Ш3", 3), Verdict("r3", TaskRoles.Review, TaskVerdicts.Returned, 6, "s3"),         // вернули, всё закрыто → хвост
+            Step("s4", "Ш4", 4, TaskItemStatus.InProgress),                                             // идёт
+            Step("s5", "Ш5", 5), Verdict("r5", TaskRoles.Review, null, 7, "s5"),                         // виток идёт
+            Step("s6", "Ш6", 6), Verdict("r6", TaskRoles.Review, TaskVerdicts.Withdrawn, 8, "s6"),       // снят
+            Step("s7", "Ш7", 7), Verdict("r7", TaskRoles.Review, TaskVerdicts.Accepted, 9, "s7"),
+            Rework("w7", "Ш7", 10, status: TaskItemStatus.InProgress),                                   // принят, но доработка открыта
+        };
+
+        var acct = Account(tasks);
+        var tailFromChains = acct.Chains.Where(c => c.Outcome is "pending" or "returned").Select(c => c.StepRef).ToList();
+
+        tailFromChains.Should().Equal(new[] { "Ш2", "Ш3" }, "фикстура правда: в хвосте только эти две цепочки");
+        acct.ClosedTailKeys.Should().Equal(tailFromChains, "ключи хвоста — тот же проход и тот же предикат, что корзины");
+        acct.Progress.ClosedTail.Should().Be(2);
+        acct.Chains.Select(c => c.Outcome).Distinct().OrderBy(x => x, StringComparer.Ordinal)
+            .Should().Equal(new[] { "accepted", "pending", "returned", "running", "withdrawn" },
+                "фикстура даёт все исходы, иначе равенство выше пустое");
+
+        var run = Run(tasks);
+        run.StepProgress.ClosedTail.Should().Be(acct.ClosedTailKeys.Count, "проектор берёт ключи учёта, а не пересчитывает их");
+    }
+
+    // Открытая доработка, принятый шаг с доработкой, снятый шаг и идущая задача — не хвост:
+    // кнопка мержа их не трогает (§8.3, «что кнопка не трогает»).
+    [Fact]
+    public void ЗакрытыйХвост_НеТрогаетЖивуюРаботуПринятыеИСнятыеШаги()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back")),
+            Step("s1", "Ш1", 1), Rework("w1", "Ш1", 3, status: TaskItemStatus.InProgress),
+            Step("s2", "Ш2", 2), Verdict("r2", TaskRoles.Review, TaskVerdicts.Accepted, 6, "s2"),
+            Rework("w2", "Ш2", 7, status: TaskItemStatus.InProgress),
+            Step("s3", "Ш3", 4), Verdict("r3", TaskRoles.Review, TaskVerdicts.Withdrawn, 8, "s3"),
+            Step("s4", "Ш4", 5, TaskItemStatus.InProgress),
+        };
+
+        Account(tasks).ClosedTailKeys.Should().BeEmpty();
+
+        var p = Run(tasks).StepProgress;
+        p.ClosedTail.Should().Be(0);
+        p.Withdrawn.Should().Be(1, "Ш3 снят: он вне знаменателя и не хвост");
+    }
+
+    // Идущий виток — живая работа (§8.3): «на ревью, которое идёт», в отличие от «ждёт ревью»
+    // (витков нет), в хвост не входит — его никто не снимает без человека.
+    [Fact]
+    public void ЗакрытыйХвост_ИдущийВитокНеВХвосте()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, null, 5, "s1"),
+        };
+
+        Account(tasks).ClosedTailKeys.Should().BeEmpty();
+        Run(tasks).StepProgress.ClosedTail.Should().Be(0);
+    }
+
+    // Ключ и порядок — как в учёте: у шага без stepRef ключ — id задачи, порядок — по появлению.
+    [Fact]
+    public void ЗакрытыйХвост_КлючБезСтепРефаIdЗадачи_ПорядокКакУЦепочек()
+    {
+        var tasks = new[] { Feature(), Step("b", null, 2), Step("a", null, 1) };
+
+        var acct = Account(tasks);
+
+        acct.ClosedTailKeys.Should().Equal(new[] { "b", "a" }, "тот же порядок появления, что у Chains");
+        acct.Chains.Select(c => c.StepRef).Should().Equal(acct.ClosedTailKeys);
+    }
+
+    // Снятие «при мерже» (Origin = merge_tail) — часть Withdrawn с тем же источником, что решил
+    // снятие: задача-шаг или последний виток-снятие. Без Origin — снятие по существу; снятая
+    // доработка шага не касается и в хвост остаётся.
+    [Fact]
+    public void WithdrawnAtMerge_СчитаетТолькоВердикСOriginMergeTail()
+    {
+        var s1 = Step("s1", "Ш1", 1);
+        s1.Verification = new TaskVerification { Verdict = TaskVerdicts.Withdrawn, Origin = TaskVerificationOrigins.MergeTail };
+        var r2 = Verdict("r2", TaskRoles.Review, TaskVerdicts.Withdrawn, 6, "s2");
+        r2.Verification!.Origin = TaskVerificationOrigins.MergeTail;
+        var s3 = Step("s3", "Ш3", 2);
+        var r3 = Verdict("r3", TaskRoles.Review, TaskVerdicts.Withdrawn, 7, "s3"); // без Origin — по существу
+        var w4 = Rework("w4", "Ш4", 3, status: TaskItemStatus.Done, verdict: TaskVerdicts.Withdrawn);
+        w4.Verification!.Origin = TaskVerificationOrigins.MergeTail;
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back")),
+            s1, Step("s2", "Ш2", 4), r2, s3, r3, Step("s4", "Ш4", 5), w4,
+        };
+
+        var p = Run(tasks).StepProgress;
+
+        p.Withdrawn.Should().Be(3);
+        p.WithdrawnAtMerge.Should().Be(2, "только вердикт с Origin = merge_tail: задача-шаг и последний виток");
+        p.ClosedTail.Should().Be(1, "снятая доработка шага не касается: Ш4 остаётся закрытым непринятым");
+    }
+
+    // Диалог мержа: «живое» и «хвост» — два отдельных риска; их сумма — то же число, что был
+    // один «open» (сторож разбиения, §8.3).
+    [Fact]
+    public void РискиМержа_ЖивоеИХвостОтдельно_СуммаРавнаПрежнемуOpen()
+    {
+        var tasks = new[]
+        {
+            Feature(), Plan("p", 0, ("Ш1", "back"), ("Ш2", "back"), ("Ш3", "back"), ("Ш4", "back"), ("Ш5", "back")),
+            Step("s1", "Ш1", 1), Verdict("r1", TaskRoles.Review, TaskVerdicts.Accepted, 5, "s1"),
+            Step("s2", "Ш2", 2),
+            Step("s3", "Ш3", 3), Verdict("r3", TaskRoles.Review, TaskVerdicts.Returned, 6, "s3"),
+            Step("s4", "Ш4", 4, TaskItemStatus.InProgress),
+            Step("s5", "Ш5", 5), Verdict("r5", TaskRoles.Review, null, 7, "s5"),
+            Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 30, "s1"),
+        };
+
+        var run = Run(tasks);
+
+        // Живое — Ш4 (идёт) и Ш5 (виток идёт); хвост — Ш2 (ждёт ревью) и Ш3 (вернули без доработки).
+        // «tracker» — тот же закрытый хвост глазами сверки (§8.1: unreviewed / returned_no_rework):
+        // отдельная ось, её число этим шагом не меняется.
+        var risks = run.Attention!.MergeRisks;
+        risks.Should().Equal(new[]
+        {
+            new FeatureMergeRisk("open", 2),
+            new FeatureMergeRisk("tail", 2),
+            new FeatureMergeRisk("tracker", 2),
+        }, "порядок фиксирован: живое → хвост → сверка трекера");
+        (risks.Single(r => r.Kind == "open").Count + risks.Single(r => r.Kind == "tail").Count)
+            .Should().Be(run.StepProgress.Work + run.StepProgress.Review, "open + tail = прежний open");
+        run.StepProgress.ClosedTail.Should().Be(2);
     }
 
     // ─── Контракт: SlimRun, индекс, StepsOpen ────────────────────────────────────────────────
@@ -841,7 +998,7 @@ public class FeatureStepProgressTests
             Step("s1", "Ш1", 1), Step("s2", "Ш2", 2, TaskItemStatus.InProgress) };
         var run = FeatureProjector.Build(epic, tasks, T0.AddDays(1));
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
 
         (row.StepsReview, row.StepsWork, row.StepsNotCreated, row.PlanState).Should().Be((1, 1, 1, "cut"));
         (row.StepsAccepted, row.StepsTotal).Should().Be((0, 3));
@@ -857,7 +1014,7 @@ public class FeatureStepProgressTests
             Rework("w1", "Нет-такого", 8), Rework("w2", null, 9) };
         var run = FeatureProjector.Build(epic, tasks, T0.AddDays(1));
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
 
         run.StepProgress.Withdrawn.Should().BeGreaterThan(0);
         run.StepProgress.UnlinkedReworks.Should().BeGreaterThan(0);
@@ -885,8 +1042,11 @@ public class FeatureStepProgressTests
         json.Should().Contain("\"stepProgress\"");
         json.Should().Contain("\"planState\"");
         json.Should().Contain("\"stepsOpen\"");
+        // Х0 (§8.3): имена новых счётчиков — часть контракта, фронт (Ф1) читает ровно их.
+        json.Should().Contain("\"closedTail\"");
+        json.Should().Contain("\"withdrawnAtMerge\"");
 
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1));
         var rowJson = JsonSerializer.Serialize(row, opts);
         rowJson.Should().Contain("\"stepsReview\"");
         rowJson.Should().Contain("\"stepsWork\"");
@@ -909,7 +1069,7 @@ public class FeatureStepProgressTests
         merged.State.Should().Be(FeatureStates.Merged);
         merged.Summary!.StepsOpen.Should().Be(1);
         merged.Summary.Steps.Should().Be(2, "Summary.Steps = знаменатель");
-        FeatureProjector.BuildRow(merged, mergedTasks, Array.Empty<FeatureIndexSession>(), 0).Summary!.StepsOpen.Should().Be(1);
+        FeatureProjector.BuildRow(merged, mergedTasks, Array.Empty<FeatureIndexSession>(), 0, T0.AddDays(1)).Summary!.StepsOpen.Should().Be(1);
 
         // closed: эпик Done, merge нет; два шага, принято 0.
         var epicC = Feature();
@@ -1009,5 +1169,196 @@ public class FeatureStepProgressTests
 
         run.StepProgress.Total.Should().Be(3, "действующий p2 [A,B] плюс заведённый C");
         AssertBucketsMatchProgress(run, tasks);
+    }
+    // ─── FS-PB2: доработки после мержа вне знаменателя ──────────────────────────────────────────
+
+    private static TaskItem MergeDone(string id, int minute) => new()
+    {
+        Id = id, FeatureId = Epic, Role = TaskRoles.Merge, Status = TaskItemStatus.Done,
+        CreatedAt = T0.AddMinutes(minute), CompletedAt = T0.AddMinutes(minute + 1),
+    };
+
+    private static FeatureStepAccounting.Result AccountFu(int? baseline, params TaskItem[] tasks)
+    {
+        var steps = tasks.Where(t => t.Role is TaskRoles.Step or TaskRoles.Rework).ToList();
+        var verdicts = tasks.Where(t => t.Role is TaskRoles.Review or TaskRoles.Qa or TaskRoles.Final).ToList();
+        var plan = tasks.Where(t => t.Role == TaskRoles.Plan).ToList();
+        var merges = tasks.Where(t => t.Role == TaskRoles.Merge).ToList();
+        return FeatureStepAccounting.Build(steps, verdicts, plan, T0.AddDays(1), null, merges, baseline);
+    }
+
+    [Fact]
+    public void Доработка_СозданаПослеПервогоМержаВнеПлана_ВнеTotalИКорзин()
+    {
+        var acc = AccountFu(7, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40, TaskItemStatus.InProgress));
+
+        acc.Progress.Total.Should().Be(1);
+        acc.Progress.Accepted.Should().Be(1);
+        acc.Progress.Work.Should().Be(0);
+        acc.Progress.PlanState.Should().Be(FeatureStepAccounting.PlanDone);
+        acc.Progress.FollowUpTotal.Should().Be(1);
+        acc.Progress.FollowUpAccepted.Should().Be(0);
+        acc.Progress.BaselineTotal.Should().Be(7);
+        acc.Lanes.Sum(l => l.Total).Should().Be(1);
+        acc.Chains.Single(c => c.StepRef == "F").FollowUp.Should().BeTrue();
+        acc.Chains.Single(c => c.StepRef == "A").FollowUp.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Доработка_ПринятаяСчитаетсяВFollowUpAccepted_ТотальНеМеняется()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"));
+
+        acc.Progress.Total.Should().Be(1);
+        acc.Progress.FollowUpTotal.Should().Be(1);
+        acc.Progress.FollowUpAccepted.Should().Be(1);
+        acc.Progress.BaselineTotal.Should().BeNull();
+    }
+
+    [Fact]
+    public void Доработка_ПлановыйШагПослеМержа_ОстаётсяБазовым()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back"), ("B", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sB", "B", 40, TaskItemStatus.InProgress));
+
+        acc.Progress.Total.Should().Be(2);
+        acc.Progress.Work.Should().Be(1);
+        acc.Progress.FollowUpTotal.Should().Be(0);
+    }
+
+    // Граница: шаг, созданный ровно в момент закрытия мержа, — не «строго позже», значит базовый.
+    // Опорный момент — именно ПЕРВЫЙ мерж: от второго (m2) шаг, созданный между ними, сдвинул бы итог.
+    [Fact]
+    public void Доработка_ГраницаПервогоМержа_СтрогоПозжеИТолькоОтПервого()
+    {
+        var m1 = MergeDone("m1", 30); // закрыт на минуте 31
+        var onBorder = Step("sB", "B", 31, TaskItemStatus.InProgress);
+        var between = Step("sC", "C", 40, TaskItemStatus.InProgress);
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), m1, MergeDone("m2", 50), onBorder, between);
+
+        acc.Progress.Total.Should().Be(2, "A плюс B (создан ровно на границе)");
+        acc.Progress.FollowUpTotal.Should().Be(1, "C создан после первого мержа, хоть и до второго");
+        acc.Chains.Single(c => c.StepRef == "B").FollowUp.Should().BeFalse();
+    }
+
+    [Fact]
+    public void Доработка_БезМержа_НеВыделяется_ПустаяКоллекцияНулевыеСчётчики()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), Step("sF", "F", 40));
+        acc.Progress.Total.Should().Be(2);
+        acc.Progress.FollowUpTotal.Should().Be(0);
+        acc.Progress.FollowUpAccepted.Should().Be(0);
+        AccountFu(null, Feature()).Progress.FollowUpTotal.Should().Be(0);
+    }
+
+    [Fact]
+    public void РискиМержа_ОткрытаяДоработкаУчитываетсяВOpen()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40, TaskItemStatus.InProgress));
+
+        var risks = FeatureProjector.BuildMergeRisks(acc.Progress, 0);
+        risks.Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 1);
+    }
+
+    // Принятая доработка после мержа мерж не держит: вычет FollowUpAccepted в BuildMergeRisks.
+    [Fact]
+    public void РискиМержа_ПринятаяДоработка_НеДержитМерж()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().NotContain(r => r.Kind == FeatureMergeRiskKinds.Open);
+    }
+
+    [Fact]
+    public void РискиМержа_ПринятаяИОткрытаяДоработки_OpenОдин()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("sF", "F", 40), Verdict("rF", TaskRoles.Review, TaskVerdicts.Accepted, 45, "sF"),
+            Step("sG", "G", 41, TaskItemStatus.InProgress));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 1);
+    }
+
+    [Fact]
+    public void КонтрактДоработок_ИменаПолейCamelCase()
+    {
+        var opts = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var acc = AccountFu(3, Plan("p", 0, ("A", "back")), Step("sA", "A", 1), MergeDone("m1", 30), Step("sF", "F", 40));
+        var json = JsonSerializer.Serialize(new { acc.Progress, acc.Chains }, opts);
+        json.Should().Contain("\"baselineTotal\":3").And.Contain("\"followUpTotal\":1")
+            .And.Contain("\"followUpAccepted\":0").And.Contain("\"followUp\":true");
+    }
+    // Критерий c1: 10 принятых базовых шагов + 3 доработки после мержа (1 принята) через полный
+    // FeatureProjector.Build: итог (Total/Accepted/Summary) тот же, что без доработок.
+    [Fact]
+    public void Доработки_ПослеМержа_ИтогИSummaryНеМеняются()
+    {
+        List<TaskItem> Base()
+        {
+            var l = new List<TaskItem> { Feature(), Plan("p", 0, Enumerable.Range(1, 10).Select(n => ($"B{n}", (string?)"back")).ToArray()) };
+            for (var n = 1; n <= 10; n++)
+            {
+                l.Add(Step($"s{n}", $"B{n}", n));
+                l.Add(Verdict($"r{n}", TaskRoles.Review, TaskVerdicts.Accepted, n + 1, $"s{n}"));
+            }
+            l.Add(Verdict("f", TaskRoles.Final, TaskVerdicts.Accepted, 30, "s1"));
+            l.Add(MergeDone("m", 40));
+            return l;
+        }
+        var tasks = Base();
+        var before = FeatureProjector.Build(tasks[0], tasks.ToList(), T0.AddDays(1));
+        tasks.Add(Step("f1", "F1", 60));
+        tasks.Add(Step("f2", "F2", 61));
+        tasks.Add(Step("f3", "F3", 62));
+        tasks.Add(Verdict("rf3", TaskRoles.Review, TaskVerdicts.Accepted, 64, "f3"));
+        var run = FeatureProjector.Build(tasks[0], tasks, T0.AddDays(1));
+
+        run.StepProgress.Total.Should().Be(10);
+        run.StepProgress.Accepted.Should().Be(10);
+        run.StepProgress.PlanState.Should().Be(FeatureStepAccounting.PlanDone);
+        run.StepProgress.FollowUpTotal.Should().Be(3);
+        run.StepProgress.FollowUpAccepted.Should().Be(1);
+        run.StepChains.Count(c => c.FollowUp).Should().Be(3);
+        // Состояние фичи при доработках после мержа (WaveAfterMerge) — открытый вопрос Андрею и здесь
+        // не фиксируется; Summary строится из тех же Total/Accepted, поэтому сверяем источник итога.
+        before.State.Should().Be(FeatureStates.Merged);
+        before.Summary!.Steps.Should().Be(run.StepProgress.Total);
+        before.Summary.StepsOpen.Should().Be(run.StepProgress.Total - run.StepProgress.Accepted);
+    }
+
+    // Критерий c3: две открытые доработки → open=2 в рисках второго мержа; плановый шаг-«хвост» не мешает.
+    [Fact]
+    public void РискиМержа_ДвеОткрытыеДоработки_OpenДва()
+    {
+        var acc = AccountFu(null, Plan("p", 0, ("A", "back")), Step("sA", "A", 1),
+            Verdict("rA", TaskRoles.Review, TaskVerdicts.Accepted, 5, "sA"), MergeDone("m1", 30),
+            Step("f1", "F1", 40, TaskItemStatus.InProgress), Step("f2", "F2", 41, TaskItemStatus.InProgress));
+
+        FeatureProjector.BuildMergeRisks(acc.Progress, 0)
+            .Should().ContainSingle(r => r.Kind == FeatureMergeRiskKinds.Open && r.Count == 2);
+    }
+
+    // Критерий c4: BaselineSteps эпика доезжает до stepProgress.baselineTotal; без него — null.
+    [Fact]
+    public void BaselineTotal_ИзЭпика_ПробрасываетсяВStepProgress()
+    {
+        var epic = Feature();
+        epic.BaselineSteps = 12;
+        var withBase = FeatureProjector.Build(epic, [epic, Step("s1", "A", 1)], T0.AddDays(1));
+        withBase.StepProgress.BaselineTotal.Should().Be(12);
+        var epic2 = Feature();
+        FeatureProjector.Build(epic2, [epic2, Step("s1", "A", 1)], T0.AddDays(1)).StepProgress.BaselineTotal.Should().BeNull();
     }
 }

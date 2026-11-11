@@ -244,7 +244,7 @@ public class ChatHandoffService(
         var sent = await (SendOverride is { } send
             ? send(source.Id, BuildWarmPrompt(), WarmTurnTimeout)
             : sessions.SendMessageAndWaitAsync(source.Id, BuildWarmPrompt(), WarmTurnTimeout,
-                preempt: false, senderUserId: ownerId));
+                preempt: false, systemDirective: true, senderUserId: ownerId));
 
         var note = sent switch
         {

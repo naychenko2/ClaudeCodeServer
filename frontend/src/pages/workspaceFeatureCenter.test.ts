@@ -501,13 +501,12 @@ describe('WorkspacePage: центр — страница фичи соседом
     expect((reactProps(taAfterReturn!) as any).value, 'черновик композера не пережил возврат').toBe(draft);
   });
 
-  // M4: страница открыта на «Чатах» → клик по точке (cc-open-feature с stage) → вкладка
-  // ЯВНО «Хронология» (setPage сбрасывает _tab только при смене fid — повторный клик по
-  // точке на уже открытой фиче вкладку бы не сменил) + якорь этапа; вкладка «Хронология»
-  // читает якорь и ГАСИТ его (clearFeatureStageFocus) — «Фича →» без stage старый этап
-  // не раскроет. Мутации: убрать setFeaturePageTab('timeline') → вкладка «chats» → red;
-  // убрать clearFeatureStageFocus → stageFocus() не null → red.
-  it('M4: страница на «Чатах» → точка (stage) → «Хронология» + якорь гашен; «Фича →» без stage → якоря нет', async () => {
+  // M4: страница открыта на «Разборе» (старое значение chats) → клик по точке (cc-open-feature
+  // с stage) → вкладка ЯВНО «Ход» (setPage сбрасывает вкладку только при смене fid — повторный
+  // клик по точке на уже открытой фиче вкладку бы не сменил). Вкладки «Хронология» больше нет:
+  // якорь этапа никто не гасит, поэтому на гашение тест не опирается.
+  // Мутация: убрать setFeaturePageTab('timeline') → вкладка «review» → red.
+  it('M4: страница на «Разборе» → точка (stage) → «Ход»; «Фича →» без stage → вкладка не меняется', async () => {
     const { container } = mount(createElement(WorkspacePage, {
       project,
       auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
@@ -521,13 +520,13 @@ describe('WorkspacePage: центр — страница фичи соседом
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.tab(), 'дефолтная вкладка — «Хронология»').toBe('timeline');
+    expect(pageTest.mainTab(), 'дефолтная вкладка — «Ход»').toBe('progress');
     expect(findNodeByAttr(container, 'data-testid', 'feature-page-close'), 'страница фичи не открыта').not.toBeNull();
 
-    // 2. Пользователь на вкладке «Чаты».
+    // 2. Пользователь на вкладке «Разбор».
     setFeaturePageTab('chats');
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.tab()).toBe('chats');
+    expect(pageTest.mainTab()).toBe('review');
 
     // 3. Клик по точке: cc-open-feature с stage.
     act(() => {
@@ -537,10 +536,8 @@ describe('WorkspacePage: центр — страница фичи соседом
     });
     await act(async () => { vi.advanceTimersByTime(100); });
 
-    // 4. Вкладка ЯВНО «Хронология» (не «Чаты» — старый дефект).
-    expect(pageTest.tab(), 'клик по точке не переключил на «Хронологию»').toBe('timeline');
-    // 5. «Хронология» смонтирована и ГАСИТ якорь (clearFeatureStageFocus после прочтения).
-    expect(pageTest.stageFocus(), 'якорь этапа не гашен вкладкой «Хронология»').toBeNull();
+    // 4. Вкладка ЯВНО «Ход» (не «Разбор» — старый дефект).
+    expect(pageTest.mainTab(), 'клик по точке не переключил на «Ход»').toBe('progress');
 
     // 6. «Фича →» без stage: якорь не ставится заново (старый этап не раскроется).
     act(() => {
@@ -549,8 +546,7 @@ describe('WorkspacePage: центр — страница фичи соседом
       }));
     });
     await act(async () => { vi.advanceTimersByTime(100); });
-    expect(pageTest.stageFocus(), '«Фича →» без stage не должна ставить якорь').toBeNull();
-    expect(pageTest.tab(), 'вкладка осталась «Хронология»').toBe('timeline');
+    expect(pageTest.mainTab(), 'вкладка осталась «Ход»').toBe('progress');
   });
 
   it('системное «назад» (popstate): setOpenFeatureId по снимку — в исходнике центра', () => {
@@ -1070,6 +1066,35 @@ describe('WorkspacePage: центр — страница фичи соседом
       'страница не вернулась поверх файла (мобила)').toBe('flex');
     expect((findNodeByAttr(container, 'data-testid', 'workspace-center-container') as any).style?.display,
       'контейнер страницы не виден (мобила)').toBe('flex');
+  });
+
+  // FS-F1g (мобила): макет с автором-задачей открыт со страницы фичи → под шапкой плашка
+  // «Из ветки {branch} · только просмотр», кнопка возврата подписана «К фиче».
+  // Мутации: backLabel={undefined} в WorkspacePage → «К фиче» нет; убрать {taskId && …} в FileViewer → плашки нет.
+  it('FS-F1g (мобила): файл из «Материалов» — плашка «Из ветки … · только просмотр» и «К фиче»', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    mockData.featurePage = {
+      run: { epic: { title: 'Моя фича' } }, events: [], eventsTotal: 0,
+      plans: [],
+      mockups: [
+        { path: 'docs/mockups/foo.html', title: 'Foo', status: 'approved', files: [{ path: 'docs/mockups/foo.html', exists: true, branch: 'feat/x' }], source: 'header', taskId: 'T1', ownerTaskId: 'T1', authorPersonaId: null, modifiedAt: null },
+      ],
+    };
+    setFeaturePageTab('plans');
+    const { container } = mount(createElement(WorkspacePage, {
+      project,
+      auth: { serverUrl: 'http://x', token: 't', username: 'u', role: 'user' },
+      onGoToProjects: () => {}, onSwitchHub: () => {}, onLogout: () => {},
+    } as any));
+    await act(async () => { vi.advanceTimersByTime(100); });
+    await openFeature(container);
+    clickNode(container, 'mockup-row', 'docs/mockups/foo.html');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    clickNode(container, 'mockup-open-area');
+    await act(async () => { vi.advanceTimersByTime(100); });
+    const text = textNodes(container as never).join('|');
+    expect(text, 'плашка с веткой').toContain('Из ветки feat/x · только просмотр');
+    expect(text, 'подпись возврата к фиче').toContain('К фиче');
   });
 
   // (г) зонд A Глеба: страница A → «Открыть макет» (файл открыт, страница уступила) →
@@ -2612,3 +2637,26 @@ function toHashOf(s: any): string {
   else if (s.chatId) h += `/chat/${encodeURIComponent(s.chatId)}`;
   return h;
 }
+
+// FS-F1c: onOpenFile(path, { taskId, branch }) со страницы фичи — тот же путь открытия, что из дерева
+// (navPush с file, без новых маршрутов); дерево и чат якорь задачи сбрасывают (проверка по исходнику).
+describe('FS-F1c: проводка taskId/branch со страницы фичи до FileViewer', () => {
+  const ws = readFileSync(new URL('./WorkspacePage.tsx', import.meta.url), 'utf8');
+  const desk = readFileSync(new URL('./workspace/DesktopWorkspace.tsx', import.meta.url), 'utf8');
+  const fn = (name: string) => ws.slice(ws.indexOf(`const ${name} = `), ws.indexOf(`const ${name} = `) + 700);
+
+  it('страница фичи открывает файл через handleOpenFileFromFeature → открытие из дерева (navPush с file)', () => {
+    expect(ws).toContain('onOpenFile={handleOpenFileFromFeature}');
+    expect(desk).toContain('onOpenFile={p.onOpenFileFromFeature}');
+    expect(fn('handleOpenFileFromFeature')).toContain('handleOpenFileFromTree(filePath)');
+    expect(fn('handleOpenFileFromTree')).toContain("navPush({ screen: 'project', project, view: mobileView, file: filePath })");
+  });
+  it('taskId доходит до FileViewer на мобиле и десктопе', () => {
+    expect(ws).toContain('taskId={openFileTaskId}');
+    expect(desk.match(/taskId=\{p\.openFileTaskId\}/g)?.length).toBe(2);
+  });
+  it('открытие из дерева и из чата сбрасывает якорь задачи', () => {
+    expect(fn('handleOpenFileFromTree')).toContain('setOpenFileTask(null)');
+    expect(fn('handleOpenFileFromChat')).toContain('setOpenFileTask(null)');
+  });
+});

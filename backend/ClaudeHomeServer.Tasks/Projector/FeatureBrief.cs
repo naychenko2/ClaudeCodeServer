@@ -1,3 +1,4 @@
+using System.Globalization;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Tasks.Projector;
@@ -23,6 +24,24 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // момента постановки удержания (FeatureHold.Since) до now, НЕ из work-интервалов (у фичи в очереди
 // elapsed = WorkWallMinutes = 0, и подпись «в очереди N мин» была бы недостижима). Null — фича
 // не в очереди.
+//
+// FS-E4: ask — одна фраза «что нужно от тебя» с источником тревоги (AskOf): источник — уже
+// вычисленный run.Attention (FeatureProjector.cs:175-216), тот же единственный элемент и тот же
+// приоритет stopped → wait → merge, второго расчёта нет; фразы по кодам остановки — словарь
+// StopReasonPhrases. Тревоги нет — null.
+//
+// FS-V2 (макет v2 «Срок»): eta — ОДИН срок с источником (EtaOf): выбор между оценкой оркестратора
+// и историей делает бэк (приоритет note → history), карточка фронта больше не выбирает сама;
+// clockStopped — признак «часы стоят» (вид тревоги), при нём endsAt=null — отсутствие даты
+// объяснено, а не молча спрятано (в note.estimate она гасилась без причины).
+// FS-V2 доработка (ревью f03f4f60): устаревший голос срока не даёт — при brief.note.stale
+// источник history (тот же предикат StaleOf, что у brief.note.stale, без второго расчёта).
+//
+// FS-O2c: в StaleOf добавлены возраст голоса (> StaleAgeHours) и число вердиктов принятия после
+// записи (≥ StaleAcceptedSteps): стадия и категория prod-этапа не меняются днями, и оценка
+// суточной давности выглядела свежей. «Сейчас» — тот же now, что у Build (чистая функция,
+// подставляемые часы в тестах); напоминание оркестратору читает brief.note.stale и начинает
+// срабатывать по возрасту само.
 public static class FeatureBrief
 {
     // Категории сводки (brief.kind, JSON camelCase-совместимые строки как в контракте разреза п. 4).
@@ -55,6 +74,16 @@ public static class FeatureBrief
 
     // estimate.source: единственный источник v1 — история проекта (разрез п.3).
     public const string EstimateSource = "history";
+
+    // eta.source (FS-V2): сначала оценка оркестратора (note), затем история (порядок — план FS-V2).
+    public const string EtaSourceNote = "note";
+    public const string EtaSourceHistory = "history";
+
+    // eta.clockStopped (FS-V2): вид тревоги, стоящей часами (run.Attention.Kind как есть:
+    // FeatureProjector.cs:175-216). merge — не «часы стоят»: фича дошла до решения человека
+    // по мержу, работа не встала.
+    public const string ClockStoppedWait = "wait";
+    public const string ClockStoppedStopped = "stopped";
 
     // «Сейчас»: = run.Now[0] либо Attention (без Now).
     public sealed record BriefNow(
@@ -113,6 +142,25 @@ public static class FeatureBrief
         string TaskId, string Stage, string? StepRef, string? Lane, string? PersonaId,
         string State, DateTime Since, string? Reason);
 
+    // FS-E4: фиксированные фразы brief.ask — для тревоги merge и для реального wait без текста
+    // причины (аномальные данные: wait пишется с текстом — SetAwaitingHuman пишет Since и Reason
+    // парой, TaskManager.cs:1611-1626).
+    public const string MergeAskText = "Нужно решение по мержу";
+    public const string WaitAskFallback = "Жду вашего решения";
+
+    // brief.ask (FS-E4): одна фраза «что нужно от тебя» с источником тревоги. text — фраза
+    // (≤ TaskManager.AwaitingAskMaxLength), source — вид тревоги (stopped|wait|merge,
+    // run.Attention.Kind как есть), since/personaId/sessionId — поля тревоги как есть.
+    public sealed record BriefAsk(
+        string Text, string Source, DateTime? Since, string? PersonaId, string? SessionId);
+
+    // brief.eta (FS-V2, макет v2 «Срок»): ОДИН срок вместо выбора карточки между note.estimate
+    // и estimate. minutes — срок всегда есть (eta null ⇔ числа нет — «одного срока» без числа
+    // не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
+    // source — что именно показано (note|history); clockStopped — почему даты нет при живом
+    // сроке (wait|stopped|null).
+    public sealed record BriefEta(int Minutes, DateTime? EndsAt, string Source, string? ClockStopped);
+
     // brief: контракт ответа (разрез п. 6).
     public sealed record Brief(
         string Kind,
@@ -143,6 +191,13 @@ public static class FeatureBrief
         // Оценка старта фичи в очереди по впереди стоящим фичам и их remainingMinutes
         // (QueueStartEstimateOf); null — не в очереди или данных нет.
         DateTime? QueueStartEstimate,
+        // FS-E4: одна фраза «что нужно от тебя» с источником тревоги (AskOf из run.Attention).
+        // null — тревоги нет.
+        BriefAsk? Ask,
+        // FS-V2: один «Срок» с источником и признаком «часы стоят» (EtaOf): выбор источника
+        // делает бэк (note → history), карточка фронта не выбирает сама. null — ни одной
+        // оценки нет.
+        BriefEta? Eta,
         DateTime ComputedAt);
 
     // Таблица kind: FeatureStates → категория. paused расщепляется по Hold.Reason, merged — по
@@ -177,6 +232,9 @@ public static class FeatureBrief
         var kind = KindOf(run);
 
         var estimate = EstimateOf(run, typical, kind);
+        // Голос считается раньше eta: оценка оркестратора для eta — та же вычисленная
+        // note.estimate (EstimateOfNote), второго расчёта по тем же входам нет.
+        var note = NoteOf(run, kind, estimate, now);
 
         return new Brief(
             kind,
@@ -188,11 +246,13 @@ public static class FeatureBrief
             estimate,
             Queue: null,
             QueueWaitMinutes: QueueWaitOf(run, kind, now),
-            Note: NoteOf(run, kind, estimate),
+            Note: note,
             InitialEtaMinutes: run.Epic?.InitialEtaMinutes,
             UpdatedAt: UpdatedAtOf(run),
             Active: ActiveOf(run),
             QueueStartEstimate: QueueStartEstimateOf(run, kind, typical, now, projectRuns, slotLimit),
+            Ask: AskOf(run),
+            Eta: EtaOf(note, estimate, ClockStoppedOf(run)),
             now);
     }
 
@@ -336,27 +396,45 @@ public static class FeatureBrief
         return minutes < 0 ? 0 : (int)minutes;
     }
 
-    // Активная стадия конвейера (B14, возврат FIN 74722f13): ЕДИНАЯ база для штампа StageAtWrite
-    // (TasksController.SetFeatureNote, TasksToolset featureNote зовут её) и для сравнения StaleOf.
-    // Now[0] для штампа не используется: на waiting/stopped/idle/paused Now пуст (в нём только
-    // InProgress-задачи), и голос, записанный там, был бы устаревшим с первой секунды. Стадию
-    // определяет проектор (FeatureProjector.cs:266-291): она есть почти всегда — фича без задач
-    // стоит на «cut», с todo-шагом — на «prod»; пусто только когда все стадии пройдены (merge done).
-    internal static string ActiveStageOf(FeatureRun run) =>
+    // FS-V1 (разрез §2.1 П2): ЕДИНАЯ «текущая стадия» фичи — стадия первой идущей задачи
+    // (run.Now[0]), иначе первая активная стадия конвейера. Приём как у ComputeState для
+    // состояния (ADR-031 §3.1): одна функция, потребители своей правила не держат. Через неё
+    // работают все четыре пути величины: ActiveStageOf (штамп StageAtWrite и StaleOf),
+    // brief.now.stage (NowOf), stages[].state = "active" (FeatureProjector.BuildCore, расчёт
+    // activeIndex — держит то же правило) и row.now0.stage (Now0Of берёт run.Now[0]).
+    // Следствие принято разрезом: у старых голосов StageAtWrite мог быть «первой активной»
+    // стадией, а работа шла в другой — «устарел» у таких голосов меняется (тест
+    // Note_ШтампПервойАктивнойПриРаботеВДругойСтадииДаётStale).
+    // Идущих задач нет — вторая половина правила (FirstActiveStageOf): на паузе Now гасится
+    // намеренно (W4-HOLD-D), в stopped/waiting/idle в Now только идущие — голос, записанный там,
+    // не устаревший с первой секунды (B14, возврат FIN 74722f13).
+    internal static string CurrentStageOf(FeatureRun run) =>
+        run.Now.FirstOrDefault()?.Stage ?? FirstActiveStageOf(run);
+
+    // Первая активная стадия конвейера — вторая половина CurrentStageOf: по ней судится фича без
+    // идущих задач. Стадии считает проектор (FeatureProjector.BuildCore, расчёт activeIndex): фича без задач стоит
+    // на «cut», с todo-шагом — на «prod»; пусто только когда все стадии пройдены (merge done).
+    private static string FirstActiveStageOf(FeatureRun run) =>
         run.Stages.FirstOrDefault(s => s.State == "active")?.Key ?? "";
 
-    // «Сейчас»: первая запись Now; иначе тревога (Attention). Стадия тревоги — активная стадия
-    // конвейера (у Attention своего ключа стадии нет). Ни того ни другого — null.
+    // Активная стадия — существующий внешний вход штампа голоса (TasksController.cs:1276,
+    // TasksToolset.cs:617): их правка вне шага FS-V1, поэтому имя сохранено; правило одно —
+    // CurrentStageOf, своего «первого активного» эта точка больше не держит.
+    internal static string ActiveStageOf(FeatureRun run) => CurrentStageOf(run);
+
+    // «Сейчас»: первая запись Now; иначе тревога (Attention). Стадия — CurrentStageOf: для Now[0]
+    // это его стадия, для тревоги без идущих задач — первая активная стадия конвейера (у Attention
+    // своего ключа стадии нет). Ни того ни другого — null.
     private static BriefNow? NowOf(FeatureRun run)
     {
         var first = run.Now.FirstOrDefault();
         if (first is not null)
-            return new BriefNow(first.Stage, first.TaskId, first.PersonaId, first.StepRef,
+            return new BriefNow(CurrentStageOf(run), first.TaskId, first.PersonaId, first.StepRef,
                 LaneOf(run, first.StepRef), first.StartedAt);
 
         var attention = run.Attention;
         if (attention is null) return null;
-        return new BriefNow(ActiveStageOf(run), attention.TaskId, attention.PersonaId, null, null, attention.Since);
+        return new BriefNow(CurrentStageOf(run), attention.TaskId, attention.PersonaId, null, null, attention.Since);
     }
 
     // Линия — у готовой цепочки шага (FeatureStepChain.Lane); шага нет — null.
@@ -368,6 +446,51 @@ public static class FeatureBrief
     {
         if (!string.IsNullOrEmpty(run.Attention?.Reason)) return run.Attention!.Reason;
         return kind is Kinds.Paused or Kinds.Queued ? run.Hold?.Reason : null;
+    }
+
+    // brief.ask (FS-E4): одна фраза «что нужно от тебя». Источник — уже вычисленный run.Attention
+    // (FeatureProjector.cs:175-216): приоритет stopped → wait → merge и выбор задачи решены там;
+    // здесь отображение единственного элемента, второго расчёта тревоги нет (как NowOf/ReasonOf).
+    // Тревоги нет — null. Текст: wait — AwaitingHumanReason задачи (пишется парой с Since, ≤120 —
+    // TaskManager.SetAwaitingHuman); merge — фиксированная; stopped — StopReasonPhrases по коду
+    // (неизвестный код или пометка без кода — общая фраза). Реальный wait без текста (аномальные
+    // данные) — общая фраза: сигнал «ждёт вас» не должен теряться. Лимит держится и здесь: хранилище
+    // могло быть правлено минуя продюсера.
+    // FS-V4: internal — ту же функцию зовёт строка индекса (FeatureProjector.BuildRow): своей копии
+    // логики в индексе нет, инвариант row.ask == brief.ask держится одной функцией.
+    internal static BriefAsk? AskOf(FeatureRun run)
+    {
+        var attention = run.Attention;
+        if (attention is null) return null;
+
+        var text = attention.Kind switch
+        {
+            "wait" => string.IsNullOrWhiteSpace(attention.Reason) ? WaitAskFallback : attention.Reason!.Trim(),
+            "merge" => MergeAskText,
+            "stopped" => StopReasonPhrases.PhraseFor(attention.Reason),
+            // Виды attention — только эти три (FeatureProjector.cs:175-216); иное — аномальные данные.
+            _ => null,
+        };
+        if (text is null) return null;
+        if (text.Length > TaskManager.AwaitingAskMaxLength) text = TrimToTextElements(text, TaskManager.AwaitingAskMaxLength);
+
+        return new BriefAsk(text, attention.Kind, attention.Since, attention.PersonaId, attention.LinkedSessionId);
+    }
+
+    // Обрезка под лимит по границе text-элемента (StringInfo), а не по индексу UTF-16: суррогатная
+    // пара (эмодзи) и кластер с комбинингом не рвутся пополам — cut встаёт на последнюю границу
+    // текста, укладывающуюся в лимит. Лимит остаётся в единицах UTF-16: тот же, что проверяет
+    // SetAwaitingHuman (TaskManager.cs:1641).
+    private static string TrimToTextElements(string text, int limit)
+    {
+        var cut = 0;
+        while (cut < text.Length)
+        {
+            var next = cut + StringInfo.GetNextTextElement(text, cut).Length;
+            if (next > limit) break;
+            cut = next;
+        }
+        return text[..cut];
     }
 
     // «Дальше»: стадии ПОСЛЕ активной со state pending (skipped/absent пропускаются), ≤ MaxNext.
@@ -433,14 +556,18 @@ public static class FeatureBrief
     // служит только StaleOf. ByPersonaId — null: хранимый FeatureNote (B3) persona автора не несёт
     // (только чат BySessionId); заполнить его — аддитивная правка модели, не проектора.
     // Run без эпика (тестовая фикстура) или без голоса — null: «голоса нет → строки нет совсем».
-    private static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history)
+    // FS-V4: internal — вход EtaOf для строки индекса (FeatureProjector.BuildRow): тот же голос и
+    // тот же StaleOf, без истории (history там null); логики здесь нет — только видимость.
+    // FS-O2c: now — «сейчас» вызывающего (тот же, что у Build; BuildRow получает его из
+    // BuildIndexCore): по нему StaleOf меряет возраст голоса.
+    internal static BriefNote? NoteOf(FeatureRun run, string kind, BriefEstimate? history, DateTime now)
     {
         var note = run.Epic?.Note;
         if (note is null) return null;
 
         return new BriefNote(
             note.Text, note.At, null, note.ByUser, note.StageAtWrite,
-            StaleOf(run, note, kind), EstimateOfNote(note, kind, history));
+            StaleOf(run, note, kind, now), EstimateOfNote(note, kind, history));
     }
 
     // Оценка оркестратора (макет 2): устаревание — то же StaleOf, что у голоса (отдельной логики нет:
@@ -468,22 +595,115 @@ public static class FeatureBrief
         return Agreements.Within;
     }
 
-    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80): голос устарел,
-    // если StageAtWrite ≠ текущей активной стадии ИЛИ категория (brief.kind) сменилась с момента записи.
-    // Единая база: StageAtWrite штампуется той же ActiveStageOf, что и это сравнение (её зовут
-    // REST PUT и MCP featureNote; Now[0] для штампа не используется) — голос, записанный на
-    // «ждёт вас» / паузе / idle, не устаревший с первой секунды: стадия не менялась. Стадия
-    // задачи в петле (шла не в активной) на штамп больше не влияет: штамп — стадия конвейера.
+    // brief.eta (FS-V2, макет v2 «Срок»): один срок — выбор источника делает бэк, карточка
+    // фронта больше не выбирает между note.estimate и estimate. Приоритет (план FS-V2):
+    // оценка оркестратора, затем история.
+    // «Оценка отдаётся» = etaMinutes есть: оценка без срока — не срок (её «что дальше» и why
+    // остаются в note.estimate), срок тогда берётся из истории — иначе карточке доставался бы
+    // пустый срок там, где число есть.
+    // FS-V2 доработка (ревью f03f4f60): устаревшая оценка — не срок: пока голос устарел
+    // (note.stale), число из голоса не берётся, источник — история (то же правило, что у фронта,
+    // FeatureBriefModel.ts estimateView). Предикат один: StaleOf, уже вычисленный NoteOf
+    // (тот же brief.note.stale), второго расчёта нет. Инвариант: eta.source == "note"
+    // ⇒ note.stale == false.
+    // Нижний порог: меньше минуты — не срок (фронт отбрасывает remainingMinutes < 1,
+    // FeatureBriefModel.ts:589): такая оценка считается отсутствующей.
+    // minutes — всегда число (eta без числа — null: «одного срока» без числа не бывает);
+    // endsAt — дата note.estimate (от момента записи голоса, не от «сейчас» — та же база, что
+    // EstimateOfNote), у истории даты нет никогда; при непустом clockStopped — null: сейчас
+    // дата при стоящих часах просто пропадала молча, теперь её отсутствие объяснено самим
+    // признаком. Оценок нет обеих — eta null.
+    // FS-V4: internal — ту же функцию зовёт строка индекса (FeatureProjector.BuildRow) с history=null:
+    // срок по истории в индексе не считаем (ADR-031 §3.4), поэтому source там только "note" или null.
+    internal static BriefEta? EtaOf(BriefNote? note, BriefEstimate? history, string? clockStopped)
+    {
+        int minutes;
+        DateTime? endsAt;
+        string source;
+        if (note is { Stale: false, Estimate: { EtaMinutes: >= 1 } est })
+        {
+            minutes = est.EtaMinutes!.Value;
+            endsAt = est.EtaEndsAt;
+            source = EtaSourceNote;
+        }
+        else if (history is { RemainingMinutes: >= 1 })
+        {
+            minutes = history.RemainingMinutes;
+            endsAt = null;
+            source = EtaSourceHistory;
+        }
+        else
+        {
+            return null;
+        }
+        if (clockStopped is not null) endsAt = null;
+        return new BriefEta(minutes, endsAt, source, clockStopped);
+    }
+
+    // Признак «часы стоят» (FS-V2): вид тревоги как есть (тот же единственный источник, что
+    // ask/now/reason — run.Attention, FeatureProjector.cs:175-216, второго расчёта нет):
+    // wait — фича ждёт человека, stopped — исполнитель встал. merge — не «часы стоят»: до
+    // решения по мержу работа дошла сама; тревоги нет — null.
+    // FS-V4: internal — вход EtaOf для строки индекса (тот же признак, что у страницы).
+    internal static string? ClockStoppedOf(FeatureRun run) => run.Attention?.Kind switch
+    {
+        "wait" => ClockStoppedWait,
+        "stopped" => ClockStoppedStopped,
+        _ => null,
+    };
+
+    // Пороги устаревания голоса (FS-O2c): возраст (часы) и число вердиктов принятия после записи.
+    // Значения — вопрос Андрея (план волны), правка только здесь: потребители читают признак
+    // brief.note.stale, а не пороги.
+    public const int StaleAgeHours = 12;
+    public const int StaleAcceptedSteps = 3;
+
+    // Признак устаревания (разрез п.2, B14 возврат FIN 74722f13, B15 дефект 415c1c80, FS-O2c):
+    // голос устарел, если StageAtWrite ≠ текущей стадии ИЛИ категория (brief.kind) сменилась
+    // с момента записи ИЛИ голос старше StaleAgeHours ИЛИ после записи принято не меньше
+    // StaleAcceptedSteps вердиктов принятия (AcceptedVerdictsAfter).
+    // Единая база: StageAtWrite штампуется той же CurrentStageOf, что и это сравнение (её зовут
+    // REST PUT и MCP featureNote) — голос, записанный на «ждёт вас» / паузе / idle (Now пуст,
+    // работает вторая половина правила), не устаревший с первой секунды: стадия не менялась.
+    // FS-V1: «текущей» считается стадия идущей задачи, а не первая непройденная стадия конвейера,
+    // поэтому голос, записанный, когда работа шла не там, где «первая активная», устаревает —
+    // следствие принято разрезом (§2.1, П2), оно покрыто тестом. Стадия задачи в петле на штамп
+    // отдельно не влияет: штамп — та же величина, что у всех потребителей стадии.
     // Категория на момент записи (B15): штамп — САМА категория (FeatureBrief.KindAtWriteOf, та же
     // величина, что brief.kind), поэтому голос, записанный в очереди, свежий до смены категории.
     // Старые голоса (до B15) хранят СОСТОЯНИЕ — они достраиваются таблицей KindByState (fail-closed
     // для неизвестного значения).
-    private static bool StaleOf(FeatureRun run, FeatureNote note, string kind)
+    // FS-O2c (два новых условия через «или», пороги — константы выше): стадия и категория
+    // prod-этапа не меняются днями, и оценка суточной давности выглядела свежей.
+    // Возраст: строго больше StaleAgeHours (ровно StaleAgeHours — ещё не устарел).
+    // Принятые вердикты: не меньше StaleAcceptedSteps с временем вердикта позже Note.At
+    // (AcceptedVerdictsAfter). now — тот же, что у Build/BuildRow, второго источника времени нет.
+    private static bool StaleOf(FeatureRun run, FeatureNote note, string kind, DateTime now)
     {
-        if (note.StageAtWrite != ActiveStageOf(run)) return true;
+        if (note.StageAtWrite != CurrentStageOf(run)) return true;
         var kindAtWrite = KindFromStamp(note.StateAtWrite);
         if (kindAtWrite is null) return true;
-        return kindAtWrite != kind;
+        if (kindAtWrite != kind) return true;
+        if (now - note.At > TimeSpan.FromHours(StaleAgeHours)) return true;
+        return AcceptedVerdictsAfter(run, note.At) >= StaleAcceptedSteps;
+    }
+
+    // FS-O2c: число вердиктов принятия (FeatureProjector.IsAcceptance — единый предикат, своего
+    // словаря здесь нет) задач рана с временем вердикта позже момента записи голоса. Время
+    // вердикта — Verification.VerifiedAt: его ставит сервер на всех путях вердикта
+    // (TaskManager.cs:586/1439, TasksController.cs:646, TasksToolset.cs:508/691); без отметки
+    // (старые/синтетические данные) вердикт не считается — его возраст неизвестен. Состав задач
+    // — AllTasksOf (тот же, что у UpdatedAtOf): вердикт на ревью/проверке/финале — вердикт о
+    // шаге, вердикт на самой задаче-шаге — тоже вердикт. Своего прохода по цепочкам нет,
+    // хранить ничего не нужно. Шаг с несколькими принятыми витками даёт несколько вердиктов:
+    // порог считается по вердиктам (правило задачи FS-O2c), не по шагам.
+    private static int AcceptedVerdictsAfter(FeatureRun run, DateTime after)
+    {
+        var count = 0;
+        foreach (var t in AllTasksOf(run))
+            if (t.Verification is { } v && FeatureProjector.IsAcceptance(v.Verdict) && v.VerifiedAt > after)
+                count++;
+        return count;
     }
 
     // Категория, записанная в голос: новое значение — сама категория (brief.kind); старое (до B15) —

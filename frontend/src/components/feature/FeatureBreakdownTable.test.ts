@@ -110,6 +110,9 @@ function mountTable(
     colorOf?: (k: string) => string;
     hiddenKeys?: string[];
     costPartial?: boolean;
+    hideTokens?: boolean;
+    readOnlyMeasure?: boolean;
+    measure?: 'time' | 'tokens' | 'cost';
   } = {},
 ) {
   return mount(createElement(FeatureBreakdownTable, {
@@ -120,6 +123,9 @@ function mountTable(
     labelOf: extra.labelOf,
     colorOf: extra.colorOf,
     hiddenKeys: extra.hiddenKeys,
+    hideTokens: extra.hideTokens,
+    readOnlyMeasure: extra.readOnlyMeasure,
+    measure: extra.measure,
   }));
 }
 
@@ -448,5 +454,49 @@ describe('доработка части 1: прокрутка, отступы, �
   it('роль feature подписана «координация» и в таблице, и в чипах', () => {
     expect(roleGroupLabel('feature')).toBe('координация');
     expect(chipLabel({ kind: 'role', key: 'feature' })).toBe('координация');
+  });
+});
+
+describe('режим «Разбора» (FS-FR4): hideTokens / readOnlyMeasure', () => {
+  it('hideTokens: колонки токенов нет — ни шапки, ни ячеек, ни в «Всего»', () => {
+    const { container } = mountTable(GROUPS, { hideTokens: true });
+    const table = tableNode(container)!;
+    const heads = table.querySelectorAll('th').map(t => textOf(t));
+    expect(heads[2]).toContain('время');
+    expect(heads[3]).toContain('деньги');
+    expect(heads[4]).toBe('чаты');
+    expect(textOf(table)).not.toContain('токены');
+    expect(textOf(table)).not.toContain('тыс.'); // ни «1 тыс.» в строках, ни «4 тыс.» в «Всего»
+    const cells = rowCells(container, 'kira')!;
+    expect(cells.length).toBe(5); // имя, чипы, время, деньги, чаты
+    const total = findNodeByAttr(container, 'data-testid', 'breakdown-total')!;
+    expect(textOf(total)).toContain('3 ч 30 мин');
+    expect(textOf(total)).toContain('$5,00');
+  });
+
+  it('readOnlyMeasure: в шапке нет кнопок и testid сортировки; сортировка по пропу measure', () => {
+    const { container } = mountTable(GROUPS, { readOnlyMeasure: true, measure: 'time' });
+    const table = tableNode(container)!;
+    const ths = table.querySelectorAll('th');
+    expect(ths.flatMap(th => th.querySelectorAll('button')).length).toBe(0);
+    expect(findNodeByAttr(table, 'data-testid', 'breakdown-sort-time')).toBeNull();
+    // Мера из пропа: время по убыванию — тот же порядок, что у клика по «время».
+    expect(rowOrder(container)).toEqual(['kira', 'timur', 'vera']);
+    expect(ths[2].getAttribute('aria-sort')).toBe('descending');
+    expect(textOf(ths[2])).toContain('время');
+  });
+
+  it('одна группа + readOnlyMeasure — таблица есть: в read-only нет сравнения и оболочки (c2)', () => {
+    const { container } = mountTable([mkGroup('kira', 60, 100, 1)], { readOnlyMeasure: true, measure: 'time' });
+    expect(findNodeByAttr(container, 'data-testid', 'feature-breakdown-table')).toBeTruthy();
+    expect(rowOrder(container)).toEqual(['kira']);
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-total')).toBeTruthy();
+  });
+
+  it('без новых пропов поведение старое: одна группа — null, кнопки сортировки на месте', () => {
+    const few = mountTable([mkGroup('kira', 60, 100, 1)]);
+    expect(findNodeByAttr(few.container, 'data-testid', 'feature-breakdown-table')).toBeNull();
+    const { container } = mountTable(GROUPS);
+    expect(findNodeByAttr(container, 'data-testid', 'breakdown-sort-time')).toBeTruthy();
   });
 });

@@ -1,44 +1,46 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import { AlertTriangle, ChevronRight } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { FeatureGlyph } from './chat/feature/FeatureGlyphs';
 import { FeatureTrackerBar, trackerBarAria } from './chat/feature/FeatureTrackerBar';
 import { featureTruthBar } from './chat/feature/featureTruthModel';
-import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { Button } from './ui/Button';
-import { Badge } from './ui/Badge';
-import { featureDisplayState, featureQuickAction, featureAvatarPersonaIds, formatDuration, CLOSED_NO_MERGE_STATUS } from '../lib/chatGroups';
-import { stepProgressFromIndex, formatStepProgress, trackerPercent } from '../lib/featureProgress';
+import { featureDisplayState, featureQuickAction, formatDuration, STAGE_NAME } from '../lib/chatGroups';
+import { stepProgressFromIndex, formatStepProgress } from '../lib/featureProgress';
 import { dateOnly } from './chat/feature/featureTime';
-import type { FeatureIndexFeature } from '../types/featureIndex';
+import type { FeatureIndexFeature, FeatureRailKey } from '../types/featureIndex';
+import type { FeatureAsk, FeatureEta } from '../lib/featurePage';
 import type { Persona } from '../types';
 
-// Плашка группы фичи в списке чатов — С1 «Трек снизу» (утверждена макетом
-// feature-chats-panel-plan-popup-v4): список чатов СРАВНИВАЕТ фичи, и длинная полоса
-// трекера под каждой плашкой сразу показывает, какая ближе к концу.
+// Плашка группы фичи в списке чатов — v2 (записка features-simplify-v1 §3 R2, шаг
+// FS-FL1): две строки и тонкая полоса. Полоса трекера — та же, что в шапке В2:
+// она и сравнивает фичи глазами, вместо процента и цифр.
 //
-// Строка 1: глиф 14, название, «давность» (mono, прячется при наведении).
-// Строка 2: стопка аватаров «кто сейчас» · статус («Сейчас {Имя} +N» / тревога тоном) ·
-//          справа «{pct} %» (mono; на десктопе — и срок, если он есть в данных).
-// Под строкой 2 — полоса трекера во всю ширину (та же, что в шапке В2): пять корзин,
-// «в master» первой. Счётчики «принято N из T · …» — в title (полная строка), бейдж
-// «расхождений: N» остаётся видимым.
+// Строка 1: глиф 14, название, справа срок (600 FS.sm C.textSecondary, tabular-nums —
+// не моно): из feature.eta (FS-V4/FS-FT): endsAt → «≈ чт»; clockStopped → «часы
+// стоят»; eta нет → «—». Закрытая/смерженная — дата мержа вместо срока.
+// Строка 2: одна фраза. Обычная: «{этап} · {stepsAccepted}/{stepsTotal}» (этап —
+// now0.stage, фолбэк на активной стадии рельсы; имена — общий STAGE_NAME). При
+// feature.ask — вместо неё: wait/merge → «Ждёт тебя: {ask.text}» (warningText),
+// stopped → «Стоит {давность}: {ask.text}» (dangerText). Закрытая: «Смержена ·
+// {длительность}» / прежняя CLOSED_NO_MERGE_STATUS. Очередь и «ждёт согласия на
+// мерж» без ask — прежние слова featureDisplayState (одна подпись на все места, Ш1d).
+// Под строкой 2 — полоса трекера во всю ширину.
 //
-// Ушло: мини-рельса из 8 точек (FeatureRail) — этапы больше нигде в чатах не
-// повторяются, они на странице фичи («Хронология»).
+// Ушло из строки (R2): стопка аватаров, ⚠ расхождений трекера (он на странице
+// фичи), процент (полоса говорит то же), давность активности, «Сейчас {Имя}».
 //
-// Высота — ровно 55 px (поля 6/10/2/2 + строки 19/17 + зазор 4 + полоса 4; minHeight
-// не нужен). Кромка тревоги 3px — тоном В2: «ждёт вас» — C.warning, «стоит» — C.danger.
-// Компактная (закрытая фича, .closed): без рамки/заливки/аватаров/процента/полосы —
-// второй план, как прежде.
-// Мобила: срок не показывается, только процент (С1 §Для Киры).
+// Высота — ровно 55 px (поля 6/10/3/2 + строки 19/17 + отступ над полосой 4 + полоса
+// 4; minHeight не нужен). Кромка тревоги 3px — тоны В2: «ждёт» — C.warning,
+// «стоит» — C.danger.
+// Компактная (закрытая фича, .closed): без рамки/заливки/полосы — второй план, как
+// прежде.
 //
-// Данные — строка индекса (те же числа, что страница фичи): процент — общий
-// trackerPercent, полосы — общий FeatureTrackerBar. «Срок» в индексе не несётся
-// (оценка живёт в epic.note страницы фичи) — без данных срока нет (пустые части
-// скрываются), это отмечено постановщику.
+// Данные — строка индекса (те же числа, что страница фичи): срок — только
+// feature.eta, тревога — только feature.ask (контракт FS-FL1: фронт их не выводит
+// из других полей); полосы — общий FeatureTrackerBar.
 
 // Единый focus-visible ring (клавиатура) для шеврона и тела плашки (m1): нативное
 // кольцо браузера в тёмной теме не видно, поэтому — SHADOW.focus через :focus-visible
@@ -61,27 +63,41 @@ export function featureGroupChevronClick(onToggle: () => void, e: { stopPropagat
   onToggle();
 }
 
-// «Давность» справа в строке 1 (макет .pr): сколько прошло с attention.since (если есть
-// тревога) или с lastActivityAt. Компактный формат: «сейчас» / «N мин» / «N ч» / «dd.mm».
-// Чистая функция: now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
-// Местный пояс (getMonth/getDate, а не getUTC*) — как в featureTime.
-function ageLabel(iso: string | null | undefined, now?: number): string {
-  if (!iso) return '';
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const n = now ?? Date.now();
-  const diffMin = Math.max(0, Math.round((n - t) / 60000));
-  if (diffMin < 1) return 'сейчас';
-  if (diffMin < 60) return `${diffMin} мин`;
-  const h = Math.floor(diffMin / 60);
-  if (h < 24) return `${h} ч`;
-  const d = new Date(t);
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  return `${dd}.${mm}`;
+// Срок справа в строке 1 (v2): «≈ чт» — день недели окончания из feature.eta (короткая
+// форма строки списка; полная дата — на странице фичи); «часы стоят» — по бэковому
+// clockStopped (даже при живом endsAt: часы не идут); eta нет / даты нет — «—».
+// Чистая функция. Местный пояс (toLocaleDateString), как в featureTime/chatGroups.
+function etaLabel(eta: FeatureEta | null | undefined): string {
+  if (!eta) return '—';
+  if (eta.clockStopped != null) return 'часы стоят';
+  if (!eta.endsAt) return '—';
+  const d = new Date(eta.endsAt);
+  if (Number.isNaN(d.getTime())) return '—';
+  return `≈ ${d.toLocaleDateString('ru-RU', { weekday: 'short' })}`;
 }
 
-export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobile = false, compact = false, personaName, now, personaById, selected = false }: {
+// «Стоит 2 ч» — давность тревоги с ask.since: тот же формат длительности, что у
+// статусов фичи (formatDuration). Нет since/невалидно — пустая строка (фраза без
+// давности). Чистая функция: now — «сейчас» в мс (стабильные тесты; не задано — Date.now()).
+function stoppedAge(ask: FeatureAsk, now?: number): string {
+  if (!ask.since) return '';
+  const t = new Date(ask.since).getTime();
+  if (Number.isNaN(t)) return '';
+  const min = Math.max(0, Math.round(((now ?? Date.now()) - t) / 60000));
+  return formatDuration(min);
+}
+
+// Этап строки 2: now0.stage (контракт FS-FL1), фолбэк на активной стадии рельсы
+// (old answers: now0 может не прийти). Имена — общий STAGE_NAME (chatGroups), своей
+// копии слов нет. Нет ни того, ни другого (или ключ неизвестен) — null: выдуманного
+// этапа нет, строка остаётся без слова этапа.
+function stageNameOf(feature: FeatureIndexFeature): string | null {
+  const key = feature.now0?.stage ?? feature.rail.find(s => s.state === 'active')?.key ?? null;
+  if (!key) return null;
+  return STAGE_NAME[key as FeatureRailKey] ?? null;
+}
+
+export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobile = false, compact = false, personaName, now, selected = false }: {
   feature: FeatureIndexFeature;
   // Группа раскрыта (шеvron повёрнут, под заголовком — все чаты).
   expanded: boolean;
@@ -90,69 +106,69 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
   // Тело: открывает страницу фичи.
   onOpen: () => void;
   isMobile?: boolean;
-  // Закрытая фича «на втором плане» (макет .closed .fgh): без рамки/заливки/аватаров/полосы.
+  // Закрытая фича «на втором плане» (макет .closed .fgh): без рамки/заливки/полосы.
   compact?: boolean;
-  // «Кто» в статусе: имя персоны (attention.personaId / now0.personaId, резолвит вызывающий).
+  // «Кто» в запасных словах состояния (featureDisplayState enrich; аватаров в v2 нет).
   personaName?: string | null;
-  // «Сейчас» в мс для «сколько» (стабильные тесты); не задано — Date.now().
+  // «Сейчас» в мс для давности тревоги (стабильные тесты); не задано — Date.now().
   now?: number;
-  // Резолвер id персоны → Persona (для стопки аватаров и имени в статусе); не задан — аватаров нет.
+  // Резолвер id персоны. В v2 не потребляется (стопка аватаров ушла, R2); проп держим в
+  // типе: вызывающий (SessionList) передаёт его, снятие — за FS-FL2a.
   personaById?: (id: string) => Persona | undefined;
   // Открыта страница фичи (рамка accentMuted, фон accentLight).
   selected?: boolean;
 }) {
   const [hovered, setHovered] = useState(false);
   const st = featureDisplayState(feature, { now, personaName });
-  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (полосы и процента нет).
+  // Честный прогресс (Ф-pr): из строки индекса; null — старые ответы (полосы нет).
   const progress = stepProgressFromIndex(feature);
-  // Полоса С1 — БЕЗ подсветки «в master», и это не пропуск: строка индекса (FeatureIndex.cs)
+  // Полоса — БЕЗ подсветки «в master», и это не пропуск: строка индекса (FeatureIndex.cs)
   // несёт корзины stepsAccepted/Review/Work/NotCreated, а ортогонального InMaster у неё
-  // нет — выдумывать поле или просить новый бэк для плашки не стали (решение постановщика,
-  // отступление от макета v4 принял Александр; новых полей в бэк не заводим). Числа,
-  // которые индекс несёт, рисуются как есть; «в master» остаётся там, где он есть — в
-  // строке В2 и в попапе (берут run.stepProgress.inMaster).
+  // нет (решение постановщика, как в В2; новых полей в бэк не заводим). Числа,
+  // которые индекс несёт, рисуются как есть.
   const bar = featureTruthBar(progress, null);
-  const percent = progress ? trackerPercent(progress.accepted, progress.total) : 0;
   // Кромка тревоги 3px — тоны В2: 'wait' → warning (жёлтый), 'stop' → danger (красный).
-  // (Синий C.info был языком старой плашки; в языке фичи «нужен ответ» — warn.)
   const alarmEdge = st.alarm === 'wait' ? C.warning : st.alarm === 'stop' ? C.danger : null;
-  // Закрытая фича: статус «смержена {дата} · {длительность}» (макет .closed) или общая
-  // CLOSED_NO_MERGE_STATUS («закрыта без мержа», Ш1f): та же подпись, что строка индекса
-  // (featureDisplayState) и тег страницы — короткая «закрыта» в компактной плашке больше
-  // не печатается (решение Майи «везде одна подпись», хвост ревью Ш1e).
+
+  // === v2 (FS-FL1): срок и одна фраза. Ключи — только feature.eta и feature.ask:
+  // фронт их не выводит из других полей (контракт шага). ===
+
+  // Закрытая/смерженная: справа вместо срока — дата мержа (тот же dateOnly, что у
+  // подписей режима фичи); без мержа и без даты — «—».
   const closedMerged = feature.bucket === 'closed' && feature.summary?.mergedAt != null;
-  const closedStatus = compact && feature.bucket === 'closed'
-    ? (closedMerged
-      ? `смержена ${dateOnly(feature.summary!.mergedAt)} · ${formatDuration(feature.summary!.durationMinutes)}`
-      : CLOSED_NO_MERGE_STATUS)
+  const closedLike = feature.bucket === 'closed' || feature.bucket === 'merged';
+  const etaText = closedLike
+    ? (closedMerged ? dateOnly(feature.summary!.mergedAt) ?? '—' : '—')
+    : etaLabel(feature.eta);
+
+  // Строка 2 — одна фраза. Приоритет: закрытая → тревога (ask) → очередь → «{этап} ·
+  // N/M» → прежнее слово состояния (merge_pending/пауза без этапа: их слов в v2 нет,
+  // берём featureDisplayState — одна подпись на все места, Ш1d).
+  const closedLine = closedMerged
+    ? `Смержена · ${formatDuration(feature.summary!.durationMinutes)}`
+    : closedLike ? st.status : null;
+  const ask = closedLike ? null : feature.ask ?? null;
+  const askAge = ask?.source === 'stopped' ? stoppedAge(ask, now) : '';
+  const askText = ask
+    ? (ask.source === 'stopped' ? `Стоит${askAge ? ` ${askAge}` : ''}: ${ask.text}` : `Ждёт тебя: ${ask.text}`)
     : null;
-  // «Сейчас {Имя} +N» — обычная работа (plain run): имя первого идущего, «+N» остальных.
-  // merge_pending/merging/очередь/закрытая — прежние слова featureDisplayState (их
-  // «Сейчас» не касается).
-  const nowIds = featureAvatarPersonaIds(feature);
-  const avatars = nowIds.map(id => personaById?.(id)).filter((p): p is Persona => p != null);
-  const firstName = avatars[0]?.name ?? personaName ?? null;
-  const plainRun = !compact && st.kind === 'run' && !st.alarm && feature.state !== 'merging' && firstName != null;
-  const status = closedStatus ?? (plainRun
-    ? 'Сейчас'
-    : st.status);
-  const statusRest = plainRun ? Math.max(0, nowIds.length - 1) : 0;
   // Очередь: цифры «N из M» набираем FONT.mono — при пересчёте не прыгает ширина.
-  const queueNums = st.kind === 'queue' ? /^в очереди · (\d+ из \d+)$/.exec(status)?.[1] ?? null : null;
-  // Тон статуса: «ждёт вас» — warningText 600, «стоит» — dangerText 600 (тоны В2),
-  // «доработка» — warningText 600, закрытая смержена → successText, «Сейчас» — textSecondary
-  // (имя — textHeading 600 внутри), прочее — textSecondary 400.
-  const statusColor = compact
-    ? (closedMerged ? C.successText : C.textSecondary)
-    : feature.bucket === 'merged' ? C.successText
-    : st.alarm === 'wait' ? C.warningText
-    : st.alarm === 'stop' ? C.dangerText
-    : st.kind === 'loop' ? C.warningText
+  const queueNums = !closedLike && !ask && st.kind === 'queue' ? /^в очереди · (\d+ из \d+)$/.exec(st.status)?.[1] ?? null : null;
+  const stage = closedLike || ask || st.kind === 'queue' ? null : stageNameOf(feature);
+  const stageLine = stage ? `${stage} · ${feature.stepsAccepted}/${feature.stepsTotal}` : null;
+  const line2Text = closedLine ?? askText ?? stageLine ?? st.status;
+  // Тон строки 2: «ждёт тебя» — warningText 600, «стоит» — dangerText 600 (тоны В2);
+  // смержена — successText 600; очередь — textPrimary 600; «доработка» — warningText
+  // 600; этап и прочее — textSecondary 400.
+  const line2Color = (closedMerged || st.kind === 'done') ? C.successText
+    : ask ? (ask.source === 'stopped' ? C.dangerText : C.warningText)
     : st.kind === 'queue' ? C.textPrimary
+    : st.kind === 'loop' ? C.warningText
     : C.textSecondary;
-  const statusWeight = (st.alarm != null || st.kind === 'loop' || st.kind === 'queue' || (compact && closedMerged) || feature.bucket === 'merged' || plainRun) ? 600 : 400;
-  // «Давность»: с тревоги (attention.since) или с последней активности (lastActivityAt).
-  const age = compact ? '' : ageLabel(feature.attention?.since ?? feature.lastActivityAt, now);
+  const line2Weight = (closedMerged || st.kind === 'done' || ask != null || st.kind === 'queue' || st.kind === 'loop') ? 600 : 400;
+  // Полный текст тревоги — в title (фраза на строке — с многоточием); полная строка
+  // счётчиков — общий formatStepProgress.
+  const line2Title = ask ? ask.text : progress ? formatStepProgress(progress) : undefined;
   // Быстрое действие: «Ответить» / «К мержу» / «Ключевой чат» (null — нет).
   const quick = featureQuickAction(feature);
   // Быстрое действие рендерим только на десктопе (на 360 оно живёт на странице фичи).
@@ -258,8 +274,10 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           ...(compact && isMobile ? { minHeight: 52 } : null),
         }}
       >
-        {/* Строка 1: глиф, название, давность. Высота 19 фиксирована (как .r1 в макете):
-            содержимое не растягивает строку — из неё складывается высота плашки (55). */}
+        {/* Строка 1 (v2): глиф, название, срок справа (600 FS.sm textSecondary,
+            tabular-nums — не моно; закрытая — дата мержа). Высота 19 фиксирована
+            (как .r1 в макете): содержимое не растягивает строку — из неё складывается
+            высота плашки (55). */}
         <div data-testid="feature-group-row1" style={{ display: 'flex', alignItems: 'center', gap: 7, height: 19, lineHeight: '19px' }}>
           <span style={{ display: 'flex', flexShrink: 0 }}>
             <FeatureGlyph kind={st.kind} size={14} />
@@ -276,87 +294,42 @@ export function FeatureGroupHeader({ feature, expanded, onToggle, onOpen, isMobi
           >
             {feature.title}
           </span>
-          {age && (
-            <span
-              data-testid="feature-group-age"
-              style={{
-                flexShrink: 0,
-                fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-                // Прячется при наведении (под быстрым действием) — overlap справа в строке 1.
-                visibility: hovered ? 'hidden' : 'visible',
-              }}
-            >
-              {age}
-            </span>
-          )}
+          <span
+            data-testid="feature-group-eta"
+            style={{
+              flexShrink: 0, whiteSpace: 'nowrap',
+              fontSize: FS.sm, fontWeight: 600, color: C.textSecondary,
+              // Цифры и слова срока одним шрифтом UI (не моно): табличные цифры не
+              // дают строке прыгать при пересчёте.
+              fontVariantNumeric: 'tabular-nums',
+            }}
+          >
+            {etaText}
+          </span>
         </div>
 
-        {/* Строка 2: аватары, статус, процент, бейдж расхождений. Высота 17 фиксирована
-            (.r2 макета) и alignItems: center: бейдж/аватар не растягивают строку до 17,4+
-            — иначе высота плашки съезжает (дизайн-ревью F2, major 2). */}
-        <div data-testid="feature-group-row2" style={{ display: 'flex', alignItems: 'center', gap: 7, height: 17, lineHeight: '17px', minWidth: 0 }}>
-          {avatars.length > 0 && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }}>
-              {avatars.map((p, i) => (
-                <span
-                  key={p.id}
-                  style={{
-                    // Кольцо 2px bgCard + нахлёст −5 со второго (макет: стопка аватаров).
-                    boxShadow: `0 0 0 2px ${C.bgCard}`,
-                    marginLeft: i === 0 ? 0 : -5,
-                    borderRadius: R.full,
-                    display: 'inline-flex',
-                  }}
-                >
-                  <PersonaAvatar persona={p} size={16} />
-                </span>
-              ))}
-            </span>
-          )}
+        {/* Строка 2 (v2): одна фраза — «{этап} · N/M» / «Ждёт тебя: …» / «Стоит …: …» /
+            «Смержена · …». Аватаров, ⚠ расхождений и процента нет (R2: полоса ниже
+            говорит о прогрессе глазами). Высота 17 фиксирована (.r2 макета) и
+            alignItems: center: содержимое не растягивает строку (дизайн-ревью F2,
+            major 2). */}
+        <div data-testid="feature-group-row2" style={{ display: 'flex', alignItems: 'center', height: 17, lineHeight: '17px', minWidth: 0 }}>
           <span
             data-testid="feature-group-status"
-            title={progress ? formatStepProgress(progress) : undefined}
+            title={line2Title}
             style={{
               flex: 1, minWidth: 0,
               fontSize: FS.xs,
-              color: statusColor,
-              fontWeight: statusWeight,
+              color: line2Color,
+              fontWeight: line2Weight,
               fontFamily: FONT.sans,
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}
           >
-            {plainRun ? (
-              <>Сейчас <b data-testid="feature-group-now-name" style={{ color: C.textHeading, fontWeight: 600 }}>{firstName}</b>{statusRest > 0 ? ` +${statusRest}` : ''}</>
-            ) : queueNums
+            {queueNums
               ? <>в очереди · <span data-testid="feature-group-queue-nums" style={{ fontFamily: FONT.mono }}>{queueNums}</span></>
-              : status}
+              : line2Text}
           </span>
-          {!compact && bar && (
-            <span
-              data-testid="feature-group-percent"
-              title={progress ? formatStepProgress(progress) : undefined}
-              style={{
-                flexShrink: 0, whiteSpace: 'nowrap',
-                fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
-              }}
-            >
-              <b style={{ color: C.textHeading }}>{percent} %</b>
-            </span>
-          )}
-          {/* Бейдж расхождений — глиф + число (дизайн-ревью F2, minor 10): длинное слово
-              «расхождений: N» резало статус до «ждёт согласия на ме…». Пояснение — в title. */}
-          {!compact && (feature.trackerIssues ?? 0) > 0 && (
-            <span data-testid="feature-group-tracker-issues" style={{ display: 'inline-flex', flexShrink: 0 }}>
-              <Badge
-                tone="warning"
-                size="xs"
-                icon={<AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-                title={`Трекер расходится с работой: ${feature.trackerIssues} — оркестратор поправит`}
-              >
-                {feature.trackerIssues}
-              </Badge>
-            </span>
-          )}
         </div>
 
         {/* Полоса трекера во всю ширину (С1 «Трек снизу»): та же, что в шапке В2. */}

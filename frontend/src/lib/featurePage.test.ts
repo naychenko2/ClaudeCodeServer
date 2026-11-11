@@ -8,7 +8,15 @@
 //   3. Мутация: сломанный фильтр/дебаунс красит тест.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test, FEATURE_TAB_LABEL, stepsTabCount } from './featurePage';
+import {
+  __test,
+  FEATURE_MAIN_TAB_LABEL,
+  getFeatureMainTab,
+  setFeatureMainTab,
+  setFeaturePageTab,
+  stepsTabCount,
+  toMainTab,
+} from './featurePage';
 import { api } from './api';
 import type { Task } from '../types';
 import type { FeaturePage } from '../types/featureIndex';
@@ -306,25 +314,113 @@ describe('brief: ответ страницы с brief и без него', () =>
 // p.15/p.16 («Показать все») — замороженный блок: функция refetchFeaturePageAll убрана,
 // её тесты (персист режима + тост при сбое) — с ней.
 
-// ── 6. Названия вкладок (Ш1b) ──────────────────────────────────────────────────
-describe('названия вкладок (Ш1b, разрез упрощения страницы)', () => {
-  // Разворот словаря по разрезу: лента событий — «История» фичи, планы и макеты —
-  // «Материалы». Мутация: вернуть старое имя → red.
-  it('events → «История», plans → «Материалы»', () => {
-    expect(FEATURE_TAB_LABEL.events).toBe('История');
-    expect(FEATURE_TAB_LABEL.plans).toBe('Материалы');
-  });
-
-  // Ш7: вкладка «Шаги» (бывшая «Задачи»), счётчик — знаменатель трекера.
-  it('tasks → «Шаги»', () => {
-    expect(FEATURE_TAB_LABEL.tasks).toBe('Шаги');
-  });
-
+// ── 6. Названия вкладок и счётчик ────────────────────────────────────────────────
+describe('названия вкладок и счётчик шагов', () => {
   it('stepsTabCount: stepProgress.total, а не число задач; без прогресса — число цепочек', () => {
     const chains = [{ stepRef: 'A' }, { stepRef: 'B' }] as FeatureRun['stepChains'];
     const withProgress = { stepProgress: { total: 98 }, stepChains: chains, steps: [{}, {}, {}] } as unknown as FeatureRun;
     expect(stepsTabCount(withProgress)).toBe(98);
     expect(stepsTabCount({ stepChains: chains } as unknown as FeatureRun)).toBe(2);
     expect(stepsTabCount({} as unknown as FeatureRun)).toBe(0);
+  });
+});
+
+// ── 7. Мейн-вкладка «Ход · Материалы · Разбор» (FS-FTABS, макет v4) ──────────────────
+//
+// По макету v4 у «Разбора» сегментов нет: стор одной вкладки, без якоря. Живёт рядом
+// со старым `_tab` (до FS-FP): setFeaturePageTab пишет оба значения, перевод — строго
+// по таблице. Уведомления меряются сырой подпиской `__test.subscribe` (тот же emit,
+// что читают useSyncExternalStore-хуки). Мутации:
+//   «events → progress» в toMainTab → красный ровно тест «events → review»;
+//   «убрать ранний выход при равном значении» в setFeatureMainTab → красный
+//   «chats, затем stats» (2 вместо 1) и «no-op при равном» (3 вместо 2).
+
+describe('мейн-вкладка (FS-FTABS)', () => {
+  beforeEach(() => {
+    __test.reset();
+  });
+  afterEach(() => {
+    __test.reset();
+  });
+
+  // По строке на каждое значение таблицы: мутация одной строки красит ровно её тест.
+  it('toMainTab: timeline → progress', () => {
+    expect(toMainTab('timeline')).toBe('progress');
+  });
+  it('toMainTab: tasks → progress', () => {
+    expect(toMainTab('tasks')).toBe('progress');
+  });
+  it('toMainTab: plans → materials', () => {
+    expect(toMainTab('plans')).toBe('materials');
+  });
+  it('toMainTab: chats → review', () => {
+    expect(toMainTab('chats')).toBe('review');
+  });
+  it('toMainTab: events → review', () => {
+    expect(toMainTab('events')).toBe('review');
+  });
+  it('toMainTab: stats → review', () => {
+    expect(toMainTab('stats')).toBe('review');
+  });
+
+  it('FEATURE_MAIN_TAB_LABEL: «Ход · Материалы · Разбор»', () => {
+    expect(FEATURE_MAIN_TAB_LABEL.progress).toBe('Ход');
+    expect(FEATURE_MAIN_TAB_LABEL.materials).toBe('Материалы');
+    expect(FEATURE_MAIN_TAB_LABEL.review).toBe('Разбор');
+  });
+
+  it('chats, затем stats: main=review, второй вызов мейн-значение не меняет и подписчиков не будит', () => {
+    setFeaturePageTab('chats'); // main → review (до подписки — не считаем)
+    let n = 0;
+    const off = __test.subscribe(() => {
+      n += 1;
+    });
+    setFeaturePageTab('stats'); // main тот же (review): setFeatureMainTab ранне выходит
+    off();
+    expect(getFeatureMainTab()).toBe('review');
+    // Лишнего уведомления нет: мутация «emit в setFeaturePageTab» даёт 1 вместо 0.
+    expect(n).toBe(0);
+  });
+
+  it('повтор того же старого значения после ручной смены вкладки снова открывает нужную', () => {
+    setFeaturePageTab('events');
+    setFeatureMainTab('progress');
+    setFeaturePageTab('events');
+    expect(getFeatureMainTab()).toBe('review');
+  });
+
+  it('setFeatureMainTab: no-op при равном значении, уведомление только при смене', () => {
+    let n = 0;
+    const off = __test.subscribe(() => {
+      n += 1;
+    });
+    setFeatureMainTab('review'); // progress → review: 1
+    setFeatureMainTab('review'); // то же: 0 (ранний выход)
+    setFeatureMainTab('materials'); // review → materials: 1
+    off();
+    expect(getFeatureMainTab()).toBe('materials');
+    expect(n).toBe(2);
+  });
+
+  it('умолчание progress; смена фичи сбрасывает к нему, лишнего уведомления нет', () => {
+    expect(getFeatureMainTab()).toBe('progress');
+    // Счётчик «новых значений», как это делает useSyncExternalStore:
+    // уведомление засчитывается, когда срез реально изменился.
+    let last = getFeatureMainTab();
+    let n = 0;
+    const off = __test.subscribe(() => {
+      const v = getFeatureMainTab();
+      if (v !== last) {
+        n += 1;
+        last = v;
+      }
+    });
+    __test.setPage('epic-1');
+    setFeaturePageTab('stats'); // → review: одно новое значение
+    __test.setPage('epic-2'); // смена фичи: сброс к дефолту вместе с _tab
+    off();
+    expect(__test.tab()).toBe('timeline');
+    expect(__test.mainTab()).toBe('progress');
+    expect(n).toBe(1); // ровно одно; сброс сам по себе emit не даёт
   });
 });

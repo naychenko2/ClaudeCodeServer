@@ -1,4 +1,5 @@
-// Дефект 4c4645e2: чип возврата «← к фиче · Статистика» на экране открытой задачи.
+// Дефект 4c4645e2: чип возврата «← к фиче · Разбор» на экране открытой задачи (FS-FBACK:
+// вкладка возврата — мейн-вкладка, «Статистика» переводится в «Разбор»).
 // Тот же FeatureBackChip, что в шапке чата, и тот же стор featureBackNav: переход
 // записывается recordFeatureReturn с {kind:'task'}, панель деталей читает его по id задачи.
 //
@@ -40,13 +41,13 @@ afterEach(() => {
 });
 
 describe('Возврат к фиче на экране задачи (дефект 4c4645e2)', () => {
-  it('точка возврата записана → чип «к фиче «Фича» · Статистика»', () => {
+  it('точка возврата записана → чип «к фиче «Фича» · Разбор»', () => {
     setFeaturePageTab('stats');
     backNav.recordFeatureReturn('f1', { kind: 'task', id: 't1' }, 'Фича');
     const c = renderPane(task(), PROJECT);
     const chip = findNodeByAttr(c, 'data-testid', 'feature-back-chip');
     expect(chip, 'чипа нет').not.toBeNull();
-    expect(textNodes(chip!).join('')).toBe('к фиче «Фича» · Статистика');
+    expect(textNodes(chip!).join('')).toBe('к фиче «Фича» · Разбор');
   });
 
   it('без точки возврата чипа нет', () => {
@@ -84,10 +85,11 @@ describe('Возврат к фиче на экране задачи (дефек�
     const log: { type: string; detail: unknown }[] = [];
     (globalThis as { window: { dispatchEvent: (e: Event) => boolean } }).window.dispatchEvent =
       (e: Event) => { log.push({ type: e.type, detail: (e as CustomEvent).detail }); return true; };
-    const btn = findNodeByAttr(c, 'aria-label', 'К фиче «Фича», вкладка «Статистика»');
+    const btn = findNodeByAttr(c, 'aria-label', 'К фиче «Фича», вкладка «Разбор»');
     expect(btn, 'кнопки чипа нет').not.toBeNull();
     act(() => { (reactProps(btn!)!.onClick as () => void)(); });
-    expect(pageStore.tab(), 'вернулись не на ту вкладку').toBe('stats');
+    // FS-FBACK: клик ставит мейн-вкладку (мейн-стор — источник правды для вкладки возврата).
+    expect(pageStore.mainTab(), 'вернулись не на ту вкладку').toBe('review');
     const ev = log.find(d => d.type === 'cc-open-feature');
     expect(ev, 'cc-open-feature не диспатчен').toBeDefined();
     expect(ev!.detail).toEqual({ featureId: 'f1', fromChat: false });

@@ -128,7 +128,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Цепочки: по одной на шаг (stepRef). Шаг = stepRef; в цепочку входят задача шага
         // (role=step) и её доработки (role=rework, тот же stepRef), в порядке времени.
         var accounting = FeatureStepAccounting.Build(steps, verdictTasks, plan, nowUtc, sessions,
-            children.Where(t => t.Role == TaskRoles.Merge).ToList());
+            children.Where(t => t.Role == TaskRoles.Merge).ToList(), epic.BaselineSteps);
         var stepChains = accounting.Chains;
 
         // TR-B1c: сверка трекера — один вызов на том же проходе, что и учёт шагов.
@@ -308,31 +308,50 @@ public sealed class FeatureProjector(TaskManager tasks)
                 && stageDefs[i].tasks.All(t => t.Status == TaskItemStatus.Done))
             .ToArray();
 
-        // activeIndex: текущая стадия конвейера.
-        // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
-        // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
-        //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
-        //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
-        //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
-        //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
-        //    нет) — частный случай: последняя с задачами = final → active = merge.
-        //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
-        // 3) -1 — все стадии пройдены (merge done).
+        // activeIndex: ТЕКУЩАЯ стадия фичи — та же величина, что FeatureBrief.CurrentStageOf
+        // (FS-V1, разрез §2.1 П2): стадия первой ИДУЩЕЙ задачи, иначе — первая непройденная
+        // стадия с работой. До FS-V1 здесь жила только вторая половина, а brief.now и row.now0
+        // брали первую: два разных ответа на один вопрос, и Гант с шапкой расходились.
+        // nowList построен выше и пуст там, где идущих нет намеренно (пауза — W4-HOLD-D, гашение
+        // nowList в BuildCore), поэтому «первая идущая задача» здесь ровно та, что станет run.Now[0].
         int activeIndex = -1;
-        for (int i = 0; i < isDone.Length; i++)
+        if (nowList.Count > 0)
         {
-            if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
-        }
-        if (activeIndex == -1 && !isDone[^1])
-        {
-            int lastWithTasks = -1;
+            // Стадия идущей задачи — ключ из stageDefs (RoleToStage отдаёт только их). Задача без
+            // роли даёт «prod»: по ней активной может стать стадия без своих задач — тот же
+            // случай, что «фича дошла и ждёт следующую» ниже.
             for (int i = 0; i < stageDefs.Length; i++)
-                if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
-            activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
-            // Пустая необязательная «design» не может быть активной: активность
-            // уходит на следующую стадию (W4-DES-B).
-            if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
-                activeIndex++;
+            {
+                if (stageDefs[i].key == nowList[0].Stage) { activeIndex = i; break; }
+            }
+        }
+        if (activeIndex == -1)
+        {
+            // Идущих задач нет.
+            // 1) Первая стадия, которая ИМЕТ задачи и НЕ пройдена (есть работа).
+            // 2) Если таких нет (все стадии с задачами пройдены) и merge не пройдена —
+            //    активной считается стадия СРАЗУ ПОСЛЕДНЕЙ стадии, у которой есть задачи
+            //    (все стадии с задачами пройдены, merge ещё нет): фича «дошла» до последней
+            //    заполненной стадии и ждёт следующую. Задач нет вообще (все стадии пусты) →
+            //    cut (Разрез) — фича ещё не стартовала. Честный мерж (финал принят, merge-задачи
+            //    нет) — частный случай: последняя с задачами = final → active = merge.
+            //    Ложного «Мерж · сейчас» нет: cut done + пусто дальше → plan, plan done + пусто → prod.
+            // 3) -1 — все стадии пройдены (merge done).
+            for (int i = 0; i < isDone.Length; i++)
+            {
+                if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
+            }
+            if (activeIndex == -1 && !isDone[^1])
+            {
+                int lastWithTasks = -1;
+                for (int i = 0; i < stageDefs.Length; i++)
+                    if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
+                activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
+                // Пустая необязательная «design» не может быть активной: активность
+                // уходит на следующую стадию (W4-DES-B).
+                if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
+                    activeIndex++;
+            }
         }
 
         // W4-3B: множество id этого run — фильтр связи «оценивает →» у исполнителей стадии.
@@ -632,6 +651,9 @@ public sealed class FeatureProjector(TaskManager tasks)
             Closed = closed,
             Summary = summary,
             PostMergeTails = postMergeTails,
+            // Ключи закрытого хвоста — из того же прохода учёта (FeatureStepAccounting), что и
+            // корзины: второй предикат «что такое хвост» не заводится, список только переносится.
+            ClosedTailKeys = accounting.ClosedTailKeys,
             Tracker = tracker,
         };
     }
@@ -776,10 +798,16 @@ public sealed class FeatureProjector(TaskManager tasks)
     // TaskItem.Role как есть (step в документы не попадает, догадок по заголовку нет). hasText —
     // ResultMarkdown не пуст после Trim; mockupPaths — пути файлов документа: макеты из
     // ResultMarkdown (docs/mockups/….{html,md}) + файлы, которые задача сама приложила через
-    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе):
-    // distinct, порядок появления (сначала текст, потом linkedFiles), ≤ 20, пути с «..» отброшены.
+    // LinkedFiles (M5: ADR, спеки, записки вне docs/mockups не должны теряться в разделе).
+    // FS-B0: в LinkedFiles берётся только материал или макет (FeatureMaterials.IsMaterial /
+    // IsMockup) — код, тесты и файлы вне docs/ в «Прочие документы» не едут никогда.
+    // distinct регистронезависимо, порядок появления (сначала текст, потом linkedFiles),
+    // пути с «..» отброшены.
     //
     // Порядок списка: роль (cut → design → plan → consult), внутри роли — по CreatedAt.
+    // Общий потолок — 30 путей на фичу (FeatureMaterials.Cap), а не 20 на задачу: кандидаты
+    // обходятся свежие-сверху (по CreatedAt desc) — пути свежих задач занимают бюджет первыми,
+    // старые обрезаются. Внутри задачи порядок кандидатов сохраняется.
     public static List<FeaturePlan> BuildPlans(FeatureRun run)
     {
         ArgumentNullException.ThrowIfNull(run);
@@ -800,6 +828,21 @@ public sealed class FeatureProjector(TaskManager tasks)
         ordered.AddRange(plan.OrderBy(t => t.CreatedAt));
         ordered.AddRange(consult.OrderBy(t => t.CreatedAt));
 
+        // Бюджет на фичу (FS-B0): задачи обходятся свежие-сверху; дубли (в т.ч. между задачами)
+        // схлопываются регистронезависимо; суммарно не более FeatureMaterials.Cap путей.
+        var budget = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pathsByTask = new Dictionary<string, List<string>>();
+        foreach (var t in ordered.OrderByDescending(t => t.CreatedAt))
+        {
+            var kept = new List<string>();
+            foreach (var p in MockupPaths(t))
+            {
+                if (budget.Count >= FeatureMaterials.Cap) break;
+                if (budget.Add(p)) kept.Add(p);
+            }
+            pathsByTask[t.Id] = kept;
+        }
+
         return ordered
             .Select(t => new FeaturePlan(
                 t.Id,
@@ -809,7 +852,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 t.CreatedAt,
                 t.CompletedAt,
                 HasText(t),
-                MockupPaths(t)))
+                pathsByTask[t.Id]))
             .ToList();
     }
 
@@ -819,11 +862,16 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пути файлов документа (M5): макеты из ResultMarkdown (docs/mockups/….{html,md}) + файлы,
     // которые задача приложила через LinkedFiles (ADR, спеки, записки — вне docs/mockups).
     // Порядок: сначала пути из текста (порядок появления), затем из LinkedFiles (как приложены).
-    // distinct, общий потолок 20, пустые и пути с «..» (pathtraversal) отброшены.
+    // FS-B0: из LinkedFiles берётся только материал или макет (FeatureMaterials.IsMaterial /
+    // IsMockup): код, тесты и файлы вне docs/ — шум группы «Прочие документы», в список не
+    // входят никогда; макеты остаются — их читает «Упомянут в» у карточки макета.
+    // distinct регистронезависимо, пустые и пути с «..» (pathtraversal) отброшены.
+    // Потолок — общий на фичу в BuildPlans (FeatureMaterials.Cap), не на задачу.
     // Пустой источник → [].
     private static List<string> MockupPaths(TaskItem t)
     {
         var paths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var text = t.ResultMarkdown;
         if (!string.IsNullOrEmpty(text))
         {
@@ -832,17 +880,16 @@ public sealed class FeatureProjector(TaskManager tasks)
                 var p = m.Value;
                 // «..» — выход за docs/mockups (pathtraversal) → отбрасываем.
                 if (p.Contains("..")) continue;
-                if (!paths.Contains(p)) paths.Add(p);
-                if (paths.Count >= 20) return paths;
+                if (seen.Add(p)) paths.Add(p);
             }
         }
-        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /): берём как
-        // есть, та же безопасность: пустые и с «..» отброшены, дубли схлопнуты, потолок общий.
+        // LinkedFiles — намеренные приложения задачи (контракт: пути от корня через /):
+        // та же безопасность (пустые и с «..» отброшены), плюс правило материала (FS-B0).
         foreach (var p in t.LinkedFiles)
         {
             if (string.IsNullOrWhiteSpace(p) || p.Contains("..")) continue;
-            if (!paths.Contains(p)) paths.Add(p);
-            if (paths.Count >= 20) break;
+            if (!FeatureMaterials.IsMaterial(p) && !FeatureMaterials.IsMockup(p)) continue;
+            if (seen.Add(p)) paths.Add(p);
         }
         return paths;
     }
@@ -931,6 +978,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         Closed = run.Closed,
         Summary = run.Summary,
         PostMergeTails = run.PostMergeTails,
+        // Диалог мержа показывает хвост поимённо и отправляет решение по этим ключам: список
+        // обязан пережить облегчение (тот же смысл, что с PostMergeTails).
+        ClosedTailKeys = run.ClosedTailKeys,
         Tracker = run.Tracker,
     };
 
@@ -979,12 +1029,19 @@ public sealed class FeatureProjector(TaskManager tasks)
     // (витки — задачи-носители вердикта returned/accepted_with_remarks) и сколько из них открыто (их доработка
     // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
     // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
+    // «open» — живое (Work + Review минус закрытый хвост), «tail» — закрытый хвост (§8.3): сданные,
+    // но не принятые шаги. Деление точное: ClosedTail ⊆ Review + Work, поэтому open + tail равен
+    // прежнему open (сторож FeatureStepProgressTests) — диалог мержа видит то же число, что и раньше,
+    // но разделённым на «ещё можно вести» и «решение о снятии».
     internal static List<FeatureMergeRisk> BuildMergeRisks(FeatureStepProgress progress, int trackerCount)
     {
         var risks = new List<FeatureMergeRisk>();
         if (progress.NotCreated > 0) risks.Add(new(FeatureMergeRiskKinds.NotCreated, progress.NotCreated));
-        int open = progress.Work + progress.Review;
+        // Открытые доработки после мержа вне корзин, но мерж они держат так же (FS-PB2).
+        int open = progress.Work + progress.Review - progress.ClosedTail
+            + (progress.FollowUpTotal - progress.FollowUpAccepted);
         if (open > 0) risks.Add(new(FeatureMergeRiskKinds.Open, open));
+        if (progress.ClosedTail > 0) risks.Add(new(FeatureMergeRiskKinds.Tail, progress.ClosedTail));
         if (trackerCount > 0) risks.Add(new(FeatureMergeRiskKinds.Tracker, trackerCount));
         return risks;
     }
@@ -1484,7 +1541,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         DateTime? now = null)
     {
         ArgumentNullException.ThrowIfNull(sessions);
-        _ = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2); Б1 пока не трогает
+        var nowUtc = now ?? DateTime.UtcNow; // «сейчас» — для длительностей (Б2) и устаревания голоса (FS-O2c)
 
         // Задача по id — для OwnFeatureId («своя» фича чата — первая в своём классе).
         var byId = owner.ToDictionary(t => t.Id);
@@ -1526,12 +1583,12 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
         // (строка): один снимок — одна семантика, живые чаты не теряются, чужие не попадают.
         var runs = survivingEpics
-            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), now, sessions))
+            .Select(epic => Build(epic, FeatureTasks(epic, byFeature), nowUtc, sessions))
             .ToList();
         ApplyQueue(runs, owner);
         var rows = OrderRuns(runs)
             .Select(run => BuildRow(run, FeatureTasks(run.Epic, byFeature), sessions,
-                ChatCount(map, run.FeatureId)))
+                ChatCount(map, run.FeatureId), nowUtc))
             .ToList();
         var featureOrder = new Dictionary<string, int>();
         for (var i = 0; i < rows.Count; i++)
@@ -1637,15 +1694,21 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Строка фичи: FeatureRun + задачи фичи (эпик + дочерние, для ключевого чата) + сессии
     // (ключевой чат: archived/project) + chatCount.
     // Чистая функция — на ней золотые тесты (FeatureIndexRowTests).
+    // FS-O2c: now — «сейчас» для StaleOf в NoteOf (возраст голоса и вердикты после записи);
+    // в BuildIndexCore — тот же nowUtc, что идёт в Build.
     internal static FeatureIndexRow BuildRow(
         FeatureRun run,
         IReadOnlyList<TaskItem> featureTasks,
         IReadOnlyCollection<FeatureIndexSession> sessions,
-        int chatCount)
+        int chatCount,
+        DateTime now)
     {
         // Ключевой чат: первое живое звено цепочки (удалённый/чужой чат → следующее звено).
         var key = KeySession(run.Epic, featureTasks, sessions);
         var keySession = key is null ? null : sessions.FirstOrDefault(s => s.Id == key);
+        // FS-V4: категория — одна величина для поля Kind и для штампа голоса в NoteOf (тот же
+        // FeatureBrief.KindOf, что у brief.kind); вне таблицы — null (строка не роняет индекс, Б-1.2 к.3).
+        var kind = FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null;
         return new FeatureIndexRow(
             run.FeatureId,
             run.Epic.Title,
@@ -1683,8 +1746,18 @@ public sealed class FeatureProjector(TaskManager tasks)
             // kind — из той же таблицы и той же функции, что brief.kind (FeatureBrief.KindOf, Б-1.1):
             // своего маппинга здесь нет. Отличие от brief: состояние вне таблицы — null, не исключение
             // (строка индекса не роняет индекс, Б-1.2 к.3).
-            Kind: FeatureBrief.KindByState.ContainsKey(run.State) ? FeatureBrief.KindOf(run) : null,
-            TrackerIssues: run.Tracker.Count);
+            Kind: kind,
+            TrackerIssues: run.Tracker.Count,
+            // FS-V4 (макет v2 «Срок», карточка чата v5): ask/eta строки — те же функции, что у
+            // страницы (FeatureBrief.AskOf/EtaOf), своего расчёта здесь нет. Eta — только оценка
+            // оркестратора: history=null (срок по истории требует FeatureTypical и журналов; индекс
+            // лёгкий, ADR-031 §3.4), note — тот же NoteOf с той же StaleOf, часы — тот же
+            // ClockStoppedOf. Нет оценки оркестратора — null: карточка фронта срока не показывает.
+            Ask: FeatureBrief.AskOf(run),
+            // Состояние вне таблицы (только синтетический run) — категории нет: NoteOf без неё не
+            // зовём, eta null (тот же fail-closed, что у Kind поля).
+            Eta: kind is null ? null : FeatureBrief.EtaOf(FeatureBrief.NoteOf(run, kind, null, now), null,
+                FeatureBrief.ClockStoppedOf(run)));
     }
 
     // Ключевой чат фичи (контракт §1): первое ЖИВОЕ звено цепочки

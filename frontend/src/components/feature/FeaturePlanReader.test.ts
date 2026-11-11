@@ -153,9 +153,18 @@ const TEXTS = vi.hoisted(() => ({
     '## Раздел 4', 'тело 4',
     '## Раздел 5', 'тело 5',
   ].join('\n'),
-  // Цель есть только в корень проекта: в дереве фичи mock отказывает по featureId.
-  onlymain: [
-    'См. [в main](docs/only-main.md).',
+  // Цель снесена вместе с веткой задачи: 404 с reason 'branch_deleted'.
+  deletedLink: [
+    'См. [убранный](docs/deleted.md).',
+    '## Раздел 1', 'тело 1',
+    '## Раздел 2', 'тело 2',
+    '## Раздел 3', 'тело 3',
+    '## Раздел 4', 'тело 4',
+    '## Раздел 5', 'тело 5',
+  ].join('\n'),
+  // Гонка двух ссылок: A читается медленно, B — сразу.
+  race: [
+    'A: [медленный](docs/slow.md), B: [быстрый](docs/fast.md).',
     '## Раздел 1', 'тело 1',
     '## Раздел 2', 'тело 2',
     '## Раздел 3', 'тело 3',
@@ -197,6 +206,9 @@ const TEXTS = vi.hoisted(() => ({
 
 // 'flaky': первый вызов роняет (состояние error), последующие дают текст — путь «Повторить».
 const _flakyCalls = vi.hoisted(() => new Map<string, number>());
+// Записи каждого вызова files.getContent: аргументы — проверка якоря FS-F1d (taskId документа,
+// без featureId, ровно один запрос).
+const CONTENT_CALLS = vi.hoisted(() => [] as { projectId: string; path: string; featureId?: string; taskId?: string }[]);
 vi.mock('../../lib/api', () => ({
   api: {
     tasks: {
@@ -211,12 +223,16 @@ vi.mock('../../lib/api', () => ({
         return Promise.resolve({ resultMarkdown: TEXTS[id] ?? '' });
       },
     },
-    // Чтение целевого документа (W4-LINK-F): «only-main» нет в дереве фичи — есть в
-    // корень проекта (фолбэк читалки); «missing» — ни там, ни там.
+    // Чтение целевого документа (W4-LINK-F, FS-F1d): якорь — дерево задачи, локатор бэка сам
+    // ищет в нём и в main. «missing» — ни там, ни там (404 без reason); «deleted» — 404 с
+    // reason 'branch_deleted': доходит до вызывающего полем, а не исключением (features/files/api.ts);
+    // «slow»/«fast» — пара для теста гонки (A медленный, B немедленный).
     files: {
-      getContent: (projectId: string, path: string, featureId?: string) => {
+      getContent: (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string; taskId?: string }) => {
+        CONTENT_CALLS.push({ projectId, path, featureId, taskId: opts?.taskId });
         if (path === 'docs/missing.md') return Promise.reject({ status: 404 });
-        if (path === 'docs/only-main.md' && featureId) return Promise.reject({ status: 404 });
+        if (path === 'docs/deleted.md') return Promise.resolve({ content: null, isBinary: false, isImage: false, reason: 'branch_deleted' });
+        if (path === 'docs/slow.md') return new Promise(res => setTimeout(() => res({ content: 'Медленный A', isBinary: false, isImage: false }), 20));
         return Promise.resolve({ content: `Содержимое: ${path}`, isBinary: false, isImage: false });
       },
     },
@@ -619,10 +635,14 @@ describe('FeaturePlanReader: свёртка разделов', () => {
 
 // === W4-LINK-F: ссылки между документами фичи в читалке ===
 // [[wikilinks]] и относительные пути внутри дерева фичи — кликабельны, цель открывается
-// в той же читалке; чтение — через резолв featureId (W4-5B2), при отказе — корень
-// проекта. Внешние http-ссылки — как раньше. Битые ссылки не роняют читалку.
+// в той же читалке; чтение — по якорю задачи-документа (FS-F1d): локатор бэка сам ищет
+// в дереве задачи и в main, своего фолбэка «без якоря» нет. Внешние http-ссылки — как
+// раньше. Битые ссылки не роняют читалку.
 describe('FeaturePlanReader: ссылки между документами (W4-LINK-F)', () => {
-  beforeEach(() => installFakeDom());
+  beforeEach(() => {
+    installFakeDom();
+    CONTENT_CALLS.length = 0;
+  });
   afterEach(() => {
     uninstallFakeDom();
     vi.restoreAllMocks();
@@ -636,15 +656,17 @@ describe('FeaturePlanReader: ссылки между документами (W4-
     act(() => { (props!.onClick as () => void)(); });
   }
 
-  // Клик по относительному пути внутри дерева фичи: цель читается через featureId
-  // (mock отдаёт «Содержимое: <path>») и показывается в читалке.
-  it('клик по относительному пути открывает целевой документ через резолв featureId', async () => {
+  // Клик по относительному пути внутри дерева фичи: цель читается по якорю задачи-документа
+  // (mock отдаёт «Содержимое: <path>») и показывается в читалке. Ровно один запрос: без
+  // featureId, с taskId открытого документа — повтора «без якоря» нет.
+  it('клик по относительному пути открывает цель по якорю задачи-документа: один запрос, без featureId', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('links'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
     await flush();
     clickByTitle(container, 'Открыть docs/features/note.md');
     await flush();
     expect(findNodeByAttr(container, 'data-testid', 'plan-open-doc')).not.toBeNull();
     expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')!).join(' ')).toContain('Содержимое: docs/features/note.md');
+    expect(CONTENT_CALLS).toEqual([{ projectId: 'p1', path: 'docs/features/note.md', featureId: undefined, taskId: 'links' }]);
   });
 
   // [[Заголовок]] другого документа фичи — не файл, а документ: клик зовёт onOpenDocument
@@ -664,7 +686,7 @@ describe('FeaturePlanReader: ссылки между документами (W4-
     expect(opened).toEqual(['doc2']);
   });
 
-  // Цели нет ни в дереве фичи, ни в проекте: честный «Документа нет», читалка жива.
+  // Цели нет ни в дереве задачи, ни в main: честный «Документа нет», читалка жива.
   it('битая ссылка не роняет читалку: «Документа нет» вместо текста', async () => {
     const { container } = mount(createElement(FeaturePlanReader, { plan: plan('brokenLink'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
     await flush();
@@ -674,14 +696,45 @@ describe('FeaturePlanReader: ссылки между документами (W4-
     expect(findNodeByAttr(container, 'data-testid', 'plan-reader')).not.toBeNull();
   });
 
-  // В дереве фичи цели нет (mock отказывает по featureId) — фолбэк на корень проекта
-  // даёт текст.
-  it('если цели нет в дереве фичи — чтение из корня проекта (фолбэк)', async () => {
-    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('onlymain'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+  // Файл снесён вместе с веткой задачи: 404 доходит полем reason 'branch_deleted' —
+  // то же состояние, что во вьюере (FileViewer), а не ошибка загрузки.
+  it('404 reason=branch_deleted — «Материал удалён вместе с веткой»', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('deletedLink'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
     await flush();
-    clickByTitle(container, 'Открыть docs/only-main.md');
+    clickByTitle(container, 'Открыть docs/deleted.md');
     await flush();
-    expect(textNodes(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')!).join(' ')).toContain('Содержимое: docs/only-main.md');
+    const node = findNodeByAttr(container, 'data-testid', 'plan-open-doc-deleted');
+    expect(node, 'состояние удалённого материала').not.toBeNull();
+    expect(textNodes(node!).join(' ')).toContain('Материал удалён вместе с веткой');
+    expect(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'plan-reader')).not.toBeNull();
+  });
+
+  // Гонка: A (медленный) открыт, возвращены к текущему документу, открыт B — показывается
+  // B; поздний ответ A отбрасывается по ключу активного запроса. Мутация «снять проверку
+  // ключа» — красный. (Второй клик возможен после возврата: открытый документ заменяет
+  // тело читалки, ссылки исходного текста в DOM скрыты.)
+  it('две ссылки подряд — показана вторая, поздний ответ первой отбрасывается', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('race'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    clickByTitle(container, 'Открыть docs/slow.md');
+    click(container, 'plan-open-doc-close');
+    clickByTitle(container, 'Открыть docs/fast.md');
+    // Дождаться и медленного A (20 мс): он не должен перезаписать B.
+    await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+    const body = textNodes(findNodeByAttr(container, 'data-testid', 'plan-open-doc-body')!).join(' ');
+    expect(body).toContain('Содержимое: docs/fast.md');
+    expect(body).not.toContain('Медленный A');
+  });
+
+  // Открытый документ закрыли до ответа: поздний ответ не возвращает его в читалку.
+  it('закрытый документ не возвращается поздним ответом', async () => {
+    const { container } = mount(createElement(FeaturePlanReader, { plan: plan('race'), mockups: [], featureId: 'feat-1', projectId: 'p1' }));
+    await flush();
+    clickByTitle(container, 'Открыть docs/slow.md');
+    click(container, 'plan-open-doc-close');
+    await act(async () => { await new Promise(r => setTimeout(r, 60)); });
+    expect(findNodeByAttr(container, 'data-testid', 'plan-open-doc')).toBeNull();
   });
 
   // [[…]] внутри код-забора — цитата: ссылка не появляется.

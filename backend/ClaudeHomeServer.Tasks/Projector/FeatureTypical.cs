@@ -281,7 +281,9 @@ public static class FeatureTypical
         return new TypicalPercentiles(Pct(sorted, 0.5), Pct(sorted, 0.25), Pct(sorted, 0.75));
     }
 
-    private static double Pct(List<double> sorted, double q)
+    // internal — общая функция квантилей: её же использует медиана шага этой фичи
+    // (FeatureStats.StepMedianOf), не копия.
+    internal static double Pct(List<double> sorted, double q)
     {
         double pos = q * (sorted.Count - 1);
         int lo = (int)Math.Floor(pos);

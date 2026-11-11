@@ -283,7 +283,7 @@ export interface MockupCardProps {
   // Планы фичи — для обратной строки «Упомянут в».
   plans: FeaturePlan[];
   // Открыть файл проекта (существующий просмотр, HTML в песочнице).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   isMobile?: boolean;
   // Версия из «Прошлых версий», не текущая в группе → чип «заменён».
   replaced?: boolean;
@@ -302,6 +302,17 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
   const authorName = persona?.name ?? (mockup.authorPersonaId ? mockup.authorPersonaId : null);
   // const (не свойство): narrowing `taskId &&` переживает замыкание onOpen.
   const taskId = mockup.taskId;
+  // Главный html-файл — чтобы взять из него branch (FS-F1f: файл лежит в ветке автора).
+  const mainFile = main ? mockup.files.find(f => f.path === main) : undefined;
+  // const (не свойство): narrowing `ownerTaskId &&` переживает замыкание openMain.
+  const ownerTaskId = mockup.ownerTaskId;
+  // «Открыть макет» → FileViewer в центре с taskId автора и branch файла (FS-F1f);
+  // без автора — как раньше, одним аргументом.
+  const openMain = (): void => {
+    if (!main || !onOpenFile) return;
+    if (ownerTaskId) onOpenFile(main, { taskId: ownerTaskId, branch: mainFile?.branch });
+    else onOpenFile(main);
+  };
 
   // «Упомянут в»: планы, чьи mockupPaths ссылаются на этот макет (path или файлы).
   const mentionedBy = plans.filter(p =>
@@ -346,8 +357,8 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
         data-testid="mockup-open-area"
         role={main ? 'button' : undefined}
         tabIndex={main ? 0 : undefined}
-        onClick={() => { if (main && onOpenFile) onOpenFile(main); }}
-        onKeyDown={e => { if (main && onOpenFile && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpenFile(main); } }}
+        onClick={openMain}
+        onKeyDown={e => { if (main && onOpenFile && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openMain(); } }}
         style={{
           position: 'relative', borderRadius: R.lg,
           border: main ? 'none' : `1px dashed ${C.dashed}`,
@@ -361,7 +372,8 @@ export function MockupCard({ mockup, plans, onOpenFile, isMobile = false, replac
             variant="primary"
             disabled={!main}
             title={nMaster ? 'макет появится после мержа' : undefined}
-            onClick={e => { e.stopPropagation(); if (main && onOpenFile) onOpenFile(main); }}
+            dataTestId="mockup-open-btn"
+            onClick={e => { e.stopPropagation(); openMain(); }}
           >
             <ExternalLink size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             Открыть макет

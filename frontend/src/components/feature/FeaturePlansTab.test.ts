@@ -4,8 +4,10 @@
 // неизвестная роль не роняет сетку, hasText=false → «Текста пока нет»,
 // exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
 // ошибка загрузки текста + «Повторить».
-// «Прочие документы» (M7): linkedFiles задач из plans[].mockupPaths показываются
-// карточками (имя + путь), не дублируются с макетами (ни их path, ни файлы макета),
+// «Прочие документы» (FS-F1e): по materials[] из бэка — карточки ровно как пришли
+// (состав и порядок, фронт не фильтрует), клик — onOpenFile(path, { taskId }).
+// Старый ответ (materials нет) — прежний путь M7: linkedFiles задач из plans[].mockupPaths
+// (имя + путь), не дублируются с макетами (ни их path, ни файлы макета),
 // схлопываются между планами и по регистру, входят в счётчик; при 'device' группы нет.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
@@ -17,7 +19,7 @@ import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import { getBackNav, clearBackNav, featureBackNavFromTask } from '../../lib/featureBackNav';
 import type { FeaturePage } from '../../types/featureIndex';
-import type { FeaturePlan, FeatureMockup } from '../../types/featurePlans';
+import type { FeaturePlan, FeatureMockup, FeatureMaterial } from '../../types/featurePlans';
 
 type FNode = ReturnType<typeof findNodeByAttr> extends infer T ? (T extends null ? never : NonNullable<T>) : never;
 
@@ -59,6 +61,10 @@ function mockup(over: Partial<FeatureMockup> = {}): FeatureMockup {
     source: 'header', taskId: null, authorPersonaId: null, modifiedAt: null,
     ...over,
   };
+}
+
+function material(over: Partial<FeatureMaterial> = {}): FeatureMaterial {
+  return { path: 'docs/adr/031.md', taskId: 't-mat', at: '2026-11-01T00:00:00Z', ...over };
 }
 
 function pageData(over: Partial<FeaturePage> = {}): FeaturePage {
@@ -507,6 +513,75 @@ describe('FeaturePlansTab', () => {
     expect(collectText(container, 'other-doc-row').length, 'путь, отличающийся только регистром, стал «прочим документом»').toBe(0);
   });
 
+  // === 7h. «Прочие документы» из materials (FS-F1e): карточки ровно как присланы с бэка —
+  // состав и порядок (фронт не фильтрует: путь, покрытый макетом, и путь вне docs/ остаются),
+  // прежний путь по mockupPaths не подмешивается; клик — ровно один вызов
+  // onOpenFile(path, { taskId }). Мутация «звать onOpenFile(path) без opts» (FeaturePlansTab,
+  // убрать { taskId: d.taskId }) краснеет ровно клик-ассерт; после отката — зелёный. ===
+  it('materials: карточки как пришли с бэка, клик — onOpenFile(path, {taskId})', () => {
+    const onOpenFile = vi.fn();
+    const page = pageData({
+      plans: [plan({ taskId: 'd1', role: 'design', title: 'Дизайн', mockupPaths: ['docs/adr/OLD.md'] })],
+      mockups: [mockup({ path: 'docs/mockups/x.html', title: 'X', files: [{ path: 'docs/mockups/x.html', exists: true }] })],
+      materials: [
+        material({ path: 'docs/adr/031-feature.md', taskId: 't-2', at: '2026-11-01T00:00:00Z' }),
+        material({ path: 'docs/mockups/x.html', taskId: 't-3', at: '2026-10-25T00:00:00Z' }),
+        material({ path: 'notes/design-note.md', taskId: 't-1', at: '2026-10-20T00:00:00Z' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials, onOpenFile }));
+    const rows = collectText(container, 'other-doc-row');
+    // Ровно materials и в их порядке; старый путь (docs/adr/OLD.md) не подмешан.
+    expect(rows.length).toBe(3);
+    expect(rows[0]).toContain('docs/adr/031-feature.md');
+    expect(rows[1]).toContain('docs/mockups/x.html');
+    expect(rows[2]).toContain('notes/design-note.md');
+    expect(rows.some(r => r.includes('docs/adr/OLD.md'))).toBe(false);
+    // Клик — ровно один вызов: путь + taskId автора.
+    click(container as FNode, 'other-doc-row');
+    expect(onOpenFile).toHaveBeenCalledTimes(1);
+    expect(onOpenFile).toHaveBeenCalledWith('docs/adr/031-feature.md', { taskId: 't-2' });
+  });
+
+  // === 7i. Счётчик с materials = видимые документы + материалы + живые макеты —
+  // ровно тот состав, что рисует сетка (R-M3). Мутация «не считать materials»
+  // (plansTabCount) краснеет: бейдж расходится с карточками. ===
+  it('счётчик с materials = число карточек', () => {
+    const page = pageData({
+      plans: [
+        plan({ taskId: 'c1', role: 'cut', title: 'Разрез', mockupPaths: ['docs/adr/OLD.md'] }),
+        plan({ taskId: 'x1', role: 'audit' as FeaturePlan['role'], title: 'Аудит' }),
+      ],
+      mockups: [mockup({ path: 'docs/mockups/foo-1.html', title: 'foo 1', status: 'rejected' })],
+      materials: [
+        material({ path: 'docs/adr/031.md', taskId: 't-1', at: '2026-11-01T00:00:00Z' }),
+        material({ path: 'docs/spec.md', taskId: 't-2', at: '2026-10-20T00:00:00Z' }),
+      ],
+    });
+    // Видимые: cut (1) + materials (2); live-макетов нет (отклонён). old-путь плана не подмешан.
+    expect(plansTabCount(page)).toBe(3);
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials }));
+    expect(collectText(container, 'plan-row').length + collectText(container, 'other-doc-row').length).toBe(3);
+  });
+
+  // === 7j. materials=[] (новый ответ без материалов): группа пустая, прежний путь не
+  // подмешивается — бэк единственный источник состава (пустой массив — ответ, не отсутствие). ===
+  it('materials=[]: группа пустая, прежний путь не подмешивается', () => {
+    const page = pageData({ plans: [plan({ mockupPaths: ['docs/adr/031.md'] })], materials: [] });
+    expect(plansTabCount(page)).toBe(1); // только карточка плана
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials }));
+    expect(collectText(container, 'other-doc-row').length).toBe(0);
+  });
+
+  // === 7k. 'device': materials не рисуются и не считаются — файлы локального проекта на
+  // устройстве, страница их не откроет (та же причина, что у 7e). ===
+  it("device: materials не рисуются и не считаются", () => {
+    const page = pageData({ mockupsUnavailable: 'device', materials: [material({ path: 'docs/adr/031.md', taskId: 't-1' })] });
+    expect(plansTabCount(page)).toBe(0);
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials }));
+    expect(collectText(container, 'other-doc-row').length).toBe(0);
+  });
+
   // === 8. Markdown через ОБЩИЙ рендер (лента): GFM-таблица → <table> ===
   // Мутация: заменить MarkdownContent на свой наивный парсер → <table> не появится.
   it('markdown через общий рендер: GFM-таблица → <table>', async () => {
@@ -613,9 +688,10 @@ describe('FeaturePlansTab', () => {
     clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'plan-t', projectId: 'proj-epic' }]);
-    // Точка возврата: на задаче рисуется чип «← к фиче · Планы».
-    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'plan-t' }, fromTab: 'plans' });
-    expect(featureBackNavFromTask('plan-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
+    // Точка возврата: на задаче рисуется чип «← к фиче · Материалы» (FS-FBACK: вкладка
+    // возврата — мейн-вкладка, 'plans' переводится в 'materials').
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'plan-t' }, fromTab: 'materials' });
+    expect(featureBackNavFromTask('plan-t')).toMatchObject({ featureId: 'f1', tab: 'materials' });
   });
 
   it('карточка макета: «задача макета» → openTaskInSection с projectId эпика', async () => {
@@ -627,7 +703,7 @@ describe('FeaturePlansTab', () => {
     clearBackNav();
     click(container as FNode, 'nav-target-task');
     expect(mockOpenTask.calls).toEqual([{ id: 'mock-t', projectId: 'proj-epic' }]);
-    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'mock-t' }, fromTab: 'plans' });
-    expect(featureBackNavFromTask('mock-t')).toMatchObject({ featureId: 'f1', tab: 'plans' });
+    expect(getBackNav()).toMatchObject({ from: 'f1', fromKind: 'feature', to: { kind: 'task', id: 'mock-t' }, fromTab: 'materials' });
+    expect(featureBackNavFromTask('mock-t')).toMatchObject({ featureId: 'f1', tab: 'materials' });
   });
 });

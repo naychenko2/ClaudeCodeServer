@@ -95,6 +95,12 @@ public sealed class TasksSubsystem : IAppSubsystem
         // (тот был хрупкой связью: убрали параметр — журнал ходов молча пуст). Запись диска —
         // в фоне (очередь), не на потоке завершения хода.
         services.AddGatedHostedService<FeatureTurnJournalSubscriber>(config, "tasks");
+        // Снятие ожидания человека ответом в чате задачи (FS-E3b): подписчик
+        // HumanMessageAccepted находит задачу по LinkedSessionId и снимает ожидание
+        // (older-ответ не снимает свежее ожидание — решает TaskManager под своим локом).
+        // IHostedService (Tasks, не Main — граница подсистем держится), явная регистрация
+        // по образцу строки выше.
+        services.AddGatedHostedService<AwaitingHumanAnswerSubscriber>(config, "tasks");
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

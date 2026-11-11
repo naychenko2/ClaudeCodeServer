@@ -271,8 +271,7 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
     mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
     mockSessions = [sess('c1-chat')];
     store.clear();
-    // Ф-2.2: «Закрытые» на оси featureKinds — секция закрытых на экране без лишнего клика
-    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['closed'] }));
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
 
     const container = new _FakeNode();
     const root = createRoot(container);
@@ -289,6 +288,14 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
       };
       return walk(container);
     };
+    // FS-FL2b: секция «Закрытые · N ›» свёрнута — раскрываем её строку-переключатель
+    const closedToggle = (function find(n: _FakeNode): _FakeNode | null {
+      if (n._attrs['data-testid'] === 'closed-section-toggle') return n;
+      for (const c of n.childNodes) { const r = find(c); if (r) return r; }
+      return null;
+    })(container);
+    expect(closedToggle, 'строки «Закрытые · N ›» нет').not.toBeNull();
+    await act(async () => { container.fireClick(closedToggle!); });
     // По умолчанию свёрнута (aria-expanded="false" на шевроне)
     let chevron = findChevron();
     expect(chevron).not.toBeNull();
@@ -303,36 +310,24 @@ describe('SessionList: M4 закрытые фичи раскрываются', (
   });
 });
 
-// === Ф-2.2: режим «Фичи» по оси featureKinds (отбор, «Показаны», пустые состояния) ===
-// Отбор — только featureMatchesKinds по полю kind (Ф-1.3/Б-1.2): bucket в пути фильтра
-// не читается. Мультивыбор оси (OR); крестик строки «Показаны» убирает значение с оси
-// ('remove') или возвращает снятое ('restore', вариант «кроме»); «Закрытые» — секцией,
-// когда выбраны на оси; пустые состояния: «Фич пока нет» / calm «Открытых фич нет» +
-// «Показать закрытые · N» / «Под фильтр ничего не попало». Один запрос индекса на
-// проект. Индекс и sessions приходят из SessionList (useFeaturesIndex) — FilterBar
-// только показывает; интерактив — createRoot + act (effects идут), текст из fake-DOM.
-describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () => {
-  // kind — единственный признак состояния (Б-1.2: row.kind == brief.kind). bucket
-  // в фикстуре согласован с ним (тот же закон бэка), но тесты читают только kind.
-  const feat = (id: string, kind: FeatureKind, title: string) => ({
-    featureId: id, title, projectId: 'p1',
+// === FS-FL2b: режим «Фичи» — секции вместо фильтра, «Закрытые · N ›» свёрнуты ===
+// Раскладку даёт featureListSections (по kind, FS-FL2a): «Ждут тебя»/«Стоят» → «В работе» →
+// «Закрытые» (merged и closed). Фронт ничего не отбрасывает; сохранённый featureKinds не читается.
+describe('SessionList: FS-FL2b режим фич секциями', () => {
+  const feat = (id: string, kind: FeatureKind, title: string, projectId = 'p1') => ({
+    featureId: id, title, projectId,
     bucket: kind === 'closed' ? 'closed' as const : kind === 'merged' ? 'merged' as const : 'running' as const,
     attention: null, rail: [], chips: [], kind,
     stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
-    keySessionId: null, keyArchived: false, keyProjectId: 'p1', chatCount: 1,
+    keySessionId: null, keyArchived: false, keyProjectId: projectId, chatCount: 1,
   });
-  // projectId: 'p1' — как в реальном списке проекта: карточка читает индекс того же
-  // проекта, что и SessionList (useFeaturesIndex), а не области '' (вне проектов).
-  // p.1: status 'waiting' (живой) — карточка монтируется и тест реально ловит второй
-  // запрос индекса (было 'finished' → видимый список пуст, ChatCard не монтировался,
-  // и тест проходил тривиально, не доказывая фикс).
-  const s = (id: string): Session => ({
-    id, projectId: 'p1', mode: 'auto', status: 'waiting', messageCount: 0,
+  // status 'waiting' (живой): карточка монтируется, как в реальном списке
+  const s = (id: string, projectId = 'p1'): Session => ({
+    id, projectId, mode: 'auto', status: 'waiting', messageCount: 0,
     createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z',
     origin: 'manual',
   } as Session);
-  // Индекс: 3 открытые (waiting_you / error / queued) + 1 СМЕРЖЕННАЯ С ОТКРЫТЫМ ЭПИКОМ
-  // (kind='merged', эпик не Done → bucket 'merged') + 1 закрытая; каждая со своим чатом
+  const link = (featureId: string) => [{ featureId, kind: 'executor' as const, taskRole: null, stepRef: null, lane: null }];
   const f1 = feat('f1', 'waiting_you', 'FICH_W');
   const f2 = feat('f2', 'error', 'FICH_S');
   const f3 = feat('f3', 'queued', 'FICH_Q');
@@ -340,252 +335,171 @@ describe('SessionList: Ф-2.2 режим фич по оси featureKinds', () =>
   const c1 = feat('c1', 'closed', 'FICH_C');
   const idx: import('../types/featureIndex').FeaturesIndex = {
     features: [f1, f2, f3, g1, c1],
-    chats: {
-      's1': [{ featureId: 'f1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-      's2': [{ featureId: 'f2', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-      's3': [{ featureId: 'f3', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-      's5': [{ featureId: 'g1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-      's4': [{ featureId: 'c1', kind: 'executor', taskRole: null, stepRef: null, lane: null }],
-    },
+    chats: { s1: link('f1'), s2: link('f2'), s3: link('f3'), s5: link('g1'), s4: link('c1') },
   };
 
-  // Рендер режима «Фичи» с заданными фильтрами (опционально — свой индекс/sessions:
-  // кейсы пустых состояний живут на своём индексе). Возвращает контейнер fake-DOM
   async function renderFeatures(
-    filters: Record<string, unknown>,
-    opts: { features?: ReturnType<typeof feat>[]; sessions?: Session[] } = {},
-  ): Promise<_FakeNode> {
+    filters: Record<string, unknown> = {},
+    opts: { features?: ReturnType<typeof feat>[]; sessions?: Session[]; isMobile?: boolean } = {},
+  ): Promise<{ container: _FakeNode; rerender: (p: Project) => Promise<void> }> {
     const idxNow = { ...idx, features: opts.features ?? idx.features };
     featuresIndexTest.reset();
-    indexCalls = 0;
     featuresIndexTest.setIndex('p1', idxNow);
-    mockIndex = idxNow; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
+    mockIndex = idxNow;
     mockSessions = opts.sessions ?? [s('s1'), s('s2'), s('s3'), s('s4'), s('s5')];
     store.clear();
     store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', ...filters }));
     const container = new _FakeNode();
     const root = createRoot(container);
-    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
-    return container;
+    const render = (pr: Project) => act(async () => {
+      root.render(createElement(SessionList, { project: pr, activeSession: null, onSelect: () => {}, isMobile: opts.isMobile }));
+    });
+    await render(project);
+    return { container, rerender: render };
   }
 
-  // Узел по aria-label (крестик снимаемого чипа)
-  function findByAriaLabel(n: _FakeNode, label: string): _FakeNode | null {
-    if (n._attrs['aria-label'] === label) return n;
-    for (const c of n.childNodes) { const r = findByAriaLabel(c, label); if (r) return r; }
+  function findTestId(n: _FakeNode, id: string): _FakeNode | null {
+    if (n._attrs['data-testid'] === id) return n;
+    for (const c of n.childNodes) { const r = findTestId(c, id); if (r) return r; }
     return null;
   }
-
-  // Заголовок группы фичи: в fake-DOM текстовый узел {feature.title} не создаётся,
-  // но span несёт атрибут title={feature.title} — по нему и проверяем, что группа на экране
-  function hasFeatureTitle(n: _FakeNode, title: string): boolean {
-    if (n._attrs['title'] === title) return true;
-    for (const c of n.childNodes) if (hasFeatureTitle(c, title)) return true;
-    return false;
+  function allTestIds(n: _FakeNode, id: string, out: _FakeNode[] = []): _FakeNode[] {
+    if (n._attrs['data-testid'] === id) out.push(n);
+    for (const c of n.childNodes) allTestIds(c, id, out);
+    return out;
   }
-
-  // Родительский элемент текстового узла (кнопка, несущая эту подпись): для клика
-  // по «Сбросить» — текст живёт в text-узле, клик — на его <button>-родителе
-  function parentOfText(n: _FakeNode, text: string): _FakeNode | null {
-    if (n.nodeType === 3 && n.textContent === text) return n.parentElement;
-    for (const c of n.childNodes) { const r = parentOfText(c, text); if (r) return r; }
-    return null;
+  function textOf(n: _FakeNode): string {
+    let t = n.textContent ?? '';
+    for (const c of n.childNodes) t += textOf(c);
+    return t;
   }
-
-  // То же по ПРЕФИКСУ: «Показать закрытые · {N}» — ДВА текстовых узла («Показать
-  // закрытые · » и число), точного совпадения whole-text нет никогда
+  // Группа фичи рисуется заголовком с атрибутом title={feature.title} — ровно один на группу
+  function countTitle(n: _FakeNode, title: string): number {
+    let c = n._attrs['title'] === title ? 1 : 0;
+    for (const ch of n.childNodes) c += countTitle(ch, title);
+    return c;
+  }
   function parentOfTextStart(n: _FakeNode, prefix: string): _FakeNode | null {
     if (n.nodeType === 3 && n.textContent.startsWith(prefix)) return n.parentElement;
     for (const c of n.childNodes) { const r = parentOfTextStart(c, prefix); if (r) return r; }
     return null;
   }
 
-  // Узел, НЕСУЩИЙ этот текст в своём textContent: одиночный текстовый ребёнок React
-  // кладёт в textContent самого элемента (setTextContent, nodeType=1 — заголовок
-  // EmptyState), при нескольких детях — в text-ноду. Здесь ровно один ребёнок.
-  function nodeWithText(n: _FakeNode, text: string): _FakeNode | null {
-    if (n.textContent === text) return n;
-    for (const c of n.childNodes) { const r = nodeWithText(c, text); if (r) return r; }
-    return null;
-  }
-
-  // Узел по data-testid (надёжно в fake-DOM: атрибуты всегда создаются, в отличие от
-  // текстовых узлов)
-  function findTestId(n: _FakeNode, id: string): _FakeNode | null {
-    if (n._attrs['data-testid'] === id) return n;
-    for (const c of n.childNodes) { const r = findTestId(c, id); if (r) return r; }
-    return null;
-  }
-
-  // Сколько раз фича отрисована как группа: title={feature.title} ставится ровно один раз
-  // на заголовок группы (FeatureGroupHeader), поэтому счётчик по нему = состав секций
-  function countFeatureTitle(n: _FakeNode, title: string): number {
-    let c = n._attrs['title'] === title ? 1 : 0;
-    for (const ch of n.childNodes) c += countFeatureTitle(ch, title);
-    return c;
-  }
-
-  // c1: смерженная с открытым эпиком (kind='merged', эпик не Done) — открытая фича:
-  // при умолчании она в обычных открытых группах, секции закрытых нет вовсе.
-  // Мутация: в shownOpenIds вернуть `f.bucket !== 'closed'` вместо kind — FICH_G
-  // (bucket='merged'?) тут не краснеет; краснеет на «явный merged» (ниже) и на c2.
-  it('c1: merged с открытым эпиком при умолчании — в открытых группах, не в секции закрытых', async () => {
-    const all = await renderFeatures({});
-    expect(hasFeatureTitle(all, 'FICH_G'), 'смерженной с открытым эпиком нет в открытых группах').toBe(true);
-    // Секции закрытых при умолчании нет, закрытой фичи на экране нет
-    expect(findTestId(all, 'closed-section-header'), 'секция закрытых при умолчании').toBeNull();
-    expect(hasFeatureTitle(all, 'FICH_C'), 'закрытая фича при умолчании').toBe(false);
-    // Явный выбор «Смержены» оставляет только её (other open kinds сняты)
-    const only = await renderFeatures({ featureKinds: ['merged'] });
-    expect(hasFeatureTitle(only, 'FICH_G')).toBe(true);
-    expect(hasFeatureTitle(only, 'FICH_W'), 'открытая фича под выбором «Смержены»').toBe(false);
+  it('секции по порядку: «Ждут тебя» → «В работе»; «Закрытые · 2 ›» свёрнуты, их фич на экране нет', async () => {
+    const { container } = await renderFeatures();
+    const titles = allTestIds(container, 'feature-section-title').map(textOf);
+    expect(titles, 'подписи секций или их порядок').toEqual(['Ждут тебя', 'В работе']);
+    for (const t of ['FICH_W', 'FICH_S', 'FICH_Q']) expect(countTitle(container, t), `${t} должна быть один раз`).toBe(1);
+    const toggle = findTestId(container, 'closed-section-toggle');
+    expect(toggle, 'строки «Закрытые · N ›» нет').not.toBeNull();
+    expect(textOf(toggle!), 'число в строке «Закрытые»').toContain('2');
+    expect(toggle!._attrs['aria-expanded']).toBe('false');
+    expect(countTitle(container, 'FICH_G'), 'merged видна в свёрнутой секции').toBe(0);
+    expect(countTitle(container, 'FICH_C'), 'closed видна в свёрнутой секции').toBe(0);
   });
 
-  // Мультивыбор оси — OR по kind (замена теста «два чипа дают OR» Ф1.2).
-  it('мультивыбор оси даёт OR: waiting_you+error → их фичи, queued не показана', async () => {
-    const container = await renderFeatures({ featureKinds: ['waiting_you', 'error'] });
-    expect(hasFeatureTitle(container, 'FICH_W')).toBe(true);
-    expect(hasFeatureTitle(container, 'FICH_S')).toBe(true);
-    expect(hasFeatureTitle(container, 'FICH_Q'), 'фича несогласованного kind показана').toBe(false);
+  // Инвариант: после раскрытия каждая из 5 фич — ровно один раз; повторный клик сворачивает.
+  // Мутация: в closed-ветке не рисовать sec.groups при closedExpanded → тест красный.
+  it('клик по «Закрытые» раскрывает: все пять фич ровно по разу; повторный клик сворачивает', async () => {
+    const { container } = await renderFeatures();
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(findTestId(container, 'closed-section-toggle')!._attrs['aria-expanded']).toBe('true');
+    for (const t of ['FICH_W', 'FICH_S', 'FICH_Q', 'FICH_G', 'FICH_C']) {
+      expect(countTitle(container, t), `${t} должна быть ровно один раз`).toBe(1);
+    }
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(countTitle(container, 'FICH_C'), 'после повторного клика закрытая осталась').toBe(0);
+    expect(countTitle(container, 'FICH_W'), 'открытые пропали').toBe(1);
   });
 
-  // c2: «только закрытые» — открытых групп нет, секция закрытых одна; число =
-  // рисующиеся закрытые (chatCount > 0), тот же счёт, что у чипа «Закрытые» в FilterBar.
-  it('c2: ось «только закрытые» — открытых групп нет, секция закрытых одна с числом', async () => {
-    const off = await renderFeatures({});
-    expect(findTestId(off, 'closed-section-header'), 'заголовок секции без выбора «Закрытых»').toBeNull();
-    const on = await renderFeatures({ featureKinds: ['closed'] });
-    expect(hasFeatureTitle(on, 'FICH_W'), 'открытая фича под «только закрытые»').toBe(false);
-    expect(hasFeatureTitle(on, 'FICH_G'), 'merged под «только закрытые»').toBe(false);
-    expect(hasFeatureTitle(on, 'FICH_C'), 'закрытой фичи нет').toBe(true);
-    const header = findTestId(on, 'closed-section-header');
-    expect(header, 'заголовка секции «Закрытые» нет').not.toBeNull();
-    expect(header!._attrs['data-closed-count'], 'число «Закрытые · N» не по рисующимся').toBe('1');
+  // Сохранённая ось не читается: фильтра нет, строки «Показаны» нет, FICH_Q виден.
+  // Мутация: вернуть отбор по featureKinds → FICH_Q пропадёт, тест красный.
+  it('сохранённый featureKinds=[waiting_you] не читается: показаны все открытые, строки «Показаны» нет', async () => {
+    const { container } = await renderFeatures({ featureKinds: ['waiting_you'] });
+    for (const t of ['FICH_W', 'FICH_S', 'FICH_Q']) expect(countTitle(container, t), t).toBe(1);
+    expect(parentOfTextStart(container, 'Показаны'), 'строка «Показаны» осталась').toBeNull();
+    expect(parentOfTextStart(container, 'Сбросить'), 'кнопка «Сбросить» оси осталась').toBeNull();
   });
 
-  // c2: все фичи закрыты (фичи ЕСТЬ, открытых нет) → calm-плашка со ссылкой,
-  // которая добавляет «Закрытые» на ось (полный цикл: клик → секция на экране).
-  it('c2: все закрыты (умолчание) — calm «Открытых фич нет» + «Показать закрытые · 1», клик поднимает секцию', async () => {
-    const container = await renderFeatures({}, { features: [c1], sessions: [s('s4')] });
-    expect(parentOfText(container, 'Открытых фич нет.'), 'плашки calm нет').not.toBeNull();
-    // Закрытые ещё не выбраны: их ни в секции, ни на экране
-    expect(findTestId(container, 'closed-section-header'), 'секция закрытых до клика').toBeNull();
-    const link = parentOfTextStart(container, 'Показать закрытые ·');
-    expect(link, 'ссылки «Показать закрытые · N» в calm нет').not.toBeNull();
-    await act(async () => { container.fireClick(link!); });
-    // Клик добавил 'closed' на ось → закрытые встали секцией
-    expect(findTestId(container, 'closed-section-header'), 'секции закрытых после клика').not.toBeNull();
-    expect(hasFeatureTitle(container, 'FICH_C'), 'закрытой фичи после клика нет').toBe(true);
-  });
-
-  // R-Ф2.2 m3: граница `f.kind !== 'closed'` в shownOpenIds — закрытая фича не попадает
-  // в открытые группы: при «Закрытых» на оси она рисуется ОДИН раз, только в секции закрытых
-  // (проверяем состав секций — число отрисовок группы, а не заголовки).
-  // Мутация: снять `&& f.kind !== 'closed'` из shownOpenIds → фича и в открытых группах,
-  // и в секции закрытых → 2, тест красный.
-  it('R-Ф2.2 m3: «Закрытые» на оси — закрытая фича рисуется один раз, не в открытых группах', async () => {
-    const on = await renderFeatures({ featureKinds: ['closed'] });
-    expect(countFeatureTitle(on, 'FICH_C'), 'закрытая фича отрисована не один раз').toBe(1);
-    // Единственное место, где она, — секция закрытых (её заголовок на экране)
-    expect(findTestId(on, 'closed-section-header'), 'секции закрытых нет').not.toBeNull();
-  });
-
-  // R-Ф2.2 m2: гард `!closedSelected` в calm — при уже выбранных «Закрытых» нечего
-  // предлагать добавить: плашка calm на экране, ссылки «Показать закрытые · N» нет.
-  // Мутация: снять `!closedSelected &&` из условия ссылки → ссылка появляется, тест красный.
-  it('R-Ф2.2 m2: все закрыты + «Закрытые» на оси — calm без ссылки «Показать закрытые»', async () => {
-    const container = await renderFeatures({ featureKinds: ['closed'] }, { features: [c1], sessions: [s('s4')] });
-    expect(parentOfText(container, 'Открытых фич нет.'), 'плашки calm нет').not.toBeNull();
-    expect(parentOfTextStart(container, 'Показать закрытые ·'), 'ссылка «Показать закрытые · N» при уже выбранных «Закрытых»').toBeNull();
-  });
-
-  // c3: выбранный kind без совпадений (в индексе есть открытые других состояний) →
-  // EmptyState «Под фильтр ничего не попало»; «Сбросить фильтр» → [] (умолчание).
-  it('c3: noMatch — «Под фильтр ничего не попало», «Сбросить фильтр» возвращает умолчание', async () => {
-    const container = await renderFeatures({ featureKinds: ['idle'] });
-    expect(hasFeatureTitle(container, 'FICH_W'), 'фича несогласованного kind показана').toBe(false);
-    expect(nodeWithText(container, 'Под фильтр ничего не попало'), 'EmptyState noMatch').not.toBeNull();
-    const reset = parentOfText(container, 'Сбросить фильтр');
-    expect(reset, 'кнопки «Сбросить фильтр» нет').not.toBeNull();
-    await act(async () => { container.fireClick(reset!); });
-    // Сброс → []: открытые снова на экране, EmptyState снят
-    expect(nodeWithText(container, 'Под фильтр ничего не попало'), 'EmptyState после сброса').toBeNull();
-    expect(hasFeatureTitle(container, 'FICH_W'), 'после сброса открытой фичи нет').toBe(true);
-  });
-
-  // Строка «Показаны» (п.4 записки), вариант «Показаны: …»: крестик убирает значение
-  // с оси, остальной выбор не трогает.
-  it('«Показаны:» — крестик убирает «Ждут вас» с оси: FICH_W нет, FICH_S остаётся', async () => {
-    const container = await renderFeatures({ featureKinds: ['waiting_you', 'error'] });
-    const cross = findByAriaLabel(container, 'Убрать «Ждут вас»');
-    expect(cross, 'крестика чипа «Ждут вас» в строке «Показаны» нет').not.toBeNull();
-    await act(async () => { container.fireClick(cross!); });
-    expect(hasFeatureTitle(container, 'FICH_W'), 'снятый kind не снял свою фичу').toBe(false);
-    expect(hasFeatureTitle(container, 'FICH_S'), 'остальной выбор сломан').toBe(true);
-  });
-
-  // Вариант «Все открытые, кроме:» (снят один из восьми): крестик ВОЗВРАЩАЕТ снятое;
-  // возврат делает выбор равным умолчанию → канон [] (R-Ф2.1 M2), строка исчезает.
-  it('«Все открытые, кроме:» — крестик возвращает «Остановленных»: возврат = умолчание []', async () => {
-    const seven = ALL_FEATURE_KINDS.filter(k => k !== 'closed' && k !== 'error');
-    const container = await renderFeatures({ featureKinds: seven });
-    expect(hasFeatureTitle(container, 'FICH_W'), 'неснятый kind пропал').toBe(true);
-    expect(hasFeatureTitle(container, 'FICH_S'), 'снятый «Остановлены» не снят').toBe(false);
-    const cross = findByAriaLabel(container, 'Вернуть «Остановлены»');
-    expect(cross, 'чипа-возврата «Вернуть «Остановлены»» нет').not.toBeNull();
-    await act(async () => { container.fireClick(cross!); });
-    expect(hasFeatureTitle(container, 'FICH_S'), 'возврат не вернул фичу').toBe(true);
-    expect(parentOfText(container, 'Сбросить'), 'строка «Показаны» осталась после возврата к умолчанию').toBeNull();
-  });
-
-  it('один запрос индекса на проект (FilterBar не плодит fetch)', async () => {
-    // Все потребители (SessionList + карточки) читают индекс того же проекта 'p1'
-    // (projectId в фикстуре), поэтому первичная загрузка — ровно один fetch (0→1).
-    // Если бы карточка читала область '' (вне проектов) — был бы второй fetch.
-    // p.1: фикстура — ЖИВОЙ статус (waiting): карточка монтируется и её
-    // useFeaturesIndex реально исполняется. Мутация «ChatCard читает scope null»
-    // (вне проектов) красит: indexCalls=2. С 'finished' карточка бы не смонтировалась
-    // и тест проходил тривиально, не доказывая фикс.
-    await renderFeatures({ featureKinds: ['waiting_you'] });
-    expect(indexCalls).toBe(1);
-  });
-
-  // «Сбросить» в строке «Показаны» снимает выбор оси одним кликом и не плодит запросов.
-  // Мутация: в обработчике `featureKinds: []` → `['error']` — строка остаётся → тест красный.
-  it('«Сбросить» снимает выбор оси и не плодит запросов', async () => {
-    const container = await renderFeatures({ featureKinds: ['waiting_you', 'error'] });
-    const resetBtn = parentOfText(container, 'Сбросить');
-    expect(resetBtn, 'кнопки «Сбросить» в строке «Показаны» нет').not.toBeNull();
-    await act(async () => { container.fireClick(resetBtn!); });
-    // После сброса: выбор равен умолчанию → строки «Показаны» (и «Сбросить») нет
-    expect(parentOfText(container, 'Сбросить'), '«Сбросить» остался').toBeNull();
-    expect(parentOfText(container, 'Показаны:'), 'подписи «Показаны:» остались').toBeNull();
-    // Новых запросов индекса нет: сброс фильтров не меняет проект → fetch не плодится
-    expect(indexCalls).toBe(1);
-  });
-
-  // m1: «Сбросить» в строке «Показаны» — minHeight 40 на 360 (было 24).
-  // SSR (renderToStaticMarkup): стили в style-атрибуте — надёжно. removableChips рендерится
-  // при выбранном «Закрытом» на оси независимо от индекса (в SSR effects не идут).
-  // Мутация: убрать minHeight:40 из style кнопки → на мобиле height/minHeight по xs (24), тест красный.
-  it('m1: «Сбросить» minHeight 40 на 360 (десктоп — 24)', () => {
+  // Инвариант: индекс из 9 фич (по одной на каждый kind), «Закрытые» раскрыты → групп ровно 9.
+  // Мутация: отбор по сохранённому featureKinds (старый featureMatchesKinds) → групп меньше, красный.
+  it('инвариант: 9 фич по одной на каждый kind, «Закрытые» раскрыты → заголовков групп ровно 9, дублей нет', async () => {
+    const all = ALL_FEATURE_KINDS.map((k, i) => feat(`k${i}`, k, `KIND_${k}`));
+    const chats: Record<string, ReturnType<typeof link>> = {};
+    all.forEach((f, i) => { chats[`c${i}`] = link(f.featureId); });
     featuresIndexTest.reset();
-    // Строка «Показаны» живёт в рендере режима фич — он требует ГОТОВОГО индекса
-    // (после FI-1 reset() = «не готово» → строка загрузки). Пустой срез кладём явно.
-    featuresIndexTest.setIndex('p1', EMPTY_READY);
-    // featureKinds:['closed'] → shownFiltersModel не null → строка «Показаны» с «Сбросить»
+    const idx9 = { features: all, chats };
+    featuresIndexTest.setIndex('p1', idx9);
+    mockIndex = idx9;
+    mockSessions = all.map((_, i) => s(`c${i}`));
     store.clear();
-    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['closed'] }));
-    // Мобила: у кнопки «Сбросить» minHeight 40
-    const mobile = renderToStaticMarkup(createElement(SessionList, { project, activeSession: null, onSelect: () => {}, isMobile: true }));
-    const mTag = buttonTagWithText(mobile, 'Сбросить');
-    expect(mTag).not.toBeNull();
-    expect(mTag).toContain('min-height:40px');
-    // Десктоп: height/minHeight 24 (xs), minHeight 40 нет
-    const desktop = renderToStaticMarkup(createElement(SessionList, { project, activeSession: null, onSelect: () => {} }));
-    const dTag = buttonTagWithText(desktop, 'Сбросить');
-    expect(dTag).not.toBeNull();
-    expect(dTag).not.toContain('min-height:40px');
+    // сохранённая ось, которая раньше сузила бы список до одной фичи
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest', featureKinds: ['waiting_you'] }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: () => {} })); });
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(allTestIds(container, 'feature-group-header'), 'число заголовков групп').toHaveLength(9);
+    for (const k of ALL_FEATURE_KINDS) expect(countTitle(container, `KIND_${k}`), `KIND_${k}`).toBe(1);
+  });
+
+  it('только error → подпись секции «Стоят», не «Ждут тебя»', async () => {
+    const { container } = await renderFeatures({}, { features: [f2], sessions: [s('s2')] });
+    expect(allTestIds(container, 'feature-section-title').map(textOf)).toEqual(['Стоят']);
+  });
+
+  it('все закрыты: calm «Открытых фич нет», строка «Закрытые · 1» свёрнута, клик показывает фичу', async () => {
+    const { container } = await renderFeatures({}, { features: [c1], sessions: [s('s4')] });
+    expect(parentOfTextStart(container, 'Открытых фич нет.'), 'плашки calm нет').not.toBeNull();
+    expect(countTitle(container, 'FICH_C'), 'закрытая видна до клика').toBe(0);
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(countTitle(container, 'FICH_C')).toBe(1);
+  });
+
+  it('нет закрытых — строки «Закрытые» нет вовсе', async () => {
+    const { container } = await renderFeatures({}, { features: [f1, f3], sessions: [s('s1'), s('s3')] });
+    expect(findTestId(container, 'closed-section-toggle')).toBeNull();
+  });
+
+  it('360: строка «Закрытые» высотой не меньше 44', async () => {
+    const { container } = await renderFeatures({}, { isMobile: true });
+    const toggle = findTestId(container, 'closed-section-toggle');
+    expect(toggle, 'строки нет').not.toBeNull();
+    expect(toggle!.style.minHeight, 'minHeight строки на мобиле').toBe('44px');
+  });
+
+  // Конкурентность: смена проекта при раскрытых «Закрытых». Индекс нового проекта приходит
+  // асинхронно; после него секция свёрнута, строк старого проекта в DOM нет.
+  // Мутация: хранить раскрытие булевым флагом (без привязки к project.id) → секция
+  // остаётся раскрытой, FICH_X2 виден, тест красный.
+  it('смена проекта при раскрытых «Закрытых»: секция снова свёрнута, строк старого проекта нет', async () => {
+    const { container, rerender } = await renderFeatures();
+    await act(async () => { container.fireClick(findTestId(container, 'closed-section-toggle')!); });
+    expect(countTitle(container, 'FICH_C'), 'до смены проекта закрытая не раскрыта').toBe(1);
+
+    const x1 = feat('x1', 'running', 'FICH_X1', 'p2');
+    const x2 = feat('x2', 'closed', 'FICH_X2', 'p2');
+    const idx2: import('../types/featureIndex').FeaturesIndex = { features: [x1, x2], chats: { t1: link('x1'), t2: link('x2') } };
+    featuresIndexTest.setIndex('p2', idx2);
+    mockIndex = idx2;
+    mockSessions = [s('t1', 'p2'), s('t2', 'p2')];
+    store.set('cc_chat_filters:p2', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    await rerender({ ...project, id: 'p2' } as Project);
+
+    for (const t of ['FICH_W', 'FICH_S', 'FICH_Q', 'FICH_G', 'FICH_C']) {
+      expect(countTitle(container, t), `${t} старого проекта осталась в DOM`).toBe(0);
+    }
+    expect(countTitle(container, 'FICH_X1'), 'открытая фича нового проекта').toBe(1);
+    const toggle = findTestId(container, 'closed-section-toggle');
+    expect(toggle, 'строка «Закрытые» нового проекта').not.toBeNull();
+    expect(toggle!._attrs['aria-expanded'], 'секция осталась раскрытой после смены проекта').toBe('false');
+    expect(countTitle(container, 'FICH_X2'), 'закрытая нового проекта видна свёрнутой').toBe(0);
+  });
+
+  it('один запрос индекса на проект', async () => {
+    indexCalls = 0;
+    await renderFeatures();
+    expect(indexCalls).toBe(1);
   });
 });
 
@@ -683,16 +597,6 @@ describe('SessionList: общий чат фич — в обеих группах
     root.unmount();
   });
 });
-
-// Открывающий тег <button ...> с заданным текстом-содержимым (SSR: style в открывающем
-// теге, текст — содержимое). Возвращает строку тега или null.
-function buttonTagWithText(html: string, text: string): string | null {
-  const end = html.indexOf(`>${text}</button>`);
-  if (end < 0) return null;
-  const start = html.lastIndexOf('<button', end);
-  if (start < 0) return null;
-  return html.slice(start, end);
-}
 
 // === S2d-F2: chat_visibility_changed — реакция настоящего стора списка ===
 // Событие шлётся в project-группу после того, как сервер снял чужие соединения с группы

@@ -17,13 +17,16 @@ public class FeatureIndexRowTests
     // Строка из эпика + дочерних: Build → BuildRow (sessions/chatCount — опционально).
     // Снимок — и в Build (fail-closed полей run: now/attention/исполнители), и в BuildRow
     // (строка) — как в продуктовом маршруте BuildIndexCore: один снимок, одна семантика.
+    // now — «сейчас» строки (FS-O2c: возраст голоса в StaleOf): по умолчанию UtcNow, как у Build
+    // без явного now; тесты с голосом на фиксированных часах передают свои.
     private static FeatureIndexRow Row(
         TaskItem epic, List<TaskItem> tasks,
-        IReadOnlyCollection<FeatureIndexSession>? sessions = null, int chatCount = 0)
+        IReadOnlyCollection<FeatureIndexSession>? sessions = null, int chatCount = 0,
+        DateTime? now = null)
     {
         sessions ??= Array.Empty<FeatureIndexSession>();
         var run = FeatureProjector.Build(epic, tasks, null, sessions);
-        return FeatureProjector.BuildRow(run, tasks, sessions, chatCount);
+        return FeatureProjector.BuildRow(run, tasks, sessions, chatCount, now ?? DateTime.UtcNow);
     }
 
     private static TaskItem Epic(string id, string? sourceSessionId = null,
@@ -181,8 +184,9 @@ public class FeatureIndexRowTests
     }
 
     // Строка из готового run: задачи — только эпик (состояние уже задано в run), снимок пустой.
-    private static FeatureIndexRow Row(FeatureRun run) =>
-        FeatureProjector.BuildRow(run, [run.Epic], Array.Empty<FeatureIndexSession>(), 0);
+    // Синтетический run без Build: now — часы фикстуры (FS-O2c); по умолчанию UtcNow.
+    private static FeatureIndexRow Row(FeatureRun run, DateTime? now = null) =>
+        FeatureProjector.BuildRow(run, [run.Epic], Array.Empty<FeatureIndexSession>(), 0, now ?? DateTime.UtcNow);
 
     [Fact]
     public void Строка_Kind_РавнаBriefKind_ПоВсемСостояниям()
@@ -265,7 +269,7 @@ public class FeatureIndexRowTests
         run.Ready.Should().BeTrue("финал принят — готова");
         run.Closed.Should().BeFalse("мержа нет, эпик не Done — не закрыта");
 
-        var row = FeatureProjector.BuildRow(run, [epic, final], Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, [epic, final], Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
         row.Bucket.Should().Be("attention",
             "готова (final accepted) ≠ закрыта: bucket = attention (merge), не closed");
     }
@@ -286,7 +290,7 @@ public class FeatureIndexRowTests
             Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
         };
         var run = FeatureProjector.Build(epic, [epic, final]);
-        var row = FeatureProjector.BuildRow(run, [epic, final], Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, [epic, final], Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
 
         row.Chips.Should().Equal(["open", "merge"],
             "финал принят, мержа нет — чипы open + merge");
@@ -307,7 +311,7 @@ public class FeatureIndexRowTests
         var step = Child("s1", epicId, status: TaskItemStatus.InProgress);
 
         var run = FeatureProjector.Build(epic, [epic, step]);
-        var row = FeatureProjector.BuildRow(run, [epic, step], Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, [epic, step], Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
 
         row.Attention!.Kind.Should().Be("wait", "явный wait — kind = wait");
         row.Attention.Reason.Should().Be("ждём решения");
@@ -381,7 +385,7 @@ public class FeatureIndexRowTests
         var merge = Child("m1", epicId, role: TaskRoles.Merge, status: TaskItemStatus.Done);
 
         var run = FeatureProjector.Build(epic, [epic, step, merge]);
-        var row = FeatureProjector.BuildRow(run, [epic, step, merge], Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, [epic, step, merge], Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
 
         row.Bucket.Should().Be("closed");
         row.Rail.Should().HaveCount(8, "рельса — 8 стадий: пустая необязательная «design» добавляется (W4-DES-B)");
@@ -413,7 +417,7 @@ public class FeatureIndexRowTests
         // merge-задачи НЕТ: только эпик (Done) + шаг (Done).
 
         var run = FeatureProjector.Build(epic, [epic, step]);
-        var row = FeatureProjector.BuildRow(run, [epic, step], Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, [epic, step], Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
 
         row.Bucket.Should().Be("closed", "эпик Done — фича закрыта");
         row.Rail.Should().OnlyContain(s => s.Tone == null,
@@ -435,7 +439,7 @@ public class FeatureIndexRowTests
         var tasks = FeatureRunFixture.Load("feat-curator-console.json");
         var epic = tasks.Single(t => t.Role == TaskRoles.Feature);
         var run = FeatureProjector.Build(epic, tasks);
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, DateTime.UtcNow);
 
         // bucket: эпик inProgress, attention null, Now не пуст (cc-r3, cc-s4) → running.
         run.Closed.Should().BeFalse();
@@ -824,5 +828,173 @@ public class FeatureIndexRowTests
 
         run.Tracker.Should().NotBeNull().And.BeEmpty();
         Row(epic, [epic]).TrackerIssues.Should().Be(0);
+    }
+
+    // ── FS-V4: ask и срок оркестратора в строке индекса ─────────────────────────────────────
+    // ask строки — та же функция, что brief.ask (FeatureBrief.AskOf, единый источник run.Attention):
+    // инвариант row.ask == brief.ask держится одной функцией, своей копии логики в BuildRow нет.
+    // eta строки — та же EtaOf, но с history=null: срок по истории в индексе не считаем (требует
+    // FeatureTypical и журналов; индекс лёгкий, ADR-031 §3.4) → source только "note" или null.
+    // Мутация (к.2): в BuildRow `Ask: FeatureBrief.AskOf(run)` → с своей фразой для merge
+    // (`is { Source: "merge" } a ? a with { Text = "своя фраза" } : ...`) — красный ровно
+    // Строка_Ask_РавнаBriefAsk_ПоТрёмИсточникам на ветке merge; откат → зелёный.
+
+    // Инвариант на продуктовом пути: тот же FeatureRun (Build по реальным задачам) → BuildRow и
+    // FeatureBrief.Build дают совпадающий ask для всех трёх источников тревоги.
+    [Fact]
+    public void Строка_Ask_РавнаBriefAsk_ПоТрёмИсточникам()
+    {
+        var t = new DateTime(2026, 10, 26, 12, 0, 0, DateTimeKind.Utc);
+
+        // stopped: InProgress-задача с валидной пометкой остановки.
+        var epicS = Epic("epic-ask-stopped");
+        var stopped = Child("st1", "epic-ask-stopped", status: TaskItemStatus.InProgress);
+        stopped.ClaudeStartedAt = t.AddHours(-2);
+        stopped.ExecutorStoppedAt = t.AddHours(-1);
+        stopped.ExecutorStopReason = "auth_failed";
+        AssertAskEqualsBrief(FeatureProjector.Build(epicS, [epicS, stopped], null, Sessions()), "stopped");
+
+        // wait: InProgress-задача ждёт человека (AwaitingHumanSince + Reason — пара, TaskManager).
+        var epicW = Epic("epic-ask-wait");
+        var waiting = Child("w1", "epic-ask-wait", status: TaskItemStatus.InProgress);
+        waiting.ClaudeStartedAt = t.AddHours(-2);
+        waiting.AwaitingHumanSince = t.AddHours(-1);
+        waiting.AwaitingHumanReason = "нужен ответ по макету";
+        AssertAskEqualsBrief(FeatureProjector.Build(epicW, [epicW, waiting], null, Sessions()), "wait");
+
+        // merge: финал принят, merge-задачи нет.
+        var epicM = Epic("epic-ask-merge");
+        var final = Child("f1", "epic-ask-merge", role: TaskRoles.Final, status: TaskItemStatus.Done);
+        final.CompletedAt = t;
+        final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+        AssertAskEqualsBrief(FeatureProjector.Build(epicM, [epicM, final], null, Sessions()), "merge");
+    }
+
+    private static IReadOnlyCollection<FeatureIndexSession> Sessions() => Array.Empty<FeatureIndexSession>();
+
+    // Один и тот же run → строка и brief: ask совпадает целиком (record-равенство), источник —
+    // ожидаемый. Расхождение любой части (текст, источник, since, persona, session) — красный.
+    private static void AssertAskEqualsBrief(FeatureRun run, string expectedSource)
+    {
+        run.Attention.Should().NotBeNull($"тревога {expectedSource} должна быть вычислена");
+        run.Attention!.Kind.Should().Be(expectedSource);
+
+        var row = FeatureProjector.BuildRow(run, [run.Epic], Sessions(), 0, DateTime.UtcNow);
+        var brief = FeatureBrief.Build(run, null, null, KindNow);
+
+        row.Ask.Should().NotBeNull();
+        row.Ask.Should().Be(brief.Ask, $"row.ask == brief.ask для источника {expectedSource}");
+        row.Ask!.Source.Should().Be(expectedSource);
+    }
+
+    // Тревоги нет — ask null (тот же fail-closed, что у страницы).
+    [Fact]
+    public void Строка_Ask_БезТревогиNull() =>
+        Row(RunOf(FeatureStates.Running)).Ask.Should().BeNull("тревоги нет — нет и ask");
+
+    // Фикстура eta (тот же образец, что FeatureBriefTests.RunWithEta): активная стадия «prod»,
+    // нарезанный план, свежий штамп голоса (стадия и категория = текущие — тест про eta, не про
+    // stale). noVoice — голоса нет вовсе; attention — тревога по виду; stageAtWrite — штамп стадии
+    // записи голоса: отличный от активной («prod») — голос устарел по StaleOf (FeatureBrief.cs:662).
+    private static FeatureRun RunWithNoteEstimate(string state, int? eta, bool noVoice = false,
+        FeatureAttention? attention = null, string stageAtWrite = "prod")
+    {
+        var estimate = eta is { } e ? Est(e) : null;
+        return new FeatureRun
+        {
+            FeatureId = "epic-eta",
+            State = state,
+            Attention = attention,
+            Epic = noVoice
+                ? new TaskItem { Id = "epic-eta", Role = TaskRoles.Feature }
+                : new TaskItem
+                {
+                    Id = "epic-eta",
+                    Role = TaskRoles.Feature,
+                    Note = new FeatureNote("ревью началось", KindNow.AddHours(-2), "sess-1", true,
+                        stageAtWrite, FeatureBrief.KindByState[state]) with { Estimate = estimate },
+                },
+            Stages = [new FeatureStage { Key = "prod", State = "active", PersonaIds = [] }],
+            StepProgress = new FeatureStepProgress { PlanState = "cut", Total = 1, Work = 1 },
+        };
+    }
+
+    private static FeatureEstimate Est(int eta) => new(["ревью"], eta, null);
+
+    private static FeatureAttention AttentionOf(string kind) => new()
+    {
+        Kind = kind, TaskId = "t1", Since = KindNow.AddHours(-1), Reason = "причина", PersonaId = "denis",
+    };
+
+    // Оценка оркестратора есть — eta в строке есть: source="note", минуты и дата — ровно те же
+    // вычисленные подполя brief (note.estimate), «второго расчёта» нет.
+    [Fact]
+    public void Строка_Eta_ТолькоОценкаОркестратора_ЗначенияКакУСтраницы()
+    {
+        var run = RunWithNoteEstimate(FeatureStates.Running, 90);
+        var row = Row(run, KindNow);
+        var brief = FeatureBrief.Build(run, null, null, KindNow);
+
+        row.Eta.Should().NotBeNull();
+        row.Eta!.Source.Should().Be("note");
+        row.Eta.Minutes.Should().Be(90);
+        row.Eta.Minutes.Should().Be(brief.Note!.Estimate!.EtaMinutes!.Value, "та же вычисленная оценка");
+        row.Eta.EndsAt.Should().Be(brief.Note.Estimate.EtaEndsAt, "та же дата — от момента записи голоса");
+        row.Eta.ClockStopped.Should().BeNull("тревоги нет — часы идут");
+    }
+
+    // Нет оценки оркестратора — eta null, даже при нарезанном плане: срок по истории индекс не
+    // считает. Та же фикстура на странице с выборкой — срок истории даёт: разница ровно в этом.
+    [Fact]
+    public void Строка_Eta_БезОценкиОркестратораNull_ИсториюИндексНеСчитает()
+    {
+        var typical = new FeatureTypical.TypicalFeatureStats(
+            Count: 7, WaitingCount: 0,
+            Duration: new FeatureTypical.TypicalPercentiles(0, 0, 0), Waiting: null,
+            Loops: new FeatureTypical.TypicalPercentiles(0, 0, 0),
+            StepCount: 5,
+            StepMinutes: new FeatureTypical.TypicalPercentiles(10, 8, 12),
+            TailMinutes: new FeatureTypical.TypicalPercentiles(30, 20, 40));
+
+        Row(RunWithNoteEstimate(FeatureStates.Running, null, noVoice: true), KindNow).Eta.Should().BeNull(
+            "голоса нет — оценки нет, истории в индексе нет");
+        Row(RunWithNoteEstimate(FeatureStates.Running, null), KindNow).Eta.Should().BeNull(
+            "в голосе оценки нет — срока нет");
+
+        var page = FeatureBrief.Build(
+            RunWithNoteEstimate(FeatureStates.Running, null, noVoice: true), null, typical, KindNow);
+        page.Eta.Should().NotBeNull("страница срок по истории считает");
+        page.Eta!.Source.Should().Be("history");
+    }
+
+    // Голос устарел (стадия записи ≠ текущей активной — StaleOf, FeatureBrief.cs:660-666): оценка в
+    // голосе есть, категория — текущая, но срок из устаревшего голоса не берётся (тот же предикат,
+    // что у страницы: EtaOf требует Stale == false, FeatureBrief.cs:615; инвариант
+    // eta.source == "note" ⇒ note.stale == false). В индексе истории нет — eta null целиком.
+    // Мутация NoteOf → n with { Stale = false } в BuildRow (FeatureProjector.cs:1756) красит
+    // ровно этот тест: у всех остальных фикстур голос свежий, Stale там и так false.
+    [Fact]
+    public void Строка_Eta_УстаревшийГолосNull_СрокНеБерётся()
+    {
+        // Контроль: та же фикстура со свежим штампом стадии — срок есть; отличие ровно в штампе.
+        Row(RunWithNoteEstimate(FeatureStates.Running, 90), KindNow).Eta.Should().NotBeNull(
+            "свежий голос того же содержания — срок берётся");
+
+        var row = Row(RunWithNoteEstimate(FeatureStates.Running, 90, stageAtWrite: "design"), KindNow);
+        row.Eta.Should().BeNull("стадия записи ≠ текущей активной — голос устарел, срок не берётся");
+    }
+
+    // Часы стоят: при wait — clockStopped="wait" и даты нет (тот же признак, что у страницы);
+    // оценка при этом остаётся — работа до конца всё ещё есть.
+    [Fact]
+    public void Строка_Eta_ПриОжиданииЧасыСтоятПризнакWaitИБезДаты()
+    {
+        var row = Row(RunWithNoteEstimate(FeatureStates.Waiting, 90, attention: AttentionOf("wait")), KindNow);
+
+        row.Eta.Should().NotBeNull();
+        row.Eta!.Source.Should().Be("note");
+        row.Eta.Minutes.Should().Be(90);
+        row.Eta.ClockStopped.Should().Be("wait");
+        row.Eta.EndsAt.Should().BeNull("при стоящих часах даты нет");
     }
 }

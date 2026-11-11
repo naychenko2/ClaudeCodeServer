@@ -64,6 +64,11 @@ export interface FeatureTask {
   // с оценкой. На wire — без bySessionId (ее снимает FeatureNoteJsonConverter на границе
   // сериализации). Аддитивное: старый answers и эпик без голоса — undefined/null.
   note?: FeatureTaskNote | null;
+  // Срок первой оценки оркестратора после старта (бэк: `TaskItem.InitialEtaMinutes`,
+  // пишется один раз, TaskManager.cs:1816): нужен карточке фичи в шапке чата (FS-FCb,
+  // «обещали ≈ N»); бэк отдаёт его в run.epic — полном TaskItem. Аддитивное: старые
+  // задачи его не несут.
+  initialEtaMinutes?: number | null;
 }
 
 // Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу
@@ -269,6 +274,10 @@ export interface FeatureStepChain {
   // Момент мержа, в который шаг попал в master (первый подходящий; бэк: `MergedAt`,
   // FeatureRun.cs:386); null — не в master.
   mergedAt?: string | null;
+  // Доработка после мержа (FS-PB2, бэк: `FeatureStepChain.FollowUp`, FeatureRun.cs:419): шаг
+  // заведён позже первого мержа и вне действующего плана — в знаменатель, корзины и линии не
+  // входит, цепочка в списке остаётся. Аддитивное: старые ответы не несут.
+  followUp?: boolean;
 }
 
 // Метка мержа для ганта (P1/F1, бэк: `FeatureMergeMark`, FeatureRun.cs:118-123): id задачи
@@ -331,13 +340,24 @@ export interface FeatureNow {
 
 // Риск мержа (бэк: `FeatureMergeRisk`): только у тревоги kind == 'merge' — что
 // в трекере расходится с «финал принят» (Ш8). Фронт ничего не считает: печатает
-// список как пришёл (нули бэк не кладёт, порядок даёт бэк). Виды:
-// not_created — не заведено шагов; open — заведены, но не приняты;
+// список как пришёл (нули бэк не кладёт, порядок даёт бэк). Виды (бэк:
+// FeatureMergeRiskKinds, FeatureRun.cs:215-228):
+// not_created — не заведено шагов; open — заведены, но не приняты и ЖИВЫЕ
+// (работа или виток идут); tail — закрытый хвост: сданные, но не принятые шаги
+// (FS-XT0, §8.3) — это риск РЕШЕНИЯ («снять или оставить»), он требует выбора
+// человека в диалоге мержа и не печатается строкой, как живые;
 // tracker — трекер расходится.
 export interface FeatureMergeRisk {
-  kind: 'not_created' | 'open' | 'tracker';
+  kind: 'not_created' | 'open' | 'tail' | 'tracker';
   count: number;
 }
+
+// Решение о закрытом хвосте при мерже (FS-XT1/FS-XF1, §8.3): тело POST merge
+// { tail }. 'withdraw' — снять хвост и мержить (бэк: WithdrawMergeTail, Origin
+// = merge_tail), 'keep' — мержить, оставив сданные непринятые шаги (запись
+// журнала merge_with_tail). Без решения при непустом хвосте бэк отвечает 409
+// tail_decision_required (TasksController.cs:1645-1652).
+export type MergeTailDecision = 'withdraw' | 'keep';
 
 // Тревога фичи (бэк: `FeatureAttention`): один элемент либо null.
 // Приоритет: stopped → wait явный → wait «мерж».
@@ -460,6 +480,12 @@ export interface FeatureRun {
   // отдельной строкой. У недоведённой до терминального состояния фичи — пустой список.
   // Аддитивное: старые ответы поля не несут — UI обязан пережить отсутствие.
   postMergeTails?: string[];
+  // Ключи закрытого хвоста (FS-XT1, §8.3, бэк: `FeatureRun.ClosedTailKeys`, FeatureRun.cs:113):
+  // stepRef цепочек «сдано, но не принято», в том же порядке, что ленты шагов; учёт —
+  // FeatureStepAccounting, второй точки правды нет. Нужен диалогу мержа: он показывает
+  // хвост поимённо и отправляет решение по этим ключам (SlimRun список сохраняет,
+  // FeatureProjector.cs:983). Пусто/отсутствует — хвоста нет (старые ответы).
+  closedTailKeys?: string[];
   // Все закрытые мержи фичи (P1/F1, бэк: `FeatureRun.Merges`, FeatureRun.cs:110): метки для
   // ганта, по моменту закрытия. Не обрезают график: ClosureAt смотрит только на State.
   // Пусто/отсутствует — мержей не было (старые ответы).

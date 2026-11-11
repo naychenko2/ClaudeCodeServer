@@ -121,7 +121,7 @@ public class FeatureQuietTests
         var epic = Epic(Now - TimeSpan.FromDays(2));
         var tasks = new List<TaskItem> { epic, ClosedStep(Now - TimeSpan.FromHours(24)) };
         var run = FeatureProjector.Build(epic, tasks, Now);
-        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0);
+        var row = FeatureProjector.BuildRow(run, tasks, Array.Empty<FeatureIndexSession>(), 0, Now);
 
         row.Quiet.Should().Be(run.Quiet, "строка не пересчитывает признак");
         row.Quiet.Should().BeTrue();

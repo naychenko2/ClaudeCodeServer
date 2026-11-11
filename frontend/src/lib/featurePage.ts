@@ -136,6 +136,30 @@ export interface FeatureBriefActive {
   reason: string | null;
 }
 
+// «Нужно от тебя» (FS-E4, бэк FeatureBrief.BriefAsk, FeatureBrief.cs:148): одна фраза
+// с источником тревоги. source — вид тревоги как есть (FeatureAttention.kind: wait | merge |
+// stopped); since/personaId/sessionId — поля тревоги как есть. Бэковые DateTime?/string?
+// сериализуют null-ом — `string | null` по образцу FeatureAttention (nullable-терпимость).
+export interface FeatureAsk {
+  text: string;
+  source: 'wait' | 'merge' | 'stopped';
+  since?: string | null;
+  personaId?: string | null;
+  sessionId?: string | null;
+}
+
+// «Срок» (FS-V2, бэк FeatureBrief.BriefEta, FeatureBrief.cs:156): ОДИН срок вместо выбора
+// карточки между note.estimate и estimate: выбор источника делает бэк (note → history),
+// карточка не выбирает сама. minutes есть всегда (eta null ⇔ числа нет — «одного срока» без
+// числа не бывает); endsAt — дата только от оценки оркестратора и только пока часы идут;
+// clockStopped — почему даты нет при живом сроке (wait | stopped | null).
+export interface FeatureEta {
+  minutes: number;
+  endsAt?: string | null;
+  source: 'note' | 'history';
+  clockStopped?: 'wait' | 'stopped' | null;
+}
+
 // Блок «Сводка» страницы фичи: аддитивное поле `brief` ответа
 // `GET /api/tasks/features/{featureId}` (в `FeaturePage` — опционально).
 export interface FeatureBrief {
@@ -164,6 +188,11 @@ export interface FeatureBrief {
   // Карточка читает его в строке «обновлено N назад» (briefUpdatedText). null — событий
   // состояния нет вовсе (тестовая фикстура бэка); у живой фичи заполнено.
   updatedAt?: string | null;
+  // «Нужно от тебя» (FS-E4): null — тревоги нет (бэк AskOf: Attention null).
+  ask?: FeatureAsk | null;
+  // «Срок» (FS-V2): один срок с источником; null — ни одной оценки нет. Выбор источника
+  // (note → history) делает бэк — карточка фронта не выбирает сама.
+  eta?: FeatureEta | null;
   computedAt: string;
 }
 
@@ -256,6 +285,7 @@ function fetchPage(fid: string, initial: boolean, signal?: AbortSignal, expand =
 function setPage(fid: string | null) {
   if (fid !== _fid) {
     _tab = DEFAULT_TAB;
+    _mainTab = DEFAULT_MAIN_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
     _eventsLoaded = false;
@@ -273,46 +303,79 @@ export type FeaturePageTab = 'timeline' | 'plans' | 'chats' | 'tasks' | 'events'
 const DEFAULT_TAB: FeaturePageTab = 'timeline';
 let _tab: FeaturePageTab = DEFAULT_TAB;
 
-// Названия вкладок: ОДИН словарь (minor 1, ревью Ф9b) — единый источник для полосы
-// вкладок (FeaturePageTabs) И для чипа возврата «← к фиче · {вкладка}» в шапке чата (Ф9b):
-// названия не разъезжаются (раньше у чипа был отдельный короткий словарь, «Планы»).
-// Ш1b (разрез упрощения страницы фичи): «События» → «История», «Планы и макеты» →
-// «Материалы». Вкладка «Материалы» в чипе недостижима (из неё перехода в чат нет — только
-// в задачу, а чип рисуется на chat-переходе), но запись НЕ мёртвая: её использует полоса
-// вкладок.
-export const FEATURE_TAB_LABEL: Record<FeaturePageTab, string> = {
-  timeline: 'Хронология',
-  plans: 'Материалы',
-  chats: 'Чаты',
-  tasks: 'Шаги',
-  events: 'История',
-  stats: 'Статистика',
-};
-
 // Счётчик вкладки «Шаги»: знаменатель трекера (stepProgress.total — тот же, что на полосе
 // готовности), а не число задач. Нет агрегата прогресса (старый ответ) — число цепочек.
 export function stepsTabCount(run: FeatureRun): number {
   return run.stepProgress?.total ?? run.stepChains?.length ?? 0;
 }
 
-// Текущая вкладка без подписки: recordFeatureReturn запоминает её в момент перехода.
-export function getFeaturePageTab(): FeaturePageTab {
-  return _tab;
+// Внешняя точка перехода на вкладку (старые значения): перевод по таблице toMainTab.
+// Раннего выхода по прошлому значению нет: пользователь мог переключить вкладку руками
+// (setFeatureMainTab), и повторный переход на то же старое значение обязан её открыть.
+// Лишних уведомлений нет: setFeatureMainTab ранне выходит при том же мейн-значении.
+export function setFeaturePageTab(t: FeaturePageTab) {
+  _tab = t;
+  setFeatureMainTab(toMainTab(t));
 }
 
-// Установить вкладку (no-op при том же значении — лишний emit не плодим).
-export function setFeaturePageTab(t: FeaturePageTab) {
-  if (_tab === t) return;
-  _tab = t;
+// === Мейн-вкладка «Ход · Материалы · Разбор» (FS-FTABS, макет v4) ===
+//
+// По макету v4 (docs/mockups/feature-page-simplify-v4-clickable.md §7) страница
+// живёт на трёх вкладках, и у «Разбора» сегментов нет: стор сегмента не нужен,
+// якорь не храним — вкладка всегда открывается сверху.
+//
+// Стор живёт рядом со старым `_tab`, ничего не ломая, до FS-FP: там FeaturePage
+// и FeaturePageTabs перейдут на этот стор, а старый снимется. Умолчание —
+// 'progress'; сброс — там же, где у `_tab` (смена fid, __test.reset).
+export type FeatureMainTab = 'progress' | 'materials' | 'review';
+
+// Названия мейн-вкладок: ОДИН словарь.
+export const FEATURE_MAIN_TAB_LABEL: Record<FeatureMainTab, string> = {
+  progress: 'Ход',
+  materials: 'Материалы',
+  review: 'Разбор',
+};
+
+// Перевод старых значений в новые — строго по таблице FS-FTABS:
+// timeline/tasks → progress, plans → materials, chats/events/stats → review.
+// Полного покрытия union — нет: новая вкладка FeaturePageTab без строки здесь
+// не соберётся (tsc), перевод не «провалится» молча.
+export function toMainTab(t: FeaturePageTab): FeatureMainTab {
+  switch (t) {
+    case 'timeline':
+    case 'tasks':
+      return 'progress';
+    case 'plans':
+      return 'materials';
+    case 'chats':
+    case 'events':
+    case 'stats':
+      return 'review';
+  }
+}
+
+const DEFAULT_MAIN_TAB: FeatureMainTab = 'progress';
+let _mainTab: FeatureMainTab = DEFAULT_MAIN_TAB;
+
+// Текущая мейн-вкладка без подписки.
+export function getFeatureMainTab(): FeatureMainTab {
+  return _mainTab;
+}
+
+// Установить мейн-вкладку (no-op при том же значении — подписчики уведомляются
+// только при реальной смене, как setFeaturePageTab).
+export function setFeatureMainTab(t: FeatureMainTab) {
+  if (_mainTab === t) return;
+  _mainTab = t;
   emit();
 }
 
-// Хук: выбранная вкладка страницы (тот же стор, что и данные).
-export function useFeaturePageTab(): FeaturePageTab {
+// Хук: мейн-вкладка страницы (тот же стор, что и данные).
+export function useFeatureMainTab(): FeatureMainTab {
   return useSyncExternalStore(
     subscribe,
-    () => _tab,
-    () => _tab,
+    () => _mainTab,
+    () => _mainTab,
   );
 }
 
@@ -469,6 +532,7 @@ export const __test = {
     _fid = null;
     _pending = null;
     _tab = DEFAULT_TAB;
+    _mainTab = DEFAULT_MAIN_TAB;
     _eventsLimit = undefined;
     _eventsExpanded = false;
     _eventsLoaded = false;
@@ -483,6 +547,9 @@ export const __test = {
   stageFocus: () => _stageFocus,
   // Выбранная вкладка (M4: клик по точке ставит 'timeline' явно).
   tab: () => _tab,
+  // Мейн-вкладка (FS-FTABS) и подписка на emit — для счётчика уведомлений в тестах.
+  mainTab: () => _mainTab,
+  subscribe,
   setState,
   state: () => _state,
   fid: () => _fid,

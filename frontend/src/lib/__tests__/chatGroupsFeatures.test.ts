@@ -14,7 +14,7 @@
 // Тесты независимы от пояса: время — только ISO-строки фикстуры.
 
 import { describe, it, expect } from 'vitest';
-import { groupByFeatures, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel } from '../chatGroups';
+import { groupByFeatures, featureGroupTreeRows, sharedFeatureTitles, featureRoleFor, FEATURE_KIND_LABEL, featureKindCounts, featureMatchesKinds, shownFiltersModel, featureListSections } from '../chatGroups';
 import { ALL_FEATURE_KINDS, type FeatureKind } from '../chatFilters';
 import type { FeatureBucket, FeatureChatLink, FeatureIndexFeature, FeaturesIndex } from '../../types/featureIndex';
 import type { Session } from '../../types';
@@ -612,6 +612,117 @@ describe('Ф-1.3: сторож — featureMatchesKinds/featureKindCounts не ч
   it('исходник функций не содержит идентификаторов state/chips/bucket', () => {
     const src = `${featureMatchesKinds.toString()}\n${featureKindCounts.toString()}`;
     expect(src).not.toMatch(/\b(state|chips|bucket)\b/);
+  });
+});
+
+// === FS-FL2a: секции списка «Ждут тебя / Стоят», «В работе», «Закрытые» ===
+// Чистая функция featureListSections: делит ТОЛЬКО по kind из индекса (записка v2 §6,
+// R1, R3). Инвариант: каждая фича входа ровно в одной секции, ни одна не теряется;
+// пустые секции не возвращаются; порядок секций attention → active → closed.
+
+describe('FS-FL2a: featureListSections — деление по kind (таблица «Пути к инварианту»)', () => {
+  const expectedKey = (k: FeatureKind): 'attention' | 'active' | 'closed' =>
+    k === 'waiting_you' || k === 'error' ? 'attention'
+      : k === 'merged' || k === 'closed' ? 'closed'
+        : 'active';
+
+  it('каждое из 9 значений kind → своя секция, одна фича входа', () => {
+    for (const k of ALL_FEATURE_KINDS) {
+      const secs = featureListSections([withKind('F', k)]);
+      expect(secs).toHaveLength(1);
+      expect(secs[0].key).toBe(expectedKey(k));
+      expect(secs[0].features.map(f => f.featureId)).toEqual(['F']);
+    }
+  });
+
+  it('заголовки одиночных секций: «Ждут тебя» / «Стоят» / «В работе» / «Закрытые»', () => {
+    expect(featureListSections([withKind('W', 'waiting_you')])[0].title).toBe('Ждут тебя');
+    expect(featureListSections([withKind('E', 'error')])[0].title).toBe('Стоят');
+    expect(featureListSections([withKind('R', 'running')])[0].title).toBe('В работе');
+    expect(featureListSections([withKind('M', 'merged')])[0].title).toBe('Закрытые');
+  });
+
+  it('kind=null (старый индекс) и неизвестный kind → active, фича не теряется', () => {
+    for (const k of [null, 'новое' as unknown as FeatureKind]) {
+      const secs = featureListSections([withKind('U', k)]);
+      expect(secs).toHaveLength(1);
+      expect(secs[0].key).toBe('active');
+      expect(secs[0].title).toBe('В работе');
+      expect(secs[0].features.map(f => f.featureId)).toEqual(['U']);
+    }
+    // Старый ответ без поля вовсе (undefined) — то же правило.
+    const noField = { ...withKind('N', null) };
+    delete (noField as { kind?: FeatureKind | null }).kind;
+    const secs = featureListSections([noField]);
+    expect(secs).toHaveLength(1);
+    expect(secs[0].key).toBe('active');
+  });
+});
+
+describe('FS-FL2a: инвариант — каждая фича ровно в одной секции', () => {
+  it('все 9 kind + null + неизвестный: сумма длин = длина входа, дублей featureId нет', () => {
+    const feats = [
+      ...ALL_FEATURE_KINDS.map((k, i) => withKind(`K${i}`, k)),
+      withKind('NULL', null),
+      withKind('UNK', 'новое' as unknown as FeatureKind),
+    ];
+    const secs = featureListSections(feats);
+    const ids = secs.flatMap(s => s.features.map(f => f.featureId));
+    expect(ids.length).toBe(feats.length);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect([...ids].sort()).toEqual(feats.map(f => f.featureId).sort());
+  });
+
+  it('пустой вход — ни одной секции', () => {
+    expect(featureListSections([])).toEqual([]);
+  });
+});
+
+describe('FS-FL2a: порядок секций и внутри секций', () => {
+  it('секции attention → active → closed; пустых нет; порядок внутри — как во входе', () => {
+    const feats = [
+      withKind('c1', 'closed'), withKind('a1', 'running'), withKind('e1', 'error'),
+      withKind('m1', 'merged'), withKind('q1', 'queued'),
+    ];
+    const secs = featureListSections(feats);
+    expect(secs.map(s => s.key)).toEqual(['attention', 'active', 'closed']);
+    // waiting_you нет → заголовок attention «Стоят»
+    expect(secs[0].title).toBe('Стоят');
+    expect(secs[0].features.map(f => f.featureId)).toEqual(['e1']);
+    // active и closed: порядок входного массива сохранён (бэк уже упорядочил)
+    expect(secs[1].features.map(f => f.featureId)).toEqual(['a1', 'q1']);
+    expect(secs[2].features.map(f => f.featureId)).toEqual(['c1', 'm1']);
+  });
+
+  it('внутри attention: waiting_you раньше error, несмотря на порядок входа', () => {
+    const secs = featureListSections([
+      withKind('e1', 'error'), withKind('w1', 'waiting_you'), withKind('e2', 'error'), withKind('w2', 'waiting_you'),
+    ]);
+    expect(secs).toHaveLength(1);
+    expect(secs[0].title).toBe('Ждут тебя');
+    expect(secs[0].features.map(f => f.featureId)).toEqual(['w1', 'w2', 'e1', 'e2']);
+  });
+});
+
+// Сторож (контракт «Ключи: только f.kind»): деление читает ТОЛЬКО kind. Поведенческая
+// проверка — фича с противоречивыми данными (kind vs bucket); мутация (в отчёте):
+// убран ключ `paused: 'active'` из FEATURE_LIST_SECTION_OF_KIND → инвариант
+// красный (TypeError на buckets[undefined]); откат → зелёный.
+describe('FS-FL2a: сторож — featureListSections читает только kind', () => {
+  it('поведенчески: kind="running", bucket="closed" → active; kind="closed", bucket="running" → closed', () => {
+    const runClosed = { ...feature('X', 'closed'), kind: 'running', chatCount: 1 };
+    const secsRun = featureListSections([runClosed]);
+    expect(secsRun).toHaveLength(1);
+    expect(secsRun[0].key).toBe('active');
+    const closedRun = { ...feature('Y', 'running'), kind: 'closed', chatCount: 1 };
+    const secsClosed = featureListSections([closedRun]);
+    expect(secsClosed).toHaveLength(1);
+    expect(secsClosed[0].key).toBe('closed');
+    expect(secsClosed[0].title).toBe('Закрытые');
+  });
+
+  it('исходник функции не содержит идентификаторов state/chips/bucket/chatCount', () => {
+    expect(featureListSections.toString()).not.toMatch(/\b(state|chips|bucket|chatCount)\b/);
   });
 });
 

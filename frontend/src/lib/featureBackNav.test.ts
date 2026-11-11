@@ -1,7 +1,8 @@
 // Стор «← назад» (featureBackNav): откуда пришли в ключевой чат, в памяти вкладки.
 // Чистая логика (без DOM): запись/сброс/чтение по текущему чату.
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
-import { recordBackNav, recordFeatureReturn, clearBackNav, getBackNav, backNavFrom, normalizeBackTarget, __test } from './featureBackNav';
+import { recordBackNav, recordFeatureReturn, clearBackNav, getBackNav, backNavFrom, featureBackNavFrom, normalizeBackTarget, __test } from './featureBackNav';
+import { __test as pageStore, setFeatureMainTab } from './featurePage';
 
 beforeEach(() => __test.reset());
 
@@ -371,5 +372,44 @@ describe('featureBackNav: окно возврата и страница (GC-F11R
     offPage();
     vi.advanceTimersByTime(0);
     expect(__test.lastAppliedFeatureView('f1'), 'уход при открытой чужой фиче не погасил окно').toBeNull();
+  });
+});
+
+// FS-FBACK: вкладка возврата хранится ТОЛЬКО как FeatureMainTab («Ход · Материалы · Разбор»).
+// Без явного аргумента — из мейн-стора страницы; старый FeaturePageTab аргумент переводится
+// через toMainTab (вызывающие не меняются). Мутации (в отчёте): (12) брать fromTab из
+// getFeaturePageTab() (старый стор) → «по умолчанию мейн-вкладка» краснеет; (13) хранить
+// старый аргумент как есть → «перевод по таблице» краснеет; (14) последний запись не
+// побеждает → «последний выигрывает» краснеет.
+describe('featureBackNav: вкладка возврата — FeatureMainTab (FS-FBACK)', () => {
+  beforeEach(() => { __test.reset(); pageStore.reset(); });
+
+  it('по умолчанию вкладка берётся из мейн-стора, а не из старого', () => {
+    setFeatureMainTab('review');
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    expect(getBackNav()?.fromTab, 'fromTab не мейн-вкладка').toBe('review');
+    expect(featureBackNavFrom('c1')?.tab, 'tab в информации чипа').toBe('review');
+  });
+
+  it('старый аргумент FeaturePageTab переводится по таблице toMainTab', () => {
+    for (const [oldTab, mainTab] of [
+      ['timeline', 'progress'], ['tasks', 'progress'], ['plans', 'materials'],
+      ['chats', 'review'], ['events', 'review'], ['stats', 'review'],
+    ] as const) {
+      __test.reset();
+      recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', oldTab);
+      expect(getBackNav()?.fromTab, `перевод '${oldTab}'`).toBe(mainTab);
+      expect(featureBackNavFrom('c1')?.tab, `tab чипа для '${oldTab}'`).toBe(mainTab);
+    }
+  });
+
+  it('два recordFeatureReturn подряд: выигрывает последний («Разбор» → «Ход»)', () => {
+    setFeatureMainTab('review');
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    expect(getBackNav()?.fromTab, 'первая запись не сохранена').toBe('review');
+    setFeatureMainTab('progress');
+    recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича');
+    expect(getBackNav()?.fromTab, 'последняя запись не победила').toBe('progress');
+    expect(featureBackNavFrom('c1')?.tab, 'чип читает не последнюю вкладку').toBe('progress');
   });
 });

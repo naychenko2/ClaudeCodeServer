@@ -15,6 +15,20 @@ import type { ChangedBySession, FileEntry, SyncMark } from '../../types';
 // вовсе, поэтому существующие вызывающие (без ifMatch) этой ошибки не видят.
 // Тип тела и интерфейсы author/source — в lib/offline: тот же контракт К8 служит
 // конфликту заметки (NoteConflictError).
+// Ответ files/content (доменный тип, FS-F1a): поля прочитанного файла плюс два поля
+// ветки чтения из коммита ветки (FS-B2, когда рабочий каталог задачи снесли):
+// fromCommit — true, когда содержимое прочитано git show по ветке задачи;
+// reason — 404 с причиной доходит до вызывающего полем, а не исключением:
+// 'branch_deleted' — файл снесли вместе с веткой, 'binary' — бинарь из коммита не читается.
+// Прочие 404 (без reason) остаются исключением, как раньше.
+export type FileContentResult = {
+  content: string | null; isBinary: boolean; isImage: boolean;
+  isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number;
+  branch?: string | null; isAnchor?: boolean;
+  fromCommit?: boolean; reason?: 'binary' | 'branch_deleted';
+  etag?: string;
+};
+
 export class FileConflictError extends Error {
   readonly status = 409;
   readonly code = 'file_changed';
@@ -45,7 +59,9 @@ export const filesApi = {
     // на них относительным путём, а base64 из files/content для <img src> не подходит
     // sessionId (F1a, «Резолвинг ссылок по worktree»): забрать файл из дерева чата,
     // а не из анкера проекта; параметр необязательный — старые вызовы не меняются.
-    fileUrl: (projectId: string, path: string, sessionId?: string): string => {
+    // taskId (FS-F1a, бэк FS-B1b): анкер — дерево задачи; два анкера сразу сервер
+    // отвергает 400, поэтому при taskId sessionId не шлётся.
+    fileUrl: (projectId: string, path: string, sessionId?: string, taskId?: string): string => {
       // Локальный проект: поток отдаёт агент по узкому билету на путь, а его выдача
       // асинхронна — синхронного URL нет (точка — agentStreamUrl в deviceAgent.ts).
       // Основной билет проекта в URL не кладём никогда
@@ -53,7 +69,8 @@ export const filesApi = {
       if (route === 'agent') return '';
       const token = readStoredToken();
       const params = new URLSearchParams({ path });
-      if (sessionId) params.set('sessionId', sessionId);
+      if (taskId) params.set('taskId', taskId);
+      else if (sessionId) params.set('sessionId', sessionId);
       if (token) params.set('access_token', token);
       // С другого устройства файл отдаёт ретранслятор — целиком, без Range, под тем же JWT
       const base = route === 'relay' ? 'relay/files/stream' : 'files/stream';
@@ -69,10 +86,12 @@ export const filesApi = {
     // иначе сервер 400; в ответе только найденные пути. Формат — DTO endpoints
     // files/locate (не TreeHit: TreeHit — внутренний тип локатора, без path и
     // alternatives). alternatives — число других совпадений (совпадений − 1).
-    locate: (projectId: string, paths: string[], sessionId?: string) =>
+    // taskId (FS-F1a, бэк FS-B1b): анкер — дерево задачи; при нём sessionId не шлётся
+    // (два анкера сразу — 400).
+    locate: (projectId: string, paths: string[], sessionId?: string, taskId?: string) =>
       projectRequest<{ path: string; branch?: string; isAnchor: boolean; alternatives?: number }[]>(
         `/projects/${projectId}/files/locate`,
-        { method: 'POST', body: JSON.stringify({ paths, ...(sessionId ? { sessionId } : {}) }) },
+        { method: 'POST', body: JSON.stringify({ paths, ...(taskId ? { taskId } : sessionId ? { sessionId } : {}) }) },
       ),
     // featureId (W4-5B2): читать из проверенного дерева эпика; без него — корень проекта.
     // sessionId (F1a): резолвить путь в дереве чата; ответ несёт branch (в каком дереве
@@ -82,10 +101,23 @@ export const filesApi = {
     // документы и сверх потолка — без тега, как и их правка без If-Match. Агент и ретранслятор
     // ETag не отдают вовсе (LocalApi.MapFiles, ProjectRelayController) — там etag undefined.
     // Офлайн-доставка из кэша тега не имеет: сохранять офлайн нельзя в любом случае.
-    getContent: async (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string }) => {
+    // taskId (FS-F1a, бэк FS-B1a/FS-B2): анкер — дерево задачи; при нём sessionId не шлётся
+    // (два анкера сразу — 400). Ответ может нести fromCommit (прочитано из коммита ветки);
+    // 404 с reason (branch_deleted/binary) возвращается полем reason, а не исключением —
+    // «удалён вместе с веткой» — состояние файла, его показывают, а не ловят.
+    getContent: async (projectId: string, path: string, featureId?: string, opts?: { sessionId?: string; taskId?: string }): Promise<FileContentResult> => {
       const etagRef: EtagRef = {};
-      const data = await projectRequest<{ content: string | null; isBinary: boolean; isImage: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number; branch?: string | null; isAnchor?: boolean }>(`/projects/${projectId}/files/content?path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`, { etagRef });
-      return { ...data, etag: etagRef.etag };
+      const query = `path=${encodeURIComponent(path)}${featureId ? `&featureId=${encodeURIComponent(featureId)}` : ''}${opts?.taskId ? `&taskId=${encodeURIComponent(opts.taskId)}` : opts?.sessionId ? `&sessionId=${encodeURIComponent(opts.sessionId)}` : ''}`;
+      try {
+        const data = await projectRequest<FileContentResult>(`/projects/${projectId}/files/content?${query}`, { etagRef });
+        return { ...data, etag: etagRef.etag };
+      } catch (e) {
+        // Форма ошибки — request() (offline.ts) и agentRequest() (deviceAgent.ts): status + body.
+        const err = e as { status?: number; body?: { reason?: string } };
+        const reason = err.body?.reason === 'branch_deleted' || err.body?.reason === 'binary' ? err.body.reason : null;
+        if (err.status !== 404 || !reason) throw e;
+        return { content: null, isBinary: false, isImage: false, reason, etag: undefined };
+      }
     },
     // ifMatch (К8): тег версии, которую видел вызывающий, — etag из getContent или sha256 из
     // FileConflictError (повторная отправка по актуальному состоянию). С If-Match сервер либо

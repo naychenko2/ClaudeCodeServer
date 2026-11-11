@@ -78,13 +78,13 @@ public class WikiChatsController : ControllerBase
     private const string ServiceTokenKind = "svc";
     private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
 
-    // Порядок зон в списке — тот, что в интерфейсе отбора (ADR-035:217): сначала то, что
-    // разбирается; неизвестная зона (стор будущего шага) — в конец, она не должна терять
+    // Порядок зон в списке — тот, что в интерфейсе отбора (ADR-035:217): первым — чаты,
+    // ждущие действия человека (awaiting_human), затем то, что разбирается; неизвестная зона (стор будущего шага) — в конец, она не должна терять
     // запись из списка.
     private static readonly string[] ZoneOrder =
-        [WikiChatScorer.ZoneTriage, WikiChatScorer.ZoneGray, WikiChatScorer.ZoneSkipped,
+        [WikiChatIngestService.ZoneAwaitingHuman,
+         WikiChatScorer.ZoneTriage, WikiChatScorer.ZoneGray, WikiChatScorer.ZoneSkipped,
          WikiChatIngestService.ZoneNothingNew, WikiChatIngestService.ZoneRejectedSkipped,
-         WikiChatIngestService.ZoneAwaitingHuman,
          WikiChatScorer.ZoneExcluded];
 
     private static int ZoneRank(string zone)
@@ -101,6 +101,29 @@ public class WikiChatsController : ControllerBase
     // разведения владения (пересчёт писал общий zone, stage1Zone нет) — прежний zone.
     private static bool Stage2Applies(WikiChatTriageEntry e) =>
         e.Stage2Zone is not null && e.Stage1Zone == WikiChatScorer.ZoneGray;
+
+    // Чаты, у которых во «Входящих» есть пакет окна (источник session:{id}#m..) в proposed
+    // с хотя бы одной нерешённой спорной операцией. Пакеты читаются один раз и только если
+    // в сторе есть awaiting_human.
+    private static HashSet<string> SessionsAwaitingHuman(string root, IReadOnlyList<WikiChatTriageEntry> entries)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        if (!entries.Any(e => e.Zone == WikiChatIngestService.ZoneAwaitingHuman)) return result;
+        foreach (var p in WikiPackageStore.List(root).Packages)
+        {
+            if (p.Status != WikiPackage.StatusProposed ||
+                !p.Operations.Any(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null))
+                continue;
+            foreach (var src in p.Sources)
+            {
+                if (src.Origin != WikiGate.OriginSession || !src.Ref.StartsWith("session:", StringComparison.Ordinal)) continue;
+                var id = src.Ref["session:".Length..];
+                var hash = id.IndexOf('#');
+                result.Add(hash < 0 ? id : id[..hash]);
+            }
+        }
+        return result;
+    }
 
     internal static string ShownZone(WikiChatTriageEntry e) =>
         e.Zone is WikiChatIngestService.ZoneNothingNew or WikiChatIngestService.ZoneRejectedSkipped
@@ -146,8 +169,14 @@ public class WikiChatsController : ControllerBase
 
         var items = new List<WikiChatTriageDto>();
         var counts = new Dictionary<string, int>();
-        foreach (var e in read.Entries)
+        var waiting = SessionsAwaitingHuman(WikiPaths.Root(_dataDir, userId), read.Entries);
+        foreach (var raw in read.Entries)
         {
+            // Зона awaiting_human держится, пока у чата есть пакет с нерешённой спорной
+            // операцией; человек решил всё — зона снимается (как у applied: Zone/Reason пусты).
+            var e = raw.Zone == WikiChatIngestService.ZoneAwaitingHuman && !waiting.Contains(raw.SessionId)
+                ? raw with { Zone = null, Reason = null }
+                : raw;
             var session = _sessions.GetById(e.SessionId);
             // Приватный чат (FIN3-3): запись о нём выпадает из списка и из counts так же, как
             // запись несуществующего, — при любом запросившем (тот же фильтр, что у BuildQueue

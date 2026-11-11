@@ -605,6 +605,44 @@ public class WikiChatsControllerTests : IDisposable
         status.StatusCode.Should().Be(200);
     }
 
+    // C2R-Sh2b: awaiting_human стоит первой в списке, причина — «N операция/и/ий на решении»,
+    // а после решения всех спорных операций зона снимается (M1). Мутации: убрать фильтр
+    // SessionsAwaitingHuman → последний ассерт красный; вернуть зону в конец ZoneOrder →
+    // ассерт порядка красный.
+    [Fact]
+    public async Task Список_AwaitingHuman_ПерваяВСписке_СнимаетсяПослеРешенияПакета()
+    {
+        AddSession();
+        AddSession("s-other");
+        SetShortHistory();
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+        WikiSettingsStore.Mutate(_dir, User, st => st with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+        _llm.Script(("S", Synth(Claim1)));
+
+        var res = await _chat.AnalyzeAsync(User, ChatId);
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        list.Items[0].SessionId.Should().Be(ChatId);
+        list.Items[0].Zone.Should().Be(WikiChatIngestService.ZoneAwaitingHuman);
+        list.Items[0].Reason.Should().Be("1 операция на решении");
+
+        var root = WikiPaths.Root(_dir, User);
+        var pkg = WikiPackageStore.List(root).Packages.Single();
+        WikiPackageStore.AcceptAllContested(root, pkg.Id).Ok.Should().BeTrue();
+
+        var after = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        var row = after.Items.Single(i => i.SessionId == ChatId);
+        row.Zone.Should().NotBe(WikiChatIngestService.ZoneAwaitingHuman, "все спорные операции решены");
+        row.Reason.Should().NotContain("на решении", "причина awaiting_human снята вместе с зоной");
+        after.Counts.ContainsKey(WikiChatIngestService.ZoneAwaitingHuman).Should().BeFalse();
+    }
+
     // ─── обвязка ──────────────────────────────────────────────────────────────
 
     // WaitAsync возвращается сразу по завершению разбора, поэтому большой потолок не удлиняет

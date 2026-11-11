@@ -520,7 +520,7 @@ public sealed class WikiChatIngestService
             {
                 var (c, h) = AdvanceCursor(cur, awaitTo, history);
                 return new WikiChatTriageEntry(sessionId, c, h, ZoneAwaitingHuman,
-                    $"ждёт решения во «Входящих»: {awaitingOps} операций", 0, default, RejectStreak: 0);
+                    $"{awaitingOps} {OperationsWord(awaitingOps)} на решении", 0, default, RejectStreak: 0);
             });
             if (!upAwait.Ok)
                 return Refused(null, $"курсор разбора не записан: {upAwait.Reason}", inputTokens);
@@ -578,6 +578,14 @@ public sealed class WikiChatIngestService
     /// (AppendChronicleAsync ниже): один источник пути на весь продукт — список чатов и
     /// фронт берут её отсюда, а не копированием построения (S7b0a). null — хроники здесь
     /// быть не может: не-проектный дом (личный — с Ф2, сфера — следующая фича) или id,
+    /// <summary>Склонение «операция» под число: 1 операция, 2–4 операции, 5+ и 11–14 — операций.</summary>
+    internal static string OperationsWord(int n)
+    {
+        var m100 = n % 100;
+        if (m100 is >= 11 and <= 14) return "операций";
+        return (n % 10) switch { 1 => "операция", 2 or 3 or 4 => "операции", _ => "операций" };
+    }
+
     /// не представимый в пути (тот же guard, что у AnalyzeAsync).</summary>
     public static string? ChroniclePath(string home, string sessionId) =>
         WikiSections.TryProjectId(home, out _) && IsSessionIdSafe(sessionId)

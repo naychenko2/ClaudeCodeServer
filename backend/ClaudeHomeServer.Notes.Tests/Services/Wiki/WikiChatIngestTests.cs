@@ -1707,7 +1707,21 @@ public class WikiChatIngestTests : IDisposable
         var entry = WikiChatTriageStore.Get(Root).Entries.Single();
         entry.Zone.Should().Be(WikiChatIngestService.ZoneAwaitingHuman);
         var ops = WikiPackageStore.List(Root).Packages.Single().Operations.Count;
-        entry.Reason.Should().Be($"ждёт решения во «Входящих»: {ops} операций");
+        entry.Reason.Should().Be($"{ops} {WikiChatIngestService.OperationsWord(ops)} на решении");
         ops.Should().BeGreaterThan(0);
     }
+
+    // C2R-Sh2b: склонение причины. Мутация «всегда „операций“» → красное.
+    [Theory]
+    [InlineData(1, "операция")]
+    [InlineData(2, "операции")]
+    [InlineData(4, "операции")]
+    [InlineData(5, "операций")]
+    [InlineData(11, "операций")]
+    [InlineData(12, "операций")]
+    [InlineData(21, "операция")]
+    [InlineData(22, "операции")]
+    [InlineData(25, "операций")]
+    public void OperationsWord_СклонениеПоЧислу(int n, string word) =>
+        WikiChatIngestService.OperationsWord(n).Should().Be(word);
 }

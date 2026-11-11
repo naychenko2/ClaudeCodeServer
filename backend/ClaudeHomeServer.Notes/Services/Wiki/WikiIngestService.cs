@@ -465,7 +465,8 @@ public sealed class WikiIngestService
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
                 return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
                     "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id,
-                    usage.InputTokens, Operations: created.Package.Operations.Count), verdict);
+                    usage.InputTokens,
+                    Operations: created.Package.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox)), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)

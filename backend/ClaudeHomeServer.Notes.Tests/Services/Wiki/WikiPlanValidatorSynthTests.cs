@@ -161,6 +161,64 @@ public class WikiPlanValidatorSynthTests
         r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("без цитат");
     }
 
+    // Границы цитат на операцию (ревью S2-6, M5): та же мера, что у формы пакета
+    // (WikiPackage.cs:355-370), но нарушение отклоняет одну операцию с причиной,
+    // а не роняет форму всего пакета.
+    [Fact]
+    public void ValidateSynth_ЧетыреЦитаты_ОтказОднойОперации_ВтораяПринята_ФормаПакетаЧиста()
+    {
+        var r = Run(
+            Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", [QLinux, QWindows, QMinutes, "Прежний план был"]),
+            Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 12 минут", [QMinutes]));
+
+        var rej = r.Rejected.Should().ContainSingle().Subject;
+        rej.Index.Should().Be(0);
+        rej.Reason.Should().Contain("цитат").And.Contain("допустимо 1–3");
+        r.Accepted.Should().ContainSingle().Which.Page.Should().EndWith("Сущность.md");
+        r.Violations.Should().BeEmpty();
+
+        // Пакет из оставшейся принятой операции — формы без ошибок: отказ одной операции
+        // не касается целого пакета (в отличие от формы пакета, где 4 цитаты давали бы
+        // ошибку на весь пакет).
+        var pkg = new WikiPackage
+        {
+            Id = Guid.NewGuid().ToString("N"),
+            Section = Section,
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, "session:s1#m1-9")],
+            Operations = r.Accepted,
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackage.ShapeErrors(pkg).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатаНижеНижнейГраницы_ОтказПоДлине()
+    {
+        // «Linux» (5 символов) дословно есть в источнике, но ниже MinQuoteLength:
+        // отказывает форма — причина называет длину, а не меру 1.
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", ["Linux"]));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason
+            .Should().Contain("5 символов").And.Contain("допустимо 8–300");
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатаРовноMaxQuoteLength_Принята()
+    {
+        // Верхняя граница включительно: MeasureQuoteLength out-of-contract — только raw > Max.
+        var longQ = new string('к', WikiPage.MaxQuoteLength);
+        var src = new WikiPlanValidator.Source(WikiGate.OriginSession, CardTitle, "Решение: " + longQ + ". Остальное.");
+
+        var r = WikiPlanValidator.ValidateSynth(
+            new([Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", [longQ])]),
+            src, Section, [WikiSections.Common],
+            [new(CardPath, CardFile), new(PagePath, PageFile)], new());
+
+        r.Rejected.Should().BeEmpty();
+        r.Accepted.Should().ContainSingle().Which.Quotes.Should().Equal(longQ);
+    }
+
     [Fact]
     public void ValidateSynth_ВтораяЦитатаНеИзИсточника_ОтказСНомером()
     {
@@ -258,6 +316,23 @@ public class WikiPlanValidatorSynthTests
 
         var good = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 12 минут", [QMinutes]));
         good.Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
+    }
+
+    [Fact]
+    public void ValidateSynth_СпорнаяПолитикаИНеподтверждённоеЧисло_ПричинаДописывается()
+    {
+        // Ревью S2-6, M5: причина чисел не заменяет причину политики, а дописывается к ней —
+        // человек видит и риск политики, и причину чисел.
+        var r = WikiPlanValidator.ValidateSynth(
+            new([Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 15 минут", [QMinutes])]),
+            Src, Section, [WikiSections.Common],
+            [new(CardPath, CardFile), new(PagePath, PageFile)],
+            new() { PackageAfterModelRepair = true });
+
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("пакет после ремонта модели")
+            .And.Contain("число не подтверждено цитатой").And.Contain("15");
     }
 
     [Theory]

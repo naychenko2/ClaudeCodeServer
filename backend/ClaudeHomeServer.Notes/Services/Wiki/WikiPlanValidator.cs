@@ -420,7 +420,11 @@ public static class WikiPlanValidator
             if (synth && WikiClaimNumbers.Unconfirmed(claimText, quotes) is { Count: > 0 } unconfirmed)
             {
                 decision = WikiPackage.DecisionInbox;
-                decisionReason = $"число не подтверждено цитатой: {string.Join(", ", unconfirmed)}";
+                // Причина политики не заменяется, а дописывается: человек во «Входящих» видит
+                // и риск политики, и причину чисел (ревью S2-6, M5). Если причины политики
+                // нет — только числа.
+                var numbers = $"число не подтверждено цитатой: {string.Join(", ", unconfirmed)}";
+                decisionReason = string.IsNullOrWhiteSpace(decisionReason) ? numbers : decisionReason + "; " + numbers;
             }
             if (synth)
                 foreach (var q in quotes)
@@ -534,6 +538,21 @@ public static class WikiPlanValidator
             return "утверждение без текста";
         if (op.Quotes is null || op.Quotes.Count == 0)
             return "утверждение без цитат";
+        // Границы цитат — та же мера, что у формы пакета (WikiPackage.cs:355-370) и гейта:
+        // 1–3 цитаты, длина каждой — QuoteMatcher.MeasureQuoteLength в контракте
+        // WikiPage.MinQuoteLength..MaxQuoteLength. Здесь нарушение отклоняет ОДНУ операцию
+        // с причиной, а не роняет форму всего пакета: лишняя цитата не касается принятых
+        // операций (ревью S2-6, M5).
+        if (op.Quotes.Count > 3)
+            return $"цитат: {op.Quotes.Count}, допустимо 1–3";
+        for (var n = 0; n < op.Quotes.Count; n++)
+        {
+            if (op.Quotes[n] is null)
+                return $"цитата {n + 1}: null в списке";
+            var (raw, norm, outOfContract) = QuoteMatcher.MeasureQuoteLength(op.Quotes[n]);
+            if (outOfContract)
+                return $"цитата {n + 1}: {raw} символов ({norm} после нормализации), допустимо {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}";
+        }
         return null;
     }
 

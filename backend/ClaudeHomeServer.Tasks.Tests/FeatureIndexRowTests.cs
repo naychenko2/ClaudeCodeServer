@@ -890,9 +890,10 @@ public class FeatureIndexRowTests
 
     // Фикстура eta (тот же образец, что FeatureBriefTests.RunWithEta): активная стадия «prod»,
     // нарезанный план, свежий штамп голоса (стадия и категория = текущие — тест про eta, не про
-    // stale). noVoice — голоса нет вовсе; attention — тревога по виду.
+    // stale). noVoice — голоса нет вовсе; attention — тревога по виду; stageAtWrite — штамп стадии
+    // записи голоса: отличный от активной («prod») — голос устарел по StaleOf (FeatureBrief.cs:662).
     private static FeatureRun RunWithNoteEstimate(string state, int? eta, bool noVoice = false,
-        FeatureAttention? attention = null)
+        FeatureAttention? attention = null, string stageAtWrite = "prod")
     {
         var estimate = eta is { } e ? Est(e) : null;
         return new FeatureRun
@@ -907,7 +908,7 @@ public class FeatureIndexRowTests
                     Id = "epic-eta",
                     Role = TaskRoles.Feature,
                     Note = new FeatureNote("ревью началось", KindNow.AddHours(-2), "sess-1", true,
-                        "prod", FeatureBrief.KindByState[state]) with { Estimate = estimate },
+                        stageAtWrite, FeatureBrief.KindByState[state]) with { Estimate = estimate },
                 },
             Stages = [new FeatureStage { Key = "prod", State = "active", PersonaIds = [] }],
             StepProgress = new FeatureStepProgress { PlanState = "cut", Total = 1, Work = 1 },
@@ -960,6 +961,23 @@ public class FeatureIndexRowTests
             RunWithNoteEstimate(FeatureStates.Running, null, noVoice: true), null, typical, KindNow);
         page.Eta.Should().NotBeNull("страница срок по истории считает");
         page.Eta!.Source.Should().Be("history");
+    }
+
+    // Голос устарел (стадия записи ≠ текущей активной — StaleOf, FeatureBrief.cs:660-666): оценка в
+    // голосе есть, категория — текущая, но срок из устаревшего голоса не берётся (тот же предикат,
+    // что у страницы: EtaOf требует Stale == false, FeatureBrief.cs:615; инвариант
+    // eta.source == "note" ⇒ note.stale == false). В индексе истории нет — eta null целиком.
+    // Мутация NoteOf → n with { Stale = false } в BuildRow (FeatureProjector.cs:1756) красит
+    // ровно этот тест: у всех остальных фикстур голос свежий, Stale там и так false.
+    [Fact]
+    public void Строка_Eta_УстаревшийГолосNull_СрокНеБерётся()
+    {
+        // Контроль: та же фикстура со свежим штампом стадии — срок есть; отличие ровно в штампе.
+        Row(RunWithNoteEstimate(FeatureStates.Running, 90)).Eta.Should().NotBeNull(
+            "свежий голос того же содержания — срок берётся");
+
+        var row = Row(RunWithNoteEstimate(FeatureStates.Running, 90, stageAtWrite: "design"));
+        row.Eta.Should().BeNull("стадия записи ≠ текущей активной — голос устарел, срок не берётся");
     }
 
     // Часы стоят: при wait — clockStopped="wait" и даты нет (тот же признак, что у страницы);

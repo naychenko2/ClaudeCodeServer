@@ -325,7 +325,8 @@ public class WikiPackagesController : ControllerBase
         [.. p.Sources.Select(s => new WikiPackageSourceDto(s.Origin, s.Ref))],
         [.. p.Operations.Select((o, i) => new WikiPackageOperationDto(
             i, o.Op, o.Page, o.Target, o.Text, o.Class, o.Decision, o.Reason, o.BaseHashes,
-            o.InputTokens, o.OutputTokens, o.HumanDecision, o.HumanReason))]);
+            o.InputTokens, o.OutputTokens, o.HumanDecision, o.HumanReason,
+            o.Claim, o.Quotes, o.Kind, o.AsOf))]);
 
     // Раздел пакета — чужой проект? Имя проекта не показывается и не решается: только своя
     // вики (ADR-036, решение 1).
@@ -356,7 +357,11 @@ public sealed record WikiPackageDto(
 public sealed record WikiPackageSourceDto(string Origin, string Ref);
 
 /// <summary>Намерение операции: class — «origin × op», decision — auto|inbox, reason — почему
-/// спорная; humanDecision — решение человека (accepted|rejected|null = не решено).</summary>
+/// спорная; humanDecision — решение человека (accepted|rejected|null = не решено). Доказательства
+/// операции (дефект a9d8d6eb): claim — утверждение, quotes — цитаты-доказательства (1–3, порядок
+/// сохраняется), kind — вид создаваемой страницы, asOf — дата «на когда». Всё читается из операции
+/// пакета как есть (WikiPackage.Operation); для старой операции без полей — null, quotes — null,
+/// а не [].</summary>
 public sealed record WikiPackageOperationDto(
     int Index,
     string Op,
@@ -370,7 +375,11 @@ public sealed record WikiPackageOperationDto(
     int? InputTokens,
     int? OutputTokens,
     string? HumanDecision,
-    string? HumanReason);
+    string? HumanReason,
+    string? Claim = null,
+    IReadOnlyList<string>? Quotes = null,
+    string? Kind = null,
+    string? AsOf = null);
 
 /// <summary>Решение по одной спорной операции. accept=false требует reason.</summary>
 public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason);

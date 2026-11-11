@@ -164,6 +164,50 @@ public class WikiPackagesControllerTests : IDisposable
         ListOf(Controller("u2").List(null)).Should().BeEmpty();
     }
 
+    // ─── 4b. Карточка пакета отдаёт доказательства операции (дефект a9d8d6eb) ───
+
+    [Fact]
+    public void КарточкаПакета_ОтдаётClaim_Quotes_Kind_AsOf_СтараяОперацияВСёNull()
+    {
+        // Мутация «маппинг Dto не несёт o.Claim» (подставить null вместо o.Claim) — проверка
+        // op.Claim ниже краснеет: «Expected ... but found <null>». Тест держит и порядок цитат
+        // (Equal по исходному порядку), и null всех четырёх полей у операции без доказательств.
+        var withProof = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Claim = "Сборка ведётся на Linux",
+            Quotes = ["сборка падает на Windows", "CI гоняет тесты на ubuntu"],
+            Kind = "decision",
+            AsOf = "2026-11-09",
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "замещает действующее утверждение",
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var id = NewPackage(WikiPackage.StatusProposed, "common", withProof);
+
+        var op = ((OkObjectResult)Controller().Get(id)).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which.Operations[0];
+        op.Claim.Should().Be("Сборка ведётся на Linux");
+        // Порядок цитат сохраняется как в пакете: номера сносок берутся по нему (S2-7).
+        op.Quotes.Should().Equal("сборка падает на Windows", "CI гоняет тесты на ubuntu");
+        op.Kind.Should().Be("decision");
+        op.AsOf.Should().Be("2026-11-09");
+
+        // Старая операция без доказательств: все четыре поля null, quotes — null, а не [].
+        var legacy = ((OkObjectResult)Controller().Get(
+            NewPackage(WikiPackage.StatusProposed, "common",
+                Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto)))).Value
+            .Should().BeAssignableTo<WikiPackageDto>().Which.Operations[0];
+        legacy.Claim.Should().BeNull();
+        legacy.Quotes.Should().BeNull();
+        legacy.Kind.Should().BeNull();
+        legacy.AsOf.Should().BeNull();
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]

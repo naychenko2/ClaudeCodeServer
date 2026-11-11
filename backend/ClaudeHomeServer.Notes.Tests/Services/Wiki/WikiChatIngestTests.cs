@@ -1691,4 +1691,23 @@ public class WikiChatIngestTests : IDisposable
         public string? SphereName(string ownerId, string sphereId) => null;
         public string? CharterOf(string ownerId, string sphereId) => null;
     }
+
+    // C2R-Sh2b: исход awaiting_human пишет зону awaiting_human и причину с числом операций,
+    // а не пустую зону. Мутация «зона null» → красное.
+    [Fact]
+    public async Task C2R_AwaitingHuman_ПишетЗонуИПричинуСЧисломОпераций()
+    {
+        AddSession();
+        SetShortHistory();
+        DisableAppendClass();
+
+        var res = await Sut(new FakeLlm(("S", Synth(Claim1)))).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Zone.Should().Be(WikiChatIngestService.ZoneAwaitingHuman);
+        var ops = WikiPackageStore.List(Root).Packages.Single().Operations.Count;
+        entry.Reason.Should().Be($"ждёт решения во «Входящих»: {ops} операций");
+        ops.Should().BeGreaterThan(0);
+    }
 }

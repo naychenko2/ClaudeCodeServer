@@ -111,7 +111,8 @@ public sealed class WikiIngestService
     /// отброшенные проверками кода при пакете из принятых (поштучный приём): число и первые
     /// MaxDropReasons причин; 0/null — отбрасывать было нечего.</summary>
     public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
-        long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null);
+        long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null,
+        int Operations = 0);
 
     /// <summary>Сколько причин отброшенных операций нести в исходе.</summary>
     public const int MaxDropReasons = 3;
@@ -464,7 +465,7 @@ public sealed class WikiIngestService
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
                 return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
                     "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id,
-                    usage.InputTokens), verdict);
+                    usage.InputTokens, Operations: created.Package.Operations.Count), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)

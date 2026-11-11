@@ -117,6 +117,10 @@ public sealed class WikiChatIngestService
     /// (C2R-Sh2). Имя — контракт с фронтом (Sh6c), менять нельзя.</summary>
     public const string ZoneRejectedSkipped = "rejected_skipped";
 
+    /// <summary>Зона стора для чата, чей разобранный исход — пакет во «Входящих», ждущий
+    /// решения человека (C2R-Sh2b). Имя — контракт с фронтом (Sh6d), менять нельзя.</summary>
+    public const string ZoneAwaitingHuman = "awaiting_human";
+
     /// <summary>Сколько отказов подряд ПОСЛЕ ОТВЕТА модели переводит курсор через окно.</summary>
     public const int RejectSkipAfter = 3;
 
@@ -409,6 +413,7 @@ public sealed class WikiChatIngestService
 
         var applied = new List<(string PackageId, string CardTitle)>();
         var awaiting = 0;
+        var awaitingOps = 0;
         string? nothingReason = null;
         // Частичный исход (WC-3): failedReason — причина отказанного окна (null — отказа
         // не было), lastOkTo — конец последнего окна, завершившегося без отказа (1-индекс в
@@ -470,6 +475,7 @@ public sealed class WikiChatIngestService
                     break;
                 case WikiIngestService.OutcomeAwaitingHuman:
                     awaiting++;
+                    awaitingOps += ing.Operations;
                     break;
                 case WikiIngestService.OutcomeNothingNew:
                     nothingReason ??= ing.Reason;
@@ -513,7 +519,8 @@ public sealed class WikiChatIngestService
             var upAwait = WikiChatTriageStore.Update(root, sessionId, cur =>
             {
                 var (c, h) = AdvanceCursor(cur, awaitTo, history);
-                return new WikiChatTriageEntry(sessionId, c, h, null, null, 0, default, RejectStreak: 0);
+                return new WikiChatTriageEntry(sessionId, c, h, ZoneAwaitingHuman,
+                    $"ждёт решения во «Входящих»: {awaitingOps} операций", 0, default, RejectStreak: 0);
             });
             if (!upAwait.Ok)
                 return Refused(null, $"курсор разбора не записан: {upAwait.Reason}", inputTokens);

@@ -504,4 +504,16 @@ public class WikiChatStage2Tests : IDisposable
                 History.TryGetValue(sessionId, out var h) ? [.. h] : new List<StoredMessage>());
         public bool SetWikiMark(string sessionId, string? mark) => true;
     }
+
+    // C2R-Sh2b: зона awaiting_human показывается поверх зоны ступени 1, как rejected_skipped.
+    [Fact]
+    public void ShownZone_AwaitingHuman_ПоверхСтупени1()
+    {
+        var e = new WikiChatTriageEntry("c", 0, null, WikiChatIngestService.ZoneAwaitingHuman,
+            "ждёт решения во «Входящих»: 2 операций", 0, default,
+            5, null, "gray", "причина 1", "triage", "причина 2", 3);
+
+        WikiChatsController.ShownZone(e).Should().Be("awaiting_human");
+        WikiChatsController.ShownReason(e).Should().Be("ждёт решения во «Входящих»: 2 операций");
+    }
 }

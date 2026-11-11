@@ -1097,11 +1097,23 @@ public class WikiNightlyServiceTests : IDisposable
         AddChat("c2", ageMinutes: 1);
         await Tick(Sut((owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
             WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 10,
-            Dropped: chat == "c1" ? 2 : 3, FirstDropReason: "причина " + chat))));
+            Dropped: chat == "c1" ? 1 : 2, FirstDropReason: "причина " + chat))));
 
         var last = Last();
-        last.Dropped.Should().Be(5);
+        last.Dropped.Should().Be(3);
         last.FirstDropReason.Should().Be("причина c1");
+    }
+
+    [Fact]
+    public void СтарыйФайлИтога_БезПолейDropped_ЧитаетсяНулём()
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(LastFile())!);
+        File.WriteAllText(LastFile(),
+            """{"date":"2026-11-01","selected":1,"analyzed":1,"applied":0,"toInbox":0,"estTokens":0,"outcome":"completed"}""");
+
+        var last = Last();
+        last.Dropped.Should().Be(0);
+        last.FirstDropReason.Should().BeNull();
     }
 
     [Fact]

@@ -212,11 +212,12 @@ public class WikiIngestSynthTests : IDisposable
     private const string BadQuote = "Цитаты в источнике нет вообще";
 
     [Fact]
-    public async Task Поштучно_ОднаОперацияНеДословна_ВПакетТолькоПринятая_БезРемонта_ПричинаВDropped()
+    public async Task Поштучно_ИзТрёхОднаНеДословна_ВПакетДве_БезРемонта_ПричинаВDropped()
     {
         var plan = WikiSynthJson.Ok(
             WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
-            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]));
+            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]),
+            WikiSynthJson.Op("append", PageTitle, "Контейнер собран отдельно", [Quote2]));
         var llm = new FakeLlm(plan);
 
         var res = await Sut(llm).IngestAsync(User, Req());
@@ -226,7 +227,7 @@ public class WikiIngestSynthTests : IDisposable
         res.Dropped.Should().Be(1);
         res.DropReasons.Should().ContainSingle().Which.Should().Contain("отсутствует в источнике дословно");
         var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
-        pkg.Operations.Should().ContainSingle().Which.Claim.Should().Be(Claim1);
+        pkg.Operations.Select(o => o.Claim).Should().BeEquivalentTo(Claim1, "Контейнер собран отдельно");
     }
 
     [Fact]
@@ -250,7 +251,8 @@ public class WikiIngestSynthTests : IDisposable
         var bad = WikiSynthJson.Append(PageTitle, Claim1, BadQuote);
         var repaired = WikiSynthJson.Ok(
             WikiSynthJson.Op("append", PageTitle, Claim1, [Quote1]),
-            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]));
+            WikiSynthJson.Op("append", PageTitle, "Другое утверждение", [BadQuote]),
+            WikiSynthJson.Op("append", PageTitle, "Контейнер собран отдельно", [Quote2]));
         var llm = new FakeLlm(bad, repair: repaired);
 
         var res = await Sut(llm).IngestAsync(User, Req());
@@ -259,7 +261,7 @@ public class WikiIngestSynthTests : IDisposable
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
         res.Dropped.Should().Be(1);
         var pkg = WikiPackageStore.TryRead(Root, res.PackageId!).Package!;
-        pkg.Operations.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionInbox);
+        pkg.Operations.Should().HaveCount(2).And.OnlyContain(o => o.Decision == WikiPackage.DecisionInbox);
     }
 
     [Fact]

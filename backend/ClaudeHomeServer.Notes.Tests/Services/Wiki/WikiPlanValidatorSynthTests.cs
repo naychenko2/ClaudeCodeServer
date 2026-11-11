@@ -1,0 +1,307 @@
+using ClaudeHomeServer.Services.Notes.Wiki;
+using FluentAssertions;
+using Xunit;
+
+namespace ClaudeHomeServer.Tests.Services;
+
+// S2-6 (ADR-039, решения 2–3): ValidateSynth — операция синтеза «утверждение + цитаты».
+// База — как у WikiPlanValidatorTests: карточка, накопленная страница и текст источника.
+public class WikiPlanValidatorSynthTests
+{
+    private const string Section = "projects/p1";
+    private const string CardTitle = "Карточка чата";
+    private const string CardPath = "Проекты/p1/Карточка-чата.md";
+    private const string PagePath = "Проекты/p1/Сущность.md";
+    private const string OtherPath = "Проекты/p1/Другая.md";
+
+    private const string SourceText =
+        "Решение: перенести сборку на Linux. Прежний план был остаться на Windows. Сборка занимает 12 минут.";
+
+    private const string QLinux = "перенести сборку на Linux";
+    private const string QWindows = "остаться на Windows";
+    private const string QMinutes = "Сборка занимает 12 минут";
+
+    private static readonly WikiPlanValidator.Source Src = new(WikiGate.OriginSession, CardTitle, SourceText);
+
+    private static readonly string CardFile = $$"""
+        ---
+        type: source
+        origin: session
+        ref: session:s1#m1-9
+        hash: 0123456789012345678901234567890123456789012345678901234567890123
+        captured: 2026-10-27
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # {{CardTitle}}
+        """;
+
+    private static readonly string PageFile = """
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность
+
+        ## Сводка
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+        """;
+
+    // Страница, на которой цитата QLinux уже занята карточкой текущего источника.
+    private static readonly string OtherFile = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Другая
+
+        ## Сводка
+        Сборка переезжает [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{CardTitle}}]] — «{{QLinux}}»
+        """;
+
+    private static WikiPlanValidator.SynthOp Op(
+        string op, string page, string claim, string[]? quotes, string? kind = null, string? asOf = null, string? target = null) =>
+        new(op, kind, page, claim, quotes, target, asOf);
+
+    private static WikiPlanValidator.Result Run(
+        IReadOnlyList<WikiGate.Draft>? snapshot = null,
+        params WikiPlanValidator.SynthOp[] ops) =>
+        WikiPlanValidator.ValidateSynth(
+            new([.. ops]),
+            Src,
+            Section,
+            [WikiSections.Common],
+            snapshot ?? [new(CardPath, CardFile), new(PagePath, PageFile)],
+            new());
+
+    private static WikiPlanValidator.Result Run(params WikiPlanValidator.SynthOp[] ops) => Run(null, ops);
+
+    [Fact]
+    public void ValidateSynth_ДвеЦитаты_ПринятаСТекстомРавнымClaimИЦитатами()
+    {
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux, Windows оставляем", [QLinux, QWindows],
+            kind: "state", asOf: "2026-11-01"));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Text.Should().Be("Сборка уходит на Linux, Windows оставляем");
+        op.Claim.Should().Be(op.Text);
+        op.Quotes.Should().Equal(QLinux, QWindows);
+        op.Decision.Should().Be(WikiPackage.DecisionAuto);
+        // Kind и as_of осмысленны только у create: у append они обнуляются, а не отказ.
+        op.Kind.Should().BeNull();
+        op.AsOf.Should().BeNull();
+    }
+
+    [Fact]
+    public void RenderApply_ДвеЦитаты_СтрокаСДвумяСноскамиПоПорядку()
+    {
+        var op = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = PagePath, Text = "Итог", Class = "x", Decision = WikiPackage.DecisionAuto,
+        };
+        List<WikiGate.Draft> state = [new(PagePath, PageFile)];
+
+        var draft = WikiPlanValidator.RenderApply(state, op, [QLinux, QWindows], CardTitle)!.Value;
+
+        var page = WikiPage.Parse(draft.Content).Model!;
+        page.Sections.Single(s => s.Name == "Сводка").Lines.Should().ContainSingle()
+            .Which.Should().Be("Итог [^s1][^s2]");
+        page.Footnotes.Select(f => f.Quote).Should().Equal(QLinux, QWindows);
+    }
+
+    [Fact]
+    public void RenderApply_СтараяСигнатура_РавнаНовойСОднойЦитатой()
+    {
+        var op = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpAppend, Page = PagePath, Text = "Итог", Class = "x", Decision = WikiPackage.DecisionAuto,
+        };
+        List<WikiGate.Draft> state = [new(PagePath, PageFile)];
+
+        WikiPlanValidator.RenderApply(state, op, QLinux, CardTitle)!.Value.Content
+            .Should().Be(WikiPlanValidator.RenderApply(state, op, [QLinux], CardTitle)!.Value.Content);
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатNull_Отказ() => БезЦитат(null);
+
+    [Fact]
+    public void ValidateSynth_ЦитатПусто_Отказ() => БезЦитат([]);
+
+    private static void БезЦитат(string[]? quotes)
+    {
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка уходит на Linux", quotes));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("без цитат");
+    }
+
+    [Fact]
+    public void ValidateSynth_ВтораяЦитатаНеИзИсточника_ОтказСНомером()
+    {
+        var r = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка", [QLinux, "этого в источнике нет вовсе"]));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цитата 2 отсутствует в источнике дословно");
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатаДословноНаСтраницеАНеВИсточнике_AntiLoop()
+    {
+        var page = PageFile.Replace("## Сводка\n", "## Сводка\nпрежняя формулировка про макос\n");
+        var r = Run([new(CardPath, CardFile), new(PagePath, page)],
+            Op(WikiPackage.OpAppend, "Сущность", "Пересказ", ["прежняя формулировка про макос"]));
+
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("anti_loop");
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатаЗанятаДругойСтраницей_Отказ()
+    {
+        var r = Run([new(CardPath, CardFile), new(PagePath, PageFile), new(OtherPath, OtherFile)],
+            Op(WikiPackage.OpAppend, "Сущность", "Сборка на Linux", [QLinux]));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цитата уже на странице").And.Contain(OtherPath);
+    }
+
+    [Fact]
+    public void ValidateSynth_ЦитатаНаТойЖеСтраницеСвоейСамой_НеЗанятаДругой()
+    {
+        // Повтор на той же странице ловит IsDuplicateStatement, а не QuoteOwner (exceptPage).
+        var r = Run([new(CardPath, CardFile), new(OtherPath, OtherFile)],
+            Op(WikiPackage.OpAppend, "Другая", "Совсем иное утверждение", [QWindows]));
+
+        r.Rejected.Should().BeEmpty();
+        r.Accepted.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ValidateSynth_ОднаЦитатаДвумНовымСтраницамПлана_ВтораяОтклонена()
+    {
+        var r = Run(
+            Op(WikiPackage.OpCreate, "Первая", "Утверждение один", [QLinux], kind: "decision"),
+            Op(WikiPackage.OpCreate, "Вторая", "Утверждение два", [QLinux], kind: "decision"));
+
+        r.Accepted.Should().ContainSingle().Which.Page.Should().EndWith("Первая.md");
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("цитата уже на странице").And.Contain("Первая.md");
+    }
+
+    [Fact]
+    public void ValidateSynth_ЧислоНеИзЦитаты_ВоВходящихСПричиной_ПодтверждённоеПроходит()
+    {
+        var bad = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 15 минут", [QMinutes]));
+        var op = bad.Accepted.Should().ContainSingle().Subject;
+        op.Decision.Should().Be(WikiPackage.DecisionInbox);
+        op.Reason.Should().Contain("число не подтверждено цитатой").And.Contain("15");
+        bad.Rejected.Should().BeEmpty();
+
+        var good = Run(Op(WikiPackage.OpAppend, "Сущность", "Сборка занимает 12 минут", [QMinutes]));
+        good.Accepted.Should().ContainSingle().Which.Decision.Should().Be(WikiPackage.DecisionAuto);
+    }
+
+    [Theory]
+    [InlineData("decision")]
+    [InlineData("rule")]
+    [InlineData("term")]
+    public void ValidateSynth_CreateВида_ВидПопадаетВTypeШапки(string kind)
+    {
+        var r = Run(Op(WikiPackage.OpCreate, "Новая", "Сборка уходит на Linux", [QLinux], kind: kind, asOf: "2026-11-01"));
+
+        r.Rejected.Should().BeEmpty();
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.Kind.Should().Be(kind);
+        // as_of учитывается только у state: у прочих видов — обнулён, а не отказ.
+        op.AsOf.Should().BeNull();
+        List<WikiGate.Draft> state = [new(CardPath, CardFile)];
+        var draft = WikiPlanValidator.RenderApply(state, op, op.Quotes!, CardTitle)!.Value;
+        WikiPage.Parse(draft.Content).Model!.Frontmatter.Type.Should().Be(kind);
+    }
+
+    [Fact]
+    public void ValidateSynth_CreateState_AsOfИдётВШапкуЧерновика()
+    {
+        var r = Run(Op(WikiPackage.OpCreate, "Состояние", "Сборка уходит на Linux", [QLinux], kind: "state", asOf: "2026-11-01"));
+
+        var op = r.Accepted.Should().ContainSingle().Subject;
+        op.AsOf.Should().Be("2026-11-01");
+        List<WikiGate.Draft> state = [new(CardPath, CardFile)];
+        var fm = WikiPage.Parse(WikiPlanValidator.RenderApply(state, op, op.Quotes!, CardTitle)!.Value.Content).Model!.Frontmatter;
+        fm.Type.Should().Be("state");
+        fm.AsOf.Should().Be("2026-11-01");
+    }
+
+    [Theory]
+    [InlineData("source")]
+    [InlineData("chronicle")]
+    [InlineData("topic")]
+    [InlineData(null)]
+    public void ValidateSynth_CreateВидВнеПеречня_Отказ(string? kind)
+    {
+        var r = Run(Op(WikiPackage.OpCreate, "Новая", "Сборка уходит на Linux", [QLinux], kind: kind));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("вид");
+    }
+
+    [Fact]
+    public void ValidateSynth_StateБезAsOf_Отказ()
+    {
+        var r = Run(Op(WikiPackage.OpCreate, "Состояние", "Сборка уходит на Linux", [QLinux], kind: "state"));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("as_of");
+    }
+
+    [Theory]
+    [InlineData("2026-13-01")]
+    [InlineData("вчера")]
+    public void ValidateSynth_StateСНеверымAsOf_ОтказСтрогогоРазбораШапки(string asOf)
+    {
+        var r = Run(Op(WikiPackage.OpCreate, "Состояние", "Сборка уходит на Linux", [QLinux], kind: "state", asOf: asOf));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("as_of");
+    }
+
+    [Fact]
+    public void ValidateSynth_Supersede_ВнеСинтеза()
+    {
+        var r = Run(Op(WikiPackage.OpSupersede, "Сущность", "Сборка", [QLinux], target: "что-то"));
+
+        r.Accepted.Should().BeEmpty();
+        r.Rejected.Should().ContainSingle().Which.Reason.Should().Contain("не входит в синтез");
+    }
+
+    [Fact]
+    public void ValidateSynth_ПустойПланИNull_НеПадает()
+    {
+        WikiPlanValidator.ValidateSynth(null, Src, Section, [], [], new()).Violations.Should().NotBeEmpty();
+        Run(Array.Empty<WikiPlanValidator.SynthOp>()).Accepted.Should().BeEmpty();
+    }
+}

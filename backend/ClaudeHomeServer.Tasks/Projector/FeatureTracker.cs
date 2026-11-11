@@ -14,7 +14,6 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 //   dead_verdict          — review/qa/final в Todo, все цели уже приняты или сняты;
 //   reported_open         — исполнитель отчитался (ClaudeResult != null), задача InProgress,
 //                           чат исполнителя не в работе, старше порога;
-//   epic_open_after_merge — мерж Done, все дочерние Done, эпик открыт;
 //   orphans_in_closed     — эпик Done, в нём остались не-Done задачи;
 //   unplanned_step        — цепочка шага со stepRef, которого нет в действующем плане (InPlan, B3),
 //                           не снята, план нарезан (cut/partial), старше порога.
@@ -33,7 +32,6 @@ internal static class FeatureTracker
     internal const string ReturnedNoRework = "returned_no_rework";
     internal const string DeadVerdict = "dead_verdict";
     internal const string ReportedOpen = "reported_open";
-    internal const string EpicOpenAfterMerge = "epic_open_after_merge";
     internal const string OrphansInClosed = "orphans_in_closed";
     internal const string UnplannedStep = "unplanned_step";
 
@@ -184,19 +182,10 @@ internal static class FeatureTracker
             issues.Add(new FeatureTrackerIssue(ReportedOpen, t.Id, t.StepRef, t.UpdatedAt));
         }
 
-        // ─── Виды эпика: epic_open_after_merge, orphans_in_closed ─────────────────────────────
-        if (epic.Status != TaskItemStatus.Done)
-        {
-            if (children.Count > 0)
-            {
-                // «После мержа» буквально: закрытая merge-задача и все дочерние Done при открытом
-                // эпике. Без merge-задачи сигнала нет (признак — роль, не название).
-                var merge = children.LastOrDefault(t => t.Role == TaskRoles.Merge && t.Status == TaskItemStatus.Done);
-                if (merge is not null && children.All(t => t.Status == TaskItemStatus.Done))
-                    issues.Add(new FeatureTrackerIssue(EpicOpenAfterMerge, merge.Id, null, merge.CompletedAt));
-            }
-        }
-        else
+        // ─── orphans_in_closed ──────────────────────────────────────────────────────────────────
+        // Открытый эпик после мержа — не расхождение (решение Андрея 11.11, FS-AC1): фича после
+        // мержа не закрывается автоматически, остаётся «смержена», закрывает её человек кнопкой.
+        if (epic.Status == TaskItemStatus.Done)
         {
             // orphans_in_closed: эпик закрыт, дочерние задачи оставлены открытыми — по записи на каждую.
             foreach (var t in children)

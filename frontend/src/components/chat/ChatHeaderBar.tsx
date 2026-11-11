@@ -43,6 +43,7 @@ import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from '../ToolbarOverflowMenu';
 import { Badge, Button, IconButton, ChatTopicIcon, Modal, ModalActions, ConfirmDialog, TextField, Menu, MenuItem, MenuSep, Tooltip } from '../ui';
 import { FeatureBackChip } from './FeatureBackChip';
+import type { FeatureHeaderParts } from './feature/FeatureChatCard';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 import { chatActionDeniedReason, isNotChatAuthorError } from '../../features/projects/members/participantGate';
@@ -1215,16 +1216,14 @@ interface ChatHeaderBarProps {
   // Полоса контекста чата (фича chat-context): отдельная строка ПОД заголовком —
   // и в hero-шапке, и в тулбарной. Не задана — шапка ровно такая, как была
   contextBar?: ReactNode;
-  // Строка фичи этого чата (В2 «Трек», F2): вторая строка шапки, ПОД заголовком и НАД
-  // строкой контекста (макет feature-chat-header-row2-v3). Слот даёт только горизонталь
-  // поле (18 остров / padX тулбар) и не имеет своего фона: строка лежит на холсте, как
-  // шапка; нижний отступ строки (10) и её содержимое — дело самой FeatureBanner. В тулбарной
-  // линия «при прокрутке» переезжает на слот (линия остаётся одна, на нижней кромке шапки).
-  // Контракт «слот задан» = «в слоте есть строка»: НЕ задан (undefined/null) — шапка ровно
-  // как без строки фичи. Пустой чат НЕ передаёт <FeatureBanner/>: элемент truthy и для
-  // пустого рендера, и шапка приняла бы его за заполненный — гасила бы линию тулбара и
-  // ставила пустой div (ревью F2, major 2; решает ChatPanel).
-  featureBar?: ReactNode;
+  // Фича этого чата — часть шапки (FP-C3, вариант А макета chat-feature-fit-v1): три части от
+  // FeatureChatCard. subtitle встаёт на место подзаголовка (проект/бейджи у чата фичи уходят —
+  // проект есть в хлебных крошках); edge — нижняя кромка шапки, трекер 2 px на ширину колонки
+  // (линия «при прокрутке» на её месте не рисуется; у закрытой фичи edge нет — линия как у
+  // всякого чата); alarm — кнопка тревоги первой в правом кластере (только 1280).
+  // Контракт «задано» = «у чата есть фича»: НЕ задано (undefined/null) — шапка ровно как без
+  // фичи (решает FeatureChatCard: у чата без фичи он зовёт children(null)).
+  feature?: FeatureHeaderParts | null;
   // Фичи карточки в слоте (FS-FC-chip): на них чип «к фиче» в тулбаре не рисуется — возврат ведёт кнопка «К фиче» карточки; список даёт ChatPanel (FS-FCi)
   featureBarFeatureIds?: readonly string[];
   // Лента прокручена от начала — только тогда шапку отделяет линия. В начале ленты
@@ -1338,7 +1337,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, featureBar, featureBarFeatureIds, scrolled }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, items, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, onAttachmentMoves, onAddToWall, onChatDeleted, island, compact, contextBar, feature, featureBarFeatureIds, scrolled }: ChatHeaderBarProps) {
   // Вклады слота chat-header-action: невидимый слушатель «Итог сессии в заметку»
   // и его пункт в правом клик-меню. Нет подсистемы — нет и вкладов, остальные
   // AI-действия чата к заметкам не относятся и остаются.
@@ -1699,7 +1698,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
             )}
           </div>
         </div>
-        {metaRow(hero)}
+        {feature ? (
+          <div style={{ marginTop: hero ? 3 : 1, minWidth: 0 }}>{feature.subtitle}</div>
+        ) : metaRow(hero)}
       </div>
     </div>
   );
@@ -2191,6 +2192,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isCompact ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
+      {feature?.alarm}
       {badgeVisible('mechanic') && mechanicBadge}{badgeVisible('workflow') && workflowBadge}
       {/* Мобила с переключателем чатов: при тесноте уступают бейджи (обрезаются слева),
           а не кнопки действий и не тач-зона имени */}
@@ -2411,7 +2413,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       <div style={{
         position: 'relative', flexShrink: 0, width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto',
         boxSizing: 'border-box',
-        borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
+        // Кромка-трекер фичи (feature.edge) заменяет линию: две кромки разом не рисуем
+        borderBottom: feature?.edge ? 'none' : `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
         transition: 'border-color 0.18s ease-out',
       }}>
         {/* flexWrap: при узком окне правый кластер уходит второй строкой — остров подрастает */}
@@ -2426,9 +2429,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
-        {/* Строка фичи — над контекстом, в том же поле острова: она часть шапки,
-            её полоса трекера и отделяет шапку от ленты (макет В2) */}
-        {featureBar && <div data-testid="chat-feature-bar" style={{ padding: '0 18px' }}>{featureBar}</div>}
+        {/* Кромка-трекер фичи: нижняя кромка шапки, 2 px на ширину колонки (макет А) */}
+        {feature?.edge && <div data-testid="chat-feature-edge">{feature.edge}</div>}
         {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
             стоят над лентой, а не сбоку от неё */}
         {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
@@ -2444,10 +2446,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой. Линия снизу при этом
     // остаётся: она и отделяет шапку от ленты
-    // Строка фичи под тулбаром — часть шапки: её линия (при прокрутке) становится
-    // нижней кромкой шапки, поэтому у тулбаря своя линия гасится — иначе она резала
-    // бы шапку пополам, над строкой фичи.
-    <Toolbar isMobile={isCompact} noBorder={island || featureBar != null} bg={island || compact ? 'transparent' : undefined}
+    // Кромка-трекер фичи под тулбаром — нижняя кромка шапки, поэтому у тулбара своя линия
+    // гасится — иначе она резала бы шапку пополам, над кромкой.
+    <Toolbar isMobile={isCompact} noBorder={island || feature?.edge != null} bg={island || compact ? 'transparent' : undefined}
       // Правый клик по шапке — меню действий у курсора (desktop, см. ctxMenuEl)
       onContextMenu={isCompact ? undefined : e => {
         e.preventDefault();
@@ -2460,7 +2461,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         // занято всегда (прозрачный цвет), поэтому шапка не дёргается по высоте.
         // На острове (island) границу даёт сама карточка — там своей линии не рисуем;
         // при строке фичи линия переезжает на неё (нижняя кромка шапки — под строкой).
-        ...(island || featureBar != null ? null : {
+        ...(island || feature?.edge != null ? null : {
           borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
           transition: 'border-color 0.18s ease-out',
         }),
@@ -2474,29 +2475,14 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {actionDialogsEl}
     </Toolbar>
   );
-  if (!featureBar && !contextBar) return toolbarEl;
-  // Строка фичи — первой под тулбаром: она часть шапки (своего фона не имеет, линия
-  // «при прокрутке» — её нижняя кромка, когда она последняя). Контекст чата — строкой
-  // ниже строки фичи, до ленты: фон свой не нужен (шапка уже отделена), линия снизу
+  if (!feature?.edge && !contextBar) return toolbarEl;
+  // Кромка-трекер фичи — первой под тулбаром (нижняя кромка шапки). Контекст чата — строкой
+  // ниже неё, до ленты: фон свой не нужен (шапка уже отделена), линия снизу
   // отбивает материалы от переписки.
   return (
     <>
       {toolbarEl}
-      {featureBar && (
-        <div
-          data-testid="chat-feature-bar"
-          style={{
-            flexShrink: 0,
-            padding: `0 ${isCompact ? TB.padXMobile : TB.padX}px`,
-            ...(contextBar ? null : {
-              borderBottom: `1px solid ${scrolled ? C.borderLight : 'transparent'}`,
-              transition: 'border-color 0.18s ease-out',
-            }),
-          }}
-        >
-          {featureBar}
-        </div>
-      )}
+      {feature?.edge && <div data-testid="chat-feature-edge" style={{ flexShrink: 0 }}>{feature.edge}</div>}
       {contextBar && (
         <div style={{
           flexShrink: 0, display: 'flex', alignItems: 'center',

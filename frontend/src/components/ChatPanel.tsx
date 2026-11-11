@@ -61,7 +61,7 @@ import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { navPush, getNav, type NavSnapshot } from '../lib/nav';
 import { lastAssistantTextIndex, shouldShowContinueHint, continuationLinks, continueButtonGate, continuedLinkFromError } from '../lib/chatContinue';
 import { ContinueChatDialog, ContinueHint, ContinuationBanner } from './chat/ContinueChat';
-import { FeatureChatCard } from './chat/feature/FeatureChatCard';
+import { FeatureChatCard, type FeatureHeaderParts } from './chat/feature/FeatureChatCard';
 import { useIsTouch } from '../lib/breakpoints';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -1822,11 +1822,8 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     [todoBatches]);
   // Режим «Исполнение фичи»: агрегаты берутся из REST по сессии чата.
   const featureRuns = useFeatureRuns(session.id);
-  // Слот строки фичи в шапке (В2), как и сама строка (FeatureChatCard).
-  // Решение «есть ли у чата фича» принимается ЗДЕСЬ: React-элемент всегда truthy, и
-  // переданный при пустом чате слот гасил бы линию тулбара у каждого чата без фичи
-  // (ревью F2, major 2). Индекс — тот же стор, что у FeatureChatCard (один запрос на
-  // проект, идемпотентен), нужен ровно чтобы отличить «слот задан» от «в нём есть».
+  // Список фич чата — для скрытия чипа возврата в шапке (featureBarFeatureIds). Индекс — тот же
+  // стор, что у FeatureChatCard (один запрос на проект, идемпотентен).
   useFeaturesIndex(session.projectId ?? null);
   const featureBarIds = featureOf(session.id).map(f => f.feature.featureId);
   const hasFeatureRow = featureBarIds.length > 0;
@@ -2737,7 +2734,9 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
     return () => io.disconnect();
   }, [hidden, showEarlier, scrollRef]);
 
-  const headerBar = (
+  // Фича — часть шапки (FP-C3): FeatureChatCard отдаёт ей три части (строка, кромка, тревога)
+  // render-prop'ом; у чата без фичи — null, шапка как без неё, а дерево то же (без перемонтирования).
+  const renderHeaderBar = (feature: FeatureHeaderParts | null) => (
     <ChatHeaderBar
       island={headerIsland}
       // Линию под шапкой зажигает прокрутка ленты: в её начале отделять нечего
@@ -2772,21 +2771,21 @@ export function ChatPanel({ session, project, onOpenFile: onOpenFileProp, onOpen
       onAttachmentMoves={handleAttachmentMoves}
       onAddToWall={onAddToWall}
       onChatDeleted={onChatDeleted}
-      // Строка фичи — вторая строка шапки (В2 «Трек», F2): под заголовком, над
-      // контекстом. Чат без фичи (или с выключенными флагами) — слот НЕ передаётся:
-      // шапка остаётся ровно как без строки фичи (ни пикселя, линия тулбара на месте).
-      featureBar={hasFeatureRow ? (
-        <FeatureChatCard
-          sessionId={session.id}
-          projectId={session.projectId ?? null}
-          isMobile={!!isMobile}
-          // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
-          onFocusComposer={() => setComposerFocusBump(b => b + 1)}
-        />
-      ) : null}
+      feature={feature}
       featureBarFeatureIds={hasFeatureRow ? featureBarIds : undefined}
       contextBar={contextBar}
     />
+  );
+  const headerBar = (
+    <FeatureChatCard
+      sessionId={session.id}
+      projectId={session.projectId ?? null}
+      isMobile={!!isMobile}
+      // Ждут В ЭТОМ чате (waiting/stopped) — фокус в композер (M2), не страница фичи.
+      onFocusComposer={() => setComposerFocusBump(b => b + 1)}
+    >
+      {renderHeaderBar}
+    </FeatureChatCard>
   );
 
   return (

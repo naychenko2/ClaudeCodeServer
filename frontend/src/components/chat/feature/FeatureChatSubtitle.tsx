@@ -77,11 +77,22 @@ export function FeatureChatSubtitle({ model, isMobile, onOpen, expanded }: {
       {isMobile ? (
         <>
           <Dot color={DOT_COLOR[model.glyph]} size={6} />
+          {/* Подпись рядом с точкой обязательна (голая точка — не подпись): тревога — слово,
+              иначе счёт; нет и счёта (info/success без чисел) — слово состояния, а если и
+              его нет — название фичи. */}
           {word.tone === 'warn' || word.tone === 'danger' ? (
             <span data-testid="feature-subtitle-word" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', ...WORD_STYLE[word.tone] }}>
               {word.text}
             </span>
-          ) : countBlock}
+          ) : countBlock ?? (word.text ? (
+            <span data-testid="feature-subtitle-word" style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', ...WORD_STYLE[word.tone] }}>
+              {word.text}
+            </span>
+          ) : (
+            <span data-testid="feature-subtitle-name" title={model.title} style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {model.title}
+            </span>
+          ))}
         </>
       ) : (
         <>
@@ -89,10 +100,11 @@ export function FeatureChatSubtitle({ model, isMobile, onOpen, expanded }: {
             <FeatureGlyph kind={GLYPH_KIND[model.glyph]} size={14} />
           </span>
           {/* Название — гибкий элемент строки (режется первым, как имя файла в шапке),
-              полное — в title (макет §5). */}
+              полное — в title (макет §5). Сжимается в 100 раз охотнее слова состояния:
+              на промежуточной ширине (1000–1100) хвост не выходит за контейнер. */}
           <span
             data-testid="feature-subtitle-name" title={model.title}
-            style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 600, color: C.textPrimary }}
+            style={{ flex: '0 100 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', fontWeight: 600, color: C.textPrimary }}
           >
             {model.title}
           </span>
@@ -100,7 +112,12 @@ export function FeatureChatSubtitle({ model, isMobile, onOpen, expanded }: {
           {word.text && (
             <>
               <span aria-hidden style={{ flexShrink: 0, color: C.textMuted }}>·</span>
-              <span data-testid="feature-subtitle-word" style={{ ...WORD_STYLE[word.tone] }}>{word.text}</span>
+              <span
+                data-testid="feature-subtitle-word"
+                style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', ...WORD_STYLE[word.tone] }}
+              >
+                {word.text}
+              </span>
             </>
           )}
         </>

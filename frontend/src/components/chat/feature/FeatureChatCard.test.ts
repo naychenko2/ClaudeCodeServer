@@ -1,23 +1,23 @@
-// FS-FC: рендер карточки FeatureChatCard (макет v5 §2–§4). Окружение — настоящий
-// компонент на fakeDom с живыми сторами (featuresIndex/featureRuns/featureBackNav/
-// featurePage), как в FeatureBackChip.test и SessionList.test: «run приходит позже
-// индекса» и «указатель меняется на живом компоненте» достижимы только так.
+// FP-C3: контейнер FeatureChatCard — фича как часть шапки чата (вариант А макета
+// chat-feature-fit-v1). Окружение — настоящий компонент на fakeDom с живыми сторами
+// (featuresIndex/featureRuns/featureBackNav/featurePage), как раньше: «run приходит позже
+// индекса», «указатель меняется на живом компоненте» и «смена чата при открытом поповере»
+// достижимы только так. Render-prop children(parts) здесь рисует три части подряд (в
+// продукте их раскладывает ChatHeaderBar): строка, кромка, кнопка тревоги.
 //
-// Что защищается (постановка): ни одного aria-expanded в карточке; в ключевом чате —
-// бейдж вместо кнопки «Ключевой чат»; «К фиче» с указателем ведёт на записанную
-// вкладку (returnToFeature), без указателя — на «Ход» (cc-open-feature, fromChat:true);
-// действие тревоги в своём чате — фокус поля, не переход; мобила — кнопки 40, тега нет;
-// подпись тревоги («Нужно от тебя:» / «Что мешает:») — отдельный элемент перед текстом
-// вопроса только при бэковом ask (FS-FCi); без ask и на мобиле подписи нет.
+// Что защищается: строка → поповер по клику (aria-expanded живёт ТОЛЬКО у строки);
+// «Ключевой чат» — в поповере, в ключевом чате вместо него бейдж; «К фиче» с указателем ведёт
+// на записанную вкладку (returnToFeature), без указателя — на «Ход»; действие тревоги в своём
+// чате — фокус поля, не переход; конкурентность: приход run дорисовывает срок и трекер, строка
+// не перемонтируется; смена чата закрывает поповер и сбрасывает «ещё N»; клик мимо поповера и
+// Esc закрывают его; 360 — шторка, кнопки 40, на 360 кнопки тревоги в шапке нет.
 //
-// Мутации (в отчёте): (1) рисовать «Ключевой чат» и в ключевом чате → краснеет ровно
-// тест ключевого чата; (2) «К фиче» без указателя не ставит «Ход» → краснеет клик
-// без указателя; (3) опустить minHeight 40 на мобиле → краснеет тест 360;
-// (4) убрать рендер подписи фразы → краснеет ровно тест подписи (FS-FCi).
+// Мутации (в отчёте): см. итог задачи FP-C3.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FeatureChatCard } from './FeatureChatCard';
+import { FeatureChatCard, type FeatureHeaderParts } from './FeatureChatCard';
+import { Fragment } from 'react';
 import { refetchFeatureRuns, __test as runsStore } from '../../../lib/featureRuns';
 import { __test as indexStore } from '../../../lib/featuresIndex';
 import { __test as backNav } from '../../../lib/featureBackNav';
@@ -93,10 +93,14 @@ function seedIndex(f: FeatureIndexFeature, sessionId = 's-me'): void {
   data.index = idx; // эффект useFeaturesIndex возвращает тот же срез — seeded не затирается
 }
 
+// Раскладка частей без шапки: строка, кромка, тревога подряд (в продукте — ChatHeaderBar).
+const layout = (parts: FeatureHeaderParts | null) =>
+  parts ? createElement(Fragment, null, parts.subtitle, parts.edge, parts.alarm) : null;
+
 async function renderCard(over: { isMobile?: boolean; sessionId?: string } = {}) {
   const { root, container } = mount(createElement(FeatureChatCard, {
     sessionId: over.sessionId ?? 's-me', projectId: 'p1', isMobile: over.isMobile ?? false,
-    onFocusComposer: () => { focusCount++; },
+    onFocusComposer: () => { focusCount++; }, children: layout,
   }));
   roots.push(root);
   // Первичные запросы сторов (effects) — промисы: ждём полный хвост микрозадач.
@@ -119,24 +123,40 @@ function eventLog(): { type: string; detail: Record<string, unknown> }[] {
 }
 
 function click(node: ReturnType<typeof findNodeByAttr>): void {
-  act(() => { (reactProps(node!)!.onClick as () => void)(); });
+  act(() => { (reactProps(node!)!.onClick as (e?: unknown) => void)({ stopPropagation: () => {} }); });
 }
 
-function walk(n: NonNullable<ReturnType<typeof findNodeByAttr>>, fn: (x: NonNullable<ReturnType<typeof findNodeByAttr>>) => void): void {
+type N = NonNullable<ReturnType<typeof findNodeByAttr>>;
+function walk(n: N, fn: (x: N) => void): void {
   fn(n);
-  for (const c of (n as { childNodes: NonNullable<ReturnType<typeof findNodeByAttr>>[] }).childNodes) walk(c, fn);
+  for (const c of (n as unknown as { childNodes: N[] }).childNodes) walk(c, fn);
 }
-function countAriaExpanded(c: NonNullable<ReturnType<typeof findNodeByAttr>>): number {
+const doc = () => (globalThis as unknown as { document: { body: N; listeners?: Record<string, Set<(e: unknown) => void>> } }).document;
+// Поповер (Menu) и шторка (Modal) живут порталом в body, строка/кромка/тревога — в контейнере.
+const inBody = (testId: string) => findNodeByAttr(doc().body, 'data-testid', testId);
+const textOf = (n: N): string => textNodes(n).join('');
+function countAriaExpanded(c: N): number {
   let k = 0;
   walk(c, (x) => { if (x.nodeType === 1 && x.getAttribute('aria-expanded') != null) k++; });
   return k;
 }
-function buttonNodes(c: NonNullable<ReturnType<typeof findNodeByAttr>>) {
-  const out: NonNullable<ReturnType<typeof findNodeByAttr>>[] = [];
-  walk(c, (x) => { if (x.nodeType === 1 && x.nodeName === 'BUTTON') out.push(x); });
-  return out;
+function pressEscape(): void {
+  const handlers = [...(doc().listeners?.keydown ?? new Set<(e: unknown) => void>())];
+  act(() => { for (const h of handlers) h({ key: 'Escape', preventDefault: () => {}, defaultPrevented: false }); });
 }
-const textOf = (n: NonNullable<ReturnType<typeof findNodeByAttr>>): string => textNodes(n).join('');
+// Подложка Menu: fixed-слой на весь экран без детей с onClick (клик мимо поповера).
+function menuBackdrop(): N | null {
+  let found: N | null = null;
+  walk(doc().body, (x) => {
+    if (found || x.nodeType !== 1) return;
+    const st = (x as unknown as { style: Record<string, string> }).style;
+    if (st.position === 'fixed' && st.inset === '0' && reactProps(x)?.onClick) found = x;
+  });
+  return found;
+}
+
+const subtitleOf = (c: N) => findNodeByAttr(c, 'data-testid', 'feature-chat-subtitle')!;
+const openPopover = (c: N) => { click(subtitleOf(c)); };
 
 beforeEach(() => {
   indexStore.reset(); runsStore.reset(); backNav.reset(); pageStore.reset();
@@ -147,46 +167,53 @@ beforeEach(() => {
 afterEach(() => {
   for (const r of roots) act(() => { r.unmount(); });
   roots.length = 0;
+  vi.unstubAllGlobals();
   uninstallFakeDom();
 });
 
-describe('FeatureChatCard: чат шага и ключевой чат (c1)', () => {
-  it('чат шага: ни одного aria-expanded, нет шеврона/раскрытия; «Ключевой чат» один и ведёт openChatById(keySessionId) ровно один раз', async () => {
+describe('FeatureChatCard: строка, поповер и «Ключевой чат»', () => {
+  it('строка — единственный раскрываемый элемент; клик открывает поповер (aria-expanded=true), «Ключевой чат» один и ведёт openChatById(keySessionId) ровно один раз', async () => {
     seedIndex(feat({ ...indexProgress, keySessionId: 's-key', nowPersonaIds: ['p-kira'] }));
     const c = await renderCard();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-chat-card'), 'карточки нет').not.toBeNull();
-    // Инвариант v5: ничего не сворачивается — ни одного aria-expanded во всём дереве карточки.
-    expect(countAriaExpanded(c), 'в карточке появился раскрываемый элемент').toBe(0);
-    expect(findNodeByAttr(c, 'data-testid', 'feature-row-expand'), 'шеврон старой строки').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-row-body'), 'раскрытие старой строки').toBeNull();
-    const key = findNodeByAttr(c, 'data-testid', 'feature-card-to-key');
+    // Отдельной полосы с карточкой больше нет: ни старой карточки, ни двух строк.
+    expect(findNodeByAttr(c, 'data-testid', 'feature-chat-card'), 'старая карточка-полоса').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-row1'), 'старая строка 1').toBeNull();
+    expect(countAriaExpanded(c), 'раскрываемых элементов должно быть ровно одно — строка').toBe(1);
+    expect(subtitleOf(c).getAttribute('aria-expanded')).toBe('false');
+    expect(inBody('feature-popover'), 'поповер открыт без клика').toBeNull();
+    openPopover(c);
+    expect(subtitleOf(c).getAttribute('aria-expanded'), 'строка не отметила «открыт»').toBe('true');
+    expect(inBody('feature-popover'), 'поповер не открылся').not.toBeNull();
+    const key = inBody('feature-popover-to-key');
     expect(key, 'кнопки «Ключевой чат» нет').not.toBeNull();
     expect(textOf(key!)).toBe('Ключевой чат');
     const log = eventLog();
     click(key);
     expect(openChatCalls, 'openChatById зван не один раз/не туда').toEqual(['s-key']);
-    expect(log.length, 'один клик — ровно одно действие').toBe(0); // переход — openChatById, событий нет
+    expect(log.length, 'один клик — ровно одно действие').toBe(0);
+    expect(inBody('feature-popover'), 'после перехода поповер остался висеть').toBeNull();
   });
 
-  it('ключевой чат: кнопки «Ключевой чат» нет, есть бейдж «это ключевой чат»', async () => {
+  it('ключевой чат: кнопки нет, в поповере бейдж «это ключевой чат»', async () => {
     seedIndex(feat({ ...indexProgress, keySessionId: 's-key' }), 's-key');
     const c = await renderCard({ sessionId: 's-key' });
-    expect(findNodeByAttr(c, 'data-testid', 'feature-card-to-key'), 'кнопка «Ключевой чат» в ключевом чате').toBeNull();
-    const badge = findNodeByAttr(c, 'data-testid', 'feature-card-key-badge');
+    openPopover(c);
+    expect(inBody('feature-popover-to-key'), 'кнопка «Ключевой чат» в ключевом чате').toBeNull();
+    const badge = inBody('feature-popover-key-badge');
     expect(badge, 'бейджа ключевого чата нет').not.toBeNull();
     expect(textOf(badge!)).toBe('это ключевой чат');
-    // Бейдж — span (Badge без onClick): не кнопка и не раскрываемый.
     expect(badge!.nodeName).not.toBe('BUTTON');
   });
 });
 
-describe('FeatureChatCard: «К фиче» (c2)', () => {
+describe('FeatureChatCard: «К фиче»', () => {
   it('с указателем на эту фичу (tab=materials): подпись «‹ К фиче · Материалы», клик — returnToFeature (на записанную вкладку, fromChat:false)', async () => {
     seedIndex(feat({ ...indexProgress }));
     setFeatureMainTab('materials');
     backNav.recordFeatureReturn('f1', { kind: 'chat', id: 's-me' }, 'Правда о прогрессе');
     const c = await renderCard();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-card-to-feature');
+    openPopover(c);
+    const btn = inBody('feature-popover-to-feature');
     expect(btn, 'кнопки «К фиче» нет').not.toBeNull();
     expect(textOf(btn!), 'подпись с вкладкой').toContain('Материалы');
     setFeatureMainTab('review'); // вкладку могли сменить, пока страница была скрыта — возврат на записанную
@@ -200,9 +227,10 @@ describe('FeatureChatCard: «К фиче» (c2)', () => {
 
   it('без указателя: клик ставит «Ход» и диспатчит cc-open-feature { featureId, fromChatId, fromChat:true } — ровно одно событие', async () => {
     seedIndex(feat({ ...indexProgress }));
-    setFeatureMainTab('review'); // «progress» не должна получиться по умолчанию
+    setFeatureMainTab('review');
     const c = await renderCard();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-card-to-feature');
+    openPopover(c);
+    const btn = inBody('feature-popover-to-feature');
     expect(textOf(btn!), 'без указателя нет подписи «К фиче ›»').toBe('К фиче ›');
     const log = eventLog();
     click(btn);
@@ -212,11 +240,12 @@ describe('FeatureChatCard: «К фиче» (c2)', () => {
     expect(log[0].detail).toMatchObject({ featureId: 'f1', fromChatId: 's-me', fromChat: true });
   });
 
-  it('указатель на другую фичу — «К фиче» карточки ведёт по-своему (returnToFeature чужого указателя не зовёт)', async () => {
+  it('указатель на другую фичу — «К фиче» ведёт по-своему (returnToFeature чужого указателя не зовёт)', async () => {
     seedIndex(feat({ ...indexProgress }));
     backNav.recordFeatureReturn('f2', { kind: 'chat', id: 's-me' }, 'Чужая фича');
     const c = await renderCard();
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-card-to-feature');
+    openPopover(c);
+    const btn = inBody('feature-popover-to-feature');
     expect(textOf(btn!), 'подпись почужала').toBe('К фиче ›');
     const log = eventLog();
     click(btn);
@@ -224,41 +253,57 @@ describe('FeatureChatCard: «К фиче» (c2)', () => {
     expect(log[0].detail).toMatchObject({ featureId: 'f1', fromChat: true });
   });
 
-  it('конкурентность: указатель записан на живом компоненте — подпись переключается без перемонтирования', async () => {
+  it('конкурентность: указатель записан на живом компоненте при открытом поповере — подпись переключается без перемонтирования', async () => {
     seedIndex(feat({ ...indexProgress }));
     const c = await renderCard();
-    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-to-feature')!)).toBe('К фиче ›');
+    openPopover(c);
+    expect(textOf(inBody('feature-popover-to-feature')!)).toBe('К фиче ›');
     setFeatureMainTab('review');
     act(() => { backNav.recordFeatureReturn('f1', { kind: 'chat', id: 's-me' }, 'Правда о прогрессе'); });
-    const btn = findNodeByAttr(c, 'data-testid', 'feature-card-to-feature');
-    expect(textOf(btn!), 'запись указателя не перекрасила живую карточку').toContain('‹ К фиче · Разбор');
+    expect(textOf(inBody('feature-popover-to-feature')!), 'запись указателя не перекрасила живой поповер').toContain('‹ К фиче · Разбор');
   });
 });
 
-describe('FeatureChatCard: действие тревоги и приход run (c4)', () => {
-  it('ждут В ЭТОМ чате: «Ответить здесь» → onFocusComposer ровно один раз, openChatById ноль раз', async () => {
+describe('FeatureChatCard: действие тревоги и приход run', () => {
+  it('ждут В ЭТОМ чате: кнопка тревоги в шапке (1280) и «Ответить здесь» в поповере → onFocusComposer по разу, openChatById ноль раз', async () => {
     seedIndex(feat({
       ...indexProgress, state: 'waiting',
       attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-me', taskId: 't-1' },
     }));
     const c = await renderCard();
     const btn = findNodeByAttr(c, 'data-testid', 'feature-card-action');
-    expect(btn, 'кнопки действия нет').not.toBeNull();
+    expect(btn, 'кнопки тревоги в шапке нет').not.toBeNull();
     expect(textOf(btn!)).toBe('Ответить здесь');
     const log = eventLog();
     click(btn);
     expect(focusCount, 'фокус поля').toBe(1);
     expect(openChatCalls.length, 'переход вместо фокуса').toBe(0);
+    openPopover(c);
+    click(inBody('feature-popover-action'));
+    expect(focusCount, 'действие поповера — тот же маршрут').toBe(2);
+    expect(openChatCalls.length).toBe(0);
     expect(log.length, 'лишнего действия нет').toBe(0);
   });
 
-  it('run=null → run: первый рендер — счёт индекса без срока; после прихода run — счёт и срок из run (тот же корень, без перемонтирования)', async () => {
+  it('тревога в ДРУГОМ чате: кнопка шапки открывает чат тревоги, не фокусирует поле', async () => {
+    seedIndex(feat({
+      ...indexProgress, state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
+    }));
+    const c = await renderCard();
+    click(findNodeByAttr(c, 'data-testid', 'feature-card-action'));
+    expect(openChatCalls).toEqual(['s-alex']);
+    expect(focusCount).toBe(0);
+  });
+
+  it('run=null → run: строка и кромка по индексу без срока; после прихода run — счёт и срок из run, тот же узел строки (без перемонтирования)', async () => {
     seedIndex(feat({ ...indexProgress, nowPersonaIds: ['p-kira'] }));
     const c = await renderCard();
-    const count = () => textOf(findNodeByAttr(c, 'data-testid', 'feature-card-count')!);
+    const count = () => textOf(findNodeByAttr(c, 'data-testid', 'feature-subtitle-count')!);
+    const row = subtitleOf(c);
     expect(count(), 'счёт индекса').toContain('5 из 30');
     expect(count(), 'срок выдуман до прихода run').not.toContain('≈');
-    // Run приходит позже — через стор (тот же путь, что в продукте: refetch после task_changed).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-bar'), 'кромки по индексу нет').not.toBeNull();
     data.runs = [run({
       stepProgress: sp(6, 44),
       epic: { id: 'f1', title: 'Фича', status: 'todo', note: { text: 'голос', at: '2026-11-10T10:00:00Z', byUser: false, stageAtWrite: 'prod', stateAtWrite: 'running', estimate: { etaMinutes: 160 } } },
@@ -266,54 +311,44 @@ describe('FeatureChatCard: действие тревоги и приход run (
     await act(async () => { refetchFeatureRuns('s-me'); await new Promise((r) => setTimeout(r, 0)); });
     expect(count(), 'числа run не победили').toContain('6 из 44');
     expect(count(), 'срока из run нет').toContain('≈');
-    expect(findNodeByAttr(c, 'data-testid', 'feature-chat-card'), 'карточка перемонтирована').not.toBeNull();
+    expect(subtitleOf(c), 'строка перемонтирована').toBe(row);
+  });
+
+  it('кромка — трекер 2 px без зазора и скругления', async () => {
+    seedIndex(feat({ ...indexProgress }));
+    const c = await renderCard();
+    const st = (findNodeByAttr(c, 'data-testid', 'feature-card-bar') as unknown as { style: Record<string, string> }).style;
+    expect(st.height).toBe('2px');
+    expect(st.gap, 'зазор между сегментами').toBe('0');
+    expect(st.borderRadius, 'скругление кромки').toBe('0');
   });
 });
 
-describe('FeatureChatCard: подпись тревоги (FS-FCi, макет v5 §2)', () => {
-  it('ask на десктопе: подпись — отдельный элемент до текста вопроса; без ask и на мобиле — подписи нет', async () => {
-    // wait → «Нужно от тебя:» (слова только ASK_LABEL), текст вопроса — после подписи.
+describe('FeatureChatCard: подпись тревоги в поповере', () => {
+  it('ask на десктопе: подпись — отдельный элемент до текста вопроса', async () => {
     seedIndex(feat({
       ...indexProgress, state: 'waiting',
       attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
       ask: { text: 'нужно решение по отступам', source: 'wait', personaId: 'p-kira', sessionId: 's-alex' },
     }));
     const cWait = await renderCard();
-    const labelWait = findNodeByAttr(cWait, 'data-testid', 'feature-card-phrase-label');
-    expect(labelWait, 'подписи ask wait нет').not.toBeNull();
-    expect(textOf(labelWait!), 'подпись не слова модели').toBe('Нужно от тебя:');
-    expect(textOf(findNodeByAttr(cWait, 'data-testid', 'feature-card-phrase')!)).toBe('Нужно от тебя: нужно решение по отступам');
+    openPopover(cWait);
+    expect(textOf(inBody('feature-popover-phrase-label')!), 'подпись не слова модели').toBe('Нужно от тебя:');
+    expect(textOf(inBody('feature-popover-phrase')!)).toBe('Нужно от тебя: нужно решение по отступам');
 
-    // stopped → «Что мешает:».
-    seedIndex(feat({
-      ...indexProgress, state: 'stopped',
-      attention: { kind: 'stop', since: null, reason: 'локальный движок недоступен', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
-      ask: { text: 'локальный движок недоступен', source: 'stopped', personaId: 'p-kira', sessionId: 's-alex' },
-    }));
-    const cStop = await renderCard();
-    const labelStop = findNodeByAttr(cStop, 'data-testid', 'feature-card-phrase-label');
-    expect(labelStop, 'подписи ask stopped нет').not.toBeNull();
-    expect(textOf(labelStop!), 'подпись не слова модели').toBe('Что мешает:');
-    expect(textOf(findNodeByAttr(cStop, 'data-testid', 'feature-card-phrase')!)).toBe('Что мешает: локальный движок недоступен');
+  });
 
-    // Без ask (идущая фича): фраза та же, подписи нет.
+  it('без ask (идущая фича) подписи нет', async () => {
     seedIndex(feat({ ...indexProgress, nowPersonaIds: ['p-kira'] }));
     const cRun = await renderCard();
-    expect(findNodeByAttr(cRun, 'data-testid', 'feature-card-phrase-label'), 'подпись без ask').toBeNull();
-
-    // Мобила: модель не даёт подписи (featureChatCardModel:115 — на мобиле ask=null).
-    seedIndex(feat({
-      ...indexProgress, state: 'waiting',
-      attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
-      ask: { text: 'нужно решение по отступам', source: 'wait', personaId: 'p-kira', sessionId: 's-alex' },
-    }));
-    const cMob = await renderCard({ isMobile: true });
-    expect(findNodeByAttr(cMob, 'data-testid', 'feature-card-phrase-label'), 'подпись на мобиле').toBeNull();
+    openPopover(cRun);
+    expect(inBody('feature-popover'), 'поповер не открылся').not.toBeNull();
+    expect(inBody('feature-popover-phrase-label'), 'подпись без ask').toBeNull();
   });
 });
 
 describe('FeatureChatCard: несколько фич у чата', () => {
-  it('карточка — первой фичи из featureOf; «ещё N» перед «Ключевой чат» перебирает фичи', async () => {
+  function seedTwo() {
     const f1 = feat({ featureId: 'f1', title: 'Первая фича', ...indexProgress });
     const f2 = feat({ featureId: 'f2', title: 'Вторая фича' });
     const idx = {
@@ -324,18 +359,23 @@ describe('FeatureChatCard: несколько фич у чата', () => {
       ] },
     } as FeaturesIndex;
     indexStore.reset(); indexStore.setIndex('p1', idx); data.index = idx;
+  }
+
+  it('строка — первой фичи; «ещё N» последней кнопкой поповера перебирает фичи, поповер остаётся открытым', async () => {
+    seedTwo();
     const c = await renderCard();
-    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-title')!)).toBe('Первая фича');
-    const cycle = findNodeByAttr(c, 'data-testid', 'feature-card-cycle');
+    const name = () => textOf(findNodeByAttr(c, 'data-testid', 'feature-subtitle-name')!);
+    expect(name()).toBe('Первая фича');
+    openPopover(c);
+    const cycle = inBody('feature-popover-cycle');
     expect(cycle, 'кнопки «ещё N» нет').not.toBeNull();
     expect(textOf(cycle!)).toBe('ещё 1');
     click(cycle);
-    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-title')!), 'цикл не показал вторую фичу').toBe('Вторая фича');
+    expect(name(), 'цикл не показал вторую фичу').toBe('Вторая фича');
+    expect(inBody('feature-popover'), 'цикл закрыл поповер').not.toBeNull();
   });
 
-  it('смена чата на живом компоненте: выбор сбрасывается — карточка нового чата показывает ЕГО первую фичу', async () => {
-    // s1 и s2 — по две фичи у каждого: без сброса selIdx после «ещё 1» в s1 карточка s2
-    // показала бы вторую фичу s2. Тот же корень, что в воркспейсе (ChatPanel не перемонтируется).
+  it('смена чата на живом компоненте при ОТКРЫТОМ поповере: поповер закрыт, выбор сброшен — строка нового чата показывает ЕГО первую фичу', async () => {
     const f1 = feat({ featureId: 'f1', title: 'Первая фича s1', ...indexProgress });
     const f2 = feat({ featureId: 'f2', title: 'Вторая фича s1' });
     const f3 = feat({ featureId: 'f3', title: 'Первая фича s2', ...indexProgress });
@@ -354,56 +394,87 @@ describe('FeatureChatCard: несколько фич у чата', () => {
       },
     } as FeaturesIndex;
     indexStore.reset(); indexStore.setIndex('p1', idx); data.index = idx;
-    const { root, container } = mount(createElement(FeatureChatCard, {
-      sessionId: 's1', projectId: 'p1', isMobile: false,
-      onFocusComposer: () => { focusCount++; },
-    }));
+    const props = (sessionId: string) => ({ sessionId, projectId: 'p1', isMobile: false, onFocusComposer: () => { focusCount++; }, children: layout });
+    const { root, container } = mount(createElement(FeatureChatCard, props('s1')));
     roots.push(root);
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    const title = () => textOf(findNodeByAttr(container, 'data-testid', 'feature-card-title')!);
-    expect(title()).toBe('Первая фича s1');
-    click(findNodeByAttr(container, 'data-testid', 'feature-card-cycle'));
-    expect(title(), 'цикл внутри s1 не показал вторую фичу').toBe('Вторая фича s1');
+    const name = () => textOf(findNodeByAttr(container, 'data-testid', 'feature-subtitle-name')!);
+    expect(name()).toBe('Первая фича s1');
+    openPopover(container);
+    click(inBody('feature-popover-cycle'));
+    expect(name(), 'цикл внутри s1 не показал вторую фичу').toBe('Вторая фича s1');
+    expect(inBody('feature-popover'), 'поповер должен быть открыт перед сменой чата').not.toBeNull();
     // Воркспейс переключил чат: ТОТ ЖЕ корень, sessionId → s2.
-    act(() => { root.render(createElement(FeatureChatCard, { sessionId: 's2', projectId: 'p1', isMobile: false, onFocusComposer: () => { focusCount++; } })); });
+    act(() => { root.render(createElement(FeatureChatCard, props('s2'))); });
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
-    expect(findNodeByAttr(container, 'data-testid', 'feature-chat-card'), 'карточка перемонтирована').not.toBeNull();
-    expect(title(), 'после смены чата карточка показывает не первую фичу').toBe('Первая фича s2');
+    expect(inBody('feature-popover'), 'поповер чата s1 остался висеть в чате s2').toBeNull();
+    expect(subtitleOf(container).getAttribute('aria-expanded')).toBe('false');
+    expect(name(), 'после смены чата показана не первая фича').toBe('Первая фича s2');
+  });
+});
+
+describe('FeatureChatCard: закрытие поповера', () => {
+  it('клик мимо (по подложке Menu) и Escape закрывают поповер', async () => {
+    // Возврат фокуса у Menu проверяет `el instanceof HTMLElement` — в node глобала нет.
+    vi.stubGlobal('HTMLElement', class {});
+    seedIndex(feat({ ...indexProgress }));
+    const c = await renderCard();
+    openPopover(c);
+    const bd = menuBackdrop();
+    expect(bd, 'подложки Menu нет — клик мимо нечем ловить').not.toBeNull();
+    click(bd);
+    expect(inBody('feature-popover'), 'клик мимо не закрыл поповер').toBeNull();
+    expect(subtitleOf(c).getAttribute('aria-expanded')).toBe('false');
+    openPopover(c);
+    expect(inBody('feature-popover')).not.toBeNull();
+    pressEscape();
+    expect(inBody('feature-popover'), 'Escape не закрыл поповер').toBeNull();
   });
 });
 
 describe('FeatureChatCard: мобила 360', () => {
-  it('тега статуса нет; все кнопки minHeight 40 (цель на тач)', async () => {
+  it('кнопки тревоги в шапке нет; строка — цель 40; шторка: действие, «К фиче», «Ключевой» на всю ширину, minHeight 40', async () => {
     seedIndex(feat({
       ...indexProgress, state: 'waiting',
       attention: { kind: 'wait', since: null, reason: 'про отступы', personaId: 'p-kira', sessionId: 's-alex', taskId: 't-1' },
       keySessionId: 's-key',
     }));
     const c = await renderCard({ isMobile: true });
-    expect(findNodeByAttr(c, 'data-testid', 'feature-card-tag'), 'тег на мобиле').toBeNull();
-    const btns = buttonNodes(c);
-    expect(btns.length, 'на мобиле должны быть действие, «К фиче» и «Ключевой»').toBe(3);
-    for (const b of btns) {
-      expect((b as { style: Record<string, string> }).style.minHeight, `кнопка «${textOf(b)}» ниже 40`).toBe('40px');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-action'), 'кнопка тревоги на 360').toBeNull();
+    expect((subtitleOf(c) as unknown as { style: Record<string, string> }).style.minHeight, 'цель строки ниже 40').toBe('40px');
+    openPopover(c);
+    for (const id of ['feature-popover-action', 'feature-popover-to-feature', 'feature-popover-to-key']) {
+      const b = inBody(id);
+      expect(b, `в шторке нет «${id}»`).not.toBeNull();
+      expect((b as unknown as { style: Record<string, string> }).style.minHeight, `«${id}» ниже 40`).toBe('40px');
     }
   });
 });
 
 describe('FeatureChatCard: закрытая фича', () => {
-  it('полосы трекера и действия нет (showTracker=false)', async () => {
+  it('кромки и кнопки тревоги нет; в строке слово «смержена»; в поповере нет трекера', async () => {
     seedIndex(feat({
       featureId: 'f1', title: 'Смержена', projectId: 'p1', bucket: 'closed', state: 'merged',
       attention: null, rail: [], chips: ['closed'], stepsAccepted: 12, stepsTotal: 12, loops: 0,
       now0: null, lastActivityAt: null, summary: { mergedAt: '2026-10-19T12:00:00Z', durationMinutes: 913 },
       keySessionId: null, keyArchived: false, keyProjectId: null, chatCount: 0,
     }));
-    // Итог («12 шагов · 15 ч 13 мин», «Смержена …») — из run.summary; без run модель
-    // честно деградирует до корзин индекса (это кейс featureChatCardModel.test).
     data.runs = [run({ state: 'merged', summary: { mergedAt: '2026-10-19T12:00:00Z', durationMinutes: 913, tasks: 14, steps: 12, loops: 1 } })];
     const c = await renderCard();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-card-bar'), 'полоса у закрытой').toBeNull();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-card-action'), 'действия у закрытой').toBeNull();
-    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-count')!)).toContain('12 шагов');
-    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-card-phrase')!)).toContain('Смержена');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-bar'), 'кромка у закрытой').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-action'), 'тревога у закрытой').toBeNull();
+    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-subtitle-count')!)).toContain('12 шагов');
+    expect(textOf(findNodeByAttr(c, 'data-testid', 'feature-subtitle-word')!)).toContain('смержена');
+    openPopover(c);
+    expect(inBody('feature-popover-bar'), 'трекер в поповере закрытой').toBeNull();
+  });
+});
+
+describe('FeatureChatCard: чат без фичи', () => {
+  it('children зовётся с null: ничего не рисуется, дерево то же', async () => {
+    indexStore.reset(); indexStore.setIndex('p1', { features: [], chats: {} } as FeaturesIndex);
+    const c = await renderCard();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-chat-subtitle')).toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-card-bar')).toBeNull();
   });
 });

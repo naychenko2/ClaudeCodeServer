@@ -169,7 +169,7 @@ export function FeatureChatPopover(props: FeatureChatPopoverProps) {
   // 1280: Menu по якорю строки-триггера (fixed, порталом в body — шапка чата не обрезала бы
   // absolute); его подложка ловит клик мимо, его handler — Escape с возвратом фокуса на якорь.
   return (
-    <Menu onClose={onClose} anchor={anchor?.getBoundingClientRect() ?? undefined} minWidth={400} maxWidth={400}>
+    <Menu onClose={onClose} anchor={anchor?.getBoundingClientRect() ?? undefined} anchorAlign="start" minWidth={400} maxWidth={400}>
       <div style={{ padding: `${SP.md}px ${SP.lg - 2}px` }}>{content}</div>
     </Menu>
   );

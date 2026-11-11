@@ -202,3 +202,41 @@ describe('FeatureChatSubtitle: строка 360 (макет §5 «360: стро�
     expect(svg, 'точки тона нет').not.toBeNull();
   });
 });
+
+// Миноры ревью FP-C1 (Глеб, 11.11), закрыты при встраивании в шапку (FP-C3).
+describe('FeatureChatSubtitle: хвост на промежуточной ширине и пустая точка', () => {
+  it('1280: название режется первым (shrink 100), слово — с многоточием, разделитель не сжимается', () => {
+    const c = renderSubtitle(waitModel(), false, false);
+    const name = findNodeByAttr(c, 'data-testid', 'feature-subtitle-name')!;
+    const word = findNodeByAttr(c, 'data-testid', 'feature-subtitle-word')!;
+    expect(styleOf(name).flex, 'название должно сжиматься охотнее слова').toBe('0 100 auto');
+    expect(styleOf(word).flex, 'слово сжимается последним').toBe('0 1 auto');
+    expect(styleOf(word).overflow, 'слово без обрезки — хвост выйдет за контейнер').toBe('hidden');
+    expect(styleOf(word).textOverflow).toBe('ellipsis');
+    expect(styleOf(word).minWidth).toBe('0');
+    const root = findNodeByAttr(c, 'data-testid', 'feature-chat-subtitle')!;
+    expect(styleOf(root).maxWidth, 'строка шире контейнера').toBe('100%');
+    // Разделитель «·» — узел с aria-hidden, флекс-базис не сжимается.
+    let sep: typeof root | null = null;
+    const walk = (n: typeof root) => {
+      if (n.nodeType === 1 && n.getAttribute('aria-hidden') === 'true' && textOf(n) === '·') sep = n;
+      for (const ch of (n as { childNodes: typeof root[] }).childNodes) walk(ch);
+    };
+    walk(root);
+    expect(sep, 'разделителя нет').not.toBeNull();
+    expect(styleOf(sep!).flexShrink, 'разделитель сжимается').toBe('0');
+  });
+
+  it('360: info без чисел — рядом с точкой подпись (слово состояния или название), голой точки нет', () => {
+    // Старый ответ индекса без корзин шагов: count=null, тон info (идёт).
+    const m = featureChatCardModel(feat({
+      stepsReview: undefined, stepsWork: undefined, stepsNotCreated: undefined, planState: undefined, nowPersonaIds: ['p-kira'],
+    }), null, 's-me', true, NOW);
+    expect(m.count, 'фикстура должна быть без счёта').toBeNull();
+    const c = renderSubtitle(m, true, false);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-subtitle-count')).toBeNull();
+    const label = findNodeByAttr(c, 'data-testid', 'feature-subtitle-word') ?? findNodeByAttr(c, 'data-testid', 'feature-subtitle-name');
+    expect(label, 'рядом с точкой нет подписи').not.toBeNull();
+    expect(textOf(label!).length, 'подпись пустая').toBeGreaterThan(0);
+  });
+});

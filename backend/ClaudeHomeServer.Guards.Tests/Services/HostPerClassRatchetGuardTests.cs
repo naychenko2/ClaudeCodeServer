@@ -70,7 +70,6 @@ public class HostPerClassRatchetGuardTests
         ["ClaudeHomeServer.Tests.Contract.ProjectRelayContractTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.AnonymousEndpointsGuardTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.AssistantDeletionTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
-        ["ClaudeHomeServer.Tests.Controllers.ChatsControllerHandoffTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.DifyHttpOwnerIsolationTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.GitControllerLogTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",
         ["ClaudeHomeServer.Tests.Controllers.McpCatalogControllerTests"] = "недоделанный H0: хост на каждый тест или на конфигурацию без разбора — перевести на хост на класс",

@@ -712,63 +712,6 @@ public class ChatsController(SessionManager sessions, ProjectManager projects, F
         catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 
-    // «Продолжить в новом чате»: агент пишет записку-передачу в этом чате (платный ход, ждём его
-    // конца), платформа сохраняет её заметкой и открывает новый чат с ней. Оркестрация живёт в
-    // ChatContinueService. Коды: 404 — чат не найден/чужой; 400 — продолжать нечего (нет ходов
-    // агента) или тип чата не поддерживается (групповой, штаб); 409 — чат занят (идёт ход) либо
-    // агент не написал записку; текст ошибки годится для тоста.
-    [HttpPost("{id}/continue")]
-    public async Task<IActionResult> Continue(string id, [FromBody] ContinueChatRequest? req,
-        [FromServices] ChatContinueService continuation)
-    {
-        if (sessions.DenyOwnerTurn(id, UserId) is { } denied) return denied;
-        try
-        {
-            var result = await continuation.ContinueAsync(UserId, id, req?.Note);
-            return Ok(new { newSessionId = result.NewSessionId, handoffNoteId = result.HandoffNoteId });
-        }
-        catch (KeyNotFoundException) { return NotFound(); }
-        catch (GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
-        catch (ChatContinueNotSupportedException ex) { return BadRequest(new { error = ex.Message }); }
-        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
-    }
-
-    // «Перенести в новый чат» (шаг B-4 фичы «Индикатор prompt cache и перенос в новый чат»):
-    // передаточная записка и чат-преемник без resume. Тело не нужно: путь (тёплый — записку
-    // пишет сам чат, пока его кэш тёплый; холодный — записку собирает дешёвый раннер по
-    // транскрипту) выбирает сервер по статусу кэша последнего хода (PromptCacheState, B-1).
-    // Ответ — id нового чата, projectId и черновик композера (записка, которую человек может
-    // поправить до первого хода). Коды: 404 — чат не найден/чужой (per-owner: брать только
-    // чаты владельца, чужой id — 404, не 500); 409 — группа/штаб/worktree, пустой чат,
-    // место назначено на локаль, повторный клик, чат занят другим ходом (тёплый путь);
-    // 502 — модель не дала записку или холодный путь не уложился в потолок (4 мин);
-    [HttpPost("{id}/handoff")]
-    public async Task<IActionResult> Handoff(string id, CancellationToken ct,
-        [FromServices] ChatHandoffService handoff)
-    {
-        // Тело обязательно и у 404: без него фронт подставляет свой «Not Found» (минор ревью F-4)
-        if (sessions.DenyOwnerTurn(id, UserId) is { } denied)
-            return denied is NotFoundResult ? NotFound(new { error = "Чат не найден или удалён" }) : denied;
-        try
-        {
-            var result = await handoff.HandoffAsync(UserId, id, ct);
-            return Ok(new
-            {
-                chatId = result.Session.Id,
-                projectId = result.Session.ProjectId,
-                draft = result.Draft,
-                warm = result.Warm,
-            });
-        }
-        // Тело обязательно: без него фронт подставляет свой «Not Found» (минор ревью F-4)
-        catch (KeyNotFoundException) { return NotFound(new { error = "Чат не найден или удалён" }); }
-        catch (HandoffInProgressException ex) { return Conflict(new { error = ex.Message }); }
-        catch (HandoffBusyException ex) { return Conflict(new { error = ex.Message }); }
-        catch (HandoffGenerationException ex) { return StatusCode(502, new { error = ex.Message }); }
-        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
-    }
-
     // История чата вне проекта. Без after — полный плоский массив (прежний контракт).
     // С after (+ fp) — докачка хвоста (Перф-2 B5): объект { reset, messages, anchorIndex,
     // anchorFp }, как у проектной сессии (SessionsController.GetHistory) — одна логика в
@@ -926,10 +869,6 @@ public record SetWorktreeRequest(bool Enabled, string? Branch = null, bool Force
 public record MigrateProviderRequest(string? Model, string? SubscriptionKey = null);
 
 public record SetModeRequest(string Mode);
-
-// «Продолжить в новом чате». Note — необязательная приписка человека: что делать дальше
-// (уходит в первое сообщение нового чата)
-public record ContinueChatRequest(string? Note = null);
 
 // Ветвление чата (шаг 4 плана «Ветвление чата», контракт §6 docs/research/chat-branching-2026-09.md).
 // AnchorText обязателен: индекс — договорённость двух счётчиков (клиент/сервер), сверка текста

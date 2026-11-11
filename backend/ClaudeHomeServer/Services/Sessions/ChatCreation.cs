@@ -719,3 +719,7 @@ public sealed class ChatCreation
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 }
+
+// Причина отказа «продолжить нельзя» жила в ChatContinueService (снят шагом B-1b); перенесена к
+// единственному оставшемуся бросающему (CreateContinuationAsync) и снимается шагом B-1c вместе с ним
+public sealed class ChatContinueNotSupportedException(string message) : Exception(message);

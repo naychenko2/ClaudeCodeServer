@@ -189,24 +189,6 @@ public class SharedProjectPersonaTests : IClassFixture<TestWebApplicationFactory
     }
 
     [Fact]
-    public async Task ПродолжениеЛегасиЧатаОбщегоПроектаСГлобальнойПерсоной_400СКодомДоПлатногоХода()
-    {
-        var (projectId, _) = await ProjectWithChatAsync("editor");
-        var personaId = await CreatePersonaAsync(Owner(), "Глобальная-" + Guid.NewGuid().ToString("N")[..6], "global");
-        // Легаси-чат: CreateAsync рамку не проверяет, глобальная персона села в общий проект до запрета
-        var sessions = _factory.Services.GetRequiredService<SessionManager>();
-        var legacy = await sessions.CreateAsync(projectId, ClaudeMode.AcceptEdits, personaId: personaId);
-        var before = await ProjectChatIdsAsync(Owner(), projectId);
-
-        var r = await Owner().PostAsJsonAsync($"/api/chats/{legacy.Id}/continue", new { });
-
-        r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await BodyAsync(r)).GetProperty("code").GetString().Should().Be(GlobalPersonaInSharedException.Code);
-        (await ProjectChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
-            "отказ не оставил нового чата");
-    }
-
-    [Fact]
     public async Task ГрупповойЧатОбщегоПроектаСГлобальнымУчастником_400СКодомИЧатНеСоздан()
     {
         var (projectId, _) = await ProjectWithChatAsync("editor");

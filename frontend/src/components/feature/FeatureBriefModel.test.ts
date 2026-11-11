@@ -277,6 +277,13 @@ describe('Дальше: строка из next', () => {
     expect(briefNextText(brief({ kind: 'closed' }), nameOf)).toBe('Ничего — фича закрыта');
   });
 
+  // Решение Андрея 11.11: после мержа фича остаётся «смержена», пока человек сам не
+  // нажмёт «Закрыть» (FeaturePageHeader) — строка merged зовёт к этому решению.
+  // Мутация «вернуть старый текст у merged» краснит этот тест.
+  it('merged — «Смержена — закройте, когда доработки не нужны» (FS-AC3b)', () => {
+    expect(briefNextText(brief({ kind: 'merged' }), nameOf)).toBe('Смержена — закройте, когда доработки не нужны');
+  });
+
   it('next пуст — строки нет', () => {
     expect(briefNextText(brief({ kind: 'running', next: [] }), nameOf)).toBeNull();
   });

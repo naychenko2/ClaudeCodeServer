@@ -356,12 +356,15 @@ public sealed record WikiPackage
                     {
                         if (q is null)
                         {
-                            errors.Add("null в списке цитат");
+                            errors.Add($"цитаты операции «{op.Op}»: null в списке");
                             continue;
                         }
-                        var len = q.Trim().Length;
-                        if (len is < WikiPage.MinQuoteLength or > WikiPage.MaxQuoteLength)
-                            errors.Add($"цитата операции «{op.Op}» длиной {len}, допустимо {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
+                        // Одна мера с гейтом (минор R-S2-3): нижняя граница по нормализованной
+                        // строке, верхняя — по сырой; Trim здесь не при чём — иначе пакет,
+                        // прошедший форму, отбивается гейтом.
+                        var (raw, norm, outOfContract) = QuoteMatcher.MeasureQuoteLength(q);
+                        if (outOfContract)
+                            errors.Add($"цитата операции «{op.Op}» {raw} символов ({norm} после нормализации), допустимо {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
                     }
                     if (string.IsNullOrWhiteSpace(op.Claim))
                         errors.Add($"операция «{op.Op}» с цитатами без утверждения (claim)");

@@ -245,13 +245,11 @@ public static class WikiGate
             for (var fi = 0; fi < page.Footnotes.Count; fi++)
             {
                 var footnote = page.Footnotes[fi];
-                // Минимальная длина — по нормализованной строке (той же, по которой
-                // сверяется дословность): цитата из одной разметки («*******a») не
-                // содержательна, даже если сырая длина в контракте. Верхняя граница —
-                // по сырой: нормализация только укорачивает, верхнюю меру она не обходит.
-                var normQuote = QuoteMatcher.NormalizeQuote(footnote.Quote);
-                if (normQuote.Length < WikiPage.MinQuoteLength || footnote.Quote.Length > WikiPage.MaxQuoteLength)
-                    violations.Add($"{draft.Path}: цитата {footnote.Quote.Length} символов ({normQuote.Length} после нормализации), контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
+                // Мера длины — общая с формой пакета (минор R-S2-3): одна функция
+                // QuoteMatcher.MeasureQuoteLength, здесь остаётся только сообщение.
+                var (raw, norm, outOfContract) = QuoteMatcher.MeasureQuoteLength(footnote.Quote);
+                if (outOfContract)
+                    violations.Add($"{draft.Path}: цитата {raw} символов ({norm} после нормализации), контракт {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
                 var card = FindPage(footnote.Target.Text, reach, allSections);
                 if (card is null)
                     violations.Add($"{draft.Path}: сноска на неизвестную карточку '[[{footnote.Target.Text}]]'");

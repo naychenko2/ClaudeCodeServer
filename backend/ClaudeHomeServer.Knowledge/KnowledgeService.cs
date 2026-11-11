@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
 namespace ClaudeHomeServer.Services.Knowledge;
@@ -196,15 +198,21 @@ public class KnowledgeService : IKnowledgeIndex
     private readonly DifyOptions _cfg;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
     private readonly SemaphoreSlim _createLock = new(1, 1);
-    // Кэш: datasetId → fieldId поля "tags" (чтобы не делать GET metadata при каждом сохранении тегов)
-    private readonly ConcurrentDictionary<string, string> _tagsFieldIdCache = new();
+    private readonly ILogger _log;
+    // Кэш: (datasetId, name) → fieldId поля метаданных. Ключ ОБА поля: id у каждого
+    // датасета свой, кэш по одному имени отдал бы чужой id (тест ключа в
+    // KnowledgeServiceMetadataTests). Имя в кэш — только после успешного ответа.
+    private readonly ConcurrentDictionary<(string, string), string> _metadataFieldIdCache = new();
+    // Блокировка на тот же ключ: два параллельных Ensure создают поле один раз.
+    private readonly ConcurrentDictionary<(string, string), SemaphoreSlim> _metadataFieldLocks = new();
 
     public KnowledgeService(IHttpClientFactory httpClientFactory, IOptions<DifyOptions> options,
-        WorkspaceKnowledgeStore workspaceStore)
+        WorkspaceKnowledgeStore workspaceStore, ILogger<KnowledgeService>? log = null)
     {
         _httpClientFactory = httpClientFactory;
         _cfg = options.Value;
         _workspaceStore = workspaceStore;
+        _log = log ?? NullLogger<KnowledgeService>.Instance;
     }
 
     private HttpClient CreateClient()
@@ -428,24 +436,54 @@ public class KnowledgeService : IKnowledgeIndex
         IReadOnlyDictionary<string, string>? metadata = null)
     {
         var client = CreateClient();
-        // doc_metadata — та же форма, что держится для tags; дополнительные поля (S2c:
-        // wiki_section у страниц вики) кладутся в тот же объект строковыми значениями.
-        var docMetadata = new Dictionary<string, object> { ["tags"] = (tags ?? []).ToArray() };
-        if (metadata is { Count: > 0 })
-            foreach (var (name, value) in metadata) docMetadata[name] = value;
+        // doc_metadata в теле create_by_text Dify молча отбрасывает (дефект 87bb0af6):
+        // дополнительные поля (S2c: wiki_section у страниц вики) пишутся двухшагово —
+        // поле объявляется на датасете, значение назначается через documents/metadata.
+        // В теле create остаётся только tags (старый контракт, теги этим шагом не тронуты).
         var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/document/create_by_text", new
         {
             name = fileName,
             text = content,
             indexing_technique = indexingTechnique ?? _cfg.IndexingTechnique,
             process_rule = new { mode = processRuleMode ?? "automatic" },
-            doc_metadata = docMetadata,
+            doc_metadata = new Dictionary<string, object> { ["tags"] = (tags ?? []).ToArray() },
         });
         resp.EnsureSuccessStatusCode();
 
         var body = await resp.Content.ReadFromJsonAsync<DifyDocumentCreateResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при индексировании текста");
-        return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
+        var doc = new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
+
+        if (metadata is { Count: > 0 })
+        {
+            try
+            {
+                // Объявить поля (EnsureMetadataFieldAsync, кэш id по ключу датасета) и
+                // назначить значения одним partial_update — та же форма, что у тегов.
+                var assignments = new List<object>();
+                foreach (var (name, value) in metadata)
+                    assignments.Add(new { id = await EnsureMetadataFieldAsync(datasetId, name), name, value });
+                var metaResp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/metadata", new
+                {
+                    operation_data = new[]
+                    {
+                        new { document_id = doc.Id, metadata_list = assignments, partial_update = true },
+                    },
+                });
+                metaResp.EnsureSuccessStatusCode();
+            }
+            catch (Exception ex)
+            {
+                // Документ без метаданных в индексе — сирота: его не найдёт фильтр раздела.
+                // Удаляем best-effort (сбой DELETE — только лог), отказ — вызывающему.
+                try { await DeleteDocumentAsync(datasetId, doc.Id); }
+                catch (Exception dex) { _log.LogDebug(dex, "Удаление документа {Doc} после отказа назначения метаданных", doc.Id); }
+                _log.LogWarning(ex, "Назначение метаданных документу {Doc} не удалось", doc.Id);
+                throw;
+            }
+        }
+
+        return doc;
     }
 
     private static string GetMimeType(string fileName)
@@ -548,38 +586,56 @@ public class KnowledgeService : IKnowledgeIndex
         return new DifyDocumentInfo(body.Document.Id, body.Document.Name, body.Document.IndexingStatus);
     }
 
-    // Возвращает fieldId поля "tags" в метаданных датасета; создаёт поле если его нет
-    public async Task<string> EnsureTagsFieldAsync(string datasetId)
+    // Возвращает fieldId поля метаданных `name` в датасете; создаёт поле, если его нет.
+    // Dify молча отбрасывает метаданные из тела create_by_text (дефект 87bb0af6) —
+    // единственная рабочая запись значения: сначала объявить поле здесь, потом
+    // назначить документу через documents/metadata. Кэш id — только после успешного
+    // ответа; блокировка по ключу (datasetId, name) — параллельные вызовы создают
+    // поле один раз (double-check после взятия блокировки).
+    public async Task<string> EnsureMetadataFieldAsync(string datasetId, string name)
     {
-        if (_tagsFieldIdCache.TryGetValue(datasetId, out var cached))
+        var key = (datasetId, name);
+        if (_metadataFieldIdCache.TryGetValue(key, out var cached))
             return cached;
 
-        var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
-        resp.EnsureSuccessStatusCode();
-
-        var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
-        var existing = meta?.DocMetadata.FirstOrDefault(f => f.Name == "tags");
-        if (existing is not null)
+        var gate = _metadataFieldLocks.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
         {
-            _tagsFieldIdCache[datasetId] = existing.Id;
-            return existing.Id;
+            if (_metadataFieldIdCache.TryGetValue(key, out cached))
+                return cached;
+
+            var client = CreateClient();
+            var resp = await client.GetAsync($"datasets/{Seg(datasetId)}/metadata");
+            resp.EnsureSuccessStatusCode();
+
+            var meta = await resp.Content.ReadFromJsonAsync<DifyDatasetMetadataResponse>();
+            var existing = meta?.DocMetadata.FirstOrDefault(f => f.Name == name);
+            if (existing is not null)
+            {
+                _metadataFieldIdCache[key] = existing.Id;
+                return existing.Id;
+            }
+
+            var createResp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/metadata",
+                new { type = "string", name });
+            createResp.EnsureSuccessStatusCode();
+
+            var created = await createResp.Content.ReadFromJsonAsync<DifyMetadataField>()
+                ?? throw new InvalidOperationException($"Пустой ответ при создании поля метаданных {name}");
+            _metadataFieldIdCache[key] = created.Id;
+            return created.Id;
         }
-
-        var createResp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/metadata",
-            new { type = "string", name = "tags" });
-        createResp.EnsureSuccessStatusCode();
-
-        var created = await createResp.Content.ReadFromJsonAsync<DifyMetadataField>()
-            ?? throw new InvalidOperationException("Пустой ответ при создании поля tags");
-        _tagsFieldIdCache[datasetId] = created.Id;
-        return created.Id;
+        finally
+        {
+            gate.Release();
+        }
     }
 
     // Обновляет значение тегов для документа в Dify без переиндексирования
     public async Task UpdateDocumentTagsAsync(string datasetId, string documentId, List<string> tags)
     {
-        var fieldId = await EnsureTagsFieldAsync(datasetId);
+        var fieldId = await EnsureMetadataFieldAsync(datasetId, "tags");
         var tagValue = string.Join(",", tags);
         var client = CreateClient();
         var resp = await client.PostAsJsonAsync($"datasets/{Seg(datasetId)}/documents/metadata", new

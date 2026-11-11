@@ -153,7 +153,7 @@ public class SessionLocalModelControllerTests : IClassFixture<SessionLocalModelC
         private readonly ConcurrentDictionary<string, LocalModelTurnSummary> _bySession = new();
 
         public void Set(string sessionId, LocalModelTurnSummary summary) => _bySession[sessionId] = summary;
-        public IReadOnlyList<TurnChatLive> ActiveChats() => [];
+        public IReadOnlyList<TurnChatLive> ActiveChats(string track = "main") => [];
         public LocalModelTurnSummary? GetLastTurn(string sessionId) =>
             _bySession.TryGetValue(sessionId, out var summary) ? summary : null;
     }

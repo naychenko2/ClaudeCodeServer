@@ -93,6 +93,7 @@ beforeEach(() => {
   store.clear();
   setAllFlags({});
   featuresIndexTest.reset();
+  indexGate = null;
 });
 
 describe('SessionList: groupBy из хранилища', () => {
@@ -125,7 +126,9 @@ describe('SessionList: M1′ «Фич пока нет» по содержимо�
 // «Загружаем фичи…» — ни «Без фичи», ни «Фич пока нет», ни ветки «Дни» ниже.
 // Иначе приход индекса переносит все карточки из контейнера «no-feature» в группы
 // и весь список монтируется заново (баг Андрея). Мутация: убрать featuresReady из
-// условия featureGroups → «Без фичи» возвращается → первый кейс красный.
+// условия featureGroups → вместо null — пустой массив групп (sessions в SSR пусты,
+// «Без фичи» нет) → вместо строки загрузки рисуется «Фич пока нет» (пустой индекс) →
+// первый кейс красный по assert’у на «Фич пока нет».
 describe('SessionList: FI-2 строка загрузки, пока индекс не готов', () => {
   it('индекс не готов (reset без setIndex): «Загружаем фичи…», без «Без фичи» и «Фич пока нет»', () => {
     const html = renderList(true, 'features');
@@ -225,6 +228,9 @@ let getImpl: (id: string) => Promise<Session> = async () => { throw { status: 40
 // useFeaturesIndex (effects) сам зовёт api.tasks.featuresIndex и setIndex-ит результат:
 // без мока он падает (нет сервера) → сброс в EMPTY, и группа фичи не рисуется
 let mockIndex: import('../types/featureIndex').FeaturesIndex = { features: [], chats: {} };
+// Гейт запроса индекса: когда положен — fetch не возвращается, стор держит состояние
+// «индекс не готов» (кейс FI-4 «Чатов пока нет» рядом со строкой загрузки)
+let indexGate: Promise<void> | null = null;
 // Счётчик запросов индекса: «один запрос на проект» — секция FilterBar фич не
 // должна плодить второй fetch (индекс приходит из SessionList, не из FilterBar)
 let indexCalls = 0;
@@ -232,7 +238,7 @@ vi.mock('../lib/api', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../lib/api')>();
   return { ...orig, api: { ...orig.api,
     sessions: { ...orig.api.sessions, list: async () => mockSessions },
-    tasks: { ...orig.api.tasks, featuresIndex: async () => { indexCalls++; return mockIndex; } },
+    tasks: { ...orig.api.tasks, featuresIndex: async () => { indexCalls++; if (indexGate) await indexGate; return mockIndex; } },
     chats: { ...orig.api.chats, get: (id: string) => getImpl(id) },
   } };
 });
@@ -669,6 +675,94 @@ describe('SessionList: chat_visibility_changed (S2d-F2)', () => {
     expect(lists.at(-1)?.map(s => s.id)).toEqual(['c1', 'c2']);
     expect(onActiveDeleted).not.toHaveBeenCalled();
     expect(toastMock).not.toHaveBeenCalled();
+    root.unmount();
+  });
+});
+
+// === FI-4 (хвосты ревью FI-2): отсев чатов чужого проекта + «Чатов пока нет» рядом со строкой загрузки ===
+describe('SessionList: FI-4 отсев чатов чужого проекта', () => {
+  // Форма индекса — как в Ф-2.2: kind — единственный признак состояния; «живой» чат
+  // (status 'waiting') видим и в свёрнутой группе — карточку видно без клика шеврона.
+  const feat = (id: string, title: string) => ({
+    featureId: id, title, projectId: 'p1', bucket: 'running' as const,
+    attention: null, rail: [], chips: [], kind: 'waiting_you' as const,
+    stepsAccepted: 0, stepsTotal: 0, loops: 0, now0: null, lastActivityAt: null, summary: null,
+    keySessionId: null, keyArchived: false, keyProjectId: 'p1', chatCount: 1,
+  });
+  const sess = (id: string, projectId: string, name: string): Session => ({
+    id, projectId, name, mode: 'auto', status: 'waiting', messageCount: 0,
+    createdAt: '2026-10-18T10:00:00Z', updatedAt: '2026-10-18T10:00:00Z', origin: 'manual',
+  } as Session);
+  const link = (featureId: string) => ({ featureId, kind: 'executor' as const, taskRole: null, stepRef: null, lane: null });
+  const idx: import('../types/featureIndex').FeaturesIndex = {
+    features: [feat('f1', 'ФИЧА_A')],
+    chats: { 'p1-linked': [link('f1')] },
+  };
+
+  // Узел с данным title-атрибутом: заголовок группы (FeatureGroupHeader.tsx:268,
+  // title={feature.title}) и название чата (ChatCard.tsx:1137, span title={displayName})
+  // — по нему и видим, что группа/карточка на экране (текстовые узлы в fake-DOM ненадёжны)
+  const hasTitle = (n: _FakeNode, title: string): boolean => {
+    if (n._attrs['title'] === title) return true;
+    for (const c of n.childNodes) if (hasTitle(c, title)) return true;
+    return false;
+  };
+
+  // Состояние смены проекта (SessionList.tsx:845-852): в sessions ещё лежат чаты
+  // прежнего проекта (их подмешивает кэш idb), в индексе нового — их нет. Без фильтра
+  // по project.id в projectSessions (SessionList.tsx:849-851) чат чужого проекта
+  // всплыл бы в «Без фичи» до прихода своего списка. Мутация «убрать фильтр» → красный.
+  it('индекс p1 готов, в sessions чат p2: его нет ни в «Без фичи», ни в группах', async () => {
+    featuresIndexTest.reset();
+    featuresIndexTest.setIndex('p1', idx);
+    mockIndex = idx; // эффект useFeaturesIndex не сбрасывает индекс в EMPTY
+    mockSessions = [
+      sess('p1-linked', 'p1', 'ЧАТ_P1_СВЯЗАН'), // связан с f1 → группа A
+      sess('p1-free', 'p1', 'ЧАТ_P1_БЕЗФИ'), // своего проекта, без связи → «Без фичи»
+      sess('p2-foreign', 'p2', 'ЧАТ_P2_ЧУЖОЙ'), // чат другого проекта → нигде
+    ];
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: vi.fn() })); });
+    // Оба чата своего проекта на экране: связанный — в группе, без связи — в «Без фичи»
+    expect(hasTitle(container, 'ФИЧА_A'), 'группа A есть').toBe(true);
+    expect(hasTitle(container, 'ЧАТ_P1_СВЯЗАН'), 'связанный чат в группе').toBe(true);
+    expect(hasTitle(container, 'ЧАТ_P1_БЕЗФИ'), 'чат без связи в «Без фичи»').toBe(true);
+    // Чат p2 — ни в «Без фичи», ни в какой-либо группе: его карточки нет вовсе
+    expect(hasTitle(container, 'ЧАТ_P2_ЧУЖОЙ'), 'чата чужого проекта нет').toBe(false);
+    root.unmount();
+  });
+});
+
+// FI-4, минор 4: при пустом списке и НЕГОТОВОМ индексе состояния два — «Чатов пока нет»
+// (empty-block до цепочки групп) и «Загружаем фичи…» (в цепочке) — и второе
+// противоречит первому. Правка: пустой empty-state подавляется, пока индекс не приехал.
+// Мутация: убрать из его условия !(featuresMode && !featuresReady) → «Чатов пока нет»
+// возвращается → кейс красный.
+describe('SessionList: FI-4 «Чатов пока нет» не рядом со строкой загрузки', () => {
+  // Текст всего дерева: React кладёт одиночный текстовый ребёнок в textContent самого
+  // элемента, нескольких детей — в text-ноды; берём и то, и другое (как textOf выше)
+  const allText = (n: _FakeNode): string => {
+    let out = n.textContent || '';
+    for (const c of n.childNodes) out += allText(c);
+    return out;
+  };
+
+  it('пустой проект, индекс не готов: только «Загружаем фичи…», без «Чатов пока нет»', async () => {
+    featuresIndexTest.reset();
+    indexGate = new Promise<void>(() => {}); // запрос индекса не возвращается: состояние «не готов»
+    mockSessions = []; // список приехал пустой: loaded=true, чатов нет
+    store.clear();
+    store.set('cc_chat_filters:p1', JSON.stringify({ groupBy: 'features', sortOrder: 'newest' }));
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    await act(async () => { root.render(createElement(SessionList, { project, activeSession: null, onSelect: vi.fn() })); });
+    indexGate = null;
+    const text = allText(container);
+    expect(text, 'строка загрузки есть').toContain('Загружаем фичи…');
+    expect(text, 'второго empty-state рядом нет').not.toContain('Чатов пока нет');
     root.unmount();
   });
 });

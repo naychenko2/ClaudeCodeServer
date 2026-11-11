@@ -701,6 +701,7 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'qwen-image-2.1-turbo', label: 'Qwen-Image 2.1 Turbo — быстро', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'flux3-klein', label: 'FLUX 3 Klein — текст и точная правка', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'qwen-image-2.1', label: 'Qwen-Image 2.1 — качественно', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'minimax-h3-image', label: 'MiniMax H3 Image — детали и 4K', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
   ] },
 ];

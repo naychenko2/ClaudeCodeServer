@@ -179,6 +179,17 @@ public class MediaFormatDriversTests
             (size.W, size.H).Should().Be(source[aspect], aspect);
     }
 
+    // То же для H3-Image: зеркало стандартной ступени и холст адаптера по пропорции
+    [Fact]
+    public void Размеры_H3_в_каталоге_совпадают_с_ComfyWorkflows()
+    {
+        var source = ClaudeHomeServer.Services.Images.LocalMedia.ComfyWorkflows.H3ImageSizes;
+
+        LocalImageEditor.H3Sizes.Keys.Should().BeEquivalentTo(source.Keys);
+        foreach (var (aspect, size) in LocalImageEditor.H3Sizes)
+            (size.W, size.H).Should().Be(source[aspect], aspect);
+    }
+
     // Зеркало потолка холста (ADR-028, Ш3): MaxCanvasMb у Qwen-Image = потолок загрузки узла
     // (LocalMediaService.MaxMediaInputBytes, 90 МБ) — адаптер принимает холст с кропом до него,
     // поэтому редактор не пережимает его; расхождение чисел 90 ↔ адаптер → красный

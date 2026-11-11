@@ -14,7 +14,10 @@ namespace ClaudeHomeServer.Services.Llm;
 public interface ILocalModelRequestSink
 {
     // Запрос начался: заголовки ответа получены.
-    void OnRequestStarted(string requestId, string turnId);
+    // providerKey (B5): ключ провайдера, на который ушёл запрос (маршрут шлюза). Необязательный:
+    // вызов без него — поведение прежнее (чат без провайдера, дорожка «main»). Счётчик хранит его
+    // в записи запроса (по requestId), не в поле счётчика: параллельные сессии не затирают друг друга.
+    void OnRequestStarted(string requestId, string turnId, string? providerKey = null);
 
     // Пришёл первый токен (первая content_block_delta).
     void OnFirstToken(string requestId, string turnId);

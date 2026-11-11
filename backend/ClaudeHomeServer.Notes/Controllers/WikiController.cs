@@ -241,6 +241,12 @@ public class WikiController : ControllerBase
         // то, чем UI рисует плашку и «Принять как есть»: до adopt человек видит их, а не 409.
         var manifest = ReadManifestQuietly(root, key!);
         var content = System.IO.File.ReadAllText(full);
+        // R4 (ADR-039, §7): человек открыл страницу во вкладке «Вики» — чтение Human, сильное.
+        // Сервисный токен — не человек: его GET отвечает как раньше, но чтения не считает
+        // («Не учитываются» таблицы путей). Сбой учёта (false стора) не меняет ответ:
+        // счётчик — не часть страницы; ключ — тот же параметр page, принятый выше.
+        if (!IsServiceToken)
+            WikiReadsStore.RecordMany(root, [(page!, WikiReadKind.Human)], _time.GetUtcNow());
         var (authorship, footnotes) = ReadAuthorship(root, key!, content);
         var overrides = _journal.PageOverrides(userId, key!, page!, _time.GetUtcNow() - OverridesWindow, content)
             .Select(o => new WikiOverrideDto(o.Op, o.Statement, ResolveHistoryLine(content, o.Previous), o.At, o.PackageId,

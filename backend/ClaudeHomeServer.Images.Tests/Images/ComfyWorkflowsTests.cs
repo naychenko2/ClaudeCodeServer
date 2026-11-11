@@ -35,6 +35,8 @@ public class ComfyWorkflowsTests
         "StringFormat", "BatchImagesNode",
         // Персонаж на Klein (2026-10-22): образцы для апсемплера ужимаются
         "ImageScaleToTotalPixels",
+        // MiniMax-H3-Image (2026-11-11): узел условий из ComfyUI 0.45 и пачка вариантов
+        "MiniMaxH3ImageConditioning", "RepeatLatentBatch",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -468,6 +470,13 @@ public class ComfyWorkflowsTests
             ("edit-crop", ComfyWorkflows.EditImage("a", ["x.png"], null, 1, "p", mask: "m.png",
                 crop: new LocalImageCrop(8, 16, 64, 32, 128, 64))),
             ("klein-generate", ComfyWorkflows.KleinGenerate("ёжик", 1664, 928, 1, 2, "p")),
+            ("h3image-generate", ComfyWorkflows.H3ImageGenerate("ёжик", 2752, 1536, 1, 1, "p")),
+            ("h3image-generate-batch", ComfyWorkflows.H3ImageGenerate("ёжик", 2048, 2048, 1, 3, "p")),
+            ("h3image-edit", ComfyWorkflows.H3ImageEdit("добавь лодку", ["x.png"], (2048, 2048), 1, "p")),
+            ("h3image-multi", ComfyWorkflows.H3ImageEdit("сложи", Enumerable.Range(1, 16).Select(i => $"r{i}.png").ToList(),
+                (2048, 2048), 1, "p")),
+            ("h3image-character", ComfyWorkflows.H3ImageEdit("сюда его", ["x.png", "f1.png", "f2.png"], (2048, 2048), 1, "p",
+                ["f1.png", "f2.png"])),
             ("klein-edit", ComfyWorkflows.KleinEdit("добавь лодку", ["x.png"], (1328, 1328), 1, "p")),
             ("klein-multi", ComfyWorkflows.KleinEdit("сложи", Enumerable.Range(1, 10).Select(i => $"r{i}.png").ToList(),
                 (1104, 1472), 1, "p")),

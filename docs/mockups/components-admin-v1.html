@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Админ-панель «Компоненты» · макет v1</title>
+<!--
+  Макет: админ-панель «Компоненты» — шаг 2c фичи «Внутренняя оптимизация».
+  featureId эпика: 72314c36-2a49-4115-bd86-14765a78cd0e · задача-макет: 17d1e1b0 (role=design).
+  stepRef шага реализации пока не заведён (фича в очереди) — проставить при разборе плана.
+  Предложение и открытые вопросы — components-admin-v1-proposal.md.
+  Эволюция существующего экрана «Подсистемы» (pages/SubsystemsPage.tsx, макет subsystems-admin.md).
+  Сырые цвета живут ТОЛЬКО в блоке токенов ниже (копия theme.css); в вёрстке — только var(--c-*) = C.*.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-modal:0 12px 40px rgba(23,19,15,.18);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-menu:0 6px 24px rgba(60,50,35,.16);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-modal:0 12px 44px rgba(0,0,0,.55);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-menu:0 6px 24px rgba(0,0,0,.5);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif; font-size:13px; line-height:1.5; }
+button { font-family:inherit; }
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+svg.i { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; flex:0 0 auto; }
+svg.i.s14 { width:14px; height:14px; } svg.i.s12 { width:12px; height:12px; } svg.i.s24 { width:24px; height:24px; }
+
+/* ===== Обвязка макета (не продукт) ===== */
+.bar { position:sticky; top:0; z-index:500; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.bar h1 { margin:0; font-size:15px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:220px; }
+.tog { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.tog button { font-size:12px; padding:6px 14px; cursor:pointer; background:transparent; border:none; color:var(--c-text-secondary); }
+.tog button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1280px; margin:0 auto; padding:24px 24px 96px; }
+h2.sec { margin:40px 0 4px; font-size:20px; font-weight:600; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; }
+p.note { margin:0 0 14px; color:var(--c-text-secondary); max-width:96ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; font-family:"JetBrains Mono",monospace; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 6px; }
+.row { display:flex; gap:32px; flex-wrap:wrap; align-items:flex-start; }
+.stage { position:relative; padding:24px; background:var(--c-overlay); border-radius:16px; display:flex; justify-content:center; }
+
+/* ===== Меню аватара (Menu): C.bgCard, рамка C.border, R.xl, SHADOW.menu; пункт 36, FS.base ===== */
+.menu { width:248px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; box-shadow:var(--shadow-menu); padding:4px; }
+.mi { display:flex; align-items:center; gap:8px; height:36px; padding:0 10px; border-radius:8px; color:var(--c-text-primary); font-size:13px; }
+.mi svg { color:var(--c-text-secondary); }
+.mi.hl { background:var(--c-accent-light); color:var(--c-accent); font-weight:600; }
+.mi.hl svg { color:var(--c-accent); }
+.msep { height:1px; background:var(--c-border-light); margin:4px 6px; }
+.mcap { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); padding:6px 10px 2px; }
+
+/* ===== Modal: MODAL_W.wide (720), C.bgCard, R.xxl (16), SHADOW.modal; шапка — FS.lg 600 + подзаголовок FS.sm ===== */
+.modal { width:720px; max-width:100%; background:var(--c-bg-card); border-radius:16px; box-shadow:var(--shadow-modal); display:flex; flex-direction:column; max-height:860px; }
+.mh { display:flex; align-items:flex-start; gap:12px; padding:20px 24px 12px; }
+.mh .t { flex:1; min-width:0; }
+.mh h3 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); }
+.mh p { margin:4px 0 0; font-size:12px; color:var(--c-text-secondary); line-height:1.45; }
+.xbtn { width:32px; height:32px; border-radius:8px; border:none; background:transparent; color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; cursor:pointer; }
+.xbtn:hover { background:var(--c-bg-selected); color:var(--c-text-heading); }
+.mb { padding:0 24px 20px; overflow:auto; }
+
+/* ===== Notice tone=warning: C.warningBg, рамка C.warning, R.xl, SP.md; заголовок C.warningText, тело C.textPrimary ===== */
+.notice { display:flex; gap:12px; align-items:flex-start; background:var(--c-warning-bg); border:1px solid var(--c-warning); border-radius:12px; padding:12px; }
+.notice > svg { color:var(--c-warning-text); margin-top:1px; }
+.notice .nt { font-size:13px; font-weight:600; color:var(--c-warning-text); line-height:1.3; }
+.notice .nb { font-size:12px; color:var(--c-text-primary); margin-top:4px; line-height:1.45; }
+.notice .nf { font-size:11px; color:var(--c-text-primary); opacity:.75; margin-top:4px; }
+.notice .nx { flex:1; min-width:0; }
+.notice .na { margin-left:auto; flex:0 0 auto; }
+.notice.danger { background:var(--c-danger-bg); border-color:var(--c-danger-border); }
+.notice.danger > svg, .notice.danger .nt { color:var(--c-danger-text); }
+.sticky { position:sticky; top:0; z-index:2; padding-bottom:12px; background:var(--c-bg-card); }
+
+/* ===== Button: primary / ghost / danger; size sm — высота 28, R.lg ===== */
+.btn { display:inline-flex; align-items:center; gap:6px; height:32px; padding:0 14px; border-radius:10px; font-size:13px; font-weight:600; cursor:pointer; border:1px solid transparent; white-space:nowrap; }
+.btn.sm { height:28px; padding:0 10px; font-size:12px; }
+.btn.ghost { background:transparent; border-color:var(--c-border); color:var(--c-text-primary); }
+.btn.ghost:hover { background:var(--c-bg-selected); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.lnk { background:none; border:none; padding:0; color:var(--c-accent); font-size:12px; font-weight:600; cursor:pointer; }
+.lnk:focus-visible { outline:none; box-shadow:var(--shadow-focus); border-radius:4px; }
+
+/* ===== Badge size xs: FS.xs 600, R.pill, dot 7 ===== */
+.bd { display:inline-flex; align-items:center; gap:5px; font-size:11px; font-weight:600; padding:2px 8px; border-radius:999px; white-space:nowrap; line-height:1.4; }
+.bd i { width:7px; height:7px; border-radius:50%; display:block; }
+.bd.success { background:var(--c-success-bg); color:var(--c-success-text); } .bd.success i { background:var(--c-success); }
+.bd.neutral { background:var(--c-bg-inset); color:var(--c-text-secondary); } .bd.neutral i { background:var(--c-text-muted); }
+.bd.warning { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.bd.danger { background:var(--c-danger-bg); color:var(--c-danger-text); }
+
+/* ===== Toggle 42×25 (thumb 19): вкл — C.accent, выкл — C.track; фокус SHADOW.focus ===== */
+.tg { position:relative; width:42px; height:25px; border-radius:999px; background:var(--c-track); border:none; padding:0; cursor:pointer; flex:0 0 auto; transition:background .15s; }
+.tg::after { content:""; position:absolute; top:3px; left:3px; width:19px; height:19px; border-radius:50%; background:var(--c-bg-white); box-shadow:var(--shadow-thumb); transition:left .15s; }
+.tg[aria-checked="true"] { background:var(--c-accent); }
+.tg[aria-checked="true"]::after { left:20px; }
+.tg:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.tg[aria-disabled="true"] { opacity:.5; cursor:default; }
+.tgz { padding:8px 0; margin:-8px 0; display:flex; } /* зона нажатия до 41 px на таче */
+
+/* ===== Таблица компонентов (десктоп) ===== */
+.th, .tr { display:grid; grid-template-columns:minmax(0,1fr) 150px 140px 52px; gap:12px; align-items:start; }
+.th { font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); padding:0 12px 6px; border-bottom:1px solid var(--c-border-light); }
+.th > :last-child { text-align:right; }
+.tr { padding:12px; border-bottom:1px solid var(--c-border-light); position:relative; }
+.tr.pending { background:var(--c-warning-bg); }
+.tr.pending::before { content:""; position:absolute; left:0; top:8px; bottom:8px; width:3px; border-radius:2px; background:var(--c-warning); }
+.tr.err::before { content:""; position:absolute; left:0; top:8px; bottom:8px; width:3px; border-radius:2px; background:var(--c-danger); }
+.nm { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.nm b { font-size:14px; font-weight:600; color:var(--c-text-heading); }
+.nm .k { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.ds { font-size:12px; color:var(--c-text-secondary); line-height:1.45; margin-top:2px; }
+.us .a { font-size:13px; color:var(--c-text-primary); }
+.us .b { font-size:11px; color:var(--c-text-muted); }
+.us .a.idle { color:var(--c-text-secondary); }
+.sw { display:flex; justify-content:flex-end; padding-top:1px; }
+.hint { grid-column:1 / -1; display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:12px; color:var(--c-warning-text); margin-top:-2px; }
+.hint .now { color:var(--c-text-primary); }
+.ehint { grid-column:1 / -1; margin-top:-2px; }
+.busy { display:inline-flex; align-items:center; gap:6px; font-size:11px; color:var(--c-text-muted); }
+.spin { width:12px; height:12px; border-radius:50%; border:2px solid var(--c-track); border-top-color:var(--c-accent); animation:sp 0.9s linear infinite; }
+@keyframes sp { to { transform:rotate(360deg); } }
+.grp { display:flex; align-items:center; gap:8px; margin:20px 0 6px; font-size:10px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); }
+.grp .ln { flex:1; height:1px; background:var(--c-border-light); }
+.core { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:0 16px; }
+.cr { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--c-border-light); min-height:40px; }
+.cr b { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.cr .k { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.cr .bd { margin-left:auto; }
+.foot { font-size:11px; color:var(--c-text-muted); margin-top:12px; line-height:1.45; }
+.foot code { font-family:"JetBrains Mono",monospace; }
+
+/* ===== Скелетон загрузки: C.bgInset, R.sm, пульсация ===== */
+.sk { background:var(--c-bg-inset); border-radius:6px; height:12px; animation:pl 1.4s ease-in-out infinite; }
+@keyframes pl { 50% { opacity:.45; } }
+
+/* ===== EmptyState: иконка 24 C.textMuted, заголовок FS.md 600, подпись FS.sm ===== */
+.empty { text-align:center; padding:32px 16px; color:var(--c-text-secondary); }
+.empty svg { color:var(--c-text-muted); }
+.empty .et { font-size:14px; font-weight:600; color:var(--c-text-heading); margin-top:8px; }
+.empty .es { font-size:12px; margin:4px auto 12px; max-width:44ch; line-height:1.45; }
+
+/* ===== ConfirmDialog: MODAL_W.confirm (380) ===== */
+.confirm { width:380px; max-width:100%; background:var(--c-bg-card); border-radius:16px; box-shadow:var(--shadow-modal); padding:20px 24px; }
+.confirm h4 { margin:0 0 8px; font-size:16px; font-weight:600; color:var(--c-text-heading); }
+.confirm p { margin:0 0 8px; font-size:13px; color:var(--c-text-primary); line-height:1.5; }
+.confirm .fact { display:flex; gap:8px; background:var(--c-bg-inset); border-radius:10px; padding:8px 10px; font-size:12px; color:var(--c-text-primary); margin:4px 0 12px; }
+.confirm .acts { display:flex; justify-content:flex-end; gap:8px; margin-top:16px; }
+.ovl { position:fixed; inset:0; background:var(--c-overlay); display:none; align-items:center; justify-content:center; z-index:900; padding:16px; }
+.ovl.open { display:flex; }
+
+/* ===== Мобила: bottom-sheet (R.sheet 22 сверху, SHADOW.sheet, maxHeight 92vh), 360 CSS ===== */
+.phone { width:360px; height:740px; border-radius:28px; border:1px solid var(--c-border); background:var(--c-overlay); overflow:hidden; position:relative; flex:0 0 auto; }
+.sheet { position:absolute; left:0; right:0; bottom:0; max-height:92%; background:var(--c-bg-card); border-radius:22px 22px 0 0; box-shadow:var(--shadow-sheet); display:flex; flex-direction:column; }
+.handle { width:36px; height:4px; border-radius:2px; background:var(--c-track); margin:8px auto 4px; }
+.sheet .mh { padding:8px 16px 8px; }
+.sheet .mb { padding:0 16px 16px; }
+.sheet .notice { flex-wrap:wrap; }
+.sheet .notice .nx { flex:1 1 calc(100% - 28px); }
+.sheet .notice .na { margin-left:28px; }
+.cards { display:flex; flex-direction:column; gap:8px; }
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; padding:12px; }
+.card.pending { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.card.err { border-color:var(--c-danger-border); }
+.card .top { display:flex; align-items:center; gap:12px; }
+.card .top b { flex:1; min-width:0; font-size:14px; font-weight:600; color:var(--c-text-heading); }
+.card .mid { display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap; }
+.card .mid .k { font-family:"JetBrains Mono",monospace; font-size:11px; color:var(--c-text-muted); }
+.card .us2 { font-size:12px; color:var(--c-text-secondary); margin-top:6px; }
+.card .hint { margin-top:8px; }
+.card .ehint { margin-top:8px; }
+.mcore { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:12px; }
+.mcore .cr:last-child { border-bottom:none; }
+.ann { font-size:12px; color:var(--c-text-secondary); max-width:300px; }
+.ann b { color:var(--c-text-heading); }
+.ann ol { padding-left:18px; margin:6px 0; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-rot" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></symbol>
+  <symbol id="i-blocks" viewBox="0 0 24 24"><rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+  <symbol id="i-flask" viewBox="0 0 24 24"><path d="M10 2v7.31"/><path d="M14 9.3V2"/><path d="M8.5 2h7"/><path d="M14 9.3a6.5 6.5 0 1 1-4 0"/></symbol>
+</svg>
+
+<div class="bar">
+  <h1>Админ-панель «Компоненты» · макет v1 · шаг 2c «Внутренней оптимизации»</h1>
+  <div class="tog" role="group" aria-label="Тема">
+    <button class="on" data-theme-set="light">Светлая</button>
+    <button data-theme-set="dark">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <h2 class="sec">1. Где живёт</h2>
+  <p class="note">Не новая точка входа, а переименованный пункт <b>«Подсистемы»</b> меню аватара (только <code>isAdmin</code>, серверная проверка роли на ручках). Панель «Локальные модели» живёт в правом рельсе рабочего места — это инструмент наблюдения за работой, а «Компоненты» — настройка инстанса, она стоит рядом с «Пользователями» и «MCP-серверами». Контейнер — <code>Modal</code> <code>MODAL_W.wide</code> (720): таблице с колонкой использования в 440 тесно.</p>
+  <div class="row">
+    <div class="menu" aria-label="Меню аватара (фрагмент для админа)">
+      <div class="mcap">Администрирование</div>
+      <div class="mi"><svg class="i"><use href="#i-users"/></svg>Пользователи</div>
+      <div class="mi hl"><svg class="i"><use href="#i-blocks"/></svg>Компоненты</div>
+      <div class="mi"><svg class="i"><use href="#i-plug"/></svg>MCP-серверы</div>
+      <div class="mi"><svg class="i"><use href="#i-chart"/></svg>Модели и расход</div>
+      <div class="msep"></div>
+      <div class="mi"><svg class="i"><use href="#i-flask"/></svg>Эксперименты</div>
+    </div>
+    <div class="ann">
+      <b>Почему не рядом с «Локальными моделями».</b> Рельса — про текущий проект и живые процессы; выключение компонента — про весь инстанс и следующий запуск. Положить тумблер инстанса в рельс проекта — значит обещать, что он «про этот проект».
+      <ol>
+        <li>Иконка <code class="mono">Blocks</code> (lucide), подпись «Компоненты».</li>
+        <li>Счётчика на пункте меню нет: ожидающие перезапуска изменения видны внутри.</li>
+      </ol>
+    </div>
+  </div>
+
+  <h2 class="sec">2. Основное состояние · десктоп</h2>
+  <p class="note">Живой макет: тумблеры кликаются. Выключение компонента с обращениями за сутки — через подтверждение; изменённая строка подсвечивается тоном warning и получает надпись «Вступит в силу после перезапуска»; плашка сверху считает изменения. Строка «Архитектура» показывает ошибку записи, «Плагины» — запись в процессе.</p>
+  <div class="stage">
+    <div class="modal" role="dialog" aria-labelledby="dlg-t" style="max-height:none">
+      <div class="mh">
+        <div class="t">
+          <h3 id="dlg-t">Компоненты</h3>
+          <p>Разделы продукта для всего инстанса. Изменение записывается в настройки сервера и вступает в силу после его перезапуска.</p>
+        </div>
+        <button class="xbtn" aria-label="Закрыть"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="mb" id="desk"></div>
+    </div>
+  </div>
+
+  <h2 class="sec">3. Подтверждение выключения</h2>
+  <p class="note">Только если у компонента есть обращения за последние сутки. Без использования выключение тихое (его и так можно вернуть тем же тумблером до перезапуска). Включение — всегда без вопросов.</p>
+  <div class="stage">
+    <div class="confirm" role="alertdialog" aria-labelledby="cf-t">
+      <h4 id="cf-t">Выключить «Редактор звука»?</h4>
+      <div class="fact"><svg class="i s14"><use href="#i-warn"/></svg><span>Им пользовались: <b>37 обращений за сутки</b>, последнее — 12 минут назад.</span></div>
+      <p>После перезапуска сервера раздел, его панели и инструменты агента пропадут у всех пользователей. Файлы на диске останутся: включите компонент обратно — всё вернётся.</p>
+      <p style="color:var(--c-text-secondary);font-size:12px;margin:0">До перезапуска всё работает как сейчас, и передумать можно тем же тумблером.</p>
+      <div class="acts"><button class="btn ghost">Отмена</button><button class="btn danger">Выключить</button></div>
+    </div>
+  </div>
+
+  <h2 class="sec">4. Загрузка, пусто, ошибка загрузки</h2>
+  <div class="row">
+    <div>
+      <p class="cap">Загрузка (скелетон строк)</p>
+      <div class="modal" style="width:440px">
+        <div class="mh"><div class="t"><h3>Компоненты</h3></div></div>
+        <div class="mb" aria-busy="true">
+          <div class="th" style="grid-template-columns:minmax(0,1fr) 90px 52px"><span>Компонент</span><span>Использование</span><span></span></div>
+          <div id="skel"></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">Пусто: нет отключаемых компонентов</p>
+      <div class="modal" style="width:440px">
+        <div class="mh"><div class="t"><h3>Компоненты</h3></div></div>
+        <div class="mb">
+          <div class="empty">
+            <svg class="i s24"><use href="#i-blocks"/></svg>
+            <div class="et">Отключаемых компонентов нет</div>
+            <div class="es">Сервер не сообщил ни одного компонента, который можно выключить. Ядро работает всегда — его список ниже.</div>
+          </div>
+          <div class="grp"><svg class="i s12"><use href="#i-lock"/></svg>Ядро · 5<span class="ln"></span></div>
+          <div class="cr"><b>Сессии и чат</b><span class="bd neutral">Часть ядра</span></div>
+          <div class="cr"><b>Проекты</b><span class="bd neutral">Часть ядра</span></div>
+          <div class="cr" style="border-bottom:none;color:var(--c-text-muted);font-size:12px">…ещё 3</div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <p class="cap">Ошибка загрузки списка</p>
+      <div class="modal" style="width:440px">
+        <div class="mh"><div class="t"><h3>Компоненты</h3></div></div>
+        <div class="mb">
+          <div class="empty">
+            <svg class="i s24" style="color:var(--c-danger-text)"><use href="#i-alert"/></svg>
+            <div class="et">Не удалось загрузить список</div>
+            <div class="es">Сервер не ответил. Состояние компонентов это не меняет — попробуйте ещё раз.</div>
+            <button class="btn ghost sm">Повторить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">5. Мобила · 360 CSS · карточки вместо таблицы</h2>
+  <p class="note">Тот же <code>Modal</code> уходит в bottom-sheet. Таблица разворачивается в карточки: имя и тумблер в одной строке (тумблер всегда справа, зона нажатия добита до 41 px), ключ и статус под ним, использование одной строкой. Плашка изменений прилипает к верху прокрутки. Тумблеры живые и связаны с десктопом.</p>
+  <div class="row">
+    <div class="phone"><div class="sheet" role="dialog" aria-label="Компоненты">
+      <div class="handle"></div>
+      <div class="mh">
+        <div class="t"><h3>Компоненты</h3><p>Для всего инстанса. Вступает в силу после перезапуска сервера.</p></div>
+        <button class="xbtn" aria-label="Закрыть"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="mb" id="mob"></div>
+    </div></div>
+    <div class="phone"><div class="sheet" style="max-height:62%">
+      <div class="handle"></div>
+      <div class="mb" style="padding-top:12px">
+        <h4 style="margin:0 0 8px;font-size:16px;color:var(--c-text-heading)">Выключить «Редактор звука»?</h4>
+        <div class="confirm" style="width:auto;box-shadow:none;padding:0;background:transparent">
+          <div class="fact"><svg class="i s14"><use href="#i-warn"/></svg><span>Им пользовались: <b>37 обращений за сутки</b>, последнее — 12 минут назад.</span></div>
+          <p>После перезапуска сервера раздел, его панели и инструменты агента пропадут у всех пользователей. Файлы на диске останутся.</p>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:16px">
+            <button class="btn danger" style="justify-content:center;height:44px">Выключить</button>
+            <button class="btn ghost" style="justify-content:center;height:44px">Отмена</button>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="ann">
+      <b>Подтверждение на мобиле</b> — тот же <code>ConfirmDialog</code>, он сам становится шторкой; кнопки в столбик высотой 44, опасное действие сверху, как в остальных шторках продукта.
+    </div>
+  </div>
+
+</div>
+
+<div class="ovl" id="ovl"><div class="confirm" role="alertdialog" aria-labelledby="ov-t">
+  <h4 id="ov-t"></h4>
+  <div class="fact"><svg class="i s14"><use href="#i-warn"/></svg><span id="ov-f"></span></div>
+  <p>После перезапуска сервера раздел, его панели и инструменты агента пропадут у всех пользователей. Файлы на диске останутся: включите компонент обратно — всё вернётся.</p>
+  <p style="color:var(--c-text-secondary);font-size:12px;margin:0">До перезапуска всё работает как сейчас, и передумать можно тем же тумблером.</p>
+  <div class="acts"><button class="btn ghost" id="ov-no">Отмена</button><button class="btn danger" id="ov-yes">Выключить</button></div>
+</div></div>
+
+<script>
+// Демонстрационные данные. configured — что записано в конфиге, runtime — что поднято в процессе.
+// last — минут назад (null — нет данных с запуска), day — обращений за сутки.
+const rows = [
+  { key:'imageeditor', title:'Редактор картинок', desc:'Правка картинок проекта, версии, чат картинки с агентом.', configured:true,  runtime:true,  last:3,     day:3412 },
+  { key:'notes',       title:'Заметки',           desc:'Личный vault и заметки проектов, связи и граф.',           configured:true,  runtime:true,  last:1,     day:1240 },
+  { key:'plugins',     title:'Плагины',           desc:'Пакеты владельца: навыки, команды, панели.',               configured:true,  runtime:true,  last:48,    day:214, busy:true },
+  { key:'audioeditor', title:'Редактор звука',    desc:'Озвучка, музыка, обработка и склейка звука.',              configured:false, runtime:true,  last:12,    day:37 },
+  { key:'video',       title:'Эфиры и YouTube',   desc:'Телеканалы и лента подписок поверх страниц.',              configured:true,  runtime:false, last:null,  day:0 },
+  { key:'videoeditor', title:'Редактор видео',    desc:'Сцены между двумя кадрами и фильм из них.',                configured:true,  runtime:true,  last:31680, day:0 },
+  { key:'knowledge',   title:'Знания',            desc:'Базы знаний Dify и поиск по ним.',                         configured:false, runtime:false, last:null,  day:0 },
+  { key:'architecture',title:'Архитектура',       desc:'C4-схема проекта в Viaduct.',                              configured:true,  runtime:true,  last:2900,  day:0, err:true },
+];
+const core = [
+  ['sessions','Сессии и чат'], ['projects','Проекты'], ['tasks','Задачи'], ['auth','Вход и пользователи'], ['files','Файлы проекта'],
+];
+
+const nf = n => n.toLocaleString('ru-RU');
+function ago(m) {
+  if (m === null) return null;
+  if (m < 1) return 'сейчас';
+  if (m < 60) return m + ' мин назад';
+  if (m < 1440) return Math.round(m / 60) + ' ч назад';
+  const d = Math.round(m / 1440);
+  return d + ' ' + (d % 10 === 1 && d % 100 !== 11 ? 'день' : (d % 10 >= 2 && d % 10 <= 4 && (d % 100 < 12 || d % 100 > 14) ? 'дня' : 'дней')) + ' назад';
+}
+function status(r) {
+  if (r.configured === r.runtime) return r.runtime ? ['success','Работает',true] : ['neutral','Выключен',true];
+  return ['warning', r.configured ? 'Включится' : 'Выключится', false];
+}
+function badge(r) {
+  const [tone, label, dot] = status(r);
+  return `<span class="bd ${tone}">${dot ? '<i></i>' : '<svg class="i s12"><use href="#i-rot"/></svg>'}${label}</span>`;
+}
+function usage(r) {
+  const a = ago(r.last);
+  if (a === null) return `<div class="us"><div class="a idle">—</div><div class="b">нет данных с запуска</div></div>`;
+  return `<div class="us"><div class="a${r.day ? '' : ' idle'}">${a}</div><div class="b">${nf(r.day)} за сутки</div></div>`;
+}
+function toggle(r, i) {
+  const busy = r.busy ? ' aria-disabled="true"' : '';
+  return `<span class="tgz"><button class="tg" role="switch" aria-checked="${r.configured}" aria-label="Компонент ${r.title}"${busy} data-i="${i}"></button></span>`;
+}
+function pendingHint(r, i) {
+  if (r.configured === r.runtime) return '';
+  const now = r.runtime ? 'сейчас ещё работает' : 'сейчас выключен';
+  return `<div class="hint"><svg class="i s14"><use href="#i-rot"/></svg>Вступит в силу после перезапуска · <span class="now">${now}</span> · <button class="lnk" data-revert="${i}">Вернуть</button></div>`;
+}
+function errHint(r, i) {
+  if (!r.err) return '';
+  return `<div class="ehint"><div class="notice danger" role="alert" style="padding:8px 10px"><svg class="i s14"><use href="#i-warn"/></svg>
+    <div><div class="nt" style="font-size:12px">Не удалось записать настройку</div><div class="nb">Нет прав на запись <span class="mono">appsettings.Local.json</span>. Положение не изменилось.</div></div>
+    <button class="btn ghost sm na" data-retry="${i}">Повторить</button></div></div>`;
+}
+function banner(mobile) {
+  const n = rows.filter(r => r.configured !== r.runtime).length;
+  if (!n) return '';
+  const w = n === 1 ? 'изменение ждёт' : (n < 5 ? 'изменения ждут' : 'изменений ждут');
+  const list = rows.filter(r => r.configured !== r.runtime).map(r => `«${r.title}» ${r.configured ? 'включится' : 'выключится'}`).join(', ');
+  return `<div class="sticky"><div class="notice" role="status"><svg class="i"><use href="#i-rot"/></svg>
+    <div class="nx"><div class="nt">${n} ${w} перезапуска сервера</div>
+    <div class="nb">Записано в настройки. До перезапуска всё работает по-прежнему: ${list}.</div>
+    ${mobile ? '' : '<div class="nf">Кнопки перезапуска здесь нет: рестарт обрывает идущие ходы всех пользователей — выберите момент сами.</div>'}</div>
+    <button class="btn ghost sm na" data-revert-all>Отменить ${n === 1 ? 'изменение' : 'все'}</button></div></div>`;
+}
+function coreDesk() {
+  return `<div class="grp"><svg class="i s12"><use href="#i-lock"/></svg>Ядро · ${core.length} · работает всегда<span class="ln"></span></div>
+  <div class="core">${core.map(([k,t]) => `<div class="cr" title="Часть ядра — отключить нельзя"><b>${t}</b><span class="k">${k}</span><span class="bd neutral"><svg class="i s12"><use href="#i-lock"/></svg>Часть ядра</span></div>`).join('')}</div>`;
+}
+function renderDesk() {
+  const body = rows.map((r, i) => {
+    const cls = ['tr', r.configured !== r.runtime ? 'pending' : '', r.err ? 'err' : ''].join(' ');
+    return `<div class="${cls}">
+      <div><div class="nm"><b>${r.title}</b><span class="k">${r.key}</span></div><div class="ds">${r.desc}</div></div>
+      ${usage(r)}
+      <div>${badge(r)}${r.busy ? '<div class="busy" style="margin-top:6px"><span class="spin"></span>Записываю…</div>' : ''}</div>
+      <div class="sw">${toggle(r, i)}</div>
+      ${pendingHint(r, i)}${errHint(r, i)}
+    </div>`;
+  }).join('');
+  document.getElementById('desk').innerHTML = banner(false) +
+    `<div class="th"><span>Компонент</span><span>Использование</span><span>Состояние</span><span>Вкл.</span></div>` + body + coreDesk() +
+    `<div class="foot">Значение пишется ключом <code>Subsystems:{Key}:Enabled</code> в машинный конфиг сервера. Использование — с последнего запуска процесса.</div>`;
+}
+function renderMob() {
+  const cards = rows.map((r, i) => {
+    const cls = ['card', r.configured !== r.runtime ? 'pending' : '', r.err ? 'err' : ''].join(' ');
+    const a = ago(r.last);
+    const us = a === null ? 'нет данных с запуска' : `${a} · ${nf(r.day)} за сутки`;
+    return `<div class="${cls}">
+      <div class="top"><b>${r.title}</b>${r.busy ? '<span class="spin"></span>' : ''}${toggle(r, i)}</div>
+      <div class="mid"><span class="k">${r.key}</span>${badge(r)}</div>
+      <div class="us2">${us}</div>
+      ${pendingHint(r, i)}${errHint(r, i)}
+    </div>`;
+  }).join('');
+  const mcore = `<div class="grp"><svg class="i s12"><use href="#i-lock"/></svg>Ядро · ${core.length}<span class="ln"></span></div>
+    <div class="mcore">${core.map(([k,t]) => `<div class="cr"><b>${t}</b><span class="bd neutral"><svg class="i s12"><use href="#i-lock"/></svg>Часть ядра</span></div>`).join('')}</div>`;
+  document.getElementById('mob').innerHTML = banner(true) + `<div class="cards">${cards}</div>` + mcore;
+}
+function render() { renderDesk(); renderMob(); }
+
+let pendingOff = null;
+document.addEventListener('click', e => {
+  const t = e.target.closest('[data-i],[data-revert],[data-revert-all],[data-retry],[data-theme-set]');
+  if (!t) return;
+  if (t.dataset.themeSet) {
+    document.documentElement.dataset.theme = t.dataset.themeSet;
+    document.querySelectorAll('[data-theme-set]').forEach(b => b.classList.toggle('on', b === t));
+    return;
+  }
+  if (t.hasAttribute('data-revert-all')) { rows.forEach(r => r.configured = r.runtime); return render(); }
+  if (t.dataset.revert) { const r = rows[+t.dataset.revert]; r.configured = r.runtime; return render(); }
+  if (t.dataset.retry) { rows[+t.dataset.retry].err = false; return render(); }
+  const r = rows[+t.dataset.i];
+  if (r.busy) return;
+  // Выключаем живой компонент, которым пользовались за сутки, — сначала подтверждение.
+  if (r.configured && r.runtime && r.day > 0) {
+    pendingOff = r;
+    document.getElementById('ov-t').textContent = `Выключить «${r.title}»?`;
+    document.getElementById('ov-f').innerHTML = `Им пользовались: <b>${nf(r.day)} ${r.day % 10 === 1 && r.day % 100 !== 11 ? 'обращение' : 'обращений'} за сутки</b>, последнее — ${ago(r.last)}.`;
+    document.getElementById('ovl').classList.add('open');
+    document.getElementById('ov-yes').focus();
+    return;
+  }
+  r.configured = !r.configured; r.err = false; render();
+});
+document.getElementById('ov-no').onclick = () => { pendingOff = null; document.getElementById('ovl').classList.remove('open'); };
+document.getElementById('ov-yes').onclick = () => { if (pendingOff) pendingOff.configured = false; pendingOff = null; document.getElementById('ovl').classList.remove('open'); render(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.getElementById('ov-no').click(); });
+
+document.getElementById('skel').innerHTML = [70, 55, 80, 60].map(w => `<div class="tr" style="grid-template-columns:minmax(0,1fr) 90px 52px">
+  <div><div class="sk" style="width:${w}%;height:14px"></div><div class="sk" style="width:${w + 15}%;margin-top:6px"></div></div>
+  <div><div class="sk" style="width:70%"></div><div class="sk" style="width:50%;margin-top:6px"></div></div>
+  <div class="sk" style="width:42px;height:25px;border-radius:999px"></div></div>`).join('');
+const q = new URLSearchParams(location.search).get('theme');
+if (q) document.querySelector(`[data-theme-set="${q}"]`)?.click();
+render();
+</script>
+</body>
+</html>

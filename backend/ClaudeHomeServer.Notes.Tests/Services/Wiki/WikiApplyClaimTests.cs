@@ -234,6 +234,25 @@ public class WikiApplyClaimTests : IDisposable
     }
 
     [Fact]
+    public async Task Синтез_СозданиеKindRule_ВидRuleИДвеСноски()
+    {
+        // Мутация «вид не из op.Kind» (в рендере создания писать type: topic/state вместо Kind):
+        // Contain("type: rule") краснеет.
+        await WriteCardAndPage();
+        const string NewPage = "Общее/Правило-сборки.md";
+        var pkg = CreateAccepted(Claim(WikiPackage.OpCreate, NewPage, Claim1,
+            [Quote, "остаться на Windows"], kind: WikiFrontmatter.TypeRule));
+
+        var r = await _sut.PrepareAsync(User, pkg, Ctx);
+
+        r.Ready.Should().BeTrue(r.Reason);
+        var content = r.Rendered.Single(d => d.Path == NewPage).Content;
+        content.Should().Contain("type: rule").And.NotContain("type: state").And.NotContain("as_of:");
+        content.Should().Contain(Claim1 + " [^s1][^s2]");
+        content.Should().Contain("«" + Quote + "»").And.Contain("«остаться на Windows»");
+    }
+
+    [Fact]
     public async Task Синтез_ТекстНеРавенClaim_Отказ()
     {
         await WriteCardAndPage();

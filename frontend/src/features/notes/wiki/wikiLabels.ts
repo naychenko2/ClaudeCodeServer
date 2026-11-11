@@ -20,10 +20,12 @@ export const PAGE_STATUS: Record<string, { tone: BadgeTone; text: string; title:
   drift: { tone: 'danger', text: 'дрейф', title: 'Файл изменён мимо Хранителя' },
 };
 
-// Типы страниц — WikiFrontmatter.TypeValues
+// Типы страниц — WikiFrontmatter.TypeValues (десять: rule/term/state — ADR-039, решение 3;
+// без них страница считала валидную шапку неразобранной — дефект d7ea8ba0)
 export const PAGE_TYPE: Record<string, string> = {
   overview: 'Обзор', topic: 'Тема', entity: 'Сущность', concept: 'Понятие',
   decision: 'Решение', chronicle: 'Хроника', source: 'Источник',
+  rule: 'Правило', term: 'Термин', state: 'Состояние',
 };
 
 // ─── Согласование по числу ───

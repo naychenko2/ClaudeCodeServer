@@ -1,4 +1,4 @@
-import { test, expect, type APIRequestContext, type Page } from '@playwright/test';
+import { test, expect, type APIRequestContext, type BrowserContext, type Page } from '@playwright/test';
 import { api, collectConsoleErrors, login, type Api } from './helpers';
 
 // Приёмка фичи «Упрощение раздела «Фичи»» (FS-QA). Фикстура ставится файлами в data стенда
@@ -12,7 +12,6 @@ const AFTERMERGE = 'qa-fs · после мержа';
 const MERGE = 'qa-fs · ждёт мержа';
 const WAIT = 'qa-fs · ждёт тебя';
 const ERROR = 'qa-fs · стоит';
-const RUNNING = 'qa-fs · в работе';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -490,7 +489,7 @@ test('замеры: страница фичи на 360 и 1280', async ({ page, 
   expect(errors.filter(e => !e.includes('ERR_NETWORK_CHANGED')), 'в консоли не должно быть ошибок').toEqual([]);
 });
 
-async function measureFile(page: Page, width: number, context: any) {
+async function measureFile(page: Page, width: number, context: BrowserContext) {
   const errors = collectConsoleErrors(page);
   await context.addInitScript(tk => localStorage.setItem('cc_token', tk as string), token);
   const rich = (await features()).find(f => f.title === RICH)!;

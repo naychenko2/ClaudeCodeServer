@@ -217,6 +217,18 @@ public class LocalActionRoutingTests
         Assert.Equal(2048, router.ProfileFor(LocalActionCatalog.DocSummary).NumPredict);
     }
 
+    // Пер-местный NumCtx (сверка Марка, С2-доработка Ш7): профильное окно Large (16384)
+    // резал бы вход в 35k по num_ctx — для llama-server/Strata это бюджет обрезки промпта.
+    // Места вики получают 65536; другие места Large остаются с профильным 16384.
+    [Fact]
+    public void ProfileFor_ПерМестныйNumCtxРасширяетОкноВики()
+    {
+        var router = Router(new() { ["Ollama:Model"] = "qwen3:14b" });
+        foreach (var key in new[] { LocalActionCatalog.WikiIngest, LocalActionCatalog.WikiNightly })
+            Assert.Equal(65_536, router.ProfileFor(key).NumCtx);
+        Assert.Equal(16_384, router.ProfileFor(LocalActionCatalog.DocSummary).NumCtx);
+    }
+
     // --- Админские оверрайды маршрута (рантайм-переключение из UI) ---
 
     [Fact]

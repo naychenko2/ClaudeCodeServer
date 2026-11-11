@@ -226,17 +226,19 @@ public sealed class LocalActionRouter
 
     public CheapProfileSpec ProfileSpec(CheapProfile profile) => _profiles[profile];
 
-    // Профиль места с учётом пер-местных ЛОКАЛЬНЫХ лимитов каталога (LocalAction.NumPredict /
-    // TimeoutMs): пер-местное значение сильнее профиля и переопределения Ollama:Profiles —
-    // локальная пара к CloudNumPredictFor/CloudTimeoutMsFor, единственная точка склейки
-    // (потребители — CheapTextRunner, TimeoutMsFor — берут лимиты только отсюда).
+    // Профиль места с учётом пер-местных ЛОКАЛЬНЫХ лимитов каталога (LocalAction.NumCtx /
+    // NumPredict / TimeoutMs): пер-местное значение сильнее профиля и переопределения
+    // Ollama:Profiles — локальная сторона к CloudNumPredictFor/CloudTimeoutMsFor,
+    // единственная точка склейки (потребители — CheapTextRunner, TimeoutMsFor — берут
+    // лимиты только отсюда).
     public CheapProfileSpec ProfileFor(string actionKey)
     {
         var action = LocalActionCatalog.Find(actionKey);
         var spec = _profiles[action?.Profile ?? CheapProfile.Text];
-        if (action?.NumPredict is not null || action?.TimeoutMs is not null)
+        if (action?.NumCtx is not null || action?.NumPredict is not null || action?.TimeoutMs is not null)
             spec = spec with
             {
+                NumCtx = action.NumCtx ?? spec.NumCtx,
                 NumPredict = action.NumPredict ?? spec.NumPredict,
                 TimeoutMs = action.TimeoutMs ?? spec.TimeoutMs,
             };

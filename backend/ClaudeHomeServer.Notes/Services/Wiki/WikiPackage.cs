@@ -76,7 +76,9 @@ public sealed record WikiPackage
 
     /// <summary>Допустимые переходы статуса. poza таблицей переходов нет: «недопустимый
     /// переход — отказ» (S4a).
-    /// checking → proposed | rejected_by_checks: вердикт проверок кода.
+    /// checking → proposed | rejected_by_checks: вердикт проверок кода; → stale: прежняя
+    ///   попытка заменена новым разбором того же окна до вердикта (дефект 03a50f53) —
+    ///   из живых вызывающих ставит его только гашение в Create.
     /// proposed → accepted | partially_accepted | rejected: решение человека по спорным
     ///   операциям (S4a); → applying: неспорные применяет код сам (ADR-035, решение 5);
     ///   → stale: база ops изменилась, авто-rebase нет (решение 4).
@@ -92,7 +94,7 @@ public sealed record WikiPackage
     public static readonly IReadOnlyDictionary<string, string[]> Transitions =
         new Dictionary<string, string[]>
         {
-            [StatusChecking] = [StatusProposed, StatusRejectedByChecks],
+            [StatusChecking] = [StatusProposed, StatusRejectedByChecks, StatusStale],
             [StatusProposed] = [StatusAccepted, StatusPartiallyAccepted, StatusRejected, StatusApplying, StatusStale],
             [StatusAccepted] = [StatusApplying, StatusStale],
             [StatusPartiallyAccepted] = [StatusApplying, StatusStale],

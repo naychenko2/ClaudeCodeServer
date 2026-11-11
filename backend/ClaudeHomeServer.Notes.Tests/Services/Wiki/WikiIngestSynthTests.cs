@@ -126,7 +126,9 @@ public class WikiIngestSynthTests : IDisposable
     private IReadOnlyList<WikiPackage> PackagesOnDisk() => WikiPackageStore.List(Root).Packages;
 
     // 20 открытых пакетов на всю вики (лимит ADR-035, решение 4): следующий Create отказан
-    // (CodeLimit) — так ставится сбой хранилища пакета на живом пути разбора.
+    // (CodeLimit) — так ставится сбой хранилища пакета на живом пути разбора. Окна у пакетов
+    // разные: на одном окне двух открытых попыток быть не может (гашение, дефект 03a50f53),
+    // одинаковая ref ломала бы саму фикстуру.
     private void FillOpenPackages()
     {
         for (var i = 0; i < WikiPackage.MaxOpenPackages; i++)
@@ -135,7 +137,7 @@ public class WikiIngestSynthTests : IDisposable
             {
                 Id = WikiPackageStore.NewId(),
                 Section = Section,
-                Sources = [new WikiPackage.SourceRef("session", "session:s0#m1-1")],
+                Sources = [new WikiPackage.SourceRef("session", $"session:s{i}#m1-1")],
                 Operations =
                 [
                     new WikiPackage.Operation

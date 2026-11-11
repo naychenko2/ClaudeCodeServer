@@ -71,6 +71,7 @@ public class WikiPackageStoreTests : IDisposable
     // Вся таблица допустимых переходов (ADR-035, решение 4).
     [InlineData(WikiPackage.StatusChecking, WikiPackage.StatusProposed)]
     [InlineData(WikiPackage.StatusChecking, WikiPackage.StatusRejectedByChecks)]
+    [InlineData(WikiPackage.StatusChecking, WikiPackage.StatusStale)] // заменён новым разбором окна (дефект 03a50f53)
     [InlineData(WikiPackage.StatusProposed, WikiPackage.StatusAccepted)]
     [InlineData(WikiPackage.StatusProposed, WikiPackage.StatusPartiallyAccepted)]
     [InlineData(WikiPackage.StatusProposed, WikiPackage.StatusRejected)]
@@ -487,6 +488,88 @@ public class WikiPackageStoreTests : IDisposable
         disk.CreatedAt.Should().NotBe(future).And.BeOnOrAfter(start);
     }
 
+    // ─── 10. Гашение прежних попыток того же окна (дефект 03a50f53) ───
+
+    [Fact]
+    public void ТриРазбораОдногоОкна_ПрежниеНеприменённыеПогашены_НеотменённыйРовноОдин()
+    {
+        // Каждая попытка одного окна писала новый файл, а старые лежали рядом (QA-2: три
+        // apply_failed на s1 m1-m110). Create нового пакета окна гасит прежние неприменённые
+        // попытки переходом в «stale». Мутация «убрать вызов SupersedeUnappliedOfSameSources
+        // из Create»: все три остаются открытыми — первая проверка краснеет.
+        var first = AtWindow(WikiPackage.StatusProposed);
+        var second = AtWindow(WikiPackage.StatusProposed);
+        var third = AtWindow(WikiPackage.StatusProposed);
+
+        ReadStatus(first).Should().Be(WikiPackage.StatusStale, "первая попытка заменена второй");
+        WikiPackageStore.TryRead(_root, first).Package!.StatusReason
+            .Should().Contain("заменён новым разбором", "причина гашения читается в карточке пакета");
+        ReadStatus(second).Should().Be(WikiPackage.StatusStale, "вторая заменена третьей");
+        ReadStatus(third).Should().Be(WikiPackage.StatusProposed);
+        OpenWindowOf(WindowRef).Should().Equal(new[] { third }, "на окно — один неотменённый пакет");
+    }
+
+    [Fact]
+    public void ПрименённыйРешённыйЧеловекомИТерминальный_НеГасятся_ДругоеОкноНеТронуто()
+    {
+        // Не трогать: применённый, решённый человеком (в том числе «proposed», где человек начал
+        // решать), уже терминальный («apply_failed» — из него перехода нет, он остаётся историей)
+        // и пакет другого окна. Мутация «расширить IsSupersedable на применённые/решённые/
+        // терминальные» — соответствующие проверки краснеют; «снять фильтр оконной ссылки»
+        // краснит лимитные тесты этого файла (20 открытых «chat-1» — не окно, они гашению
+        // не подлежат).
+        var applied = AtWindow(WikiPackage.StatusApplied);
+        var decidedByHuman = AtWindow(WikiPackage.StatusProposed, AppendOp(decision: WikiPackage.DecisionInbox));
+        WikiPackageStore.DecideOperation(_root, decidedByHuman, 0, true).Ok.Should().BeTrue();
+        var applyFailed = AtWindow(WikiPackage.StatusApplyFailed);
+        var halfDecided = AtWindow(WikiPackage.StatusProposed,
+            AppendOp(decision: WikiPackage.DecisionInbox), AppendOp("Общее/Z.md", WikiPackage.DecisionInbox));
+        WikiPackageStore.DecideOperation(_root, halfDecided, 0, true).Ok.Should().BeTrue();
+        var otherWindow = AtWindowRef(WikiPackage.StatusProposed, WindowRef2);
+
+        var fresh = WindowPkg();
+        WikiPackageStore.Create(_root, fresh).Ok.Should().BeTrue();
+
+        ReadStatus(applied).Should().Be(WikiPackage.StatusApplied, "применённый не гасится");
+        ReadStatus(decidedByHuman).Should().Be(WikiPackage.StatusAccepted, "решённый человеком не тронут");
+        ReadStatus(applyFailed).Should().Be(WikiPackage.StatusApplyFailed, "уже терминальный остаётся историей");
+        ReadStatus(halfDecided).Should().Be(WikiPackage.StatusProposed, "начатый человеком не затёрт кодом");
+        ReadStatus(otherWindow).Should().Be(WikiPackage.StatusProposed, "другое окно не тронуто");
+        // Открытыми остаются ровно те, что гашение не тронуло: начатый человеком, решённый
+        // человеком (его применение ещё впереди) и новый.
+        OpenWindowOf(WindowRef).Should().BeEquivalentTo(new[] { halfDecided, decidedByHuman, fresh.Id },
+            "гашение добирает только нерешённые попытки этого окна");
+    }
+
+    [Fact]
+    public async Task ДваПараллельныхСозданияОдногоОкна_ОдноГаситДругое_НеотменённыйРовноОдин()
+    {
+        // Гашение и запись — в одной критической секции (блок корня Create): второй Create под
+        // блоком видит первый пакет — тот ещё в «checking», и гасит его; поэтому «checking»
+        // гасится наравне. Мутация «перенести SupersedeUnappliedOfSameSources за WithCreateLock»:
+        // оба чтения происходят до обеих записей (первый пишет большой пакет — миллисекунды,
+        // второй читает пустой каталог — микросекунды внутри этого времени), оба не видят друг друга —
+        // открытых два, проверка краснеет. Оба старта от одного барьера (TaskCompletionSource,
+        // без Task.Delay); пакеты большие — пересечение гонки не случайна (тот же приём, что у
+        // параллельных решений).
+        var a = BigWindowPkg();
+        var b = BigWindowPkg();
+        var barrier = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = Task.Run(async () => { await barrier.Task; return WikiPackageStore.Create(_root, a); });
+        var second = Task.Run(async () => { await barrier.Task; return WikiPackageStore.Create(_root, b); });
+        barrier.SetResult();
+
+        var r1 = await first.WaitAsync(TimeSpan.FromSeconds(30));
+        var r2 = await second.WaitAsync(TimeSpan.FromSeconds(30));
+        r1.Ok.Should().BeTrue(r1.Reason);
+        r2.Ok.Should().BeTrue(r2.Reason);
+
+        var open = OpenWindowOf(WindowRef);
+        open.Should().HaveCount(1, "второе создание погасило первое: на окно — один неотменённый пакет");
+        ReadStatus(open[0] == a.Id ? b.Id : a.Id).Should().Be(WikiPackage.StatusStale,
+            "погашенный — тот, что был записан первым");
+    }
+
     // ─── Помощники ─────────────────────────────────────────────────────────
 
     private static WikiPackage Pkg(params WikiPackage.Operation[] ops) => new()
@@ -554,4 +637,41 @@ public class WikiPackageStoreTests : IDisposable
         res.State.Should().Be(WikiPackageFileState.Valid);
         return res.Package!.Status;
     }
+
+    // ─── Помощники гашения (дефект 03a50f53) ───
+
+    // Оконная ссылка того же формата, что ставит разбор чата и читает сноска
+    // (WikiPage.TryParseSessionRef): гашение работает по ней.
+    private const string WindowRef = "session:s1#m1-9";
+    private const string WindowRef2 = "session:s2#m1-9";
+
+    private static WikiPackage WindowPkg(string refPart = WindowRef, params WikiPackage.Operation[] ops) =>
+        Pkg(ops.Length == 0 ? [AppendOp()] : ops) with { Sources = [new WikiPackage.SourceRef("session", refPart)] };
+
+    private string AtWindow(string status, params WikiPackage.Operation[] ops) =>
+        AtWindowRef(status, WindowRef, ops);
+
+    private string AtWindowRef(string status, string refPart, params WikiPackage.Operation[] ops)
+    {
+        var pkg = WindowPkg(refPart, ops.Length == 0 ? [AppendOp()] : ops);
+        WikiPackageStore.Create(_root, pkg).Ok.Should().BeTrue();
+        foreach (var step in PathTo(status))
+            WikiPackageStore.Transition(_root, pkg.Id, step).Ok.Should().BeTrue($"{status}: {step}");
+        return pkg.Id;
+    }
+
+    // Большой пакет, как в тесте параллельных решений: его запись занимает миллисекунды, и два
+    // Create, стартовавшие от барьера, пересекаются не случайно.
+    private static WikiPackage BigWindowPkg()
+    {
+        var ops = new List<WikiPackage.Operation>(600);
+        for (var k = 0; k < 600; k++) ops.Add(AppendOp($"Общее/A{k:D3}.md"));
+        return WindowPkg(WindowRef, ops.ToArray());
+    }
+
+    // Неотменённые (открытые) пакеты одного окна.
+    private List<string> OpenWindowOf(string refPart) => WikiPackageStore.List(_root).Packages
+        .Where(p => p.Sources.Any(s => s.Origin == "session" && s.Ref == refPart) && WikiPackage.IsOpen(p.Status))
+        .Select(p => p.Id)
+        .ToList();
 }

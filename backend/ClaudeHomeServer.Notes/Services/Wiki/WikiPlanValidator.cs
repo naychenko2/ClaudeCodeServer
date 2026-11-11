@@ -112,8 +112,8 @@ public static class WikiPlanValidator
     }
 
     /// <summary>Тот же конвейер для операции синтеза: утверждение + цитаты (ADR-039).
-    /// Форма результата — как у Validate; принятая операция несёт Text = Claim, Claim,
-    /// Quotes, Kind (у create) и AsOf (только у state).</summary>
+    /// Форма результата — как у Validate; принятая операция несёт Text = Claim (утверждение
+    /// сложено в одну строку на входе), Claim, Quotes, Kind (у create) и AsOf (только у state).</summary>
     public static Result ValidateSynth(
         SynthPlan? plan,
         Source? source,
@@ -124,8 +124,17 @@ public static class WikiPlanValidator
     {
         if (plan is null || plan.Operations is null)
             return Run(null, true, source, sectionKey, upChain, sectionPages, context);
+        // Утверждение складывается в одну строку на входе, а не в RenderApply: Text = Claim,
+        // строка «Сводки», проверка чисел и дедуп должны видеть одну и ту же строку. Иначе
+        // меры (мера 2, числа) сверяются с многострочным, а на странице стоит разорванная
+        // строка: её верхняя половина — без сноски, и гейт отвергает весь пакет (дефект
+        // финала Б1, хвост 1a6a5cda). Формат страницы строчный — тот же помощник, что у
+        // хроники и цитат (WikiPage.OneLine). Дословность — отдельная мера и только по цитатам
+        // (QuoteMatcher.ContainsVerbatim по исходному тексту источника): утверждение своими
+        // словами её не касается.
         var units = plan.Operations
-            .Select(o => o is null ? null : new Unit(o.Op, o.Page, o.Target, null, o.Claim, o.Quotes, o.Kind, o.AsOf))
+            .Select(o => o is null ? null : new Unit(o.Op, o.Page, o.Target, null,
+                o.Claim is null ? null : WikiPage.OneLine(o.Claim), o.Quotes, o.Kind, o.AsOf))
             .ToList();
         return Run(units, true, source, sectionKey, upChain, sectionPages, context);
     }

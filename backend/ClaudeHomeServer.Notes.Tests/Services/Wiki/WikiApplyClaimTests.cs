@@ -317,6 +317,37 @@ public class WikiApplyClaimTests : IDisposable
         parsed.Model.Footnotes[2].Quote.Should().Contain("| прод | Linux |");
     }
 
+    // Дефект финала Б1 (хвост 1a6a5cda): многострочное УТВЕРЖДЕНИЕ — та же болезнь, что у
+    // цитат выше, только в claim. Складывается на входе ValidateSynth, а не в рендере: тогда
+    // Text = Claim, строка «Сводки», проверка чисел и дедуп видят одну и ту же строку.
+    // Путь — боевой: ValidateSynth → пакет из Accepted (WikiIngestService.cs:388-390) →
+    // проверка применения.
+    [Fact]
+    public async Task Синтез_МногострочныйClaim_СкладываетсяНаВходе_ПакетПрименяется()
+    {
+        await WriteCardAndPage();
+        const string MultiClaim = "Сборку переносят на Linux\nна второй машине";
+        var verdict = WikiPlanValidator.ValidateSynth(
+            new([new(WikiPackage.OpAppend, null, PagePath, MultiClaim, [Quote], null, null)]),
+            new(WikiGate.OriginSession, CardTitle, SourceText), Section, [],
+            [new(CardPath, CardFile), new(PagePath, PageBase)], new());
+        verdict.Rejected.Should().BeEmpty(string.Join("; ", verdict.Rejected.Select(i => i.Reason)));
+
+        var r = await _sut.PrepareAsync(User, CreateAccepted([.. verdict.Accepted]), Ctx);
+
+        // Мутация «убрать складывание на входе» краснит здесь же и с симптомом дефекта:
+        // верхняя половина утверждения остаётся в «Сводке» без сноски, и гейт отбивает пакет
+        // («утверждение в 'Сводка' без сноски»).
+        r.Ready.Should().BeTrue(r.Reason);
+        var content = r.Rendered.Single(d => d.Path == PagePath).Content;
+        content.Should().Contain("Сборку переносят на Linux на второй машине [^s2]");
+        var parsed = WikiPage.Parse(content);
+        parsed.Errors.Should().BeEmpty(string.Join("; ", parsed.Errors));
+        parsed.Model!.Sections.Single(s => s.Name == "Сводка").Lines.Should().HaveCount(2)
+            .And.Contain("Прежний план был остаться на Windows [^s1]")
+            .And.Contain("Сборку переносят на Linux на второй машине [^s2]");
+    }
+
     [Fact]
     public async Task Синтез_МногострочнаяЦитатаНеДословная_Отказ()
     {

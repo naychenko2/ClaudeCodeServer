@@ -346,6 +346,52 @@ public class WikiChatWindowReturnTests : IDisposable
         entry.Zone.Should().BeNull();
     }
 
+    // ── гонка 2 (MAJOR ревью a07db75e): прогон стартует ПОСЛЕ чтения истории откатом, но ДО
+    // его записи — откат всё равно последняя запись курсора ──
+
+    [Fact]
+    public async Task ПрогонНачатПослеЧтенияИстории_ОткатНеЗатёрт_КурсорFromMinus1()
+    {
+        AddSession();
+        SetHistory(ChatId, NineHistory());
+        SeedTriage(9);
+
+        // Барьер на TCS, без задержек: первый GetHistoryAsync (его делает откат) сигналит
+        // «дошёл до чтения истории» и стоит на hold, пока тест заведёт прогон той же сессии.
+        // В старой расстановке проверка _inFlight осталась бы ЗА этим барьером — прогон в неё
+        // не попал бы и затёр бы запись своим финальным AdvanceCursor.
+        var read = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _sessions.HistoryRead = read;
+        _sessions.HistoryHold = hold;
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var llm = new FakeLlm(("S", Synth(Claim1))) { GateA = gate };
+        var sut = Sut(llm);
+
+        var back = sut.ReturnWindowAsync(User, ChatId, 3);
+        SpinWait.SpinUntil(() => read.Task.IsCompleted, 5000).Should().BeTrue("откат реально дошёл до чтения истории");
+
+        var run = sut.AnalyzeAsync(User, ChatId);
+        SpinWait.SpinUntil(() => llm.Calls.Count > 0, 5000).Should().BeTrue("прогон реально в модели");
+
+        // Отпускаем по порядку: сначала путь отката к записи, потом прогон к своему курсору —
+        // после модели прогон пишет пакет, хронику и курсор, то есть длиннее короткого пути
+        // отката; этот порядок и есть сама гонка из ревью.
+        hold.SetResult();
+        gate.SetResult();
+
+        var analyzed = await run;
+        analyzed.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, analyzed.Reason);
+        (await back).Should().BeTrue("старт прогона не отменил откат");
+
+        // Мутация «вернуть проверку _inFlight в начало метода, вне замка записи» (старая
+        // расстановка): здесь 9 вместо 2 — финальный AdvanceCursor прогона затёр откат.
+        var entry = Entry();
+        entry.Cursor.Should().Be(2, "проверка и запись под одним замком: прогон, начатый после чтения истории, откат не затёр");
+        entry.Zone.Should().BeNull();
+    }
+
     // ── фейки — те же, что в WikiChatIngestTests ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -403,12 +449,26 @@ public class WikiChatWindowReturnTests : IDisposable
         public readonly List<Session> All = [];
         public readonly Dictionary<string, List<StoredMessage>> History = [];
 
+        // Барьер теста «прогон начат после чтения истории»: первый GetHistoryAsync (его делает
+        // откат) сигналит HistoryRead и стоит на HistoryHold, пока тест заведёт прогон.
+        // Последующие вызовы (их делает прогон) — без барьера.
+        public TaskCompletionSource? HistoryRead;
+        public TaskCompletionSource? HistoryHold;
+        private int _historyCalls;
+
         public Session? GetById(string id) => All.FirstOrDefault(s => s.Id == id);
         public IReadOnlyCollection<Session> GetAll() => All;
         public string? ResolveOwnerId(Session s) => s.OwnerId;
-        public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
-            Task.FromResult<IReadOnlyList<StoredMessage>>(
-                History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>());
+        public async Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)
+        {
+            if (HistoryRead is not null && Interlocked.Increment(ref _historyCalls) == 1)
+            {
+                HistoryRead.TrySetResult();
+                if (HistoryHold is not null)
+                    await HistoryHold.Task.ConfigureAwait(false);
+            }
+            return History.TryGetValue(sessionId, out var h) ? h : new List<StoredMessage>();
+        }
         public bool SetWikiMark(string sessionId, string? mark) => true;
     }
 

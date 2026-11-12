@@ -169,6 +169,33 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task InvalidateIncremental_ФайлВоВложенномWorktrees_НеПопадаетВГраф()
+    {
+        var service = _factory.Services.GetRequiredService<CodeGraphService>();
+        service.RegisterProvider(".cs", new FilesToNodesProvider());
+
+        var dir = Path.Combine(_factory.TempDir, "cgraph_wt_" + Guid.NewGuid().ToString("N")[..8]);
+        var worktree = Path.Combine(dir, ".worktrees", "x");
+        var src = Path.Combine(dir, "src");
+        Directory.CreateDirectory(worktree);
+        Directory.CreateDirectory(src);
+
+        var nested = Path.Combine(worktree, "Foo.cs");
+        var normal = Path.Combine(src, "Bar.cs");
+        await File.WriteAllTextAsync(nested, "public class Foo { }");
+        await File.WriteAllTextAsync(normal, "public class Bar { }");
+
+        service.InvalidateIncremental(dir, new[] { nested, normal });
+        await Task.Delay(500);
+
+        var snapshot = await service.GetSnapshotAsync(dir, CancellationToken.None);
+        snapshot.Should().NotBeNull();
+        snapshot!.Nodes.Select(n => n.SourceFile).Should()
+            .Contain("src/Bar.cs")
+            .And.NotContain(p => p.Contains(".worktrees"));
+    }
+
+    [Fact]
     public async Task InvalidateIncremental_ПоПутиОтдельногоДерева_ДоходитДоUpdateAsync()
     {
         var service = _factory.Services.GetRequiredService<CodeGraphService>();

@@ -507,4 +507,36 @@ public class CSharpGraphProviderTests : IDisposable
         HasEdge(graph, "Client", "Service", EdgeRelation.Calls).Should().BeTrue(
             "мусор не свалил detect в regex-fallback — граф построен через Roslyn с рёбрами");
     }
+
+    [Fact]
+    public async Task Build_ГлавныйКорень_НеБерётВложенныеWorktreesИAttachments()
+    {
+        var graph = await BuildAsync(
+            (".worktrees/x/Dup.cs", "public class WorktreeDup { }"),
+            (".cc-attachments/a/Att.cs", "public class AttachmentJunk { }"),
+            ("Client.cs", "public class Client { public Service Svc = new Service(); }"),
+            ("Service.cs", "public class Service { }"));
+
+        graph.Nodes.Values.Select(n => n.Label)
+            .Should().NotContain(new[] { "WorktreeDup", "AttachmentJunk" })
+            .And.Contain(new[] { "Client", "Service" });
+    }
+
+    [Fact]
+    public async Task Build_КореньСамогоWorktree_СтроитПолныйГрафСоСвязями()
+    {
+        // Корень вида <проект>/.worktrees/x: сверка идёт по пути относительно корня обхода,
+        // поэтому сам «.worktrees» в пути корня граф не выключает (ADR-003).
+        var wtRoot = Path.Combine(_tempDir, ".worktrees", "x");
+        Directory.CreateDirectory(wtRoot);
+        await File.WriteAllTextAsync(Path.Combine(wtRoot, "Client.cs"),
+            "public class Client { public Service Svc = new Service(); }");
+        await File.WriteAllTextAsync(Path.Combine(wtRoot, "Service.cs"), "public class Service { }");
+
+        var graph = await _provider.BuildAsync(wtRoot, CancellationToken.None);
+
+        graph.Nodes.Values.Select(n => n.Label).Should().Contain(new[] { "Client", "Service" });
+        HasEdge(graph, "Client", "Service", EdgeRelation.Calls).Should().BeTrue(
+            "ребро есть только у Roslyn-пути, regex-fallback рёбер не строит");
+    }
 }

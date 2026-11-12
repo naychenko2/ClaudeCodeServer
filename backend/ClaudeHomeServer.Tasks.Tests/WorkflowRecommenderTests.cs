@@ -179,10 +179,72 @@ public class WorkflowRecommenderTests : IDisposable
         // ключ этапа — его id, а не роль: в Skipped ровно тот токен, что вернула модель
         result!.Skipped.Should().Equal(new[] { "review-front" });
         _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal(new[] { "review-front" });
-        // промпт показывает этапы как id(роль, presence): модель отвечает тем же токеном,
-        // который потом читается по id
-        runner.LastPrompt.Should().Contain("review-front(review, optional)");
-        runner.LastPrompt.Should().Contain("review-back(review, optional)");
+        // промпт показывает этапы как id(роль, presence, после=[…]): модель отвечает тем же
+        // токеном, который потом читается по id (G5: виден и граф, а не только список ролей)
+        runner.LastPrompt.Should().Contain("review-back(review, optional, после=[step])");
+        runner.LastPrompt.Should().Contain("review-front(review, optional, после=[review-back])");
+    }
+
+    // G5: каталог для модели — id/роль/«после» каждого этапа после Normalize, то есть ровно тот
+    // граф, который построит подтверждение маршрута: параллельные ветки видно по общему «после»
+    [Fact]
+    public async Task Recommend_КаталогПресета_ИдРолиИПослеКаждогоЭтапа()
+    {
+        var preset = WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey);
+        var epic = Epic();
+        var runner = new StubRunner { Text = Answer(preset.Id) };
+
+        await MakeService(runner).RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        runner.LastPrompt.Should().Contain("step-back(step, on, после=[plan])");
+        runner.LastPrompt.Should().Contain("step-front(step, on, после=[plan])");
+        runner.LastPrompt.Should().Contain("qa-plan(qa, optional, после=[design])");
+        runner.LastPrompt.Should().Contain("qa(qa, optional, после=[review,qa-plan])");
+        // линейные пресеты остаются списком ролей: их «после» — предыдущий в списке
+        runner.LastPrompt.Should().Contain("final(final, on, после=[qa])");
+    }
+
+    // Устаревшее (G5): шаблон правили, пока модель думала, — id снятого этапа отбрасывается,
+    // предложение пишется без него (остальной список — по теперешним id шаблона)
+    [Fact]
+    public async Task Recommend_ИдЭтапаУбранПравкой_ИзSkippedОтброшен()
+    {
+        var tpl = GraphTemplate();
+        var epic = Epic();
+        var runner = new StubRunner { GateMode = true };
+        var service = MakeService(runner);
+
+        var running = service.RecommendAsync(epic.Id, Owner, CancellationToken.None);
+        var edited = _store.Get(tpl.Id, WorkflowTemplateScope.Global)!;
+        edited.Stages.RemoveAll(s => s.Id == "review-front");
+        _store.Save(edited, WorkflowTemplateScope.Global);
+        runner.Gates[0].SetResult(Answer(tpl.Id, "\"review-front\",\"review-back\""));
+
+        var result = await running;
+
+        result.Should().NotBeNull();
+        // id, которого в шаблоне уже нет, в предложение не попадает; остальное — по теперешним id
+        result!.Skipped.Should().Equal(new[] { "review-back" });
+        _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal(new[] { "review-back" });
+    }
+
+    // Шаблон удалили, пока модель думала: предложения нет — оно не может ссылаться на несуществующий
+    [Fact]
+    public async Task Recommend_ШаблонУдалёнПравкой_ПредложенияНет()
+    {
+        var tpl = GraphTemplate();
+        var epic = Epic();
+        var runner = new StubRunner { GateMode = true };
+        var service = MakeService(runner);
+
+        var running = service.RecommendAsync(epic.Id, Owner, CancellationToken.None);
+        _store.Delete(tpl.Id, WorkflowTemplateScope.Global);
+        runner.Gates[0].SetResult(Answer(tpl.Id, "\"review-front\""));
+
+        var result = await running;
+
+        result.Should().BeNull();
+        _tasks.GetById(epic.Id)!.WorkflowProposal.Should().BeNull();
     }
 
     // Роль вместо id: среди id этапов выбранного шаблона токена «review» нет — Skipped пустой.

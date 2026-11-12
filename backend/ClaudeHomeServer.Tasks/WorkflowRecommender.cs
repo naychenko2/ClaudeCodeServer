@@ -18,6 +18,11 @@ namespace ClaudeHomeServer.Services.Tasks;
 // отбрасывается; мусор/сбой модели — предложения нет, без исключения: рекомендация улучшает
 // создание фичи, её отсутствие — обычное рабочее состояние (маршрут выбирает человек).
 //
+// Каталог в промпте — id/роль/presence/«после» каждого этапа после WorkflowGraph.Normalize
+// (G5): модель видит граф, а не список ролей, и отвечает id этапа. Белые списки проверяются по
+// каталогу, перечитанному ПОСЛЕ ответа: правка или удаление шаблона, пока модель думала,
+// снимают и его id, и весь чужой шаблон, а не оставляют в предложении несуществующий этап.
+//
 // И7: пишет ТОЛЬКО epic.WorkflowProposal и только через TaskManager.SetWorkflowProposal;
 // epic.Workflow не трогает никогда. К приходу ответа человек уже подтвердил маршрут —
 // предложение не пишется: решение человека старше. Предложение — целый объект под замком
@@ -59,7 +64,11 @@ public sealed class WorkflowRecommender(
             return null;
         }
 
-        var proposal = ParseAndCut(raw, catalog);
+        // Каталог перечитываем ПОСЛЕ ответа: шаблон могли править или удалить, пока модель думала.
+        // Белый список тогда строится по теперешним id этапов — id, которого в шаблоне уже нет,
+        // в предложение не попадает (предложение, ссылающееся на снятый этап, подтверждается
+        // отказом на ручке B4b, а не тихим пропуском).
+        var proposal = ParseAndCut(raw, templates.List(epic.ProjectId));
         if (proposal is null)
         {
             log?.LogInformation("feature-workflow-recommend {Epic}: ответ модели не разобран или не прошёл белые списки", epicId);
@@ -89,6 +98,8 @@ public sealed class WorkflowRecommender(
         sb.AppendLine("скобках этапов), если по описанию фичи они не нужны (маленькая правка — снять design и qa);");
         sb.AppendLine("если снимать нечего — пустой массив.");
         sb.AppendLine("этапы с presence=on снять нельзя.");
+        sb.AppendLine("«после=[…]» — id предшественников этапа: несколько этапов с одним «после» идут параллельно,");
+        sb.AppendLine("снять такой этап — значит убрать одну из веток, остальные останутся связны.");
         sb.AppendLine();
         sb.AppendLine($"Название фичи: «{epic.Title}»");
         var description = epic.Description ?? "";
@@ -99,10 +110,13 @@ public sealed class WorkflowRecommender(
             sb.AppendLine(description);
         }
         sb.AppendLine();
-        sb.AppendLine("Шаблоны (id | название | описание | этапы id(роль, presence) в порядке маршрута):");
+        sb.AppendLine("Шаблоны (id | название | описание | этапы id(роль, presence, после=[id предшественников]) в порядке маршрута):");
         foreach (var entry in catalog)
         {
-            var stages = string.Join(", ", entry.Template.Stages.Select(s => $"{StageKey(s)}({s.Role}, {s.Presence})"));
+            // After берётся из Normalize: у линейного шаблона это «предыдущий в списке», у графового —
+            // явные рёбра. Модель видит ровно тот граф, который построит подтверждение маршрута (B4b).
+            var stages = string.Join(", ", WorkflowGraph.Normalize(entry.Template.Stages)
+                .Select(n => $"{n.Id}({n.Role}, {n.Presence}, после=[{string.Join(",", n.After)}])"));
             sb.AppendLine($"- {entry.Template.Id} | {entry.Template.Name} | {entry.Template.Description ?? ""} | {stages}");
         }
         return sb.ToString();

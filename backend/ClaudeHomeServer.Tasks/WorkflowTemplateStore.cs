@@ -37,6 +37,7 @@ public sealed class WorkflowTemplateStore
     public const int FormatVersion = 1;
     public const string FullCycleKey = "full-cycle";
     public const string FastTrackKey = "fast-track";
+    public const string ParallelCycleKey = "parallel-cycle";
 
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
@@ -112,10 +113,29 @@ public sealed class WorkflowTemplateStore
             (TaskRoles.Qa, WorkflowStagePresence.Off),
             (TaskRoles.Final, WorkflowStagePresence.On),
             (TaskRoles.Merge, WorkflowStagePresence.On)),
+        // Третий пресет — графовой формы (разрез 2 §1.10): две линии шага параллельно и
+        // отдельная ветка QA плана. Presence — по образцу full-cycle (съёмные там же, где у
+        // него); несъёмные (step/final/merge) — всегда «on», их требует WorkflowRules.
+        ParallelCycleKey => GraphPreset(key, "Параллельный цикл",
+            "Две линии работы: шаг по бэку и фронту параллельно, проверка плана — отдельной веткой.",
+            new() { Role = TaskRoles.Cut, Presence = WorkflowStagePresence.On },
+            new() { Role = TaskRoles.Design, Presence = WorkflowStagePresence.Optional },
+            new() { Role = TaskRoles.Plan, Presence = WorkflowStagePresence.On },
+            new()
+            {
+                Id = "qa-plan", Role = TaskRoles.Qa, Presence = WorkflowStagePresence.Optional,
+                After = ["design"], Specialty = PersonaSpecialty.Tester,
+            },
+            new() { Id = "step-back", Role = TaskRoles.Step, Lane = "back", After = ["plan"] },
+            new() { Id = "step-front", Role = TaskRoles.Step, Lane = "front", After = ["plan"] },
+            new() { Role = TaskRoles.Review, After = ["step-back", "step-front"] },
+            new() { Id = "qa", Role = TaskRoles.Qa, Presence = WorkflowStagePresence.Optional, After = ["review", "qa-plan"] },
+            new() { Role = TaskRoles.Final },
+            new() { Role = TaskRoles.Merge }),
         _ => throw new ArgumentException($"неизвестный встроенный пресет «{key}»", nameof(key)),
     };
 
-    public static readonly IReadOnlyList<string> BuiltInKeys = [FullCycleKey, FastTrackKey];
+    public static readonly IReadOnlyList<string> BuiltInKeys = [FullCycleKey, FastTrackKey, ParallelCycleKey];
 
     private static WorkflowTemplate Preset(string key, string name, string description,
         params (string Role, string Presence)[] stages) => new()
@@ -126,6 +146,21 @@ public sealed class WorkflowTemplateStore
         Version = 1,
         BuiltInKey = key,
         Stages = stages.Select(s => new WorkflowStage { Role = s.Role, Presence = s.Presence }).ToList(),
+    };
+
+    // Графовой пресет: в записи этапа — только то, что отличается от значения по умолчанию
+    // (id = роль — WorkflowGraph.Normalize; «после» = предыдущий в списке там же; Presence =
+    // «on» — в самом WorkflowStage). Порядок списка — топологический: After ссылается только
+    // на более ранние.
+    private static WorkflowTemplate GraphPreset(string key, string name, string description,
+        params WorkflowStage[] stages) => new()
+    {
+        Id = $"builtin-{key}",
+        Name = name,
+        Description = description,
+        Version = 1,
+        BuiltInKey = key,
+        Stages = [.. stages],
     };
 
     // Глобальные шаблоны, затем (если задан projectId) проектные. Копии.

@@ -38,11 +38,11 @@ public class WorkflowTemplateStoreTests : IDisposable
         act.Should().Throw<WorkflowTemplateException>().Which;
 
     [Fact]
-    public void НовыйСтор_ОтдаётОбаПресетаИзКода_ВалидныеПоПравилам()
+    public void НовыйСтор_ОтдаётВсеПресетыИзКода_ВалидныеПоПравилам()
     {
         var all = NewStore().List();
 
-        all.Select(e => e.Template.BuiltInKey).Should().Equal("full-cycle", "fast-track");
+        all.Select(e => e.Template.BuiltInKey).Should().Equal("full-cycle", "fast-track", "parallel-cycle");
         all.Should().OnlyContain(e => e.Scope == WorkflowTemplateScope.Global && e.Template.Version == 1);
         foreach (var e in all) WorkflowRules.Validate(e.Template).Should().BeEmpty();
 
@@ -186,6 +186,138 @@ public class WorkflowTemplateStoreTests : IDisposable
         Fail(() => store.ResetBuiltIn("нет-такого")).Kind.Should().Be(WorkflowTemplateErrorKind.NotFound);
     }
 
+    // G5 (посев пресетов): каждый встроенный пресет валиден и разрешим при ЛЮБОМ снятии
+    // optional-этапов — ни одна ветка не должна оставаться без стока; у линейных пресетов
+    // id этапа после Normalize равен роли (их форма не меняется).
+    [Fact]
+    public void ВсеВстроенныеПресеты_ВалидныИРазрешимы_ПриЛюбомСнятииOptional()
+    {
+        WorkflowTemplateStore.BuiltInKeys.Should().Equal("full-cycle", "fast-track", "parallel-cycle");
+
+        foreach (var key in WorkflowTemplateStore.BuiltInKeys)
+        {
+            var preset = WorkflowTemplateStore.BuiltInPreset(key);
+            WorkflowRules.Validate(preset).Should().BeEmpty($"пресет «{key}»");
+
+            var nodes = WorkflowGraph.Normalize(preset.Stages);
+            var optional = nodes.Where(n => n.Presence == WorkflowStagePresence.Optional).Select(n => n.Id).ToList();
+
+            for (var mask = 0; mask < (1 << optional.Count); mask++)
+            {
+                var skipped = optional.Where((_, bit) => (mask >> bit & 1) == 1).ToList();
+                var label = $"пресет «{key}», снято [{string.Join(",", skipped)}]";
+                var route = WorkflowGraph.Resolve(preset, skipped);
+
+                WorkflowGraph.DanglingIds(route).Should().BeEmpty($"{label}: ветка обязана сходиться в общий сток");
+                route.Select(s => s.Id).Should().BeEquivalentTo(
+                    nodes.Where(n => n.Presence != WorkflowStagePresence.Off && !skipped.Contains(n.Id)).Select(n => n.Id),
+                    $"{label}: в маршруте ровно неснятые этапы");
+            }
+        }
+
+        foreach (var key in new[] { WorkflowTemplateStore.FullCycleKey, WorkflowTemplateStore.FastTrackKey })
+            WorkflowGraph.Normalize(WorkflowTemplateStore.BuiltInPreset(key).Stages)
+                .Should().OnlyContain(n => n.Id == n.Role, $"пресет «{key}» линейный: id этапа = роль");
+    }
+
+    // G5: форма графа parallel-cycle (разрез 2 §1.10) — две линии шага в одной колонке,
+    // ветка проверки плана рядом с планом, общий QA правее ревью. Тот же рисунок, что в тестах
+    // фронта (frontend/src/features/workflowTemplates/workflowGraphModel.test.ts).
+    [Fact]
+    public void ParallelCycle_ДвеЛинииШагаВОднойКолонке_РёбраПоРазрезу()
+    {
+        var preset = WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey);
+        var route = WorkflowGraph.Resolve(preset, []);
+        var columns = WorkflowGraph.Columns(route);
+
+        route.Select(s => s.Id).Should().Equal(
+            "cut", "design", "plan", "qa-plan", "step-back", "step-front", "review", "qa", "final", "merge");
+        WorkflowGraph.DanglingIds(route).Should().BeEmpty();
+
+        columns["step-back"].Should().Be(columns["step-front"], "две линии шага — одна колонка");
+        columns["qa-plan"].Should().Be(columns["plan"], "ветка проверки плана идёт рядом с планом");
+        columns["qa"].Should().BeGreaterThan(columns["review"], "qa сходится из ревью и ветки плана");
+        columns["final"].Should().BeGreaterThan(columns["qa"]);
+        columns["merge"].Should().BeGreaterThan(columns["final"]);
+
+        route.Single(s => s.Id == "review").After.Should().Equal("step-back", "step-front");
+        route.Single(s => s.Id == "qa").After.Should().Equal("review", "qa-plan");
+        // Presence — по образцу full-cycle: съёмные те же роли (design, qa) плюс своя ветка
+        // проверки плана, несъёмные (step/final/merge) — всегда «on»
+        preset.Stages.Select(s => (s.Id ?? s.Role, s.Presence)).Should().Equal(
+            ("cut", "on"), ("design", "optional"), ("plan", "on"), ("qa-plan", "optional"),
+            ("step-back", "on"), ("step-front", "on"), ("review", "on"), ("qa", "optional"),
+            ("final", "on"), ("merge", "on"));
+        // линии — только у step и разные: иначе StageFor не выбрал бы этап по линии задачи
+        route.Where(s => s.Role == TaskRoles.Step).Select(s => (s.Id, s.Lane)).Should()
+            .Equal(("step-back", "back"), ("step-front", "front"));
+        // специальность ветки проверки плана — тестировщик (разрез 2 §1.10)
+        preset.Stages.Single(s => s.Id == "qa-plan").Specialty.Should().Be(PersonaSpecialty.Tester);
+    }
+
+    // G5: сброс parallel-cycle идёт тем же путём, что у full-cycle/fast-track (B1b):
+    // правка → Save → ResetBuiltIn → граф кода, Version +1.
+    [Fact]
+    public void ResetBuiltIn_ПараллельныйЦикл_ВозвращаетГрафКода()
+    {
+        var store = NewStore();
+        var preset = store.List().Single(e => e.Template.BuiltInKey == "parallel-cycle").Template;
+        preset.Stages.Single(s => s.Id == "qa").Presence = WorkflowStagePresence.On; // правка: общий QA обязателен
+        var edited = store.Save(preset, WorkflowTemplateScope.Global);
+        edited.Version.Should().Be(2);
+        edited.Stages.Single(s => s.Id == "qa").Presence.Should().Be("on");
+
+        var reset = store.ResetBuiltIn(WorkflowTemplateStore.ParallelCycleKey);
+
+        reset.Version.Should().Be(3);
+        reset.Should().BeEquivalentTo(
+            WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey),
+            opt => opt.Excluding(t => t.Version));
+        var fromFile = NewStore().Get(reset.Id, WorkflowTemplateScope.Global)!;
+        fromFile.Version.Should().Be(3);
+        fromFile.Stages.Single(s => s.Id == "qa").Presence.Should().Be("optional");
+        fromFile.Stages.Single(s => s.Id == "step-front").After.Should().Equal("plan");
+        fromFile.Stages.Single(s => s.Id == "qa-plan").Specialty.Should().Be(PersonaSpecialty.Tester);
+    }
+
+    // Конкурентность G5: сброс встроенного и сохранение своего шаблона одновременно. Один лок
+    // стора сериализует обе правки — в файле остаются обе; без лока последний снимок стёр бы
+    // одну из них (мутация — в отчёте задачи).
+    [Fact]
+    public async Task Reset_ПараллельноССохранением_ОбаШаблонаЦелы()
+    {
+        var store = NewStore();
+        var own = store.Save(Custom("свой"), WorkflowTemplateScope.Global);
+        using var barrier = new Barrier(2);
+
+        var resetting = Task.Run(() =>
+        {
+            barrier.SignalAndWait();
+            return store.ResetBuiltIn(WorkflowTemplateStore.ParallelCycleKey);
+        });
+        var saving = Task.Run(() =>
+        {
+            var copy = store.Get(own.Id, WorkflowTemplateScope.Global)!;
+            copy.Name = "правка";
+            barrier.SignalAndWait();
+            return store.Save(copy, WorkflowTemplateScope.Global);
+        });
+
+        var reset = await resetting;
+        var saved = await saving;
+
+        reset.Version.Should().Be(2);
+        saved.Version.Should().Be(2);
+
+        var after = NewStore();
+        var preset = after.Get(WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey).Id,
+            WorkflowTemplateScope.Global)!;
+        preset.Version.Should().Be(2, "сброс применён к файлу");
+        preset.Stages.Should().HaveCount(10);
+        after.Get(own.Id, WorkflowTemplateScope.Global)!.Name.Should().Be("правка", "сохранение применено к файлу");
+        Directory.GetFiles(_dir, "*.tmp").Should().BeEmpty();
+    }
+
     [Fact]
     public void Get_List_ОтдаютКопии_ПравкаКопииСторНеМеняет()
     {
@@ -206,7 +338,7 @@ public class WorkflowTemplateStoreTests : IDisposable
 
         var store = NewStore();
 
-        store.List().Select(e => e.Template.BuiltInKey).Should().Equal("full-cycle", "fast-track");
+        store.List().Select(e => e.Template.BuiltInKey).Should().Equal("full-cycle", "fast-track", "parallel-cycle");
         Directory.GetFiles(_dir, "*.corrupt-*.bak").Should().HaveCount(1);
     }
 

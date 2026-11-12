@@ -132,6 +132,6 @@ export function showWriteButton(canWrite: boolean, readOnly: boolean): boolean {
 }
 
 // Владелец проекта пишет проектные шаблоны (временно, до ответа на вопрос 3 Андрею).
-export function canWriteProjectTemplates(ownerId: string | undefined, userId: string | undefined): boolean {
+export function canWriteProjectTemplates(ownerId: string | null | undefined, userId: string | null | undefined): boolean {
   return !!ownerId && ownerId === userId;
 }

@@ -102,7 +102,8 @@ public class WorkflowRulesTests
     }
 
     // c4: лексика ячейки — как у специальности: "tier:*" в ячейке этапа запрещён
-    // (та же проверка SpecialtySettingsStore.ValidateModelCell).
+    // (общая проверка ModelCellRules из Core, доработка B1a по R-B1a п.1).
+    // R-B1a п.5: проверяется ПОЛНЫЙ текст ошибки — с меткой этапа из label, а не фрагмент.
     [Theory]
     [InlineData("TierStrong")]
     [InlineData("TierMedium")]
@@ -112,8 +113,8 @@ public class WorkflowRulesTests
         var stage = Stage();
         typeof(WorkflowStage).GetProperty(cellName)!.SetValue(stage, "tier:strong");
 
-        ValidateOne(stage).Should().ContainSingle()
-            .Which.Should().Contain("не может быть tier:*");
+        ValidateOne(stage).Should().ContainSingle().Which.Should().Be(
+            "этап «step»: в ячейке уровня не может быть tier:* — уровень уже выбран строкой");
     }
 
     // c4: белый список политик простоя (строки, не enum).
@@ -140,14 +141,21 @@ public class WorkflowRulesTests
         ValidateOne(stage).Should().BeEmpty();
     }
 
-    // c4: промпт этапа — строго за 4000.
-    [Fact]
-    public void ПромптДлиннееЛимита_Ошибка()
+    // c4: промпт этапа — строго за 4000. R-B1a п.4: граница запинена — 4000 проходит,
+    // 4001 краснеет (мутация `>` → `>=` без случая 4000 не красит ни один тест).
+    [Theory]
+    [InlineData(4000, false)]
+    [InlineData(4001, true)]
+    public void Промпт_ГраницаЛимита(int length, bool expectError)
     {
         var stage = Stage();
-        stage.Prompt = new string('а', WorkflowRules.PromptLimit + 1);
+        stage.Prompt = new string('а', length);
 
-        ValidateOne(stage).Should().ContainSingle().Which.Should().Contain("длиннее 4000");
+        var errors = ValidateOne(stage);
+        if (expectError)
+            errors.Should().ContainSingle().Which.Should().Contain("длиннее 4000");
+        else
+            errors.Should().BeEmpty();
     }
 
     // c3 (И3 «таймаут нельзя обойти»): null/0/отрицательное — дефолт конфига (null),
@@ -167,4 +175,55 @@ public class WorkflowRulesTests
     [InlineData(999, 240)]
     public void NormalizeStall_КлампПол(int? minutes, int? expected) =>
         WorkflowRules.NormalizeStall(minutes).Should().Be(expected);
+
+    // R-B1a п.2: контракт валидатора — собрать все ошибки, стор отдаёт их как 400.
+    // null-вход (шаблон, список этапов, элемент списка) — ошибка в списке, а не
+    // NullReferenceException: исключение уронило бы ручку 500-м вместо валидного 400.
+    [Fact]
+    public void NullШаблон_Ошибка() =>
+        WorkflowRules.Validate(null).Should().ContainSingle().Which.Should().Be("шаблон не задан.");
+
+    [Fact]
+    public void NullСписокЭтапов_Ошибка() =>
+        WorkflowRules.Validate(new WorkflowTemplate { Name = "тест", Stages = null! })
+            .Should().ContainSingle().Which.Should().Contain("список этапов не задан");
+
+    [Fact]
+    public void NullЭлементЭтапов_Ошибка_СНомеромИБезИсключения()
+    {
+        var errors = WorkflowRules.Validate(new WorkflowTemplate
+        {
+            Name = "тест",
+            Stages = [Stage(), null!, Stage(TaskRoles.Merge)],
+        });
+
+        // Пустая запись не останавливает разбор: остальные этапы проверяются дальше,
+        // метка — порядковый номер (роли у пустой записи нет).
+        errors.Should().ContainSingle().Which.Should().Be("этап #2: пустая запись");
+    }
+
+    // R-B1a п.3: Presence и StallPolicy триммятся симметрично роли — строка из UI
+    // с крающими пробелами — та же запись, а не «неизвестное значение».
+    [Theory]
+    [InlineData(" on")]
+    [InlineData("optional ")]
+    [InlineData(" off")]
+    public void PresenceСПробелами_Проходит(string presence) =>
+        ValidateOne(Stage(TaskRoles.Review, presence)).Should().BeEmpty();
+
+    [Fact]
+    public void НесъёмнаяРольPresenceСПробелом_ОшибкаСНормализованнымЗначением() =>
+        ValidateOne(Stage(TaskRoles.Final, " off")).Should().ContainSingle().Which
+            .Should().Contain("роль несъёмная, Presence «off» запрещён");
+
+    [Theory]
+    [InlineData(" nudge-alert")]
+    [InlineData("alert ")]
+    public void ПолитикаПростояСПробелами_Проходит(string policy)
+    {
+        var stage = Stage();
+        stage.StallPolicy = policy;
+
+        ValidateOne(stage).Should().BeEmpty();
+    }
 }

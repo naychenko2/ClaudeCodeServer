@@ -25,20 +25,43 @@ public static class WorkflowRules
 
     // Проверить шаблон целиком: пустой список — валиден. Собираем ВСЕ ошибки, не первую:
     // редактор шаблонов (C1) показывает картину за один проход, правка по одной ошибке
-    // на сохранение здесь не в помощь.
-    public static List<string> Validate(WorkflowTemplate template)
+    // на сохранение здесь не в помощь. Тот же контракт — против null-входа: null-шаблон,
+    // null-список этапов и null-элемент — ошибка в списке, а не исключение (R-B1a, п.2:
+    // стор отдаёт список как 400, исключение уронило бы ручку 500-м).
+    public static List<string> Validate(WorkflowTemplate? template)
     {
         var errors = new List<string>();
+        if (template is null)
+        {
+            errors.Add("шаблон не задан.");
+            return errors;
+        }
+        if (template.Stages is not { } stages)
+        {
+            errors.Add("шаблон: список этапов не задан.");
+            return errors;
+        }
+
         var seenRoles = new HashSet<string>(StringComparer.Ordinal);
 
-        for (var i = 0; i < template.Stages.Count; i++)
+        for (var i = 0; i < stages.Count; i++)
         {
-            var stage = template.Stages[i];
-            var role = stage.Role?.Trim() ?? "";
             // Метка в тексте ошибки: роль, если она известна; иначе порядковый номер —
             // «неизвестная роль» именем этапа не назвать.
+            var labelUnknown = $"этап #{i + 1}";
+            if (stages[i] is not { } stage)
+            {
+                errors.Add($"{labelUnknown}: пустая запись");
+                continue;
+            }
+
+            var role = stage.Role?.Trim() ?? "";
+            // Presence и StallPolicy триммятся так же, как роль (R-B1a, п.3): строка из UI
+            // с крающими пробелами — та же запись, а не «неизвестное значение».
+            var presence = stage.Presence?.Trim() ?? "";
+            var stallPolicy = stage.StallPolicy?.Trim() ?? "";
             var known = StageRoles.Contains(role);
-            var label = known ? $"этап «{role}»" : $"этап #{i + 1}";
+            var label = known ? $"этап «{role}»" : labelUnknown;
 
             if (!known)
             {
@@ -49,16 +72,16 @@ public static class WorkflowRules
                 errors.Add($"{label}: роль встречается в маршруте дважды.");
             }
 
-            if (!WorkflowStagePresence.All.Contains(stage.Presence))
+            if (!WorkflowStagePresence.All.Contains(presence))
             {
-                errors.Add($"{label}: неизвестное Presence «{stage.Presence}». Допустимы: {string.Join(", ", WorkflowStagePresence.All)}.");
+                errors.Add($"{label}: неизвестное Presence «{presence}». Допустимы: {string.Join(", ", WorkflowStagePresence.All)}.");
             }
             else if (NonSkippable.Contains(role) &&
-                     stage.Presence is WorkflowStagePresence.Off or WorkflowStagePresence.Optional)
+                     presence is WorkflowStagePresence.Off or WorkflowStagePresence.Optional)
             {
                 // Несъёмную роль нельзя ни снять, ни сделать опциональной: пропуск должен
                 // быть виден валидатору, а не исчезать тихо (риск эпика «скрытый пропуск финала»).
-                errors.Add($"{label}: роль несъёмная, Presence «{stage.Presence}» запрещён.");
+                errors.Add($"{label}: роль несъёмная, Presence «{presence}» запрещён.");
             }
 
             // Кого звать — одно: специальность ИЛИ конкретная персона (разрез §1).
@@ -75,14 +98,15 @@ public static class WorkflowRules
             }
 
             // Ячейки матрицы — той же проверкой, что ячейки специальности (разрез §3:
-            // «ячейку этапа валидировать как ячейку специальности»), не копией:
+            // «ячейку этапа валидировать как ячейку специальности»), не копией: общий
+            // метод живёт в спине ModelCellRules (Core) — Tasks не зависит от Llm (R-B1a, п.1).
             foreach (var cell in new[] { stage.TierStrong, stage.TierMedium, stage.TierWeak })
-                if (SpecialtySettingsStore.ValidateModelCell(cell, label) is { } cellError)
+                if (ModelCellRules.ValidateModelCell(cell, label) is { } cellError)
                     errors.Add(cellError);
 
-            if (!string.IsNullOrWhiteSpace(stage.StallPolicy) && !WorkflowStallPolicies.All.Contains(stage.StallPolicy))
+            if (!string.IsNullOrWhiteSpace(stallPolicy) && !WorkflowStallPolicies.All.Contains(stallPolicy))
             {
-                errors.Add($"{label}: неизвестная политика простоя «{stage.StallPolicy}». Допустимы: {string.Join(", ", WorkflowStallPolicies.All)}.");
+                errors.Add($"{label}: неизвестная политика простоя «{stallPolicy}». Допустимы: {string.Join(", ", WorkflowStallPolicies.All)}.");
             }
         }
 

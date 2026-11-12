@@ -595,17 +595,11 @@ public sealed class SpecialtySettingsStore
 
     // Ячейка матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
     // уровнем). null — ячейка валидна. name — для текста ошибки (например «специальность «tester»»).
-    // public static: той же проверкой валидируются ячейки этапа шаблона процесса
-    // (WorkflowRules, вертикаль Tasks, разрез ai-fabrika-workflow-cut-2026-11 §1) —
-    // общая для specialty и stage, не копия. Шов Tasks→этот тип объявлен точной записью
-    // в SubsystemBoundaryTests.
-    public static string? ValidateModelCell(string? cell, string name)
-    {
-        if (string.IsNullOrWhiteSpace(cell)) return null;
-        if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
-            return $"{name}: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
-        return null;
-    }
+    // Тонкий вызов спину ModelCellRules (Core/Services/Llm/): единственная реализация той же
+    // проверки для матриц специальности, этапа и персоны; текст ошибки — байт в байт прежний
+    // (доработка B1a по R-B1a, п.1: шов Tasks→Llm снят, проверка опущена в спину).
+    public static string? ValidateModelCell(string? cell, string name) =>
+        ModelCellRules.ValidateModelCell(cell, name);
 
     private static string? ValidateTemplateSettings(SpecialtyTemplateSettings settings, string name)
     {

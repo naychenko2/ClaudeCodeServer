@@ -325,11 +325,14 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // прежний контракт идемпотентного удаления (строка выше) сохранён, существование не выдаётся кодом,
         // сам чат не тронут. Видимость — первым шагом, как требует порядок «решение прав после видимости».
         if (sessions.GetAccessible(sessionId, UserId) is null) return NoContent();
-        // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): удалить может автор чата или владелец
-        // проекта. Авторство — CreatedByUserId (только это поле; nil — автор неизвестен и автором не
-        // считается, тот же fail-closed, что у DenyTurnAuthor). Видимому не-автору (читателю, редактору
-        // чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
-        if (session.CreatedByUserId != UserId && sessions.GetOwnedVisible(sessionId, UserId) is null)
+        // W4-C1 (решение Андрея, 12.11): общий чат удаляет только владелец проекта (GetOwnedVisible —
+        // владение проектом + видимость), даже если создал его редактор. Автор своего приватного чата
+        // (PrivateToUserId == CreatedByUserId == вызывающий) удаляет его по-прежнему: владелец чужой
+        // приватный не видит, иначе его не удалил бы никто. Авторство — CreatedByUserId (только это
+        // поле; nil — автор неизвестен и автором не считается, тот же fail-closed, что у DenyTurnAuthor).
+        // Видимому не-автору (читателю, редактору чужого чата) — прежний 403 по контракту ChatAuthorGate, чат цел.
+        if (sessions.GetOwnedVisible(sessionId, UserId) is null &&
+            (session.PrivateToUserId != UserId || session.CreatedByUserId != UserId))
             return ChatAuthorGate.Denied();
         await sessions.DeleteAsync(sessionId);
         return NoContent();

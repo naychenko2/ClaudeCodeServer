@@ -316,6 +316,98 @@ public class WikiChatIngestTests : IDisposable
         parsed.Footnotes.Should().OnlyContain(f => !QuoteMatcher.MeasureQuoteLength(f.Quote).OutOfContract);
     }
 
+    // ── «О чём» не трогается при дописывании; новая хроника — без строки «Продолжение чата» ──
+    //
+    // Доработка B-2d по ревью a6e7a3bc (п. «обязательно до мержа»): правило AppendChronicleAsync
+    // («О чём» остаётся как есть — WikiChatIngestService.cs:685-687) и снятое в 1d51512
+    // «хроника больше не пишет ссылку на прежний чат» не были закреплены ни одним тестом:
+    // мутация Глеба «О чём → пустой список» давала зелёный прогон всего файла (1693/1693).
+    // Мутация здесь: «стирать „О чём“ при дописывании» (sections.Add(s) → new() { Name = s.Name,
+    // Lines = s.Name == "О чём" ? [] : s.Lines }) — краснеет «легаси-строка осталась».
+    // Вторая пара держит снятое: ни один путь разбора больше не пишет «Продолжение чата: [[…]]».
+    [Fact]
+    public async Task Hronika_NovayaBezSsilkiOChem_LegasiiStrokaPriDopisivaniiSohranyaetsya()
+    {
+        const string PrevChat = "chat-0";
+        const string PrevTitle = "Прежний чат 2026-10-30";
+
+        // Прежний чат: его хроника уже на диске — та же WritePageAsync и та же форма страницы,
+        // что у разбора (приём WikiRetractChronicleTests). Она — цель легаси-строки ниже:
+        // висящую ссылку гейт применения отверг бы как ссылку на несуществующую страницу
+        // (цель проверки — всё состояние раздела: working строится из него целиком,
+        // WikiApplyService.cs:656, ссылки проверяет WikiGate.CheckLinks), и тест краснел бы
+        // не по проверяемому правилу.
+        var prevKey = WikiChatIngestService.ChroniclePath(Section, PrevChat)!;
+        var prev = new WikiPage
+        {
+            Title = PrevTitle,
+            Frontmatter = new WikiFrontmatter { Type = WikiFrontmatter.TypeChronicle },
+            Sections =
+            [
+                new() { Name = "О чём", Lines = [] },
+                new() { Name = "Что решили", Lines = [] },
+                new() { Name = "Что выяснили", Lines = [] },
+                new() { Name = "Открытые вопросы", Lines = [] },
+            ],
+        };
+        (await _keeper.WritePageAsync(User, Section, prevKey, prev.Render())).Status
+            .Should().Be(WikiOpStatus.Applied, "прежняя хроника на диске");
+
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(
+            ("S", Synth(Claim1)),
+            ("S", Synth(Claim2)));
+        var sut = Sut(llm);
+
+        var first = await sut.AnalyzeAsync(User, ChatId);
+        first.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, first.Reason);
+
+        var key = WikiChatIngestService.ChroniclePath(Section, ChatId)!;
+        var textNew = File.ReadAllText(PathOf(key), System.Text.Encoding.UTF8);
+
+        // Новая хроника — пустое «О чём» и ни одной строки-ссылки: механика «Продолжить в
+        // новом чате» убрана из продукта (1d51512), ContinuationLinkLine больше нет.
+        textNew.Should().NotContain("Продолжение чата", "новая хроника не пишет ссылку на прежний чат");
+        var newPage = WikiPage.Parse(textNew).Model!;
+        newPage.Sections.Single(s => s.Name == "О чём").Lines.Should().BeEmpty();
+
+        // Легаси-состояние (так писал старый код до 1d51512): строку дозаписываем руками,
+        // в одной копии формата — ContinuationLinkPrefix.
+        var legacy = WikiRetractService.ContinuationLinkPrefix + "[[" + PrevTitle + "]]";
+        var withLegacy = new WikiPage
+        {
+            Title = newPage.Title,
+            Frontmatter = newPage.Frontmatter,
+            Sections = [.. newPage.Sections.Select(s => s.Name == "О чём"
+                ? new WikiPage.Section { Name = s.Name, Lines = [.. s.Lines, legacy] }
+                : s)],
+            Footnotes = newPage.Footnotes,
+        };
+        (await _keeper.WritePageAsync(User, Section, key, withLegacy.Render())).Status
+            .Should().Be(WikiOpStatus.Applied, "легаси-хроника остаётся валидной страницей");
+
+        // Дельта и повторный разбор того же чата (тот же приём, что в C1).
+        _sessions.History[ChatId].Add(new StoredUserMessage($"{Claim2}. Детали: {Marker2}."));
+        _sessions.History[ChatId].Add(new StoredTextMessage("Принято."));
+        _sessions.History[ChatId].Add(new StoredTextMessage("Готово."));
+
+        var second = await sut.AnalyzeAsync(User, ChatId);
+        second.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, second.Reason);
+
+        // «О чём» не трогается: написанное раньше — накопленное знание, его снимает откат
+        // по источнику (WikiRetractService.RemoveContinuationLinks), а не дописывание.
+        var text2 = File.ReadAllText(PathOf(key), System.Text.Encoding.UTF8);
+        var page2 = WikiPage.Parse(text2).Model!;
+        page2.Sections.Single(s => s.Name == "О чём").Lines.Should().Equal(legacy);
+        CountOf(text2, legacy).Should().Be(1, "строка остаётся одна, дописывание её не дублирует");
+
+        // Само дописывание работает: «Что выяснили» выросла обоими разборами.
+        StatementLines(text2, Claim1).Should().Be(1);
+        StatementLines(text2, Claim2).Should().Be(1, "повторный разбор дописывает «Что выяснили»");
+    }
+
     // ── c2: подмена записи N — курсор сброшен в 0, повторные утверждения не дублируются ──
 
     [Fact]

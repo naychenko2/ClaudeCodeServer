@@ -19,7 +19,7 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // очередь ComfyUI не забивается ожиданиями одного человека, а каждый готовый вариант сразу уходит
 // отчётом EditProgress.Ready. Граф ComfyWorkflows при этом не трогается — он общий с MCP-инструментом
 // local_generate_image, где batch_size остаётся.
-public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null) : IImageEditor, IImageEditQuoter
+public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null) : IImageEditor, IImageEditQuoter, IImageEditRouter
 {
     public const string ProviderKey = "local";
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
@@ -174,15 +174,18 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxFaceCropPhotos: 1, Format: format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора — Qwen Turbo (решение Андрея 2026-10-22, заменяет «качественно» от 2026-10-17):
-    // по умолчанию важнее скорость. FLUX 3 Klein и «качественно» — по явному выбору человека
-    public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
+    // Авто-выбор — по таблице LocalImageRouting.Table (одно место: после оценки слепых листов меняется
+    // только она). Умолчание — Qwen Turbo (решение Андрея 2026-10-22: скорость важнее). Fibo Dev и H3 в
+    // «Авто» не участвуют. Ручной выбор модели главнее: до PickModel он не доходит (QuoteAsync)
+    public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Route(op, mode, traits)?.Model;
+
+    public ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits)
     {
-        ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
-        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint =>
-            Catalog.First(m => m.Id == QwenImageTurbo),
-        _ => null,
-    };
+        if (op == ImageEditOp.EnhanceFaces)
+            return new ImageRoute(Catalog.First(m => m.Id == FaceDetailer), "улучшение лиц");
+        var route = LocalImageRouting.Pick(Catalog, op, mode, traits);
+        return route is null ? null : route with { Reason = LocalImageRouting.Describe(route.Model, route.Reason) };
+    }
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 

@@ -102,7 +102,9 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ImageEditOp Op, int Count, ImageEditEstimateDto Estimate, DateTime ExpiresAt, int? ExpectedSeconds,
         long? ContextRevision = null, ResolvedFormat? Format = null,
         // Число проходов (ADR-028, этап 3): N = число лиц в faceTarget; null — обычная правка
-        int? FacePasses = null);
+        int? FacePasses = null,
+        // Причина выбора «Авто» («Авто → Klein: в запросе надпись»); null — модель названа явно
+        string? RouteReason = null);
 
     private sealed class Job(string id, string ownerId, string projectId, Quote quote, CancellationTokenSource cts)
     {
@@ -181,11 +183,26 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         if (request.FaceTarget is not null)
             request = request with { References = 0, HasMask = false, HasCharacter = true, HasAnnotations = false };
 
-        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal);
+        // Размер исходника — только у правки (у генерации Width/Height — желаемый размер результата)
+        double? sourceMp = request.Op != ImageEditOp.Generate && request.Width is > 0 && request.Height is > 0
+            ? request.Width.Value * (double)request.Height.Value / 1_000_000 : null;
+        var traits = new EditTraits(request.HasMask, request.References, request.HasCharacter, request.HasAnnotations, request.Removal,
+            request.Prompt, sourceMp, FaceSwap: request.FaceTarget is not null);
         var op = request.HasMask && request.Op == ImageEditOp.Edit ? ImageEditOp.Inpaint : request.Op;
-        var model = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase)
-            ? editor.PickModel(op, request.Mode, traits)
-            : editor.Models.FirstOrDefault(m => string.Equals(m.Id, request.Model?.Trim(), StringComparison.OrdinalIgnoreCase));
+        var auto = string.Equals(request.Model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase);
+        // Ручной выбор модели главнее «Авто»: таблица зовётся только когда выбрано «auto»
+        string? routeReason = null;
+        ImageEditModelInfo? model;
+        if (auto && editor is IImageEditRouter router)
+        {
+            var route = router.Route(op, request.Mode, traits);
+            model = route?.Model;
+            routeReason = route?.Reason;
+        }
+        else
+            model = auto
+                ? editor.PickModel(op, request.Mode, traits)
+                : editor.Models.FirstOrDefault(m => string.Equals(m.Id, request.Model?.Trim(), StringComparison.OrdinalIgnoreCase));
         if (model is null)
             return Fail<ImageEditQuoteDto>(ImageEditErrorCodes.InvalidRequest,
                 $"У поставщика {editor.Label} нет модели для этой операции");
@@ -226,7 +243,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
 
         var quote = new Quote(Guid.NewGuid().ToString("N"), ownerId, projectId, editor.Key, model, op, count,
             estimate, Now() + QuoteTtl, estimate.EtaSeconds ?? (editor as IImageEditQuoter)?.ExpectedSeconds(model),
-            request.ContextRevision, format, facePasses);
+            request.ContextRevision, format, facePasses, routeReason);
         PruneQuotes();
         _quotes[quote.Id] = quote;
         return ImageEditCallResult<ImageEditQuoteDto>.Ok(ToDto(quote));
@@ -928,7 +945,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         q.Estimate.Amount is { } a ? new EditCost(a, q.Estimate.Unit) : null;
 
     private ImageEditQuoteDto ToDto(Quote q) =>
-        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses);
+        new(q.Id, q.Provider, q.Model.Id, q.Estimate, q.ExpiresAt, q.ExpectedSeconds, Format: q.Format, FacePasses: q.FacePasses, RouteReason: q.RouteReason);
 
     private ImageEditJobDto ToDto(Job j)
     {

@@ -369,6 +369,7 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const price = estimate ? priceSum(estimate.amount, estimate.unit, estimate.approx, estimate) : null;
   const priceLines = footPrice(estimate, count);
   const queue = queueText(quote?.estimate ?? null);
+  const routeReason = quote?.routeReason ?? null;
 
   const setSettings = useCallback((patch: Partial<ImageThreadSettings>) => {
     const next = { ...settings, ...patch };
@@ -386,6 +387,6 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   return {
     catalog, settings, prefs, imageMode: imgMode, provider: pv, model: m, blocked, quote, quoteLoading: loading,
     priceLabel, price, marks, drawn, whole, hasImage, hasMask, setSettings, launch, route,
-    op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, runLabel: runVerb(pr.op),
+    op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, routeReason, runLabel: runVerb(pr.op),
   };
 }

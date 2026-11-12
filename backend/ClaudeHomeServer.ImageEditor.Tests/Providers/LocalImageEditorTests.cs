@@ -295,7 +295,7 @@ public class LocalImageEditorTests : IDisposable
 
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
-        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImage);
     }
 
     [Fact]
@@ -312,13 +312,13 @@ public class LocalImageEditorTests : IDisposable
         editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
     }
 
-    // Решение Андрея 2026-10-22: умолчание всех операций — Qwen Turbo; Klein и «качественно» — по выбору
+    // Решение Андрея 2026-10-22: умолчание генерации и правки — Qwen Turbo; маска и дорисовка — «качественно» (таблица Ш2)
     [Theory]
     [InlineData(ImageEditOp.Generate, "qwen-image-2.1-turbo")]
     [InlineData(ImageEditOp.Edit, "qwen-image-2.1-turbo")]
-    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1-turbo")]
-    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1-turbo")]
-    public void АвтоВыбор_TurboПоУмолчанию(ImageEditOp op, string expected)
+    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1")]
+    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1")]
+    public void АвтоВыбор_TurboПоУмолчанию_МаскаИДорисовка_Качественно(ImageEditOp op, string expected)
     {
         new LocalImageEditor(new FakeMedia()).PickModel(op, EditMode.Auto, new EditTraits(false, 0, false))!.Id
             .Should().Be(expected);

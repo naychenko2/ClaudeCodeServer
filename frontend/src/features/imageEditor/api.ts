@@ -90,6 +90,8 @@ export interface ImageEditQuoteRequest {
   hasAnnotations?: boolean;
   // Запрос просит стереть отмеченное кистью
   removal?: boolean;
+  // Текст запроса: по нему «Авто» у локальных моделей выбирает модель (надпись, люди, фото)
+  prompt?: string | null;
   // Чат и ревизия контекста (ADR-023 §Д2.1): с ревизией сервер берёт образцы, персонажа и размер из стора
   sessionId?: string | null;
   contextRevision?: number | null;
@@ -121,6 +123,8 @@ export interface ImageEditQuote {
   expectedSeconds?: number | null;
   // Число проходов подстановки (ADR-028, этап 3): N = число лиц в faceTarget; у обычной правки поля нет
   facePasses?: number | null;
+  // Почему «Авто» выбрало эту модель («Авто → Klein: в запросе надпись»); у явного выбора поля нет
+  routeReason?: string | null;
 }
 
 export interface EditCost { amount: number; unit: string }

@@ -267,3 +267,71 @@ export interface FeatureStats {
   // FeatureTimeline.cs:115). Аддитивное: старые ответы поля не несут.
   estimateDrift?: FeatureEstimateDrift | null;
 }
+
+// === Метрики этапа (D1d; мини-разрез D0 §4, бэк: StageMetrics.cs) ===
+// camelCase, null-поля приходят явно: «не считали» ≠ ноль. Фронт ничего не досчитывает.
+
+export interface StageMetricsWindow {
+  from: string;
+  to: string;
+  // true — этап ещё жив, to = «сейчас».
+  live: boolean;
+  elapsedMinutes: number;
+}
+
+export interface StageMetricsTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+}
+
+export interface StageMetricsReviewTask {
+  taskId: string;
+  // Verification.Verdict; null — ещё не вынесен.
+  verdict: string | null;
+  sharedWith: number;
+}
+
+// Доля исполнителя или ревью.
+export interface StageMetricsShare {
+  // null — журнал неполный (mode=approx у ревью).
+  minutes: number | null;
+  live: boolean;
+  turns: number | null;
+  errorTurns: number | null;
+  // tokens/costUsd = null — Spend выключен или записей нет.
+  tokens: StageMetricsTokens | null;
+  costUsd: number | null;
+  costPartial: boolean;
+  hiddenCostModels: string[];
+  models: string[];
+  // Только у ревью.
+  tasks?: StageMetricsReviewTask[] | null;
+}
+
+export interface StageMetricsWaitingNow {
+  taskId: string;
+  since: string;
+  reason: string | null;
+}
+
+export interface StageMetricsHuman {
+  minutes: number | null;
+  waits: number | null;
+  // Ходы, начатые человеком; null — расхода нет.
+  replies: number | null;
+  waitingNow: StageMetricsWaitingNow | null;
+}
+
+export interface StageMetrics {
+  // journal — журнал полный; approx — минуты исполнителя приближённые, у ревью/человека null.
+  mode: 'journal' | 'approx';
+  window: StageMetricsWindow;
+  executor: StageMetricsShare;
+  // null — у этапа нет задач ревью (не «0 минут»).
+  review: StageMetricsShare | null;
+  human: StageMetricsHuman;
+  idleMinutes: number | null;
+  spendFrom: string | null;
+}

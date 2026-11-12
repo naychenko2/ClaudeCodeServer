@@ -13,7 +13,9 @@
 // не показывается; все пусты — «За ночь решений нет»; содержимое строки (claim, «почему»
 // судьи, причина спора) и ссылка на страницу — раздел берётся из ключа страницы по границе
 // «/»; «Откатить пакет» — только у принятых (у «Ждут судью» его нет), один POST с id пакета
-// строки; отказ — текстом; гонка поколений между видами.
+// строки; отказ — текстом; гонка поколений между видами; отказ вида ночи — тот же один
+// Notice с «Повторить», но с переключателем над ним: «Все записи» запрашивает обычный
+// журнал (доработка ревью bb48be19).
 //
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 // Модалка ConfirmDialog рендерится порталом в document.body — её узлы ищутся от body.
@@ -49,6 +51,7 @@
 // (19) не отфильтровывать пустые группы → «ровно 3 заголовка» краснеет (J-F2);
 // (20) снять проверку поколения в .then вида ночи → «гонка видов» краснеет (J-F2);
 // (21) pageSectionKey — startsWith без границы «/» → «с похожим префиксом» краснеет (J-F2).
+// (22) убрать viewRow из ветки ошибки → «отказ загрузки вида ночи» краснеет (доработка bb48be19).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -1217,6 +1220,36 @@ describe('«Журнал»: вид «Решения за ночь» (J-F2)', () 
     // мутация (20): снять проверку поколения в .then — запоздалый ответ дорисует 4 строки
     resolveLate(NIGHT_2110);
     await settle();
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('отказ загрузки вида ночи: ошибка с переключателем вида; «Все записи» запрашивает обычный журнал', async () => {
+    // Обрыв сети ночного запроса (без status — не отказ контракта): журнал и дерево живы
+    req.mockImplementation((url: string) => {
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.reject(new Error('обрыв сети'));
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // Состояние ошибки — тот же один Notice с «Повторить» (ревью bb48be19): добавлен только
+    // переключатель над ним (мутация (22): убрать viewRow из ветки ошибки — эти два assert
+    // и клик ниже краснеют)
+    expect(has(c, 'Не удалось прочитать «Решения за ночь»')).toBe(true);
+    const retryBtns = allNodes(c).filter(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === 'Повторить');
+    expect(retryBtns).toHaveLength(1);
+    expect(segmentBtn(c, 'Все записи')).not.toBeNull();
+    // Возврат к журналу: новый обычный запрос без view, его строки на экране.
+    // Ряд вызовов: монтирование — журнал, смена вида — ночной (отказал), возврат — журнал
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(3);
+    expect(String(calls[2][0])).toBe('/wiki/journal');
+    expect(rows(c)).toHaveLength(5);
     expect(nightRows(c)).toHaveLength(0);
   });
 });

@@ -616,12 +616,26 @@ export function WikiJournal(
     />
   );
 
+  // Переключатель вида — на верхнем уровне обоих видов (в раскрытой записи журнала его
+  // нет, как там нет и фильтров: это подэкран одного вида), и в состоянии ошибки тоже
+  // (ревью bb48be19): если вид ночи падает (500, обрыв сети), вернуться к «Все записи»
+  // должно быть чем — состояние ошибки остаётся одним Notice с «Повторить», добавляется
+  // только сам переключатель над ним. Фильтры — только у журнала: бэк игнорирует их для
+  // вида ночи (WikiController.cs:615-616), показывать их было бы обещанием, которого
+  // вид не выполняет.
+  const viewRow = (
+    <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+      <SegmentedControl value={view} options={NIGHT_VIEW_OPTIONS} onChange={setView} />
+    </div>
+  );
+
   if (loadError) {
     const text = loadError instanceof WikiError
       ? wikiErrorText(loadError)
       : (view === 'night' ? 'Не удалось прочитать «Решения за ночь»' : 'Не удалось прочитать «Журнал»');
     return (
       <div data-testid="wiki-journal-error" style={{ padding: SP.sm }}>
+        {viewRow}
         <Notice tone="danger" icon={AlertTriangle} title={text} action={<Button variant="ghost" size="sm" onClick={load}>Повторить</Button>} />
       </div>
     );
@@ -642,16 +656,6 @@ export function WikiJournal(
         {OVERRIDE_TEXT.filter}
         {data ? <span style={{ fontWeight: 700 }}>{overrodeCount}</span> : null}
       </Chip>
-    </div>
-  );
-
-  // Переключатель вида — на верхнем уровне обоих видов (в раскрытой записи журнала его
-  // нет, как там нет и фильтров: это подэкран одного вида). Фильтры — только у журнала:
-  // бэк игнорирует их для вида ночи (WikiController.cs:615-616), показывать их было бы
-  // обещанием, которого вид не выполняет.
-  const viewRow = (
-    <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
-      <SegmentedControl value={view} options={NIGHT_VIEW_OPTIONS} onChange={setView} />
     </div>
   );
 

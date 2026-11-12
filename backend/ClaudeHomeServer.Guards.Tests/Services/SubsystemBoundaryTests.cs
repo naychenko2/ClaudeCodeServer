@@ -1313,6 +1313,11 @@ public class SubsystemBoundaryTests
         // без допуска сторож зелёный. ТАКОЙ ЖЕ мёртвый допуск остался ещё у пяти
         // вертикалей (Backgrounds, ProjectIcons, Memory, Docs, Changelog) — снимается
         // отдельной уборкой, чтобы не смешивать её с выносом Tasks.
+        // Точечный шов B1a (разрез ai-fabrika-workflow-cut-2026-11 §1): WorkflowRules
+        // валидирует ячейки матрицы этапа той же проверкой, что ячейки специальности, —
+        // через SpecialtySettingsStore.ValidateModelCell, не копией. Запись точная,
+        // не префикс `Services.Llm`: Tasks нужен ровно этот один тип;
+        // снятый выше мёртвый префикс-шов возвращать нечем.
         new object[]
         {
             new VerticalBoundary(
@@ -1324,7 +1329,10 @@ public class SubsystemBoundaryTests
                         "ClaudeHomeServer.Services.Tasks",
                     })
                     .ToArray(),
-                Array.Empty<string>()),
+                new[]
+                {
+                    "ClaudeHomeServer.Services.Llm.SpecialtySettingsStore",
+                }),
         },
         // Notes — вертикаль заметок (волна 4C, шаг 2). Obsidian-совместимый vault
         // (`[[wikilinks]]`/backlinks/граф/комментарии), AI-сводки, синк с Dify,

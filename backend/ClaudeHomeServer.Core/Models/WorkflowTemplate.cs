@@ -1,0 +1,101 @@
+using ClaudeHomeServer.Services; // ModelTier — примитив спины (по образцу Persona.cs)
+
+namespace ClaudeHomeServer.Models;
+
+// Модели шаблона процесса фичи (разрез docs/research/ai-fabrika-workflow-cut-2026-11.md §1 —
+// поля дословно оттуда). Строки, а не enum (тот же урок, что у TaskRoles): откат кода ломает
+// чтение enum'а, а незнакомые строки старый код при чтении просто игнорирует.
+// Правила и клампы — не здесь: WorkflowRules (вертикаль Tasks).
+
+// Присутствие этапа в маршруте (разрез §1 «Пропуск»): пропуск выражен полем, а не отсутствием
+// этапа — состав маршрута остаётся видимым в шаблоне.
+// on — этап в маршруте всегда; optional — по умолчанию в маршруте, человек или рекомендатель
+// может снять; off — этапа в этом шаблоне нет (фаст-трек: design=off, qa=off).
+public static class WorkflowStagePresence
+{
+    public const string On = "on";
+    public const string Optional = "optional";
+    public const string Off = "off";
+
+    public static readonly IReadOnlyList<string> All = [On, Optional, Off];
+}
+
+// Политика простоя исполнителя этапа (разрез §1, §3 «ClassifyStall», инвариант И3):
+// nudge-alert — как сейчас (толкач + уведомление); alert — без автохода;
+// stop-alert — остановка исполнителя существующим путём «Стоп» плюс уведомление.
+// Строки, а не enum (урок McpCatalogRef). Белый список — WorkflowRules.
+public static class WorkflowStallPolicies
+{
+    public const string NudgeAlert = "nudge-alert";
+    public const string Alert = "alert";
+    public const string StopAlert = "stop-alert";
+
+    public static readonly IReadOnlyList<string> All = [NudgeAlert, Alert, StopAlert];
+}
+
+// Ссылка на версию шаблона (BasedOn): у проектного шаблона — от какого глобального он форкнут.
+public class WorkflowTemplateRef
+{
+    public string TemplateId { get; set; } = "";
+    public int Version { get; set; }
+}
+
+// Этап шаблона = роль задачи из закрытого набора TaskRoles (разрез §0.3: новых видов работ
+// шаблон не вводит; rework берёт этап step). Порядок этапов — порядок маршрута.
+public class WorkflowStage
+{
+    // Ключ из TaskRoles: cut | design | plan | step | review | qa | final | merge.
+    public string Role { get; set; } = "";
+    public string Presence { get; set; } = WorkflowStagePresence.On;
+    // Кого звать: подсказка оркестратору и предзаполнение personaId (разрез §3 TaskManager.Create).
+    // Взаимоисключимо с PersonaId (валидирует WorkflowRules).
+    public PersonaSpecialty? Specialty { get; set; }
+    public string? PersonaId { get; set; }
+    // Доп. текст этапа, только ДОБАВЛЯЕТСЯ к правилам хода (И6), никогда не вытесняет их.
+    public string? Prompt { get; set; }
+    // Ячейки матрицы моделей в той же лексике ADR-007: id модели | "preset:{id}".
+    // "tier:*" в ячейке запрещён (ячейка уже адресована уровнем) — та же проверка,
+    // что у ячеек специальности (SpecialtySettingsStore.ValidateModelCell).
+    public string? TierStrong { get; set; }
+    public string? TierMedium { get; set; }
+    public string? TierWeak { get; set; }
+    // Уровень этапа: null — не задан (дальше персона → специальность → слоты).
+    public ModelTier? DefaultTier { get; set; }
+    // Только СУЖЕНИЕ прав поверх персоны (И5), никогда не расширение.
+    public List<string>? DisallowedTools { get; set; }
+    // Подмножество ключей MCP, уже выданных персоне; null — без сужения.
+    public List<string>? McpAllow { get; set; }
+    // Порог молчания [5..240] минут; null — Tasks:ExecutorStaleMinutes (дефолт конфига).
+    // Обойти таймаут нельзя: NormalizeStall клампит, а не пропускает (И3).
+    public int? StallMinutes { get; set; }
+    public string? StallPolicy { get; set; }
+}
+
+// Шаблон процесса фичи. Он НЕ становится вторым рантаймом (разрез §0.2): конвейер ведёт
+// оркестратор карточками TaskRoles; шаблон читают ровно в трёх точках создания/исполнения.
+public class WorkflowTemplate
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string Name { get; set; } = "";
+    // Описание читает рекомендатель маршрута (разрез §5).
+    public string? Description { get; set; }
+    // +1 при каждом сохранении; старые версии НЕ храним (разрез §4).
+    public int Version { get; set; }
+    // Встроенный пресет ("full-cycle" | "fast-track"): удалить нельзя, сбросить к коду можно.
+    // Сами пресеты — шаг B1b.
+    public string? BuiltInKey { get; set; }
+    // У проектного шаблона: от какого глобального форкнут.
+    public WorkflowTemplateRef? BasedOn { get; set; }
+    // Порядок списка = порядок маршрута.
+    public List<WorkflowStage> Stages { get; set; } = [];
+}
+
+// Файл стора data/workflow-templates.json на диске (стор — шаг B1b). Глобальные шаблоны
+// пишет только админ, проектные — владелец проекта (И8). Попадает в бэкап по умолчанию.
+public class WorkflowTemplateFile
+{
+    // Версия формата файла; задаёт её стор (B1b), здесь поле только для чтения/записи.
+    public int Version { get; set; }
+    public List<WorkflowTemplate> Global { get; set; } = [];
+    public Dictionary<string, List<WorkflowTemplate>> Projects { get; set; } = new(StringComparer.Ordinal);
+}

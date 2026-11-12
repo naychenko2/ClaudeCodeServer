@@ -593,16 +593,24 @@ public sealed class SpecialtySettingsStore
         return null;
     }
 
-    // Ячейки матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
-    // уровнем). name — для текста ошибки (ключ специальности или "any").
+    // Ячейка матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
+    // уровнем). null — ячейка валидна. name — для текста ошибки (например «специальность «tester»»).
+    // public static: той же проверкой валидируются ячейки этапа шаблона процесса
+    // (WorkflowRules, вертикаль Tasks, разрез ai-fabrika-workflow-cut-2026-11 §1) —
+    // общая для specialty и stage, не копия. Шов Tasks→этот тип объявлен точной записью
+    // в SubsystemBoundaryTests.
+    public static string? ValidateModelCell(string? cell, string name)
+    {
+        if (string.IsNullOrWhiteSpace(cell)) return null;
+        if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
+            return $"{name}: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
+        return null;
+    }
+
     private static string? ValidateTemplateSettings(SpecialtyTemplateSettings settings, string name)
     {
         foreach (var cell in new[] { settings.TierStrong, settings.TierMedium, settings.TierWeak })
-        {
-            if (string.IsNullOrWhiteSpace(cell)) continue;
-            if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
-                return $"Специальность «{name}»: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
-        }
+            if (ValidateModelCell(cell, $"Специальность «{name}»") is { } cellError) return cellError;
 
         // Секции промптов: id из каталога, без дублей, текст в лимите (общий с UI счётчиком)
         var seenSections = new HashSet<string>(StringComparer.Ordinal);

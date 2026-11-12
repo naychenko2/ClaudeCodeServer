@@ -309,6 +309,11 @@ backend/ClaudeHomeServer/Controllers/TasksController.cs|94
 # 403/404). Ключом хранилищ ничто не стало: запись чата адресована id чата и остаётся на
 # авторе-арендаторе (SetArchivedAsync/RetitleAsync зовутся с TenantOwnerId из RequestScope).
 backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|7
+# B1c (REST шаблонов процесса): WorkflowTemplatesController 0→3 — id вызывающего входит только в
+# IProjectAccess.Resolve (запрошенные права Read/Configure и чтение для развилки 403/404), тот же
+# класс мест, что вердикт S1-3c. Ключом хранилищ ничто не стало: шаблоны ключуются (scope, projectId) —
+# проектная область адресована id проекта, вызывающий нигде ключом не служит.
+backend/ClaudeHomeServer/Controllers/WorkflowTemplatesController.cs|3
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 # S2d-4b2: TasksToolset 0→1 — id актора хода (`actor`, неизвестный → пустая строка) входит только в

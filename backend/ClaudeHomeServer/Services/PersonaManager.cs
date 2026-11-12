@@ -41,6 +41,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private readonly LlmProviderRegistry? _providers;
     // Справочник сфер: зона персоны сферы (видимость, уникальность handle); без него (юнит-тесты) сфер нет
     private readonly ISphereDirectory? _spheres;
+    // Разовая миграция прав к наследованию (A1b): выполняется только когда включена явно
+    // (флаг Personas:SpecialtyInheritanceMigration:Enabled, дефолт false — сначала сухой прогон)
+    private readonly bool _specialtyInheritanceMigration;
 
     public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null,
         ProjectEventLogService? events = null, UserModelTierResolver? userTiers = null,
@@ -53,6 +56,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         _events = events;
         _userTiers = userTiers;
         _specialty = specialty;
+        _specialtyInheritanceMigration =
+            bool.TryParse(config["Personas:SpecialtyInheritanceMigration:Enabled"], out var inheritMigration)
+            && inheritMigration;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -71,6 +77,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Разовый перенос явной модели персоны в ячейку её рабочего уровня — строго ПОСЛЕ
         // миграции уровней: та перезаписывает TierMedium безусловно и затёрла бы перенос
         MigratePersonaModelToTierCell();
+        // Разовая миграция прав к наследованию от специальности — ПОСЛЕ модельных миграций:
+        // её отчёт по ячейкам моделей читает уже приведённые к ячейкам значения
+        MigrateSpecialtyInheritance();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -95,16 +104,29 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // специальности в КОПИИ, запись кэша не трогается (там остаются материализованные значения).
     // Шаблон читается одним снимком на вызов, поэтому группа Access/Tools/DisallowedTools не
     // рвётся; сбой чтения — материализованные поля персоны.
+    // Соглашение A1b (M3 из R-A1a): EffectiveAccessTemplate возвращает null и для Specialty=None,
+    // и для «шаблона нет» — поэтому None проверяется ЯВНО до вызова, а null после него значит
+    // только «шаблона нет»: права персоны остаются материализованными (как в Apply), не Full.
     internal Persona Hydrate(Persona p)
     {
         if (!p.InheritsAccess) return p;
+        if (p.Specialty == PersonaSpecialty.None)
+        {
+            // None — осознанный шаблон кода: Full без ограничений (поведение A1a не меняется)
+            var none = p.ShallowCopy();
+            none.Access = PersonaAccess.Full;
+            none.Tools = null;
+            none.DisallowedTools = null;
+            return none;
+        }
         try
         {
             var template = SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, p.OwnerId, p.Specialty);
+            if (template is null) return p; // шаблона нет — наследовать нечего, права персоны целы
             var copy = p.ShallowCopy();
-            copy.Access = template?.Access ?? PersonaAccess.Full;
-            copy.Tools = NormalizeTools(template?.Tools?.ToList());
-            copy.DisallowedTools = template?.DisallowedTools?.ToList();
+            copy.Access = template.Access;
+            copy.Tools = NormalizeTools(template.Tools?.ToList());
+            copy.DisallowedTools = template.DisallowedTools?.ToList();
             return copy;
         }
         catch (Exception ex)
@@ -700,6 +722,85 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             Console.WriteLine($"[PersonaManager] Миграция: явная модель перенесена в ячейку уровня у {migrated} персон(ы)");
         }
     }
+
+    // Разовая миграция прав персон к наследованию от специальности (разрез §2 «Миграция», A1b):
+    // группа персоны совпадает с эффективным шаблоном его специальности → InheritsAccess=true,
+    // иначе false — override сохраняется байт в байт. Включается флагом
+    // Personas:SpecialtyInheritanceMigration:Enabled (дефолт false: сначала отчёт админской ручки
+    // сухого прогона, потом включение). Идемпотентна по маркеру InheritsAccessMigratedAt, а не по
+    // данным: после смены шаблона специальности повторный прогон пересчитал бы группу и молча
+    // переключил бы наследование — в том числе у прав, которые человек выбрал сам после миграции.
+    // Маркер ставится и тем, чьё значение уже верное: решение принято, второй раз его не решаем.
+    // UpdatedAt НЕ бампаем (как соседние миграции) — иначе перетасовался бы список персон.
+    // Сбой — лог, без маркера и без записи: стор поднимается на прежних данных.
+    internal PersonaSpecialtyMigration.Plan MigrateSpecialtyInheritance()
+    {
+        if (!_specialtyInheritanceMigration)
+            return new PersonaSpecialtyMigration.Plan([], []);
+
+        try
+        {
+            var plan = PlanOfSpecialtyInheritance();
+            var pending = plan.Pending;
+            if (pending.Count > 0)
+            {
+                var now = DateTime.UtcNow;
+                lock (_saveLock)
+                {
+                    foreach (var d in pending)
+                    {
+                        // Персону могли удалить между снимком и записью — её решение больше не нужно
+                        if (!_personas.TryGetValue(d.PersonaId, out var persona)) continue;
+                        persona.InheritsAccess = d.InheritsAccess;
+                        persona.InheritsAccessMigratedAt = now;
+                    }
+                    JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
+                }
+                _log?.LogInformation(
+                    "Миграция прав к наследованию: персон {Total} — наследуют {Inherits}, override {Override}, "
+                    + "без эффективного шаблона {NoTemplate}, правка значений {Changes}, "
+                    + "ячеек моделей, совпавших со специальностью: {Cells}",
+                    plan.Decisions.Count, plan.CountOf(PersonaSpecialtyMigration.Group.Inherits),
+                    plan.CountOf(PersonaSpecialtyMigration.Group.Override),
+                    plan.CountOf(PersonaSpecialtyMigration.Group.NoTemplate), plan.CountChanges(),
+                    plan.ModelCells.Count);
+            }
+            return plan;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Миграция прав к наследованию не выполнена — стор поднимается на прежних данных");
+            return new PersonaSpecialtyMigration.Plan([], []);
+        }
+    }
+
+    // Снимок плана под _saveLock — под тем же локом, под которым Update меняет группу прав:
+    // отчёт не собирает состояние из середины чужой правки и не перемешивается с миграцией
+    private PersonaSpecialtyMigration.Plan PlanOfSpecialtyInheritance()
+    {
+        lock (_saveLock)
+            return PersonaSpecialtyMigration.Build(
+                _personas.Values,
+                (ownerId, specialty) => SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, ownerId, specialty),
+                _specialty is null
+                    ? null
+                    : (Func<string, PersonaSpecialty, PersonaSpecialtyMigration.SpecialtyCells?>)CellsOfSpecialty);
+    }
+
+    // Ячейки моделей специальности — только для отчёта (A1b их не чистит): тот же слой настроек,
+    // что читает TierMatricesOf
+    private PersonaSpecialtyMigration.SpecialtyCells? CellsOfSpecialty(
+        string ownerId, PersonaSpecialty specialty) =>
+        _specialty?.TemplateSettings(ownerId, specialty) is { } settings
+            ? new PersonaSpecialtyMigration.SpecialtyCells(settings.TierStrong, settings.TierMedium, settings.TierWeak)
+            : null;
+
+    // Сухой прогон (админская ручка): отчёт по снимку, ничего не пишет — ни personas.json, ни
+    // specialty-settings.json. Флаг не нужен: это способ посмотреть ДО включения миграции
+    public PersonaSpecialtyMigration.Plan DryRunSpecialtyInheritance() => PlanOfSpecialtyInheritance();
+
+    // Выполнить миграцию сейчас (админская ручка без перезапуска): тот же путь, что при загрузке
+    public PersonaSpecialtyMigration.Plan RunSpecialtyInheritanceMigration() => MigrateSpecialtyInheritance();
 
     // Узкие матрицы для разворота уровня персоны — та же сборка, что у боевого резолва
     // (ModelAssignmentResolver.PersonaMatrices): матрица персоны, затем матрицы её

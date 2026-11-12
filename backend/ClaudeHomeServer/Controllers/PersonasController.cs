@@ -2087,6 +2087,59 @@ public class PersonasController(
         }
     }
 
+    /// <summary>
+    /// Разовая миграция прав персон к наследованию от специальности (разрез §2 «Миграция», A1b).
+    /// dryRun=true — только отчёт поимённо: ни personas.json, ни specialty-settings.json не
+    /// пишутся, и флаг не нужен (это способ посмотреть ДО включения). Без dryRun миграция
+    /// выполняется, если она включена флагом Personas:SpecialtyInheritanceMigration:Enabled
+    /// (дефолт false) — иначе 400 с указанием, как посмотреть прогон.
+    /// Только админ: отчёт перечисляет персон всех владельцев.
+    /// </summary>
+    [Authorize(Roles = "admin")]
+    [HttpPost("migrations/specialty-inheritance")]
+    public IActionResult MigrateSpecialtyInheritance([FromQuery] bool dryRun = false)
+    {
+        var migrationEnabled = bool.TryParse(
+            _config["Personas:SpecialtyInheritanceMigration:Enabled"], out var flag) && flag;
+        if (!dryRun && !migrationEnabled)
+            return BadRequest(new
+            {
+                error = "Миграция выключена флагом Personas:SpecialtyInheritanceMigration:Enabled. "
+                    + "Сухой прогон доступен всегда: ?dryRun=true",
+            });
+
+        var plan = dryRun ? _personas.DryRunSpecialtyInheritance() : _personas.RunSpecialtyInheritanceMigration();
+        return Ok(new
+        {
+            dryRun,
+            counts = new
+            {
+                total = plan.Decisions.Count,
+                inherits = plan.CountOf(PersonaSpecialtyMigration.Group.Inherits),
+                overrideRights = plan.CountOf(PersonaSpecialtyMigration.Group.Override),
+                noTemplate = plan.CountOf(PersonaSpecialtyMigration.Group.NoTemplate),
+                changes = plan.CountChanges(),
+                alreadyMigrated = plan.Decisions.Count(d => d.AlreadyMigrated),
+                modelCellsMatched = plan.ModelCells.Count,
+            },
+            personas = plan.Decisions.Select(d => new
+            {
+                id = d.PersonaId,
+                name = d.Name,
+                ownerId = d.OwnerId,
+                specialty = SpecialtyCatalog.KeyOf(d.Specialty),
+                group = d.Group.ToString(),
+                currentAccess = d.CurrentAccess.ToString(),
+                currentTools = d.CurrentTools,
+                currentDisallowedTools = d.CurrentDisallowed,
+                inheritsAccess = d.InheritsAccess,
+                changed = d.IsChange && !d.AlreadyMigrated,
+                alreadyMigrated = d.AlreadyMigrated,
+            }),
+            modelCells = plan.ModelCells.Select(c => new { id = c.PersonaId, name = c.Name, cell = c.Cell, value = c.Value }),
+        });
+    }
+
     // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
     private static List<string> SplitCsv(string? csv) =>
         string.IsNullOrWhiteSpace(csv)

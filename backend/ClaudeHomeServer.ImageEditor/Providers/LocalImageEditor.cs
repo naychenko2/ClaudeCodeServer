@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 
@@ -19,9 +21,13 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // очередь ComfyUI не забивается ожиданиями одного человека, а каждый готовый вариант сразу уходит
 // отчётом EditProgress.Ready. Граф ComfyWorkflows при этом не трогается — он общий с MCP-инструментом
 // local_generate_image, где batch_size остаётся.
-public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null) : IImageEditor, IImageEditQuoter, IImageEditRouter
+public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null,
+    IConfiguration? config = null, ILogger<LocalImageEditor>? log = null) : IImageEditor, IImageEditQuoter, IImageEditRouter
 {
     public const string ProviderKey = "local";
+
+    // Таблица «Авто»: секция LocalMedia:Routing на лету, без неё или при ошибке — LocalImageRouting.Table
+    private readonly LocalImageRoutingSource _routing = new(config, Catalog, log);
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
     public const string FluxKlein = LocalImageModels.Klein;
     public const string MiniMaxH3Image = LocalImageModels.H3Image;
@@ -183,12 +189,12 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     {
         if (op == ImageEditOp.EnhanceFaces)
             return new ImageRoute(Catalog.First(m => m.Id == FaceDetailer), "улучшение лиц");
-        var route = LocalImageRouting.Pick(Catalog, op, mode, traits, category);
+        var route = LocalImageRouting.Pick(_routing.Table, Catalog, op, traits, category);
         return route is null ? null : route with { Reason = LocalImageRouting.Describe(route.Model, route.Reason) };
     }
 
     public bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits) =>
-        LocalImageRouting.NeedsClassifier(Catalog, op, mode, traits);
+        LocalImageRouting.NeedsClassifier(_routing.Table, Catalog, op, traits);
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 

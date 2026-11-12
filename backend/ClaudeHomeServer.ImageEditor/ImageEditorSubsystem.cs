@@ -44,7 +44,8 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         // драйвер получает null и скрыт в каталоге, а не роняет резолв
         // Шлюз IMediaGpuYieldGate регистрирует Llm: нет вертикали — null, задания уходят сразу
         services.AddSingleton(sp => new LocalImageEditor(sp.GetService<ILocalImageMedia>(),
-            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>()));
+            sp.GetService<ClaudeHomeServer.Services.Llm.IMediaGpuYieldGate>(),
+            sp.GetService<IConfiguration>(), sp.GetService<ILogger<LocalImageEditor>>()));
         services.AddSingleton<IImageEditor>(sp => sp.GetRequiredService<LocalImageEditor>());
 
         // Фоновая разметка ракурса и эмоции фото персонажей (ADR-027 §9); нет шва IImageLabeler или флага —

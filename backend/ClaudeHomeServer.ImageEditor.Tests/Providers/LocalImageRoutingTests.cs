@@ -40,9 +40,26 @@ public class LocalImageRoutingTests : IDisposable
     public void Генерация_ЛюдиИФото_Krea(string prompt) =>
         Pick(ImageEditOp.Generate, T(prompt)).Model.Id.Should().Be(LocalImageEditor.Krea2Turbo);
 
+    // Режимов «Быстро / Точно / Фото» у local нет (решение Андрея 12.11): выбор от режима не зависит,
+    // а в каталоге у «Авто» local переключателя нет
+    [Theory]
+    [InlineData(ImageEditOp.Generate, "пейзаж", 0.8)]
+    [InlineData(ImageEditOp.Edit, "сделай теплее", 1.0)]
+    [InlineData(ImageEditOp.Edit, "поправь", 0.8)]
+    public void Режим_НеВлияетНаВыбор(ImageEditOp op, string prompt, double mp)
+    {
+        var auto = Pick(op, T(prompt, mp: mp));
+        foreach (var mode in Enum.GetValues<EditMode>())
+            Pick(op, T(prompt, mp: mp), mode).Should().Be(auto);
+    }
+
     [Fact]
-    public void Генерация_РежимФотореализм_Krea() =>
-        Pick(ImageEditOp.Generate, T("пейзаж"), EditMode.Photoreal).Model.Id.Should().Be(LocalImageEditor.Krea2Turbo);
+    public void Каталог_АвтоLocal_БезРежимов()
+    {
+        var local = ImageEditCatalog.Build([_editor], null, null).Providers.Single(p => p.Key == LocalImageEditor.ProviderKey);
+        local.Models[0].Id.Should().Be(ImageEditCatalog.AutoModelId);
+        local.Models[0].Modes.Should().BeNull();
+    }
 
     [Fact]
     public void Генерация_ЛюдиСОбразцом_КреаНеБерётся() =>
@@ -71,7 +88,7 @@ public class LocalImageRoutingTests : IDisposable
     public void Надпись_КleinНетВКаталоге_ЗапасноеMoss()
     {
         var catalog = _editor.Models.Where(m => m.Id != LocalImageEditor.FluxKlein).ToList();
-        LocalImageRouting.Pick(catalog, ImageEditOp.Generate, EditMode.Auto, T("«Привет»"))!.Model.Id
+        LocalImageRouting.Pick(LocalImageRouting.Table, catalog, ImageEditOp.Generate, T("«Привет»"))!.Model.Id
             .Should().Be(LocalImageEditor.MossImage);
     }
 
@@ -87,10 +104,6 @@ public class LocalImageRoutingTests : IDisposable
         r.Reason.Should().Be("Авто → Fibo Turbo: быстрая правка");
     }
 
-    [Fact]
-    public void Правка_РежимБыстрая_FiboTurbo() =>
-        Pick(ImageEditOp.Edit, T("сделай теплее", mp: 1.0), EditMode.Fast).Model.Id.Should().Be(LocalImageEditor.Fibo2Turbo);
-
     [Theory]
     [InlineData(2.0)]
     [InlineData(1.5)]
@@ -105,7 +118,7 @@ public class LocalImageRoutingTests : IDisposable
     public void Правка_ОдеждаИлиТочная_Klein()
     {
         Pick(ImageEditOp.Edit, T("перекрась куртку в красный", mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
-        Pick(ImageEditOp.Edit, T("поправь", mp: 0.8), EditMode.Precise).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+        Pick(ImageEditOp.Edit, T("сделай точнее", mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
     }
 
     [Fact]

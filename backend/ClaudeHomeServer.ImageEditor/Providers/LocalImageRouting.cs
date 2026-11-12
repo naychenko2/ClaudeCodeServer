@@ -19,9 +19,6 @@ public enum RouteTrait
     Annotations = 512,   // стрелки, рамки, подписи на холсте
     Inputs = 1024,       // образцы на входе
     BigSource = 2048,    // исходник заметно больше 1 Мп (или размер неизвестен)
-    PhotorealMode = 4096,
-    PreciseMode = 8192,
-    FastMode = 16384,
 }
 
 // Одно правило таблицы: операции, обязательные и запрещённые признаки → модели по порядку
@@ -35,8 +32,10 @@ public sealed record RouteRule(
     string Reason);
 
 // Таблица маршрутизации «Авто» у локальных моделей — ЕДИНСТВЕННОЕ место, где решается «что куда».
-// Стартовая — итог Ш1 (замер 520 картинок, tools/image-bench). После оценки Андреем слепых листов
-// меняется только она (и тесты LocalImageRoutingTests). Первое сработавшее правило выигрывает.
+// Стартовая — итог Ш1 (замер 520 картинок, tools/image-bench). Первое сработавшее правило выигрывает.
+// В бою её можно перекрыть секцией LocalMedia:Routing (LocalImageRoutingSource, перечитывается на лету);
+// таблица из кода — умолчание и откат, когда секции нет или она невалидна.
+// Режимов «Быстро / Точно / Фото» у local нет (решение Андрея 12.11): EditMode таблица не читает.
 // Fibo 2.0 Dev и MiniMax H3 в таблицу не входят: Dev медленный и слабый, H3 печатает куски промпта
 // в кадр — только ручной выбор. Qwen «качественно» на генерации выигрыша не дал при цене ×2–2,7.
 public static class LocalImageRouting
@@ -76,21 +75,21 @@ public static class LocalImageRouting
         new("sign-edit", Edit, RouteTrait.SignKeyword, RouteTrait.None,
             [LocalImageEditor.FluxKlein, LocalImageEditor.QwenImageTurbo], "вывеска, афиша или слайд"),
         // Правка: одежда и точная правка — Klein; быстрая — Fibo Turbo, если исходник не больше ~1 Мп
-        new("precise-edit", Edit, RouteTrait.PreciseMode | RouteTrait.PreciseEdit, RouteTrait.None,
+        new("precise-edit", Edit, RouteTrait.PreciseEdit, RouteTrait.None,
             [LocalImageEditor.FluxKlein, LocalImageEditor.QwenImageTurbo], "точная правка или одежда"),
-        new("fast-edit", Edit, RouteTrait.FastMode | RouteTrait.FastEdit, RouteTrait.BigSource | RouteTrait.Inputs,
+        new("fast-edit", Edit, RouteTrait.FastEdit, RouteTrait.BigSource | RouteTrait.Inputs,
             [LocalImageEditor.Fibo2Turbo], "быстрая правка"),
         new("edit-default", Edit, RouteTrait.None, RouteTrait.None,
             [LocalImageEditor.QwenImageTurbo], "правка по умолчанию"),
         // Генерация: люди и фото — Krea 2 Turbo (образцов он не берёт, с образцами — как по умолчанию)
-        new("people-gen", Gen, RouteTrait.People | RouteTrait.Photo | RouteTrait.PhotorealMode, RouteTrait.Inputs,
+        new("people-gen", Gen, RouteTrait.People | RouteTrait.Photo, RouteTrait.Inputs,
             [LocalImageEditor.Krea2Turbo], "люди или фотореализм"),
         new("gen-default", Gen, RouteTrait.None, RouteTrait.None,
             [LocalImageEditor.QwenImageTurbo], "по умолчанию"),
     ];
 
     // Размер исходника неизвестен — считаем «большим»: Fibo Turbo ужимает результат до ~1 Мп
-    public static RouteTrait TraitsOf(ImageEditOp op, EditMode mode, EditTraits t)
+    public static RouteTrait TraitsOf(ImageEditOp op, EditTraits t)
     {
         var r = RouteTrait.None;
         var h = PromptHints.Of(t.Prompt);
@@ -107,18 +106,8 @@ public static class LocalImageRouting
         if (t.References > 0) r |= RouteTrait.Inputs;
         if (t.References > FiboMaxReferences || t.SourceMegapixels is null or > FiboSourceMegapixels)
             r |= RouteTrait.BigSource;
-        r |= mode switch
-        {
-            EditMode.Photoreal => RouteTrait.PhotorealMode,
-            EditMode.Precise => RouteTrait.PreciseMode,
-            EditMode.Fast => RouteTrait.FastMode,
-            _ => RouteTrait.None,
-        };
         return r;
     }
-
-    // Правила, после которых правила молчат: признаков в запросе не нашлось
-    private static readonly string[] DefaultRules = ["gen-default", "edit-default"];
 
     // Категории классификатора неоднозначных запросов (Ш3, ImageRouteClassifier): подпись для причины
     // выбора и признаки таблицы. Модель решает по-прежнему таблица — классификатор только досказывает
@@ -147,32 +136,36 @@ public static class LocalImageRouting
             ["текст"] = ("надпись", RouteTrait.SignKeyword),
         };
 
-    // Стоит ли спрашивать классификатор: текст есть, ключевых слов в нём нет, и правила дошли до умолчания.
+    // Стоит ли спрашивать классификатор: генерация или правка, текст есть, ключевых слов в нём нет, и правила
+    // дошли до общего правила (без обязательных и запрещённых признаков) — так и у таблицы из конфига.
     // Слово нашлось, но правило не сработало (фон при большом исходнике) — категория выбора не изменит
-    public static bool NeedsClassifier(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, EditMode mode, EditTraits traits) =>
-        !string.IsNullOrWhiteSpace(traits.Prompt) && PromptHints.Of(traits.Prompt) == default
-        && Match(catalog, op, TraitsOf(op, mode, traits)) is { } m && DefaultRules.Contains(m.Rule.Id);
+    public static bool NeedsClassifier(IReadOnlyList<RouteRule> table, IReadOnlyList<ImageEditModelInfo> catalog,
+        ImageEditOp op, EditTraits traits) =>
+        op is ImageEditOp.Generate or ImageEditOp.Edit
+        && !string.IsNullOrWhiteSpace(traits.Prompt) && PromptHints.Of(traits.Prompt) == default
+        && Match(table, catalog, op, TraitsOf(op, traits)) is { Rule: { Any: RouteTrait.None, Forbid: RouteTrait.None } };
 
     // Первое сработавшее правило, у которого есть подходящая модель каталога. category — ответ
     // классификатора (ключ GenCategories/EditCategories): его признаки добавляются к найденным по словам,
     // а причина выбора называет категорию
-    public static ImageRoute? Pick(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, EditMode mode, EditTraits traits,
-        string? category = null)
+    public static ImageRoute? Pick(IReadOnlyList<RouteRule> table, IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op,
+        EditTraits traits, string? category = null)
     {
-        var have = TraitsOf(op, mode, traits);
+        var have = TraitsOf(op, traits);
         var cats = op == ImageEditOp.Generate ? GenCategories : EditCategories;
         if (category is not null && cats.TryGetValue(category, out var c))
         {
-            var m = Match(catalog, op, have | c.Traits);
+            var m = Match(table, catalog, op, have | c.Traits);
             return m is null ? null : new ImageRoute(m.Value.Model, $"{c.Label} (по смыслу запроса)");
         }
-        var r = Match(catalog, op, have);
+        var r = Match(table, catalog, op, have);
         return r is null ? null : new ImageRoute(r.Value.Model, r.Value.Rule.Reason);
     }
 
-    private static (RouteRule Rule, ImageEditModelInfo Model)? Match(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, RouteTrait have)
+    private static (RouteRule Rule, ImageEditModelInfo Model)? Match(IReadOnlyList<RouteRule> table,
+        IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, RouteTrait have)
     {
-        foreach (var rule in Table)
+        foreach (var rule in table)
         {
             if (!rule.Ops.Contains(op)) continue;
             if (rule.Any != RouteTrait.None && (have & rule.Any) == 0) continue;

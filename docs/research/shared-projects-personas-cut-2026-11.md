@@ -34,14 +34,16 @@
    `persona.OwnerId == caller`, роль `Owner`; участнику — `null`. **Глобальные и сферные персоны
    владельца участнику не видны никогда**, в том числе через список.
 
+**Решение Андрея 12.11 (волна 4):** в общем проекте редактор проектную персону только смотрит (`Read`) и разговаривает с ней (`RunTurn`); правка карточки, памяти и привязок — `Configure`, только владелец. Агент участника — ровно права своего человека. Автоматическая память из чатов редактора продолжает пополняться (`PersonaMemoryAutolearnService`).
+
 Матрица (права — существующий `ProjectRight`, новых значений не заводим):
 
 | Действие над проектной персоной общего проекта | Право | Владелец | Редактор | Читатель |
 |---|---|---|---|---|
 | Видеть персону, аватар, привязки, правила автоматики, память, фокус, её чаты (кроме чужих приватных) | `Read` | ✓ | ✓ | ✓ |
 | Новый чат с персоной, групповой чат, смена собеседника в своём чате | `RunTurn` | ✓ | ✓ | — |
-| Создать проектную персону в этом проекте; править карточку (имя, роль, характер, тон, приветствие, голос, аватар); память персоны — записать/исправить/забыть/подтвердить, сбросить фокус | `WriteContent` | ✓ | ✓ | — |
-| Привязки: добавить/изменить/удалить, кроме MCP (`Tool` с `mcp:*`) и плагинов (`Skill` с `plugin:*`); подбор привязок ИИ | `WriteContent` + сужение (§4, И-4) | ✓ | ✓ | — |
+| Создать проектную персону в этом проекте; править карточку (имя, роль, характер, тон, приветствие, голос, аватар); память персоны — записать/исправить/забыть/подтвердить, сбросить фокус | `Configure` | ✓ | — | — |
+| Привязки: добавить/изменить/удалить (в том числе MCP и плагины); подбор привязок ИИ | `Configure` (сужение §4, И-4 осталось вторым рубежом) | ✓ | — | — |
 | Привязки MCP и плагинов, выдача MCP-сервера персоне, установка навыка персоне | `Configure` | ✓ | — | — |
 | Поля зоны и денег: `Scope`, `ProjectId`, `SphereId`, профиль доступа `Access`, модель/уровень/усилие/матрица уровней | `Configure` | ✓ | — | — |
 | Удалить персону; сделать руководителем проекта (`make-default`) | `Configure` | ✓ | — | — |
@@ -80,24 +82,24 @@
 | `GET ?scope=sphere`, `?scope=global` | по владельцу | без изменений (сферы и глобальные — личное) | — | — |
 | `POST /match` с `projectId` | `GetForContext(UserId,…)` :127 | `RJ(Read)`, кандидаты — команда проекта | `T` | B2 |
 | `GET /{id}` | `Get(id, UserId)` :200 | `RP(Read)` | — | B1 |
-| `POST /` (создать) и `POST /ai/quick-create` с `scope=project` | `ValidProject(UserId,…)` в `PersonasCrudService` :71, контроллер :510 | `RJ(WriteContent)`; `OwnerId` новой персоны = `T`, не caller | `T` | B3 |
-| `POST /ai/team` | `AiTeamAsync(UserId, projectId,…)` :581 | `RJ(WriteContent)` | `T` | B3 |
-| `PUT /{id}` | `UpdateAsync(UserId,…)` :210 | `RP(WriteContent)` + отказ 403 на поля зоны/денег без `Configure` (§2) | `T` | B3 |
+| `POST /` (создать) и `POST /ai/quick-create` с `scope=project` | `ValidProject(UserId,…)` в `PersonasCrudService` :71, контроллер :510 | `RJ(Configure)`; `OwnerId` новой персоны = `T`, не caller | `T` | B3 |
+| `POST /ai/team` | `AiTeamAsync(UserId, projectId,…)` :581 | `RJ(Configure)` | `T` | B3 |
+| `PUT /{id}` | `UpdateAsync(UserId,…)` :210 | `RP(Configure)` + отказ 403 на поля зоны/денег без `Configure` (§2) | `T` | B3 |
 | `DELETE /{id}` | `DeleteAsync(UserId,…)` :214 | `RP(Configure)` | `T` | B1 |
 | `POST /{id}/make-default` | :222 | `RP(Configure)` | `T` | B1 |
 | `GET /{id}/chats` | `Get` :228 + `GetPersonaChats(UserId,…)` | `RP(Read)`; список — `GetPersonaChats(T, id, viewer: caller)` (И-5) | `T` | B4 |
 | **`POST /{id}/chats`** (дефект) | `Get` :236 + `CreatePersonaChatAsync(UserId,…)` :248 | `RP(RunTurn)`; `CreatePersonaChatAsync(T,…, createdByUserId: caller)` | `T` | B4 |
-| `POST /{id}/avatar/generate`, `/avatar/select` | `_crud.*(UserId,…)` :283, :299 | `RP(WriteContent)` | `T` | B3 |
+| `POST /{id}/avatar/generate`, `/avatar/select` | `_crud.*(UserId,…)` :283, :299 | `RP(Configure)` | `T` | B3 |
 | `GET /{id}/avatar`, `/avatar/original`, `/avatar/candidate/{file}` | `Get` :289, :308, :347 | `RP(Read)` | — | B1 |
-| `POST /{id}/avatar/upload`, `/avatar/recrop` | `Get` :366/:396, `SetAvatar*(id, UserId,…)` :385/:410 | `RP(WriteContent)` | `T` | B3 |
-| `PUT /{id}/voice` | :631 | `RP(WriteContent)` | `T` | B3 |
+| `POST /{id}/avatar/upload`, `/avatar/recrop` | `Get` :366/:396, `SetAvatar*(id, UserId,…)` :385/:410 | `RP(Configure)` | `T` | B3 |
+| `PUT /{id}/voice` | :631 | `RP(Configure)` | `T` | B3 |
 | `GET /{id}/bindings` | `Get` :590 | `RP(Read)` | — | B1 |
-| `POST/PUT/DELETE /{id}/bindings[/{bindingId}]` | `Get` + `ValidateAsync(UserId,…)` + `UpdateBindings(id, UserId,…)` :596–:680 | `RP(WriteContent)` + И-4 (MCP/плагин — `Configure`; цель — только в этом проекте) | `T` | B5 |
-| `POST /{id}/bindings/suggest`, `/generate`, `/apply-defaults` | :1276–:1340 | `RP(WriteContent)`; кандидаты фильтруются по И-4 | `T` | B5 |
+| `POST/PUT/DELETE /{id}/bindings[/{bindingId}]` | `Get` + `ValidateAsync(UserId,…)` + `UpdateBindings(id, UserId,…)` :596–:680 | `RP(Configure)` (решение 12.11; И-4 — второй рубеж) | `T` | B5 |
+| `POST /{id}/bindings/suggest`, `/generate`, `/apply-defaults` | :1276–:1340 | `RP(Configure)` (решение 12.11) | `T` | B5 |
 | `GET /binding-targets?type&personaId` | по `UserId` :1093–:1160 | если персона чужого арендатора — только цели этого проекта (И-4), иначе как сейчас | `T` | B5 |
 | `GET/POST/PUT/DELETE /{id}/automation…`, `/test`, `/suggest`, `/generate` | `Get` :689–:834, `UpdateRules(id, UserId,…)` | чтение `RP(Read)`, всё прочее `RP(Configure)` | `T` | B1 |
 | `GET /{id}/memory`, `/memory/search`, `/memory/recall`, `GET /{id}/focus` | `Get` + `_memory.*(UserId,…)` :1429–:1480 | `RP(Read)` | `T` | B1 |
-| `POST /{id}/memory`, `PUT/DELETE /{id}/memory/{entryId}`, `/confirm`, `DELETE /{id}/focus` | :1461–:1525 | `RP(WriteContent)` | `T` | B1 |
+| `POST /{id}/memory`, `PUT/DELETE /{id}/memory/{entryId}`, `/confirm`, `DELETE /{id}/focus` | :1461–:1525 | `RP(Configure)` | `T` | B1 |
 | `POST /{id}/memory/{entryId}/to-note`, `/memory/from-note` | :1532, :1543 | `RP(Configure)` | `T` | B1 |
 | `POST /ask` | агентский путь (`DenyOnDelegatedTurn`, токен арендатора) | без изменений | — | — |
 | `GET/POST /pantheon…`, `/avatar/caps`, `/ai/voice/candidates`, `/ai/character`, `/bindings/ai-condition`, `/knowledge-search` | личное пространство caller | без изменений | — | — |
@@ -127,8 +129,8 @@
 | Путь | Сейчас | Решение волны 3 |
 |---|---|---|
 | `SessionHub` | методов, адресующих персону по id вызывающего, нет (`RespondTeamPlanAsync` — штаб, `Configure`) | без изменений |
-| MCP `personas_list/get/bindings_list/automation_list/mcp_list/suggest_bindings` (`PersonasToolset.cs`) | токен арендатора; узкая рамка режет глобальных и сферных (S2a-3b) | без изменений |
-| MCP `personas_create/update/delete/bindings_set/mcp_grant/automation_*/generate_avatar/set_default/persona_ask/ai_team` | `ActorToolRights`: `OwnerOnly` для актора-участника | **без изменений в волне 3**: агент участника остаётся уже человека-редактора (правило «агент не больше человека» соблюдено). Открыть `personas_update`/`bindings_set` правом `WriteContent` — отдельное решение Андрея, не дефект |
+| MCP `personas_list/get/bindings_list/automation_list/mcp_list` (`PersonasToolset.cs`; `personas_suggest_bindings` с 12.11 — `OwnerOnly`) | токен арендатора; узкая рамка режет глобальных и сферных (S2a-3b) | без изменений |
+| MCP `personas_create/update/delete/bindings_set/mcp_grant/automation_*/generate_avatar/set_default/persona_ask/ai_team` | `ActorToolRights`: `OwnerOnly` для актора-участника | **без изменений в волне 3**: агент участника остаётся уже человека-редактора (правило «агент не больше человека» соблюдено). Решение Андрея 12.11: остаётся `OwnerOnly`; `personas_suggest_bindings` тоже переведён в `OwnerOnly` (W4-A1) |
 | MCP `memory`: `memory_*` персоны, `team_memory_*` | токен арендатора; запись `OwnerOnly` для участника | без изменений |
 | MCP `tasks_create`/`tasks_update`: `TaskPersonaGate` по актору | валидатор звался прямо по ключу арендатора, мимо `ResolvePersona` (`TasksToolset.cs:262-267`, `:443` до правки): агент актора-участника принимал глобальную персону владельца — И-1/И-3, найдено финалом a6f43197 | в обоих местах звать `TaskPersonaGate.Denied(…, callerUserId: TurnActorId(session.Id, context.OwnerId), …)` — тот же гейт, что REST (`TasksController.cs:1847`); тест — актор-участник + глобальная персона владельца дают отказ. Сделано, `c034655df`. **Исключение `selfPersonaId`** (принято финалом dd9d9213): это `session.PersonaId` (`TasksToolset.cs:111`), он идёт только в метку автора `CreatedByPersonaId` (`TasksToolset.cs:313`); персона чата проверена гейтом при его создании (`SessionsController.cs:101`, `ResolvePersona` с правом `RunTurn`), а пробуждение постановщика идёт в тот же `LinkedSessionId` (`TaskExecutionService.cs:1754`, `:2195`). Перевод на актора не принимается: редактор потерял бы право ставить задачи в общем проекте без руководителя — такой чат ведёт личный ассистент владельца (`TasksToolset.cs:271-277`) |
 | Слой персоны в ходе (`PersonaLayerContributor`), `@`-упоминания (`MentionTriggerSource`), автоматика (`PersonaAutomationService`), исполнитель задач (`TaskExecutionService`), штаб (`Services/Team/*`) | ключ — владелец сессии/задачи = арендатор | без изменений: проверено, что ключ уже `T` |
@@ -229,12 +231,12 @@
 (записи 05.11 — о приватных вложениях, токене на ход участника и удалении задачи). Статус по
 состоянию кода на 06.11 — ниже каждого пункта; где решения нет, вопрос остаётся **открыт**.
 
-1. **Агент редактора правит персону через MCP?** **Открыт.** В коде работает по умолчанию
+1. **Агент редактора правит персону через MCP?** **Закрыт: нет (решение Андрея 12.11).** В коде работает по умолчанию
    волны 3: `OwnerOnly` для актора-участника (таблица прав `ActorRightGate.cs:141-147`,
    единый гейт тулсетов `McpTransportController.cs:261`). Финал
    a6f43197 (06.11): блокером не считает — агент редактора и так уже человека-редактора;
    закрыть совсем — одна строка в `NonOwnerBindingEditDenied`.
-2. **Редактор заводит автоматику персоны?** **Открыт.** В коде работает по умолчанию:
+2. **Редактор заводит автоматику персоны?** **Закрыт: нет (решение Андрея 12.11).** В коде работает по умолчанию:
    автоматика — `Configure`, только владельцу (таблица прав сторожа `PersonaScopeGuardTests.cs:59-66`,
    матрица §2 выше).
 3. **Участник без руководителя проекта:** 400 `no_project_persona` с понятным текстом, а не

@@ -163,10 +163,6 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
     private string MemberId => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
 
-    // Стор персон на диске: DataPath тестового хоста — TempDir (TestWebApplicationFactory.cs:115),
-    // PersonasPath не переопределён → personas.json рядом с projects.json.
-    private string StorePath => Path.Combine(_factory.TempDir, "personas.json");
-
     private PersonaManager Personas => _factory.Services.GetRequiredService<PersonaManager>();
     private ProjectManager Projects => _factory.Services.GetRequiredService<ProjectManager>();
     private PersonaMemoryService Memory => _factory.Services.GetRequiredService<PersonaMemoryService>();
@@ -428,12 +424,12 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
     private static readonly WriteAct[] WriteActions =
     [
         new("запись памяти", HttpMethod.Post, "/api/personas/{p}/memory",
-            (r, _) => new { type = "semantic", text = "Запись " + r }, Ok2xx, Ok2xx, 403, 404),
+            (r, _) => new { type = "semantic", text = "Запись " + r }, Ok2xx, 403, 403, 404),
         new("правка записи", HttpMethod.Put, "/api/personas/{p}/memory/{e}",
-            (r, _) => new { text = "Изменено " + r }, Ok2xx, Ok2xx, 403, 404),
-        new("подтвердить запись", HttpMethod.Post, "/api/personas/{p}/memory/{e}/confirm", null, Ok2xx, Ok2xx, 403, 404),
-        new("забыть запись", HttpMethod.Delete, "/api/personas/{p}/memory/{e}", null, 204, 204, 403, 404),
-        new("сбросить фокус", HttpMethod.Delete, "/api/personas/{p}/focus", null, 204, 204, 403, 404),
+            (r, _) => new { text = "Изменено " + r }, Ok2xx, 403, 403, 404),
+        new("подтвердить запись", HttpMethod.Post, "/api/personas/{p}/memory/{e}/confirm", null, Ok2xx, 403, 403, 404),
+        new("забыть запись", HttpMethod.Delete, "/api/personas/{p}/memory/{e}", null, 204, 403, 403, 404),
+        new("сбросить фокус", HttpMethod.Delete, "/api/personas/{p}/focus", null, 204, 403, 403, 404),
         new("в заметку", HttpMethod.Post, "/api/personas/{p}/memory/{e}/to-note", null, Ok2xx, 403, 403, 404),
         new("из заметки", HttpMethod.Post, "/api/personas/{p}/memory/from-note",
             (_, ids) => new { noteId = ids["n"] }, Ok2xx, 403, 403, 404),
@@ -444,13 +440,13 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
             (r, _) => new { actionInstruction = "Изменено " + r }, Ok2xx, 403, 403, 404),
         new("удалить правило", HttpMethod.Delete, "/api/personas/{p}/automation/{a}", null, 204, 403, 403, 404),
         new("прогнать правило", HttpMethod.Post, "/api/personas/{p}/automation/{a}/test", null, 202, 403, 403, 404),
-        // W3-B3b (разрез §3.1 строки «PUT {id}/voice», «POST {id}/avatar/select»): WriteContent-пути
-        // карточки — те же ожидания, что у памяти: отказ читателя решает фильтр (project_scope).
+        // W3-B3b (разрез §3.1 строки «PUT {id}/voice», «POST {id}/avatar/select»): с 12.11 пути
+        // карточки и памяти — Configure (решение Андрея): редактор и читатель получают 403 project_scope.
         // Голос валиден по TtsVoiceCatalog: «sofia» с амплуа «casual» (TtsVoiceCatalogTests.cs:144).
         new("голос", HttpMethod.Put, "/api/personas/{p}/voice",
-            (_, _) => new { voice = "sofia", role = "casual" }, Ok2xx, Ok2xx, 403, 404),
+            (_, _) => new { voice = "sofia", role = "casual" }, Ok2xx, 403, 403, 404),
         new("выбор аватара", HttpMethod.Post, "/api/personas/{p}/avatar/select",
-            (_, _) => new { file = "cand.png" }, Ok2xx, Ok2xx, 403, 404),
+            (_, _) => new { file = "cand.png" }, Ok2xx, 403, 403, 404),
     ];
 
     // Фикстура действия — прямая запись стора под ключом владельца: проверяемому действию должно
@@ -525,7 +521,7 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         var rules = Personas.Get(personaId, TenantId)!.AutomationRules ?? [];
         switch (actionName, role)
         {
-            case ("запись памяти", Owner or Editor):
+            case ("запись памяти", Owner):
                 entries.Select(e => e.Text).Should().Contain("Запись " + runId,
                     $"{role}: запись легла в тот же стор, который читает владелец");
                 break;
@@ -533,7 +529,7 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
                 entries.Select(e => e.Text).Should().NotContain("Запись " + runId,
                     $"{role}: отказанная запись не оставила следа");
                 break;
-            case ("правка записи", Owner or Editor):
+            case ("правка записи", Owner):
                 entries.Single(e => e.Id == ids["e"]).Text.Should().Be("Изменено " + runId,
                     $"{role}: правка записана в сторе владельца");
                 break;
@@ -541,20 +537,20 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
                 entries.Single(e => e.Id == ids["e"]).Text.Should().Be("Факт проекта",
                     $"{role}: отказанная правка не тронула запись");
                 break;
-            case ("подтвердить запись", Owner or Editor):
+            case ("подтвердить запись", Owner):
                 entries.Single(e => e.Id == ids["e"]).Pending.Should().BeFalse($"{role}: запись подтверждена");
                 break;
             case ("подтвердить запись", _):
                 entries.Single(e => e.Id == ids["e"]).Pending.Should().BeTrue(
                     $"{role}: отказанный confirm оставил запись pending");
                 break;
-            case ("забыть запись", Owner or Editor):
+            case ("забыть запись", Owner):
                 entries.Any(e => e.Id == ids["e"]).Should().BeFalse($"{role}: запись удалена");
                 break;
             case ("забыть запись", _):
                 entries.Any(e => e.Id == ids["e"]).Should().BeTrue($"{role}: отказанное удаление не тронуло запись");
                 break;
-            case ("сбросить фокус", Owner or Editor):
+            case ("сбросить фокус", Owner):
                 Memory.GetFocus(TenantId, personaId).Should().BeNull($"{role}: фокус сброшен");
                 break;
             case ("сбросить фокус", _):
@@ -600,14 +596,14 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
             case ("прогнать правило", _):
                 rules.Any(r => r.Id == ids["a"]).Should().BeTrue($"{role}: отказанный прогон оставил правило на месте");
                 break;
-            case ("голос", Owner or Editor):
+            case ("голос", Owner):
                 Personas.Get(personaId, TenantId)!.Voice?.Voice.Should().Be("sofia",
                     $"{role}: голос записан под ключом арендатора");
                 break;
             case ("голос", _):
                 Personas.Get(personaId, TenantId)!.Voice.Should().BeNull($"{role}: отказанный голос ничего не записал");
                 break;
-            case ("выбор аватара", Owner or Editor):
+            case ("выбор аватара", Owner):
                 var chosen = Personas.Get(personaId, TenantId)!.Avatar.ImageFile;
                 chosen.Should().NotBe("avatar-arr.png", $"{role}: кандидат стал аватаром — новым файлом");
                 Directory.Exists(Path.Combine(Personas.AssetsDir, personaId, "candidates")).Should().BeFalse(
@@ -620,35 +616,6 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
                     $"{role}: отказанный выбор не съел кандидата");
                 break;
         }
-    }
-
-    // ── W3-B1d: гонка — владелец и редактор пишут память одной персоны одновременно ──────────────
-    //
-    // До B1d ключи были разные (каждый свой UserId) и записи не пересекались; теперь оба идут в
-    // один стор. Защита от гонки — блокировка сервиса: дописывание и сохранение в Remember идут
-    // под _saveLock (PersonaMemoryService.Remember: state.Entries.Add + JsonFileStore.Save под
-    // lock), дописывание — не перезапись списка (Append, не замена). Мутация «снять lock в
-    // Remember» на копии дерева теста не покраснила: критическая секция короткая (дедуп +
-    // Add + Save), два запроса в неё за два прогона не пересеклись — разбор в отчёте задачи.
-
-    [Fact]
-    public async Task ParallelMemoryWrite_OwnerAndEditor_BothEntriesKept()
-    {
-        var (_, personaId) = await ArrangeAsync(Editor);
-        var ownerText = "Запись владельца " + RunId();
-        var editorText = "Запись редактора " + RunId();
-
-        var ownerPost = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
-            new { type = "semantic", text = ownerText });
-        var editorPost = SecondClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
-            new { type = "semantic", text = editorText });
-        foreach (var response in await Task.WhenAll(ownerPost, editorPost))
-            response.EnsureSuccessStatusCode();
-
-        var texts = Memory.List(TenantId, personaId, null).Select(e => e.Text);
-        texts.Should().Contain(ownerText, "запись владельца в сторе");
-        texts.Should().Contain(editorText,
-            "запись редактора в том же сторе: одновременная запись ничего не перезаписала и не потеряла");
     }
 
     // ── W3-B3a: создание проектной персоны — право по проекту из тела, владелец = арендатор
@@ -679,14 +646,14 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
     [
         new("создать проектную", "/api/personas",
             (r, ids) => new { name = "Созданная-" + r, scope = "project", projectId = ids["p"] },
-            Ok2xx, Ok2xx, 403, 404),
+            Ok2xx, 403, 403, 404),
         new("quick-create проектной", "/api/personas/ai/quick-create",
             (r, ids) => new { prompt = "Аналитик для проекта " + r, scope = "project", projectId = ids["p"] },
-            Ok2xx, Ok2xx, 403, 404),
+            Ok2xx, 403, 403, 404),
         // ai/team пишет только черновики в ответ, персон не создаёт — это отдельная проверка ниже
         new("ai-команда проекта", "/api/personas/ai/team",
             (r, ids) => new { projectId = ids["p"], prompt = "Команда для анализа " + r },
-            Ok2xx, Ok2xx, 403, 404),
+            Ok2xx, 403, 403, 404),
     ];
 
     // Имя, под которым принятое действие создало бы персону: «создать проектную» — из тела
@@ -749,8 +716,8 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         // сторе вызывающего.
         switch (actionName, role)
         {
-            case ("создать проектную", Owner or Editor):
-            case ("quick-create проектной", Owner or Editor):
+            case ("создать проектную", Owner):
+            case ("quick-create проектной", Owner):
                 var created = Personas.GetByOwner(TenantId).Single(p => p.Name == name);
                 created.OwnerId.Should().Be(TenantId,
                     $"{role}: OwnerId новой персоны — владелец проекта, не вызывающий (И-7)");
@@ -768,7 +735,7 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
                     _llm.Owners.Should().NotContain(MemberId, "ни один вызов создания не пошёл под ключом вызывающего");
                 }
                 break;
-            case ("ai-команда проекта", Owner or Editor):
+            case ("ai-команда проекта", Owner):
                 body.GetProperty("members").EnumerateArray().Select(m => m.GetProperty("name").GetString())
                     .Should().Contain(name, $"{role}: черновики команды дошли до фронта");
                 Personas.GetByOwner(TenantId).Any(p => p.Name == name).Should().BeFalse(
@@ -807,49 +774,6 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
             "И-3: личная персона участника не видна владельцу проекта");
     }
 
-    // ── W3-B3a: гонка — владелец и редактор создают персону одного проекта одновременно ────────
-    //
-    // До B3a ключи были разные (каждый свой UserId) и записи не пересекались; теперь обе идут в
-    // стор проекта. Защита — существующая блокировка PersonaManager: вставка в ConcurrentDictionary
-    // и JsonFileStore.Save — под _saveLock, генерация handle там же (атомарна, без TOCTOU,
-    // PersonaManager.cs:423). Ожидаем ровно две персоны, обе под ключом владельца, и читаемый
-    // personas.json.
-
-    [Fact]
-    public async Task ParallelCreate_OwnerAndEditor_TwoPersonas()
-    {
-        var (projectId, fixturePersonaId) = await ArrangeAsync(Editor);
-        var ownerName = "Парная владельца-" + RunId();
-        var editorName = "Парная редактора-" + RunId();
-
-        var ownerPost = OwnerClient().PostAsJsonAsync("/api/personas",
-            new { name = ownerName, scope = "project", projectId });
-        var editorPost = SecondClient().PostAsJsonAsync("/api/personas",
-            new { name = editorName, scope = "project", projectId });
-        var ids = new List<string>();
-        foreach (var response in await Task.WhenAll(ownerPost, editorPost))
-        {
-            response.EnsureSuccessStatusCode();
-            ids.Add(IdOf(await response.Content.ReadAsStringAsync()));
-        }
-
-        var team = Personas.GetProjectTeam(TenantId, projectId);
-        team.Select(p => p.Id).Should().BeEquivalentTo(new[] { fixturePersonaId, ids[0], ids[1] },
-            "ровно три записи команды: существующая не потеряна, новые — две, без дублей");
-        foreach (var (id, name) in new[] { (ids[0], ownerName), (ids[1], editorName) })
-            Personas.Get(id, TenantId)!.OwnerId.Should().Be(TenantId,
-                $"{name}: созданная участником проекта — под ключом его арендатора (И-7)");
-
-        // Стор на диске читается: после двух одновременных сохранений personas.json — валидный JSON
-        // с обеими записями (оборванный файл или потерянная запись краснеют здесь). Имена в файле
-        // экранированы (\uXXXX), поэтому проверка — по разобранному JSON, а не по подстроке.
-        var stored = JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
-            .Select(e => e.GetProperty("Name").GetString()).ToList();
-        stored.Should().Contain(ownerName, "запись владельца лежит на диске");
-        stored.Should().Contain(editorName,
-            "запись редактора лежит на диске: одновременное сохранение ничего не потеряло и не оборвало файл");
-    }
-
     // ── W3-B3b: правка карточки (PUT /{id}) — поля зоны и денег принадлежат владельцу ──────────
     // (разрез §3.1 строка «PUT /{id}», §2 строка «Поля зоны и денег»; И-2, И-7) ────────────────
     //
@@ -879,31 +803,31 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
 
     private static readonly UpdateAct[] UpdateActions =
     [
-        new("править имя", (r, _) => new { name = "Имя-" + r }, Ok2xx, Ok2xx, 403, 404, NoRight),
+        new("править имя", (r, _) => new { name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
         // Карточка целиком, как её приносит форма: зона/доступ/модель — текущие значения или
         // пустые сбросы. Ни одно поле не изменено — отказа нет.
         new("править имя с неизменённой зоной",
             (r, ids) => new { name = "Имя-" + r, scope = "project", projectId = ids["p"], access = "full", model = "", effort = "" },
-            Ok2xx, Ok2xx, 403, 404, NoRight),
-        new("сменить модель", (r, _) => new { model = "sonnet" }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить модель и имя", (r, _) => new { model = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить зону на другой проект", (r, ids) => new { projectId = ids["p2"] }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить усилие", (r, _) => new { effort = "low" }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+            Ok2xx, 403, 403, 404, NoRight),
+        new("сменить модель", (r, _) => new { model = "sonnet" }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить модель и имя", (r, _) => new { model = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить зону на другой проект", (r, ids) => new { projectId = ids["p2"] }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить усилие", (r, _) => new { effort = "low" }, Ok2xx, 403, 403, 404, NoRight),
         // П1 ревью e6029e19: профиль доступа (Access/DisallowedTools/Tools/Specialty) — тоже поле
         // владельца. Каждая новая строка несёт name: на отказанной роли проверяется «прочие поля
         // DTO не записаны», на разрешённой — записаны обе части правки.
-        new("сменить профиль доступа", (r, _) => new { access = "readOnly", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить зону", (r, _) => new { scope = "global", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить уровень модели", (r, _) => new { modelTier = "strong", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
-        new("сменить ячейку матрицы", (r, _) => new { tierStrong = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        new("сменить профиль доступа", (r, _) => new { access = "readOnly", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить зону", (r, _) => new { scope = "global", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить уровень модели", (r, _) => new { modelTier = "strong", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
+        new("сменить ячейку матрицы", (r, _) => new { tierStrong = "sonnet", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
         // Обход (A): Access не меняется (тот же Custom), меняется только список запретов —
         // прямой сверки поля DTO раньше было недостаточно (PersonasCrudService.cs:232 → PersonaManager.cs:775)
         new("очистить запреты при неизменённом доступе",
             (r, _) => new { access = "custom", disallowedTools = Array.Empty<string>(), name = "Имя-" + r },
-            Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+            Ok2xx, 403, 403, 404, NoRight),
         // Обход (B): специальность через шаблон меняет профиль доступа (SpecialtyTemplatesService.cs:41,
         // SpecialtyCatalog.cs:37-38) — при неизменном Access в теле
-        new("сменить специальность", (r, _) => new { specialty = "backendExecutor", name = "Имя-" + r }, Ok2xx, 403, 403, 404, OwnerSettingsGate.ErrorCode),
+        new("сменить специальность", (r, _) => new { specialty = "backendExecutor", name = "Имя-" + r }, Ok2xx, 403, 403, 404, NoRight),
     ];
 
     // Подготовка фитчюра под строку: «сменить зону» — второй проект того же владельца (правка
@@ -965,13 +889,13 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         var persona = Personas.Get(personaId, TenantId)!;
         switch (actionName, role)
         {
-            case ("править имя", Owner or Editor):
+            case ("править имя", Owner):
                 persona.Name.Should().Be("Имя-" + runId, $"{role}: имя записано под ключом арендатора");
                 break;
             case ("править имя", _):
                 persona.Name.Should().Be(beforeName, $"{role}: отказанная правка не тронула имя");
                 break;
-            case ("править имя с неизменённой зоной", Owner or Editor):
+            case ("править имя с неизменённой зоной", Owner):
                 persona.Name.Should().Be("Имя-" + runId, $"{role}: неизменённые поля зоны не дали отказа");
                 persona.Scope.Should().Be(PersonaScope.Project);
                 persona.ProjectId.Should().Be(projectId);
@@ -1065,38 +989,6 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         }
     }
 
-    // ── W3-B3b: гонка — владелец правит имя, редактор правит тон одной персоны одновременно ────
-    //
-    // Оба идут в один стор под _saveLock PersonaManager.Update (мутация полей и Save,
-    // PersonaManager.cs:706-802). Partial-update не перечёркивает чужие поля: обе правки остаются.
-    // Устаревшая запись (оба меняют ОДНО поле) — побеждает последняя запись целиком: семантика
-    // стора как есть, версионной сверки не заводилось. Здесь поля разные — проверка: запись одна,
-    // OwnerId не изменился (И-7), обе правки в сторе, personas.json читается.
-
-    [Fact]
-    public async Task ParallelUpdate_OwnerAndEditor_SinglePersonaOwnerKept()
-    {
-        var (_, personaId) = await ArrangeAsync(Editor);
-        var ownerName = "Имя владельца-" + RunId();
-        var editorTone = "Тон редактора-" + RunId();
-
-        var ownerPut = OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}", new { name = ownerName });
-        var editorPut = SecondClient().PutAsJsonAsync($"/api/personas/{personaId}",
-            new { contract = new { tone = editorTone } });
-        foreach (var response in await Task.WhenAll(ownerPut, editorPut))
-            response.EnsureSuccessStatusCode();
-
-        var records = Personas.GetByOwner(TenantId).Where(p => p.Id == personaId).ToList();
-        records.Should().HaveCount(1, "запись персоны одна: одновременные правки не размножили её");
-        var persona = records[0];
-        persona.OwnerId.Should().Be(TenantId, "OwnerId не изменился (И-7): правка участника не переносит персону");
-        persona.Name.Should().Be(ownerName, "имя владельца в сторе");
-        persona.Contract?.Tone.Should().Be(editorTone,
-            "тон редактора в том же сторе: partial-update не перечеркнул чужие поля");
-
-        // Стор на диске читается и содержит ровно эту запись один раз (тот же приём, что ParallelCreate)
-        JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
-            .Count(e => e.GetProperty("Id").GetString() == personaId)
-            .Should().Be(1, "personas.json после двух одновременных сохранений: запись одна, файл не оборван");
-    }
+    // Гонки «владелец и редактор пишут одну персону» (память, создание, правка) сняты 12.11:
+    // записи редактора больше нет (Configure), параллельные 2xx невозможны по построению.
 }

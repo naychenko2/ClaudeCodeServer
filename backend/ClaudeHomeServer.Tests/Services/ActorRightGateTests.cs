@@ -137,6 +137,10 @@ public class ActorRightGateUnitTests
     [InlineData("tests", "run_tests")]
     [InlineData("wsp", "chats_send")]
     [InlineData("personas", "personas_update")]
+    [InlineData("personas", "personas_bindings_set")]
+    [InlineData("personas", "personas_suggest_bindings")]
+    // ключ консультанта pmem_<handle> в таблице не значится — закрыт default-deny (решение 12.11)
+    [InlineData("pmem_timur", "memory_remember")]
     [InlineData("higgsfield", "generate_video")]
     public void ЛюбойУчастник_ПишущееИИсполняющееДругихСерверов_Отказ(string server, string tool)
     {

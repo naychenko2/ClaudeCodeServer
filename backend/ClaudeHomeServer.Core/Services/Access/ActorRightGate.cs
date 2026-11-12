@@ -137,11 +137,13 @@ public static class ActorToolRights
              "team_memory_forget", "team_memory_remember", "team_memory_update"]);
         Server("notifications", ["notifications_list"],
             ["notifications_create", "notifications_delete", "notifications_mark_read"]);
-        // persona_ask запускает ход другой персоны (деньги арендатора) — закрыт; спорно
+        // persona_ask запускает ход другой персоны (деньги арендатора) — закрыт; спорно.
+        // personas_suggest_bindings — с 12.11 тоже OwnerOnly: подбор привязок проектной персоны
+        // ИИ-ходом редактор не видит (правка привязок — Configure, решение Андрея)
         Server("personas",
             ["personas_list", "personas_get", "personas_bindings_list", "personas_automation_list",
-             "personas_mcp_list", "personas_suggest_bindings"],
-            ["persona_ask", "personas_ai_team", "personas_automation_create", "personas_automation_delete",
+             "personas_mcp_list"],
+            ["persona_ask", "personas_suggest_bindings", "personas_ai_team", "personas_automation_create", "personas_automation_delete",
              "personas_automation_test", "personas_automation_update", "personas_bindings_set",
              "personas_create", "personas_delete", "personas_generate_avatar", "personas_mcp_grant",
              "personas_set_default", "personas_update"]);

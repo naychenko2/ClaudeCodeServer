@@ -292,7 +292,7 @@ public class PersonasController(
     {
         if (string.IsNullOrWhiteSpace(projectId))
             return (null, BadRequest(new { error = "Для проектной персоны нужен корректный projectId" }));
-        if (_access?.Resolve(UserId, projectId, ProjectRight.WriteContent) is { } area) return (area, null);
+        if (_access?.Resolve(UserId, projectId, ProjectRight.Configure) is { } area) return (area, null);
         return _access?.Resolve(UserId, projectId, ProjectRight.Read) is null
             ? (null, NotFound())
             : (null, StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode }));
@@ -321,7 +321,7 @@ public class PersonasController(
     }
 
     // Глобальную/сферную персону — личное пространство вызывающего, как раньше; проектную — по
-    // праву WriteContent на её проект, под ключом его владельца (W3-B3a; тот же приём, что
+    // праву Configure (только владелец, решение 12.11) на её проект, под ключом его владельца (W3-B3a; тот же приём, что
     // ProjectTasksController.Create: право по проекту из тела, запись — по TenantOwnerId).
     // Роль вызывающего и проект персоны идут дальше — в ИИ-подбор при создании (доработка
     // ревью aaf13fce): авто-привязки и типовые умения не пишут участнику личных целей
@@ -349,7 +349,7 @@ public class PersonasController(
     }
 
     [HttpPut("{id}")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req)
     {
         // W3-B3b (разрез §3.1 строка «PUT /{id}», §2 строка «Поля зоны и денег»; И-2, И-7): ключ —
@@ -527,7 +527,7 @@ public class PersonasController(
     // Инициатора и актора выводит CallerSpendAttribution: форма (без чата-вызывателя) — человек,
     // агентский вызов через stdio-MCP — по признаку живого хода (S-SPEND-8)
     [HttpPost("{id}/avatar/generate")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [SubsystemUsage("images")]
     // Гейт выключенной вертикали идёт раньше ProjectScope (Order): 503 с причиной, а не 404 «Не найдено»
     [SubsystemEnabled("images", "Подсистема генерации изображений выключена")]
@@ -556,7 +556,7 @@ public class PersonasController(
 
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
     [HttpPost("{id}/avatar/select")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req)
     {
         // W3-B3b (разрез §3.1 строка «POST {id}/avatar/select»; И-2): ключ — арендатор.
@@ -632,7 +632,7 @@ public class PersonasController(
     // Валидация: заявленный ContentType из белого списка И настоящие magic bytes;
     // расширение файла — по фактическому типу, а не по имени от клиента.
     [HttpPost("{id}/avatar/upload")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [RequestSizeLimit(15_000_000)]
     public async Task<ActionResult<Persona>> UploadAvatar(string id,
         [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
@@ -666,7 +666,7 @@ public class PersonasController(
 
     // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
     [HttpPost("{id}/avatar/recrop")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [RequestSizeLimit(5_000_000)]
     public async Task<ActionResult<Persona>> RecropAvatar(string id,
         [FromForm] IFormFile? cropped, [FromForm] string? crop)
@@ -787,7 +787,7 @@ public class PersonasController(
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        // Проектная персона — по праву WriteContent на её проект и под ключом его владельца
+        // Проектная персона — по праву Configure (только владелец, решение 12.11) на её проект и под ключом его владельца
         // (W3-B3a, разрез §3.1 «POST /ai/quick-create», И-2); глобальная/сферная — личное
         // пространство вызывающего, как раньше. Роль вызывающего и проект идут в авто-подбор
         // привязок ниже (доработка ревью aaf13fce): участнику подбор не пишет личных целей
@@ -876,7 +876,7 @@ public class PersonasController(
     // персон (роль/имя/характер/специальность) для создания в команде проекта. Возвращает
     // черновики — фронт показывает их для одобрения, затем создаёт через обычный POST /api/personas.
     // Право и ключ — те же, что у создания проектной персоны (W3-B3a, разрез §3.1 «POST /ai/team»,
-    // И-2): WriteContent на проект из тела, AiTeamAsync — под ключом его владельца (состав команды
+    // И-2): Configure на проект из тела, AiTeamAsync — под ключом его владельца (состав команды
     // строится по CLAUDE.md проекта и оплачивается тем же ключом).
     [HttpPost("ai/team")]
     public async Task<ActionResult> AiTeam([FromBody] AiTeamRequest req)
@@ -905,7 +905,7 @@ public class PersonasController(
 
     // Добавить одну привязку (мгновенное сохранение)
     [HttpPost("{id}/bindings")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaBinding>> AddBinding(string id, [FromBody] PersonaBindingRequest req)
     {
         // W3-B5a (разрез §3.1 строка «POST/PUT/DELETE {id}/bindings»; И-2, И-4): ключ — арендатор;
@@ -933,7 +933,7 @@ public class PersonasController(
 
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
     [HttpPut("{id}/bindings")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
         [FromBody] PersonaBindingsSetRequest req)
     {
@@ -958,7 +958,7 @@ public class PersonasController(
     // форма, которой ошибку надо показать.
     // Валидация и запись — PersonasCrudService (та же копия правила у MCP personas_update)
     [HttpPut("{id}/voice")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req)
     {
         // W3-B3b (разрез §3.1 строка «PUT {id}/voice»; И-2): ключ — арендатор.
@@ -968,7 +968,7 @@ public class PersonasController(
 
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaBinding>> UpdateBinding(string id, string bindingId,
         [FromBody] PersonaBindingRequest req)
     {
@@ -1017,7 +1017,7 @@ public class PersonasController(
     }
 
     [HttpDelete("{id}/bindings/{bindingId}")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> DeleteBinding(string id, string bindingId)
     {
         // W3-B5a (та же строка §3.1; И-2, И-4): ключ — арендатор; существующую привязку
@@ -1696,7 +1696,7 @@ public class PersonasController(
 
     // AI-подбор привязок под роль персоны: возвращает кандидатов, НЕ сохраняет
     [HttpPost("{id}/bindings/suggest")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> SuggestBindings(string id)
     {
         // W3-B5b (разрез §3.1 строка «POST {id}/bindings/suggest»; И-2, И-4): ключ — арендатора;
@@ -1721,7 +1721,7 @@ public class PersonasController(
     // Генерация привязок под свободный запрос пользователя: тот же конвейер, что и подбор
     // под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
     [HttpPost("{id}/bindings/generate")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> GenerateBindings(string id, [FromBody] GenerateBindingsRequest req)
     {
         // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; сужение кандидатов — тем же
@@ -1752,7 +1752,7 @@ public class PersonasController(
     // это 502, а не applied=0: у кнопки есть ветка «Не удалось применить — попробуйте
     // позже», и без ошибки она недостижима (сбой до записи ничего не меняет).
     [HttpPost("{id}/bindings/apply-defaults")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> ApplyDefaultBindings(string id)
     {
         // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; типовые цели материализуются
@@ -1905,11 +1905,11 @@ public class PersonasController(
 
     // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
         // W3-B1d (разрез §3.1 строка «POST {id}/memory»; И-2): запись памяти — под ключом арендатора,
-        // как её чтение в B1c: редактор общего проекта (право WriteContent из фильтра) пишет в тот
+        // как её чтение в B1c: редактор общего проекта (право Configure из фильтра) пишет в тот
         // же стор персоны, который читает владелец; с ключом вызывающего персону не нашёл бы
         // ни гейт тела, ни валидация RememberAsync — запись стала бы 404. Отказ 403/404 — за фильтром (И-3).
         var scope = HttpContext.GetRequestScope();
@@ -1942,7 +1942,7 @@ public class PersonasController(
 
     // Сбросить фокус (кнопка «Сбросить» в карточке памяти)
     [HttpDelete("{id}/focus")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> ClearFocus(string id)
     {
         // W3-B1d (разрез §3.1 строка «DELETE {id}/focus»; И-2): фокус лежит в сторе под ключом
@@ -1956,7 +1956,7 @@ public class PersonasController(
 
     // Отредактировать текст записи (UI-редактирование)
     [HttpPut("{id}/memory/{entryId}")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaMemoryEntry>> UpdateMemory(string id, string entryId, [FromBody] UpdateMemoryRequest req)
     {
         // W3-B1d (разрез §3.1 строка «PUT {id}/memory/{entryId}»; И-2): ключ записи — арендатор
@@ -1971,7 +1971,7 @@ public class PersonasController(
 
     // Забыть запись
     [HttpDelete("{id}/memory/{entryId}")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> Forget(string id, string entryId)
     {
         // W3-B1d (разрез §3.1 строка «DELETE {id}/memory/{entryId}»; И-2): ключ записи — арендатор
@@ -1984,7 +1984,7 @@ public class PersonasController(
 
     // Подтвердить предложенную autolearn запись (③-3.2) — снимает pending, попадает в recall
     [HttpPost("{id}/memory/{entryId}/confirm")]
-    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> ConfirmMemory(string id, string entryId)
     {
         // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/confirm»; И-2): ключ записи — арендатор

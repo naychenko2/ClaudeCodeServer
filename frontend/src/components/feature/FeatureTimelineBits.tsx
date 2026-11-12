@@ -411,7 +411,7 @@ export function ExecutorAvatar({ personaId }: { personaId: string | null }) {
 // маркер и живой ход на полосе идут по часам вкладки; со своим useNow у FeatureStepDetails
 // строка расходилась бы с осью и карточками «Производства» до интервала тика (60 с).
 // Хвост после мержа (GC-F10a): `isTail` — метку ставит вызывающий (по run.postMergeTails);
-// строка остаётся в списке этапа, но помечается «· хвост после мержа» — это не обычная
+// строка остаётся в списке этапа, но помечается «· открыто после мержа» (FP-H1) — это не обычная
 // работа стадии; отдельной строкой хвост в список не возвращается (тот же маркер, что
 // в подписи блока времени FeatureStepDetails).
 export function ExecutorRow({ x, task, now, featureId, featureTitle = null, marks = EMPTY_NAV_MARKS, isMobile = false,
@@ -549,7 +549,7 @@ export function ExecutorRow({ x, task, now, featureId, featureTitle = null, mark
             а не про её текущий статус. */}
         {isTail && (
           <span data-testid="timeline-executor-tail" style={{ fontSize: FS.xs, color: C.textMuted, whiteSpace: 'nowrap' }}>
-            · хвост после мержа
+            · открыто после мержа
           </span>
         )}
         {/* Чип модели и «оценивает →» — на 360 переезжают в раскрытую часть (макет §360). */}

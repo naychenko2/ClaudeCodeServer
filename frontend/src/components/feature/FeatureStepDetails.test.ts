@@ -299,13 +299,13 @@ describe('«Время шага»: доли — ровно axisFrac', () => {
     expect(findNodeByAttr(noAxis.container, 'data-testid', 'step-time')).toBeNull();
   });
 
-  it('хвост после мержа: блок помечен «хвост после мержа», без флага — нет', () => {
+  it('«открыто после мержа»: блок помечен «открыто после мержа», без флага — нет', () => {
     const id = nextId();
     upsertTaskLocal(fullTask(id));
     const tail = renderItem({ taskId: id, axis: CLOSED_AXIS, turns, isTail: true, nowMs: NOW_MS });
-    expect(textNodes(findNodeByAttr(tail.container, 'data-testid', 'step-time')!).join(' ')).toContain('хвост после мержа');
+    expect(textNodes(findNodeByAttr(tail.container, 'data-testid', 'step-time')!).join(' ')).toContain('открыто после мержа');
     const plain = renderItem({ taskId: id, axis: CLOSED_AXIS, turns, nowMs: NOW_MS });
-    expect(textNodes(findNodeByAttr(plain.container, 'data-testid', 'step-time')!).join(' ')).not.toContain('хвост');
+    expect(textNodes(findNodeByAttr(plain.container, 'data-testid', 'step-time')!).join(' ')).not.toContain('после мержа');
   });
 
   it('легенда называет живой ход и описывает цвета токенами, а не словами', () => {

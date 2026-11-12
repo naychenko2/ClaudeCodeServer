@@ -460,7 +460,7 @@ test.describe('Сценарий 3 · Применение', () => {
     await openWikiSettings(page);
     const auto = page.getByRole('switch', { name: 'Применять неспорное само' });
     await expect(auto, 'тумблер «Применять неспорное само» на месте').toBeVisible();
-    await expect(auto.getAttribute('aria-label'), 'aria-label = видимая подпись').toBe('Применять неспорное само');
+    await expect(auto, 'aria-label = видимая подпись').toHaveAttribute('aria-label', 'Применять неспорное само');
 
     // Класс правок: сеем запись класса (выключен) и ждём строку в блоке.
     writeWiki('keeper/settings.json', JSON.stringify({

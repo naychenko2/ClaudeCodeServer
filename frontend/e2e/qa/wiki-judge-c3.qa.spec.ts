@@ -172,7 +172,7 @@ test('тумблер ручного режима возвращает кнопк
   await openPanelTab(page, 'wikiSettings');
   const sw = page.getByLabel('Применять неспорное само');
   await expect(sw, 'тумблер «Применять неспорное само» есть в настройках вики').toBeVisible({ timeout: 20000 });
-  await expect(sw.getAttribute('aria-label'), 'aria-label тумблера = видимая подпись').toBe('Применять неспорное само');
+  await expect(sw, 'aria-label тумблера = видимая подпись').toHaveAttribute('aria-label', 'Применять неспорное само');
   if ((await sw.getAttribute('aria-checked')) === 'true') {
     await sw.click();
     await expect.poll(async () => (await client.get<{ autoApplyEnabled: boolean }>('/api/wiki/settings')).autoApplyEnabled,

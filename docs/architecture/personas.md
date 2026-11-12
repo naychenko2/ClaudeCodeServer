@@ -363,7 +363,7 @@
   `ProjectAccess.RoleHasRight` ([ProjectAccess.cs](../../backend/ClaudeHomeServer.Core/Services/Access/ProjectAccess.cs):91-98):
   видеть персону, её аватар, привязки, память, чаты — `Read` (все роли); новый чат с персоной —
   `RunTurn` (владелец и редактор; `POST {id}/chats` гейтится этим правом,
-  [PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):435);
+  [PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):463-465, `CreateChat`);
   правка карточки, память, привязки, создание проектной персоны — `Configure` (только владелец, решение Андрея 12.11:
   редактор персону только смотрит и разговаривает с ней; автоматическая память из его чатов пополняется);
   удаление, руководитель проекта, поля модели/зоны/доступа, автоматика, MCP- и плагин-привязки,
@@ -375,7 +375,7 @@
   ([PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):454-455);
   допуск персоны задаче — `TaskPersonaGate`
   ([TasksController.cs](../../backend/ClaudeHomeServer/Controllers/TasksController.cs):1847-1859).
-  Персона, созданная редактором, получает `OwnerId = арендатор`; `Scope/ProjectId` правка не меняет (И-7).
+  Проектную персону создаёт только владелец (`Configure`), `OwnerId` у неё — арендатор; `Scope/ProjectId` правка не меняет (И-7).
 - **Рассылка.** `personas_changed` проектной персоны идёт группе проекта и её владельцу
   ([PersonasController.cs](../../backend/ClaudeHomeServer/Controllers/PersonasController.cs):101-108,
   [PersonasCrudService.cs](../../backend/ClaudeHomeServer/Services/PersonasCrudService.cs):63-71);

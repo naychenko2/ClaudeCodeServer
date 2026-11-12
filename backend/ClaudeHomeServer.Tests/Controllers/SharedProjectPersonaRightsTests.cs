@@ -33,51 +33,40 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// действие не оставляет следа. Мутации, на которых матрица краснеет: вернуть в Get
 /// `_personas.Get(id, UserId)` или снять с Get атрибут [ProjectScope(From = Persona)].
 ///
+/// Правило с 12.11 (решение Андрея): память, фокус, автоматика, карточка, голос, аватар и
+/// создание проектной персоны — Configure, только владелец. Редактор и читатель на любом из
+/// этих путей получают 403 с машинным кодом project_scope ещё до тела (отказ решает фильтр или
+/// IProjectAccess.Resolve в теле создания), посторонний — 404; отказанное действие не оставляет
+/// следа в сторе. Редактору открыты только чтение и разговор с персоной (RunTurn).
+///
 /// W3-B1d (тот же файл, §3.1 строки B1 с RP(WriteContent)/RP(Configure)): вторая матрица —
-/// write-пути (память, фокус, автоматика). Запись идёт под ключом арендатора: редактор пишет
-/// в тот же стор, который читает владелец (с ключом вызывающего персону не нашёл бы ни гейт
-/// тела, ни валидация сервиса — записи не было бы вовсе), читатель отказан 403 и не оставляет
-/// следа. Гонка: ParallelMemoryWrite_OwnerAndEditor_BothEntriesKept — две одновременные
-/// записи остаются обе. Мутации: вернуть в Remember `_personas.Get(id, UserId)` — строка
-/// «запись памяти» краснеет для Editor. Снятие блокировки в Remember тест гонки не покраснил
-/// (два прогона, копия мутации): критическая секция короткая, два запроса в неё не попали —
-/// разбор в отчёте задачи.
+/// write-пути (память, фокус, автоматика, голос, выбор аватара). Владелец пишет под ключом
+/// арендатора, остальные роли отказаны.
 ///
-/// W3-B3a (тот же файл, §3.1 строки «POST /», «POST /ai/quick-create», «POST /ai/team»): третья
-/// матрица — создание проектной персоны. [ProjectScope] на этих действиях невозможен (id проекта
-/// не в маршруте), право решает IProjectAccess.Resolve в теле, ключ — TenantOwnerId. Ожидания те
-/// же, что у матрицы {id}-путей: редактор — 2xx, и OwnerId новой персоны — владелец проекта
-/// (с ключом вызывающего ValidProject отбил бы ему 400, а персона досталась бы ему самому);
-/// читатель — 403 project_scope, посторонний — 404; отказанное создание не оставляет ни
-/// полусозданной персоны, ни следа в сторе. Глобальную персону участник создаёт в своём
-/// пространстве (последний тест). Мутации (проверены на копиях дерева): вернуть в Create ключ
-/// вызывающего (tenant = area.CallerUserId) — строка «создать проектную» краснеет для Editor
-/// (400 вместо 2xx: ValidProject не пропускает чужой проект); вернуть в AiTeam ключ вызывающего
-/// (AiTeamAsync(…, area.CallerUserId)) — краснеет строка «ai-команда проекта» для Editor
-/// (400 «Проект не найден» из сверки project.OwnerId с первым аргументом, PersonasCrudService.cs:444).
+/// W3-B3a: третья матрица — создание проектной персоны (POST /, /ai/quick-create, /ai/team).
+/// [ProjectScope] на этих действиях невозможен (id проекта не в маршруте), право решает
+/// IProjectAccess.Resolve в теле, ключ — TenantOwnerId. Владелец — 2xx и OwnerId новой персоны —
+/// он сам; редактор и читатель — 403 project_scope до работы (в том числе до обращения к модели),
+/// посторонний — 404. Глобальную персону участник создаёт в своём пространстве (последний тест).
 ///
-/// W3-B3b (тот же файл, §3.1 строки «PUT /{id}», «PUT {id}/voice», «POST {id}/avatar/select»):
-/// четвёртая матрица — правка карточки. Поля зоны и денег (Scope/ProjectId/SphereId, профиль
-/// доступа, модель/уровень/усилие/матрица) — право владельца: редактору — 403 с кодом
-/// owner_settings до записи и без частичной записи прочих полей DTO; поле, принесённое без
-/// изменения, отказом не считается (форма шлёт карточку целиком). Содержание (имя, тон) и
-/// голос/аватар — WriteContent: редактор пишет под ключом арендатора, читатель отказан
-/// фильтром (project_scope). Гонка ParallelUpdate_OwnerAndEditor_SinglePersonaOwnerKept:
-/// обе правки одной персоны под _saveLock, запись одна, OwnerId не изменён. Мутации (проверены
-/// на копиях дерева): убрать сверку ProjectId в ChangesOwnerSettings — краснеет строка «сменить
-/// зону» для Editor (200 вместо 403, зона бы уехала в чужой проект); вернуть ключ вызывающего
-/// в Update/SetVoice/SelectAvatar — краснеют строки «править имя», «голос», «выбор аватара»
-/// для Editor (404: персоны под его ключом нет).
+/// W3-B3b: четвёртая матрица — правка карточки (PUT /{id}). Любая правка не-владельца — 403
+/// project_scope до записи и без частичной записи прочих полей DTO; профиль доступа — не только
+/// Access: DisallowedTools, Tools и Specialty — его части, и строки «сменить профиль доступа»,
+/// «очистить запреты при неизменённом доступе» и «сменить специальность» держат обходы прежнего
+/// гейта (теперь тот же отказ даёт Configure на самом действии).
 ///
-/// Доработка по ревью e6029e19 (W3-B3b returned, contract): профиль доступа — не только поле
-/// Access: DisallowedTools, Tools и Specialty — его части, и гейт сверяет их со ЭФФЕКТИВНЫМ
-/// значением записи (те же нормализаторы, что у писателя). Строки матрицы: «сменить профиль
-/// доступа», «сменить зону», «сменить уровень модели», «сменить ячейку матрицы» и два обхода
-/// прежнего гейта: «очистить запреты при неизменённом доступе» (Access тот же, меняется только
-/// DisallowedTools) и «сменить специальность» (шаблон специальности даёт Access/Tools из
-/// шаблона при неизменном Access в теле). Мутации: снять сверку DisallowedTools — краснеет
-/// строка «очистить запреты» для Editor; снять сверку Specialty — краснеет «сменить
-/// специальность» для Editor (обе — 200 вместо 403).
+/// Гонки «две вкладки владельца» (последний раздел файла): ParallelMemoryWrite_TwoOwnerRequests_
+/// BothEntriesKept, ParallelCreate_TwoOwnerRequests_TwoPersonasAndValidStore и
+/// ParallelUpdate_TwoOwnerRequests_SinglePersonaBothFieldsKept. Создание — единственный тест,
+/// проверяющий, что personas.json после двух одновременных сохранений остаётся валидным JSON.
+///
+/// Мутации, которые краснеют сейчас: снять [ProjectScope] с
+/// действия записи или понизить его право до WriteContent — краснеет соответствующая строка
+/// матрицы для Editor (2xx вместо 403); снять проверку права в теле создания — краснеют строки
+/// «создать проектную» / «quick-create проектной» / «ai-команда проекта» для Editor; снять
+/// _saveLock в PersonaMemoryService.Remember — краснеет ParallelMemoryWrite_TwoOwnerRequests_
+/// BothEntriesKept, снять _saveLock в PersonaManager.Update/Create — ParallelUpdate_… и
+/// ParallelCreate_….
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -989,6 +978,84 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
         }
     }
 
-    // Гонки «владелец и редактор пишут одну персону» (память, создание, правка) сняты 12.11:
-    // записи редактора больше нет (Configure), параллельные 2xx невозможны по построению.
+    // ── Гонки «две вкладки владельца»: два запроса владельца пишут одну персону одновременно ───
+    //
+    // С 12.11 запись редактора невозможна (Configure → 403 до тела), но два запроса самого
+    // владельца (две вкладки) по-прежнему идут в один стор под _saveLock PersonaManager /
+    // PersonaMemoryService. Проба: снять _saveLock в Remember/Update — потеря записи или
+    // оборванный personas.json краснят тесты ниже.
+
+    private string StorePath => Path.Combine(_factory.TempDir, "personas.json");
+
+    [Fact]
+    public async Task ParallelMemoryWrite_TwoOwnerRequests_BothEntriesKept()
+    {
+        var (_, personaId) = await ArrangeAsync(Owner);
+        var firstText = "Запись вкладки 1 " + RunId();
+        var secondText = "Запись вкладки 2 " + RunId();
+
+        var first = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
+            new { type = "semantic", text = firstText });
+        var second = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
+            new { type = "semantic", text = secondText });
+        foreach (var response in await Task.WhenAll(first, second))
+            response.EnsureSuccessStatusCode();
+
+        var texts = Memory.List(TenantId, personaId, null).Select(e => e.Text).ToList();
+        texts.Should().Contain(firstText, "запись первой вкладки в сторе");
+        texts.Should().Contain(secondText, "запись второй вкладки в том же сторе: одновременная запись ничего не потеряла");
+    }
+
+    [Fact]
+    public async Task ParallelCreate_TwoOwnerRequests_TwoPersonasAndValidStore()
+    {
+        var (projectId, fixturePersonaId) = await ArrangeAsync(Owner);
+        var firstName = "Парная вкладки 1-" + RunId();
+        var secondName = "Парная вкладки 2-" + RunId();
+
+        var first = OwnerClient().PostAsJsonAsync("/api/personas",
+            new { name = firstName, scope = "project", projectId });
+        var second = OwnerClient().PostAsJsonAsync("/api/personas",
+            new { name = secondName, scope = "project", projectId });
+        var ids = new List<string>();
+        foreach (var response in await Task.WhenAll(first, second))
+        {
+            response.EnsureSuccessStatusCode();
+            ids.Add(IdOf(await response.Content.ReadAsStringAsync()));
+        }
+
+        Personas.GetProjectTeam(TenantId, projectId).Select(p => p.Id).Should().BeEquivalentTo(
+            new[] { fixturePersonaId, ids[0], ids[1] },
+            "ровно три записи команды: существующая не потеряна, новые — две, без дублей");
+
+        // Стор на диске читается: после двух одновременных сохранений personas.json — валидный JSON
+        // с обеими записями. Имена в файле экранированы (\uXXXX), поэтому проверка — по разобранному JSON.
+        var stored = JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
+            .Select(e => e.GetProperty("Name").GetString()).ToList();
+        stored.Should().Contain(firstName, "запись первой вкладки лежит на диске");
+        stored.Should().Contain(secondName, "запись второй вкладки лежит на диске: файл не оборван, ничего не потеряно");
+    }
+
+    [Fact]
+    public async Task ParallelUpdate_TwoOwnerRequests_SinglePersonaBothFieldsKept()
+    {
+        var (_, personaId) = await ArrangeAsync(Owner);
+        var name = "Имя вкладки 1-" + RunId();
+        var tone = "Тон вкладки 2-" + RunId();
+
+        var first = OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}", new { name });
+        var second = OwnerClient().PutAsJsonAsync($"/api/personas/{personaId}",
+            new { contract = new { tone } });
+        foreach (var response in await Task.WhenAll(first, second))
+            response.EnsureSuccessStatusCode();
+
+        var records = Personas.GetByOwner(TenantId).Where(p => p.Id == personaId).ToList();
+        records.Should().HaveCount(1, "запись персоны одна: одновременные правки не размножили её");
+        records[0].Name.Should().Be(name, "имя первой вкладки в сторе");
+        records[0].Contract?.Tone.Should().Be(tone, "тон второй вкладки в том же сторе: partial-update не перечеркнул чужие поля");
+
+        JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
+            .Count(e => e.GetProperty("Id").GetString() == personaId)
+            .Should().Be(1, "personas.json после двух одновременных сохранений: запись одна, файл не оборван");
+    }
 }

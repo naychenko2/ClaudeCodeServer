@@ -207,6 +207,28 @@ public class PersonaChangedMemberDeliveryTests : IClassFixture<TestWebApplicatio
             .StatusCode.Should().Be(System.Net.HttpStatusCode.Forbidden);
     }
 
+    // Владелец правит свою проектную персону, не состоя в группе проекта: ToOwner доносит
+    // событие вкладкам владельца (раздел «Персоны» вне проекта). Проба: убрать ToOwner из
+    // PersonasCrudService.Broadcast — тест краснеет (событие не приходит).
+    [Fact]
+    public async Task Владелец_ПолучаетСобытиеПравкиСвоейПроектнойПерсоны_НеСостояВГруппеПроекта()
+    {
+        var projectId = await CreateProjectAsync("editor");
+        var id = await CreatePersonaAsync(Owner(), projectId, "Персона проекта");
+
+        var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var sink = new Sink();
+        sink.Attach(conn);
+        // Только своя группа, без JoinProject
+        await conn.InvokeAsync("JoinUser", OwnerId);
+
+        (await Owner().PutAsJsonAsync($"/api/personas/{id}", new { description = "правка владельца" }))
+            .EnsureSuccessStatusCode();
+
+        var updated = await sink.Await("updated").WaitAsync(Wait);
+        updated.GetProperty("personaId").GetString().Should().Be(id);
+    }
+
     // Точка контроллера: POST {id}/bindings вещает сам PersonasController, не сервис.
     // Цель «tool/web» — статический ключ ToolCatalog: валидна и не пересекается с посевными
     // привязками проекта (те — Project/Notes/Knowledge).

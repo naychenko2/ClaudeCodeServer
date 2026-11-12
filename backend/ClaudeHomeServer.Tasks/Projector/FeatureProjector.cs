@@ -1026,8 +1026,10 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Эпик (feature) в «Сейчас» не доходит: он контейнер фичи и исключён из Now, см. Build.)
 
     // Возвраты по источникам: для каждого источника (ревью/проверка/финал) — число возвратов
-    // (витки — задачи-носители вердикта returned/accepted_with_remarks) и сколько из них открыто (их доработка
-    // ещё не done). «Доработка» — rework-задача, чей ReviewOf ссылается на задачу-источник.
+    // (витки — задачи-носители вердикта returned), сколько из них открыто (их доработка
+    // ещё не done) и сколько виток принято с замечаниями (accepted_with_remarks: принято, работа
+    // к исполнителю не возвращалась — в Count и в Open не входит). «Доработка» — rework-задача,
+    // чей ReviewOf ссылается на задачу-источник.
     // Риски мержа из уже посчитанных учёта шагов и сверки трекера; порядок фиксирован, нули не кладём.
     // «open» — живое (Work + Review минус закрытый хвост), «tail» — закрытый хвост (§8.3): сданные,
     // но не принятые шаги. Деление точное: ClosedTail ⊆ Review + Work, поэтому open + tail равен
@@ -1052,16 +1054,24 @@ public sealed class FeatureProjector(TaskManager tasks)
         var reworks = steps.Where(t => t.Role == TaskRoles.Rework).ToList();
         FeatureSourceReturns Count(List<TaskItem> tasks)
         {
-            int count = 0, open = 0;
+            int count = 0, remarks = 0, open = 0;
             foreach (var t in tasks)
             {
-                if (!IsReturn(RoundVerdict(t))) continue;
-                count++;
+                var verdict = RoundVerdict(t);
                 // Открыто: есть доработка, ссылающаяся на эту задачу, и она ещё не done.
-                if (reworks.Any(r => r.ReviewOf is not null && r.ReviewOf.Contains(t.Id) && r.Status != TaskItemStatus.Done))
-                    open++;
+                bool reworkOpen = reworks.Any(r => r.ReviewOf is not null && r.ReviewOf.Contains(t.Id) && r.Status != TaskItemStatus.Done);
+                if (verdict == TaskVerdicts.Returned)
+                {
+                    count++;
+                    if (reworkOpen) open++;
+                }
+                else if (verdict == TaskVerdicts.AcceptedWithRemarks)
+                {
+                    // Замечания — отдельная ось: ни в Count, ни в Open (доработки по ним нет).
+                    remarks++;
+                }
             }
-            return new FeatureSourceReturns { Count = count, Open = open };
+            return new FeatureSourceReturns { Count = count, Remarks = remarks, Open = open };
         }
         return new FeatureReturnsBySource
         {

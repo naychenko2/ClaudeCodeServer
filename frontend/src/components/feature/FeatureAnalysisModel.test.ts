@@ -13,7 +13,9 @@
 // «без чата — кнопки нет»; (3) «тихо» без пунктира — краснеет «quiet — рамка пунктиром»;
 // (4) quiet из idleDur (if (run.quiet === true) → if (run.quiet === true || idleDur
 // >= 24*60)) — краснеет «quiet — только run.quiet»; (5) вернуть в компоненте
-// подавление хвоста по isMobile && st.key === 'moving' — краснеет сторож хвоста.
+// подавление хвоста по isMobile && st.key === 'moving' — краснеет сторож хвоста;
+// (6) (FP-H2) собрать часть про возвраты из summary.loops вместо verdicts.returned —
+// краснеют «done — смержена с итогом» и «склонение счётчиков done».
 
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -59,13 +61,17 @@ function mkNow(over: Partial<FeatureNow> = {}): FeatureNow {
   return { taskId: 't-1', stage: 'prod', title: 'Тема шага', ...over };
 }
 
-describe('analysisLineState — склонение счётчиков done', () => {
+describe('analysisLineState — склонение счётчиков done (FP-H2: «возвратов» = verdicts.returned)', () => {
   it('1 / 2 / 5 / 11 / 21', () => {
     const cases: Array<[number, string]> = [[1, '1 шаг, 1 возврат.'], [2, '2 шага, 2 возврата.'],
       [5, '5 шагов, 5 возвратов.'], [11, '11 шагов, 11 возвратов.'], [21, '21 шаг, 21 возврат.']];
     for (const [n, tail] of cases) {
+      // summary.loops намеренно больше returned (n+20 — это returned + замечания):
+      // слово должно строиться по verdicts.returned, а не по loops.
       const st = analysisLineState(mkRun({
-        state: 'merged', summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: n, loops: n },
+        state: 'merged',
+        summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: n, loops: n + 20 },
+        verdicts: { accepted: 0, acceptedWithRemarks: 20, returned: n, withdrawn: 0, loops: n + 20 },
       }), NOW);
       expect(st.tail).toBe(tail);
     }
@@ -73,18 +79,33 @@ describe('analysisLineState — склонение счётчиков done', () 
 });
 
 describe('analysisLineState — состояния', () => {
-  it('done — смержена с итогом: бейдж, дата мержа, счётчики', () => {
+  it('done — смержена с итогом: бейдж, дата мержа, счётчики; «возвратов» = verdicts.returned, не summary.loops (FP-H2)', () => {
+    // Фикстура решения Софьи: returned 15 / acceptedWithRemarks 20 / loops 35 —
+    // строка анализа говорит «15 возвратов», как герой и полоса «Разбора».
     const st = analysisLineState(mkRun({
       state: 'merged',
-      summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: 3, loops: 2 },
+      summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: 3, loops: 35 },
+      verdicts: { accepted: 3, acceptedWithRemarks: 20, returned: 15, withdrawn: 0, loops: 35 },
     }), NOW);
     expect(st.key).toBe('done');
     expect(st.badge?.text).toBe('смержена');
     expect(st.strong).toContain('шла 2 ч');
-    expect(st.tail).toBe('3 шага, 2 возврата.');
+    expect(st.tail).toBe('3 шага, 15 возвратов.');
     // Действие одно — «Анализ моделью».
     expect(st.actions.length).toBe(1);
     expect(st.actions[0].kind).toBe('analysis');
+  });
+
+  // Мутация (6) (FP-H2): собрать часть про возвраты из summary.loops — этот и
+  // «склонение… done» краснеют (проверено прогоном в копии мутации).
+  it('done без verdicts (старый ответ) — части про возвраты нет, не падаем', () => {
+    const st = analysisLineState(mkRun({
+      state: 'merged',
+      summary: { mergedAt: '2026-10-19T10:00:00Z', durationMinutes: 120, steps: 3, loops: 7 },
+      verdicts: undefined,
+    }), NOW);
+    expect(st.key).toBe('done');
+    expect(st.tail).toBe('3 шага.');
   });
 
   it('done — закрыта без итога: только бейдж, фразы нет', () => {

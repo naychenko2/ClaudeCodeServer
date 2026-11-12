@@ -1,18 +1,21 @@
 // Тесты сборки вкладки «Разбор» одной страницей (FS-FR). Проверяется ТОЛЬКО сборка: порядок
 // «итог → источник → якоря → шесть секций» по REVIEW_SECTIONS, прокрутка по клику якоря,
 // пустые состояния, мобильная высота якорей. Тела секций тестируют их файлы (FS-FR0–FS-FR6).
-// Внутри вкладки нет SegmentedControl/role=tablist/aria-pressed: «Разбор» — страница, не переключатель.
+// Внутри вкладки нет SegmentedControl/role=tablist; aria-pressed допустим только у чипов легенды
+// карточки «Исход ревью» (FeatureReturnsOutcomeBar): «Разбор» — страница, не переключатель.
 //
 // Мутации (проверены прогоном в копии дерева, 11.11): (1) при stats=null рендерить секцию →
 // краснеет ровно «stats=null → «Статистики пока нет», ни якорей, ни секций» (8 зелёных);
 // (2) не передавать isMobile в ReviewAnchors → краснеет ровно «на 360 все шесть якорей —
 // не ниже 40 px» (якорь 32 px, 8 зелёных); (3) убрать AccuracyBadges из сборки → краснеют
 // «порядок страницы» и «источник и полнота цифр» (7 зелёных); (4) переставить volume перед
-// time → краснеет ровно «порядок страницы» (8 зелёных).
+// time → краснеет ровно «порядок страницы» (8 зелёных); (5) вынести легенду «Исхода ревью»
+// из карточки → краснеет ровно «aria-pressed — только у чипов легенды…» (8 зелёных, 11.11).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeatureReviewTab } from './FeatureReviewTab';
+import { outcomeBarModel } from './FeatureReturnsOutcomeBar';
 import { REVIEW_SECTIONS } from './FeatureReviewParts';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage } from '../../types/featureRun';
@@ -143,7 +146,7 @@ function testIdsInOrder(n: AnyNode): string[] {
   return out;
 }
 
-// Значения атрибута у всех элементов поддерева (для «ни role=tablist, ни aria-pressed»).
+// Значения атрибута у всех элементов поддерева (для «ни role=tablist»).
 function attrDeep(n: AnyNode, attr: string): string[] {
   const out: string[] = [];
   if (n.nodeType === 1) {
@@ -151,6 +154,19 @@ function attrDeep(n: AnyNode, attr: string): string[] {
     if (v != null) out.push(v);
   }
   for (const c of n.childNodes) out.push(...attrDeep(c, attr));
+  return out;
+}
+
+// Узлы с aria-pressed и признак «внутри карточки «Исход ревью»» — для проверки, что
+// aria-pressed на странице принадлежит только чипам легенды этой карточки.
+function ariaPressedNodes(n: AnyNode, insideCard: boolean): { testid: string; insideCard: boolean }[] {
+  const out: { testid: string; insideCard: boolean }[] = [];
+  if (n.nodeType === 1) {
+    const testid = n.attributes?.['data-testid'] ?? '';
+    if (n.getAttribute('aria-pressed') != null) out.push({ testid, insideCard });
+    insideCard = insideCard || testid === 'returns-outcome';
+  }
+  for (const c of n.childNodes) out.push(...ariaPressedNodes(c, insideCard));
   return out;
 }
 
@@ -182,10 +198,17 @@ describe('FeatureReviewTab: сборка страницы', () => {
     expect(seq.filter((id) => id.startsWith('review-sec-')).length).toBe(6);
   });
 
-  it('внутри вкладки нет role=tablist и ни одного aria-pressed: это страница, не переключатель', () => {
+  it('внутри вкладки нет role=tablist; aria-pressed — только у чипов легенды в карточке «Исход ревью»: это страница, не переключатель', () => {
     const c = renderTab();
     expect(attrDeep(c, 'role').filter((r) => r === 'tablist').length, 'role=tablist').toBe(0);
-    expect(attrDeep(c, 'aria-pressed').length, 'aria-pressed').toBe(0);
+    const press = ariaPressedNodes(c, false);
+    // Чипов ровно столько, сколько сегментов исхода (все три, даже с нулевым числом).
+    expect(press.length, 'число aria-pressed').toBe(outcomeBarModel(mkRun().verdicts).segments.length);
+    // Каждый принадлежит чипу returns-chip-* внутри карточки; вне карточки их нет.
+    for (const p of press) {
+      expect(p.insideCard, `aria-pressed вне карточки «Исход ревью» (${p.testid})`).toBe(true);
+      expect(p.testid, 'aria-pressed на узле вне чипа легенды').toMatch(/^returns-chip-(accepted|remarks|returned)$/);
+    }
   });
 
   it('якоря — по шесть и по ключам REVIEW_SECTIONS (testid и id секции совпадают)', () => {

@@ -1,7 +1,8 @@
 // Тесты блока «Шкала срока» секции «Время и срок» вкладки «Разбор» (FS-FR1b): четыре строки
 // в порядке записки §5, общая шкала 0…max из показанных значений, «обещали» — риска, имя
 // оценщика в строке «Сейчас осталось», «Согласие оценок» через ReviewKv, без данных — блока
-// нет. Окружение node: renderToStaticMarkup.
+// нет. Подпись «Смены знаменателя: N» (FP-R2, величина 8): после знака шкалы, до «Согласия
+// оценок»; нет estimateDrift или 0 — подписи нет. Окружение node: renderToStaticMarkup.
 //
 // Мутации (краснеющие тесты — по фактическим прогонам в копии дерева, 11.11):
 // (1) «сейчас» взят из brief.estimate.remainingMinutes вместо note.estimate.etaMinutes —
@@ -21,7 +22,7 @@ import { describe, it, expect } from 'vitest';
 import { FeatureReviewEtaScale } from './FeatureReviewEtaScale';
 import { formatDuration } from './FeatureStatsBits';
 import type { FeatureBrief, FeatureBriefEstimate, FeatureBriefNote } from '../../lib/featurePage';
-import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureEstimateDrift, FeatureStats, FeatureTimeline } from '../../types/featureStats';
 
 const nameOf = (id: string): string | null => (id === 'p-sofya' ? 'Софья' : null);
 
@@ -67,6 +68,15 @@ function mkStats(over: Partial<FeatureStats> = {}): FeatureStats {
       loops: { median: 1, p25: 0, p75: 2 }, stepCount: 4, stepMinutes: null, tailMinutes: null,
     },
     ...over,
+  };
+}
+
+// Дрейф оценок (величины 4, 7, 8) — для подписи «Смены знаменателя» важен только
+// denominatorChanges; остальное — из контракта поля.
+function mkDrift(over: Partial<FeatureEstimateDrift> = {}): FeatureEstimateDrift {
+  return {
+    initialEtaMinutes: 1440, firstEtaMinutes: 1440, currentEtaMinutes: 1500, shiftMinutes: 60,
+    denominatorChanges: 0, accuracy: null, ...over,
   };
 }
 
@@ -188,6 +198,26 @@ describe('«Согласие оценок» (ReviewKv)', () => {
 
   it('agreement null — строки нет', () => {
     expect(html(mkBrief({ note: mkNote({ estimate: { ...mkNote().estimate!, agreement: null } }) }))).not.toContain('Согласие оценок');
+  });
+});
+
+describe('подпись «Смены знаменателя» (FP-R2, величина 8)', () => {
+  it('denominatorChanges 3 → «Смены знаменателя: 3» — после знака шкалы, до «Согласия оценок»', () => {
+    const h = html(mkBrief(), mkStats({ estimateDrift: mkDrift({ denominatorChanges: 3 }) }));
+    const iScale = h.indexOf('data-testid="review-eta-scale"');
+    const iDen = h.indexOf('Смены знаменателя: 3');
+    const iAgree = h.indexOf('Согласие оценок');
+    expect(iScale).toBeGreaterThanOrEqual(0);
+    expect(iDen).toBeGreaterThan(iScale);
+    expect(iDen).toBeLessThan(iAgree);
+  });
+
+  it('denominatorChanges 0 — «не менялся», подписи нет', () => {
+    expect(html(mkBrief(), mkStats({ estimateDrift: mkDrift({ denominatorChanges: 0 }) }))).not.toContain('Смены знаменателя');
+  });
+
+  it('нет estimateDrift (старый ответ) — подписи нет', () => {
+    expect(html(mkBrief())).not.toContain('Смены знаменателя');
   });
 });
 

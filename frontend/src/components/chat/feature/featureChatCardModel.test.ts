@@ -2,14 +2,14 @@
 // постановка шага + макет v5 §3. Мок FeatureIndexFeature/FeatureRun — как в FeatureBanner.test.
 
 import { describe, expect, it, vi } from 'vitest';
-import { featureChatCardModel } from './featureChatCardModel';
+import { chatCardStateWord, featureChatCardModel } from './featureChatCardModel';
 import { featureEstimateView } from './featureTruthModel';
 // Инвариант FS-FCb: подпись карточки — тот же словарь, что у плашки страницы (FeatureAskBlock).
 import { ASK_LABEL } from '../../feature/FeatureAskBlock';
 import type { FeatureIndexFeature } from '../../../types/featureIndex';
 import type { FeatureRun } from '../../../types/featureRun';
 
-const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>([['p-kira', 'Кира'], ['p-gleb', 'Глеб']]) }));
+const { personaMap } = vi.hoisted(() => ({ personaMap: new Map<string, string>([['p-kira', 'Кира'], ['p-gleb', 'Глеб'], ['p-alex', 'Александр']]) }));
 vi.mock('../../../lib/personas', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/personas')>();
   return { ...orig, getPersonaById: (id: string) => (personaMap.has(id) ? { id, name: personaMap.get(id) } : undefined) };
@@ -311,5 +311,71 @@ describe('featureChatCardModel: «часы стоят» и «обещали ≈ 
     const r = run({ state: 'closed', epic: { id: 'f1', title: 'Фича', status: 'done', initialEtaMinutes: 600 } });
     const m = featureChatCardModel(feat({ state: 'closed', bucket: 'closed', stepsAccepted: 12, stepsTotal: 12, planState: 'done' }), r, 's-me', false, NOW);
     expect(m.phrase.text).toBe('закрыта без мержа');
+  });
+});
+
+// FP-C1 (макет chat-feature-fit-v1 §5 «Слово состояния»): слово для строки-подзаголовка шапки.
+// Признак — model.glyph, не разбор текста фразы; слова тревоги — «ждёт тебя»/«стоит» (с именем
+// — через двоеточие, без имени — без); «идёт»/«смержена»/«закрыта» — короткие слова тега
+// (shortRunTagLabel, общий словарь узкой шапки).
+describe('chatCardStateWord: слово состояния для строки FP-C1', () => {
+  it('state word: wait → «ждёт тебя: Александр», tone warn', () => {
+    const f = feat({
+      state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'нужен ответ', personaId: 'p-alex', sessionId: 's-alex', taskId: 't-1' },
+      ask: { text: 'согласен, что «ещё N» можно убрать?', source: 'wait', personaId: 'p-alex' },
+    });
+    const m = featureChatCardModel(f, null, 's-me', false, NOW);
+    expect(m.glyph).toBe('warning'); // признак состояния — глиф модели
+    expect(chatCardStateWord(m)).toEqual({ text: 'ждёт тебя: Александр', tone: 'warn' });
+  });
+
+  it('state word: без имени — «ждёт тебя» и «стоит», без двоеточия', () => {
+    const wait = featureChatCardModel(feat({
+      state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'про отступы', personaId: null, sessionId: 's-alex', taskId: 't-1' },
+    }), null, 's-me', false, NOW);
+    expect(chatCardStateWord(wait)).toEqual({ text: 'ждёт тебя', tone: 'warn' });
+    const stop = featureChatCardModel(feat({
+      state: 'stopped',
+      attention: { kind: 'stopped', since: null, reason: null, personaId: 'p-gleb', sessionId: 's-gleb', taskId: 't-2' },
+    }), null, 's-me', false, NOW);
+    // без ask имя в текст фразы встроен (phrase.name=null) — слово без имени
+    expect(stop.phrase.name).toBeNull();
+    expect(chatCardStateWord(stop)).toEqual({ text: 'стоит', tone: 'danger' });
+  });
+
+  it('state word: stop с именем (ask stopped) → «стоит: Глеб», tone danger', () => {
+    const m = featureChatCardModel(feat({
+      state: 'stopped',
+      attention: { kind: 'stopped', since: null, reason: 'auth_failed', personaId: 'p-gleb', sessionId: 's-gleb', taskId: 't-2' },
+      ask: { text: 'Локальный движок недоступен', source: 'stopped', personaId: 'p-gleb' },
+    }), null, 's-me', false, NOW);
+    expect(chatCardStateWord(m)).toEqual({ text: 'стоит: Глеб', tone: 'danger' });
+  });
+
+  it('state word: running → короткое слово тега «идёт», tone muted; очередь — «в очереди»', () => {
+    const running = featureChatCardModel(feat(), null, 's-me', false, NOW);
+    expect(running.glyph).toBe('info');
+    expect(chatCardStateWord(running)).toEqual({ text: 'идёт', tone: 'muted' });
+    const queue = featureChatCardModel(feat({ state: 'paused', holdReason: 'queue', queue: { position: 2, length: 3 } }), null, 's-me', false, NOW);
+    expect(chatCardStateWord(queue)).toEqual({ text: 'в очереди', tone: 'muted' });
+  });
+
+  it('state word: merged → «смержена», closed → «закрыта», tone success', () => {
+    const merged = featureChatCardModel(feat({ state: 'merged', bucket: 'closed' }), null, 's-me', false, NOW);
+    expect(merged.glyph).toBe('success');
+    expect(chatCardStateWord(merged)).toEqual({ text: 'смержена', tone: 'success' });
+    const closed = featureChatCardModel(feat({ state: 'closed', bucket: 'closed' }), null, 's-me', false, NOW);
+    expect(chatCardStateWord(closed)).toEqual({ text: 'закрыта', tone: 'success' });
+  });
+
+  it('мобильная модель (тега нет): тревога говорит «ждёт тебя», у info/success слова нет (360 строка — счёт/срок)', () => {
+    const wait = featureChatCardModel(feat({
+      state: 'waiting',
+      attention: { kind: 'wait', since: null, reason: 'про отступы', personaId: null, sessionId: 's-alex', taskId: 't-1' },
+    }), null, 's-me', true, NOW);
+    expect(chatCardStateWord(wait)).toEqual({ text: 'ждёт тебя', tone: 'warn' });
+    expect(chatCardStateWord(featureChatCardModel(feat(), null, 's-me', true, NOW))).toEqual({ text: '', tone: 'muted' });
   });
 });

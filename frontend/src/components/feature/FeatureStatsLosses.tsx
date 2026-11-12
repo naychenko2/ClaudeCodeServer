@@ -165,8 +165,10 @@ function cardText(card: LossCard, personas: ReturnType<typeof usePersonas>): { b
       return { big: card.minutes == null ? '—' : formatDuration(card.minutes), ctx };
     }
     case 'loops': {
+      // «кругов» (FP-H2): Loops — returned + замечания, «сколько раз работа вернулась к
+      // исполнителю»; «возвраты» на странице — только настоящие (verdicts.returned).
       return {
-        big: `${card.stepRef} · ${card.loops} ${plural(card.loops, 'возврат', 'возврата', 'возвратов')}`,
+        big: `${card.stepRef} · ${card.loops} ${plural(card.loops, 'круг', 'круга', 'кругов')}`,
         ctx: `${card.stepTitle} · шёл ${formatDuration(card.durationMinutes)}`,
       };
     }
@@ -197,7 +199,7 @@ export function FeatureStatsLosses({ run, stats, isMobile = false, nav, nowMs }:
       <div style={SEC_LABEL}>Главные потери</div>
       {model.empty ? (
         <div data-testid="losses-empty" style={DASH_NOTE}>
-          Потери появятся с первым ожиданием, возвратом или ошибкой.
+          Потери появятся с первым ожиданием, кругом или ошибкой.
         </div>
       ) : (
         <div style={gridStyle(isMobile)}>

@@ -2,7 +2,9 @@
 // «Прошло» (открытая — elapsed, закрытая — summary.durationMinutes), «Ошибки» с эпизодами,
 // «Сдвиг срока с начала» (знак + formatDuration по модулю, 0 → «без сдвига») и «Точность срока»
 // («×1,5 от обещанного», одна цифра после запятой); нет stats.estimateDrift — обеих строк нет,
-// секция остаётся как в FS-FR1. Ровно две плитки, порядок строк kv и слот шкалы срока.
+// секция остаётся как в FS-FR1. Медианы шага (FP-R2, перенесены из «Объёма»): строки в конце
+// списка из typical.stepMinutes.median и stepMedianMinutes; нет данных (поля нет, null) — строк
+// нет. Ровно две плитки, порядок строк kv и слот шкалы срока.
 // Окружение node: разметка — renderToStaticMarkup (счёт и порядок — по html), состояний и
 // кликов здесь нет.
 //
@@ -26,7 +28,7 @@ import { FeatureReviewTime } from './FeatureReviewTime';
 import { formatDuration } from './FeatureStatsBits';
 import { COMP_LABEL } from './FeatureStatsPulseModel';
 import type { FeatureRun } from '../../types/featureRun';
-import type { FeatureEstimateDrift, FeatureStats, FeatureTimeline } from '../../types/featureStats';
+import type { FeatureEstimateDrift, FeatureStats, FeatureTimeline, TypicalFeatureStats } from '../../types/featureStats';
 
 function mkRun(over: Partial<FeatureRun> = {}): FeatureRun {
   return {
@@ -77,6 +79,16 @@ function mkDrift(over: Partial<FeatureEstimateDrift> = {}): FeatureEstimateDrift
   return {
     initialEtaMinutes: 600, firstEtaMinutes: 600, currentEtaMinutes: 900, shiftMinutes: 300,
     denominatorChanges: 0, accuracy: 1.5, ...over,
+  };
+}
+
+// «Типичная фича» (FP-R2): медиана шага 45 мин; stepMinutes: null — «фич с шагами меньше трёх».
+function mkTypical(over: Partial<TypicalFeatureStats> = {}): TypicalFeatureStats {
+  return {
+    count: 5, waitingCount: 0, duration: { median: 1440, p25: 720, p75: 2880 }, waiting: null,
+    loops: { median: 1, p25: 0, p75: 2 }, stepCount: 4,
+    stepMinutes: { median: 45, p25: 20, p75: 90 }, tailMinutes: null,
+    ...over,
   };
 }
 
@@ -244,6 +256,36 @@ describe('нет estimateDrift — обеих строк нет (c2)', () => {
     const h = html(mkRun(), mkStats(C1));
     expect(h).not.toContain('Сдвиг срока');
     expect(h).not.toContain('Точность срока');
+  });
+});
+
+describe('медианы шага (FP-R2)', () => {
+  it('typical.stepMinutes.median 45 → «Медиана шага по проекту» = formatDuration(45)', () => {
+    const h = html(mkRun(), mkStats(C1, { typical: mkTypical() }));
+    expect(kvValue(h, 'Медиана шага по проекту')).toBe(formatDuration(45));
+  });
+
+  it('stepMedianMinutes 90 → «Медиана шага этой фичи» = formatDuration(90)', () => {
+    const h = html(mkRun(), mkStats(C1, { stepMedianMinutes: 90 }));
+    expect(kvValue(h, 'Медиана шага этой фичи')).toBe(formatDuration(90));
+  });
+
+  it('обе медианы — в конце списка строк, после «Точности срока»', () => {
+    const h = html(mkRun(), mkStats(
+      { ...C1, errorMinutes: 30, errorCount: 2 },
+      { typical: mkTypical(), stepMedianMinutes: 90, estimateDrift: mkDrift() },
+    ));
+    expect(kvPairs(h).map((p) => p[0])).toEqual([
+      'Прошло', 'Ошибки', 'Сдвиг срока с начала', 'Точность срока',
+      'Медиана шага по проекту', 'Медиана шага этой фичи',
+    ]);
+  });
+
+  it('нет данных — строк нет: поля отсутствуют, typical без stepMinutes, stepMedianMinutes null', () => {
+    const h1 = html(mkRun(), mkStats(C1));
+    expect(h1).not.toContain('Медиана шага');
+    const h2 = html(mkRun(), mkStats(C1, { typical: mkTypical({ stepMinutes: null }), stepMedianMinutes: null }));
+    expect(h2).not.toContain('Медиана шага');
   });
 });
 

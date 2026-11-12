@@ -66,9 +66,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// «создать проектную» / «quick-create проектной» / «ai-команда проекта» для Editor; снять
 /// _saveLock в PersonaMemoryService.Remember (lock → lock (new object())) — краснеет
 /// ParallelMemoryWrite_TwoOwnerTabs_AllEntriesKept (замер: потеряна запись из 40). Снятие
-/// _saveLock в PersonaManager.Update и Create тесты ParallelUpdate_… и ParallelCreate_… НЕ
-/// краснит (замер в копии): Update правит один живой объект, а Save у обоих вне лока — эти
-/// тесты охраняют целостность personas.json и отсутствие дублей, но не сам лок.
+/// _saveLock вокруг генерации handle и вставки в PersonaManager.Create краснит
+/// ParallelCreate_TwoOwnerTabs_UniqueHandlesAndValidStore (замер в копии: дубль handle — два
+/// запроса с одним именем дают один слаг). Снятие _saveLock в Update тест ParallelUpdate_…
+/// НЕ краснит (замер в копии): Update правит один живой объект, запись файла — под отдельным
+/// lock внутри Save().
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>

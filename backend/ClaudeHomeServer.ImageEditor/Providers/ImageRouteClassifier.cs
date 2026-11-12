@@ -57,9 +57,11 @@ public sealed class ImageRouteClassifier
     public async Task<string?> ClassifyAsync(ImageEditOp op, string prompt, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(prompt) || op is not (ImageEditOp.Generate or ImageEditOp.Edit)) return null;
-        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{op}\n{prompt.Trim()}")));
+        // В LLM уходит то же начало запроса, что видят правила по словам
+        var text = PromptHints.Clip(prompt.Trim())!;
+        var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{op}\n{text}")));
         if (_cache.Count >= CacheLimit) _cache.Clear();
-        var task = _cache.GetOrAdd(key, _ => AskAsync(op, prompt.Trim()));
+        var task = _cache.GetOrAdd(key, _ => AskAsync(op, text));
         // Сбой не кэшируем: он может быть временным. Снимаем именно эту задачу, а не новую по тому же тексту
         _ = task.ContinueWith(t => { if (t.Result is null) _cache.TryRemove(KeyValuePair.Create(key, t)); },
             CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);

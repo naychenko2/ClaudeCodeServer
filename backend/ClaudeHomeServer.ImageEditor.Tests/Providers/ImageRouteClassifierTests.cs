@@ -72,6 +72,17 @@ public class ImageRouteClassifierTests : IDisposable
     }
 
     [Fact]
+    public async Task ДлинныйТекст_ВLlmУходитОбрезанным()
+    {
+        string? sent = null;
+        var runner = new FakeRunner((p, _) => { sent = p; return Task.FromResult<string?>("{\"category\":\"арт\"}"); });
+        var c = new ImageRouteClassifier(runner);
+        await c.ClassifyAsync(ImageEditOp.Generate, "лиса " + new string('х', 50_000) + " КОНЕЦ");
+        sent.Should().NotBeNull().And.NotContain("КОНЕЦ");
+        sent!.Length.Should().BeLessThan(PromptHints.MaxPromptChars + 1_000);
+    }
+
+    [Fact]
     public async Task Сбой_НеКэшируется()
     {
         var fail = true;

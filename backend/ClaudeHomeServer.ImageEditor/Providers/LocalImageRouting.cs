@@ -204,8 +204,14 @@ public readonly record struct PromptHints(bool QuotedText, bool Sign, bool Peopl
     private const RegexOptions O = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled;
     private static readonly TimeSpan T = TimeSpan.FromMilliseconds(50);
 
-    // «…», "…", “…” с хотя бы одной буквой или цифрой внутри
-    private static readonly Regex Quoted = new("«[^»]*[\\p{L}\\p{N}][^»]*»|\"[^\"]*[\\p{L}\\p{N}][^\"]*\"|“[^”]*[\\p{L}\\p{N}][^”]*”", O, T);
+    // Автовыбору хватает начала запроса; промпт в десятки тысяч символов (MCP, REST) не гоняем по регуляркам
+    public const int MaxPromptChars = 2000;
+
+    public static string? Clip(string? prompt) => prompt is { Length: > MaxPromptChars } ? prompt[..MaxPromptChars] : prompt;
+
+    // «…», "…", “…” с хотя бы одной буквой или цифрой внутри. До первой буквы — только не-буквы: иначе
+    // незакрытая кавычка даёт квадратичный откат
+    private static readonly Regex Quoted = new("«[^»\\p{L}\\p{N}]*[\\p{L}\\p{N}][^»]*»|\"[^\"\\p{L}\\p{N}]*[\\p{L}\\p{N}][^\"]*\"|“[^”\\p{L}\\p{N}]*[\\p{L}\\p{N}][^”]*”", O, T);
     private static readonly Regex SignRx = new("(?<!\\p{L})(вывеск|афиш|слайд|плакат|баннер|постер|надпис|signboard|poster|slide|banner|billboard|caption)", O, T);
     private static readonly Regex PeopleRx = new("(?<!\\p{L})(человек|людей|люди|портрет|девушк|парен|мужчин|женщин|ребён|ребен|дет[ие]|лиц[оа]|селфи|person|people|portrait|woman|man\\b|girl|boy|face)", O, T);
     private static readonly Regex PhotoRx = new("(?<!\\p{L})(фото|реалистич|фотореал|photo|realistic)", O, T);
@@ -216,7 +222,16 @@ public readonly record struct PromptHints(bool QuotedText, bool Sign, bool Peopl
     public static PromptHints Of(string? prompt)
     {
         if (string.IsNullOrWhiteSpace(prompt)) return default;
-        return new PromptHints(Quoted.IsMatch(prompt), SignRx.IsMatch(prompt), PeopleRx.IsMatch(prompt),
-            PhotoRx.IsMatch(prompt), FastRx.IsMatch(prompt), PreciseRx.IsMatch(prompt));
+        var p = Clip(prompt)!;
+        try
+        {
+            return new PromptHints(Quoted.IsMatch(p), SignRx.IsMatch(p), PeopleRx.IsMatch(p),
+                PhotoRx.IsMatch(p), FastRx.IsMatch(p), PreciseRx.IsMatch(p));
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // Котировка не падает из-за текста: без признаков — выбор по умолчанию
+            return default;
+        }
     }
 }

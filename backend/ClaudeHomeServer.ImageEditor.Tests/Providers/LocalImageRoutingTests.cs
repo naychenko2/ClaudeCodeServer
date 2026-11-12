@@ -151,6 +151,28 @@ public class LocalImageRoutingTests : IDisposable
         r.Reason.Should().Be("Авто → Qwen «качественно»: одежда или точная правка");
     }
 
+    // Незакрытая кавычка в огромном промпте давала откат регулярки и RegexMatchTimeoutException → 500
+    [Theory]
+    [InlineData("«")]
+    [InlineData("\"")]
+    [InlineData("“")]
+    public async Task Котировка_ДлинныйПромптСНезакрытойКавычкой_Отвечает(string quote)
+    {
+        var prompt = string.Concat(Enumerable.Repeat(quote + "кот в шляпе ", 5_000));
+        var hints = () => PromptHints.Of(prompt);
+        hints.Should().NotThrow();
+        using var service = Service();
+        var quoted = await service.QuoteAsync("u", "p", Quote(ImageEditCatalog.AutoModelId, prompt), default);
+        quoted.Value.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Признаки_ТолькоПоНачалуПромпта()
+    {
+        PromptHints.Of(new string('х', PromptHints.MaxPromptChars) + " вывеска «Бар»").Should().Be(default(PromptHints));
+        PromptHints.Of("вывеска «Бар» " + new string('х', 50_000)).QuotedText.Should().BeTrue();
+    }
+
     [Fact]
     public void Правка_Надпись_Klein()
     {

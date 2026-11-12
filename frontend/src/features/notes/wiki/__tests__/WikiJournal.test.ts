@@ -8,6 +8,13 @@
 // 'all'/null — без section; снятие пропа — прежняя раскладка со своим Select; смена пропа —
 // перезапрос и гонка поколений; отказ с пропом — текстом, как без пропа.
 //
+// Вид «Решения за ночь» (J-F2): переключатель вида и запрос view=night с окном последней
+// ночи [вчера, завтра); группы 2/1/1/0 — ровно 3 заголовка и 4 строки операций, пустая группа
+// не показывается; все пусты — «За ночь решений нет»; содержимое строки (claim, «почему»
+// судьи, причина спора) и ссылка на страницу — раздел берётся из ключа страницы по границе
+// «/»; «Откатить пакет» — только у принятых (у «Ждут судью» его нет), один POST с id пакета
+// строки; отказ — текстом; гонка поколений между видами.
+//
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 // Модалка ConfirmDialog рендерится порталом в document.body — её узлы ищутся от body.
 // Нативный <select> в fakeDom не живёт (react-dom при рендере читает select.options, чего у
@@ -37,6 +44,11 @@
 // (14) не вести «Вернуть мою» на страницу (убрать requestOpenWikiPage) → ««Вернуть мою» ведёт
 //     на страницу» краснеет (F6b).
 // (16) снять проверку поколения в .then (loadSeq) → «смена пропа a → b» краснеет (W9b).
+// (17) строка ночи не рендерит judgeReason/reason → «содержимое строки» краснеет (J-F2);
+// (18) «Откатить пакет» во всех группах → «у „Ждут судью“ нет „Откатить пакет“» краснеет (J-F2);
+// (19) не отфильтровывать пустые группы → «ровно 3 заголовка» краснеет (J-F2);
+// (20) снять проверку поколения в .then вида ночи → «гонка видов» краснеет (J-F2);
+// (21) pageSectionKey — startsWith без границы «/» → «с похожим префиксом» краснеет (J-F2).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -76,7 +88,7 @@ vi.mock('../../../../components/ui/Select', () => ({
 
 import { request } from '../../../../lib/offline';
 import {
-  __test as wikiStore, consumeOpenWikiPage, getWikiPageSnapshot, loadWikiPage, useWikiPage,
+  __test as wikiStore, consumeOpenWikiPage, getWikiPageSnapshot, loadWikiPage, loadWikiTree, useWikiPage,
 } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -942,5 +954,269 @@ describe('«Журнал»: раздел из пропа sectionScope (W9b)', ()
     const { container } = renderScoped('projects/p1');
     await settle();
     expect(has(container, 'Нет доступа')).toBe(true);
+  });
+});
+
+// ─── Вид «Решения за ночь» (J-F2) ───
+// Строка ночи — операция пакета с вердиктом (контракт J-F0): раздела в ней нет — только ключ
+// страницы, поэтому ссылка проверяет и derivation раздела из дерева по границе «/». Дерево
+// поднимается до рендера: без него ссылка на страницу не строится (и это тоже проверяется).
+// Окно запроса — локальные [вчера, завтра): asserted не точными датами (полночь посреди
+// теста сдвинула бы их), а границей: from ≤ сегодня ≤ to и ровно 2 дня между ними.
+
+const ND_ACCEPTED_A = {
+  packageId: 'pkg-a1', page: 'projects/p1/page-a', claim: 'Утверждение А',
+  reasonCode: 'source_not_newer', judgeDecision: 'accepted', judgeReason: 'подтверждено источником',
+  judgeAt: '2026-11-12T02:10:00Z', judgeCostUsd: 0.0012, judgeModel: 'claude-x',
+  reason: 'заменить мою формулировку',
+};
+const ND_ACCEPTED_B = { ...ND_ACCEPTED_A, packageId: 'pkg-a2', page: 'projects/p1/page-b', claim: 'Утверждение Б', judgeAt: '2026-11-12T02:14:00Z' };
+const ND_REJECTED = { ...ND_ACCEPTED_A, packageId: 'pkg-r1', page: 'common/page-c', claim: 'Утверждение В', judgeDecision: 'rejected', judgeReason: 'противоречит странице' };
+// Отказ кода (в т.ч. «судья не вынес решения за 3 попытки»): judgeModel='code', не вердикт модели
+const ND_CODE = { ...ND_ACCEPTED_A, packageId: 'pkg-c1', page: 'common/page-d', claim: null, judgeReason: 'судья не вынес решения за 3 попытки', judgeModel: 'code' };
+const ND_WAITING = {
+  ...ND_ACCEPTED_A, packageId: 'pkg-w1', page: 'projects/p1/page-e', claim: 'Утверждение Г',
+  judgeDecision: null, judgeReason: null, judgeAt: null, judgeCostUsd: null, judgeModel: null,
+  reason: 'ждёт решения',
+};
+
+// Фикстура c1: группы 2/1/1/0
+const NIGHT_2110 = { judgeAccepted: [ND_ACCEPTED_A, ND_ACCEPTED_B], judgeRejected: [ND_REJECTED], codeRejected: [ND_CODE], waiting: [] };
+const NIGHT_EMPTY = { judgeAccepted: [], judgeRejected: [], codeRejected: [], waiting: [] };
+const NIGHT_ONLY_WAITING = { ...NIGHT_EMPTY, waiting: [ND_WAITING] };
+
+// Дерево для ссылки на страницу: 'projects/p10' — раздел с похожим префиксом: граница
+// ключа («/»), а не начало строки
+const TREE_NIGHT = {
+  initialized: true,
+  sections: [
+    { key: 'projects/p1', name: 'AI Home' },
+    { key: 'projects/p10', name: 'Другой проект' },
+    { key: 'common', name: null },
+  ],
+};
+
+function serveNight(data: unknown) {
+  req.mockImplementation((url: string) => {
+    if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+    if (String(url).includes('view=night')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+    return Promise.resolve(null);
+  });
+}
+
+// Данные вида + поднятое дерево — до рендера (тот же порядок, что openPage выше)
+async function seedNight(data: unknown) {
+  serveNight(data);
+  await act(async () => { await loadWikiTree(); });
+}
+
+function nightRows(container: AnyNode): AnyNode[] {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-night-row');
+}
+function nightGroupCount(container: AnyNode): number {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-night-group').length;
+}
+function segmentBtn(container: AnyNode, label: string): AnyNode | null {
+  return allNodes(container).find(n => n.nodeName === 'BUTTON' && textNodes(n).join('').trim() === label) ?? null;
+}
+async function toNightView(c: AnyNode) {
+  click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+  await settle();
+}
+
+describe('«Журнал»: вид «Решения за ночь» (J-F2)', () => {
+  it('переключатель вида: «Решения за ночь» просит view=night с окном последней ночи; «Все записи» — обычный журнал', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    // дефолтный вид — прежний журнал: свои строки, ночных нет
+    expect(rows(c)).toHaveLength(5);
+    expect(nightRows(c)).toHaveLength(0);
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+    await settle();
+    const calls = getCalls('/wiki/journal');
+    expect(calls).toHaveLength(2);
+    const m = /^\/wiki\/journal\?view=night&from=(\d{4}-\d{2}-\d{2})&to=(\d{4}-\d{2}-\d{2})$/.exec(String(calls[1][0]));
+    expect(m).not.toBeNull();
+    // окно накрывает ночь через полночь: from ≤ сегодня ≤ to, ровно 2 дня между ними
+    const from = Date.parse(`${m![1]}T00:00:00Z`);
+    const to = Date.parse(`${m![2]}T00:00:00Z`);
+    const DAY = 86_400_000;
+    const now = new Date();
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    expect(from).toBeLessThanOrEqual(today);
+    expect(to).toBeGreaterThanOrEqual(today);
+    expect(to - from).toBe(2 * DAY);
+    expect(nightRows(c)).toHaveLength(4);
+    // возврат к журналу — обычный запрос без view, его строки на месте
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    expect(String(getCalls('/wiki/journal')[2][0])).toBe('/wiki/journal');
+    expect(rows(c)).toHaveLength(5);
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('группы 2/1/1/0: ровно 3 заголовка групп и 4 строки операций; «Ждут судью» не показана', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (19): не отфильтровывать пустые группы — «Ждут судью» добавилась бы четвёртой
+    expect(nightGroupCount(c)).toBe(3);
+    expect(nightRows(c)).toHaveLength(4);
+    expect(has(c, 'Принято судьёй')).toBe(true);
+    expect(has(c, 'Отклонено судьёй')).toBe(true);
+    expect(has(c, 'Отклонено кодом')).toBe(true);
+    expect(has(c, 'Ждут судью')).toBe(false);
+  });
+
+  it('все группы пусты — «За ночь решений нет», а не пустой экран', async () => {
+    await seedNight(NIGHT_EMPTY);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(has(c, 'За ночь решений нет')).toBe(true);
+    expect(nightGroupCount(c)).toBe(0);
+    expect(nightRows(c)).toHaveLength(0);
+  });
+
+  it('содержимое строки: claim, «почему» судьи и причина спора; ссылка открывает страницу', async () => {
+    await seedNight(NIGHT_2110);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (17): строка не рендерит judgeReason/reason — эти два assert краснеют
+    expect(has(c, 'Утверждение А')).toBe(true);
+    expect(has(c, 'почему: подтверждено источником')).toBe(true);
+    expect(has(c, 'причина спора: заменить мою формулировку')).toBe(true);
+    // раздела в строке нет — он берётся из ключа страницы; открытие — существующий канал
+    click(buttonByTestId(c, 'wiki-night-open'), 'ссылка на страницу');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p1', path: 'projects/p1/page-a' });
+  });
+
+  it('страница раздела с похожим префиктом: раздел берётся по границе ключа, а не по началу строки', async () => {
+    // 'projects/p1x' — не раздел: 'projects/p1' — начало его ключа, но не граница.
+    // Без границы «/» строка получила бы ссылку в чужой раздел.
+    const P1X = { ...ND_ACCEPTED_A, page: 'projects/p1x/y.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [P1X] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // мутация (21): startsWith без границы «/» — 'projects/p1' совпал бы, и этот assert краснеет
+    expect(buttonByTestId(c, 'wiki-night-open')).toBeNull();
+    expect(has(c, 'projects/p1x/y.md')).toBe(true);
+  });
+
+  it('граница пропускает похожий префикс раздела: «projects/p10» открывается в своём разделе', async () => {
+    const P10 = { ...ND_ACCEPTED_A, page: 'projects/p10/x.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [P10] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    click(buttonByTestId(c, 'wiki-night-open'), 'ссылка на страницу p10');
+    expect(consumeOpenWikiPage()).toMatchObject({ section: 'projects/p10', path: 'projects/p10/x.md' });
+  });
+
+  it('страница раздела, которого нет в дереве: без ссылки, ключ показан текстом', async () => {
+    const GHOST = { ...ND_ACCEPTED_A, page: 'projects/p9/ghost.md' };
+    await seedNight({ ...NIGHT_EMPTY, judgeAccepted: [GHOST] });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(nightRows(c)).toHaveLength(1);
+    expect(buttonByTestId(c, 'wiki-night-open')).toBeNull();
+    expect(has(c, 'projects/p9/ghost.md')).toBe(true);
+  });
+
+  it('«Откатить пакет»: один POST с id пакета строки; кнопка — только у принятых судьёй', async () => {
+    serveNight(NIGHT_2110);
+    await act(async () => { await loadWikiTree(); });
+    // откат отвечает успехом: список перечитывается после него
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.resolve({ restoredPages: ['projects/p1/page-a'] });
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.resolve(NIGHT_2110);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // 2 принятые строки — 2 кнопки; в отклонённых и отбитых кодом кнопки нет (откатывать нечего)
+    const revertBtns = allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-night-revert');
+    expect(revertBtns).toHaveLength(2);
+    click(revertBtns[0], 'Откатить пакет');
+    await settle();
+    const posts = postCalls();
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0][0])).toBe('/wiki/packages/pkg-a1/revert');
+    // тост — согласованный итог по возвращённым страницам
+    expect(toast.calls).toHaveLength(1);
+    expect(toast.calls[0][1]).toBe('1 страница возвращена');
+  });
+
+  it('у «Ждут судью» нет «Откатить пакет»: их ещё не применили', async () => {
+    await seedNight(NIGHT_ONLY_WAITING);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    expect(has(c, 'Ждут судью')).toBe(true);
+    expect(nightRows(c)).toHaveLength(1);
+    // мутация (18): «Откатить пакет» во всех группах — этот assert краснеет
+    expect(buttonByTestId(c, 'wiki-night-revert')).toBeNull();
+  });
+
+  it('отказ отката показан текстом, не кодом', async () => {
+    serveNight(NIGHT_2110);
+    await act(async () => { await loadWikiTree(); });
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') {
+        return Promise.reject({ status: 400, body: { code: 'wiki_revert_status', message: 'пакет в «open»: откатывают только применённый пакет' } });
+      }
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) return Promise.resolve(NIGHT_2110);
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    const c = render();
+    await settle();
+    await toNightView(c);
+    click(buttonByTestId(c, 'wiki-night-revert'), 'Откатить пакет');
+    await settle();
+    expect(has(c, 'Пакет в этом состоянии откатать нельзя')).toBe(true);
+    expect(has(c, 'wiki_revert_status')).toBe(false);
+  });
+
+  it('гонка видов: запоздалый ответ прежней ночи не перезатрёт свежие данные', async () => {
+    let resolveLate: (v: unknown) => void = () => {};
+    let n = 0;
+    req.mockImplementation((url: string) => {
+      if (url === '/wiki/tree') return Promise.resolve(TREE_NIGHT);
+      if (String(url).includes('view=night')) {
+        n++;
+        // первая ночь — задержана; вторая (после возврата к журналу и обратно) отвечает сразу
+        if (n === 1) return new Promise(res => { resolveLate = res; });
+        return Promise.resolve(NIGHT_EMPTY);
+      }
+      if (url.startsWith('/wiki/journal')) return Promise.resolve(RESP);
+      return Promise.resolve(null);
+    });
+    await act(async () => { await loadWikiTree(); });
+    const c = render();
+    await settle();
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент «Решения за ночь»');
+    await settle();
+    expect(nightRows(c)).toHaveLength(0); // первый ещё не ответил
+    click(segmentBtn(c, 'Все записи'), 'сегмент «Все записи»');
+    await settle();
+    expect(rows(c)).toHaveLength(5);
+    click(segmentBtn(c, 'Решения за ночь'), 'сегмент ещё раз');
+    await settle();
+    expect(nightRows(c)).toHaveLength(0); // свежий ответ — пустое окно
+    // мутация (20): снять проверку поколения в .then — запоздалый ответ дорисует 4 строки
+    resolveLate(NIGHT_2110);
+    await settle();
+    expect(nightRows(c)).toHaveLength(0);
   });
 });

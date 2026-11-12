@@ -1799,9 +1799,10 @@ const windowWidth = useWindowWidth();
     if (creatingSession) return;
     setCreatingSession(true);
     try {
-      // Чат создаётся от лица дефолт-персоны проекта
+      // Чат создаётся от лица дефолт-персоны проекта; ownerId обязателен: без него
+      // участник общего проекта молча получил бы личный чат вне проекта (W3-F2a)
       const s = await createChatWithContextPersona(
-        { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
+        { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null, ownerId: project.ownerId ?? null }, { mode: 'auto' });
       handleSelectSession(s);
     } catch (e) {
       showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -1817,9 +1818,9 @@ const windowWidth = useWindowWidth();
     void (async () => {
       try {
         if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
-        // Чат создаётся от лица дефолт-персоны проекта
+        // Чат создаётся от лица дефолт-персоны проекта; ownerId обязателен — см. handleCreateSession
         const s = await createChatWithContextPersona(
-          { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
+          { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null, ownerId: project.ownerId ?? null }, { mode: 'auto' });
         handleSelectSession(s, msg);
       } catch (e) {
         showToast('Чат', e instanceof Error ? e.message : 'Не удалось открыть чат');

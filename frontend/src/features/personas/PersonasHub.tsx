@@ -12,6 +12,8 @@ import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
+import { personaRole, canPersona } from './personaRights';
+import { useAllProjects } from '../projects/useAllProjects';
 
 // Хаб раздела «Персоны»: показывается в центральной зоне, когда персона не выбрана
 // и не идёт создание. Единая шапка (текст + компактная карточка возможностей),
@@ -30,6 +32,11 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
 }) {
   const [activityExpanded, setActivityExpanded] = useState(false);
   const { items: activityItems, loading: activityLoading } = usePersonasActivity(personas);
+  // W3-F1d (доработка fe0f42e8): роль этого человека в проекте, к которому относится
+  // персона, — для гейта «Поговорить» на витрине. Список проектов — общий кэш
+  // useAllProjects (тот же источник, что у палитры и зоны переключения), отдельного
+  // фетча здесь нет; роль читается только через personaRights (матрица §2).
+  const projects = useAllProjects();
   const hasPersonas = personas.length > 0;
   const scrollRef = useRef<HTMLDivElement>(null);
   const toggleActivity = () => {
@@ -108,18 +115,25 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
 
               {/* Твои помощники */}
               <section ref={assistantsSectionRef}>
-                <SectionTitle title="Твои помощники" sub="Кликни, чтобы открыть, или наведи, чтобы поговорить" />
+                <SectionTitle title="Твои помощники" sub="Кликни, чтобы открыть" />
                 {hasPersonas ? (
                   <div style={showcaseGrid}>
-                    {personas.map(p => (
-                      <AssistantCard
-                        key={p.id}
-                        persona={p}
-                        talking={talking}
-                        onOpen={() => onOpenPersonaView(p.id)}
-                        onTalk={() => onTalk(p)}
-                      />
-                    ))}
+                    {personas.map(p => {
+                      // Чат с персоной закрыт ролью (canPersona 'chat') — onTalk не передаём,
+                      // и кнопки на карточке нет вовсе (тот же приём, что F1c/F1d: пустого
+                      // ряда вместо неё не остаётся). Своя/глобальная персона и обычный
+                      // проект (роли нет) — как раньше: кнопка есть.
+                      const mayChat = canPersona(personaRole(p, projects), 'chat');
+                      return (
+                        <AssistantCard
+                          key={p.id}
+                          persona={p}
+                          talking={talking}
+                          onOpen={() => onOpenPersonaView(p.id)}
+                          onTalk={mayChat ? () => onTalk(p) : undefined}
+                        />
+                      );
+                    })}
                     <div
                       role="button" tabIndex={0} onClick={onNew}
                       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNew(); } }}
@@ -201,7 +215,10 @@ function SectionTitle({ title, sub }: { title: string; sub: string }) {
 }
 
 function AssistantCard({ persona, talking, onOpen, onTalk }: {
-  persona: Persona; talking?: boolean; onOpen: () => void; onTalk: () => void;
+  persona: Persona; talking?: boolean; onOpen: () => void;
+  // Начать чат с персоной. Нет onTalk (роль закрыла чат с персоной, W3-F1d) — кнопки
+  // «Поговорить» на карточке нет вовсе: фронт не обещает то, что бэк откажет (403).
+  onTalk?: () => void;
 }) {
   const lines = personaTitleLines(persona);
   return (
@@ -220,14 +237,16 @@ function AssistantCard({ persona, talking, onOpen, onTalk }: {
         </div>
       </div>
       {persona.description?.trim() && <div style={assistantDesc}>{persona.description}</div>}
-      <button
-        type="button"
-        disabled={talking}
-        onClick={e => { e.stopPropagation(); onTalk(); }}
-        style={{ ...talkLink, opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}
-      >
-        <MessageSquare size={12} strokeWidth={2.2} /> {talking ? 'Создаём…' : 'Поговорить'}
-      </button>
+      {onTalk && (
+        <button
+          type="button"
+          disabled={talking}
+          onClick={e => { e.stopPropagation(); onTalk(); }}
+          style={{ ...talkLink, opacity: talking ? 0.6 : 1, cursor: talking ? 'default' : 'pointer' }}
+        >
+          <MessageSquare size={12} strokeWidth={2.2} /> {talking ? 'Создаём…' : 'Поговорить'}
+        </button>
+      )}
     </div>
   );
 }

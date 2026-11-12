@@ -924,11 +924,11 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
             contextProjectId, automationRuleId, createdByUserId, privateToUserId);
 
     public async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
-        ClaudeMode mode, string? name = null)
-        => await _creation.CreateGroupChatAsync(ownerId, personaIds, mode, name);
+        ClaudeMode mode, string? name = null, string? createdByUserId = null)
+        => await _creation.CreateGroupChatAsync(ownerId, personaIds, mode, name, createdByUserId);
 
-    public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId)
-        => _creation.GetPersonaChats(ownerId, personaId);
+    public IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId, string viewer)
+        => _creation.GetPersonaChats(ownerId, personaId, viewer);
 
     public Session? GetById(string id) => _store.GetById(id);
 
@@ -1014,8 +1014,9 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
     // Обновить состав участников группового чата. Активный спикер сохраняется,
     // если остался в составе, иначе — новая ведущая. Адаптер пересоздаётся
     // (состав участников зашит в подсказку @упоминаний и групповой слой промпта).
-    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds) =>
-        _settings.SetParticipants(sessionId, ownerId, personaIds);
+    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds,
+        string? callerUserId = null) =>
+        _settings.SetParticipants(sessionId, ownerId, personaIds, callerUserId);
 
     public string? ResolveOwnerId(Session s) => _store.ResolveOwnerId(s);
 

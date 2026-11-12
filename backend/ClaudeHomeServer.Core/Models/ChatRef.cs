@@ -34,7 +34,8 @@ public sealed record ChatRef
 
 /// <summary>Кому показываем чат задачи. Две аудитории — потому что две формы рассылки:
 /// • <see cref="Viewer"/> — один человек (вызывающий REST, владелец карточки в WS): видимость
-///   решает <see cref="SessionAccess"/> по нему;
+///   решает <see cref="SessionAccess"/> по нему; пустой id — актора неизвестен (путь MCP,
+///   DEF-83e3): маскируется только приватное, общее отдаётся как есть (см. <see cref="ChatRefs.For"/>);
 /// • <see cref="Group"/> — вся группа project_{id} ОДНИМ payload'ом: отдать можно только то, что
 ///   видно всем, т.е. общий чат этого проекта; приватный чат участника закрыт и для его автора —
 ///   свой чат он видит точковыми путями (список и карточка REST).</summary>
@@ -72,6 +73,12 @@ public static class ChatRefs
 
         if (audience.ViewerUserId is { } viewer)
         {
+            // DEF-83e3: пустой зритель — не человек (актора хода нет), ему нечего «не пускать».
+            // Маску судит только приватность: PrivateToUserId закрыт, общий чат отдаётся как есть
+            // (тот же приём, что фильтр видимости в WorkspaceToolset.chats_list: нет актора →
+            // чужим считается любое private). Fail-closed остаётся ровно для приватных.
+            if (viewer.Length == 0)
+                return session.PrivateToUserId is null ? Visible(session) : Hidden(session);
             var project = session.ProjectId is { } pid ? projects?.GetById(pid) : null;
             return SessionAccess.CanSee(session, project, viewer) ? Visible(session) : Hidden(session);
         }

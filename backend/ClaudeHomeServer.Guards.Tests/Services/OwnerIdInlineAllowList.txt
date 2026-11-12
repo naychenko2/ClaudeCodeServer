@@ -25,7 +25,7 @@
 #     ключом хранилищ не служит; карточка GetById резолвится только через IProjectAccess.Resolve;
 #     в списке проекта «владелец или участник» берётся из RequestScope ([ProjectScope]), не сравнением.
 #   • ModelsController|2 — задачи (S2b) и личные персоны;
-#   • PersonasController|2 — до S4;
+#   • PersonasController|3 — до S4; +1 в доработке W3-B2 — см. дельту ниже;
 #   • TtsController|1 — владение чатом при записи расхода (чат — S1-3a, личный расход);
 #   • MediaHistoryController|1 — запись личной истории медиа (ADR-030), не проект;
 #   • ProjectGroupsController|2 — группы проектов личные у владельца, а не проектный доступ;
@@ -48,6 +48,15 @@
 # («actor != context.OwnerId»): когда актор хода не арендатор, сверяется автор записи
 # (автор или владелец — то же правило, что REST-удаление). Это право автора, а не ключ хранилищ:
 # задача берётся по id, стор — под арендатором.
+# Дельта W3-B2 доработка (путь б, вердикт вместо перевода): +1 совпадения в 0 файлах:
+# PersonasController.cs 2→3 — отсев СВОИХ проектов в списке персон без scope: их персоны уже в
+# own (GetByOwner), дублей быть не должно. Это не решение о доступе: он решён ProjectManager.
+# GetAccessible (ProjectManager.cs:80-87, там же рубильник); сравнение означает только «мой/не мой»
+# и ключом хранилищ не служит — ключ чужой команды p.OwnerId. Путь (а) (ProjectAccess.Check)
+# проверен прогоном и отвергнут: он чинит этот сторож, но красит DirectProjectAccessGuardTests
+# (прямой вызов в контроллере, снимок 0) и ProjectActionCallerKeyGuardTests (UserId аргументом
+# вызова, 108 против 107) — то есть требует подъёма ещё двух чужих снимков. Перейдёт на
+# IProjectAccess вместе с переводом вертикали персон на ключ арендатора (S4).
 
 backend/ClaudeHomeServer.Architecture/Services/Architecture/ArchitectureToolset.cs|1
 backend/ClaudeHomeServer.AudioEditor/Mcp/AudioEditorToolset.cs|1
@@ -59,7 +68,7 @@ backend/ClaudeHomeServer/Controllers/FeatureChatDoor.cs|1
 backend/ClaudeHomeServer/Controllers/LocalModelStatsController.cs|8
 backend/ClaudeHomeServer/Controllers/MediaHistoryController.cs|1
 backend/ClaudeHomeServer/Controllers/ModelsController.cs|2
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|2
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|3
 backend/ClaudeHomeServer/Controllers/ProjectGroupsController.cs|2
 backend/ClaudeHomeServer/Controllers/ProjectRelayController.cs|1
 backend/ClaudeHomeServer/Controllers/SessionHandsController.cs|1

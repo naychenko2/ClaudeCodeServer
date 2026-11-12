@@ -124,6 +124,22 @@ describe('SaveConflictDialog', () => {
     expect(html).toContain('в проекте · Андрей');
   });
 
+  // DEF-65cf: текст повторного конфликта собирается по code, как заголовок:
+  // для заметки было жёсткое «Файл…».
+  it('повторный конфликт: Notice по code — «Файл…» / «Заметку…»', () => {
+    const noteConflict: SaveConflict = { ...conflict, code: 'note_changed' };
+    for (const noDiff of [false, true]) {
+      const file = render({ again: true, noDiff });
+      expect(file, 'файл: «Файл…»').toContain('Файл изменили ещё раз');
+      const note = render({ again: true, noDiff, conflict: noteConflict });
+      expect(note, 'заметка: «Заметку…»').toContain('Заметку изменили ещё раз');
+      expect(note, 'заметка: без «Файл…»').not.toContain('Файл');
+    }
+    // с диффом — та же формулировка про свежую версию, по code
+    expect(render({ again: true })).toContain('Файл изменили ещё раз — показываем свежую версию.');
+    expect(render({ again: true, conflict: noteConflict })).toContain('Заметку изменили ещё раз — показываем свежую версию.');
+  });
+
   it('загрузка диффа — скелетон, кнопки активны', () => {
     const html = render({ diffLoading: true });
     expect(html).toContain('aria-busy="true"');

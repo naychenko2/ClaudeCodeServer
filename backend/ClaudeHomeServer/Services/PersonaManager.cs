@@ -143,6 +143,25 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public IReadOnlyList<Persona> GetProjectTeam(string userId, string? projectId) =>
         GetByOwner(userId).Where(p => PersonaZone.IsProjectTeam(p, projectId)).ToList();
 
+    // Проектные персоны проектов, где вызывающий — участник (W3-B2, разрез §3.1 «GET /api/personas
+    // без scope»). Список проектов готовый и принадлежит вызывающему контроллеру
+    // (ProjectManager.GetAccessible — видимость с рубильником и флагом): здесь НЕТ выборки по
+    // OwnerId, метод принимает пары (projectId, tenantOwnerId) и отдаёт команды этих проектов.
+    // Проектная персона с чужим владельцем — битая запись, а не доступ (та же сверка, что в
+    // ProjectAccessService.ResolvePersona, §2.2).
+    public List<Persona> GetProjectTeamsOfMemberProjects(
+        IReadOnlyCollection<(string ProjectId, string TenantOwnerId)> memberProjects)
+    {
+        if (memberProjects is not { Count: > 0 }) return [];
+        var tenants = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (projectId, tenantOwnerId) in memberProjects) tenants[projectId] = tenantOwnerId;
+        return _personas.Values
+            .Where(p => PersonaZone.OwnProjectId(p) is { } ownProjectId
+                && tenants.TryGetValue(ownProjectId, out var tenant)
+                && p.OwnerId == tenant)
+            .OrderByDescending(p => p.UpdatedAt).ToList();
+    }
+
     // Персона по id с проверкой владельца (null — нет или чужая)
     public Persona? Get(string id, string userId) =>
         _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? p : null;
@@ -210,7 +229,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // и нормализуется в null (поведение как раньше, по фич-флагам владельца).
     private static readonly string[] AllTools = ["tasks", "notes", "web"];
 
-    private static List<string>? NormalizeTools(List<string>? tools)
+    // internal — тот же нормализатор нужен гейту owner_settings в контроллере, чтобы сверять
+    // запрос с ЭФФЕКТИВНЫМ значением записи, а не с дословным телом (PersonasController.ChangesOwnerSettings)
+    internal static List<string>? NormalizeTools(List<string>? tools)
     {
         if (tools is null) return null;
         var clean = tools.Select(t => t.Trim().ToLowerInvariant())
@@ -826,6 +847,70 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         Save();
         OnPersonaChanged?.Invoke(persona);
         return persona;
+    }
+
+    // Добавление одной привязки к набору (W3-B5a, POST {id}/bindings): список строится
+    // под _saveLock из ТЕКУЩЕГО значения — снимок вызывающего не основа записи.
+    // Иначе две одновременные записи (владелец и редактор) перечёркивают друг друга:
+    // UpdateBindings пишет список целиком, и additive-вызов поверх его снимка —
+    // классическая потерянная правка. Полная замена — остаётся за UpdateBindings.
+    public Persona AppendBinding(string id, string userId, PersonaBinding binding)
+    {
+        var persona = Get(id, userId)
+            ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+        lock (_saveLock)
+        {
+            persona.Bindings = [.. persona.Bindings ?? [], binding];
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return persona;
+    }
+
+    // Правка одной привязки (W3-B5a доработка, PUT {id}/bindings/{bindingId}; возврат ревью
+    // 5a794ef5): read-modify-write под _saveLock, как AppendBinding — поиск, мутация и запись
+    // атомарны относительно одновременных AppendBinding/RemoveBinding. Прежняя форма
+    // (контроллер мутировал найденный объект и писал весь список) затирала привязку,
+    // добавленную параллельным POST после момента снятия списка. Возвращает изменённую
+    // привязку; null — персоны или привязки уже нет (гонка с удалением: 404, а не 500).
+    public PersonaBinding? UpdateBinding(string id, string userId, string bindingId,
+        Action<PersonaBinding> mutate)
+    {
+        var persona = Get(id, userId);
+        if (persona is null) return null;
+        PersonaBinding? updated = null;
+        lock (_saveLock)
+        {
+            var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
+            if (current is null) return null;
+            mutate(current);
+            current.UpdatedAt = DateTime.UtcNow;
+            persona.UpdatedAt = DateTime.UtcNow;
+            updated = current;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return updated;
+    }
+
+    // Удаление одной привязки (W3-B5a доработка, DELETE {id}/bindings/{bindingId}): тот же
+    // read-modify-write под _saveLock из текущего значения. Пустой список нормализуется
+    // в null (как UpdateBindings). false — персоны или привязки уже нет.
+    public bool RemoveBinding(string id, string userId, string bindingId)
+    {
+        var persona = Get(id, userId);
+        if (persona is null) return false;
+        lock (_saveLock)
+        {
+            if (persona.Bindings?.Any(b => b.Id == bindingId) != true) return false;
+            var kept = persona.Bindings!.Where(b => b.Id != bindingId).ToList();
+            persona.Bindings = kept.Count > 0 ? kept : null;
+            persona.UpdatedAt = DateTime.UtcNow;
+        }
+        Save();
+        OnPersonaChanged?.Invoke(persona);
+        return true;
     }
 
     // Полная замена правил автоматизации персоны (событийно-управляемая проактивность);

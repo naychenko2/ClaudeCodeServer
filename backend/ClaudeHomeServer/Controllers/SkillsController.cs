@@ -146,7 +146,15 @@ public class SkillsController(
         {
             IReadOnlyList<SkillSuggestion> result;
             if (!string.IsNullOrWhiteSpace(req.PersonaId))
-                result = await suggest.SuggestForPersonaAsync(UserId, req.PersonaId, ct);
+            {
+                // Навыки — библиотека владельца (разрез §3.2, B5): право Configure по персоне.
+                // id в DTO — [ProjectScope] его не видит, резолв здесь; ключ подборки —
+                // арендатор персоны, а не вызывающий (иначе контекст персоны читался бы
+                // редактором общего проекта).
+                var scope = access.ResolvePersona(UserId, req.PersonaId, ProjectRight.Configure);
+                if (scope is null) return PersonaConfigureDenied(req.PersonaId);
+                result = await suggest.SuggestForPersonaAsync(scope.TenantOwnerId, req.PersonaId, ct);
+            }
             else if (!string.IsNullOrWhiteSpace(req.ProjectId))
                 result = await suggest.SuggestForProjectAsync(UserId, req.ProjectId, ct);
             else if (!string.IsNullOrWhiteSpace(req.Query))
@@ -176,11 +184,19 @@ public class SkillsController(
 
     // --- Установить навык персоне: глобальная установка + привязка (Skill) ---
 
+    // Навыки — библиотека владельца (разрез §3.2, B5): право Configure по персоне. Проектной
+    // персоне общего проекта навык ставит только её владелец (он же владелец проекта):
+    // редактору и читателю — 403 «Только владелец проекта», постороннему — 404 (существование
+    // чужой персоны не подтверждаем). Ключ записи — арендатор из RequestScope: привязка
+    // валидируется и пишется по владельцу персоны (ValidateAsync/UpdateBindings), а не по
+    // вызывающему.
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [HttpPost("api/personas/{id}/skills")]
     public async Task<IActionResult> InstallForPersona(string id, [FromBody] InstallForPersonaRequest req,
         CancellationToken ct)
     {
-        var persona = personas.Get(id, UserId);
+        var tenantId = HttpContext.GetRequestScope().TenantOwnerId;
+        var persona = personas.Get(id, tenantId);
         if (persona is null) return NotFound(new { error = "Персона не найдена" });
         if (string.IsNullOrWhiteSpace(req.Source) || string.IsNullOrWhiteSpace(req.Skill))
             return BadRequest(new { error = "Нужны source и skill" });
@@ -192,15 +208,25 @@ public class SkillsController(
         // Имя цели привязки — как навык видит каталог (frontmatter name); резолвим по установленной папке
         var target = ResolveInstalledSkillName(req.Skill.Trim());
         var binding = new PersonaBinding { Type = PersonaBindingType.Skill, Target = target };
-        var err = await bindings.ValidateAsync(UserId, binding, persona.Bindings);
+        var err = await bindings.ValidateAsync(tenantId, binding, persona.Bindings);
         if (err is not null)
             // Навык установлен, но привязать не смогли — сообщаем честно
             return Ok(new { installed = target, bound = false, warning = err });
 
         var list = new List<PersonaBinding>(persona.Bindings ?? []) { binding };
-        personas.UpdateBindings(id, UserId, list);
+        personas.UpdateBindings(id, tenantId, list);
         return Ok(new { installed = target, bound = true, binding });
     }
+
+    // Отказ по персоне для путей, где id приходит в теле (фильтр [ProjectScope] его не видит):
+    // та же грань и та же форма ответа, что у фильтра (ProjectScopeAttribute.cs:95-115) —
+    // видимому без права 403 project_scope, невидимому 404; решение о праве идёт ПОСЛЕ
+    // проверки видимости.
+    private IActionResult PersonaConfigureDenied(string personaId) =>
+        access.ResolvePersona(UserId, personaId, ProjectRight.Read) is null
+            ? new NotFoundResult()
+            : StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Только владелец проекта", code = ProjectScopeAttribute.ErrorCode });
 
     // Имя навыка в глобальном каталоге по имени папки (slug), с которым его установил CLI.
     private string ResolveInstalledSkillName(string skillSlug)

@@ -66,6 +66,8 @@ export function SaveConflictDialog({
   const caption = sourceCaption(conflict.source);
   const title = conflict.code === 'note_changed' ? 'Заметку изменили, пока вы правили' : 'Файл изменили, пока вы правили';
   const what = conflict.code === 'note_changed' ? 'заметку' : 'файл';
+  // Начальная форма того же слова — для начала предложения в Notice (DEF-65cf)
+  const whatHere = conflict.code === 'note_changed' ? 'Заметку' : 'Файл';
 
   // Без права на копию её нет в диалоге вообще (0 узлов), а не «задизейблена»: человек не
   // видит действия, которое бэк всё равно отказал бы
@@ -109,7 +111,8 @@ export function SaveConflictDialog({
 
         {again && (
           <Notice tone="warning" icon={AlertTriangle}>
-            {noDiff ? 'Файл изменили ещё раз. Выберите заново.' : 'Файл изменили ещё раз — показываем свежую версию. Выберите заново.'}
+            {/* Текст — по тому же code, что и заголовок: DEF-65cf — для заметки было «Файл…». */}
+            {noDiff ? `${whatHere} изменили ещё раз. Выберите заново.` : `${whatHere} изменили ещё раз — показываем свежую версию. Выберите заново.`}
           </Notice>
         )}
         {copyError && (

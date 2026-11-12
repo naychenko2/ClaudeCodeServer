@@ -798,7 +798,7 @@ Architecture, Dossiers, Spend, Notes…) зовут Core-примитив нап
 | Рассылки | `ToOwner` (78), `Clients.Group("user_"+UserId)` (13, в том числе `GitStatusChanged`, `TeamMemoryChanged`, `KnowledgeChanged` с projectId) | Проектные события → `ToProject`. Личные (уведомления, персоны вне проекта) остаются в `ToOwner` |
 | MCP по HTTP | `McpTransportController.cs:65`: owner = `sub`; `IMcpSessionAccessor.GetOwned`; инлайн `project.OwnerId != context.OwnerId` в тулсетах | Токен арендатора сохраняется. Проверки — через точку доступа. Актор — из реестра хода (§4.2) |
 | Знания | `KnowledgeAccess.IsRelevant` по префиксу username | Датасет проекта (`workspace-knowledge.json` по `RootPath`) доступен, если вызывающий имеет доступ к проекту с этим корнем. Префиксная логика остаётся для личных баз |
-| Персоны | `GetForContext`, `GetProjectTeam` фильтруют по владельцу | Проектная команда — по проекту и доступу; правка — по праву «персоны проекта» |
+| Персоны | `GetForContext`, `GetProjectTeam` фильтруют по владельцу | Проектная команда — по проекту и доступу; правка — по праву «персоны проекта». Доделано не было (дефект 05.11) — разрез волны 3: [shared-projects-personas-cut-2026-11.md](shared-projects-personas-cut-2026-11.md) |
 | Медиа-редакторы, контекст чата | ключ `{ownerId}/{sessionId}` | Передавать `TenantOwnerId`. В местах записи добавить автора |
 | LoRA | `LoraNamespace.PrefixFor(ownerId)` | Обучение в общем проекте — в пространстве арендатора |
 | Фронт | списки проектов и чатов, `Me` из `/api/auth/me` | Бейдж «общий», авторы сообщений и версий, участники в шапке, выбор исполнителя задачи, диалог конфликта 409 |

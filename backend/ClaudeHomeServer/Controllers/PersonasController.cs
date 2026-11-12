@@ -6,6 +6,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
@@ -52,7 +53,10 @@ public class PersonasController(
     // активация контроллера не должна падать — аватарные ручки отвечают гейтом (503/catch),
     // остальные эндпоинты персон живут без неё
     Services.Images.ImageGenerationService? images = null,
-    INoteAccessor? notes = null) : ControllerBase
+    INoteAccessor? notes = null,
+    // Доступ к проекту для списков и /match по projectId (W3-B2, разрез §3.1): область и ключ —
+    // IProjectAccess.Resolve; null — fail-closed (проект недоступен)
+    IProjectAccess? access = null) : ControllerBase
 {
     private readonly PersonaManager _personas = personas;
     private readonly ProjectManager _projects = projects;
@@ -60,6 +64,7 @@ public class PersonasController(
     private readonly PersonaMemoryService _memory = memory;
     private readonly PersonaBindingsService _bindings = bindings;
     private readonly INoteAccessor? _notes = notes;
+    private readonly IProjectAccess? _access = access;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
     private readonly Services.Images.ImageGenerationService? _images = images;
@@ -88,14 +93,31 @@ public class PersonasController(
         callerSessionId is null || _sessions.GetOwnedVisible(callerSessionId, UserId) is not { } caller
         || caller.PrivateToUserId is not null;
 
+    // И-8 (W3-B6, разрез docs/research/shared-projects-personas-cut-2026-11.md §3.1): событие
+    // проектной персоны идёт группе проекта И её владельцу — доходит до всех участников проекта;
+    // событие личной (глобальной/сферной) — только вызывающему владельцу, как раньше. Сообщение
+    // то же PersonasChangedMessage, без новых полей. Имена групп — через публичные хелперы
+    // SessionHubBroadcaster: единый источник префиксов (тот же приём, что у FileWatcherService).
     private Task Broadcast(string action, string? personaId = null) =>
-        _hub.Clients.Group("user_" + UserId)
+        _hub.Clients.Group(SessionHubBroadcaster.OwnerGroup(UserId))
             .SendAsync("message", new PersonasChangedMessage(action, personaId));
 
-    // Список персон владельца. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
+    private Task Broadcast(Persona persona, string action, string? personaId = null)
+    {
+        if (!PersonaZone.IsProjectPersona(persona) || string.IsNullOrEmpty(persona.ProjectId))
+            return Broadcast(action, personaId);
+        var message = new PersonasChangedMessage(action, personaId);
+        return Task.WhenAll(
+            _hub.Clients.Group(SessionHubBroadcaster.ProjectGroup(persona.ProjectId)).SendAsync("message", message),
+            _hub.Clients.Group(SessionHubBroadcaster.OwnerGroup(persona.OwnerId)).SendAsync("message", message));
+    }
+
+    // Список персон. scope: "context" — глобальные + этого проекта (+ extraProjectIds/
     // extraPersonaIds — кросс-проектные привязки ProjectPersonas текущей персоны-вызывающего);
     // "project" — только привязанные к projectId; "global" — только глобальные;
-    // иначе — все персоны владельца.
+    // иначе — свои персоны + проектные персоны проектов, где вызывающий участник.
+    // Доступ к проекту в "context"/"project" — через IProjectAccess (нет доступа или проекта → 404,
+    // как несуществующему); дальнейшие вызовы — под ключом арендатора (W3-B2, разрез §3.1; И-2).
     [HttpGet]
     public ActionResult<IReadOnlyList<Persona>> List(
         [FromQuery] string? scope, [FromQuery] string? projectId,
@@ -104,17 +126,47 @@ public class PersonasController(
     {
         if (string.Equals(scope, "context", StringComparison.OrdinalIgnoreCase))
         {
-            return Ok(_personas.GetForContextWithExtras(UserId, projectId,
+            if (string.IsNullOrEmpty(projectId))
+            {
+                // Нет проекта — вызывающий сам свой арендатор: свои глобальные + extras, как раньше
+                // (тот же приём, что ResolveSession для чата вне проекта).
+                var ownTenant = UserId;
+                return Ok(_personas.GetForContextWithExtras(ownTenant, null,
+                    SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
+            }
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            if (area.Role != ProjectRole.Owner)
+                // Участнику — только команда проекта: глобальная и сферная персона владельца
+                // не видна ни в одном списке (И-3).
+                return Ok(_personas.GetProjectTeam(area.TenantOwnerId, projectId));
+            return Ok(_personas.GetForContextWithExtras(area.TenantOwnerId, projectId,
                 SplitCsv(extraProjectIds), SplitCsv(extraPersonaIds)));
         }
         if (string.Equals(scope, "project", StringComparison.OrdinalIgnoreCase))
-            return Ok(_personas.GetProjectTeam(UserId, projectId));
+        {
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            return Ok(_personas.GetProjectTeam(area.TenantOwnerId, projectId));
+        }
         if (string.Equals(scope, "sphere", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetSphereTeam(UserId, sphereId));
         if (string.Equals(scope, "global", StringComparison.OrdinalIgnoreCase))
             return Ok(_personas.GetByOwner(UserId)
                 .Where(p => p.Scope == PersonaScope.Global).ToList());
-        return Ok(_personas.GetByOwner(UserId));
+        // Без scope — свои (как раньше) + проектные персоны проектов, где вызывающий участник
+        // (разрез §3.1 «GET /api/personas без scope»). Список проектов участника — существующая
+        // видимость ProjectManager.GetAccessible (с рубильником и флагом), не новая выборка по
+        // OwnerId; ключ чужой команды — её владелец. Отсев своих проектов — сравнением с
+        // вызывающим осознанно: их персоны уже в own (дублей быть не должно), доступа здесь
+        // никто не решает — он решён GetAccessible; вердикт в снимке OwnerIdInlineAllowList.
+        var own = _personas.GetByOwner(UserId);
+        var memberProjects = _projects.GetAccessible(UserId)
+            .Where(p => p.OwnerId != UserId)
+            .Select(p => (p.Id, p.OwnerId!))
+            .ToList();
+        return Ok(own.Concat(_personas.GetProjectTeamsOfMemberProjects(memberProjects))
+            .OrderByDescending(p => p.UpdatedAt).ToList());
     }
 
     // Подбор максимально релевантной персоны под задачу (для чат-действий AI-хаба, которые
@@ -128,10 +180,27 @@ public class PersonasController(
     public async Task<IActionResult> MatchPersona([FromBody] MatchPersonaRequest req)
     {
         var task = (req?.Task ?? "").Trim();
-        var personas = _personas.GetForContext(UserId, req?.ProjectId);
+        // W3-B2 (разрез §3.1 «POST /match»): с projectId — доступ через IProjectAccess (нет доступа
+        // или проекта → 404), кандидаты — команда проекта, ключ вызовов — арендатор (И-2); фильтр
+        // requiredTool — тоже по арендатору: доступность возможностей персоны решается в пространстве
+        // её владельца. Без проекта — вызывающий сам свой арендатор: свои глобальные, как раньше.
+        string tenant;
+        IReadOnlyCollection<Persona> personas;
+        if (req?.ProjectId is { Length: > 0 } projectId)
+        {
+            var area = _access?.Resolve(UserId, projectId, ProjectRight.Read);
+            if (area is null) return NotFound();
+            tenant = area.TenantOwnerId;
+            personas = _personas.GetProjectTeam(tenant, projectId);
+        }
+        else
+        {
+            tenant = UserId;
+            personas = _personas.GetForContext(tenant, null);
+        }
         var requiredTool = (req?.RequiredTool ?? "").Trim();
         if (requiredTool.Length > 0)
-            personas = personas.Where(p => _bindings.ToolKeyAvailable(UserId, p, requiredTool)).ToList();
+            personas = personas.Where(p => _bindings.ToolKeyAvailable(tenant, p, requiredTool)).ToList();
         if (task.Length == 0 || personas.Count == 0) return Ok(new { personaId = (string?)null });
 
         var sb = new System.Text.StringBuilder();
@@ -199,10 +268,34 @@ public class PersonasController(
     }
 
     [HttpGet("{id}")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<Persona> Get(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}; И-1, И-2): персона и область — из резолва
+        // атрибута (ResolvePersona): проектная персона читается под ключом арендатора её проекта.
+        // Отказ 404/403 решает фильтр (И-3: чужая глобальная к телу не доходит), проверка здесь —
+        // fail-closed на гонку между резолвом и чтением.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         return persona is null ? NotFound() : Ok(persona);
+    }
+
+    // Арендатор проекта, названного в ТЕЛЕ записывающего действия персон (W3-B3a, разрез §3.1
+    // строки «POST /», «POST /ai/quick-create», «POST /ai/team»). [ProjectScope] здесь невозможен:
+    // id проекта не в маршруте и не в аргументах действия — право решает IProjectAccess.Resolve в
+    // теле (тот же приём, что TaskActionDenied в TasksController.cs:232). Отказ — та же грань и та
+    // же форма, что у атрибута (ProjectScopeAttribute.cs:75-115): нет id → 400 (тот же текст тела,
+    // что отдавал ValidProject), невидимому (чужой/несуществующий проект) → 404, видимому без права
+    // (читателю) → 403 project_scope. Ключ дальнейших вызовов — TenantOwnerId резолва, не
+    // вызывающий (И-2); OwnerId новой персоны — владелец проекта (И-7).
+    private (RequestScope? Area, ActionResult? Denied) ProjectWriteArea(string? projectId)
+    {
+        if (string.IsNullOrWhiteSpace(projectId))
+            return (null, BadRequest(new { error = "Для проектной персоны нужен корректный projectId" }));
+        if (_access?.Resolve(UserId, projectId, ProjectRight.WriteContent) is { } area) return (area, null);
+        return _access?.Resolve(UserId, projectId, ProjectRight.Read) is null
+            ? (null, NotFound())
+            : (null, StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode }));
     }
 
     // Атрибуция траты аватара по REST-входу (дефект stdio-пути, ревью 3c6055aa): человек из
@@ -227,63 +320,176 @@ public class PersonasController(
             : (SpendInitiators.Agent, actor);
     }
 
+    // Глобальную/сферную персону — личное пространство вызывающего, как раньше; проектную — по
+    // праву WriteContent на её проект, под ключом его владельца (W3-B3a; тот же приём, что
+    // ProjectTasksController.Create: право по проекту из тела, запись — по TenantOwnerId).
+    // Роль вызывающего и проект персоны идут дальше — в ИИ-подбор при создании (доработка
+    // ревью aaf13fce): авто-привязки и типовые умения не пишут участнику личных целей
+    // владельца и mcp/плагин-целей. Для глобальной/сферной — вызывающий сам свой арендатор:
+    // роль остаётся Owner, сужения нет.
     // Инициатор и актор траты аватара называет здесь вызывающий, сам сервис их не вычисывает
     // (S-SPEND-8); для REST-входа их выводит CallerSpendAttribution, а не канал доставки
     [HttpPost]
-    public Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
+    public async Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
     {
+        var tenant = UserId;
+        var callerRole = ProjectRole.Owner;
+        string? boundProjectId = null;
+        if (PersonaZone.IsProjectScope(req.Scope))
+        {
+            var (area, denied) = ProjectWriteArea(req.ProjectId);
+            if (denied is not null) return denied;
+            tenant = area!.TenantOwnerId;
+            callerRole = area!.Role;
+            boundProjectId = req.ProjectId;
+        }
         var (initiator, actor) = CallerSpendAttribution();
-        return _crud.CreateAsync(UserId, req, CallerSessionId(), initiator, actor);
+        return await _crud.CreateAsync(tenant, req, CallerSessionId(), initiator, actor,
+            callerRole: callerRole, projectId: boundProjectId);
     }
 
     [HttpPut("{id}")]
-    public Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req) =>
-        _crud.UpdateAsync(UserId, id, req, CallerSessionId());
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    public async Task<ActionResult<Persona>> Update(string id, [FromBody] UpdatePersonaRequest req)
+    {
+        // W3-B3b (разрез §3.1 строка «PUT /{id}», §2 строка «Поля зоны и денег»; И-2, И-7): ключ —
+        // арендатор. Поля зоны и денег персоны (Scope/ProjectId/SphereId, профиль доступа,
+        // модель/уровень/усилие/матрица уровней) — право Configure, как у настроек чата: участнику —
+        // 403 с кодом owner_settings до записи (тот же гейт, что OwnerSettingsGate, S2a-10b).
+        // Сравнение с текущими значениями персоны: поле, принесённое DTO без изменения, — не отказ
+        // (форма персоны шлёт карточку целиком).
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } current) return NotFound();
+        if (scope.Role != ProjectRole.Owner && ChangesOwnerSettings(current, req))
+            return StatusCode(403, new { error = "Настройки персоны выбирает её владелец", code = OwnerSettingsGate.ErrorCode });
+        return await _crud.UpdateAsync(scope.TenantOwnerId, id, req, CallerSessionId(),
+            callerIsOwner: scope.Role == ProjectRole.Owner);
+    }
+
+    // Поля строки §2 «Поля зоны и денег» — право Configure, только владелец. «Меняется» — когда DTO
+    // задаёт значение отличное от текущего: null — не менять; ""/пробел — сброс в null (как
+    // PersonaManager.Update:739-754), изменением считается только реальная разница значений.
+    // Неразбираемое значение (уровень, профиль доступа) здесь не изменение: его 400 — дело сервиса,
+    // гейт не должен менять 400 на 403.
+    private static bool ChangesOwnerSettings(Persona current, UpdatePersonaRequest req)
+    {
+        if (req.Scope is { } scope && scope != current.Scope) return true;
+        if (ChangedOwnerField(req.ProjectId, current.ProjectId)) return true;
+        if (ChangedOwnerField(req.SphereId, current.SphereId)) return true;
+        if (ChangedOwnerField(req.Model, current.Model)) return true;
+        if (ChangedOwnerField(req.Effort, current.Effort)) return true;
+        if (ChangedOwnerField(req.TierStrong, current.TierStrong)) return true;
+        if (ChangedOwnerField(req.TierMedium, current.TierMedium)) return true;
+        if (ChangedOwnerField(req.TierWeak, current.TierWeak)) return true;
+        if (PersonasCrudService.TryParseAccess(req.Access, out var access) && access is not null
+            && access.Value != current.Access) return true;
+        if (req.ModelTier is not null && ModelTiers.IsValidWireValue(req.ModelTier)
+            && (ModelTiers.TryParse(req.ModelTier, out var tier) ? (ModelTier?)tier : null) != current.ModelTier)
+            return true;
+        // П1 ревью e6029e19: профиль доступа — не только поле Access. Специальность — его часть
+        // всегда: её смена подставляет шаблон в access/tools/disallowed (SpecialtyTemplatesService.cs:41,
+        // SpecialtyCatalog.cs:37-38), поэтому сверяется полем напрямую, без симуляции эффекта шаблона:
+        // запрос с той же специальностью шаблон не применяет (SpecialtyTemplatesService.cs:34) — отказом
+        // не считается.
+        if (req.Specialty is { } specialty && specialty != current.Specialty) return true;
+        // Списки — сравнение с ЭФФЕКТИВНЫМ значением после записи, теми же нормализаторами, что у
+        // писателя (PersonaManager.cs:772-776): полный набор allowed схлопывается в null, запреты живут
+        // только при Custom (effectiveAccess — что реально останется после записи). Запрос, не меняющий
+        // эффективное значение, — не отказ: форма шлёт карточку целиком.
+        if (req.Tools is not null && !SameToolSet(PersonaManager.NormalizeTools(req.Tools), current.Tools))
+            return true;
+        var effectiveAccess = access ?? current.Access;
+        if (req.DisallowedTools is not null && !SameToolSet(
+                effectiveAccess == PersonaAccess.Custom ? PersonaManager.NormalizeDisallowed(req.DisallowedTools) : null,
+                current.DisallowedTools))
+            return true;
+        return false;
+    }
+
+    // Список ключей инструментов — сравнение множеством: порядок в JSON не значим (писатель тоже
+    // Distinct, без порядка). null — «без ограничений»/«нет запретов», равно только null.
+    private static bool SameToolSet(List<string>? a, List<string>? b) =>
+        (a ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            .SetEquals((b ?? []).ToHashSet(StringComparer.OrdinalIgnoreCase));
+
+    private static bool ChangedOwnerField(string? requested, string? current)
+    {
+        if (requested is null) return false;
+        var effective = string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
+        return effective != (string.IsNullOrWhiteSpace(current) ? null : current.Trim());
+    }
 
     [HttpDelete("{id}")]
-    public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null) =>
-        _crud.DeleteAsync(UserId, id, successorId);
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
+    public Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null)
+    {
+        // W3-B1c (разрез §3.1 строка DELETE {id}; И-2): право (Configure, только владелец) на атрибуте,
+        // ключ удаления — арендатор: проектная персона удаляется из стора владельца.
+        var scope = HttpContext.GetRequestScope();
+        return _crud.DeleteAsync(scope.TenantOwnerId, id, successorId);
+    }
 
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца, проектную —
     // дефолтом её проекта. Вызов из чата разрешён ТОЛЬКО онбординг-сессии — гейт и
     // финализация онбординга внутри crud (по callerSessionId).
     [HttpPost("{id}/make-default")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
-    public Task<IActionResult> MakeDefault(string id) =>
-        _crud.MakeDefaultAsync(UserId, id, CallerSessionId());
+    public Task<IActionResult> MakeDefault(string id)
+    {
+        // W3-B1c (разрез §3.1 строка POST {id}/make-default; И-2): ключ назначения — арендатор.
+        // Right=Configure допускает только владельца (проверено матрицей: редактору/читателю — 403),
+        // а MakeDefaultAsync сверяет project.OwnerId с первым аргументом: для владельца ключи
+        // совпадают, поведение не меняется — ключ из резолва здесь единая точка правды, не права.
+        var scope = HttpContext.GetRequestScope();
+        return _crud.MakeDefaultAsync(scope.TenantOwnerId, id, CallerSessionId());
+    }
 
     // Чаты, которые ведутся от лица этой персоны
     [HttpGet("{id}/chats")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult Chats(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        return Ok(_sessions.GetPersonaChats(UserId, id));
+        // W3-B4a (разрез §3.1, строка {id}/chats; И-2, И-5): ключ — арендатор, не вызывающий:
+        // чаты проектной персоны живут в пространстве её проекта, и участник общего проекта
+        // ведётся туда, а не к своему ключу (раньше — 404). Список фильтруется видимостью
+        // вызывающего: приватные чаты владельца с этой персоной в список участника не входят.
+        var scope = HttpContext.GetRequestScope();
+        // viewer — именованный аргумент: это не ключ хранилища, а фильтр видимости вызывающего (И-5).
+        return Ok(_sessions.GetPersonaChats(scope.TenantOwnerId, id, viewer: UserId));
     }
 
     // Открыть новый чат с персоной (или продолжить существующий по resumeSessionId)
     [HttpPost("{id}/chats")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.RunTurn)]
     public async Task<ActionResult<Session>> CreateChat(string id, [FromBody] CreatePersonaChatRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B4a (дефект прода 05.11: «Новый чат» с персоной общего проекта → 404): персона и
+        // область — из резолва атрибута (ResolvePersona, §3.1): редактора ведёт к арендатору
+        // проекта, вызывающий идёт только в автора (createdByUserId, И-2). Своего резолва
+        // персоны здесь больше нет: одна точка правды — IProjectAccess.ResolvePersona (И-1).
+        var scope = HttpContext.GetRequestScope();
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
         // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
-        // (contextProjectId, ChatCreation.cs:495) и чата вне проекта: ClaudeSessionId =
-        // resumeSessionId (:495/:520) — ключ истории (HistoryKeyOf) и транскрипта CLI.
-        // Отказ неотличим от несуществующего; неизвестный ключ не трогается. Гейт здесь, не в
-        // сервисе: исключение из StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
+        // (contextProjectId) и чата вне проекта: ClaudeSessionId = resumeSessionId — ключ
+        // истории (HistoryKeyOf) и транскрипта CLI. Отказ неотличим от несуществующего;
+        // неизвестный ключ не трогается. Гейт здесь, не в сервисе: исключение из
+        // StartNewSessionAsync дало бы 400 в catch ниже, а нужен 404.
         if (req.ResumeSessionId is { Length: > 0 } resumeId && _sessions.IsTranscriptReservedForOthers(resumeId, UserId))
             return NotFound(new { error = "Чат не найден" });
         var mode = ClaudeModeExtensions.ForNewChat(req.Mode, hasPersona: true);
         try
         {
-            var chat = await _sessions.CreatePersonaChatAsync(UserId, id, mode, req.ResumeSessionId, req.Name,
-                contextProjectId: req.ProjectId);
+            var chat = await _sessions.CreatePersonaChatAsync(scope.TenantOwnerId, id, mode, req.ResumeSessionId, req.Name,
+                contextProjectId: req.ProjectId, createdByUserId: UserId);
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
         catch (GlobalPersonaInSharedException ex)
         { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
+        // И-6 (W3-B4a): проектная персона с проектом чужого владельца — отказ 400, а не тихий
+        // чат вне проекта; через ResolvePersona этот путь из HTTP не достижим, это второй рубеж.
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -321,18 +527,25 @@ public class PersonasController(
     // Инициатора и актора выводит CallerSpendAttribution: форма (без чата-вызывателя) — человек,
     // агентский вызов через stdio-MCP — по признаку живого хода (S-SPEND-8)
     [HttpPost("{id}/avatar/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [SubsystemUsage("images")]
-    public Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
+    public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
     {
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/generate»; И-2): ключ — арендатор: кандидаты
+        // аватара проектной персоны идут в папку ассетов владельца её проекта.
+        var scope = HttpContext.GetRequestScope();
         var (initiator, actor) = CallerSpendAttribution();
-        return _crud.GenerateAvatarAsync(UserId, id, req, initiator, actor);
+        return await _crud.GenerateAvatarAsync(scope.TenantOwnerId, id, req, initiator, actor);
     }
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
     [HttpGet("{id}/avatar/candidate/{file}")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarCandidate(string id, string file)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar/candidate; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         var safe = Path.GetFileName(file);   // защита от path-traversal
         var full = SafePath.Join(_personas.AssetsDir, Path.Combine(id, "candidates", safe));
         if (!System.IO.File.Exists(full)) return NotFound();
@@ -341,17 +554,26 @@ public class PersonasController(
 
     // Выбрать кандидата как аватар персоны: делаем основным, чистим остальных кандидатов.
     [HttpPost("{id}/avatar/select")]
-    public Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req) =>
-        _crud.SelectAvatarAsync(UserId, id, req);
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    public async Task<ActionResult<Persona>> SelectAvatar(string id, [FromBody] SelectAvatarRequest req)
+    {
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/select»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        return await _crud.SelectAvatarAsync(scope.TenantOwnerId, id, req);
+    }
 
     // Отдать картинку аватара. JWT принимается и в query access_token (браузерный <img>).
     // size — размер показа (device px): сервер отдаёт миниатюру ближайшей ступени
     // (64/128/256, генерируется один раз и лежит рядом с оригиналом); без параметра —
     // оригинал (нужен для перекропа и большого вида).
     [HttpGet("{id}/avatar")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<IActionResult> Avatar(string id, [FromQuery] int? size = null)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar; И-2): ключ чтения персоны — арендатор:
+        // аватар проектной персоны лежит в пространстве владельца проекта.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null || persona.Avatar.Kind != PersonaAvatarKind.Image
             || string.IsNullOrEmpty(persona.Avatar.ImageFile))
             return NotFound();
@@ -388,9 +610,12 @@ public class PersonasController(
     // Оригинал загруженного аватара (для перекропа). access_token в query — как GET avatar.
     // v в URL — имя файла оригинала: меняется при повторной загрузке, кэш — как у аватара.
     [HttpGet("{id}/avatar/original")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public IActionResult AvatarOriginal(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/avatar/original; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null || string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return NotFound();
 
@@ -405,11 +630,15 @@ public class PersonasController(
     // Валидация: заявленный ContentType из белого списка И настоящие magic bytes;
     // расширение файла — по фактическому типу, а не по имени от клиента.
     [HttpPost("{id}/avatar/upload")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [RequestSizeLimit(15_000_000)]
     public async Task<ActionResult<Persona>> UploadAvatar(string id,
         [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/upload»; И-2): ключ — арендатор: файлы аватара
+        // проектной персоны лежат в папке ассетов владельца её проекта.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (original is null || cropped is null)
             return BadRequest(new { error = "Нужны файлы original и cropped" });
@@ -428,18 +657,21 @@ public class PersonasController(
         await ImageAssetHelper.SaveFormFileAsync(original, SafePath.Join(dir, originalName));
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
-        var updated = _personas.SetAvatarUploaded(id, UserId, imageName, originalName, cropState);
-        await Broadcast("updated", id);
+        var updated = _personas.SetAvatarUploaded(id, scope.TenantOwnerId, imageName, originalName, cropState);
+        await Broadcast(updated, "updated", id);
         return Ok(updated);
     }
 
     // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
     [HttpPost("{id}/avatar/recrop")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [RequestSizeLimit(5_000_000)]
     public async Task<ActionResult<Persona>> RecropAvatar(string id,
         [FromForm] IFormFile? cropped, [FromForm] string? crop)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B3b (разрез §3.1 строка «POST {id}/avatar/recrop»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrEmpty(persona.Avatar.OriginalFile))
             return BadRequest(new { error = "У персоны нет оригинала для перекропа" });
@@ -453,8 +685,8 @@ public class PersonasController(
         var imageName = $"avatar-{Guid.NewGuid():N}{croppedCheck.Ext}";
         await ImageAssetHelper.SaveFormFileAsync(cropped, SafePath.Join(dir, imageName));
 
-        var updated = _personas.SetAvatarRecropped(id, UserId, imageName, ImageAssetHelper.ParseCrop(crop));
-        await Broadcast("updated", id);
+        var updated = _personas.SetAvatarRecropped(id, scope.TenantOwnerId, imageName, ImageAssetHelper.ParseCrop(crop));
+        await Broadcast(updated, "updated", id);
         return Ok(updated);
     }
 
@@ -553,11 +785,27 @@ public class PersonasController(
             return BadRequest(new { error = "Опишите, кто это и чем будет заниматься" });
 
         var scope = req.Scope ?? PersonaScope.Global;
-        if (PersonaZone.IsProjectScope(scope) && !_crud.ValidProject(UserId, req.ProjectId))
-            return BadRequest(new { error = "Для проектной персоны нужен корректный projectId" });
+        // Проектная персона — по праву WriteContent на её проект и под ключом его владельца
+        // (W3-B3a, разрез §3.1 «POST /ai/quick-create», И-2); глобальная/сферная — личное
+        // пространство вызывающего, как раньше. Роль вызывающего и проект идут в авто-подбор
+        // привязок ниже (доработка ревью aaf13fce): участнику подбор не пишет личных целей
+        // владельца и mcp/плагин-целей.
+        var tenant = UserId;
+        var callerRole = ProjectRole.Owner;
+        string? boundProjectId = null;
+        if (PersonaZone.IsProjectScope(scope))
+        {
+            var (area, denied) = ProjectWriteArea(req.ProjectId);
+            if (denied is not null) return denied;
+            tenant = area!.TenantOwnerId;
+            callerRole = area!.Role;
+            boundProjectId = req.ProjectId;
+        }
 
         // 1. Черновик всех полей одним one-shot вызовом (строгий JSON-объект).
         // LLM иногда отвечает без валидного JSON — логируем сырой ответ и повторяем один раз.
+        // Ключ one-shot — тот же, что у всего создания (tenant): персона и её аватар/привязки
+        // пойдут в пространство владельца проекта, поэтому и черновик оплачивает он.
         var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
         DraftRaw? draft = null;
         for (var attempt = 1; attempt <= 2 && draft is null; attempt++)
@@ -566,7 +814,7 @@ public class PersonasController(
             try
             {
                 raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaQuickCreate,
-                    _drafts.BuildDraftPrompt(req.Prompt), model, UserId, jsonFormat: "json",
+                    _drafts.BuildDraftPrompt(req.Prompt), model, tenant, jsonFormat: "json",
                     ct: HttpContext.RequestAborted);
             }
             catch (Exception ex)
@@ -600,71 +848,105 @@ public class PersonasController(
         };
         if (PersonaManager.ExceedsContractLimit(contract, null, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
-        var persona = _personas.Create(UserId, draft.Name!, draft.Role, draft.Description,
+        var persona = _personas.Create(tenant, draft.Name!, draft.Role, draft.Description,
             systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
         // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы).
-        // Quick-create — действие человека из UI, инициатор траты — он (S-SPEND-8)
-        persona = await _crud.TryAutoGenerateAvatarAsync(UserId, persona, draft.AvatarPrompt, SpendInitiators.Human);
+        // Quick-create — действие человека из UI, инициатор траты — он (S-SPEND-8); ключ —
+        // арендатор проекта персоны (W3-B3a), как у всей остальной записи этой ручки.
+        persona = await _crud.TryAutoGenerateAvatarAsync(tenant, persona, draft.AvatarPrompt, SpendInitiators.Human);
 
         // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
-        persona = _bindings.SeedProjectDefaults(UserId, persona);
+        persona = _bindings.SeedProjectDefaults(tenant, persona);
 
         // 4. Авто-подбор привязок (по умолчанию включён) —
         // best-effort: сбой не роняет создание, персона остаётся без привязок
         if (req.AutoBindings != false)
-            persona = await _crud.TryAutoBindAsync(UserId, persona, HttpContext.RequestAborted);
+            persona = await _crud.TryAutoBindAsync(tenant, persona,
+                callerRole: callerRole, projectId: boundProjectId, ct: HttpContext.RequestAborted);
 
-        await Broadcast("created", persona.Id);
+        await Broadcast(persona, "created", persona.Id);
         return Ok(persona);
     }
 
     // AI-формирование команды: по промпту + контексту проекта (CLAUDE.md) LLM предлагает набор
     // персон (роль/имя/характер/специальность) для создания в команде проекта. Возвращает
     // черновики — фронт показывает их для одобрения, затем создаёт через обычный POST /api/personas.
+    // Право и ключ — те же, что у создания проектной персоны (W3-B3a, разрез §3.1 «POST /ai/team»,
+    // И-2): WriteContent на проект из тела, AiTeamAsync — под ключом его владельца (состав команды
+    // строится по CLAUDE.md проекта и оплачивается тем же ключом).
     [HttpPost("ai/team")]
-    public Task<ActionResult> AiTeam([FromBody] AiTeamRequest req) =>
-        _crud.AiTeamAsync(UserId, req.ProjectId, req.Prompt ?? "", HttpContext.RequestAborted);
+    public async Task<ActionResult> AiTeam([FromBody] AiTeamRequest req)
+    {
+        var (area, denied) = ProjectWriteArea(req.ProjectId);
+        if (denied is not null) return denied;
+        return await _crud.AiTeamAsync(area!.TenantOwnerId, req.ProjectId, req.Prompt ?? "",
+            HttpContext.RequestAborted);
+    }
 
     // --- Привязки персоны: источники знаний и правила (фича persona-bindings) ---
     // CRUD работает независимо от флага (данные безвредны и переживают выключение);
     // за флагом — только suggest/autoBindings и сам блок в промпте (PersonaBindingsService).
 
     [HttpGet("{id}/bindings")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaBinding>> Bindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/bindings; И-2): ключ чтения персоны — арендатор:
+        // участник видит привязки владельца, в том числе к личным целям (И-4: видеть, не менять).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         return Ok(persona.Bindings ?? []);
     }
 
     // Добавить одну привязку (мгновенное сохранение)
     [HttpPost("{id}/bindings")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaBinding>> AddBinding(string id, [FromBody] PersonaBindingRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (разрез §3.1 строка «POST/PUT/DELETE {id}/bindings»; И-2, И-4): ключ — арендатор;
+        // для не-владельца — сужение целей одним методом PersonaBindingsService (отказ по праву
+        // решается до валидности цели — тот же порядок, что у [ProjectScope]).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         var (binding, parseError) = PersonasCrudService.ParseBinding(req);
         if (binding is null) return BadRequest(new { error = parseError });
-        var err = await _bindings.ValidateAsync(UserId, binding, persona.Bindings, persona);
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, binding)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        var err = await _bindings.ValidateAsync(scope.TenantOwnerId, binding, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
-        var list = new List<PersonaBinding>(persona.Bindings ?? []) { binding };
-        _personas.UpdateBindings(id, UserId, list);
-        await Broadcast("updated", id);
+        // AppendBinding, не UpdateBindings поверх снимка: additive-запись строит список под
+        // _saveLock из текущего значения — одновременные записи владельца и редактора
+        // не перечёркивают друг друга (тест гонки).
+        _personas.AppendBinding(id, scope.TenantOwnerId, binding);
+        await Broadcast(persona, "updated", id);
         return Ok(binding);
     }
 
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
     [HttpPut("{id}/bindings")]
-    public Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
-        [FromBody] PersonaBindingsSetRequest req) =>
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
+        [FromBody] PersonaBindingsSetRequest req)
+    {
+        // W3-B5a доработка (хвост 1 возврата 5a794ef5): ключ — арендатора; сужение набора
+        // для не-владельца — тем же NonOwnerBindingEditDenied внутри SetBindingsAsync:
+        // личные привязки владельца не-владелец не удаляет и не подменяет (403), проектные — может.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
+        if (persona is null) return NotFound();
         // Единая точка с http-тулсетом (personas_bindings_set): дословная копия тела здесь
         // уже однажды разошлась бы с сервисом — рассинхрон, ради устранения которого
         // PersonasCrudService и заводили
-        _crud.SetBindingsAsync(UserId, id, req.Bindings);
+        return await _crud.SetBindingsAsync(scope.TenantOwnerId, id, req.Bindings,
+            scope.Role, persona.ProjectId);
+    }
 
     // Голос персоны в голосовом режиме. Пустое тело (или объект без единого заполненного
     // поля) снимает голос — персона возвращается к голосу инстанса.
@@ -674,15 +956,24 @@ public class PersonasController(
     // форма, которой ошибку надо показать.
     // Валидация и запись — PersonasCrudService (та же копия правила у MCP personas_update)
     [HttpPut("{id}/voice")]
-    public Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req) =>
-        _crud.SetVoiceAsync(UserId, id, req);
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    public async Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req)
+    {
+        // W3-B3b (разрез §3.1 строка «PUT {id}/voice»; И-2): ключ — арендатор.
+        var scope = HttpContext.GetRequestScope();
+        return await _crud.SetVoiceAsync(scope.TenantOwnerId, id, req);
+    }
 
     // Изменить одну привязку
     [HttpPut("{id}/bindings/{bindingId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaBinding>> UpdateBinding(string id, string bindingId,
         [FromBody] PersonaBindingRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (та же строка §3.1; И-2, И-4): ключ — арендатор; сужение — тем же методом,
+        // с существующей привязкой (личную цель владельца участник не меняет — 403).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
         if (current is null) return NotFound(new { error = "Привязка не найдена" });
@@ -701,49 +992,75 @@ public class PersonasController(
             Mode = parsed.Mode,
             CreatedAt = current.CreatedAt,
         };
-        var err = await _bindings.ValidateAsync(UserId, candidate, persona.Bindings, persona);
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, candidate, current)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        var err = await _bindings.ValidateAsync(scope.TenantOwnerId, candidate, persona.Bindings, persona);
         if (err is not null) return BadRequest(new { error = err });
 
-        current.Type = candidate.Type;
-        current.Target = candidate.Target;
-        current.Path = candidate.Path;
-        current.Condition = candidate.Condition;
-        current.Mode = candidate.Mode;
-        current.UpdatedAt = DateTime.UtcNow;
-        _personas.UpdateBindings(id, UserId, persona.Bindings!.ToList());
-        await Broadcast("updated", id);
-        return Ok(current);
+        // Правка под _saveLock в PersonaManager (доработка возврата 5a794ef5): поиск, мутация
+        // и запись — атомарны относительно одновременного AppendBinding/RemoveBinding;
+        // прежняя запись всего списка из снимка вызывающего теряла параллельную привязку.
+        var updated = _personas.UpdateBinding(id, scope.TenantOwnerId, bindingId, b =>
+        {
+            b.Type = candidate.Type;
+            b.Target = candidate.Target;
+            b.Path = candidate.Path;
+            b.Condition = candidate.Condition;
+            b.Mode = candidate.Mode;
+        });
+        if (updated is null) return NotFound(new { error = "Привязка не найдена" });
+        await Broadcast(persona, "updated", id);
+        return Ok(updated);
     }
 
     [HttpDelete("{id}/bindings/{bindingId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> DeleteBinding(string id, string bindingId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5a (та же строка §3.1; И-2, И-4): ключ — арендатор; существующую привязку
+        // владельца к личной цели не-владелец не удаляет (403, тот же метод).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
-        var list = persona.Bindings?.Where(b => b.Id != bindingId).ToList();
-        if (list is null || list.Count == (persona.Bindings?.Count ?? 0))
+        var current = persona.Bindings?.FirstOrDefault(b => b.Id == bindingId);
+        if (current is null) return NotFound(new { error = "Привязка не найдена" });
+        if (_bindings.NonOwnerBindingEditDenied(scope.Role, persona.ProjectId, current, current)
+                is (int deniedStatus, string deniedError))
+            return StatusCode(deniedStatus, new { error = deniedError });
+        // Удаление под _saveLock в PersonaManager (та же доработка): список строится из
+        // текущего значения, а не из снимка — одновременный POST не затирается.
+        if (!_personas.RemoveBinding(id, scope.TenantOwnerId, bindingId))
             return NotFound(new { error = "Привязка не найдена" });
-        _personas.UpdateBindings(id, UserId, list);
-        await Broadcast("updated", id);
+        await Broadcast(persona, "updated", id);
         return NoContent();
     }
 
     // --- Автоматизации персоны (событийно-управляемая проактивность): правила «триггер → действие» ---
 
     [HttpGet("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaAutomationRule>> Automation(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1c (разрез §3.1 строка GET {id}/automation, только чтение; И-2): ключ чтения — арендатор;
+        // write-пути автоматики (Configure) остаются W3-B1d.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         return Ok(persona.AutomationRules ?? []);
     }
 
     // Добавить правило (мгновенное сохранение)
     [HttpPost("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaAutomationRule>> AddAutomationRule(string id,
         [FromBody] AutomationRuleRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation»; И-2): ключ чтения персоны и записи
+        // правил — арендатор. Право (Configure) из фильтра допускает только владельца: для него
+        // ключ совпадает с вызывающим, но берут его из резолва атрибута, а не из UserId.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         // Валидация projectId в triggerArgs
         var error = ValidateTriggerProjectId(persona, req);
@@ -755,8 +1072,8 @@ public class PersonasController(
         var dup = persona.AutomationRules?.FirstOrDefault(r => AutomationSignature(r) == AutomationSignature(rule));
         if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
-        _personas.UpdateRules(id, UserId, list);
-        await Broadcast("updated", id);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
+        await Broadcast(persona, "updated", id);
         return Ok(rule);
     }
 
@@ -798,23 +1115,29 @@ public class PersonasController(
 
     // Полная замена набора правил (PUT-семантика)
     [HttpPut("{id}/automation")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<IReadOnlyList<PersonaAutomationRule>>> SetAutomationRules(string id,
         [FromBody] AutomationRulesSetRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «PUT {id}/automation»; И-2): та же ключевая замена, что в AddAutomationRule
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var list = (req.Rules ?? []).Select(r => ParseRule(r)).ToList();
-        var updated = _personas.UpdateRules(id, UserId, list);
-        await Broadcast("updated", id);
+        var updated = _personas.UpdateRules(id, scope.TenantOwnerId, list);
+        await Broadcast(updated, "updated", id);
         return Ok(updated.AutomationRules ?? []);
     }
 
     // Изменить одно правило (partial-merge: null-поля наследуются от текущего)
     [HttpPut("{id}/automation/{ruleId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult<PersonaAutomationRule>> UpdateAutomationRule(string id, string ruleId,
         [FromBody] AutomationRuleRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «PUT {id}/automation/{ruleId}»; И-2): ключ — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var current = persona.AutomationRules?.FirstOrDefault(r => r.Id == ruleId);
         if (current is null) return NotFound(new { error = "Правило не найдено" });
@@ -825,40 +1148,51 @@ public class PersonasController(
 
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
-        _personas.UpdateRules(id, UserId, list);
-        await Broadcast("updated", id);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
+        await Broadcast(persona, "updated", id);
         return Ok(merged);
     }
 
     [HttpDelete("{id}/automation/{ruleId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> DeleteAutomationRule(string id, string ruleId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/automation/{ruleId}»; И-2): ключ — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         var list = persona.AutomationRules?.Where(r => r.Id != ruleId).ToList();
         if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
             return NotFound(new { error = "Правило не найдено" });
-        _personas.UpdateRules(id, UserId, list);
-        await Broadcast("updated", id);
+        _personas.UpdateRules(id, scope.TenantOwnerId, list);
+        await Broadcast(persona, "updated", id);
         return NoContent();
     }
 
     // Ручной прогон правила (UX «Проверить»): синтетическое событие, байпас троттлинга.
     [HttpPost("{id}/automation/{ruleId}/test")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> TestAutomationRule(string id, string ruleId)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/{ruleId}/test»; И-2): ключ — арендатор:
+        // TestAsync ищет правило по GetByOwner(ownerId) — параметр сервиса именован ownerId,
+        // ключ ему дают из резолва, а не из UserId.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (persona.AutomationRules?.Any(r => r.Id == ruleId) != true) return NotFound();
-        _ = _automation.TestAsync(UserId, id, ruleId);   // в фон — ход может быть долгим
+        _ = _automation.TestAsync(scope.TenantOwnerId, id, ruleId);   // в фон — ход может быть долгим
         return Accepted();
     }
 
     // AI-подбор правил автоматизации под роль персоны: возвращает кандидатов, НЕ сохраняет
     [HttpPost("{id}/automation/suggest")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> SuggestAutomation(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/suggest»; И-2): ключ чтения персоны — арендатор
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         try
@@ -876,9 +1210,12 @@ public class PersonasController(
     // Генерация правил автоматизации под свободный запрос пользователя: тот же конвейер, что и
     // подбор под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
     [HttpPost("{id}/automation/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<ActionResult> GenerateAutomation(string id, [FromBody] GenerateAutomationRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B1d (разрез §3.1 строка «POST {id}/automation/generate»; И-2): та же ключевая замена, что в suggest
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Prompt))
             return BadRequest(new { error = "Опишите, что должна отслеживать персона" });
@@ -1137,27 +1474,60 @@ public class PersonasController(
     // Каталог возможных целей привязки для пикера фронта: type = project | knowledge |
     // notes | tool | skill; для notes с ?source= — папки внутри источника; для узкого пикера
     // ProjectPersonas — personasInProject?source={projectId} (персоны команды проекта).
+    // W3-B5b (разрез §3.1 строка «GET /binding-targets»; И-2, И-4): с ?personaId= каталог
+    // строится для этой персоны и под её ключом-арендатором (для своей персоны или без
+    // personaId — вызывающий сам, как раньше). Чужая проектная персона (вызывающий — участник
+    // её проекта) — только цели этого проекта: каждый элемент каталога проходит тот же
+    // NonOwnerBindingEditDenied, что запись привязки (И-4): личные цели владельца и mcp/плагин-
+    // цели в выдачу редактору не попадают. Чужая глобальная/сферная персона или посторонний —
+    // 404 (И-3, существование не раскрываем).
     [HttpGet("binding-targets")]
     public async Task<ActionResult> BindingTargets([FromQuery] string? type, [FromQuery] string? source,
         [FromQuery] string? personaId)
     {
+        // Цель каталога — через единую точку резолва (ResolvePersona, И-1): проектная персона
+        // резолвится к арендатору её проекта, чужие глобальная/сферная — не видны вовсе.
+        RequestScope? scope = null;
+        Persona? targetPersona = null;
+        if (!string.IsNullOrWhiteSpace(personaId))
+        {
+            scope = _access?.ResolvePersona(UserId, personaId, ProjectRight.Read);
+            if (scope is null) return NotFound();
+            targetPersona = _personas.Get(personaId, scope.TenantOwnerId);
+            if (targetPersona is null) return NotFound();
+        }
+        // Ключ каталога — арендатор: для своей персоны или без personaId он совпадает с вызывающим.
+        var tenant = scope?.TenantOwnerId ?? UserId;
+        // Сужение — только не-владельцу чужой персоны; владелец своей — без сужения (И-4).
+        var narrow = scope is not null && scope.Role != ProjectRole.Owner;
+        // Допустимость цели каталога — тот же метод И-4, что у записи привязки: проба никуда
+        // не пишется, она только решает, отдавать ли элемент.
+        bool TargetAllowed(PersonaBindingType probeType, string probeTarget) =>
+            !narrow || _bindings.NonOwnerBindingEditDenied(scope!.Role, targetPersona!.ProjectId,
+                new PersonaBinding { Type = probeType, Target = probeTarget }) is null;
+
         switch (type?.Trim().ToLowerInvariant())
         {
             case "project":
-                return Ok(_projects.GetByOwner(UserId)
+                return Ok(_projects.GetByOwner(tenant)
+                    .Where(p => TargetAllowed(PersonaBindingType.Project, p.Id))
                     .Select(p => new { id = p.Id, label = p.Name, hint = p.RootPath, meta = (string?)null }));
 
             case "personasinproject" when !string.IsNullOrWhiteSpace(source):
                 // Второй уровень пикера ProjectPersonas: команда конкретного (чужого) проекта —
-                // сужение привязки до одной персоны вместо всей команды.
-                return Ok(_personas.GetByOwner(UserId)
+                // сужение привязки до одной персоны вместо всей команды. Не-владельцу — только
+                // команда ЭТОГО проекта (цель ProjectPersonas = этот projectId, И-4).
+                return Ok(_personas.GetByOwner(tenant)
                     .Where(p => PersonaZone.IsProjectTeam(p, source))
+                    .Where(p => TargetAllowed(PersonaBindingType.ProjectPersonas, source))
                     .Select(p => new { id = p.Id, label = PersonaManager.PersonaLabel(p), hint = p.Description, meta = source }));
 
             case "knowledge":
                 // Все базы знаний Dify, доступные пользователю (его проекты/заметки + датасеты
                 // без префикса-владельца или с его префиксом); чужие пользователи скрыты.
-                return Ok((await _bindings.KnowledgeTargetsAsync(UserId))
+                // Не-владельцу чужой персоны — только датасет этого проекта (тот же метод).
+                return Ok((await _bindings.KnowledgeTargetsAsync(tenant))
+                    .Where(d => TargetAllowed(PersonaBindingType.Knowledge, d.Id))
                     .Select(d => new
                     {
                         id = d.Id,
@@ -1168,9 +1538,12 @@ public class PersonasController(
 
             case "notes" when !string.IsNullOrWhiteSpace(source):
                 {
-                    // Папки источника — из путей его заметок (все промежуточные уровни)
+                    // Папки источника — из путей его заметок (все промежуточные уровни).
+                    // Не-владельцу чужой персоны папки отдаются только для источника ЭТОГО
+                    // проекта: чужой источник (личный vault, другой проект) закрыт целиком.
+                    if (!TargetAllowed(PersonaBindingType.Notes, source)) return Ok(new object[0]);
                     var folders = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var s in _notes?.GetSummaries(UserId, source, null) ?? [])
+                    foreach (var s in _notes?.GetSummaries(tenant, source, null) ?? [])
                     {
                         var dir = System.IO.Path.GetDirectoryName(s.Path)?.Replace('\\', '/');
                         while (!string.IsNullOrEmpty(dir))
@@ -1183,25 +1556,22 @@ public class PersonasController(
                 }
 
             case "notes":
-                return Ok((_notes?.GetSources(UserId) ?? [])
+                return Ok((_notes?.GetSources(tenant) ?? [])
+                    .Where(s => TargetAllowed(PersonaBindingType.Notes, s.Key))
                     .Select(s => new { id = s.Key, label = s.Label, hint = (string?)null, meta = (string?)null }));
 
             case "tool":
                 {
-                    Persona? persona = null;
-                    if (!string.IsNullOrWhiteSpace(personaId))
-                    {
-                        persona = _personas.Get(personaId, UserId);
-                        if (persona is null) return NotFound();
-                    }
-
-                    // Каталог владельца: статические ключи плюс серверы его личного MCP-реестра
-                    return Ok(_bindings.ToolCatalogFor(UserId)
+                    // Каталог владельца персоны (не-владельцу чужой персоны — без mcp:*: это
+                    // право Configure, тот же метод И-4): статические ключи плюс серверы
+                    // личного MCP-реестра арендатора.
+                    return Ok(_bindings.ToolCatalogFor(tenant)
+                        .Where(kv => TargetAllowed(PersonaBindingType.Tool, kv.Key))
                         .Select(kv =>
                         {
-                            if (persona is null)
+                            if (targetPersona is null)
                                 return (object)new { id = kv.Key, label = kv.Value.Label, hint = kv.Value.Hint, meta = (string?)null };
-                            var (enabled, origin) = _bindings.GetToolDefaultState(UserId, persona, kv.Key);
+                            var (enabled, origin) = _bindings.GetToolDefaultState(tenant, targetPersona, kv.Key);
                             return (object)new
                             {
                                 id = kv.Key,
@@ -1215,7 +1585,10 @@ public class PersonasController(
                 }
 
             case "skill":
+                // Глобальные скиллы — общая цель (без «plugin:»); плагин-цели владельца
+                // не-владельцу закрыты (право Configure) — здесь их и так нет.
                 return Ok(_skills.GetGlobalSkills()
+                    .Where(s => TargetAllowed(PersonaBindingType.Skill, s.Name))
                     .Select(s => new { id = s.Name, label = s.Name, hint = s.Description, meta = (string?)null }));
 
             default:
@@ -1321,14 +1694,19 @@ public class PersonasController(
 
     // AI-подбор привязок под роль персоны: возвращает кандидатов, НЕ сохраняет
     [HttpPost("{id}/bindings/suggest")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> SuggestBindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (разрез §3.1 строка «POST {id}/bindings/suggest»; И-2, И-4): ключ — арендатора;
+        // кандидаты для не-владельца сужены тем же NonOwnerBindingEditDenied до ответа.
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
 
         try
         {
-            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, ct: HttpContext.RequestAborted);
+            var candidates = await _crud.SuggestBindingsAsync(scope.TenantOwnerId, persona,
+                callerRole: scope.Role, projectId: persona.ProjectId, ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1341,17 +1719,21 @@ public class PersonasController(
     // Генерация привязок под свободный запрос пользователя: тот же конвейер, что и подбор
     // под роль, но главный ориентир — текст пользователя. Возвращает кандидатов, НЕ сохраняет.
     [HttpPost("{id}/bindings/generate")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> GenerateBindings(string id, [FromBody] GenerateBindingsRequest req)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; сужение кандидатов — тем же
+        // методом до ответа (тот же путь обработки, что у suggest).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Prompt))
             return BadRequest(new { error = "Опишите, какая привязка нужна персоне" });
 
         try
         {
-            var candidates = await _crud.SuggestBindingsAsync(UserId, persona, req.Prompt.Trim(),
-                ct: HttpContext.RequestAborted);
+            var candidates = await _crud.SuggestBindingsAsync(scope.TenantOwnerId, persona, req.Prompt.Trim(),
+                callerRole: scope.Role, projectId: persona.ProjectId, ct: HttpContext.RequestAborted);
             return Ok(new { candidates });
         }
         catch (Exception ex)
@@ -1368,16 +1750,21 @@ public class PersonasController(
     // это 502, а не applied=0: у кнопки есть ветка «Не удалось применить — попробуйте
     // позже», и без ошибки она недостижима (сбой до записи ничего не меняет).
     [HttpPost("{id}/bindings/apply-defaults")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult> ApplyDefaultBindings(string id)
     {
-        var persona = _personas.Get(id, UserId);
+        // W3-B5b (та же строка §3.1; И-2, И-4): ключ — арендатора; типовые цели материализуются
+        // только разрешённые вызывающему — сужение тем же методом ДО записи (личных целей
+        // владельца и mcp/плагин-целей участник персоне не добавляет).
+        var scope = HttpContext.GetRequestScope();
+        var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
         if (persona.Specialty == PersonaSpecialty.None)
             return BadRequest(new { error = "У персоны не задана специальность — типовых умений роли нет" });
         try
         {
-            var (updated, applied) = await _crud.MaterializeDefaultBindingsAsync(UserId, persona,
-                HttpContext.RequestAborted);
+            var (updated, applied) = await _crud.MaterializeDefaultBindingsAsync(scope.TenantOwnerId, persona,
+                scope.Role, persona.ProjectId, HttpContext.RequestAborted);
             return Ok(new { persona = updated, applied });
         }
         catch (Exception ex)
@@ -1471,20 +1858,27 @@ public class PersonasController(
 
     // Записи памяти (type — необязательный фильтр semantic|episodic|procedural)
     [HttpGet("{id}/memory")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<IReadOnlyList<PersonaMemoryEntry>> Memory(string id, [FromQuery] string? type)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory; И-2): память проектной персоны ключована
+        // арендатором: и чтение персоны, и чтение памяти — под ключом владельца.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         PersonaMemoryType? filter = Enum.TryParse<PersonaMemoryType>(type, true, out var t) ? t : null;
-        return Ok(_memory.List(UserId, id, filter));
+        return Ok(_memory.List(scope.TenantOwnerId, id, filter));
     }
 
     // Поиск по памяти (relevance × recency × typeWeight)
     [HttpGet("{id}/memory/search")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemorySearch(string id, [FromQuery] string q, [FromQuery] int topK = 8)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory/search; И-2): поиск — по памяти арендатора
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return BadRequest("Пустой запрос");
-        var hits = await _memory.SearchAsync(UserId, id, q, Math.Clamp(topK, 1, 20));
+        var hits = await _memory.SearchAsync(scope.TenantOwnerId, id, q, Math.Clamp(topK, 1, 20));
         return Ok(hits);
     }
 
@@ -1493,28 +1887,39 @@ public class PersonasController(
     // системный промпт персонной сессии. Дёргается memory_recall из MCP memory-server:
     // файловый сабагент получает память того же качества, что собеседник чата.
     [HttpGet("{id}/memory/recall")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public async Task<ActionResult> MemoryRecall(string id, [FromQuery] string q, [FromQuery] int topK = 5)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1c (разрез §3.1 строка GET {id}/memory/recall; И-2): recall строится из памяти
+        // арендатора — того же качества, что recall персонной сессии под токеном арендатора.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
         if (string.IsNullOrWhiteSpace(q)) return BadRequest("Пустой запрос");
         var minScore = double.TryParse(_config["Persona:RecallMinScore"],
             System.Globalization.CultureInfo.InvariantCulture, out var ms) ? ms : 0.30;
-        var recall = await _memory.BuildRecallAsync(UserId, id, q, Math.Clamp(topK, 1, 20), minScore);
+        var recall = await _memory.BuildRecallAsync(scope.TenantOwnerId, id, q, Math.Clamp(topK, 1, 20), minScore);
         return Ok(new { text = recall?.Text });
     }
 
     // Запомнить (явный write-path); salience — важность 0..1 (опционально)
     [HttpPost("{id}/memory")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> Remember(string id, [FromBody] RememberRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory»; И-2): запись памяти — под ключом арендатора,
+        // как её чтение в B1c: редактор общего проекта (право WriteContent из фильтра) пишет в тот
+        // же стор персоны, который читает владелец; с ключом вызывающего персону не нашёл бы
+        // ни гейт тела, ни валидация RememberAsync — запись стала бы 404. Отказ 403/404 — за фильтром (И-3).
+        var scope = HttpContext.GetRequestScope();
+        // R-W3-B6 (доработка, И-8): событие памяти — по зоне персоны, как created/updated
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
         if (!Enum.TryParse<PersonaMemoryType>(req.Type, true, out var type)) type = PersonaMemoryType.Semantic;
         // Семантический write-path: близкий факт усилит существующую запись, а не создаст дубль
-        var entry = await _memory.RememberAsync(UserId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
+        var entry = await _memory.RememberAsync(scope.TenantOwnerId, id, type, req.Text, req.Tags, req.SourceSessionId, req.Salience);
         if (entry is null) return NotFound();
-        _memory.EnforceCap(UserId, id);   // потолок и для явного write-path
-        await Broadcast("memory", id);
+        _memory.EnforceCap(scope.TenantOwnerId, id);   // потолок и для явного write-path
+        await Broadcast(persona, "memory", id);
         return Ok(entry);
     }
 
@@ -1522,52 +1927,69 @@ public class PersonasController(
 
     // Текущий фокус; 204 — фокуса нет
     [HttpGet("{id}/focus")]
+    [ProjectScope(From = ScopeSource.Persona)]
     public ActionResult<PersonaWorkingFocus> GetFocus(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        var focus = _memory.GetFocus(UserId, id);
+        // W3-B1c (разрез §3.1 строка GET {id}/focus; И-2): фокус проектной персоны лежит
+        // в сторе памяти под ключом арендатора.
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        var focus = _memory.GetFocus(scope.TenantOwnerId, id);
         return focus is null ? NoContent() : Ok(focus);
     }
 
     // Сбросить фокус (кнопка «Сбросить» в карточке памяти)
     [HttpDelete("{id}/focus")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ClearFocus(string id)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        _memory.ClearFocus(UserId, id);
-        await Broadcast("memory", id);
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/focus»; И-2): фокус лежит в сторе под ключом
+        // арендатора (тот же ключ, что чтение GetFocus в B1c) — сброс идёт им же
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        _memory.ClearFocus(scope.TenantOwnerId, id);
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
     // Отредактировать текст записи (UI-редактирование)
     [HttpPut("{id}/memory/{entryId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<ActionResult<PersonaMemoryEntry>> UpdateMemory(string id, string entryId, [FromBody] UpdateMemoryRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
+        // W3-B1d (разрез §3.1 строка «PUT {id}/memory/{entryId}»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
         if (string.IsNullOrWhiteSpace(req.Text)) return BadRequest("Пустой текст");
-        var entry = _memory.Update(UserId, id, entryId, req.Text);
+        var entry = _memory.Update(scope.TenantOwnerId, id, entryId, req.Text);
         if (entry is null) return NotFound();
-        await Broadcast("memory", id);
+        await Broadcast(persona, "memory", id);
         return Ok(entry);
     }
 
     // Забыть запись
     [HttpDelete("{id}/memory/{entryId}")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> Forget(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!_memory.Forget(UserId, id, entryId)) return NotFound();
-        await Broadcast("memory", id);
+        // W3-B1d (разрез §3.1 строка «DELETE {id}/memory/{entryId}»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        if (!_memory.Forget(scope.TenantOwnerId, id, entryId)) return NotFound();
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
     // Подтвердить предложенную autolearn запись (③-3.2) — снимает pending, попадает в recall
     [HttpPost("{id}/memory/{entryId}/confirm")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     public async Task<IActionResult> ConfirmMemory(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!_memory.Confirm(UserId, id, entryId)) return NotFound();
-        await Broadcast("memory", id);
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/confirm»; И-2): ключ записи — арендатор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        if (!_memory.Confirm(scope.TenantOwnerId, id, entryId)) return NotFound();
+        await Broadcast(persona, "memory", id);
         return NoContent();
     }
 
@@ -1576,10 +1998,15 @@ public class PersonasController(
     // Склейка (заголовок/подпись) — в PersonaMemoryService.MemoryToNote, единая точка с
     // MCP-инструментом memory_to_note.
     [HttpPost("{id}/memory/{entryId}/to-note")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public IActionResult MemoryToNote(string id, string entryId)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        return _memory.MemoryToNote(UserId, id, entryId) is { } note
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/{entryId}/to-note»; И-2): ключ — арендатор:
+        // заметка выходит в vault владельца (Create(ownerId) в сервисе) — право Configure,
+        // участник до тела не доходит, ключ берётся из резолва
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is null) return NotFound();
+        return _memory.MemoryToNote(scope.TenantOwnerId, id, entryId) is { } note
             ? Ok(new { noteId = note.NoteId, noteTitle = note.NoteTitle })
             : NotFound("Запись памяти не найдена");
     }
@@ -1587,11 +2014,15 @@ public class PersonasController(
     // Закрепить заметку в памяти персоны (③-3.3): важное подчёркивается, попадает в recall
     // с высоким salience (1.0) как semantic-факт.
     [HttpPost("{id}/memory/from-note")]
+    [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.Configure)]
     public async Task<IActionResult> NoteToMemory(string id, [FromBody] NoteToMemoryRequest req)
     {
-        if (_personas.Get(id, UserId) is null) return NotFound();
-        if (!await _memory.NoteToMemoryAsync(UserId, id, req.NoteId)) return NotFound("Заметка не найдена");
-        await Broadcast("memory", id);
+        // W3-B1d (разрез §3.1 строка «POST {id}/memory/from-note»; И-2): ключ — арендатор:
+        // заметка читается в vault владельца (GetDetail(ownerId) в сервисе), запись — в тот же стор
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        if (!await _memory.NoteToMemoryAsync(scope.TenantOwnerId, id, req.NoteId)) return NotFound("Заметка не найдена");
+        await Broadcast(persona, "memory", id);
         return Ok();
     }
 

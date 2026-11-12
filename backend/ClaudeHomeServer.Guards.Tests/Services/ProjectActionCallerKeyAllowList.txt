@@ -87,6 +87,20 @@ backend/ClaudeHomeServer.VideoEditor/Controllers/VideoEditScopeGate.cs|6
 # и S2d-4a. Ключом хранилищ он не служит: тема пишется на чате по его id (ApplySubjects),
 # арендатор — Project.OwnerId.
 backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
+# W3-B4c (разрез §3.2 «ChatsController group/participants»): ChatsController стал точкой доступа
+# (IProjectAccess для резолва ведущей персоны группы). Вердикт снимка 66: два места — допуск
+# «персона → область» ResolvePersona(RunTurn)/(Read) (тот же класс, что вердикт W3-B4b по
+# SessionsController); остальные — видимость и право на чат (GetOwnedVisible/GetAccessible/Deny*),
+# личное пространство вызывающего (чаты вне проекта — сам предмет файла: список, создание,
+# архивы, userState, штаб, продолжение) и автор записи. Ключом хранилищ общего проекта ничто не
+# служит: групповой чат пишется по арендатору (CreateGroupChatAsync/SetParticipants зовутся с
+# TenantOwnerId), вызывающий — автор (именованные аргументы createdByUserId/callerUserId).
+# W3-SYNC (слияние master в ветку): 66→62 — снял master, не ветка: ручки «продолжить чат» и
+# «передать чат» (DenyOwnerTurn ×2, continuation.ContinueAsync, handoff.HandoffAsync) в master
+# убраны вместе с фичей continue/handoff. Места волны целы: ResolvePersona группы и вызовы
+# CreateGroupChatAsync/SetParticipants по TenantOwnerId, а автора там называли именованные
+# аргументы createdByUserId/callerUserId — в словарь они не входят.
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|62
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
@@ -131,11 +145,65 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
 # служит: история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf).
-# R-ТРАТА (слияние линии траты с ядром): PersonasController 111→118 — CallerSpendAttribution и
-# avatar/generate берут id вызывающего аргументом в GetTurnActor/IsTurnFromHuman/GetOwned только для
-# атрибуции расхода (инициатор/актор хода). Ключом хранилищ он не служит: запись траты ключуется
-# владельцем из RequestScope, id — лишь адрес чата-вызывателя.
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|118
+# W3-B4a (дефект «Новый чат» с персоной общего проекта): PersonasController 112→108 — четыре места
+# переведены на ключ арендатора: резолв _personas.Get(id, UserId) в Chats/CreateChat снят (одна точка
+# правды — ResolvePersona атрибута), GetPersonaChats и CreatePersonaChatAsync зовутся с
+# scope.TenantOwnerId; вызывающий остался только как именованный аргумент viewer (фильтр видимости,
+# И-5) и createdByUserId (автор, не ключ) — не ключ хранилищ.
+# Снимок 108→107: добивание старого остатка — расхождение PersonasController (111 против 112)
+# существовало на HEAD до этого шага (появилось между f654a477d и 50dc87738, автор не снижал).
+# W3-B1c (read-пути {id}-действий и действия владельца): PersonasController 107→91 — шестнадцать мест
+# переведены на scope.TenantOwnerId: Get/Avatar*/AvatarOriginal/AvatarCandidate/Bindings/Automation
+# (чтение персоны), Delete/MakeDefault (ключ записи в PersonasCrudService), Memory/MemorySearch/
+# MemoryRecall/GetFocus (плюс ключ стора памяти). Вызывающий остался только в CallerSessionId,
+# viewer и createdByUserId — не ключ хранилищ.
+# W3-B1d (write-пути {id}-действий): PersonasController 91→64 — двадцать семь мест переведены на
+# scope.TenantOwnerId: Add/Set/Update/Delete/Test/Suggest/Generate-автоматика (резолв персоны,
+# UpdateRules, TestAsync), Remember/UpdateMemory/Forget/ConfirmMemory/ClearFocus/MemoryToNote/
+# NoteToMemory (резолв персоны и ключ стора памяти). Оставшееся — список/пантеон/создание и
+# ai-пути (ключ — вызывающий по разряду), Ask (GetReachable/AskAsync), места W3-B3b
+# (avatar upload/recrop) и строки долга W3-B5a/B5b (привязки).
+# W3-B3a (создание проектной персоны, разрез §3.1 строки «POST /», «POST /ai/quick-create»,
+# «POST /ai/team», И-2, И-7): 64→58 — восемь мест переведены на TenantOwnerId резолва права по
+# проекту из тела: CreateAsync в Create; ValidProject/one-shot черновика/Create/
+# TryAutoGenerateAvatar/SeedProjectDefaults/TryAutoBind в quick-create; AiTeamAsync в ai/team.
+# Добавлены два: Resolve(UserId, …) в ProjectWriteArea — id вызывающего входит только в
+# запрошенное право и в развилку 403/404 (тот же класс мест, что вердикт S2c-9 выше), ключом
+# хранилищ не стал. Глобальная/сферная персона — личное пространство вызывающего: её ключ
+# остался UserId намеренно (это не проектное действие, §3.1 «без изменений»).
+# W3-B3b (правка карточки, разрез §3.1 строки «PUT /{id}», «POST {id}/avatar/generate|select|
+# upload|recrop», «PUT {id}/voice», И-2): 58→50 — восемь мест переведены на scope.TenantOwnerId:
+# Update (резолв персоны в гейте owner_settings + ключ _crud.UpdateAsync), GenerateAvatar/
+# SelectAvatar/SetVoice (ключ _crud.*), UploadAvatar/RecropAvatar (резолв персоны и ключ
+# SetAvatarUploaded/SetAvatarRecropped). Вызывающий остался в callerIsOwner (флаг права, не ключ).
+# W3-B5a (привязки CRUD, разрез §3.1 строка «POST/PUT/DELETE {id}/bindings», И-2, И-4): 50→42 —
+# восемь мест переведены на scope.TenantOwnerId: AddBinding/UpdateBinding/DeleteBinding (резолв
+# персоны, ValidateAsync, UpdateBindings; additive-запись — AppendBinding с тем же ключом).
+# Оставшееся в файле — строки долга W3-B5b (binding-targets/suggest/generate/apply-defaults) и
+# «личные» места (списки/пантеон/создание/ai-пути/Ask).
+# W3-B5a доработка (хвост 1 возврата ревью 5a794ef5): 42→41 — SetBindings (полная замена
+# PUT {id}/bindings) переведена на scope.TenantOwnerId + persona.ProjectId (сужение набора
+# для не-владельца — NonOwnerBindingEditDenied внутри SetBindingsAsync). PUT/DELETE одной
+# привязки зовут UpdateBinding/RemoveBinding с ключом арендатора — новых мест не добавили.
+# W3-B5b (каталог целей и ИИ-подбор, разрез §3.1 строки «GET /binding-targets»,
+# «suggest/generate/apply-defaults», И-2): 41→28 — тринадцать мест переведены на ключ
+# арендатора: BindingTargets (GetByOwner/KnowledgeTargetsAsync/GetSummaries/GetSources/
+# ToolCatalogFor/GetToolDefaultState/резолв персоны — через ResolvePersona с Read, он и есть
+# новый оставленный вызов с id вызывающего: резолв, не ключ хранилищ) и Suggest/Generate/
+# ApplyDefault (резолв персоны + вызовы _crud.* с TenantOwnerId). Сужение кандидатов —
+# NonOwnerBindingEditDenied в сервисе, id вызывающего там не появляется.
+# W3-B6 (рассылка personas_changed, разрез §3.1, И-8): PersonasController 28→29 — личная ветка
+# Broadcast адресует свою группу через SessionHubBroadcaster.OwnerGroup(UserId): id вызывающего
+# входит только в адрес собственной SignalR-группы (user_{id}, тот же класс мест, что S1-4 выше),
+# ключом хранилищ не служит. Проектная ветка адресует группу проекта и группу владельца по
+# persona.ProjectId/persona.OwnerId — id вызывающего там не появляется.
+# R-ТРАТА (master, слияние линии траты с ядром): те же девять строк, что на своём основании
+# master считал 111→118 — CallerSpendAttribution (GetOwned/GetTurnActor/IsTurnFromHuman) и
+# именованные аргументы атрибуции в Create/avatar/generate. Ключом хранилищ они не служат:
+# запись траты ключуется владельцем из RequestScope, id — лишь адрес чата-вызывателя.
+# W3-SYNC (слияние master в ветку): 29 + 9 = 38 — миграция ключа волны цела (ни одной строки
+# 29 мерж не снял), к ней легла атрибуция траты master (+9).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|38
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
 # R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
 # IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной
@@ -171,8 +239,16 @@ backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
 # (IsTranscriptReservedForOthers → VisibleTo → SessionAccess.CanSee). Ключом хранилищ он не служит:
 # история и транскрипт нового чата ключуются его ClaudeSessionId (HistoryKeyOf), арендатор —
 # ResolveOwnerId; неизвестные ключи гейт не трогает (ветвление подаёт свой новый csid).
-backend/ClaudeHomeServer/Controllers/SessionsController.cs|19
-backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
+# W3-B4b (разрез §3.2 «SessionsController»): 19→18 — три места переведены на ключ арендатора:
+# резолв руководителя при создании чата и явной personaId (Get(…, UserId) и двойной поиск сняты,
+# допуск — ResolvePersona с ключом области), запись SetPersona(…, TenantOwnerId). Добавлены два
+# допуска ResolvePersona(…, UserId, …) — id вызывающего входит только в решение «персона → область»,
+# ключом хранилищ он не стал. Сторож посчитал это снижением.
+backend/ClaudeHomeServer/Controllers/SessionsController.cs|18
+# Снимок 10→8: добивание остатка bc38eb0ba (W3-B5c «навыки персоны — только владельцу»): ключ записи
+# привязки и резолв в POST /api/skills/suggest переведены на TenantOwnerId/ResolvePersona, счётчик
+# тогда не был снижен — сторож краснел с того коммита.
+backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # S2d-4i: TasksController 86→92 — шесть write-ответов (POST задачи проекта, POST личной задачи, PUT,
 # merge ×2, execute) отдают копию хранимой задачи с маской чужих приватных чатов: тот же класс мест,
 # что S2d-4b выше. id вызывающего входит только в решение о видимости ССЫЛКИ на чат
@@ -199,18 +275,34 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|10
 # проверку права (фичу ведёт владелец проекта), ключ записи — tenantId (арендатор), не вызывающий;
 # тот же класс мест, что «FeatureOwnerGate.Denied(access, UserId, …)» выше. Дверь MCP зовёт тот же
 # гейт через TurnActorId(...) — не имя из словаря регекспов, счётчик TasksToolset не изменился.
-# FS-XT1 (e0e74d018, доработка по ревью 786941ae): TasksController 98→102 — тело мержа { tail }:
+# W3-B7 (8e8d3d88a; разрез §3.2 «TasksController»): TasksController 98→93 — три ручки задач
+# переведены на TaskPersonaGate: допуск персоны через ResolvePersona(Read), валидация с ключом
+# арендатора задачи; removed — одиннадцать мест в Create/Update: «personas.Get(…, UserId)» ×3,
+# «BuildExternalTaskScopes(UserId, …)» ×3, «TaskPersonaValidator.Error(personas, UserId, …)» ×5;
+# added — пять вызовов
+# «TaskPersonaGate.Denied(…, UserId, …)» (id вызывающего входит только в допуск персоны, ключ
+# валидации — tenantId) и «ResolvePersona(callerUserId, …)» в теле гейта. Сторож посчитал это снижением.
+# W3-B7 доработа (остаток по отчёту W3-B8): TasksController 93→89 — мерж фичи резолвит исполнителя
+# DevOps по ключу арендатора проекта эпика: снято «personas.GetByOwner(UserId)»,
+# «BuildExternalTaskScopes(UserId, …)», «TaskPersonaValidator.Error(personas, UserId, …)»; параметр
+# валидатора переименован в tenantId (тело «personas.Get(personaId, tenantId)» больше не ключ
+# вызывающего). Дверь мержа по-прежнему по вызывающему (чужая фича — 404 до этого кода).
+# FS-XT1 (master, e0e74d018, доработка по ревью 786941ae): тело мержа { tail } —
 # «tasks.WithdrawMergeTail(featureId, tailKeys, UserId)» (снятие делает стор по владельцу фичи),
 # два «ToTaskBoard(UserId, …)» на снятые задачи и эпик (адресат — владелец записей, тот же класс,
 # что SetFeatureHold выше) и «journal?.Append(UserId, featureId, …)» на решение «оставить» (журнал
 # фичи адресован владельцу). Ключом хранилищ ничто из этого не стало: задачи и журнал лежат у
-# арендатора, вызывающий входит только в право действия человека. Доработка новых мест не добавила.
-# FS-B3b (b5afcd269): TasksController 102→103 — «locator.LocateManyAsync(UserId, project, paths)» в
+# арендатора, вызывающий входит только в право действия человека.
+# FS-B3b (master, b5afcd269): «locator.LocateManyAsync(UserId, project, paths)» в
 # LocateMockupFilesAsync (exists/branch файлов макета фичи). id вызывающего — владелец проекта
 # (проект взят GetByOwner), он нужен локатору только как владелец среды исполнения git-запросов
 # (ILauncherFactory.ForOwner) — тот же класс мест, что «git.WorktreeListAsync(UserId, …)» и
 # «git.CurrentBranchAsync(UserId, …)» выше в контроллере. Ключом хранилищ не стал: ничего не пишется.
-backend/ClaudeHomeServer/Controllers/TasksController.cs|103
+# W3-SYNC (слияние master в ветку): 89 + 5 = 94 — пять строк атрибуции master (WithdrawMergeTail,
+# ToTaskBoard ×2, journal.Append, LocateManyAsync) легли поверх миграции волны; ещё две — та же
+# строка в новой форме master (tasks.Create с CreatedByHuman = !IsServiceToken, MaskRunChats с
+# materials) — счёт не изменили. Миграции волны (89) мерж не тронул.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|94
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

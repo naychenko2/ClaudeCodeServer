@@ -21,7 +21,9 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   personas: Persona[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onNew: () => void;
+  // Создание персоны; onNew не задан — кнопки создания нет вовсе, и пустой полосы
+  // над списком тоже (гейт по роли в панели «Команда», W3-F1c: читателю бэк откажет).
+  onNew?: () => void;
   // Переключатель зоны — только в глобальном разделе. В панели команды проекта список
   // и так ограничен проектом, поэтому пропсы опциональны: нет onModeChange — нет и тумблера.
   mode?: PersonaListMode;
@@ -39,25 +41,26 @@ export function PersonaList({ personas, selectedId, onSelect, onNew, mode, onMod
   // variant="primary" size="xs" + Plus + короткая подпись). Подпись «Персона»
   // (а не «Новая персона») — место действия понятно из шапки и иконки плюс;
   // полное название остаётся в title для тултипа и доступности.
-  const newBtn = (
+  const newBtn = onNew ? (
     <Button variant="primary" size="xs" title="Новая персона"
       leftIcon={<Plus size={13} strokeWidth={ICON_STROKE} />}
       onClick={onNew}>
       Персона
     </Button>
-  );
+  ) : null;
 
   // Полоса над списком остаётся только с содержимым: без шапки — кнопка (+ тумблер),
   // в карточке с шапкой — один тумблер зоны (кнопка уже в шапке). Пустой полосы
-  // с бордером быть не должно — панель «Команда» проекта осталась бы с лишней чертой.
-  const hasToolbar = !inHeader || !!onModeChange;
+  // с бордером быть не должно — панель «Команда» проекта осталась бы с лишней чертой
+  // (и без onNew — ни кнопки, ни полосы: W3-F1c).
+  const hasToolbar = (!!onNew && !inHeader) || !!onModeChange;
 
   return (
     <>
-      {inHeader && <PanelHeaderSlot pinned>{newBtn}</PanelHeaderSlot>}
+      {inHeader && onNew && <PanelHeaderSlot pinned>{newBtn}</PanelHeaderSlot>}
       {hasToolbar && (
         <div style={{ padding: '10px 10px 9px', borderBottom: `1px solid ${C.border}`, flex: 'none', display: 'flex', flexDirection: 'column', gap: 8 }}>
-          {!inHeader && <div>{newBtn}</div>}
+          {onNew && !inHeader && <div>{newBtn}</div>}
           {onModeChange && (
             <PillSwitch<PersonaListMode>
               value={mode ?? 'global'} onChange={onModeChange} fill

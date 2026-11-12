@@ -35,17 +35,19 @@ export interface MemoryPanelProps<TType extends string> {
   typeMeta: Record<TType, MemoryTypeMeta>;
   typeOrder: TType[];
 
-  // Быстрое ручное добавление
+  // Быстрое ручное добавление. Нет onAdd (роль «читатель», W3-F1h) — карточка добавления
+  // не рисуется вовсе: панель только для чтения.
   addHint: string;
   addPlaceholder: string;
-  onAdd: (type: TType, text: string) => Promise<unknown>;
+  onAdd?: (type: TType, text: string) => Promise<unknown>;
   // Лимит длины записи (символов) — известен только там, где бэкенд его гейтит
   // (память команды, TeamMemoryService.MaxTextLength); без пропа счётчик не рисуется.
   maxLength?: number;
 
-  // Действия карточки
-  onEdit: (id: string, text: string) => Promise<unknown>;
-  onRemove: (id: string) => Promise<unknown>;
+  // Действия карточки. Нет обработчика — нет и контрола (тот же образец, что onConfirm/onToNote):
+  // на панели только для чтения карточка остаётся текстом (memoryWrite закрыт ролью, W3-F1h).
+  onEdit?: (id: string, text: string) => Promise<unknown>;
+  onRemove?: (id: string) => Promise<unknown>;
   onConfirm?: (id: string) => Promise<unknown>;   // персона — есть; команда — нет (без pending-гейта)
   onToNote?: (id: string) => void;                // персона — есть; команда — нет
 
@@ -53,6 +55,9 @@ export interface MemoryPanelProps<TType extends string> {
   emptyTitle: string;
   emptyHint: string;
 }
+
+// Ноп для useInlineEdit, когда панель без права правки (onEdit нет): машина неактивна.
+const NOOP = async () => undefined;
 
 export function MemoryPanel<TType extends string>({
   entries, error, onRetry, typeMeta, typeOrder,
@@ -68,7 +73,10 @@ export function MemoryPanel<TType extends string>({
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [removingId, setRemovingId] = useState<string | null>(null);
-  const edit = useInlineEdit(onEdit);
+  // Нет onEdit — машина инлайн-правки неактивна: карточке не передаётся onStartEdit, start()
+  // никто не зовёт. Ноп держит хук unconditional (правило хуков), поведение всех прежних
+  // вызывающих (всегда передают onEdit) не меняется.
+  const edit = useInlineEdit(onEdit ?? NOOP);
   const overLimit = maxLength != null && addText.trim().length > maxLength;
 
   const loading = entries === null;
@@ -112,7 +120,7 @@ export function MemoryPanel<TType extends string>({
 
   const submit = async () => {
     const text = addText.trim();
-    if (!text || adding || overLimit) return;
+    if (!text || adding || overLimit || !onAdd) return;
     setAdding(true);
     try {
       await onAdd(addType, text);
@@ -127,6 +135,7 @@ export function MemoryPanel<TType extends string>({
   };
 
   const remove = async (id: string) => {
+    if (!onRemove) return;
     setRemovingId(id);
     try { await onRemove(id); }
     finally { setRemovingId(null); }
@@ -137,35 +146,38 @@ export function MemoryPanel<TType extends string>({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 720, margin: '0 auto', width: '100%' }}>
-      {/* Быстрое ручное добавление — заметная карточка НАВЕРХУ (ручное первично) */}
-      <div style={cardStyle}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 15, color: C.textHeading }}>✋ Добавить вручную</div>
-        <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '4px 0 10px' }}>{addHint}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <select value={addType} onChange={e => setAddType(e.target.value as TType)} style={selectStyle} aria-label="Тип записи">
-            {typeOrder.map(t => <option key={t} value={t}>{typeMeta[t].title}</option>)}
-          </select>
-          <TextArea
-            value={addText}
-            onChange={v => { setAddText(v); if (addError) setAddError(null); }}
-            autoGrow
-            minHeight={44}
-            placeholder={addPlaceholder}
-            onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
-          />
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
-            {addError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{addError}</span>}
-            {maxLength != null && (
-              <span style={{ fontSize: 11.5, color: overLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
-                {addText.trim().length} / {maxLength}
-              </span>
-            )}
-            <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim() || overLimit} onClick={() => void submit()}>
-              {adding ? 'Сохраняю…' : 'Запомнить'}
-            </Button>
+      {/* Быстрое ручное добавление — заметная карточка НАВЕРХУ (ручное первично).
+          Нет onAdd (панель только для чтения) — карточки нет вовсе. */}
+      {onAdd && (
+        <div style={cardStyle}>
+          <div style={{ fontFamily: FONT.serif, fontSize: 15, color: C.textHeading }}>✋ Добавить вручную</div>
+          <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, margin: '4px 0 10px' }}>{addHint}</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <select value={addType} onChange={e => setAddType(e.target.value as TType)} style={selectStyle} aria-label="Тип записи">
+              {typeOrder.map(t => <option key={t} value={t}>{typeMeta[t].title}</option>)}
+            </select>
+            <TextArea
+              value={addText}
+              onChange={v => { setAddText(v); if (addError) setAddError(null); }}
+              autoGrow
+              minHeight={44}
+              placeholder={addPlaceholder}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
+            />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'flex-end' }}>
+              {addError && <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, marginRight: 'auto' }}>{addError}</span>}
+              {maxLength != null && (
+                <span style={{ fontSize: 11.5, color: overLimit ? C.dangerText : C.textMuted, fontFamily: FONT.sans }}>
+                  {addText.trim().length} / {maxLength}
+                </span>
+              )}
+              <Button variant="primary" size="sm" loading={adding} disabled={adding || !addText.trim() || overLimit} onClick={() => void submit()}>
+                {adding ? 'Сохраняю…' : 'Запомнить'}
+              </Button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {!isEmpty && (
         <>
@@ -220,11 +232,11 @@ export function MemoryPanel<TType extends string>({
             {s.items.map(e => (
               <MemoryEntryCard
                 key={e.id} entry={e} typeMeta={typeMeta[e.type]}
-                onRemove={() => void remove(e.id)} removing={removingId === e.id}
+                onRemove={onRemove ? () => void remove(e.id) : undefined} removing={removingId === e.id}
                 onToNote={onToNote ? () => onToNote(e.id) : undefined}
                 onConfirm={e.pending && onConfirm ? () => onConfirm(e.id) : undefined}
                 editing={edit.editingId === e.id} editText={edit.text} onEditTextChange={edit.setText}
-                onStartEdit={() => edit.start(e.id, e.text)} onSaveEdit={() => void edit.save()}
+                onStartEdit={onEdit ? () => edit.start(e.id, e.text) : undefined} onSaveEdit={() => void edit.save()}
                 onCancelEdit={edit.cancel} savingEdit={edit.saving}
                 editError={edit.editingId === e.id ? edit.error : null} editMaxLength={maxLength}
               />

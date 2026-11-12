@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
@@ -1243,5 +1244,72 @@ public class PersonaBindingsService : IPersonaServerToolGate
             return "Такая привязка уже есть (дубликат type+target+path)";
 
         return null;
+    }
+
+    // --- И-4 (разрез docs/research/shared-projects-personas-cut-2026-11.md §4): одна точка
+    // сужения целей привязки для не-владельца ---
+
+    // Можно ли не-владельцу проекта добавить/изменить/удалить эту привязку. Владелец всегда может:
+    // его персона привязана к его же пространству. Не-владельцу разрешены только цели ЭТОГО
+    // проекта: Project/ProjectPath/ProjectPersonas/ProjectTasks и Notes — с этим projectId,
+    // Knowledge — датасет проекта, Tool — без префикса «mcp:», Skill — без «plugin:» (личный
+    // реестр и пакет плагинов владельца — дело права Configure, §2). current — существующая
+    // привязка (PUT/DELETE), null при добавлении (POST).
+    // Отказы: 403 — MCP/плагин-цели (право Configure) и существующие привязки владельца к личным
+    // целям (не-владелец их видит, но не меняет и не удаляет); 400 — прочая чужая цель.
+    // Возвращает null, если действие разрешено. Отказ по праву не зависит от валидности цели
+    // и решается ДО ValidateAsync — тот же порядок, что у [ProjectScope] (403 не зависит от того,
+    // есть ли чужой mcp-сервер в реестре).
+    public (int Status, string Error)? NonOwnerBindingEditDenied(ProjectRole role, string? projectId,
+        PersonaBinding binding, PersonaBinding? current = null)
+    {
+        if (role == ProjectRole.Owner) return null;
+
+        // Существующая привязка владельца к личной цели (в неё входят и mcp:/plugin:) —
+        // участник её не меняет и не удаляет.
+        if (current is not null && !IsProjectBoundTarget(projectId, current))
+            return (403, "Это привязка владельца к личной цели — участник правит только привязки проекта");
+
+        if (IsOwnerOnlyTarget(binding))
+            return (403, "MCP-серверы и навыки плагинов выдаёт персоне только владелец проекта");
+
+        if (!IsProjectBoundTarget(projectId, binding))
+            return (400, "Участник может привязывать персону только к данным этого проекта");
+
+        return null;
+    }
+
+    // MCP/плагин-цели: ключи живут в личном реестре и пакете плагинов владельца (ToolKeyPrefix,
+    // PluginSkillTarget.Prefix — те же разделители, что в ValidateAsync).
+    private static bool IsOwnerOnlyTarget(PersonaBinding binding) =>
+        (binding.Type == PersonaBindingType.Tool && IsMcpKey(binding.Target))
+        || (binding.Type == PersonaBindingType.Skill
+            && binding.Target.StartsWith(PluginSkillTarget.Prefix, StringComparison.OrdinalIgnoreCase));
+
+    // Цель — «цель этого проекта» (разрешённый набор не-владельца, И-4).
+    private bool IsProjectBoundTarget(string? projectId, PersonaBinding binding)
+    {
+        switch (binding.Type)
+        {
+            case PersonaBindingType.Project:
+            case PersonaBindingType.ProjectPath:
+            case PersonaBindingType.ProjectPersonas:
+            case PersonaBindingType.ProjectTasks:
+            case PersonaBindingType.Notes:
+                return !string.IsNullOrEmpty(projectId)
+                    && string.Equals(binding.Target, projectId, StringComparison.OrdinalIgnoreCase);
+            case PersonaBindingType.Knowledge:
+                if (string.IsNullOrEmpty(projectId) || _projects.GetById(projectId) is not { } project
+                    || string.IsNullOrWhiteSpace(project.RootPath)) return false;
+                // Датасет проекта — тот же источник, что KnownDatasets строит под ProjectId
+                return string.Equals(_wkStore.GetByPath(project.RootPath)?.DifyDatasetId,
+                    binding.Target, StringComparison.OrdinalIgnoreCase);
+            case PersonaBindingType.Tool:
+                return !IsMcpKey(binding.Target);
+            case PersonaBindingType.Skill:
+                return !binding.Target.StartsWith(PluginSkillTarget.Prefix, StringComparison.OrdinalIgnoreCase);
+            default:
+                return false;
+        }
     }
 }

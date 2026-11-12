@@ -32,10 +32,13 @@ function ToolRowIcon({ icon: Icon }: { icon: LucideIcon }) {
   return <Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 
-export function ToolTargetPicker({ personaId, bindings, onSetMode, onOpenRule }: {
+export function ToolTargetPicker({ personaId, bindings, hideMcp = false, onSetMode, onOpenRule }: {
   personaId: string;
   // Все привязки персоны (из родителя) — по ним резолвится текущий режим каждого ключа
   bindings: PersonaBinding[];
+  // Серверы личного MCP-реестра (ключи «mcp:») закрыты без права bindingMcpPlugin (И-4,
+  // W3-F1f): группа «Свои MCP-серверы» не строится вовсе — ни строк, ни пустого состояния
+  hideMcp?: boolean;
   onSetMode: (target: BindingTarget, existing: PersonaBinding | undefined, mode: PersonaBindingMode) => Promise<void>;
   // Клик по телу строки — перейти к шагу «Правило» с выбранной целью
   onOpenRule: (target: BindingTarget) => void;
@@ -70,16 +73,20 @@ export function ToolTargetPicker({ personaId, bindings, onSetMode, onOpenRule }:
     const byGroup = new Map<string, BindingTarget[]>();
     for (const t of items ?? []) {
       if (q && !t.label.toLowerCase().includes(q) && !(t.hint ?? '').toLowerCase().includes(q)) continue;
+      // Без права bindingMcpPlugin mcp:-цели выпадают из группировки до построения групп
+      if (hideMcp && isMcpUserKey(t.id)) continue;
       const g = toolGroupOf(t.id);
       const arr = byGroup.get(g) ?? [];
       arr.push(t);
       byGroup.set(g, arr);
     }
     // «Свои MCP-серверы»: у пользователя без реестра группа пуста — вне поиска держим
-    // её видимой (без элементов), чтобы показать пустое состояние с CTA «Добавить сервер»
-    if (!q && !byGroup.has('mcpUser')) byGroup.set('mcpUser', []);
+    // её видимой (без элементов), чтобы показать пустое состояние с CTA «Добавить сервер».
+    // При hideMcp группа не показывается вовсе (пустое состояние — приглашение завести
+    // сервер адресовано тому, кто его может привязать)
+    if (!q && !hideMcp && !byGroup.has('mcpUser')) byGroup.set('mcpUser', []);
     return TOOL_GROUP_ORDER.filter(g => byGroup.has(g)).map(g => ({ key: g, items: byGroup.get(g)! }));
-  }, [items, q]);
+  }, [items, q, hideMcp]);
 
   const pick = async (t: BindingTarget, mode: PersonaBindingMode) => {
     if (pending) return;

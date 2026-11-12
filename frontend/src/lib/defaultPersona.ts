@@ -139,12 +139,29 @@ export function useMe(): MeState {
   );
 }
 
+// Контекст проекта для резолвера дефолт-персоны и хелпера создания чата (W3-F2a, доработка 2):
+// ownerId — ОБЯЗАТЕЛЬНОЕ поле (значение null — проекта без владельца, старые данные).
+// Литерал без него не компилируется: tsc ловит любой будущий вызов, забывший его передать —
+// та была причина дефекта в WorkspacePage, где контекст собирают литералом.
+// Вызывающий с полным Project передаёт его как есть: хелпер сам нормализует Project в
+// контекст (у Project поле ownerId остаётся необязательным — старые данные).
+export type ProjectChatContext = Pick<Project, 'id' | 'defaultPersonaId'> & { ownerId: string | null };
+
 // Дефолт-персона контекста: в проекте — его руководитель, а если руководителя ещё нет —
 // личная дефолт-персона (проект без командных механик ведёт личный ассистент); вне проекта —
 // сразу личная. null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
 // провижн на рубеже 2.4).
-export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPersonaId'> | null): string | null {
-  return project?.defaultPersonaId ?? _me.defaultPersonaId;
+// Исключение (W3-F2a, дефект D1): в общем проекте, где вызывающий не владелец (ownerId
+// != me.userId), личная персона НЕ подставляется: личный ассистент увёл бы чат из проекта
+// (бэк создал бы его личным, вне проекта — «молча» для участника). null — запрос идёт без
+// personaId, бэк отвечает 400 no_project_persona, текст доходит до вызывающего как тост.
+// Владелец (ownerId == me.userId) и проект без ownerId (null — старые данные) — прежний фолбэк.
+export function getContextDefaultPersonaId(
+  project?: Pick<ProjectChatContext, 'defaultPersonaId' | 'ownerId'> | null,
+): string | null {
+  if (project?.defaultPersonaId) return project.defaultPersonaId;
+  if (project && project.ownerId && _me.userId && project.ownerId !== _me.userId) return null;
+  return _me.defaultPersonaId;
 }
 
 // Ошибка-сигнал «нужен онбординг»: хелпер не может создать чат без дефолт-персоны.
@@ -166,11 +183,20 @@ export class OnboardingRequiredError extends Error {
 // api.sessions.create()/api.chats.create() без personaId — сервер сам провижнит
 // ассистента и продолжит создание с ним (400 остаётся только когда провижн вернул
 // null). OnboardingRequiredError — только на случай, когда и сервер не смог.
+// Исключение (W3-B4b/W3-F2a): 400 с кодом no_project_persona — в общем проекте нет
+// руководителя и провижна участника нет; это не онбординг (участник сам не починит —
+// назначает только владелец), поэтому текст сервера уходит вызывающему как есть,
+// а не оборачивается в OnboardingRequiredError.
 export async function createChatWithContextPersona(
-  project?: Pick<Project, 'id' | 'defaultPersonaId'> | null,
+  project?: ProjectChatContext | Project | null,
   opts?: { mode?: string; name?: string },
 ): Promise<Session> {
-  const defaultId = getContextDefaultPersonaId(project);
+  // Полный Project нормализуем в контекст: его ownerId всё ещё необязателен (старые
+  // данные) — отсутствующий становится null, резолвер читает это как «проект без владельца».
+  const ctx = project
+    ? { defaultPersonaId: project.defaultPersonaId ?? null, ownerId: project.ownerId ?? null }
+    : null;
+  const defaultId = getContextDefaultPersonaId(ctx);
   if (defaultId) {
     return api.personas.createChat(defaultId, {
       mode: opts?.mode,
@@ -183,7 +209,14 @@ export async function createChatWithContextPersona(
       ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name)
       : await api.chats.create(opts?.mode, undefined, opts?.name);
   } catch (e) {
-    if ((e as Error & { status?: number }).status === 400) {
+    const err = e as Error & { status?: number; body?: { code?: string; error?: string } };
+    if (err.status === 400) {
+      // Различаем по коду из тела ответа (как chatFieldsErrorText, api.ts:1071), не по тексту.
+      if (err.body?.code === 'no_project_persona') {
+        // Текст — серверный (единственная формулировка отказа); если тело пришло без
+        // error, оставляем message транспорта (он и есть текст тела или statusText).
+        throw new Error(err.body.error ?? err.message);
+      }
       throw new OnboardingRequiredError(project ? 'project' : 'user');
     }
     throw e;

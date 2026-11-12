@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Link, Plus, Search, Check as CheckIcon, SquarePen, CheckCircle2, Power, Trash2, Globe, Minimize2, Sparkles } from 'lucide-react';
-import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, ServerMessage, SkillSuggestion } from '../../types';
+import type { BindingTarget, Persona, PersonaBinding, PersonaBindingDto, PersonaBindingMode, PersonaBindingType, Project, ServerMessage, SkillSuggestion } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
@@ -23,6 +23,8 @@ import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
 import { PluginTargetPicker } from './PluginTargetPicker';
 import { ownProjectId } from '../../lib/personaZone';
+import { canPersona, personaRole } from './personaRights';
+import { isMcpUserKey } from './toolMeta';
 
 // Вкладка «Умения» студии персоны (фича persona-bindings): карточки привязок
 // «источник + правило, когда им пользоваться». Семантика мгновенного сохранения
@@ -64,6 +66,36 @@ interface AddPanelState {
 // Типы привязок «Сотрудничество с другими проектами» — показываются отдельной секцией
 const CROSS_PROJECT_TYPES: PersonaBindingType[] = ['projectPersonas', 'projectTasks'];
 
+// «Цель этого проекта» (И-4 разреза shared-projects-personas-cut-2026-11): решается по
+// идентификатору цели, не по тексту подписи: проектные типы — сами являются
+// id проекта; заметки проекта — тот же id (ключ источника = id проекта, NotesService.cs:254);
+// tool — ключи без 'mcp:' (личный реестр владельца); skill — имена без 'plugin:'
+// (навыки плагинов — личное владельца); knowledge — датасет этого проекта (meta цели —
+// id проекта, ветка knowledge в PersonasController.cs:1157). Вызывается только когда
+// право чужих целей закрыто участнику (mayBind && !mayBindForeign — по матрице
+// personaRights это ровно редактор); owner/без роли проходят через mayBindForeign и
+// сюда не заходят.
+function bindingTargetInProject(
+  b: PersonaBinding,
+  projectId: string | undefined,
+  knowledgeProject: Map<string, string | null>,
+): boolean {
+  if (!projectId) return true; // персона без проекта (своя/глобальная) — как раньше
+  switch (b.type) {
+    case 'project': case 'projectPath': case 'projectPersonas': case 'projectTasks':
+    case 'notes':
+      return b.target === projectId;
+    case 'knowledge':
+      return knowledgeProject.get(b.target) === projectId;
+    case 'tool':
+      return !isMcpUserKey(b.target);
+    case 'skill':
+      return !b.target.toLowerCase().startsWith('plugin:');
+    case 'plugin':
+      return false; // всегда цель 'plugin:…*' — личное владельца
+  }
+}
+
 // Текстовая подпись пути для крошки шага ③ (см. AddPanelState.path/pathLabel)
 function panelPathSuffix(panel: AddPanelState): string {
   if (panel.type === 'projectTasks')
@@ -85,12 +117,26 @@ interface SuggestResult {
   prompt?: string;
 }
 
-export function PersonaBindingsPanel({ persona, accent, isMobile }: {
+export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
   persona: Persona;
+  // Список проектов родителя (тот же, что у PersonaForm/PersonaAutomationPanel) —
+  // нужен только для чтения роли через personaRole (W3-F1f, разрез §3.4)
+  projects: Project[];
   // Цвет персоны (разрезолвленный из палитры) — рамки активных карточек и степпер
   accent: string;
   isMobile: boolean;
 }) {
+  // Гейт по роли (W3-F1f, разрез §2/§3.4): роль — только через personaRights по проекту
+  // персоны. Нет роли (своя персона / обычный проект / старый бэк) и owner — всё как раньше.
+  // Читателю закрыто право bindingWrite (всё редактирование), редактору открыт bindingWrite,
+  // но закрыты bindingMcpPlugin (цели mcp:/plugin:* — Configure на бэке), skills (навыки —
+  // Configure) и bindingForeignTarget (правка привязок к целям вне этого проекта — И-4).
+  const role = personaRole(persona, projects);
+  const mayBind = canPersona(role, 'bindingWrite');
+  const mayMcpPlugin = canPersona(role, 'bindingMcpPlugin');
+  const mayBindForeign = canPersona(role, 'bindingForeignTarget');
+  const maySkills = canPersona(role, 'skills');
+
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
   const [error, setError] = useState(false);
 
@@ -216,6 +262,34 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
+  // «Датасет этого проекта» решается по meta цели — id проекта датасета
+  // (ветка knowledge в binding-targets, PersonasController.cs:1157). Мета нужна ровно там,
+  // где решается «своя/чужая цель» — при закрытом праве чужих целей (те же флаги, что в
+  // canEditBinding: mayBind && !mayBindForeign); owner/без роли проходят через
+  // mayBindForeign и мета им не нужна. Запрос тот же, что у подписей целей: модульный
+  // кэш fetchBindingTargets дублирует его, новой попытки нет. Каталога нет (ошибка/пустой)
+  // — у датасета кнопки остаются скрыты: при неизвестном проекте фронт не обещает то,
+  // что бэк может отказать (fail-closed, И-4).
+  const needKnowledgeMeta = mayBind && !mayBindForeign && list.some(b => b.type === 'knowledge');
+  const [knowledgeProject, setKnowledgeProject] = useState<Map<string, string | null>>(() => new Map());
+  useEffect(() => {
+    if (!needKnowledgeMeta) return;
+    let alive = true;
+    fetchBindingTargets('knowledge')
+      .then(l => { if (alive) setKnowledgeProject(new Map(l.map(t => [t.id, t.meta ?? null]))); })
+      .catch(() => { /* мета недоступна — у привязок knowledge кнопки остаются скрыты */ });
+    return () => { alive = false; };
+  }, [needKnowledgeMeta]);
+
+  // Можно ли менять/удалять эту привязку этому человеку: owner/без роли — все
+  // (mayBindForeign); читатель — никаких (mayBind закрыт); редактор — только цели этого
+  // проекта (bindingForeignTarget закрыт в personaRights, И-4). Порядок списка при этом
+  // не меняется — гейт прячет только органы.
+  const canEditBinding = (b: PersonaBinding): boolean => {
+    if (!mayBind) return false;
+    return mayBindForeign || bindingTargetInProject(b, persona.projectId, knowledgeProject);
+  };
+
   // Сводка по серверам личного MCP-реестра — каталог тот же, что у пикера инструментов
   // (статический + серверы владельца, ключи «mcp:»). Семантика читается по флагу
   // mcp-allowlist (та же граница, что развёл бэк в GetToolDefaultState/McpDelivery):
@@ -336,15 +410,21 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       // Один цельный набор для PUT-замены: существующие привязки как есть, кроме
       // последней по каждому ключу каталога — она выключается; недостающие ключи
       // добавляются новыми off-привязками. touchedIdx — позиции, которые реально меняются.
+      // Серверы личного MCP-реестра ('mcp:') участнику без права bindingMcpPlugin не
+      // трогались ни в какую сторону: существующие остаются как есть, новых off-привязок
+      // на них не заводится (П1 доработки W3-F1f — иначе «Минимум» редактора менял чужие
+      // цели, хотя редактор их не правит).
       const touchedIdx = new Set<number>();
       const next: PersonaBindingDto[] = current.map((b, i) => {
-        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off')
+        if (b.type !== 'tool' || lastByTarget.get(b.target.toLowerCase()) !== b.id || b.mode === 'off'
+          || (!mayMcpPlugin && isMcpUserKey(b.target)))
           return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: b.mode };
         touchedIdx.add(i);
         return { type: b.type, target: b.target, path: b.path ?? undefined, condition: b.condition, mode: 'off' };
       });
       for (const t of catalog) {
         if (lastByTarget.has(t.id.toLowerCase())) continue;
+        if (!mayMcpPlugin && isMcpUserKey(t.id)) continue;
         touchedIdx.add(next.length);
         next.push({ type: 'tool', target: t.id, mode: 'off', condition: '' });
       }
@@ -556,14 +636,18 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // Карточка одной привязки — общая для секции «Умения и правила» и секции
   // «Сотрудничество с другими проектами» (обе используют один и тот же список бindings)
   const renderBindingCard = (b: PersonaBinding) => {
-    const open = expandedId === b.id;
+    // Гейт по цели (W3-F1f): не-редактируемая этому человеку карточка не раскрывается
+    // (в раскрытом теле живут textarea условия, переключатель режима и «Удалить привязку»)
+    // и не имеет меню «⋯». Сама карточка и её режим остаются видимыми — право Read.
+    const editable = canEditBinding(b);
+    const open = editable && expandedId === b.id;
     const dim = b.mode === 'off' && !open;
     const flashing = flashIds.has(b.id);
     return (
       <div
         key={b.id}
-        onMouseEnter={() => setHoveredId(b.id)}
-        onMouseLeave={() => setHoveredId(h => h === b.id ? null : h)}
+        onMouseEnter={editable ? () => setHoveredId(b.id) : undefined}
+        onMouseLeave={editable ? () => setHoveredId(h => h === b.id ? null : h) : undefined}
         style={{
           background: flashing ? C.accentLight : C.bgWhite,
           border: `1px solid ${open || hoveredId === b.id ? accent : C.border}`,
@@ -573,8 +657,8 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       >
         {/* Свёрнутая строка */}
         <div
-          onClick={() => toggleCard(b)}
-          style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}
+          onClick={editable ? () => toggleCard(b) : undefined}
+          style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: editable ? 'pointer' : 'default' }}
         >
           <BindingTypeIcon type={b.type} dim={dim} />
           <div style={{ flex: 1, minWidth: 0, opacity: dim ? 0.55 : 1 }}>
@@ -591,7 +675,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             <BindingModeBadge mode={b.mode} />
-            {!open && (
+            {editable && !open && (
               <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
                 <button
                   onClick={() => setMenuId(m => m === b.id ? null : b.id)}
@@ -696,13 +780,16 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         </div>
 
         {/* Пресет «Минимум»: выключает все инструменты и разделы одной кнопкой — экономия
-            контекста для персон, которым не нужен полный набор возможностей */}
-        <div style={{ marginTop: 12 }}>
-          <Button variant="ghost" size="sm" disabled={minimalBusy || bindings === null}
-            leftIcon={<Minimize2 size={14} strokeWidth={ICON_STROKE} />} onClick={openMinimal}>
-            Пресет «Минимум»
-          </Button>
-        </div>
+            контекста для персон, которым не нужен полный набор возможностей.
+            Массовая запись привязок (WriteContent): читателю не рисуется (W3-F1f) */}
+        {mayBind && (
+          <div style={{ marginTop: 12 }}>
+            <Button variant="ghost" size="sm" disabled={minimalBusy || bindings === null}
+              leftIcon={<Minimize2 size={14} strokeWidth={ICON_STROKE} />} onClick={openMinimal}>
+              Пресет «Минимум»
+            </Button>
+          </div>
+        )}
 
         {/* Сводка по серверам личного MCP-реестра: без флага — сколько не выключены,
             с флагом mcp-allowlist — сколько выдано лично (проектные выдачи сюда не входят) */}
@@ -715,8 +802,9 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         {/* Плашка «Применить типовые» (фича specialty-prompt-sections): для персон с
             заданной специальностью — кнопка материализует профиль роли в личные привязки
             поверх существующих (свои записи не трогаются). Скрывается после применения
-            до смены персоны или специальности. */}
-        {persona.specialty && persona.specialty !== 'none' && (
+            до смены персоны или специальности. Массовая запись привязок (WriteContent):
+            читателю не рисуется (W3-F1f) */}
+        {mayBind && persona.specialty && persona.specialty !== 'none' && (
           <div style={{
             marginTop: 12, display: 'flex', gap: 12, alignItems: 'flex-start',
             background: applyDefaultsDone ? C.successBg : C.infoBg,
@@ -746,7 +834,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </div>
         )}
 
-        {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных) */}
+        {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных).
+            Ролевой гейт здесь не нужен: флаг рисуется только глобальной персоне, у неё нет
+            projectId → personaRole даёт null → любое право = «как владелец» (П4 доработки
+            W3-F1f: мёртвый гейт editZoneModel убран). Поле зоны участника гейтится ролью
+            в PersonaForm. */}
         {persona.scope === 'global' && (
           <div style={{
             marginTop: 14, display: 'flex', alignItems: 'center', gap: 12,
@@ -783,7 +875,8 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </div>
         )}
 
-        {/* Пустое состояние — приглашение с чипами-примерами */}
+        {/* Пустое состояние: с правом записи — приглашение с чипами-примерами;
+            без него (читатель) — только констатация: кому можно добавить (W3-F1f) */}
         {bindings !== null && !error && localBindings.length === 0 && !panel && suggestJob.status === 'idle' && (
           <div style={{
             marginTop: 14, border: `1.5px dashed ${C.dashed}`, borderRadius: R.xl,
@@ -792,21 +885,34 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <div style={{ color: C.textMuted, marginBottom: 8, display: 'flex', justifyContent: 'center' }}>
               <Link size={22} strokeWidth={ICON_STROKE} />
             </div>
-            <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
-              Подключи персоне источники и инструменты
-            </div>
-            <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5, marginTop: 5 }}>
-              Проекты, базы знаний, заметки и навыки —<br />с правилом, когда ими пользоваться
-            </div>
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 14 }}>
-              <ExampleChip label="🗂 файлы проекта" onClick={() => openAdd('project')} />
-              <ExampleChip label="📚 база знаний" onClick={() => openAdd('knowledge')} />
-              <ExampleChip label="🔧 инструмент чатов" onClick={() => openAdd('tool')} />
-              <ExampleChip label="⚡ навык" onClick={() => openAdd('skill')} />
-            </div>
-            <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
-              <AddBindingButton onClick={() => openAdd()} />
-            </div>
+            {mayBind ? (
+              <>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+                  Подключи персоне источники и инструменты
+                </div>
+                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5, marginTop: 5 }}>
+                  Проекты, базы знаний, заметки и навыки —<br />с правилом, когда ими пользоваться
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 14 }}>
+                  <ExampleChip label="🗂 файлы проекта" onClick={() => openAdd('project')} />
+                  <ExampleChip label="📚 база знаний" onClick={() => openAdd('knowledge')} />
+                  <ExampleChip label="🔧 инструмент чатов" onClick={() => openAdd('tool')} />
+                  <ExampleChip label="⚡ навык" onClick={() => openAdd('skill')} />
+                </div>
+                <div style={{ marginTop: 16, display: 'flex', justifyContent: 'center' }}>
+                  <AddBindingButton onClick={() => openAdd()} />
+                </div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>
+                  Привязок пока нет
+                </div>
+                <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5, marginTop: 5 }}>
+                  Источники и инструменты этой персоне назначает владелец проекта
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -817,8 +923,10 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </div>
         )}
 
-        {/* Кнопки под списком (скрыты, пока открыта панель добавления/подбор/ввод описания) */}
-        {bindings !== null && !error && localBindings.length > 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
+        {/* Кнопки под списком (скрыты, пока открыта панель добавления/подбор/ввод описания).
+            Все они — запись привязок или установка навыка: без права WriteContent/Configure
+            не рисуются (W3-F1f); «Найти навык» — отдельное право skills (§2: навыки — Configure) */}
+        {mayBind && bindings !== null && !error && localBindings.length > 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <AddBindingButton onClick={() => openAdd()} />
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
@@ -827,12 +935,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghostAccent" size="sm" onClick={openGenerate}>
               ✨ Создать привязку
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
-              ⚡ Найти навык
-            </Button>
+            {maySkills && (
+              <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
+                ⚡ Найти навык
+              </Button>
+            )}
           </div>
         )}
-        {bindings !== null && !error && localBindings.length === 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
+        {mayBind && bindings !== null && !error && localBindings.length === 0 && !panel && suggestJob.status === 'idle' && genPrompt === null && (
           <div style={{ display: 'flex', justifyContent: 'center', gap: 10, flexWrap: 'wrap', marginTop: 12 }}>
             <Button variant="ghostAccent" size="sm" onClick={runSuggest}>
               ✨ Подобрать автоматически
@@ -840,9 +950,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             <Button variant="ghostAccent" size="sm" onClick={openGenerate}>
               ✨ Создать привязку
             </Button>
-            <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
-              ⚡ Найти навык
-            </Button>
+            {maySkills && (
+              <Button variant="ghost" size="sm" onClick={() => setShowSkillSearch(true)}>
+                ⚡ Найти навык
+              </Button>
+            )}
           </div>
         )}
 
@@ -861,12 +973,16 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
               }}>
                 <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
                   Пока эта персона общается только со своей командой и её задачами.
-                  Разреши ей звать на помощь другой проект
+                  {/* «Разреши ей звать на помощь другой проект» — пригласительная форма только
+                      там, где её можно выполнить: без права записи (читатель) — констатация (W3-F1f) */}
+                  {mayBind ? ' Разреши ей звать на помощь другой проект' : ' Это назначение — за владельцем проекта'}
                 </div>
-                <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
-                  <ExampleChip label="🤝 команда другого проекта" onClick={() => openAdd('projectPersonas')} />
-                  <ExampleChip label="📋 задачи другого проекта" onClick={() => openAdd('projectTasks')} />
-                </div>
+                {mayBind && (
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap', marginTop: 12 }}>
+                    <ExampleChip label="🤝 команда другого проекта" onClick={() => openAdd('projectPersonas')} />
+                    <ExampleChip label="📋 задачи другого проекта" onClick={() => openAdd('projectTasks')} />
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
@@ -1065,6 +1181,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             accent={accent}
             isMobile={isMobile}
             aiBusy={panelAiBusy}
+            allowMcpPlugin={mayMcpPlugin}
             ownProjectId={ownProjectId(persona)}
             toolPicker={{
               personaId: persona.id,
@@ -1109,11 +1226,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 }
 
 // === Инлайн-панель «Добавить привязку»: ① Тип → ② Цель → ③ Правило ===
-function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, onChange, onClose, onCommit, onAiCondition }: {
+function AddPanel({ panel, accent, isMobile, aiBusy, allowMcpPlugin, ownProjectId, toolPicker, onChange, onClose, onCommit, onAiCondition }: {
   panel: AddPanelState;
   accent: string;
   isMobile: boolean;
   aiBusy: boolean;
+  // Право bindingMcpPlugin (W3-F1f): без него тип «Плагин» (цель всегда plugin:…) не входит
+  // в сетку, а в пикере инструментов скрыты серверы личного MCP-реестра (ключи mcp:) — И-4
+  allowMcpPlugin: boolean;
   // Проект самой персоны (scope=project) — исключаем его из пикера projectPersonas/
   // projectTasks: обращаться к своей же команде/задачам через кросс-проектную привязку бессмысленно
   ownProjectId?: string;
@@ -1149,7 +1269,10 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
 
       {panel.step === 1 && (
         <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : 'repeat(3, 1fr)', gap: 10, marginTop: 14 }}>
-          {BINDING_TYPE_ORDER.map(t => {
+          {/* Тип «Плагин» закрыт без права bindingMcpPlugin: его цель всегда plugin:{…} —
+              личное владельца (И-4). Остальные типы доступны и участнику (сужение целей —
+              на бэке, W3-B5b) */}
+          {BINDING_TYPE_ORDER.filter(t => allowMcpPlugin || t !== 'plugin').map(t => {
             const m = BINDING_TYPE_META[t];
             return (
               <button
@@ -1173,7 +1296,7 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
       )}
 
       {panel.step === 2 && panel.type && (
-        <TargetPicker panel={panel} onChange={onChange} ownProjectId={ownProjectId} toolPicker={toolPicker} />
+        <TargetPicker panel={panel} onChange={onChange} allowMcpPlugin={allowMcpPlugin} ownProjectId={ownProjectId} toolPicker={toolPicker} />
       )}
 
       {panel.step === 3 && panel.type && (
@@ -1230,10 +1353,12 @@ function AddPanel({ panel, accent, isMobile, aiBusy, ownProjectId, toolPicker, o
 // затем ручной ввод пути (mono, дерево в v1 не строим); projectPersonas — проект,
 // затем «вся команда» или конкретная персона; projectTasks — проект, затем
 // переключатель «Полный доступ / Только чтение».
-function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
+function TargetPicker({ panel, ownProjectId, allowMcpPlugin, toolPicker, onChange }: {
   panel: AddPanelState;
   // Проект самой персоны — исключается из списка (нет смысла в кросс-привязке на себя)
   ownProjectId?: string;
+  // Право bindingMcpPlugin (W3-F1f): без него в пикере инструментов скрыты mcp:-цели (И-4)
+  allowMcpPlugin: boolean;
   toolPicker: {
     personaId: string;
     bindings: PersonaBinding[];
@@ -1278,6 +1403,7 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
         <ToolTargetPicker
           personaId={toolPicker.personaId}
           bindings={toolPicker.bindings}
+          hideMcp={!allowMcpPlugin}
           onSetMode={toolPicker.onSetMode}
           onOpenRule={toolPicker.onOpenRule}
         />

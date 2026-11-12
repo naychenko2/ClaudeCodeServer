@@ -245,9 +245,10 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
     /// <summary>
     /// Живой сценарий приёмки «создание задачи работает»: tools/call tasks_create на обычном
     /// ходу создаёт задачу в проекте чата, и она видна через REST того же владельца.
-    /// Происхождение (sourceSessionId) проверяется в пути владельца: ответ MCP-вызова без актора
-    /// хода маскирует ссылки на чат (S2d-4b2: актор неизвестен — «не видит», ForActorMasked →
-    /// TaskView.MaskForeignChats), а запись задачи источник помнит и владелец видит его по REST.
+    /// Происхождение (sourceSessionId) проверяется в пути владельца: ответ вызова без актора
+    /// хода маскирует только приватные чаты (DEF-83e3: общий чат отдаётся как есть, ForActorMasked →
+    /// TaskView.MaskForeignChats → ChatRefs.For), а запись задачи источник помнит и владелец
+    /// видит его по REST.
     /// </summary>
     [Fact]
     public async Task СозданиеЗадачи_ЖивымВызовом_Работает()
@@ -263,11 +264,12 @@ public class TasksHttpDelegationGateTests : IClassFixture<TasksHttpDelegationGat
         task.GetProperty("title").GetString().Should().Be("Задача из http-тулсета");
         task.GetProperty("projectId").GetString().Should().Be(projectId,
             "проект по умолчанию — проект чата-вызывателя");
-        // Ответ вызова без актора хода: id чата обнулён, рядом форма-заглушка (текущий контракт
-        // маски — TaskChatRefMcpAndReportTests «актор неизвестен — не видит»)
-        task.GetProperty("sourceSessionId").ValueKind.Should().Be(JsonValueKind.Null,
-            "вызов без актора хода: id своего чата в ответе маскируется");
-        task.GetProperty("sourceChat").GetProperty("private").GetBoolean().Should().BeTrue();
+        // Ответ вызова без актора хода: общий чат вызывателя не приватный — id на месте, формы нет
+        // (DEF-83e3: при неизвестном акторе маскируется только приватное; сама маска —
+        // TaskChatRefMcpAndReportTests «АкторНеизвестен_ОбщийЧатКакЕсть_ПриватныйЗамаскирован»)
+        task.GetProperty("sourceSessionId").GetString().Should().Be(sessionId,
+            "общий чат вызывателя не приватный: маска его не закрывает");
+        task.TryGetProperty("sourceChat", out _).Should().BeFalse("формы-заглушки нет там, где id на месте");
         // Происхождение записи — в пути владельца: его REST свой чат видит и отдаёт полный id
         var id = task.GetProperty("id").GetString()!;
         var viaOwner = JsonSerializer.Deserialize<JsonElement>(

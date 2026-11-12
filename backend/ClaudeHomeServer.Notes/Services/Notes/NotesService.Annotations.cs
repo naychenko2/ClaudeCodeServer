@@ -500,7 +500,15 @@ public sealed partial class NotesService
             if (a is null || a.IsReply || !a.DocScope.Equals(scope, StringComparison.Ordinal) ||
                 !a.DocPath.Equals(rel, StringComparison.OrdinalIgnoreCase)) continue;
             var (state, s, e) = ResolveAnchor(doc, a);
-            var replies = replyCounts.GetValueOrDefault((n.SourceKey, n.RelPath.ToLowerInvariant()));
+            // DEF-9fb9: ключ счётчика — тот же, что в GetReplies (:381): канонический путь
+            // комментария (у проекта с notes/, как пишет Reply :361) + легаси-вариант без
+            // префикса; модельный RelPath — от notes-корня, без него. Ключи различались →
+            // Replies=0 у комментариев общего проекта. У личного vault ключи совпадают —
+            // один подсчёт, без двойного счёта.
+            var canonical = DocPathOf(n.SourceKey, n.RelPath).ToLowerInvariant();
+            var legacy = n.RelPath.ToLowerInvariant();
+            var replies = replyCounts.GetValueOrDefault((n.SourceKey, canonical));
+            if (canonical != legacy) replies += replyCounts.GetValueOrDefault((n.SourceKey, legacy));
             result.Add(new DocAnnotationDto(
                 n.Id, n.Title, a.Status, state, s, e, a.BlockId, a.AnchorHeading,
                 a.AnchorQuote ?? "", ExtractExcerpt(n.Content), n.Tags, n.UpdatedAt, replies));

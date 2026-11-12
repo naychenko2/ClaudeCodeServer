@@ -452,12 +452,34 @@ public sealed class ChatCreation
         var persona = _personaLayer.ResolvePersona(personaId, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {personaId}");
 
+        // И-6 (W3-B4a, разрез §3.1): проектная персона никогда не создаёт чат вне своего проекта.
+        // Проект чужого владельца (или уже удалённый) — отказ, а не тихий фолбэк в чат вне проекта:
+        // с ключом арендатора (PersonasController) такой чат родился бы в личном пространстве
+        // владельца от лица участника. Из HTTP путь закрыт самим резолвом (ResolvePersona: битая
+        // запись — 404, ProjectAccessService.cs:63) — это второй рубеж для прямых внутренних
+        // вызовов: преемник/продолжение, исполнитель задач (TaskExecutionService), автономность
+        // (PersonaAutomationService).
+        if (PersonaZone.IsProjectPersona(persona))
+        {
+            var ownProject = string.IsNullOrEmpty(persona.ProjectId) ? null : _projects.GetById(persona.ProjectId);
+            if (ownProject is null || ownProject.OwnerId != ownerId)
+                throw new InvalidOperationException(
+                    $"Персона «{persona.Name}» не работает вне своего проекта");
+        }
+
         // Проект сессии: у проектной персоны — её собственный; у глобальной — контекстный
         var targetProjectId = PersonaZone.IsProjectPersona(persona)
             ? persona.ProjectId
             : contextProjectId;
         // Персона сферы без проекта сферы чата не получает: её зона — только проекты сферы
         if (PersonaZone.IsSpherePersona(persona)) _settings.EnsurePersonaVisible(persona, targetProjectId);
+
+        // Глобальной персоне чат общего проекта не назначается (доработка R-S2a-8, дефект D1 W3-B4a):
+        // общая проверка рамки — по целевому проекту чата ДО выбора ветки и до всякой работы.
+        // Вердикт рамки — по свойствам проекта без актора (TurnFrame), поэтому он одинаков для
+        // владельца и для участника; раньше проверка жила в ветке владельца ниже, и участнику
+        // общего проекта чат молча уходил вне проекта (И-6: тихого фолбэка в личный чат нет).
+        _settings.EnsurePersonasVisibleInFrame(targetProjectId, new[] { persona });
 
         // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной».
         // Дефолт места (Strong) передаётся в резолв, чтобы ячейка персоны без явного уровня сработала.
@@ -469,9 +491,7 @@ public sealed class ChatCreation
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
         {
-            // Глобальной персоне чат общего проекта не назначается (доработка R-S2a-8): общая проверка
-            // рамки — здесь проект чата известен точно (иначе чат вышел бы вне проекта, где отказа нет).
-            _settings.EnsurePersonasVisibleInFrame(project.Id, new[] { persona });
+            // Рамка уже проверена выше — по целевому проекту, для любого актора (дефект D1).
             var projectSession = new Session
             {
                 ProjectId = project.Id,
@@ -514,17 +534,21 @@ public sealed class ChatCreation
         return session;
     }
 
-    // Создание группового чата (флаг persona-group-chats): 2-4 персоны владельца,
+    // Создание группового чата (флаг persona-group-chats): 2-8 персоны владельца,
     // первая — ведущая (стартовый активный спикер). Зона — по ведущей, как в
     // CreatePersonaChatAsync: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     internal async Task<Session> CreateGroupChatAsync(string ownerId, IReadOnlyList<string> personaIds,
-        ClaudeMode mode, string? name = null)
+        ClaudeMode mode, string? name = null, string? createdByUserId = null)
     {
-        // Проект группового чата — проект ведущей проектной персоны; у остальных чат вне проекта,
-        // и персоне сферы в нём не место
-        var groupProjectId = _personaLayer.ResolvePersona(personaIds.FirstOrDefault() ?? "", ownerId) is { } l
+        // Проект группового чата — проект ведущей, то есть ПЕРВОГО НЕПУСТОГО id: тот же резолв
+        // ведущей, что в ChatsController.CreateGroup (W3-B4c П1). «Сырой» первый id мог быть пустым:
+        // тогда проект выходил null, сверка состава ValidateParticipants выключалась, а чат всё
+        // равно садился в проект ведущей ниже (по participants[0]) — граница И-3 держала только
+        // непустой первый id. У остальных чат вне проекта, и персоне сферы в нём не место.
+        var groupProjectId = personaIds.FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)) is { } leadId
+            && _personaLayer.ResolvePersona(leadId, ownerId) is { } l
             ? PersonaZone.OwnProjectId(l) : null;
-        var participants = _settings.ValidateParticipants(ownerId, personaIds, groupProjectId);
+        var participants = _settings.ValidateParticipants(ownerId, personaIds, groupProjectId, createdByUserId);
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
@@ -552,6 +576,9 @@ public sealed class ChatCreation
                 Model = leaderModel,
                 Provider = _route.ResolveSubscriptionProvider(leaderModel),
                 Effort = leader.Effort,
+                // W3-B4c (И-2): ключ записи — арендатор, автор — вызывающий (участник или владелец),
+                // тот же приём, что у одиночного чата (CreatePersonaChatAsync). Чат вне проекта автора не несёт.
+                CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
             };
             await _process.StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules
@@ -576,12 +603,14 @@ public sealed class ChatCreation
         return session;
     }
 
-    // Чаты владельца, ведущиеся от лица конкретной персоны (для раздела «Персоны») — список
-    // человеческой ручки (S2d-4a): плюс VisibleTo, чужой приватный чат в нём не живёт
-    internal IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId) =>
+    // Чаты области арендатора, ведущиеся от лица конкретной персоны (для раздела «Персоны») —
+    // список человеческой ручки (S2d-4a): VisibleTo фильтрует по вызывающему (И-5, W3-B4a):
+    // после перехода ключа на арендатора viewer обязан остаться caller — иначе участник
+    // увидел бы приватные чаты владельца с этой персоной.
+    internal IReadOnlyList<Session> GetPersonaChats(string ownerId, string personaId, string viewer) =>
         _sessions.Values
             .Select(e => e.Info)
-            .Where(s => s.PersonaId == personaId && _store.ResolveOwnerId(s) == ownerId && _store.VisibleTo(s, ownerId))
+            .Where(s => s.PersonaId == personaId && _store.ResolveOwnerId(s) == ownerId && _store.VisibleTo(s, viewer))
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 }

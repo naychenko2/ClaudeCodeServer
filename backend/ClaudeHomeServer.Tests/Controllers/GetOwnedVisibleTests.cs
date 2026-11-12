@@ -246,10 +246,10 @@ public sealed class GetOwnedVisibleTests : IDisposable
         _history.SaveAsync(sessionId, [new StoredUserMessage("о чём был разговор")]);
 
     private SessionsController SessionsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
+        new(_sessions, _projects, null!, null!, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
@@ -290,7 +290,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
     [Fact]
     public async Task ChatsController_ЧужойПриватный404_КакНаНесуществующем_СвоиИОбщийПроходят()
     {
-        var c = new ChatsController(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        var c = new ChatsController(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(_ownerId) };
 
         // Гейт закрыт — 404 без тела, неотличимо от несуществующего чата; дальше по порядку —
@@ -555,7 +555,7 @@ public sealed class GetOwnedVisibleTests : IDisposable
         using var tasks = new TaskManager(_config);
         var resolver = new SessionContextResolver(_projects, tasks);
         // GetContext — синхронный (состав считается на месте), PutContext — async (меняет стор)
-        SessionsController As(string userId) => new(_sessions, _projects, null!, null!, resolver, null!)
+        SessionsController As(string userId) => new(_sessions, _projects, null!, null!, resolver, null!, null!)
             { ControllerContext = AsUser(userId) };
 
         As(_ownerId).GetContext(_projectId, ForeignPrivateId).Should().BeOfType<NotFoundResult>();
@@ -576,10 +576,12 @@ public sealed class GetOwnedVisibleTests : IDisposable
             .Should().BeOfType<NotFoundResult>();
     }
 
-    // Собеседник чата — запись: автор-арендатор. Участник (в т.ч. автор своего приватного)
-    // не менял его проектной сессии и до шага: SetPersona внутри сверяет ResolveOwnerId
+    // Собеседник чата — настройка чата (W3-B4b): владелец проекта — любой чат проекта, участник —
+    // только чат, автор которого он (по CreatedByUserId). Чужой приватный неотличим от «нет такого»
+    // (S2d-3e — сохранён). Свой приватный без автора в сиде (поле не проставлено) автором не
+    // считается: тот же fail-closed, что у удаления чата, — 403 owner_settings, чат цел.
     [Fact]
-    public void SessionsController_SetPersona_ЧужойПриватныйКакНесуществующий_АвторАрендаторПроходит()
+    public void SessionsController_SetPersona_ЧужойПриватныйКакНесуществующий_ВладелецЛюбойЧатУчастникуСвой()
     {
         var req = new SetPersonaRequest(null, null); // «снять собеседника» — без резолва персоны
         var asOwner = SessionsAs(_ownerId);
@@ -589,8 +591,13 @@ public sealed class GetOwnedVisibleTests : IDisposable
         asOwner.SetPersona(_projectId, OwnPrivateId, req).Should().BeOfType<OkObjectResult>();
         asOwner.SetPersona(_projectId, OpenChatId, req).Should().BeOfType<OkObjectResult>();
 
-        SessionsAs(_editorId).SetPersona(_projectId, ForeignPrivateId, req).Should().BeOfType<NotFoundResult>(
-            "владение не изменилось: автор-участник своего приватного — не арендатор");
+        var denied = SessionsAs(_editorId).SetPersona(_projectId, ForeignPrivateId, req)
+            .Should().BeOfType<ObjectResult>().Subject;
+        denied.StatusCode.Should().Be(StatusCodes.Status403Forbidden,
+            "автор-участник своего приватного теперь проходит гейт — но автор в сиде неизвестен " +
+            "(CreatedByUserId пуст): неизвестный автор автором не считается");
+        System.Text.Json.JsonSerializer.Serialize(denied.Value).Should().Contain(OwnerSettingsGate.ErrorCode);
+        _sessions.GetById(ForeignPrivateId)!.Should().NotBeNull("отказ не трогает чат");
     }
 
     [Fact]

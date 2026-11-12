@@ -138,6 +138,14 @@ function keepIfSame(prev: Session[], next: Session[]): Session[] {
   return prev;
 }
 
+// Отказ «Нового чата» (W3-F2b, дефект 05.11): до фикса onNew лишь запускал createNew(),
+// не глядя на исход — rejection createChatWithContextPersona (например no_project_persona) оставался
+// необработанным, в UI тишина. Теперь — тост с текстом сервера, как в handleCreateSession
+// (WorkspacePage): пользователь видит, почему чат не создался.
+export function reportNewChatError(e: unknown): void {
+  showToast('Новый чат', e instanceof Error ? e.message : 'Не удалось создать чат');
+}
+
 export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onSessionsListChanged, onCleared, onActiveDeleted, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   // «Сохранить в заметки» доступно только при включённой подсистеме заметок — иначе
   // кнопка/пункт в ChatCard уйдёт в архив не сохранённой, а карточка не получит
@@ -1258,7 +1266,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // flex:1 нет свободного места, и overflowY:auto не срабатывает.
     <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
-        onNew={() => { void createNew(); }}
+        onNew={() => { createNew().catch(reportNewChatError); }}
         hideNew={!online || !canCreateChats(project)}
         sessions={sessions}
         filters={groupBy === filters.groupBy ? filters : { ...filters, groupBy }}

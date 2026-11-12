@@ -113,23 +113,19 @@ public class ProjectTasksController(
         // что клиент не привёл Status в соответствие с категорией колонки.
         var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
 
-        // Персона-исполнитель: своя и в правильном проекте (или есть ProjectTasks-привязка)
-        if (!string.IsNullOrEmpty(req.PersonaId))
-        {
-            var p = personas.Get(req.PersonaId, UserId);
-            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, projectId, scopes, spheres) is { } personaError)
-                return BadRequest(new { error = personaError });
-        }
+        // Персона-исполнитель (W3-B7, разрез §3.2 «TasksController»): допуск — ResolvePersona
+        // по праву Read (одна точка «персона → область», И-1), валидация — с ключом арендатора
+        // проекта задачи (И-2), а не вызывающего: редактор общего проекта поручает задачу его
+        // проектной персоне, а личная (глобальная, сферная) персона владельца ему недоступна.
+        // Агентский путь (TasksToolset) ключует context.OwnerId — REST сходится с ним.
+        if (!string.IsNullOrEmpty(req.PersonaId) && TaskPersonaGate.Denied(access, personas, bindings,
+                spheres, UserId, req.PersonaId, projectId, tenantId) is { } personaError)
+            return BadRequest(new { error = personaError });
 
-        // Персона-постановщик (происхождение): та же валидация — своя и в правильном проекте
-        if (!string.IsNullOrEmpty(req.CreatedByPersonaId))
-        {
-            var p = personas.Get(req.CreatedByPersonaId, UserId);
-            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, projectId, scopes, spheres) is { } creatorError)
-                return BadRequest(new { error = creatorError });
-        }
+        // Персона-постановщик (происхождение): тот же допуск и тот же ключ
+        if (!string.IsNullOrEmpty(req.CreatedByPersonaId) && TaskPersonaGate.Denied(access, personas, bindings,
+                spheres, UserId, req.CreatedByPersonaId, projectId, tenantId) is { } creatorError)
+            return BadRequest(new { error = creatorError });
 
         TaskItem task;
         try
@@ -407,14 +403,16 @@ public class TasksController(
         // клиент не привёл Status в соответствие с категорией колонки.
         var targetColumn = project?.BoardColumns?.FirstOrDefault(c => c.Id == req.ColumnId);
 
-        // Персона-исполнитель: своя; проектная персона личную задачу не берёт
-        if (!string.IsNullOrEmpty(req.PersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.PersonaId, taskProjectId: null, spheres: spheres) is { } personaError)
+        // Персона-исполнитель: та же точка допуска, что у проектной ручки; ключ — сам
+        // вызывающий: для личной задачи он и есть арендатор. Своя глобальная персона — как
+        // прежде; чужая и проектная — отказ (проектная персона личную задачу не берёт).
+        if (!string.IsNullOrEmpty(req.PersonaId) && TaskPersonaGate.Denied(access, personas, bindings,
+                spheres, UserId, req.PersonaId, taskProjectId: null, tenantId: UserId) is { } personaError)
             return BadRequest(new { error = personaError });
 
         // Персона-постановщик (происхождение): та же валидация, что у исполнителя
-        if (!string.IsNullOrEmpty(req.CreatedByPersonaId)
-            && TaskPersonaValidator.Error(personas, UserId, req.CreatedByPersonaId, taskProjectId: null, spheres: spheres) is { } creatorError)
+        if (!string.IsNullOrEmpty(req.CreatedByPersonaId) && TaskPersonaGate.Denied(access, personas, bindings,
+                spheres, UserId, req.CreatedByPersonaId, taskProjectId: null, tenantId: UserId) is { } creatorError)
             return BadRequest(new { error = creatorError });
 
         TaskItem task;
@@ -626,15 +624,14 @@ public class TasksController(
         }
 
         // Персона-исполнитель: "" = убрать (валидировать нечего), непустая — проверяем.
-        // Валидация по целевому проекту: проектная персона прежнего проекта в новом недействительна,
-        // если не имеет кросс-проектной ProjectTasks-привязки с полным доступом.
-        if (!string.IsNullOrEmpty(req.PersonaId))
-        {
-            var p = personas.Get(req.PersonaId, UserId);
-            var scopes = p is not null ? bindings.BuildExternalTaskScopes(UserId, p) : [];
-            if (TaskPersonaValidator.Error(personas, UserId, req.PersonaId, targetProjectId, scopes, spheres) is { } personaError)
-                return BadRequest(new { error = personaError });
-        }
+        // Допуск — ResolvePersona по праву Read, ключ валидации — арендатор целевого проекта
+        // (W3-B7, И-2); для личной задачи арендатор — сам вызывающий. Валидация по целевому
+        // проекту: проектная персона прежнего проекта в новом недействительна, если не имеет
+        // кросс-проектной ProjectTasks-привязки с полным доступом.
+        if (!string.IsNullOrEmpty(req.PersonaId) && TaskPersonaGate.Denied(access, personas, bindings,
+                spheres, UserId, req.PersonaId, targetProjectId,
+                tenantId: targetProject?.OwnerId ?? UserId) is { } personaError)
+            return BadRequest(new { error = personaError });
 
         // Вердикт проверки дефекта: автора и время подставляет сервер из сессии вызова
         // (X-Caller-Session-Id) — клиентские значения игнорируются, это гигиена атрибуции,
@@ -1646,12 +1643,20 @@ public class TasksController(
 
         // Исполнитель: ровно одна персона с Specialty=DevopsExecutor, допустимая в проекте эпика.
         // Те же externalScopes, что в Create: кросс-проектная ProjectTasks-привязка не даёт ложного 409.
-        var devops = personas.GetByOwner(UserId)
+        // Ключ поиска и валидации — арендатор проекта эпика, а не вызывающий (остаток W3-B7,
+        // разрез §3.2 строка B7): merge-задача принадлежит проекту эпика и берёт персону проекта
+        // (или глобальную персону арендатора). До этой правки поиск шел «среди своих» вызывающего —
+        // та же ловушка ключа, что в Create до TaskPersonaGate. Дверь мержа остаётся по вызывающему:
+        // чужая фича — 404 раньше этого кода (FeatureProjector.Project по задачам вызывающего,
+        // тест «РедакторНеМержитФичуАрендатора»); для владельца проекта оба ключа совпадают.
+        // Проект существует и ProjectId не null: гард worktree выше вернул 409 при любом из этих.
+        var tenantId = projects.GetById(run.Epic.ProjectId!)!.OwnerId!;
+        var devops = personas.GetByOwner(tenantId)
             .Where(p => p.Specialty == PersonaSpecialty.DevopsExecutor)
             .Where(p =>
             {
-                var scopes = bindings.BuildExternalTaskScopes(UserId, p);
-                return TaskPersonaValidator.Error(personas, UserId, p.Id,
+                var scopes = bindings.BuildExternalTaskScopes(tenantId, p);
+                return TaskPersonaValidator.Error(personas, tenantId, p.Id,
                     taskProjectId: run.Epic.ProjectId, externalScopes: scopes, spheres: spheres) is null;
             })
             .ToList();
@@ -2015,17 +2020,41 @@ public record ClassifyTaskRequest(string Title, string? Description = null, stri
 public record NormalizeTitleRequest(string Title);
 public record FindDuplicateRequest(string Title, string? Description = null, string? ProjectId = null);
 
+// Допуск персоны задачи (W3-B7, разрез shared-projects-personas-cut-2026-11.md §3.2):
+// одна точка правды «персона → область» — IProjectAccess.ResolvePersona с правом Read (И-1),
+// дальше валидация — с ключом арендатора задачи (И-2), а не вызывающего: задача общего
+// проекта берёт только персону этого проекта (или её кросс-проектную ProjectTasks-привязку),
+// личные (глобальные, сферные) персоны доступны только их владельцу (И-3). Текст отказа или
+// null. Ключ чтения персоны и её привязок — её же арендатор: после успешного резолва он верен
+// для любого допустного вида (проектной — владелец проекта, прочих — сам вызывающий).
+public static class TaskPersonaGate
+{
+    public static string? Denied(IProjectAccess? access, PersonaManager personas,
+        PersonaBindingsService bindings, ISphereDirectory? spheres,
+        string callerUserId, string personaId, string? taskProjectId, string tenantId)
+    {
+        // «Нет» и «чужое» не различаем: текст отказа тот же, что у несуществующей персоны.
+        if (access?.ResolvePersona(callerUserId, personaId, ProjectRight.Read) is not { } scope)
+            return "Персона не найдена или недоступна";
+        var persona = personas.Get(personaId, scope.TenantOwnerId);
+        var externalScopes = bindings.BuildExternalTaskScopes(scope.TenantOwnerId, persona);
+        return TaskPersonaValidator.Error(personas, tenantId, personaId, taskProjectId, externalScopes, spheres);
+    }
+}
+
 // Валидация персоны-исполнителя/постановщика задачи: персона существует и принадлежит
-// владельцу; проектная персона допустима только у задач своего проекта, если не имеет
-// кросс-проектной ProjectTasks-привязки с полным доступом (externalScopes). null — ошибок нет.
+// арендатору проекта задачи (ключ — tenantId, а не вызывающий: W3-B7, разрез §3.2 строка B7;
+// личной задачи арендатор — сам вызывающий); проектная персона допустима только у задач
+// своего проекта, если не имеет кросс-проектной ProjectTasks-привязки с полным доступом
+// (externalScopes). null — ошибок нет.
 public static class TaskPersonaValidator
 {
-    public static string? Error(PersonaManager personas, string userId, string personaId,
+    public static string? Error(PersonaManager personas, string tenantId, string personaId,
         string? taskProjectId,
         IReadOnlyList<(string ProjectId, bool ReadOnly)>? externalScopes = null,
         ISphereDirectory? spheres = null)
     {
-        var persona = personas.Get(personaId, userId);
+        var persona = personas.Get(personaId, tenantId);
         if (persona is null) return "Персона не найдена или недоступна";
         // Персона сферы — исполнитель в любом проекте своей сферы: синтетические полные скоупы
         // зоны приходят в externalScopes (PersonaBindingsService.BuildExternalTaskScopes)

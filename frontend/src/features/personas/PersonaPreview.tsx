@@ -63,8 +63,10 @@ export function PersonaPreview({ persona, accent, zoneLabel, onOpenSession, onTa
   zoneLabel?: string;
   // Открыть существующий чат персоны (навигация — у родителя: хаб или проект)
   onOpenSession: (s: Session) => void;
-  // Начать новый разговор (та же кнопка, что «Поговорить» в тулбаре)
-  onTalk: () => void;
+  // Начать новый разговор (та же кнопка, что «Поговорить» в тулбаре).
+  // onTalk не задан — кновок начала чата нет вовсе (гейт по роли, W3-F1c: читателю
+  // чат с персоной откажет бэк, фронт не обещает).
+  onTalk?: () => void;
   talking?: boolean;
   // Перейти в вид «Профиль» (подсказка при пустом характере)
   onEditProfile?: () => void;
@@ -571,13 +573,15 @@ const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && on
           <span style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>
             Разговоров ещё не было
           </span>
-          <button type="button" onClick={onTalk} disabled={talking} style={{
-            background: accent, color: C.onAccent, border: 'none', borderRadius: R.lg,
-            padding: '8px 16px', fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
-            cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
-          }}>
-            {talking ? 'Создаём…' : 'Начать первый разговор'}
-          </button>
+          {onTalk && (
+            <button type="button" onClick={onTalk} disabled={talking} style={{
+              background: accent, color: C.onAccent, border: 'none', borderRadius: R.lg,
+              padding: '8px 16px', fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
+              cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
+            }}>
+              {talking ? 'Создаём…' : 'Начать первый разговор'}
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -636,17 +640,20 @@ const specialtyBridge = (persona.specialty && persona.specialty !== 'none' && on
     <div style={{ flex: '1 1 380px', minWidth: 0, display: 'flex', flexDirection: 'column', gap: 24 }}>
       <div>
         {hero}
-        {/* Поговорить — после описания, до фактов и настроек */}
-        <button type="button" onClick={onTalk} disabled={talking} style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
-          padding: '11px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
-          cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
-          marginTop: 18,
-        }}>
-          <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          {talking ? 'Создаём…' : 'Поговорить'}
-        </button>
+        {/* Поговорить — после описания, до фактов и настроек. Нет onTalk (роль закрыла
+            чат с персоной) — кнопки нет вовсе, пустого ряда в колонке не остаётся */}
+        {onTalk && (
+          <button type="button" onClick={onTalk} disabled={talking} style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+            background: accent, color: C.onAccent, border: 'none', borderRadius: R.xl,
+            padding: '11px 16px', fontSize: 14, fontWeight: 600, fontFamily: FONT.sans,
+            cursor: talking ? 'default' : 'pointer', opacity: talking ? 0.6 : 1,
+            marginTop: 18,
+          }}>
+            <MessageSquare size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            {talking ? 'Создаём…' : 'Поговорить'}
+          </button>
+        )}
         {greeting}
       </div>
       {factsRow}

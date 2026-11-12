@@ -1,5 +1,6 @@
 using System.Text.Json;
 using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -58,12 +59,24 @@ public sealed class PersonasCrudService(
     private static OkObjectResult Ok(object value) => new(value);
     private static NoContentResult NoContent() => new();
 
-    private Task Broadcast(string userId, string action, string? personaId = null) =>
-        broadcaster.ToOwner(userId, new PersonasChangedMessage(action, personaId));
+    // И-8 (W3-B6, разрез docs/research/shared-projects-personas-cut-2026-11.md §3.1): событие
+    // проектной персоны идёт группе проекта И её владельцу — доходит до всех участников;
+    // ToOwner отдельный: вкладки владельца вне проекта (раздел «Персоны») подписаны только на
+    // свою группу. Событие личной (глобальной/сферной) — только владельцу, как раньше. Сообщение
+    // то же PersonasChangedMessage, без новых полей.
+    private Task Broadcast(string userId, Persona persona, string action, string? personaId = null)
+    {
+        var message = new PersonasChangedMessage(action, personaId);
+        if (PersonaZone.IsProjectPersona(persona) && !string.IsNullOrEmpty(persona.ProjectId))
+            return Task.WhenAll(
+                broadcaster.ToProject(persona.ProjectId, message),
+                broadcaster.ToOwner(userId, message));
+        return broadcaster.ToOwner(userId, message);
+    }
 
     // --- Создание / правка / удаление / дефолт (тела POST/PUT/DELETE/make-default) ---
 
-    // onAutoVoice — исход автоподбора голоса, если он запускался (MCP сообщает его модели);
+    // onAutoVoice — исход автоподбора голоса, если он запускается (MCP сообщает его модели);
     // голос был задан явно (в т.ч. пустым объектом) — не вызывается.
     // initiator — кто подал создание: человек из формы или агент из чата (учёт траты аватара,
     // S-SPEND-2c). Сервис его не вычисывает: у него два входа, REST и MCP, и называет его
@@ -71,8 +84,14 @@ public sealed class PersonasCrudService(
     // actorUserId — актор траты аватара (п.2 хвоста R-S-SPEND-2): тот же порядок, что у
     // GenerateAvatarAsync: в REST это сам обратившийся человек, в MCP-тулсете — актор хода
     // (GetTurnActor), а не владелец песочницы; не назван — актор равняется обратившемуся
+    // callerRole/projectId — сужение ИИ-подбора при создании (W3-B5b доработка, ревью aaf13fce):
+    // контроллер передаёт роль вызывающего из области запроса (ProjectWriteArea) и проект персоны —
+    // типовые умения и autoBindings не пишут участнику личных целей владельца и mcp/плагин-целей.
+    // Роль по умолчанию — Owner: MCP-тулсет и создание владельцем действуют в пространстве
+    // владельца, сужения нет.
     public async Task<ActionResult<Persona>> CreateAsync(string userId, CreatePersonaRequest req,
         string? callerSessionId, string initiator, string? actorUserId = null,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
         CancellationToken ct = default, Action<AutoVoiceResult>? onAutoVoice = null)
     {
         if (string.IsNullOrWhiteSpace(req.Name))
@@ -124,6 +143,17 @@ public sealed class PersonasCrudService(
             {
                 var (binding, parseError) = ParseBinding(b);
                 if (binding is null) return BadRequest(new { error = parseError });
+                // W3-B5b доработка 2 (возврат дельта-ревью 7ace425a): явные привязки тела создания
+                // сужены не-владельцу тем же NonOwnerBindingEditDenied, что запись привязки
+                // (AddBinding/SetBindings): без него редактор создал бы проектную персону с
+                // привязкой к личным заметкам владельца, и через неё участник читал бы его личные
+                // данные. Отказ по праву — ДО ValidateAsync (тот же порядок, что у [ProjectScope]:
+                // mcp-цели может не быть в реестре — 403 всё равно 403) и до personas.Create.
+                // Роль по умолчанию — Owner: MCP-тулсет и создание владельцем действуют
+                // в пространстве владельца, сужения нет.
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
                 var err = await bindings.ValidateAsync(userId, binding, bindingList, draftOwner);
                 if (err is not null) return BadRequest(new { error = err });
                 bindingList.Add(binding);
@@ -161,7 +191,8 @@ public sealed class PersonasCrudService(
         var (withDefaults, defaultsApplied) = (persona, 0);
         try
         {
-            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona, ct);
+            (withDefaults, defaultsApplied) = await MaterializeDefaultBindingsAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
         }
         catch (Exception ex)
         {
@@ -171,7 +202,8 @@ public sealed class PersonasCrudService(
         // Авто-подбор привязок (autoBindings) — best-effort:
         // сбой подбора не роняет создание, персона остаётся без привязок
         if (defaultsApplied == 0 && req.AutoBindings == true)
-            persona = await TryAutoBindAsync(userId, persona, ct);
+            persona = await TryAutoBindAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
         // Фото-аватар (autoAvatar) — явный опт-ин для путей, где человек не выбирает
         // аватар сам (напр. пакетное создание команды из ai/team); ручное создание
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
@@ -196,16 +228,22 @@ public sealed class PersonasCrudService(
             if (caller?.OnboardingKind is not null)
                 sessions.SetOnboardingCreatedPersona(csid, userId, persona.Id);
         }
-        await Broadcast(userId, "created", persona.Id);
+        await Broadcast(userId, persona, "created", persona.Id);
         return Ok(persona);
     }
 
     // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
     // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
-        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true)
+        UpdatePersonaRequest req, string? callerSessionId, bool broadcast = true, bool callerIsOwner = true)
     {
         if (personas.Get(id, userId) is not { } current) return NotFound();
+        // И-7 (W3-B3b, разрез §3.1 строка «PUT /{id}»): зону персоны не-владелец не меняет никогда.
+        // REST-гейт (owner_settings, PersonasController.Update) отказывает такую правку до сервиса;
+        // обнуление здесь — собственная граница сервиса: UpdateAsync — общая точка с MCP-тулсетом
+        // (personas_update), и если его откроют актору-участнику (открытый вопрос 1 разреза),
+        // зона не поедет вместе с ним.
+        if (!callerIsOwner) req = req with { Scope = null, ProjectId = null, SphereId = null };
         if (req.Scope == PersonaScope.Project && !ValidProject(userId, req.ProjectId))
             return BadRequest("Для проектной персоны нужен корректный projectId");
         // Любой непустой projectId (в т.ч. при partial-update без scope) — только свой проект
@@ -274,13 +312,15 @@ public sealed class PersonasCrudService(
         // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
-        if (broadcast) await Broadcast(userId, "updated", id);
+        if (broadcast) await Broadcast(userId, persona, "updated", id);
         return Ok(persona);
     }
 
     public async Task<IActionResult> DeleteAsync(string userId, string id, string? successorId)
     {
-        if (personas.Get(id, userId) is null) return NotFound();
+        // Снимок персоны до удаления нужен и для адресата событий (И-8): по его зоне решает,
+        // кому ушло «deleted» и сопутствующее «default»
+        if (personas.Get(id, userId) is not { } persona) return NotFound();
 
         var me = users.GetById(userId);
         var isAssistantDraft = me?.AssistantPersonaId == id;
@@ -297,7 +337,7 @@ public sealed class PersonasCrudService(
             if (me?.DefaultPersonaId == id)
             {
                 users.SetDefaultPersona(userId, null);
-                await Broadcast(userId, "default", null);
+                await Broadcast(userId, persona, "default");
             }
         }
         else
@@ -323,14 +363,14 @@ public sealed class PersonasCrudService(
                 if (isUserDefault) users.SetDefaultPersona(userId, successor.Id);
                 foreach (var project in defaultOfProjects)
                     projects.SetDefaultPersona(project.Id, successor.Id);
-                await Broadcast(userId, "default", successor.Id);
+                await Broadcast(userId, persona, "default", successor.Id);
             }
         }
 
         if (!personas.Delete(id, userId)) return NotFound();
         // Чистим долгую память персоны: Dify-датасет + data/persona-memory.json (иначе осиротят)
         await memory.DeletePersonaAsync(id);
-        await Broadcast(userId, "deleted", id);
+        await Broadcast(userId, persona, "deleted", id);
         return NoContent();
     }
 
@@ -387,7 +427,7 @@ public sealed class PersonasCrudService(
 
         // Событие и для инвалидации кэша auth.me / DTO проекта на фронте:
         // смена дефолта видна резолверу аватаров без перезагрузки
-        await Broadcast(userId, "default", id);
+        await Broadcast(userId, persona, "default", id);
         return Ok(persona);
     }
 
@@ -657,7 +697,7 @@ public sealed class PersonasCrudService(
         try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
 
         var updated = personas.SetAvatarImage(id, userId, fileName);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(updated);
     }
 
@@ -733,35 +773,92 @@ public sealed class PersonasCrudService(
 
     // --- Привязки ---
 
-    // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
+    // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set).
+    // callerRole/projectId — сужение для не-владельца общего проекта (W3-B5a доработка, хвост 1
+    // возврата 5a794ef5): личные привязки владельца не-владелец не удаляет и не подменяет
+    // (403, тот же NonOwnerBindingEditDenied); повторённые запросом дословно — остаются как есть
+    // (id и даты не заменяются): полная замена участника — только проектной части набора.
+    // Роль по умолчанию — Owner: MCP-тулсет действует в пространстве владельца (его ключ —
+    // ownerId из токена), сужения у него нет, поведение не меняется.
     public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindingsAsync(string userId,
-        string id, List<PersonaBindingRequest>? bindingRequests)
+        string id, List<PersonaBindingRequest>? bindingRequests,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null)
     {
         var persona = personas.Get(id, userId);
         if (persona is null) return NotFound();
 
-        var list = new List<PersonaBinding>();
+        var requested = new List<PersonaBinding>();
         foreach (var b in bindingRequests ?? [])
         {
             var (binding, parseError) = ParseBinding(b);
             if (binding is null) return BadRequest(new { error = parseError });
-            var err = await bindings.ValidateAsync(userId, binding, list, persona);
+            requested.Add(binding);
+        }
+
+        var kept = new List<PersonaBinding>();
+        if (callerRole != ProjectRole.Owner)
+        {
+            var existing = persona.Bindings ?? [];
+            // Существующие: личная привязка вне запроса — «удаление» (403), с изменёнными
+            // полями — «подмена» (403); дословная копия — остаётся оригинальным объектом.
+            foreach (var e in existing)
+            {
+                var mirror = requested.FirstOrDefault(r => SameBindingShape(r, e));
+                if (mirror is not null && SameBindingContent(mirror, e)) { kept.Add(e); continue; }
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, e, e)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
+            }
+            // Запрошенные: совпадение по ключу дубликата с существующей — «подмена» (текущая
+            // как current), остальное — новые (тот же метод, current=null).
+            foreach (var r in requested)
+            {
+                if (kept.Any(e => SameBindingShape(e, r))) continue;
+                var current = existing.FirstOrDefault(b => SameBindingShape(b, r));
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, r, current)
+                        is (int deniedStatus, string deniedError))
+                    return StatusCode(deniedStatus, new { error = deniedError });
+            }
+        }
+
+        var list = new List<PersonaBinding>(kept);
+        foreach (var b in requested)
+        {
+            if (kept.Any(e => SameBindingShape(e, b))) continue; // дословная копия владельца — в сторе её оригинал
+            var err = await bindings.ValidateAsync(userId, b, list, persona);
             if (err is not null) return BadRequest(new { error = err });
-            list.Add(binding);
+            list.Add(b);
         }
         var updated = personas.UpdateBindings(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(updated.Bindings ?? []);
     }
+
+    // Идентичность привязки запроса и существующей: тот же ключ дубликата, что в ValidateAsync
+    // (type+target+path). Содержание — с condition и mode: равное содержание значит, что копия
+    // запроса дословно сохраняет привязку владельца, а не подменяет её.
+    private static bool SameBindingShape(PersonaBinding a, PersonaBinding b) =>
+        a.Type == b.Type
+        && string.Equals(a.Target, b.Target, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(a.Path ?? "", b.Path ?? "", StringComparison.OrdinalIgnoreCase);
+
+    private static bool SameBindingContent(PersonaBinding a, PersonaBinding b) =>
+        SameBindingShape(a, b)
+        && string.Equals(a.Condition ?? "", b.Condition ?? "", StringComparison.Ordinal)
+        && a.Mode == b.Mode;
 
     // Авто-подбор и сохранение привязок для свежесозданной персоны (best-effort).
     // Подобранное ДОПОЛНЯЕТ существующие (явные из запроса и посевные): UpdateBindings
     // заменяет список целиком, отдавать ему только новых кандидатов — молчаливая потеря.
-    public async Task<Persona> TryAutoBindAsync(string userId, Persona persona, CancellationToken ct = default)
+    // callerRole/projectId — то же сужение кандидатов, что у SuggestBindingsAsync (W3-B5b
+    // доработка): создающий-участник не получает через подбор личных целей владельца.
+    public async Task<Persona> TryAutoBindAsync(string userId, Persona persona,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null, CancellationToken ct = default)
     {
         try
         {
-            var candidates = await SuggestBindingsAsync(userId, persona, ct: ct);
+            var candidates = await SuggestBindingsAsync(userId, persona,
+                callerRole: callerRole, projectId: projectId, ct: ct);
             if (candidates.Count > 0)
                 return personas.UpdateBindings(persona.Id, userId,
                     (persona.Bindings ?? []).Concat(candidates).ToList());
@@ -782,8 +879,16 @@ public sealed class PersonasCrudService(
     // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
     // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
     // недостижима (до записи привязок сбой ничего не меняет).
+    // callerRole/projectId — сужение целей для не-владельца общего проекта (W3-B5b, разрез
+    // §3.1 строка «apply-defaults», И-4): типовой профиль материализуется только в цели,
+    // разрешённые вызывающему (тот же NonOwnerBindingEditDenied, что у записи привязки);
+    // личных целей владельца и mcp/плагин-целей участник персоне не добавляет. Роль по
+    // умолчанию — Owner: MCP-тулсет действует в пространстве владельца, сужения нет;
+    // создание проектной персоны участником передаёт роль из области запроса (доработка
+    // ревью aaf13fce — CreateAsync и кнопка «Применить типовые»).
     public async Task<(Persona Persona, int Applied)> MaterializeDefaultBindingsAsync(string userId,
-        Persona persona, CancellationToken ct = default)
+        Persona persona, ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
+        CancellationToken ct = default)
     {
         if (persona.Specialty == PersonaSpecialty.None) return (persona, 0);
         var profile = specialtySettings.EffectiveDefaultBindings(userId, persona.Specialty);
@@ -802,6 +907,9 @@ public sealed class PersonasCrudService(
                 Condition = entry.Condition,
                 Mode = entry.Mode,
             };
+            // W3-B5b: плагин-скилл владельца — цель его личного пакета (право Configure):
+            // не-владелец её не материализует.
+            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
             if (await bindings.ValidateAsync(userId, binding, accepted, persona) is not null) continue;
             accepted.Add(binding);
             added.Add(binding);
@@ -809,7 +917,8 @@ public sealed class PersonasCrudService(
 
         var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
         if (aiEntries.Count > 0)
-            added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted, ct: ct));
+            added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted,
+                callerRole: callerRole, projectId: projectId, ct: ct));
 
         if (added.Count > 0)
             persona = personas.UpdateBindings(persona.Id, userId,
@@ -824,9 +933,18 @@ public sealed class PersonasCrudService(
     // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
     // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
     // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
+    // callerRole/projectId — сужение кандидатов для не-владельца общего проекта (W3-B5b,
+    // разрез §3.1 строка «suggest/generate», И-4): кандидат отбрасывается тем же
+    // NonOwnerBindingEditDenied ДО валидации и до ответа — праву отказа не мешает ни
+    // валидность цели, ни её отсутствие в каталоге. Роль по умолчанию — Owner: MCP-тулсет
+    // действует в пространстве владельца, сужения нет; авто-подбор при создании получает
+    // роль вызывающего из области запроса (доработка ревью aaf13fce — CreateAsync,
+    // TryAutoBindAsync, quick-create).
     public async Task<List<PersonaBinding>> SuggestBindingsAsync(string userId, Persona persona,
         string? userPrompt = null, IReadOnlyList<SpecialtyDefaultBinding>? profile = null,
-        List<PersonaBinding>? acceptedSeed = null, CancellationToken ct = default)
+        List<PersonaBinding>? acceptedSeed = null,
+        ProjectRole callerRole = ProjectRole.Owner, string? projectId = null,
+        CancellationToken ct = default)
     {
         // Полный каталог знаний (датасеты проектов/заметок + прочие доступные Dify-датасеты) —
         // валидация всё равно принимает любой из KnowledgeTargetsAsync, каталог промпта не должен быть уже
@@ -862,6 +980,9 @@ public sealed class PersonasCrudService(
                 var (binding, _) = ParseBinding(new PersonaBindingRequest(
                     r.Type ?? "", r.Target ?? "", r.Path, "", "auto"));
                 if (binding is null) continue;
+                // W3-B5b: чужая цель отбрана по праву до валидации и до занятия слота
+                // (тот же метод И-4) — слот остаётся свободным для разрешённой цели.
+                if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
                 var index = -1;
                 for (var i = 0; i < slots.Count; i++)
                     if (!slots[i].Used && slots[i].Entry.Type == binding.Type) { index = i; break; }
@@ -882,6 +1003,9 @@ public sealed class PersonasCrudService(
             var (binding, _) = ParseBinding(new PersonaBindingRequest(
                 r.Type ?? "", r.Target ?? "", r.Path, r.Condition, r.Mode ?? "auto"));
             if (binding is null) continue;
+            // W3-B5b: сужение кандидатов не-владельца — тот же NonOwnerBindingEditDenied
+            // до валидации и до ответа (разрез §3.1, И-4).
+            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
             var err = await bindings.ValidateAsync(userId, binding, accepted, persona);
             if (err is not null) continue;
             accepted.Add(binding);
@@ -1059,7 +1183,7 @@ public sealed class PersonasCrudService(
         if (dup is not null) return Ok(dup);
         var list = new List<PersonaAutomationRule>(persona.AutomationRules ?? []) { rule };
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(rule);
     }
 
@@ -1079,7 +1203,7 @@ public sealed class PersonasCrudService(
         var merged = ParseRule(req, current);
         var list = (persona.AutomationRules ?? []).Select(r => r.Id == ruleId ? merged : r).ToList();
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(merged);
     }
 
@@ -1091,7 +1215,7 @@ public sealed class PersonasCrudService(
         if (list is null || list.Count == (persona.AutomationRules?.Count ?? 0))
             return NotFound(new { error = "Правило не найдено" });
         personas.UpdateRules(id, userId, list);
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return NoContent();
     }
 
@@ -1212,7 +1336,7 @@ public sealed class PersonasCrudService(
         var persona = personas.SetVoice(id, userId, voice);
         // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
         // списка персон, иначе там останется прежний голос до перезагрузки
-        await Broadcast(userId, "updated", id);
+        await Broadcast(userId, persona, "updated", id);
         return Ok(persona);
     }
 

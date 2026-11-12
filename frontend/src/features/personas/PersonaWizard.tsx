@@ -821,7 +821,7 @@ export function PersonaWizard({ scope, projectId, sphereId, projects, onOpenStud
             <>
               <StepHead title="Умения и правила" subtitle="Что персона знает и к каким источникам обращается — можно пропустить и настроить позже." />
               <div style={{ margin: '-22px -24px 0' }}>
-                <PersonaBindingsPanel persona={livePersona} accent={accentColor} isMobile={!!isMobile} />
+                <PersonaBindingsPanel persona={livePersona} projects={projects} accent={accentColor} isMobile={!!isMobile} />
               </div>
             </>
           )}

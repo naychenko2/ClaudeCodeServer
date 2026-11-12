@@ -182,11 +182,11 @@ public sealed class ChatWriteRightsEndpointTests : IDisposable
     }
 
     private ChatsController ChatsAs(string userId) =>
-        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!,
+        new(_sessions, _projects, null!, null!, null!, null!, null!, null!, null!, null!, null!,
             NullLogger<ChatsController>.Instance) { ControllerContext = AsUser(userId) };
 
     private SessionsController SessionsAs(string userId) =>
-        new(_sessions, _projects, null!, _personas, null!, null!) { ControllerContext = AsUser(userId) };
+        new(_sessions, _projects, null!, _personas, null!, null!, null!) { ControllerContext = AsUser(userId) };
 
     private static ControllerContext AsUser(string userId) => new()
     {

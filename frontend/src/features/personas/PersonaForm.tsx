@@ -33,6 +33,7 @@ import { slugify as slugifyHandle } from '../../lib/slug';
 import { NO_AUTOFILL } from '../../lib/noAutofill';
 import { PersonaZoneSelect } from './PersonaZoneSelect';
 import { isProjectPersona, isSpherePersona } from '../../lib/personaZone';
+import { canPersona, personaRole, type PersonaAction } from './personaRights';
 import { useSpheres } from '../../lib/useSpheres';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 
@@ -89,6 +90,10 @@ interface PersonaFormProps {
   defaultSphereId?: string;
 }
 
+// Подсказка выключенных полей зоны и денег (W3-F1e): видимым текстом под полем, тот же
+// смысл, что у отказа бэка (403 owner_settings на PUT этих полей участнику)
+const OWNER_ONLY_HINT = 'Меняет только владелец проекта';
+
 // Инлайн-форма создания/редактирования персоны (без Modal-обёртки).
 // Редизайн «Студия-профиль»: ОДНА центрированная колонка с плоскими секциями,
 // разделёнными тонкой линией (паттерн TaskEditForm/FeatureFlagsModal),
@@ -99,6 +104,20 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   { persona, projects, onSaved, onDelete, initial, onStatus, onColorChange, onOpenMemory, defaultScope, defaultProjectId, defaultSphereId }, ref,
 ) {
   const isEdit = !!persona;
+  // Гейт по роли (W3-F1e, разрез §2/§3.4): роль читается только через personaRights — по
+  // persona.projectId. Нет роли (обычный проект / старый бэк) = owner: старый бэк разрешал
+  // вызывающему всё. Создание (persona=null) не гейтится: зона выбирается при создании,
+  // бэк держит правило W3-B3a.
+  const projectRole = persona ? personaRole(persona, projects) : null;
+  const can = (a: PersonaAction) => canPersona(projectRole, a);
+  // Читатель: форма только для чтения — editCard ему закрыт, и больше в форме писать нечего
+  const readOnlyForm = !can('editCard');
+  // Поля зоны и денег (Scope/ProjectId/SphereId, профиль доступа, модель/уровень/усилие) —
+  // Configure: закрыты обоим участникам — как 403 owner_settings на PUT этих полей на бэке
+  const ownerOnlyFields = !can('editZoneModel');
+  // Удаление — Configure: ни редактору, ни читателю «Удалить» не рисуется (и в мобильной
+  // «Опасной зоне», и в императивном remove для тулбара-родителя)
+  const canDelete = can('delete');
   const isMobile = useIsMobile();
   const models = useModels();
 
@@ -492,7 +511,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     if (!isEdit && !handleEdited) setHandle(slugifyHandle(name));
   }, [name, isEdit, handleEdited]);
 
-  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId);
+  // Форма только для чтения не сохраняется: «Сохранить» родителя гасится этим сигналом
+  // (в самой форме своей кнопки нет — она в тулбаре)
+  const canSave = name.trim().length > 0 && !(isProjectZone && !projectId) && !(isSphereZone && !sphereId) && !readOnlyForm;
 
   // Снимок редактируемых полей — для вычисления «есть несохранённые правки» (dirty)
   const snapshot = JSON.stringify({
@@ -590,17 +611,20 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       systemPrompt: '',
       // Правка: шлём значение как есть — "" сбрасывает модель/усилие к дефолту (бэкенд: ""→null).
       // Создание: пусто → не пишем (иначе сохранилась бы пустая строка вместо null).
-      model: isEdit ? model : (model || undefined),
+      // Участник (W3-F1e): поля зоны и денег (Configure) не отправляются вовсе — контракт
+      // partial-update: отсутствие = не менять. Бэк ответил бы 403 owner_settings на
+      // изменённые, а фронт не обещает того, что будет отказано
+      model: isEdit ? (ownerOnlyFields ? undefined : model) : (model || undefined),
       // Уровень модели по той же схеме: правка шлёт "" (сброс), создание — только заданный
-      modelTier: isEdit ? modelTier : (modelTier || undefined),
+      modelTier: isEdit ? (ownerOnlyFields ? undefined : modelTier) : (modelTier || undefined),
       // Свои модели по уровням — та же схема («»→ сброс ячейки к наследованию)
-      tierStrong: isEdit ? tierStrong : (tierStrong || undefined),
-      tierMedium: isEdit ? tierMedium : (tierMedium || undefined),
-      tierWeak: isEdit ? tierWeak : (tierWeak || undefined),
-      effort: isEdit ? effort : (effort || undefined),
-      scope,
-      projectId: isProjectZone ? projectId : undefined,
-      sphereId: isSphereZone ? sphereId : undefined,
+      tierStrong: isEdit ? (ownerOnlyFields ? undefined : tierStrong) : (tierStrong || undefined),
+      tierMedium: isEdit ? (ownerOnlyFields ? undefined : tierMedium) : (tierMedium || undefined),
+      tierWeak: isEdit ? (ownerOnlyFields ? undefined : tierWeak) : (tierWeak || undefined),
+      effort: isEdit ? (ownerOnlyFields ? undefined : effort) : (effort || undefined),
+      scope: ownerOnlyFields ? undefined : scope,
+      projectId: !ownerOnlyFields && isProjectZone ? projectId : undefined,
+      sphereId: !ownerOnlyFields && isSphereZone ? sphereId : undefined,
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
@@ -610,11 +634,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       gender,
       // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
       tools,
-      // Профиль доступа: свой список запретов уходит только при custom
-      access,
+      // Профиль доступа: свой список запретов уходит только при custom; участнику —
+      // ни профиль, ни запреты (деньга/права арендатора, см. поля выше)
+      access: ownerOnlyFields ? undefined : access,
       // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
       specialty,
-      disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
+      disallowedTools: ownerOnlyFields ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
     };
     try {
       const saved = isEdit
@@ -669,8 +694,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   useEffect(() => { saveRef.current = save; });
   useImperativeHandle(ref, () => ({
     save: () => saveRef.current(),
-    remove: () => { if (persona && onDelete) onDelete(persona); },
-  }), [persona, onDelete]);
+    // Удаление — только когда его разрешает роль (canDelete — personaRights): родитель и сам
+    // прячет вход (F1c), но форма не подчиняет императивный вызов вопреки роли
+    remove: () => { if (persona && onDelete && canDelete) onDelete(persona); },
+  }), [persona, onDelete, canDelete]);
 
   // Сообщаем родителю состояние формы (для кнопок тулбара)
   useEffect(() => {
@@ -701,6 +728,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             onClick={() => setAvatarMenu(v => !v)}
             aria-label="Изменить внешность"
             title="Изменить внешность"
+            // Читатель внешность не правит (карточка — editCard): вход закрыт, вместе с меню
+            disabled={readOnlyForm}
             style={{
               position: 'absolute', right: -2, bottom: -2, width: 28, height: 28, borderRadius: R.full,
               border: `2px solid ${C.bgMain}`, background: avatarMenu || showAppearance ? accentColor : C.bgWhite,
@@ -766,6 +795,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               onChange={e => setRole(e.target.value)}
               placeholder="Дизайнер, PM, Тестировщик…"
               autoFocus
+              disabled={readOnlyForm}
               style={{
                 width: '100%', boxSizing: 'border-box',
                 border: 'none', outline: 'none', background: 'transparent',
@@ -777,12 +807,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           <div style={{ display: 'flex', gap: 12, flexDirection: isMobile ? 'column' : 'row' }}>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Field label="Имя">
-                <TextField value={name} onChange={setName} placeholder="Например, Ассистент" voice />
+                <TextField value={name} onChange={setName} placeholder="Например, Ассистент" disabled={readOnlyForm} voice />
               </Field>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <Field label="Описание" hint="Короткая подпись под именем в списке">
-                <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" voice />
+                <TextField value={description} onChange={setDescription} placeholder="Чем занимается персона" disabled={readOnlyForm} voice />
               </Field>
             </div>
           </div>
@@ -798,6 +828,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   value={handle}
                   onChange={e => { setHandle(slugifyHandle(e.target.value, true)); setHandleEdited(true); }}
                   placeholder="masha"
+                  disabled={readOnlyForm}
                   style={{
                     flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
                     fontFamily: FONT.mono, fontSize: 13, color: C.textHeading, padding: '8px 10px 8px 2px',
@@ -816,12 +847,16 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   { value: 'female', label: 'Женский' },
                   { value: 'male', label: 'Мужской' },
                 ]}
+                disabled={readOnlyForm}
               />
             </Field>
           </div>
           {/* Шире соседних полей: рядом с выбором голоса стоят ▶ и «Подобрать под персону» */}
           <div style={{ maxWidth: isMobile ? '100%' : 520 }}>
             <Field label="Голос" hint={voicePickOpen ? undefined : 'Как персона звучит в голосовом режиме'}>
+              {/* Читателю голос не правится (он — часть карточки, editCard закрыт). У пикера нет
+                  пропа disabled — контрол выключен обёрткой: клики и фокус к нему не доходят */}
+              <div style={readOnlyForm ? { pointerEvents: 'none', opacity: 0.6 } : undefined}>
               <PersonaVoicePicker
                 onPickPanelChange={setVoicePickOpen}
                 value={voice ?? null}
@@ -838,6 +873,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 })}
                 greeting={greeting}
               />
+              </div>
             </Field>
           </div>
         </div>
@@ -861,9 +897,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             ) : (
               <>
                 <TextField value={avatarPrompt} onChange={setAvatarPrompt}
-                  placeholder="Опишите внешность (необязательно): рыжий кот в очках" voice />
+                  placeholder="Опишите внешность (необязательно): рыжий кот в очках" disabled={readOnlyForm} voice />
                 <div>
-                  <Button variant="ghostAccent" size="sm" loading={generating} disabled={generating} onClick={generateAvatar}>
+                  <Button variant="ghostAccent" size="sm" loading={generating} disabled={generating || readOnlyForm} onClick={generateAvatar}>
                     {generating ? 'Генерирую 4 варианта…' : '✨ Сгенерировать 4 варианта'}
                   </Button>
                 </div>
@@ -884,7 +920,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                           key={file}
                           type="button"
                           onClick={() => chooseCandidate(file)}
-                          disabled={!!selecting}
+                          disabled={!!selecting || readOnlyForm}
                           title="Выбрать этот аватар"
                           style={{
                             position: 'relative', padding: 0, border: `2px solid ${C.border}`, background: C.bgWhite,
@@ -930,6 +966,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                     type="button"
                     onClick={() => setColor(key)}
                     aria-label={key}
+                    disabled={readOnlyForm}
                     style={{
                       width: 30, height: 30, borderRadius: R.full, cursor: 'pointer',
                       background: agentDotColor(key),
@@ -974,12 +1011,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         display: 'flex', flexDirection: 'column', gap: 8,
       }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'flex-end', position: 'relative' }}>
-          <Button variant="ghostAccent" size="sm" disabled={characterBusy}
+          <Button variant="ghostAccent" size="sm" disabled={characterBusy || readOnlyForm}
             onClick={() => setAiPopover(v => v === 'generate' ? null : 'generate')}>
             ✨ Сгенерировать
           </Button>
           {contractFilled && (
-            <Button variant="ghostAccent" size="sm" disabled={characterBusy}
+            <Button variant="ghostAccent" size="sm" disabled={characterBusy || readOnlyForm}
               onClick={() => setAiPopover(v => v === 'improve' ? null : 'improve')}>
               ✨ Улучшить
             </Button>
@@ -1025,6 +1062,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           autoGrow
           minHeight={isMobile ? 160 : 200}
           voice
+          disabled={readOnlyForm}
           style={{ fontSize: 14.5, lineHeight: 1.6 }} />
         {!character && (
           <div style={{
@@ -1053,6 +1091,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 type="button"
                 onClick={() => setTone(active ? '' : p.text)}
                 title={p.text}
+                disabled={readOnlyForm}
                 style={{
                   ...presetChip,
                   background: active ? C.accentLight : C.bgWhite,
@@ -1070,17 +1109,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             );
           })}
         </div>
-        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" voice />
+        <TextField value={tone} onChange={setTone} placeholder="Например: тепло и на равных" disabled={readOnlyForm} voice />
       </div>
 
       {/* Слоты «Всегда»/«Никогда»: textarea «строка = пункт» */}
       <div style={{ marginTop: 18, display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         <Field label="Всегда" hint="Каждая строка — отдельное правило">
-          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88} voice
+          <TextArea value={mustDo} onChange={setMustDo} autoGrow minHeight={88} voice disabled={readOnlyForm}
             placeholder={'Выноси вывод первым\nУточняй при неясности'} />
         </Field>
         <Field label="Никогда" hint="Каждая строка — отдельное правило">
-          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88} voice
+          <TextArea value={mustNot} onChange={setMustNot} autoGrow minHeight={88} voice disabled={readOnlyForm}
             placeholder={'Не отвечай наугад\nНе хвали из вежливости'} />
         </Field>
       </div>
@@ -1088,7 +1127,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       {/* Слот «Формат ответов» */}
       <div style={{ marginTop: 18 }}>
         <Field label="Формат ответов" hint="Структура и объём типового ответа">
-          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56} voice
+          <TextArea value={outputFormat} onChange={setOutputFormat} autoGrow minHeight={56} voice disabled={readOnlyForm}
             placeholder="Краткий вывод, затем аргументы; списки — только где они уместны" />
         </Field>
       </div>
@@ -1104,6 +1143,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 onChange={v => setSpeechExamples(prev => prev.map((p, j) => (j === i ? v : p)))}
                 placeholder="Реплика от лица персоны"
                 voice
+                disabled={readOnlyForm}
               />
             </div>
             <button
@@ -1111,6 +1151,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               onClick={() => setSpeechExamples(prev => prev.filter((_, j) => j !== i))}
               aria-label="Убрать пример"
               title="Убрать пример"
+              disabled={readOnlyForm}
               style={exampleRemoveBtn}
             >
               ×
@@ -1123,6 +1164,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               type="button"
               onClick={() => setSpeechExamples(prev => [...prev, ''])}
               style={addExampleBtn}
+              disabled={readOnlyForm}
             >
               + пример
             </button>
@@ -1135,11 +1177,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <div style={{ marginTop: 18 }}>
         {instructions.trim() || instructionsOpen ? (
           <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных уровней">
-            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360} voice
+            <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360} voice disabled={readOnlyForm}
               placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
           </Field>
         ) : (
-          <button type="button" onClick={() => setInstructionsOpen(true)} style={addExampleBtn}>
+          <button type="button" onClick={() => setInstructionsOpen(true)} style={addExampleBtn} disabled={readOnlyForm}>
             + инструкция (полный регламент роли)
           </button>
         )}
@@ -1166,19 +1208,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             «Сейчас пойдёт» под каждой ячейкой — резолв места chat-persona с уровнем: видно
             реальную модель и откуда она возьмётся, без догадок про наследование. */}
         <div style={{ gridColumn: '1 / -1' }}>
-          <Field label="Модели">
+          {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены
+              с видимой подсказкой (не только в title), и в DTO они не едут */}
+          <Field label="Модели" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {isEdit && (tierStrong || tierMedium || tierWeak) && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                   <button
                     type="button"
                     onClick={resetPersonaTiers}
-                    disabled={tiersResetBusy}
+                    disabled={tiersResetBusy || ownerOnlyFields}
                     title="Вернуть наследование"
                     style={{
                       font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
                       background: 'transparent', border: 'none', padding: 0,
-                      cursor: tiersResetBusy ? 'default' : 'pointer', textDecoration: 'underline',
+                      cursor: tiersResetBusy || ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
                       opacity: tiersResetBusy ? 0.5 : 1,
                     }}
                   >
@@ -1203,6 +1247,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                           placeholder={personaCellPlaceholder(t)}
                           showTiers={false}
                           showPresets
+                          readOnly={ownerOnlyFields}
                           onChange={v => setTierCell(t, v)}
                         />
                       </div>
@@ -1211,10 +1256,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                           type="button"
                           onClick={() => setTierCell(t, '')}
                           title="Вернуть наследование"
+                          disabled={ownerOnlyFields}
                           style={{
                             flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
                             background: 'transparent', border: 'none', padding: 0,
-                            cursor: 'pointer', textDecoration: 'underline',
+                            cursor: ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
                           }}
                         >
                           Сбросить
@@ -1239,8 +1285,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </div>
 
         {caps.supportsEffort && (
-          <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-            <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
+          <Field label="Усилие рассуждения" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Выше — глубже размышляет, но дольше и дороже.'}>
+            <SegmentedControl value={effort}
+              options={effortsForProvider(modelProvider(model)).map(o => ({ ...o, disabled: ownerOnlyFields }))}
+              onChange={setEffort} columns={3} />
           </Field>
         )}
 
@@ -1250,7 +1298,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.45 }}>
                 {lightContext ? 'Включён' : 'Выключен'}
               </span>
-              <Toggle checked={lightContext} onChange={setLightContext} />
+              {/* Облегчённый контекст — не из списка «зоны и денег», но читателю не даётся вовсе */}
+              <Toggle checked={lightContext} onChange={setLightContext} disabled={readOnlyForm} />
             </div>
             <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
               Персона получает краткую карту проекта вместо полного CLAUDE.md, сокращённый набор
@@ -1278,16 +1327,19 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           </div>
         </Field>
 
-        <Field label="Зона">
+        {/* Зона (Scope/ProjectId/SphereId) — Configure: участнику выключена с видимой
+            подсказкой; в DTO её поля для участника не едут */}
+        <Field label="Зона" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
           {spheresOn ? (
             <PersonaZoneSelect
               value={{ scope, projectId, sphereId }}
               onChange={z => { setScope(z.scope); setProjectId(z.projectId ?? ''); setSphereId(z.sphereId ?? ''); }}
               projects={projects}
               spheres={spheres}
+              disabled={ownerOnlyFields}
             />
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, ...(ownerOnlyFields ? { pointerEvents: 'none', opacity: 0.6 } : null) }}>
               <PillSwitch<PersonaScope>
                 fill
                 value={scope}
@@ -1300,6 +1352,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   onChange={e => setProjectId(e.target.value)}
                   style={selectStyle}
                   aria-label="Проект"
+                  disabled={ownerOnlyFields}
                 >
                   {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
                   {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
@@ -1310,15 +1363,19 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         </Field>
 
         <Field label="Приветствие" hint="С чего персона начинает разговор">
-          <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
+          <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" disabled={readOnlyForm} />
         </Field>
 
-        <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
+        {/* Специальность — Configure (доработка ревью fd328e70, п.3): бэк (01ebbf0ed)
+            отвечает участнику 403 owner_settings на её смену, поэтому тот же гейт, что у
+            полей зоны и денег, и та же подсказка — фронт не обещает того, что бэк откажет. */}
+        <Field label="Специальность" hint={ownerOnlyFields ? OWNER_ONLY_HINT : 'Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.'}>
           <select
             value={specialty}
             onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
             style={selectStyle}
             aria-label="Специальность"
+            disabled={ownerOnlyFields}
           >
             <option value="none">Не задана</option>
             {specialtyCatalog?.filter(e => e.key !== 'none').map(e => (
@@ -1338,20 +1395,22 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             Стоит рядом со «Специальностью» намеренно — её шаблон подставляет ровно эти поля,
             и подмена прав должна быть видна на том же экране. */}
         <div style={{ gridColumn: '1 / -1' }}>
-          <Field label="Профиль доступа" hint={accessHint}>
+          {/* Профиль доступа — права арендатора (Configure): участнику выключен с видимой
+              подсказкой вместо обычного hint */}
+          <Field label="Профиль доступа" hint={ownerOnlyFields ? OWNER_ONLY_HINT : accessHint}>
             <SegmentedControl<PersonaAccess>
               value={access}
               onChange={setAccess}
               columns={3}
               options={[
-                { value: 'full', label: 'Полный' },
-                { value: 'readOnly', label: 'Только чтение' },
-                { value: 'custom', label: 'Свой' },
+                { value: 'full', label: 'Полный', disabled: ownerOnlyFields },
+                { value: 'readOnly', label: 'Только чтение', disabled: ownerOnlyFields },
+                { value: 'custom', label: 'Свой', disabled: ownerOnlyFields },
               ]}
             />
             {access === 'custom' && (
               <TextArea value={disallowedText} onChange={setDisallowedText}
-                autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
+                autoGrow minHeight={56} placeholder="Bash, Edit, Write" disabled={ownerOnlyFields} />
             )}
           </Field>
         </div>
@@ -1380,7 +1439,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             {memoryEnabled ? 'Персона запоминает факты между разговорами' : 'Память выключена'}
           </span>
         </div>
-        <Toggle checked={memoryEnabled} onChange={setMemoryEnabled} />
+        {/* Память читателю только для чтения (Read): тумблер выключен; редактору — открыт
+            (memoryWrite — WriteContent) */}
+        <Toggle checked={memoryEnabled} onChange={setMemoryEnabled} disabled={readOnlyForm} />
       </div>
 
       {isEdit ? (
@@ -1395,6 +1456,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 <button
                   type="button"
                   style={openMemoryBtn}
+                  // Сброс фокуса — запись в память (WriteContent): читателю закрыта
+                  disabled={!can('memoryWrite')}
                   onClick={() => {
                     if (!persona) return;
                     api.personas.clearFocus(persona.id).then(() => setFocus(null)).catch(() => {});
@@ -1450,7 +1513,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // === Опасная зона (только мобилка) — «Удалить» перенесён из тулбара в конец формы:
   // на мобиле в тулбаре нет ⋯-меню, удаление живёт здесь, отдельной секцией.
-  const dangerSection = isMobile && isEdit && onDelete && persona ? (
+  // Удаление — Configure (W3-F1e): ни читателю, ни редактору секция не рисуется вовсе.
+  const dangerSection = isMobile && isEdit && onDelete && persona && canDelete ? (
     <div style={section}>
       <SectionLabel style={{ marginBottom: 6 }}>Опасная зона</SectionLabel>
       <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.5, marginBottom: 14 }}>

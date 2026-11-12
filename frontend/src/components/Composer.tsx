@@ -98,6 +98,9 @@ export interface ComposerProps {
   selectedAgentName?: string | null;
   onCompanionChange?: (sel: CompanionSelection) => void;
   canPickCompanion?: boolean;
+  // W3-F1i: смена собеседника закрыта по праву (чужой чат общего проекта — W3-B4b):
+  // селектор выключен с видимой подсказкой; родитель при блокировке и запрос не шлёт
+  companionLocked?: boolean;
   hasMessages?: boolean;
   // Выбор модели прямо в полосе контролов (слева от собеседника). Провайдер любой —
   // смену провайдера у начатого чата родитель проводит миграцией, см. chatStarted.
@@ -588,6 +591,7 @@ export function Composer({
   selectedAgentName = null,
   onCompanionChange,
   canPickCompanion,
+  companionLocked,
   model,
   onModelChange,
   chatStarted,
@@ -2337,6 +2341,9 @@ export function Composer({
       selectedPersona={selectedPersona ?? null}
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
+      // W3-F1i: правовой блок смены (чужой чат общего проекта) — триггер выключен
+      // с видимой подсказкой; выбор через этот селектор невозможен вовсе
+      locked={companionLocked}
       sharedProject={isMember}
       isMobile={isMobile}
       wide={widePickers}

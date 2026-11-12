@@ -251,16 +251,33 @@ public sealed class TasksToolset(
 
                 var columnId = StringArg(arguments, "columnId");
                 var cat = BoardColumnHelper.Category(project, columnId);
+                // Ключ валидатора персоны — арендатор целевого проекта задачи, а не владельца
+                // токена (остаток W3-B7, разрез §3.2 строка B7): в проектном чате они совпадают
+                // (GetOwned через ResolveOwnerId по проекту), но ключ обязан приходить из проекта
+                // задачи, а не из токена. Личная задача (проекта нет) — её арендатор сам вызывающий.
+                var tenantId = project?.OwnerId ?? context.OwnerId;
                 var personaId = StringArg(arguments, "personaId");
-                // Скоупы у валидатора — НАЗНАЧАЕМОЙ персоны (как REST Create), а не вызывателя:
-                // правило «проектная персона — только задачи своего проекта» обходилось бы
-                // чужой привязкой вызывателя (блокер приёмки волны 2.1)
+                // Допуск и валидация — тот же TaskPersonaGate, что REST Create (блокер финала a6f43197):
+                // ResolvePersona по АКТОРУ идущего хода (И-1: одна точка «персона → область»; И-3:
+                // личная — глобальная или сферная — персона принадлежит только своему владельцу,
+                // агенту редактора она не открывается), валидация — с ключом арендатора задачи (И-2).
+                // Прямой вызов валидатора ключовал только tenantId и глобальную персону владельца
+                // участнику принимал: две точки правды на одном правиле. Скоупы привязок гейт
+                // берёт у самой назначаемой персоны (её же арендатор), а не у вызывателя — как REST.
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
+                    && TaskPersonaGate.Denied(access, personas, bindings, spheres,
+                        TurnActorId(session.Id, context.OwnerId), personaId, targetProjectId, tenantId)
+                        is { } personaError)
                     return Deny(personaError);
+                // selfPersonaId — НЕ та же дверь: это собеседник чата, выбранный при его создании
+                // (SessionsController), а не выбор актора. Его допуск меряется тем же ключом, что и
+                // конфигурация самого чата (арендатор). Перевод на актора отказал бы агенту редактора
+                // любой чат общего проекта без руководителя: такой чат ведёт личный ассистент
+                // владельца (SessionsController.cs:82-88), и его же персона — автор задач. Принятые
+                // тесты прав редактора (SharedProjectTaskWriteRightsTests) на этом краснеют;
+                // решение — за постановщиком, эскалировано в отчёте.
                 if (selfPersonaId is not null
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, selfPersonaId, targetProjectId, extraScopes, spheres) is { } creatorError)
+                    && TaskPersonaValidator.Error(personas, tenantId, selfPersonaId, targetProjectId, extraScopes, spheres) is { } creatorError)
                     return Deny(creatorError);
 
                 // Дефект: гейты DefectRules.EnsureNotClosedAtCreate (статус/категория колонки)
@@ -450,10 +467,19 @@ public sealed class TasksToolset(
                 else if (existing.ColumnId is not null && targetProject?.BoardColumns is { } currentColumns)
                     effectiveColumn = currentColumns.FirstOrDefault(c => c.Id == existing.ColumnId);
                 var personaId = StringArg(arguments, "personaId");
-                // Скоупы назначаемой персоны, не вызывателя — как REST Update (блокер 2.1)
+                // Ключ валидатора — арендатор проекта задачи (остаток W3-B7, разрез §3.2 строка B7),
+                // тот же вывод, что у «me» ниже: существующая задача общего проекта лежит под
+                // арендатором, и её проектная персона принадлежит ему. Осиротевший проект задачи —
+                // ключ по токену, как прежде (задача под ним же, сверка OwnerId выше).
+                var tenantId = targetProject?.OwnerId ?? context.OwnerId;
+                // Тот же TaskPersonaGate, что в создании и в REST Update: допуск — ResolvePersona по
+                // актору идущего хода (И-1, И-3), валидация — с ключом арендатора задачи (И-2) и
+                // скоупами самой назначаемой персоны (блокер 2.1). Без резолва агент редактора брал
+                // глобальную персону владельца — чего REST уже не делал.
                 if (personaId.Length > 0
-                    && TaskPersonaValidator.Error(personas, context.OwnerId, personaId, targetProjectId,
-                        AssignedPersonaScopes(context.OwnerId, personaId), spheres) is { } personaError)
+                    && TaskPersonaGate.Denied(access, personas, bindings, spheres,
+                        TurnActorId(session.Id, context.OwnerId), personaId, targetProjectId, tenantId)
+                        is { } personaError)
                     return Deny(personaError);
 
                 // Человек-исполнитель (S2b-2b): «me»/«claude» — прежний путь (enum), но они
@@ -995,15 +1021,6 @@ public sealed class TasksToolset(
         return true;
     }
 
-    // --- Скоупы проектов (живой эквивалент TASKS_EXTRA_* stdio-ветки) ---
-
-    // Кросс-проектные скоупы НАЗНАЧАЕМОЙ персоны: тот же расчёт, что REST Create/Update
-    // (BuildExternalTaskScopes по исполнителю), — валидация «свой проект» не должна
-    // смотреть на привязки вызывателя
-    private IReadOnlyList<(string ProjectId, bool ReadOnly)> AssignedPersonaScopes(
-        string ownerId, string personaId) =>
-        personas.Get(personaId, ownerId) is { } p ? bindings.BuildExternalTaskScopes(ownerId, p) : [];
-
     private const string NarrowText =
         "Недоступно в общем проекте: задачи доступны только из проекта этого чата.";
 
@@ -1267,8 +1284,8 @@ public sealed class TasksToolset(
     // только ответ: запись задачи и гейты инструментов здесь не меняются (гейт актора — S2c-6).
     //
     // S2d-4b2: плюс маска чужих приватных чатов задачи (ChatRefs.For, та же функция, что в REST) —
-    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — «не видит»
-    // (пустой id никому не даёт доступа, fail-closed), в отличие от прав на поля задачи выше.
+    // для ВСЕХ ролей, включая арендатора. Зритель — актор хода; актор неизвестен — пустой id,
+    // и маска судит только приватность: приватные закрыты, общие отдаются как есть (DEF-83e3).
     private TaskItem ForCaller(TaskItem task, Session session, string ownerId) =>
         ForActorMasked(task, ownerId, sessions.GetTurnActor(session.Id, ownerId), sessions, projects);
 

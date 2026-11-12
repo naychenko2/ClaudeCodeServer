@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef } from 'react';
-import { Check, ChevronDown, MessageCircle, Users } from 'lucide-react';
+import { Check, ChevronDown, Lock, MessageCircle, Users } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import type { Persona, AgentInfo } from '../types';
 import { C, FS, R, FONT, SHADOW, Z } from '../lib/design';
@@ -49,12 +49,20 @@ interface Props {
   // Общий проект: группа «Глобальные» убирается у всех, включая владельца (п.17 карты),
   // внизу списка — строка-пояснение. В личном проекте поведение не меняется
   sharedProject?: boolean;
+  // W3-F1i (правило W3-B4b): смена собеседника закрыта по праву — участник общего проекта
+  // меняет его только в своём чате. Триггер выключен, причина — видимым текстом в нём
+  // (не только title: на 360 px title не читается). Решает вызывающий (canChangeCompanion)
+  locked?: boolean;
 }
+
+// Подсказка выключенной смены (W3-F1i): тот же смысл, что у отказа бэка
+// (SetPersona: автору и владельцу — да, остальным — нет, матрица §3.2)
+export const COMPANION_LOCKED_HINT = 'Собеседника меняет автор чата или владелец проекта';
 
 // Единый селектор «собеседника» чата: персоны (наша фича) и стандартные .md-агенты
 // Claude в одном дропдауне. Заменяет пару PersonaSelector + AgentSelector в композере.
 // Раскрытие/мобильное позиционирование — по образцу PersonaSelector.
-export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact, compactCompanion, maxLabelWidth, sharedProject }: Props) {
+export function CompanionSelector({ personas, agents, selectedPersona, selectedAgentName, onSelect, isMobile, dropUp = true, onCreateGroup, wide, compact, compactCompanion, maxLabelWidth, sharedProject, locked }: Props) {
   const [open, setOpen] = useState(false);
   // Режим мультивыбора участников группового чата (внутри того же дропдауна)
   const [groupMode, setGroupMode] = useState(false);
@@ -115,6 +123,32 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
   const selectablePersonas = [...projectPersonas, ...regularGlobals];
 
   if (selectablePersonas.length === 0 && plainAgents.length === 0) return null;
+
+  // Закрыто по праву (W3-F1i): вместо выбора — выключенный триггер с причиной. Подсказка —
+  // видимым текстом внутри него (на 360 px title не читается), переносится в две строки,
+  // как подпись «роль/имя» выбранной персоны; замок сигналит выключенное состояние.
+  // Текущий собеседник при этом виден в шапке чата — здесь он не нужен
+  if (locked) {
+    return (
+      <div style={{ position: 'relative', flexShrink: 0, minWidth: 0 }}>
+        <button
+          type="button"
+          disabled
+          title={COMPANION_LOCKED_HINT}
+          style={{
+            height: isMobile ? 32 : 28, padding: '0 8px', borderRadius: R.md, border: 'none',
+            background: 'transparent', color: C.textMuted, cursor: 'not-allowed', opacity: 0.6,
+            fontSize: FS.xs, fontWeight: 500, fontFamily: FONT.sans, lineHeight: 1.25,
+            display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, whiteSpace: 'normal',
+            maxWidth: isMobile ? 150 : 200, textAlign: 'left',
+          }}
+        >
+          <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden' }}>{COMPANION_LOCKED_HINT}</span>
+        </button>
+      </div>
+    );
+  }
 
   // Пункт-чекбокс персоны в групповом мультивыборе (общий для всех подгрупп)
   const groupCheckboxItem = (p: Persona) => {

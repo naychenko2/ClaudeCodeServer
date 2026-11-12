@@ -717,12 +717,13 @@ public sealed class ChatSettings
     // Обновить состав участников группового чата. Активный спикер сохраняется,
     // если остался в составе, иначе — новая ведущая. Адаптер пересоздаётся
     // (состав участников зашит в подсказку @упоминаний и групповой слой промпта).
-    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds)
+    public Session? SetParticipants(string sessionId, string ownerId, IReadOnlyList<string> personaIds,
+        string? callerUserId = null)
     {
         if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return null;
         if (_store.ResolveOwnerId(entry.Info) != ownerId) return null;
 
-        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId);
+        var participants = ValidateParticipants(ownerId, personaIds, entry.Info.ProjectId, callerUserId);
         // Новый участник чата общего проекта не глобальная персона (доработка R-S2a-8): та же общая
         // проверка рамки, что при создании группового чата, — по фактическому проекту этого чата.
         EnsurePersonasVisibleInFrame(entry.Info.ProjectId, participants);
@@ -740,9 +741,9 @@ public sealed class ChatSettings
         return entry.Info;
     }
 
-    // Участники группового чата: 2-4 уникальные персоны, все принадлежат владельцу
+    // Участники группового чата: 2-8 уникальные персоны, все принадлежат владельцу (арендатору чата)
     internal List<Persona> ValidateParticipants(string ownerId, IReadOnlyList<string> personaIds,
-        string? projectId = null)
+        string? projectId = null, string? callerUserId = null)
     {
         var ids = (personaIds ?? Array.Empty<string>())
             .Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
@@ -750,6 +751,15 @@ public sealed class ChatSettings
             throw new InvalidOperationException("В групповом чате участвуют от 2 до 8 персон");
         var result = ids.Select(id => _personas.Get(id, ownerId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}")).ToList();
+        // W3-B4c (разрез §3.2, И-2/И-3): группа проектного чата состоит только из персон этого проекта.
+        // С ключом T личные персоны владельца стали доступны участнику — сверка проекта участника
+        // закрывает это вторым рубежом: не-арендатору такая персона несуществующая (KeyNotFound →
+        // контроллер отвечает 404). Путь арендатора не тронут: отказ глобальной в общем проекте
+        // держит рамка EnsurePersonasVisibleInFrame (R-S2a-8), она ниже в этих же методах.
+        if (projectId is not null && callerUserId is not null && callerUserId != ownerId)
+            foreach (var p in result)
+                if (PersonaZone.OwnProjectId(p) != projectId)
+                    throw new KeyNotFoundException($"Персона не найдена: {p.Id}");
         // Участник сферы обязан быть виден в проекте чата (у группового чата вне проекта — нигде)
         foreach (var p in result.Where(PersonaZone.IsSpherePersona)) EnsurePersonaVisible(p, projectId);
         return result;
@@ -787,6 +797,9 @@ public sealed class ChatSettings
     // из персоны; у начатой сессии — только при том же провайдере: смена собеседника
     // транскрипт не перевозит (в отличие от явной смены модели), а уводить ход в чужой
     // профиль CLI молча нельзя — модель персоны просто не применяется.
+    // Ключ вызова — арендатор (ResolveOwnerId, И-2): с W3-B4b REST-путь зовёт этот метод с
+    // TenantOwnerId из RequestScope, а решение «кому менять вообще» (автор чата или владелец)
+    // держит контроллер — здесь владение по-прежнему сверяется, но автором оно быть перестало.
     public Session? SetPersona(string sessionId, string ownerId, string? personaId, string? agentName = null)
     {
         if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return null;
@@ -867,61 +880,69 @@ public sealed class ChatSettings
     // флаг PersonaSwitched, сброс адаптера (новый слой подхватится при следующем ходе), Save.
     internal void SwitchSpeaker(SessionEntry entry, Persona? persona, string? agentName = null)
     {
-        var started = entry.Info.ClaudeSessionId is not null;
-        // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
-        var newAgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
-            ? agentName.Trim()
-            : null;
-        // Спикер реально сменился, только если изменилась личность собеседника (персона ИЛИ
-        // .md-агент). Повторное назначение той же персоны — не смена (иначе PersonaSwitched
-        // взводился бы навсегда и в ленту лез разделитель «теперь отвечает чужие прошлые ответы»).
-        var switching = started &&
-            (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName != newAgentName);
-
-        entry.Info.PersonaId = persona?.Id;
-        entry.Info.AgentName = newAgentName;
-        if (persona is not null)
+        // Замок спикера (W3-B4b): вся запись собеседника — пара «персона/агент + модель/усилие»
+        // — пишется целиком. Два конкурентных SwitchSpeaker одного чата (SetPersona из двух вкладок,
+        // роутинг @упоминания) без замка смешивали бы половины разных собеседников; с ним
+        // побеждает последний завершивший, состояние целое. SaveSessions — вне замка: под ним
+        // других замков записи не берётся, обратного порядка («стор → спикер») нигде нет.
+        lock (entry.SpeakerLock)
         {
-            // Модель персоны: своя сильнее её уровня (уровень уже развёрнут в модель по
-            // слотам владельца) — дальше по тексту работаем только с этим значением.
-            // Владелец — ТОЛЬКО через ResolveOwnerId: у проектной сессии Session.OwnerId
-            // равен null (он живёт у проекта), и личные слоты тиров молча подменялись бы
-            // глобальными — см. комментарий у GetActiveTurnDelegation
-            var personaModel = _assignments.PersonaModel(persona, _store.ResolveOwnerId(entry.Info),
-                Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona));
-            if (!started)
-            {
-                // ?? — а не присваивание в лоб: у персоны без своей модели чат остаётся на той,
-                // что уже подставлена при создании (глобальная «модель по умолчанию»).
-                // Раньше здесь её затирало в null, и назначение персоны в свежий чат молча
-                // возвращало ход к дефолту CLI (заметнее всего в MCP chats_create + personaId)
-                entry.Info.Model = personaModel ?? entry.Info.Model;
-                entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
-            }
-            else if (_llmProviders.ProviderKey(personaModel) == _llmProviders.ProviderKey(entry.Info.Model)
-                && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, personaModel))
-            {
-                // Тот же провайдер И подписка сессии способна обслужить модель персоны —
-                // модель применяется со следующего хода; иначе оставляем модель сессии
-                // (характер всё равно её): пин Opus на аккаунте без Opus валил бы ход
-                entry.Info.Model = personaModel ?? entry.Info.Model;
-                entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
-            }
-        }
-        if (switching) entry.Info.PersonaSwitched = true;
-        // Сдвиг без гейта архива — осознанно (решение 2026-10-09): смена собеседника — это
-        // АКТИВНОСТЬ (новый собеседник, PersonaSwitched, разделитель в ленте), а не настройка
-        // чата, как SetPinned. Поэтому архивный чат при смене персоны выходит из архива;
-        // сторож — ChatArchiveFlagTests. Сдвиг намеренно безусловный и по `switching` не
-        // гейтится: двигаем и при повторном выборе той же персоны, и при назначении в
-        // неначатый чат (switching == false) — решение Гриши 2026-10-09
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+            var started = entry.Info.ClaudeSessionId is not null;
+            // .md-агент и персона взаимоисключающие: назначение одного сбрасывает другого
+            var newAgentName = persona is null && !string.IsNullOrWhiteSpace(agentName)
+                ? agentName.Trim()
+                : null;
+            // Спикер реально сменился, только если изменилась личность собеседника (персона ИЛИ
+            // .md-агент). Повторное назначение той же персоны — не смена (иначе PersonaSwitched
+            // взводился бы навсегда и в ленту лез разделитель «теперь отвечает чужие прошлые ответы»).
+            var switching = started &&
+                (entry.Info.PersonaId != persona?.Id || entry.Info.AgentName != newAgentName);
 
-        // Адаптер несёт контекст прежнего собеседника (memory-MCP, привязки) — пометим
-        // устаревшим. Уборка ЛЕНИВАЯ (EnsureProcessAsync перед следующим ходом), а не
-        // немедленная: мгновенный dispose обрывал бы активный ход и убивал доживающих
-        // фоновых агентов молча
-        if (entry.Process is not null) entry.AdapterStale = true;
+            entry.Info.PersonaId = persona?.Id;
+            entry.Info.AgentName = newAgentName;
+            if (persona is not null)
+            {
+                // Модель персоны: своя сильнее её уровня (уровень уже развёрнут в модель по
+                // слотам владельца) — дальше по тексту работаем только с этим значением.
+                // Владелец — ТОЛЬКО через ResolveOwnerId: у проектной сессии Session.OwnerId
+                // равен null (он живёт у проекта), и личные слоты тиров молча подменялись бы
+                // глобальными — см. комментарий у GetActiveTurnDelegation
+                var personaModel = _assignments.PersonaModel(persona, _store.ResolveOwnerId(entry.Info),
+                    Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona));
+                if (!started)
+                {
+                    // ?? — а не присваивание в лоб: у персоны без своей модели чат остаётся на той,
+                    // что уже подставлена при создании (глобальная «модель по умолчанию»).
+                    // Раньше здесь её затирало в null, и назначение персоны в свежий чат молча
+                    // возвращало ход к дефолту CLI (заметнее всего в MCP chats_create + personaId)
+                    entry.Info.Model = personaModel ?? entry.Info.Model;
+                    entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
+                }
+                else if (_llmProviders.ProviderKey(personaModel) == _llmProviders.ProviderKey(entry.Info.Model)
+                    && _subscriptionPool.SupportsModel(entry.Info.Provider ?? ClaudeSubscriptionPool.PrimaryKey, personaModel))
+                {
+                    // Тот же провайдер И подписка сессии способна обслужить модель персоны —
+                    // модель применяется со следующего хода; иначе оставляем модель сессии
+                    // (характер всё равно её): пин Opus на аккаунте без Opus валил бы ход
+                    entry.Info.Model = personaModel ?? entry.Info.Model;
+                    entry.Info.Effort = persona.Effort ?? entry.Info.Effort;
+                }
+            }
+            if (switching) entry.Info.PersonaSwitched = true;
+            // Сдвиг без гейта архива — осознанно (решение 2026-10-09): смена собеседника — это
+            // АКТИВНОСТЬ (новый собеседник, PersonaSwitched, разделитель в ленте), а не настройка
+            // чата, как SetPinned. Поэтому архивный чат при смене персоны выходит из архива;
+            // сторож — ChatArchiveFlagTests. Сдвиг намеренно безусловный и по `switching` не
+            // гейтится: двигаем и при повторном выборе той же персоны, и при назначении в
+            // неначатый чат (switching == false) — решение Гриши 2026-10-09
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+
+            // Адаптер несёт контекст прежнего собеседника (memory-MCP, привязки) — пометим
+            // устаревшим. Уборка ЛЕНИВАЯ (EnsureProcessAsync перед следующим ходом), а не
+            // немедленная: мгновенный dispose обрывал бы активный ход и убивал доживающих
+            // фоновых агентов молча
+            if (entry.Process is not null) entry.AdapterStale = true;
+        }
         _store.SaveSessions();
     }
 

@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronLeft } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ServerMessage } from '../../types';
+import type { Persona, PersonaMemoryEntry, PersonaMemoryType, ProjectRoleView, ServerMessage } from '../../types';
 import { C, FONT, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from './PersonaAvatar';
+import { canPersona } from './personaRights';
 import { MemoryPanel } from '../memory/MemoryPanel';
 import type { MemoryEntryView, MemoryTypeMeta } from '../memory/memoryTypes';
 
@@ -36,13 +37,16 @@ function toView(e: PersonaMemoryEntry): MemoryEntryView<PersonaMemoryType> {
   };
 }
 
-export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
+export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded, role = null }: {
   persona: Persona;
   onBack?: () => void;
   isMobile: boolean;
   // embedded — панель отрисована под стрипом персоны (в PersonaChat), свой
   // заголовок не нужен: идентичность уже показана выше.
   embedded?: boolean;
+  // Роль текущего человека в проекте персоны (матрица §2 разреза). Её считает вызывающий
+  // через personaRole (проброс — отдельный шаг); по умолчанию null — как раньше, всё открыто.
+  role?: ProjectRoleView | null;
 }) {
   const [entries, setEntries] = useState<PersonaMemoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -128,6 +132,13 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
     }
   };
 
+  // Гейт по роли (матрица §2): запись в память (добавить/править/забыть/подтвердить) —
+  // WriteContent, читателю закрыта; «в заметку» — Configure, закрыта читателю и редактору.
+  // Отсутствие обработчика в MemoryPanel/MemoryEntryCard — отсутствие контрола (W3-F1h).
+  // «Сброс фокуса» (тоже WriteContent) в этой вкладке не контролируется нигде — скрывать нечего.
+  const mayWrite = canPersona(role, 'memoryWrite');
+  const mayNote = canPersona(role, 'memoryNote');
+
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgMain, overflow: 'hidden' }}>
       {/* Шапка панели — скрыта во встроенном режиме (идентичность в стрипе) */}
@@ -162,11 +173,11 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
           typeOrder={TYPE_ORDER}
           addHint="Персона будет считать это устойчивым фактом и опираться на него в разговоре."
           addPlaceholder="Добавить факт, который персона должна помнить…"
-          onAdd={add}
-          onEdit={edit}
-          onRemove={remove}
-          onConfirm={confirm}
-          onToNote={toNote}
+          onAdd={mayWrite ? add : undefined}
+          onEdit={mayWrite ? edit : undefined}
+          onRemove={mayWrite ? remove : undefined}
+          onConfirm={mayWrite ? confirm : undefined}
+          onToNote={mayNote ? toNote : undefined}
           emptyIcon="🧠"
           emptyTitle="Память пуста"
           emptyHint="Персона пока ничего не запомнил. Память пополняется во время разговоров."

@@ -1,5 +1,6 @@
 using System.Reflection;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -12,6 +13,7 @@ public class TaskManagerWorkflowTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"tmw-{Guid.NewGuid():N}");
     private readonly WorkflowTemplateStore _store;
+    private readonly IConfiguration _config;
     private readonly TaskManager _tasks;
     private const string Owner = "u";
 
@@ -19,10 +21,10 @@ public class TaskManagerWorkflowTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         _store = new WorkflowTemplateStore(Path.Combine(_dir, "workflow-templates.json"));
-        var config = new ConfigurationBuilder()
+        _config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
             .Build();
-        _tasks = new TaskManager(config, workflows: _store);
+        _tasks = new TaskManager(_config, workflows: _store);
     }
 
     public void Dispose()
@@ -61,6 +63,27 @@ public class TaskManagerWorkflowTests : IDisposable
     private TaskItem Step(TaskItem epic, string? role = TaskRoles.Step, string? personaId = null, string? title = "шаг") =>
         _tasks.Create(null, Owner, new CreateTaskRequest(title!, FeatureId: epic.Id, Role: role, PersonaId: personaId, StepRef: "B1"));
 
+    private TaskManager TasksWithPersonas(params Persona[] personas) =>
+        new(_config, workflows: _store, personas: new FakePersonaLookup(personas));
+
+    private sealed class FakePersonaLookup(params Persona[] items) : IPersonaLookup
+    {
+        public Persona? GetByIdInternal(string id) => items.FirstOrDefault(p => p.Id == id);
+        public IReadOnlyCollection<Persona> GetAllInternal() => items;
+    }
+
+    // Эпик с подтверждённым маршрутом «все роли шаблона» в заданном менеджере.
+    private TaskItem EpicIn(TaskManager tasks, WorkflowTemplate tpl, string? projectId = null)
+    {
+        var epic = tasks.Create(projectId, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
+        {
+            TemplateId = tpl.Id, Scope = "global", Route = tpl.Stages.Select(s => s.Role).ToList(),
+            Skipped = [], ConfirmedVersion = tpl.Version, ConfirmedAt = DateTime.UtcNow,
+        });
+        return epic;
+    }
+
     [Fact]
     public void Create_ЭпикБезWorkflow_StageNull_Легаси()
     {
@@ -92,6 +115,64 @@ public class TaskManagerWorkflowTests : IDisposable
     {
         var epic = Epic(_store.Save(Template(), WorkflowTemplateScope.Global));
         Step(epic, personaId: "other").PersonaId.Should().Be("other");
+    }
+
+    // Персона этапа приходит из шаблона мимо входных врат дверей (TaskPersonaGate): при
+    // подстановке проверяем существование и владельца — недоступного исполнителя не ставим.
+    [Fact]
+    public void Create_ПерсонаЭтапа_НеНайдена_Отказ()
+    {
+        var tpl = _store.Save(Template(), WorkflowTemplateScope.Global);
+        var tasks = TasksWithPersonas();
+        var epic = EpicIn(tasks, tpl);
+
+        var act = () => tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id,
+            Role: TaskRoles.Step, StepRef: "B1"));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("не найдена или недоступна");
+    }
+
+    [Fact]
+    public void Create_ПерсонаЭтапа_ЧужогоВладельца_Отказ()
+    {
+        var tpl = _store.Save(Template(), WorkflowTemplateScope.Global);
+        var tasks = TasksWithPersonas(new Persona { Id = "persona-step", OwnerId = "чужой", Name = "Ч" });
+        var epic = EpicIn(tasks, tpl);
+
+        var act = () => tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id,
+            Role: TaskRoles.Step, StepRef: "B1"));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("не найдена или недоступна");
+    }
+
+    [Fact]
+    public void Create_ПерсонаЭтапа_ПроектнаяЧужогоПроекта_Отказ()
+    {
+        var tpl = _store.Save(Template(), WorkflowTemplateScope.Global);
+        var tasks = TasksWithPersonas(new Persona
+        {
+            Id = "persona-step", OwnerId = Owner, Name = "П", Scope = PersonaScope.Project, ProjectId = "p2",
+        });
+        var epic = EpicIn(tasks, tpl, "p1");
+
+        var act = () => tasks.Create("p1", Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id,
+            Role: TaskRoles.Step, StepRef: "B1"));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("только задачи своего проекта");
+    }
+
+    [Fact]
+    public void Create_ПерсонаЭтапа_СвоегоВладельца_Подставляется()
+    {
+        var tpl = _store.Save(Template(), WorkflowTemplateScope.Global);
+        var tasks = TasksWithPersonas(new Persona { Id = "persona-step", OwnerId = Owner, Name = "С" });
+        var epic = EpicIn(tasks, tpl);
+
+        var step = tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id,
+            Role: TaskRoles.Step, StepRef: "B1"));
+
+        step.PersonaId.Should().Be("persona-step");
+        step.Assignee.Should().Be(TaskItemAssignee.Claude);
     }
 
     [Fact]
@@ -202,6 +283,52 @@ public class TaskManagerWorkflowTests : IDisposable
         plan.PlanSteps.Should().HaveCount(2);
     }
 
+    // Смена роли после создания проходит проверку маршрута, как и Create: роль этапа,
+    // снятая маршрутом эпика, → отказ; Stage при этом не переписывается (И3/И4).
+    [Fact]
+    public void Update_СменаРолиНаСнятуюМаршрутом_Отказ()
+    {
+        var epic = Epic(_store.Save(Template(), WorkflowTemplateScope.Global), TaskRoles.Qa);
+        var task = _tasks.Create(null, Owner, new CreateTaskRequest("задача", FeatureId: epic.Id));
+
+        var act = () => _tasks.Update(task.Id, new UpdateTaskRequest(Role: TaskRoles.Qa));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("этап пропущен маршрутом");
+        var stored = _tasks.GetById(task.Id)!;
+        stored.Role.Should().BeNull("отказ до мутации");
+        stored.Stage.Should().BeNull();
+    }
+
+    // Правка задачи, у которой роль не менялась (дефект с авто-qa при снятом qa), не отказывает.
+    [Fact]
+    public void Update_ПравкаБезСменыРоли_ДефектСАвтоQa_Проходит()
+    {
+        var epic = Epic(_store.Save(Template(), WorkflowTemplateScope.Global), TaskRoles.Qa);
+        var defect = _tasks.Create(null, Owner, new CreateTaskRequest("баг", FeatureId: epic.Id,
+            Kind: TaskKind.Defect, Repro: new DefectRepro { Steps = "шаги" }));
+
+        _tasks.Update(defect.Id, new UpdateTaskRequest(Title: "новое имя"));
+
+        var stored = _tasks.GetById(defect.Id)!;
+        stored.Title.Should().Be("новое имя");
+        stored.Role.Should().Be(TaskRoles.Qa);
+        stored.Stage.Should().BeNull();
+    }
+
+    // Легаси-эпик без Workflow: маршрута нет — смена роли проходит, Stage остаётся null.
+    [Fact]
+    public void Update_СменаРоли_ЛегасиЭпикБезWorkflow_Проходит()
+    {
+        var epic = Epic();
+        var task = _tasks.Create(null, Owner, new CreateTaskRequest("задача", FeatureId: epic.Id));
+
+        _tasks.Update(task.Id, new UpdateTaskRequest(Role: TaskRoles.Qa));
+
+        var stored = _tasks.GetById(task.Id)!;
+        stored.Role.Should().Be(TaskRoles.Qa);
+        stored.Stage.Should().BeNull();
+    }
+
     // И3/И4: Stage пишет только Create — ни один путь обновления его не меняет.
     [Fact]
     public void Stage_НеизменнаНаПутяхОбновления()
@@ -218,6 +345,9 @@ public class TaskManagerWorkflowTests : IDisposable
         _tasks.Update(step.Id, new UpdateTaskRequest(PersonaId: "другая"));
         _tasks.Update(step.Id, new UpdateTaskRequest(ColumnId: "col-review"), effectiveColumn: null);
         _tasks.Update(step.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        // Смена роли в пределах маршрута (step → review) проходит, но слепок прежнего этапа не переписывает.
+        _tasks.Update(step.Id, new UpdateTaskRequest(Role: TaskRoles.Review));
+        _tasks.GetById(step.Id)!.Role.Should().Be(TaskRoles.Review);
 
         System.Text.Json.JsonSerializer.Serialize(_tasks.GetById(step.Id)!.Stage).Should().Be(snapshot);
     }

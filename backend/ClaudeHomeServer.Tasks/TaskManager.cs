@@ -561,6 +561,24 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         task.Stage = snapshot;
         if (task.PersonaId is null && snapshot.PersonaId is { Length: > 0 } stagePersona)
         {
+            // Персона из этапа приходит из конфигурации шаблона, минуя входные врата дверей
+            // (TaskPersonaGate в контроллере): до этой подстановки существование и арендатор
+            // персоны не проверял никто. Проверяем здесь минимум — персона резолвится у
+            // арендатора задачи и не чужая проектная; молча подставить недоступного
+            // исполнителя нельзя (правило ValidateFeatureFields: неверное значение — отказ).
+            // Полную проверку зон и кросс-проектных привязок делает только дверь; без шва
+            // привязок вертикаль их не видит, поэтому здесь fail-closed по доступному.
+            if (_personas is not null)
+            {
+                var stagePersonaEntity = _personas.GetByIdInternal(stagePersona);
+                if (stagePersonaEntity is null || stagePersonaEntity.OwnerId != task.OwnerId)
+                    throw new InvalidOperationException(
+                        $"Персона этапа «{stagePersona}» не найдена или недоступна.");
+                if (PersonaZone.IsProjectPersona(stagePersonaEntity)
+                    && stagePersonaEntity.ProjectId != task.ProjectId)
+                    throw new InvalidOperationException(
+                        "Проектная персона этапа может выполнять только задачи своего проекта.");
+            }
             task.PersonaId = stagePersona;
             NormalizePersonaAssignee(task);
         }
@@ -603,11 +621,36 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         };
     }
 
+    // Смена роли/фичи в Update проходит ту же проверку маршрута, что Create: роль этапа,
+    // снятая маршрутом эпика, → отказ. Без этого Create(role=qa) на снятом qa даёт 400, а
+    // Create с ролью null + tasks_update {role:"qa"} — проходит (major ревью R-B2).
+    // Путь задачи с неизменной ролью и фичей не проверяется: автоназначенная роль дефекта
+    // (qa) маршрутом не режется — дефект не теряем. Stage здесь НЕ переписывается (И3/И4):
+    // смена роли на другую роль маршрута слепок от прежнего этапа не трогает.
+    private void EnsureRoleChangeInRoute(
+        string? effFeatureId, string? effRole, string? roleBefore, string? featureIdBefore)
+    {
+        if (effFeatureId is null) return;
+        if (effRole == roleBefore && effFeatureId == featureIdBefore) return;
+        var stageRole = StageRoleOf(effRole);
+        if (stageRole is null) return;
+        var epic = GetById(effFeatureId);
+        if (epic is null) return;
+        FeatureWorkflow? route;
+        lock (_workflowLock) { route = epic.Workflow; }
+        if (route is null) return;
+        if (!route.Route.Contains(stageRole, StringComparer.Ordinal))
+            throw new InvalidOperationException($"{StageSkippedText}: роль «{effRole}» снята в маршруте фичи.");
+    }
+
     // Шаги плана вида review/qa/final у роли, снятой маршрутом эпика, → отказ. Эпик без Workflow — no-op.
     private void EnsurePlanStepsInRoute(string? featureId, List<PlannedStep> steps)
     {
         if (featureId is null || steps.Count == 0) return;
-        var route = GetById(featureId)?.Workflow;
+        var epic = GetById(featureId);
+        if (epic is null) return;
+        FeatureWorkflow? route;
+        lock (_workflowLock) { route = epic.Workflow; }
         if (route is null) return;
         foreach (var step in steps)
         {
@@ -1251,6 +1294,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
+        EnsureRoleChangeInRoute(effFeatureId, effRole, task.Role, task.FeatureId);
         if (req.PlanSteps is not null && effPlanSteps is not null) EnsurePlanStepsInRoute(effFeatureId, effPlanSteps);
         EnsureReturnReason(req.Verification);
         // Та же норма на двери Update (major ревью d27c643c: раньше защищался только контроллер):

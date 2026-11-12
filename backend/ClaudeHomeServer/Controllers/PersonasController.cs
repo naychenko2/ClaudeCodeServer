@@ -893,14 +893,30 @@ public class PersonasController(
 
     [HttpGet("{id}/bindings")]
     [ProjectScope(From = ScopeSource.Persona)]
-    public ActionResult<IReadOnlyList<PersonaBinding>> Bindings(string id)
+    public ActionResult Bindings(string id)
     {
         // W3-B1c (разрез §3.1 строка GET {id}/bindings; И-2): ключ чтения персоны — арендатор:
         // участник видит привязки владельца, в том числе к личным целям (И-4: видеть, не менять).
         var scope = HttpContext.GetRequestScope();
         var persona = _personas.Get(id, scope.TenantOwnerId);
         if (persona is null) return NotFound();
-        return Ok(persona.Bindings ?? []);
+        // A2 (разрез §2 «Типовые умения»): эффективный список — Skill-умения специальности
+        // первыми, с признаком источника inherited=true (фронт A3b показывает их с пометкой
+        // «от специальности» и кнопкой «Отключить»), затем свои привязки персоны.
+        // Путь записи не меняется: в Persona.Bindings пишутся только свои.
+        return Ok(_bindings.EffectiveBindings(scope.TenantOwnerId, persona)
+            .Select(e => new
+            {
+                id = e.Binding.Id,
+                type = e.Binding.Type,
+                target = e.Binding.Target,
+                path = e.Binding.Path,
+                condition = e.Binding.Condition,
+                mode = e.Binding.Mode,
+                createdAt = e.Binding.CreatedAt,
+                updatedAt = e.Binding.UpdatedAt,
+                inherited = e.Inherited,
+            }));
     }
 
     // Добавить одну привязку (мгновенное сохранение)
@@ -2088,7 +2104,8 @@ public class PersonasController(
     }
 
     /// <summary>
-    /// Разовая миграция прав персон к наследованию от специальности (разрез §2 «Миграция», A1b).
+    /// Разовая миграция персон к наследованию от специальности (разрез §2 «Миграция», A1b —
+    /// права; A2 — удаление Skill-копий типовых умений, они наследуются в рантайме).
     /// dryRun=true — только отчёт поимённо: ни personas.json, ни specialty-settings.json не
     /// пишутся, и флаг не нужен (это способ посмотреть ДО включения). Без dryRun миграция
     /// выполняется, если она включена флагом Personas:SpecialtyInheritanceMigration:Enabled
@@ -2121,6 +2138,8 @@ public class PersonasController(
                 changes = plan.CountChanges(),
                 alreadyMigrated = plan.Decisions.Count(d => d.AlreadyMigrated),
                 modelCellsMatched = plan.ModelCells.Count,
+                // A2: Skill-копии типовых умений, которые прогон удалит (теперь они наследуются)
+                removedSkillBindings = plan.CountRemovedSkills(),
             },
             personas = plan.Decisions.Select(d => new
             {
@@ -2135,6 +2154,8 @@ public class PersonasController(
                 inheritsAccess = d.InheritsAccess,
                 changed = d.IsChange && !d.AlreadyMigrated,
                 alreadyMigrated = d.AlreadyMigrated,
+                // A2: поимённо — какая Skill-привязка и с каким именем удалится прогоном
+                removedSkills = d.RemovedSkills.Select(r => new { id = r.BindingId, target = r.Target }),
             }),
             modelCells = plan.ModelCells.Select(c => new { id = c.PersonaId, name = c.Name, cell = c.Cell, value = c.Value }),
         });

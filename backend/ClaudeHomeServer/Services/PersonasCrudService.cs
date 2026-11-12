@@ -870,12 +870,14 @@ public sealed class PersonasCrudService(
         return persona;
     }
 
-    // Типовые умения специальности → личные привязки персоны («копия при создании» и
-    // кнопка «Применить типовые» для существующих). Скиллы материализуются напрямую из
-    // каталога владельца (отсутствующие пропускаются молча — каталог у каждого свой),
-    // остальные типы — one-shot AI-подбор конкретных целей. Дубликаты и недоступные цели
-    // отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
-    // пуст или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
+    // Типовые умения специальности → личные привязки персоны (кнопка «Применить типовые» для
+    // существующих). A2 (разрез §2 «Типовые умения»): Skill-часть профиля больше НЕ материализуется
+    // — Skill-умения наследуются в рантайме (PersonaBindingsService.EffectiveBindings), копия
+    // в сторе была бы тем, от чего этот шаг отказался; существующие копии снимает миграция A1b-шага.
+    // Остаётся AI-часть (Knowledge/Project/…): one-shot подбор конкретных целей — она была и
+    // остаётся копией (§7 разреза: «их проектные, наследовать нечего»). Дубликаты и недоступные
+    // цели отбрасывает валидация. Возвращает персону и число ДОБАВЛЕННЫХ привязок (0 — профиль
+    // пуст, Skill-only или ничего не подошло). Сбой (например, недоступность AI-подбора) пробрасывает
     // наружу: вызывающий сам решает семантику — создание персоны глотает его (best-effort),
     // а кнопка «Применить типовые» отдаёт ошибку, иначе её ветка «Не удалось применить»
     // недостижима (до записи привязок сбой ничего не меняет).
@@ -897,24 +899,9 @@ public sealed class PersonasCrudService(
         var accepted = new List<PersonaBinding>(persona.Bindings ?? []);
         var added = new List<PersonaBinding>();
 
-        // Скиллы — явная цель профиля, AI не нужен
-        foreach (var entry in profile.Where(e => e.Type == PersonaBindingType.Skill))
-        {
-            var binding = new PersonaBinding
-            {
-                Type = PersonaBindingType.Skill,
-                Target = entry.SkillName?.Trim() ?? "",
-                Condition = entry.Condition,
-                Mode = entry.Mode,
-            };
-            // W3-B5b: плагин-скилл владельца — цель его личного пакета (право Configure):
-            // не-владелец её не материализует.
-            if (bindings.NonOwnerBindingEditDenied(callerRole, projectId, binding) is not null) continue;
-            if (await bindings.ValidateAsync(userId, binding, accepted, persona) is not null) continue;
-            accepted.Add(binding);
-            added.Add(binding);
-        }
-
+        // A2: Skill-часть профиля здесь не материализуется — она наследуется в рантайме
+        // (PersonaBindingsService.EffectiveBindings). Возврат этого цикла вернул бы копию,
+        // от которой шаг отказался (тест MaterializeDefaultBindings_SkillНeМатериализуется краснеет).
         var aiEntries = profile.Where(e => e.Type != PersonaBindingType.Skill).ToList();
         if (aiEntries.Count > 0)
             added.AddRange(await SuggestBindingsAsync(userId, persona, profile: aiEntries, acceptedSeed: accepted,
@@ -931,8 +918,8 @@ public sealed class PersonasCrudService(
     // userPrompt задан — генерация под свободный запрос пользователя, иначе подбор под роль.
     // profile задан — материализация типовых умений роли: AI подбирает только ЦЕЛИ типов
     // профиля (по одному на запись), условие и режим подставляются из профиля сервером.
-    // acceptedSeed — уже подготовленные к добавлению привязки (например, скиллы профиля):
-    // валидация дубликатов должна видеть их рядом с текущими привязками персоны.
+    // acceptedSeed — уже подготовленные к добавлению привязки: валидация дубликатов
+    // должна видеть их рядом с текущими привязками персоны.
     // callerRole/projectId — сужение кандидатов для не-владельца общего проекта (W3-B5b,
     // разрез §3.1 строка «suggest/generate», И-4): кандидат отбрасывается тем же
     // NonOwnerBindingEditDenied ДО валидации и до ответа — праву отказа не мешает ни

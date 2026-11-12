@@ -127,6 +127,11 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // при СОЗДАНИИ. Опциональная зависимость: подсистема Plugins выключена → null (Main
     // отвечает «Подсистема плагинов выключена», не 500). Реализация — в вертикали Plugins.
     private readonly IPluginSkillResolver? _pluginSkillResolver;
+    // A2 (разрез §2 «Типовые умения»): Skill-умения специальности наследуются в рантайме —
+    // эффективный список читает тот же профиль, что MaterializeDefaultBindingsAsync читал для
+    // копирования (SpecialtySettingsStore.EffectiveDefaultBindings). Опционально (в тестах
+    // не передаётся): без стора унаследованных умений нет, эффективный список = свои привязки.
+    private readonly Llm.SpecialtySettingsStore? _specialtySettings;
 
     // Кэш имён Dify-датасетов (id → отображаемое имя без префикса владельца).
     private readonly ISphereDirectory? _spheres;
@@ -151,7 +156,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
         ISphereDirectory? spheres = null,
         // Шов «навык плагина существует» (QA-фикс L3): опциональная зависимость —
         // подсистема Plugins выключена (Subsystems:plugins:Enabled=false) → null.
-        IPluginSkillResolver? pluginSkillResolver = null)
+        IPluginSkillResolver? pluginSkillResolver = null,
+        // A2: настройки специальностей (Services.Llm, DI регистрирует её всегда) — источник
+        // Skill-умений для наследования. null (юнит-тесты без стора) — унаследованных нет.
+        Llm.SpecialtySettingsStore? specialtySettings = null)
     {
         _spheres = spheres;
         _personas = personas;
@@ -166,6 +174,7 @@ public class PersonaBindingsService : IPersonaServerToolGate
         _config = config;
         _log = log;
         _pluginSkillResolver = pluginSkillResolver;
+        _specialtySettings = specialtySettings;
     }
 
     // --- Tool-рубильники ---
@@ -653,6 +662,63 @@ public class PersonaBindingsService : IPersonaServerToolGate
         return persona;
     }
 
+    // --- Эффективный список привязок (A2) ---
+
+    // A2 (разрез §2 «Типовые умения»): Skill-умения специальности наследуются в рантайме, а не
+    // копируются. Эффективный список = Skill-умения специальности (в порядке профиля,
+    // Inherited=true) + свои привязки персоны (в порядке стора, Inherited=false); порядок —
+    // унаследованные первыми. Гашение — по SkillName без учёта регистра (то же сравнение, что
+    // FindToolBinding/ValidateAsync): своя Skill-привязка с тем же именем убирает унаследованную —
+    // Mode=Off выключает умение целиком (кнопка «Отключить» фронта A3b), другой Mode — собственное
+    // решение персоны об этом умении, дублировать его унаследованной копией нельзя.
+    // Битый SkillName специальности (без имени) пропускается с логом. Без стора настроек или при
+    // Specialty=None список = свои привязки персоны. AI-привязки (Knowledge/Project/…) не
+    // наследуются (§7 разреза) — они остаются копией.
+    public sealed record EffectiveBinding(PersonaBinding Binding, bool Inherited);
+
+    public IReadOnlyList<EffectiveBinding> EffectiveBindings(string ownerId, Persona? persona)
+    {
+        var own = persona?.Bindings ?? [];
+        var list = new List<EffectiveBinding>();
+        if (persona is not null && _specialtySettings is not null
+            && persona.Specialty != PersonaSpecialty.None)
+        {
+            foreach (var entry in _specialtySettings.EffectiveDefaultBindings(ownerId, persona.Specialty))
+            {
+                if (entry.Type != PersonaBindingType.Skill) continue; // AI-часть профиля — копия, не наследование
+                var skillName = entry.SkillName?.Trim();
+                if (string.IsNullOrEmpty(skillName))
+                {
+                    _log.LogWarning("Skill-умение специальности {Specialty} без имени — пропускаю",
+                        persona.Specialty);
+                    continue;
+                }
+                if (own.Any(b => b.Type == PersonaBindingType.Skill
+                    && string.Equals(b.Target, skillName, StringComparison.OrdinalIgnoreCase)))
+                    continue;
+                list.Add(new EffectiveBinding(new PersonaBinding
+                {
+                    Type = PersonaBindingType.Skill,
+                    Target = skillName,
+                    Condition = entry.Condition,
+                    Mode = entry.Mode,
+                }, true));
+            }
+        }
+        list.AddRange(own.Select(b => new EffectiveBinding(b, false)));
+        return list;
+    }
+
+    // Привязки хода: те же, что EffectiveBindings, без Off (смысл прежнего active-фильтра
+    // в BuildTurnBlock/BuildSubagentIndex/BuildAlwaysExtracts). Наружу — EffectiveBindings:
+    // он несёт признак источника для ответа (фронт A3b). Internal — юнит-тесты проводки
+    // (тот же приём, что BuildIndex).
+    internal List<PersonaBinding> ActiveBindingsForTurn(string ownerId, Persona persona) =>
+        EffectiveBindings(ownerId, persona)
+            .Where(e => e.Binding.Mode != PersonaBindingMode.Off)
+            .Select(e => e.Binding)
+            .ToList();
+
     // --- Каталог целей ---
 
     // Известные датасеты владельца: базы знаний его проектов + датасет заметок «{username}:notes».
@@ -733,8 +799,9 @@ public class PersonaBindingsService : IPersonaServerToolGate
         IReadOnlyList<string> mountedSections, string? projectId = null)
     {
         var persona = _personas.Get(personaId, ownerId);
-        if (persona?.Bindings is not { Count: > 0 } bindings) return null;
-        var active = bindings.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
+        if (persona is null) return null;
+        // A2: эффективный список — Skill-умения специальности вместо их копий в сторе
+        var active = ActiveBindingsForTurn(ownerId, persona);
         if (active.Count == 0) return null;
 
         // M2: проект хода — для фильтрации Skill-привязок плагинов по локальности
@@ -757,8 +824,10 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // (серверных выжимок по тексту хода у статического файла нет). null — привязок нет.
     public string? BuildSubagentIndex(string ownerId, Persona persona)
     {
-        var active = persona.Bindings?.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
-        if (active is not { Count: > 0 }) return null;
+        // A2: тот же эффективный список, что у хода: .md-сабагент получает унаследованные
+        // Skill-умения специальности, а не материализованные копии
+        var active = ActiveBindingsForTurn(ownerId, persona);
+        if (active.Count == 0) return null;
 
         var mounted = new[] { "files", "knowledge" };
         var lines = new List<string>();
@@ -790,8 +859,9 @@ public class PersonaBindingsService : IPersonaServerToolGate
     // по тексту вопроса. null — Always-привязок нет или ничего не нашлось.
     public Task<string?> BuildAlwaysExtractsAsync(string ownerId, Persona persona, string question)
     {
-        var active = persona.Bindings?.Where(b => b.Mode != PersonaBindingMode.Off).ToList();
-        if (active is not { Count: > 0 }) return Task.FromResult<string?>(null);
+        // A2: тот же эффективный список, что у хода и сабагента (one-shot persona_ask)
+        var active = ActiveBindingsForTurn(ownerId, persona);
+        if (active.Count == 0) return Task.FromResult<string?>(null);
         return BuildExtractsAsync(ownerId, active, question);
     }
 

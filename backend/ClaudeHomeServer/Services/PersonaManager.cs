@@ -731,6 +731,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // данным: после смены шаблона специальности повторный прогон пересчитал бы группу и молча
     // переключил бы наследование — в том числе у прав, которые человек выбрал сам после миграции.
     // Маркер ставится и тем, чьё значение уже верное: решение принято, второй раз его не решаем.
+    // A2: в том же пуске у ещё не решённых персон удаляются Skill-копии типовых умений
+    // (совпавшие с профилем специальности по SkillName) — умение теперь наследуется в рантайме.
     // UpdatedAt НЕ бампаем (как соседние миграции) — иначе перетасовался бы список персон.
     // Сбой — лог, без маркера и без записи: стор поднимается на прежних данных.
     internal PersonaSpecialtyMigration.Plan MigrateSpecialtyInheritance()
@@ -753,17 +755,28 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                         if (!_personas.TryGetValue(d.PersonaId, out var persona)) continue;
                         persona.InheritsAccess = d.InheritsAccess;
                         persona.InheritsAccessMigratedAt = now;
+                        // A2 (разрез §2 п.4): Skill-копии типовых умений удаляются — теперь они
+                        // наследуются в рантайме (PersonaBindingsService.EffectiveBindings).
+                        // Удаление по id из плана: привязку могли править между снимком и записью —
+                        // её нет, нечего и удалять. Тот же лок и тот же Save, что у прав.
+                        if (d.RemovedSkills.Count > 0 && persona.Bindings is { Count: > 0 } bindings)
+                        {
+                            var drop = d.RemovedSkills.Select(r => r.BindingId).ToHashSet(StringComparer.Ordinal);
+                            var kept = bindings.Where(b => !drop.Contains(b.Id)).ToList();
+                            if (kept.Count < bindings.Count) persona.Bindings = kept;
+                        }
                     }
                     JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
                 }
                 _log?.LogInformation(
                     "Миграция прав к наследованию: персон {Total} — наследуют {Inherits}, override {Override}, "
                     + "без эффективного шаблона {NoTemplate}, правка значений {Changes}, "
-                    + "ячеек моделей, совпавших со специальностью: {Cells}",
+                    + "ячеек моделей, совпавших со специальностью: {Cells}, "
+                    + "Skill-копий умений удалено (теперь наследуются): {Skills}",
                     plan.Decisions.Count, plan.CountOf(PersonaSpecialtyMigration.Group.Inherits),
                     plan.CountOf(PersonaSpecialtyMigration.Group.Override),
                     plan.CountOf(PersonaSpecialtyMigration.Group.NoTemplate), plan.CountChanges(),
-                    plan.ModelCells.Count);
+                    plan.ModelCells.Count, plan.CountRemovedSkills());
             }
             return plan;
         }
@@ -784,8 +797,19 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 (ownerId, specialty) => SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, ownerId, specialty),
                 _specialty is null
                     ? null
-                    : (Func<string, PersonaSpecialty, PersonaSpecialtyMigration.SpecialtyCells?>)CellsOfSpecialty);
+                    : (Func<string, PersonaSpecialty, PersonaSpecialtyMigration.SpecialtyCells?>)CellsOfSpecialty,
+                _specialty is null
+                    ? null
+                    : (Func<string, PersonaSpecialty, IReadOnlyList<SpecialtyDefaultBinding>>)
+                        DefaultBindingsOfSpecialty);
     }
+
+    // Типовой профиль умений специальности (A2): та же точка EffectiveDefaultBindings, что
+    // читает рантайм (PersonaBindingsService.EffectiveBindings) и материализация
+    // (PersonasCrudService.MaterializeDefaultBindingsAsync) — по ней миграция находит копии.
+    private IReadOnlyList<SpecialtyDefaultBinding> DefaultBindingsOfSpecialty(
+        string ownerId, PersonaSpecialty specialty) =>
+        _specialty!.EffectiveDefaultBindings(ownerId, specialty);
 
     // Ячейки моделей специальности — только для отчёта (A1b их не чистит): тот же слой настроек,
     // что читает TierMatricesOf

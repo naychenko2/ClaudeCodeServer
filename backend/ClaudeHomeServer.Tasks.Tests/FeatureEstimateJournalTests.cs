@@ -384,14 +384,15 @@ public class FeatureEstimateJournalTests : IDisposable
             + "строки первых двух уже в файле");
 
         var saved = _sut.GetById(epic.Id)!.Note!.Estimate!;
-        saved.ExpectedSteps.Should().Be(33);
         var lines = _journal.Read("u", epic.Id).Entries
             .Where(e => e.Kind == "estimate_set").ToList();
         lines.Should().HaveCount(3);
-        lines[0].ExpectedSteps.Should().Be(11, "порядок строк = порядок записей голоса");
-        lines[1].ExpectedSteps.Should().Be(22);
-        lines[2].ExpectedSteps.Should().Be(33);
-        // Инвариант: последняя строка = сохранённая оценка.
+        // System.Threading.Lock не гарантирует FIFO: освободившийся замок первой может взять
+        // и третья запись раньше второй (под нагрузкой так и бывает). Порядок второй и третьей
+        // не проверяем — они равноправны; первая держала замок всё время, значит строго первая.
+        lines[0].ExpectedSteps.Should().Be(11, "первая держала замок — её строка первая");
+        lines.Skip(1).Select(l => l.ExpectedSteps).Should().BeEquivalentTo(new int?[] { 22, 33 });
+        // Инвариант: последняя строка = сохранённая оценка (при любом порядке очереди замка).
         lines[^1].ExpectedSteps.Should().Be(saved.ExpectedSteps);
         lines[^1].EtaMinutes.Should().Be(saved.EtaMinutes);
     }

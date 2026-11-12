@@ -26,11 +26,23 @@ public class LocalImageRoutingTests : IDisposable
         _editor.Route(op, mode, t) ?? throw new InvalidOperationException("маршрута нет");
 
     [Fact]
-    public void Генерация_ПоУмолчанию_QwenTurbo()
+    public void Генерация_ПоУмолчанию_Klein()
     {
         var r = Pick(ImageEditOp.Generate, T("кот на подоконнике"));
-        r.Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
-        r.Reason.Should().Be("Авто → Qwen Turbo: по умолчанию");
+        r.Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+        r.Reason.Should().Be("Авто → Klein: по умолчанию");
+    }
+
+    // Ш10: запасные генерации по умолчанию — MOSS, затем Qwen Turbo
+    [Fact]
+    public void Генерация_ПоУмолчанию_БезKlein_Moss_БезОбоих_QwenTurbo()
+    {
+        var noKlein = _editor.Models.Where(m => m.Id != LocalImageEditor.FluxKlein).ToList();
+        LocalImageRouting.Pick(LocalImageRouting.Table, noKlein, ImageEditOp.Generate, T("кот"))!.Model.Id
+            .Should().Be(LocalImageEditor.MossImage);
+        var neither = noKlein.Where(m => m.Id != LocalImageEditor.MossImage).ToList();
+        LocalImageRouting.Pick(LocalImageRouting.Table, neither, ImageEditOp.Generate, T("кот"))!.Model.Id
+            .Should().Be(LocalImageEditor.QwenImageTurbo);
     }
 
     [Theory]
@@ -63,33 +75,49 @@ public class LocalImageRoutingTests : IDisposable
 
     [Fact]
     public void Генерация_ЛюдиСОбразцом_КреаНеБерётся() =>
-        Pick(ImageEditOp.Generate, T("портрет", refs: 1)).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+        Pick(ImageEditOp.Generate, T("портрет", refs: 1)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
 
     [Fact]
-    public void Генерация_НадписьВКавычках_Klein_ПричинаВОтвете()
+    public void Генерация_ЛюдиБезKrea_ЗапасныйKlein()
+    {
+        var noKrea = _editor.Models.Where(m => m.Id != LocalImageEditor.Krea2Turbo).ToList();
+        var r = LocalImageRouting.Pick(LocalImageRouting.Table, noKrea, ImageEditOp.Generate, T("портрет старика"))!;
+        r.Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+        r.Reason.Should().Be("люди или фото");
+    }
+
+    // Ш10: правка стиля мимо Fibo Turbo (3,0 из 5) — даже при маленьком исходнике
+    [Theory]
+    [InlineData("перерисуй в стиле акварели")]
+    [InlineData("make it watercolor style")]
+    public void Правка_Стиль_НеFibo(string prompt) =>
+        Pick(ImageEditOp.Edit, T(prompt, mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+
+    [Fact]
+    public void Генерация_НадписьВКавычках_Moss_ПричинаВОтвете()
     {
         var r = Pick(ImageEditOp.Generate, T("вывеска кафе с текстом «Добро пожаловать»"));
-        r.Model.Id.Should().Be(LocalImageEditor.FluxKlein);
-        r.Reason.Should().Be("Авто → Klein: в запросе надпись");
+        r.Model.Id.Should().Be(LocalImageEditor.MossImage);
+        r.Reason.Should().Be("Авто → MOSS: в запросе надпись");
     }
 
     [Theory]
     [InlineData("афиша концерта")]
     [InlineData("слайд про продажи")]
     [InlineData("вывеска магазина")]
-    public void Генерация_ВывескаАфишаСлайд_Klein(string prompt) =>
-        Pick(ImageEditOp.Generate, T(prompt)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+    public void Генерация_ВывескаАфишаСлайд_Moss(string prompt) =>
+        Pick(ImageEditOp.Generate, T(prompt)).Model.Id.Should().Be(LocalImageEditor.MossImage);
 
     [Fact]
     public void Надпись_Выигрывает_ЗаЛюдей() =>
-        Pick(ImageEditOp.Generate, T("девушка с табличкой \"Привет\"")).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+        Pick(ImageEditOp.Generate, T("девушка с табличкой \"Привет\"")).Model.Id.Should().Be(LocalImageEditor.MossImage);
 
     [Fact]
-    public void Надпись_КleinНетВКаталоге_ЗапасноеMoss()
+    public void Надпись_MossНетВКаталоге_ЗапасноеKlein()
     {
-        var catalog = _editor.Models.Where(m => m.Id != LocalImageEditor.FluxKlein).ToList();
+        var catalog = _editor.Models.Where(m => m.Id != LocalImageEditor.MossImage).ToList();
         LocalImageRouting.Pick(LocalImageRouting.Table, catalog, ImageEditOp.Generate, T("«Привет»"))!.Model.Id
-            .Should().Be(LocalImageEditor.MossImage);
+            .Should().Be(LocalImageEditor.FluxKlein);
     }
 
     [Fact]
@@ -115,10 +143,12 @@ public class LocalImageRoutingTests : IDisposable
     }
 
     [Fact]
-    public void Правка_ОдеждаИлиТочная_Klein()
+    public void Правка_ОдеждаИлиТочная_QwenКачественно()
     {
-        Pick(ImageEditOp.Edit, T("перекрась куртку в красный", mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
-        Pick(ImageEditOp.Edit, T("сделай точнее", mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.FluxKlein);
+        Pick(ImageEditOp.Edit, T("перекрась куртку в красный", mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.QwenImage);
+        var r = Pick(ImageEditOp.Edit, T("сделай точнее", mp: 0.8));
+        r.Model.Id.Should().Be(LocalImageEditor.QwenImage);
+        r.Reason.Should().Be("Авто → Qwen «качественно»: одежда или точная правка");
     }
 
     [Fact]
@@ -145,13 +175,13 @@ public class LocalImageRoutingTests : IDisposable
     }
 
     [Fact]
-    public void МаскаДорисовкаПодстановкаНаЛицо_QwenКачественно()
+    public void МаскаДорисовкаПодстановкаНаЛицо_QwenTurbo()
     {
-        Pick(ImageEditOp.Inpaint, T("убери")).Model.Id.Should().Be(LocalImageEditor.QwenImage);
-        Pick(ImageEditOp.Outpaint, T()).Model.Id.Should().Be(LocalImageEditor.QwenImage);
-        Pick(ImageEditOp.Edit, T("замени фон", mask: true, mp: 0.5)).Model.Id.Should().Be(LocalImageEditor.QwenImage);
+        Pick(ImageEditOp.Inpaint, T("убери")).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+        Pick(ImageEditOp.Outpaint, T()).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+        Pick(ImageEditOp.Edit, T("замени фон", mask: true, mp: 0.5)).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
         var swap = Pick(ImageEditOp.Edit, T(character: true, faceSwap: true));
-        swap.Model.Id.Should().Be(LocalImageEditor.QwenImage);
+        swap.Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
         swap.Reason.Should().Contain("подстановка на лицо");
     }
 
@@ -202,12 +232,12 @@ public class LocalImageRoutingTests : IDisposable
         new("local", model, EditMode.Auto, op, 1, false, Prompt: prompt);
 
     [Fact]
-    public async Task Котировка_АвтоНадпись_Klein_ПричинаВОтвете()
+    public async Task Котировка_АвтоНадпись_Moss_ПричинаВОтвете()
     {
         using var service = Service();
         var quote = await service.QuoteAsync("u", "p", Quote(ImageEditCatalog.AutoModelId, "вывеска «Бар»"), default);
-        quote.Value!.Model.Should().Be(LocalImageEditor.FluxKlein);
-        quote.Value.RouteReason.Should().Be("Авто → Klein: в запросе надпись");
+        quote.Value!.Model.Should().Be(LocalImageEditor.MossImage);
+        quote.Value.RouteReason.Should().Be("Авто → MOSS: в запросе надпись");
     }
 
     [Fact]
@@ -238,13 +268,13 @@ public class LocalImageRoutingTests : IDisposable
     }
 
     [Fact]
-    public async Task Котировка_ПодстановкаНаЛицо_QwenКачественно()
+    public async Task Котировка_ПодстановкаНаЛицо_QwenTurbo()
     {
         using var service = Service();
         var faceTarget = new FaceTarget("v1", "k", [new FaceAssignment(1, "slug")]);
         var req = Quote(ImageEditCatalog.AutoModelId, null, ImageEditOp.Edit) with { FaceTarget = faceTarget, HasMask = true };
         var quote = await service.QuoteAsync("u", "p", req, default);
-        quote.Value!.Model.Should().Be(LocalImageEditor.QwenImage);
+        quote.Value!.Model.Should().Be(LocalImageEditor.QwenImageTurbo);
         quote.Value.RouteReason.Should().Contain("подстановка на лицо");
     }
 }

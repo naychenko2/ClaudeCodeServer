@@ -110,9 +110,10 @@ public class ImageRouteClassifierTests : IDisposable
     [Theory]
     [InlineData(ImageEditOp.Generate, "люди", LocalImageEditor.Krea2Turbo, "Авто → Krea 2 Turbo: люди (по смыслу запроса)")]
     [InlineData(ImageEditOp.Generate, "товар", LocalImageEditor.Krea2Turbo, "Авто → Krea 2 Turbo: товар (по смыслу запроса)")]
-    [InlineData(ImageEditOp.Generate, "надписи", LocalImageEditor.FluxKlein, "Авто → Klein: надписи (по смыслу запроса)")]
-    [InlineData(ImageEditOp.Generate, "арт", LocalImageEditor.QwenImageTurbo, "Авто → Qwen Turbo: иллюстрация (по смыслу запроса)")]
-    [InlineData(ImageEditOp.Edit, "одежда", LocalImageEditor.FluxKlein, "Авто → Klein: одежда (по смыслу запроса)")]
+    [InlineData(ImageEditOp.Generate, "надписи", LocalImageEditor.MossImage, "Авто → MOSS: надписи (по смыслу запроса)")]
+    [InlineData(ImageEditOp.Generate, "арт", LocalImageEditor.FluxKlein, "Авто → Klein: иллюстрация (по смыслу запроса)")]
+    [InlineData(ImageEditOp.Edit, "одежда", LocalImageEditor.QwenImage, "Авто → Qwen «качественно»: одежда (по смыслу запроса)")]
+    [InlineData(ImageEditOp.Edit, "стиль", LocalImageEditor.QwenImageTurbo, "Авто → Qwen Turbo: стиль (по смыслу запроса)")]
     [InlineData(ImageEditOp.Edit, "убрать", LocalImageEditor.QwenImageTurbo, "Авто → Qwen Turbo: убрать предмет (по смыслу запроса)")]
     public void Категория_ДобавляетПризнаки_ТаблицаВыбираетМодель(ImageEditOp op, string category, string model, string reason)
     {
@@ -124,7 +125,7 @@ public class ImageRouteClassifierTests : IDisposable
     [Fact]
     public void Категория_НеОтменяетЗапреты_ЛюдиСОбразцом_НеKrea() =>
         _editor.Route(ImageEditOp.Generate, EditMode.Auto, T("кто-то", refs: 1), "люди")!.Model.Id
-            .Should().Be(LocalImageEditor.QwenImageTurbo);
+            .Should().Be(LocalImageEditor.FluxKlein);
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ public class ImageRouteClassifierTests : IDisposable
         var runner = Answer("{\"category\":\"арт\"}");
         using var service = Service(new ImageRouteClassifier(runner));
         var quote = await service.QuoteAsync("u", "p", Quote("вывеска «Бар»"), default);
-        quote.Value!.RouteReason.Should().Be("Авто → Klein: в запросе надпись");
+        quote.Value!.RouteReason.Should().Be("Авто → MOSS: в запросе надпись");
         runner.Calls.Should().Be(0);
     }
 
@@ -160,7 +161,7 @@ public class ImageRouteClassifierTests : IDisposable
     {
         using var service = Service(new ImageRouteClassifier(Answer(null)));
         var quote = await service.QuoteAsync("u", "p", Quote("кот на подоконнике"), default);
-        quote.Value!.Model.Should().Be(LocalImageEditor.QwenImageTurbo);
-        quote.Value.RouteReason.Should().Be("Авто → Qwen Turbo: по умолчанию");
+        quote.Value!.Model.Should().Be(LocalImageEditor.FluxKlein);
+        quote.Value.RouteReason.Should().Be("Авто → Klein: по умолчанию");
     }
 }

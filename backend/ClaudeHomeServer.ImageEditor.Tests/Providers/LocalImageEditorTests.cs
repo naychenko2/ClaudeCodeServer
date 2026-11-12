@@ -143,7 +143,7 @@ public class LocalImageEditorTests : IDisposable
 
         quote.Value.Should().NotBeNull(quote.Error);
         quote.Value!.Provider.Should().Be("local");
-        quote.Value.Model.Should().Be(LocalImageEditor.QwenImageTurbo, "авто-выбор — Qwen Turbo (решение 2026-10-22)");
+        quote.Value.Model.Should().Be(LocalImageEditor.FluxKlein, "авто-выбор генерации — Klein (таблица Ш10)");
         quote.Value.Estimate.Should().Be(new ImageEditEstimateDto(0, ImageEditPriceUnits.Free, false,
             ImageEditEstimateSources.Provider, EtaSeconds: 80, QueueLength: 3));
         quote.Value.ExpectedSeconds.Should().Be(80, "время для процентов — то же, что в котировке");
@@ -295,7 +295,7 @@ public class LocalImageEditorTests : IDisposable
 
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
         editor.Models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.Ops.Should().Contain(ImageEditOp.Outpaint);
-        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImage);
+        editor.PickModel(ImageEditOp.Outpaint, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
     }
 
     [Fact]
@@ -312,13 +312,13 @@ public class LocalImageEditorTests : IDisposable
         editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
     }
 
-    // Решение Андрея 2026-10-22: умолчание генерации и правки — Qwen Turbo; маска и дорисовка — «качественно» (таблица Ш2)
+    // Умолчание генерации — Klein, правки, маски и дорисовки — Qwen Turbo (таблица Ш10)
     [Theory]
-    [InlineData(ImageEditOp.Generate, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Generate, "flux3-klein")]
     [InlineData(ImageEditOp.Edit, "qwen-image-2.1-turbo")]
-    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1")]
-    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1")]
-    public void АвтоВыбор_TurboПоУмолчанию_МаскаИДорисовка_Качественно(ImageEditOp op, string expected)
+    [InlineData(ImageEditOp.Inpaint, "qwen-image-2.1-turbo")]
+    [InlineData(ImageEditOp.Outpaint, "qwen-image-2.1-turbo")]
+    public void АвтоВыбор_ПоУмолчанию_ПоТаблицеШ10(ImageEditOp op, string expected)
     {
         new LocalImageEditor(new FakeMedia()).PickModel(op, EditMode.Auto, new EditTraits(false, 0, false))!.Id
             .Should().Be(expected);

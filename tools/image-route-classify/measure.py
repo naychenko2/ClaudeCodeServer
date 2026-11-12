@@ -15,7 +15,7 @@ QUOTED = re.compile(r"«[^»]*[^\W_][^»]*»|\"[^\"]*[^\W_][^\"]*\"|“[^”]*[^
 SIGN = re.compile(NB + r"(вывеск|афиш|слайд|плакат|баннер|постер|надпис|signboard|poster|slide|banner|billboard|caption)", re.I)
 PEOPLE = re.compile(NB + r"(человек|людей|люди|портрет|девушк|парен|мужчин|женщин|ребён|ребен|дет[ие]|лиц[оа]|селфи|person|people|portrait|woman|man\b|girl|boy|face)", re.I)
 PHOTO = re.compile(NB + r"(фото|реалистич|фотореал|photo|realistic)", re.I)
-FAST = re.compile(NB + r"(фон|стил|аксессуар|очки|очков|шляп|background|style|accessor)", re.I)
+FAST = re.compile(NB + r"(фон|аксессуар|очки|очков|шляп|background|accessor)", re.I)
 PRECISE = re.compile(NB + r"(одежд|футболк|куртк|платье|плать|рубашк|штан|костюм|пальто|clothes|clothing|shirt|dress|jacket|точн)", re.I)
 
 GEN_CATS = ["люди", "товар", "арт", "надписи", "состав", "пейзаж"]
@@ -61,7 +61,7 @@ def rules_edit(p):
     m = FAST.search(p)
     if m:
         w = m.group(1).lower()
-        return "фон" if w.startswith(("фон", "background")) else "стиль" if w.startswith(("стил", "style")) else "добавить"
+        return "фон" if w.startswith(("фон", "background")) else "добавить"
     return None
 
 

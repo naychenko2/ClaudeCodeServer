@@ -99,7 +99,7 @@ public class LocalImageRoutingSourceTests
     {
         var cfg = Config([]);
         var editor = new LocalImageEditor(new LocalImageEditorTests.FakeMedia(), config: cfg);
-        editor.Route(GenOp, EditMode.Auto, Cat)!.Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+        editor.Route(GenOp, EditMode.Auto, Cat)!.Model.Id.Should().Be(LocalImageEditor.FluxKlein);
 
         foreach (var (k, v) in Section(KreaByDefault())) cfg[k] = v;
         cfg.Reload();

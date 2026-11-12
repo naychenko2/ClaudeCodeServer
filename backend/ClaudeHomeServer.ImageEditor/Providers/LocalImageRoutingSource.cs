@@ -6,7 +6,8 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 
 // Таблица «Авто» локальных моделей из конфига: секция LocalMedia:Routing перечитывается на лету (appsettings.Local.json
 // грузится с reloadOnChange). Нет секции — таблица из кода (LocalImageRouting.Table); секция невалидна — тоже она,
-// с предупреждением в логе: опечатка в конфиге не должна оставить «Авто» без модели. Формат правила:
+// с предупреждением в логе: опечатка в конфиге не должна оставить «Авто» без модели. «None» в Any/Forbid — нет
+// признаков. Формат правила:
 // { "Id", "Ops": ["Generate"], "Any": ["People", "Photo"], "Forbid": ["Inputs"], "Models": ["krea2-turbo"], "Reason" }
 public sealed class LocalImageRoutingSource
 {
@@ -110,6 +111,7 @@ public sealed class LocalImageRoutingSource
         var r = RouteTrait.None;
         foreach (var v in Values(s, key))
         {
+            if (string.Equals(v, nameof(RouteTrait.None), StringComparison.OrdinalIgnoreCase)) continue;
             if (!Enum.TryParse<RouteTrait>(v, ignoreCase: true, out var t) || t == RouteTrait.None
                 || !Enum.IsDefined(t) || int.TryParse(v, out _))
                 return (r, $"неизвестный признак «{v}» в {key}");

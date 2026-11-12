@@ -21,6 +21,7 @@ import { ProjectIconSection } from '../ProjectIconSection';
 import { ProjectIcon } from '../ProjectIcon';
 import { MembersSection } from '../members/MembersSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { WorkflowTemplatesProjectSection } from '../../workflowTemplates/WorkflowTemplatesProjectSection';
 import { PluginsProjectSection } from '../../plugins/PluginsProjectSection';
 import { DeviceSection } from '../../desktop/DeviceSection';
 import { LocalHandsSection } from '../../localHands/LocalHandsSection';
@@ -632,6 +633,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         <MembersSection project={project} mode="owner" defaultOpen={openMembers} onMembersChanged={handleMembersChanged} />
       )}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
+      <WorkflowTemplatesProjectSection project={project} />
       {/* Плагины (ADR-031): секция сама решает, рисовать ли список (серверный проект)
           или info-плашку «для локальных проектов пока недоступны»; без флага plugins-mvp — null */}
       <PluginsProjectSection

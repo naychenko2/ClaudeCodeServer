@@ -121,11 +121,13 @@ public class WorkflowRecommenderTests : IDisposable
     private static string Answer(string templateId, string skipped = "", string rationale = "по описанию") =>
         "{\"templateId\":\"" + templateId + "\",\"skipped\":[" + skipped + "],\"rationale\":\"" + rationale + "\"}";
 
+    // Маршрут для гонки «человек подтвердил, пока ждали модель»: Stages — той же production-точкой,
+    // что у TaskWorkflowController.Confirm (G1), переходный шим Route удалён (G3, п.8).
     private static FeatureWorkflow Route(WorkflowTemplate tpl) => new()
     {
         TemplateId = tpl.Id,
         Scope = "global",
-        Route = tpl.Stages.Select(s => s.Role).ToList(),
+        Stages = WorkflowGraph.Resolve(tpl, []),
         Skipped = [],
         ConfirmedVersion = tpl.Version,
         ConfirmedAt = DateTime.UtcNow,

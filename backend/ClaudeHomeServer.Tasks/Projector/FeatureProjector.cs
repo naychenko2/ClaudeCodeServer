@@ -312,7 +312,17 @@ public sealed class FeatureProjector(TaskManager tasks)
         string? readyId = null; // «готовая» стадия графа — только когда нигде нет активной, см. ниже
         if (graph is not null)
         {
-            graphStates = WorkflowGraph.States(graph, stageDefs.SelectMany(d => d.tasks), epic.Workflow!.Skipped);
+            // Вход States — задачи с id разрешённого этапа (G3): States читает только Stage.StageId
+            // слепка, а проектор распределяет и задачи без слепка (TaskStageId) — для них передаётся
+            // минимальная копия с resolved StageId (снимок стора не мутируется: Build — чистая
+            // функция). Поле Stage здесь — единственное, что States читает из TaskItem вместе
+            // со Status; копия намеренно тонкая, под сигнатуру G1.
+            var stateInput = new List<TaskItem>();
+            foreach (var def in stageDefs)
+                foreach (var t in def.tasks)
+                    if (t.Stage?.StageId == def.id) stateInput.Add(t);
+                    else stateInput.Add(new TaskItem { Id = t.Id, Status = t.Status, Stage = new StageSnapshot { StageId = def.id } });
+            graphStates = WorkflowGraph.States(graph, stateInput, epic.Workflow!.Skipped);
             // «Готовый» этап (разрез 2 §1.7): если идущих задач нет нигде (ни одного active по графу),
             // активен первый в топологическом порядке pending-этап, у которого все предшественники
             // done: фича «дошла» и ждёт следующий этап — та же семантика, что «следующая после

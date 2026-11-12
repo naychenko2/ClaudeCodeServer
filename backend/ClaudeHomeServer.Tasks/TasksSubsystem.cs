@@ -108,6 +108,9 @@ public sealed class TasksSubsystem : IAppSubsystem
         services.AddGatedHostedService<AwaitingHumanAnswerSubscriber>(config, "tasks");
         // Стор шаблонов процесса фичи (data/workflow-templates.json): singleton — лок на файл один.
         services.AddSingleton<WorkflowTemplateStore>();
+        // Рекоменд маршрута фичи (B4a, разрез workflow §5): шов Tasks → Llm (ICheapTextRunner)
+        // уже declared — тот же, что у TaskAiService; запись только через TaskManager (И7).
+        services.AddSingleton<WorkflowRecommender>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

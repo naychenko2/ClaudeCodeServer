@@ -9,6 +9,7 @@ using ClaudeHomeServer.Services.Spheres;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -29,6 +30,12 @@ public class WikiNightlyServiceTests : IDisposable
     private const string Other = "u2";
     private const string Section = "projects/p1";
     private const string PagePath = "Проекты/p1/Сущность.md";
+
+    // Знание фикстуры (J-O1, тест журнала ночи): утверждение своими словами + дословная цитата
+    // из реплики чата — то, что реально доезжает до страницы и чего в строке журнала быть не
+    // должно. Та же пара, что в тестах разбора (WikiIngestTests).
+    private const string ClaimText = "Сборку решено перенести на Linux";
+    private const string ClaimQuote = "Решение: перенести сборку на Linux";
 
     private static readonly string NothingJson =
         $$"""{"outcome":"{{WikiKeeperPrompts.NothingToAdd}}","reason":"не о чём писать"}""";
@@ -118,11 +125,13 @@ public class WikiNightlyServiceTests : IDisposable
         return s;
     }
 
+    // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
     private WikiNightlyService Sut(Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
         ClaudeHomeServer.Services.Composition.IFeatureFlagGate? flags = null,
-        ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null) =>
+        ClaudeHomeServer.Services.Composition.INotificationSender? notifier = null,
+        ILogger<WikiNightlyService>? log = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier, _keeper);
+            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, flags ?? _flag, () => _now, notifier, _keeper);
 
     private Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done(
         string outcome = WikiChatIngestService.OutcomeNothingNew, int packages = 0) =>
@@ -142,10 +151,11 @@ public class WikiNightlyServiceTests : IDisposable
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
             new WikiIngestService(_llm, new NoSpheres(), _apply, _config), _sessions, _keeper, _config);
 
-    private WikiNightlyService RealSut() =>
+    // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
+    private WikiNightlyService RealSut(ILogger<WikiNightlyService>? log = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
             (o, c, ct) => RealIngest().AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
-            _llm, _config, NullLogger<WikiNightlyService>.Instance, _flag, () => _now, keeper: _keeper);
+            _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, keeper: _keeper);
 
     private List<string> KeeperFiles() =>
         Directory.Exists(Path.Combine(Root(), "keeper"))
@@ -1179,6 +1189,127 @@ public class WikiNightlyServiceTests : IDisposable
         last.Outcome.Should().Be(WikiNightlyService.OutcomeError);
     }
 
+    // ─── J-O1 (дефект 2e13d45c): мёртвый локальный маршрут и строка итога ночи ───
+    // Ночь 12.11: три прохода по 41 отказу с ложной причиной «пустой ответ» при 0 токенов.
+    // Причина теперь названа маршрутом (ReasonLocalUnavailable), три таких отказа подряд
+    // обрывают проход, а итог прохода читается одной строкой журнала процесса.
+
+    [Fact]
+    public async Task ЛокальныйМаршрутМёртв_ТриОтказаПодряд_ПроходОстановлен_ИтогError()
+    {
+        // Мутации: «убрать выключатель» (localDownStreak и break в RunPassAsync) → 10 вызовов
+        // модели вместо 3 (красный); «не ставить OutcomeError» → completed (красный);
+        // «обнулять ряд на каждом отказе» → выключатель не срабатывает (красный).
+        Configure();
+        for (var i = 1; i <= 10; i++) AddChat("c" + i, ageMinutes: i);
+        _llm.LocalDown = true;
+
+        await Tick(RealSut());
+
+        _llm.Calls.Count(c => c.ActionKey == LocalActionCatalog.WikiNightly).Should().Be(3,
+            "три отказа локального маршрута подряд — проход остановлен, очередь дальше не зовётся");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeError, "мёртвый локальный маршрут — не completed");
+        last.Analyzed.Should().Be(3);
+        last.Rejected.Should().Be(3);
+        last.InputTokens.Should().Be(0, "модель не звалась ни разу");
+        last.FirstRejectReason.Should().Contain(WikiIngestService.ReasonLocalUnavailable)
+            .And.NotContain("пустой ответ", "ложная причина больше не пишется");
+
+        // error дату не закрывает: следующий тик той же ночи пробует снова — и снова гаснет
+        // на трёх отказах, а не на сорока одном.
+        await Tick(RealSut());
+        _llm.Calls.Count(c => c.ActionKey == LocalActionCatalog.WikiNightly).Should().Be(6,
+            "повтор есть (error дату не закрывает), но короткий");
+    }
+
+    [Fact]
+    public async Task ОтказыЛокальногоМаршрутаНеПодряд_НочьИдётДальше_ИтогCompleted()
+    {
+        // Граница «подряд идущих» (между ними — состоявшийся разбор, ряд обнуляется): три
+        // отказа локального маршрута за ночь, но не подряд → проход не останавливается.
+        // Мутация «считать отказы всей ночи, а не ряда» → 3 ≥ лимита → error (красный);
+        // «не обнулять ряд при успешном разборе» → тоже error (красный).
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        AddChat("c3", ageMinutes: 2);
+        AddChat("c4", ageMinutes: 3);
+        var localDown = "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable;
+
+        await Tick(Sut((owner, chat, ct) =>
+        {
+            lock (_analyzed) _analyzed.Add(chat);
+            return chat == "c2"
+                ? Task.FromResult(new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeNothingNew, null, [], InputTokens: 1_000))
+                : Task.FromResult(new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected, localDown, [], InputTokens: 0));
+        }));
+
+        var last = Last();
+        _analyzed.Should().HaveCount(4, "ряд не дошёл до лимита: очередь прошла целиком");
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "отказы не подряд — это не мёртвый движок");
+        last.Rejected.Should().Be(3);
+        last.FirstRejectReason.Should().Be(localDown);
+    }
+
+    [Fact]
+    public async Task ИтогНочи_ОднаСтрокаЖурнала_БезТекстаЗнаний()
+    {
+        // c3 (J-O1): прошедшая ночь проверяется по журналу процесса — одна структурная строка
+        // Information на проход владельца, по полям итога. Знаний в ней нет: утверждение и
+        // цитата этой фикстуры реально доезжают до страницы (Applied), но в строку не попадают.
+        // Мутации: «строка на каждый чат» → счёт красный; «Warning вместо Information» →
+        // уровень красный; «добавить в шаблон текст отказа/утверждения» → NotContain красный.
+        Configure();
+        AddChat("c1", history: KnowledgeHist());
+        _llm.Reply = _ => WikiSynthJson.Append("Сущность", ClaimText, ClaimQuote);
+        var log = new RecordingLog();
+
+        await Tick(RealSut(log));
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, last.FirstRejectReason ?? "");
+        last.Applied.Should().Be(1, "фикстура настоящая: утверждение с цитатой применено");
+        var rows = log.Rows.Where(r => r.Message.StartsWith("Ночь вики")).ToList();
+        rows.Should().ContainSingle("одна строка на проход владельца");
+        rows[0].Level.Should().Be(LogLevel.Information);
+        rows[0].Message.Should().Contain("Ночь вики " + User).And.Contain(last.Date).And.Contain(last.Outcome)
+            .And.Contain("чатов ").And.Contain("отказов ").And.Contain("пакетов 1").And.Contain("ток;");
+        rows[0].Message.Should().NotContain(ClaimText).And.NotContain(ClaimQuote);
+        log.Rows.Should().NotContain(
+            r => r.Message.StartsWith("Ночь вики") && r.Level == LogLevel.Warning,
+            "обычная ночь не кричит: Warning — только плохой исход");
+    }
+
+    [Fact]
+    public async Task НочьError_СтрокаЖурналаДополненаWarning_НочьOpenLimitТоже()
+    {
+        // c3 (J-O1): плохая ночь видна в журнале по уровню: к той же структурной строке
+        // добавляется ровно одна Warning (error и open_limit). Мутация «не дублировать
+        // Warning» → счёт красный; «Warning при любом исходе» → первый блок красный.
+        Configure();
+        AddChat("c1");
+        _llm.LocalDown = true;
+        var log = new RecordingLog();
+
+        await Tick(RealSut(log));
+
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeError);
+        var rows = log.Rows.Where(r => r.Message.StartsWith("Ночь вики")).ToList();
+        rows.Should().HaveCount(2, "одна Information и одна Warning");
+        rows.Count(r => r.Level == LogLevel.Information).Should().Be(1);
+        rows.Count(r => r.Level == LogLevel.Warning).Should().Be(1, "error — виден по уровню, не поиском");
+
+        // Тот же порядок для open_limit: упор в лимит открытых пакетов — плохой исход.
+        var log2 = new RecordingLog();
+        AddOpenPackages(WikiPackage.MaxOpenPackages);
+        await Tick(Sut(log: log2));
+        Last().Outcome.Should().Be(WikiNightlyService.OutcomeOpenLimit);
+        log2.Rows.Count(r => r.Message.StartsWith("Ночь вики") && r.Level == LogLevel.Warning).Should().Be(1);
+    }
+
     [Fact]
     public async Task СтарыйИтогБезПоля_ЧитаетсяНулём()
     {
@@ -1441,6 +1572,18 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiChatScorer.WikiChatInput ScorerInput(Session s) =>
         new(s.TaskExecution, s.WikiMark, s.IsPinned, false, null, s.CreatedAt, s.UpdatedAt, 0, _sessions.History[s.Id]);
 
+    // Чат с цитируемым знанием (тест журнала J-O1): три реплики человека — нужная дельта
+    // ночи; первая содержит дословную цитату фикстуры, чтобы утверждение применилось на
+    // страницу. Все реплики короткие: дельта остаётся одним окном разбора.
+    private static List<StoredMessage> KnowledgeHist() => [
+        new StoredUserMessage(ClaimQuote + "."),
+        new StoredTextMessage("Принято."),
+        new StoredUserMessage("Прежний план был остаться на Windows."),
+        new StoredTextMessage("Принято."),
+        new StoredUserMessage("Контенер собран на второй машине."),
+        new StoredTextMessage("Принято."),
+    ];
+
     // ─── подмены ───────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner
@@ -1457,6 +1600,11 @@ public class WikiNightlyServiceTests : IDisposable
         // «Движок не принял вызов» по actionKey (WN-4): возврат исключением вместо ответа —
         // так же, как ждущий слот путь TrackedLocalLlmClient (LocalEngineSlotRefusalException).
         public Func<string, Exception?>? Throw;
+
+        // «Локальный движок мёртв» (дефект 2e13d45c): цепочка без облачного шага отдаёт null
+        // без исключения — движок не настроен/не готов/не ответил. Вызов при этом состоялся
+        // (он считается), ответа нет.
+        public bool LocalDown;
 
         public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
@@ -1492,6 +1640,8 @@ public class WikiNightlyServiceTests : IDisposable
             var text = Answer(actionKey, prompt);
             if (Throw?.Invoke(actionKey) is { } ex)
                 return Task.FromException<OneShotResult?>(ex);
+            if (LocalDown)
+                return Task.FromResult<OneShotResult?>(null);
             return Task.FromResult<OneShotResult?>(new OneShotResult(
                 text,
                 LocalInputTokens == 0
@@ -1551,5 +1701,17 @@ public class WikiNightlyServiceTests : IDisposable
         public bool Enabled(string ownerId) => false;
         public string? SphereName(string ownerId, string sphereId) => null;
         public string? CharterOf(string ownerId, string sphereId) => null;
+    }
+
+    // Захват журнала службы (тесты строки итога, J-O1): строка как её видит журнал —
+    // отформатированная, с подставленными значениями.
+    private sealed class RecordingLog : ILogger<WikiNightlyService>
+    {
+        public List<(LogLevel Level, string Message)> Rows { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Rows.Add((logLevel, formatter(state, exception)));
     }
 }

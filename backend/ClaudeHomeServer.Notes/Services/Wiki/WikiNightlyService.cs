@@ -64,6 +64,12 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // файле) и «ничего не разобрано, и ночь обычная» — сказать нечего. Любой иной исход называется
 // простым языком (причины — в OutcomeReason). Сбой доставки ничего не отменяет и не рвёт: итог
 // к тому моменту уже записан, исключение отправителя не выходит из службы (LogSafe).
+//
+// Журнал процесса (J-O1): каждый завершённый проход владельца оставляет в журнале ОДНУ строку
+// Information «Ночь вики …» — по полям итога, после записи keeper/nightly-last.json; при
+// error/open_limit та же строка повторяется Warning (плохая ночь видна по уровню, а не поиском
+// по тексту). Пропущенный проход (дата уже пройдена, флаг или тумблер выключены) строки не даёт.
+// Текста знаний в строке нет: claim, цитаты и названия страниц в журнал не уезжают.
 
 // Честные пределы:
 // - Токены — ОЦЕНКА EstTokens (символы дельты / 4, плюс потолок входа на каждый вызов ступени 2):
@@ -85,7 +91,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 //   цепочка, что RunLocalOrChosenAsync), без финального claude-шага. Падение или недоступность
 //   локали — отказ вызова: окно разбора уходит в Rejected и курсор не двигается, ступень 2
 //   оставляет чат серым; целая ночь таких отказов (каждый разобранный чат отказан и вход нулевой)
-//   — итог error, не completed (WN-2, конец RunPassAsync). Фактический вход этих вызовов (usage
+//   — итог error, не completed (WN-2, конец RunPassAsync); три отказа локального маршрута подряд
+//   обрывают проход сразу (выключатель 2e13d45c, LocalDownBreakAfter) — ночь при мёртвом движке
+//   не сжигает очередь на повтор одного и того же отказа. Фактический вход этих вызовов (usage
 //   того же ответа движка) суммируется в NightResult.InputTokens — меры нагрузки, не денег.
 //   Кнопка «Разобрать» и агент wiki_ingest не затронуты — облако там допустимо.
 public sealed class WikiNightlyService : BackgroundService
@@ -103,6 +111,16 @@ public sealed class WikiNightlyService : BackgroundService
     public const int MinHumanDelta = 3;
     // Доля InputTokenBudget, отданная разбору чатов (остальное — запас).
     private const double ChatBudgetShare = 0.7;
+
+    /// <summary>Выключатель мёртвого локального маршрута (дефект 2e13d45c, J-O1): три окна
+    /// разбора подряд, отказанных потому, что локальной модели нет (причина
+    /// WikiIngestService.ReasonLocalUnavailable, InputTokens 0 — модель не звалась), — это не
+    /// три несчастливых чата, а один и тот же отказ трижды: дальше по очереди будет то же
+    /// самое, и ночь 12.11 сожгла так 41 отказ на проход. Проход обрывается сразу, итог error
+    /// (дату не закрывает, следующий тик окна пробует снова — как любой error). Считаются подряд
+    /// идущие отказы маршрута места, а не конкретного движка: к ночи может добавиться второй
+    /// локальный исполнитель (J-W2).</summary>
+    private const int LocalDownBreakAfter = 3;
 
     /// <summary>Итог прохода — то, что лежит в keeper/nightly-last.json. Date — дата начала окна
     /// (yyyy-MM-dd); Selected — чатов, прошедших отбор и дельту; Analyzed — разборов, вернувших
@@ -279,6 +297,28 @@ public sealed class WikiNightlyService : BackgroundService
         catch { /* см. LogSafe */ }
     }
 
+    private void LogWarnSafe(string template, params object?[] args)
+    {
+        try { _log.LogWarning(template, args); }
+        catch { /* см. LogSafe */ }
+    }
+
+    /// <summary>Одна строка итога прохода в журнале процесса (J-O1): структурная, по полям
+    /// NightResult — та же форма, что лежит в keeper/nightly-last.json, только доступная по
+    /// журналу. Полей судителя нет (их добавит J-J4) и текста знаний нет: claim, цитаты и
+    /// названия страниц в журнал не уезжают. При плохом исходе строка повторяется Warning:
+    /// такая ночь должна быть видна по уровню, а не поиском по тексту. Исключение журнала
+    /// проход не рвёт (см. LogSafe).</summary>
+    private void LogNightSummary(string ownerId, NightResult r)
+    {
+        const string Template = "Ночь вики {OwnerId} {Date}: {Outcome}; чатов {Selected}/{Analyzed}, "
+            + "отказов {Rejected} (первый: {FirstRejectReason}); пакетов {Applied}; вход {InputTokens} ток; ручной {Manual}";
+        object?[] args = [ownerId, r.Date, r.Outcome, r.Selected, r.Analyzed, r.Rejected,
+            r.FirstRejectReason, r.Applied, r.InputTokens, r.Manual];
+        LogInfoSafe(Template, args);
+        if (r.Outcome is OutcomeError or OutcomeOpenLimit) LogWarnSafe(Template, args);
+    }
+
     // ─── Ручной запуск (WN-5) ────────────────────────────────────────────────
 
     /// <summary>Исход запроса ручного прохода (WN-5): Started — проход начат; LlmWikiOff — функция
@@ -420,6 +460,10 @@ public sealed class WikiNightlyService : BackgroundService
         {
             LogSafe(ex, "Итог ночного разбора {Owner} не записан", ownerId);
         }
+        // Журнал процесса (J-O1): после записи итога на диске — одна строка на проход владельца
+        // (см. LogNightSummary). Пропущенный проход (дата уже пройдена, флаг/тумблер выключены)
+        // строки не даёт: в журнале живут только состоявшиеся проходы.
+        LogNightSummary(ownerId, result);
         // Уведомление — ПОСЛЕ записи итога: даже если доставка откажет, итог уже на диске
         // и в следующем тике читается настройками. Сбой отправителя остаёт в TryNotifyAsync.
         // Молчим только о повторном error той же даты; успех после error и любой иной исход — сообщаем.
@@ -463,6 +507,9 @@ public sealed class WikiNightlyService : BackgroundService
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
         string? firstRejectReason = null;
+        // Ряд отказов локального маршрута подряд (выключатель 2e13d45c, см. LocalDownBreakAfter):
+        // любой иной исход разбора ряд обнуляет.
+        var localDownStreak = 0;
         var dropped = 0;
         string? firstDropReason = null;
         var disputedPages = new HashSet<string>(StringComparer.Ordinal);
@@ -567,6 +614,24 @@ public sealed class WikiNightlyService : BackgroundService
                     rejected++;
                     firstRejectReason ??= r.Reason;
                     LogInfoSafe("Ночной разбор {Owner}: чат {Chat} отказан: {Reason}", ownerId, c.Session.Id, r.Reason);
+                    // Выключатель мёртвого локального маршрута (2e13d45c, см. LocalDownBreakAfter):
+                    // продолжать не за чем — каждый следующий чат дал бы тот же отказ с тем же
+                    // нулевым входом. Итог — error с причиной первого из ряда (firstRejectReason
+                    // уже назван); error дату не закрывает, следующий тик окна пробует снова.
+                    localDownStreak = IsLocalDownRejection(r) ? localDownStreak + 1 : 0;
+                    if (localDownStreak >= LocalDownBreakAfter)
+                    {
+                        LogInfoSafe("Ночной разбор {Owner}: {Reason} — {Streak} отказов подряд, проход остановлен",
+                            ownerId, WikiIngestService.ReasonLocalUnavailable, localDownStreak);
+                        outcome = OutcomeError;
+                        break;
+                    }
+                }
+                else
+                {
+                    // Любой несостоявшийся этим отказом разбор ряд обнуляет: выключатель считает
+                    // подряд идущие, а не всего ночи.
+                    localDownStreak = 0;
                 }
                 var made = r.Outcome switch
                 {
@@ -617,6 +682,14 @@ public sealed class WikiNightlyService : BackgroundService
         NightResult Result(string o) => new(FormatDate(date), selected, analyzed, applied, toInbox, est, o,
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason);
     }
+
+    /// <summary>Отказ окна по мёртвому локальному маршруту (2e13d45c): причина отказа несёт
+    /// формулировку WikiIngestService.ReasonLocalUnavailable, а нулевой вход подтверждает, что
+    /// модель не звалась ни разу. Проверка по подстроке: до ночи причина проходит через обёртки
+    /// («разбор окна m1-m8 не удался: синтез: …»). Имени движка нет: их может быть несколько
+    /// (J-W2), выключатель относится к маршруту места.</summary>
+    private static bool IsLocalDownRejection(WikiChatIngestService.ChatResult r) =>
+        r.InputTokens == 0 && r.Reason?.Contains(WikiIngestService.ReasonLocalUnavailable, StringComparison.Ordinal) == true;
 
     // Что мешает продолжать ПЕРЕД чатом: тумблер/флаг сняли (disabled_midway), окно закрылось
     // (window_closed), модель недоступна (error — облако молча не подставляется), упор в лимит

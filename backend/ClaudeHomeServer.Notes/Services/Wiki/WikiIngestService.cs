@@ -90,6 +90,14 @@ public sealed class WikiIngestService
     /// пяти: промпт не должен разрастись до половины раздела.</summary>
     public const int MaxCandidatePages = 5;
 
+    /// <summary>Причина отказа окна, когда локальный маршрут места не дал ответа (дефект 2e13d45c,
+    /// J-O1): «модель дала пустой ответ» лжёт, когда модель не звалась вовсе (движок не настроен,
+    /// не готов или оборвался). Доезжает до журнала ночи через ChatResult.Reason и служит
+    /// выключателю WikiNightlyService: три подряд таких отказа — локального маршрута нет,
+    /// дальше по очереди будет то же самое. Имени движка в ней нет намеренно: к ночи может
+    /// добавиться второй локальный исполнитель (J-W2).</summary>
+    public const string ReasonLocalUnavailable = "локальная модель недоступна";
+
     /// <summary>Заявка: результат захвата источника (S6h) плюс его дом. Origin — из
     /// закрытого перечня (WikiGate.OriginValues); Ref — ссылка карточки («note:{id}»,
     /// «session:{id}#m{a}-{b}»); CardRelPath/SourceText — то, что вернул захват;
@@ -649,8 +657,17 @@ public sealed class WikiIngestService
             {
                 var viaLocal = await _llm.RunLocalOrChosenDetailedAsync(
                     LocalActionCatalog.WikiNightly, prompt, ownerId, jsonFormat: "json", ct: ct);
-                text = viaLocal?.Text;
-                used = viaLocal?.Usage;
+                if (viaLocal is null)
+                    // Мёртвый локальный движок даёт null БЕЗ исключения (CheapTextRunner: движок
+                    // не готов или не ответил → (null, null), облачного шага нет) — ниже это
+                    // читалось как «модель дала пустой ответ», и ночь 12.11 сожгла 41 отказа с
+                    // ложной причиной (дефект 2e13d45c). Здесь — честная причина маршрута.
+                    // Текст последней ошибки движка шов не отдаёт: RunLocalOrChosenDetailedAsync
+                    // возвращает null без деталей (ICheapTextRunner.cs:90), поэтому формулировка
+                    // общая, без имени движка и порта.
+                    return new ModelAnswer(null, $"{passName}: {ReasonLocalUnavailable}");
+                text = viaLocal.Text;
+                used = viaLocal.Usage;
             }
             else
             {

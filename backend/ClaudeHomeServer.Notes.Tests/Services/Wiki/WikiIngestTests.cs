@@ -795,6 +795,29 @@ public class WikiIngestTests : IDisposable
             "ночная заявка идёт со своим местом, не с wiki-ingest");
     }
 
+    // ── J-O1 (дефект 2e13d45c): мёртвый локальный маршрут назван честно ──
+
+    [Fact]
+    public async Task НочнойРазбор_ЛокальныйМаршрутМёртв_ПричинаЛокальнаяМодельНедоступна_ANePustoyOtvet()
+    {
+        // Ночь 12.11: 3 прохода × 41 отказ при 0 токенов с ложной причиной «модель дала пустой
+        // ответ» — её давал null без исключения, который ниже читался пустым ответом модели.
+        // Мутации: «убрать ветку viaLocal is null» (text=null → строка «пустой ответ») или
+        // «вернуть прежнюю формулировку» → NotContain краснеет; «считать это успешным ответом» →
+        // Outcome краснеет.
+        var llm = new FakeLlm(synth: NothingJson, nightly: true) { LocalDown = true };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain(WikiIngestService.ReasonLocalUnavailable, "причина маршрута, а не ответ модели");
+        res.Reason.Should().NotContain("пустой ответ", "модель не зввалась ни разу — «пустой ответ» лжёт");
+        res.Reason.Should().NotContain("qwen", "имени движка в причине нет: их может быть несколько (J-W2)");
+        res.InputTokens.Should().Be(0, "ответа не было — понесённого расхода нет");
+        llm.Calls.Should().ContainSingle(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "отказ не повторяет вызов и не зовёт облако");
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -809,6 +832,10 @@ public class WikiIngestTests : IDisposable
         // (LocalEngineSlotRefusalException). Здесь ключ — проход, а не actionKey: все
         // вызовы разбора идут одним местом, различить их можно только по промпту.
         public Func<string, Exception?>? Throw;
+
+        // «Локальный движок мёртв» (дефект 2e13d45c): цепочка без облачного шага отдаёт null
+        // без исключения — движок не настроен/не готов/не ответил. Вызов при этом состоялся.
+        public bool LocalDown;
 
         public FakeLlm(string synth, string? repair = null, string? emptySection = null, bool nightly = false)
         {
@@ -845,10 +872,16 @@ public class WikiIngestTests : IDisposable
 
         // Ночная ветка CallModelAsync зовёт detailed-вариант (тот же путь без облака): тот же
         // ответ плюс usage движка — полный вход 1 000, вывод 50, CostUsd 0 (локаль бесплатна).
+        // LocalDown — та же цепочка при мёртвом движке: вызов зарегистрирован, ответа нет (null).
         public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult<OneShotResult?>(new OneShotResult(
-                Answer(actionKey, prompt), new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt);
+            return LocalDown
+                ? Task.FromResult<OneShotResult?>(null)
+                : Task.FromResult<OneShotResult?>(new OneShotResult(
+                    text, new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
+        }
 
         private string Answer(string actionKey, string prompt)
         {

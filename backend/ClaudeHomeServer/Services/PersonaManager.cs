@@ -834,6 +834,71 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // Выполнить миграцию сейчас (админская ручка без перезапуска): тот же путь, что при загрузке
     public PersonaSpecialtyMigration.Plan RunSpecialtyInheritanceMigration() => MigrateSpecialtyInheritance();
 
+    // A1c (разрез §2 «Персистентные…»): после успешного сохранения специальности — переписать
+    // персистентные Access/Tools/DisallowedTools её персон с InheritsAccess=true эффективными
+    // значениями: снимок для отката кода не должен протухать. Override (false) не трогается:
+    // флаг перепроверяется под тем же _saveLock, под которым пишет Update, — персона, параллельно
+    // переключённая в «своё», не затирается.
+    // Эффективный шаблон читается ОДНИМ снимком вне лока (та же конвенция, что у Hydrate):
+    // группа прав внутри одного вызова не рвётся параллельной правкой настроек. None — дефолт
+    // кода Full без ограничений (как Hydrate). Одна запись стора на вызов (образец:
+    // MigrateSpecialtyInheritance); изменений нет — записи нет. UpdatedAt не бампаем (как
+    // соседние системные правки): перематериализация не должна перетасовывать список персон.
+    // События не поднимаются: фронт перечитывает персоны после сохранения (контракт шага).
+    // Сбой — только лог: ответ ручки специальности перематериализация не валит, исключение
+    // наружу не выходит.
+    public void RematerializeSpecialtyAccess(PersonaSpecialty specialty)
+    {
+        if (_specialty is null) return; // нет стора настроек — брать шаблон нечего
+        try
+        {
+            // Резолв стора плоский с v5: ownerId на результат не влияет (разрез §2),
+            // меж-владелецный вызов передаёт его пустым. None — явный дефолт кода, как в Hydrate.
+            var template = specialty == PersonaSpecialty.None
+                ? new SpecialtyTemplate(PersonaAccess.Full, null, null)
+                : SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, "", specialty);
+            if (template is null) return; // шаблона нет — наследовать нечего, снимки персон целы
+
+            var access = template.Access;
+            var tools = NormalizeTools(template.Tools?.ToList());
+            // Инвариант персоны (Create/Update): свой список запретов живёт только при Custom
+            var disallowed = access == PersonaAccess.Custom
+                ? NormalizeDisallowed(template.DisallowedTools?.ToList())
+                : null;
+
+            static bool Same(List<string>? a, List<string>? b) =>
+                a is null ? b is null : b is not null && a.SequenceEqual(b);
+
+            var changed = 0;
+            lock (_saveLock)
+            {
+                foreach (var persona in _personas.Values)
+                {
+                    if (persona.Specialty != specialty) continue;
+                    // Флаг проверяется под тем же локом, что и Update: параллельный переход
+                    // в override побеждает этот вызов
+                    if (!persona.InheritsAccess) continue;
+                    if (persona.Access == access && Same(persona.Tools, tools) && Same(persona.DisallowedTools, disallowed))
+                        continue; // снимок уже свежий — писать нечего
+                    persona.Access = access;
+                    persona.Tools = tools;
+                    persona.DisallowedTools = disallowed;
+                    changed++;
+                }
+                if (changed > 0)
+                    JsonFileStore.Save(_storePath, _personas.Values.ToList(), JsonOpts);
+            }
+            if (changed > 0)
+                _log?.LogInformation("Перематериализация прав специальности {Specialty}: обновлено {Changed} персон(ы)",
+                    specialty, changed);
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Перематериализация прав специальности {Specialty} не выполнена — стор остаётся на прежнем снимке",
+                specialty);
+        }
+    }
+
     // Узкие матрицы для разворота уровня персоны — та же сборка, что у боевого резолва
     // (ModelAssignmentResolver.PersonaMatrices): матрица персоны, затем матрицы её
     // специальности. Дублируется сознательно: резолвер собирает их у себя из своих данных,

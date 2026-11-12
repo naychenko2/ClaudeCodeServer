@@ -14,12 +14,16 @@ using Microsoft.Extensions.DependencyInjection;
 namespace ClaudeHomeServer.Tests.Controllers;
 
 /// <summary>
-/// Приватный чат при создании (W4-B1a): POST /api/projects/{pid}/sessions с полем "private": true
-/// рождает чат, приватный с первого мгновения — PrivateToUserId стоит в записи ДО регистрации
-/// сессии, поэтому окна, в котором чат был бы общим, нет по построению. Ответ — тот же Session
-/// (privateToUserId = id вызывающего, excludeFromDossiers = true). Отказ: не общий проект — 409
-/// not_shared_project (тот же текст и код, что у тумблера ChatsController.SetVisibility) и чата
-/// в проекте не появилось; читатель — 403 (отказ правом, атрибут RunTurn).
+/// Приватный чат при создании (W4-B1a, W4-B1b): POST /api/projects/{pid}/sessions и
+/// POST /api/personas/{id}/chats с полем "private": true рождают чат, приватный с первого
+/// мгновения — PrivateToUserId стоит в записи ДО регистрации сессии, поэтому окна, в котором
+/// чат был бы общим, нет по построению. Ответ — тот же Session (privateToUserId = id
+/// вызывающего, excludeFromDossiers = true). Отказ: не общий проект — 409 not_shared_project
+/// (тот же текст и код, что у тумблера ChatsController.SetVisibility) и чата в проекте не
+/// появилось; читатель — 403 (отказ правом, атрибут RunTurn).
+/// Для ручки персон целевой проект — тот же, что у фабрики: проектная персона → её проект
+/// (явного projectId в теле не нужно), иначе запросный; статус ответа — прежний контракт
+/// ручки (200, SharedProjectPersonaChatTests), в отличие от 201 на sessions.
 /// «Не мелькнуть» проверяется живым каналом: SignalR-клиент владельца состоит в группе проекта,
 /// редактор создаёт приватный чат, затем идёт маркер, который гарантированно уходит в группу
 /// проекта (создание проектной персоны, как в PersonaChangedMemberDeliveryTests). До маркера у
@@ -140,6 +144,10 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
 
     private static async Task<List<string>> ChatIdsAsync(HttpClient client, string projectId) =>
         (await BodyAsync(await client.GetAsync($"/api/projects/{projectId}/sessions")))
+            .EnumerateArray().Select(c => c.GetProperty("id").GetString()!).ToList();
+
+    private static async Task<List<string>> PersonaChatIdsAsync(HttpClient client, string personaId) =>
+        (await BodyAsync(await client.GetAsync($"/api/personas/{personaId}/chats")))
             .EnumerateArray().Select(c => c.GetProperty("id").GetString()!).ToList();
 
     /// <summary>Записанный чат — из стора, а не из ответа: проверяется состояние хранилища
@@ -316,5 +324,130 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
         // этого чата: ни chat_visibility_changed, ни какого-либо иного сообщения с его id
         sink.ChatIds().Should().NotContain(chatId,
             "приватный чат ни на миг не стал общим: до маркера в группе проекта нет ни одного сообщения с его id");
+    }
+
+    // === POST /api/personas/{id}/chats (W4-B1b) ===
+    // Та же приватность при создании, другая дверь: чат ведётся от лица проектной персоны,
+    // её проект — целевой сам (явного projectId в теле не нужно). Статус успеха — прежний
+    // контракт ручки (200 OK, SharedProjectPersonaChatTests), не 201 как у sessions: шаг его
+    // не меняет.
+
+    /// <summary>Проектная персона общего проекта: чат редактора от её лица.</summary>
+    private async Task<(string ProjectId, string PersonaId)> SharedProjectWithProjectPersonaAsync()
+    {
+        var projectId = await SharedProjectAsync();
+        var personaId = await CreatePersonaAsync(Owner(), projectId, "Руководитель-" + Guid.NewGuid().ToString("N")[..6]);
+        return (projectId, personaId);
+    }
+
+    [Fact]
+    public async Task РедакторСоздаётПриватныйЧатСПроектнойПерсоной_ПриватенИСРождения()
+    {
+        var (projectId, personaId) = await SharedProjectWithProjectPersonaAsync();
+
+        var r = await Member().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("name", "Приватный чат редактора"), ("private", true)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.OK,
+            "флаг private — действие хода, редактору открыто; статус успеха ручки не менялся (200, как без флага)");
+        var json = await BodyAsync(r);
+        var chatId = json.GetProperty("id").GetString()!;
+        json.GetProperty("privateToUserId").GetString().Should().Be(MemberId(),
+            "ответ тот же Session: приватность — id вызывающего");
+        json.GetProperty("excludeFromDossiers").GetBoolean().Should().BeTrue(
+            "приватный чат с рождения исключён из «Истории решений» (тот же смысл, что у тумблера)");
+
+        var stored = Stored(chatId);
+        stored.ProjectId.Should().Be(projectId, "целевой проект — проект проектной персоны");
+        stored.PrivateToUserId.Should().Be(MemberId());
+        stored.CreatedByUserId.Should().Be(MemberId(), "автор — тот же вызывающий (S2d-1c не тронут)");
+        stored.ExcludeFromDossiers.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ПриватныйЧатСПерсонойНеВиденВладельцуИВторомуУчастнику_АвторВидит()
+    {
+        var (projectId, personaId) = await SharedProjectWithProjectPersonaAsync();
+
+        var created = await Member().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true)));
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        (await ChatIdsAsync(Owner(), projectId)).Should().NotContain(chatId,
+            "владелец проекта не видит чужой приватный чат (GetVisibleByProject, S2d-4a)");
+        (await PersonaChatIdsAsync(Owner(), personaId)).Should().NotContain(chatId,
+            "и в списке чатов персоны: viewer — вызывающий (И-5)");
+        (await ChatIdsAsync(SecondMember(), projectId)).Should().NotContain(chatId,
+            "второй участник — тоже");
+        (await Owner().GetAsync($"/api/chats/{chatId}")).StatusCode.Should().Be(HttpStatusCode.NotFound,
+            "и по id: существование чужого приватного не раскрываем");
+        // Автор свой приватный видит — список для него не пустой
+        (await PersonaChatIdsAsync(Member(), personaId)).Should().Contain(chatId);
+    }
+
+    [Fact]
+    public async Task БезФлагаЧатСПерсонойОбыченИВиденВсеми()
+    {
+        var (projectId, personaId) = await SharedProjectWithProjectPersonaAsync();
+
+        var created = await Member().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("name", "Обычный чат")));
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        Stored(chatId).PrivateToUserId.Should().BeNull("поля private в запросе нет — поведение прежнее");
+        Stored(chatId).ExcludeFromDossiers.Should().BeFalse();
+        (await ChatIdsAsync(Owner(), projectId)).Should().Contain(chatId,
+            "обычный чат виден всем: иначе проверка приватности была бы зелёной на пустоте");
+        (await PersonaChatIdsAsync(Owner(), personaId)).Should().Contain(chatId);
+        (await ChatIdsAsync(SecondMember(), projectId)).Should().Contain(chatId);
+    }
+
+    [Fact]
+    public async Task ПриватныйЧатСПерсонойНеМелькаетВГруппеПроекта()
+    {
+        var (projectId, personaId) = await SharedProjectWithProjectPersonaAsync();
+
+        var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var sink = new Sink();
+        // Приёмник и группа проекта — ДО создания чата: сообщение, ушедшее до подписки, было бы
+        // просто не увидено, и проверка стала бы зелёной на пустоте. Персона чата создана до
+        // подписки — её «created» не шумит в приёмнике, маркером остаётся только следующая персона.
+        sink.Attach(conn);
+        await conn.InvokeAsync("JoinProject", projectId);
+
+        var created = await Member().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true)));
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        // Маркер: событие, которое гарантированно уходит в группу проекта (тот же путь, что в
+        // PersonaChangedMemberDeliveryTests). Он же — доказательство, что канал живой.
+        await CreatePersonaAsync(Owner(), projectId, "Маркер-" + Guid.NewGuid().ToString("N")[..6]);
+        await sink.Marker.WaitAsync(Wait);
+
+        sink.ChatIds().Should().NotContain(chatId,
+            "приватный чат ни на миг не стал общим: до маркера в группе проекта нет ни одного сообщения с его id");
+    }
+
+    [Fact]
+    public async Task ПерсонаВНеобщемПроектеСФлагомPrivate_409НеSharedProjectИБезНовогоЧата()
+    {
+        // Проект без участников: персона в нём — проектная, но чат её проекта не ляжет в общий
+        var projectId = await PersonalProjectAsync(role: null);
+        var personaId = await CreatePersonaAsync(Owner(), projectId, "Одинокая-" + Guid.NewGuid().ToString("N")[..6]);
+        var before = await ChatIdsAsync(Owner(), projectId);
+
+        var r = await Owner().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await BodyAsync(r);
+        body.GetProperty("code").GetString().Should().Be("not_shared_project");
+        body.GetProperty("error").GetString().Should().Be("Приватным можно сделать только чат общего проекта",
+            "тот же текст и код, что у тумблера ChatsController.SetVisibility");
+        (await ChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
+            "отказанное создание не оставило в проекте чата: отказ до фабрики, без побочных эффектов");
     }
 }

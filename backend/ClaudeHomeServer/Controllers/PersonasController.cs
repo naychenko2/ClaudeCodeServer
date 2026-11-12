@@ -469,6 +469,22 @@ public class PersonasController(
         // проекта, вызывающий идёт только в автора (createdByUserId, И-2). Своего резолва
         // персоны здесь больше нет: одна точка правды — IProjectAccess.ResolvePersona (И-1).
         var scope = HttpContext.GetRequestScope();
+        // Приватный чат создаётся приватным атомарно (W4-B1b): флаг принимает только общий проект —
+        // та же проверка и тот же отказ, что у тумблера (ChatsController.SetVisibility) и у
+        // POST /api/projects/{pid}/sessions (W4-B1a, SessionsController.cs:49). Целевой проект —
+        // тот же, что у фабрики (CreatePersonaChatAsync): проектная персона → её проект,
+        // иначе запросный. Отказ идёт ДО фабрики: отказанное создание не оставило ни чата, ни
+        // следа. Неизвестная персона остаётся на отказе фабрики (400) — 409 только тому чату,
+        // который реально родился бы в необщем месте.
+        if (req.Private && _personas.Get(id, scope.TenantOwnerId) is { } privatePersona)
+        {
+            var targetProjectId = PersonaZone.IsProjectPersona(privatePersona)
+                ? PersonaZone.OwnProjectId(privatePersona)
+                : req.ProjectId;
+            if (!ChatVisibility.CanBePrivate(
+                    targetProjectId is { Length: > 0 } tpid ? _projects.GetById(tpid) : null))
+                return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
+        }
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions
         // (SessionsController.cs:55), для обеих веток CreatePersonaChatAsync — проектной
         // (contextProjectId) и чата вне проекта: ClaudeSessionId = resumeSessionId — ключ
@@ -481,7 +497,11 @@ public class PersonasController(
         try
         {
             var chat = await _sessions.CreatePersonaChatAsync(scope.TenantOwnerId, id, mode, req.ResumeSessionId, req.Name,
-                contextProjectId: req.ProjectId, createdByUserId: UserId);
+                contextProjectId: req.ProjectId, createdByUserId: UserId,
+                // Приватность ставится в объект чата ДО его регистрации (W4-B1b): окна, в котором
+                // чат был бы общим, нет по построению; приватный с рождения исключён и из
+                // «Истории решений» — это ставит фабрика (ChatCreation.cs:519)
+                privateToUserId: req.Private ? UserId : null);
             return Ok(chat);
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
@@ -2191,8 +2211,10 @@ public record UpdatePersonaRequest(
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
     string? SphereId = null);
 
+// Private: чат создаётся приватным сразу (W4-B1b) — только для общего проекта, иначе 409
+// not_shared_project; тот же смысл и тот же отказ, что у тумблера и у POST /api/projects/{pid}/sessions
 public record CreatePersonaChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null,
-    string? ProjectId = null);
+    string? ProjectId = null, bool Private = false);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);
 public record MatchPersonaRequest(string? Task = null, string? ProjectId = null, string? RequiredTool = null);

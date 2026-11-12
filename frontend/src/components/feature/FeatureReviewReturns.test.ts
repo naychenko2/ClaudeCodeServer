@@ -150,7 +150,7 @@ describe('«Главные потери» как есть (c1)', () => {
     const h = html(C1_RUN);
     expect(h).toContain('Главные потери');
     expect(h).toContain('Дольше всего ждали вас');
-    expect(h).toContain('ST-F7 · 2 возврата');
+    expect(h).toContain('ST-F7 · 2 круга'); // FP-H2: Loops — «круги», не «возвраты»
   });
 
   // Мутация (2): nowMs не пробросен (Date.now()) — минуты живой карточки считались бы

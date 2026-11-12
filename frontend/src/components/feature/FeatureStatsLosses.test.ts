@@ -170,7 +170,7 @@ describe('нечего показать (к3)', () => {
     const { container } = mountLosses(mkRun(), mkEmptyStats());
     const note = findNodeByAttr(container, 'data-testid', 'losses-empty');
     expect(note, 'пунктирной заметки нет').toBeTruthy();
-    expect(textOf(note)).toContain('Потери появятся с первым ожиданием, возвратом или ошибкой');
+    expect(textOf(note)).toContain('Потери появятся с первым ожиданием, кругом или ошибкой');
     // Стиль заметки — пунктирная рамка (как «нет данных» в герое).
     expect(styleOf(note).border).toBe(`1px dashed ${C.dashed}`);
     expect(findNodeByAttr(container, 'data-testid', 'loss-card-1'), 'карточка 1 при пустом').toBeNull();
@@ -250,15 +250,19 @@ describe('карточка 2 — витки (к1, к2)', () => {
     expect(findNodeByAttr(container, 'data-testid', 'loss-card-2'), 'карточка 2 при loops=0').toBeNull();
   });
 
-  it('содержимое: «ST-F7 · 2 возврата», контекст шага, значки ✓/↩ по числу витков', () => {
+  // FP-H2: Loops — returned + замечания, слово карточки — «круги»; «возвраты» на
+  // странице — только настоящие (verdicts.returned). Мутация (7): вернуть в подпись
+  // и заголовок слово «возврат» — этот тест и «склонение» краснеют (проверено прогоном).
+  it('содержимое: «ST-F7 · 2 круга», контекст шага, значки ✓/↩ по числу витков, слова «возврат» нет', () => {
     const run = mkRun({ stepChains: [mkChain()], stages: [mkStage()] });
     const { container } = mountLosses(run, mkStats());
     const card = findNodeByAttr(container, 'data-testid', 'loss-card-2');
     expect(card, 'карточки 2 нет').toBeTruthy();
     const text = textOf(card);
-    expect(text).toContain('Больше всего возвратов');
-    expect(text).toContain('ST-F7 · 2 возврата'); // plural: 2 — «возврата»
+    expect(text).toContain('Больше всего кругов');
+    expect(text).toContain('ST-F7 · 2 круга'); // plural: 2 — «круга»
     expect(text).toContain('Выпилить блок · шёл 1 ч 05 мин');
+    expect(text.toLowerCase(), 'слово «возврат» вернулось в карточку').not.toContain('возврат');
     const rounds = findNodeByAttr(card!, 'data-testid', 'loss-rounds');
     expect(rounds, 'ряд витков не найден').toBeTruthy();
     expect(rounds!.children.length, 'число значков витков').toBe(2);
@@ -266,8 +270,8 @@ describe('карточка 2 — витки (к1, к2)', () => {
     expect(text).toContain('↩');
   });
 
-  it('склонение: 1 возврат / 5 возвратов', () => {
-    for (const [n, word] of [[1, '1 возврат'], [5, '5 возвратов']] as const) {
+  it('склонение: 1 круг / 5 кругов', () => {
+    for (const [n, word] of [[1, '1 круг'], [5, '5 кругов']] as const) {
       const run = mkRun({ stepChains: [mkChain({ loops: n })] });
       const { container } = mountLosses(run, mkStats());
       const text = textOf(findNodeByAttr(container, 'data-testid', 'loss-card-2'));

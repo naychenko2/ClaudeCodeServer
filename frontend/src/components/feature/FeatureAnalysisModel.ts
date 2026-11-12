@@ -97,10 +97,18 @@ export function analysisLineState(run: FeatureRun, nowMs: number): AnalysisLineS
     const s = run.summary;
     if (!s) return { key: 'done', tone: 'neutral', dashed: false, badge, strong: '', tail: '', actions: [ANALYSIS_ACTION] };
     const when = s.mergedAt ? `${formatDateTime(s.mergedAt)} · ` : '';
+    // «возвратов» — только настоящие (FP-H2, как герой FeatureClosedSummary и полоса
+    // FeatureReturnsOutcomeBar): run.verdicts.returned. summary.loops — returned +
+    // замечания — под этим словом не показывается; нет verdicts (старый ответ) —
+    // и части про возвраты нет, не падаем.
+    const returned = run.verdicts?.returned;
+    const returnsPart = returned != null
+      ? `, ${returned} ${plural(returned, 'возврат', 'возврата', 'возвратов')}`
+      : '';
     return {
       key: 'done', tone: 'neutral', dashed: false, badge,
       strong: `${when}шла ${formatDuration(s.durationMinutes)}`,
-      tail: `${s.steps} ${plural(s.steps, 'шаг', 'шага', 'шагов')}, ${s.loops} ${plural(s.loops, 'возврат', 'возврата', 'возвратов')}.`,
+      tail: `${s.steps} ${plural(s.steps, 'шаг', 'шага', 'шагов')}${returnsPart}.`,
       actions: [ANALYSIS_ACTION],
     };
   }

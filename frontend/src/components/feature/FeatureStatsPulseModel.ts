@@ -88,7 +88,8 @@ export function tilesModel(run: FeatureRun, stats: FeatureStats): StatTile[] {
 export type LossCard =
   // 1. Ожидание: живая, если фича сейчас ждёт человека.
   | { no: 1; kind: 'wait'; title: string; minutes: number | null; live: boolean; count: number | null }
-  // 2. Шаг с наибольшим числом возвратов.
+  // 2. Шаг с наибольшим числом кругов (Loops — returned + замечания; на странице
+  // это слово «круги», не «возвраты» — FP-H2).
   | { no: 2; kind: 'loops'; title: string; stepRef: string; stepTitle: string; loops: number; rounds: RoundMark[]; durationMinutes: number }
   // 3. Сейчас: задача, идущая дольше всех.
   | { no: 3; kind: 'longest'; title: string; stepRef: string | null; personaId: string | null; minutes: number; tokens: number | null; share: number | null }
@@ -96,7 +97,7 @@ export type LossCard =
   | { no: 3; kind: 'stage'; title: string; stageKey: string; stageLabel: string; minutes: number };
 
 export interface LossesModel {
-  // Нечего показать — пунктир «Потери появятся с первым ожиданием, возвратом или ошибкой».
+  // Нечего показать — пунктир «Потери появятся с первым ожиданием, кругом или ошибкой».
   empty: boolean;
   cards: LossCard[];
 }
@@ -132,7 +133,7 @@ export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number)
     });
   }
 
-  // 2. Шаг с максимальным loops; возвратов нет — карточки нет.
+  // 2. Шаг с максимальным loops; кругов нет — карточки нет.
   let bestChain: FeatureStepChain | null = null;
   for (const ch of run.stepChains ?? []) {
     if (ch.loops > 0 && (bestChain === null || ch.loops > bestChain.loops)) bestChain = ch;
@@ -141,7 +142,9 @@ export function lossesModel(run: FeatureRun, stats: FeatureStats, nowMs: number)
     cards.push({
       no: 2,
       kind: 'loops',
-      title: 'Больше всего возвратов',
+      // «кругов» (FP-H2): Loops — returned + замечания; «возвраты» на странице — только
+      // настоящие (verdicts.returned), здесь под этим словом был бы подлог.
+      title: 'Больше всего кругов',
       stepRef: bestChain.stepRef,
       stepTitle: bestChain.title,
       loops: bestChain.loops,

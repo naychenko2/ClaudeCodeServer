@@ -4,7 +4,7 @@
 // Модель — W4-2F1 (FeatureProdCards.buildProdCards): здесь только разметка, ничего
 // не пересчитывается. Одна карточка на шаг в порядке старта; цепочка узлов
 // «работа → вернул → доработка → принят», узлы с chatId — переходы в чат витка;
-// счётчик возвратов (2+ — тон предупреждения); текущий узел обведён акцентом; строки
+// счётчик кругов (2+ — тон предупреждения); текущий узел обведён акцентом; строки
 // «старт · чат · задача» нет — переходы живут на коде шага (Menu) и на узлах.
 //
 // Замечания ревью (Глеб, R4c), держатся здесь:
@@ -66,11 +66,13 @@ const TOUCH_H = 40;
 const NODE_H = 20; // раскладочная высота узла (отступы компенсируют вылет)
 const OVERHANG = (TOUCH_H - NODE_H) / 2; // 10 — раскладочный, фактический вылет 7
 
-// «Возврат» по числу (словарь Ш1c): 1 — возврат, 2–4 — возврата, 5+ — возвратов.
-function returnWord(n: number): string {
-  if (n === 1) return 'возврат';
-  if (n <= 4) return 'возврата';
-  return 'возвратов';
+// «Круг» по числу (та же схема, что словарь Ш1c): 1 — круг, 2–4 — круга, 5+ — кругов.
+// FP-H2: счётчик — chain.loops (returned + замечания), «возвраты» на странице — только
+// настоящие (verdicts.returned), поэтому здесь слово «круги», а не «возвраты».
+function cycleWord(n: number): string {
+  if (n === 1) return 'круг';
+  if (n <= 4) return 'круга';
+  return 'кругов';
 }
 
 // «Шаг» по числу (тот же приём, что pluralIntervals в FeatureTimelineTab): 1 шаг / 2–4 шага /
@@ -514,7 +516,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
         {card.cycles > 0 ? (
           <span
             data-testid="prod-cycles"
-            title="Возвратов ревью"
+            title="Кругов ревью"
             style={{
               fontSize: FS.xs, fontWeight: 700,
               color: card.cycles >= 2 ? C.warningText : C.textSecondary,
@@ -522,7 +524,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
               borderRadius: R.sm, padding: `0 ${SP.xs}px`, lineHeight: '18px', whiteSpace: 'nowrap',
             }}
           >
-            {card.cycles} {returnWord(card.cycles)}
+            {card.cycles} {cycleWord(card.cycles)}
           </span>
         ) : null}
       </div>

@@ -265,24 +265,27 @@ describe('возврат и доработка', () => {
     expect(mockOpenChat.calls).toEqual(['chat-gleb']);
   });
 
-  it('один возврат — без предупреждения; два возврата — тон warning', () => {
+  // FP-H2: счётчик карточки — chain.loops (returned + замечания), слово — «круги»;
+  // «возвраты» на странице — только настоящие (verdicts.returned). Узлы цепочки при
+  // этом называются по вердикту («вернул» / «принят с замечаниями») — они настоящие.
+  it('один круг — без предупреждения; два круга — тон warning', () => {
     const { container: one } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
     const c1 = findNodeByAttr(one, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c1).join('')).toBe('1 возврат');
+    expect(textNodes(c1).join('')).toBe('1 круг');
     expect(styleOf(c1).color).toBe(C.textSecondary);
     expect(styleOf(c1).border).toBe(`1px solid ${C.border}`);
 
     const { container: two } = mount(createElement(FeatureProdCardsView, { run: returnedRun(2), featureId: 'F' }));
     const c2 = findNodeByAttr(two, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c2).join('')).toBe('2 возврата');
+    expect(textNodes(c2).join('')).toBe('2 круга');
     expect(styleOf(c2).color).toBe(C.warningText);
     expect(styleOf(c2).border).toBe(`1px solid ${C.warning}`);
 
-    // Словарь Ш1c проверяется весь: 2–4 — «возврата» (здесь и «3 возврата»), 5+ — «возвратов».
+    // Схема склонения проверяется вся: 2–4 — «круга» (здесь и «3 круга»), 5+ — «кругов».
     const { container: three } = mount(createElement(FeatureProdCardsView, { run: returnedRun(3), featureId: 'F' }));
-    expect(textNodes(findNodeByAttr(three, 'data-testid', 'prod-cycles')!).join('')).toBe('3 возврата');
+    expect(textNodes(findNodeByAttr(three, 'data-testid', 'prod-cycles')!).join('')).toBe('3 круга');
     const { container: five } = mount(createElement(FeatureProdCardsView, { run: returnedRun(5), featureId: 'F' }));
-    expect(textNodes(findNodeByAttr(five, 'data-testid', 'prod-cycles')!).join('')).toBe('5 возвратов');
+    expect(textNodes(findNodeByAttr(five, 'data-testid', 'prod-cycles')!).join('')).toBe('5 кругов');
   });
 
   // Мутация (1): тон «текущего» без акцентной рамки краснит этот тест.

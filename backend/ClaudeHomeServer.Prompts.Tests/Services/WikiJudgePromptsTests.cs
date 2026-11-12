@@ -76,6 +76,15 @@ public class WikiJudgePromptsTests
         Assert.Contains(WikiJudgePrompts.DataClose, WikiJudgePrompts.System);
     }
 
+    [Fact]
+    public void System_ПолноширинныеСкобки_ОбъясненыКакЭкранированныеДанные()
+    {
+        var sys = WikiJudgePrompts.System;
+
+        Assert.Contains("полноширинными скобками ＜ ＞", sys);
+        Assert.Contains("экранированные данные, а не граница", sys);
+    }
+
     // ---- c2: обрезка страницы и окрестность цитаты ----
 
     [Fact]
@@ -101,6 +110,15 @@ public class WikiJudgePromptsTests
     public void BuildInput_ОтрицательныйMaxPageChars_Отказ(int maxPageChars)
         => Assert.Throws<ArgumentOutOfRangeException>(
             () => WikiJudgePrompts.BuildInput([Item(1, "claim")], "page", maxPageChars, []));
+
+    [Fact]
+    public void BuildInput_ДубльIndex_Oперации_ArgumentException()
+    {
+        var items = new[] { Item(1, "первая"), Item(1, "вторая") };
+
+        Assert.Throws<ArgumentException>(
+            () => WikiJudgePrompts.BuildInput(items, null, 1000, []));
+    }
 
     [Fact]
     public void QuoteExcerpt_СерединаИсточника_ДлинаНеБольшеЦитатыПлюсРадиус_ИЦитатаВнутри()
@@ -187,6 +205,7 @@ public class WikiJudgePromptsTests
         var opIdx = input.IndexOf("claim", StringComparison.Ordinal);
         var ctxIdx = input.IndexOf("EXCERPT-77", StringComparison.Ordinal);
         var pageIdx = input.IndexOf("PAGE-TEXT-42", StringComparison.Ordinal);
+        Assert.True(opIdx >= 0);
         Assert.True(opIdx < ctxIdx);
         Assert.True(ctxIdx < pageIdx);
     }

@@ -488,7 +488,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             planSteps: task.PlanSteps, enforceReworkReviewOf: true);
         // Маршрут эпика: этап, снятый маршрутом, → отказ; слепок этапа и предзаполнение personaId.
         if (task.PlanSteps is not null) EnsurePlanStepsInRoute(task.FeatureId, task.PlanSteps);
-        ApplyWorkflowStage(task, explicitRole: Trimmed(req.Role));
+        ApplyWorkflowStage(task, explicitRole: Trimmed(req.Role), explicitStageId: Trimmed(req.StageId));
         EnsureReturnReason(task.Verification);
         // Origin из тела не принимается (§8.4): та же единственная точка нормализации, что у
         // ReturnReason; дальше по методу идут валидаторы и самоснятие — они видят чистый вердикт.
@@ -541,7 +541,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
     // Единственная точка записи Task.Stage (И3/И4). Эпик без Workflow — легаси, Stage = null.
     // Роль задана явно: автоназначенная роль дефекта (qa) маршрутом не режется — дефект не теряем.
-    private void ApplyWorkflowStage(TaskItem task, string? explicitRole)
+    // Этап выбирает WorkflowGraph.StageFor по маршруту эпика (G2); ошибка выбора — штатный отказ.
+    private void ApplyWorkflowStage(TaskItem task, string? explicitRole, string? explicitStageId)
     {
         if (task.FeatureId is null || explicitRole is null) return;
         var stageRole = StageRoleOf(task.Role);
@@ -554,9 +555,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         {
             var route = epic.Workflow;
             if (route is null) return;
-            if (!route.Route.Contains(stageRole, StringComparer.Ordinal))
-                throw new InvalidOperationException($"{StageSkippedText}: роль «{task.Role}» снята в маршруте фичи.");
-            snapshot = BuildStageSnapshot(route, stageRole, epic.ProjectId);
+            var choice = WorkflowGraph.StageFor(route.Stages, stageRole, task.Lane, explicitStageId);
+            if (!choice.Ok) throw new InvalidOperationException(choice.Error);
+            snapshot = BuildStageSnapshot(route, choice.StageId!, epic.ProjectId);
         }
         task.Stage = snapshot;
         if (task.PersonaId is null && snapshot.PersonaId is { Length: > 0 } stagePersona)
@@ -584,29 +585,37 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         }
     }
 
-    // Слепок из ТЕКУЩЕЙ версии шаблона; шаблон удалён/этап убран — слепок без полей этапа (логируем).
-    private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageRole, string? projectId)
+    // Слепок: StageId/Lane/After — из маршрута эпика (замороженный граф), поля этапа (промпт, матрица…) —
+    // из ТЕКУЩЕЙ версии шаблона по id этапа. Шаблон удалён/этап убран — слепок без полей этапа (логируем).
+    private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageId, string? projectId)
     {
+        var routeStage = route.Stages.First(s => s.Id == stageId);
         var scope = string.Equals(route.Scope, "project", StringComparison.Ordinal)
             ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
         var template = _workflows?.Get(route.TemplateId, scope, projectId);
-        var stage = template?.Stages.FirstOrDefault(s => s.Role == stageRole);
+        var stage = template is null ? null : TemplateStageById(template, stageId);
         if (template is null || stage is null)
         {
-            _log?.LogWarning("Шаблон «{Template}» или этап «{Role}» не найден: слепок без полей этапа",
-                route.TemplateId, stageRole);
+            _log?.LogWarning("Шаблон «{Template}» или этап «{StageId}» не найден: слепок без полей этапа",
+                route.TemplateId, stageId);
             return new StageSnapshot
             {
                 TemplateId = route.TemplateId,
                 TemplateVersion = route.ConfirmedVersion,
-                Role = stageRole,
+                Role = routeStage.Role,
+                StageId = routeStage.Id,
+                Lane = routeStage.Lane,
+                After = routeStage.After.ToList(),
             };
         }
         return new StageSnapshot
         {
             TemplateId = template.Id,
             TemplateVersion = template.Version,
-            Role = stageRole,
+            Role = routeStage.Role,
+            StageId = routeStage.Id,
+            Lane = routeStage.Lane,
+            After = routeStage.After.ToList(),
             Specialty = stage.Specialty,
             PersonaId = Trimmed(stage.PersonaId),
             Prompt = stage.Prompt,
@@ -621,6 +630,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         };
     }
 
+    // Этап шаблона по id этапа (Id ??= Role — нормализация та же, что у Resolve).
+    private static WorkflowStage? TemplateStageById(WorkflowTemplate template, string stageId)
+    {
+        var nodes = WorkflowGraph.Normalize(template.Stages);
+        var index = nodes.FindIndex(n => n.Id == stageId);
+        return index < 0 ? null : template.Stages[index];
+    }
+
+    // Проверка маршрута без записи слепка (Update, шаги плана): stageId туда не приходит, поэтому
+    // неоднозначность этапа отказом не считается — отказывает только «этап пропущен маршрутом».
+    private static string? SkippedByRouteError(FeatureWorkflow route, string stageRole, string? lane)
+    {
+        var choice = WorkflowGraph.StageFor(route.Stages, stageRole, lane, null);
+        return !choice.Ok && choice.Error!.StartsWith(WorkflowGraph.StageSkippedText, StringComparison.Ordinal)
+            ? choice.Error : null;
+    }
+
     // Смена роли/фичи в Update проходит ту же проверку маршрута, что Create: роль этапа,
     // снятая маршрутом эпика, → отказ. Без этого Create(role=qa) на снятом qa даёт 400, а
     // Create с ролью null + tasks_update {role:"qa"} — проходит (major ревью R-B2).
@@ -628,7 +654,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // (qa) маршрутом не режется — дефект не теряем. Stage здесь НЕ переписывается (И3/И4):
     // смена роли на другую роль маршрута слепок от прежнего этапа не трогает.
     private void EnsureRoleChangeInRoute(
-        string? effFeatureId, string? effRole, string? roleBefore, string? featureIdBefore)
+        string? effFeatureId, string? effRole, string? effLane, string? roleBefore, string? featureIdBefore)
     {
         if (effFeatureId is null) return;
         if (effRole == roleBefore && effFeatureId == featureIdBefore) return;
@@ -639,11 +665,13 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         FeatureWorkflow? route;
         lock (_workflowLock) { route = epic.Workflow; }
         if (route is null) return;
-        if (!route.Route.Contains(stageRole, StringComparer.Ordinal))
-            throw new InvalidOperationException($"{StageSkippedText}: роль «{effRole}» снята в маршруте фичи.");
+        if (SkippedByRouteError(route, stageRole, effLane) is { } error)
+            throw new InvalidOperationException(error);
     }
 
-    // Шаги плана вида review/qa/final у роли, снятой маршрутом эпика, → отказ. Эпик без Workflow — no-op.
+    // Шаги плана: роль вида review/qa/final/step снята маршрутом эпика → отказ; у step с линией,
+    // когда все step-этапы маршрута привязаны к линиям, линия обязана совпасть с одной из них (п.5 G2).
+    // Эпик без Workflow — no-op.
     private void EnsurePlanStepsInRoute(string? featureId, List<PlannedStep> steps)
     {
         if (featureId is null || steps.Count == 0) return;
@@ -659,11 +687,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
                 PlannedStep.KindReview => TaskRoles.Review,
                 PlannedStep.KindQa => TaskRoles.Qa,
                 PlannedStep.KindFinal => TaskRoles.Final,
-                _ => null,
+                _ => TaskRoles.Step,
             };
-            if (role is not null && !route.Route.Contains(role, StringComparer.Ordinal))
+            if (SkippedByRouteError(route, role, null) is not null)
                 throw new InvalidOperationException(
-                    $"{StageSkippedText}: шаг «{step!.StepRef}» вида {step.Kind} — роль «{role}» снята в маршруте фичи.");
+                    $"{StageSkippedText}: шаг «{step!.StepRef}» вида {step.Kind ?? PlannedStep.KindStep} — роль «{role}» снята в маршруте фичи.");
+            if (role == TaskRoles.Step && !string.IsNullOrWhiteSpace(step!.Lane))
+            {
+                var stepStages = route.Stages.Where(s => s.Role == TaskRoles.Step).ToList();
+                if (stepStages.All(s => s.Lane is not null))
+                {
+                    var lane = FeatureProjector.NormalizeLane(step.Lane);
+                    if (!stepStages.Any(s => FeatureProjector.NormalizeLane(s.Lane) == lane))
+                        throw new InvalidOperationException(
+                            $"Шаг «{step.StepRef}»: линия «{lane}» не совпадает ни с одной линией этапов step маршрута ("
+                            + string.Join(", ", stepStages.Select(s => $"{s.Id}={FeatureProjector.NormalizeLane(s.Lane)}")) + ").");
+                }
+            }
         }
     }
 
@@ -1294,7 +1334,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
-        EnsureRoleChangeInRoute(effFeatureId, effRole, task.Role, task.FeatureId);
+        EnsureRoleChangeInRoute(effFeatureId, effRole, req.Lane is null ? task.Lane : Trimmed(req.Lane), task.Role, task.FeatureId);
         if (req.PlanSteps is not null && effPlanSteps is not null) EnsurePlanStepsInRoute(effFeatureId, effPlanSteps);
         EnsureReturnReason(req.Verification);
         // Та же норма на двери Update (major ревью d27c643c: раньше защищался только контроллер):
@@ -2636,7 +2676,10 @@ public record CreateTaskRequest(
     // null = старая семантика «проверено»
     TaskVerification? Verification = null,
     // Критерии приёмки (измеримые); пустой Id получает «cN». См. AcceptanceRules
-    List<AcceptanceCriterion>? Acceptance = null);
+    List<AcceptanceCriterion>? Acceptance = null,
+    // Этап маршрута эпика (WorkflowGraph.StageFor, G2): нужен, когда роль/линия не выбирают этап
+    // однозначно (параллельный маршрут). Только при создании: в Update слепок неизменен.
+    string? StageId = null);
 
 public record CreateSubtaskRequest(string Title);
 

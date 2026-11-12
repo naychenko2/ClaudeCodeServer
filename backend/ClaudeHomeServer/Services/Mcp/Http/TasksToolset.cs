@@ -325,6 +325,7 @@ public sealed class TasksToolset(
                     Role: OptionalArg(arguments, "role"),
                     StepRef: OptionalArg(arguments, "stepRef"),
                     Lane: OptionalArg(arguments, "lane"),
+                    StageId: OptionalArg(arguments, "stageId"),
                     ReviewOf: LabelsArg(arguments, "reviewOf"),
                     PlanSteps: planSteps,
                     // Создатель — актор хода-создателя (редактор общего проекта и т.п.); актор
@@ -1661,6 +1662,7 @@ public sealed class TasksToolset(
                     ["role"] = RoleSchema(),
                     ["stepRef"] = StepRefSchema(),
                     ["lane"] = LaneSchema(),
+                    ["stageId"] = StageIdSchema(),
                     ["reviewOf"] = ReviewOfSchema(),
                     ["acceptance"] = AcceptanceSchema(),
                     ["planSteps"] = PlanStepsSchema(),
@@ -2074,6 +2076,12 @@ public sealed class TasksToolset(
     {
         ["type"] = "string",
         ["description"] = "Id задачи-эпика фичи; без роли — частичный мерж",
+    };
+
+    private static JsonObject StageIdSchema() => new()
+    {
+        ["type"] = "string",
+        ["description"] = "Id этапа маршрута фичи; нужен, когда роль и линия не выбирают этап однозначно (только при создании)",
     };
 
     private static JsonObject RoleSchema() => new()

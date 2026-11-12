@@ -445,7 +445,231 @@ public class TaskManagerWorkflowTests : IDisposable
         await Task.WhenAll(creates.Append(confirm));
 
         foreach (var qa in creates.Select(c => c.Result).Where(t => t is not null))
+        {
             qa!.Stage!.TemplateId.Should().Be(tplA.Id, "qa создан только по старому маршруту, целиком");
+            qa.Stage.StageId.Should().Be(TaskRoles.Qa);
+            qa.Stage.After.Should().Equal([TaskRoles.Review], "After — из того же маршрута A, что и StageId (линейный: предыдущий этап)");
+        }
         _tasks.GetById(epic.Id)!.Workflow!.TemplateId.Should().Be(tplB.Id);
+    }
+
+    // ─── G2: выбор этапа по графу (WorkflowGraph.StageFor) ───────────────────────────
+
+    // cut → design → {plan, qa-plan}; plan → {step-back, step-front} → review → qa ← qa-plan; qa → final → merge.
+    private static WorkflowTemplate ParallelCycle() => new()
+    {
+        Name = "parallel-cycle",
+        Stages =
+        [
+            new() { Role = TaskRoles.Cut },
+            new() { Role = TaskRoles.Design },
+            new() { Role = TaskRoles.Plan, After = ["design"], Prompt = "план" },
+            new() { Role = TaskRoles.Qa, Id = "qa-plan", After = ["design"], Prompt = "тест-план" },
+            new() { Role = TaskRoles.Step, Id = "step-back", After = ["plan"], Lane = "back", Prompt = "бэк" },
+            new() { Role = TaskRoles.Step, Id = "step-front", After = ["plan"], Lane = "front", Prompt = "фронт" },
+            new() { Role = TaskRoles.Review, After = ["step-back", "step-front"] },
+            new() { Role = TaskRoles.Qa, After = ["review", "qa-plan"], Prompt = "qa-итог" },
+            new() { Role = TaskRoles.Final },
+            new() { Role = TaskRoles.Merge },
+        ],
+    };
+
+    private TaskItem ParallelEpic(TaskManager? tasks = null)
+    {
+        tasks ??= _tasks;
+        var tpl = _store.Save(ParallelCycle(), WorkflowTemplateScope.Global);
+        var epic = tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
+        {
+            TemplateId = tpl.Id, Scope = "global", Stages = WorkflowGraph.Resolve(tpl, []),
+            ConfirmedVersion = tpl.Version, ConfirmedAt = DateTime.UtcNow,
+        });
+        return epic;
+    }
+
+    private TaskItem Create(TaskItem epic, string role, string? lane = null, string? stageId = null) =>
+        _tasks.Create(null, Owner, new CreateTaskRequest("задача", FeatureId: epic.Id, Role: role, Lane: lane, StageId: stageId, StepRef: "B1"));
+
+    [Theory]
+    [InlineData("back", "step-back", "бэк")]
+    [InlineData("backend", "step-back", "бэк")]
+    [InlineData("front", "step-front", "фронт")]
+    public void Create_ПараллельныйМаршрут_StepВыбираетЭтапПоЛинии(string lane, string stageId, string prompt)
+    {
+        var step = Create(ParallelEpic(), TaskRoles.Step, lane);
+
+        step.Stage!.StageId.Should().Be(stageId);
+        step.Stage.Role.Should().Be(TaskRoles.Step);
+        step.Stage.Lane.Should().Be(stageId == "step-back" ? "back" : "front", "Lane — из этапа маршрута");
+        step.Stage.After.Should().Equal(["plan"], "After — предшественники из маршрута эпика");
+        step.Stage.Prompt.Should().Be(prompt, "поля этапа берутся из шаблона по id этапа, а не по роли");
+    }
+
+    [Fact]
+    public void Create_ПараллельныйМаршрут_ДваQa_БезStageId_Отказ_СоStageId_Этап()
+    {
+        var epic = ParallelEpic();
+
+        var act = () => Create(epic, TaskRoles.Qa);
+        act.Should().Throw<InvalidOperationException>().Which.Message
+            .Should().Contain("несколько этапов роли «qa»").And.Contain("укажите stageId (qa-plan, qa)");
+
+        var plan = Create(epic, TaskRoles.Qa, stageId: "qa-plan");
+        plan.Stage!.StageId.Should().Be("qa-plan");
+        plan.Stage.After.Should().Equal(["design"]);
+        plan.Stage.Prompt.Should().Be("тест-план");
+
+        var final = Create(epic, TaskRoles.Qa, stageId: "qa");
+        final.Stage!.After.Should().Equal(["review", "qa-plan"]);
+        final.Stage.Prompt.Should().Be("qa-итог");
+    }
+
+    [Fact]
+    public void Create_StageIdЧужойРоли_ИлиНеизвестный_Отказ()
+    {
+        var epic = ParallelEpic();
+
+        var wrongRole = () => Create(epic, TaskRoles.Review, stageId: "qa-plan");
+        wrongRole.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("имеет роль «qa»");
+        var unknown = () => Create(epic, TaskRoles.Step, stageId: "step-nope");
+        unknown.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("не найден");
+        _tasks.GetAll().Should().NotContain(t => t.FeatureId == epic.Id, "отказ до вставки в стор");
+    }
+
+    [Fact]
+    public void Create_ШагЛинииБезЭтапа_Отказ_СоСпискомId()
+    {
+        var act = () => Create(ParallelEpic(), TaskRoles.Step, "other");
+
+        act.Should().Throw<InvalidOperationException>().Which.Message
+            .Should().Contain("укажите stageId (step-back, step-front)");
+    }
+
+    [Fact]
+    public void Create_Rework_БерётЭтапStep_ПоЛинии()
+    {
+        var epic = ParallelEpic();
+        var review = Create(epic, TaskRoles.Review);
+        var rework = _tasks.Create(null, Owner, new CreateTaskRequest("доработка", FeatureId: epic.Id,
+            Role: TaskRoles.Rework, Lane: "front", StepRef: "B1", ReviewOf: [review.Id]));
+
+        rework.Stage!.StageId.Should().Be("step-front");
+    }
+
+    [Fact]
+    public void Create_Merge_ОдиночнаяРоль_ЭтапОднозначен()
+    {
+        var epic = ParallelEpic();
+        _tasks.Create(null, Owner, new CreateTaskRequest("финал", FeatureId: epic.Id, Role: TaskRoles.Final,
+            Status: TaskItemStatus.Done, Verification: new TaskVerification { Verdict = "accepted" }));
+
+        Create(epic, TaskRoles.Merge).Stage!.StageId.Should().Be("merge");
+    }
+
+    // Шим Route отдаёт id этапов; три места TaskManager сравнивали его с ролью (R-G1): на параллельном
+    // маршруте смена роли на qa/step давала ложный отказ.
+    [Theory]
+    [InlineData(TaskRoles.Qa)]
+    [InlineData(TaskRoles.Step)]
+    [InlineData(TaskRoles.Review)]
+    public void Update_СменаРолиНаРольСНесколькимиЭтапами_ПараллельныйМаршрут_НеОтказывает(string role)
+    {
+        var epic = ParallelEpic();
+        var task = _tasks.Create(null, Owner, new CreateTaskRequest("задача", FeatureId: epic.Id));
+
+        _tasks.Update(task.Id, new UpdateTaskRequest(Role: role));
+
+        var stored = _tasks.GetById(task.Id)!;
+        stored.Role.Should().Be(role);
+        stored.Stage.Should().BeNull("слепок в Update не пишется (И3/И4)");
+    }
+
+    [Fact]
+    public void Update_СменаРолиНаСнятуюМаршрутомQa_ПараллельныйМаршрут_Отказ()
+    {
+        var tpl = _store.Save(ParallelCycle(), WorkflowTemplateScope.Global);
+        var epic = _tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        var route = WorkflowGraph.Resolve(tpl, []).Where(s => s.Role != TaskRoles.Qa).ToList();
+        _tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow { TemplateId = tpl.Id, Stages = route, ConfirmedVersion = tpl.Version });
+        var task = _tasks.Create(null, Owner, new CreateTaskRequest("задача", FeatureId: epic.Id));
+
+        var act = () => _tasks.Update(task.Id, new UpdateTaskRequest(Role: TaskRoles.Qa));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("этап пропущен маршрутом");
+    }
+
+    [Fact]
+    public void PlanSteps_ПараллельныйМаршрут_QaИReviewВПлане_НеОтказывают()
+    {
+        var epic = ParallelEpic();
+
+        var plan = _tasks.Create(null, Owner, new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps:
+            [
+                new PlannedStep { StepRef = "B1", Title = "бэк", Lane = "back" },
+                new PlannedStep { StepRef = "R-B1", Title = "ревью", Kind = PlannedStep.KindReview },
+                new PlannedStep { StepRef = "Q-B1", Title = "qa", Kind = PlannedStep.KindQa },
+            ]));
+
+        plan.PlanSteps.Should().HaveCount(3);
+    }
+
+    [Fact]
+    public void PlanSteps_ЛинияШагаНеСовпадаетСЛиниямиМаршрута_Отказ()
+    {
+        var epic = ParallelEpic();
+
+        var act = () => _tasks.Create(null, Owner, new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "прочее", Lane = "other" }]));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("линия «other»");
+    }
+
+    [Fact]
+    public void PlanSteps_ЛинияШагаСОднимЭтапомБезЛинии_НеПроверяется()
+    {
+        // Линейный маршрут: этап step без линии — правило линии не действует.
+        var epic = Epic(_store.Save(Template(), WorkflowTemplateScope.Global));
+
+        var plan = _tasks.Create(null, Owner, new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "любая", Lane = "other" }]));
+
+        plan.PlanSteps.Should().HaveCount(1);
+    }
+
+    [Fact]
+    public void Update_PlanSteps_ЛинияНеСовпадает_Отказ()
+    {
+        var epic = ParallelEpic();
+        var plan = _tasks.Create(null, Owner, new CreateTaskRequest("план", FeatureId: epic.Id, Role: TaskRoles.Plan,
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "бэк", Lane = "back" }]));
+
+        var act = () => _tasks.Update(plan.Id, new UpdateTaskRequest(
+            PlanSteps: [new PlannedStep { StepRef = "B1", Title = "прочее", Lane = "other" }]));
+
+        act.Should().Throw<InvalidOperationException>().Which.Message.Should().Contain("линия «other»");
+    }
+
+    // Параллельное создание двух шагов разных линий: у каждого свой этап, без перекрёстного слепка.
+    [Fact]
+    public async Task Create_ДваШагаРазныхЛинийПараллельно_КаждыйСвойStageId()
+    {
+        var epic = ParallelEpic();
+
+        var tasks = Enumerable.Range(0, 40).Select(i => Task.Run(() =>
+            Create(epic, TaskRoles.Step, i % 2 == 0 ? "back" : "front"))).ToArray();
+        var done = await Task.WhenAll(tasks);
+
+        for (var i = 0; i < done.Length; i++)
+            done[i].Stage!.StageId.Should().Be(i % 2 == 0 ? "step-back" : "step-front");
+    }
+
+    // Ошибка StageFor — штатный отказ (InvalidOperationException → 400), а не иной тип исключения.
+    [Fact]
+    public void Create_НеоднозначныйЭтап_ИсключениеТипаОтказа()
+    {
+        var act = () => Create(ParallelEpic(), TaskRoles.Qa);
+
+        act.Should().Throw<InvalidOperationException>();
     }
 }

@@ -14,7 +14,8 @@ namespace ClaudeHomeServer.Tests.Services;
 // ревью 72ea3763 п.2): откат по источнику обязан снять хронику чата, даже когда её написал
 // разбор вне пакета (AppendChronicleAsync, S6e-2) — create-операции хроники ни в одном
 // пакете нет, и поиск только по операциям до такой хроники не доходил. Вторая часть —
-// строка «Продолжение чата: [[T]]» в хрониках-продолжениях: после удаления цели любая
+// легаси-строка «Продолжение чата: [[T]]» в хрониках-продолжениях (новые ингест уже не
+// пишет): после удаления цели любая
 // следующая запись раздела отвергается гейтом как ссылка на несуществующую страницу
 // (целью проверки применения весь список состояния раздела, WikiApplyService.cs:711).
 //
@@ -318,11 +319,11 @@ public class WikiRetractChronicleTests : IDisposable
         await WriteViaKeeper(User, Section, chronicleA,
             ChroniclePage(TitleA, [], [ClaimA + " [^s1]"], [(CardTitleA, ClaimA)]));
 
-        // Хроника продолжения: строка в «О чём» — ровно формат ContinuationLinkLine
-        // (одна копия: ContinuationLinkPrefix).
+        // Хроника продолжения: строка в «О чём» — ровно легаси-формат ContinuationLinkPrefix
+        // (одна копия формата).
         var chronicleB = WikiChatIngestService.ChroniclePath(Section, ChatB)!;
         await WriteViaKeeper(User, Section, chronicleB,
-            ChroniclePage(TitleB, [WikiChatIngestService.ContinuationLinkPrefix + "[[" + TitleA + "]]"], [], []));
+            ChroniclePage(TitleB, [WikiRetractService.ContinuationLinkPrefix + "[[" + TitleA + "]]"], [], []));
 
         var r = await _sut.RetractAsync(User, SourceRefA);
 

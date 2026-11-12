@@ -88,6 +88,10 @@ public sealed class ImageEditorSubsystem : IAppSubsystem
         services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
             ? new CharacterSceneParser(runner)
             : null!);
+        // Категория неоднозначного запроса для «Авто» локальных моделей: без дешёвого раннера — только правила
+        services.AddSingleton(sp => sp.GetService<ClaudeHomeServer.Services.Llm.ICheapTextRunner>() is { } runner
+            ? new ImageRouteClassifier(runner)
+            : null!);
         services.AddSingleton<ImageEditLaunchAssembler>();
         // Гейт области ручек: проект или личный чат вне проекта (разрез image-editor-personal-chats)
         services.AddSingleton<Controllers.ImageEditScopeGate>();

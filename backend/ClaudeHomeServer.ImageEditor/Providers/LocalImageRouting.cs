@@ -117,10 +117,61 @@ public static class LocalImageRouting
         return r;
     }
 
-    // Первое сработавшее правило, у которого есть подходящая модель каталога
-    public static ImageRoute? Pick(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, EditMode mode, EditTraits traits)
+    // Правила, после которых правила молчат: признаков в запросе не нашлось
+    private static readonly string[] DefaultRules = ["gen-default", "edit-default"];
+
+    // Категории классификатора неоднозначных запросов (Ш3, ImageRouteClassifier): подпись для причины
+    // выбора и признаки таблицы. Модель решает по-прежнему таблица — классификатор только досказывает
+    // признаки, которых правила по словам не нашли. Пустые признаки — модель по умолчанию, но причина
+    // называет категорию. «товар» = предметная съёмка, то есть фотореализм. После Ш10 (оценка листов
+    // по категориям) менять признаки здесь же
+    public static readonly IReadOnlyDictionary<string, (string Label, RouteTrait Traits)> GenCategories =
+        new Dictionary<string, (string, RouteTrait)>
+        {
+            ["люди"] = ("люди", RouteTrait.People),
+            ["товар"] = ("товар", RouteTrait.Photo),
+            ["арт"] = ("иллюстрация", RouteTrait.None),
+            ["надписи"] = ("надписи", RouteTrait.SignKeyword),
+            ["состав"] = ("состав сцены", RouteTrait.None),
+            ["пейзаж"] = ("пейзаж", RouteTrait.None),
+        };
+
+    public static readonly IReadOnlyDictionary<string, (string Label, RouteTrait Traits)> EditCategories =
+        new Dictionary<string, (string, RouteTrait)>
+        {
+            ["фон"] = ("фон", RouteTrait.FastEdit),
+            ["одежда"] = ("одежда", RouteTrait.PreciseEdit),
+            ["добавить"] = ("добавить предмет", RouteTrait.FastEdit),
+            ["убрать"] = ("убрать предмет", RouteTrait.None),
+            ["стиль"] = ("стиль", RouteTrait.FastEdit),
+            ["текст"] = ("надпись", RouteTrait.SignKeyword),
+        };
+
+    // Стоит ли спрашивать классификатор: текст есть, ключевых слов в нём нет, и правила дошли до умолчания.
+    // Слово нашлось, но правило не сработало (фон при большом исходнике) — категория выбора не изменит
+    public static bool NeedsClassifier(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, EditMode mode, EditTraits traits) =>
+        !string.IsNullOrWhiteSpace(traits.Prompt) && PromptHints.Of(traits.Prompt) == default
+        && Match(catalog, op, TraitsOf(op, mode, traits)) is { } m && DefaultRules.Contains(m.Rule.Id);
+
+    // Первое сработавшее правило, у которого есть подходящая модель каталога. category — ответ
+    // классификатора (ключ GenCategories/EditCategories): его признаки добавляются к найденным по словам,
+    // а причина выбора называет категорию
+    public static ImageRoute? Pick(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, EditMode mode, EditTraits traits,
+        string? category = null)
     {
         var have = TraitsOf(op, mode, traits);
+        var cats = op == ImageEditOp.Generate ? GenCategories : EditCategories;
+        if (category is not null && cats.TryGetValue(category, out var c))
+        {
+            var m = Match(catalog, op, have | c.Traits);
+            return m is null ? null : new ImageRoute(m.Value.Model, $"{c.Label} (по смыслу запроса)");
+        }
+        var r = Match(catalog, op, have);
+        return r is null ? null : new ImageRoute(r.Value.Model, r.Value.Rule.Reason);
+    }
+
+    private static (RouteRule Rule, ImageEditModelInfo Model)? Match(IReadOnlyList<ImageEditModelInfo> catalog, ImageEditOp op, RouteTrait have)
+    {
         foreach (var rule in Table)
         {
             if (!rule.Ops.Contains(op)) continue;
@@ -129,7 +180,7 @@ public static class LocalImageRouting
             foreach (var id in rule.Models)
             {
                 var model = catalog.FirstOrDefault(m => m.Id == id && m.Caps.Ops.Contains(op));
-                if (model is not null) return new ImageRoute(model, rule.Reason);
+                if (model is not null) return (rule, model);
             }
         }
         return null;

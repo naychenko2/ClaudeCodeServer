@@ -179,13 +179,16 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     // «Авто» не участвуют. Ручной выбор модели главнее: до PickModel он не доходит (QuoteAsync)
     public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Route(op, mode, traits)?.Model;
 
-    public ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits)
+    public ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits, string? category = null)
     {
         if (op == ImageEditOp.EnhanceFaces)
             return new ImageRoute(Catalog.First(m => m.Id == FaceDetailer), "улучшение лиц");
-        var route = LocalImageRouting.Pick(Catalog, op, mode, traits);
+        var route = LocalImageRouting.Pick(Catalog, op, mode, traits, category);
         return route is null ? null : route with { Reason = LocalImageRouting.Describe(route.Model, route.Reason) };
     }
+
+    public bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits) =>
+        LocalImageRouting.NeedsClassifier(Catalog, op, mode, traits);
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 

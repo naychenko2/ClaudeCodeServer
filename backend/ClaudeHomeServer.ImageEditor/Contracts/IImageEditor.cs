@@ -78,7 +78,11 @@ public record ImageRoute(ImageEditModelInfo Model, string Reason);
 // Поставщик, умеющий объяснить выбор «Авто»; PickModel его Model и возвращает
 public interface IImageEditRouter
 {
-    ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits);
+    // category — ответ классификатора неоднозначных запросов (ImageRouteClassifier); null — только правила
+    ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits, string? category = null);
+
+    // Правила дошли до умолчания, а текст запроса есть — стоит спросить классификатор
+    bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits);
 }
 
 // Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми.

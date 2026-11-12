@@ -51,6 +51,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     // Фактическая цена запроса fal по request_id (Core-шов, шаг S-SPEND-7): null — опроса нет,
     // трата остаётся такой, какой её сказал поставщик
     private readonly IFalRequestCost? _falCost;
+    private readonly ImageRouteClassifier? _routeClassifier;
     private readonly ImageEditWorkspace _workspace;
     private readonly ILogger<ImageEditJobService> _log;
     private readonly TimeProvider _time;
@@ -70,8 +71,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         TimeProvider? time = null,
         IImageRaster? raster = null,
         ISessionDirectory? sessions = null,
-        IFalRequestCost? falCost = null)
+        IFalRequestCost? falCost = null,
+        ImageRouteClassifier? routeClassifier = null)
     {
+        _routeClassifier = routeClassifier;
         _sessions = sessions;
         _fitter = raster is null ? null : new InputFitter(raster);
         _editors = editors;
@@ -195,7 +198,11 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         ImageEditModelInfo? model;
         if (auto && editor is IImageEditRouter router)
         {
-            var route = router.Route(op, request.Mode, traits);
+            // Правила по словам молчат — спрашиваем локальную LLM (потолок 2 с, не успела — правила)
+            var category = _routeClassifier is not null && router.NeedsClassifier(op, request.Mode, traits)
+                ? await _routeClassifier.ClassifyAsync(op, traits.Prompt!, ct)
+                : null;
+            var route = router.Route(op, request.Mode, traits, category);
             model = route?.Model;
             routeReason = route?.Reason;
         }

@@ -529,6 +529,8 @@ public class PersonasController(
     [HttpPost("{id}/avatar/generate")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
     [SubsystemUsage("images")]
+    // Гейт выключенной вертикали идёт раньше ProjectScope (Order): 503 с причиной, а не 404 «Не найдено»
+    [SubsystemEnabled("images", "Подсистема генерации изображений выключена")]
     public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
     {
         // W3-B3b (разрез §3.1 строка «POST {id}/avatar/generate»; И-2): ключ — арендатор: кандидаты

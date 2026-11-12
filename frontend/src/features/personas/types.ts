@@ -130,6 +130,10 @@ export interface Persona {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (только при access === 'custom')
   disallowedTools?: string[] | null;
+  // Права (access/tools/disallowedTools) как группа, наследуемая от специальности: true — при
+  // чтении сервер подставляет эффективный шаблон специальности (PersonaManager.Hydrate), поля
+  // не свои; false/отсутствие (старый бэк) — поля персоны есть её override. Та же читка, что на бэке.
+  inheritsAccess?: boolean;
   // Ключ шаблона пантеона OmO, из которого подключена персона (null — создана вручную)
   templateKey?: string | null;
   // Привязки к источникам знаний и правилам (фича persona-bindings); null — нет
@@ -303,6 +307,9 @@ export interface CreatePersonaDto {
   access?: PersonaAccess;
   // Свой список запрещённых инструментов (для custom)
   disallowedTools?: string[];
+  // Права как группа, наследуемая от специальности (true) или свой override (false);
+  // та же семантика, что у Persona.inheritsAccess
+  inheritsAccess?: boolean;
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана
   specialty?: PersonaSpecialty;
   // Доступ ко всем проектам владельца (текущим и будущим); только для scope === 'global'

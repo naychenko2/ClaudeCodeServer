@@ -696,6 +696,11 @@ export interface WikiNightDecisionDto {
   judgeCostUsd: number | null;
   judgeModel: string | null;
   reason: string | null;
+  // Текущее состояние пакета (WikiPackage.StatusValues — обязательное, не nullable): вердикт
+  // судьи и судьба пакета — разные вещи, принятый судьёй пакет мог не примениться
+  // (apply_failed) или быть откатан человеком (reverted); «Откатить пакет» — только у applied
+  // (RowOf, WikiJournalReader.cs:328-330).
+  packageStatus: string;
 }
 
 export interface WikiNightDecisionsDto {

@@ -12,10 +12,12 @@
 // ночи [вчера, завтра); группы 2/1/1/0 — ровно 3 заголовка и 4 строки операций, пустая группа
 // не показывается; все пусты — «За ночь решений нет»; содержимое строки (claim, «почему»
 // судьи, причина спора) и ссылка на страницу — раздел берётся из ключа страницы по границе
-// «/»; «Откатить пакет» — только у принятых (у «Ждут судью» его нет), один POST с id пакета
-// строки; отказ — текстом; гонка поколений между видами; отказ вида ночи — тот же один
-// Notice с «Повторить», но с переключателем над ним: «Все записи» запрашивает обычный
-// журнал (доработка ревью bb48be19).
+// «/»; «Откатить пакет» — только у строки с packageStatus === 'applied' (доработка b0065470):
+// в «Принято судьёй» строки reverted/apply_failed остаются в группе с пометкой «откачен» /
+// «не применён» без кнопки; у «Ждут решения» (прежний заголовок «Ждут судью») кнопки нет
+// вовсе; один POST с id пакета строки; отказ — текстом; гонка поколений между видами; отказ
+// вида ночи — тот же один Notice с «Повторить», но с переключателем над ним: «Все записи»
+// запрашивает обычный журнал (доработка ревью bb48be19).
 //
 // Мокан только транспорт (offline.request) и signalr — тот же приём, что в WikiInbox.test.
 // Модалка ConfirmDialog рендерится порталом в document.body — её узлы ищутся от body.
@@ -47,11 +49,15 @@
 //     на страницу» краснеет (F6b).
 // (16) снять проверку поколения в .then (loadSeq) → «смена пропа a → b» краснеет (W9b).
 // (17) строка ночи не рендерит judgeReason/reason → «содержимое строки» краснеет (J-F2);
-// (18) «Откатить пакет» во всех группах → «у „Ждут судью“ нет „Откатить пакет“» краснеет (J-F2);
+// (18) «Откатить пакет» во всех группах → «у „Ждут решения“ нет „Откатить пакет“» краснеет (J-F2);
 // (19) не отфильтровывать пустые группы → «ровно 3 заголовка» краснеет (J-F2);
 // (20) снять проверку поколения в .then вида ночи → «гонка видов» краснеет (J-F2);
 // (21) pageSectionKey — startsWith без границы «/» → «с похожим префиксом» краснеет (J-F2).
 // (22) убрать viewRow из ветки ошибки → «отказ загрузки вида ночи» краснеет (доработка bb48be19).
+// (23) показывать «Откатить пакет» при любой группе/статусе → «кнопка только у applied»
+//     краснеет (3 кнопки вместо 1) (доработка b0065470);
+// (24) не рендерить пометку статуса (PACKAGE_STATUS_BADGE пуст) → «пометка „откачен“ /
+//     „не применён“» краснеет (доработка b0065470).
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -967,20 +973,26 @@ describe('«Журнал»: раздел из пропа sectionScope (W9b)', ()
 // Окно запроса — локальные [вчера, завтра): asserted не точными датами (полночь посреди
 // теста сдвинула бы их), а границей: from ≤ сегодня ≤ to и ровно 2 дня между ними.
 
+// packageStatus — фактические статусы этих групп (RowOf несёт p.Status, WikiJournalReader.cs:328-330):
+// judgeAccepted — применённый (applied) либо с другой судьбой (см. ND_ACCEPTED_REVERTED/FAILED);
+// judgeRejected — rejected; codeRejected — отказ кодов; waiting — только открытый пакет (IsOpen)
 const ND_ACCEPTED_A = {
   packageId: 'pkg-a1', page: 'projects/p1/page-a', claim: 'Утверждение А',
   reasonCode: 'source_not_newer', judgeDecision: 'accepted', judgeReason: 'подтверждено источником',
   judgeAt: '2026-11-12T02:10:00Z', judgeCostUsd: 0.0012, judgeModel: 'claude-x',
-  reason: 'заменить мою формулировку',
+  reason: 'заменить мою формулировку', packageStatus: 'applied',
 };
 const ND_ACCEPTED_B = { ...ND_ACCEPTED_A, packageId: 'pkg-a2', page: 'projects/p1/page-b', claim: 'Утверждение Б', judgeAt: '2026-11-12T02:14:00Z' };
-const ND_REJECTED = { ...ND_ACCEPTED_A, packageId: 'pkg-r1', page: 'common/page-c', claim: 'Утверждение В', judgeDecision: 'rejected', judgeReason: 'противоречит странице' };
+// Принятый судьёй, но с другой судьбой пакета: откатан человеком / не применился (дефекты b58d81c0, 76f4c7d6)
+const ND_ACCEPTED_REVERTED = { ...ND_ACCEPTED_A, packageId: 'pkg-a3', page: 'projects/p1/page-f', claim: 'Утверждение Ж', judgeAt: '2026-11-12T02:16:00Z', packageStatus: 'reverted' };
+const ND_ACCEPTED_FAILED = { ...ND_ACCEPTED_A, packageId: 'pkg-a4', page: 'projects/p1/page-g', claim: 'Утверждение И', judgeAt: '2026-11-12T02:18:00Z', packageStatus: 'apply_failed' };
+const ND_REJECTED = { ...ND_ACCEPTED_A, packageId: 'pkg-r1', page: 'common/page-c', claim: 'Утверждение В', judgeDecision: 'rejected', judgeReason: 'противоречит странице', packageStatus: 'rejected' };
 // Отказ кода (в т.ч. «судья не вынес решения за 3 попытки»): judgeModel='code', не вердикт модели
-const ND_CODE = { ...ND_ACCEPTED_A, packageId: 'pkg-c1', page: 'common/page-d', claim: null, judgeReason: 'судья не вынес решения за 3 попытки', judgeModel: 'code' };
+const ND_CODE = { ...ND_ACCEPTED_A, packageId: 'pkg-c1', page: 'common/page-d', claim: null, judgeReason: 'судья не вынес решения за 3 попытки', judgeModel: 'code', packageStatus: 'rejected_by_checks' };
 const ND_WAITING = {
   ...ND_ACCEPTED_A, packageId: 'pkg-w1', page: 'projects/p1/page-e', claim: 'Утверждение Г',
   judgeDecision: null, judgeReason: null, judgeAt: null, judgeCostUsd: null, judgeModel: null,
-  reason: 'ждёт решения',
+  reason: 'ждёт решения', packageStatus: 'proposed',
 };
 
 // Фикстура c1: группы 2/1/1/0
@@ -1060,18 +1072,18 @@ describe('«Журнал»: вид «Решения за ночь» (J-F2)', () 
     expect(nightRows(c)).toHaveLength(0);
   });
 
-  it('группы 2/1/1/0: ровно 3 заголовка групп и 4 строки операций; «Ждут судью» не показана', async () => {
+  it('группы 2/1/1/0: ровно 3 заголовка групп и 4 строки операций; «Ждут решения» не показана', async () => {
     await seedNight(NIGHT_2110);
     const c = render();
     await settle();
     await toNightView(c);
-    // мутация (19): не отфильтровывать пустые группы — «Ждут судью» добавилась бы четвёртой
+    // мутация (19): не отфильтровывать пустые группы — «Ждут решения» добавилась бы четвёртой
     expect(nightGroupCount(c)).toBe(3);
     expect(nightRows(c)).toHaveLength(4);
     expect(has(c, 'Принято судьёй')).toBe(true);
     expect(has(c, 'Отклонено судьёй')).toBe(true);
     expect(has(c, 'Отклонено кодом')).toBe(true);
-    expect(has(c, 'Ждут судью')).toBe(false);
+    expect(has(c, 'Ждут решения')).toBe(false);
   });
 
   it('все группы пусты — «За ночь решений нет», а не пустой экран', async () => {
@@ -1132,7 +1144,7 @@ describe('«Журнал»: вид «Решения за ночь» (J-F2)', () 
     expect(has(c, 'projects/p9/ghost.md')).toBe(true);
   });
 
-  it('«Откатить пакет»: один POST с id пакета строки; кнопка — только у принятых судьёй', async () => {
+  it('«Откатить пакет»: один POST с id пакета строки; кнопка — только у применённых (applied)', async () => {
     serveNight(NIGHT_2110);
     await act(async () => { await loadWikiTree(); });
     // откат отвечает успехом: список перечитывается после него
@@ -1159,12 +1171,47 @@ describe('«Журнал»: вид «Решения за ночь» (J-F2)', () 
     expect(toast.calls[0][1]).toBe('1 страница возвращена');
   });
 
-  it('у «Ждут судью» нет «Откатить пакет»: их ещё не применили', async () => {
+  // Доработка приёмки b0065470 (дефекты b58d81c0, 76f4c7d6): вердикт судьи и судьба пакета —
+  // разные вещи. Строки принятой группы с другой судьбой остаются в группе: без кнопки,
+  // с пометкой статуса.
+  it('«Принято судьёй» с другой судьбой пакета: кнопка только у applied, reverted/apply_failed — пометка в своей группе', async () => {
+    const NIGHT_MIXED = {
+      ...NIGHT_EMPTY,
+      judgeAccepted: [ND_ACCEPTED_A, ND_ACCEPTED_REVERTED, ND_ACCEPTED_FAILED],
+    };
+    await seedNight(NIGHT_MIXED);
+    const c = render();
+    await settle();
+    await toNightView(c);
+    // 3 строки остаются в одной группе («Принято судьёй» — единственный заголовок)
+    expect(nightGroupCount(c)).toBe(1);
+    expect(nightRows(c)).toHaveLength(3);
+    expect(has(c, 'Принято судьёй')).toBe(true);
+    // мутация (23): показывать кнопку при любой группе/статусе — 4 кнопки, этот assert краснеет
+    const revertBtns = allNodes(c).filter(n => n.getAttribute('data-testid') === 'wiki-night-revert');
+    expect(revertBtns).toHaveLength(1);
+    // мутация (24): не рендерить пометку статуса — эти два assert краснеют
+    expect(has(c, 'откачен')).toBe(true);
+    expect(has(c, 'не применён')).toBe(true);
+    // пометка — у своей строки: «откачен» у pkg-a3, «не применён» у pkg-a4; у applied — ни той, ни другой
+    const rowText = (row: AnyNode) => textNodes(row).join(' ');
+    const rowsByPage = ['page-f', 'page-g', 'page-a'].map(p =>
+      nightRows(c).find(r => rowText(r).includes(`projects/p1/${p}`)));
+    expect(rowsByPage.every(Boolean)).toBe(true);
+    expect(rowText(rowsByPage[0]!)).toContain('откачен');
+    expect(rowText(rowsByPage[1]!)).toContain('не применён');
+    expect(rowText(rowsByPage[2]!)).not.toContain('откачен');
+    expect(rowText(rowsByPage[2]!)).not.toContain('не применён');
+    // группа «принято» остаётся и у помеченных строк: их вердикт никуда не делся
+    expect(has(c, 'подтверждено источником')).toBe(true);
+  });
+
+  it('у «Ждут решения» нет «Откатить пакет»: их ещё не применили', async () => {
     await seedNight(NIGHT_ONLY_WAITING);
     const c = render();
     await settle();
     await toNightView(c);
-    expect(has(c, 'Ждут судью')).toBe(true);
+    expect(has(c, 'Ждут решения')).toBe(true);
     expect(nightRows(c)).toHaveLength(1);
     // мутация (18): «Откатить пакет» во всех группах — этот assert краснеет
     expect(buttonByTestId(c, 'wiki-night-revert')).toBeNull();

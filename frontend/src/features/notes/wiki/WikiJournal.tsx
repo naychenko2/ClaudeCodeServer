@@ -356,15 +356,26 @@ const NIGHT_GROUPS: { key: NightGroupKey; title: string }[] = [
   { key: 'judgeAccepted', title: 'Принято судьёй' },
   { key: 'judgeRejected', title: 'Отклонено судьёй' },
   { key: 'codeRejected', title: 'Отклонено кодом' },
-  { key: 'waiting', title: 'Ждут судью' },
+  // Эти операции ждут и человека, и судья (J-F2, доработка приёмки b0065470): «судья» в
+  // заголовке обещал бы только автоматическую половину
+  { key: 'waiting', title: 'Ждут решения' },
 ];
 
-// Решение в строке — короткое: полное имя уже в заголовке группы. У «Ждут судью» решения
+// Решение в строке — короткое: полное имя уже в заголовке группы. У «Ждут решения» решения
 // нет вовсе — строка без бейджа: пустое поле честнее выдумки.
 const GROUP_BADGE: Record<Exclude<NightGroupKey, 'waiting'>, { tone: 'success' | 'danger'; text: string }> = {
   judgeAccepted: { tone: 'success', text: 'принято' },
   judgeRejected: { tone: 'danger', text: 'отклонено' },
   codeRejected: { tone: 'danger', text: 'отклонено кодом' },
+};
+
+// Судьба пакета — не вердикт судьи: в «Принято судьёй» строка может нести уже откатанный
+// (reverted) или не применившийся (apply_failed) пакет — пометка говорит об этом прямо,
+// строка остаётся в своей группе (вердикт никуда не делся). Прочие статусы не помечаются:
+// словарь не выдумывает смысл незнакомому слову (тот же приём, что UNKNOWN_OP_TEXT).
+const PACKAGE_STATUS_BADGE: Record<string, { tone: 'neutral' | 'danger'; text: string }> = {
+  reverted: { tone: 'neutral', text: 'откачен' },
+  apply_failed: { tone: 'danger', text: 'не применён' },
 };
 
 // Строка ночи не несёт раздела (в отличие от строки журнала): только ключ страницы.
@@ -402,10 +413,11 @@ function revertPackageErrorText(e: WikiError): string {
 
 // Строка операции ночи: ссылка на страницу (открывает её существующим каналом
 // requestOpenWikiPage), claim, решение, «почему» судьи, исходная причина спора и
-// «Откатить пакет» — только у «Принято судьёй»: откатывают применённый пакет
-// (WikiController.cs:178-179), а вердикт судьи замкнут применением (J-J2b): у прочих
-// групп откатывать нечего. Всё оборачивается: на 360 px строка не даёт горизонтальной
-// прокрутки.
+// «Откатить пакет» — только у строки с packageStatus === 'applied': откатывают применённый
+// пакет (WikiController.cs:178-179), а вердикт судьи и судьба пакета — разные вещи
+// (J-F2, доработка b0065470): принятый судьёй мог не примениться (apply_failed) или быть
+// откатан (reverted) — такая строка остаётся в своей группе с пометкой статуса, без кнопки.
+// Всё оборачивается: на 360 px строка не даёт горизонтальной прокрутки.
 function NightRow({ row, group, busy, onRevert }: {
   row: WikiNightDecisionDto;
   group: NightGroupKey;
@@ -416,14 +428,16 @@ function NightRow({ row, group, busy, onRevert }: {
   const sectionKey = pageSectionKey(tree, row.page);
   const section = sectionKey ? tree?.sections.find(s => s.key === sectionKey) : undefined;
   const badge = group === 'waiting' ? null : GROUP_BADGE[group];
+  const statusBadge = PACKAGE_STATUS_BADGE[row.packageStatus] ?? null;
   return (
     <div data-testid="wiki-night-row" style={{ padding: `${SP.sm}px ${SP.md}px`, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-      {(section || badge) && (
+      {(section || badge || statusBadge) && (
         <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
           {section && (
             <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{sectionPrefix(section)}</span>
           )}
           {badge && <Badge tone={badge.tone}>{badge.text}</Badge>}
+          {statusBadge && <Badge tone={statusBadge.tone}>{statusBadge.text}</Badge>}
         </span>
       )}
       {sectionKey ? (
@@ -452,7 +466,7 @@ function NightRow({ row, group, busy, onRevert }: {
       {row.reason && (
         <span style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'break-word' }}>причина спора: {row.reason}</span>
       )}
-      {group === 'judgeAccepted' && (
+      {row.packageStatus === 'applied' && (
         <span style={{ marginTop: SP.xs }}>
           <Button variant="secondary" size="sm" dataTestId="wiki-night-revert" disabled={busy} onClick={onRevert}>Откатить пакет</Button>
         </span>
@@ -561,9 +575,9 @@ export function WikiJournal(
   };
 
   // «Откатить пакет» (мера 4, J-F2): в один клик, без подтверждения — строка уже назвала
-  // всё, что откатывается (страница, claim, вердикт). Успех — перечитка ночи: откатанный
-  // пакет уходит из «Принято судьёй» (его операций больше нет в окне вердиктов как принятых;
-  // сам откат в этой сводке не показывается — она про вердикты, журнал — про события).
+  // всё, что откатывается (страница, claim, вердикт). Успех — перечитка ночи: вердикт
+  // судьи никуда не уходит (сводка — про вердикты), строка остаётся в своей группе, но
+  // пакет получает статус reverted и пометку «откачен» вместо кнопки (доработка b0065470).
   const doRevertPackage = async (row: WikiNightDecisionDto) => {
     if (busy) return;
     setBusy(true);

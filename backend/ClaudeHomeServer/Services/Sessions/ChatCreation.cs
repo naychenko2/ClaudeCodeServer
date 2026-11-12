@@ -6,9 +6,9 @@ using ClaudeHomeServer.Protocol;
 namespace ClaudeHomeServer.Services.Sessions;
 
 // Создание чата (S3-5, docs/research/session-manager-split-2026-11.md §1 «жизненный цикл», §2):
-// обычный чат проекта, чат вне проекта, чат от лица персоны, групповой чат, а также два
-// способа породить чат из существующего — ветка по транскрипту и перенос разговора в новый
-// чат. Тела перенесены из SessionManager дословно; фасад держит делегирующие обёртки
+// обычный чат проекта, чат вне проекта, чат от лица персоны, групповой чат, а также
+// способ породить чат из существующего — ветка по транскрипту. Тела перенесены из
+// SessionManager дословно; фасад держит делегирующие обёртки
 // прежних публичных сигнатур (на них сидят контроллеры и тулсеты). Класс internal: его
 // никто не принимает в публичном конструкторе — фасад собирает его сам (переходный режим)
 // или через AddSessionCore.
@@ -361,20 +361,6 @@ public sealed class ChatCreation
         configure?.Invoke(s);
         _store.SaveSessions();
         return s;
-    }
-
-    // Проверка «из чата можно перенести разговор в новый» (холодный путь переноса, шаг B-4
-    // фичы про prompt cache) — до вызова модели, чтобы не платить за записку,
-    // которую некуда положить. Старый чат только читается.
-    internal void EnsureHandoffAllowed(Session source) =>
-        EnsureSuccessorAllowed(source, "переносить", "нового чата");
-
-    // Новый чат для переноса: без resume (новый csid выдаст первый ход), с наследованием §11.
-    // Источник не трогается — ни UpdatedAt, ни архив.
-    internal Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
-    {
-        EnsureHandoffAllowed(source);
-        return CreateSuccessorChatAsync(source, ownerId, name, resumeSessionId: null);
     }
 
     // === Фабрики чатов ===

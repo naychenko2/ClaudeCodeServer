@@ -137,7 +137,7 @@ public class HostPerClassRatchetGuardTests
     };
 
     // Потолки списков: запись в Remainder/UndoneH0 не лазейка, а долг — размер только уменьшается
-    internal const int UndoneH0Ceiling = 68;
+    internal const int UndoneH0Ceiling = 67;
     internal const int RemainderCeiling = 29;
 
     // Скан решения (все тестовые сборки по метаданным и IL) — Slow по «Правилу новой метки» testing.md

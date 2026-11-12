@@ -902,11 +902,6 @@ private Task HandleTeamTurnCompletedShim(TurnCompleted e) =>
         int userMessageIndex, string anchorText, string include, string? name = null)
         => await _creation.BranchAsync(sessionId, ownerId, userMessageIndex, anchorText, include, name);
 
-    public void EnsureHandoffAllowed(Session source) => _creation.EnsureHandoffAllowed(source);
-
-    public Task<Session> CreateHandoffChatAsync(Session source, string ownerId, string name)
-        => _creation.CreateHandoffChatAsync(source, ownerId, name);
-
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
         string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,

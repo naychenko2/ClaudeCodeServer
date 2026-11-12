@@ -508,7 +508,7 @@ public class SessionStatusTests : IDisposable
             "занятый чат: сообщение человека уходит в очередь");
 
         // Разбор очереди: DeliverPendingAsync → SendDirectAsync (fromQueue, cause=QueueUser).
-        // Приватный метод вызываем рефлексией (прецедент — ChatContinueServiceTests: _sessions/Pending).
+        // Приватный метод вызываем рефлексией (прецедент — рефлексия по приватному полю: _sessions/Pending).
         var entry = GetEntry(sut, s.Id);
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
         var head = (QueuedMessage)pending[0]!;

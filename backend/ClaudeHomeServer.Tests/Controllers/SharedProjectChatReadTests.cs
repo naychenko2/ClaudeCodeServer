@@ -125,10 +125,10 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
     // ── запись и ходы — не участника ─────────────────────────────────────────────
 
     // Читатель после QA-P1 — как и прежде, ничего: и переименование, и AI-переименование для него
-    // 403 project_scope (права записи контента у читателя нет), клон/продолжение/передача/значок/
-    // контекст/настройки — прежние 403/404.
+    // 403 project_scope (права записи контента у читателя нет), клон/значок/контекст/настройки —
+    // прежние 403/404.
     [Fact]
-    public async Task Читатель_НеПереименовываетНеКлонируетНеПродолжаетНеПишет()
+    public async Task Читатель_НеПереименовываетНеКлонируетНеПишет()
     {
         var (projectId, sessionId) = await SharedChatAsync("reader");
         var member = Member();
@@ -142,8 +142,6 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
             "смена значков");
         ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/branch",
             new { userMessageIndex = 0, anchorText = "x", include = "none" }), "клон");
-        ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/continue", new { }), "продолжение");
-        ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/handoff", null), "передача");
         ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/retitle", null), "AI-переименование");
         ShouldBeRefused(await member.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",
             new { text = "привет", wait = "none" }), "отправка сообщения");
@@ -163,8 +161,8 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
 
     // QA-P1 (решение Андрея, продуктовый вопрос 2 плана v2): редактор переименовывает чат владельца —
     // право записи контента, а не авторство. AI-переименование тоже его (гейт пройден: ручка отвечает
-    // по делу — в чате нет сообщений, 502, а не 403/404). Прочее — по-прежнему не он: клон,
-    // продолжение, передача, значки, контекст, настройки чата.
+    // по делу — в чате нет сообщений, 502, а не 403/404). Прочее — по-прежнему не он: клон, значки,
+    // контекст, настройки чата.
     [Fact]
     public async Task Редактор_ПереименовываетЧатВладельца_ПрочегоЕмуНельзя()
     {
@@ -176,8 +174,6 @@ public class SharedProjectChatReadTests : IClassFixture<TestWebApplicationFactor
             "смена значков");
         ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/branch",
             new { userMessageIndex = 0, anchorText = "x", include = "none" }), "клон");
-        ShouldBeRefused(await member.PostAsJsonAsync($"/api/chats/{sessionId}/continue", new { }), "продолжение");
-        ShouldBeRefused(await member.PostAsync($"/api/chats/{sessionId}/handoff", null), "передача");
         // Право записи пройдено: до тела ручки дошло (там «в чате ещё нет сообщений», 502) —
         // отказа права (403) или видимости (404) нет; фейковый раннер TestWebApplicationFactory
         // network не делает

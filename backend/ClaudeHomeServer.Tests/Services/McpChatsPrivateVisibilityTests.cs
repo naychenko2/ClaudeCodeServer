@@ -25,7 +25,7 @@ namespace ClaudeHomeServer.Tests.Services;
 /// <summary>
 /// FIN3-1 (пункт critical FINAL-3): MCP wsp <c>chats_history/chats_send/chats_update/
 /// chats_archive/chats_delete</c> проверяют видимость приватного чата в ЛЮБОЙ рамке —
-/// та же точка, что у chats_list (S2d-4e) и chats_continue (S2d-7b-1): чужой приватный чат
+/// та же точка, что у chats_list (S2d-4e): чужой приватный чат
 /// не виден даже владельцу проекта; автор своего приватного видит; актор неизвестен —
 /// приватные не видны (fail-closed). До правки приватность держала только узкая рамка
 /// (NarrowDenied): в широкой владелец читал/писал/архивировал/удалял чужой приватный чат.

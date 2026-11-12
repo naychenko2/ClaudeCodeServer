@@ -37,15 +37,10 @@ import { AlertTriangle, History, Moon } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, requestOpenWikiPage, showToast,
   WikiError, loadWikiJournal, retractWikiSource, useWikiTree,
-  type WikiJournalDto, type WikiJournalEntryOverrideDto,
-} from 'aihome_shell/kit';
-// Транспорт «Решений за ночь» — прямо из lib/wiki: J-F0 сознательно не поднимал их в кит
-// (кит держит стор и общие операции; здесь — чистые функции и DTO, состояния стора по-прежнему
-// берутся только через кит).
-import {
   loadWikiNightDecisions, revertWikiPackage,
+  type WikiJournalDto, type WikiJournalEntryOverrideDto,
   type WikiNightDecisionDto, type WikiNightDecisionsDto, type WikiRevertDto,
-} from '../../../lib/wiki';
+} from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Chip } from '../../../components/ui/Chip';

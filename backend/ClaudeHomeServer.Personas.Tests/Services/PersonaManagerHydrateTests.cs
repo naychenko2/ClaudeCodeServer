@@ -74,6 +74,20 @@ public class PersonaManagerHydrateTests : IDisposable
     }
 
     [Fact]
+    public void ПравкаСпециальности_PersonaAccessPolicyДаётНовыйНабор_ТолькоПриInheritsAccess()
+    {
+        var inheriting = MakeInheriting();
+        var overriding = MakeInheriting(inherits: false);
+        SetTemplate(PersonaAccess.Full, null, null);
+        PersonaAccessPolicy.BuildExtraDisallowed(_sut.Get(inheriting.Id, Owner)).Should().BeNull();
+
+        SetTemplate(PersonaAccess.Custom, null, ["Bash"]);
+
+        PersonaAccessPolicy.BuildExtraDisallowed(_sut.Get(inheriting.Id, Owner)).Should().Contain("Bash");
+        PersonaAccessPolicy.BuildExtraDisallowed(_sut.Get(overriding.Id, Owner)).Should().BeNull("override переживает правку");
+    }
+
+    [Fact]
     public void Get_Override_ПраваПерсоныПереживаютШаблон()
     {
         SetTemplate(PersonaAccess.ReadOnly, ["tasks"], null);

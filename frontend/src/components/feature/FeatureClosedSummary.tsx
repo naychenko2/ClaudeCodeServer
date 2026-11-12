@@ -5,7 +5,8 @@
 // это returned + замечания, в герое под словом «возвраты» не показывается; нет
 // verdicts (старый ответ) — плитки возвратов нет, не падаем. Замечаний в герое
 // нет вовсе: они в полосе «Разбора» (FeatureReviewReturns). «Хвосты» названы
-// так же, как в «Объёме» (FeatureReviewVolume), — «доработки после мержа».
+// так же, как в «Объёме» (FeatureReviewVolume), — «открыто после мержа» (FP-R3):
+// «доработки» — имя followUp («Доработки: A из T»), не этой величины.
 // Четвёртой плитки «точность срока» нет — этой величины в контракте нет.
 // Подсказка «Закройте фичу, когда доработки не нужны» — только у merged (FS-AC3b):
 // фича остаётся «смержена», пока человек сам не нажмёт «Закрыть» (FeaturePageHeader).
@@ -85,8 +86,9 @@ function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null |
 export function FeatureClosedSummary({
   summary, verdicts, initialEtaMinutes, tailsCount, showCloseHint, followUp, isMobile = false, onOpenReview,
 }: FeatureClosedSummaryProps) {
-  // Метки плиток склоняются по числу (тот же приём, что «Все N шагов» в FeatureProgressTab):
-  // «1 / шаг», «2 / возврата», «7 / шагов»; 0 — родительный множественный («0 доработок после мержа»).
+  // Метки «шагов» и «возвратов» склоняются по числу (тот же приём, что «Все N шагов»
+  // в FeatureProgressTab): «1 / шаг», «2 / возврата», «7 / шагов». Метка «открыто после
+  // мержа» не склоняется (FP-R3): неизменяемая подпись, число стоит рядом, в самой плитке.
   const tiles = [
     { key: 'steps', label: plural(summary.steps, 'шаг', 'шага', 'шагов'), value: summary.steps },
   ];
@@ -96,8 +98,9 @@ export function FeatureClosedSummary({
   if (verdicts?.returned != null) {
     tiles.push({ key: 'loops', label: plural(verdicts.returned, 'возврат', 'возврата', 'возвратов'), value: verdicts.returned });
   }
-  // То же имя, что в «Объёме» (FeatureReviewVolume): «доработки после мержа», не «хвосты» (FP-H1).
-  tiles.push({ key: 'tails', label: `${plural(tailsCount, 'доработка', 'доработки', 'доработок')} после мержа`, value: tailsCount });
+  // То же имя, что в «Объёме» (FeatureReviewVolume): «открыто после мержа», не «хвосты» и не
+  // «доработки» (FP-R3): «доработки» здесь — только строка followUp («Доработки: A из T»).
+  tiles.push({ key: 'tails', label: 'открыто после мержа', value: tailsCount });
 
   return (
     <div data-testid="closed-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>

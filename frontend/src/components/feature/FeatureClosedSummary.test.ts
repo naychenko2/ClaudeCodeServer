@@ -10,7 +10,8 @@
 //     сразу под строкой итога (FS-AC3b); у closed её нет: ни без мержа (mergedAt null/мусор),
 //     ни после мержа (showCloseHint=false при валидном mergedAt — бэк его оставляет).
 // FP-H1 (дефект Веры e128aac4): «возвраты» в герое — только verdicts.returned, не summary.loops
-// (returned + замечания); замечаний в герое нет; «хвосты» → «доработки после мержа»; без
+// (returned + замечания); замечаний в герое нет; FP-R3: «хвосты» → «открыто после мержа»
+// (неизменяемая подпись; «доработки» — только строка followUp «Доработки: A из T»); без
 // verdicts (старый ответ) — плитки возвратов нет, не падаем. Мутация «вернуть summary.loops»
 // краснит «возвраты = verdicts.returned».
 // Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
@@ -59,10 +60,11 @@ describe('FeatureClosedSummary', () => {
     for (const k of ['steps', 'loops', 'tails']) {
       expect(findNodeByAttr(container, 'data-testid', `closed-tile-${k}`)).not.toBeNull();
     }
-    // Метки плиток склоняются по числу: 7 → «шагов», 15 → «возвратов», 1 → «доработка после мержа».
+    // Метки «шагов»/«возвратов» склоняются по числу: 7 → «шагов», 15 → «возвратов»;
+    // «открыто после мержа» — неизменяемая подпись (FP-R3).
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('15возвратов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1доработка после мержа');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1открыто после мержа');
     const tiles = findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!;
     expect(tiles.childNodes.length).toBe(3);
   });
@@ -120,7 +122,7 @@ describe('FeatureClosedSummary', () => {
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line'))).toBe(baseLine);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('15возвратов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1доработка после мержа');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1открыто после мержа');
     // «план расширен» в итогах не показываем.
     expect(textOf(container)).not.toContain('план расширен');
     uninstallFakeDom(); installFakeDom();
@@ -211,16 +213,32 @@ describe('«Возвраты» в герое — только настоящие
     // Остальные две плитки — на месте.
     expect(tiles.childNodes.length).toBe(2);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps')!)).toBe('7шагов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('1доработка после мержа');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('1открыто после мержа');
   });
 
-  it('«доработки после мержа», не «хвосты»: слова «хвост» в герое нет; склонение по числу', () => {
+  it('«открыто после мержа», не «хвосты» и не «доработки»: слова «хвост» в герое нет; подпись не склоняется (FP-R3)', () => {
     const { container } = mountSummary({ tailsCount: 5 });
     expect(textOf(container)).not.toContain('хвост');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('5доработок после мержа');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('5открыто после мержа');
     uninstallFakeDom(); installFakeDom();
-    // 0 — родительный множественный, как у «0 шагов».
+    // Неизменяемая подпись: одно и то же при 0 и при 5 (FP-R3: «доработки» — имя followUp).
     const zero = mountSummary({ tailsCount: 0 });
-    expect(textOf(findNodeByAttr(zero.container, 'data-testid', 'closed-tile-tails')!)).toBe('0доработок после мержа');
+    expect(textOf(findNodeByAttr(zero.container, 'data-testid', 'closed-tile-tails')!)).toBe('0открыто после мержа');
+  });
+});
+
+// FP-R3 (финал Александра d9373bd8): под одним именем «доработки после мержа» стояло два
+// разных числа: postMergeTails (плитка героя) и followUp («Доработки: A из T»). Теперь это
+// два разных слова. Мутация «вернуть «доработок после мержа» в плитке героя» краснит этот тест.
+describe('FP-R3: «открыто после мержа» и «Доработки: A из T» — два слова для двух величин', () => {
+  it('postMergeTails 0, followUp 2 из 2: плитка «0 открыто после мержа» и строка «Доработки: 2 из 2»', () => {
+    const { container } = mountSummary({ tailsCount: 0, followUp: { total: 2, accepted: 2 } });
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('0открыто после мержа');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-followup')!)).toBe('Доработки: 2 из 2');
+    // Прежнего имени плитки нигде в герое не остаётся (ни в одном склонении).
+    const whole = textOf(container);
+    expect(whole).not.toContain('доработка после мержа');
+    expect(whole).not.toContain('доработки после мержа');
+    expect(whole).not.toContain('доработок после мержа');
   });
 });

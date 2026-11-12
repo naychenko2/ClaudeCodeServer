@@ -588,14 +588,31 @@ public class WikiApplyPolicyTests
         v.ReasonCode.Should().Be(code);
     }
 
+    // Ожидаемые перечни — в тесте, не выведенные из ReasonCodes. number_unconfirmed здесь
+    // обязателен: его ставит валидатор (WikiPlanValidator.cs:443), а форма пакета сверяет
+    // код причины по ReasonCodes (WikiPackage.cs:369) — без него в перечне пакет с
+    // неподтверждённым числом отвергался бы по форме, и разбор уходил в отказ.
+    private static readonly string[] PolicyCodesExpected =
+        [WikiApplyPolicy.CodeAutoApplyOff, WikiApplyPolicy.CodeUnknownOp, WikiApplyPolicy.CodeNoClass,
+         WikiApplyPolicy.CodeBadClass, WikiApplyPolicy.CodeNoPage, WikiApplyPolicy.CodeClassDisabled,
+         WikiApplyPolicy.CodeRevertQuarantine, WikiApplyPolicy.CodeNoHistorySection,
+         WikiApplyPolicy.CodeOverridesHuman, WikiApplyPolicy.CodePageDuplicate,
+         WikiApplyPolicy.CodeSectionNewPagesLimit, WikiApplyPolicy.CodeOriginUrl,
+         WikiApplyPolicy.CodePersonalToCommon, WikiApplyPolicy.CodeTargetDisputed,
+         WikiApplyPolicy.CodeAfterModelRepair];
+    private static readonly string[] ReasonCodesExpected =
+        [.. PolicyCodesExpected, WikiApplyPolicy.CodeNumberUnconfirmed];
+
     [Fact]
     public void ReasonCodes_КаждыйКодПолитикиПолученСвоейВеткой_ПереченьПолный()
     {
         var covered = InboxCodeCases().Select(c => (string)c[0]).ToList();
 
-        // number_unconfirmed — код валидатора (числа), не политики: Decide его не рождает.
-        covered.Distinct().Should().BeEquivalentTo(
-            WikiApplyPolicy.ReasonCodes.Except([WikiApplyPolicy.CodeNumberUnconfirmed]));
+        // Полный перечень формы пакета — против ожидаемого списка: выпадение любого кода
+        // (в т. ч. number_unconfirmed, которого Decide не рождает) — красным.
+        WikiApplyPolicy.ReasonCodes.Should().BeEquivalentTo(ReasonCodesExpected);
+        // Каждый код политики обязан иметь свою ветку в InboxCodeCases — и наоборот.
+        covered.Distinct().Should().BeEquivalentTo(PolicyCodesExpected);
     }
 
     // Ожидаемые множества — в тесте, не выведенные из кода: убрать origin_url из CodeRejected

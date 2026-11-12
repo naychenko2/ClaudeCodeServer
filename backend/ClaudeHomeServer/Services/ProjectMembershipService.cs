@@ -181,7 +181,7 @@ public sealed class ProjectMembershipService(
     /// запись нельзя (жизненный цикл владельца целиком — S5).
     /// </summary>
     public bool OwnerHasMembers(string ownerId) =>
-        projects.GetAll().Any(p => p.OwnerId == ownerId && p.Members is { Count: > 0 });
+        projects.GetAll().Any(p => p.OwnerId == ownerId && ProjectAccess.IsShared(p));
 
     private async Task<MembershipResult> DropAsync(string projectId, string memberUserId)
     {
@@ -301,7 +301,7 @@ public static class ProjectMembersView
         var role = ProjectAccess.Check(p, callerId);
         var former = p.FormerMembers is { Count: > 0 } f
             ? f.Select(m => new { userId = m.UserId, displayName = m.DisplayName }).ToList() : null;
-        var shared = p.Members is { Count: > 0 } || role is not (null or ProjectRole.Owner);
+        var shared = ProjectAccess.IsShared(p) || role is not (null or ProjectRole.Owner);
         if (!shared) return (null, null, null, null, former);
         var owner = users.GetById(p.OwnerId!);
         var members = p.Members ?? [];

@@ -158,15 +158,33 @@ public class WikiNightlyServiceTests : IDisposable
     private WikiNightlyService.NightResult Last() => WikiNightlyService.ReadLast(Root()).Should().NotBeNull().And.Subject
         as WikiNightlyService.NightResult ?? throw new InvalidOperationException();
 
-    private WikiChatIngestService RealIngest() =>
+    // midJudge — фейк точки (б) внутри настоящего WikiIngestService (доработка финала J-J4):
+    // считает, звался ли судья посреди ночи. null — точки (б) нет, как в цепочке без судьи.
+    private WikiChatIngestService RealIngest(
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(new WikiSourceCapture(_notes, _projects, _sessions, _config, _keeper),
-            new WikiIngestService(_llm, new NoSpheres(), _apply, _config), _sessions, _keeper, _config);
+            new WikiIngestService(_llm, new NoSpheres(), _apply, _config, null, midJudge), _sessions, _keeper, _config);
 
     // log — захват журнала для тестов строки итога (J-O1); без него — тихий SUT, как раньше.
-    private WikiNightlyService RealSut(ILogger<WikiNightlyService>? log = null) =>
+    // judge — фейк точки (а) (проход судьи в конце), midJudge — фейк точки (б) в настоящей цепочке.
+    private WikiNightlyService RealSut(ILogger<WikiNightlyService>? log = null,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? midJudge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            (o, c, ct) => RealIngest().AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
-            _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, keeper: _keeper);
+            (o, c, ct) => RealIngest(midJudge).AnalyzeAsync(o, c, ct, LocalActionCatalog.WikiNightly),
+            _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now,
+            keeper: _keeper, judge: judge);
+
+    // Строка журнала владельца (тест доработки финала J-J4): карантин N7d — страница,
+    // откатанная человеком, делает операции новых пакетов спорными («Входящие»).
+    private void LogLine(string ts, string op, string actor, params string[] pages)
+    {
+        var path = Path.Combine(Root(), "keeper", "log.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var arr = string.Join(",", pages.Select(p => "\"" + p + "\""));
+        File.AppendAllText(path,
+            $$"""{"ts":"{{ts}}","op":"{{op}}","section":"{{Section}}","pages":[{{arr}}],"actor":"{{actor}}"}""" + "\n");
+    }
 
     private List<string> KeeperFiles() =>
         Directory.Exists(Path.Combine(Root(), "keeper"))
@@ -1399,6 +1417,51 @@ public class WikiNightlyServiceTests : IDisposable
         rows.Should().HaveCount(2, "одна Information и одна Warning");
         rows[0].Message.Should().Contain("на судье 0/0/3").And.Contain("судья 1 выз. $0");
         rows.Count(r => r.Level == LogLevel.Warning).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task НочьСДвумяСпорнымиОкнами_СудьяОднимПроходомВКонце_ЕгоЧислаВИтоге()
+    {
+        // Доработка финала J-J4 (пункт 1 «до мержа»): окна ночи идут через тот же IngestAsync,
+        // но точка (б) судью для места wiki-nightly не пускает — её полный проход один, в конце
+        // RunPassAsync (точка (а)), и его числа идут в итог. Посреди ночи тот проход
+        // выбрасывал свой итог: сводка ночи читала бы почти ноль вызовов и цену около нуля.
+        // Мутация «вернуть судью в точку (б) для ночи» (убрать guard по actionKey в
+        // RunProtectedAsync) → midCalls=2, красный.
+        Configure();
+        AddChat("c1", history: KnowledgeHist());
+        AddChat("c2", history: KnowledgeHist());
+        _llm.Reply = _ => WikiSynthJson.Append("Сущность", ClaimText, ClaimQuote);
+        // Спорность обоих окон: страница откатана человеком вчера (карантин N7d) — операции
+        // каждого пакета идут в «Входящие», каждое окно заканчивается awaiting_human.
+        LogLine(DateTimeOffset.UtcNow.AddDays(-1).ToString("O"), "revert", "user", PagePath);
+
+        var midCalls = 0;
+        var endCalls = 0;
+        var gate = new object();
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> mid =
+            (owner, root, ct) =>
+            {
+                lock (gate) midCalls++;
+                return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+            };
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> end =
+            (owner, root, ct) =>
+            {
+                lock (gate) endCalls++;
+                return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(2, 0.04m, 2, 0, 0, 0, null));
+            };
+
+        await Tick(RealSut(judge: end, midJudge: mid));
+
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, last.FirstRejectReason ?? "");
+        last.ToInbox.Should().Be(2, "оба окна спорные: каждое — своей записью в «Входящих»");
+        midCalls.Should().Be(0, "посреди ночи судья не идёт: у неё один полный проход — в конце");
+        endCalls.Should().Be(1, "ровно один проход судьи на ночь");
+        last.JudgeCalls.Should().Be(2, "в итог ночи идут числа её единственного прохода, а не ноль");
+        last.JudgeCostUsd.Should().Be(0.04m, "цена ночи — цена её единственного прохода");
+        last.JudgeApplied.Should().Be(2);
     }
 
     [Fact]

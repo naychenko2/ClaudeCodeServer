@@ -549,6 +549,27 @@ public class WikiIngestTests : IDisposable
         roots.Should().BeEmpty("неприменённого спорного нет — прохода судьи нет");
     }
 
+    [Fact]
+    public async Task J4r_НочнаяЗаявкаСоСпорнымОкном_СудьяВТочкеБНеЗван()
+    {
+        // Доработка финала J-J4 (пункт 1 «до мержа»): окна ночи идут через этот же IngestAsync
+        // с местом wiki-nightly, но точка (б) судью для них не пускает: у ночи один полный
+        // проход — в конце RunPassAsync (точка (а) WikiNightlyService), его числа и идут в итог
+        // ночи. Посреди ночи тот проход выбрасывал свой итог и шёл без ct ночи. Дневная заявка
+        // (actionKey null — кнопка и MCP-заявка) зовёт судью здесь же, как прежде: тест выше.
+        // Мутация «вернуть судью в точку (б) для ночи» (убрать guard по actionKey) → 1 вызов, красный.
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+        var roots = new List<string>();
+
+        // nightly: true — место ночи идёт локальным маршрутом (иначе отказ окна до вызова).
+        var res = await Sut(new FakeLlm(synth: SynthJson, nightly: true), CountingJudge(roots))
+            .IngestAsync(User, Req(), CancellationToken.None, LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.PackageId.Should().NotBeNullOrEmpty("окно спорное: пакет всё равно создаётся — он ждёт человека");
+        roots.Should().BeEmpty("для ночи точка (б) судью не пускает: её полный проход — в конце ночи");
+    }
+
     // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────
 
     [Fact]

@@ -2346,6 +2346,130 @@ public class FeatureProjectorTests
         Stage(run, "merge").State.Should().NotBe("active");
     }
 
+    // ─── B5 (разрез workflow §3): стадии из подтверждённого маршрута (FeatureWorkflow.Route) ──
+
+    // Фаст-трек (маршрут без cut/design/qa): Stages — ровно порядок Workflow.Route,
+    // снятых стадий нет; роль step → стадия prod (одна таблица FeatureTimeMath.RoleToStage).
+    // Мутация «игнорировать Workflow» (BuildStageDefs: не читать epic.Workflow) — красный
+    // этот и оба следующих cases; легаси-случай ниже при ней зелёный.
+    [Fact]
+    public void Build_МаршрутФастТрек_StagesИзRouteБезСнятыхСтадий()
+    {
+        const string epicId = "epic-fast-track";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = "builtin-fast-track", Scope = "global",
+                Route = [TaskRoles.Plan, TaskRoles.Step, TaskRoles.Review, TaskRoles.Final, TaskRoles.Merge],
+                Skipped = [TaskRoles.Cut, TaskRoles.Design, TaskRoles.Qa],
+                ConfirmedVersion = 1,
+                ConfirmedAt = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc),
+                ConfirmedByUser = true,
+            },
+        };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem
+        {
+            Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+        // qa-задача при снятом qa (битые данные: TaskManager.Create её бы не пустил) —
+        // в стадии её быть не должно ни при каком раскладе.
+        var qa = new TaskItem { Id = "q1", FeatureId = epicId, Role = TaskRoles.Qa, Status = TaskItemStatus.Done };
+        var final = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Final, Status = TaskItemStatus.Done,
+            Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step, review, qa, final]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "plan", "prod", "review", "final", "merge" },
+            "порядок стадий = порядок Route; снятых маршрутом стадий (cut/design/qa) в проекции нет");
+        run.Stages.Should().NotContain(s => s.Key == "cut" || s.Key == "design" || s.Key == "qa",
+            "пропуски маршрута в графе не показываем (решение Андрея)");
+        // Задачи — по своим стадиям; снятая qa-задача не попадает ни в одну стадию.
+        Stage(run, "plan").TaskIds.Should().Equal(new[] { "p1" });
+        Stage(run, "prod").TaskIds.Should().Equal(new[] { "s1" });
+        Stage(run, "review").TaskIds.Should().Equal(new[] { "r1" });
+        Stage(run, "final").TaskIds.Should().Equal(new[] { "f1" });
+        run.Stages.SelectMany(s => s.TaskIds).Should().NotContain("q1");
+        // Финал принят, мержа нет → «честный мерж» в маршруте: активна merge (последняя
+        // стадия Route), а не снятая cut.
+        Stage(run, "merge").State.Should().Be("active");
+    }
+
+    // Эпик без Workflow — легаси: фиксированный список из 8 ключей, байт в байт к прежнему
+    // stageDefs (старые фичи не ломаются). При мутации «игнорировать Workflow» этот case
+    // зелёный: легаси-ветка от правки маршрута не зависит (проверено прогоном мутации).
+    [Fact]
+    public void Build_БезWorkflow_LегасиСписокИзВосьмиСтадий()
+    {
+        const string epicId = "epic-legacy-route";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature };
+        var plan = new TaskItem { Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+
+        var run = FeatureProjector.Build(epic, [epic, plan, step]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(
+            new[] { "cut", "design", "plan", "prod", "review", "qa", "final", "merge" },
+            "без подтверждённого маршрута — прежний фиксированный список (W4-DES-B)");
+    }
+
+    // Пустой Route (битые данные: валидатор маршрута ещё не на месте подтверждения):
+    // Stages пуст, Build не падает, активной стадии нет (activeIndex для пустого списка — -1).
+    [Fact]
+    public void Build_МаршрутПустойRoute_StagesПустой_НеПадает()
+    {
+        const string epicId = "epic-empty-route";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow { TemplateId = "t", Scope = "global", Route = [], ConfirmedByUser = true },
+        };
+        var step = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step,
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc),
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, step]);
+
+        run.Stages.Should().BeEmpty("пустой маршрут — пустой конвейер, без исключения");
+        run.Stages.Should().NotContain(s => s.State == "active");
+    }
+
+    // Роль вне StageRoles (feature) и повторная роль в Route (битые данные): вне проекции —
+    // стадия без соответствия не заводится, повтор не даёт второй копии той же стадии.
+    [Fact]
+    public void Build_МаршрутНеизвестнаяРольИПовтор_ВнеПроекции()
+    {
+        const string epicId = "epic-bad-route";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = "t", Scope = "global",
+                Route = [TaskRoles.Step, TaskRoles.Review, TaskRoles.Feature, TaskRoles.Step, TaskRoles.Merge],
+                ConfirmedByUser = true,
+            },
+        };
+        var step = new TaskItem { Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, Status = TaskItemStatus.Done };
+        var review = new TaskItem { Id = "r1", FeatureId = epicId, Role = TaskRoles.Review, Status = TaskItemStatus.Done };
+        var merge = new TaskItem { Id = "m1", FeatureId = epicId, Role = TaskRoles.Merge, Status = TaskItemStatus.Done };
+
+        var run = FeatureProjector.Build(epic, [epic, step, review, merge]);
+
+        run.Stages.Select(s => s.Key).Should().Equal(new[] { "prod", "review", "merge" },
+            "feature вне набора стадий; повтор step — одна стадия prod");
+    }
+
     // ─── FS-V1 (разрез §2.1 П2): одна «текущая стадия» на все четыре потребителя ──────────────────
 
     // Сторож инварианта: работа реально идёт на «review» (ревью принятого шага Ш1), а по старому

@@ -286,20 +286,13 @@ public sealed class FeatureProjector(TaskManager tasks)
                 .Select(t => t.Id)
                 .ToList();
 
-        // Конвейер: стадии в порядке жизненного цикла. Порядок задаётся ЯВНЫМ списком,
-        // а не выводится из порядка кода (W4-DES-B): «design» — необязательный этап после
-        // «cut»; без дизайн-задач — состояние skipped, на готовность не влияет.
-        var stageDefs = new (string key, List<TaskItem> tasks)[]
-        {
-            ("cut", cut),
-            ("design", design),
-            ("plan", plan),
-            ("prod", steps),
-            ("review", reviews),
-            ("qa", qa),
-            ("final", final is not null ? [final] : []),
-            ("merge", merge is not null ? [merge] : []),
-        };
+        // Конвейер: стадии в порядке жизненного цикла. Без подтверждённого маршрута
+        // (epic.Workflow == null) — фиксированный список легаси (W4-DES-B: «design» —
+        // необязательный этап после «cut»; без дизайн-задач — состояние skipped, на готовность
+        // не влияет). С маршрутом — порядок Workflow.Route, снятые маршрутом стадии в проекцию
+        // не попадают (решение Андрея, разрез workflow §3 «FeatureProjector», шаг B5) —
+        // BuildStageDefs.
+        var stageDefs = BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge);
 
         // isDone[i]: стадия имеет ≥1 задачи И все они Done.
         // Мерж done ТОЛЬКО при merge.Status == Done (финал зелёный, а мержа нет → мерж active).
@@ -341,15 +334,20 @@ public sealed class FeatureProjector(TaskManager tasks)
             {
                 if (!isDone[i] && stageDefs[i].tasks.Count > 0) { activeIndex = i; break; }
             }
-            if (activeIndex == -1 && !isDone[^1])
+            // isDone.Length == 0 — маршрут без стадий (пустой Route, битые данные): активной
+            // стадии нет, activeIndex остаётся -1 (список пуст, [^1] не брать).
+            if (activeIndex == -1 && isDone.Length > 0 && !isDone[^1])
             {
                 int lastWithTasks = -1;
                 for (int i = 0; i < stageDefs.Length; i++)
                     if (stageDefs[i].tasks.Count > 0) lastWithTasks = i;
                 activeIndex = lastWithTasks < 0 ? 0 : lastWithTasks + 1;
                 // Пустая необязательная «design» не может быть активной: активность
-                // уходит на следующую стадию (W4-DES-B).
-                if (stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
+                // уходит на следующую стадию (W4-DES-B). В маршруте design может стоять
+                // последней (порядок задаёт шаблон) — следующей стадии нет, остаёмся на
+                // design: расчёт состояния даёт ей skipped, ложного «active» не будет.
+                if (activeIndex + 1 < stageDefs.Length
+                    && stageDefs[activeIndex].key == "design" && stageDefs[activeIndex].tasks.Count == 0)
                     activeIndex++;
             }
         }
@@ -655,6 +653,64 @@ public sealed class FeatureProjector(TaskManager tasks)
             // корзины: второй предикат «что такое хвост» не заводится, список только переносится.
             ClosedTailKeys = accounting.ClosedTailKeys,
             Tracker = tracker,
+        };
+    }
+
+    // ─── B5 (разрез workflow §3): список стадий конвейера ──────────────────────────────────
+    // Без подтверждённого маршрута (epic.Workflow == null) — фиксированный список легаси
+    // (байт в байт к прежнему stageDefs): старые фичи не ломаются. С маршрутом — стадии
+    // идут в порядке Workflow.Route; снятые маршрутом стадии в проекцию НЕ попадают
+    // (решение Андрея: пропуски в графе не показываем, данные о пропуске — в Workflow.Skipped).
+    // Ключ этапа маршрута (роль из WorkflowRules.StageRoles) → ключ стадии — ОДНА таблица
+    // FeatureTimeMath.RoleToStage (step → prod, остальные — собой); второй таблицы здесь нет.
+    // Роль вне StageRoles и повторная роль — вне проекции: валидатор шаблона (WorkflowRules.
+    // Validate) не пропускает их на записи, здесь — защита от битых данных: стадия без
+    // соответствия не заводится, повтор не даёт второй копии той же стадии. Пустой Route —
+    // пустой список (проектор не падает; activeIndex для пустого списка — -1, см. BuildCore).
+    private static (string key, List<TaskItem> tasks)[] BuildStageDefs(
+        TaskItem epic,
+        List<TaskItem> cut, List<TaskItem> design, List<TaskItem> plan, List<TaskItem> steps,
+        List<TaskItem> reviews, List<TaskItem> qa, TaskItem? final, TaskItem? merge)
+    {
+        var byKey = new Dictionary<string, List<TaskItem>>(StringComparer.Ordinal)
+        {
+            ["cut"] = cut,
+            ["design"] = design,
+            ["plan"] = plan,
+            ["prod"] = steps,
+            ["review"] = reviews,
+            ["qa"] = qa,
+            ["final"] = final is not null ? [final] : [],
+            ["merge"] = merge is not null ? [merge] : [],
+        };
+
+        // Подтверждённый маршрут читаем буквально: пустой (или null) Route — пустой
+        // конвейер, не откат к легаси: легаси — только отсутствие Workflow.
+        if (epic.Workflow is { } confirmed)
+        {
+            var defs = new List<(string key, List<TaskItem> tasks)>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var role in confirmed.Route ?? [])
+            {
+                if (!WorkflowRules.StageRoles.Contains(role)) continue;
+                var key = FeatureTimeMath.RoleToStage(role);
+                if (!seen.Add(key)) continue;
+                defs.Add((key, byKey[key]));
+            }
+            return defs.ToArray();
+        }
+
+        // Легаси: порядок жизненного цикла, «design» — необязательный этап после «cut» (W4-DES-B).
+        return new (string, List<TaskItem>)[]
+        {
+            ("cut", cut),
+            ("design", design),
+            ("plan", plan),
+            ("prod", steps),
+            ("review", reviews),
+            ("qa", qa),
+            ("final", byKey["final"]),
+            ("merge", byKey["merge"]),
         };
     }
 

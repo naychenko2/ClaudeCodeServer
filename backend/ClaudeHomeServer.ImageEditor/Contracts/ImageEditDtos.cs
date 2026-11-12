@@ -187,7 +187,9 @@ public record ImageEditJobInput(
     ImageBytes? KeepMask = null,
     // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
     // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
-    IReadOnlyList<FacePass>? FacePasses = null)
+    IReadOnlyList<FacePass>? FacePasses = null,
+    // Стиль Krea 2 Turbo (Krea2Styles.Id); null — без стиля. Проверяет сборщик запуска
+    string? Style = null)
 {
     // Вход прохода подстановки (ADR-028, этап 3): поля прохода поверх базового входа. Единственная
     // точка подстановки — и для верхних полей N = 1 (сборщик), и для каждого прохода цепочки, —

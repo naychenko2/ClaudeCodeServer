@@ -109,6 +109,8 @@ export interface ContextLaunch {
   count: number;
   // Пропорции дорисовки или новой картинки; null — как решит модель
   aspect: string | null;
+  // Стиль Krea 2 Turbo (id из caps.styles); null — без стиля
+  style?: string | null;
   contextRevision: number;
   onJob?: (jobId: string) => void;
 }
@@ -241,6 +243,7 @@ export async function launchThread(
       characterSlug: noSamples || cx ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
       ...(aspectRatio ? { aspectRatio } : null),
+      ...(cx?.style ? { style: cx.style } : null),
       sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,
       ...(cx ? { contextRevision: cx.contextRevision } : null),
     });

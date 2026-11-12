@@ -64,4 +64,59 @@ public class LocalImageMediaAdapterKrea2MossTests
 
         Unet().Should().Be("qwen_image_2.1_int8_convrot.safetensors");
     }
+    // ── Стили Krea 2 Turbo (Ш4) ──
+
+    [Fact]
+    public async Task Krea2СоСтилем_ЛораИТриггерВГрафе()
+    {
+        var submitted = await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Generate, "кот", [], "1:1", 1,
+            Model: LocalImageModels.Krea2Turbo, KreaStyle: "softwatercolor"), default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!;
+        graph["lora"]!["inputs"]!["lora_name"]!.GetValue<string>().Should().Be("krea2_softwatercolor.safetensors");
+        graph["pos"]!["inputs"]!["text"]!.GetValue<string>().Should().Be("кот, art deco watercolor style");
+    }
+
+    [Fact]
+    public async Task Krea2СОбразцомСтиля_СвойГрафСтиляПоОбразцу()
+    {
+        var submitted = await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Generate, "йети", [LocalMediaTestImages.Png(8, 8)], "1:1", 1,
+            Model: LocalImageModels.Krea2Turbo, StyleReference: true), default);
+
+        submitted.Error.Should().BeNull();
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!;
+        Unet().Should().Be("krea2_turbo_int8_convrot.safetensors");
+        graph["lora"]!["inputs"]!["lora_name"]!.GetValue<string>().Should().Be("krea2_style_reference.safetensors");
+        graph["enc"]!["class_type"]!.GetValue<string>().Should().Be("TextEncodeQwenImageEditPlus");
+        graph["img"]!["class_type"]!.GetValue<string>().Should().Be("LoadImage");
+        submitted.EtaSeconds.Should().Be(LocalMediaService.Krea2StyleReferenceEta(1));
+    }
+
+    [Fact]
+    public void Effective_ОбразецСтиляОстаётсяНаKrea_ОстальноеУходитНаQwen()
+    {
+        byte[][] one = [LocalMediaTestImages.Png(8, 8)];
+        byte[][] two = [LocalMediaTestImages.Png(8, 8), LocalMediaTestImages.Png(8, 8)];
+        LocalImageRequest Req(byte[][] images, bool styleRef, LocalImageOp op = LocalImageOp.Generate, LocalImageLora? lora = null) =>
+            new(op, "x", images, "1:1", 1, Lora: lora, Model: LocalImageModels.Krea2Turbo, StyleReference: styleRef);
+
+        LocalImageModels.Effective(Req(one, true)).Should().Be(LocalImageModels.Krea2Turbo);
+        LocalImageModels.Effective(Req(one, false)).Should().Be(LocalImageModels.Quality, "образец другой роли");
+        LocalImageModels.Effective(Req(two, true)).Should().Be(LocalImageModels.Quality, "образец стиля один");
+        LocalImageModels.Effective(Req(one, true, LocalImageOp.Edit)).Should().Be(LocalImageModels.Quality);
+        LocalImageModels.Effective(Req(one, true, lora: new LocalImageLora("l.safetensors", 1))).Should().Be(LocalImageModels.Quality);
+        LocalImageModels.Effective(Req([], false)).Should().Be(LocalImageModels.Krea2Turbo);
+    }
+
+    [Fact]
+    public async Task Moss_СтильИОбразецНеПрименяются()
+    {
+        await Build().SubmitAsync(new LocalImageRequest(LocalImageOp.Generate, "кот", [], "1:1", 1,
+            Model: LocalImageModels.Moss, KreaStyle: "darkbrush"), default);
+
+        var graph = _comfy.Prompts.Should().ContainSingle().Subject["prompt"]!;
+        graph.AsObject().Should().NotContainKey("lora");
+        Unet().Should().Be("moss_image_sft_int8_convrot.safetensors");
+    }
 }

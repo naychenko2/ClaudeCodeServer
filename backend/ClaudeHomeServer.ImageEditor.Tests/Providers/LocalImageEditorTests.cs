@@ -395,7 +395,9 @@ public class LocalImageEditorTests : IDisposable
         var caps = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == id).Caps;
 
         caps.Ops.Should().Equal(ImageEditOp.Generate);
-        caps.MaxReferences.Should().Be(0);
+        // Krea берёт один образец-стиль (остальные образцы шов отдаёт Qwen); MOSS образцов не берёт
+        caps.MaxReferences.Should().Be(id == "krea2-turbo" ? 15 : 0);
+        if (id != "krea2-turbo") caps.Styles.Should().BeNull("стили только у Krea");
         caps.FaceByReferences.Should().BeFalse();
         caps.Mask.Should().Be(MaskSupport.None);
         caps.Format!.ModelLabel.Should().Be(format);
@@ -1193,5 +1195,90 @@ public class LocalImageEditorTests : IDisposable
         result.Outcome.Should().Be(EditOutcome.Ok);
         media.Submitted.Should().ContainSingle();
         gate.Waits.Should().Be(0);
+    }
+
+    // ── Стили Krea 2 Turbo (Ш4) ──
+
+    private static ImageEditJobInput KreaInput(string? style, params ReferenceImage[] refs) =>
+        new("", "кот на крыше", null, null, null, null, refs, null, Style: style);
+
+    private static ImageEditQuoteRequest KreaQuote(int references = 0) =>
+        Quote(ImageEditOp.Generate) with { Model = LocalImageEditor.Krea2Turbo, References = references };
+
+    [Fact]
+    public void КаталогKrea2_ДевятьСтилейПлашками()
+    {
+        var caps = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == "krea2-turbo").Caps;
+
+        caps.Styles.Should().HaveCount(9);
+        caps.Styles!.Select(x => x.Id).Should().Equal(Krea2Styles.All.Select(x => x.Id));
+        new LocalImageEditor(new FakeMedia()).Models.Where(m => m.Id != "krea2-turbo").Should().OnlyContain(m => m.Caps.Styles == null);
+    }
+
+    [Fact]
+    public async Task Krea2_СтильУходитВШов()
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), KreaQuote(), KreaInput("neondrip"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Model.Should().Be(LocalImageModels.Krea2Turbo);
+        sent.KreaStyle.Should().Be("neondrip");
+        sent.StyleReference.Should().BeFalse();
+        sent.Images.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Krea2_НеизвестныйСтиль_БезСтиля()
+    {
+        var media = new FakeMedia();
+        await RunAsync(Service(Editor(media)), KreaQuote(), KreaInput("нет-такого"));
+
+        media.Submitted.Should().ContainSingle().Subject.KreaStyle.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Krea2_ОдинОбразецСРольюСтиль_СтильПоОбразцу()
+    {
+        var media = new FakeMedia();
+        var job = await RunAsync(Service(Editor(media)), KreaQuote(references: 1),
+            KreaInput("darkbrush", new ReferenceImage(TestImages.Png(8, 8), "image/png", ReferenceRole.Style, "стиль")));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.StyleReference.Should().BeTrue();
+        sent.Images.Should().ContainSingle();
+        sent.KreaStyle.Should().BeNull("образец важнее плашки стиля");
+        LocalImageModels.Effective(sent).Should().Be(LocalImageModels.Krea2Turbo);
+        sent.Prompt.Should().Be("кот на крыше", "роли образцов в текст не пишутся");
+    }
+
+    [Theory]
+    [InlineData(ReferenceRole.Object)]
+    [InlineData(ReferenceRole.Character)]
+    public async Task Krea2_ОбразецДругойРоли_УходитНаQwen(ReferenceRole role)
+    {
+        var media = new FakeMedia();
+        await RunAsync(Service(Editor(media)), KreaQuote(references: 1),
+            KreaInput(null, new ReferenceImage(TestImages.Png(8, 8), "image/png", role, "образец")));
+
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.StyleReference.Should().BeFalse();
+        LocalImageModels.Effective(sent).Should().Be(LocalImageModels.Quality);
+    }
+
+    [Fact]
+    public async Task Krea2_КотировкаСОдНимОбразцом_СчитаетсяПоKrea()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        await service.QuoteAsync("user-a", Project, KreaQuote(references: 1), default);
+        media.EtaModels.Should().Contain(LocalImageEditor.Krea2Turbo).And.NotContain(LocalImageEditor.QwenImage);
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, KreaQuote(references: 2), default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "два образца — Qwen");
     }
 }

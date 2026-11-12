@@ -146,6 +146,11 @@ public sealed class ImageEditLaunchAssembler(
                 return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
         }
 
+        // Стиль Krea 2 Turbo: неизвестный id — отказ, а не молчаливый запуск без стиля
+        var style = Krea2Styles.Find(req.Style);
+        if (!string.IsNullOrWhiteSpace(req.Style) && style is null)
+            return Invalid($"Стиль «{req.Style}» неизвестен");
+
         var limits = ImageEditCatalog.DefaultLimits;
         var sizes = new[] { source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
             .Concat(req.Uploaded.Select(r => r.Bytes))
@@ -188,6 +193,11 @@ public sealed class ImageEditLaunchAssembler(
             return PhotosInvalid();
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
+        // Стиль Krea с персонажем или образцами не роли «стиль» шов увёл бы на Qwen и выбросил стиль
+        // (LocalImageModels.Effective) — отказ вместо картинки без стиля
+        if (style is not null && quoteInfo?.InputCaps?.Styles is { Count: > 0 }
+            && (character is not null || references is not ([] or [{ Role: ReferenceRole.Style }])))
+            return Invalid("Стиль Krea работает без образцов или с одним образцом-стилем");
 
         if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInsideAs(scope.Project!.RootPath, sourcePath, actorId) is null)
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");
@@ -209,7 +219,8 @@ public sealed class ImageEditLaunchAssembler(
             AspectRatio: aspectRatio,
             ThreadId: threadId,
             BaseVersionId: baseVersionId,
-            CharacterPicker: picker));
+            CharacterPicker: picker,
+            Style: style?.Id));
     }
 
     // Подбор фото персонажа под сюжет (ADR-027 §7). Возвращает
@@ -548,4 +559,6 @@ public sealed record ImageEditLaunchRequest(
     IReadOnlyList<string>? CharacterPhotos = null,
     // Подстановка персонажа на лицо (ADR-028, этап 2): при наличии контекст чата игнорируется
     // целиком, образцы — только персонаж, маска строится сервером
-    FaceTarget? FaceTarget = null);
+    FaceTarget? FaceTarget = null,
+    // Стиль Krea 2 Turbo (Krea2Styles.Id); пусто — без стиля
+    string? Style = null);

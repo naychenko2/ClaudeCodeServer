@@ -213,7 +213,8 @@ public abstract class ImageEditorEndpoints(
             VersionId: form.VersionId,
             ContextRevision: form.ContextRevision,
             CharacterPhotos: form.CharacterPhotos,
-            FaceTarget: faceTarget);
+            FaceTarget: faceTarget,
+            Style: form.Style);
 
         var started = await launcher.LaunchAsync(scope.Tenant, UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -317,6 +318,8 @@ public abstract class ImageEditorEndpoints(
         public string? BaseStepId { get; set; }
         // Пропорции «Дорисовать за края» (1:1, 16:9, 9:16); не передано — на усмотрение драйвера
         public string? AspectRatio { get; set; }
+        // Стиль Krea 2 Turbo (Krea2Styles.Id); не передано — без стиля
+        public string? Style { get; set; }
         // Нить картинки в чате (ADR-019): варианты станут её версиями, внизу ленты —
         // якорь запуска. Не своя нить — 404 thread_not_found до запуска
         public string? SessionId { get; set; }

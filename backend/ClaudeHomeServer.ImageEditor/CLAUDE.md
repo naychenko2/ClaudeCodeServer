@@ -304,7 +304,13 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   **Krea 2 Turbo (`krea2-turbo`) и MOSS-Image (`moss-image`), с 2026-11-12** — только `Generate`
   (`TextOnlyModel`: без образцов, масок и персонажа, формат ~1 Мп). Любая картинка на входе, LoRA или
   не-генерация уводят запуск на Qwen «качественно» (`LocalImageModels.TextOnly` в `Effective`), котировку —
-  так же (`EtaVariant`).
+  так же (`EtaVariant`). **Стили Krea (Ш4)**: исключение — один образец с ролью «стиль» остаётся на Krea
+  («стиль по образцу», `IsKreaStyleReference`), поэтому каталог заявляет `MaxReferences: 15` и `caps.Styles`.
+  Стиль — только ручной выбор Krea 2 Turbo: при «Авто» плашек нет, автовыбор Krea со стилем не выбирает.
+  Стиль с персонажем, образцом другой роли или 2+ образцами `ImageEditLaunchAssembler` отвергает
+  («Стиль Krea работает без образцов или с одним образцом-стилем»), а не запускает Qwen без стиля.
+  Котировка роли не видит: одиночный образец любой роли считает стилем по образцу и занижает время,
+  если роль другая, — известный компромисс.
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

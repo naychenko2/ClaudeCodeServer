@@ -29,6 +29,10 @@ export function paramsFor(catalog: ImageEditCatalog | null, settings: { provider
   const { m } = resolveModel(catalog, { ...settings, matchSourceSize: true });
   const max = Math.max(1, m?.caps?.maxCount ?? catalog?.limits.maxCount ?? 4);
   const out: LaunchParam[] = [{ kind: 'variants', min: 1, max, value: 1 }];
+  // Стили модели плашками (Krea 2 Turbo, только генерация по тексту); '' — без стиля
+  const styles = m?.caps?.styles;
+  if (op === 'generate' && styles?.length)
+    out.push({ kind: 'style', options: [{ value: '', label: 'Без стиля' }, ...styles.map(s => ({ value: s.id, label: s.label }))], value: '' });
   return out;
 }
 
@@ -103,6 +107,7 @@ export async function launchAction(ctx: ContextKindCtx, req: LaunchRequest): Pro
   const ok = await launchThread(scope, ctx.sessionId, thread, { kind: 'prompt', prompt: req.text }, {
     ctx: {
       op: req.op as ImageEditOp, count: countOf(req, settings.count), aspect,
+      style: typeof req.params.style === 'string' && req.params.style ? req.params.style : null,
       contextRevision: req.contextRevision, onJob: id => { jobId = id; watcher.attach(id); },
     },
   });

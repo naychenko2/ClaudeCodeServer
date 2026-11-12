@@ -1,7 +1,8 @@
 // Действия чата (QA-P1, бэк f777c8460; доработка QA-P1F по ревью 6e843c37): переименовать,
 // архивировать и теги — правка содержимого чата: владелец и редактор (бэковый PUT оставляет
-// редактору name/tags), читателю — ничего; удалить — автор чата и владелец проекта
-// (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests); срок жизни, мьют уведомлений и
+// редактору name/tags), читателю — ничего; удалить — решение Андрея 12.11 (W4-C1): общий чат
+// удаляет только владелец проекта, свой приватный — его автор (зеркало SessionsController.Delete);
+// срок жизни, мьют уведомлений и
 // «не сохранять решения» — настройки владельца: закрыты и редактору, и читателю (зеркало
 // бэкового OwnerSettingsGate, 403 owner_settings). Обычный проект (без myRole) и чат вне
 // проекта — как раньше. Окружение node без jsdom: логика гейта — чистыми функциями,
@@ -31,18 +32,26 @@ describe('chatWriteDeniedReason (переименовать/архивирова
 });
 
 describe('chatDeleteDeniedReason (удалить)', () => {
-  it('редактору: свой чат можно, чужой — нет (и через диспетчер)', () => {
-    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME }, ME)).toBeNull();
-    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: OTHER }, ME)).toBe(CHAT_DELETE_DENIED);
-    expect(chatActionDeniedReason('delete', { myRole: 'editor' }, { createdByUserId: OTHER }, ME)).toBe(CHAT_DELETE_DENIED);
+  // Решение Андрея 12.11 (W4-C1): редактору открыт только ЕГО приватный чат (оба поля —
+  // privateToUserId и createdByUserId — мои); любой общий чат — даже созданный им самим —
+  // только владельцу проекта
+  it('редактору: свой приватный можно, свой общий и чужой — нет (и через диспетчер)', () => {
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME, privateToUserId: ME }, ME)).toBeNull();
+    // свой общий: автор я, но чат не приватен — отказ (перевёрнутый старый кейс «editor свой → null»)
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME, privateToUserId: null }, ME)).toBe(CHAT_DELETE_DENIED);
+    expect(chatActionDeniedReason('delete', { myRole: 'editor' }, { createdByUserId: ME, privateToUserId: null }, ME)).toBe(CHAT_DELETE_DENIED);
+    // чужой чат — общий и приватный чужому — отказ; приватен мне, но автор другой — тоже не мой чат
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: OTHER, privateToUserId: null }, ME)).toBe(CHAT_DELETE_DENIED);
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: OTHER, privateToUserId: OTHER }, ME)).toBe(CHAT_DELETE_DENIED);
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: OTHER, privateToUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
     // чат без автора (старая запись) и мой id без пары — fail-closed, как на бэке (NoAuthorChatId)
-    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: null }, ME)).toBe(CHAT_DELETE_DENIED);
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: null, privateToUserId: null }, ME)).toBe(CHAT_DELETE_DENIED);
     expect(chatDeleteDeniedReason({ myRole: 'editor' }, null, ME)).toBe(CHAT_DELETE_DENIED);
-    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME }, null)).toBe(CHAT_DELETE_DENIED);
+    expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME, privateToUserId: ME }, null)).toBe(CHAT_DELETE_DENIED);
   });
-  it('читателю: любой чат, даже свой (и через диспетчер)', () => {
-    expect(chatDeleteDeniedReason({ myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
-    expect(chatActionDeniedReason('delete', { myRole: 'reader' }, { createdByUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
+  it('читателю: любой чат, даже свой приватный (и через диспетчер)', () => {
+    expect(chatDeleteDeniedReason({ myRole: 'reader' }, { createdByUserId: ME, privateToUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
+    expect(chatActionDeniedReason('delete', { myRole: 'reader' }, { createdByUserId: ME, privateToUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
   });
   it('владельцу и обычному проекту: любой чат, как раньше', () => {
     expect(chatDeleteDeniedReason({ myRole: 'owner' }, { createdByUserId: OTHER }, ME)).toBeNull();

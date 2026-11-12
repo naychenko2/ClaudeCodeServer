@@ -38,29 +38,33 @@ export function participantSendTitle(_gate: Extract<ParticipantComposerGate, { b
 
 // Действия чата (QA-P1, бэк f777c8460; QA-P1F): переименовать, архивировать и теги —
 // право записи чата, владелец и редактор (любой видимый чат, зеркало DenyContentWrite);
-// удалить — автор чата и владелец проекта (зеркало ChatAuthorGate/ChatWriteRightsEndpointTests);
-// читателю — ничего.
+// удалить — решение Андрея 12.11: общий чат удаляет только владелец проекта, свой
+// приватный — его автор (W4-C1); читателю — ничего.
 // Обычный проект (без myRole) — всё разрешено, как раньше. null — можно; строка — причина
 // для подсказки выключенного пункта и сублейбла меню.
 export const CHAT_WRITE_DENIED = 'Только владелец и редактор проекта';
-export const CHAT_DELETE_DENIED = 'Только автор чата и владелец проекта';
+export const CHAT_DELETE_DENIED = 'Общий чат удаляет только владелец проекта';
 
 // Переименовать/архивировать/AI-переименовать/теги: отказан только читателю
 export function chatWriteDeniedReason(project: Pick<Project, 'myRole'> | null | undefined): string | null {
   return project?.myRole === 'reader' ? CHAT_WRITE_DENIED : null;
 }
 
-// Удалить: автор чата и владелец проекта. Свой чат редактора опознаётся по createdByUserId
-// (поле с бэка; у старых записей null — чат чужой, fail-closed); мой id — из stored-пары
+// Удалить: решение Андрея 12.11, зеркало SessionsController.Delete. Общий чат — только
+// владельцу проекта; редактору открыт его собственный приватный чат: privateToUserId И
+// createdByUserId — оба мои (поля с бэка; у старых записей null — чат общий, fail-closed);
+// мой id — из stored-пары
 export function chatDeleteDeniedReason(
   project: Pick<Project, 'myRole'> | null | undefined,
-  chat: Pick<Session, 'createdByUserId'> | null | undefined,
+  chat: Pick<Session, 'createdByUserId' | 'privateToUserId'> | null | undefined,
   myUserId: string | null | undefined,
 ): string | null {
   const role = project?.myRole;
   if (!role || role === 'owner') return null;
   if (role === 'reader') return CHAT_DELETE_DENIED;
-  return chat?.createdByUserId && chat.createdByUserId === myUserId ? null : CHAT_DELETE_DENIED;
+  return !!myUserId && chat?.privateToUserId === myUserId && chat?.createdByUserId === myUserId
+    ? null
+    : CHAT_DELETE_DENIED;
 }
 
 // Настройки чата — право владельца (QA-P1F, зеркало бэкового OwnerSettingsGate): срок
@@ -76,12 +80,13 @@ export function ownerSettingsDeniedReason(project: Pick<Project, 'myRole'> | nul
 }
 
 // Единый диспетчер для петель шапки (ряд, «⋯», runAction): rename/archive/tags — гейт
-// записи, delete — авторский, срок/мьют/досье — настройки владельца. Пункты, которые
-// ничего не пишут в чате («Закрепить», «На стену»), правило не трогает
+// записи, delete — право владельца (свой приватный чат — его автора), срок/мьют/досье —
+// настройки владельца. Пункты, которые ничего не пишут в чате («Закрепить», «На стену»),
+// правило не трогает
 export function chatActionDeniedReason(
   key: string,
   project: Pick<Project, 'myRole'> | null | undefined,
-  chat: Pick<Session, 'createdByUserId'> | null | undefined,
+  chat: Pick<Session, 'createdByUserId' | 'privateToUserId'> | null | undefined,
   myUserId: string | null | undefined,
 ): string | null {
   if (key === 'rename' || key === 'archive' || key === 'tags') return chatWriteDeniedReason(project);

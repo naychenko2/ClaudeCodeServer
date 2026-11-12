@@ -252,6 +252,12 @@ public sealed class SpecialtySettingsStore
     // берутся из настройки инстанса, ЕСЛИ там заданы, иначе из дефолта кода
     // (SpecialtyPromptPresets); настройка одной секции не трогает соседние. «Замена целиком»
     // здесь была бы ошибкой: настройка одной секции сносила бы дефолтные тексты остальных.
+    //
+    // P1a (разрез 2, Г6): само наложение вынесено в PromptSectionOverlay.Apply — одну
+    // функцию на все слои (слой персоны в промпте хода сядет на неё же, P1c). Здесь
+    // остаются только состояния кода (дефолты каталога) и приведение настройки админа к
+    // PromptSectionOverride: Enabled записи всегда «задан» (bool без null), Text — «задан»
+    // только когда непустой. Чтение — тот же volatile-снимок _file, без блокировок.
     public IReadOnlyList<EffectivePromptSection> EffectivePromptSectionStates(
         string ownerId, PersonaSpecialty specialty)
     {
@@ -259,29 +265,18 @@ public sealed class SpecialtySettingsStore
         var key = SpecialtyCatalog.KeyOf(specialty);
         var record = _file.Global.Specialties.GetValueOrDefault(key);
 
-        var result = new List<EffectivePromptSection>(SpecialtyPromptPresets.Sections.Count);
+        var codeStates = new List<EffectivePromptSection>(SpecialtyPromptPresets.Sections.Count);
         foreach (var meta in SpecialtyPromptPresets.Sections)
-        {
-            var enabled = SpecialtyPromptPresets.DefaultEnabled(meta.Id, specialty);
-            var text = SpecialtyPromptPresets.DefaultText(meta.Id, specialty);
-            var enabledSource = SectionSource.Code;
-            var textSource = SectionSource.Code;
+            codeStates.Add(new EffectivePromptSection(
+                meta.Id,
+                SpecialtyPromptPresets.DefaultEnabled(meta.Id, specialty),
+                SpecialtyPromptPresets.DefaultText(meta.Id, specialty),
+                SectionSource.Code, SectionSource.Code));
 
-            var entry = record?.PromptSections?
-                .FirstOrDefault(p => string.Equals(p.Id, meta.Id, StringComparison.OrdinalIgnoreCase));
-            if (entry is not null)
-            {
-                enabled = entry.Enabled;
-                enabledSource = SectionSource.Global;
-            }
-            if (!string.IsNullOrWhiteSpace(entry?.Text))
-            {
-                text = entry.Text!.Trim();
-                textSource = SectionSource.Global;
-            }
-            result.Add(new EffectivePromptSection(meta.Id, enabled, text, enabledSource, textSource));
-        }
-        return result;
+        var overrides = record?.PromptSections?
+            .Select(p => new PromptSectionOverride(p.Id, p.Enabled, p.Text))
+            .ToList();
+        return PromptSectionOverlay.Apply(codeStates, overrides, SectionSource.Global);
     }
 
     // Эффективные секции промпта специальности (контракт вклейки в системный промпт):

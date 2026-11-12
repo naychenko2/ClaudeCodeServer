@@ -23,6 +23,20 @@ public sealed record OneShotResult(string Text, OneShotUsage? Usage, long Durati
 public sealed class LlmTimeoutException(string? message = null)
     : InvalidOperationException(message ?? "AI не ответил за отведённое время");
 
+// Исполнитель-движок места: какая локальная модель способна принять его работу и как она
+// подписана для владельца. Engine — «local» (основная локальная модель, значение
+// LocalActionOverridesStore.LocalRoute) или имя движка LocalEngines:<имя>; третьего вида
+// исполнителя шов не знает. Title — подпись движка для UI владельца (Title/ModelLabel его
+// спецификации) — владельцу нужно видеть, КУДА он отправляет ночь, а не технический ключ.
+// Parallel — можно ли на этом движке вести несколько работ места одновременно (ночной разбор
+// вики разбирает чаты параллельно; остальным местам это не нужно — см.
+// LocalAction.ParallelExecutors).
+//
+// Имя совпадает с LocalExecutor из ClaudeHomeServer.Services.Composition: там — персона-
+// исполнитель задачи, здесь — движок локальной модели. Понятия разные, namespace'ы разные; в
+// файле, который видит оба, имя уточняют явно (LocalExecutorRoster).
+public sealed record LocalExecutor(string Engine, string Title, bool Parallel);
+
 // Единая точка «дешёвого» текстового one-shot вызова для фоновых действий. Скрывает от
 // потребителя выбор исполнителя: если действие сконфигурировано на локаль (LocalActionRouter)
 // и Ollama доступна — идёт бесплатный локальный вызов; при недоступности/ошибке/пустом ответе
@@ -104,4 +118,37 @@ public interface ICheapTextRunner
     Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
         string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
         object? jsonFormat = null, CancellationToken ct = default);
+
+    // Исполнители-движки места: какие локальные движки назначены ему по текущему конфигу —
+    // основная локаль («local») и именованные движки LocalEngines:*, чей Actions содержит этот
+    // ключ. Порядок — тот, по которому работу стоит вести (назначенный месту движок первым).
+    // Пусто — исполнителей нет (место не на локали, движков нет, или шов про движки ничего не
+    // знает): вызывающий работу не начинает вовсе, а не уходит «куда-нибудь».
+    // Тело по умолчанию — пустой список: своих движков не знает ни одна существующая реализация
+    // и ни одна тестовая заглушка — для них это прежний ответ «движков не вижу». Абстрактный
+    // метод сломал бы их всех сразу (их десятки) — поэтому дефолт, а не обязательный член.
+    public IReadOnlyList<LocalExecutor> LocalExecutorsFor(string actionKey) => [];
+
+    // Готов ли названный движок принять работу ПРЯМО СЕЙЧАС — без самого вызова: проба
+    // готовности по ReadyUrl (дежурная модель под арбитром GPU выгружается штатно, и отказ
+    // обязан быть мгновенным, а не 20-секундным таймаутом) и занятость слота. Нужен месту,
+    // которое решает «идти или нет» ДО того, как соберёт промпт: ночь не готовит разбор чата,
+    // который некуда положить. false — движка нет, он выгружен или занят ходом исполнителя.
+    // Тело по умолчанию — false: шов, который про движки ничего не знает, не должен притворяться
+    // готовым (подмена «считаем готовым» дала бы тихий уход в несуществующий шаг).
+    public Task<bool> IsLocalEngineReadyAsync(string engine, CancellationToken ct = default) =>
+        Task.FromResult(false);
+
+    // Вызов на ОДНОМ названном движке, с расходом. Отличие от RunLocalOrChosenDetailedAsync —
+    // здесь нет выбора исполнителя швом: НЕТ шага «выбранная модель» (исполнитель задан
+    // аргументом, а не маршрутом места), НЕТ страховочного FallbackRoute этого движка, НЕТ
+    // финального claude-шага. Работа идёт ровно там, куда её послали, и сама никуда не уходит
+    // (И3: ночь не уходит в облако). null — движок неизвестен (имя сверяется с LocalEngines:*,
+    // «local» — основная локаль), не готов или не ответил: подмены нет, решение за вызывающим.
+    // jsonFormat — как в RunAsync: structured output шага ("json" или схема). Тело по умолчанию
+    // — null: отсутствие реализации здесь читается как отказ окна, а не как подмена другим
+    // исполнителем.
+    public Task<OneShotResult?> RunOnLocalEngineDetailedAsync(string engine, string actionKey,
+        string prompt, string? ownerId = null, object? jsonFormat = null,
+        CancellationToken ct = default) => Task.FromResult<OneShotResult?>(null);
 }

@@ -1,6 +1,10 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
+// Имя LocalExecutor с W1a есть в двух швах Core: в Composition — персона-исполнитель задачи,
+// в Llm — движок локальной модели. Файл видит оба namespace'а, поэтому фиксирую явно, о ком
+// здесь речь: без этого имени стало бы достаточно для неоднозначной ссылки.
+using LocalExecutor = ClaudeHomeServer.Services.Composition.LocalExecutor;
 
 namespace ClaudeHomeServer.Services;
 

@@ -51,11 +51,18 @@ public sealed record CheapProfileSpec(
 // (LlamaServerClient). Для мест, где большое окно не влезает в профильное, ответ — в
 // потолок вывода, а работа — в профильное время. Пер-местное значение сильнее профиля и
 // переопределения Ollama:Profiles (склейка — LocalActionRouter.ProfileFor). null = профиль.
+// ParallelExecutors — место умеет вести НЕСКОЛЬКО работ на локальных движках одновременно и
+// потому смотрит список своих исполнителей (ICheapTextRunner.LocalExecutorsFor /
+// IsLocalEngineReadyAsync): ночь разбирает отобранные чаты параллельно по движкам. Для всех
+// остальных мест цепочка одна, как раньше: одна работа, один проход по цепочке. Флаг только
+// описательный — он ничего не разрешает сам, он говорит вызывающему, что тому можно делить
+// работу на исполнителей.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
     bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null,
     int? CloudNumPredict = null, ActionInput Input = ActionInput.Text, bool FacePose = false,
-    int? NumCtx = null, int? NumPredict = null, int? TimeoutMs = null);
+    int? NumCtx = null, int? NumPredict = null, int? TimeoutMs = null,
+    bool ParallelExecutors = false);
 
 // Вход места каталога: только текст или текст плюс картинки (разметка фото персонажа)
 public enum ActionInput { Text, Images }
@@ -242,9 +249,13 @@ public static class LocalActionCatalog
         // меньший профиль молча обрезал бы хвост (num_ctx Ollama). Слот medium — явный.
         // Те же пер-местные локальные лимиты, что у wiki-ingest: та же семантика разбора
         // по большому окну (см. комментарий выше).
+        // ParallelExecutors: true — единственное место, которое делит свою работу между
+        // движками: ночь разбирает отобранные чаты параллельно (W1a → W2a). Остальные места —
+        // одна работа за один проход цепочки.
         new(WikiNightly, "Ночной разбор вики", "Заметки", CheapProfile.Large,
             DefaultLocal: true, Tier: ModelTier.Medium,
-            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000),
+            NumCtx: 65_536, NumPredict: 16_384, TimeoutMs: 600_000,
+            ParallelExecutors: true),
         // Ступень 2 отбора чатов для вики (Ф2, ADR-035 решение 12а): вердикт «есть ли в чате
         // что-то стоящее» — вход готовит вызывающий (обрезанный отрезок чата), ответ —
         // маленький JSON. Слот weak — явный.

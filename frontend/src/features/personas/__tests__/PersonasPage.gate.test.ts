@@ -122,10 +122,10 @@ describe('PersonasPage (студия персоны): вкладка «Памя�
     expect(countOf(html, ADD_BTN), '«Запомнить» читателю').toBe(0);
   });
 
-  it('редактор: карточка добавления на месте (memoryWrite открыт)', () => {
+  it('редактор: как читатель — нет карточки добавления и «Запомнить» (memoryWrite закрыт)', () => {
     const html = renderMemory(PROJECT_PERSONA, [projectWith('editor')]);
-    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(1);
-    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(1);
+    expect(countOf(html, ADD_CARD), 'карточка ручного добавления редактору').toBe(0);
+    expect(countOf(html, ADD_BTN), '«Запомнить» редактору').toBe(0);
   });
 
   it('владелец и без myRole: карточка добавления на месте, как раньше', () => {

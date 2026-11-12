@@ -115,11 +115,11 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     expect(countOf(html, 'Удалить'), '«Удалить» в форме читателю').toBe(0);
   });
 
-  it('редактор: имя открыто; зона и модель выключены; «Удалить» нет', () => {
+  it('редактор: как читатель — имя, зона, модель выключены; «Сохранить»/«Удалить» нет', () => {
     const html = renderForm('editor');
     const nameTag = openTagWith(html, '<input', NAME_MARK);
     expect(nameTag, 'поля имени нет').not.toBeNull();
-    expect(nameTag!, 'поле имени редактору выключено').not.toContain('disabled');
+    expect(nameTag!, 'поле имени редактору не выключено (editCard — Configure)').toContain('disabled');
     const zoneTag = openTagWith(html, '<select', ZONE_MARK);
     expect(zoneTag, 'выбора зоны нет').not.toBeNull();
     expect(zoneTag!, 'выбор зоны редактору не выключен').toContain('disabled');
@@ -138,6 +138,7 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     // маркер text-in-tag его не ловит, здесь достаточно самого текста: он встречается
     // только в этой кнопке (описание зоны — «Удаление…», без слова «Удалить»)
     expect(countOf(html, 'Удалить персону'), '«Удалить» редактору').toBe(0);
+    expect(countOf(html, 'Сохранить'), '«Сохранить» в форме редактору').toBe(0);
   });
 
   // Мобила смонтирована (useIsMobile → true): этот кейс доказывает, что «Удалить персону»

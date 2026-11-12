@@ -3,8 +3,7 @@ import type { Persona, Project, ProjectRoleView, Session } from '../../../types'
 import { type PersonaAction, canChangeCompanion, canPersona, personaRole } from '../personaRights';
 
 // Ожидаемая матрица §2 разреза, как данные: нет роли/владелец — всё; читатель — ничего;
-// редактор — только чат, карточка, создание проектной персоны, память персоны, обычные
-// привязки этого проекта, ИИ-сборка команды.
+// редактор — только чат (решение Андрея 12.11).
 // Таблица — 4 роли × 14 действий = 56 проверок; новое действие в PersonaAction без строки
 // здесь не скомпилируется.
 const ACTIONS: PersonaAction[] = [
@@ -15,19 +14,19 @@ const ACTIONS: PersonaAction[] = [
 
 const EXPECTED: Record<PersonaAction, Record<'none' | 'owner' | 'editor' | 'reader', boolean>> = {
   chat: { none: true, owner: true, editor: true, reader: false },
-  editCard: { none: true, owner: true, editor: true, reader: false },
+  editCard: { none: true, owner: true, editor: false, reader: false },
   // Создание проектной персоны — WriteContent (§2): читателю бэк откажет.
-  createPersona: { none: true, owner: true, editor: true, reader: false },
+  createPersona: { none: true, owner: true, editor: false, reader: false },
   editZoneModel: { none: true, owner: true, editor: false, reader: false },
   delete: { none: true, owner: true, editor: false, reader: false },
   makeLead: { none: true, owner: true, editor: false, reader: false },
   automation: { none: true, owner: true, editor: false, reader: false },
-  memoryWrite: { none: true, owner: true, editor: true, reader: false },
+  memoryWrite: { none: true, owner: true, editor: false, reader: false },
   memoryNote: { none: true, owner: true, editor: false, reader: false },
-  bindingWrite: { none: true, owner: true, editor: true, reader: false },
+  bindingWrite: { none: true, owner: true, editor: false, reader: false },
   bindingMcpPlugin: { none: true, owner: true, editor: false, reader: false },
   skills: { none: true, owner: true, editor: false, reader: false },
-  aiTeam: { none: true, owner: true, editor: true, reader: false },
+  aiTeam: { none: true, owner: true, editor: false, reader: false },
   // Правка привязки к цели вне этого проекта — за владельцем (И-4): редактору закрыта,
   // поэтому «своя/чужая цель» в панели решается на mayBind/mayBindForeign, а не своей
   // проверкой роли.

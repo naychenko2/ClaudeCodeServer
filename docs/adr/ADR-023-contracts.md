@@ -147,7 +147,8 @@ CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одно
   "format": null,
   "resolved": null,
   "faceTarget": null,
-  "characterSlug": null
+  "characterSlug": null,
+  "prompt": null
 }
 ```
 
@@ -191,9 +192,13 @@ CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одно
   "aspectRatio": null,
   "matchSourceSize": true,
   "sessionId": "c1",
-  "contextRevision": 7
+  "contextRevision": 7,
+  "style": null
 }
 ```
+
+`prompt` котировки — текст запроса для «Авто» локальных моделей (без него выбор идёт по операции);
+`style` формы запуска — id стиля Krea 2 Turbo (только при ручном выборе этой модели).
 
 ### Котировка звука: тело
 

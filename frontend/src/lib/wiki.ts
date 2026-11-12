@@ -184,7 +184,17 @@ export type WikiErrorCode =
   // Перенос заметки в вики (F5b, ADR-038): заметка уже перенесена (в ней ссылка) / target
   // задан там, где его задать нельзя (дом страницы — дом заметки)
   | 'wiki_note_transferred'
-  | 'wiki_transfer_target';
+  | 'wiki_transfer_target'
+  // «Решения за ночь» (view=night, J-J5): вид журнала вне перечня / даты окна (нет, не дата,
+  // from позже to) — 400 (WikiController.cs:113-114, 621-625)
+  | 'wiki_view_key'
+  | 'wiki_date_range'
+  // Отказы чистки ИИ-страниц (J-P2): манифест затронутого раздела невалиден (409), сбой
+  // чтения или архива (503 — транзитный, повторить можно) (WikiKeeper.cs:173-175,
+  // WikiController.cs:695-700); прочий отказ Хранителя — уже известный wiki_refused
+  | 'wiki_purge_manifest'
+  | 'wiki_purge_io'
+  | 'wiki_purge_archive';
 
 const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_foreign', 'wiki_section_key', 'wiki_page_key', 'wiki_project_missing', 'wiki_section_off',
@@ -204,6 +214,8 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'wiki_nightly_running', 'wiki_nightly_disabled', 'wiki_settings_invalid',
   'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
   'wiki_note_transferred', 'wiki_transfer_target',
+  'wiki_view_key', 'wiki_date_range',
+  'wiki_purge_manifest', 'wiki_purge_io', 'wiki_purge_archive',
 ]);
 
 export class WikiError extends Error {
@@ -534,6 +546,27 @@ export interface WikiPackageOperationDto {
   quotes: string[] | null;
   kind: string | null;
   asOf: string | null;
+  // ─── Облачный судья (J-J2a/J-J3a): вердикт по спорной операции ───
+  // Машинный код причины спора: допуск к судье решает код, а не текст reason (И4′).
+  // Пакеты без поля — null: к судье не допускаются (WikiPackage.cs:250).
+  reasonCode?: string | null;
+  // Вердикт судьи — те же значения, что у решения человека; null/нет — решения нет.
+  // Хранится ОТДЕЛЬНО от humanDecision: у спорной операции ровно одно решение — человека
+  // или судьи (И1); на humanDecision стоят обучение классов и журнал «правка человека»,
+  // решение модели туда не пишется (WikiPackage.cs:261-267).
+  judgeDecision?: 'accepted' | 'rejected' | null;
+  // Почему судья отказал (обязателен для rejected) (WikiPackage.cs:270)
+  judgeReason?: string | null;
+  // Что вынесло вердикт: имя модели или 'code' — «отклонено кодом, без вызова модели»
+  // (И4′); ставит код, не модель (WikiPackage.cs:273)
+  judgeModel?: string | null;
+  // Время вердикта — время сервера в момент записи, ISO 8601 (WikiPackage.cs:276)
+  judgeAt?: string | null;
+  // Стоимость вердикта в долларах; null — вердикта нет (WikiPackage.cs:278)
+  judgeCostUsd?: number | null;
+  // Сколько раз судья пробовал по этой операции без вердикта (счётчик попыток, J-J3a);
+  // вердикт его не двигает (WikiPackage.cs:281)
+  judgeAttempts?: number;
 }
 
 export interface WikiPackageDto {
@@ -635,6 +668,49 @@ export async function loadWikiJournal(q: WikiJournalQuery = {}): Promise<WikiJou
   if (q.overrodeHuman) params.set('overrodeHuman', 'true');
   const qs = params.toString();
   return wikiHttp<WikiJournalDto>(`/wiki/journal${qs ? `?${qs}` : ''}`);
+}
+
+// ─── «Решения за ночь»: вердикты судьи по окну (J-F0; GET /api/wiki/journal?view=night, J-J5) ───
+// Другой вид той же журнальной ручки: не строки log, а операции пакетов с вердиктом облачного
+// судья по окну [from, to) — плюс очередь того, что ещё не решил ни человек, ни судья (без
+// фильтра по времени: она про «сейчас», а не про «за ночь»). Судейские группы — хронологические,
+// waiting — по давности пакета; пустая группа — пустой список, пустое окно — не отказ
+// (WikiController.cs:597-632). from/to — обязательные даты ISO-8601 (тот же формат, что ts
+// строк журнала): нет даты / не дата / from позже to — 400 wiki_date_range, чужой вид —
+// wiki_view_key; прочие параметры вида бэк игнорирует (сводка — по всей вике, не по разделу).
+// Чистый транспорт (тот же порядок, что loadWikiJournal): состояния стора не трогает.
+
+// Одна операция с вердиктом (WikiController.cs:923-926): что и где предлагалось (packageId/
+// page/claim), исходная причина спора (reason — текст; reasonCode — машинный код, по нему
+// решался допуск к судье) и сам вердикт. У waiting вердикта нет вовсе — judge*-поля null;
+// judgeModel === 'code' — отказ вынесен кодом, без вызова модели (И4′).
+export interface WikiNightDecisionDto {
+  packageId: string;
+  page: string;
+  claim: string | null;
+  reasonCode: string | null;
+  judgeDecision: 'accepted' | 'rejected' | null;
+  judgeReason: string | null;
+  // Время вердикта, ISO 8601
+  judgeAt: string | null;
+  judgeCostUsd: number | null;
+  judgeModel: string | null;
+  reason: string | null;
+}
+
+export interface WikiNightDecisionsDto {
+  judgeAccepted: WikiNightDecisionDto[];
+  judgeRejected: WikiNightDecisionDto[];
+  // Отклонено кодом без вызова модели — не вердикт судьи (И4′)
+  codeRejected: WikiNightDecisionDto[];
+  // Ещё не решил ни человек, ни судья
+  waiting: WikiNightDecisionDto[];
+}
+
+// from/to — даты окна [from, to) в ISO-8601 (YYYY-MM-DD): их валидирует бэк.
+export async function loadWikiNightDecisions(from: string, to: string): Promise<WikiNightDecisionsDto> {
+  return wikiHttp<WikiNightDecisionsDto>(
+    `/wiki/journal?view=night&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 }
 
 export interface WikiRevertDto { restoredPages: string[] }
@@ -943,6 +1019,18 @@ export interface WikiLastNight {
   // без них — не ошибка, отсутствие читается как есть (тот же приём, что отсутствующий lastNight)
   rejected?: number;
   manual?: boolean;
+  // Итог облачного судья этой ночи (J-J4): счётчики — по операциям, не по пакетам;
+  // judgeCostUsd — стоимость его вызовов (единственные деньги в итоге). codeRejected —
+  // отказано кодом без вызова модели (И4′), не вердикт судьи. В ответе бэка поля всегда:
+  // старый keeper/nightly-last.json без них читается нулями на бэке (аддитивность,
+  // WikiSettingsController.cs:377-385) — «поле отсутствует → 0» обеспечивает бэк, поэтому
+  // здесь поля обязательны, как прочие числа итога.
+  judgeCalls: number;
+  judgeCostUsd: number;
+  judgeApplied: number;
+  judgeRejected: number;
+  judgeDeferred: number;
+  codeRejected: number;
 }
 
 // Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
@@ -1342,6 +1430,53 @@ export async function setWikiChatMark(sessionId: string, mark: WikiChatMark | nu
   );
   const m = res?.mark;
   return m === 'important' || m === 'skip' ? m : null;
+}
+
+// ─── «Начать вики заново»: чистка ИИ-страниц (J-F0; POST /api/wiki/purge, J-P2, ADR-039 реш. 10) ───
+// Предпросмотр и запуск — одна ручка, режим параметром dryRun; без явного dryRun бэк делает
+// предпросмотр (разрушающее действие требует явного решения). Инициатор — только человек
+// (сервисному токену 403); нулевой состав — не отказ: 200 с нулями (WikiController.cs:656-687).
+// Отказы — WikiError с кодом Хранителя: wiki_purge_manifest (409 — манифест затронутого
+// раздела невалиден, человек чинит сам), wiki_purge_io | wiki_purge_archive (503 — транзитный
+// сбой диска: повторить можно, на полпути ничего не осталось), wiki_refused (409, прочий
+// отказ). 500 нет ни на одном коде (WikiKeeper.cs:173-175, WikiController.cs:695-700).
+
+// Одна страница состава предпросмотра (WikiController.cs:942): class — предикат включения
+// ('ai' | 'together' | 'chronicle' | 'source', таблица решения ADR-039): по классам —
+// aggregate-сводка, по путям человек решает.
+export interface WikiPurgePageDto { pageKey: string; section: string; class: string }
+
+// Ответ обоих режимов (WikiController.cs:951-957). Предпросмотр: countsBySection (числа по
+// разделам и классам) + pages (состав путей); на диске не тронуто ничего, deleted 0,
+// archivePath null. Запуск: deleted — число удалённых, archivePath — путь архива относительно
+// корня вики (null, когда архивировать было нечего), staledPackages — число погашенных
+// открытых ИИ-пакетов; pages пуст — этих файлов уже нет на диске.
+// warning — предупреждение исхода: чистка прошла, но перезапуск разбора не доведён; текст
+// формулирует бэк, пути хоста в нём нет (WikiController.cs, доработка ed105a07 — идёт
+// параллельно). Отсутствие поля (бэк без доработки) читаем как null (тот же приём, что
+// отсутствующий lastNight).
+export interface WikiPurgeDto {
+  dryRun: boolean;
+  countsBySection: Record<string, Record<string, number>>;
+  pages: WikiPurgePageDto[];
+  deleted: number;
+  archivePath: string | null;
+  staledPackages: number;
+  warning?: string | null;
+}
+
+// «Что будет удалено»: на диске не тронуто ничего, состояния стора не трогает.
+export function previewWikiPurge(): Promise<WikiPurgeDto> {
+  return wikiHttp<WikiPurgeDto>('/wiki/purge?dryRun=true', { method: 'POST' });
+}
+
+// «Начать заново»: удалить ИИ-страницы. После — перечитываем дерево и открытые каталоги
+// (тот же порядок, что у deleteWikiSection): страницы удалены, витрина не должна показывать
+// прежний состав; сбой перечитки чистку не отменяет.
+export async function runWikiPurge(): Promise<WikiPurgeDto> {
+  const res = await wikiHttp<WikiPurgeDto>('/wiki/purge?dryRun=false', { method: 'POST' });
+  await refreshWiki();
+  return res;
 }
 
 // ─── Снимки и подписки ───

@@ -363,6 +363,19 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
     void putBinding(b, { mode, condition: cond });
   };
 
+  // «Отключить» унаследованное умение: своя Skill-привязка с тем же именем и Mode=Off
+  // (бэк гасит ею унаследованную, A2), а не удаление — у наследника нечего удалять
+  const disableInherited = async (b: PersonaBinding) => {
+    try {
+      await api.personas.addBinding(persona.id, {
+        type: 'skill', target: b.target, condition: b.condition, mode: 'off',
+      });
+      await load();
+    } catch (e) {
+      showToast('Умения', e instanceof Error ? e.message : 'Не удалось отключить умение.');
+    }
+  };
+
   const remove = async (b: PersonaBinding) => {
     try {
       await api.personas.removeBinding(persona.id, b.id);
@@ -639,13 +652,14 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
     // Гейт по цели (W3-F1f): не-редактируемая этому человеку карточка не раскрывается
     // (в раскрытом теле живут textarea условия, переключатель режима и «Удалить привязку»)
     // и не имеет меню «⋯». Сама карточка и её режим остаются видимыми — право Read.
-    const editable = canEditBinding(b);
+    const inherited = b.inherited === true;
+    const editable = !inherited && canEditBinding(b);
     const open = editable && expandedId === b.id;
     const dim = b.mode === 'off' && !open;
     const flashing = flashIds.has(b.id);
     return (
       <div
-        key={b.id}
+        key={inherited ? `inherited:${b.target}` : b.id}
         onMouseEnter={editable ? () => setHoveredId(b.id) : undefined}
         onMouseLeave={editable ? () => setHoveredId(h => h === b.id ? null : h) : undefined}
         style={{
@@ -674,7 +688,16 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+            {inherited && (
+              <span style={{
+                fontSize: 11, fontWeight: 600, color: C.textMuted, background: C.bgPanel,
+                borderRadius: R.md, padding: '2px 8px', whiteSpace: 'nowrap',
+              }}>от специальности</span>
+            )}
             <BindingModeBadge mode={b.mode} />
+            {inherited && mayBind && (
+              <Button variant="ghost" size={isMobile ? 'md' : 'sm'} onClick={() => void disableInherited(b)}>Отключить</Button>
+            )}
             {editable && !open && (
               <div style={{ position: 'relative' }} onClick={e => e.stopPropagation()}>
                 <button

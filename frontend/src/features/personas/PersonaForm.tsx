@@ -5,6 +5,7 @@ import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMem
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
+import { accessMode as readAccessMode, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
  import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Select, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
@@ -190,6 +191,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'));
   const [disallowedText, setDisallowedText] = useState(
     (persona?.disallowedTools ?? []).join(', '));
+  // Группа прав «как у специальности» (true) или «своё» (false). Источник — persona.inheritsAccess
+  // с сервера; новая персона наследует, пока человек не выбрал «Своё»
+  const [inheritsAccess, setInheritsAccess] = useState<boolean>(
+    persona ? readAccessMode(persona) === 'inherited' : true);
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   // Облегчённый контекст: переключатель Вкл/Выкл без «Авто» (решение владельца)
   const [lightContext, setLightContext] = useState(persona?.lightContext ?? false);
@@ -208,6 +213,29 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
   // спрашивает подтверждение (защита ручных правок). Без каталога (ещё не загружен) —
   // обычный setSpecialty.
+  // Эффективная группа прав для показа в режиме «как у специальности»: шаблон выбранной сейчас
+  // специальности; без каталога/шаблона — поля персоны (сервер подставил их при выдаче)
+  const specialtyTemplate = specialtyCatalog?.find(e => e.key === specialty)?.template ?? null;
+  const effectiveGroup: AccessGroup = specialtyTemplate
+    ? { access: specialtyTemplate.access, tools: specialtyTemplate.tools, disallowedTools: specialtyTemplate.disallowedTools }
+    : { access, tools, disallowedTools: parseDisallowed(disallowedText) };
+
+  // Переключатель группы прав. «Своё» забирает текущие эффективные значения как override
+  // (toOwn), «Как у специальности» шлёт только флаг (toInherited) — значения не копируются
+  const switchAccessMode = (own: boolean) => {
+    if (own === !inheritsAccess) return;
+    if (own) {
+      const o = toOwn({ access, tools, disallowedTools: parseDisallowed(disallowedText) }, effectiveGroup);
+      setAccess(o.access);
+      setTools(o.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((o.disallowedTools ?? []).join(', '));
+      setInheritsAccess(o.inheritsAccess);
+      setTemplateNote(null);
+    } else {
+      setInheritsAccess(toInherited().inheritsAccess);
+    }
+  };
+
   const applySpecialtyTemplate = (next: PersonaSpecialty) => {
     const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
     if (template) {
@@ -223,6 +251,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   const changeSpecialty = (next: PersonaSpecialty) => {
     if (next === specialty) return;
+    // Права «как у специальности» не копируются: смена роли меняет только саму роль
+    if (inheritsAccess) {
+      setSpecialty(next);
+      setTemplateNote(null);
+      return;
+    }
     const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
     if (!template) {
       setSpecialty(next);
@@ -339,7 +373,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     const rec = specialty !== 'none' && specSettings
       ? effectiveSpecialtyRecord(specSettings.global, specSettings.global, specialty) : null;
     const defRec = specSettings?.global.defaultSpecialty ?? null;
-    const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
+    const fromSpec = tierCellView({}, rec, TIER_KEY[t]).value || cellOfRec(defRec);
     if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
     return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
   };
@@ -531,9 +565,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     sphereId: isSphereZone ? sphereId : '',
     color, greeting: greeting.trim(), memoryEnabled, lightContext, gender,
     tools: [...tools].sort(),
-    access,
+    inheritsAccess,
+    // В режиме «как у специальности» поля прав не свои и не уходят — в снимок не входят
+    access: inheritsAccess ? null : access,
     specialty,
-    disallowed: access === 'custom' ? parseDisallowed(disallowedText) : [],
+    disallowed: !inheritsAccess && access === 'custom' ? parseDisallowed(disallowedText) : [],
   });
   // Исходный снимок считается от предзаполненного состояния: у legacy-персоны
   // слот «Характер» = systemPrompt, поэтому сама миграция не делает форму dirty.
@@ -567,9 +603,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       lightContext: persona?.lightContext ?? false,
       gender: persona?.gender ?? 'unspecified',
       tools: [...(persona ? (persona.tools ?? ALL_TOOL_KEYS) : ALL_TOOL_KEYS)].sort(),
-      access: persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
+      inheritsAccess: persona ? readAccessMode(persona) === 'inherited' : true,
+      access: persona && readAccessMode(persona) === 'inherited' ? null
+        : persona ? (persona.access ?? 'full') : (initial?.access ?? 'full'),
       specialty: persona ? (persona.specialty ?? 'none') : (initial?.specialty ?? 'none'),
-      disallowed: (persona?.access ?? 'full') === 'custom' ? (persona?.disallowedTools ?? []) : [],
+      disallowed: persona && readAccessMode(persona) !== 'inherited' && (persona.access ?? 'full') === 'custom'
+        ? (persona.disallowedTools ?? []) : [],
     });
   }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
   const dirty = snapshot !== initialSnapshot;
@@ -632,14 +671,19 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       // Пол: всегда явный (текущее значение селекта). unspecified = дефолт «авто по имени»,
       // совпадает с текущим — нет-оп; female/male — явная установка.
       gender,
-      // Всегда явный список: полный набор бэкенд нормализует в «без ограничений»
-      tools,
+      // Своё: явный список (полный набор бэкенд нормализует в «без ограничений»).
+      // «Как у специальности»: поля прав не уходят — иначе смена роли в другой вкладке
+      // перезаписала бы наследование устаревшей копией
+      tools: inheritsAccess ? undefined : tools,
+      // Режим группы прав: участнику не шлём (права арендатора, см. поля выше);
+      // «Как у специальности» — true без полей, «Своё» — false вместе с полями
+      inheritsAccess: ownerOnlyFields ? undefined : inheritsAccess,
       // Профиль доступа: свой список запретов уходит только при custom; участнику —
       // ни профиль, ни запреты (деньга/права арендатора, см. поля выше)
-      access: ownerOnlyFields ? undefined : access,
+      access: ownerOnlyFields || inheritsAccess ? undefined : access,
       // Специальность шлём всегда (включая 'none' — сброс); update на бэке None ставит явно
       specialty,
-      disallowedTools: ownerOnlyFields ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
+      disallowedTools: ownerOnlyFields || inheritsAccess ? undefined : (access === 'custom' ? parseDisallowed(disallowedText) : []),
     };
     try {
       const saved = isEdit
@@ -1397,6 +1441,34 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <div style={{ gridColumn: '1 / -1' }}>
           {/* Профиль доступа — права арендатора (Configure): участнику выключен с видимой
               подсказкой вместо обычного hint */}
+          <Field label="Права" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
+            <SegmentedControl<'inherited' | 'own'>
+              value={inheritsAccess ? 'inherited' : 'own'}
+              onChange={v => switchAccessMode(v === 'own')}
+              columns={2}
+              options={[
+                { value: 'inherited', label: 'Как у специальности', disabled: ownerOnlyFields },
+                { value: 'own', label: 'Своё', disabled: ownerOnlyFields },
+              ]}
+            />
+          </Field>
+          {inheritsAccess && (
+            <div
+              data-testid="access-inherited"
+              style={{ marginTop: 8, fontFamily: FONT.sans, fontSize: 12.5, lineHeight: 1.45, color: C.textMuted }}
+            >
+              {inheritedAccessText(effectiveGroup)}
+              {specialty !== 'none' && (
+                <>
+                  {' · '}
+                  <a href={`#/specialties/${specialty}`} style={{ color: C.textMuted, textDecoration: 'underline' }}>
+                    роль «{specialtyLabel(specialtyCatalog, specialty)}»
+                  </a>
+                </>
+              )}
+            </div>
+          )}
+          {!inheritsAccess && (
           <Field label="Профиль доступа" hint={ownerOnlyFields ? OWNER_ONLY_HINT : accessHint}>
             <SegmentedControl<PersonaAccess>
               value={access}
@@ -1413,6 +1485,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 autoGrow minHeight={56} placeholder="Bash, Edit, Write" disabled={ownerOnlyFields} />
             )}
           </Field>
+          )}
         </div>
       </div>
 
@@ -1564,6 +1637,19 @@ function parseDisallowed(s: string): string[] {
 
 // Возможности персоны (Persona.Tools): полный набор = «без ограничений»
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
+
+const TIER_KEY: Record<ModelTierKey, TierKey> = { strong: 'tierStrong', medium: 'tierMedium', weak: 'tierWeak' };
+
+// Сводка унаследованных прав: профиль и (для «Своего») список запретов
+function inheritedAccessText(g: AccessGroup): string {
+  const a = g.access ?? 'full';
+  if (a === 'readOnly') return 'Только чтение';
+  if (a === 'custom') {
+    const d = g.disallowedTools ?? [];
+    return d.length ? `Свой профиль · запрещено: ${d.join(', ')}` : 'Свой профиль';
+  }
+  return 'Полный доступ';
+}
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [

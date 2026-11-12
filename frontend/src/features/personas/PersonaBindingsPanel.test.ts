@@ -477,3 +477,30 @@ describe('PluginTargetPicker → commit', () => {
     expect(findButton(container, 'Добавить привязку'), 'панель закрылась после ошибки').not.toBeNull();
   });
 });
+
+// === A3b: унаследованные умения (inherited: true из эффективного списка бэка, A2) ===
+describe('Унаследованные умения', () => {
+  const INHERITED = {
+    id: '', type: 'skill', target: 'review-pr', path: null, condition: 'на ревью', mode: 'auto',
+    createdAt: '', updatedAt: '', inherited: true,
+  };
+
+  it('пометка «от специальности»; «Отключить» создаёт Skill-привязку Mode=Off с тем же именем, а не удаляет', async () => {
+    vi.mocked(api.personas.bindings).mockReset().mockResolvedValue([INHERITED] as never);
+    vi.mocked(api.personas.addBinding).mockReset().mockResolvedValue({ ...INHERITED, id: 'own-1', mode: 'off', inherited: false } as never);
+
+    const { container, text } = await renderPanel({ persona: { ...PERSONA, id: 'persona-inh' } as Persona });
+    expect(text()).toContain('от специальности');
+    // у унаследованного нет меню «⋯» — править/удалять нечего
+    expect(countActionMenus(container)).toBe(0);
+
+    const off = findButton(container, 'Отключить');
+    expect(off, 'кнопка «Отключить» не найдена').not.toBeNull();
+    await act(async () => { off!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+
+    expect(api.personas.addBinding).toHaveBeenCalledTimes(1);
+    expect(api.personas.addBinding).toHaveBeenCalledWith('persona-inh',
+      { type: 'skill', target: 'review-pr', condition: 'на ревью', mode: 'off' });
+    expect(api.personas.removeBinding).not.toHaveBeenCalled();
+  });
+});

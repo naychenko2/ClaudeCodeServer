@@ -245,6 +245,9 @@ export interface PersonaBinding {
   mode: PersonaBindingMode;
   createdAt: string;
   updatedAt: string;
+  // true — умение пришло от специальности (эффективный список бэка, A2): своей записи нет,
+  // менять/удалять нельзя, выключается привязкой Mode=Off с тем же именем навыка
+  inherited?: boolean;
 }
 
 // Тело создания/обновления привязки (POST/PUT bindings)

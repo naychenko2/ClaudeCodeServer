@@ -72,10 +72,12 @@ public class McpNarrowFrameTests : IDisposable
         noteErr.Should().BeFalse(noteJson);
         var noteId = IdOf(JsonSerializer.Deserialize<JsonElement>(noteJson));
 
+        // Чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a
+        // доработка 2, финал ed64271c); состояние фикстуры прежнее.
         var sharedProject = await CreateProjectAsync($"Общий-{tag}");
+        var sharedChat = await CreateSessionAsync(sharedProject);
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(sharedProject,
             [new ProjectMember { UserId = "участник-" + tag, Role = ProjectRole.Editor }]);
-        var sharedChat = await CreateSessionAsync(sharedProject);
         return new Fixture(tag, personalName, personalProject, personalChat, taskId, noteTitle, noteId,
             sharedProject, sharedChat);
     }

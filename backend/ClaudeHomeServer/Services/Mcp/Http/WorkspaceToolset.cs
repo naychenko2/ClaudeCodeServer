@@ -1615,9 +1615,11 @@ public sealed partial class WorkspaceToolset(
                     {
                         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
                             return Deny(denied);
-                        // Персона: явная → она; иначе руководитель проекта, иначе провижн
-                        // ассистента — правило «персона контекста», то же что в
-                        // SessionsController.Create (stdio-ветка получала его через REST)
+                        // Персона: явная → она; иначе руководитель проекта; иначе провижн
+                        // ассистента — только личного проекта. Правило «персона контекста»,
+                        // то же что в SessionsController.Create (W4-B1a доработка 2, финал
+                        // ed64271c): в общем проекте без руководителя провижна нет — отказ
+                        // тем же машинным кодом, что у REST
                         // Явная персона (R-S2a-8): глобальная чату общего проекта не назначается —
                         // CreateAsync рамку не проверяет, поэтому та же проверка, что в REST. Код
                         // отказа едет в JSON-теле: агент различает его, а не разбирает текст
@@ -1630,9 +1632,23 @@ public sealed partial class WorkspaceToolset(
                                     new { error = ex.Message, code = GlobalPersonaInSharedException.Code }, JsonOpts));
                             }
                         }
-                        personaId ??= await ResolveNewChatPersona(context.OwnerId, p.Id, default);
+                        personaId ??= ProjectLeadPersonaId(context.OwnerId, p);
                         if (personaId is null)
-                            return Deny("Новый чат создаётся только с персоной: укажите personaId");
+                        {
+                            // Руководителя нет. В общем проекта провижна личного ассистента нет
+                            // никому, включая владельца (S2a-8, финал ed64271c): тот же отказ и
+                            // тот же код, что у REST (NoProjectPersonaDenied). Актор-участник
+                            // сюда не доходит — chats_create OwnerOnly (ActorRightGate.cs:75-76),
+                            // поэтому текст — владелецский. Провижн остаётся правом личного
+                            // проекта.
+                            if (ProjectAccess.IsShared(p))
+                                return Deny(JsonSerializer.Serialize(
+                                    new { error = "В проекте нет руководителя — назначьте его в команде проекта",
+                                        code = "no_project_persona" }, JsonOpts));
+                            personaId = (await provisioner.EnsureAsync(context.OwnerId, default))?.Id;
+                            if (personaId is null)
+                                return Deny("Новый чат создаётся только с персоной: укажите personaId");
+                        }
                         created = await sessions.CreateAsync(p.Id, ClaudeMode.AcceptEdits,
                             resumeSessionId: null, name: name, model: model, personaId: personaId);
                     }
@@ -1863,17 +1879,16 @@ public sealed partial class WorkspaceToolset(
         return result with { Text = body.ToJsonString(JsonOpts) };
     }
 
-    // Персона для нового чата: руководитель проекта (вживую, сирота не считается),
-    // иначе провижн личного ассистента — правило «персона контекста» из SessionsController
-    private async Task<string?> ResolveNewChatPersona(string ownerId, string projectId,
-        CancellationToken ct)
-    {
-        if (projects.GetById(projectId)?.DefaultPersonaId is { } leadId
-            && personas.Get(leadId, ownerId) is { } lead
-            && sessions.PersonaVisibleIn(lead, projectId))
-            return lead.Id;
-        return (await provisioner.EnsureAsync(ownerId, ct))?.Id;
-    }
+    // Собеседник нового чата проекта: его руководитель (вживую, сирота не считается).
+    // Провижн личного ассистента здесь не решается: он возможен только личному проекту,
+    // и это решает вызывающий (W4-B1a доработка 2, финал ed64271c) — в общем проекте
+    // глобальная персона собеседником быть не может (S2a-8).
+    private string? ProjectLeadPersonaId(string ownerId, Project project) =>
+        project.DefaultPersonaId is { } leadId
+        && personas.Get(leadId, ownerId) is { } lead
+        && sessions.PersonaVisibleIn(lead, project.Id)
+            ? lead.Id
+            : null;
 
     // --- Секция destructive (безвозвратное удаление): гейт делегированного хода на КАЖДЫЙ
     // вызов — как [DenyOnDelegatedTurn] на REST-эндпоинтах ---

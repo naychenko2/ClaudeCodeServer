@@ -614,11 +614,12 @@ public class AvatarSpendTurnActorTests : IClassFixture<SharedChatAvatarSpendFact
         var project = await _owner.PostAsJsonAsync("/api/projects", new { name = $"att-{tag}" });
         project.EnsureSuccessStatusCode();
         var projectId = (await project.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
-        (await _owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
-            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
+        // чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a 2, финал ed64271c)
         var session = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
         session.EnsureSuccessStatusCode();
         var sessionId = (await session.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        (await _owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+            new { username = TestWebApplicationFactory.SecondUsername, role = "editor" })).EnsureSuccessStatusCode();
 
         // Страховка замера: ход действительно принадлежит участнику — без этого подмена
         // в строке тулсета осталась бы незаметной (тот же приём, что в TasksToolsetAssigneeTests)

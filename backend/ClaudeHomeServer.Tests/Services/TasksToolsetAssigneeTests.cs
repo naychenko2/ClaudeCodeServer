@@ -105,13 +105,15 @@ public class TasksToolsetAssigneeTests : IClassFixture<TestWebApplicationFactory
         created.EnsureSuccessStatusCode();
         var projectId = IdOf(await created.Content.ReadAsStringAsync());
 
-        if (role is not null)
-            (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
-                new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
-
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
         var session = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
         session.EnsureSuccessStatusCode();
         var sessionId = IdOf(await session.Content.ReadAsStringAsync());
+
+        if (role is not null)
+            (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
+                new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
 
         // Актор вызова называется явно (тот же приём, что StartTurnAsync в TasksRunExecutorActorTests)
         (await owner.PostAsJsonAsync($"/api/sessions/{sessionId}/messages",

@@ -208,6 +208,12 @@ public class HubDenialCodeTests : IAsyncDisposable
         project.EnsureSuccessStatusCode();
         var projectId = IdOf(await project.Content.ReadFromJsonAsync<JsonElement>());
 
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var chatId = IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
+
         if (member is { } role)
         {
             var ownerUser = _factory.Services.GetRequiredService<UserStore>()
@@ -218,9 +224,7 @@ public class HubDenialCodeTests : IAsyncDisposable
                 [new ProjectMember { UserId = memberUser.Id, Role = role, AddedBy = ownerUser.Id }]);
         }
 
-        var chat = await _owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        return IdOf(await chat.Content.ReadFromJsonAsync<JsonElement>());
+        return chatId;
     }
 
     /// <summary>Послать сообщение (wait=none): первый — начинает ход, его автор — податель

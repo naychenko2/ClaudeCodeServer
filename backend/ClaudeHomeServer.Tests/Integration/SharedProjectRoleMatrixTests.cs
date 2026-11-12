@@ -150,13 +150,18 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         created.EnsureSuccessStatusCode();
         var projectId = IdOf(await created.Content.ReadAsStringAsync());
 
+        // Чат создаётся ДО участников: пока проект личный, провижна владельца нет; в общем
+        // проекта без руководителя она не запускается никому (W4-B1a доработка 2, финал
+        // ed64271c). Итоговое состояние прежнее: чат в уже общем проекте.
+        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
+        chat.EnsureSuccessStatusCode();
+        var sessionId = IdOf(await chat.Content.ReadAsStringAsync());
+
         if (role is Editor or Reader)
             (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
                 new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
 
-        var chat = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        chat.EnsureSuccessStatusCode();
-        return (projectId, IdOf(await chat.Content.ReadAsStringAsync()));
+        return (projectId, sessionId);
     }
 
     private static string IdOf(string json) =>

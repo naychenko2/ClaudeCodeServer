@@ -350,12 +350,16 @@ public class ActorRightMcpWiringTests : IDisposable
             new { name = "Права" + Guid.NewGuid().ToString("N")[..6], rootPath = dir, createDirectory = true });
         created.EnsureSuccessStatusCode();
         var projectId = IdOf(await created.Content.ReadAsStringAsync());
+        // Чат до участников: пока проект личный, провижна владельца нет; в общем проекта без
+        // руководителя она не запускается никому (W4-B1a доработка 2, финал ed64271c)
+        var session = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
+        session.EnsureSuccessStatusCode();
+        var chatId = IdOf(await session.Content.ReadAsStringAsync());
+
         (await owner.PostAsJsonAsync($"/api/projects/{projectId}/members",
             new { username = TestWebApplicationFactory.SecondUsername, role })).EnsureSuccessStatusCode();
 
-        var session = await owner.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "acceptEdits" });
-        session.EnsureSuccessStatusCode();
-        return (projectId, IdOf(await session.Content.ReadAsStringAsync()));
+        return (projectId, chatId);
     }
 
     [Fact]

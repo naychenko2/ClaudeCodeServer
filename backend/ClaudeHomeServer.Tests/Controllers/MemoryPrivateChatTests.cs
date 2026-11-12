@@ -61,13 +61,22 @@ public class MemoryPrivateChatTests : IDisposable
         return (await resp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
     }
 
-    /// <summary>Общий проект (с участником-редактором) — приватным чат бывает только в нём.</summary>
-    private async Task<string> SharedProjectAsync()
-    {
-        var projectId = await IdOf(await _client.PostAsJsonAsync("/api/projects",
-            new { name = $"priv-{Guid.NewGuid():N}" }));
+    /// <summary>Проект владельца, пока ещё личный: чаты создаются в нём ДО участников —
+    /// в общем проекта без руководителя провижна владельца нет (W4-B1a доработка 2, финал
+    /// ed64271c). Итоговое состояние то же: чат в уже общем проекте.</summary>
+    private async Task<string> NewProjectAsync() =>
+        await IdOf(await _client.PostAsJsonAsync("/api/projects", new { name = $"priv-{Guid.NewGuid():N}" }));
+
+    /// <summary>Делает проект общим (участник-редактор): приватным чат бывает только в нём.</summary>
+    private void Share(string projectId) =>
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(projectId,
             [new ProjectMember { UserId = "reader-" + Guid.NewGuid().ToString("N")[..8], Role = ProjectRole.Editor }]);
+
+    /// <summary>Общий проект без чата — для путей, где чат берётся напрямую из сервиса.</summary>
+    private async Task<string> SharedProjectAsync()
+    {
+        var projectId = await NewProjectAsync();
+        Share(projectId);
         return projectId;
     }
 
@@ -111,9 +120,10 @@ public class MemoryPrivateChatTests : IDisposable
 
     private async Task<(string ProjectId, string OpenChat, string PrivateChat)> FixtureAsync()
     {
-        var projectId = await SharedProjectAsync();
+        var projectId = await NewProjectAsync();
         var openChat = await ChatAsync(projectId);
         var privateChat = await ChatAsync(projectId);
+        Share(projectId);
         await MakePrivateAsync(privateChat);
         return (projectId, openChat, privateChat);
     }
@@ -215,9 +225,10 @@ public class MemoryPrivateChatTests : IDisposable
             new { name = $"sg-{Guid.NewGuid():N}", color = "#D97757" }));
         var projectId = await IdOf(await _client.PostAsJsonAsync("/api/projects",
             new { name = $"sp-{Guid.NewGuid():N}", groupId = sphereId }));
+        var privateChat = await ChatAsync(projectId);
+        // чат до участников: в общем проекта без руководителя провижна владельца нет (W4-B1a 2)
         _factory.Services.GetRequiredService<ProjectManager>().SetMembers(projectId,
             [new ProjectMember { UserId = "editor-" + Guid.NewGuid().ToString("N")[..8], Role = ProjectRole.Editor }]);
-        var privateChat = await ChatAsync(projectId);
         await MakePrivateAsync(privateChat);
 
         var denied = await CallAsync(null, projectId, "sphere_memory_remember",

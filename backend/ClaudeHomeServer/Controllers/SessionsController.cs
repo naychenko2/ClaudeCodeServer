@@ -63,37 +63,40 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
             return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
-        // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим
-        // с ним. 400 — только когда провижн невозможен. Служебные пути (задачи, one-shot)
-        // REST не используют, поэтому гейт их не задевает.
+        // с фронтом): без personaId/resumeSessionId сначала резолвим руководителя проекта,
+        // в личном проекте — провижним ассистента и продолжим с ним. 400 — когда собеседника
+        // взять нечем. Служебные пути (задачи, one-shot) REST не используют, поэтому гейт их
+        // не задевает.
         if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId))
         {
             // Правило «персона контекста» — то же, что на фронте (lib/defaultPersona.ts):
-            // в проекте чат ведёт руководитель, и только если его нет — личный ассистент.
-            // Сервер обязан повторять это правило, иначе не-браузерный потребитель REST
-            // (скрипт, будущий адаптер мессенджера) получил бы в проекте с назначенным
+            // в проекте чат ведёт руководитель; личный ассистент — собеседник личного
+            // проекта. Сервер обязан повторять это правило, иначе не-браузерный потребитель
+            // REST (скрипт, будущий адаптер мессенджера) получил бы в проекте с назначенным
             // руководителем чат от личного ассистента — и вместе с ним молча потерял бы
             // командные механики (SessionManager отдаёт их только персоне-руководителю).
             // Резолв в живую персону, а не проверка поля: сирота не должна подменять правило.
             // Ключ руководителя — арендатор (W3-B4b, И-2): участник получает руководителя
-            // проекта, а не свою подмену. Фолбэк на личного ассистента — право владельца:
-            // участнику провижн не запускается — инвариант «участник не получает чат общего
-            // проекта с глобальной персоной (своей или владельца)».
+            // проекта, а не свою подмену. Фолбэк на личного ассистента — право личного
+            // проекта: в общем он не запускается никому, включая владельца (W4-B1a доработка 2,
+            // финал ed64271c) — глобальная персона не может быть собеседником общего чата
+            // (S2a-8), а путь провижна этой рамки не проверял.
             var scope = HttpContext.GetRequestScope();
-            var lead = projects.GetById(projectId)?.DefaultPersonaId is { } leadId
+            var project = projects.GetById(projectId);
+            var lead = project?.DefaultPersonaId is { } leadId
                 ? personas.Get(leadId, scope.TenantOwnerId)
                 : null;
             // Руководитель вне своей зоны (персона сферы, проект вышел из сферы) не считается
             if (lead is not null && !sessions.PersonaVisibleIn(lead, projectId)) lead = null;
             if (lead is not null) personaId = lead.Id;
-            else if (scope.Role == ProjectRole.Owner)
+            else if (scope.Role == ProjectRole.Owner && !ProjectAccess.IsShared(project))
             {
                 var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
                 if (provisioned is null)
                     return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
                 personaId = provisioned.Id;
             }
-            else return NoProjectPersonaDenied();
+            else return NoProjectPersonaDenied(scope.Role == ProjectRole.Owner);
         }
         try
         {
@@ -211,11 +214,16 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         new(new { error = "Пока чат приватный, «Не сохранять решения» нельзя выключить", code = "private_chat_dossiers" })
             { StatusCode = StatusCodes.Status409Conflict };
 
-    // В общем проекте нет руководителя, а личного ассистента участнику не подставляют (W3-B4b):
-    // провижн глобальной персоны — право владельца. 400 с машинным кодом — фронт по нему
-    // показывает текст «попросите владельца назначить» (W3-F2a).
-    private static ObjectResult NoProjectPersonaDenied() =>
-        new(new { error = "В проекте нет руководителя — попросите владельца назначить", code = "no_project_persona" })
+    // В общем проекте нет руководителя, а личного ассистента в общий чат не подставляют никому,
+    // включая владельца (W3-B4b + доработка W4-B1a 2, финал ed64271c): провижн глобальной
+    // персоны — право личного проекта. 400 с машинным кодом — фронт по нему отдаёт текст отказа
+    // вызывающему как есть (W3-F2a, defaultPersona.ts). Текст различается по роли: участнику —
+    // «попросите владельца», владельцу — «назначьте его»: руководитель — его решение.
+    private static ObjectResult NoProjectPersonaDenied(bool isOwner) =>
+        new(new { error = isOwner
+                ? "В проекте нет руководителя — назначьте его в команде проекта"
+                : "В проекте нет руководителя — попросите владельца назначить",
+            code = "no_project_persona" })
             { StatusCode = StatusCodes.Status400BadRequest };
 
     // Назначить/сменить/снять собеседника (персону или .md-агента) у проектной сессии — в т.ч. по ходу разговора.

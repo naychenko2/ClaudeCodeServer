@@ -112,7 +112,7 @@ public class ComfyWorkflowsFibo2Tests
     [Fact]
     public void Размеры_ОколоМегапикселя_КратныШестнадцати()
     {
-        foreach (var (_, (w, h)) in ComfyWorkflows.Fibo2Sizes)
+        foreach (var (_, (w, h)) in ComfyWorkflows.OneMegapixelSizes)
         {
             (w % 16).Should().Be(0);
             (h % 16).Should().Be(0);

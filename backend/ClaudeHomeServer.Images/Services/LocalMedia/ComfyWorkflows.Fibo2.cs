@@ -30,10 +30,10 @@ public static partial class ComfyWorkflows
 
     public static bool IsFibo2(string? model) => model is LocalImageModels.Fibo2 or LocalImageModels.Fibo2Turbo;
 
-    // Обучена на ~1 Мп: выше — промпт «утекает» в угол и послушность падает (заметка шаблона).
-    // Размеры — trained_size узла TextEncodeFibo2 (кратно 16, в пределах 10 % от 1 Мп).
-    // Зеркало — LocalImageEditor.Fibo2Sizes (сверка в тестах)
-    public static readonly IReadOnlyDictionary<string, (int Width, int Height)> Fibo2Sizes =
+    // Размеры ~1 Мп — у Fibo 2.0 (выше промпт «утекает» в угол, заметка шаблона), Krea 2 Turbo и
+    // MOSS-Image (шаблоны: ResolutionSelector на 1 Мп). Значения — trained_size узла TextEncodeFibo2
+    // (кратно 16, в пределах 10 % от 1 Мп). Зеркало — LocalImageEditor.OneMegapixelSizes (сверка в тестах)
+    public static readonly IReadOnlyDictionary<string, (int Width, int Height)> OneMegapixelSizes =
         new Dictionary<string, (int Width, int Height)>(StringComparer.Ordinal)
         {
             ["1:1"] = (1024, 1024),

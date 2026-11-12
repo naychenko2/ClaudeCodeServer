@@ -38,7 +38,7 @@ public class ComfyWorkflowsTests
         // MiniMax-H3-Image (2026-11-11): узел условий из ComfyUI 0.45 и пачка вариантов
         "MiniMaxH3ImageConditioning", "RepeatLatentBatch",
         // Fibo 2.0 (2026-11-12): узел условий из ComfyUI 0.45
-        "TextEncodeFibo2",
+        "TextEncodeFibo2", "EmptyLatentImage",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -474,6 +474,8 @@ public class ComfyWorkflowsTests
             ("klein-generate", ComfyWorkflows.KleinGenerate("ёжик", 1664, 928, 1, 2, "p")),
             ("h3image-generate", ComfyWorkflows.H3ImageGenerate("ёжик", 2752, 1536, 1, 1, "p")),
             ("fibo2-generate", ComfyWorkflows.Fibo2Generate("ёжик", 1424, 800, 1, 2, "p")),
+            ("krea2-generate", ComfyWorkflows.Krea2Generate("ёжик", 1424, 800, 1, 2, "p")),
+            ("moss-generate", ComfyWorkflows.MossGenerate("ёжик", 832, 1248, 1, 1, "p")),
             ("fibo2-generate-turbo", ComfyWorkflows.Fibo2Generate("ёжик", 1024, 1024, 1, 1, "p", turbo: true)),
             ("fibo2-edit", ComfyWorkflows.Fibo2Edit("добавь лодку", ["x.png"], null, 1, "p", turbo: true)),
             ("fibo2-multi", ComfyWorkflows.Fibo2Edit("сложи", ["a.png", "b.png", "c.png", "d.png"], (1024, 1024), 1, "p", turbo: false)),

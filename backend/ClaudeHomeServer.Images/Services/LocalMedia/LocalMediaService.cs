@@ -522,6 +522,12 @@ public sealed partial class LocalMediaService(
     public static int Fibo2EditEta(bool turbo, int images, int count) =>
         (turbo ? 10 + 7 * Math.Max(1, count) : 10 + 60 * Math.Max(1, count)) + 5 * (Math.Max(1, images) - 1);
 
+    // Krea 2 Turbo, 1 Мп, 8 шагов (замер 2026-11-12, RTX 3090): 8–12 с прогретой моделью, 19 с
+    // холодной. MOSS-Image SFT, 25 шагов с расширителем промпта: 16–27 с
+    public static int Krea2GenerateEta(int count) => 4 + 7 * Math.Max(1, count);
+
+    public static int MossGenerateEta(int count) => 8 + 17 * Math.Max(1, count);
+
     public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый

@@ -71,6 +71,9 @@ public static class LocalImageModels
     // Fibo 2.0 (Bria): Dev — 50 шагов с CFG, генерация и правка; Turbo — дистиллят на 4 шага для правки
     public const string Fibo2 = "fibo2";
     public const string Fibo2Turbo = "fibo2-turbo";
+    // Только генерация по тексту: Krea 2 Turbo (8 шагов) и MOSS-Image SFT (25 шагов)
+    public const string Krea2Turbo = "krea2-turbo";
+    public const string Moss = "moss-image";
 
     // Больше картинок на входе Klein не проверяли (A/B и граф BFL — до четырёх)
     public const int KleinMaxImages = 10;
@@ -90,20 +93,26 @@ public static class LocalImageModels
     // Fibo 2.0 обучена на правке по одной картинке и по образцам до четырёх (карточка модели)
     public const int Fibo2MaxImages = 4;
 
-    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein or H3Image or Fibo2 or Fibo2Turbo;
+    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein or H3Image or Fibo2 or Fibo2Turbo or Krea2Turbo or Moss;
 
     // Модели, которые берут персонажа сами — по фото, без LoRA (LoRA обучены под Qwen-Image)
     public static bool TakesCharacterByPhotos(string? model) => model is Klein or H3Image;
 
     public static bool IsFibo2(string? model) => model is Fibo2 or Fibo2Turbo;
 
+    // Модели без входных картинок: правка, образцы, маски и персонаж для них — запуск Qwen
+    public static bool TextOnly(string? model) => model is Krea2Turbo or Moss;
+
     // Модель, на которой запуск пойдёт на самом деле. Klein, H3-Image и Fibo 2.0 не проверены на
     // подстановке лица (кроп), масках, дорисовке за края и длинных наборах входов — такие запуски
     // уходят на Qwen «качественно». Персонажа Fibo 2.0 по фото не проверяли, а LoRA обучены под
-    // Qwen-Image — запуск с LoRA персонажа тоже уходит на Qwen
+    // Qwen-Image — запуск с LoRA персонажа тоже уходит на Qwen. Krea 2 и MOSS-Image картинок на
+    // входе не берут: всё, кроме генерации по тексту, у них идёт на Qwen
     public static string? Effective(LocalImageRequest request) =>
         ((TakesCharacterByPhotos(request.Model) || IsFibo2(request.Model)) && NeedsQwen(request))
         || (IsFibo2(request.Model) && request.Lora is not null)
+        || (TextOnly(request.Model) && (request.Op != LocalImageOp.Generate || (request.Images?.Count ?? 0) > 0
+                                        || request.Lora is not null || NeedsQwen(request)))
             ? Quality
             : request.Model;
 

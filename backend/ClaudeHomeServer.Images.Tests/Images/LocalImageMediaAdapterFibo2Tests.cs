@@ -118,9 +118,9 @@ public class LocalImageMediaAdapterFibo2Tests
     [Fact]
     public void РазмерПоПропорцииВнеТаблицы_Квадрат()
     {
-        LocalImageMediaAdapter.Fibo2SizeFor("16:9").Should().Be((1424, 800));
-        LocalImageMediaAdapter.Fibo2SizeFor("21:9").Should().Be((1024, 1024));
-        LocalImageMediaAdapter.Fibo2SizeFor(null).Should().Be((1024, 1024));
+        LocalImageMediaAdapter.OneMegapixelSizeFor("16:9").Should().Be((1424, 800));
+        LocalImageMediaAdapter.OneMegapixelSizeFor("21:9").Should().Be((1024, 1024));
+        LocalImageMediaAdapter.OneMegapixelSizeFor(null).Should().Be((1024, 1024));
     }
 
     // Фейк ComfyUI не знает /models/loras — отдаём список поверх него

@@ -704,6 +704,8 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'minimax-h3-image', label: 'MiniMax H3 Image — детали и 4K', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2', label: 'Fibo 2.0 — состав сцены и текст, некоммерч.', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2-turbo', label: 'Fibo 2.0 Turbo — быстрая правка, некоммерч.', caps: caps(['edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'krea2-turbo', label: 'Krea 2 Turbo — эстетика, 8 шагов', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'moss-image', label: 'MOSS-Image — надписи и вёрстка', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
   ] },
 ];

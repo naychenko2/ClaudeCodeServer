@@ -194,10 +194,10 @@ public class MediaFormatDriversTests
     [Fact]
     public void Размеры_Fibo2_в_каталоге_совпадают_с_ComfyWorkflows()
     {
-        var source = ClaudeHomeServer.Services.Images.LocalMedia.ComfyWorkflows.Fibo2Sizes;
+        var source = ClaudeHomeServer.Services.Images.LocalMedia.ComfyWorkflows.OneMegapixelSizes;
 
-        LocalImageEditor.Fibo2Sizes.Keys.Should().BeEquivalentTo(source.Keys);
-        foreach (var (aspect, size) in LocalImageEditor.Fibo2Sizes)
+        LocalImageEditor.OneMegapixelSizes.Keys.Should().BeEquivalentTo(source.Keys);
+        foreach (var (aspect, size) in LocalImageEditor.OneMegapixelSizes)
             (size.W, size.H).Should().Be(source[aspect], aspect);
     }
 

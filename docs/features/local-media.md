@@ -114,6 +114,17 @@ fal-ai). Это правило живёт в строке встроенного
 дорисовку, подстановку на лицо, больше 4 картинок и персонажа с LoRA отдаёт Qwen «качественно».
 Веса — `Comfy-Org/Fibo-2.0` (int8_convrot), энкодер `qwen3vl_4b_int8_convrot` и `flux2-vae` — общие
 с Klein. **Лицензия CC BY-NC 4.0** — только некоммерческое использование.
+
+**Krea 2 Turbo** (`krea2-turbo`) и **MOSS-Image** (`moss-image`, SFT) — с 2026-11-12, только генерация по
+тексту, ~1 Мп; образцы, правку, маски и персонажа обе отдают Qwen «качественно» (`LocalImageModels.TextOnly`).
+Krea 2 Turbo — 8 шагов без CFG, VAE Qwen-Image, расширитель промпта выключен; самая «художественная»
+картинка, кириллица на крупных надписях чистая, счёт предметов не держит. Замер: 8–12 с прогретой, 19 с
+холодной. MOSS-Image — DiT 5B, 25 шагов, CFG 2,5, er_sde, энкодер и расширитель промпта — Qwen3.5-9B;
+лучшая вёрстка надписей (афиша на три строки без ошибок). Замер: 16–27 с. Не взяты: Krea 2 Raw (база
+для LoRA, 52 шага — 98 с), MOSS-Image Base (хуже SFT по композиции), правка MOSS через edit-LoRA (при
+замене фона выкинула человека). Веса — `Comfy-Org/Krea-2`, `Comfy-Org/MOSS-Image` (int8_convrot), на
+Video в `~/ai-data/image-extra` (секция `image_extra` в `extra_model_paths.yaml`). Лицензии: Krea 2 —
+Community License (коммерция до $1 млн годовой выручки), MOSS-Image — Apache 2.0.
 | `local_job_status`, `local_jobs_wait` | — | статус и ожидание (до 15 с за вызов, до 12 задач) | — |
 | `local_models` | — | операции, размеры, длина очереди ComfyUI | — |
 

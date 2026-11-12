@@ -294,6 +294,10 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Qwen «качественно» (`LocalImageModels.Effective`), котировка считает так же (`EtaVariant`). У Turbo нет
   `Generate`. Формат ~1 Мп (`ComfyWorkflows.Fibo2Sizes` ↔ `LocalImageEditor.Fibo2Sizes`); холст правки
   выбирает узел `TextEncodeFibo2` по пропорции исходника. Веса CC BY-NC — в подписи модели «некоммерч.».
+  **Krea 2 Turbo (`krea2-turbo`) и MOSS-Image (`moss-image`), с 2026-11-12** — только `Generate`
+  (`TextOnlyModel`: без образцов, масок и персонажа, формат ~1 Мп). Любая картинка на входе, LoRA или
+  не-генерация уводят запуск на Qwen «качественно» (`LocalImageModels.TextOnly` в `Effective`), котировку —
+  так же (`EtaVariant`).
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

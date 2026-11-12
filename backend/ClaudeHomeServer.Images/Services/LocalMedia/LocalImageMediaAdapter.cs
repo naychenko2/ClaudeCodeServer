@@ -148,6 +148,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
     public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
+        LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsKrea2(model) => LocalMediaService.Krea2GenerateEta(Math.Max(1, count)),
+        LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsMoss(model) => LocalMediaService.MossGenerateEta(Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsFibo2(model) =>
             LocalMediaService.Fibo2GenerateEta(model == LocalImageModels.Fibo2Turbo, Math.Max(1, count)),
         LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsFibo2(model) =>
@@ -379,6 +381,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                     KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) =>
                     H3ImageGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
+                LocalImageOp.Generate when ComfyWorkflows.IsKrea2(model) =>
+                    ComfyWorkflows.Krea2Generate(prompt, OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
+                LocalImageOp.Generate when ComfyWorkflows.IsMoss(model) =>
+                    ComfyWorkflows.MossGenerate(prompt, OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsFibo2(model) =>
                     Fibo2Graph(prompt, request, names, model, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request with { Model = model }, seed, count, prefix),
@@ -494,18 +500,22 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         string? model, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
     {
         var turbo = model == LocalImageModels.Fibo2Turbo;
-        var size = request.Width is > 0 && request.Height is > 0
-            ? (request.Width.Value, request.Height.Value)
-            : Fibo2SizeFor(request.Aspect);
+        var size = OneMegapixelCanvas(request);
         if (names.Count == 0)
-            return ComfyWorkflows.Fibo2Generate(prompt, size.Item1, size.Item2, seed, count, prefix, turbo);
+            return ComfyWorkflows.Fibo2Generate(prompt, size.Width, size.Height, seed, count, prefix, turbo);
         return ComfyWorkflows.Fibo2Edit(prompt, names, request.Op == LocalImageOp.Generate ? size : null, seed, prefix, turbo,
             faceRefs, count);
     }
 
-    // Размер из таблицы Fibo 2.0; соотношение не из таблицы — 1024²
-    internal static (int Width, int Height) Fibo2SizeFor(string? aspect) =>
-        ComfyWorkflows.Fibo2Sizes.TryGetValue(aspect?.Trim() ?? "", out var exact) ? exact : ComfyWorkflows.Fibo2Sizes["1:1"];
+    // Холст моделей на ~1 Мп (Fibo 2.0, Krea 2, MOSS-Image): точный размер формата или таблица
+    internal static (int Width, int Height) OneMegapixelCanvas(LocalImageRequest request) =>
+        request.Width is > 0 && request.Height is > 0
+            ? (request.Width.Value, request.Height.Value)
+            : OneMegapixelSizeFor(request.Aspect);
+
+    // Размер из таблицы ~1 Мп; соотношение не из таблицы — 1024²
+    internal static (int Width, int Height) OneMegapixelSizeFor(string? aspect) =>
+        ComfyWorkflows.OneMegapixelSizes.TryGetValue(aspect?.Trim() ?? "", out var exact) ? exact : ComfyWorkflows.OneMegapixelSizes["1:1"];
 
     private (int Width, int Height)? SourceSize(byte[] image) =>
         raster?.Probe(image) is { } probe ? (probe.DisplayWidth, probe.DisplayHeight) : ImageDimensions.Read(image);

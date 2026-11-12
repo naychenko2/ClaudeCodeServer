@@ -27,6 +27,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     public const string MiniMaxH3Image = LocalImageModels.H3Image;
     public const string Fibo2Dev = LocalImageModels.Fibo2;
     public const string Fibo2Turbo = LocalImageModels.Fibo2Turbo;
+    public const string Krea2Turbo = LocalImageModels.Krea2Turbo;
+    public const string MossImage = LocalImageModels.Moss;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -108,9 +110,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         [new FormatTierSpec(FormatTier.Standard, "~4 Мп", H3Sizes), new FormatTierSpec(FormatTier.High, "~16 Мп", H3SizesHigh)],
         new ExactSizeSpec(Step: 32, MinSide: 512, MaxSide: 6272, MaxMegapixels: 16.8));
 
-    // Fibo 2.0 обучена на ~1 Мп (выше послушность падает): обученные размеры узла TextEncodeFibo2 —
-    // зеркало ComfyWorkflows.Fibo2Sizes (сверка в тестах). «Точно…» — кратно 16 в пределах ~1,2 Мп
-    public static readonly IReadOnlyDictionary<string, FormatSize> Fibo2Sizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
+    // Fibo 2.0, Krea 2 и MOSS-Image — на ~1 Мп (Fibo выше теряет послушность): обученные размеры узла TextEncodeFibo2 —
+    // зеркало ComfyWorkflows.OneMegapixelSizes (сверка в тестах). «Точно…» — кратно 16 в пределах ~1,2 Мп
+    public static readonly IReadOnlyDictionary<string, FormatSize> OneMegapixelSizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
     {
         ["1:1"] = new(1024, 1024),
         ["16:9"] = new(1424, 800),
@@ -121,11 +123,21 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         ["2:3"] = new(832, 1248),
     };
 
-    private static readonly MediaFormatCaps Fibo2Format = new("Fibo 2.0",
-        [.. Fibo2Sizes.Keys],
-        [new FormatTierSpec(FormatTier.Standard, "~1 Мп", Fibo2Sizes)],
+    private static readonly MediaFormatCaps Fibo2Format = OneMegapixelFormat("Fibo 2.0");
+
+    private static MediaFormatCaps OneMegapixelFormat(string label) => new(label,
+        [.. OneMegapixelSizes.Keys],
+        [new FormatTierSpec(FormatTier.Standard, "~1 Мп", OneMegapixelSizes)],
         new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 2048, MaxMegapixels: 1.2),
         null, "один размер ~1 Мп");
+
+    // Только генерация по тексту: образцов, масок и персонажа эти модели не берут (их запуск ушёл бы
+    // на Qwen), поэтому в каталоге у них одна операция
+    private static ImageEditModelInfo TextOnlyModel(string id, string label, string formatLabel) =>
+        new(id, label,
+            new ImageEditCaps([ImageEditOp.Generate], MaskSupport.None,
+                MaxReferences: 0, MaxCount: 4, FaceByReferences: false, Format: OneMegapixelFormat(formatLabel)),
+            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
     // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
@@ -146,6 +158,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1,
                 MaxFaceCropPhotos: 1, Format: Fibo2Format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
+        // Krea 2 Turbo и MOSS-Image (2026-11-12): только генерация по тексту
+        TextOnlyModel(Krea2Turbo, "Krea 2 Turbo — эстетика, 8 шагов", "Krea 2 Turbo"),
+        TextOnlyModel(MossImage, "MOSS-Image — надписи и вёрстка", "MOSS-Image"),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
@@ -205,15 +220,19 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
 
     // Модель, на которой запуск пойдёт на самом деле, — грубо, по признакам котировки: точный
     // выбор делает шов (LocalImageModels.Effective) по готовому запросу. Персонаж Klein не уводит,
-    // а Fibo 2.0 — уводит: LoRA персонажа обучены под Qwen
-    private static string EtaVariant(string id, ImageEditQuoteRequest request, int images) =>
-        (LocalImageModels.TakesCharacterByPhotos(id) || LocalImageModels.IsFibo2(id))
-        && (request.HasMask
-            || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
-            || images + 1 > LocalImageModels.MaxImagesOf(id)
-            || (LocalImageModels.IsFibo2(id) && request.HasCharacter))
-            ? QwenImage
-            : id;
+    // а Fibo 2.0 — уводит: LoRA персонажа обучены под Qwen. Krea 2 и MOSS-Image любую картинку
+    // на входе (образец, маску, персонажа) отдают Qwen
+    private static string EtaVariant(string id, ImageEditQuoteRequest request, int images)
+    {
+        if (LocalImageModels.TextOnly(id))
+            return request.Op != ImageEditOp.Generate || images > 0 || request.HasMask ? QwenImage : id;
+        var toQwen = (LocalImageModels.TakesCharacterByPhotos(id) || LocalImageModels.IsFibo2(id))
+                     && (request.HasMask
+                         || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
+                         || images + 1 > LocalImageModels.MaxImagesOf(id)
+                         || (LocalImageModels.IsFibo2(id) && request.HasCharacter));
+        return toQwen ? QwenImage : id;
+    }
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
 

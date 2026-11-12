@@ -304,7 +304,7 @@ public class LocalImageEditorTests : IDisposable
         var editor = new LocalImageEditor(new FakeMedia());
 
         editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "minimax-h3-image",
-            "fibo2", "fibo2-turbo", "face-detailer");
+            "fibo2", "fibo2-turbo", "krea2-turbo", "moss-image", "face-detailer");
         editor.Models[0].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
         editor.Models[1].Label.Should().Be("FLUX 3 Klein — текст и точная правка");
         editor.Models[2].Label.Should().Be("Qwen-Image 2.1 — качественно");
@@ -386,6 +386,36 @@ public class LocalImageEditorTests : IDisposable
         }
     }
 
+    // Krea 2 Turbo и MOSS-Image — только генерация по тексту, без образцов и персонажа; формат ~1 Мп
+    [Theory]
+    [InlineData("krea2-turbo", "Krea 2 Turbo")]
+    [InlineData("moss-image", "MOSS-Image")]
+    public void Каталог_Krea2Moss_ТолькоГенерация(string id, string format)
+    {
+        var caps = new LocalImageEditor(new FakeMedia()).Models.Single(m => m.Id == id).Caps;
+
+        caps.Ops.Should().Equal(ImageEditOp.Generate);
+        caps.MaxReferences.Should().Be(0);
+        caps.FaceByReferences.Should().BeFalse();
+        caps.Mask.Should().Be(MaskSupport.None);
+        caps.Format!.ModelLabel.Should().Be(format);
+        caps.Format.Tiers[0].Sizes["1:1"].Should().Be(new FormatSize(1024, 1024));
+    }
+
+    [Fact]
+    public async Task КотировкаKrea2_ПерсонажУводитНаQwen_ТекстНет()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.Krea2Turbo }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage);
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.Krea2Turbo, HasCharacter = false }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.Krea2Turbo).And.NotContain(LocalImageEditor.QwenImage);
+    }
+
     [Fact]
     public async Task КотировкаFibo2_ПерсонажИКистьУводятНаQwen()
     {
@@ -445,7 +475,7 @@ public class LocalImageEditorTests : IDisposable
         models.Single(m => m.Id == LocalImageEditor.FluxKlein).Caps.MaxCharacterPhotos.Should().Be(5);
         models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps.MaxCharacterPhotos.Should().Be(1);
         models.Single(m => m.Id == LocalImageEditor.QwenImageTurbo).Caps.MaxCharacterPhotos.Should().Be(1);
-        models.Where(m => m.Id != LocalImageEditor.FaceDetailer)
+        models.Where(m => m.Id != LocalImageEditor.FaceDetailer && !LocalImageModels.TextOnly(m.Id))
             .Should().OnlyContain(m => m.Caps.MaxFaceCropPhotos == 1, "подстановку на лицо делает Qwen: одно фото");
     }
 

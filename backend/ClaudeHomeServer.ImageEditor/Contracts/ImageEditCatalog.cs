@@ -65,6 +65,8 @@ public static class ImageEditCatalog
             // Fibo 2.0 — тот же вход: холст правки узел сам приводит к своему ~1 Мп
             ["fibo2"] = (1664, 1.8, 30, 90),
             ["fibo2-turbo"] = (1664, 1.8, 30, 90),
+            ["krea2-turbo"] = (1664, 1.8, 30, 90),
+            ["moss-image"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1-turbo"] = (1664, 1.8, 30, 90),
             ["face-detailer"] = (4096, 16.8, 30, null),

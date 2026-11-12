@@ -288,6 +288,7 @@ public sealed class PregateService : ITaskPregate
 
         var problems = new List<string>();
         var tail = new Queue<string>();
+        var flaky = new FlakyBlock();
         var gate = new object();
         void OnLine(string line)
         {
@@ -297,12 +298,16 @@ public sealed class PregateService : ITaskPregate
                 tail.Enqueue(cut);
                 while (tail.Count > DetailLines) tail.Dequeue();
                 if (problems.Count < DetailLines && IsProblem(line)) problems.Add(cut);
+                flaky.Feed(cut);
             }
         }
 
         var outcome = await _pipeline.RunProcessAsync(_launchers.ForProject(request.Project), spec, OnLine, limit);
         if (outcome.Aborted) return null;
-        if (outcome.ExitCode == 0) return new PregateCheckResult(check.Name, PregateStatus.Green);
+        // Флаки зелёного прогона не прощаются молча: статус зелёный, но деталь с ними едет в сводку
+        if (outcome.ExitCode == 0)
+            lock (gate)
+                return new PregateCheckResult(check.Name, PregateStatus.Green, flaky.Detail ?? "");
         lock (gate)
         {
             var lines = problems.Count > 0 ? problems : [.. tail];
@@ -347,6 +352,35 @@ public sealed class PregateService : ITaskPregate
         {
             return true; // выход за дерево или негодный путь — не наш случай, пусть решает сам процесс
         }
+    }
+
+    // Блок «Флаки (прошли со второго раза): N» из вывода scripts/test-shards.py: заголовок и следом строки
+    // «  FQN» с отступом; блок кончается первой строкой без отступа. Повторный блок заменяет прежний
+    private sealed class FlakyBlock
+    {
+        private string? _header;
+        private readonly List<string> _fqns = [];
+        private bool _open;
+
+        public void Feed(string line)
+        {
+            if (line.StartsWith(PregateRules.FlakyHeader, StringComparison.Ordinal))
+            {
+                _header = line.TrimEnd();
+                _fqns.Clear();
+                _open = true;
+                return;
+            }
+            if (!_open) return;
+            if (line.Length > 0 && char.IsWhiteSpace(line[0]) && line.Trim().Length > 0)
+            {
+                if (_fqns.Count < DetailLines) _fqns.Add(line.Trim());
+            }
+            else _open = false;
+        }
+
+        // Заголовок блока и до DetailLines FQN; null — блока не было
+        public string? Detail => _header is null ? null : string.Join('\n', [_header, .. _fqns]);
     }
 
     // Строка с диагностикой компилятора или линтера: «warning CS8618», «error TS2322», «: error »

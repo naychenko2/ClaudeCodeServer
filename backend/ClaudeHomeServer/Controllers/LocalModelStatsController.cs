@@ -22,24 +22,27 @@ namespace ClaudeHomeServer.Controllers;
 // Roles="admin" не ослабил бы доступ.
 //
 // Зависимости — только через интерфейсы вертикали Llm (ILocalModelStatsReader, IGpuSampler).
-// Подсистема Llm может быть отключена (Subsystems:llm:Enabled=false) — тогда
-// зависимости необязательны (GetService → null) и ответ {configured:false, status:notConnected}
-// (200, а не 500). Внутренние типы Llm наружу не отдаём: DTO — отдельные записи ниже.
+// `?` на них — остаток эпохи отключаемой llm, а не контракт: подсистема llm неотключаема
+// (ADR-014 §5), её Register ставит все эти сервисы безусловно (LlmSubsystem.cs:296, 486-511),
+// поэтому GetService → null и ответ {configured:false, status:notConnected} на рантайме
+// не достижимы. Внутренние типы Llm наружу не отдаём: DTO — отдельные записи ниже.
 [ApiController]
 [Route("api/local-model")]
 public class LocalModelStatsController(IServiceProvider services, IOptions<LocalModelStatsMediaOptions> mediaOptions) : ControllerBase
 {
-    // Llm-зависимости необязательны: подсистема может быть выключена (GetService → null).
+    // Llm-зависимости: `?` — остаток эпохи отключаемой llm (ADR-014 §5), на текущем графе DI
+    // обе зарегистрированы безусловно.
     private readonly ILocalModelStatsReader? _reader = services.GetService<ILocalModelStatsReader>();
     private readonly IGpuSampler? _gpus = services.GetService<IGpuSampler>();
-    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. Необязателен (подсистема Llm отключаема).
+    // Вкладка «Железо» (Б1): отчёт с уровнями на бэкенде. `?` — тот же остаток (см. выше).
     private readonly IHardwareReportService? _hardware = services.GetService<IHardwareReportService>();
     // Счётчик хода: живые чаты на движке (chats) и прогоны, которые он не видит (othersCount).
     private readonly ILocalModelTurnMeter? _meter = services.GetService<ILocalModelTurnMeter>();
     // Стенд второй модели (Б3c): справочник дорожек статистики, словарь известных движков
     // (список engines и цепочка duty), клиент состояния арбитра и журнал вызовов мест («кто сейчас
-    // на модели»). Всё необязательно: подсистема Llm отключаема (GetService → null) — тогда
-    // engines отдаёт {main, configured:false}, а stats?engine= — {configured:false} (200, не 500).
+    // на модели»). `?` — тот же остаток эпохи отключаемой llm (ADR-014 §5): на текущем графе DI
+    // все четыре зарегистрированы. Пустой ответ {configured:false} даёт отсутствие ДОРОЖКИ
+    // (неизвестный движок, движок без MetricsUrl), а не отсутствие сервиса.
     private readonly ILocalEngineStatsDirectory? _tracks = services.GetService<ILocalEngineStatsDirectory>();
     private readonly NamedLocalEngines? _namedEngines = services.GetService<NamedLocalEngines>();
     private readonly IEngineArbiterStateReader? _arbiter = services.GetService<IEngineArbiterStateReader>();
@@ -78,7 +81,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         var current = _reader?.Current;
 
-        // Подсистема Llm отключена (reader null) → notConnected, 200 (не 500).
+        // reader null — ветка эпохи отключаемой llm (на текущем графе DI не достижима,
+        // ADR-014 §5): notConnected, 200 (не 500).
         if (current is null)
             return Ok(new LocalModelStatsResponse
             {
@@ -106,24 +110,9 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         var points = _reader!.GetHistory(windowSpan, since);
         var history = points.Select(p => MapHistoryPoint(current, p)).ToArray();
 
-        // Чаты на стенде: живые чаты счётчика хода (ILocalModelTurnMeter.ActiveChats).
-        // Анонимизация: свой чат (OwnerId == текущий пользователь) — название/id/проект
-        // отдаются; чужой — «Чат другого пользователя», id/проект null. Сам OwnerId
-        // наружу не уходит (в DTO такого поля нет).
-        var active = _meter?.ActiveChats() ?? [];
-        var chats = active.Select(c =>
-        {
-            var own = c.OwnerId == UserId;
-            return new ChatDto
-            {
-                Own = own,
-                SessionId = own ? c.SessionId : null,
-                ProjectId = own ? c.ProjectId : null,
-                Title = own ? c.Title : "Чат другого пользователя",
-                Phase = c.Phase,
-                GenTps = c.GenTps,
-            };
-        }).ToArray();
+        // Чаты на стенде: живые чаты дорожки main (ILocalModelTurnMeter.ActiveChats).
+        var active = _meter?.ActiveChats(LocalModelStatsPoller.MainTrackName) ?? [];
+        var chats = AnonymizeChats(active);
 
         // othersCount — прогоны на стенде, которые счётчик не видит как чаты (он видит
         // только ходы, прошедшие через шлюз): max(0, running + waiting − живых чатов).
@@ -209,10 +198,28 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     private static string TitleOf(string name) =>
         name.Length == 0 ? name : char.ToUpperInvariant(name[0]) + name[1..];
 
-    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт по алфавиту
-    // ключей, и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
+    // Основной локальный провайдер панели — первый IsLocal СО секцией Stats: реестр идёт в алфавите
+    // ключей (так их отдаёт IConfiguration), и локальный провайдер без Stats (например, чатовый на Video) не должен прятать панель.
     private LlmProviderConfig? MainLocalProvider() =>
         _providers?.All.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
+
+    // Анонимизация чатов стенда (общая для main и именованных): свой чат (OwnerId == текущий
+    // пользователь) — название/id/проект отдаются; чужой — «Чат другого пользователя»,
+    // id/проект null. Сам OwnerId наружу не уходит (в DTO такого поля нет).
+    private ChatDto[] AnonymizeChats(IReadOnlyList<TurnChatLive> active) =>
+        [.. active.Select(c =>
+        {
+            var own = c.OwnerId == UserId;
+            return new ChatDto
+            {
+                Own = own,
+                SessionId = own ? c.SessionId : null,
+                ProjectId = own ? c.ProjectId : null,
+                Title = own ? c.Title : "Чат другого пользователя",
+                Phase = c.Phase,
+                GenTps = c.GenTps,
+            };
+        })];
 
     // Подпись из конфига: пустая или из пробелов — как не заданная.
     private static string? Label(string? value) =>
@@ -221,12 +228,11 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // GET /api/local-model/stats?engine=<имя> — стенд именованного движка (B3c): тот же
     // LocalModelStatsResponse плюс блок «Дежурство» (duty). Без engine или с engine=main —
     // основной стенд выше, его ответ побайтно не меняется.
-    // Нет дорожки (неизвестный движок, движок без MetricsUrl или выключенная Llm) →
+    // Нет дорожки (неизвестный движок или движок без MetricsUrl) →
     // {configured:false, status:notConnected} (200, не 500), без блока duty.
     // Отличия от основного стенда: gpus — карта Video, общая с ComfyUI, из Core-шва IComfyStats
     // (узел /ccs/stats), а не сэмплера хоста (разрез v2 §3); Llm ↛ Images — склейка здесь;
-    // chats — пусты (именованный движок обслуживает места, не ходы чатов; «кто сейчас на модели»
-    // — duty.callsNow); hardware нет (сводка «Видеокарты» относится к хосту, не к машине Video).
+    // chats — живые чаты ЭТОЙ дорожки (ActiveChats(имя)), вызовы мест — отдельно в duty.callsNow; hardware нет (сводка «Видеокарты» относится к хосту, не к машине Video).
     private async Task<IActionResult> NamedStatsAsync(string name, TimeSpan windowSpan, long? since, CancellationToken ct)
     {
         var current = _tracks?.CurrentOf(name);
@@ -253,11 +259,16 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
 
         var history = _tracks!.HistoryOf(name, windowSpan, since).Select(p => MapHistoryPoint(current, p)).ToArray();
 
+        var active = _meter?.ActiveChats(name) ?? [];
+        var duty = await BuildDutyAsync(name, comfy, ct);
+        var spec = _namedEngines?.Get(name)?.Spec;
+
         return Ok(new LocalModelStatsResponse
         {
             Configured = current.Configured,
             Engine = current.Engine,
-            Model = current.Model,
+            EngineLabel = Label(spec?.EngineLabel),
+            Model = Label(spec?.ModelLabel) ?? current.Model,
             TensorParallel = current.TensorParallel,
             // Статус дорожки, включая "yielded" (Б3b): выгруженная под арбитром модель — не авария,
             // DownSince при этом не ставится (снимок дорожки уже несёт null).
@@ -265,9 +276,8 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             DownSince = current.DownSince?.ToUnixTimeMilliseconds(),
             Running = current.Running,
             Waiting = current.Waiting,
-            // Счётчик хода не видит вызовов именованного движка (они идут мимо шлюз'а):
-            // «прочие» — всё, что сообщает движок.
-            OthersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0)),
+            // «Прочие» — то, что движок сообщает сверх своих чатов и вызовов мест (duty.callsNow).
+            OthersCount = Math.Max(0, (current.Running ?? 0) + (current.Waiting ?? 0) - active.Count - (duty.CallsNow?.Length ?? 0)),
             CleanStepMs = current.CleanStepMs,
             Speed = new SpeedDto
             {
@@ -285,10 +295,10 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
             },
             Gpus = gpus,
             History = history,
-            Chats = [],
+            Chats = AnonymizeChats(active),
             Unsupported = current.Unsupported,
             Hardware = null,
-            Duty = await BuildDutyAsync(name, comfy, ct),
+            Duty = duty,
         });
     }
 
@@ -391,7 +401,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
     // GET /api/local-model/hardware?window=1m|5m|15m|1h
     // Вкладка «Железо»: температуры карт (в т.ч. памяти GDDR6X), процессора, платы, дисков + ряды
     // истории за окно. ТОЛЬКО admin (роль на действии, как у /stats; не-админ → 403). Неизвестное window → 400.
-    // Подсистема Llm выключена → 200 пустой отчёт (не 500).
+    // hardware нет в контейнере (ветка эпохи отключаемой llm, ADR-014 §5) → 200 пустой отчёт (не 500).
     [Authorize(Roles = "admin")]
     [HttpGet("hardware")]
     public IActionResult Hardware([FromQuery] string? window)
@@ -687,18 +697,18 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Тип движка ("vllm" | "llama-server" | "ollama"); null — не задан.
         public string? Engine { get; init; }
 
-        // Подпись движка из Stats:EngineLabel (только основной стенд); нет — поля нет
+        // Подпись движка: Stats:EngineLabel основного стенда или LocalEngines:{имя}:EngineLabel именованного; нет — поля нет
         // в ответе (WhenWritingNull: без подписей ответ побайтно прежний), фронт покажет Engine.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? EngineLabel { get; init; }
 
-        // Модель стенда: Stats:Model, иначе идентификатор из каталога провайдера; null — неизвестна.
+        // Модель стенда: Stats:Model (у именованного — LocalEngines:{имя}:ModelLabel), иначе идентификатор из каталога провайдера; null — неизвестна.
         public string? Model { get; init; }
 
         // Число карт тензор-параллелизма из секции Stats; null — не задано (фронт покажет число карт).
         public int? TensorParallel { get; init; }
 
-        // Раскладка по картам из Stats:Topology (только основной стенд) — фронт пишет её
+        // Раскладка по картам из Stats:Topology (только основной стенд; у именованного — null) — фронт пишет её
         // вместо «TP=N»; нет — поля нет в ответе, как у EngineLabel.
         [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? Topology { get; init; }
@@ -731,7 +741,7 @@ public class LocalModelStatsController(IServiceProvider services, IOptions<Local
         // Точки кольца: t, genThroughput, waiting, running.
         public HistoryPointDto[] History { get; init; } = [];
 
-        // Чаты на стенде; пока пусто (шаг 19).
+        // Живые чаты дорожки стенда (main — ходы основного провайдера; именованная — ходы провайдеров с её StatsEngine).
         public ChatDto[] Chats { get; init; } = [];
 
         // Метрики, которых движок не сообщил (отсутствуют в /metrics). Единый словарь сокрытия

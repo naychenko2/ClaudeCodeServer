@@ -4,7 +4,7 @@
 // в токенах, $ не показывается нигде; fal.ai — счётчик генераций.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Users, X } from 'lucide-react';
-import type { SpendCardRow, SpendOverviewResponse } from '../../types';
+import type { SpendCardRow, SpendOverviewResponse } from './types';
 import { api, C, FONT, ISLAND, R, SHADOW, SP, Z, CONTENT_MAX_W, MOBILE_MAX, TABLET_MAX, useIsMobile, useWindowWidth, IconButton, MiniSegment, Notice } from 'aihome_shell/kit';
 import { SPEND_PERIODS, periodRange, fmtDate, type SpendLevel } from './spendModel';
 import { spendQuery, type SpendFilter, type SpendOpenContext } from '../../lib/spendContract';

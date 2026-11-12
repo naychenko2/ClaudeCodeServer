@@ -5,69 +5,31 @@ using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// Единая точка правды «первое живое звено ключевой чата + переход по продолжениям»
-// (FeatureKeyChain.FirstLive). Мутации (по одному тесту каждая, вывод — в отчёте задачи):
-//  • убрать переход по ContinuedInSessionId — тесты «продолжение…» красные;
-//  • убрать visited.Add (защита от цикла) — тест «цикл» уходит в MaxContinuationDepth и возвращает
-//    другое звено — красный;
-//  • убрать пропуск мёртвого звена (continue) — тест «первое звено мертво» красный.
+// Единая точка правды «первое живое звено ключевой чата» (FeatureKeyChain.FirstLive).
+// Мутации (по одному тесту каждая, вывод — в отчёте задачи):
+//  • не проверять живость (вернуть первое звено цепочки) — тест «первое звено мертво» красный;
+//  • брать последнее живое вместо первого (Last) — тест «первое звено живое» красный.
 public class FeatureKeyChainFirstLiveTests
 {
-    private static Func<string, FeatureKeyChain.KeyChatProbe?> Probe(Dictionary<string, string?> live) =>
-        id => live.TryGetValue(id, out var cont) ? new FeatureKeyChain.KeyChatProbe(cont) : null;
+    private static Func<string, bool> Live(params string[] ids) => new HashSet<string>(ids).Contains;
 
     [Fact]
-    public void ПервоеЗвеноЖивое_БезПродолжения_ОноСамо()
+    public void ПервоеЗвеноЖивое_БерётсяОно()
     {
-        FeatureKeyChain.FirstLive(["a", "b"], Probe(new() { ["a"] = null, ["b"] = null })).Should().Be("a");
+        FeatureKeyChain.FirstLive(["a", "b"], Live("a", "b")).Should().Be("a");
     }
 
     [Fact]
     public void ПервоеЗвеноМертво_БерётсяСледующееЖивое()
     {
-        FeatureKeyChain.FirstLive(["a", "b"], Probe(new() { ["b"] = null })).Should().Be("b");
-    }
-
-    [Fact]
-    public void Продолжение_ЖивоеПродолжение_ВместоИсходного()
-    {
-        FeatureKeyChain.FirstLive(["a"], Probe(new() { ["a"] = "a2", ["a2"] = null })).Should().Be("a2");
-    }
-
-    [Fact]
-    public void Продолжение_ЦепочкаПродолжений_ПоследнееЖивое()
-    {
-        FeatureKeyChain.FirstLive(["a"], Probe(new() { ["a"] = "a2", ["a2"] = "a3", ["a3"] = null })).Should().Be("a3");
-    }
-
-    [Fact]
-    public void Продолжение_Мертво_ОстаёмсяНаПоследнемЖивом()
-    {
-        FeatureKeyChain.FirstLive(["a"], Probe(new() { ["a"] = "ушло" })).Should().Be("a");
-    }
-
-    [Fact]
-    public void Продолжение_Цикл_Прерывается()
-    {
-        FeatureKeyChain.FirstLive(["a"], Probe(new() { ["a"] = "b", ["b"] = "a" })).Should().Be("b",
-            "цикл a→b→a останавливается на втором шаге, без бесконечного обхода");
-    }
-
-    [Fact]
-    public void Продолжение_Глубже_Предела_ОстановкаНаПределе()
-    {
-        var live = new Dictionary<string, string?>();
-        for (var i = 0; i < 20; i++) live[$"s{i}"] = $"s{i + 1}";
-        live["s20"] = null;
-
-        FeatureKeyChain.FirstLive(["s0"], Probe(live)).Should().Be($"s{FeatureKeyChain.MaxContinuationDepth}");
+        FeatureKeyChain.FirstLive(["a", "b"], Live("b")).Should().Be("b");
     }
 
     [Fact]
     public void ЖивыхЗвеньевНет_Null()
     {
-        FeatureKeyChain.FirstLive(["a", "b"], Probe(new())).Should().BeNull();
-        FeatureKeyChain.FirstLive([], Probe(new() { ["a"] = null })).Should().BeNull();
+        FeatureKeyChain.FirstLive(["a", "b"], Live()).Should().BeNull();
+        FeatureKeyChain.FirstLive([], Live("a")).Should().BeNull();
     }
 
     // Порядок звеньев: запускающий дочерних → чат создания эпика → запустивший эпик.
@@ -133,20 +95,6 @@ public class FeatureKeyChainFirstLiveTests
         FeatureKeyChain.Of(epic, [epic, a, b]).Should().Equal("a-chat", "z");
     }
 
-    // KeySession проектора ходит через ту же функцию: продолжение из снимка сессий владельца
-    [Fact]
-    public void KeySession_ПереходитКПродолжениюИзСнимка()
-    {
-        var epic = new TaskItem { Id = "e", SourceSessionId = "a" };
-        var sessions = new[]
-        {
-            new FeatureIndexSession("a", null, null, false, ContinuedInSessionId: "a2"),
-            new FeatureIndexSession("a2", null, null, false),
-        };
-
-        FeatureProjector.KeySession(epic, [epic], sessions).Should().Be("a2");
-    }
-
     [Fact]
     public void KeySession_ПовторIdВСнимке_НеПадает()
     {
@@ -160,16 +108,18 @@ public class FeatureKeyChainFirstLiveTests
         FeatureProjector.KeySession(epic, [epic], sessions).Should().Be("a");
     }
 
-    // Каталог сессий: чужой владелец продолжением не считается (предохранитель из постановки)
+    // Каталог сессий: чужое звено пропускается, отсутствующего в справочнике нет (предохранитель
+    // из постановки)
     [Fact]
-    public void ПоСправочнику_ЧужоеПродолжение_НеБерётся()
+    public void ПоСправочнику_ЧужоеЗвено_Пропускается()
     {
         var dir = new FakeDirectory(
-            new Session { Id = "a", ContinuedInSessionId = "x" },
+            new Session { Id = "a" },
             new Session { Id = "x" });
         dir.OwnerOf["x"] = "чужой";
 
-        FeatureKeyChain.FirstLive(["a"], dir, "u").Should().Be("a");
+        FeatureKeyChain.FirstLive(["x", "a"], dir, "u").Should().Be("a");
+        FeatureKeyChain.FirstLive(["x", "нет"], dir, "u").Should().BeNull();
     }
 
     private sealed class FakeDirectory : ISessionDirectory

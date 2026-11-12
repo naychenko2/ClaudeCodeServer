@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -302,10 +303,11 @@ public class LocalImageEditorTests : IDisposable
     {
         var editor = new LocalImageEditor(new FakeMedia());
 
-        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "face-detailer");
+        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "minimax-h3-image", "face-detailer");
         editor.Models[0].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
         editor.Models[1].Label.Should().Be("FLUX 3 Klein — текст и точная правка");
         editor.Models[2].Label.Should().Be("Qwen-Image 2.1 — качественно");
+        editor.Models[3].Label.Should().Be("MiniMax H3 Image — детали и 4K");
         editor.PickModel(ImageEditOp.EnhanceFaces, EditMode.Auto, new EditTraits(false, 0, false))!.Id.Should().Be("face-detailer");
     }
 
@@ -333,6 +335,46 @@ public class LocalImageEditorTests : IDisposable
         klein.MaxReferences.Should().Be(qwen.MaxReferences);
         klein.Format!.ModelLabel.Should().Be("FLUX 3 Klein");
         klein.Format.Tiers.Should().BeEquivalentTo(qwen.Format!.Tiers);
+    }
+
+    // H3-Image: те же операции, что у Qwen (непроверенное уходит на Qwen), свой формат ~4 и ~16 Мп
+    [Fact]
+    public void Каталог_H3Image_ВозможностиQwen_СвойФормат()
+    {
+        var models = new LocalImageEditor(new FakeMedia()).Models;
+        var h3 = models.Single(m => m.Id == LocalImageEditor.MiniMaxH3Image).Caps;
+        var qwen = models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps;
+
+        h3.Ops.Should().Equal(qwen.Ops);
+        h3.Mask.Should().Be(qwen.Mask);
+        h3.MaxReferences.Should().Be(15, "16 картинок всего: холст и 15 образцов");
+        h3.MaxCharacterPhotos.Should().Be(LocalImageModels.H3ImageCharacterPhotos);
+        h3.MaxFaceCropPhotos.Should().Be(1, "подстановку на лицо делает Qwen");
+        h3.Format!.ModelLabel.Should().Be("MiniMax H3 Image");
+        h3.Format.Tiers.Select(t => t.Tier).Should().Equal(FormatTier.Standard, FormatTier.High);
+        h3.Format.Tiers[0].Sizes["1:1"].Should().Be(new FormatSize(2048, 2048));
+        h3.Format.Tiers[1].Sizes["16:9"].Should().Be(new FormatSize(5472, 3072));
+        h3.Format.Exact!.Step.Should().Be(32);
+        foreach (var size in h3.Format.Tiers.SelectMany(t => t.Sizes.Values))
+        {
+            (size.W % 32).Should().Be(0);
+            (size.H % 32).Should().Be(0);
+        }
+    }
+
+    [Fact]
+    public async Task КотировкаH3_ПерсонажНеУводит_КистьУводитНаQwen()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        var withCharacter = await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.MiniMaxH3Image }, default);
+        withCharacter.Value!.Model.Should().Be(LocalImageEditor.MiniMaxH3Image);
+        media.EtaModels.Should().Contain(LocalImageEditor.MiniMaxH3Image).And.NotContain(LocalImageEditor.QwenImage);
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Edit, mask: true) with { Model = LocalImageEditor.MiniMaxH3Image }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "кисть H3 отдаёт Qwen");
     }
 
     [Fact]
@@ -781,6 +823,45 @@ public class LocalImageEditorTests : IDisposable
         sent.Lora.Should().BeNull();
         sent.Prompt.Should().StartWith("поставь сюда Тимура").And.Contain("2–6) 5 фото лица одного и того же человека")
             .And.NotContain("photo of andreyk");
+    }
+
+    // ── Персонаж на H3-Image: фото без LoRA, как у Klein (замер 2026-11-11) ──
+
+    [Fact]
+    public async Task H3_ПерсонажПоТексту_ФотоБезЛоры_ЗапросСФотографийОбразцов()
+    {
+        var media = new FakeMedia();
+        var photos = LocalImageModels.H3ImageCharacterPhotos;
+        var faces = Faces(photos);
+        var character = TimurLora with { Description = "мужчина 30 лет", FacePhotos = [.. faces.Select(f => f.Bytes)] };
+
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Generate) with { Model = LocalImageEditor.MiniMaxH3Image },
+            new ImageEditJobInput("", "сидит в кафе", null, null, null, null, faces, null, character));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        sent.Model.Should().Be(LocalImageEditor.MiniMaxH3Image);
+        LocalImageModels.Effective(sent).Should().Be(LocalImageEditor.MiniMaxH3Image);
+        sent.Images.Should().HaveCount(photos);
+        sent.Lora.Should().BeNull("LoRA обучены под Qwen-Image");
+        sent.FaceReferences.Should().HaveCount(photos);
+        sent.Prompt.Should().EndWith("— «Тимур», мужчина 30 лет: сидит в кафе").And.NotContain("andreyk");
+    }
+
+    [Fact]
+    public async Task H3_ПравкаСКистью_УходитНаQwen_СЛорой()
+    {
+        var media = new FakeMedia();
+        var source = TestImages.Png(8, 8, 1);
+
+        var job = await RunAsync(Service(Editor(media)), CharacterQuote(ImageEditOp.Edit, mask: true) with { Model = LocalImageEditor.MiniMaxH3Image },
+            new ImageEditJobInput("", "поставь сюда Тимура", null, new ImageBytes(source, "image/png"),
+                new ImageBytes(TestImages.Png(8, 8, 255), "image/png"), null, Faces(1), "images/hero.png", TimurLora));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        var sent = media.Submitted.Should().ContainSingle().Subject;
+        LocalImageModels.Effective(sent).Should().Be(LocalImageEditor.QwenImage, "маски H3 отдаёт Qwen «качественно»");
+        sent.Lora.Should().NotBeNull("на Qwen LoRA персонажа работает");
     }
 
     [Fact]

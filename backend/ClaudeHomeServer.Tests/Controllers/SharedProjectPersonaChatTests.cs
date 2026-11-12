@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
@@ -241,7 +242,7 @@ public class SharedProjectPersonaChatTests : IClassFixture<TestWebApplicationFac
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest,
             "дефект D1: раньше был 200 — рамка жила в ветке владельца, чат молча уходил вне проекта");
         (await BodyAsync(r)).GetProperty("code").GetString()
-            .Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+            .Should().Be(GlobalPersonaInSharedException.Code,
                 "та же рамка и тот же машинный код, что у владельца и что на POST /sessions");
         (await PersonaChatIdsAsync(Member(), globalId)).Should().BeEmpty("отказ не оставил чата с персоной");
         sessionsSvc.GetAllOwnedBy(MemberId()).Count(s => s.ProjectId is null).Should().Be(outsideBefore,

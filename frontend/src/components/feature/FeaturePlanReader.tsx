@@ -16,9 +16,11 @@
 //
 // Ссылки между документами фичи (W4-LINK-F): [[wikilinks]] и относительные пути внутри
 // дерева фичи — кликабельны, открывают цель одним кликом. [[Заголовок]] резолвится по
-// спискам документов фичи, путь — через резолв featureId (W4-5B2), не своей логикой:
-// цель читается тем же эндпоинтом файлов. Внешние http-ссылки — как раньше (ReaderLinkWrap
-// в общем рендере). Битые ссылки не роняют читалку: открытие само показывает «не найдено».
+// спискам документов фичи; путь читается по якорю задачи-документа (FS-F1d): локатор бэка
+// сам ищет в дереве задачи, потом в main — своего фолбэка «без якоря» нет. Внешние
+// http-ссылки — как раньше (ReaderLinkWrap в общем рендере). Битые ссылки не роняют читалку:
+// открытие само показывает «не найдено», файл из снесённой ветки — «Материал удалён вместе
+// с веткой» (та же фраза, что во вьюере, FS-B2).
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, FileText, RotateCw, Scissors, Palette, MessageCircle, ChevronDown, type LucideIcon } from 'lucide-react';
@@ -202,10 +204,13 @@ export interface FeaturePlanReaderProps {
 export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMockup, onOpenTask, marks = EMPTY_NAV_MARKS, featureId = null, projectId = null, taskProjectId = null, documents = [], onOpenDocument }: FeaturePlanReaderProps) {
   const [state, setState] = useState<TextState>(() => _textCache.get(textCacheKey(plan)) ?? { status: 'loading' });
   const [reload, setReload] = useState(0);
-  // Открытый по ссылке целевой документ (W4-LINK-F): текст читается через резолв
-  // featureId (W4-5B2), при отказе — корень проекта (после мержа worktree нет, документ
-  // в main). Оба отказа — честный «документа нет», читалка не роняется.
-  const [openDoc, setOpenDoc] = useState<{ path: string; status: 'loading' | 'error' | 'ok'; text?: string; isBinary?: boolean } | null>(null);
+  // Открытый по ссылке целевой документ (W4-LINK-F): текст читается по якорю задачи-документа
+  // (FS-F1d) — локатор бэка сам ищет в дереве задачи и в main. Отказ — честный «документа
+  // нет», файл из снесённой ветки — «Материал удалён вместе с веткой», читалка не роняется.
+  const [openDoc, setOpenDoc] = useState<{ path: string; status: 'loading' | 'error' | 'deleted' | 'ok'; text?: string; isBinary?: boolean } | null>(null);
+  // Ключ активного запроса (taskId, path): ответ применяется только к нему — вторая ссылка
+  // и закрытый документ снимают предыдущий запрос, его поздний ответ отбрасывается.
+  const openReqRef = useRef<string | null>(null);
   // «Содержание · N» — раскрыто на 1280, свёрнуто на 360.
   const [tocOpen, setTocOpen] = useState(!isMobile);
 
@@ -215,16 +220,24 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
   const linkCtx = useMemo(() => {
     if (!featureId || !projectId) return null;
     const openFile = (path: string) => {
+      // Якорь чтения — задача-документ (FS-F1d): бэк сам ищет в его дереве и в main,
+      // своего повтора «без якоря» нет. Ответ применяется только активному запросу.
+      const key = `${plan.taskId}|${path}`;
+      openReqRef.current = key;
       setOpenDoc({ path, status: 'loading' });
-      const read = (fid?: string) => api.files.getContent(projectId, path, fid);
-      read(featureId)
-        .then(r => setOpenDoc({ path, status: 'ok', text: r.content ?? '', isBinary: r.isBinary }))
-        .catch(() => read()
-          .then(r => setOpenDoc({ path, status: 'ok', text: r.content ?? '', isBinary: r.isBinary }))
-          .catch(() => setOpenDoc({ path, status: 'error' })));
+      api.files.getContent(projectId, path, undefined, { taskId: plan.taskId })
+        .then(r => {
+          if (openReqRef.current !== key) return;
+          // 404 с причиной (FS-B2) доходит полем, а не исключением: «удалён вместе с
+          // веткой» — состояние файла, его показывают; бинарь из коммита — то же
+          // состояние «не текстовый», что и у рабочего файла.
+          if (r.reason === 'branch_deleted') { setOpenDoc({ path, status: 'deleted' }); return; }
+          setOpenDoc({ path, status: 'ok', text: r.content ?? '', isBinary: r.isBinary || r.reason === 'binary' });
+        })
+        .catch(() => { if (openReqRef.current === key) setOpenDoc({ path, status: 'error' }); });
     };
     return { featureId, projectId, openFile, openDocument: (id: string) => onOpenDocument?.(id) };
-  }, [featureId, projectId, onOpenDocument]);
+  }, [featureId, projectId, plan.taskId, onOpenDocument]);
   // Свёрнутые `##`-разделы длинного документа: по умолчанию пустое — все раскрыты.
   const [collapsed, setCollapsed] = useState<Set<number>>(() => new Set());
   // Корень тела — для скролла к `##`-секции по пункту «Содержание» (под липкие вкладки).
@@ -269,7 +282,9 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
     if (!plan.hasText) return; // «Текста пока нет» — запрос не идёт
     // Новый документ (или повтор) — свёртка начинается заново: все разделы раскрыты.
     setCollapsed(new Set());
-    // Открытый по ссылке документ относится к прежнему тексту — с новым он не показан.
+    // Открытый по ссылке документ относится к прежнему тексту — с новым он не показан;
+    // и поздний ответ прежнего запроса не должен его вернуть.
+    openReqRef.current = null;
     setOpenDoc(null);
     const key = textCacheKey(plan);
     // Повтор (reload > 0): сбросить кэш (в т.ч. ошибку), чтобы тянуть заново.
@@ -495,7 +510,12 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                   <FileText size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                   {openDoc.path}
                 </span>
-                <Button size={isMobile ? 'md' : 'xs'} variant="ghost" dataTestId="plan-open-doc-close" onClick={() => setOpenDoc(null)}>
+                <Button
+                  size={isMobile ? 'md' : 'xs'}
+                  variant="ghost"
+                  dataTestId="plan-open-doc-close"
+                  onClick={() => { openReqRef.current = null; setOpenDoc(null); }}
+                >
                   К текущему документу
                 </Button>
               </div>
@@ -506,7 +526,9 @@ export function FeaturePlanReader({ plan, mockups, isMobile = false, onOpenMocku
                   ))}
                 </div>
               ) : openDoc.status === 'error' ? (
-                <span data-testid="plan-open-doc-missing" style={{ fontSize: FS.sm, color: C.textMuted }}>Документа нет — он не найден ни в дереве фичи, ни в проекте</span>
+                <span data-testid="plan-open-doc-missing" style={{ fontSize: FS.sm, color: C.textMuted }}>Документа нет — он не найден ни в дереве задачи, ни в проекте</span>
+              ) : openDoc.status === 'deleted' ? (
+                <span data-testid="plan-open-doc-deleted" style={{ fontSize: FS.sm, color: C.textMuted }}>Материал удалён вместе с веткой</span>
               ) : openDoc.isBinary ? (
                 <span data-testid="plan-open-doc-binary" style={{ fontSize: FS.sm, color: C.textMuted }}>Файл не текстовый — открыть его можно в просмотре файлов.</span>
               ) : (

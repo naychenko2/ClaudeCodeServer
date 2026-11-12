@@ -7,7 +7,8 @@ import { useContainerWidth } from '../../hooks/useContainerWidth';
 import { useGitChip } from '../../hooks/useGitChip';
 import { registerGitActions } from '../../lib/chatContext/gitActions';
 import { execMenuTitle, selectRowAction } from '../../lib/chatContext/rowExec';
-import { getKindApi } from '../../lib/chatContext/registry';
+import { getKindApi, getKindRegistry } from '../../lib/chatContext/registry';
+import { dimmedKindItem } from '../../lib/chatContext/disabledKind';
 import { getRunVersion, subscribeRun } from '../../lib/chatContext/actionRun';
 import { withThumb } from '../../lib/chatContext/thumbs';
 import {
@@ -35,8 +36,6 @@ interface Props {
   onCommitAll: () => void;
   // Открыть объект в правой панели «Контекст»; по умолчанию — revealContextPanel
   onOpenPrimary?: () => void;
-  // Полоса-подсказка над строкой (ContinueHint): прокидывается в ContextRowView.notice
-  notice?: ReactNode;
 }
 
 const iconOf = (kind: string): ReactNode =>
@@ -101,7 +100,7 @@ function WithGit(props: Props & { project: Project }) {
   );
 }
 
-function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
+function RowCore({ session, project, isMobile, onOpenPrimary: onOpenPrimaryProp, git }: Props & { git: RowGit | null }) {
   const sessionId = session.id;
   // Клик по чипу объекта открывает панель «Контекст», а открытую мигает карточкой «С чем»
   const onOpenPrimary = onOpenPrimaryProp ?? (() => { revealContextPanel(sessionId); });
@@ -114,9 +113,14 @@ function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrim
   useEffect(() => { void ensureChatContext(sessionId); }, [sessionId]);
 
   const kindCtx = { projectId: project?.id ?? null, sessionId, isMobile };
+  // Прикреплённый объект неактивной вертикали: её вида нет в реестре слота — ни иконки, ни
+  // действий, ни «Формата». Подстановку плашки (текст причины вместо label, гашение версии,
+  // missing для гашения чипа вью) считает dimmedKindItem (lib/chatContext/disabledKind.ts):
+  // там и различение «выключен администратором» / «не загрузился» по полю missing объекта.
+  const kindRegistry = getKindRegistry();
   // Миниатюры сервер не присылает: адрес собираем здесь (вид объекта или путь файла проекта)
-  const primary = ctx.primary ? withThumb(kindCtx, ctx.primary) : null;
-  const refs = ctx.refs.map(r => withThumb(kindCtx, r));
+  const primary = ctx.primary ? dimmedKindItem(withThumb(kindCtx, ctx.primary), kindRegistry) : null;
+  const refs = ctx.refs.map(r => dimmedKindItem(withThumb(kindCtx, r), kindRegistry));
 
   // Выбранное действие объекта: предвыбор → память → умолчание (Р1). «Чем» есть только у run-действия
   // executors() вида зовётся на каждый рендер намеренно: выбранный исполнитель живёт в сторе вертикали,
@@ -152,7 +156,6 @@ function RowCore({ session, project, isMobile, notice, onOpenPrimary: onOpenPrim
         onOpenPrimary={onOpenPrimary}
         onDetach={id => { void detachRef(sessionId, id); }}
         onClear={() => { void clearContext(sessionId); }}
-        notice={notice}
       />
     </div>
   );

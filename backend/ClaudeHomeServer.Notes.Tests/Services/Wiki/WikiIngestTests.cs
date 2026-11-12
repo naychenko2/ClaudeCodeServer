@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Tests.Services;
 // план судит настоящий WikiPlanValidator, пакет кладется в настоящий WikiPackageStore,
 // неспорное применяется настоящим WikiApplyService — цепочка проверяется целая, на диске.
 //
-// Критерии: c1 — в промпт прохода B попадает _index только раздела назначения и цепочки
+// Критерии: c1 — в промпт синтеза попадает _index только раздела назначения и цепочки
 // вверх (соседний проект и личное — нет); c2 — «нечего добавить» → пакета нет, исход
 // nothing_new, ровно два вызова модели; c3 — план с нарушениями → ровно один ремонт, после
 // него весь пакет в «Входящих», страниц на диске не тронуто; c4 — дом personal → отказ
@@ -30,7 +30,11 @@ namespace ClaudeHomeServer.Tests.Services;
 // состояния раздела (битая ссылка на чужой странице) не зовут ремонт и не решают исход,
 // они называются в причине. Плюс доработка S4c (ревью d857da6c): настройки владельца (общий
 // выключатель, выключенные классы) читаются в бою и решают «само / Входящие»; битый
-// settings.json — умолчания, не падение разбора.
+// settings.json — умолчания, не падение разбора. Плюс WN-3 (дыра WC-2): отказ
+// «нечего добавить» / пустой план в разделе без страниц знаний — ровно один повтор
+// прохода B с прямой причиной; второй отказ модели — прежний nothing_new; сбой самого
+// повтора (упал или дал пустой ответ) — rejected с причиной сбоя, а не nothing_new;
+// в непустом разделе повтор не зовётся.
 public class WikiIngestTests : IDisposable
 {
     private const string User = "u1";
@@ -51,21 +55,25 @@ public class WikiIngestTests : IDisposable
     private const string ClaimText = "Сборку решено перенести на Linux";
     private const string ClaimQuote = "Решение: перенести сборку на Linux";
 
-    private static readonly string ClaimsJson =
-        $$"""{"claims":[{"text":"{{ClaimText}}","quote":"{{ClaimQuote}}"}]}""";
-
-    private static readonly string PlanJson = $$"""
-        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
-        """;
+    // Ответы модели в формате синтеза (WikiSynthJson): утверждение своими словами + дословная цитата.
+    private static readonly string SynthJson = WikiSynthJson.Append(PageTitle, ClaimText, ClaimQuote);
 
     // План с нарушением: append на страницу, которой в разделе нет — валидатор её отвергнет.
-    private static readonly string BadPlanJson = """
-        {"operations":[{"op":"append","page":"Несуществующая","claim":0}]}
-        """;
+    private static readonly string BadSynthJson = WikiSynthJson.Append("Несуществующая", ClaimText, ClaimQuote);
 
-    private static readonly string NothingJson =
-        $$"""{"outcome":"{{WikiKeeperPrompts.NothingToAdd}}","reason":"не о чём писать"}""";
+    private static readonly string NothingJson = WikiSynthJson.Nothing();
+
+    // Пустой план: operations есть, но операций нет — «модель сказала, что писать нечего,
+    // только маркер не поставила» (WN-3, дыра WC-2).
+    private static readonly string EmptyPlanJson = WikiSynthJson.Ok();
+
+    // create: цель — несуществующая страница; валидатор её создаёт, операция auto: новой
+    // страницы нет ни в анти-петле N7d, ни в правках человека.
+    private static readonly string CreateSynthJson = WikiSynthJson.Create("Новая-сущность", ClaimText, ClaimQuote);
+
+    // «Нечего добавить» без причины — второй отказ после ремонта (WN-3).
+    private static readonly string NothingShortJson =
+        $$"""{"outcome":"{{WikiKeeperPrompts.NothingToAdd}}"}""";
 
     // Карточка с именем: _index называет страницу её заголовком (# …), а не именем файла —
     // поэтому у заполняющих карточек других разделов заголовки обязаны быть своими.
@@ -187,7 +195,7 @@ public class WikiIngestTests : IDisposable
     // ── c1: в промпт прохода B — _index только раздела назначения и цепочки вверх ──
 
     [Fact]
-    public async Task C1_ПромтПроходаB_видитТолькоРазделНазначенияИВерх()
+    public async Task C1_ПромптСинтеза_видитТолькоРазделНазначенияИВерх()
     {
         // Соседний проект и личное: их _index есть на диске (тест генерирует сам) —
         // в промпт они не попадают (ADR-036, решение 3). «Общее» — вверх по цепочке: его
@@ -198,29 +206,154 @@ public class WikiIngestTests : IDisposable
         WikiProjections.RegenerateSection(Root, "projects/q1");
         WikiProjections.RegenerateSection(Root, "personal");
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: NothingJson);
+        var llm = new FakeLlm(synth: NothingJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
-        var promptB = llm.PromptOf("B");
-        promptB.Should().Contain(PageTitle, "каталог раздела назначения — в промпте");
-        promptB.Should().Contain("Общая-карточка", "цепочка вверх (common) — в промпте");
-        promptB.Should().NotContain("Соседняя-карточка", "каталог соседнего проекта — вне промпта");
-        promptB.Should().NotContain("Личная-карточка", "каталог личного раздела — вне промпта");
+        var promptS = llm.PromptOf("S");
+        promptS.Should().Contain(PageTitle, "каталог раздела назначения — в промпте");
+        promptS.Should().Contain("Общая-карточка", "цепочка вверх (common) — в промпте");
+        promptS.Should().NotContain("Соседняя-карточка", "каталог соседнего проекта — вне промпта");
+        promptS.Should().NotContain("Личная-карточка", "каталог личного раздела — вне промпта");
     }
 
     // ── c2: «нечего добавить» — пакет не создан, исход nothing_new, ровно два вызова ──
 
     [Fact]
-    public async Task C2_НечегоДобавить_БезПакета_ДваВызоваМодели()
+    public async Task C2_НечегоДобавить_БезПакета_ОдинВызовМодели()
     {
-        var llm = new FakeLlm(claims: ClaimsJson, plan: NothingJson);
+        var llm = new FakeLlm(synth: NothingJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
         res.Reason.Should().Be("не о чём писать", "причина модели доходит до вызывающего");
-        llm.Calls.Should().HaveCount(2, "проходы A и B — и ничего больше");
+        llm.Calls.Should().HaveCount(1, "один проход синтеза — и ничего больше");
         PackagesOnDisk().Should().BeEmpty("пакет при штатном исходе не создаётся");
+    }
+
+    // ── WN-3 (дыра WC-2): отказ в разделе без страниц знаний — один повтор с причиной ──
+    // Проход B вернул «нечего добавить» / пустой план, а в разделе назначения нет ни
+    // одной страницы знаний и модель не видела ни одной цели: это не решение «уже
+    // написано», а невидение цели. Ровно один повторный вызов B с прямой причиной;
+    // второй отказ — прежний nothing_new. В непустом разделе штатный nothing_new
+    // не тронут (ср. C2 выше).
+
+    // Раздел без страниц знаний: отдельный проект того же владельца — только карточка
+    // источника (она не страница знаний). Цепочка вверх («Общее») пуста: модель не
+    // видит ни одной цели.
+    private const string EmptySection = "projects/p2";
+    private const string EmptyCardPath = "Проекты/p2/Источники/Карточка-чата.md";
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПустойПлан_ОдинПовторСПрямойПричиной_CreateПрименён()
+    {
+        // c1: A + B (пустой план) + повтор; третий промпт содержит прямую причину;
+        // итоговый план с create применяется (страница на диске).
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(synth: EmptyPlanJson, emptySection: CreateSynthJson);
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+        llm.Calls.Should().HaveCount(2, "синтез и повтор — и ничего больше");
+        llm.PromptOf("E").Should().Contain("в разделе нет страниц знаний",
+            "причина повтора прямая и доезжает до промпта");
+        var page = File.ReadAllText(Path.Combine(Root, "pages/Проекты/p2/Новая-сущность.md"));
+        page.Should().Contain(ClaimText, "итоговый план содержит create: страница создана и применена");
+    }
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПовторТожеОтказал_ПрежнийИсход_БезИсключения()
+    {
+        // c2: второй отказ — прежний nothing_new с прежней причиной, цикла нет,
+        // пакета нет, исключения наружу нет.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(synth: NothingJson, emptySection: NothingShortJson);
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
+        res.Reason.Should().Be("не о чём писать", "прежний исход: причина первого отказа модели");
+        llm.Calls.Should().HaveCount(2, "синтез и повтор — больше никого");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПовторУпал_ОтказСПричинойСбояANeNothingNew()
+    {
+        // Доработка ревью WN-3 (major): сбой повторного вызова — не отказ модели (её не
+        // звали ни разу), поэтому исход — rejected с причиной сбоя (тот же инвариант WN-4),
+        // а не nothing_new с причиной ПЕРВОГО отказа: иначе «движок занят» читается ночным
+        // путём как «нечего добавить», lastOkTo двигается и окно чата теряется при
+        // completed ночи.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(synth: NothingJson, emptySection: CreateSynthJson)
+        {
+            Throw = pass => pass == "E"
+                ? new LocalEngineSlotRefusalException("local-qwen", LocalTurnRefusal.QueueFull, 4, 4)
+                : null,
+        };
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, "сбой вызова — отказ разбора, не штатный исход");
+        res.Reason.Should().Contain("занят").And.Contain("слота не дождались")
+            .And.NotContain("не о чём писать", "причина первого отказа не подменяет причину сбоя");
+        llm.Calls.Should().HaveCount(2, "синтез и повтор — ремонта после сбоя вызова нет");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WN3_ПустойРаздел_ПовторДалПустойОтвет_ОтказСПричинойСбоя()
+    {
+        // Тот же инвариант на другом сбое повтора: модель вернула пустой ответ — это тоже
+        // сбой вызова (CallModelAsync называет его отдельно), а не решение «нечего
+        // добавить»: исход rejected с этой причиной, не nothing_new.
+        Write(User, EmptySection, EmptyCardPath, CardFile);
+        var llm = new FakeLlm(synth: NothingJson, emptySection: "");
+
+        var res = await Sut(llm).IngestAsync(User, Req(home: EmptySection, card: EmptyCardPath));
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("пустой ответ").And.NotContain("не о чём писать");
+        llm.Calls.Should().HaveCount(2, "синтез и повтор — дальше отказа вызова не идут");
+        PackagesOnDisk().Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task WN3_РазделНеПустой_ОтказB_БезПовтора_ДваВызова()
+    {
+        // c3: страница знаний есть и она видна модели как кандидат (её заголовок
+        // встречается в тексте утверждения) — её отказ есть решение, повтора нет.
+        Write(User, Section, "Проекты/p1/Linux.md", """
+            ---
+            type: topic
+            aliases: []
+            owns: []
+            sources: []
+            status: active
+            ---
+
+            # Linux
+
+            ## Сводка
+            Что-то про сборку [^s1]
+
+            ## Хронология
+
+            ## Противоречия
+
+            ## История
+
+            [^s1]: [[Карточка чата]] — «Контенер собран на второй машине»
+            """);
+        var llm = new FakeLlm(synth: NothingJson);
+
+        var res = await Sut(llm).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeNothingNew);
+        llm.Calls.Should().HaveCount(1, "модель видела цель: её отказ — решение, не дыра WC-2");
+        PackagesOnDisk().Should().BeEmpty();
     }
 
     // ── c3: план с нарушениями — ровно один ремонт, после него весь пакет в «Входящих» ──
@@ -230,10 +363,10 @@ public class WikiIngestTests : IDisposable
     {
         var pageHashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: BadPlanJson, repair: PlanJson);
+        var llm = new FakeLlm(synth: BadSynthJson, repair: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
-        llm.Calls.Where(c => c.Pass == "B").Should().HaveCount(1);
+        llm.Calls.Where(c => c.Pass == "S").Should().HaveCount(1);
         llm.Calls.Where(c => c.Pass == "R").Should().HaveCount(1, "ремонт — ровно одна попытка");
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman);
 
@@ -254,7 +387,7 @@ public class WikiIngestTests : IDisposable
     [Fact]
     public async Task C4_ЛичныйДом_ОтказБезВызоваМодели()
     {
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req(home: "personal"));
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
@@ -268,22 +401,22 @@ public class WikiIngestTests : IDisposable
     [Fact]
     public async Task C5_КорректныйПлан_AutoПрименён_UsageВПакете()
     {
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
         res.PackageId.Should().NotBeNullOrEmpty();
 
         var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
-        page.Should().Contain(ClaimQuote, "утверждение append'а — дословная цитата источника (M1)");
+        page.Should().Contain(ClaimText, "строка append'а — утверждение своими словами").And.Contain(ClaimQuote, "сноска — дословная цитата");
 
         var read = WikiPackageStore.TryRead(Root, res.PackageId!);
         read.State.Should().Be(WikiPackageFileState.Valid);
         read.Package!.Status.Should().Be(WikiPackage.StatusApplied);
-        // usage разбора (два вызова × (10 вход / 5 выход)) — в каждой операции пакета.
+        // usage разбора (один вызов: 10 вход / 5 выход) — в каждой операции пакета.
         read.Package.Operations.Should().NotBeEmpty();
         read.Package.Operations.Should().OnlyContain(o =>
-            o.InputTokens == 20 && o.OutputTokens == 10);
+            o.InputTokens == 10 && o.OutputTokens == 5);
     }
 
     // ── N7d: анти-петля — откат человека за 7 дней запрещает автоприменение ──
@@ -307,7 +440,7 @@ public class WikiIngestTests : IDisposable
         LogLine(DaysAgo(1), op, "user", PagePath);
         var hashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
 
-        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+        var res = await Sut(new FakeLlm(synth: SynthJson)).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
         Sha256Of(Path.Combine(Root, "pages/" + PagePath)).Should().Be(hashBefore);
@@ -321,7 +454,7 @@ public class WikiIngestTests : IDisposable
         // Сторож старта пишет строки с другим actor: анти-петлю они не включают.
         LogLine(DaysAgo(1), "revert", "system", PagePath);
 
-        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+        var res = await Sut(new FakeLlm(synth: SynthJson)).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
     }
@@ -336,7 +469,7 @@ public class WikiIngestTests : IDisposable
     {
         LogLine(DaysAgo(1), "revert", "user", PagePath);
 
-        var res = await new WikiIngestService(new FakeLlm(claims: ClaimsJson, plan: PlanJson),
+        var res = await new WikiIngestService(new FakeLlm(synth: SynthJson),
             new NoSpheres(), _apply, _config, new ShiftedTime(TimeSpan.FromDays(7))).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
@@ -347,7 +480,7 @@ public class WikiIngestTests : IDisposable
     {
         LogLine(DaysAgo(8), "revert", "user", PagePath);
 
-        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+        var res = await Sut(new FakeLlm(synth: SynthJson)).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
     }
@@ -359,7 +492,7 @@ public class WikiIngestTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.AppendAllText(path, "{обрыв посреди записи\n[1,2]\n");
 
-        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).IngestAsync(User, Req());
+        var res = await Sut(new FakeLlm(synth: SynthJson)).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
     }
@@ -411,16 +544,14 @@ public class WikiIngestTests : IDisposable
         WikiJournalReader.ReadLastHumanEdits(Root).Should().BeEmpty();
     }
 
-    // ── M1 (доработка ревью S6b-3): подтверждённая цитата доходит до пакета и сноски ──
-    // Модель отвечает как просит промпт: пересказ в text, дословная выдержка в quote
-    // (WikiKeeperPrompts.cs:126). В пакет идёт цитата: применение рендерит строку
-    // утверждения и сноску по op.Text и требует его дословности в источнике
-    // (WikiApplyService.cs:564) — пересказ был бы отказан по цитате, уже подтверждённой кодом.
+    // ── M1: утверждение своими словами и цитата доходят до пакета и страницы ──
+    // Синтез (ADR-039, реш. 2): в пакет идёт Text = Claim (пересказ), доказательство — Quotes;
+    // строка страницы — утверждение, сноска — дословная цитата. Подмены Text цитатой нет.
 
     [Fact]
-    public async Task M1_ПересказИДословнаяЦитата_АвтоПрименён_СноскаСЦитатойПроходаA()
+    public async Task M1_УтверждениеИЦитата_АвтоПрименён_ТекстЭтоClaim_СноскаСЦитатой()
     {
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
@@ -428,14 +559,14 @@ public class WikiIngestTests : IDisposable
         var read = WikiPackageStore.TryRead(Root, res.PackageId!);
         read.State.Should().Be(WikiPackageFileState.Valid);
         read.Package!.Operations.Should().NotBeEmpty();
-        read.Package.Operations.Should().OnlyContain(o => o.Text == ClaimQuote,
-            "в пакет идёт цитата, подтверждённая валидатором (мера 1), а не пересказ");
+        read.Package.Operations.Should().OnlyContain(o => o.Text == ClaimText && o.Claim == ClaimText,
+            "в пакет идёт утверждение, а не цитата");
+        read.Package.Operations.Should().OnlyContain(o => o.Quotes != null && o.Quotes.Count == 1 && o.Quotes[0] == ClaimQuote);
 
         var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
-        page.Should().Contain(ClaimQuote, "строка утверждения — дословная выдержка источника");
-        page.Should().NotContain(ClaimText, "пересказ в страницу не пишется: там только подтверждённое дословно");
+        page.Should().Contain(ClaimText, "строка утверждения — своими словами");
         page.Should().Contain("[^s2]: [[" + CardTitle + "]] — «" + ClaimQuote + "»",
-            "сноска принятого утверждения — цитата из прохода A");
+            "сноска принятого утверждения — дословная цитата");
     }
 
     // ── M2 (доработка ревью S6b-3): нарушения состояния раздела — не вина плана ──
@@ -448,10 +579,10 @@ public class WikiIngestTests : IDisposable
     {
         Write(User, Section, "Проекты/p1/Битая-страница.md", BrokenLinkPage);
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
-        llm.Calls.Should().HaveCount(2, "состояние раздела — не вина плана: третьего вызова модели нет");
+        llm.Calls.Should().HaveCount(1, "состояние раздела — не вина плана: ремонта нет");
         llm.Calls.Should().NotContain(c => c.Pass == "R", "ремонт из-за Violations не вызывают");
         PackagesOnDisk().Should().HaveCount(1, "разбор дошёл до пакета: нарушения плана не решили его");
         res.Reason.Should().Contain("в разделе есть нарушения:",
@@ -464,7 +595,7 @@ public class WikiIngestTests : IDisposable
     [Fact]
     public async Task Гонка_ДвеЗаявкиОдногоИсточника_ОдинПрогон()
     {
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var sut = Sut(llm);
         var req = Req();
 
@@ -474,7 +605,7 @@ public class WikiIngestTests : IDisposable
 
         // Мутация «снять присоединение к незавершённой заявке»: вторая проходит свой цикл —
         // четыре вызова модели и (до дедупа по свежей странице) вторая постановка пакета.
-        llm.Calls.Should().HaveCount(2, "одна заявка — один прогон; вторая получает её результат");
+        llm.Calls.Should().HaveCount(1, "одна заявка — один прогон; вторая получает её результат");
         results.Should().OnlyContain(r => r.Outcome == WikiIngestService.OutcomeApplied);
         results[0].PackageId.Should().Be(results[1].PackageId);
         PackagesOnDisk().Should().HaveCount(1, "двух пакетов на один источник нет");
@@ -485,12 +616,12 @@ public class WikiIngestTests : IDisposable
     [Fact]
     public async Task ОтветМоделиНеJSON_ОтказСПричиной()
     {
-        var llm = new FakeLlm(claims: "модель ответила прозой вместо JSON", plan: PlanJson);
+        var llm = new FakeLlm(synth: "модель ответила прозой вместо JSON");
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
-        res.Reason.Should().Contain("проход A");
-        llm.Calls.Should().HaveCount(1, "после отказа прохода A дальше не идут");
+        res.Reason.Should().Contain("ответ модели не разобран");
+        llm.Calls.Should().HaveCount(1, "после отказа разбора ответа дальше не идут");
         PackagesOnDisk().Should().BeEmpty();
     }
 
@@ -511,11 +642,11 @@ public class WikiIngestTests : IDisposable
                 "класс выключен человеком", DateTimeOffset.UtcNow, null)],
         });
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
-        llm.Calls.Should().HaveCount(2, "выключенный класс — не вина плана: ремонта модели нет");
+        llm.Calls.Should().HaveCount(1, "выключенный класс — не вина плана: ремонта модели нет");
 
         var read = WikiPackageStore.TryRead(Root, res.PackageId!);
         read.State.Should().Be(WikiPackageFileState.Valid);
@@ -536,7 +667,7 @@ public class WikiIngestTests : IDisposable
         var pageHashBefore = Sha256Of(Path.Combine(Root, "pages/" + PagePath));
         WikiSettingsStore.Mutate(_dir, User, s => s with { AutoApplyEnabled = false });
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
@@ -560,12 +691,12 @@ public class WikiIngestTests : IDisposable
         Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
         File.WriteAllText(settingsPath, "{ это не json");
 
-        var llm = new FakeLlm(claims: ClaimsJson, plan: PlanJson);
+        var llm = new FakeLlm(synth: SynthJson);
         var res = await Sut(llm).IngestAsync(User, Req());
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
         var page = File.ReadAllText(Path.Combine(Root, "pages/" + PagePath));
-        page.Should().Contain(ClaimQuote, "при умолчаниях неспорное применяется само, как раньше");
+        page.Should().Contain(ClaimText, "при умолчаниях неспорное применяется само, как раньше");
     }
 
     // ── W3-1: авто-путь без исключения, «applying» не висит ────────────────────────────
@@ -584,7 +715,7 @@ public class WikiIngestTests : IDisposable
         var id = PackageOnDisk(WikiPackage.StatusAccepted);
         var card = WikiPackageStore.TryRead(Root, id).Package!;
 
-        var res = await Sut(new FakeLlm(claims: ClaimsJson, plan: PlanJson)).ApplyAutoAsync(
+        var res = await Sut(new FakeLlm(synth: SynthJson)).ApplyAutoAsync(
             "..", Root, card, new WikiApplyService.ApplyContext(CardTitle, SourceText));
 
         res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
@@ -654,7 +785,7 @@ public class WikiIngestTests : IDisposable
     {
         // Мутация «не класть Usage в аккумулятор в ночной ветке CallModelAsync» → 0 (красный).
         // До этого шага ночная ветка звала строковый RunLocalOrChosenAsync: метрик не было вовсе.
-        var llm = new FakeLlm(claims: NothingJson, plan: NothingJson, nightly: true);
+        var llm = new FakeLlm(synth: NothingJson, nightly: true);
 
         var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
 
@@ -673,18 +804,27 @@ public class WikiIngestTests : IDisposable
         private readonly Dictionary<string, Queue<string>> _answers = new();
         private readonly bool _nightly;
 
-        public FakeLlm(string claims, string plan, string? repair = null, bool nightly = false)
+        // «Движок не принял вызов» по проходу (тот же приём, что у фейка ночи): возврат
+        // исключением вместо ответа — как ждущий слот путь TrackedLocalLlmClient
+        // (LocalEngineSlotRefusalException). Здесь ключ — проход, а не actionKey: все
+        // вызовы разбора идут одним местом, различить их можно только по промпту.
+        public Func<string, Exception?>? Throw;
+
+        public FakeLlm(string synth, string? repair = null, string? emptySection = null, bool nightly = false)
         {
             _nightly = nightly;
-            _answers["A"] = new Queue<string>([claims]);
-            _answers["B"] = new Queue<string>([plan]);
-            _answers["R"] = new Queue<string>([repair ?? plan]);
+            _answers["S"] = new Queue<string>([synth]);
+            _answers["R"] = new Queue<string>([repair ?? synth]);
+            // Повтор пустого раздела (WN-3): своя очередь; нет ответа — нечитаемый ответ,
+            // он и есть «второй отказ» (тот же исход nothing_new, без исключения).
+            _answers["E"] = new Queue<string>([emptySection ?? "нет ответа для прохода E"]);
         }
 
         public string PromptOf(string pass) =>
             Calls.First(c => c.Pass == pass).Prompt;
 
-        public bool UsesLocal(string actionKey) => false;
+        // Ночное место идёт локальным маршрутом (иначе разбор отказывает окно до вызова).
+        public bool UsesLocal(string actionKey) => _nightly;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
@@ -712,15 +852,21 @@ public class WikiIngestTests : IDisposable
 
         private string Answer(string actionKey, string prompt)
         {
-            // Проход определяется по директиве своего промпта (WikiKeeperPrompts),
-            // ремонт — по префиксу ремонта: порядок вызовов в тесте не угадывается.
+            // Вызов определяется по директиве своего промпта (WikiKeeperPrompts.Synth),
+            // ремонт — по префиксу ремонта, повтор пустого раздела (WN-3) — по своему
+            // префиксу: он вложен перед промптом синтеза и иначе сочтётся обычным вызовом.
+            // Порядок вызовов в тесте не угадывается.
             var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("extract durable") ? "A"
-                : prompt.Contains("turn the claims") ? "B"
+                : prompt.Contains("THE TARGET SECTION HAS NO KNOWLEDGE PAGES") ? "E"
+                : prompt.Contains("single pass") ? "S"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(_nightly ? LocalActionCatalog.WikiNightly : LocalActionCatalog.WikiIngest,
                 "место разбора — то, что назвал вызывающий");
+            // Вызов зарегистрирован и упал: сбой после того, как вызывающий позвал, — так же,
+            // как в живом пути (слот не выдан → исключения до вызова не доходят).
+            if (Throw?.Invoke(pass) is { } ex)
+                throw ex;
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;
         }

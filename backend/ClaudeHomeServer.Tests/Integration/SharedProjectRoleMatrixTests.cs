@@ -23,7 +23,7 @@ namespace ClaudeHomeServer.Tests.Integration;
 /// Правила S2a-10b различаются машинным кодом отказа (строка DenyCode): перебой чужого хода —
 /// автору идущего хода или владельцу, прочему участнику not_chat_author; «не доставлять» сообщение
 /// из очереди — его отправителю или владельцу, прочему — not_sender; настройки чата (режим прав,
-/// цикл, штаб, модель, провайдер, продолжение) — только владельцу, участнику owner_settings.
+/// цикл, штаб, модель, провайдер) — только владельцу, участнику owner_settings.
 /// Каждая строка матрицы — отдельный случай теории: снятая проверка в одном эндпоинте
 /// красит только его строки.
 /// </summary>
@@ -103,8 +103,8 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         // ход: отправка — владелец и редактор (RunTurn, S2a-10), читатель 403 как отказ права;
         // перебой чужого хода (S2a-10b) — автору идущего хода или владельцу, прочему участнику
         // not_chat_author; «не доставлять» сообщение из очереди — его отправителю или владельцу,
-        // прочему — not_sender; настройки хода (режим, цикл, штаб, модель, провайдер,
-        // продолжение) — только владельцу, участнику owner_settings
+        // прочему — not_sender; настройки хода (режим, цикл, штаб, модель, провайдер) —
+        // только владельцу, участнику owner_settings
         new("ход: сообщение", "POST", "/api/sessions/{s}/messages", new { text = "привет", wait = "none" }, Ok2xx, Ok2xx, 403, 404, "project_scope"),
         new("ход: очередь, снять чужое", "DELETE", "/api/sessions/{s}/pending/nope", null, 404, 403, 403, 404, NotSender),
         new("ход: очередь, перебить", "POST", "/api/sessions/{s}/pending/preempt", null, 409, 403, 403, 404, NotAuthor),
@@ -115,7 +115,6 @@ public class SharedProjectRoleMatrixTests : IClassFixture<TestWebApplicationFact
         new("ход: штаб, перезапуск волны", "POST", "/api/chats/{s}/team-wave/restart", null, PassesGate, 403, 403, 404, OwnerSettings),
         new("ход: штаб, перезапуск хода", "POST", "/api/chats/{s}/team-wave/restart-turn", null, PassesGate, 403, 403, 404, OwnerSettings),
         new("ход: смена провайдера", "POST", "/api/chats/{s}/migrate-provider", new { model = "sonnet" }, PassesGate, 403, 403, 404, OwnerSettings),
-        new("ход: продолжить в новом чате", "POST", "/api/chats/{s}/continue", null, PassesGate, 403, 403, 404, OwnerSettings),
         // личное состояние: у каждого своё, достаточно видеть чат
         new("личное: прочитано", "PUT", "/api/chats/{s}/read", null, Ok2xx, Ok2xx, Ok2xx, 404),
         new("личное: закрепить", "PUT", "/api/chats/{s}/user-state", new { pinned = true }, Ok2xx, Ok2xx, Ok2xx, 404),

@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · раздел «Фичи» проще · v1 — регулярный первый экран</title>
+<!--
+  Макет на согласование Андрею. Записка — features-simplify-v1-proposal.md. Код продукта не правится.
+  Привязка: featureId 11041582-a74b-4f54-9d6d-6c0e3e610245 (эпик «Оптимизация раздела „Фичи“»),
+  задача дизайна 9b7b723d-58cd-49f4-b84c-824590c9ed82 (role=design, шагов-потребителей пока нет — их разрежут после интервью).
+  Опирается на внедрённый feature-page-simplify-v1 (Ш1–Ш8): сводка В2 «Трек», одна тревога под тулбаром, вкладки «Шаги/История/Материалы».
+  Данные выдуманы, сверены с FeatureRun / FeatureIndexFeature (stepProgress, attention, brief.now, note.estimate).
+  Метки R1…R12 = строки рекомендаций в записке; кнопка «Пометки» их прячет.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css (светлая тема), семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*), var(--fs-*), var(--sp-*), var(--r-*). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4;
+  --c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  /* FS */ --fs-xxs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px; --fs-h2:22px;
+  /* SP */ --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  /* R  */ --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-max:999px;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+/* ===== дальше — только переменные ===== */
+* { box-sizing:border-box; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font:var(--fs-base)/1.45 var(--font-sans); }
+button { font:inherit; color:inherit; cursor:pointer; }
+button:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+
+/* --- пульт макета --- */
+.ctl { position:sticky; top:0; z-index:5; display:flex; flex-wrap:wrap; gap:var(--sp-md); align-items:center;
+  padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.ctl h1 { font:600 var(--fs-md)/1.2 var(--font-serif); margin:0 var(--sp-md) 0 0; color:var(--c-text-heading); }
+.seg { display:inline-flex; background:var(--c-bg-inset); border-radius:var(--r-max); padding:var(--sp-xxs); }
+.seg button { border:0; background:none; padding:var(--sp-xs) var(--sp-md); border-radius:var(--r-max); font-size:var(--fs-sm); color:var(--c-text-secondary); min-height:28px; }
+.seg button[aria-pressed="true"] { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; }
+.ctl .hint { font-size:var(--fs-xs); color:var(--c-text-muted); }
+
+.stage { padding:var(--sp-xl); display:flex; gap:var(--sp-xl); align-items:flex-start; flex-wrap:wrap; }
+.cap { font-size:var(--fs-xxs); text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin:0 0 var(--sp-sm); }
+
+/* --- рамки устройств --- */
+.desk { width:1240px; display:flex; gap:var(--sp-md); }
+.phone { width:360px; flex:none; border:1px solid var(--c-border); border-radius:var(--r-xl); overflow:hidden; background:var(--c-bg-main); }
+.view-mobile .desk-wrap { display:none; }
+.view-desktop .mob-wrap { display:none; }
+
+/* --- левая панель: список фич --- */
+.list { width:300px; flex:none; background:var(--c-bg-panel); border-radius:var(--r-xl); padding:var(--sp-md); }
+.phone .list { width:auto; border-radius:0; }
+.list-h { display:flex; align-items:center; justify-content:space-between; margin-bottom:var(--sp-sm); }
+.list-h b { font:600 var(--fs-md) var(--font-sans); color:var(--c-text-heading); }
+.list-h small { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.pres { display:flex; gap:var(--sp-xs); margin-bottom:var(--sp-md); flex-wrap:wrap; }
+.pres button { border:1px solid var(--c-border); background:var(--c-bg-white); border-radius:var(--r-max); padding:var(--sp-xs) var(--sp-md); font-size:var(--fs-sm); min-height:28px; color:var(--c-text-secondary); }
+.phone .pres button { min-height:36px; }
+.pres button[aria-pressed="true"] { background:var(--c-accent-light); border-color:var(--c-accent-muted); color:var(--c-text-heading); font-weight:600; }
+.pres .n { font-family:var(--font-mono); margin-left:var(--sp-xs); }
+
+.frow { position:relative; display:block; width:100%; text-align:left; border:1px solid transparent; background:var(--c-bg-card);
+  border-radius:var(--r-lg); padding:var(--sp-sm) var(--sp-md) var(--sp-sm) var(--sp-md); margin-bottom:var(--sp-xs); }
+.phone .frow { padding:var(--sp-md); }
+.frow:hover { border-color:var(--c-border); }
+.frow.sel { background:var(--c-accent-light); border-color:var(--c-accent-muted); }
+.frow.warn { box-shadow:inset 3px 0 0 var(--c-warning); }
+.frow.stop { box-shadow:inset 3px 0 0 var(--c-danger); }
+.f1 { display:flex; align-items:baseline; gap:var(--sp-sm); }
+.f1 .t { flex:1; min-width:0; font-weight:600; color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.f1 .p { font:600 var(--fs-sm) var(--font-mono); color:var(--c-text-secondary); }
+.f2 { font-size:var(--fs-sm); color:var(--c-text-secondary); margin-top:var(--sp-xxs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.f2 b { color:var(--c-text-heading); font-weight:600; }
+.f2.w { color:var(--c-warning-text); }
+.f2.s { color:var(--c-danger-text); }
+.bar { display:flex; gap:var(--sp-xxs); height:3px; margin-top:var(--sp-sm); }
+.bar i { display:block; border-radius:var(--r-max); }
+.closed { margin-top:var(--sp-md); border-top:1px solid var(--c-border-light); padding-top:var(--sp-sm); }
+.closed button { width:100%; border:0; background:none; text-align:left; padding:var(--sp-sm) 0; font-size:var(--fs-sm); color:var(--c-text-muted); min-height:32px; }
+
+/* --- остров страницы фичи --- */
+.island { flex:1; min-width:0; background:var(--c-bg-white); border-radius:var(--r-xl); box-shadow:var(--shadow-island); overflow:hidden; }
+.phone .island { border-radius:0; box-shadow:none; }
+.tb { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-bottom:1px solid var(--c-border-light); }
+.phone .tb { padding:var(--sp-sm) var(--sp-md); }
+.tb .back { border:0; background:none; color:var(--c-text-secondary); font-size:var(--fs-sm); min-height:32px; padding:0 var(--sp-xs); }
+.phone .tb .back { min-height:40px; }
+.tb h2 { flex:1; min-width:0; margin:0; font:600 var(--fs-lg)/1.25 var(--font-serif); color:var(--c-text-heading); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.tag { font-size:var(--fs-xs); padding:var(--sp-xxs) var(--sp-sm); border-radius:var(--r-sm); background:var(--c-info-bg); color:var(--c-info); white-space:nowrap; }
+.tag.w { background:var(--c-warning-bg); color:var(--c-warning-text); }
+.ib { border:1px solid var(--c-border); background:var(--c-bg-white); border-radius:var(--r-md); min-width:32px; min-height:32px; color:var(--c-text-secondary); }
+.phone .ib { min-width:40px; min-height:40px; }
+.btn { border:1px solid var(--c-border); background:var(--c-bg-white); border-radius:var(--r-md); padding:var(--sp-xs) var(--sp-md); min-height:32px; font-size:var(--fs-sm); font-weight:600; color:var(--c-text-heading); }
+.btn.pri { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+.phone .btn { min-height:40px; }
+
+.alert { display:none; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-lg); background:var(--c-warning-bg); border-bottom:1px solid var(--c-border-light); color:var(--c-text-heading); }
+.phone .alert { padding:var(--sp-sm) var(--sp-md); flex-wrap:wrap; }
+.alert .dot { width:8px; height:8px; border-radius:var(--r-max); background:var(--c-warning); flex:none; }
+.alert .tx { flex:1; min-width:0; }
+.alert .tx small { color:var(--c-text-secondary); }
+.st-wait .alert { display:flex; }
+
+.body { padding:var(--sp-lg); }
+.phone .body { padding:var(--sp-md); }
+
+/* сводка */
+.brief { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-lg); }
+.phone .brief { padding:var(--sp-md); }
+.now { font-size:var(--fs-md); color:var(--c-text-secondary); }
+.now b { color:var(--c-text-heading); font-weight:600; }
+.prog { display:flex; align-items:center; gap:var(--sp-md); margin-top:var(--sp-md); }
+.prog .bar { flex:1; height:6px; margin:0; }
+.prog .pct { font:700 var(--fs-lg) var(--font-mono); color:var(--c-text-heading); }
+.legend { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-md); font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
+.legend b { color:var(--c-text-secondary); font-weight:600; font-family:var(--font-mono); }
+.legend i { display:inline-block; width:8px; height:8px; border-radius:var(--r-max); margin-right:var(--sp-xs); vertical-align:middle; }
+.facts { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-lg); margin-top:var(--sp-md); padding-top:var(--sp-md); border-top:1px solid var(--c-border-light); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+.facts .v { font-family:var(--font-mono); font-weight:600; color:var(--c-text-heading); }
+.facts .lnk { border:0; background:none; padding:0; color:var(--c-accent); font-size:var(--fs-sm); min-height:24px; }
+.phone .facts .lnk { min-height:32px; }
+.note { margin-top:var(--sp-md); background:var(--c-bg-inset); border-radius:var(--r-md); padding:var(--sp-sm) var(--sp-md); font-size:var(--fs-sm); color:var(--c-text-primary);
+  display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+.note b { color:var(--c-text-heading); }
+
+/* вкладки */
+.tabs { display:flex; gap:var(--sp-lg); border-bottom:1px solid var(--c-border-light); margin:var(--sp-lg) calc(-1 * var(--sp-lg)) 0; padding:0 var(--sp-lg); overflow-x:auto; scrollbar-width:none; }
+.phone .tabs { margin:var(--sp-md) calc(-1 * var(--sp-md)) 0; padding:0 var(--sp-md); gap:var(--sp-md); }
+.tabs button { border:0; background:none; padding:var(--sp-sm) 0; min-height:38px; font-size:var(--fs-base); color:var(--c-text-secondary); border-bottom:2px solid transparent; white-space:nowrap; }
+.phone .tabs button { min-height:44px; }
+.tabs button[aria-selected="true"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+.tabs .n { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--c-text-muted); margin-left:var(--sp-xs); }
+
+/* «Ход»: этапы без оси по умолчанию */
+.stages { margin-top:var(--sp-md); }
+.sr { display:grid; grid-template-columns:14px 1fr auto; gap:var(--sp-sm); align-items:center; padding:var(--sp-sm) 0; border-bottom:1px solid var(--c-border-light); font-size:var(--fs-base); }
+.phone .sr { min-height:44px; }
+.sr .d { width:10px; height:10px; border-radius:var(--r-max); background:var(--c-progress-track); }
+.sr.done .d { background:var(--c-success); }
+.sr.cur .d { background:var(--c-info); box-shadow:0 0 0 3px var(--c-info-bg); }
+.sr .nm { color:var(--c-text-heading); }
+.sr .nm small { color:var(--c-text-muted); margin-left:var(--sp-sm); font-size:var(--fs-sm); }
+.sr .du { font:var(--fs-sm) var(--font-mono); color:var(--c-text-secondary); }
+.sr.next .nm { color:var(--c-text-muted); }
+.cur-box { margin:var(--sp-xs) 0 var(--sp-sm) 22px; display:flex; flex-direction:column; gap:var(--sp-xs); }
+.step { display:flex; align-items:center; gap:var(--sp-sm); font-size:var(--fs-sm); background:var(--c-bg-card); border-radius:var(--r-md); padding:var(--sp-sm) var(--sp-md); }
+.phone .step { min-height:44px; }
+.step .who { font-weight:600; color:var(--c-text-heading); }
+.step .tx { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--c-text-secondary); }
+.step .tm { font-family:var(--font-mono); color:var(--c-text-muted); }
+.more { border:0; background:none; padding:var(--sp-xs) 0; color:var(--c-accent); font-size:var(--fs-sm); text-align:left; min-height:32px; }
+.axis-t { display:flex; justify-content:flex-end; margin-top:var(--sp-sm); }
+.axis-t button { border:1px solid var(--c-border); background:var(--c-bg-white); border-radius:var(--r-max); padding:var(--sp-xxs) var(--sp-md); font-size:var(--fs-xs); color:var(--c-text-secondary); min-height:28px; }
+.phone .axis-t button { min-height:36px; }
+
+/* --- пометки рекомендаций --- */
+.r { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:18px; padding:0 var(--sp-xs); margin-left:var(--sp-xs);
+  border-radius:var(--r-max); background:var(--c-plan); color:var(--c-on-accent); font:600 var(--fs-xxs)/1 var(--font-mono); vertical-align:middle; }
+.no-marks .r { display:none; }
+
+/* --- легенда «что поменялось» под макетом --- */
+.diff { max-width:1240px; margin:0 var(--sp-xl) var(--sp-xxl); display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:var(--sp-md); }
+.diff div { background:var(--c-bg-card); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); font-size:var(--fs-sm); }
+.diff b { color:var(--c-text-heading); }
+.diff .lost { color:var(--c-text-muted); display:block; margin-top:var(--sp-xs); }
+</style>
+</head>
+<body class="view-both st-run">
+
+<div class="ctl" role="toolbar" aria-label="Пульт макета">
+  <h1>Раздел «Фичи» проще · v1</h1>
+  <span class="seg" data-group="state">
+    <button aria-pressed="true" data-v="run">Идёт</button>
+    <button aria-pressed="false" data-v="wait">Ждёт вас</button>
+  </span>
+  <span class="seg" data-group="view">
+    <button aria-pressed="true" data-v="both">Десктоп + 360</button>
+    <button aria-pressed="false" data-v="desktop">Десктоп</button>
+    <button aria-pressed="false" data-v="mobile">360</button>
+  </span>
+  <span class="seg" data-group="marks">
+    <button aria-pressed="true" data-v="on">Пометки R</button>
+    <button aria-pressed="false" data-v="off">Без пометок</button>
+  </span>
+  <span class="hint">Макет целевой раскладки. Метки R1…R12 — строки записки features-simplify-v1-proposal.md</span>
+</div>
+
+<template id="tpl-list">
+  <div class="list" aria-label="Список фич">
+    <div class="list-h"><b>Фичи</b><small>проект AI Home</small></div>
+    <div class="pres" role="group" aria-label="Какие фичи показать">
+      <button aria-pressed="true">Меня ждут<span class="n js-wait-n">0</span></button>
+      <button aria-pressed="false">В работе<span class="n">4</span></button>
+      <button aria-pressed="false">Все<span class="n">6</span></button>
+      <span class="r">R1</span>
+    </div>
+    <!-- строка фичи: 2 строки + тонкая полоса; аватары, ⚠N и давность ушли (R2) -->
+    <button class="frow sel js-row-main">
+      <div class="f1"><span class="t">Оптимизация раздела «Фичи»</span><span class="p">27 %</span><span class="r">R2</span></div>
+      <div class="f2 js-row-main-st">Сейчас <b>Майя</b> · макет</div>
+      <div class="bar"><i style="flex:26;background:var(--c-success)"></i><i style="flex:13;background:var(--c-info)"></i><i style="flex:59;background:var(--c-progress-track)"></i></div>
+    </button>
+    <button class="frow">
+      <div class="f1"><span class="t">Общие проекты</span><span class="p">64 %</span></div>
+      <div class="f2">Сейчас <b>Вера</b> проверяет</div>
+      <div class="bar"><i style="flex:64;background:var(--c-success)"></i><i style="flex:10;background:var(--c-info)"></i><i style="flex:26;background:var(--c-progress-track)"></i></div>
+    </button>
+    <button class="frow stop">
+      <div class="f1"><span class="t">Ускорение тестов · продолжение</span><span class="p">41 %</span></div>
+      <div class="f2 s">Стоит 2 ч · Тимур не отвечает</div>
+      <div class="bar"><i style="flex:41;background:var(--c-success)"></i><i style="flex:59;background:var(--c-progress-track)"></i></div>
+    </button>
+    <button class="frow">
+      <div class="f1"><span class="t">Плагины · панель</span><span class="p">—</span></div>
+      <div class="f2">В очереди · 1 из 2</div>
+    </button>
+    <div class="closed"><button>▸ Закрытые и смерженные · 12 <span class="r">R3</span></button></div>
+  </div>
+</template>
+
+<template id="tpl-page">
+  <div class="island" aria-label="Страница фичи">
+    <div class="tb">
+      <button class="back">‹ К списку</button>
+      <h2>Оптимизация раздела «Фичи»</h2>
+      <span class="tag js-tag">идёт · дизайн</span><span class="r">R4</span>
+      <button class="ib" aria-label="Ещё действия">⋯</button><span class="r">R5</span>
+    </div>
+    <div class="alert" role="status">
+      <span class="dot" aria-hidden="true"></span>
+      <span class="tx"><b>Майя ждёт ответа</b> · 12 мин <small>— вопросы к интервью</small></span>
+      <button class="btn pri">Ответить Майе</button><span class="r">R6</span>
+    </div>
+    <div class="body">
+      <section class="brief" aria-label="Сводка">
+        <div class="now js-now">Сейчас <b>Майя</b> делает макет раскладки · с 12:40</div>
+        <div class="prog">
+          <div class="bar" aria-hidden="true"><i style="flex:26;background:var(--c-success)"></i><i style="flex:13;background:var(--c-info)"></i><i style="flex:4;background:var(--c-accent)"></i><i style="flex:55;background:var(--c-progress-track)"></i></div>
+          <span class="pct">27 %</span>
+        </div>
+        <div class="legend"><span><i style="background:var(--c-success)"></i>принято <b>26</b></span><span><i style="background:var(--c-info)"></i>в ревью <b>13</b></span><span><i style="background:var(--c-accent)"></i>в работе <b>4</b></span><span><i style="background:var(--c-progress-track)"></i>не заведено <b>55</b></span></div>
+        <div class="note"><b>Софья:</b> аудит раздела, дальше интервью с Андреем и разрез. Код не трогаем до решений; срок держится, если интервью на этой неделе.</div>
+        <div class="facts">
+          <span>срок <span class="v">≈ 3 дн</span> <button class="lnk">почему ›</button><span class="r">R7</span></span>
+          <span>с начала <span class="v">1 дн 2 ч</span></span>
+          <span>работа <span class="v">17 ч 34</span></span>
+          <span>возвраты <span class="v">2</span></span>
+        </div>
+      </section>
+
+      <div class="tabs" role="tablist" aria-label="Разделы фичи">
+        <button role="tab" aria-selected="true">Ход</button>
+        <button role="tab" aria-selected="false">Шаги<span class="n">98</span></button>
+        <button role="tab" aria-selected="false">Чаты<span class="n">9</span></button>
+        <button role="tab" aria-selected="false">Материалы<span class="n">4</span></button>
+        <button role="tab" aria-selected="false">Разбор</button><span class="r">R8</span>
+      </div>
+
+      <div class="stages" role="list" aria-label="Этапы">
+        <div class="sr done" role="listitem"><span class="d"></span><span class="nm">Разрез</span><span class="du">≈ 1 ч 05</span></div>
+        <div class="sr done" role="listitem"><span class="d"></span><span class="nm">План</span><span class="du">≈ 2 ч 10</span></div>
+        <div class="sr cur" role="listitem"><span class="d"></span><span class="nm">Производство<small>принято 26 из 98</small><span class="r">R9</span></span><span class="du">≈ 11 ч 15</span></div>
+        <div class="cur-box">
+          <div class="step"><span class="who">Майя</span><span class="tx">Макет целевой раскладки</span><span class="tm">идёт 40 мин</span></div>
+          <div class="step"><span class="who">Кира</span><span class="tx">Фильтр-пресеты списка фич</span><span class="tm">идёт 15 мин</span></div>
+          <div class="step"><span class="who">Глеб</span><span class="tx">Ревью: строка фичи без аватаров</span><span class="tm">ждёт 5 мин</span></div>
+          <button class="more">Все шаги этапа — 98 ›<span class="r">R10</span></button>
+        </div>
+        <div class="sr next" role="listitem"><span class="d"></span><span class="nm">Ревью<small>13 ждут</small></span><span class="du">—</span></div>
+        <div class="sr next" role="listitem"><span class="d"></span><span class="nm">Проверка</span><span class="du">—</span></div>
+        <div class="sr next" role="listitem"><span class="d"></span><span class="nm">Финальное ревью</span><span class="du">—</span></div>
+        <div class="sr next" role="listitem"><span class="d"></span><span class="nm">Мерж</span><span class="du">—</span></div>
+      </div>
+      <div class="axis-t"><button>Показать на шкале времени</button><span class="r">R11</span></div>
+    </div>
+  </div>
+</template>
+
+<main class="stage">
+  <section class="desk-wrap">
+    <p class="cap">Десктоп · 1240: список фич слева, страница фичи в острове</p>
+    <div class="desk js-desk"></div>
+  </section>
+  <section class="mob-wrap">
+    <p class="cap">360 · список</p>
+    <div class="phone js-mob-list"></div>
+  </section>
+  <section class="mob-wrap">
+    <p class="cap">360 · первый экран фичи</p>
+    <div class="phone js-mob-page"></div>
+  </section>
+</main>
+
+<section class="diff" aria-label="Что поменялось">
+  <div><b>R1 · три пресета вместо девяти чипов.</b> «Меня ждут» = ждут + остановлены, «В работе» = идут + очередь + пауза, «Все» = открытые. Тонкий выбор по видам — в поповере фильтра как раньше.<span class="lost">Теряем: один клик до «только на паузе».</span></div>
+  <div><b>R2 · строка фичи в две строки.</b> Название и %, одна фраза состояния, полоса 3 px. Аватары, ⚠N и давность ушли.<span class="lost">Теряем: ⚠ расхождения трекера в списке — он остаётся на странице фичи.</span></div>
+  <div><b>R4 · тег состояния один.</b> Он в тулбаре, а в сводке тега и «обновлено» больше нет.<span class="lost">Ничего не теряем: тулбар видно всегда.</span></div>
+  <div><b>R6 · действие одно.</b> Кнопка «Ответить / Мерж…» стоит только в полосе тревоги. В тулбаре и сводке её нет.<span class="lost">Ничего не теряем: тревога есть на всех вкладках.</span></div>
+  <div><b>R7 · срок одной строкой.</b> Источник, альтернатива и «почему» открываются по «почему ›».<span class="lost">Теряем: разбор оценки на виду. По сути это справка.</span></div>
+  <div><b>R8 · «Разбор» = История + Статистика.</b> Это ретроспектива: одна вкладка, внутри переключатель «Лента · Цифры».<span class="lost">Теряем: один клик до статистики.</span></div>
+  <div><b>R9–R11 · «Ход» без шкалы по умолчанию.</b> Этапы списком, у текущего — кто сейчас работает. Дорожки и ось — по «на шкале времени».<span class="lost">Теряем: паузы и интервалы с первого взгляда. Они нужны в разборе, а не каждый день.</span></div>
+</section>
+
+<script>
+(function () {
+  const list = document.getElementById('tpl-list').content;
+  const page = document.getElementById('tpl-page').content;
+  const desk = document.querySelector('.js-desk');
+  desk.append(list.cloneNode(true), page.cloneNode(true));
+  document.querySelector('.js-mob-list').append(list.cloneNode(true));
+  document.querySelector('.js-mob-page').append(page.cloneNode(true));
+
+  const body = document.body;
+  function setState(v) {
+    body.classList.toggle('st-wait', v === 'wait');
+    body.classList.toggle('st-run', v === 'run');
+    document.querySelectorAll('.js-tag').forEach(t => { t.textContent = v === 'wait' ? 'ждёт вас' : 'идёт · дизайн'; t.classList.toggle('w', v === 'wait'); });
+    document.querySelectorAll('.js-now').forEach(n => { n.innerHTML = v === 'wait'
+      ? 'Сейчас <b>Майя</b> ждёт ваш ответ по интервью · с 12:52'
+      : 'Сейчас <b>Майя</b> делает макет раскладки · с 12:40'; });
+    document.querySelectorAll('.js-row-main').forEach(r => r.classList.toggle('warn', v === 'wait'));
+    document.querySelectorAll('.js-row-main-st').forEach(r => { r.className = 'f2 js-row-main-st' + (v === 'wait' ? ' w' : '');
+      r.innerHTML = v === 'wait' ? 'Ждёт вас 12 мин · Майя' : 'Сейчас <b>Майя</b> · макет'; });
+    document.querySelectorAll('.js-wait-n').forEach(n => { n.textContent = v === 'wait' ? '2' : '1'; });
+  }
+  document.querySelectorAll('.seg').forEach(seg => seg.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    seg.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+    const g = seg.dataset.group, v = b.dataset.v;
+    if (g === 'state') setState(v);
+    if (g === 'view') { body.classList.remove('view-both', 'view-desktop', 'view-mobile'); body.classList.add('view-' + v); }
+    if (g === 'marks') body.classList.toggle('no-marks', v === 'off');
+  }));
+  setState('run');
+})();
+</script>
+</body>
+</html>

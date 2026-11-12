@@ -128,7 +128,6 @@ public static class WikiChatScorer
         string? WikiMark,
         bool IsPinned,
         bool HasSummary,
-        string? ContinuedFromSessionId,
         string? BranchedFromSessionId,
         DateTime CreatedAt,
         DateTime UpdatedAt,
@@ -221,9 +220,8 @@ public static class WikiChatScorer
         int answerChars = agentTexts.Sum(m => m.Text.Length);
         Add(signals, SignalAnswerVolume, Math.Min(answerChars / AnswerVolumeCharsPerWeight, CapAnswerVolume));
 
-        // Возврат к теме: чат живёт дольше суток, продолжен или ветвлён.
+        // Возврат к теме: чат живёт дольше суток или ветвлён.
         bool topicReturn = (input.UpdatedAt - input.CreatedAt).TotalHours > TopicReturnHours
-            || !string.IsNullOrEmpty(input.ContinuedFromSessionId)
             || !string.IsNullOrEmpty(input.BranchedFromSessionId);
         Add(signals, SignalTopicReturn, topicReturn ? WeightTopicReturn : 0);
 

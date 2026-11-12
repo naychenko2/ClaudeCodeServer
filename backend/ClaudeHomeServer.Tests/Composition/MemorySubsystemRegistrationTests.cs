@@ -59,8 +59,7 @@ public class MemorySubsystemRegistrationTests
     {
         var services = BuildServices(BuildConfig(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
 
-        // Фасады стора + их консолидация/autolearn из блоков Program.cs:165-166 и
-        // Program.cs:213-221 до выноса в подсистему.
+        // Фасады стора + их консолидация/autolearn из блоков Program.cs до выноса в подсистему.
         services.Should().Contain(s => s.ServiceType == typeof(PersonaMemoryService));
         services.Should().Contain(s => s.ServiceType == typeof(TeamMemoryService));
         services.Should().Contain(s => s.ServiceType == typeof(PersonaMemoryConsolidationService));

@@ -40,11 +40,13 @@ public class ProjectCapabilitiesGuardTests
         ["backend/ClaudeHomeServer.Llm/Gateway/TurnTokenService.cs"] = (1, "привязка токена хода к устройству"),
         ["backend/ClaudeHomeServer.DeviceAgent/Pairing/DevicePairing.cs"] = (1, "ответ сопряжения устройства, не проект"),
         // IsLocal — признак локального LLM-провайдера, к проектам не относится
-        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (3, "LLM-провайдер"),
+        ["backend/ClaudeHomeServer.Core/Models/LlmProviderConfig.cs"] = (4, "LLM-провайдер"), // четвёртое — комментарий к StatsEngine про основной локальный провайдер
         ["backend/ClaudeHomeServer.Core/Services/Mcp/Http/LoopbackProxyBypass.cs"] = (1, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LocalEndpointProbe.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/LlmSessionContext.cs"] = (1, "LLM-провайдер"),
-        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (9, "LLM-провайдер"),
+        // Девять прежних плюс три про выбор основного локального провайдера панели «Локальные
+        // модели» (два комментария и p.IsLocal в OrderBy) — локальность провайдера, не проекта.
+        ["backend/ClaudeHomeServer.Llm/LlmProviderRegistry.cs"] = (12, "LLM-провайдер"),
         // Признак локальности LLM-провайдера в /api/models (LlmCapabilities.IsLocal) и его
         // отдача наружу (ModelsController) — про провайдера, не про локальность проекта.
         ["backend/ClaudeHomeServer.Core/Services/Llm/LlmCapabilities.cs"] = (2, "LLM-провайдер"),
@@ -77,9 +79,10 @@ public class ProjectCapabilitiesGuardTests
         // Швы оркестрации фичи: «локальный исполнитель» — персона, чья модель уходит в локального
         // провайдера (IModelResolver.IsLocal в комментарии к LocalExecutor), не локальный проект.
         ["backend/ClaudeHomeServer.Core/Services/FeatureOrchestrationSeams.cs"] = (1, "чужой смысл: локальный провайдер модели"),
-        // Реализация шва: resolver.IsLocal(key) провайдера модели персоны плюс приватный IsLocal(persona)
-        // и его вызов и упоминание в комментарии — все про провайдера, не про локальный проект.
-        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (4, "чужой смысл: локальный провайдер модели"),
+        // Реализация шва: resolver.IsLocal(key) провайдера — в разборе модели персоны и модели
+        // задачи (LocalTurnOf, 07.11) плюс упоминание в комментарии — все про провайдера,
+        // не про локальный проект. Приватный метод переименован в IsLocalPersona (не вхождение).
+        ["backend/ClaudeHomeServer/Services/LocalExecutorRoster.cs"] = (3, "чужой смысл: локальный провайдер модели"),
         // Расход: локальные LLM-провайдеры считаются бесплатными (1444df06e) — IsLocal везде про провайдера, не проект.
         ["backend/ClaudeHomeServer.Llm/LlmModelResolverAdapter.cs"] = (2, "LLM-провайдер"),
         ["backend/ClaudeHomeServer.Llm/OneShotClaudeRunner.cs"] = (3, "LLM-провайдер"),

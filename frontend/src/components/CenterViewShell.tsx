@@ -75,8 +75,10 @@ export function CenterViewShell({
             {isMobile ? (
               <span data-testid={closeTestId}>
                 {/* m2 (Майя): полный текст возврата («К чату «…»»/«К списку») — в title И aria-label;
-                    видимая подпись остаётся короткой (closeLabel), высота 32 px — паритет с файлом. */}
-                <BackButton onClick={onClose} title={mobileTitle} ariaLabel={mobileTitle} style={{ height: 32 }}>
+                    видимая подпись остаётся короткой (closeLabel). FS-T8 (дефект c27d286c): фиксированная
+                    высота 32 ниже тач-порога — минимум TB.iconHitMobile (40). Шапка не раздувается:
+                    TB.heightMobile 56 = 40 + паддинги 2×SP.sm, кнопка центрирована alignItems. Десктоп (32) — без изменений. */}
+                <BackButton onClick={onClose} title={mobileTitle} ariaLabel={mobileTitle} style={{ minHeight: TB.iconHitMobile }}>
                   <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>{closeLabel}</span>
                 </BackButton>
               </span>

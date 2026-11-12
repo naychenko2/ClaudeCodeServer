@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -5,6 +6,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Sessions;
 using ClaudeHomeServer.Services.Skills;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Knowledge;
@@ -82,7 +84,28 @@ public class SessionStatusTests : IDisposable
             knowledge, new SkillsService(), userStore, _config, NullLogger<PersonaBindingsService>.Instance, notes: notesSvc, notesKb: notesKb);
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(_config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
-        return new SessionManager(_projectManager, _historyService, _config, adapters, falCost, usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas, bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, _broadcaster);
+        return SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(_config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+        }).Manager;
     }
 
     private void WriteSessions(IEnumerable<Session> sessions)
@@ -443,9 +466,9 @@ public class SessionStatusTests : IDisposable
     }
 
     [Theory]
-    [InlineData(SessionManager.DeliveryCause.ServerRestartResume)]
-    [InlineData(SessionManager.DeliveryCause.WorkLoop)]
-    public async Task АвтоХод_СчётчикНеТрогает(SessionManager.DeliveryCause cause)
+    [InlineData(DeliveryCause.ServerRestartResume)]
+    [InlineData(DeliveryCause.WorkLoop)]
+    public async Task АвтоХод_СчётчикНеТрогает(DeliveryCause cause)
     {
         var project = MakeProject("auto-" + cause);
         var s = MakeSession(SessionStatus.Active, projectId: project.Id);
@@ -481,14 +504,14 @@ public class SessionStatusTests : IDisposable
 
         // Чат занят (Working) → сообщение человека встаёт в очередь, а не в новый ход.
         var outcome = await sut.SendMessageAsync(s.Id, "из очереди", []);
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued,
+        outcome.Should().Be(SendUserOutcome.Queued,
             "занятый чат: сообщение человека уходит в очередь");
 
         // Разбор очереди: DeliverPendingAsync → SendDirectAsync (fromQueue, cause=QueueUser).
-        // Приватный метод вызываем рефлексией (прецедент — ChatContinueServiceTests: _sessions/Pending).
+        // Приватный метод вызываем рефлексией (прецедент — рефлексия по приватному полю: _sessions/Pending).
         var entry = GetEntry(sut, s.Id);
         var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
-        var head = (SessionManager.QueuedMessage)pending[0]!;
+        var head = (QueuedMessage)pending[0]!;
         var deliver = typeof(SessionManager).GetMethod("DeliverPendingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         await (Task)deliver.Invoke(sut, [s.Id, entry, head])!;
@@ -501,7 +524,7 @@ public class SessionStatusTests : IDisposable
 
     private static object GetEntry(SessionManager sut, string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var field = typeof(SessionManager).GetProperty("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!;
         return ((System.Collections.IDictionary)field.GetValue(sut)!)[sessionId]!;
     }
 }

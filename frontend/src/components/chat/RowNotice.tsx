@@ -1,6 +1,6 @@
 // Тонкая полоса над строкой контекста: иконка + текст + (средний элемент) + ссылка-действие + необязательный ✕.
-// Общий корпус для «Выбор снят · Вернуть» (UndoNotice) и «Контекст N · продолжить в новом чате» (ContinueHint):
-// без общего примитива рамка и отступы двух соседних полос разъедутся (история Notice.tsx, дизайн-ревью 4.7, S2).
+// Корпус полосы «Выбор снят · Вернуть» (UndoNotice): рамка и отступы живут в одном примитиве
+// (история Notice.tsx, дизайн-ревью 4.7, S2).
 // Геометрия — по спецификации docs/design/mockups/continue-hint-variants.md: border-box, height 28/32,
 // C.bgPanel, C.border, ссылка C.accent, ✕ C.textMuted.
 import { useState, type CSSProperties, type ReactNode } from 'react';
@@ -13,7 +13,7 @@ import { ellipsis } from './RowChip';
 const CAN_HOVER = typeof window !== 'undefined' && !window.matchMedia('(hover: none)').matches;
 
 // Кольцо фокуса с клавиатуры — инжектим один раз, как IconButton и Chip.
-// Общий для полосы (RowNotice) и ушка (LipEar): обе рисуют кнопки через эти же примитивы.
+// Кнопки полосы рисуются через эти же примитивы.
 const FOCUS_CLASS = 'cc-rownotice';
 if (typeof document !== 'undefined' && !document.getElementById('cc-rownotice-style')) {
   const el = document.createElement('style');
@@ -24,7 +24,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-rownotice-st
 
 // Действие-ссылка: подпись + иконка до/после неё. Состояние hover/tap/focus — внутреннее.
 // data — data-{data} (например «undo»), testId — data-testid; iconBefore (UndoNotice: RotateCcw)
-// или iconAfter (ContinueHint: ArrowRight). Общий с ушком (LipEar) — не дублируем стили.
+// или iconAfter — по необходимости действия. Общий с полосой — не дублируем стили.
 export function RowNoticeAction({ label, onClick, testId, data, iconBefore, iconAfter, isMobile }: {
   label: ReactNode;
   onClick: () => void;
@@ -65,7 +65,7 @@ export function RowNoticeAction({ label, onClick, testId, data, iconBefore, icon
 
 // ✕ «Не сейчас»: закрывает до следующего роста контекста. title — полный текст тултипа,
 // ariaLabel — короткий (скринридер), по умолчанию = title. size — размеры кнопки; по умолчанию
-// как у полосы (20×20, мобила 32×30), ушко (LipEar) на мобиле ставит 32×28.
+// как у полосы (20×20, мобила 32×30).
 export function RowNoticeSnooze({ onClick, title, ariaLabel, testId, isMobile, size }: {
   onClick: () => void;
   title: string;
@@ -103,7 +103,7 @@ export function RowNoticeSnooze({ onClick, title, ariaLabel, testId, isMobile, s
 }
 
 // Действие-ссылка справа: подпись + иконка до/после неё. data — data-{data} (например «undo»),
-// testId — data-testid; иконка до (UndoNotice: RotateCcw) или после (ContinueHint: ArrowRight)
+// testId — data-testid; иконка до (UndoNotice: RotateCcw) или после
 export interface RowNoticeActionProps {
   label: ReactNode;
   onClick: () => void;

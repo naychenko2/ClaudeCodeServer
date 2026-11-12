@@ -740,6 +740,55 @@ export function shownFiltersModel(featureKinds: readonly FeatureKind[]): ShownFi
   return { prefix: 'Все открытые, кроме:', chips: [...off.map(k => add(k)), ...(closed ? [del('closed', true)] : [])] };
 }
 
+// === FS-FL2a: секции списка фич «Ждут тебя / Стоят», «В работе», «Закрытые» ===
+// Единственный ключ — kind из индекса (записка v2 §6, R1, R3): состояние фронт не выводит
+// из других полей (сторож в тестах). Неизвестный kind (бэковый словарь обновился раньше
+// фронтального) или поля нет (старый индекс) → active: фича не теряется в списке —
+// инвариант: каждая фича входа ровно в одной секции.
+
+export type FeatureListSectionKey = 'attention' | 'active' | 'closed';
+
+export interface FeatureListSection {
+  key: FeatureListSectionKey;
+  title: string;
+  features: FeatureIndexFeature[];
+}
+
+// Секция каждого из 9 значений — по белому списку ALL_FEATURE_KINDS (таблица «Пути к
+// инварианту»): attention — ждущие человека и остановленные; closed — архив.
+// merged — 'active' (FS-AC3a, решение Андрея 11.11): фича после мержа остаётся
+// «смержена» на своём месте порядка бэка, пока человек сам не нажмёт «Закрыть».
+const FEATURE_LIST_SECTION_OF_KIND: Record<FeatureKind, FeatureListSectionKey> = {
+  waiting_you: 'attention', error: 'attention',
+  running: 'active', queued: 'active', paused: 'active', draft: 'active', idle: 'active',
+  merged: 'active', closed: 'closed',
+};
+
+// Разделение для списка фич (чистая функция, без React): секции attention → active →
+// closed, пустые не возвращаются. Внутри attention: сначала waiting_you, потом error
+// (sort стабилен — ES2019); в остальном порядок входного массива (бэк уже упорядочил).
+export function featureListSections(features: FeatureIndexFeature[]): FeatureListSection[] {
+  const buckets: Record<FeatureListSectionKey, FeatureIndexFeature[]> = { attention: [], active: [], closed: [] };
+  for (const f of features) {
+    const k = f.kind;
+    // Белый список, а не `in` по объекту: неизвестный ключ не должен цепляться до
+    // прототипа (тот же приём, что toFeatureKinds в chatFilters.ts).
+    const key = k && (ALL_FEATURE_KINDS as readonly string[]).includes(k)
+      ? FEATURE_LIST_SECTION_OF_KIND[k]
+      : 'active';
+    buckets[key].push(f);
+  }
+  // Внутри attention: waiting_you раньше error; порядок внутри групп сохранён.
+  buckets.attention.sort((a, b) => Number(a.kind === 'error') - Number(b.kind === 'error'));
+  const titleOf = (key: FeatureListSectionKey): string =>
+    key === 'attention'
+      ? (buckets.attention.some(f => f.kind === 'waiting_you') ? 'Ждут тебя' : 'Стоят')
+      : key === 'active' ? 'В работе' : 'Закрытые';
+  return (['attention', 'active', 'closed'] as const)
+    .filter(key => buckets[key].length > 0)
+    .map(key => ({ key, title: titleOf(key), features: buckets[key] }));
+}
+
 // Карту фич по featureId строим ОДИН раз на объект индекса (WeakMap — живёт, пока
 // живёт сам index). Без неё sharedFeatureTitles на каждую строку списка делала
 // линейный .find по features[] для каждой ссылки чата (минор Глеба, 24.10).

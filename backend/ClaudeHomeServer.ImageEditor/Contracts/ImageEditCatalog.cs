@@ -59,6 +59,9 @@ public static class ImageEditCatalog
             // (90 МБ) — потолок загрузки узла (LocalMediaService.MaxMediaInputBytes, зеркало в
             // MediaFormatDriversTests): модель видит только кроп, холст не пережимается
             ["flux3-klein"] = (1664, 1.8, 30, 90),
+            // H3-Image — тот же вход, что у Qwen: на масках, дорисовке и лице запуск уходит на Qwen
+            // «качественно», а свой холст H3 сам приводит к родной площади 2048²
+            ["minimax-h3-image"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1"] = (1664, 1.8, 30, 90),
             ["qwen-image-2.1-turbo"] = (1664, 1.8, 30, 90),
             ["face-detailer"] = (4096, 16.8, 30, null),

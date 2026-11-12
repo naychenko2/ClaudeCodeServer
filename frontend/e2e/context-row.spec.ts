@@ -78,6 +78,22 @@ test('1440, тёмная тема: строка читается', async ({ page
   await shot(page, 'row-1440-dark.png');
 });
 
+test('строка прилегает к полю ввода (геометрия, не только видимость)', async ({ page }) => {
+  newWorld({ ctx: { primary: primary() } });
+  await openChat(page, { vp: D });
+  await expect(row(page)).toBeVisible({ timeout: 30_000 });
+  // Губа строки заезжает под поле (COMPOSER_LIP.overlap = 12 px): низ строки лежит НИЖЕ верха поля,
+  // а не висит над ним зазором. Измеряем перекрытие, а не только наличие.
+  // boundingBox() = {x, y, width, height}: низ = y + height, верх = y.
+  const rowBox = (await row(page).boundingBox())!;
+  const cardBox = (await page.locator('[data-composer-card]').boundingBox())!;
+  const overlap = rowBox.y + rowBox.height - cardBox.y;
+  expect(overlap, `перекрытие строки и поля = ${overlap.toFixed(1)} px (ожидалось ~12, без зазора)`)
+    .toBeGreaterThanOrEqual(8);
+  expect(overlap).toBeLessThanOrEqual(16);
+  await shot(page, 'row-1440-geometry.png');
+});
+
 test('✕ снимает объект, «Вернуть» возвращает; референсы не трогаются', async ({ page }) => {
   newWorld({ ctx: { primary: primary(), refs: [ref('r1', 'Аня')] } });
   await openChat(page, { vp: D });
@@ -91,6 +107,33 @@ test('✕ снимает объект, «Вернуть» возвращает; 
   await expect(page.locator('[data-context-notice]')).toHaveCount(0);
   const puts = w().mutations.filter(m => m.method === 'PUT');
   expect(puts.map(m => (m.body as { kind: string | null }).kind)).toEqual([null, 'image']);
+});
+
+test('полоса «Вернуть» стоит в хосте строки', async ({ page }) => {
+  newWorld({ ctx: { primary: primary() } });
+  await openChat(page, { vp: D });
+  await expect(chip(page, 'primary')).toBeVisible({ timeout: 30_000 });
+  // Снять объект (✕ на чипе) → полоса «Вернуть» (UndoNotice) встаёт на строке
+  await chip(page, 'primary').locator('[data-chip-x]').click();
+  await expect(page.locator('[data-context-notice]'), '«Вернуть» не появился').toBeVisible();
+  // Полоса — внутри хоста строки ([data-context-row-host]), а не отдельным элементом страницы
+  await expect(page.locator('[data-context-row-host] [data-context-notice]'), '«Вернуть» в хосте').toHaveCount(1);
+  await shot(page, 'undo-host-1440.png');
+});
+
+test('«Вернуть» без текстовой строки: полоса есть, самой строки нет', async ({ page }) => {
+  // Ветка ContextRowView без ушка: ни ветки, ни объекта (проект без git) — строки контекста нет,
+  // но полоса «Вернуть» обязана остаться (иначе снятый объект не вернуть).
+  newWorld({ noGit: true, ctx: { primary: primary() } });
+  await openChat(page, { vp: D });
+  await expect(chip(page, 'primary')).toBeVisible({ timeout: 30_000 });
+  await chip(page, 'primary').locator('[data-chip-x]').click();
+  await expect(page.locator('[data-context-notice]'), '«Вернуть» не появился').toBeVisible();
+  await expect(page.locator('[data-context-row]'), 'строки контекста нет — объект снят, ветки нет').toHaveCount(0);
+  await expect(page.locator('[data-context-row-host] [data-context-notice]'), '«Вернуть» в хосте').toHaveCount(1);
+  await page.locator('[data-undo]').click();
+  await expect(chip(page, 'primary'), 'объект не вернулся').toBeVisible();
+  await expect(page.locator('[data-context-notice]')).toHaveCount(0);
 });
 
 test('«+N ›» открывает список подключённого, «Очистить контекст» снимает всё', async ({ page }) => {
@@ -138,6 +181,14 @@ test('личный чат без объекта: строки нет', async ({ 
   newWorld({ personal: true });
   await openChat(page, { vp: D });
   await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
+  await expect(row(page)).toHaveCount(0);
+});
+
+test('проект без git и без объекта: строки нет', async ({ page }) => {
+  newWorld({ noGit: true, ctx: { primary: null } });
+  await openChat(page, { vp: D });
+  await expect(page.locator('textarea').last()).toBeVisible({ timeout: 30_000 });
+  // Ни ветки, ни объекта — губы нет (ContextRowView возвращает null без предложения «Вернуть»)
   await expect(row(page)).toHaveCount(0);
 });
 

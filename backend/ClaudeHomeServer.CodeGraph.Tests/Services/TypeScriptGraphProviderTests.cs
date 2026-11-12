@@ -67,13 +67,15 @@ public class TypeScriptGraphProviderTests : IClassFixture<TestWebApplicationFact
             "а импорт из components/ui резолвится сквозь index-реэкспорт до Segmented.tsx");
 
         // Вид Constant: чистые данные (токены дизайн-системы) отличаются от объекта со
-        // стрелочными методами (api) — решение принимает экстрактор по AST инициализатора.
+        // стрелочными методами (доменный API фичи) — решение принимает экстрактор по AST
+        // инициализатора. lib/api.ts::api как образец не годится: после разноса фронт-линии
+        // он чистые spread'ы (...xxxApi) без методов — для него вид Constant верен.
         raw.Nodes.Should().ContainKey("lib/design.ts::C");
         raw.Nodes["lib/design.ts::C"].Kind.Should().Be(NodeKind.Constant,
             "C — объект из строк без функций, чистые данные");
-        raw.Nodes.Should().ContainKey("lib/api.ts::api");
-        raw.Nodes["lib/api.ts::api"].Kind.Should().Be(NodeKind.Util,
-            "api — объект со стрелочными методами, это поведение, не константа");
+        raw.Nodes.Should().ContainKey("features/projects/api.ts::projectsApi");
+        raw.Nodes["features/projects/api.ts::projectsApi"].Kind.Should().Be(NodeKind.Util,
+            "projectsApi — объект со стрелочными методами, это поведение, не константа");
 
         codeGraph.RegisterProvider(".ts", provider);
         codeGraph.RegisterProvider(".tsx", provider);

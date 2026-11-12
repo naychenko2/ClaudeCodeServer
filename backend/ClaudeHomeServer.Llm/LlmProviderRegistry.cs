@@ -74,6 +74,12 @@ public class LlmProviderRegistry
             _providers[cfg.Key] = cfg;
         }
 
+        // Дубль id модели у двух и более провайдеров — конфиг-ошибка: ResolveByModel берёт
+        // первое совпадение (см. ResolveByModel), и ход молча уходит к первому из владельцев. Само
+        // поведение не меняем, но молчать нельзя: ОДИН Warning на каждый дублирующийся id
+        // (id и ключи ВСЕХ его владельцев) — конфликт обязан быть виден в логе старта.
+        WarnAboutDuplicateModelIds();
+
         // Потолки внутренних повторов CLI: секция LlmProviders:Retry. null — секция не задана,
         // RetryCeilings/RetryWatchdogMaxWaitMs подставят встроенные дефолты (см. константы выше).
         _retry = config.GetSection($"{Section}:{RetryKey}").Get<LlmRetryPolicy>();
@@ -101,6 +107,34 @@ public class LlmProviderRegistry
         // Корзина синка — рядом с data/, вне claude-profiles (ADR-015 §5.3). Здесь же
         // инициализируется, чтобы путь был единым и у NormalizeAll, и у тестов.
         _trashStore = new SyncTrashStore(Path.Combine(dataDir, SyncTrashStore.RootDirName));
+    }
+
+    // Один Warning на каждый id модели, объявленный в каталогах двух и более провайдеров
+    // (развести дубль конфигом — дело хозяина конфига; код лишь делает конфликт видимым
+    // в логе старта). Сравнение id — как у
+    // FindModel, OrdinalIgnoreCase: «Qwen3.8-27B» и «qwen3.8-27b» — тот же id. Пустой id
+    // не считаем: он ни к чему не резолвится. Поведение ResolveByModel (первое совпадение)
+    // эта проверка НЕ меняет — она только пишет.
+    private void WarnAboutDuplicateModelIds()
+    {
+        var owners = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in _providers.Values)
+            foreach (var m in p.Models)
+            {
+                if (string.IsNullOrWhiteSpace(m.Id)) continue;
+                if (!owners.TryGetValue(m.Id, out var keys))
+                    owners[m.Id] = keys = [];
+                // Ключи _providers уже LowerInvariant (см. ctor) — дедупликация простым Contains:
+                // один провайдер с двумя одинаковыми записями каталога не удвоит свой ключ.
+                if (!keys.Contains(p.Key))
+                    keys.Add(p.Key);
+            }
+        foreach (var (id, keys) in owners)
+            if (keys.Count > 1)
+                Console.Error.WriteLine(
+                    $"[LlmProviders] Дубль id модели «{id}» у {keys.Count} провайдеров: "
+                    + $"{string.Join(", ", keys)} — ResolveByModel берёт первое совпадение, "
+                    + "ход уйдёт к первому из владельцев");
     }
 
     public IReadOnlyCollection<LlmProviderConfig> All => _providers.Values;
@@ -186,6 +220,26 @@ public class LlmProviderRegistry
 
     public LlmProviderConfig? GetByKey(string? key) =>
         key is not null && _providers.TryGetValue(key, out var p) ? p : null;
+
+    // Статистическая дорожка ходов провайдера (фича «Локальные модели: Qwen 27B на Video, vLLM», B1; ключи
+    // дорожки — контракт с B5/B7): явный StatsEngine провайдера; иначе MainTrackName
+    // («main»), если провайдер — основной локальный (тот же выбор, что MainLocalProvider
+    // в LocalModelStatsController:218: первый IsLocal с секцией Stats); иначе null —
+    // ходы такого провайдера в статистику движков не пишутся. Неизвестный ключ — null.
+    public string? StatsTrackOf(string? providerKey)
+    {
+        var p = GetByKey(providerKey);
+        if (p is null) return null;
+        if (!string.IsNullOrWhiteSpace(p.StatsEngine)) return p.StatsEngine.Trim();
+        return MainLocalProvider() == p ? LocalModelStatsPoller.MainTrackName : null;
+    }
+
+    // Основной локальный провайдер — порядок выбора повторяет MainLocalProvider в
+    // LocalModelStatsController:218-219: среди IsLocal предпочтение у тех, у кого есть
+    // Stats; при равенстве — первый по алфавиту ключей. Когда Stats ровно у
+    // одного провайдера, порядок ключей на выбор не влияет.
+    private LlmProviderConfig? MainLocalProvider() =>
+        _providers.Values.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
 
     // Провайдер по модели: сперва точное совпадение с каталогом провайдера,
     // затем по префиксу (модели из GET /models, не описанные в конфиге).

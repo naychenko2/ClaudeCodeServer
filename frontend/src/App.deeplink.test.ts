@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { getNav, parseHash } from './lib/nav';
 import { __test as flagsTest } from './lib/featureFlags';
 import {
-  installFakeDom, uninstallFakeDom, mount,
+  installFakeDom, uninstallFakeDom, mount, textNodes,
 } from './components/chat/__tests__/fakeDom';
 import type { Project } from './types';
 
@@ -123,13 +123,13 @@ vi.mock('./lib/terminalSignalr', () => {
 vi.mock('./lib/agentHub', () => ({ __esModule: true, resetAgentHubs: () => {} }));
 
 // ── HubTabs: App берёт отсюда только три функции; мокируем, чтобы не тянуть цепочку
-//     Toolbar→IconButton (document.getElementById на уровне модуля) и shell-kit (matchMedia) ──
-vi.mock('./components/HubTabs', () => ({
-  __esModule: true,
-  moduleIdOf: () => null,
-  subsystemKeyOf: () => null,
-  subsystemTabValue: () => 'subsystem:x',
-}));
+//     Toolbar→IconButton (document.getElementById на уровне модуля) и shell-kit (matchMedia).
+//     Реальные реализации — из hubTabsModel (чистая модель, type-only импорты): S2b-3c
+//     требует subsystemKeyOf/subsystemTabValue настоящих (иначе активный ключ подсистемы null) ──
+vi.mock('./components/HubTabs', async () => {
+  const model = await import('./components/hubTabsModel');
+  return { __esModule: true, moduleIdOf: model.moduleIdOf, subsystemKeyOf: model.subsystemKeyOf, subsystemTabValue: model.subsystemTabValue };
+});
 // HubHeader: App берёт только константы; мок — чтобы не тянуть IconButton (document.getElementById)
 vi.mock('./components/HubHeader', () => ({
   __esModule: true,
@@ -137,16 +137,23 @@ vi.mock('./components/HubHeader', () => ({
   productHistorySeenKey: (userId?: string | null) => `cc_ph_seen${userId ? '_' + userId : ''}`,
 }));
 
-// ── подсистемы / реестр: no-op ──
+// ── подсистемы / реестр: no-op по умолчанию; состояние — в subsysMock (S2b-3c:
+//    кейсы «выключенная подсистема» / «включённая + зарегистрированная» переключают его) ──
+const subsysMock = vi.hoisted(() => ({
+  enabled: false,
+  manifest: null as null | { key: string; title: string; order: number },
+  tab: null as null | (() => any),
+}));
 vi.mock('./lib/subsystems', async (importOriginal) => {
   const orig = await importOriginal<typeof import('./lib/subsystems')>();
-  return { ...orig, useSubsystem: () => false, isSubsystemEnabled: () => false, setAllSubsystems: () => {} };
+  return { ...orig, useSubsystem: () => subsysMock.enabled, isSubsystemEnabled: () => subsysMock.enabled, setAllSubsystems: () => {} };
 });
 vi.mock('./lib/subsystems/registry', () => ({
   __esModule: true,
   useSlot: () => [], useSlotItem: () => null,
   loadSubsystemRemotes: () => Promise.resolve(),
-  getSubsystem: () => undefined, getSubsystemTab: () => undefined,
+  getSubsystem: (k: string) => (subsysMock.manifest && subsysMock.manifest.key === k ? subsysMock.manifest : undefined),
+  getSubsystemTab: () => subsysMock.tab ?? undefined,
   REVEAL_PANEL_EVENT: 'cc-reveal-panel', SLOT_WORKSPACE_PANEL_DEF: { id: 'workspace' },
 }));
 
@@ -376,6 +383,86 @@ describe('App: cc-open-project-feature — канал выбора чата и �
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(toastMock.calls.some(t => t.includes('Не удалось открыть проект фичи')), 'тоста о сбое списка нет').toBe(true);
     expect((globalThis as any).sessionStorage.getItem('cc_pending_project_chat'), 'канал не должен быть написан').toBe(null);
+  });
+});
+
+// ═══ S2b-3c: прямой хэш #/spend на раздел выключенной/незарегистрированной подсистемы ═══
+// Начальный таб #/spend ставится без гейта (App.tsx: screen 'spend' → SPEND_TAB, в отличие
+// от notes, где гейт в useState и в реактивном fallbackIfNotesOff), и ветка рендера до
+// S2b-3c рисовала пустоту, когда компонента нет в реестре. Ожидание: SubsystemDisabledState.
+// initialHash фиксируется при ИМПОРТЕ App (App.tsx: const initialHash = parseHash()), поэтому
+// здесь повторный импорт модуля (vi.resetModules) с хэшем '#/spend'; моки vi.mock сохраняются.
+describe('App: #/spend при выключенной подсистеме — SubsystemDisabledState, не пустота', () => {
+  beforeEach(() => {
+    setupTestWindow();
+    store.clear(); sstore.clear();
+    flagsTest.reset();
+    store.set('cc_token', 't');
+    store.set('cc_server_url', 'http://x');
+    store.set('cc_username', 'u');
+    mockData.fail = false;
+    mockData.projects = [];
+    // Дефолт: выключено и не зарегистрировано (тот же, что у прежних кейсов файла)
+    subsysMock.enabled = false;
+    subsysMock.manifest = null;
+    subsysMock.tab = null;
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    uninstallFakeDom();
+    vi.restoreAllMocks();
+  });
+
+  // Повторный импорт App с хэшем '#/spend' и ожидание конца /me-цикла (me → null →
+  // .finally → authChecking off; потолок таймера 3 с). Возвращает контейнер монтирования.
+  async function mountAtSpend() {
+    (globalThis as any).window.location.hash = '#/spend';
+    // Повторно исполняемые модули пишут в documentElement на уровне модуля
+    // (themeMode.applyTheme) — у FDoc из installFakeDom его нет; даём минимальный.
+    const doc = (globalThis as any).document;
+    if (doc && !doc.documentElement) {
+      doc.documentElement = {
+        nodeType: 1, nodeName: 'HTML', dataset: {}, attributes: {}, childNodes: [],
+        style: { setProperty: () => {}, removeProperty: () => {} },
+        addEventListener: () => {}, removeEventListener: () => {}, appendChild: (c: any) => c,
+        setAttribute: () => {}, getAttribute: () => null,
+      };
+    }
+    vi.resetModules();
+    const { default: AppAtSpend } = await import('./App');
+    const { container } = mount(createElement(AppAtSpend));
+    await act(async () => { vi.advanceTimersByTime(3100); });
+    return container;
+  }
+
+  it('выключена/не зарегистрирована → «Раздел выключен администратором» (мутация: убрать ветку → red)', async () => {
+    const container = await mountAtSpend();
+    const text = textNodes(container).join(' ');
+    expect(text, 'заглушка выключенного раздела не отрисована').toContain('Раздел выключен администратором');
+  });
+
+  it('зарегистрированный таб + выключена → заглушка с именем раздела, таб не монтируется (мутация: убрать && isSubsystemEnabled → red)', async () => {
+    // Основной продуктовый вариант шага: админ выключил зарегистрированный «Расходы»,
+    // у пользователя прямая ссылка #/spend. Таб ЕСТЬ в реестре (ActiveSubsystemTab
+    // ненулевой) — и всё равно не должен монтироваться: только заглушка с именем
+    // раздела из манифеста. Прежний кейс моделировал «выключенную» как «нет таба»,
+    // поэтому выбивание isSubsystemEnabled из условия он не замечает (R-S2b-3c).
+    subsysMock.manifest = { key: 'spend', title: 'Расходы', order: 40 };
+    subsysMock.tab = () => createElement('div', null, 'SpendPageStubDisabled');
+    const container = await mountAtSpend();
+    const text = textNodes(container).join(' ');
+    expect(text, 'заглушка с именем раздела не отрисована').toContain('Раздел «Расходы» выключен администратором');
+    expect(text, 'таб выключенной подсистемы не должен монтироваться').not.toContain('SpendPageStubDisabled');
+  });
+
+  it('включена + зарегистрирована → компонент раздела, заглушки нет', async () => {
+    subsysMock.enabled = true;
+    subsysMock.manifest = { key: 'spend', title: 'Расходы', order: 40 };
+    subsysMock.tab = () => createElement('div', null, 'SpendPageStub');
+    const container = await mountAtSpend();
+    const text = textNodes(container).join(' ');
+    expect(text, 'компонент раздела не отрисован').toContain('SpendPageStub');
+    expect(text, 'заглушка не должна появляться при включённой подсистеме').not.toContain('выключен администратором');
   });
 });
 

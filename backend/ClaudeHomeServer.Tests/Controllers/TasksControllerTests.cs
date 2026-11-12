@@ -219,7 +219,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
     // для проверки отказа 403 на ручках hold/clear.
     private TasksController BuildController(GitService? git, MockupCatalog? catalog = null,
         ISpendFeatureReader? spend = null, FeatureJournalStore? journal = null, bool serviceToken = false,
-        FeatureSummaryService? summary = null)
+        FeatureSummaryService? summary = null, ProjectTreeLocator? locator = null)
     {
         var controller = new TasksController(
             tasks: _factory.Services.GetRequiredService<TaskManager>(),
@@ -238,7 +238,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             journal: journal,
             spend: spend,
             summary: summary,
-            queue: _factory.Services.GetService<FeatureQueueService>());
+            queue: _factory.Services.GetService<FeatureQueueService>(),
+            locator: locator);
         var claims = new List<Claim> { new(JwtRegisteredClaimNames.Sub, OwnerId) };
         if (serviceToken) claims.Add(new("typ", "svc"));
         var identity = new ClaimsIdentity(claims, "test");
@@ -251,6 +252,10 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
 
     // Реальный GitService из DI (worktree-гард проходит штатно).
     private GitService RealGit() => _factory.Services.GetRequiredService<GitService>();
+
+    // Реальный ProjectTreeLocator из DI (TaskGlue регистрирует его безусловно): exists/branch
+    // файлов макета по всем деревьям проекта (FS-B3b).
+    private ProjectTreeLocator RealLocator() => _factory.Services.GetRequiredService<ProjectTreeLocator>();
 
     // Статический словарь гейтов мержа (MergeGates) — для проверки, что запись убрана после мержа.
     private static ConcurrentDictionary<string, SemaphoreSlim> MergeGatesDict() =>
@@ -1155,6 +1160,83 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         runPlan.GetProperty("resultMarkdown").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
+    // ─── FS-B3a: materials[] — документы всех задач фичи с taskId автора ──────────────────────
+
+    // Инвариант: в materials только задачи ЭТОЙ фичи (AllRunTasks по уже проверенному run) и
+    // только из проекта эпика. Чужая задача той же фичи (ProjectId другой) и задача ДРУГОЙ
+    // фичи с тем же путём не дают своего taskId. Мутация «взять GetByOwner вместо allFeatureTasks»
+    // → чужой шаг того же владельца с тем же путём попадает (краснеет); «снять фильтр ProjectId
+    // в Build» → foreign.md в выдаче (краснеет). Индекс materials не несёт (тяжёлый ключ —
+    // только страница).
+    [Fact]
+    public async Task GetFeature_Materials_ЧужаяЗадача()
+    {
+        // Эпик с живым чатом — как в Brief_Индекс: строка индекса по нему гарантирована.
+        var chatId = await CreatePersonalChatAsync(OwnerId);
+        var epic = await CreateAgentTaskAsync(new { title = "эпик", role = "feature", sourceSessionId = chatId });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var own = await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "docs/research/own.md" },
+        });
+        var ownId = own.GetProperty("id").GetString()!;
+        // Та же фича, но чужой проект: linkedFiles не из дерева фичи — отброшен (тот же
+        // фильтр AllLinkedFiles). Проект ставим напрямую в сторе (проект-фикстура не нужна).
+        var foreignProject = await CreateTaskAsync(new
+        {
+            title = "шаг чужого проекта", featureId = epicId, role = "step", stepRef = "Ш2",
+            linkedFiles = new[] { "docs/research/foreign.md" },
+        });
+        _factory.Services.GetRequiredService<TaskManager>().GetById(foreignProject.GetProperty("id").GetString()!)!
+            .ProjectId = "proj-foreign";
+        // Другая фича того же владельца, тот же путь: не задача этого run — не попадает.
+        var otherEpic = await CreateTaskAsync(new { title = "чужая фича", role = "feature" });
+        var otherStep = await CreateTaskAsync(new
+        {
+            title = "чужой шаг", featureId = otherEpic.GetProperty("id").GetString(), role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "docs/research/own.md" },
+        });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        var materials = body.GetProperty("materials");
+        materials.ValueKind.Should().Be(JsonValueKind.Array);
+        var m = materials.EnumerateArray().Single();
+        m.GetProperty("path").GetString().Should().Be("docs/research/own.md");
+        m.GetProperty("taskId").GetString().Should().Be(ownId);
+        m.TryGetProperty("at", out _).Should().BeTrue("at — дата задачи (CompletedAt ?? UpdatedAt)");
+
+        // Индекс: строка фичи materials не несёт (тяжёлый ключ — только страница).
+        var index = await GetIndexAsync();
+        var row = index.GetProperty("features").EnumerateArray()
+            .Single(f => f.GetProperty("featureId").GetString() == epicId);
+        row.TryGetProperty("materials", out _).Should().BeFalse("индекс materials не несёт");
+    }
+
+    // Инвариант IsMaterial на живой ручке: код, макеты и индексы из linkedFiles задачи в
+    // materials не попадают никогда — только документ под docs/. Мутация «не звать IsMaterial»
+    // → backend/A.cs в выдаче (краснеет).
+    [Fact]
+    public async Task GetFeature_Materials_КодНеМатериал()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик", role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        await CreateTaskAsync(new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            linkedFiles = new[] { "backend/A.cs", "docs/mockups/m.html", "docs/README.md", "docs/research/ok.md" },
+        });
+
+        var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+
+        body.GetProperty("materials").EnumerateArray()
+            .Select(x => x.GetProperty("path").GetString())
+            .Should().Equal("docs/research/ok.md");
+    }
+
     // Б5a/Б5b: stats (график времени) в ответе GET features/{id}: timeline с from/to/stages/
     // segments/totals. Б5b: журнал фичи пишется TaskManager'ом (created) → полный → source=journal
     // (точный режим). Индекс (features/index) и список (features?sessionId=) stats НЕ несут
@@ -1312,9 +1394,9 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var body = await (await _client.GetAsync($"/api/tasks/features/{epicId}"))
             .Content.ReadFromJsonAsync<JsonElement>();
 
-        // Снапшот верхних ключей: прежние восемь + brief, ничего больше.
+        // Снапшот верхних ключей: прежние девять + materials (FS-B3a), ничего больше.
         body.EnumerateObject().Select(p => p.Name).OrderBy(x => x, StringComparer.Ordinal)
-            .Should().Equal("brief", "chats", "events", "eventsTotal", "mockups",
+            .Should().Equal("brief", "chats", "events", "eventsTotal", "materials", "mockups",
                 "mockupsUnavailable", "plans", "run", "stats");
 
         var brief = body.GetProperty("brief");
@@ -1518,6 +1600,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
         mockup.GetProperty("taskId").GetString().Should().Be(stepId, "taskId — по задаче, в linkedFiles которой path");
         mockup.GetProperty("authorPersonaId").GetString().Should().Be("persona-mk");
+        // FS-B3b: ownerTaskId запасного пути LinkedFiles — задача, приложившая этот path.
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(stepId, "автор запасного пути — приложившая его задача");
     }
 
     // M1: задача role=design входит в AllRunTasks — её linkedFiles доходят до каталога, а
@@ -1714,9 +1798,9 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
 
     // Проверенный worktree эпика (числится в `git worktree list` проекта): Find вызывается
     // дважды — сначала по дереву эпика, затем по корню; слияние по относительному пути:
-    // запись дерева побеждает (tree="feature", title по корню дерева), а exists файла
-    // проверяется по дереву фичи: в дереве файла нет (есть только в main) → exists=false,
-    // иначе карточка обещала бы файл, которого читатель по ?featureId= не отдаст (W4-R1).
+    // запись дерева побеждает (tree="feature", title по корню дерева). FS-B3b: exists файла
+    // решает локатор по всем деревьям проекта: на диске файла нет ни в одном дереве
+    // (заглушка его не создавала) → exists=false, обещания читателю нет.
     [Fact]
     public async Task GetFeature_Mockups_ПроверенныйWorktree_КаталогЧитаетДеревоЭпика()
     {
@@ -1724,7 +1808,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         var mainRoot = Projects.GetById(projectId)!.RootPath;
 
         var catalog = new RootsMockupCatalog(mainRoot);
-        var controller = BuildController(RealGit(), catalog: catalog);
+        var controller = BuildController(RealGit(), catalog: catalog, locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
@@ -1734,7 +1818,7 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
         mockup.GetProperty("title").GetString().Should().Be("mockup@" + worktree);
         mockup.GetProperty("files").EnumerateArray().Single().GetProperty("exists")
-            .GetBoolean().Should().BeFalse("файл только в main — запись дерева его не обещает");
+            .GetBoolean().Should().BeFalse("файла нет ни в одном дереве проекта — обещания нет");
     }
 
     // Фолбэк: у эпика нет worktreePath — каталог вызывается один раз, по корню проекта,
@@ -1786,17 +1870,120 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mockup.GetProperty("tree").GetString().Should().Be("main");
     }
 
-    // Сквозной сценарий W4-R1 (major 1+2) на НАСТОЯщем MockupCatalog и настоящем git-worktree:
-    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
-    // дереве, другой только в main, третий — в обоих. Каталог записывает путь под tree="feature"
-    // (запись дерева побеждает), Files — объединение путей: файл только из main не исчезает
-    // (major 2), но его exists=false — читатель с ?featureId= читает ровно дерево и отдаёт 404
-    // (major 1). Файл, есть в обоих деревьях → exists=true (минор R1B).
-    // Мутация: убрать объединение Files в слиянии — этот тест краснеет (main_only пропадает).
+    // FS-B3b ядро (дефект «не в master»): файл макета в worktree шага — ни в main, ни в дереве
+    // эпика. Прежде: каталог смотрел ровно эти два дерева → exists=false, карточка говорила
+    // «не в master», хотя файл открывается по taskId шага. Теперь: локатор находит файл в
+    // worktree проекта → exists=true, branch — ветка шага; ownerTaskId — шаг, приложивший
+    // path, и читатель по этому анкеру отдаёт 200.
+    // Мутация «вернуть exists по двум деревьям» (убрать шаг recompute в BuildMockups): этот
+    // тест краснеет — в двух деревьях файла нет.
     [Fact]
-    public async Task GetFeature_Mockups_ФайлТолькоВMain_ДеревоНеОбещаетExists()
+    public async Task GetFeature_Mockups_ФайлТолькоВВорктриШага_ExistsBranchАвтор()
     {
-        var (epicId, worktree, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        var projectRoot = Projects.GetById(projectId)!.RootPath;
+
+        // Worktree шага — реальный worktree того же проекта (git worktree add -b);
+        // файл только в нём.
+        var stepWt = Path.Combine(_host.TempDir, "mk_stepwt_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(stepWt);
+        var stepBranch = "feat/step-" + Guid.NewGuid().ToString("N")[..6];
+        var git = RealGit();
+        await git.WorktreeAddAsync(null, projectRoot, stepWt, stepBranch);
+        const string relPath = "docs/mockups/only_step.html";
+        Directory.CreateDirectory(Path.Combine(stepWt, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(stepWt, "docs", "mockups", "only_step.html"), "step only");
+
+        // Шаг — проектная задача (личная обнуляет worktree), linkedFiles — на файл.
+        var step = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            worktreePath = stepWt, worktreeBranch = stepBranch,
+            linkedFiles = new[] { relPath },
+        });
+        var stepId = step.GetProperty("id").GetString()!;
+
+        var controller = BuildController(git,
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        var file = mockup.GetProperty("files").EnumerateArray().Single();
+        file.GetProperty("path").GetString().Should().Be(relPath);
+        file.GetProperty("exists").GetBoolean().Should().BeTrue(
+            "файл в worktree проекта — exists=true, «не в master» нет");
+        file.GetProperty("branch").GetString().Should().Be(stepBranch, "branch — ветка дерева, где найден");
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(stepId, "автор — задача, приложившая path");
+
+        // Читатель подтверждает новый контракт: exists=true + анкер автора ⇒ файл открывается.
+        var content = await _client.GetAsync($"/api/projects/{projectId}/files/content?path={relPath}&taskId={stepId}");
+        content.StatusCode.Should().Be(HttpStatusCode.OK, "exists=true ⇒ файл открывается по taskId автора");
+    }
+
+    // Инвариант: материал ищется только в деревьях своего проекта. Файл — в реальном worktree
+    // ДРУГОГО проекта (отдельный git-репозиторий), worktree шага указывает туда; этого же
+    // относительного пути в деревьях проекта эпика нет. Корни локатора — только деревья
+    // проекта эпика (IsLinkedWorktree: .git-файл ведёт под <main>/.git/worktrees) →
+    // exists=false, ветки нет. Мутация «принять WorktreePath задачи как корень без
+    // проверки» — этот тест краснеет.
+    [Fact]
+    public async Task GetFeature_Mockups_ВорктриДругогоПроектаТогоЖеПути_ExistsНеДаёт()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+
+        // Отдельный git-репозиторий со своим worktree — файл только там.
+        var foreign = Path.Combine(_host.TempDir, "mk_foreign_" + Guid.NewGuid().ToString("N")[..8]);
+        var foreignRepo = Path.Combine(foreign, "repo");
+        var foreignWt = Path.Combine(foreign, "wt");
+        Directory.CreateDirectory(foreignRepo);
+        Directory.CreateDirectory(foreignWt);
+        var fgit = RealGit();
+        await fgit.InitAsync(null, foreignRepo);
+        await fgit.WorktreeAddAsync(null, foreignRepo, foreignWt, "feat/foreign");
+        const string relPath = "docs/mockups/x.html";
+        Directory.CreateDirectory(Path.Combine(foreignWt, "docs", "mockups"));
+        File.WriteAllText(Path.Combine(foreignWt, "docs", "mockups", "x.html"), "foreign");
+
+        // Шаг этой фичи: linkedFiles — на path, worktree — чужой worktree (тот же путь).
+        await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг", featureId = epicId, role = "step", stepRef = "Ш1",
+            worktreePath = foreignWt, worktreeBranch = "feat/foreign",
+            linkedFiles = new[] { relPath },
+        });
+
+        var controller = BuildController(RealGit(),
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
+        var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
+
+        var json = FeatureJson(result);
+        var mockup = json.GetProperty("mockups").EnumerateArray().Single();
+        var file = mockup.GetProperty("files").EnumerateArray().Single();
+        file.GetProperty("path").GetString().Should().Be(relPath, "запись есть (linkedFiles), файла в проекте нет");
+        file.GetProperty("exists").GetBoolean().Should().BeFalse(
+            "worktree чужого проекта — не корень этого проекта, exists нет");
+        file.GetProperty("branch").ValueKind.Should().Be(JsonValueKind.Null,
+            "ветки нет — ни в одном дереве проекта файла нет");
+    }
+
+    // Сквозной сценарий W4-5 + FS-B3b на НАСТОЯщем MockupCatalog и настоящем git-worktree:
+    // записка-макет лежит в обоих деревьях и в шапке перечисляет три файла — один только в
+    // дереве, другой только в main, третий — в обоих. Слияние прежнее: запись дерева побеждает
+    // (tree="feature"), Files — объединение путей (файл только из main не исчезает, major 2).
+    // FS-B3b: exists/branch файлов — вердикт локатора, а не дерево записи: main_only →
+    // exists=true без ветки (прежнее «дерево не обещает, exists=false» заменено: карточка не
+    // должна говорить «не в master» про файл, который открывается из main), tree_only →
+    // exists=true, branch — ветка эпика, both → exists=true без ветки (main — первый корень).
+    // Задача, приложившая записку, — автор (ownerTaskId).
+    // Мутации: убрать объединение Files в слиянии — main_only пропадает, красный;
+    // «вернуть exists по двум деревьям» — main_only и branch теряются, красный.
+    [Fact]
+    public async Task GetFeature_Mockups_ФайлТолькоВMain_ExistsПоЛокаторуБезВетки()
+    {
+        var (epicId, worktree, epicBranch, projectId) = await CreateFeatureEpicWithWorktreeAsync();
         var mainRoot = Projects.GetById(projectId)!.RootPath;
         var note = "# Макет\n\n**Фича:** " + epicId + "\n**Файлы:** tree_only.html, main_only.html, both.html\n";
         Directory.CreateDirectory(Path.Combine(mainRoot, "docs", "mockups"));
@@ -1808,32 +1995,49 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         // Файл в ОБОИХ деревьях: есть и в дереве, и в main.
         File.WriteAllText(Path.Combine(worktree, "docs", "mockups", "both.html"), "both");
         File.WriteAllText(Path.Combine(mainRoot, "docs", "mockups", "both.html"), "both");
+        // Автор записки — задача, приложившая её path (ownerTaskId для записки с шапкой).
+        var author = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг-автор", featureId = epicId, role = "step", stepRef = "Ш2",
+            linkedFiles = new[] { "docs/mockups/note.md" },
+        });
+        var authorId = author.GetProperty("id").GetString()!;
 
         var controller = BuildController(RealGit(),
-            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
         var mockup = json.GetProperty("mockups").EnumerateArray().Single();
-        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main");
+        mockup.GetProperty("tree").GetString().Should().Be("feature", "запись дерева побеждает main (W4-5)");
+        mockup.GetProperty("ownerTaskId").GetString().Should().Be(authorId, "автор записки с шапкой — та же OwnerTask");
         var files = mockup.GetProperty("files").EnumerateArray()
-            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f.GetProperty("exists").GetBoolean());
+            .ToDictionary(f => f.GetProperty("path").GetString()!, f => f);
         files.Keys.Should().Contain("docs/mockups/main_only.html",
-            "файл, существующий только в main, не исчезает из каталога");
-        files["docs/mockups/main_only.html"].Should().BeFalse(
-            "в дереве файла нет — exists=false, обещания читателю нет");
-        files["docs/mockups/tree_only.html"].Should().BeTrue("файл в дереве — обещание честное");
-        files["docs/mockups/both.html"].Should().BeTrue(
-            "файл существует в обоих деревьях — exists=true (минор R1B)");
+            "файл, существующий только в main, не исчезает из каталога (W4-5)");
+        files["docs/mockups/main_only.html"].GetProperty("exists").GetBoolean()
+            .Should().BeTrue("файл в main — exists=true, «не в master» нет");
+        files["docs/mockups/main_only.html"].GetProperty("branch").ValueKind
+            .Should().Be(JsonValueKind.Null, "найден в main — branch null");
+        files["docs/mockups/tree_only.html"].GetProperty("exists").GetBoolean().Should().BeTrue("файл в дереве — exists=true");
+        files["docs/mockups/tree_only.html"].GetProperty("branch").GetString()
+            .Should().Be(epicBranch, "branch — ветка дерева, где найден");
+        files["docs/mockups/both.html"].GetProperty("exists").GetBoolean().Should().BeTrue("файл в обоих деревьях — exists=true");
+        files["docs/mockups/both.html"].GetProperty("branch").ValueKind
+            .Should().Be(JsonValueKind.Null, "main — первый корень, branch null");
 
-        // Читатель подтверждает контракт: по ?featureId= файла из main нет, фолбэка на main нет.
+        // Читатель с ?featureId= прежний: он читает ровно дерево эпика, фолбэка на main нет.
+        // FS-B3b снимает только обещание exists этому читателю: по нему файл из main не
+        // открывается — фронт ведёт его анкером автора/ветки (FS-F1f).
         var content = await _client.GetAsync(
             $"/api/projects/{projectId}/files/content?path=docs/mockups/main_only.html&featureId={epicId}");
         content.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
-    // Вторая половина контракта: файл макета есть только в проверенном дереве — каталог
-    // говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл откроется).
+    // Вторая половина контракта: файл макета есть только в проверенном дереве — локатор
+    // (FS-B3b) говорит exists=true, и читатель с ?featureId= отдаёт 200 (exists=true ⇒ файл
+    // откроется в дереве фичи).
     [Fact]
     public async Task GetFeature_Mockups_ФайлТолькоВДереве_ExistsTrue_ЧитательОтдаёт200()
     {
@@ -1844,7 +2048,8 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.LinkedFiles = [relPath];
 
         var controller = BuildController(RealGit(),
-            catalog: _factory.Services.GetRequiredService<MockupCatalog>());
+            catalog: _factory.Services.GetRequiredService<MockupCatalog>(),
+            locator: RealLocator());
         var result = (Microsoft.AspNetCore.Mvc.OkObjectResult)(await controller.GetFeature(epicId, null))!;
 
         var json = FeatureJson(result);
@@ -2652,6 +2857,258 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         mergeBody.Should().Contain("Фича не найдена");
     }
 
+    // ─── FS-XT1 (разрез §8.3): закрытый хвост при мерже — тело { tail }, снятие с Origin ──────
+    // Закрытый хвост — сданные, но не принятые шаги (по учёту: Review/pending и Work/returned).
+    // Мерж с непустым хвостом без явного решения не идёт (409 tail_decision_required с числом
+    // шагов); «withdraw» снимает хвост одним методом стора (Origin = merge_tail), «keep» пишет
+    // решение в журнал (merge_with_tail). Ключи хвоста — только из учёта (run.ClosedTailKeys).
+
+    // Фикстура «мерж с хвостом»: worktree + принятый финал + один сданный непринятый шаг
+    // (role=step, Done, витков нет → Review/pending → закрытый хвост по учёту) + персона DevOps.
+    private async Task<(string EpicId, string StepId, string ProjectId, Persona Persona)>
+        CreateMergeTailFixtureAsync(string tag, string stepRef = "Ш1")
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var step = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "шаг " + stepRef, featureId = epicId, role = "step", stepRef, status = "done",
+        });
+        return (epicId, step.GetProperty("id").GetString()!, projectId, CreateDevopsPersona(tag));
+    }
+
+    // Тело merge с решением о хвосте: application/json обязателен, иначе [FromBody] тела не видит.
+    private static StringContent MergeTailBody(string tail) =>
+        new($"{{\"tail\":\"{tail}\"}}", System.Text.Encoding.UTF8, "application/json");
+
+    private FeatureJournalStore Journal => _factory.Services.GetRequiredService<FeatureJournalStore>();
+    private FeatureProjector Features => _factory.Services.GetRequiredService<FeatureProjector>();
+    private TaskManager Tasks => _factory.Services.GetRequiredService<TaskManager>();
+
+    // Хвост есть, тела нет → 409 tail_decision_required с числом шагов; мерж не начинается.
+    // Мутация: убрать гард решения в MergeFeature → 200 вместо 409 → тест красный.
+    [Fact]
+    public async Task MergeFeature_ХвостБезТела_409TailDecisionRequired()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tail409");
+        Features.Project(epicId, OwnerId)!.StepProgress.ClosedTail.Should().Be(1, "фикстура: сданный непринятый шаг");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", null);
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("code").GetString().Should().Be("tail_decision_required");
+            body.GetProperty("tailSteps").GetInt32().Should().Be(1, "409 несёт число шагов хвоста");
+            body.GetProperty("error").GetString().Should().Contain("хвост");
+
+            Features.Project(epicId, OwnerId)!.Merge.Should().BeNull("мерж не начался");
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("шаг не тронут");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // «withdraw»: шаги хвоста сняты с Origin = merge_tail, знаменатель сузился, журнал verdict
+    // с Origin записан, задача мержа заведена. Мутации: снять Origin/Notes в WithdrawMergeTail,
+    // или снять шаг циклом Update из контроллера без Origin → красный (Origin null).
+    [Fact]
+    public async Task MergeFeature_ХвостWithdraw_СнимаетШагиИЗаводитМерж()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailwithdraw");
+        var before = Features.Project(epicId, OwnerId)!.StepProgress;
+        before.Total.Should().Be(1);
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            var task = await response.Content.ReadFromJsonAsync<JsonElement>();
+            task.GetProperty("role").GetString().Should().Be("merge");
+
+            var stored = Tasks.GetById(stepId)!;
+            stored.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+            stored.Verification!.Origin.Should().Be(TaskVerificationOrigins.MergeTail);
+            stored.Verification!.Notes.Should().Be("снят при мерже");
+            stored.Verification!.PersonaId.Should().BeNull("снял человек по кнопке мержа, не персона");
+
+            var after = Features.Project(epicId, OwnerId)!.StepProgress;
+            after.Total.Should().Be(0, "снятый шаг выходит из знаменателя");
+            after.Withdrawn.Should().Be(1);
+            after.ClosedTail.Should().Be(0, "хвоста больше нет");
+            after.WithdrawnAtMerge.Should().Be(1, "доля «смержено без ревью» считается отдельно");
+
+            // Принятый финал сам пишет verdict-запись (она без Origin): ищем именно снятие хвоста.
+            var withdrawnEntries = Journal.Read(OwnerId, epicId).Entries
+                .Where(e => e.Kind == "verdict" && e.Origin == TaskVerificationOrigins.MergeTail).ToList();
+            withdrawnEntries.Should().ContainSingle()
+                .Which.TaskId.Should().Be(stepId, "журнал verdict несёт признак происхождения по снятому шагу");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // «keep»: шаги не тронуты, знаменатель тот же, в журнале ровно одна запись merge_with_tail
+    // с числом оставленных шагов. Мутация: не писать merge_with_tail → второй assertion красный.
+    [Fact]
+    public async Task MergeFeature_ХвостKeep_ШагиНеТронутыЗаписьЖурналаЕсть()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailkeep");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("keep"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("решение «оставить» вердикта не ставит");
+            var after = Features.Project(epicId, OwnerId)!.StepProgress;
+            after.Total.Should().Be(1, "знаменатель не меняется");
+            after.ClosedTail.Should().Be(1);
+
+            var entries = Journal.Read(OwnerId, epicId).Entries;
+            entries.Where(e => e.Kind == "verdict" && e.Origin is not null)
+                .Should().BeEmpty("решение «оставить» не снимает шагов");
+            entries.Should().ContainSingle(e => e.Kind == "merge_with_tail")
+                .Which.TailSteps.Should().Be(1, "решение «оставить» видно по числу оставленных шагов");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // Гонка: два параллельных «Мерж» с «withdraw» → одна задача мержа и ОДНА запись снятия.
+    // Снятие под локом TaskManager, второй вызов видит уже снятый вердикт (идемпотентность).
+    // Мутация: снять лок в WithdrawMergeTail → две волны вердиктов и журнала → красный.
+    [Fact]
+    public async Task MergeFeature_МержДважды_Параллельно_ХвостСнятОдинРаз()
+    {
+        var (epicId, stepId, _, persona) = await CreateMergeTailFixtureAsync("DevOps-tailrace");
+
+        try
+        {
+            var results = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ =>
+                _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"))));
+
+            results.Should().OnlyContain(r => r.StatusCode == HttpStatusCode.OK);
+            var ids = new HashSet<string>();
+            foreach (var r in results)
+            {
+                var t = await r.Content.ReadFromJsonAsync<JsonElement>();
+                ids.Add(t.GetProperty("id").GetString()!);
+            }
+            ids.Should().HaveCount(1, "дубля задачи мержа нет");
+
+            Journal.Read(OwnerId, epicId).Entries
+                .Where(e => e.Kind == "verdict" && e.Origin == TaskVerificationOrigins.MergeTail)
+                .Should().ContainSingle("хвост снят один раз");
+            Features.Project(epicId, OwnerId)!.StepProgress.WithdrawnAtMerge.Should().Be(1);
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // Виток ревью, нацеленный на живую работу, снятием хвоста не закрывается: он зван и на
+    // живой шаг. Фикстура: ШД — в закрытом хвосте; ШЦ сдан, но его цепочку держит живой сам
+    // виток; ШБ открыт. Снимается только ШД. Мутация «снимать любой открытый виток фичи» →
+    // ревью тоже получил бы withdrawn → тест красный.
+    [Fact]
+    public async Task MergeFeature_Withdraw_ВитокСЖивойЦельюНеСнимается()
+    {
+        var (epicId, _, _, projectId) = await CreateFeatureEpicWithWorktreeAsync();
+        await CreateAcceptedFinalAsync(projectId, epicId);
+        var stepTail = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШД", featureId = epicId, role = "step", stepRef = "ШД", status = "done" });
+        var stepLive = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШБ", featureId = epicId, role = "step", stepRef = "ШБ" });
+        var stepClosed = await CreateProjectTaskAsync(projectId,
+            new { title = "шаг ШЦ", featureId = epicId, role = "step", stepRef = "ШЦ", status = "done" });
+        var review = await CreateProjectTaskAsync(projectId, new
+        {
+            title = "ревью ШЦ и ШБ", featureId = epicId, role = "review",
+            reviewOf = new[] { stepClosed.GetProperty("id").GetString()!, stepLive.GetProperty("id").GetString()! },
+        });
+        var persona = CreateDevopsPersona("DevOps-tailround");
+
+        try
+        {
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+            Tasks.GetById(stepTail.GetProperty("id").GetString()!)!.Verification!.Verdict
+                .Should().Be(TaskVerdicts.Withdrawn, "закрытый хвост снимается");
+            Tasks.GetById(review.GetProperty("id").GetString()!)!.Verification
+                .Should().BeNull("виток с живой целью остаётся");
+            Tasks.GetById(stepClosed.GetProperty("id").GetString()!)!.Verification
+                .Should().BeNull("его цепочку держит живой открытый виток — это не хвост");
+        }
+        finally
+        {
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // FS-XT1 (доработка ревью 786941ae): состояние фичи изменилось между снимком хвоста (:1603)
+    // и замком стора в WithdrawMergeTail — в этом окне ревьюер завёл виток на хвостовой шаг.
+    // Снятие к нему не применяется, мерж с составом, отличным от решённого человеком, не
+    // начинается: 409 tail_withdraw_not_applied, без 500 и без молчаливой лжи. Детерминировано
+    // швом MergeTailInterleaveHook (тот же приём, что PlanReplaceInterleaveHook в TaskManagerTests),
+    // окон времени нет. Мутация «не проверять NotAppliedKeys в MergeFeature» → красный: мерж ушёл
+    // бы с живым ревью внутри фичи, а шаг был бы закрыт как «снят при мерже».
+    [Fact]
+    public async Task MergeFeature_ХвостСталЖивым_409СнятиеНеПрименено()
+    {
+        var (epicId, stepId, projectId, persona) = await CreateMergeTailFixtureAsync("DevOps-tailchanged");
+        Features.Project(epicId, OwnerId)!.StepProgress.ClosedTail.Should().Be(1, "фикстура: закрытый хвост");
+
+        try
+        {
+            Tasks.MergeTailInterleaveHook = () => Tasks.Create(projectId, OwnerId, new CreateTaskRequest(
+                "ревью Ш1", FeatureId: epicId, Role: TaskRoles.Review, ReviewOf: [stepId]));
+
+            var response = await _client.PostAsync($"/api/tasks/features/{epicId}/merge", MergeTailBody("withdraw"));
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+            body.GetProperty("code").GetString().Should().Be("tail_withdraw_not_applied");
+            body.GetProperty("error").GetString().Should().Contain("не применено");
+            body.GetProperty("tailSteps").GetInt32().Should().Be(1, "409 несёт число неприменённых шагов");
+
+            // Хозяин класса общий на все тесты — виток ищется по фиче, а не по владельцу.
+            var review = Tasks.GetByOwner(OwnerId).Single(t => t.Role == TaskRoles.Review && t.FeatureId == epicId);
+            review.Status.Should().NotBe(TaskItemStatus.Done, "живой виток снятием хвоста не закрыт");
+            Tasks.GetById(stepId)!.Verification.Should().BeNull("шаг с живым витком не снят");
+            Features.Project(epicId, OwnerId)!.Merge.Should().BeNull("мерж не начался");
+        }
+        finally
+        {
+            Tasks.MergeTailInterleaveHook = null;
+            Personas.Delete(persona.Id, OwnerId);
+        }
+    }
+
+    // §2.3 разбора: сторож делегированного хода на мерже держится только на атрибуте, а теста,
+    // читающего его, не было. Мутация «снять [DenyOnDelegatedTurn] с MergeFeature» → null →
+    // красный. Настройки не копируются в тест: сверяется сам атрибут на методе (образец —
+    // SessionManagerTestBase.ExecuteFilter).
+    [Fact]
+    public void MergeFeature_СторожАтрибутаDenyOnDelegatedTurn()
+    {
+        var attr = (ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute?)Attribute.GetCustomAttribute(
+            typeof(TasksController).GetMethod(nameof(TasksController.MergeFeature))!,
+            typeof(ClaudeHomeServer.Filters.DenyOnDelegatedTurnAttribute));
+
+        attr.Should().NotBeNull("мерж фичи — действие человека: делегированному ходу отказ");
+        attr!.AllowInTeamImplement.Should().BeTrue("штаб волен влить фичу в пределах квоты");
+        attr.AllowedDepth.Should().Be(McpEndpoints.RunExecutorAllowedDepth,
+            "тот же порог глубины, что у запуска исполнителя");
+    }
+
     // ─── W4-ANB: резюме фичи (POST /api/tasks/features/{id}/summary) ────────────────────────
     // Контракт ручки: 404 — тело как у GET; 502 — отказ модели с причиной; повторный вызов
     // с тем же отпечатком — из кэша (cached: true). Поведение сервиса (single-flight, LRU,
@@ -3117,6 +3574,46 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         note.ByUser.Should().BeTrue();
     }
 
+    // FS-O2b (c1): человеческая дверь (PUT note) передаёт в журнал тот же снимок учёта, что и
+    // MCP-путь: stage — активная стадия, planState/accepted/total — из run.StepProgress той же
+    // единственной run. Фикстура: план с двумя шагами (planState == "cut") + шаг A1 → знаменатель
+    // ненулевой, активная стадия есть. Мутации: не передавать estimateContext в SetFeatureNote из
+    // TasksController → красные PlanState/Stage/Total; брать их из отдельного второго Project() —
+    // не ловится тестом, ловится чтением кода (run выше одна).
+    [Fact]
+    public async Task PutNote_КонтекстУчёта_ПишетсяВСтрокуЖурнала()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "план контекста", featureId = epicId, role = "plan",
+            planSteps = new[] { new { stepRef = "A1", title = "шаг один" }, new { stepRef = "A2", title = "шаг два" } },
+        });
+        await CreateTaskAsync(new { title = "шаг A1", featureId = epicId, role = "step", stepRef = "A1" });
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "план нарезан, идём",
+            featureEstimate = new { etaMinutes = 210, expectedSteps = 2, why = "по плану" },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.StepProgress.PlanState.Should().Be("cut", "фикстура: план с шагами, других планов нет");
+        run.StepProgress.Total.Should().BeGreaterThan(0);
+
+        var entry = _factory.Services.GetRequiredService<FeatureJournalStore>().Read(OwnerId, epicId).Entries
+            .Single(e => e.Kind == "estimate_set");
+        entry.PlanState.Should().Be("cut");
+        entry.Stage.Should().NotBeNull().And.NotBeEmpty().And.Be(FeatureBrief.ActiveStageOf(run),
+            "stage строки — та же активная стадия, что штамп голоса");
+        entry.Accepted.Should().Be(run.StepProgress.Accepted);
+        entry.Total.Should().Be(run.StepProgress.Total);
+
+        _factory.Services.GetRequiredService<TaskManager>().GetById(epicId)!.InitialEtaMinutes
+            .Should().Be(210, "первая оценка при cut по живому пути фиксирует базовый срок");
+    }
+
     // ─── оценка оркестратора в PUT note (макет 2 сводки) ─────────────────────────────────
 
     [Fact]
@@ -3213,6 +3710,51 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
             new StringContent($"{{\"text\":\"г\",\"featureEstimate\":{estimateJson}}}", System.Text.Encoding.UTF8, "application/json"));
 
         response.StatusCode.Should().Be(ok ? HttpStatusCode.OK : HttpStatusCode.BadRequest);
+    }
+
+    // FS-O1 (возврат ревью R-FS-O1, п.1): сдвиг оценки сверх порога без why через REST — 400 с тем же
+    // текстом, что у MCP-двери (TaskManager.FeatureEstimateShiftText), а не 500 от необработанного
+    // исключения. Сам гейт — в TaskManager под замком записи (TaskManagerTests/MCP-тесты), здесь —
+    // обработка отказа контроллером. Мутация: убрать catch FeatureEstimateShiftException в
+    // SetFeatureNote — этот тест краснеет (исключение уходит в 500).
+    [Fact]
+    public async Task PutNote_SdvigOtsenkiBezWhy_400_TotZheTekstChtoUMCP()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        var first = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "старт", featureEstimate = new { expectedSteps = 10, etaMinutes = 60 },
+        });
+        first.StatusCode.Should().Be(HttpStatusCode.OK, "базовая оценка записана");
+
+        // expectedSteps 10→13 (+30 % > 25 %) без why → 400, текст — тот же, что у MCP.
+        var shiftSteps = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "новый голос", featureEstimate = new { expectedSteps = 13 },
+        });
+        shiftSteps.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await shiftSteps.Content.ReadAsStringAsync()).Should()
+            .Contain(TaskManager.FeatureEstimateShiftText, "тот же текст отказа, что у MCP-двери");
+
+        // etaMinutes 60→95 (+58 % > 50 %) без why → 400.
+        var shiftEta = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "г", featureEstimate = new { etaMinutes = 95 },
+        });
+        shiftEta.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        // отказ не записал ни голос, ни оценку: остались базовые
+        var tm = _factory.Services.GetRequiredService<TaskManager>();
+        tm.GetById(epicId)!.Note!.Text.Should().Be("старт");
+        tm.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(10);
+
+        // с why тот же сдвиг разрешён — 400 не запрет оценки, а отказ молчаливого сдвига
+        var withWhy = await _client.PutAsJsonAsync($"/api/tasks/features/{epicId}/note", new
+        {
+            text = "уточняю", featureEstimate = new { expectedSteps = 13, why = "объём уточнён" },
+        });
+        withWhy.StatusCode.Should().Be(HttpStatusCode.OK);
+        tm.GetById(epicId)!.Note!.Estimate!.ExpectedSteps.Should().Be(13, "сдвиг с why — разрешён");
     }
 
     // B14 (возврат FIN 74722f13): голос, записанный у фичи БЕЗ идущих задач (шаг в todo — Now пуст),
@@ -5417,5 +5959,139 @@ public class TasksControllerTests : IClassFixture<TasksControllerTests.Host>
         Source = "chat-turn",
         Timestamp = timestamp,
     };
+
+    // ─── FS-XT3: самоснятие на двери REST — агентский путь по типу вызывающего ─────────────────
+    // Инвариант §8.4: шаг выходит из знаменателя только по вердикту withdrawn от человека,
+    // оркестратора или кнопки мержа; агентское снятие — только с непустым Notes. Дверь REST
+    // под сервисным токеном (typ=svc — Node mcp/tasks-server, вызывающий без сессии) —
+    // агентский путь: находка 1 ревью (495d9c83) — Create ставил CreatedByHuman = true всем,
+    // включая сервисный токен, и снятый при рождении шаг проходил 200 вместо 400.
+
+    // Эпик + шаг фичи человеческим путём (дверь создания открыта человеку): id шага.
+    private async Task<string> CreateFeatureStepAsync(string tag)
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-" + tag + "-" + Guid.NewGuid().ToString("N")[..6], role = "feature" });
+        var step = await CreateTaskAsync(new
+        {
+            title = "шаг-" + tag + "-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epic.GetProperty("id").GetString(), role = "step", stepRef = "X3",
+        });
+        return step.GetProperty("id").GetString()!;
+    }
+
+    // PUT /api/tasks/{id} под сервисным токеном без сессии-вызывающей: вызывающий — исполнитель
+    // по claim (TasksController.cs:680-682) → исполнитель не ставит «withdrawn» своему шагу → 400,
+    // запись целая. Notes здесь есть: первая clause сильнее Notes-правила — отказ решает тип
+    // вызывающего, а не отсутствие причины. Мутация (c2): снять передачу callerIsExecutor в
+    // tasks.Update (TasksController.cs:694) — этот тест красный: без заголовка isAgentCall=false,
+    // гард молчит → 200.
+    [Fact]
+    public async Task PutStepWithdrawn_СервисныйТокенБезСессии_400()
+    {
+        var stepId = await CreateFeatureStepAsync("xt3-put");
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.Update(stepId, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            Verification: new TaskVerification
+            {
+                Verdict = TaskVerdicts.Withdrawn,
+                Notes = "причина есть — отказ решает тип вызывающего",
+            }));
+
+        result.Should().BeOfType<BadRequestObjectResult>().Which.StatusCode.Should().Be(400);
+        var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!;
+        stored.Status.Should().Be(TaskItemStatus.Todo, "отказ до записи: ни статус, ни вердикт не применены");
+        stored.Verification.Should().BeNull();
+    }
+
+    // POST /api/tasks под сервисным токеном: шаг сразу в Done с «withdrawn» без Notes → 400
+    // (проба Глеба: до правки было 200 — признак ставился по эндпоинту, а не по типу токена).
+    // Мутация (c2): «CreatedByHuman = true для всех» (TasksController.cs:151/:429) — этот тест
+    // красный: isAgentCall=false, гард Create молчит → 200.
+    [Fact]
+    public async Task CreateWithdrawnStep_СервисныйТокенБезNotes_400()
+    {
+        var epic = await CreateTaskAsync(new { title = "эпик-xt3-create-" + Guid.NewGuid().ToString("N")[..6], role = "feature" });
+        var epicId = epic.GetProperty("id").GetString()!;
+        var title = "снятый-при-рождении-" + Guid.NewGuid().ToString("N")[..6];
+        var controller = BuildController(RealGit(), serviceToken: true);
+
+        var result = await controller.Create(JsonSerializer.SerializeToElement(new
+        {
+            title = title,
+            featureId = epicId,
+            role = "step",
+            stepRef = "X3",
+            status = "done",
+            verification = new { verdict = "withdrawn" },
+        }));
+
+        result.Should().BeOfType<BadRequestObjectResult>().Which.StatusCode.Should().Be(400);
+        _factory.Services.GetRequiredService<TaskManager>().GetByOwner(OwnerId)
+            .Should().NotContain(t => t.Title == title, "отказ до вставки в стор");
+    }
+
+    // ─── FS-XT0 (доработка ревью d27c643c): POST /api/tasks не принимает Origin вердикта ──────
+    // Дверь создания отдавала клиентский объект как есть (TasksController.cs:150 → TaskManager.Create
+    // присваивал req.Verification целиком): POST с verification.origin=merge_tail сохранялся, и
+    // FeatureStepAccounting считал бы подделку в stepProgress.withdrawnAtMerge
+    // (FeatureStepAccounting.cs:396-401). PUT и MCP были защищены пересборкой по списку полей —
+    // теперь норма одна и та же в TaskManager (StripOriginFromBody) на Create и Update обеих дверей.
+    // Мутация (c2): убрать вызов санитайзера в TaskManager.Create → красный этот тест и
+    // Create_ВердикИзТела_OriginНеПишется (TaskManagerTests).
+    [Fact]
+    public async Task CreateOriginИзТела_НеДоходитДоСчёта()
+    {
+        var epicId = await CreateFeatureEpicAsync();
+        await CreateTaskAsync(new
+        {
+            title = "план xt0-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epicId, role = "plan",
+            planSteps = new[] { new { stepRef = "A1", title = "шаг один" } },
+        });
+
+        // Человеческая дверь (пользовательский токен): снятие шага человеку принадлежит —
+        // вердикт принимается, Origin из тела — нет.
+        var created = await CreateTaskAsync(new
+        {
+            title = "снятый телом xt0-" + Guid.NewGuid().ToString("N")[..6],
+            featureId = epicId, role = "step", stepRef = "A1", status = "done",
+            verification = new { verdict = "withdrawn", notes = "постановщик снял", origin = "merge_tail" },
+        });
+        var stepId = created.GetProperty("id").GetString()!;
+
+        var stored = _factory.Services.GetRequiredService<TaskManager>().GetById(stepId)!;
+        stored.Verification.Should().NotBeNull("вердикт человеческой двери остаётся");
+        stored.Verification!.Verdict.Should().Be(TaskVerdicts.Withdrawn);
+        stored.Verification!.Origin.Should().BeNull(
+            "Origin ставит только серверный путь снятия хвоста (WithdrawMergeTail), не тело запроса");
+
+        var run = _factory.Services.GetRequiredService<FeatureProjector>().Project(epicId, OwnerId)!;
+        run.StepProgress.Withdrawn.Should().Be(1, "снятие по вердикту считается как обычно");
+        run.StepProgress.WithdrawnAtMerge.Should().Be(0, "подделка merge_tail в счётчик не попала");
+    }
+
+    // FS-XT1, та же норма на двери PUT: Origin вердикта затирается вместе с VerifiedAt/PersonaId
+    // (их ставит сервер). Мутация: убрать StripOriginFromBody в TaskManager.Update (и начать
+    // копировать Origin в TasksController) → подделка дожила бы в сторе → тест красный.
+    [Fact]
+    public async Task UpdateOriginИзТела_Затирается()
+    {
+        var task = await CreateTaskAsync(new { title = "задача с поддельным origin" });
+        var id = task.GetProperty("id").GetString()!;
+
+        var response = await _client.PutAsJsonAsync($"/api/tasks/{id}", new
+        {
+            status = "done",
+            verification = new { verdict = "accepted", notes = "проверено", origin = "merge_tail" },
+        });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var stored = Tasks.GetById(id)!;
+        stored.Verification!.Verdict.Should().Be(TaskVerdicts.Accepted, "вердикт человеческой двери остаётся");
+        stored.Verification!.Origin.Should().BeNull(
+            "Origin ставит только серверный WithdrawMergeTail, ни одна дверь его из тела не принимает");
+    }
 
 }

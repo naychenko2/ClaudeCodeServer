@@ -73,7 +73,7 @@ public static class ActorToolRights
         // вверх из чата исполнителя) и tags_* (метаданные чатов/задач) — закрыты default-deny, ждут
         // подтверждения на финальном ревью.
         Add(Workspace, ActorToolRule.OwnerOnly,
-            "chats_create", "chats_send", "chats_update", "chats_archive", "chats_continue", "chats_report_up",
+            "chats_create", "chats_send", "chats_update", "chats_archive", "chats_report_up",
             "tags_apply", "tags_remove",
             "projects_create", "projects_update", "knowledge_index",
             "git_commit", "git_stage", "kb_add_document",

@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { WikiError, type WikiErrorCode } from '../../../../lib/wiki';
 import {
-  INBOX_REASON_TEXT, INBOX_TEXT, analyzeRefusalText, countWord, isHumanTargetClass,
+  INBOX_REASON_TEXT, INBOX_TEXT, PAGE_TYPE, analyzeRefusalText, countWord, isHumanTargetClass,
   wikiErrorText, wikiInboxReasonCode, wikiInboxReasonText,
 } from '../wikiLabels';
 
@@ -168,6 +168,30 @@ describe('причины «Входящих»: таблица сверяется
   });
 });
 
+// ─── Причина «число не подтверждено цитатой» (T-F1; ADR-039, решение 2) ───
+// Строку бэка даёт WikiPlanValidator (.:434): фиксированное начало + динамический хвост
+// чисел («: 15, 80%»). При вердикте политики «inbox» причина чисел дописывается после
+// причины политики (та же строка бэка) — такой случай должен остаться за текстом политики.
+
+describe('причина «число не подтверждено цитатой» (T-F1)', () => {
+  it('строка бэка с числом классифицируется новым кодом, человеку — текст сверки с источником, а не unknown', () => {
+    const raw = 'число не подтверждено цитатой: 15';
+    expect(wikiInboxReasonCode(raw)).toBe('number_unconfirmed');
+    expect(wikiInboxReasonText(raw)).toBe('В утверждении есть число, которого нет в цитатах — сверьте с источником');
+    expect(wikiInboxReasonText(raw)).not.toBe(INBOX_TEXT.unknown);
+  });
+
+  it('несколько чисел и проценты в хвосте — та же классификация: хвост на неё не влияет', () => {
+    expect(wikiInboxReasonCode('число не подтверждено цитатой: 15, 80%')).toBe('number_unconfirmed');
+  });
+
+  it('политика с дописанной причиной чисел классифицируется по первому префиксу (политики)', () => {
+    const raw = 'Источник старше вашей правки; число не подтверждено цитатой: 15';
+    expect(wikiInboxReasonCode(raw)).toBe('source_older_than_edit');
+    expect(wikiInboxReasonText(raw)).toBe(INBOX_REASON_TEXT.source_older_than_edit);
+  });
+});
+
 describe('отказ разбора чата по-человечески (WM-2)', () => {
   it('«пустой ответ» — «модель не ответила»; окна и проходы бэка в текст не попадают', () => {
     const raw = 'пустой ответ модели в окне m11-m381, проход A';
@@ -182,5 +206,41 @@ describe('отказ разбора чата по-человечески (WM-2)'
     expect(analyzeRefusalText('нет утверждений с цитатами в окнах m1-m9')).toBe('Не удалось разобрать');
     expect(analyzeRefusalText(null)).toBe('Не удалось разобрать');
     expect(analyzeRefusalText('')).toBe('Не удалось разобрать');
+  });
+});
+
+// ─── Типы страниц (дефект d7ea8ba0) ───
+// Ключ словаря PAGE_TYPE — значение поля type шапки; источник правды — бэковый
+// WikiFrontmatter.TypeValues. Без rule/term/state в словаре WikiPageView считал валидную
+// шапку неразобранной и показывал плашку (.:103). Список читается из бэкового файла, а не
+// копируется в тест (тот же приём, что с таблицей ADR-038 выше): новый вид на бэке краснит
+// этот тест раньше, чем страница начнёт врать человеку о прочитанной шапке.
+
+const FRONTMATTER_PATH = resolve(dirname(fileURLToPath(import.meta.url)),
+  '../../../../../../backend/ClaudeHomeServer.Notes/Services/Wiki/WikiFrontmatter.cs');
+
+function backendTypeValues(): string[] {
+  const src = readFileSync(FRONTMATTER_PATH, 'utf8');
+  // константы TypeXxx = "…" — сами значения вида
+  const consts = new Map<string, string>();
+  for (const m of src.matchAll(/public const string (Type\w+) = "([a-z]+)";/g)) consts.set(m[1], m[2]);
+  // список TypeValues = [TypeOverview, …] — ссылки на константы (\b не даёт захватить CreatableTypeValues)
+  const list = src.match(/\bTypeValues =\s*\[([^\]]*)\]/);
+  expect(list).not.toBeNull();
+  return [...list![1].matchAll(/\bType\w+\b/g)].map((m) => {
+    const v = consts.get(m[0]);
+    expect(v).toBeTruthy();
+    return v!;
+  });
+}
+
+describe('типы страниц: словарь знает все виды бэка (дефект d7ea8ba0)', () => {
+  it('ключи PAGE_TYPE — ровно WikiFrontmatter.TypeValues; rule/term/state — русские подписи', () => {
+    // сравнение по множеству, не по порядку: словарь читается по ключу, порядок записи
+    // в нём — дело витрины, а порядок TypeValues — дело бэка
+    expect([...Object.keys(PAGE_TYPE)].sort()).toEqual(backendTypeValues().sort());
+    expect(PAGE_TYPE.rule).toBe('Правило');
+    expect(PAGE_TYPE.term).toBe('Термин');
+    expect(PAGE_TYPE.state).toBe('Состояние');
   });
 });

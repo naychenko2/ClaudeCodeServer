@@ -1,5 +1,7 @@
 using System.Reflection;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Tasks.Tests;
@@ -33,6 +35,28 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • B15 (дефект 415c1c80): вернуть штамп голоса к состоянию (run.State) вместо категории —
 //    тесты «голос в очереди» красные; не достраивать старый штамп-состояние через KindByState —
 //    тест «старый штамп» красный.
+//  • FS-V1 (разрез §2.1 П2): взять в CurrentStageOf только первую активную стадию (без Now[0]) —
+//    тест «CurrentStageOf_СтадияИдущейЗадачи…» красный; убрать fallback при пустом Now —
+//    «CurrentStageOf_БезИдущихЗадачей…» красный; вернуть в StaleOf первую активную —
+//    «Note_ШтампПервойАктивной…» красный.
+//  • FS-E4 (ask): убрать строку словаря StopReasonPhrases — рефлексивный тест «КаждыйКод…» красный;
+//    взять для merge attention.Reason («мерж») — тест «Merge…» красный; вернуть null для wait без
+//    текста — тест «WaitБезТекста…» красный; убрать clamp лимита — тест «ЛимитТекста120» красный.
+//  • FS-V2 (eta): поменять в EtaOf приоритет note/history — красные ровно три случая приоритета
+//    («ОценкаОркестратораГлавнее…», «Остановка…ДатаОстаётся…», «ЗначенияРовноВычисленные…» —
+//    history 40 вместо note 90), остальные зелёные.
+//  • FS-T2 (решение Андрея 11.11, карточка 47a8f163): вернуть гашение endsAt при любом
+//    clockStopped (старый код) — красный ровно «Остановка…ДатаОстаётся…» (при stopped дата
+//    оценки остаётся); убрать строку гашения в EtaOf целиком — красный ровно «ЖдётВас…БезДаты»
+//    (случай note: при wait дату держит именно эта строка).
+//  • FS-V2 доработка (ревью f03f4f60): убрать проверку Stale: false в EtaOf — красный ровно
+//    «УстаревшийГолосБерётИсторию…» (note 90 вместо history 40), остальные зелёные (голос их
+//    фикстур свежий); убрать нижний порог < 1 — красный ровно «МеньшеОднойМинуты…» (0 вместо null).
+//  • FS-O2c: убрать ветку возраста из StaleOf — красный ровно «ВозрастГолоса…» (случай 13 ч);
+//    убрать ветку AcceptedVerdictsAfter — красный ровно «ПринятыхВердиктов…» (случай 3);
+//    «> after» → «>= after» — красный ровно «ВердиктРовноВМоментЗаписи…»; убрать фильтр
+//    IsAcceptance — красный ровно «ВозвратИОтзыв…». Голоса существующих фикстур (NOW−2 ч)
+//    ниже обоих порогов — их тесты не затронуты.
 public class FeatureBriefTests
 {
     private static readonly DateTime NOW = new(2026, 10, 25, 12, 0, 0, DateTimeKind.Utc);
@@ -300,6 +324,166 @@ public class FeatureBriefTests
         FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Reason.Should().BeNull();
     }
 
+    // ─── ask (FS-E4): одна фраза «что нужно от тебя» из уже вычисленной тревоги ────────────────
+    // Источник — run.Attention (FeatureProjector.cs:175-216): приоритет stopped → wait → merge решён
+    // там, здесь только отображение единственного элемента — второго расчёта нет.
+
+    // Фикстура тревоги: поля attention (не задачи) — тест доказывает, что ask берётся из Attention.
+    private static FeatureRun RunWithAttention(string kind, string? reason, DateTime? since,
+        string? personaId, string? sessionId) => new()
+    {
+        FeatureId = "ep",
+        State = kind switch
+        {
+            "stopped" => FeatureStates.Stopped,
+            "wait" => FeatureStates.Waiting,
+            "merge" => FeatureStates.MergePending,
+            _ => FeatureStates.Idle,
+        },
+        Attention = new FeatureAttention
+        {
+            Kind = kind, TaskId = "t1", Since = since, Reason = reason,
+            PersonaId = personaId, LinkedSessionId = sessionId,
+        },
+    };
+
+    // c1: тревоги нет — null. В том числе у идущей фичи с записями Now: ask только из Attention
+    // (тот же источник, что now/reason, а не второй расчёт).
+    [Fact]
+    public void Ask_БезТревогиNull_ДажеУИдущейФичеСNow()
+    {
+        FeatureBrief.Build(RunOf(FeatureStates.Idle), null, null, NOW).Ask.Should().BeNull();
+
+        var running = RunOf(FeatureStates.Running);
+        running.Now.Add(new FeatureNow { TaskId = "t1", Stage = "prod", StartedAt = NOW.AddMinutes(-10) });
+        FeatureBrief.Build(running, null, null, NOW).Ask.Should().BeNull("тревоги нет — нет и ask");
+    }
+
+    // c1: wait — text = AwaitingHumanReason (attention.Reason как есть), source = "wait",
+    // since/personaId/sessionId — поля тревоги как есть.
+    [Fact]
+    public void Ask_WaitБерётТекстОжиданияИзТревоги()
+    {
+        var since = NOW.AddMinutes(-30);
+        var ask = FeatureBrief.Build(
+            RunWithAttention("wait", "нужен ответ по макету", since, "sofya", "sess-9"), null, null, NOW).Ask!;
+
+        ask.Text.Should().Be("нужен ответ по макету");
+        ask.Source.Should().Be("wait");
+        ask.Since.Should().Be(since);
+        ask.PersonaId.Should().Be("sofya");
+        ask.SessionId.Should().Be("sess-9");
+    }
+
+    // Реальный wait всегда с текстом (SetAwaitingHuman пишет Since и Reason парой, TaskManager.cs:1611-1626).
+    // Аномальные данные (null/пусто/пробелы) — общая фраза: сигнал «ждёт вас» не должен теряться.
+    // Мутация: вернуть null вместо фразы — тест красный.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Ask_WaitБезТекстаДаётОбщуюФразуОжидания(string? reason) =>
+        FeatureBrief.Build(RunWithAttention("wait", reason, NOW, null, null), null, null, NOW)
+            .Ask!.Text.Should().Be(FeatureBrief.WaitAskFallback);
+
+    // c1: merge — фиксированная фраза, а не attention.Reason («мерж» — техническое слово тревоги,
+    // не «что нужно от человека»). Мутация: взять attention.Reason — тест красный («мерж»).
+    [Fact]
+    public void Ask_MergeФиксированнаяФразаАНеТехническийReasonТревоги()
+    {
+        var since = NOW.AddHours(-2);
+        var ask = FeatureBrief.Build(RunWithAttention("merge", "мерж", since, "mark", "sess-8"), null, null, NOW).Ask!;
+
+        ask.Text.Should().Be(FeatureBrief.MergeAskText).And.NotBe("мерж");
+        ask.Source.Should().Be("merge");
+        ask.Since.Should().Be(since);
+    }
+
+    // c1: stopped — человеческая фраза по коду ExecutorStopReason (словарь StopReasonPhrases).
+    // Золотые фразы кодов словаря; хвосты ревью R-E4 (минор 1): три из них переформулированы под
+    // вопрос «что нужно от тебя» (feature_held, interrupted_by_user, tool_call_leaked) — тексты
+    // согласованы продактом, это осознанная правка словаря.
+    [Theory]
+    [InlineData(ExecutorStopClassifier.AuthFailedReason, "Нужна авторизация — исполнитель не вошёл")]
+    [InlineData(ExecutorStopClassifier.InterruptedByUserReason, "Исполнитель остановлен вами — запустите снова или оставьте")]
+    [InlineData(ExecutorStopClassifier.FeatureHeldReason, "Фича на паузе — снимите паузу, когда будете готовы")]
+    [InlineData(ExecutorStopClassifier.ToolCallLeakedReason, "Исполнитель сбился — перезапустите шаг")]
+    [InlineData(ExecutorStopClassifier.FeatureHeldExpiredReason, "Чат прерванного исполнителя удалён — шаг нужно перезапустить")]
+    public void Ask_StoppedФразаПоКодуИзСловаря(string code, string expected)
+    {
+        var ask = FeatureBrief.Build(RunWithAttention("stopped", code, NOW.AddHours(-1), "denis", null),
+            null, null, NOW).Ask!;
+
+        ask.Text.Should().Be(expected);
+        ask.Source.Should().Be("stopped");
+    }
+
+    // c1: неизвестный код или пометка остановки без кода — общая фраза, не сам код.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("нет_такого_кода")]
+    public void Ask_StoppedНеизвестныйИлиПустойКодДаётОбщуюФразу(string? code) =>
+        FeatureBrief.Build(RunWithAttention("stopped", code, NOW, null, null), null, null, NOW)
+            .Ask!.Text.Should().Be(StopReasonPhrases.Fallback);
+
+    // Инвариант: у каждого кода ExecutorStopClassifier есть своя фраза в словаре. Коды берутся
+    // рефлексией по const string класса — public И internal (хвосты ревью R-E4, минор 3: код,
+    // объявленный internal const, тоже обязан иметь фразу; тот же образец, что таблица
+    // FeatureStates). Новый код без строки словаря или удалённая строка — красный этот тест (c2).
+    // Мутация: добавить в классификатор internal const без фразы — тест красный.
+    [Fact]
+    public void Ask_КаждыйКодОстановкиИмеетСвоюФразу()
+    {
+        var codes = typeof(ExecutorStopClassifier)
+            .GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Where(f => f.IsLiteral && f.FieldType == typeof(string))
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        codes.Should().NotBeEmpty("в классификаторе есть коды-константы");
+        foreach (var code in codes)
+        {
+            var phrase = StopReasonPhrases.PhraseFor(code);
+            phrase.Should().NotBeNullOrEmpty().And.NotBe(StopReasonPhrases.Fallback,
+                $"код «{code}» не имеет своей фразы в StopReasonPhrases");
+            phrase.Length.Should().BeLessThanOrEqualTo(TaskManager.AwaitingAskMaxLength);
+        }
+    }
+
+    // Лимит text ≤ 120 — тот же, что у хранимого текста ожидания (TaskManager.AwaitingAskMaxLength);
+    // здесь — защита от данных, записанных минуя продюсера. Мутация: убрать clamp — тест красный (150).
+    [Fact]
+    public void Ask_ЛимитТекста120()
+    {
+        var text = FeatureBrief.Build(RunWithAttention("wait", new string('р', 150), NOW, null, null),
+            null, null, NOW).Ask!.Text;
+
+        text.Should().HaveLength(TaskManager.AwaitingAskMaxLength);
+    }
+
+    // Хвосты ревью R-E4 (минор 2): обрезка под лимит — по границе text-элемента (StringInfo), а не
+    // по индексу UTF-16: суррогатная пара не рвётся пополам. Фикстура: 119 BMP-символов + эмодзи
+    // (2 единицы UTF-16, позиции 119–120 → в 121-ю единицу не влезает) + хвост: префикс — 119
+    // символов, граница ДО эмодзи; одинокого high surrogate в результате нет.
+    // Мутация: вернуть text[..120] — тест красный (120 единиц, обрезанная пополам пара).
+    [Fact]
+    public void Ask_ЛимитНеРвётСуррогатнуюПару()
+    {
+        var text = FeatureBrief.Build(RunWithAttention("wait", new string('р', 119) + "\U0001F600" + new string('с', 10),
+            NOW, null, null), null, null, NOW).Ask!.Text;
+
+        text.Should().HaveLength(119, "эмодзи занимает 121-ю единицу — граница обрезки до него");
+        text.Should().NotContain("\uD83D", "одинокий high surrogate — разорванная суррогатная пара");
+        text.Should().EndWith(new string('р', 119));
+    }
+
+    // Виды attention — ровно три; иной (аномальные данные) — null: фразы неизвестному смыслу нет
+    // и её не выдумываем.
+    [Fact]
+    public void Ask_НеизвестныйВидТревогиNull() =>
+        FeatureBrief.Build(RunWithAttention("whatever", "текст", NOW, null, null), null, null, NOW)
+            .Ask.Should().BeNull();
+
     // ─── queueWaitMinutes (B8, MAJOR-1 ревью R-F8): время в очереди, не из work-интервалов ──────
 
     // c1/c2: queued — время от момента постановки удержания (FeatureHold.Since), а не из таймлайна.
@@ -517,9 +701,14 @@ public class FeatureBriefTests
 
     // Фикстура: run с активной стадией activeStage и голосом эпика, записанным на stageAtWrite /
     // stateAtWrite (штамп как ставит контроллер B3). bySessionId в хранимом голосе есть — наружу
-    // он не должен выйти ни при каком раскладе.
+    // он не должен выйти ни при каком раскладе. runningStage — идущая задача в этой стадии
+    // (FS-V1: стадия идущей задачи и есть текущая); без него идущих нет — работает вторая
+    // половина правила (первая активная стадия).
+    // FS-O2c: noteAt — момент записи голоса (по умолчанию NOW−2 ч: свежий по возрасту);
+    // reviews — задачи-витки с вердиктами (для счёта принятых после записи).
     private static FeatureRun RunWithVoice(string activeStage, string state, FeatureHold? hold,
-        string stageAtWrite, string stateAtWrite) => new()
+        string stageAtWrite, string stateAtWrite, string? runningStage = null,
+        DateTime? noteAt = null, List<TaskItem>? reviews = null) => new()
     {
         FeatureId = "ep",
         State = state,
@@ -528,10 +717,17 @@ public class FeatureBriefTests
         {
             Id = "ep",
             Role = TaskRoles.Feature,
-            Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true,
+            Note = new FeatureNote("ревью началось", noteAt ?? NOW.AddHours(-2), "sess-1", true,
                 stageAtWrite, stateAtWrite),
         },
         Stages = [Stage(activeStage, "active")],
+        Reviews = reviews ?? [],
+        Now = runningStage is null
+            ? new List<FeatureNow>()
+            : new List<FeatureNow>
+            {
+                new() { TaskId = "r1", Stage = runningStage, PersonaId = "Глеб", StartedAt = NOW.AddHours(-1) },
+            },
     };
 
     // c1: смена активной стадии после записи → stale = true (prod → review, категория та же).
@@ -713,6 +909,138 @@ public class FeatureBriefTests
         kinds.Should().NotBeEmpty();
         FeatureBrief.Kinds.All.Should().BeEquivalentTo(kinds,
             "в наборе категорий — ровно по строке на каждую константу FeatureBrief.Kinds");
+    }
+
+    // ─── FS-V1 (разрез §2.1 П2): одна «текущая стадия» на всех потребителей ───────────────────────
+
+    // Единая функция (FeatureBrief.CurrentStageOf): стадия первой идущей задачи прежде «первой
+    // активной стадии» конвейера. Фикстура — ровно то, что до FS-V1 давало расхождение: stages[]
+    // активна на prod (первая непройденная), а работа идёт на review. Мутация: взять в
+    // CurrentStageOf только FirstActiveStageOf (без Now[0]) — тест красный ("prod" ≠ "review").
+    [Fact]
+    public void CurrentStageOf_СтадияИдущейЗадачиПреждеПервойАктивной()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", runningStage: "review");
+
+        FeatureBrief.CurrentStageOf(run).Should().Be("review",
+            "работа идёт на review — текущая стадия review, а не первая активная prod");
+        FeatureBrief.ActiveStageOf(run).Should().Be("review",
+            "внешний вход штампа голоса (TasksController/TasksToolset) — та же база, своего правила он не держит");
+        FeatureBrief.Build(run, null, null, NOW).Now!.Stage.Should().Be("review", "brief.now.stage");
+    }
+
+    // Идущих задач нет — работает вторая половина правила: первая активная стадия (B14: голос на
+    // паузе/idle/waiting/stopped не устаревший с первой секунды). Мутация: убрать fallback
+    // FirstActiveStageOf (пусто при пустом Now) — тест «ГолосНаСостоянииБезИдущихЗадачей…» красный.
+    [Fact]
+    public void CurrentStageOf_БезИдущихЗадачей_ПерваяАктивнаяСтадия()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running");
+
+        FeatureBrief.CurrentStageOf(run).Should().Be("prod", "идущих нет — база та же, что у B14");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod");
+    }
+
+    // Следствие, принятое разрезом: голос, записанный со штампом «первой активной» стадии (prod),
+    // пока работа шла на review, по новому правилу устаревает. До FS-V1 он был свежим: штамп и
+    // сравнение держались одной «первой активной». Мутация: вернуть в StaleOf первую активную
+    // стадию вместо CurrentStageOf — тест красный (Stale = false).
+    [Fact]
+    public void Note_ШтампПервойАктивнойПриРаботеВДругойСтадииДаётStale()
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", runningStage: "review");
+
+        var note = FeatureBrief.Build(run, null, null, NOW).Note!;
+
+        note.StageAtWrite.Should().Be("prod", "хранимый штамп не переписывается");
+        note.Stale.Should().BeTrue(
+            "текущая стадия — review (стадия идущей задачи), голос написан на prod");
+    }
+
+    // ─── FS-O2c: возраст голоса и принятые вердикты после записи ─────────────────────────────────
+
+    // Задача-виток с вердиктом: Verification.VerifiedAt — время вердикта (его ставит сервер на
+    // живых путях; здесь — подставленное). Вердикт по умолчанию accepted; returned/withdrawn —
+    // для теста «не считаются».
+    private static TaskItem RoundWithVerdict(string id, DateTime at, string verdict = TaskVerdicts.Accepted) => new()
+    {
+        Id = id, Role = TaskRoles.Review, Status = TaskItemStatus.Done, CompletedAt = at,
+        Verification = new TaskVerification { Verdict = verdict, VerifiedAt = at },
+    };
+
+    // c1: возраст голоса. Штамп стадии и категория не менялись — сигнал ровно возраст.
+    // Порог «больше StaleAgeHours»: 11 ч — свежий, ровно 12 ч — граница вне порога (ещё не
+    // устарел), 13 ч — устарел. Мутация: убрать ветку возраста в StaleOf — красный ровно
+    // случай 13 ч (11/12 при этом зелёные).
+    [Theory]
+    [InlineData(11, false)]
+    [InlineData(12, false)]
+    [InlineData(13, true)]
+    public void Note_ВозрастГолосаБольшеПорогаДаётStale(int ageHours, bool expectedStale)
+    {
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running",
+            noteAt: NOW.AddHours(-ageHours));
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().Be(expectedStale,
+            $"{ageHours} ч с записи против порога {FeatureBrief.StaleAgeHours} ч");
+    }
+
+    // c1: принятые вердикты после записи. Голос свежий по возрасту (4 ч) и по штампу — сигнал
+    // ровно счёт: 2 — свежий, 3 (порог) — устарел. Мутация: убрать ветку AcceptedVerdictsAfter
+    // из StaleOf — красный ровно случай 3.
+    [Theory]
+    [InlineData(2, false)]
+    [InlineData(3, true)]
+    public void Note_ПринятыхВердиктовПослеЗаписиНеМеньшеПорогаДаётStale(int count, bool expectedStale)
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = Enumerable.Range(0, count)
+            .Select(i => RoundWithVerdict($"r{i}", at.AddMinutes(i + 1)))
+            .ToList();
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running",
+            noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().Be(expectedStale,
+            $"{count} вердиктов после записи против порога {FeatureBrief.StaleAcceptedSteps}");
+    }
+
+    // «После Note.At» — строго позже: вердикт ровно в момент записи и раньше не считаются.
+    // Фикстура собрана так, что граница решает исход: позже — ровно два (меньше порога), а при
+    // «>=» ровно в момент записи попал бы в счёт и дал три — тест краснеет.
+    [Fact]
+    public void Note_ВердиктРовноВМоментЗаписиИРаньшеНеСчитается()
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = new List<TaskItem>
+        {
+            RoundWithVerdict("r0", at.AddMinutes(-1)),
+            RoundWithVerdict("r1", at),
+            RoundWithVerdict("r2", at.AddMinutes(1)),
+            RoundWithVerdict("r3", at.AddMinutes(2)),
+        };
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeFalse(
+            "после записи — только r2 и r3: два вердикта, меньше порога; r0 (раньше) и r1 (ровно в момент) вне счёта");
+    }
+
+    // Порог считают только вердикты принятия (FeatureProjector.IsAcceptance): возврат и отзыв
+    // после записи — не принятие, их три — голос свежий. Мутация: считать любые вердикты
+    // (без IsAcceptance) — красный этот тест.
+    [Fact]
+    public void Note_ВозвратИОтзывПослеЗаписиНеСчитаютсяПринятыми()
+    {
+        var at = NOW.AddHours(-4);
+        var reviews = new List<TaskItem>
+        {
+            RoundWithVerdict("r1", at.AddMinutes(1), TaskVerdicts.Returned),
+            RoundWithVerdict("r2", at.AddMinutes(2), TaskVerdicts.Withdrawn),
+            RoundWithVerdict("r3", at.AddMinutes(3), TaskVerdicts.Returned),
+        };
+        var run = RunWithVoice("prod", FeatureStates.Running, null, "prod", "running", noteAt: at, reviews: reviews);
+
+        FeatureBrief.Build(run, null, null, NOW).Note!.Stale.Should().BeFalse(
+            "ни одного принятия после записи — счёт 0 против порога 3");
     }
 
     // ─── updatedAt (B6, дефект f2da9354): время последнего записанного события состояния, не момента ответа ─
@@ -991,5 +1319,230 @@ public class FeatureBriefTests
         FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().BeNull();
         run.Epic!.InitialEtaMinutes = 300;
         FeatureBrief.Build(run, null, null, NOW).InitialEtaMinutes.Should().Be(300);
+    }
+
+    // ─── eta (FS-V2): один срок с источником и признаком «часы стоят» ────────────────────────────
+
+    // Фикстура: run с нарезанным планом (историческая оценка), активной стадией «prod» и по желанию —
+    // оценкой оркестратора в голосе эпика (голос на NOW−2ч). Штамп голоса свежий: стадия stageAtWrite
+    // («prod», совпадает с активной) и категория = категории состояния (ExpectedKinds) — тест про eta,
+    // не про stale; stageAtWrite другой («cut») — голос устарел по смене стадии. Голоса нет вовсе
+    // (noVoice) и тревога (вид определяет состояние, как в RunWithAttention).
+    private static FeatureRun RunWithEta(string state, int work, int notCreated, int review,
+        FeatureAttention? attention = null, FeatureEstimate? estimate = null, bool noVoice = false,
+        string stageAtWrite = "prod") => new()
+    {
+        FeatureId = "ep",
+        State = state,
+        Attention = attention,
+        Epic = noVoice
+            ? new TaskItem { Id = "ep", Role = TaskRoles.Feature }
+            : new TaskItem
+            {
+                Id = "ep",
+                Role = TaskRoles.Feature,
+                Note = new FeatureNote("ревью началось", NOW.AddHours(-2), "sess-1", true,
+                    stageAtWrite, ExpectedKinds[state])
+                    with { Estimate = estimate },
+            },
+        Stages = [Stage("prod", "active")],
+        StepProgress = new FeatureStepProgress
+        {
+            PlanState = "cut", Total = work + notCreated + review,
+            Work = work, NotCreated = notCreated, Review = review,
+        },
+    };
+
+    private static FeatureAttention AttentionOf(string kind) => new()
+    {
+        Kind = kind, TaskId = "t1", Since = NOW.AddHours(-1), Reason = "причина", PersonaId = "denis",
+    };
+
+    // Случай 1 (c1): «note есть» — оценка оркестратора главнее истории: минуты и дата из
+    // note.estimate (то же вычисленное подполе), признака стоящих часов нет.
+    [Fact]
+    public void Eta_ОценкаОркестратораГлавнееИстории_МинутыИДатаИзNote()
+    {
+        var run = RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90));
+        var at = run.Epic!.Note!.At;
+
+        var eta = FeatureBrief.Build(run, null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("note");
+        eta.Minutes.Should().Be(90, "у истории тоже есть число (40) — приоритет у оценки оркестратора");
+        eta.EndsAt.Should().Be(at.AddMinutes(90), "дата — от момента записи голоса, та же база, что у note.estimate");
+        eta.ClockStopped.Should().BeNull("тревоги нет — часы идут");
+    }
+
+    // Случай 2 (c1): «note скрыт + история есть» — число истории, даты нет никогда.
+    // «Скрыт» в обеих формах: голос есть, оценки в нём нет; и голоса нет вовсе.
+    [Fact]
+    public void Eta_БезОценкиВГолосеБерётИсторию_ДатыНикогдаНет()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var hidden = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, typical, NOW).Eta!;
+        hidden.Source.Should().Be("history");
+        hidden.Minutes.Should().Be(40, "10 × 1 + 30 — число истории");
+        hidden.EndsAt.Should().BeNull("у истории даты нет: «осталось», а не «к чему»");
+        hidden.ClockStopped.Should().BeNull();
+
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, noVoice: true), null, typical, NOW)
+            .Eta!.Source.Should().Be("history");
+    }
+
+    // Случай 3 (c1): «ничего → null» — ни одной оценки ни из одного источника.
+    [Fact]
+    public void Eta_НиОднойОценкиNull()
+    {
+        // Голос без оценки + нет выборки (истории не из чего строить).
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, null, NOW).Eta.Should().BeNull();
+        // Ни голоса, ни плана (обычная тестовая фикстура RunOf) — то же.
+        FeatureBrief.Build(RunOf(FeatureStates.Running), null, null, NOW).Eta.Should().BeNull();
+    }
+
+    // Случай 4 (c1): «wait» — clockStopped=wait и endsAt=null; число оставшей работы при этом
+    // сохраняется (часы стоят — работа до конца всё ещё есть).
+    [Fact]
+    public void Eta_ЖдётВасЧасыСтоятПризнакWaitИБезДаты()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Waiting, 0, 1, 1, attention: AttentionOf("wait")),
+            null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("history");
+        eta.Minutes.Should().Be(45, "10 × (0 + 1 + 0.5) + 30");
+        eta.ClockStopped.Should().Be("wait");
+        eta.EndsAt.Should().BeNull();
+
+        // FS-T2: дата гасится при wait и у оценки note. Фикстура — running, не waiting: при
+        // WaitingYou дату гасит EstimateOfNote (FeatureBrief.cs:580), и строка гашения EtaOf
+        // здесь не проверялась бы. Мутация «убрать строку гашения в EtaOf» — красный ровно
+        // этот случай (дата note.estimate осталась бы).
+        var fromNote = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, attention: AttentionOf("wait"), estimate: Est(eta: 90)),
+            null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+        fromNote.Source.Should().Be("note");
+        fromNote.Minutes.Should().Be(90);
+        fromNote.ClockStopped.Should().Be("wait");
+        fromNote.EndsAt.Should().BeNull("при wait дата гасится: часы стоят из-за ожидания человека");
+    }
+
+    // Случай 5 (c1): «stopped» — clockStopped=stopped, дата ОСТАЁТСЯ (FS-T2, решение Андрея 11.11
+    // по карточке 47a8f163): оценка при остановке — оценка «до остановки», её дата прежняя;
+    // подпись на фронте — отдельная карточка, макет не меняется. Раньше дата гасилась при любом
+    // непустом clockStopped, хотя EstimateOfNote её не гасил.
+    // Мутация «обнулять при любом clockStopped» (старый код строки гашения) — красный ровно этот тест.
+    [Fact]
+    public void Eta_ОстановкаЧасыСтоятПризнакStoppedИДатаОстаётся()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var run = RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped"), estimate: Est(eta: 90));
+        var at = run.Epic!.Note!.At;
+        var fromNote = FeatureBrief.Build(run, null, typical, NOW).Eta!;
+        fromNote.Source.Should().Be("note");
+        fromNote.Minutes.Should().Be(90);
+        fromNote.ClockStopped.Should().Be("stopped");
+        fromNote.EndsAt.Should().Be(at.AddMinutes(90), "FS-T2: при stopped дата оценки остаётся");
+
+        // Та же оценка без тревоги — дата остаётся (здесь ничего не изменилось).
+        var running = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW).Eta!;
+        running.EndsAt.Should().NotBeNull();
+
+        // У истории даты нет никогда — при stopped тоже null: не потому что гасится признаком,
+        // а потому что даты нет ни у одной оценки из истории.
+        var fromHistory = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Stopped, 1, 0, 0, attention: AttentionOf("stopped")), null, typical, NOW).Eta!;
+        fromHistory.Source.Should().Be("history");
+        fromHistory.Minutes.Should().Be(40);
+        fromHistory.ClockStopped.Should().Be("stopped");
+        fromHistory.EndsAt.Should().BeNull();
+    }
+
+    // Край: оценка без срока — не срок (её «что дальше» и why остаются в note.estimate), срок
+    // берётся из истории: иначе карточка получила бы пустый срок там, где число есть.
+    [Fact]
+    public void Eta_ОценкаБезСрокаНеСрокБерётИсторию()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: null)), null, TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+
+        eta.Source.Should().Be("history");
+        eta.Minutes.Should().Be(40);
+        eta.EndsAt.Should().BeNull();
+    }
+
+    // «Мерж» — не «часы стоят» (план FS-V2): фича дошла до решения по мержу сама, работа
+    // не встала. (Дата здесь гасится EstimateOfNote по kind=waiting_you — та же база, что у
+    // note.estimate, к признаку отношения не имеет.)
+    [Fact]
+    public void Eta_МержНеЧасыСтоят()
+    {
+        var eta = FeatureBrief.Build(
+            RunWithEta(FeatureStates.MergePending, 1, 0, 0, attention: AttentionOf("merge"), estimate: Est(eta: 90)),
+            null, null, NOW).Eta!;
+
+        eta.Source.Should().Be("note");
+        eta.Minutes.Should().Be(90);
+        eta.ClockStopped.Should().BeNull("merge — не причина стоящих часов");
+    }
+
+    // Инвариант: значения eta — ровно вычисленные подполя brief (note.estimate / estimate),
+    // «второго расчёта» нет: расхождение основного срока карточки с её зеркалом — дефект.
+    [Fact]
+    public void Eta_ЗначенияРовноВычисленныеПодполяBrief_БезВторогоРасчёта()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var withNote = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW);
+        withNote.Eta!.Minutes.Should().Be(withNote.Note!.Estimate!.EtaMinutes!.Value);
+        withNote.Eta.EndsAt.Should().Be(withNote.Note.Estimate.EtaEndsAt);
+        withNote.Eta.Source.Should().Be("note");
+
+        var noNote = FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0, noVoice: true), null, typical, NOW);
+        noNote.Eta!.Minutes.Should().Be(noNote.Estimate!.RemainingMinutes);
+        noNote.Eta.Source.Should().Be("history");
+    }
+
+    // FS-V2 доработка (ревью f03f4f60): устаревшая оценка — не срок: пока голос устарел, число из
+    // него не берётся, источник — история (то же правило, что у фронта, estimateView). Причина
+    // устаревания — смена стадии: голос записан на «cut», фича идёт на «prod». Симметрично: свежий
+    // голос даёт note — инвариант eta.source == "note" ⇒ note.stale == false.
+    // Мутация: убрать проверку Stale: false в EtaOf — красный ровно этот тест (note 90 вместо history 40).
+    [Fact]
+    public void Eta_УстаревшийГолосБерётИсторию_СвежийДаётNote()
+    {
+        var typical = TypicalOf(10, 8, 12, 30, 20, 40, 5);
+
+        var stale = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90), stageAtWrite: "cut"),
+            null, typical, NOW);
+        stale.Note!.Stale.Should().BeTrue("голос записан на старте, стадия сменилась (cut → prod)");
+        stale.Eta!.Source.Should().Be("history", "устаревшая оценка — не срок");
+        stale.Eta.Minutes.Should().Be(40, "число истории, не голоса (90)");
+        stale.Eta.EndsAt.Should().BeNull("у истории даты нет никогда");
+        stale.Eta.ClockStopped.Should().BeNull("тревоги нет");
+
+        var fresh = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 90)), null, typical, NOW);
+        fresh.Note!.Stale.Should().BeFalse("стадия и категория не менялись");
+        fresh.Eta!.Source.Should().Be("note");
+        fresh.Eta.Minutes.Should().Be(90);
+    }
+
+    // Нижний порог: меньше минуты — не срок: ни история «0 минут», ни нулевая оценка свежего голоса
+    // (фронт отбрасывает remainingMinutes < 1, FeatureBriefModel.ts:589).
+    // Мутация: убрать нижний порог в EtaOf — красный ровно этот тест (0 вместо null).
+    [Fact]
+    public void Eta_МеньшеОднойМинутыНеОтдаётся()
+    {
+        FeatureBrief.Build(RunWithEta(FeatureStates.Running, 1, 0, 0), null, TypicalOf(0, 0, 0, 0, 0, 0, 5), NOW)
+            .Eta.Should().BeNull("история с нулевым числом — не срок");
+
+        var zeroEstimate = FeatureBrief.Build(
+            RunWithEta(FeatureStates.Running, 1, 0, 0, estimate: Est(eta: 0)), null, typical: TypicalOf(10, 8, 12, 30, 20, 40, 5), NOW).Eta!;
+        zeroEstimate.Source.Should().Be("history", "нулевая оценка — не срок, срок — истории");
+        zeroEstimate.Minutes.Should().Be(40);
     }
 }

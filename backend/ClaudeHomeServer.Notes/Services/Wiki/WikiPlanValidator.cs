@@ -4,11 +4,13 @@ using System.Text;
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
 // Проверки плана модели до применения и до сборки пакета (ADR-035, §12б этапы 6–8,
-// §12г меры 1–3). Чистая функция без модели и без диска: на вход — утверждения прохода A,
-// операции плана прохода B, источник (origin + карточка + текст выдержки), раздел
-// назначения, цепочка вверх и снимок страниц этих разделов; на выход — операции, принятые
+// §12г меры 1–3; ADR-039, решение 1: синтез одним вызовом — отдельной разметки нет).
+// Чистая функция без модели и без диска: на вход — операции синтеза (утверждение claim
+// с цитатами), источник (origin + карточка + текст выдержки), раздел назначения,
+// цепочка вверх и снимок страниц этих разделов; на выход — операции, принятые
 // в пакет (с классом и решением политики — ставит код, не модель), операции «ждущие»
-// сверх лимита, отклонённые с причиной и общие нарушения состояния.
+// сверх лимита, отклонённые с причиной и общие нарушения состояния. Старая форма
+// (Validate: утверждения + план по индексу) судится тем же конвейером.
 //
 // Порядок: форма цепочки вверх → форма операции → разрешение страницы → подтверждение
 // цитаты (QuoteMatcher, мера 1) → анти-петля → повтор утверждения (дедуп меры 2) → цель
@@ -33,13 +35,16 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // операция применения (§12б), не намерение модели.
 public static class WikiPlanValidator
 {
-    /// <summary>Утверждение прохода A: текст + дословная цитата (ответ модели).</summary>
+    /// <summary>Утверждение старой формы плана (его читает Validate): текст + дословная
+    /// цитата (ответ модели).</summary>
     public sealed record Claim(string? Text, string? Quote);
 
-    /// <summary>Операция плана прохода B: page — заголовок или путь страницы, claim — индекс
-    /// утверждения, target — цель (замещаемое/оспариваемое утверждение или имя другой
-    /// страницы). Всё — недоверенный ввод.</summary>
-    public sealed record PlanOp(string? Op, string? Page, int? Claim, string? Target);
+    /// <summary>Операция старой формы плана (её читает Validate): page — заголовок или путь
+    /// страницы, claimIndex — индекс утверждения, target — цель (замещаемое/оспариваемое
+    /// утверждение или имя другой страницы). Всё — недоверенный ввод. Имя поля —
+    /// ClaimIndex, не Claim: рядом тип Claim этого класса и текст утверждения
+    /// Operation.Claim.</summary>
+    public sealed record PlanOp(string? Op, string? Page, int? ClaimIndex, string? Target);
 
     public sealed record Plan(IReadOnlyList<PlanOp>? Operations);
 
@@ -63,9 +68,85 @@ public static class WikiPlanValidator
         /// страницах состояние раздела — их видит вызывающий, план от них не зависит.</summary>
         IReadOnlyList<string> Violations);
 
+    /// <summary>Операция синтеза (ADR-039, решения 2–3): утверждение своими словами (Claim)
+    /// отдельно от цитат (Quotes, 1–3). Kind — вид создаваемой страницы, уходит в поле шапки
+    /// `type`; AsOf — «на когда» для state; значение кодовое (дата источника), не ввод модели.</summary>
+    public sealed record SynthOp(
+        string? Op, string? Kind, string? Page, string? Claim, IReadOnlyList<string>? Quotes, string? Target, string? AsOf);
+
+    public sealed record SynthPlan(IReadOnlyList<SynthOp>? Operations);
+
+    // Единая внутренняя форма операции: старый план (утверждение по индексу) и план синтеза
+    // сводятся к ней, дальше идёт один конвейер. ClaimError — отказ старой формы, который
+    // проверяется на своём месте порядка (после разрешения страницы).
+    private sealed record Unit(
+        string? Op, string? Page, string? Target, string? ClaimError, string? Claim,
+        IReadOnlyList<string>? Quotes, string? Kind, string? AsOf);
+
     public static Result Validate(
         Plan? plan,
         IReadOnlyList<Claim>? claims,
+        Source? source,
+        string? sectionKey,
+        IReadOnlyList<string>? upChain,
+        IReadOnlyList<WikiGate.Draft>? sectionPages,
+        WikiApplyPolicy.ApplyContext context)
+    {
+        if (plan is null || plan.Operations is null)
+            return Run(null, false, source, sectionKey, upChain, sectionPages, context);
+        var units = new List<Unit?>(plan.Operations.Count);
+        foreach (var op in plan.Operations)
+        {
+            if (op is null)
+            {
+                units.Add(null);
+                continue;
+            }
+            var claim = op.ClaimIndex is { } ci && claims is not null && ci >= 0 && ci < claims.Count
+                ? claims[ci]
+                : null;
+            string? error = null;
+            if (claim is null)
+                error = "операция без утверждения: индекс claim вне списка утверждений или утверждений нет";
+            else if (string.IsNullOrWhiteSpace(claim.Text) || string.IsNullOrWhiteSpace(claim.Quote))
+                error = "утверждение без текста или без цитаты";
+            units.Add(new Unit(op.Op, op.Page, op.Target, error, claim?.Text,
+                claim?.Quote is { } q ? [q] : null, null, null));
+        }
+        return Run(units, false, source, sectionKey, upChain, sectionPages, context);
+    }
+
+    /// <summary>Тот же конвейер для операции синтеза: утверждение + цитаты (ADR-039).
+    /// Форма результата — как у Validate; принятая операция несёт Text = Claim (утверждение
+    /// сложено в одну строку на входе), Claim, Quotes, Kind (у create) и AsOf (только у state).</summary>
+    public static Result ValidateSynth(
+        SynthPlan? plan,
+        Source? source,
+        string? sectionKey,
+        IReadOnlyList<string>? upChain,
+        IReadOnlyList<WikiGate.Draft>? sectionPages,
+        WikiApplyPolicy.ApplyContext context)
+    {
+        if (plan is null || plan.Operations is null)
+            return Run(null, true, source, sectionKey, upChain, sectionPages, context);
+        // Утверждение складывается в одну строку на входе, а не в RenderApply: Text = Claim,
+        // строка «Сводки», проверка чисел и дедуп должны видеть одну и ту же строку. Иначе
+        // меры (мера 2, числа) сверяются с многострочным, а на странице стоит разорванная
+        // строка: её верхняя половина — без сноски, и гейт отвергает весь пакет (дефект
+        // финала Б1, хвост 1a6a5cda). Формат страницы строчный — тот же помощник, что у
+        // хроники и цитат (WikiPage.OneLine). Дословность — отдельная мера и только по цитатам
+        // (QuoteMatcher.ContainsVerbatim по исходному тексту источника): утверждение своими
+        // словами её не касается.
+        var units = plan.Operations
+            .Select(o => o is null ? null : new Unit(o.Op, o.Page, o.Target, null,
+                o.Claim is null ? null : WikiPage.OneLine(o.Claim), o.Quotes, o.Kind, o.AsOf))
+            .ToList();
+        return Run(units, true, source, sectionKey, upChain, sectionPages, context);
+    }
+
+    private static Result Run(
+        IReadOnlyList<Unit?>? units,
+        bool synth,
         Source? source,
         string? sectionKey,
         IReadOnlyList<string>? upChain,
@@ -78,16 +159,16 @@ public static class WikiPlanValidator
         var ctx = context ?? new();
 
         // ── 1. Fail-closed входа: ни null, ни кривой вход не становится исключением. ──
-        if (plan is null || plan.Operations is null)
+        if (units is null)
             return new([], [], rejected, [.. violations, "план null или операции плана null — проверять нечего"]);
         if (source is null || source.Origin is not { } origin || !WikiGate.AiOriginValues.Contains(origin))
-            return new([], [], IndexAll(plan, "источник не определён: origin вне закрытого перечня или источник null"),
+            return new([], [], IndexAll(units.Count, "источник не определён: origin вне закрытого перечня или источник null"),
                 [.. violations, "план без подтверждённого источника не применяется"]);
         if (string.IsNullOrEmpty(source.Text))
-            return new([], [], IndexAll(plan, "текста источника нет — цитату не подтвердить"),
+            return new([], [], IndexAll(units.Count, "текста источника нет — цитату не подтвердить"),
                 [.. violations, "план без текста источника не применяется"]);
         if (string.IsNullOrEmpty(sectionKey) || !WikiSections.IsWritable(sectionKey).Writable)
-            return new([], [], IndexAll(plan, $"раздел «{sectionKey ?? "—"}» не задан или не является записываемым"),
+            return new([], [], IndexAll(units.Count, $"раздел «{sectionKey ?? "—"}» не задан или не является записываемым"),
                 [.. violations, "пустой или неразобранный раздел — плана нет"]);
 
         // Цепочку «вверх» даёт вызывающий (WikiSections.UpChain от раздела назначения).
@@ -99,7 +180,7 @@ public static class WikiPlanValidator
         var chain = upChain ?? [];
         var chainError = ChainError(chain, sectionKey);
         if (chainError is not null)
-            return new([], [], IndexAll(plan, chainError), [.. violations, "цепочка вверх не валидна — план не применяется"]);
+            return new([], [], IndexAll(units.Count, chainError), [.. violations, "цепочка вверх не валидна — план не применяется"]);
 
         var allowed = new HashSet<string>(StringComparer.Ordinal) { sectionKey };
         allowed.UnionWith(chain);
@@ -122,18 +203,21 @@ public static class WikiPlanValidator
         // по цепочке — сноска не резолвится: каждая опирающаяся на неё операция отклоняется.
         var card = FindByTitle(pages, source.Card);
         if (card is null)
-            return new([], [], IndexAll(plan, $"карточка источника «{source.Card}» не найдена в разделе и вверх по цепочке"),
+            return new([], [], IndexAll(units.Count, $"карточка источника «{source.Card}» не найдена в разделе и вверх по цепочке"),
                 [.. violations, "план без карточки источника не применяется"]);
 
         // ── 3. Разбор операций плана. Счётчики включают ТЕКУЩИЙ элемент (хвост S4d, в). ──
         var newPages = ctx.Counters.NewKnowledgePagesInSection;
         var statements = ctx.Counters.StatementsInPackage;
-        var candidates = new List<(int Index, WikiPackage.Operation Op, string Quote, bool Rendered)>();
+        var candidates = new List<(int Index, WikiPackage.Operation Op, IReadOnlyList<string> Quotes, bool Rendered)>();
+        // «Одна цитата — одна страница» внутри самого плана: снимок страниц чужую операцию этого
+        // же плана не видит (QuoteOwner смотрит только записанное).
+        var planQuoteOwner = new Dictionary<string, string>(StringComparer.Ordinal);
         var rejectedAt = new HashSet<int>();
 
-        for (var i = 0; i < plan.Operations.Count; i++)
+        for (var i = 0; i < units.Count; i++)
         {
-            var op = plan.Operations[i];
+            var op = units[i];
             if (op is null)
             {
                 rejected.Add(new(i, "null в списке операций плана"));
@@ -151,6 +235,18 @@ public static class WikiPlanValidator
                 rejected.Add(new(i, $"«{op.Page}»: в '_*' (\"_schema\", \"_index\", \"_log\", \"_health\") пишет код, план туда не пишет"));
                 rejectedAt.Add(i);
                 continue;
+            }
+
+            // Форма операции синтеза (ADR-039, решения 2–3): первой, до любых обращений к страницам.
+            if (synth)
+            {
+                var formError = SynthFormError(op);
+                if (formError is not null)
+                {
+                    rejected.Add(new(i, formError));
+                    rejectedAt.Add(i);
+                    continue;
+                }
             }
 
             var isCreate = op.Op == WikiPackage.OpCreate;
@@ -177,38 +273,44 @@ public static class WikiPlanValidator
             }
             var title = isCreate ? page.Path.Split('/')[^1][..^3] : page.Model!.Title;
 
-            // Утверждение: индекс в списке прохода A, текст и цитата — непустые.
-            var claim = op.Claim is { } ci && claims is not null && ci >= 0 && ci < claims.Count
-                ? claims[ci]
-                : null;
-            if (claim is null)
+            // Утверждение и цитаты. Старая форма: отказ по индексу claim уже посчитан при сборке
+            // Unit, здесь только отдаётся на своём месте порядка.
+            if (op.ClaimError is not null)
             {
-                rejected.Add(new(i, "операция без утверждения: индекс claim вне списка утверждений или утверждений нет"));
+                rejected.Add(new(i, op.ClaimError));
                 rejectedAt.Add(i);
                 continue;
             }
-            if (string.IsNullOrWhiteSpace(claim.Text) || string.IsNullOrWhiteSpace(claim.Quote))
+            var claimText = op.Claim!;
+            var quotes = op.Quotes!;
+
+            // Мера 1: каждая цитата дословно в тексте источника. Нет — анти-петля (c3): цитата
+            // дословна на странице вики, а не в источнике — модель пересказала вики.
+            var quoteError = QuoteError(quotes, source.Text, page, synth);
+            if (quoteError is not null)
             {
-                rejected.Add(new(i, "утверждение без текста или без цитаты"));
+                rejected.Add(new(i, quoteError));
                 rejectedAt.Add(i);
                 continue;
             }
 
-            // Мера 1: цитата дословно в тексте источника. Нет — анти-петля (c3): цитата
-            // дословна на странице вики, а не в источнике — модель пересказала вики.
-            if (!QuoteMatcher.ContainsVerbatim(source.Text, claim.Quote))
+            // «Одна цитата — одна страница» (ADR-039, решение 2): занята другой страницей раздела —
+            // отказ. Сначала записанное (снимок), затем принятые ранее операции этого плана.
+            if (synth)
             {
-                rejected.Add(new(i,
-                    page.Model is not null && QuoteMatcher.ContainsVerbatim(page.Content, claim.Quote)
-                        ? $"anti_loop: цитата дословна на странице «{page.Path}», а не в источнике — пересказ вики не добавляется"
-                        : "цитата отсутствует в тексте источника дословно"));
-                rejectedAt.Add(i);
-                continue;
+                var ownerError = QuoteOwnerError(quotes, card.Model!.Title, page.Path, targetPages, planQuoteOwner);
+                if (ownerError is not null)
+                {
+                    rejected.Add(new(i, ownerError));
+                    rejectedAt.Add(i);
+                    continue;
+                }
             }
 
             // Мера 2: та же нормализованная цитата или тот же текст уже на странице —
             // повтор отбрасывается молча, без «Входящих» и без пакета.
-            if (page.Model is not null && WikiDedup.IsDuplicateStatement(page.Model, card.Model!.Title, claim.Text, claim.Quote))
+            if (page.Model is not null
+                && quotes.Any(q => WikiDedup.IsDuplicateStatement(page.Model, card.Model!.Title, claimText, q)))
             {
                 rejected.Add(new(i, $"повтор: утверждение уже на странице «{page.Path}»"));
                 rejectedAt.Add(i);
@@ -299,7 +401,7 @@ public static class WikiPlanValidator
                     Op = op.Op,
                     Page = page.Path,
                     Target = op.Target,
-                    Text = claim.Text,
+                    Text = claimText,
                     Class = opClass,
                     Decision = WikiPackage.DecisionAuto, // placeholder: Decide его не читает
                 },
@@ -316,19 +418,47 @@ public static class WikiPlanValidator
                         && page.Model is { } model && model.Sections.All(s => s.Name != "История"),
                 });
 
+            // Числа утверждения (ADR-039, решение 2): не подтверждённое цитатой число — не отказ,
+            // а «Входящие» с причиной: решает человек.
+            var decision = verdict.Decision;
+            var decisionReason = verdict.Reason;
+            if (synth && WikiClaimNumbers.Unconfirmed(claimText, quotes) is { Count: > 0 } unconfirmed)
+            {
+                decision = WikiPackage.DecisionInbox;
+                // Причина политики дописывается перед причиной чисел только при вердикте
+                // политики «inbox»: человек во «Входящих» видит и риск политики, и причину
+                // чисел (ревью S2-6, M5). При вердикте «auto» автопричина снимается:
+                // «применяется само (§12г)» противоречит тому, что операция ушла во
+                // «Входящие» (ревью aaf6dacf, находка 2). Если причины политики нет —
+                // только числа.
+                var numbers = $"число не подтверждено цитатой: {string.Join(", ", unconfirmed)}";
+                decisionReason = verdict.Decision == WikiPackage.DecisionInbox && !string.IsNullOrWhiteSpace(decisionReason)
+                    ? decisionReason + "; " + numbers
+                    : numbers;
+            }
+            if (synth)
+                foreach (var q in quotes)
+                    planQuoteOwner.TryAdd(QuoteMatcher.NormalizeQuote(q), page.Path);
+
+            // Вид — только у create и только из перечня; as_of — только у state (у прочих обнуляется).
+            var isState = isCreate && op.Kind == WikiFrontmatter.TypeState;
             candidates.Add((i, new()
             {
                 Op = op.Op,
                 Page = page.Path,
                 Target = op.Target,
-                Text = claim.Text,
+                Text = claimText,
+                Claim = synth ? claimText : null,
+                Quotes = synth ? quotes : null,
+                Kind = synth && isCreate ? op.Kind : null,
+                AsOf = synth && isState ? op.AsOf : null,
                 Class = opClass,
-                Decision = verdict.Decision,
-                Reason = verdict.Reason,
+                Decision = decision,
+                Reason = decisionReason,
                 BaseHashes = isCreate
                     ? new Dictionary<string, string>()
                     : new Dictionary<string, string> { [page.Path] = Sha256Hex(page.Content) },
-            }, claim.Quote, duplicate is null));
+            }, quotes, duplicate is null));
         }
 
         // ── 4. Черновой рендер, итоговое состояние и весь WikiGate. ──
@@ -337,7 +467,7 @@ public static class WikiPlanValidator
         // уже лежащие на страницах, нарушением ai-плана не считаются.
         var baseState = state.ToArray();
         var touched = new Dictionary<string, List<int>>(StringComparer.Ordinal);
-        foreach (var (index, op, quote, rendered) in candidates)
+        foreach (var (index, op, quotes, rendered) in candidates)
         {
             if (!rendered)
                 continue;
@@ -347,7 +477,7 @@ public static class WikiPlanValidator
             WikiGate.Draft? draftOrNull;
             try
             {
-                draftOrNull = RenderApply(state, op, quote, card.Model!.Title);
+                draftOrNull = RenderApply(state, op, quotes, card.Model!.Title);
             }
             catch (Exception)
             {
@@ -399,6 +529,96 @@ public static class WikiPlanValidator
             waiting,
             rejected,
             violations);
+    }
+
+    // Форма операции синтеза (ADR-039, решения 2–3). null — форма верна.
+    private static string? SynthFormError(Unit op)
+    {
+        if (op.Op is not (WikiPackage.OpCreate or WikiPackage.OpAppend or WikiPackage.OpConflict or WikiPackage.OpLink))
+            return $"операция «{op.Op}» не входит в синтез (create/append/conflict/link)";
+        if (op.Op == WikiPackage.OpCreate)
+        {
+            if (op.Kind is null || !WikiFrontmatter.CreatableTypeValues.Contains(op.Kind)
+                || op.Kind is WikiFrontmatter.TypeSource or WikiFrontmatter.TypeChronicle)
+                return $"вид «{op.Kind ?? "—"}» создаваемой страницы вне перечня (decision/rule/term/state)";
+            if (op.Kind == WikiFrontmatter.TypeState && string.IsNullOrWhiteSpace(op.AsOf))
+                return "у страницы вида state не задан as_of: у источника нет даты записи";
+        }
+        if (string.IsNullOrWhiteSpace(op.Claim))
+            return "утверждение без текста";
+        if (op.Quotes is null || op.Quotes.Count == 0)
+            return "утверждение без цитат";
+        // Границы цитат — та же мера, что у формы пакета (WikiPackage.cs:355-370) и гейта:
+        // 1–3 цитаты, длина каждой — QuoteMatcher.MeasureQuoteLength в контракте
+        // WikiPage.MinQuoteLength..MaxQuoteLength. Здесь нарушение отклоняет ОДНУ операцию
+        // с причиной, а не роняет форму всего пакета: лишняя цитата не касается принятых
+        // операций (ревью S2-6, M5).
+        if (op.Quotes.Count > 3)
+            return $"цитат: {op.Quotes.Count}, допустимо 1–3";
+        for (var n = 0; n < op.Quotes.Count; n++)
+        {
+            if (op.Quotes[n] is null)
+                return $"цитата {n + 1}: null в списке";
+            var (raw, norm, outOfContract) = QuoteMatcher.MeasureQuoteLength(op.Quotes[n]);
+            if (outOfContract)
+                return $"цитата {n + 1}: {raw} символов ({norm} после нормализации), допустимо {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}";
+        }
+        return null;
+    }
+
+    // Мера 1 для каждой цитаты. Номер — с единицы. В старой форме (одна цитата) текст прежний.
+    private static string? QuoteError(IReadOnlyList<string> quotes, string sourceText, Snap page, bool synth)
+    {
+        for (var n = 0; n < quotes.Count; n++)
+        {
+            var q = quotes[n];
+            if (!string.IsNullOrWhiteSpace(q) && QuoteMatcher.ContainsVerbatim(sourceText, q))
+            {
+                // Цитата из строки-маркера пониженной реплики процесса (хвост 78cfb639, минор 1
+                // R-S2-5): маркер буквально стоит в тексте окна (DemoteProcess), поэтому его текст
+                // — целый или часть — проходит меру 1 как дословный. Такая цитата — заполнитель,
+                // а не позиция участника: отклоняется, дальше операция не идёт.
+                if (IsProcessMarkerQuote(q))
+                    return "цитата из служебной реплики";
+                continue;
+            }
+            var antiLoop = !string.IsNullOrWhiteSpace(q) && page.Model is not null
+                && QuoteMatcher.ContainsVerbatim(page.Content, q);
+            if (antiLoop)
+                return $"anti_loop: цитата {(synth ? $"{n + 1} " : "")}дословна на странице «{page.Path}», а не в источнике — пересказ вики не добавляется";
+            return synth
+                ? $"цитата {n + 1} отсутствует в источнике дословно"
+                : "цитата отсутствует в тексте источника дословно";
+        }
+        return null;
+    }
+
+    // Цитата, составленная из текста маркера: равна ему, содержит его или является его частью.
+    // Сверка по нормализованным строкам (та же нормализация, что у меры 1): схлопывание
+    // пробелов и сворачивание кавычек не должны делать маркер «невидимым». Текст маркера —
+    // одна константа WikiChatSlicer.ProcessMarker, не дублируемый литерал.
+    private static bool IsProcessMarkerQuote(string quote)
+    {
+        var q = QuoteMatcher.NormalizeQuote(quote);
+        if (q.Length == 0) return false;
+        var marker = QuoteMatcher.NormalizeQuote(WikiChatSlicer.ProcessMarker);
+        return q.Contains(marker, StringComparison.Ordinal) || marker.Contains(q, StringComparison.Ordinal);
+    }
+
+    private static string? QuoteOwnerError(
+        IReadOnlyList<string> quotes, string cardTitle, string pagePath, List<Snap> targetPages,
+        Dictionary<string, string> planQuoteOwner)
+    {
+        var drafts = targetPages.Select(p => new WikiGate.Draft(p.Path, p.Content)).ToList();
+        foreach (var q in quotes)
+        {
+            var owner = WikiDedup.QuoteOwner(drafts, cardTitle, q, pagePath);
+            if (owner is null && planQuoteOwner.TryGetValue(QuoteMatcher.NormalizeQuote(q), out var inPlan) && inPlan != pagePath)
+                owner = inPlan;
+            if (owner is not null)
+                return $"цитата уже на странице «{owner}»: одна цитата — одна страница";
+        }
+        return null;
     }
 
     // ─── Разбор страницы плана ─────────────────────────────────────────────────
@@ -608,7 +828,12 @@ public static class WikiPlanValidator
     /// этом состоянии страницы (её уже заместила предыдущая принятая операция): операции
     /// нечего замещать, вызывающий отклоняет её с причиной. internal (S4b-1): тот же рендер
     /// зовёт проверка применения — второй копии рендера в проекте нет; поведение не менялось.</summary>
-    internal static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle)
+    internal static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, string quote, string cardTitle) =>
+        RenderApply(state, op, [quote], cardTitle);
+
+    /// <summary>Рендер с несколькими цитатами (ADR-039): строка `{Text} [^sN][^sN+1]…` — по
+    /// сноске на цитату, по порядку. У create в шапку идут `type = Kind` и `as_of = AsOf`.</summary>
+    internal static WikiGate.Draft? RenderApply(List<WikiGate.Draft> state, WikiPackage.Operation op, IReadOnlyList<string> quotes, string cardTitle)
     {
         // Черновой рендер: страница уже в состоянии или её нет (create) — для create
         // страница строится заново; неразобранная существующая сюда не доходит, она
@@ -620,7 +845,7 @@ public static class WikiPlanValidator
             page = new WikiPage
             {
                 Title = op.Page.Split('/')[^1][..^3],
-                Frontmatter = new WikiFrontmatter { Type = WikiFrontmatter.TypeTopic },
+                Frontmatter = new WikiFrontmatter { Type = op.Kind ?? WikiFrontmatter.TypeTopic, AsOf = op.AsOf },
                 Sections = WikiPage.SectionNames
                     .Select(n => new WikiPage.Section { Name = n, Lines = new List<string>() })
                     .ToList(),
@@ -645,7 +870,8 @@ public static class WikiPlanValidator
         var targetIdx = sections.FindIndex(s => s.Name == sectionName);
 
         var link = op.Op == WikiPackage.OpLink ? $" [[{op.Target}]]" : "";
-        var line = $"{op.Text}{link} [^s{page.Footnotes.Count + 1}]";
+        var refs = string.Concat(quotes.Select((_, k) => $"[^s{page.Footnotes.Count + 1 + k}]"));
+        var line = $"{op.Text}{link} {refs}";
         if (op.Op == WikiPackage.OpSupersede)
         {
             var old = sections[targetIdx].Lines[hit.Line];
@@ -660,8 +886,13 @@ public static class WikiPlanValidator
         else
             sections[targetIdx].Lines.Add(line);
 
+        // Цитата в сноску складывается в одну строку (тот же помощник, что у хроники):
+        // определение сноски — одна строка, многострочное FootnoteDefRx не читает и гейт
+        // отвергает весь пакет (дефект 3b6cef0e). Дословность это не трогает: она проверена
+        // вызывающим по исходному тексту пакета, а сверка гейта нормализует whitespace
+        // с обеих сторон (QuoteMatcher.ContainsVerbatim).
         var footnotes = page.Footnotes
-            .Append(new WikiPage.WikiFootnote(new WikiPage.Target(true, cardTitle), quote))
+            .Concat(quotes.Select(q => new WikiPage.WikiFootnote(new WikiPage.Target(true, cardTitle), WikiPage.OneLine(q))))
             .ToList();
 
         return new WikiGate.Draft(op.Page, new WikiPage
@@ -676,6 +907,6 @@ public static class WikiPlanValidator
     private static string Sha256Hex(string content) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 
-    private static List<Issue> IndexAll(Plan plan, string reason) =>
-        Enumerable.Range(0, plan.Operations?.Count ?? 0).Select(i => new Issue(i, reason)).ToList();
+    private static List<Issue> IndexAll(int count, string reason) =>
+        Enumerable.Range(0, count).Select(i => new Issue(i, reason)).ToList();
 }

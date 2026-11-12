@@ -772,12 +772,11 @@ public class NotesToolsetWikiTests : IDisposable
         public bool SectionEnabled(string? ownerId, Persona? persona, string key) => true;
     }
 
-    /// <summary>Модель разбора подменена: проход A даёт утверждение с дословной цитатой,
-    /// проход B — штатное «нечего добавить». Проверяется путь заявки до модели и обратно,
+    /// <summary>Модель разбора подменена: синтез отвечает штатным «нечего добавить».
+    /// Проверяется путь заявки до модели и обратно,
     /// а не качество разбора (это — территория WikiIngestTests).</summary>
     private sealed class NothingLlm : ICheapTextRunner
     {
-        private static readonly string Claims = """{"claims":[{"text":"пересказ","quote":"Решили: нарезку делает код"}]}""";
         private static readonly string Nothing = $$"""{"outcome":"{{WikiKeeperPrompts.NothingToAdd}}","reason":"нет ничего нового"}""";
 
         public bool UsesLocal(string actionKey) => false;
@@ -798,9 +797,7 @@ public class NotesToolsetWikiTests : IDisposable
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult(new OneShotResult(Answer(prompt), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
 
-        // Проход определяется по директиве своего промпта (WikiKeeperPrompts), как в
-        // WikiIngestTests: порядок вызовов угадывать нельзя.
-        private static string Answer(string prompt) =>
-            prompt.Contains("extract durable", StringComparison.Ordinal) ? Claims : Nothing;
+        // Разбор — один вызов синтеза: на любой промпт ответ один.
+        private static string Answer(string prompt) => Nothing;
     }
 }

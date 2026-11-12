@@ -5,7 +5,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  agoText, briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefDoneText, briefElapsedFact, briefEstimateText, briefNextText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
+  agoText, briefActiveTagLabel, briefActiveView, briefWaitTagLabel, briefDoneText, briefElapsedFact, briefEstimateText, briefNowText, briefReadinessText, briefSubText, briefUpdatedText, genitiveName, dativeName,
   voiceRoleText, voiceSignature, leadNoNoteText, voiceStaleLabel, voiceWhenText,
 } from './FeatureBriefModel';
 import type { FeatureBrief, FeatureBriefActive, FeatureBriefKind } from '../../lib/featurePage';
@@ -251,78 +251,10 @@ describe('Сделано', () => {
   });
 });
 
-// ── 2. «Дальше» из next[] ───────────────────────────────────────────────────────────
-
-describe('Дальше: строка из next', () => {
-  it('running — «После ревью — проверка (Вера), затем финальное ревью и мерж» (макет run)', () => {
-    const b = brief({
-      kind: 'running',
-      now: { stage: 'review', taskId: 't-rev', personaId: 'p-gleb', stepRef: '3', lane: 'back', since: at(25, 14, 5) },
-      next: [{ stage: 'qa', personaId: 'p-vera' }, { stage: 'final', personaId: null }, { stage: 'merge', personaId: null }],
-    });
-    expect(briefNextText(b, nameOf)).toBe('После ревью — проверка (Вера), затем финальное ревью и мерж');
-  });
-
-  it('waiting_you с мержем — «После вашего «да» — мерж в master» (макет wait)', () => {
-    const b = brief({ kind: 'waiting_you', reason: 'мерж', next: [{ stage: 'merge', personaId: null }] });
-    expect(briefNextText(b, nameOf)).toBe('После вашего «да» — мерж в master');
-  });
-
-  it('paused — «После снятия паузы — производство (Кира)»', () => {
-    const b = brief({ kind: 'paused', reason: 'manual', next: [{ stage: 'prod', personaId: 'p-kira' }] });
-    expect(briefNextText(b, nameOf)).toBe('После снятия паузы — производство (Кира)');
-  });
-
-  it('closed — «Ничего — фича закрыта» (макет closed)', () => {
-    expect(briefNextText(brief({ kind: 'closed' }), nameOf)).toBe('Ничего — фича закрыта');
-  });
-
-  it('next пуст — строки нет', () => {
-    expect(briefNextText(brief({ kind: 'running', next: [] }), nameOf)).toBeNull();
-  });
-
-  it('waiting_you с причиной не «мерж» и пустым next — строки нет, мерж не выдумывается (R-F2)', () => {
-    const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету', next: [] });
-    expect(briefNextText(b, nameOf)).toBeNull();
-  });
-
-  it('waiting_you с причиной не «мерж» и следующим шагом — общий префикс без слова «мерж»', () => {
-    const b = brief({ kind: 'waiting_you', reason: 'нужен твой ответ по макету', next: [{ stage: 'design', personaId: null }] });
-    expect(briefNextText(b, nameOf)).toBe('После вашего «да» — дизайн');
-  });
-
-  // Дефект 16080f64: стадия в префиксе «После …» стояла в именительном («После производство
-  // — ревью»). Каждая именная стадия (ключи = StageKey) обязана дать родительный падеж.
-  it('defect 16080f64: префикс склоняет активную стадию — каждая именная стадия', () => {
-    const cases: Array<[string, string]> = [
-      ['cut', 'После разреза — мерж'],
-      ['design', 'После дизайна — мерж'],
-      ['plan', 'После плана — мерж'],
-      ['prod', 'После производства — мерж'],
-      ['review', 'После ревью — мерж'], // «ревью» — средний род, не склоняется
-      ['qa', 'После проверки — мерж'],
-      ['final', 'После финального ревью — мерж'],
-      ['merge', 'После мержа — мерж'],
-    ];
-    for (const [stage, expected] of cases) {
-      const b = brief({
-        kind: 'running',
-        now: { stage, taskId: 't-x', personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) },
-        next: [{ stage: 'merge', personaId: null }],
-      });
-      expect(briefNextText(b, nameOf), stage).toBe(expected);
-    }
-  });
-
-  it('defect 16080f64: неизвестный ключ стадии не склоняется — ключ как есть (форму не выдумываем)', () => {
-    const b = brief({
-      kind: 'running',
-      now: { stage: 'staging', taskId: 't-x', personaId: null, stepRef: null, lane: null, since: at(25, 14, 5) },
-      next: [{ stage: 'merge', personaId: null }],
-    });
-    expect(briefNextText(b, nameOf)).toBe('После staging — мерж');
-  });
-});
+// «Дальше» (briefNextText) удалена из модели (FS-AC3b, доработка 1): секции «Дальше»
+// в карточке нет (f4107e4ad), функция никем не вызывалась. Её единственная нужная
+// на экране строка — подсказка merged — перенесена в FeatureClosedSummary и
+// сторожится там (FeatureClosedSummary.test.ts: есть у merged, нет у closed).
 
 // ── 3. «Срок» (правило двух оценок, макет feature-summary-2) ──────────────────────────
 
@@ -579,6 +511,14 @@ describe('Готовность', () => {
   it('знаменателя нет — 0 %', () => {
     const empty = briefReadinessText(brief({ done: { stepsAccepted: 0, stepsTotal: 0, loops: 0, planState: 'pending' } }), { nameOf });
     expect(empty.percent).toBe(0);
+  });
+
+  it('подпись склоняется по знаменателю: 1 из 1 → «шага», 2 из 3 → «шагов»', () => {
+    // «N из M» — родительный после «из M»: «из одного шага», «из трёх шагов» (не «1 из 1 шагов»).
+    const one = briefReadinessText(brief({ done: { stepsAccepted: 1, stepsTotal: 1, loops: 0, planState: 'done' } }), { nameOf });
+    expect(text(one.caption)).toBe('1 из 1 шага · 100 %');
+    const few = briefReadinessText(brief({ done: { stepsAccepted: 2, stepsTotal: 3, loops: 0, planState: 'cut' } }), { nameOf });
+    expect(text(few.caption)).toBe('2 из 3 шагов · 67 %');
   });
 });
 

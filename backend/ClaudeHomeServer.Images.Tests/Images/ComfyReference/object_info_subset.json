@@ -116,7 +116,8 @@
       "minimax_music3_dav.safetensors",
       "qwen_image_2.1_vae_bf16.safetensors",
       "qwen_image_vae.safetensors",
-      "pixel_space"
+      "pixel_space",
+      "minimax_h3_image_vae_fp16.safetensors"
      ]
     ]
    }
@@ -926,7 +927,8 @@
       "qwen_image_2.1_bf16.safetensors",
       "qwen_image_2.1_int8_convrot.safetensors",
       "qwen_image_2.1_turbo_int8_convrot.safetensors",
-      "qwen_image_fp8_e4m3fn.safetensors"
+      "qwen_image_fp8_e4m3fn.safetensors",
+      "minimax_h3_image_pruned_int8_convrot.safetensors"
      ]
     ],
     "weight_dtype": [
@@ -5730,5 +5732,200 @@
   "output_name": [
    "IMAGE"
   ]
+ },
+ "MiniMaxH3ImageConditioning": {
+  "input": {
+   "required": {
+    "clip": [
+     "CLIP",
+     {}
+    ],
+    "prompt": [
+     "STRING",
+     {
+      "multiline": true,
+      "dynamicPrompts": true
+     }
+    ],
+    "width": [
+     "INT",
+     {
+      "tooltip": "0 uses the width of image_1 after its reference scaling, or 2048 without images. The model is tuned for 2048x2048 pixels of area",
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 32
+     }
+    ],
+    "height": [
+     "INT",
+     {
+      "tooltip": "0 uses the height of image_1 after its reference scaling, or 2048 without images.",
+      "default": 0,
+      "min": 0,
+      "max": 16384,
+      "step": 32
+     }
+    ]
+   },
+   "optional": {
+    "vae": [
+     "VAE",
+     {
+      "tooltip": "The MiniMax-H3-Image VAE. With it the pictures are also anchored as reference latents, without it they only condition the text encoder."
+     }
+    ],
+    "images": [
+     "COMFY_AUTOGROW_V3",
+     {
+      "template": {
+       "input": {
+        "required": {
+         "image": [
+          "IMAGE",
+          {
+           "tooltip": "Reference picture, <Picture n> in the prompt; image_1 is the picture to edit."
+          }
+         ]
+        }
+       },
+       "prefix": "image_",
+       "min": 0,
+       "max": 100
+      }
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "clip",
+    "prompt",
+    "width",
+    "height"
+   ],
+   "optional": [
+    "vae",
+    "images"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "CONDITIONING",
+   "LATENT"
+  ],
+  "output_is_list": [
+   false,
+   false
+  ],
+  "output_name": [
+   "positive",
+   "LATENT"
+  ],
+  "output_tooltips": [
+   null,
+   null
+  ],
+  "output_matchtypes": null,
+  "name": "MiniMaxH3ImageConditioning",
+  "display_name": "MiniMax H3 Image Conditioning",
+  "description": "Text-to-image, or with images an edit guided by them. The prompt refers to them as <Picture 1>, <Picture 2>, ...",
+  "python_module": "comfy_extras.nodes_minimax_h3",
+  "category": "model/conditioning/minimax",
+  "output_node": false,
+  "deprecated": false,
+  "experimental": false,
+  "dev_only": false,
+  "api_node": false,
+  "price_badge": null,
+  "search_aliases": null,
+  "essentials_category": null,
+  "has_intermediate_output": false
+ },
+ "RepeatLatentBatch": {
+  "input": {
+   "required": {
+    "samples": [
+     "LATENT"
+    ],
+    "amount": [
+     "INT",
+     {
+      "default": 1,
+      "min": 1,
+      "max": 64
+     }
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "samples",
+    "amount"
+   ]
+  },
+  "is_input_list": false,
+  "output": [
+   "LATENT"
+  ],
+  "output_is_list": [
+   false
+  ],
+  "output_name": [
+   "LATENT"
+  ],
+  "name": "RepeatLatentBatch",
+  "display_name": "Repeat Latent Batch",
+  "description": "",
+  "python_module": "nodes",
+  "category": "model/latent/batch",
+  "output_node": false,
+  "has_intermediate_output": false,
+  "search_aliases": [
+   "duplicate latent",
+   "clone latent"
+  ]
+ },
+ "CcsFaceSimilarity": {
+  "input": {
+   "required": {
+    "image": [
+     "IMAGE"
+    ],
+    "references": [
+     "STRING",
+     {
+      "default": "",
+      "multiline": true
+     }
+    ]
+   },
+   "optional": {
+    "mask": [
+     "MASK"
+    ]
+   }
+  },
+  "input_order": {
+   "required": [
+    "image",
+    "references"
+   ],
+   "optional": [
+    "mask"
+   ]
+  },
+  "is_input_list": false,
+  "output": [],
+  "output_is_list": [],
+  "output_name": [],
+  "name": "CcsFaceSimilarity",
+  "display_name": "CCS Face Similarity (buffalo_l)",
+  "description": "",
+  "python_module": "custom_nodes.ccs_face_similarity",
+  "category": "image/ccs",
+  "output_node": true,
+  "has_intermediate_output": false,
+  "search_aliases": []
  }
 }

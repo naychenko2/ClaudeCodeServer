@@ -11,12 +11,12 @@
 
 import type { FeatureQueue, FeatureRun, FeatureState } from './featureRun';
 import type { FeatureStats } from './featureStats';
-import type { FeaturePlan, FeatureMockup } from './featurePlans';
+import type { FeaturePlan, FeatureMockup, FeatureMaterial } from './featurePlans';
 import type { PlanState } from '../lib/featureProgress';
 // Чат фичи (GET features/{id}, chats[]) — из featureChats; алиас, чтобы не путать с
 // FeatureChatLink этого файла (запись индекса «чат × фича», бэк: FeatureIndexChatEntry).
 import type { FeatureChatLink as FeaturePageChatLink } from './featureChats';
-import type { FeatureBrief } from '../lib/featurePage';
+import type { FeatureAsk, FeatureBrief, FeatureEta } from '../lib/featurePage';
 // Категория состояния для оси featureKinds (Ф-1.2/Ф-1.3): тот же алиас FeatureKind
 // (FeatureBrief['kind']) — второго union нет (разрез п. 7).
 import type { FeatureKind } from '../lib/chatFilters';
@@ -153,6 +153,12 @@ export interface FeatureIndexFeature {
   queue?: FeatureQueue | null;
   // Сверка трекера (TR): число расхождений трекера с работой; нет/0 — всё сходится.
   trackerIssues?: number;
+  // «Нужно от тебя» и «Срок» (FS-V4): те же величины, что brief.ask/brief.eta — тип один,
+  // из featurePage.ts (инвариант разреза §3: «ask строки индекса = brief.ask» — карточка
+  // фичи в шапке чата читает row.ask, отдельного типа для карточки нет). Аддитивные:
+  // старые ответы их не несут — UI обязан пережить отсутствие.
+  ask?: FeatureAsk | null;
+  eta?: FeatureEta | null;
 }
 
 // Роль чата в фиче (контракт: «Роль чата принята и дополнена»). Сила связи:
@@ -232,6 +238,8 @@ export interface FeaturePage {
   plans?: FeaturePlan[];
   // Макеты; null — нет.
   mockups?: FeatureMockup[];
+  // Материалы задач фичи (FS-B3a); null — нет.
+  materials?: FeatureMaterial[];
   // 'device' — макеты недоступны (нет устройства); null — доступны.
   mockupsUnavailable?: 'device';
   // Сводка состояния фичи (волна 6, разрез п. 6). Аддитивное: старые ответы его

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -92,10 +93,30 @@ public class FalPersistLockDedupTests : IDisposable
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var spend = new SpendStore(Path.Combine(_dir, "spend"), detailDays: 30);
 
-        _sessions = new SessionManager(_projectManager, _history, config, adapters, falCost, usage,
-            appSettings, _userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            _broadcaster, spend: spend, glif: glif);
+        _sessions = SessionCoreTestHost.Build(_dir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(_projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(_history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(_userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Spend.ISpendCollector>(spend);
+            s.AddSingleton<global::ClaudeHomeServer.Services.GlifAccountService>(glif);
+        }).Manager;
     }
 
     public void Dispose()
@@ -198,7 +219,7 @@ public class FalPersistLockDedupTests : IDisposable
     // идти через дисковую ветку — ту, что защищена нашим _falPersistLock.
     private void ClearAccumulator(string sessionId)
     {
-        var entriesField = typeof(SessionManager).GetField("_sessions",
+        var entriesField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         var entries = (System.Collections.IDictionary)entriesField!.GetValue(_sessions)!;
         var entry = entries[sessionId]!;

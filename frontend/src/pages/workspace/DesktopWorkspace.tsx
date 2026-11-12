@@ -86,6 +86,10 @@ interface Props {
   onOpenFileFromChat: (path: string, sessionId?: string) => void;
   // Чат, из ленты которого открыт файл: FileViewer читает его из дерева задачи этого чата
   openFileSessionId?: string;
+  openFileTaskId?: string;
+  // ветка материала задачи; вьюер покажет её в FS-F1g
+  openFileBranch?: string;
+  onOpenFileFromFeature: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   onCloseFile: () => void;
   // Ридер ссылок — открывается по кнопке-компаньону у внешней ссылки в чате, живёт
   // в центре как просмотр файла: split с чатом либо на всю контентную зону
@@ -139,6 +143,10 @@ interface Props {
   // Панели проекта: готовый контент панелек. Контент общий для обеих зон — панель
   // рисует та зона, в которой она лежит.
   panels: Partial<Record<PanelKey, ReactNode>>;
+  // Набор ключей, разрешённых рельсе (S2b-2c): объявляет страница — с панелями
+  // выключенных подсистем из него убрано (workspaceKeysFor в panelCatalog); зона
+  // этого сама не решает и без пропа остаётся на общем WORKSPACE_KEYS.
+  allowedKeys?: readonly PanelKey[];
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
   // Кружки-индикаторы на кнопках проекта в рельсе (changes/tasks/terminal/preview):
@@ -514,6 +522,7 @@ export function DesktopWorkspace(p: Props) {
         // (≥1000px) стек встаёт inline, как у правой зоны (строка 459).
         compact={p.isTablet}
         panels={zonePanels}
+        allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}
@@ -538,7 +547,7 @@ export function DesktopWorkspace(p: Props) {
           (свой макет или любой другой), а открытие страницы (вкл. смена фичи) возвращает её
           поверх ранее открытого файла. Страница остаётся смонтированной (display:none):
           закрыл файл — вернулась с прежним состоянием; файл при закрытии страницы не сбрасывается. */}
-      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} projectOwnerId={p.project.ownerId ?? null} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromTree} yielded={yielded}>
+      <FeatureCenter open={!!p.openFeatureId} featureId={p.openFeatureId} projectId={p.project.id} projectOwnerId={p.project.ownerId ?? null} isMobile={false} onBack={p.onFeatureBack} onOpenFile={p.onOpenFileFromFeature} yielded={yielded}>
       {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
@@ -651,7 +660,7 @@ export function DesktopWorkspace(p: Props) {
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             {contextTabs}
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} taskId={p.openFileTaskId} branch={p.openFileBranch} />
             </div>
           </Island>
         </div>
@@ -660,7 +669,7 @@ export function DesktopWorkspace(p: Props) {
       {!fileSplit && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете и на узком центре сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet || !p.fileFullscreen ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} sessionId={p.openFileSessionId} taskId={p.openFileTaskId} branch={p.openFileBranch} />
         </div>
       )}
       </div>
@@ -700,6 +709,7 @@ export function DesktopWorkspace(p: Props) {
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
+        allowedKeys={p.allowedKeys}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         onUserClose={p.onPanelUserClose}

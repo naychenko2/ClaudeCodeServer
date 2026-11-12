@@ -22,10 +22,10 @@ import {
   acceptAllWikiPackage, decideWikiPackage, useWikiTree, WikiError,
   type WikiApplyOutcomeDto, type WikiDecisionDto,
   type WikiPackageDto, type WikiPackageOperationDto,
+  TextArea,
 } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
-import { TextArea } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { DiffView } from '../../../components/DiffView';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
@@ -33,7 +33,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 // модуля, — к тому времени оба уже вычислены
 import { pendingContested, pkgErrorText } from './WikiInbox';
 import { sectionPrefix } from './WikiTab';
-import { ORIGIN_META } from './wikiLabels';
+import { ORIGIN_META, PAGE_TYPE } from './wikiLabels';
 
 // op — пять, удаления нет (WikiPackage.OpValues)
 const OP_META: Record<string, { text: string; tone: BadgeTone }> = {
@@ -129,6 +129,9 @@ function OperationCard({
       ? <Badge tone="danger" size="xs">отклонена</Badge>
       : null;
   const diff = intentLines(op);
+  // kind приходит из поля модели в любом регистре: подпись PAGE_TYPE ищется по
+  // нижнему регистру, и признак «state» меряется по приведённому значению
+  const kindKey = (op.kind ?? '').toLowerCase();
   return (
     <div
       data-testid="wiki-op-row"
@@ -159,13 +162,43 @@ function OperationCard({
           <span><b style={{ color: C.textHeading, fontWeight: 600 }}>Почему здесь:</b> {op.reason}</span>
         </div>
       )}
+      {(op.claim || (op.quotes && op.quotes.length > 0) || op.kind) && (
+        <div data-testid="wiki-op-evidence" style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'anywhere' }}>
+          {op.kind && (
+            <div data-testid="wiki-op-kind" style={{ fontSize: FS.xs, color: C.textMuted }}>
+              {PAGE_TYPE[kindKey] ?? op.kind}{kindKey === 'state' && op.asOf ? ` · на ${op.asOf}` : ''}
+            </div>
+          )}
+          {op.claim && (
+            <div data-testid="wiki-op-claim">
+              <b style={{ color: C.textHeading, fontWeight: 600 }}>Утверждение:</b> {op.claim}
+            </div>
+          )}
+          {op.quotes && op.quotes.length > 0 && (
+            <div style={{ marginTop: SP.xs }}>
+              <b style={{ color: C.textHeading, fontWeight: 600 }}>Цитаты:</b>
+              {op.quotes.map((q, i) => (
+                <blockquote
+                  key={i}
+                  data-testid="wiki-op-quote"
+                  style={{ margin: `${SP.xs}px 0 0`, padding: `${SP.xs}px ${SP.sm}px`, borderLeft: `3px solid ${C.accent}`, background: C.bgInset, borderRadius: `0 ${R.md}px ${R.md}px 0`, whiteSpace: 'pre-wrap' }}
+                >
+                  {q}
+                </blockquote>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
       {op.target && (op.op === 'supersede' || op.op === 'conflict' || op.op === 'link') && (
         <div style={{ marginTop: SP.xs, fontSize: FS.sm, color: C.textSecondary }}>
           {op.op === 'link' ? 'Связь с: ' : op.op === 'conflict' ? 'Оспаривает: ' : 'Замещает: '}
           <span style={{ color: C.textPrimary }}>{op.target}</span>
         </div>
       )}
-      {op.text && (
+      {/* Для синтезированных операций Text === Claim: утверждение уже показано выше,
+          печатать op.text второй раз — показывать одно и то же дважды */}
+      {op.text && op.text !== op.claim && (
         <div style={{ marginTop: SP.xs, fontSize: FS.base, color: C.textHeading }}>{op.text}</div>
       )}
       {diff && (

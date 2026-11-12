@@ -186,6 +186,10 @@ export interface FeatureSpend {
     // Метод расчёта: journal — по журналу; approx — приближённо.
     method: 'journal' | 'approx';
   } | null;
+  // Доля прочитанного кэша во всём входном контексте записей фичи (FS-M56, величина 6,
+  // бэк: `FeatureSpend.CacheShare`, FeatureTimeline.cs:165): 0…1; null — входных токенов
+  // нет (знаменатель 0). Аддитивное: старые ответы поля не несут.
+  cacheShare?: number | null;
 }
 
 // Квантили одной метрики: медиана и p25–p75 (линейная интерполяция, тип 7).
@@ -219,6 +223,25 @@ export interface TypicalFeatureStats {
   tailMinutes: TypicalPercentiles | null;
 }
 
+// Отклонение оценок фичи (FS-M478, величины 4, 7, 8; бэк: `FeatureEstimateDrift`,
+// Projector/FeatureEstimateDrift.cs:18): сдвиг срока с начала, смены знаменателя, точность
+// срока закрытой и смерженной. Строки estimate_set пишет бэк; фронт ничего не считает.
+export interface FeatureEstimateDrift {
+  // Базовая оценка срока эпика (фиксируется один раз); null — не зафиксирована.
+  initialEtaMinutes: number | null;
+  // etaMinutes первой строки estimate_set с оценкой; null — таких строк нет.
+  firstEtaMinutes: number | null;
+  // etaMinutes последней строки estimate_set с оценкой; null — таких строк нет.
+  currentEtaMinutes: number | null;
+  // current − first; null — строк с оценкой меньше двух.
+  shiftMinutes: number | null;
+  // Число смен total между соседними строками estimate_set с total (0 — не менялся).
+  denominatorChanges: number;
+  // Точность срока закрытой или смерженной фичи (FeatureEstimateDrift.cs:14-17): факт / базовая
+  // оценка; null — пока фича идёт (ни мержа, ни закрытия) или базовой оценки нет.
+  accuracy: number | null;
+}
+
 // Статистика фичи (только в GET features/{id}).
 export interface FeatureStats {
   // Источник чисел: approx — приближённо; journal — по журналу ходов.
@@ -236,4 +259,11 @@ export interface FeatureStats {
   // «Типичная фича проекта»; null — смерженных меньше трёх. Опциональна: старые ответы
   // поля не несут.
   typical?: TypicalFeatureStats | null;
+  // Медиана шага ЭТОЙ фичи (FS-M56, величина 5, бэк: `FeatureStats.StepMedianMinutes`,
+  // FeatureTimeline.cs:111): медиана длительностей цепочек этой фичи в корзине «принят»;
+  // null — принятых цепочек нет. Аддитивное: старые ответы поля не несут.
+  stepMedianMinutes?: number | null;
+  // Отклонение оценок (FS-M478, величины 4, 7, 8, бэк: `FeatureStats.EstimateDrift`,
+  // FeatureTimeline.cs:115). Аддитивное: старые ответы поля не несут.
+  estimateDrift?: FeatureEstimateDrift | null;
 }

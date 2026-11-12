@@ -36,6 +36,16 @@ export interface FeatureMockupFile {
   path: string;
   // true — файл существует в дереве проекта.
   exists: boolean;
+  // Ветка, в которой лежит файл (FS-B3b); нет — main.
+  branch?: string;
+}
+
+// Материал фичи (FS-B3a): файл, созданный задачей фичи.
+export interface FeatureMaterial {
+  path: string;
+  taskId: string;
+  // Момент появления (ISO-строка).
+  at: string;
 }
 
 // Макет фичи: путь, название, статус, файлы, источник и автор.
@@ -48,6 +58,8 @@ export interface FeatureMockup {
   status: FeatureMockupStatus | null;
   // Файлы макета.
   files: FeatureMockupFile[];
+  // Автор-задача макета (FS-B3b): из её дерева читается файл; нет — читается main.
+  ownerTaskId?: string;
   // Источник: header — из шапки; linkedFiles — из linkedFiles задачи.
   source: 'header' | 'linkedFiles';
   // Id задачи, к которой относится макет; null — не привязан.

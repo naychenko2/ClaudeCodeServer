@@ -3,7 +3,7 @@ import { History } from 'lucide-react';
 import type { Project, Session } from '../../types';
 import { C, FONT, R, TB } from '../../lib/design';
 import { updateChatFields } from '../../lib/chatUpdate';
-import { chatFieldsErrorText } from '../../lib/api';
+import { chatFieldsErrorText } from '../../features/chat/api';
 import { ownerSettingsDeniedReason } from '../../features/projects/members/participantGate';
 import { showToast } from '../../lib/toast';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';

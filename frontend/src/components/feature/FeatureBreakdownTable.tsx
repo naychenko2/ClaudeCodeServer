@@ -11,6 +11,10 @@
 // (FeatureBreakdownChats, ST-F10) — одна строка за раз, блок под таблицей, как в макете.
 // hiddenKeys — строки, которые вид решил не показывать (роль key='feature' не решена,
 // поэтому здесь только проп).
+// Режим «Разбора» (FS-FR4): hideTokens — колонки токенов нет (на 360); readOnlyMeasure —
+// заголовки мер простым текстом (без кнопок и смены сортировки, сортировка по пропу
+// measure) и одна группа рисуется таблицей: в read-only нет оболочки и сравнения,
+// поэтому fewData здесь не применяется.
 
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { C, FS, SP, R, FONT } from '../../lib/design';
@@ -57,6 +61,12 @@ export interface FeatureBreakdownTableProps {
   isMobile?: boolean;
   // Контекст возврата для переходов в чаты раскрытой группы.
   nav?: FeatureNavCtx;
+  // «Разбор» (FS-FR4): колонка токенов не рисуется (на 360 она не умещается).
+  hideTokens?: boolean;
+  // «Разбор» (FS-FR4): заголовки мер — простой текст без кнопок; сортировка по пропу
+  // measure и не переключается. В этом режиме нет оболочки со «пустым состоянием»,
+  // поэтому таблица рисуется и с одной группой (одна строка — полный ответ «кто работал»).
+  readOnlyMeasure?: boolean;
 }
 
 // Шапка: FS.xxs UPPERCASE textMuted (макет .c-tab th). Кнопка внутри th — с явным сбросом
@@ -120,6 +130,7 @@ function measureCell(
 
 export function FeatureBreakdownTable({
   groups, axis, run, labelOf, personaLabelOf: personaLabelOfProp, colorOf, hiddenKeys, measure: measureProp, onMeasureChange, isMobile = false, nav, costPartial = false,
+  hideTokens = false, readOnlyMeasure = false,
 }: FeatureBreakdownTableProps) {
   const personaLabelOf = personaLabelOfProp ?? labelOf;
   // Хуки выше раннего return: мера сортировки (если оболочка её не ведёт) и раскрытая строка.
@@ -134,7 +145,13 @@ export function FeatureBreakdownTable({
   const visible = groups.filter(g => !hidden.has(g.key));
 
   // Меньше двух групп — сравнивать нечего; пустое состояние рисует оболочка (ST-F13).
-  if (fewData(visible)) return null;
+  // В read-only (FS-FR4, «Разбор») оболочки и сравнения нет: одна строка — полный ответ
+  // «кто работал», поэтому таблица остаётся и с одной группой; не рисуется только пустой набор.
+  if (visible.length === 0) return null;
+  if (fewData(visible) && !readOnlyMeasure) return null;
+
+  // Колонки мер, которые реально рисуются: hideTokens снимает токены (мобильный «Разбор»).
+  const shownMeasures = hideTokens ? MEASURES.filter(m => m !== 'tokens') : MEASURES;
 
   const sorted = sortGroups(visible, measure);
   const maxOf = (m: Measure) => measureMax(visible, m);
@@ -156,21 +173,33 @@ export function FeatureBreakdownTable({
           <tr>
             <th style={TH}>{axisWord}</th>
             <th style={TH}>{axis === 'personas' ? 'Модели и роли' : 'Кто'}</th>
-            {MEASURES.map(m => (
-              <th key={m} aria-sort={measure === m ? 'descending' : undefined} style={TH}>
-                <button
-                  type="button"
-                  className={BREAKDOWN_FOCUS_CLASS}
-                  data-testid={`breakdown-sort-${m}`}
-                  aria-label={`Сортировать по: ${MEASURE_WORD[m]}`}
-                  style={measure === m ? { ...TH_BTN, color: C.textHeading } : TH_BTN}
-                  onClick={() => setMeasure(m)}
-                >
-                  {MEASURE_WORD[m]}
-                  {measure === m ? <span aria-hidden style={{ color: C.accent }}> ↓</span> : null}
-                </button>
-              </th>
-            ))}
+            {shownMeasures.map(m => {
+              const active = measure === m;
+              return (
+                <th key={m} aria-sort={active ? 'descending' : undefined} style={TH}>
+                  {readOnlyMeasure ? (
+                    // Read-only заголовок (FS-FR4): простой текст без кнопки — сортировка
+                    // по пропу measure и не переключается; активная колонка помечена как сейчас.
+                    <span style={active ? { color: C.textHeading } : undefined}>
+                      {MEASURE_WORD[m]}
+                      {active ? <span aria-hidden style={{ color: C.accent }}> ↓</span> : null}
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className={BREAKDOWN_FOCUS_CLASS}
+                      data-testid={`breakdown-sort-${m}`}
+                      aria-label={`Сортировать по: ${MEASURE_WORD[m]}`}
+                      style={active ? { ...TH_BTN, color: C.textHeading } : TH_BTN}
+                      onClick={() => setMeasure(m)}
+                    >
+                      {MEASURE_WORD[m]}
+                      {active ? <span aria-hidden style={{ color: C.accent }}> ↓</span> : null}
+                    </button>
+                  )}
+                </th>
+              );
+            })}
             <th style={TH}>чаты</th>
           </tr>
         </thead>
@@ -219,7 +248,7 @@ export function FeatureBreakdownTable({
                     ))}
                   </div>
                 </td>
-                {MEASURES.map(m => (
+                {shownMeasures.map(m => (
                   <td key={m} style={TD}>{measureCell(g, m, maxOf(m), color, totalOf(m))}</td>
                 ))}
                 <td style={{ ...TD, textAlign: 'right' }}>
@@ -242,20 +271,22 @@ export function FeatureBreakdownTable({
           <tr data-testid="breakdown-total">
             <td style={TD_TOTAL}>Всего</td>
             <td style={TD_TOTAL} />
-            <td style={TD_TOTAL}><span style={VAL}>{formatDuration(totalOf('time'))}</span></td>
-            <td style={TD_TOTAL}>
-              <span style={VAL}>{hasOf('tokens') ? formatTokens(totalOf('tokens')) : '—'}</span>
-            </td>
-            <td style={TD_TOTAL}>
-              <span style={VAL}>
-                {!hasOf('cost') ? '—' : totalCost.text}
-                {hasOf('cost') && totalCost.partial ? (
-                  <small data-testid="breakdown-total-partial" style={{ display: 'block', color: C.textMuted, fontWeight: 400 }}>
-                    не по всем
-                  </small>
-                ) : null}
-              </span>
-            </td>
+            {shownMeasures.map(m => (
+              <td key={m} style={TD_TOTAL}>
+                <span style={VAL}>
+                  {m === 'time'
+                    ? formatDuration(totalOf('time'))
+                    : m === 'tokens'
+                      ? (hasOf('tokens') ? formatTokens(totalOf('tokens')) : '—')
+                      : (!hasOf('cost') ? '—' : totalCost.text)}
+                  {m === 'cost' && hasOf('cost') && totalCost.partial ? (
+                    <small data-testid="breakdown-total-partial" style={{ display: 'block', color: C.textMuted, fontWeight: 400 }}>
+                      не по всем
+                    </small>
+                  ) : null}
+                </span>
+              </td>
+            ))}
             <td style={TD_TOTAL} />
           </tr>
         </tbody>

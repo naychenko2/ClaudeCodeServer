@@ -6,11 +6,11 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import type {
   SpendOverviewResponse, SpendPivotNode, SpendTaskPromptRun, SpendTurnDetailResponse,
   SpendTurnDto, SpendTurnsResponse,
-} from '../../types';
+} from './types';
 import { api, C, FONT, R, SHADOW, SP, Z } from 'aihome_shell/kit';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,
-  genUnitLong, isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel, sourceTextColor,
+  genTurnTitle, genUnitLong, isGenSource, nodeName, rowBarColor, sourceColor, sourceLabel, sourceTextColor,
   type SpendLevel,
 } from './spendModel';
 import { spendQuery, type SpendDim, type SpendFilter } from '../../lib/spendContract';
@@ -360,7 +360,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, userReadOnly = fals
           {fmtDate(t.timestamp.slice(0, 10))} {fmtTime(t.timestamp)}
         </span>
         <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0, fontFamily: FONT.sans }}>
-          {isGen ? `${sourceLabel(t.source)} · ${t.model ?? t.label ?? ''}` : [t.label ?? undefined, t.model ?? undefined].filter(Boolean).join(' · ')}
+          {isGen ? genTurnTitle(t) : [t.label ?? undefined, t.model ?? undefined].filter(Boolean).join(' · ')}
         </span>
         {isFree && (
           <span style={{ fontSize: 10, padding: '1px 7px', borderRadius: R.sm, background: C.successBg, color: C.successText, flexShrink: 0, fontFamily: FONT.sans }}>

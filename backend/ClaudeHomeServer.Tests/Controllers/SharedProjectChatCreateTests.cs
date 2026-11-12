@@ -7,6 +7,7 @@ using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Microsoft.Extensions.DependencyInjection;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -164,7 +165,7 @@ public class SharedProjectChatCreateTests : IClassFixture<TestWebApplicationFact
 
         r.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await BodyAsync(r)).GetProperty("code").GetString()
-            .Should().Be(SessionManager.GlobalPersonaInSharedException.Code,
+            .Should().Be(GlobalPersonaInSharedException.Code,
                 "перевод Create на RunTurn не ослабил рамку: та же проверка, что для владельца");
         (await ChatIdsAsync(Owner(), projectId)).Should().BeEmpty("отказ не оставил в проекте нового чата");
     }

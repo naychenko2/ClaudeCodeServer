@@ -18,6 +18,9 @@ export interface FeatureStatsTilesProps {
   run: FeatureRun;
   stats: FeatureStats;
   isMobile?: boolean;
+  // «Разбор» (FS-FR0): показать только плитки с этими ключами — порядок даёт tilesModel,
+  // only только фильтрует. Без пропа — все плитки, как раньше.
+  only?: StatTile['key'][];
 }
 
 // Сетка: четыре в ряд, на 360 — две колонки (макет .a-kpis и .w360 .a-kpis).
@@ -119,8 +122,9 @@ function tileContent(tile: StatTile): { big: string; hint: string | null } {
   }
 }
 
-export function FeatureStatsTiles({ run, stats, isMobile = false }: FeatureStatsTilesProps) {
-  const tiles = tilesModel(run, stats);
+export function FeatureStatsTiles({ run, stats, isMobile = false, only }: FeatureStatsTilesProps) {
+  const all = tilesModel(run, stats);
+  const tiles = only ? all.filter((t) => only.includes(t.key)) : all;
 
   return (
     <div data-testid="stats-tiles" style={gridStyle(isMobile)}>

@@ -133,7 +133,6 @@ public class ParticipantTurnFrameGuardTests : IClassFixture<ParticipantFrameFixt
         new("wsp", "tags_apply", P, "сущность обязана принадлежать своему проекту (:356-359); в вызове личная задача", "{{sc}}", "{\"projectId\":\"{{pp}}\",\"entityType\":\"task\",\"entityId\":\"{{pt}}\",\"tags\":[\"{{tag}}\"]}"),
         new("wsp", "tags_remove", P, "то же", "{{sc}}", "{\"projectId\":\"{{pp}}\",\"entityType\":\"task\",\"entityId\":\"{{pt}}\",\"tags\":[\"{{tag}}\"]}"),
         new("wsp", "chats_archive", P, "чужой/невидимый sessionId — отказ (:363-369); своего проекта — работает; в вызове личный чат", "{{sc}}", "{\"sessionId\":\"{{pc}}\"}"),
-        new("wsp", "chats_continue", P, "то же", "{{sc}}", "{\"sessionId\":\"{{pc}}\"}"),
         new("wsp", "chats_list", P, "без projectId — личные чаты владельца → отказ (:352); со своим проектом — список этого проекта; в вызове личный проект", "{{sc}}", "{\"projectId\":\"{{pp}}\"}"),
         new("wsp", "chats_create", P, "без projectId — личные чаты владельца → отказ (:352); со своим проектом — работает (в вызове — свой проект чата)", "{{sc}}", "{\"projectId\":\"{{sp}}\"}"),
         new("wsp", "chats_history", P, "то же; в вызове личный чат (в нём PERSONAL-сообщение)", "{{sc}}", "{\"sessionId\":\"{{pc}}\"}"),
@@ -643,7 +642,8 @@ public sealed class ParticipantFrameFixture : IDisposable
         {
             // IsConfigured=true без сети: DifyToolset/каталог ходят в записывающий хендлер
             // (тот же приём, что McpNarrowFramePersonalSpaceTests). PerplexityOptions подменяется
-            // целиком: Program.cs:1137 создаёт его эagerly из конфига — ExtraConfig к этому моменту
+            // целиком: AddWebSearch (Program.cs:703 → WebSearchRegistration.cs:19) создаёт его
+            // eagerly из конфига — ExtraConfig к этому моменту
             // ещё не применён, а ExtraServices идёт после встроенных регистраций. Рядом подменяется
             // сам PerplexitySearchService — на ту же заглушку: web_search с валидным query обязан
             // отработать (M1), платных запросов тест не делает. Состав websearch-tools/list

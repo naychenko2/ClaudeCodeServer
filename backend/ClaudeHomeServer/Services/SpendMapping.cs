@@ -1,5 +1,6 @@
 using System.Threading;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -22,24 +23,90 @@ internal static class SpendMapping
     private static int _falSpendWarned;
     private static int _glifSpendWarned;
 
-    // Извлекает request_id из результата вызова, если это генерация fal.ai. Признак fal —
-    // наличие request_id И fal-домена где-либо в ответе. Покрывает обе формы результата:
+    // request_id внутри текста: ПОСЛЕДНИЙ путь разбора — для результата, который не является
+    // JSON вовсе (не даже испорченным маркером). По наблюдению разведки (f7e8c46d) такие
+    // вызовы не учитывались вовсе (эмпирика 29.09–01.11: 4 пропущенных) — этот путь остаётся
+    // их страховкой. Символы id ограничены [A-Za-z0-9_-] и длиной 64 — чтобы не выхватить
+    // длинное поле чужого формата; форма id'а fal (UUID) в этот набор входит.
+    private static readonly Regex FalRequestIdInText = new(
+        @"""request_id""\s*:\s*""([0-9A-Za-z_-]{1,64})""",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Маркер блока картинки в tool_result внешнего MCP: Claude CLI ставит "[Image: source: …webp]"
+    // вместо самого блока (наблюдение разведки f7e8c46d), и JSON ответа перестаёт парситься
+    // целиком. Для разбора id маркер вырезается целиком: это заглушка бинарного блока, не данные
+    // ответа; после вырезания остаток снова цельный JSON и разбирается структурно.
+    private static readonly Regex ImageMarker = new(
+        @"\[Image:[^\]]*\]",
+        RegexOptions.CultureInvariant | RegexOptions.Compiled);
+
+    // Извлекает request_id результата вызова, если это генерация fal.ai. Признак fal —
+    // наличие fal-домена где-либо в ответе. Покрывает обе формы результата:
     //  • run_model/submit_job: fal.run в *_url (status_url/response_url/cancel_url);
     //  • get_job_result (видео/аудио): *_url нет, но fal.media в URL медиа.
-    public static string? TryExtractFalRequestId(string content)
+    // Порядок разбора — от структурного к текстовому:
+    //  • цельный JSON-объект: только СТРУКТУРНЫЕ поля ответа fal — top-level request_id
+    //    (одиночный вызов) и request_id элементов массива jobs[] (пакетные submit_jobs/
+    //    wait_for_jobs: верхнего id у них нет, и один такой tool_result терял сразу все N
+    //    запросов — живая сверка 04f65504);
+    //  • JSON, испорченный маркером блока картинки: маркеры вырезаются, остаток разбирается
+    //    тем же структурным способом — пакет с блоками картинок даёт все N id, а не первое
+    //    вхождение request_id (хвост ревью R-S-SPEND-ПАКЕТ, п.2: прежний regex по тексту
+    //    терял N−1 записей расхода);
+    //  • контент, не JSON вовсе: первое вхождение request_id по тексту (страховка S-SPEND-3).
+    // Чужие вложенные id (напр. data.request_id) не берутся никогда: это не структурная форма
+    // fal — ни в цельном JSON, ни в очищенном от маркеров. Id, названный и на верхнем уровне,
+    // и в jobs[], отдаётся один раз: одному сетевому циклу — одна запись расхода. Ничего не
+    // найдено — пустой список тихо, без исключения.
+    public static IReadOnlyList<string> TryExtractFalRequestIds(string content)
     {
-        if (string.IsNullOrEmpty(content)) return null;
-        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return null;
+        if (string.IsNullOrEmpty(content)) return [];
+        if (!content.Contains("fal.run") && !content.Contains("fal.ai") && !content.Contains("fal.media")) return [];
+        if (TryStructuralIds(content, out var ids)) return ids;
+        // Маркерная форма: тот же ответ, из которого CLI вырезал блоки картинок. Остаток после
+        // вырезания маркеров — снова цельный JSON, и пакет разбирается по структурным полям.
+        if (content.Contains("[Image:") && TryStructuralIds(ImageMarker.Replace(content, ""), out ids))
+            return ids;
+        var match = FalRequestIdInText.Match(content);
+        return match.Success ? [match.Groups[1].Value] : [];
+    }
+
+    // request_id структурных позиций JSON-текста (цельного или очищенного от маркеров):
+    // true — текст разобрался как JSON-объект, id собраны с дедупом; false — не JSON или
+    // не-объект (как и прежде, уходит к следующему пути разбора).
+    private static bool TryStructuralIds(string json, out IReadOnlyList<string> ids)
+    {
         try
         {
-            using var doc = JsonDocument.Parse(content);
+            using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            if (root.ValueKind != JsonValueKind.Object) return null;
-            if (root.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
-                return rid.GetString();
-            return null;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                ids = [];
+                return false;
+            }
+            var list = new List<string>();
+            AddStructuralId(root, list);
+            if (root.TryGetProperty("jobs", out var jobs) && jobs.ValueKind == JsonValueKind.Array)
+                foreach (var job in jobs.EnumerateArray())
+                    AddStructuralId(job, list);
+            // Дедуп по первому вхождению: верхний id, повторённый в jobs[], считается один раз.
+            ids = list.Distinct(StringComparer.Ordinal).ToList();
+            return true;
         }
-        catch { return null; } // не JSON / не наш формат — это не fal-результат
+        catch { ids = []; return false; }
+    }
+
+    // request_id структурной позиции цельного JSON-объекта: только строковое поле с этим
+    // именем у самого элемента; не-объект, отсутствующее поле или не-строка — ничего не добавляют.
+    private static void AddStructuralId(JsonElement el, List<string> into)
+    {
+        if (el.ValueKind != JsonValueKind.Object) return;
+        if (el.TryGetProperty("request_id", out var rid) && rid.ValueKind == JsonValueKind.String)
+        {
+            var v = rid.GetString();
+            if (!string.IsNullOrEmpty(v)) into.Add(v);
+        }
     }
 
     // Запись расхода штатного хода в аналитику (Spend Analytics): разрезы — из фактического
@@ -52,6 +119,10 @@ internal static class SpendMapping
     // Урок S2a-6c (журнал событий): потребитель, читающий реестр ПОСЛЕ конца хода,
     // получает null — здесь мы до конца хода. Без реестра (null) и для ходов без человека
     // запись остаётся без актора: срез чтения относится такие записи владельцу.
+    //
+    // initiator — признак «ход начал человек», его считает ядро (защёлка SessionEntry.TurnFromHuman):
+    // Human / Agent, null — запись хода неизвестна. Актор реестра на него не влияет: он «липкий»
+    // у внутренних ходов и несёт id человека и у агентских подач.
     public static void RecordTurnSpend(
         ISpendCollector? spend,
         LlmProviderRegistry llmProviders,
@@ -59,7 +130,8 @@ internal static class SpendMapping
         ILogger? log,
         Session? s,
         ResultMessage m,
-        ClaudeHomeServer.Services.Access.ITurnActorRegistry? actors = null)
+        ClaudeHomeServer.Services.Access.ITurnActorRegistry? actors = null,
+        string? initiator = null)
     {
         if (spend is null || s is null || m.Usage is null)
         {
@@ -98,6 +170,7 @@ internal static class SpendMapping
                 TaskId = s.TaskId,
                 PersonaId = s.PersonaId,
                 ActorUserId = string.IsNullOrEmpty(actorUserId) ? null : actorUserId,
+                Initiator = initiator,
                 Provider = provider,
                 Model = model,
                 Source = SpendSources.IsFree(provider, model, isLocal) ? SpendSources.Free : SpendSources.ChatTurn,
@@ -115,6 +188,10 @@ internal static class SpendMapping
     // Аналитика расхода: генерация fal.ai — счётчик операций (токенов у fal нет),
     // фактическая стоимость про запас. Дедуп выше гарантирует одну запись на request_id.
     // Вызывается уже после снятия _falPersistLock — внешнего состояния не держит.
+    //
+    // Этот путь — агентский по построению: в mcp.fal.ai ходит сам CLI, через роутер
+    // картинок он не идёт. Инициатор — agent (S-SPEND-8): у агентской траты один признак,
+    // «null + SessionId» вторым способом сказать то же самое быть не должно.
     public static void RecordFalGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -143,12 +220,14 @@ internal static class SpendMapping
                 CostUsd = msg.CostUsd,
                 Generations = 1,
                 Label = msg.EndpointId,
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации fal не удалась"); }
     }
 
     // Аналитика: генерация glif — счётчик операций, кредиты про запас, стоимость USD неизвестна.
+    // Инициатор — agent: glif из хода зовёт CLI напрямую (тот же признак, что у fal, S-SPEND-8).
     public static void RecordGlifGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -177,6 +256,7 @@ internal static class SpendMapping
                 CostUsd = null,
                 Generations = 1,
                 Label = msg.OutputType,
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации glif не удалась"); }
@@ -189,6 +269,7 @@ internal static class SpendMapping
         toolName is not null && toolName.Contains("mcp__higgsfield__generate_");
 
     // Запись расхода Higgsfield-генерации: Generations=1, CostUsd=null (кредиты не пересчитываем).
+    // Инициатор — agent: инструмент зовёт CLI в ходе (тот же признак, что у fal/glif, S-SPEND-8).
     public static void RecordHiggsfieldGeneration(
         ISpendCollector? spend,
         Func<Session, string?> resolveOwnerId,
@@ -210,6 +291,7 @@ internal static class SpendMapping
                 CostUsd = null,
                 Generations = 1,
                 Label = "higgsfield-generation",
+                Initiator = SpendInitiators.Agent,
             });
         }
         catch (Exception ex) { log?.LogWarning(ex, "spend: запись генерации higgsfield не удалась"); }

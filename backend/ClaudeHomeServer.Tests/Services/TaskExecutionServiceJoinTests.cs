@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
@@ -134,11 +135,29 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
         var historyService = new ChatHistoryService(config);
-        return new SessionManager(projectManager, historyService, config, adapters, falCost, usage,
-            appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox,
-            broadcaster: broadcaster,
-            git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
+        return SessionCoreTestHost.Build(Path.GetDirectoryName(config["DataPath"])!, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(historyService);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(broadcaster);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Git.GitService>(new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance));
+        }).Manager;
     }
 
     private TaskItem CreateTrackedTask(string ownerId = "user-1")
@@ -379,7 +398,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
         adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
         adapter.SetupGet(a => a.HasPendingBg).Returns(true); // фоновая команда ещё жива
         adapter.Setup(a => a.DisposeAsync()).Returns(ValueTask.CompletedTask);
-        var sessionsField = typeof(SessionManager).GetField("_sessions",
+        var sessionsField = typeof(SessionManager).GetProperty("_sessions",
             System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
         var entry = ((System.Collections.IDictionary)sessionsField.GetValue(_sessions)!)[session.Id]!;
         entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
@@ -797,6 +816,27 @@ public class TaskExecutionServiceJoinTests : IDisposable
     }
 
     // ─── Слот ревью: аренда освобождается на каждом пути выхода ─────
+
+    // ─── Дерево задачи не подключилось: абзац в постановке, а не молчание ─────
+
+    [Fact]
+    public void ДеревоНеПодключилось_НоЧислитсяВСписке_АбзацПроTree()
+    {
+        var text = TaskExecutionService.BuildDetachedTreeSection("/srv/wt/task-1", listed: true);
+
+        text.Should().Contain("Дерево задачи `/srv/wt/task-1` не подключилось, чат стоит в корне проекта")
+            .And.Contain("Свои правки делай в `/srv/wt/task-1`")
+            .And.Contain("tree=`/srv/wt/task-1`");
+    }
+
+    [Fact]
+    public void ДеревоНеНайдено_АбзацБезПодсказкиTreeНаНего()
+    {
+        var text = TaskExecutionService.BuildDetachedTreeSection("/srv/wt/gone", listed: false);
+
+        text.Should().Contain("не найдено").And.Contain("git worktree list");
+        text.Should().NotContain("tree=`/srv/wt/gone`");
+    }
 
     private static string BuildSection(int dirty) => TaskExecutionService.BuildReviewTreeSection(
         new ReviewTreeLease("/slot", "abc1234", Enumerable.Range(1, dirty).Select(i => $"f{i}.cs").ToList()));

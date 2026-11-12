@@ -258,7 +258,16 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         {
             return Deny($"Higgsfield unavailable: {OneLine(ex.Message)}");
         }
-        catch (TaskCanceledException) when (ct is not { IsCancellationRequested: true })
+        // Отмена хоста («Стоп» человека), а не отказ Higgsfield: уводим как отмену.
+        // Прежний путь валил в общий catch и писал «Internal proxy error» — в логе и в
+        // отказе виноватым оказывался внешний сервер, хотя его никто не звал.
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        // Таймаут клиента и потолок тела (exchange.Token ниже) — отмены, которые хост
+        // не начинал: это таймаут, с честной возможностью повтора.
+        catch (OperationCanceledException)
         {
             return Deny("Higgsfield timed out. You may retry.");
         }
@@ -276,6 +285,12 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
     {
         var client = clientFactory.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromMilliseconds(timeoutMs);
+        // Один дедлайн на весь обмен. Timeout клиента при ResponseHeadersRead тело не
+        // покрывает — замерено (HttpClientCancellationContractTests): стоп-тело переживает
+        // любой потолок клиента. Тело SSE обрезает только токен, поэтому к токену хода
+        // приматывается дедлайн той же длины, что потолок клиента.
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+        using var exchange = CancellationTokenSource.CreateLinkedTokenSource(ct, deadline.Token);
         var request = new HttpRequestMessage(HttpMethod.Post, UpstreamUrl)
         {
             Content = new StringContent(body.ToJsonString(JsonOpts),
@@ -286,9 +301,9 @@ public sealed class HiggsfieldToolset : IMcpParameterizedToolset
         // апстрим вправе ответить 406 Not Acceptable (Higgsfield именно это и делал).
         request.Headers.Accept.ParseAdd("application/json");
         request.Headers.Accept.ParseAdd("text/event-stream");
-        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-        using var stream = await response.Content.ReadAsStreamAsync(ct);
-        var text = await new System.IO.StreamReader(stream).ReadToEndAsync(ct);
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, exchange.Token);
+        using var stream = await response.Content.ReadAsStreamAsync(exchange.Token);
+        var text = await new System.IO.StreamReader(stream).ReadToEndAsync(exchange.Token);
         if (!response.IsSuccessStatusCode)
         {
             log.LogWarning("Higgsfield responded HTTP {Status}: {Body}",

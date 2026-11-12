@@ -17,7 +17,8 @@ public class WikiDedupTests
         string[]? aliases = null,
         string[]? owns = null,
         string[]? summary = null,
-        (string Card, string Quote)[]? footnotes = null) => new()
+        (string Card, string Quote)[]? footnotes = null,
+        string[]? history = null) => new()
         {
             Title = title,
             Frontmatter = new WikiFrontmatter
@@ -31,7 +32,7 @@ public class WikiDedupTests
                 new WikiPage.Section { Name = "Сводка", Lines = summary ?? [] },
                 new WikiPage.Section { Name = "Хронология", Lines = [] },
                 new WikiPage.Section { Name = "Противоречия", Lines = [] },
-                new WikiPage.Section { Name = "История", Lines = [] },
+                new WikiPage.Section { Name = "История", Lines = history ?? [] },
             ],
             Footnotes = footnotes is null
                 ? []
@@ -39,6 +40,10 @@ public class WikiDedupTests
         };
 
     private static WikiDedup.ExistingPage Existing(string path, WikiPage page) => new(path, page);
+
+    // Снимок страницы для QuoteOwner: текст — рендер модели (round-trip Parse→Render
+    // даёт ту же модель — инвариант модели страницы).
+    private static WikiGate.Draft Draft(string path, WikiPage page) => new(path, page.Render());
 
     // ─── Утверждение: повтор отбрасывается ────────────────────────────────────
 
@@ -182,6 +187,127 @@ public class WikiDedupTests
         WikiDedup.FindPageDuplicate("Сущность проекта", null, null, null).HasValue.Should().BeFalse();
         // Пустые имена новой страницы ничего не сравнивают: дубль не объявляется по пустоте.
         WikiDedup.FindPageDuplicate("  ", ["", " "], null, [other]).HasValue.Should().BeFalse();
+    }
+
+    // ─── QuoteOwner: «одна цитата — одна страница» (ADR-039, решение 2) ──────
+
+    private static WikiPage PageWithCitation(string title, string[]? history = null) =>
+        Page(title, summary: ["проект ведётся на 'Rust' [^s1]"],
+            footnotes: [(Card, "проект ведётся на 'Rust'")], history: history);
+
+    [Fact]
+    public void QuoteOwner_ПараУжеСтоитНаДругойСтраницеРаздела_ВозвращаетЕёПуть()
+    {
+        var other = Draft("Проекты/p1/Другая.md", PageWithCitation("Другая"));
+
+        var owner = WikiDedup.QuoteOwner([other], Card, "проект ведётся на 'Rust'", null);
+
+        owner.Should().Be("Проекты/p1/Другая.md");
+    }
+
+    [Fact]
+    public void QuoteOwner_ПараВоВторойСноскеПерваяЧужая_ВозвращаетПутьСтраницы()
+    {
+        // Страница с двумя сносками: первая — чужая (её ссылка только в «Истории»,
+        // утверждение вытеснено), наша пара — во второй (i = 1, ссылка [^s2]).
+        // Владелец определяется индексом сноски в модели: допущение «сноска с индексом i —
+        // это s{i+1}» проверяется здесь — поиск «любой s1» вместо s{i+1} краснит тест.
+        var page = Page("Другая",
+            summary: ["проект ведётся на 'Rust' [^s2]"],
+            footnotes:
+            [
+                ("Проекты/p1/Источники/Досье-9", "чужая цитата чужого источника"),
+                (Card, "проект ведётся на 'Rust'"),
+            ],
+            history: ["перенесено: чужая цитата [^s1]"]);
+
+        var other = Draft("Проекты/p1/Другая.md", page);
+
+        WikiDedup.QuoteOwner([other], Card, "проект ведётся на 'Rust'", null)
+            .Should().Be("Проекты/p1/Другая.md");
+    }
+
+    [Fact]
+    public void QuoteOwner_ТаЖеЦитатаДругойКарточкиИНоваяЦитата_НикемНеЗанята()
+    {
+        var occupied = Draft("Проекты/p1/Другая.md", PageWithCitation("Другая"));
+
+        // Ключ — пара (цитата, карточка): та же цитата из другой карточки — не занятие.
+        WikiDedup.QuoteOwner([occupied], "Проекты/p1/Источники/Досье-9", "проект ведётся на 'Rust'", null)
+            .Should().BeNull();
+        // Та же карточка, другая цитата — тоже не занятие.
+        WikiDedup.QuoteOwner([occupied], Card, "собрание держалось в пятницу", null).Should().BeNull();
+        // Пустые цитата и карточка — нечего искать.
+        WikiDedup.QuoteOwner([occupied], Card, "", null).Should().BeNull();
+        WikiDedup.QuoteOwner([occupied], "", "проект ведётся на 'Rust'", null).Should().BeNull();
+        // Пустой список (раздел пуст) — занятия нет.
+        WikiDedup.QuoteOwner([], Card, "проект ведётся на 'Rust'", null).Should().BeNull();
+    }
+
+    [Fact]
+    public void QuoteOwner_СноскаТолькоВИстории_ЦитатуНеЗанимает_ЕёВытеснили()
+    {
+        // Ссылка на сноску стоит только в «Истории» — перенесённое вытесненное утверждение,
+        // оно больше не владеет цитатой.
+        var displaced = Draft("Проекты/p1/Вытесненная.md",
+            Page("Вытесненная", footnotes: [(Card, "проект ведётся на 'Rust'")],
+                history: ["перенесено: проект ведётся на 'Rust' [^s1]"]));
+
+        WikiDedup.QuoteOwner([displaced], Card, "проект ведётся на 'Rust'", null).Should().BeNull();
+    }
+
+    [Fact]
+    public void QuoteOwner_СсылкаЕСТоИВДругойСекции_ЗанимаетНесмотряНаИсторию()
+    {
+        var both = PageWithCitation("Другая", history: ["перенесено: проект ведётся на 'Rust' [^s1]"]);
+        var occupied = Draft("Проекты/p1/Другая.md", both);
+
+        WikiDedup.QuoteOwner([occupied], Card, "проект ведётся на 'Rust'", null)
+            .Should().Be("Проекты/p1/Другая.md");
+    }
+
+    [Fact]
+    public void QuoteOwner_СтраницаОперацииИсключена_ПовторНаНейЛовитIsDuplicateStatement()
+    {
+        var own = Draft("Проекты/p1/Сама.md", PageWithCitation("Сама"));
+
+        // exceptPage — страница самой операции: её сноски не считаются.
+        WikiDedup.QuoteOwner([own], Card, "проект ведётся на 'Rust'", "Проекты/p1/Сама.md")
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void QuoteOwner_СтраницаБезМоделиПропускается_БезИсключенияНаружу()
+    {
+        var broken = new WikiGate.Draft("Проекты/p1/Сломанная.md", "это не страница: ни шапки, ни заголовка");
+        var other = Draft("Проекты/p1/Другая.md", PageWithCitation("Другая"));
+
+        // Неразобранная страница не роняет дедуп и не даёт занятия…
+        WikiDedup.QuoteOwner([broken], Card, "проект ведётся на 'Rust'", null).Should().BeNull();
+        // …и не мешает найти владельца дальше по списку.
+        WikiDedup.QuoteOwner([broken, other], Card, "проект ведётся на 'Rust'", null)
+            .Should().Be("Проекты/p1/Другая.md");
+    }
+
+    [Fact]
+    public void QuoteOwner_ЦитатаСДругимиПробеламиИКавычками_ВладелецНайден_ТаЖеНормализация()
+    {
+        var occupied = Draft("Проекты/p1/Другая.md", PageWithCitation("Другая"));
+
+        var owner = WikiDedup.QuoteOwner(
+            [occupied], Card, "проект   ведётся на \"Rust\"", null);
+
+        owner.Should().Be("Проекты/p1/Другая.md");
+    }
+
+    [Fact]
+    public void QuoteOwner_НесколькоВладельцев_ПервыйПоПорядкуСписка()
+    {
+        var first = Draft("Проекты/p1/Первая.md", PageWithCitation("Первая"));
+        var second = Draft("Проекты/p1/Вторая.md", PageWithCitation("Вторая"));
+
+        WikiDedup.QuoteOwner([first, second], Card, "проект ведётся на 'Rust'", null)
+            .Should().Be("Проекты/p1/Первая.md");
     }
 
     [Fact]

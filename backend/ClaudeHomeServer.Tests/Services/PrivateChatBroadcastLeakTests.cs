@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -94,7 +95,7 @@ public class PrivateChatBroadcastLeakTests : IDisposable
                 await Invoke(sut, "BroadcastStatusChangeAsync", chat.Id, chat, SessionStatus.Active, null, 0);
                 break;
             case "archived":
-                await Invoke(sut, "BroadcastChatArchivedAsync", chat.Id, chat, true);
+                await Invoke(sut, "BroadcastChatArchivedAsync", chat.Id, true);
                 break;
             case "renamed":
                 await Invoke(sut, "BroadcastChatRenamedAsync", chat.Id, chat, "Новое имя");
@@ -110,12 +111,32 @@ public class PrivateChatBroadcastLeakTests : IDisposable
         }
     }
 
+    // S3-3: точки «архив» и «переименование» живут в ролях ядра (ChatSettings, ChatNaming), S3-5:
+    // точка «удаление» — в ChatDeletion, а её адресация — в SessionStore (публичный метод).
+    // Метод ищется на фасаде, а если его там нет — на его полях-ролей: проверяется адресация
+    // события, а не то, в каком классе лежит тело. Поиск охватывает и public-методы ролей:
+    // у роли они открыты намеренно (фасад их не дублирует).
     private static Task Invoke(SessionManager sut, string method, params object?[] args)
     {
-        var mi = typeof(SessionManager).GetMethod(method,
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
-            ?? throw new MissingMethodException(nameof(SessionManager), method);
-        return (Task)mi.Invoke(sut, args)!;
+        foreach (var target in CoreObjects(sut))
+        {
+            var mi = target.GetType().GetMethod(method,
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Public);
+            if (mi is not null) return (Task)mi.Invoke(target, args)!;
+        }
+        throw new MissingMethodException(nameof(SessionManager), method);
+    }
+
+    private static IEnumerable<object> CoreObjects(SessionManager sut)
+    {
+        yield return sut;
+        foreach (var f in typeof(SessionManager).GetFields(
+                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic))
+        {
+            if (f.FieldType.Namespace != "ClaudeHomeServer.Services.Sessions") continue;
+            if (f.GetValue(sut) is { } role) yield return role;
+        }
     }
 
     private (SessionManager Sut, ProjectManager Projects) BuildSut()
@@ -158,9 +179,27 @@ public class PrivateChatBroadcastLeakTests : IDisposable
         var sandbox = new ClaudeHomeServer.Services.Execution.SandboxManager(config,
             NullLogger<ClaudeHomeServer.Services.Execution.SandboxManager>.Instance);
 
-        return (new SessionManager(projectManager, history, config, adapters, falCost,
-            usage, appSettings, userStore, jwt, server.Object, llmProviders, flags, personas,
-            bindings, subPool, NullLogger<SessionManager>.Instance,
-            TestLauncherFactory.Instance, sandbox, broadcaster: _broadcaster), projectManager);
+        return (SessionCoreTestHost.Build(_tempDir, s =>
+        {
+            s.AddSingleton<global::ClaudeHomeServer.Services.ProjectManager>(projectManager);
+            s.AddSingleton<global::ClaudeHomeServer.Services.ChatHistoryService>(history);
+            s.AddSingleton<global::Microsoft.Extensions.Configuration.IConfiguration>(config);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(adapters);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FalCostService>(falCost);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.UsageService>(usage);
+            s.AddSingleton<global::ClaudeHomeServer.Services.AppSettingsService>(appSettings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.UserStore>(userStore);
+            s.AddSingleton<global::ClaudeHomeServer.Services.JwtService>(jwt);
+            s.AddSingleton<global::Microsoft.AspNetCore.Hosting.Server.IServer>(server.Object);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.LlmProviderRegistry>(llmProviders);
+            s.AddSingleton<global::ClaudeHomeServer.Services.FeatureFlagService>(flags);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaManager>(personas);
+            s.AddSingleton<global::ClaudeHomeServer.Services.PersonaBindingsService>(bindings);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Llm.ClaudeSubscriptionPool>(subPool);
+            s.AddSingleton<global::Microsoft.Extensions.Logging.ILogger<ClaudeHomeServer.Services.SessionManager>>(NullLogger<SessionManager>.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.ILauncherFactory>(TestLauncherFactory.Instance);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Execution.SandboxManager>(sandbox);
+            s.AddSingleton<global::ClaudeHomeServer.Services.Composition.ISessionBroadcaster>(_broadcaster);
+        }).Manager, projectManager);
     }
 }

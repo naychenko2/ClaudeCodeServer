@@ -17,6 +17,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/git")]
 [ProjectScope]
+[SubsystemUsage("git")]
 public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, Services.Git.IForgejoAccountStore forgejoAccounts, SessionManager sessions, IHubContext<SessionHub> hub, CommitAttributionService commitAttribution) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);

@@ -12,7 +12,8 @@ namespace ClaudeHomeServer.Services.Knowledge;
 // проекты/чаты/задачи пользователя — за рамками каскада.
 //
 // Участники синка подкидываются через DI как `IEnumerable<IKnowledgeSyncParticipant>`
-// (форвардеры в Program.cs:661-670); так каскад не держит прямых ссылок на вертикали
+// (форвардеры в CoreSeamsGlue.cs:36-51, участие заметок — NotesKnowledgeGlue.cs:31);
+// так каскад не держит прямых ссылок на вертикали
 // Notes/Memory/Dossiers/Knowledge и остаётся частью спины при их выносе.
 public sealed class UserKnowledgeCascade
 {

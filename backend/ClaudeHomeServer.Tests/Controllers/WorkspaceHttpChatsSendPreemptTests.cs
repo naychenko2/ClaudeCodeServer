@@ -69,7 +69,7 @@ public class WorkspaceHttpChatsSendPreemptTests : IDisposable
     // Interrupt верифицируется на моке, реальный CLI не поднимается
     private Mock<ILlmSessionAdapter> SetWorkingAdapter(string sessionId)
     {
-        var field = typeof(SessionManager).GetField("_sessions",
+        var field = typeof(SessionManager).GetProperty("_sessions",
             BindingFlags.NonPublic | BindingFlags.Instance)!;
         var map = (System.Collections.IDictionary)field.GetValue(Sessions)!;
         var entry = map[sessionId]!;

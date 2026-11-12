@@ -111,7 +111,7 @@ public static class TurnAudience
 // DI и SessionManager, по одному экземпляру на инстанс (как шина). per-owner изоляция
 // держится на OwnerId сессии в PromptAssembling.Turn, а не на отдельных шинах.
 //
-// Этап 5, шаг 6: контракт переехал в Core (из Services/Turn/PromptSectionContributor.cs:61),
+// Этап 5, шаг 6: контракт переехал в Core (из прежнего Services/Turn/PromptSectionContributor.cs),
 // потому что его реализации теперь живут в чужих вертикалях (CodeGraph, Notes, …) и
 // компилятору нужен контракт до того, как ссылаться на конкретные классы. Прецедент
 // в Core уже был: IKnowledgeSyncParticipant (`Core/Services/Knowledge/`) собирает
@@ -139,7 +139,7 @@ public interface IPromptSectionContributor
     // существующими без перетряхивания всех Order'ов.
     //
     // Шина TurnEventBus.ApplyAsync сортирует подписчиков по Order перед прогоном
-    // (TurnEventBus.cs:128). DI-порядок `IEnumerable<IPromptSectionContributor>`
+    // (TurnEventBus.cs:79). DI-порядок `IEnumerable<IPromptSectionContributor>`
     // НЕ канонический — после инверсии контрибьюторов разные вертикали регистрируют
     // свои в своих `*Subsystem.Register`, и порядок в IEnumerable задаётся порядком
     // `AddSubsystems`, а не Order'ом контрибьютора. Поэтому шина и сортирует

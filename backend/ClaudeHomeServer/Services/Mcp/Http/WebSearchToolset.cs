@@ -40,10 +40,14 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 /// </summary>
 public sealed class WebSearchToolset(
     PerplexitySearchService search,
-    ReaderService reader,
-    ReaderQuotaService quota,
     SessionManager sessions,
     ILogger<WebSearchToolset> logger,
+    // `= null` — при Subsystems:reader:Enabled=false сервисы той вертикали в контейнер не
+    // попадают, и без значения по умолчанию резолв тулсета падал, не поднимая весь хост (S2a-2,
+    // ADR-014). Состав tools/list от этого не меняется: web_read остаётся объявленным и отвечает
+    // честным отказом — список зависит от настройки инстанса, а не от состояния соседней вертикали
+    ReaderService? reader = null,
+    ReaderQuotaService? quota = null,
     ISpendCollector? spend = null) : IMcpParameterizedToolset
 {
     private int _spendNullWarned;
@@ -110,6 +114,13 @@ public sealed class WebSearchToolset(
 
             case "web_read":
             {
+                // Вертикаль reader выключена — её сервисов нет, и квоту мерить нечем. Отказ
+                // текстом, как прочие «не на этом сервере»: у инструмента нет HTTP-кода, модель
+                // должна прочитать причину
+                if (reader is null || quota is null)
+                    return Deny("Подсистема чтения выключена (Subsystems:reader:Enabled=false): "
+                        + "web_read на этом сервере не работает");
+
                 var url = StringArg(arguments, "url").Trim();
                 if (url.Length == 0) return Deny("Нужен параметр url");
 

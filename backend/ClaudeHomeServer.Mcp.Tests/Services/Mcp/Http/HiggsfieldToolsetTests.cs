@@ -1266,6 +1266,125 @@ public class HiggsfieldToolsetTests
 
         return (statuses, oauthService, handler);
     }
+
+    // --- Потолок тела и отмена хоста в tools/call (хвост линии траты) ---
+
+    // Тело, которое молчит после первой половины: половина строки SSE сразу, затем пауза
+    // секунды. При потолке 300 мс чтение обязано оборваться; без потолка — доезжает и
+    // метод возвращает разобранный ответ.
+    private sealed class PausingSseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken ct) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new PausingStream()),
+            });
+    }
+
+    private sealed class PausingStream : Stream
+    {
+        private static readonly byte[] Sse = System.Text.Encoding.UTF8.GetBytes(
+            "data: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"content\":[]}}\n");
+        private int _pos;
+        private bool _paused;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => Sse.Length;
+        public override long Position { get => _pos; set => _pos = (int)value; }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            // Пауза до первой же пачки: транспорт тянет тело крупным Read, дробить
+            // паузу по символам нет смысла — важен сам факт «тело молчит секунду».
+            if (!_paused)
+            {
+                _paused = true;
+                Thread.Sleep(1000);
+            }
+            var n = Math.Min(count, Sse.Length - _pos);
+            if (n > 0)
+            {
+                Array.Copy(Sse, _pos, buffer, offset, n);
+                _pos += n;
+            }
+            return n;
+        }
+
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    // Что делает HttpClient при отменённом токене хоста: TaskCanceledException с этим токеном.
+    private sealed class CancelOnTokenHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken ct) =>
+            Task.FromException<HttpResponseMessage>(
+                new TaskCanceledException("запрос отменён хостом", null, ct));
+    }
+
+    [Fact]
+    public async Task PostToHiggsfield_ЗависшееТелоОбрезаетсяПотолкомТела()
+    {
+        var (dir, config, _, oauth, _) = NewStep3Fixture("bodyceiling", HttpStatusCode.OK, "unused");
+        try
+        {
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(new PausingSseHandler()),
+                sessions: null!, config, mcpStatus: null,
+                NullLogger<HiggsfieldToolset>.Instance, frames: Wide);
+
+            var post = typeof(HiggsfieldToolset).GetMethod("PostToHiggsfieldAsync",
+                BindingFlags.NonPublic | BindingFlags.Instance)!;
+            var act = async () => await (Task<JsonObject?>)post.Invoke(toolset,
+                ["test-token", new JsonObject { ["jsonrpc"] = "2.0", ["id"] = 1 },
+                    CancellationToken.None, 300])!;
+            await act.Should().ThrowAsync<OperationCanceledException>(
+                "Timeout клиента при ResponseHeadersRead тело не покрывает (замерено, "
+                + "HttpClientCancellationContractTests): без отдельного потолка-токена зависшее "
+                + "SSE-тело держало бы ход до своего таймаута клиента");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
+
+    [Fact]
+    public async Task Call_ОтменаХодаУходитНаверхКакОтменаАНеInternalProxyError()
+    {
+        var (dir, config, _, oauth, _) = NewStep3Fixture("hostcancel", HttpStatusCode.OK, "unused");
+        try
+        {
+            // Живой резолв «хвост маршрута → чат владельца» — минимальный граф, как в Tests/LocalMedia
+            var (sessions, projects, _) = TestsToolsetTests.BuildSessionManager(config);
+            var projDir = Directory.CreateDirectory(Path.Combine(dir, "proj")).FullName;
+            var project = projects.Create("Проект с Higgsfield", projDir, "test-user-id", "test-user");
+            var session = await sessions.CreateAsync(project.Id, ClaudeMode.Auto);
+
+            var toolset = new HiggsfieldToolset(oauth,
+                new StubHttpClientFactory(new CancelOnTokenHandler()),
+                sessions, config, mcpStatus: null,
+                NullLogger<HiggsfieldToolset>.Instance, frames: Wide);
+
+            using var cts = new CancellationTokenSource();
+            cts.Cancel();
+            var act = () => toolset.CallAsync("models_explore", new JsonObject(),
+                new McpToolCallContext("test-user-id", session.Id, session.Id), cts.Token);
+            await act.Should().ThrowAsync<OperationCanceledException>(
+                "«Стоп» хода — не отказ Higgsfield: без guard'а этот путь отдавался как "
+                + "«Internal proxy error» и в логе, и в тексте для модели");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* best-effort */ }
+        }
+    }
 }
 
 internal sealed class FakeSpend(List<SpendRecord> recording) : ISpendCollector

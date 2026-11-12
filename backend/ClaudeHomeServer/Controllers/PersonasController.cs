@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -37,7 +38,6 @@ public class PersonasController(
     PersonaBindingsService bindings,
     SkillsService skills,
     KnowledgeService knowledge,
-    Services.Images.ImageGenerationService images,
     Services.Llm.OneShotClaudeRunner oneShot,
     Services.Llm.ICheapTextRunner cheap,
     PersonaPromptBuilder promptBuilder,
@@ -49,6 +49,10 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
+    // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали images
+    // активация контроллера не должна падать — аватарные ручки отвечают гейтом (503/catch),
+    // остальные эндпоинты персон живут без неё
+    Services.Images.ImageGenerationService? images = null,
     INoteAccessor? notes = null,
     // Доступ к проекту для списков и /match по projectId (W3-B2, разрез §3.1): область и ключ —
     // IProjectAccess.Resolve; null — fail-closed (проект недоступен)
@@ -63,7 +67,7 @@ public class PersonasController(
     private readonly IProjectAccess? _access = access;
     private readonly SkillsService _skills = skills;
     private readonly KnowledgeService _knowledge = knowledge;
-    private readonly Services.Images.ImageGenerationService _images = images;
+    private readonly Services.Images.ImageGenerationService? _images = images;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot = oneShot;
     private readonly Services.Llm.ICheapTextRunner _cheap = cheap;
     private readonly PersonaPromptBuilder _promptBuilder = promptBuilder;
@@ -294,6 +298,28 @@ public class PersonasController(
             : (null, StatusCode(403, new { error = "Нет права на запись", code = ProjectScopeAttribute.ErrorCode }));
     }
 
+    // Атрибуция траты аватара по REST-входу (дефект stdio-пути, ревью 3c6055aa): человек из
+    // формы и агент через stdio-MCP приходят одним POST /api/personas — канал их не различает.
+    // Различает их чат-вызыватель (заголовок ставят MCP-серверы, браузер — никогда) и признак
+    // его живого хода (защёлка TurnFromHuman — тот же, по которой ядро метит учёт хода):
+    // ход начал человек → Human; ход начал агент, или живого хода нет (заголовок бывает только
+    // у агентского вызова) → Agent. Актор — подавший: актор хода, а не владелец токена: в
+    // stdio-песочнице токен арендатора, а ход может принадлежать участнику.
+    private (string Initiator, string? Actor) CallerSpendAttribution()
+    {
+        var sessionId = CallerSessionId();
+        // Нет своего чата-вызывателя — три случая: заголовка нет (вызов из формы), он чужой
+        // (GetOwned резолвит владельца) или такой сессии нет вовсе. Все три атрибуруются
+        // как вызов без чата: Human, актор не назван → равняется обратившемуся
+        // (PersonasCrudService.AvatarSpendAttribution).
+        if (sessionId is not { Length: > 0 } || _sessions.GetOwned(sessionId, UserId) is null)
+            return (SpendInitiators.Human, null);
+        var actor = _sessions.GetTurnActor(sessionId, UserId) ?? UserId; // актор неизвестен — права арендатора
+        return _sessions.IsTurnFromHuman(sessionId, UserId)
+            ? (SpendInitiators.Human, actor)
+            : (SpendInitiators.Agent, actor);
+    }
+
     // Глобальную/сферную персону — личное пространство вызывающего, как раньше; проектную — по
     // праву WriteContent на её проект, под ключом его владельца (W3-B3a; тот же приём, что
     // ProjectTasksController.Create: право по проекту из тела, запись — по TenantOwnerId).
@@ -301,6 +327,8 @@ public class PersonasController(
     // ревью aaf13fce): авто-привязки и типовые умения не пишут участнику личных целей
     // владельца и mcp/плагин-целей. Для глобальной/сферной — вызывающий сам свой арендатор:
     // роль остаётся Owner, сужения нет.
+    // Инициатор и актор траты аватара называет здесь вызывающий, сам сервис их не вычисывает
+    // (S-SPEND-8); для REST-входа их выводит CallerSpendAttribution, а не канал доставки
     [HttpPost]
     public async Task<ActionResult<Persona>> Create([FromBody] CreatePersonaRequest req)
     {
@@ -315,7 +343,8 @@ public class PersonasController(
             callerRole = area!.Role;
             boundProjectId = req.ProjectId;
         }
-        return await _crud.CreateAsync(tenant, req, CallerSessionId(),
+        var (initiator, actor) = CallerSpendAttribution();
+        return await _crud.CreateAsync(tenant, req, CallerSessionId(), initiator, actor,
             callerRole: callerRole, projectId: boundProjectId);
     }
 
@@ -457,8 +486,8 @@ public class PersonasController(
         }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
         // Чат от лица глобальной персоны в общем проекте (доработка R-S2a-8): 400 с машинным кодом.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         // И-6 (W3-B4a): проектная персона с проектом чужого владельца — отказ 400, а не тихий
         // чат вне проекта; через ResolvePersona этот путь из HTTP не достижим, это второй рубеж.
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -468,9 +497,16 @@ public class PersonasController(
 
     // Доступна ли AI-генерация аватара и чем именно её сделают (провайдер + модель).
     // Поле generate НЕ переименовывать: на него завязаны формы персоны на фронте.
+    // Атрибут на методе (S2b-1): это эндпоинт вертикали images в смешанной ручке персон —
+    // на выключенной вертикали отвечает 503 (фронт читает его как «генерации нет», .catch).
     [HttpGet("avatar/caps")]
+    [SubsystemUsage("images")]
     public ActionResult Caps()
     {
+        if (_images is null) return StatusCode(503, new
+        {
+            error = "Подсистема генерации изображений выключена (Subsystems:images:Enabled=false)",
+        });
         var provider = _images.ActiveProviderFor(Services.Images.ImagePlaces.PersonaAvatar);
         return Ok(new
         {
@@ -486,14 +522,20 @@ public class PersonasController(
     // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
     // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
+    // Атрибут на методе (S2b-1): генерация аватара — обращение к вертикали images
+    // (отказ выключенной вертикали держит PersonasCrudService, закрыто в S2a-2).
+    // Инициатора и актора выводит CallerSpendAttribution: форма (без чата-вызывателя) — человек,
+    // агентский вызов через stdio-MCP — по признаку живого хода (S-SPEND-8)
     [HttpPost("{id}/avatar/generate")]
     [ProjectScope(From = ScopeSource.Persona, Right = ProjectRight.WriteContent)]
+    [SubsystemUsage("images")]
     public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
     {
         // W3-B3b (разрез §3.1 строка «POST {id}/avatar/generate»; И-2): ключ — арендатор: кандидаты
         // аватара проектной персоны идут в папку ассетов владельца её проекта.
         var scope = HttpContext.GetRequestScope();
-        return await _crud.GenerateAvatarAsync(scope.TenantOwnerId, id, req);
+        var (initiator, actor) = CallerSpendAttribution();
+        return await _crud.GenerateAvatarAsync(scope.TenantOwnerId, id, req, initiator, actor);
     }
 
     // Отдать кандидата аватара (превью в галерее выбора). access_token в query для <img>.
@@ -810,8 +852,10 @@ public class PersonasController(
             systemPrompt: null, model: null, effort: null, scope, req.ProjectId,
             color, draft.Greeting, memoryEnabled: true, tools: null, contract: contract);
 
-        // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы)
-        persona = await _crud.TryAutoGenerateAvatarAsync(tenant, persona, draft.AvatarPrompt);
+        // 3. Фото-аватар — автоматически (не критично: при сбое остаются инициалы).
+        // Quick-create — действие человека из UI, инициатор траты — он (S-SPEND-8); ключ —
+        // арендатор проекта персоны (W3-B3a), как у всей остальной записи этой ручки.
+        persona = await _crud.TryAutoGenerateAvatarAsync(tenant, persona, draft.AvatarPrompt, SpendInitiators.Human);
 
         // 3.5. Проектной персоне — дефолтные привязки к данным проекта (файлы/заметки/знания)
         persona = _bindings.SeedProjectDefaults(tenant, persona);

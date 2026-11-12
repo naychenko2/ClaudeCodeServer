@@ -25,7 +25,7 @@ export function FeatureCenter({ open, featureId, projectId, projectOwnerId, isMo
   // Исполнитель «← назад»: закрывает страницу и ведёт в target.
   onBack: (t: FeaturePageBackTarget) => void;
   // Открыть файл проекта (существующий просмотр; «Открыть макет» в «Планы и макеты»).
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void;
   // Страница уступает центр контенту (файл): центр показан, страница скрыта, НО
   // остаётся смонтированной — состояние (вкладка, выбранный документ) переживает
   // возврат. «Последнее действие выигрывает»: файл, открытый ПОСЛЕ страницы, вытесняет

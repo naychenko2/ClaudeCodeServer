@@ -15,6 +15,27 @@ internal static class LocalExecutorLoad
     // первого сообщения (SessionLiveness) — это не ход.
     internal static bool IsTurnRunning(Session s) => s.Status == SessionStatus.Working;
 
+    internal sealed record LocalTurn(string Name, string FeatureTitle, string Step);
+
+    // Локальные ходы на движке: задачи того же признака занятости (InProgress + чат Working),
+    // чей эффективный ход локальный (шов LocalTurnOf). Считаются задачами, не персонами:
+    // одна карточка — одно физическое место на движке; в счёт идут и ревью/доработки вне
+    // ростера исполнителей. Пинка простоя это не касается: он ведёт учёт по персонам.
+    internal static List<LocalTurn> LocalTurnsBy(
+        IReadOnlyCollection<TaskItem> ownerTasks, ISessionDirectory sessions, ILocalExecutorRoster roster, string ownerId)
+    {
+        var turns = new List<LocalTurn>();
+        foreach (var t in ownerTasks)
+        {
+            if (t.Status != TaskItemStatus.InProgress || t.LinkedSessionId is not { } sid) continue;
+            if (sessions.GetById(sid) is not { } session || !IsTurnRunning(session)) continue;
+            if (roster.LocalTurnOf(t, ownerId) is not { } turn) continue;
+            var feature = t.FeatureId is { } fid ? ownerTasks.FirstOrDefault(x => x.Id == fid)?.Title : null;
+            turns.Add(new LocalTurn(turn.PersonaName ?? t.Title, feature ?? t.Title, t.StepRef ?? t.Title));
+        }
+        return turns;
+    }
+
     // personaId → чем занята (пусто — свободна). В словаре только занятые.
     internal static Dictionary<string, List<BusyEntry>> BusyBy(
         IReadOnlyCollection<TaskItem> ownerTasks, IReadOnlyCollection<LocalExecutor> roster, ISessionDirectory sessions)

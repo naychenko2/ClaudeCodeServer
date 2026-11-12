@@ -23,6 +23,7 @@ import { MiniSegment } from '../home/WidgetCard';
 import { C, FONT, FS, ISLAND, SHADOW, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
+import { SUBSYSTEM_DISABLED_REASON } from '../../lib/subsystems';
 import { IncidentsPanel } from './IncidentsPanel';
 import { takePendingIncident, INCIDENT_OPEN_EVENT } from './incidentLink';
 
@@ -156,7 +157,8 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
       subtitle={
         status?.configured
           ? 'Стек наблюдаемости не отвечает — подними его и обнови страницу.'
-          : 'Раздел выключен администратором.'
+          // причина — из SUBSYSTEM_DISABLED_REASON (единый источник с заглушкой раздела, п. 1b)
+          : `Раздел ${SUBSYSTEM_DISABLED_REASON}.`
       }
       action={
         <div style={{

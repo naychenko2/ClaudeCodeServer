@@ -9,13 +9,23 @@
 //   3 — живой режим: task_changed → перезапрос затронутого проекта (дебаунс
 //        1,5 с), событие без фичи игнорируется, флаг выключен → запросов нет;
 //   4 — несколько потребителей (R3, минор 5): выключенный потребитель не
-//        стирает срез и не отписывает чужую подписку; последний ушедший — чистит.
+//        стирает срез и не отписывает чужую подписку; последний ушедший —
+//        переносит срез в кэш (FI-1);
+//   5 — FI-1: возврат в проект рисует кэшированный срез без EMPTY-кадра; гонка
+//        двух запросов одного проекта (поколение _seq); сбой первичной («фич нет»,
+//        а не вечная загрузка) и сбой фонового (срез не трогать);
+//   6 — FI-3: граница владельца — кэш и срезы не переживают сброс владельца;
+//        поздний ответ прежнего владельца отбивается по поколению; порядок
+//        плашек featureOf не зависит от повторного входа (ключ не удаляется);
+//        wiring: App.tsx зовёт сброс на logout и cc-unauthorized.
 //
 // Тесты независимы от пояса: время — только fake timers и ISO-строки фикстуры.
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { __test, featureOf, useFeaturesIndex } from './featuresIndex';
+import { __test, featureOf, resetFeaturesIndexOwner, useFeaturesIndex } from './featuresIndex';
 import { api } from './api';
 import { upsertTaskLocal } from './tasks';
 import { setAllFlags } from './featureFlags';
@@ -112,6 +122,28 @@ describe('стор индекса разделён по проекту', () => {
     expect(__test.isIndexLoading('p2')).toBe(false);
     __test.setLoading('p1', false);
     expect(__test.isIndexLoading('p1')).toBe(false);
+  });
+
+  it('FI-1: последний ушедший — срез в кэше; featureOf его не видит, ready — true', () => {
+    // срез проекта p1 (фикстура: чаты chat-cur и др.) + один активный потребитель
+    __test.setIndex('p1', FIXTURE);
+    __test.setActive('p1');
+    __test.onUnmount('p1');
+    // кэш ушедшего проекта НЕ добавляет плашку фичи в чаты (featureOf — только живой)
+    expect(featureOf('chat-cur')).toEqual([]);
+    // сам срез сохранён в кэше — тем же объектом (для возврата без EMPTY-кадра)
+    expect(__test.cache().get('p1')).toBe(FIXTURE);
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    expect(__test.ready('p1')).toBe(true);
+    // проект, по которому не было ни одного успешного ответа — не готов
+    expect(__test.ready('p2')).toBe(false);
+  });
+
+  it('FI-1: сбой первичной загрузки — EMPTY и ready (не вечная загрузка)', () => {
+    // сбой отражается через setIndex(EMPTY): срез есть (пустой) → готово
+    __test.setIndex('p1', { features: [], chats: {} });
+    expect(__test.snapshotFor('p1').features).toHaveLength(0);
+    expect(__test.ready('p1')).toBe(true);
   });
 });
 
@@ -358,20 +390,281 @@ describe('несколько потребителей одного проект�
     await flush();
   });
 
-  it('MAJOR-1: все ушли, новый потребитель — новый запрос', async () => {
+  it('MAJOR-1: все ушли, новый потребитель — новый запрос (FI-1: срез уходит в кэш, не стирается)', async () => {
     const a = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(1);
-    // Последний ушёл — срез очищен.
+    // Последний ушёл — срез перенесён в кэш: снимок тот же объект (без EMPTY-кадра).
     a.root.unmount();
     await flush();
-    expect(__test.snapshotFor('p1').features).toHaveLength(0);
-    // Новый потребитель — первичная загрузка заново.
+    expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+    expect(__test.cache().get('p1')).toBe(FIXTURE);
+    // Новый потребитель — запрос заново (фоновый, поверх кэша).
     const b = mount(createElement(Consumer, { projectId: 'p1' }));
     await flush();
     expect(featuresIndexSpy).toHaveBeenCalledTimes(2);
     expect(__test.snapshotFor('p1')).toBe(FIXTURE);
     b.root.unmount();
     await flush();
+  });
+});
+
+// ── 5: FI-1 — кэш между входами, гонка запросов, сбои (хук с ручными промисами) ──
+
+describe('FI-1: возврат в проект, гонка запросов, сбои загрузки', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('возврат при неразрешённом фоновом запросе: тот же срез и ready (без EMPTY-кадра)', async () => {
+    let resolveFirst: (v: FeaturesIndex) => void;
+    const first = new Promise<FeaturesIndex>(r => { resolveFirst = r; });
+    // Фоновый запрос возврата — никогда не резолвится: проверяем состояние в полёте.
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => first)
+      .mockImplementation(() => new Promise<FeaturesIndex>(() => {}));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await act(async () => { resolveFirst(FIXTURE); });
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      expect(__test.ready('p1')).toBe(true);
+
+      a.root.unmount();
+      await flush();
+      // Последний ушёл: срез перенесён в кэш, снимок — тот же объект.
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE);
+      expect(__test.cache().get('p1')).toBe(FIXTURE);
+      expect(__test.ready('p1')).toBe(true);
+
+      // Возврат, пока фоновый запрос ещё в полёте: сразу прошлый срез, та же ссылка.
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(spy).toHaveBeenCalledTimes(2); // фоновое обновление отправлено
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE); // не копия и не EMPTY
+      expect(__test.ready('p1')).toBe(true);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('гонка: ранний запрос, пришедший последним, не затирает свежий (_seq)', async () => {
+    let resolve1: (v: FeaturesIndex) => void;
+    let resolve2: (v: FeaturesIndex) => void;
+    const req1 = new Promise<FeaturesIndex>(r => { resolve1 = r; });
+    const req2 = new Promise<FeaturesIndex>(r => { resolve2 = r; });
+    const idxA: FeaturesIndex = { features: [feature('A')], chats: {} };
+    const idxB: FeaturesIndex = { features: [feature('B')], chats: {} };
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => req1) // первый вход: запрос №1
+      .mockImplementationOnce(() => req2); // возврат (кэша нет): первичный снова — №2
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      a.root.unmount(); // ушли до ответа: живого среза нет, кэш пуст
+      await flush();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+
+      await act(async () => { resolve2(idxB); }); // второй ответ пришёл первым
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+
+      await act(async () => { resolve1(idxA); }); // первый ответ — последний по времени
+      await flush();
+      // Старый ответ отброшен (его поколение уже не последнее).
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+      expect(__test.cache().get('p1')).toBe(idxB);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('сбой первичной загрузки: EMPTY и ready — «фич нет», не вечная загрузка', async () => {
+    const spy = vi.spyOn(api.tasks, 'featuresIndex').mockRejectedValue(new Error('offline'));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      expect(__test.ready('p1')).toBe(true); // пустой ответ — тоже «готово»
+      expect(__test.isIndexLoading('p1')).toBe(false);
+      a.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('сбой фонового перезапроса при живом кэше: срез не трогать', async () => {
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => Promise.resolve(FIXTURE))
+      .mockImplementationOnce(() => Promise.reject(new Error('offline')));
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      a.root.unmount();
+      await flush();
+      const b = mount(createElement(Consumer, { projectId: 'p1' })); // фоновый запрос reject'нет
+      await flush();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(__test.snapshotFor('p1')).toBe(FIXTURE); // прошлый срез цел
+      expect(__test.ready('p1')).toBe(true);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+// ── 6: FI-3 — граница владельца и порядок плашек (хук с ручными промисами) ────────
+
+// Срез с одной связью чата 'c' → фича id (для теста порядка): тот же чат виден
+// и в глобальном срезе (''), и в проектном — порядок featureOf заметен на нём.
+function sliceFor(id: string): FeaturesIndex {
+  return {
+    features: [feature(id)],
+    chats: { c: [{ featureId: id, kind: 'curator', taskRole: null, stepRef: null, lane: null }] },
+  };
+}
+
+describe('FI-3: граница владельца — индекс не переживает выход', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('сброс владельца: кэш прежнего не переживает — EMPTY и «ещё не загружено»', async () => {
+    const idxA: FeaturesIndex = { features: [feature('A')], chats: {} };
+    const never = new Promise<FeaturesIndex>(() => {});
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockResolvedValueOnce(idxA)
+      .mockImplementation(() => never); // ответ нового владельца не резолвится: проверяем состояние в полёте
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(idxA);
+      a.root.unmount();
+      await flush();
+      // FI-1: срез пережил уход потребителей — в кэше…
+      expect(__test.cache().get('p1')).toBe(idxA);
+      // …но сменился владелец: App.tsx (logout / cc-unauthorized) зовёт сброс.
+      resetFeaturesIndexOwner();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      expect(__test.ready('p1')).toBe(false); // «ещё не загружено», а не срез чужого человека
+      expect(__test.cache().size).toBe(0);
+      // Вход нового владельца (ответ ещё не пришёл): тот же EMPTY, не прошлый срез.
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(__test.snapshotFor('p1').features).toHaveLength(0);
+      expect(__test.ready('p1')).toBe(false);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('поздний ответ прежнего владельца, пришедший после запроса нового, не применяется', async () => {
+    let resolveOld: (v: FeaturesIndex) => void;
+    const oldReq = new Promise<FeaturesIndex>(r => { resolveOld = r; });
+    const idxA: FeaturesIndex = { features: [feature('A')], chats: {} };
+    const idxB: FeaturesIndex = { features: [feature('B')], chats: {} };
+    const spy = vi.spyOn(api.tasks, 'featuresIndex')
+      .mockImplementationOnce(() => oldReq) // прежний владелец: запрос в полёте
+      .mockImplementationOnce(() => Promise.resolve(idxB)); // новый владелец: ответ
+    try {
+      const a = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush(); // запрос в полёте, ответа нет
+      resetFeaturesIndexOwner(); // выход владельца — раньше размонтирования, как в App.tsx
+      a.root.unmount();
+      await flush();
+      const b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+      // Ответ прежнего владельца приходит последним: его поколение уже не существует
+      // (номера моноотонны — новый запрос получил больший).
+      await act(async () => { resolveOld(idxA); });
+      await flush();
+      expect(__test.snapshotFor('p1')).toBe(idxB);
+      expect(__test.cache().get('p1')).toBe(idxB);
+      b.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('FI-3: порядок плашек не зависит от повторного входа', () => {
+  beforeEach(() => {
+    installFakeDom();
+    __test.reset();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    __test.reset();
+    setAllFlags({});
+    uninstallFakeDom();
+  });
+
+  it('чат в глобальном и проектном срезах: unmount+mount проекта не меняет порядок featureOf', async () => {
+    // Три среза; чат 'c' связан с каждым своей фичей. Живой порядок — порядок
+    // первых визитов (p1, '', p2). Прежний delete+set при возврате переставлял
+    // p1 в конец — плашки того же чата меняли порядок.
+    const sP1 = sliceFor('feat-p1');
+    const sG = sliceFor('feat-glob');
+    const sP2 = sliceFor('feat-p2');
+    const slices: Record<string, FeaturesIndex> = { p1: sP1, '': sG, p2: sP2 };
+    const spy = vi.spyOn(api.tasks, 'featuresIndex').mockImplementation((projectId?: string) =>
+      Promise.resolve(slices[projectId ?? '']));
+    try {
+      const m1 = mount(createElement(Consumer, { projectId: 'p1' }));
+      const m2 = mount(createElement(Consumer, { projectId: null }));
+      const m3 = mount(createElement(Consumer, { projectId: 'p2' }));
+      await flush();
+      const before = featureOf('c').map(e => e.feature.featureId);
+      expect(before).toEqual(['feat-p1', 'feat-glob', 'feat-p2']);
+      // Повторный вход p1: последний ушедший, затем новый потребитель.
+      m1.root.unmount();
+      await flush();
+      const m1b = mount(createElement(Consumer, { projectId: 'p1' }));
+      await flush();
+      const after = featureOf('c').map(e => e.feature.featureId);
+      // Ключ живого Map не удалялся (метка на своём месте) — порядок тот же.
+      expect(after).toEqual(before);
+      m1b.root.unmount();
+      m2.root.unmount();
+      m3.root.unmount();
+      await flush();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('App.tsx зовёт resetFeaturesIndexOwner на logout и cc-unauthorized', () => {
+    // Сам сброс проверяют тесты выше; здесь — wiring: удаление любого из двух
+    // вызовов из App.tsx (мутация) краснит этот тест (паттерн CacheWarnDialog.test.ts).
+    const src = readFileSync(fileURLToPath(new URL('../App.tsx', import.meta.url)), 'utf8');
+    const calls = src.match(/resetFeaturesIndexOwner\(\)/g);
+    expect(calls?.length, 'вызовы сброса в App.tsx: cc-unauthorized и logout').toBe(2);
   });
 });

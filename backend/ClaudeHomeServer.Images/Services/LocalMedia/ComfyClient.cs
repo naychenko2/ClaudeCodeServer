@@ -524,6 +524,9 @@ public sealed class ComfyClient(IHttpClientFactory http, IConfiguration config)
         {
             throw new ComfyException($"ComfyUI недоступен ({what})", ex);
         }
+        // Узкий тип уместен: в try только транспортный вызов, его контракт таймаута —
+        // TaskCanceledException с живым токеном хода. Отмена хоста (тот же тип с отменённым ct)
+        // здесь не ловится и уходит наверх как отмена.
         catch (TaskCanceledException ex) when (!ct.IsCancellationRequested)
         {
             throw new ComfyException($"ComfyUI не ответил вовремя ({what})", ex);

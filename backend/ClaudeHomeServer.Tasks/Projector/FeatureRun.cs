@@ -105,6 +105,12 @@ public sealed class FeatureRun
     // смерженной/закрытой фичи, по порядку CreatedAt. Хвосты НЕ держат «ждёт вас»: из-за них
     // тревога не поднимается, а сами хвосты фронт показывает отдельной строкой.
     public List<string> PostMergeTails { get; init; } = [];
+    // Ключи закрытого хвоста (§8.3, FS-XT1): ровно то, что отдал учёт
+    // (FeatureStepAccounting.Result.ClosedTailKeys), в том же порядке, что ленты шагов. Нужен
+    // там, где хвост называют по именам: ручка POST merge (снять или оставить — по этим ключам)
+    // и диалог мержа. Своего предиката «что такое хвост» здесь нет: список только переносится.
+    // Пусто — хвоста нет, решение от вызывающего не требуется.
+    public List<string> ClosedTailKeys { get; init; } = [];
     // TR-B1c: расхождения трекера с реальностью (сверка трекера, один вызов в проекторе).
     // Единая точка правды: индекс берёт Count отсюда, фронт и MCP не пересчитывают. Не null.
     public List<FeatureTrackerIssue> Tracker { get; init; } = [];
@@ -153,7 +159,9 @@ public sealed record FeaturePlan(
     // Есть ли текст (ResultMarkdown не пуст после Trim).
     bool HasText,
     // Пути файлов документа: макеты из ResultMarkdown (docs/mockups/….{html,md}), затем файлы
-    // из LinkedFiles задачи. distinct, общий потолок 20, пустые и пути с «..» отброшены.
+    // из LinkedFiles задачи, прошедшие правило материала (FeatureMaterials.IsMaterial / IsMockup:
+    // код и файлы вне docs/ не входят никогда). distinct регистронезависимо, пустые и пути с «..»
+    // отброшены; потолок общий на фичу — FeatureMaterials.Cap (30), свежие задачи сверху.
     List<string> MockupPaths);
 
 // «Сейчас»: одна InProgress-задача фичи (кто и что делает, сколько идёт).
@@ -208,8 +216,13 @@ public static class FeatureMergeRiskKinds
 {
     // Шагов плана без задач (NotCreated).
     public const string NotCreated = "not_created";
-    // Заведены, но не приняты (Work + Review).
+    // Заведены, но не приняты и ещё живые: работа идёт или идёт виток (Work.running + Review.running).
+    // Разделены с tail (разрез Александра 10.11, §8.3): раньше «open» был суммой Work + Review целиком.
     public const string Open = "open";
+    // Закрытый хвост: сданные, но не принятые шаги (Review/pending + Work/returned) — ключи отдаёт
+    // учёт (FeatureStepAccounting.Result.ClosedTailKeys). Это риск решения («снять или оставить»),
+    // а не живой работы: снимается только явным выбором человека при мерже.
+    public const string Tail = "tail";
     // Расхождения сверки трекера.
     public const string Tracker = "tracker";
 }
@@ -401,6 +414,9 @@ public sealed class FeatureStepChain
     // Шаг «в master»: все задачи цепочки сданы строго до закрытия какого-либо мержа (у мержа с
     // reviewOf — только перечисленные шаги). Ортогонален корзине/Outcome: принятость от него не зависит.
     public bool InMaster { get; init; }
+    // Доработка после мержа (FS-PB2): шаг заведён позже первого мержа и вне действующего плана;
+    // в знаменатель, корзины и линии не входит, цепочка в списке остаётся.
+    public bool FollowUp { get; init; }
     // Момент мержа, в который шаг попал в master (первый подходящий); null — не в master.
     public DateTime? MergedAt { get; init; }
     // Число витков с возвратом (returned/accepted_with_remarks) по этому шагу.
@@ -452,7 +468,8 @@ public sealed class FeatureLane
 // Честный прогресс фичи по шагам (единица учёта — шаг, код stepRef; ключ шага без stepRef — id
 // задачи). Корзины взаимоисключающие: Total = Accepted + Review + Work + NotCreated. Вне знаменателя:
 // Withdrawn (шаг снят ревью с выкладки) и UnlinkedReworks (доработки без привязки к шагу —
-// ни stepRef, ни reviewOf; новую цепочку не заводят).
+// ни stepRef, ни reviewOf; новую цепочку не заводят) и доработки после мержа (FollowUpTotal/
+// FollowUpAccepted — отдельная строка, итог фичи они не меняют).
 public sealed class FeatureStepProgress
 {
     // pending — задач role=plan нет, или у всех пустой planSteps; partial — списки есть только у
@@ -471,6 +488,19 @@ public sealed class FeatureStepProgress
     // Сколько шагов уже в master (FeatureStepChain.InMaster). Ортогональный счётчик: в Total и в
     // сумму корзин не входит, процент им не считается.
     public int InMaster { get; init; }
+    // Закрытый хвост (§8.3): сданные, но не принятые шаги — подмножество Review + Work (их деление
+    // «сдано / ещё живо»), а не пятая корзина: в Total и в сумму корзин не входит, знаменатель им
+    // не меняется. Ровно эти ключи отдаёт учёт (FeatureStepAccounting.Result.ClosedTailKeys) —
+    // второй предикат нигде не заводится. Из него: риск tail диалога мержа и снятие по выбору.
+    public int ClosedTail { get; init; }
+    // База плана из эпика (BaselineSteps, FS-PB1); null — не зафиксирована.
+    public int? BaselineTotal { get; init; }
+    // Доработки после мержа, кроме снятых, и сколько из них принято — вне Total и корзин.
+    public int FollowUpTotal { get; init; }
+    public int FollowUpAccepted { get; init; }
+    // Снятых при мерже (вердикт withdrawn с Origin = merge_tail): часть Withdrawn, ортогональный
+    // корзинам счётчик — доля «смержено без ревью», отделённая от снятых по существу (§8.3).
+    public int WithdrawnAtMerge { get; init; }
 }
 
 // Состояния фичи (FeatureRun.State) — единая точка правды: 11 значений, camelCase (как в JSON).

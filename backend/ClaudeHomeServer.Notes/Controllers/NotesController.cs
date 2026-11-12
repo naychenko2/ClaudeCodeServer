@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Notes;
+using ClaudeHomeServer.Services.Notes.Wiki;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -10,12 +11,13 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // Obsidian-совместимая база заметок, per-owner (изоляция как у задач — по claim sub).
 //
 // Контроллер живёт в вынесенной вертикали `ClaudeHomeServer.Notes` (Этап 5,
-// волна 2). Сборка подключается к MVC атрибутом `[assembly: ApplicationPart("...")]`
-// (генерируется MSBuild благодаря Web SDK у Notes.csproj). Гейт вертикали
-// `Subsystems:Notes:Enabled` снимает эту часть в композиции Main
-// (`ConfigureApplicationPartManager` в Program.cs) — при `Enabled=false` MVC не
-// находит action и маршруты `/api/notes/*` отдают общий 404, никаких обращений
-// к сервисам вертикали не происходит.
+// волна 2). Это динамический модуль: Main не ссылается на сборку на компиляции
+// (`ReferenceOutputAssembly="false"` в Main.csproj), и её часть в MVC не добавляется
+// вовсе — ModuleLoader подключает ApplicationPart только загруженному модулю
+// (Program.cs, реестр DynamicModules). Гейт `Subsystems:Notes:Enabled` закрыт —
+// ModuleLoader не загружает dll и не регистрирует сервисы: MVC не находит action,
+// маршруты `/api/notes/*` отдают общий 404 (из неполучастия части), никаких
+// обращений к сервисам вертикали не происходит.
 //
 // Шов `INotesHubNotifier` (Core) заменил `IHubContext<SessionHub>` (Main):
 // реализация в Main (`NotesHubNotifier` поверх `ISessionBroadcaster`)
@@ -31,18 +33,30 @@ public class NotesController : ControllerBase
     private readonly NotesAiService _ai;
     private readonly NoteTaskSyncService _noteTasks;
     private readonly INotesHubNotifier _hubNotifier;
+    private readonly string _dataDir;
 
     public NotesController(NotesService notes, NotesKnowledgeService kb, NotesAiService ai,
-        NoteTaskSyncService noteTasks, INotesHubNotifier hubNotifier)
+        NoteTaskSyncService noteTasks, INotesHubNotifier hubNotifier, IConfiguration config)
     {
         _notes = notes;
         _kb = kb;
         _ai = ai;
         _noteTasks = noteTasks;
         _hubNotifier = hubNotifier;
+        // Каталог данных — как у всех сервисов и у WikiController (DataPath указывает на
+        // projects.json в dataDir): нужен только корню вики для учёта чтений (R4).
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
     }
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Сервисный JWT хода (claim typ=svc, распознаётся как в WikiController): он не человек —
+    // GET заметки отвечает под svc как раньше, но чтения страницы вики не считает (ADR-039, §7
+    // «Не учитываются»). Локальные константы — тот же приём, что в WikiController/PluginsController.
+    private const string TokenKindClaim = "typ";
+    private const string ServiceTokenKind = "svc";
+    private bool IsServiceToken => User.FindFirstValue(TokenKindClaim) == ServiceTokenKind;
 
     private Task Broadcast(string action, string? noteId = null, string? source = null)
     {
@@ -491,6 +505,13 @@ public class NotesController : ControllerBase
     {
         var note = _notes.GetDetail(UserId, id);
         if (note is null) return NotFound();
+        // R4 (ADR-039, §7): открытие страницы вики в «Заметках» — чтение Human; обычная заметка
+        // — не страница вики, svc — не человек: ни то, ни другое не считается. Сбой учёта
+        // (false стора) не меняет ответ. Ключ — note.Path: для источника wiki это путь под
+        // pages/ (тот же PageKey, что у GET /api/wiki/page).
+        if (note.Source == NotesService.WikiKey && !IsServiceToken)
+            WikiReadsStore.RecordMany(WikiPaths.Root(_dataDir, UserId),
+                [(note.Path, WikiReadKind.Human)], DateTimeOffset.UtcNow);
         Response.Headers.ETag = $"\"{NotesService.ContentSha256(note.Content)}\"";
         return Ok(note);
     }

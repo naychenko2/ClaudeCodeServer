@@ -1,17 +1,20 @@
 // Единая тревога страницы фичи (Ш4): слова и тон — из alarmView (F2), «молчит/стоит/тихо» —
-// из analysisLineState. Чистый рендер (renderToStaticMarkup): без DOM и сторов.
+// из analysisLineState. Тревога — чистый рендер (renderToStaticMarkup): без DOM и сторов;
+// главная кнопка шапки (FS-FKEY) — в fakeDom: клик и порядок «запись → переход».
 //
 // Мутации (в отчёте): (1) заменить tone на свой switch по attention.kind — краснеет тест
 // «тон из alarmView»; (2) убрать ветку silent — краснеют «стоит»/«тихо»; (3) вернуть
 // «ждёт вашего ответа» в head — краснеет «слова alarmView».
 
-import { createElement } from 'react';
+import { act, createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
-import { describe, it, expect, vi } from 'vitest';
-import { FeaturePageAlert } from './FeaturePageHeader';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { FeaturePageAlert, FeaturePageToolbar } from './FeaturePageHeader';
 import { alarmView } from '../chat/feature/featureTruthModel';
+import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureAttention, FeatureRun } from '../../types/featureRun';
+import type { FeatureIndexFeature } from '../../types/featureIndex';
 
 vi.mock('../../lib/api', () => ({ api: { personas: { avatarUrl: () => '' } } }));
 vi.mock('../../lib/signalr', async (importOriginal) => {
@@ -27,6 +30,25 @@ vi.mock('../../lib/personas', async (importOriginal) => {
     usePersonasVersion: () => 0,
     getPersonaById: (id: string) => (id === 'p-kira' ? { id, name: 'Кира' } : undefined),
     ensurePersonasLoaded: async () => {},
+  };
+});
+// FS-FKEY: журналы перехода и записей возврата (тесты главной кнопки шапки).
+const openChatCalls = vi.hoisted(() => [] as string[]);
+// Крюк момента открытия: тест снимает состояние в тот момент, когда openChatById уже
+// вызван (доказательство порядка «запись → переход»).
+const openChatHook = vi.hoisted(() => ({ fn: null as ((id: string) => void) | null }));
+vi.mock('../../lib/openChat', () => ({ openChatById: async (id: string) => { openChatCalls.push(id); openChatHook.fn?.(id); return true; } }));
+// Делегирующий обёртка recordFeatureReturn: настоящий модуль делает работу, журнал
+// даёт точное число вызовов и их аргументы.
+const recFeatureReturnCalls = vi.hoisted(() => [] as { featureId: string; to: { kind: string; id: string }; title: string | null }[]);
+vi.mock('../../lib/featureBackNav', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/featureBackNav')>();
+  return {
+    ...orig,
+    recordFeatureReturn: (featureId: string, to: { kind: 'chat' | 'task'; id: string }, title?: string | null, ...rest: unknown[]) => {
+      recFeatureReturnCalls.push({ featureId, to, title: title ?? null });
+      return (orig.recordFeatureReturn as (...a: unknown[]) => void)(featureId, to, title, ...rest);
+    },
   };
 });
 
@@ -155,5 +177,83 @@ describe('FeaturePageAlert 360: контраст кнопки главного �
       const b = block(head);
       expect(ratio(tokenOf(b, 'c-bg-white'), tokenOf(b, 'c-text-secondary')), head).toBeGreaterThanOrEqual(4.5);
     }
+  });
+});
+
+// ── FS-FKEY: главная кнопка шапки (1280) пишет возврат к фиче перед переходом ──────
+// Тот же контракт, что у блока тревоги (:1014) и остальных мест страницы: один клик —
+// ровно одна recordFeatureReturn и один openChatById, запись раньше открытия.
+// Порядок и число записей проверяет снимок openChatHook: в момент вызова openChatById
+// запись уже в журнале. Мутации (в отчёте): убрать запись из ветки not_started →
+// красный только тест not_started; убрать из wait-ветки → красный только первый.
+type AnyNode = { nodeType: number; nodeName: string; childNodes: AnyNode[] };
+function firstButton(n: AnyNode): AnyNode | null {
+  if (n.nodeType === 1 && n.nodeName === 'BUTTON') return n;
+  for (const c of n.childNodes) {
+    const hit = firstButton(c);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+describe('FeaturePageToolbar: главная кнопка — запись возврата, затем переход', () => {
+  beforeEach(() => {
+    openChatCalls.length = 0;
+    openChatHook.fn = null;
+    recFeatureReturnCalls.length = 0;
+  });
+  afterEach(() => {
+    uninstallFakeDom();
+  });
+
+  // Меню ⋯ при закрытом слушателей не вешает, но mount не должен падать на отсутствии
+  // самих методов (тот же минимум, что render() в FeaturePage.test.ts).
+  function mountToolbar(run: FeatureRun, feature: FeatureIndexFeature | null) {
+    installFakeDom();
+    const win = globalThis as any;
+    if (!win.window.addEventListener) {
+      const listeners: Record<string, Set<Function>> = {};
+      win.window.addEventListener = (t: string, f: Function) => { (listeners[t] ??= new Set()).add(f); };
+      win.window.removeEventListener = (t: string, f: Function) => { listeners[t]?.delete(f); };
+      win.window.dispatchEvent = (e: { type: string }) => { listeners[e.type]?.forEach(f => f(e)); return true; };
+    }
+    if (!win.document.querySelector) win.document.querySelector = () => null;
+    if (!win.getComputedStyle) win.getComputedStyle = () => ({ overflowY: 'visible' });
+    const { container } = mount(createElement(FeaturePageToolbar, { run, feature, isMobile: false, tag: null }));
+    return container;
+  }
+
+  const clickMain = async (c: ReturnType<typeof mountToolbar>) => {
+    const wrap = findNodeByAttr(c, 'data-testid', 'feature-page-main-action');
+    expect(wrap, 'главное действие в шапке').not.toBeNull();
+    const btn = firstButton(wrap as unknown as AnyNode);
+    expect(btn, 'Button внутри главного действия').not.toBeNull();
+    await act(async () => { (reactProps(btn as never)!.onClick as () => void)(); });
+  };
+
+  it('wait→чат: «Ответить …» записывает возврат ровно один раз и раньше открытия чата', async () => {
+    const run = mkRun({ state: 'waiting', attention: att('wait', { linkedSessionId: 'chat-kira' }) });
+    const c = mountToolbar(run, null);
+    // Снимок в момент openChatById: запись уже в журнале → порядок «запись → переход».
+    const atOpen: { records: number } = { records: -1 };
+    openChatHook.fn = () => { atOpen.records = recFeatureReturnCalls.length; };
+    await clickMain(c);
+    expect(openChatCalls, 'переход в чат тревоги').toEqual(['chat-kira']);
+    expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
+    expect(recFeatureReturnCalls[0], 'запись: фича → её чат, с названием из run.epic').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-kira' }, title: 'Фича' });
+    expect(atOpen.records, 'в момент открытия чата запись уже стоит').toBe(1);
+  });
+
+  it('not_started: «Открыть ключевой чат» записывает возврат ровно один раз и раньше открытия', async () => {
+    const run = mkRun({ state: 'not_started' });
+    const feature = { featureId: 'f1', title: 'Фича', keySessionId: 'chat-key' } as FeatureIndexFeature;
+    const c = mountToolbar(run, feature);
+    const atOpen: { records: number } = { records: -1 };
+    openChatHook.fn = () => { atOpen.records = recFeatureReturnCalls.length; };
+    await clickMain(c);
+    expect(openChatCalls, 'переход в ключевой чат').toEqual(['chat-key']);
+    expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
+    expect(recFeatureReturnCalls[0], 'запись: фича → ключевой чат, с названием').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-key' }, title: 'Фича' });
+    expect(atOpen.records, 'в момент открытия чата запись уже стоит').toBe(1);
   });
 });

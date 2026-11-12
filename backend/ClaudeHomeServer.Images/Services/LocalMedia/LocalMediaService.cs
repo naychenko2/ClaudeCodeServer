@@ -505,6 +505,15 @@ public sealed partial class LocalMediaService(
 
     public static int KleinEditEta(int images) => 20 + 11 * (Math.Max(1, images) - 1);
 
+    // MiniMax-H3-Image, 2048², 6 шагов (замер 2026-11-11, RTX 3090): новый промпт прогретой моделью
+    // 17–21 с (энкодер 32B и DiT не помещаются в VRAM вместе — энкодер грузится на каждый промпт),
+    // повтор того же промпта ~9 с, холодный старт ~60 с. Правка и персонаж: каждая картинка входа
+    // кодируется и энкодером, и VAE — правка 2048² 44 с, персонаж по одному фото 56 с, по трём 48–78 с,
+    // по пяти 82–134 с (разброс — перекладка весов энкодера и DiT в VRAM)
+    public static int H3ImageGenerateEta(int count) => 12 + 9 * Math.Max(1, count);
+
+    public static int H3ImageEditEta(int images) => 40 + 20 * (Math.Max(1, images) - 1);
+
     public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый

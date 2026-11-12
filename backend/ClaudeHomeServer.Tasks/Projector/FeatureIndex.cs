@@ -11,11 +11,9 @@ namespace ClaudeHomeServer.Services.Tasks.Projector;
 // Busy — чат занят: ход исполнителя идёт (Starting/Working) или ждёт ответа человека (Waiting) —
 // то же условие, что у сторожа зависания ClassifyStall (TR-B1b). null — у составившего снимок
 // признака нет: reported_open при отсутствии признака не выдаётся (fail-closed).
-// ContinuedInSessionId — Session.ContinuedInSessionId: ключевой чат переходит к последнему живому
-// продолжению (FeatureKeyChain.FirstLive).
 public sealed record FeatureIndexSession(
     string Id, string? TaskId, string? ProjectId, bool Archived, string? Model = null, string? PersonaId = null,
-    bool? Busy = null, string? ContinuedInSessionId = null);
+    bool? Busy = null);
 
 // Чат фичи (GET /api/tasks/features/{id}, chats[]; Б4 + W4-CHT-B): один чат из снимка
 // владельца, состоящий в фиче по ЕДИНОМУ правилу FeatureChatMembership. kind: curator |
@@ -148,7 +146,16 @@ public sealed record FeatureIndexRow(
     // BuildRow guard'ит по ContainsKey — индекс не падает (в отличие от brief, который бросает).
     string? Kind = null,
     // TR-B1c: число расхождений трекера (FeatureRun.Tracker.Count), проектор считает, индекс только несёт.
-    int TrackerIssues = 0);
+    int TrackerIssues = 0,
+    // FS-V4 (макет v2 «Срок», карточка чата v5): ask строки индекса — та же форма и та же функция,
+    // что brief.ask страницы (FeatureBrief.AskOf, единый источник run.Attention — своего расчёта
+    // здесь нет). null — тревоги нет.
+    FeatureBrief.BriefAsk? Ask = null,
+    // FS-V4: eta строки индекса — та же форма, что brief.eta (FeatureBrief.EtaOf), но только с
+    // source = "note" или null: срок по истории в индексе не считаем (он требует FeatureTypical
+    // и журналов, а индекс обязан оставаться лёгким — ADR-031 §3.4). Нет оценки оркестратора —
+    // null: карточка фронта тогда срока не показывает; новых правил здесь нет.
+    FeatureBrief.BriefEta? Eta = null);
 
 // Тревога фичи (контракт §1): kind: stopped | wait | merge; merge — только когда merge-задачи
 // нет (финал принят), reason у merge — null (на бэке, AttentionOf); sessionId — чат исполнителя

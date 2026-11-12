@@ -52,7 +52,7 @@ export interface FeatureStatsTabProps {
 // Строка точности (Майя, P1): одна фраза FS.xs textMuted без повтора:
 // «≈ по задачам — числа приблизительные» / «по журналу ходов»; при trunc —
 // отдельная «журнал обрезан».
-function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; truncated: boolean }) {
+export function AccuracyBadges({ source, truncated }: { source: 'approx' | 'journal'; truncated: boolean }) {
   const phrase = source === 'approx'
     ? '≈ по задачам — числа приблизительные'
     : 'по журналу ходов';

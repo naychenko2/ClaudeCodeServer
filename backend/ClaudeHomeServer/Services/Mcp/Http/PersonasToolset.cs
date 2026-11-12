@@ -206,8 +206,17 @@ public sealed partial class PersonasToolset(
             {
                 if (ScopeDenial(arguments, null, isCreate: true) is { } createDenied) return Deny(createDenied);
                 PersonasCrudService.AutoVoiceResult? autoVoice = null;
+                // AutoAvatar у персона из чата всегда true (BuildCreateRequest) — аватар
+                // генерирует агент, и трата его: Initiator = Agent (S-SPEND-2c). Актором —
+                // актор хода, а не владелец песочницы: токен здесь арендатора, а ход может
+                // принадлежать участнику (п.2 хвоста R-S-SPEND-2, тот же образец, что у
+                // personas_generate_avatar); актор неизвестен (фон, ход самого владельца) —
+                // права арендатора, он и есть актор
+                var actorId = sessions.GetTurnActor(session.Id, ownerId) ?? ownerId;
                 var createdResult = Unwrap(await crud.CreateAsync(ownerId,
-                    BuildCreateRequest(arguments, projectId), session.Id, onAutoVoice: r => autoVoice = r));
+                    BuildCreateRequest(arguments, projectId), session.Id,
+                    onAutoVoice: r => autoVoice = r, initiator: SpendInitiators.Agent,
+                    actorUserId: actorId));
                 if (createdResult.IsError) return createdResult;
                 // Автоподбор голоса best-effort: без голоса персона говорит голосом инстанса, и
                 // модель должна знать почему. Голос задан явно (в т.ч. пустым) — подбора не было
@@ -470,8 +479,15 @@ public sealed partial class PersonasToolset(
             case "personas_generate_avatar":
             {
                 var id = StringArg(arguments, "id");
+                // Вызов из чата — агентский: трата аватара пишется с Initiator = Agent,
+                // каким её назвал вызывающий (S-SPEND-2c). Актором — актор хода, а не владелец
+                // песочницы: токен здесь арендатора, а ход может принадлежать участнику
+                // (п.2 хвоста R-S-SPEND-2, образец TasksToolset); актор неизвестен (фон,
+                // ход самого владельца) — права арендатора, он и есть актор
+                var actorId = sessions.GetTurnActor(session.Id, ownerId) ?? ownerId;
                 var generated = await crud.GenerateAvatarAsync(ownerId, id,
-                    new GenerateAvatarRequest(OptionalArg(arguments, "prompt"), 1));
+                    new GenerateAvatarRequest(OptionalArg(arguments, "prompt"), 1), SpendInitiators.Agent,
+                    actorId);
                 var unwrapped = Unwrap(generated);
                 if (unwrapped.IsError) return unwrapped;
                 // Кандидат сразу становится аватаром — как двухшаговый путь stdio-ветки

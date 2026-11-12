@@ -52,7 +52,7 @@ public class DossiersSubsystemRegistrationTests
     {
         var services = BuildServices(BuildConfig(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
 
-        // Синглтоны из блока Program.cs:166-183 до выноса в подсистему.
+        // Синглтоны из блока Program.cs до выноса в подсистему.
         services.Should().Contain(s => s.ServiceType == typeof(InstanceSecretsProvider));
         services.Should().Contain(s => s.ServiceType == typeof(DossierStore));
         services.Should().Contain(s => s.ServiceType == typeof(DossierCaptureState));

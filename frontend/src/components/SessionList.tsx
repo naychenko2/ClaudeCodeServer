@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { canCreateChats, chatActionDeniedReason, isNotChatAuthorError } from '../features/projects/members/participantGate';
-import { FilterX, ChevronUp, ChevronDown, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, ChevronRight, MessageCircle, Archive, CheckCircle2, Sparkles } from 'lucide-react';
 import type { Project, ProjectSubject, ProjectTag, Session } from '../types';
 import type { FeatureIndexFeature } from '../types/featureIndex';
 import { api } from '../lib/api';
@@ -13,11 +13,11 @@ import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
 import { useHoverWarm } from '../hooks/useSession';
 import { C, FONT, FS, GROUP_COLORS, MODAL_W, R, SHADOW, SP } from '../lib/design';
-import { Modal, ModalActions, Button, IconButton, Chip } from './ui';
+import { Modal, ModalActions, Button, IconButton } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatGroupHeader } from './ChatGroupHeader';
 import { FeatureGroupHeader } from './FeatureGroupHeader';
-import { useFeaturesIndex } from '../lib/featuresIndex';
+import { useFeaturesIndex, useFeaturesIndexReady } from '../lib/featuresIndex';
 import { LIST_FLASH_CLASS, LIST_FLASH_MS } from './ListDateDivider';
 import {
   SubjectDeleteDialog, SubjectPickMenu, SubjectRenameDialog, SubjectRunBar, SubjectSectionHeader,
@@ -34,7 +34,7 @@ import { useSubsystem } from '../lib/subsystems';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
-import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, isDefaultFeatureKinds, type ChatGroupBy, type FeatureKind } from '../lib/chatFilters';
+import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, loadChatFilters, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason, isArchivedChat, ARCHIVE_EMPTY_TITLE, ARCHIVE_EMPTY_SUBTITLE, type ChatGroupBy } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, rootChatForSection, rootResolver, useTreeCollapse, withAncestors, type ChatTreeRowData } from '../lib/chatTree';
 import { useBgWorkPresence } from '../lib/agentsPresence';
 import { startVisiblePoll, throttleRefetch } from '../lib/visiblePoll';
@@ -46,12 +46,11 @@ import { ChatCard, ROW_GAP } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
-import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, NO_SUBJECT_KEY, FEATURE_KIND_LABEL, featureMatchesKinds, shownFiltersModel, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
+import { groupChats, groupByTags, groupBySubjects, groupByFeatures, sortChatsFlat, chatTagsSorted, featureGroupByOptions, featureGroupChats, featureGroupTreeRows, featureRoleFor, NO_SUBJECT_KEY, featureListSections, type FeatureChatGroup, type SubjectChatGroup, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { dateOnly } from './chat/feature/featureTime';
 import { TagAssignMenu } from './TagChip';
 import { useReadStateVersion } from '../lib/chatReadState';
-import { autoNavigateToContinued } from '../lib/chatContinue';
 
 // Единый focus-visible ring (клавиатура) для строк-ссылок «+N чат в группе …» (F3.3):
 // проектный паттерн (один инжект <style> на модуль), не inline onFocus (минор).
@@ -572,18 +571,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         ));
         return;
       }
-      // «Продолжить в новом чате»: исходный чат продолжён — обновляем continuedInSessionId
-      // в списке (пометка «Продолжен в новом чате») и, если открыт именно он, переходим
-      // в новый (тост). Открыт другой чат/экран — только стор, без перехода.
-      if (msg.type === 'chat_continued') {
-        autoNavigateToContinued(msg);
-        setSessions(prev => prev.map(s =>
-          s.id === msg.sessionId
-            ? { ...s, continuedInSessionId: msg.newSessionId }
-            : s
-        ));
-        return;
-      }
       // Чат убран/возвращён из архива на другом клиенте/устройстве: рефетчим
       // конкретный чат и кладём обновление в список — иначе archived-флаг
       // залежался бы до следующего тика поллинга (5с) и карточка висела бы
@@ -747,9 +734,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const subjectRun = useSubjectRun(project.id, subjectsMode);
   const featuresMode = groupBy === 'features';
   const featuresIndex = useFeaturesIndex(project.id);
+  // Готов ли срез проекта (живой или из кэша последнего ответа): «фич нет» отличается
+  // от «ещё не загружено». До готовности экран рисует строку загрузки, а не «Без фичи».
+  const featuresReady = useFeaturesIndexReady(project.id);
   // Раскрытые группы фич (по featureId). Пусто = все свёрнуты: группа свёрнута по
   // умолчанию, наружу выведены ключевой и живые/вставшие чаты, остальное — «ещё N»
   const [expandedFeatureGroups, setExpandedFeatureGroups] = useState<Set<string>>(new Set());
+  // Раскрыта ли секция «Закрытые · N ›»: хранится id проекта, в котором её раскрыли, —
+  // при смене проекта сравнение само даёт «свёрнуто», без эффекта и мигания старыми строками
+  const [closedExpandedFor, setClosedExpandedFor] = useState<string | null>(null);
+  const closedExpanded = closedExpandedFor === project.id;
 
   // Возврат чата из архива: выходим из архивного вида и открываем этот чат — достают
   // из архива, чтобы продолжить работу, а не чтобы остаться в архивном списке
@@ -847,13 +841,28 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const subjectGroups: SubjectChatGroup[] | null = subjectsMode
     ? groupBySubjects(treeRoots, subjects, sortOrder)
     : null;
+  // Чаты ТЕКУЩЕГО проекта. При смене проекта sessions до свежего ответа ещё держат
+  // чаты старого (кэш idb подмешивается к prev, см. :451): ни одного из них нет в
+  // индексе нового проекта, и в группировку они не должны попадать (иначе — «Без фичи»
+  // до прихода своего списка).
+  const projectSessions = useMemo(
+    () => sessions.filter(s => s.projectId === project.id),
+    [sessions, project.id],
+  );
   // Режим «Фичи»: группы по индексу фич (порядок = порядок features[] бэка, «Без фичи»
-  // в конце). На вход — ВСЕ сессии (не только корни): правило 3 контракта С0 режет
-  // межфичевые рёбра дерева, и для этого функция должна видеть детей, а не только корни
-  // (C1: исполнители обеих фич оркестратора — в своих группах, а не деревом в первой)
-  const featureGroups: FeatureChatGroup[] | null = featuresMode
-    ? groupByFeatures(sessions, featuresIndex, sortOrder)
-    : null;
+  // в конце). На вход — ВСЕ сессии ТЕКУЩЕГО проекта (не только корни): правило 3
+  // контракта С0 режет межфичевые рёбра дерева, и для этого функция должна видеть
+  // детей, а не только корни (C1: исполнители обеих фич оркестратора — в своих
+  // группах, а не деревом в первой). Мемоизирована: hover карточки (hoveredId) не
+  // пересчитывает группировку (дерево группы buildGroupTree не мемоизировано и
+  // строится на каждый рендер). Пока индекс проекта
+  // не готов (первый вход) — групп нет вовсе: экран рисует строку загрузки, а не
+  // «Без фичи» — иначе приход индекса переносит все карточки из контейнера
+  // «no-feature» в группы и весь список монтируется заново.
+  const featureGroups: FeatureChatGroup[] | null = useMemo(
+    () => featuresMode && featuresReady ? groupByFeatures(projectSessions, featuresIndex, sortOrder) : null,
+    [featuresMode, featuresReady, projectSessions, featuresIndex, sortOrder],
+  );
   // Подсказка про залежи: чаты «без темы» старше нижней границы фона модель сама не тронет
   const sweepSince = project.subjectsSweepSince ? new Date(project.subjectsSweepSince).getTime() : null;
   const startRun = () => { void startSubjectRun(project.id); };
@@ -1040,14 +1049,12 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       </div>
     );
   };
-  // Режим «Фичи» (F8, Ф-2.2): отбор — ТОЛЬКО по оси featureKinds: featureMatchesKinds
-  // по полю kind бэка (Ф-1.3), bucket в пути фильтра не читается. Открытые группы —
-  // подходящие под выбор и не «closed» (kind='merged' с открытым эпиком — здесь, а не
-  // в секции закрытых); секция «Закрытые · N · на втором плане» — когда «Закрытые»
-  // выбраны на оси; строка «Показаны» — модель shownFiltersModel (записка п. 4);
-  // «Без фичи» и три пустых состояния (фич нет / все закрыты / под фильтр ничего
-  // не попало). Принадлежность фичи состоянию фронт НЕ считает — бэк отдаёт kind
-  // (Б-1.2), фронт только фильтрует по нему.
+  // Режим «Фичи» (FS-FL2b, записка v2 §5 R1/R3/§6): без фильтра, группами. Раскладку по
+  // секциям («Ждут тебя»/«Стоят» → «В работе» → «Закрытые») целиком даёт featureListSections
+  // по полю kind — принадлежность состоянию фронт НЕ считает и сам ничего не отбрасывает:
+  // каждая фича индекса, у которой есть группа, рисуется ровно один раз. «Закрытые» —
+  // одна строка «Закрытые · N ›», раскрывается кликом. «Без фичи» и пустые состояния
+  // («Фич пока нет», calm «Открытых фич нет») — как прежде.
   const renderFeaturesMode = () => {
     if (!featureGroups) return null;
     const allFeatures = featuresIndex.features;
@@ -1055,68 +1062,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     // ниже остаются обычные чаты без фичи (группа «Без фичи»), иначе список пустел
     const noFeatures = allFeatures.length === 0;
 
-    // Ось «Фичи · что показывать» (featureKinds, Ф-2.1): [] = умолчание (все открытые).
-    const featureKinds = filters.featureKinds;
-    const closedSelected = featureKinds.includes('closed');
-    // Запись выбора — тем же каноном, что в секции FilterBar (R-Ф2.1 M2): равный
-    // умолчанию (восемь открытых без «closed») хранится как [], иначе триггер горит
-    // при виде, неотличимом от умолчания.
-    const patchKinds = (next: FeatureKind[]) => patch({ featureKinds: isDefaultFeatureKinds(next) ? [] : next });
-
-    // Мультивыбор оси (OR): пусто = все открытые; иначе — только фичи с выбранным
-    // kind. Принадлежность состоянию фронт НЕ считает — featureMatchesKinds читает
-    // только поле kind (сторож в тестах chatGroupsFeatures).
-    const shownOpenIds = new Set(
-      allFeatures.filter(f => featureMatchesKinds(f, featureKinds) && f.kind !== 'closed').map(f => f.featureId),
-    );
-    const openGroups = featureGroups.filter(g => g.feature && shownOpenIds.has(g.feature.featureId));
+    const groupById = new Map<string, FeatureChatGroup>();
+    for (const g of featureGroups) if (g.feature) groupById.set(g.feature.featureId, g);
     const noFeatureGroup = featureGroups.find(g => g.feature === null) ?? null;
-    // Закрытые — в конце, по порядку бэка (OrderRuns), только когда «Закрытые» выбраны
-    // на оси. Порядок — порядок featureGroups (не пересортировываем).
-    const closedGroups = closedSelected
-      ? featureGroups.filter(g => g.feature && g.feature.kind === 'closed')
-      : [];
-    // Число «Закрытые · N» (заголовок секции и ссылка в calm) — ОДНО: рисующиеся
-    // закрытые (chatCount > 0, то же правило m2, что у счётчиков оси в FilterBar).
-    const drawnClosed = allFeatures.filter(f => f.kind === 'closed' && f.chatCount > 0).length;
-
-    // Строка «Показаны» под шапкой (записка п. 4): модель строки — shownFiltersModel:
-    // перечисляет более короткий из двух списков, null = выбор равный умолчанию
-    // (строки нет). Крестик чипа: 'remove' — убирает значение с оси, 'restore' —
-    // возвращает снятое (вариант «кроме», союз «и» перед «Закрытыми» несёт andBefore).
-    // ui/Chip soft selected с onRemove (крестик) — ловушки <button> внутри снимает сам
-    // компонент (ChipX: border/font/color inherit); «Сбросить» — ui/Button ghost без рамки.
-    const shownModel = shownFiltersModel(featureKinds);
-    const removableChips = shownModel && (
-      <div style={{
-        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6,
-        padding: '0 12px 8px 14px',
-      }}>
-        <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>{shownModel.prefix}</span>
-        {shownModel.chips.map(ch => (
-          <Fragment key={ch.kind}>
-            {ch.andBefore && (
-              <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>и</span>
-            )}
-            <Chip variant="soft" selected touch={isMobile}
-              onRemove={() => patchKinds(ch.action === 'remove'
-                ? featureKinds.filter(k => k !== ch.kind)
-                : [...featureKinds, ch.kind])}
-              removeLabel={ch.action === 'remove'
-                ? `Убрать «${FEATURE_KIND_LABEL[ch.kind]}»`
-                : `Вернуть «${FEATURE_KIND_LABEL[ch.kind]}»`}
-            >
-              {FEATURE_KIND_LABEL[ch.kind]}
-            </Chip>
-          </Fragment>
-        ))}
-        <Button variant="ghost" size="xs"
-          style={{ color: C.accent, border: 'none', ...(isMobile ? { height: 40, minHeight: 40 } : null) }}
-          onClick={() => patch({ featureKinds: [] })}>
-          Сбросить
-        </Button>
-      </div>
-    );
+    // Секции с группами: фича без группы (нет чатов) не рисуется и в счёт не идёт.
+    // rawSections — деление ДО фильтра по группам: по нему же считается «все закрыты»
+    // (замечание ревью FL2b): единственный источник «закрытости» — таблица секций.
+    const rawSections = featureListSections(allFeatures);
+    const sections = rawSections
+      .map(sec => ({ ...sec, groups: sec.features.map(f => groupById.get(f.featureId)).filter((g): g is FeatureChatGroup => !!g) }))
+      .filter(sec => sec.groups.length > 0);
 
     // Пустое: фич нет — спокойный EmptyState (рядом, а не вместо чатов). inline (M1′):
     // по содержимому, а не height:100% — иначе плашка тянулась на всю высоту панели,
@@ -1135,22 +1090,24 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     );
 
     // «Смержена ДД.ММ» для спокойного состояния: последняя по МОМЕНТУ мержа закрытая
-    // фича (по kind, не по bucket). Сортируем по времени (Date), а не строкой: выбор
+    // фича — из секции «closed» деления featureListSections, того же источника, что секции
+    // и allClosed (FS-T12, минор ревью R-AC3a: отдельный литерал `kind === 'closed'` здесь
+    // больше не второй источник истины). Сортируем по времени (Date), а не строкой: выбор
     // фичи не зависит от пояса, а дату показываем ЛОКАЛЬНО (dateOnly, как везде в
     // режиме фичи) — в МСК 23:30Z это уже следующий день.
-    const lastMerged = allFeatures
-      .filter(f => f.kind === 'closed')
+    const closedSection = rawSections.find(s => s.key === 'closed');
+    const lastMerged = (closedSection?.features ?? [])
       .map(f => f.summary?.mergedAt)
       .filter((d): d is string => !!d)
       .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
       .pop();
     const lastMergedDate = lastMerged ? dateOnly(lastMerged) : null;
 
-    // Спокойное состояние: фичи ЕСТЬ, но все они закрытые (по kind — тот же источник,
-    // что у отбора). noFeatures отдельно: там свой EmptyState «Фич пока нет», а не
-    // «Открытых фич нет». Ссылка «Показать закрытые · N» добавляет «Закрытые» на ось
-    // (пока их там нет — иначе ссылаться не на что); N — тот же drawnClosed.
-    const allClosed = !noFeatures && allFeatures.every(f => f.kind === 'closed');
+    // Спокойное состояние: фичи ЕСТЬ, но все они в секции closed — по тому же источнику,
+    // что и секции (rawSections, а не литерал kind: замечание ревью FL2b; merged после
+    // FS-AC3a — «В работе», и она не даёт спокойного состояния). noFeatures отдельно:
+    // там свой EmptyState «Фич пока нет», а не «Открытых фич нет».
+    const allClosed = !noFeatures && rawSections.every(s => s.key === 'closed');
     const calm = allClosed && (
       <div style={{
         display: 'flex', alignItems: 'center', gap: SP.sm,
@@ -1164,74 +1121,53 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           Открытых фич нет.
           {lastMergedDate && <> Последняя смержена {lastMergedDate}.</>}
         </span>
-        {!closedSelected && drawnClosed > 0 && (
-          <Button variant="ghost" size="xs"
-            style={{ color: C.accent, border: 'none', ...(isMobile ? { height: 40, minHeight: 40 } : null) }}
-            onClick={() => patchKinds([...featureKinds, 'closed'])}>
-            Показать закрытые · {drawnClosed}
-          </Button>
-        )}
       </div>
-    );
-
-    // «Под фильтр ничего не попало»: выбор на оси ЕСТЬ, в индексе есть открытые фичи,
-    // но под выбор не попала ни одна открытая и ни одна закрытая (при «все закрыты» —
-    // выше calm, не здесь). «Сбросить фильтр» → [] (умолчание: все открытые).
-    const noMatch = featureKinds.length > 0
-      && allFeatures.some(f => f.kind !== 'closed')
-      && openGroups.length === 0 && closedGroups.length === 0 && (
-      <EmptyState
-        compact
-        icon={<FilterX size={20} strokeWidth={2} />}
-        title="Под фильтр ничего не попало"
-        subtitle="Сейчас ни одна фича не подходит под выбранные состояния."
-        action={
-          <Button variant="ghost" size="sm" onClick={() => patch({ featureKinds: [] })}>
-            Сбросить фильтр
-          </Button>
-        }
-      />
     );
 
     return (
       <>
-        {removableChips}
         {noFeaturesState}
         {calm}
-        {openGroups.map(g => renderFeatureGroup(g))}
-        {noMatch}
-        {closedSelected && closedGroups.length > 0 && (
-          <>
-            {/* Заголовок секции «Закрытые · N · на втором плане» (таблица §2, макет А):
-                строка БЕЗ шеврона — сворачивать больше нечего, видимость решает выбор
-                «Закрытых» на оси. N = нарисованные (имеющие чаты) закрытые фичи
-                (drawnClosed — ОДНО число со счётчиком чипа «Закрытые» в FilterBar);
-                подсказка справа 11/400, без капса. На 360 — minHeight 40. */}
-            <div
-              data-testid="closed-section-header"
-              data-closed-count={drawnClosed}
+        {sections.map(sec => sec.key === 'closed' ? (
+          <Fragment key={sec.key}>
+            {/* «Закрытые · N ›»: одна строка, ui/Button ghost; на 360 — высота 44.
+                Раскрытие — локальное состояние списка (closedExpandedFor = id проекта). */}
+            <Button
+              variant="ghost" size="xs"
+              dataTestId="closed-section-toggle"
+              ariaExpanded={closedExpanded}
+              onClick={() => setClosedExpandedFor(closedExpanded ? null : project.id)}
               style={{
-                display: 'flex', alignItems: 'baseline', gap: 6,
-                padding: '12px 6px 5px',
-                ...(isMobile ? { minHeight: 40 } : null),
+                display: 'flex', alignItems: 'center', gap: 6, width: '100%', justifyContent: 'flex-start',
+                border: 'none', padding: '12px 6px 5px', color: C.textMuted,
+                fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.06em',
+                ...(isMobile ? { height: 44, minHeight: 44 } : null),
               }}
             >
-              <span style={{
-                fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase',
+              <span>
+                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{sec.groups.length}</span>
+              </span>
+              {closedExpanded
+                ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            </Button>
+            {closedExpanded && sec.groups.map(g => renderFeatureGroup(g))}
+          </Fragment>
+        ) : (
+          <Fragment key={sec.key}>
+            <div
+              data-testid="feature-section-title"
+              style={{
+                padding: '12px 6px 5px', fontSize: FS.xxs, fontWeight: 700, textTransform: 'uppercase',
                 letterSpacing: '0.06em', color: C.textMuted, fontFamily: FONT.sans,
-              }}>
-                Закрытые · <span style={{ fontFamily: FONT.mono, letterSpacing: 0 }}>{drawnClosed}</span>
-              </span>
-              <span style={{
-                marginLeft: 'auto', fontSize: FS.xs, fontWeight: 400,
-                textTransform: 'none', color: C.textMuted, fontFamily: FONT.sans,
-              }}>
-                на втором плане
-              </span>
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}
+            >
+              {sec.title}
             </div>
-            {closedGroups.map(g => renderFeatureGroup(g))}
-          </>
-        )}
+            {sec.groups.map(g => renderFeatureGroup(g))}
+          </Fragment>
+        ))}
         {noFeatureGroup && renderFeatureGroup(noFeatureGroup)}
       </>
     );
@@ -1392,8 +1328,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
-            в тулбаре панели сверху, дублировать его в empty незачем. */}
-        {loaded && !filters.archivedOnly && sessions.length === 0 && (
+            в тулбаре панели сверху, дублировать его в empty незачем. В режиме «Фичи» с
+            неготовым индексом не рисуется: состоянием экрана в это время является одна
+            строка «Загружаем фичи…» (FI-2) — второе сообщение об этом же пустом экране
+            рядом с ней противоречит первому; empty придёт вместе с индексом. */}
+        {loaded && !filters.archivedOnly && sessions.length === 0 && !(featuresMode && !featuresReady) && (
           <EmptyState
             compact
             icon={<MessageCircle size={20} strokeWidth={2} />}
@@ -1420,6 +1359,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
             {featureGroups ? (
               renderFeaturesMode()
+            ) : featuresMode ? (
+              // Индекс фич ещё не приехал (первый вход в проект): одна короткая строка
+              // вместо «Без фичи»/«Фич пока нет» и вместо ветки «Дни» ниже — иначе
+              // приход индекса перемонтирует весь список из «no-feature» в группы.
+              <div style={{ padding: SP.sm, fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans }}>
+                Загружаем фичи…
+              </div>
             ) : subjectGroups ? (
               subjectGroups.map(g => renderSubjectSection(g,
                 g.items.map(root => nestTreeRows(segByRootId.get(root.id) ?? []).map(node => (

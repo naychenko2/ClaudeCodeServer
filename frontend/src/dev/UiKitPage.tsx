@@ -8,8 +8,6 @@
 // компонентов ui/. Ни одного hex-литерала: lint:design проходит зелёным.
 
 import { useState, useEffect, useRef, type CSSProperties, Fragment } from 'react';
-import { ContinueChatDialog, ContinueHint, ContinuationBanner } from '../components/chat/ContinueChat';
-import { LipEarBaseContext } from '../components/chat/LipEar';
 import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
@@ -3921,60 +3919,9 @@ function ToolbarAndEmptySection() {
           </div>
         </SubBlock>
 
-        {/* «Продолжить в новом чате»: подсказка при большом контексте, плашки связи, диалог */}
-        <SubBlock label="Продолжить в новом чате — подсказка, плашки связи, диалог">
-          <ContinueChatKit />
-        </SubBlock>
-
         <KitOptionsDemo />
       </div>
     </Island>
-  );
-}
-
-// Витрина «Продолжить в новом чате»: компоненты настоящие, запрос — заглушка с задержкой
-// (успех) или отказом «чат занят» (ошибка), чтобы увидеть оба состояния диалога.
-function ContinueChatKit() {
-  const [dialog, setDialog] = useState<'ok' | 'busy' | null>(null);
-  const [hidden, setHidden] = useState(false);
-  const fake = (fail: boolean) => async () => {
-    await new Promise(r => setTimeout(r, 2500));
-    if (fail) throw new Error('Чат занят — дождитесь окончания хода');
-    setDialog(null);
-  };
-  // Ушко в контексте основания: host-колонка + провайдер (губа/поле). Показываем оба
-  // основания (губа и поле) × (десктоп/мобила), чтобы видеть стык, цвета и высоту.
-  const cell = (base: 'lip' | 'field', isMobile: boolean, label: string) => (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxWidth: isMobile ? 390 : undefined }}>
-      <span style={{ fontSize: FS.xs, color: C.textMuted }}>{label}</span>
-      <LipEarBaseContext.Provider value={base}>
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          <ContinueHint tokens={312_000} isMobile={isMobile} onOpen={() => setDialog('ok')} onSnooze={() => {}} />
-        </div>
-      </LipEarBaseContext.Provider>
-    </div>
-  );
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      {hidden
-        ? <Button size="sm" variant="secondary" onClick={() => setHidden(false)}>Показать подсказку снова</Button>
-        : <LipEarBaseContext.Provider value="lip"><ContinueHint tokens={312_000} onOpen={() => setDialog('ok')} onSnooze={() => setHidden(true)} /></LipEarBaseContext.Provider>}
-      <div style={{ display: 'flex', gap: SP.md, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        {cell('lip', false, 'десктоп · на губе')}
-        {cell('field', false, 'десктоп · на поле (без губы)')}
-        {cell('lip', true, 'мобила · на губе')}
-        {cell('field', true, 'мобила · на поле (без губы)')}
-      </div>
-      <ContinuationBanner kind="from" name="Оркестратор — спринт 12" onOpen={() => {}} />
-      <ContinuationBanner kind="into" onOpen={() => {}} />
-      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
-        <Button size="sm" onClick={() => setDialog('ok')}>Диалог: успех</Button>
-        <Button size="sm" variant="secondary" onClick={() => setDialog('busy')}>Диалог: 409 (чат занят)</Button>
-      </div>
-      {dialog && (
-        <ContinueChatDialog onConfirm={fake(dialog === 'busy')} onClose={() => setDialog(null)} />
-      )}
-    </div>
   );
 }
 

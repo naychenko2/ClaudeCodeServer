@@ -12,7 +12,9 @@
 //     и running не показываются; их число равно числу таких ходов в фикстуре (к3);
 //   · склонение: «1 возврат» / «2 возврата» / «5 возвратов», «1 токен» / «2 токена» /
 //     «5 токенов», «1 раз» / «2 раза» (к3);
-//   · число плитки — FONT.serif, FS.h2 (на 360 — FS.xl), как в макете §Токены.
+//   · число плитки — FONT.serif, FS.h2 (на 360 — FS.xl), как в макете §Токены;
+//   · only=[...] (FS-FR0): ровно перечисленные плитки, порядок — tilesModel; без пропа —
+//     все, как раньше.
 //
 // Мутации (проверены прогоном): (1) плитка «Расход» добавляется всегда (убрать guard
 // `if (spend)` в FeatureStatsPulseModel.ts:118 и пушить безусловно) — краснеет
@@ -21,13 +23,16 @@
 // мобильной сетки; (3) `roundMark` возвращает 'ok' и для 'withdrawn' — краснеет тест
 // числа значков; (4) `plural` (lib/plural.ts) без ветки mod10 === 1 — краснеет тест
 // «1 возврат»; (5) `tile.count == null` → `tile.count ?? 0` — краснеет тест
-// «ожиданий не считалось».
+// «ожиданий не считалось»; (6) `only` игнорируется проп (фильтрация убрана) — краснеют
+// ровно 3 теста фильтрации в describe «only — подмножество плиток», тест «без only»
+// и все прежние зелёные.
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { C, R, FS, SP, FONT } from '../../lib/design';
 import { FeatureStatsTiles } from './FeatureStatsTiles';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes } from '../chat/__tests__/fakeDom';
+import type { StatTile } from './FeatureStatsPulseModel';
 import type { FeatureRun, FeatureRound, FeatureStepChain } from '../../types/featureRun';
 import type { FeatureStats, FeatureTimeline } from '../../types/featureStats';
 
@@ -131,8 +136,8 @@ function textOf(node: unknown): string {
   return textNodes(node as never).join('');
 }
 
-function mountTiles(run: FeatureRun, stats: FeatureStats, isMobile?: boolean) {
-  return mount(createElement(FeatureStatsTiles, { run, stats, isMobile }));
+function mountTiles(run: FeatureRun, stats: FeatureStats, isMobile?: boolean, only?: StatTile['key'][]) {
+  return mount(createElement(FeatureStatsTiles, { run, stats, isMobile, only }));
 }
 
 function grid(container: ReturnType<typeof mount>['container']) {
@@ -337,5 +342,37 @@ describe('склонение числительных (к3)', () => {
     const text = textOf(findNodeByAttr(container, 'data-testid', 'tile-spend'));
     expect(text).not.toContain('$21,80');
     expect(text).toContain('часть моделей без цены');
+  });
+});
+
+describe('only — подмножество плиток для «Разбора» (FS-FR0)', () => {
+  it('only=["loops"] — ровно одна плитка «Возвраты», остальных в DOM нет', () => {
+    const { container } = mountTiles(mkRun(), mkStats({ spend: mkSpend() }), false, ['loops']);
+    const g = grid(container);
+    expect(g, 'сетка плиток не найдена').toBeTruthy();
+    expect(g.children.length).toBe(1);
+    expect(textOf(findNodeByAttr(g, 'data-testid', 'tile-loops'))).toContain('Возвраты');
+    for (const key of ['work', 'waiting', 'spend']) {
+      expect(findNodeByAttr(g, 'data-testid', `tile-${key}`), `плитка ${key} не должна быть в DOM`).toBeNull();
+    }
+  });
+
+  it('порядок — как даёт tilesModel, а не как перечислен only', () => {
+    const { container } = mountTiles(mkRun(), mkStats({ spend: mkSpend() }), false, ['spend', 'work']);
+    const g = grid(container);
+    expect(g.children.map((c) => c.getAttribute('data-testid'))).toEqual(['tile-work', 'tile-spend']);
+  });
+
+  it('ключ вне модели (spend без stats.spend) — такой плитки нет, сетка пуста', () => {
+    const { container } = mountTiles(mkRun(), mkStats(), false, ['spend']);
+    const g = grid(container);
+    expect(g.children.length).toBe(0);
+    expect(findNodeByAttr(g, 'data-testid', 'tile-spend')).toBeNull();
+  });
+
+  it('без only — все четыре плитки, как раньше (проп ничего не меняет)', () => {
+    const { container } = mountTiles(mkRun(), mkStats({ spend: mkSpend() }));
+    const g = grid(container);
+    expect(g.children.length).toBe(4);
   });
 });

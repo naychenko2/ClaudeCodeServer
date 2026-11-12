@@ -365,7 +365,22 @@ function hasHiddenAncestor(node: any): boolean {
 const cap = vi.hoisted(() => ({
   chatOnOpenFile: null as ((path: string, sessionId?: string) => void) | null,
   viewer: null as { filePath: string; sessionId?: string } | null,
+  viewerTaskId: undefined as string | undefined,
+  viewerBranch: undefined as string | undefined,
+  viewerBackLabel: undefined as string | undefined,
+  viewerOnOpenFile: null as ((path: string, anchor?: string) => void) | null,
+  featureOnOpenFile: null as ((path: string, opts?: { taskId?: string; branch?: string }) => void) | null,
 }));
+// FeatureCenter — заглушка: отдаёт тесту onOpenFile страницы фичи (handleOpenFileFromFeature)
+vi.mock('../components/feature/FeatureCenter', async () => {
+  const { createElement } = await import('react');
+  return {
+    FeatureCenter: (props: { onOpenFile?: (path: string, opts?: { taskId?: string; branch?: string }) => void; children?: unknown }) => {
+      cap.featureOnOpenFile = props.onOpenFile ?? null;
+      return createElement('div', { 'data-testid': 'feature-center-stub' }, props.children as any);
+    },
+  };
+});
 vi.mock('../components/ChatPanel', async () => {
   const { createElement } = await import('react');
   return {
@@ -390,8 +405,12 @@ vi.mock('../components/GitChangesRail', async () => {
 vi.mock('../components/FileViewer', async () => {
   const { createElement } = await import('react');
   return {
-    FileViewer: (props: { filePath: string; sessionId?: string }) => {
+    FileViewer: (props: { filePath: string; sessionId?: string; taskId?: string; branch?: string; backLabel?: string; onOpenFile?: (path: string, anchor?: string) => void }) => {
       cap.viewer = { filePath: props.filePath, sessionId: props.sessionId };
+      cap.viewerTaskId = props.taskId;
+      cap.viewerBranch = props.branch;
+      cap.viewerBackLabel = props.backLabel;
+      cap.viewerOnOpenFile = props.onOpenFile ?? null;
       return createElement('div', { 'data-testid': 'file-viewer-stub' });
     },
   };
@@ -454,8 +473,18 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     wsState.activeSession = session;
     wsState.openFile = null;
     wsState.leftTab = undefined;
+    // FS-T12: значения грязнятся здесь и тут же сбрасываются — guard-тест ниже проверяет
+    // именно сброс: тест FS-F1g заканчивается рендером «из дерева», который сам обнуляет
+    // viewerBranch, — assert по его остаткам не ловил бы убранного сброса.
+    cap.viewerBranch = 'feat/x';
+    cap.viewerBackLabel = 'К фиче';
     cap.chatOnOpenFile = null;
     cap.viewer = null;
+    cap.viewerTaskId = undefined;
+    cap.viewerBranch = undefined;
+    cap.viewerBackLabel = undefined;
+    cap.viewerOnOpenFile = null;
+    cap.featureOnOpenFile = null;
     treeCap.onOpenFile = null;
   });
   afterEach(() => {
@@ -518,6 +547,73 @@ describe('WorkspacePage: sessionId чата доезжает до FileViewer', (
     act(() => { treeCap.onOpenFile!('docs/a.md'); });
     await act(async () => { vi.advanceTimersByTime(100); });
     expect(cap.viewer, 'из дерева — корень проекта, пара сброшена').toEqual({ filePath: 'docs/a.md', sessionId: undefined });
+  });
+
+  // FS-F1c: якорь taskId привязан к пути файла. Мутация: в WorkspacePage anchorFor(openFileTask, openFile)
+  // → openFileTask ?? {} — вьюер файла B, открытого по ссылке документа, получит taskId от A → краснеет.
+  it('якорь задачи привязан к файлу: A со страницы фичи — taskId t1, B по ссылке документа — без taskId', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.featureOnOpenFile, 'FeatureCenter не получил onOpenFile').not.toBeNull();
+    act(() => { cap.featureOnOpenFile!('docs/a.md', { taskId: 't1' }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer?.filePath).toBe('docs/a.md');
+    expect(cap.viewerTaskId, 'контроль: для A — taskId t1').toBe('t1');
+    expect(cap.viewerOnOpenFile, 'FileViewer не получил onOpenFile').not.toBeNull();
+    act(() => { cap.viewerOnOpenFile!('docs/b.md'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer?.filePath).toBe('docs/b.md');
+    expect(cap.viewerTaskId, 'для B якорь A не действует').toBeUndefined();
+  });
+
+  // FS-F1g (конкурентность): страница фичи открыта по-настоящему (cc-open-feature). Файл со страницы
+  // (taskId + branch) → «К фиче»; затем тот же файл из дерева — branch и taskId сброшены (плашки нет),
+  // а подпись остаётся «К фиче» по НАЗНАЧЕНИЮ: страница смонтирована и скрыта за файлом, кнопка ведёт на неё.
+  // Мутации: убрать setOpenFileTask(null) в handleOpenFileFromTree → viewerBranch остаётся → краснеет;
+  // снять backLabel у FileViewer (WorkspacePage) → viewerBackLabel undefined → краснеет.
+  it('FS-F1g: страница фичи открыта — taskId и branch до FileViewer; из дерева — оба сброшены, подпись «К фиче»', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    wsState.leftTab = 'changes';
+    mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => {
+      (globalThis as any).window.dispatchEvent(new CustomEvent('cc-open-feature', {
+        detail: { featureId: 'f1', fromChatId: 'chatA', fromChat: true },
+      }));
+    });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => { cap.featureOnOpenFile!('docs/a.md', { taskId: 't1', branch: 'feat/x' }); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewerTaskId, 'контроль: taskId со страницы фичи').toBe('t1');
+    expect(cap.viewerBranch, 'branch доехал до FileViewer').toBe('feat/x');
+    expect(cap.viewerBackLabel, 'со страницы фичи — «К фиче»').toBe('К фиче');
+    act(() => { treeCap.onOpenFile!('docs/a.md'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewerTaskId, 'из дерева taskId сброшен').toBeUndefined();
+    expect(cap.viewerBranch, 'из дерева branch сброшен').toBeUndefined();
+    expect(cap.viewerBackLabel, 'подпись по назначению: страница под файлом жива — «К фиче»').toBe('К фиче');
+  });
+
+  // FS-T3/FS-T12: beforeEach грязит viewerBranch/viewerBackLabel значениями и сбрасывает их —
+  // этот тест, ничего не рендеря, читает undefined. Грязнение — здесь, а не в прошлом тесте:
+  // FS-F1g заканчивается рендером «из дерева», который сам обнуляет viewerBranch, и assert
+  // по его остаткам был бы пустым. Мутация: убрать или изменить сброс viewerBranch/
+  // viewerBackLabel в beforeEach → краснеет здесь.
+  it('сброс в beforeEach: без рендера поля читаются undefined, не остатки прошлого теста', () => {
+    expect(cap.viewerBranch, 'branch прошлого теста не доехал').toBeUndefined();
+    expect(cap.viewerBackLabel, 'backLabel прошлого теста не доехал').toBeUndefined();
+  });
+
+  it('FS-F1g: страница фичи не открыта — подпись возврата не ставится', async () => {
+    (globalThis as any).window.innerWidth = 360;
+    wsState.leftTab = 'changes';
+    mountPage();
+    await act(async () => { vi.advanceTimersByTime(100); });
+    act(() => { treeCap.onOpenFile!('docs/a.md'); });
+    await act(async () => { vi.advanceTimersByTime(100); });
+    expect(cap.viewer?.filePath).toBe('docs/a.md');
+    expect(cap.viewerBackLabel).toBeUndefined();
   });
 
   // ChatPanel и стена в fake-DOM целиком не монтируются — их звенья проверяем по исходнику.

@@ -54,3 +54,30 @@ describe('getHistoryTail — прокладка onBytes, live и chatScope', () 
     expect(lastOpts().chatScope).toBeUndefined();
   });
 });
+
+// URL-контракт курсора (historyCursorParams, features/sessions/api.ts): после after
+// идёт fp только у настоящего курсора, и он URL-encoded. Одна строка формата на
+// обе вертикали (sessions и chats) — её держит этот тест, а не только onBytes/live.
+const lastUrl = () => (request.mock.calls[0] as [string])[0];
+
+describe('URL курсора докачки истории — after и fp', () => {
+  beforeEach(() => {
+    request.mockReset();
+    request.mockResolvedValue({});
+  });
+
+  it('sessions: настоящий курсор → after и encoded fp в URL', async () => {
+    await api.sessions.getHistoryTail('p1', 's1', { after: 5, fp: 'a b/c' });
+    expect(lastUrl()).toBe('/projects/p1/sessions/s1/history?after=5&fp=a%20b%2Fc');
+  });
+
+  it('chats: та же строка формата для чата вне проекта', async () => {
+    await api.chats.getHistoryTail('c1', { after: 0, fp: 'x' });
+    expect(lastUrl()).toBe('/chats/c1/history?after=0&fp=x');
+  });
+
+  it('без fp (первая загрузка after=-1) → в URL только after', async () => {
+    await api.sessions.getHistoryTail('p1', 's1', { after: -1 });
+    expect(lastUrl()).toBe('/projects/p1/sessions/s1/history?after=-1');
+  });
+});

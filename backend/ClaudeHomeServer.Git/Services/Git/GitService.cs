@@ -37,6 +37,12 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 
 // GitRepoSnapshot — переехал в Core (Services/Git/GitRepoSnapshot.cs), namespace тот же.
 
+// Исход чтения файла из ветки по имени (FileAtBranchAsync). Имена статусов совпадают с
+// reason в ответе ручки GET files/content?taskId= (FS-B2): «branch_deleted» — фронту подпись
+// «удалён вместе с веткой», «binary» — не текст, Missing — обычный 404 без причины.
+public enum GitBranchFileStatus { Found, BranchDeleted, Binary, Missing }
+public sealed record GitBranchFile(GitBranchFileStatus Status, string? Content = null);
+
 // Единая точка ЛОКАЛЬНЫХ git-операций над рабочим деревом проекта.
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
@@ -842,6 +848,50 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         if (!r.Ok) return null;
         // Бинарь не показываем как текст
         return r.Stdout.Contains('\0') ? null : r.Stdout;
+    }
+
+    // Содержимое файла из ветки ПО ИМЕНИ: tip refs/heads/<ветка> → его коммент → тот же
+    // show, что у FileAtCommitAsync. Запасной путь для чтения, когда рабочего дерева уже
+    // нет, а файл остался в коммите ветки, пока жива сама ветка (FS-B2: worktree снесли
+    // после мержа или отказа от ветки). Статус различает исходы для ручки: «ветки нет»,
+    // «файла в ветке нет», «бинарь» — FileAtCommitAsync для этого не годится: он сводит
+    // отсутствие файла и бинарь к одному null.
+    // Имя ветки берётся из записи задачи, от клиента не принимается: ref собираем сами
+    // («refs/heads/» + ValidateRevision имени) — иначе «--upload-pack=x» git прочёл бы как
+    // флаг, а «a..b» и «../x» — как диапазон ревизий. Валидация — до любого запуска git.
+    // Гонка «ветку снесли между rev-parse и show» закрыта самим порядком: show идёт по
+    // резолвленному sha (объект живёт и без рефа), несуществующий ref в него попасть не
+    // может — отказа 500 нет по построению. Читающий запуск и таймаут — как у FileAtCommitAsync.
+    public async Task<GitBranchFile> FileAtBranchAsync(
+        string? ownerId, string root, string branch, string relPath, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return new GitBranchFile(GitBranchFileStatus.Missing);
+        ValidateRevision(branch);
+        ValidateRel(root, relPath);
+        var fullRef = "refs/heads/" + branch;
+        GitResult show;
+        try
+        {
+            var probe = await RunReadAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", fullRef], ct: ct);
+            var sha = probe.Stdout.Trim();
+            // Тот же признак «рефа нет», что у LocalTipAsync: --verify --quiet на отсутствующий
+            // реф — exit 1 и пустой stdout; без --verify rev-parse эхом вернул бы имя как
+            // свободный аргумент, поэтому ещё и IsValidSha.
+            if (!probe.Ok || !IsValidSha(sha)) return new GitBranchFile(GitBranchFileStatus.BranchDeleted);
+            show = await RunReadAsync(ownerId, root, ["show", $"{sha}:{relPath.Replace('\\', '/')}"], ct: ct);
+        }
+        catch (GitCommandException ex)
+        {
+            // Незапуск/таймаут git — не статус файла: обычный 404, не 500 (тот же приём,
+            // что у RefExistsAsync: «незапуск — не ошибка статуса»)
+            logger?.LogWarning(ex, "FileAtBranch: git-чтение {Ref}:{Path} не удалась (root='{Root}')", fullRef, relPath, root);
+            return new GitBranchFile(GitBranchFileStatus.Missing);
+        }
+        if (!show.Ok) return new GitBranchFile(GitBranchFileStatus.Missing); // файла в этом коммите нет
+        // Бинарь не показываем как текст (тот же признак, что у FileAtCommitAsync)
+        return show.Stdout.Contains('\0')
+            ? new GitBranchFile(GitBranchFileStatus.Binary)
+            : new GitBranchFile(GitBranchFileStatus.Found, show.Stdout);
     }
 
     // Вернуть файл к версии из коммита (рабочее дерево; фиксацию решает вызывающий)

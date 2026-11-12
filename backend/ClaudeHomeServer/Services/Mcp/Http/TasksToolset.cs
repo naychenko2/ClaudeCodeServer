@@ -36,6 +36,7 @@ namespace ClaudeHomeServer.Services.Mcp.Http;
 ///
 /// Сторож парности со stdio-веткой отката — TasksToolsetParityTests (index.js заморожен).
 /// </summary>
+[SubsystemUsage("tasks")]
 public sealed class TasksToolset(
     TaskManager tasks,
     ProjectManager projects,
@@ -387,13 +388,12 @@ public sealed class TasksToolset(
                     if (arguments["featureEstimate"] is not JsonObject) return Deny("featureEstimate: ожидается объект");
                     featureEstimateArg = FeatureEstimateArg(arguments);
                 }
-                if (featureNoteArg is not null)
+                // Право голоса фичи: членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый
+                // шов (в проде null): через него тест подменяет ОДНУ связь (session, feature) вне
+                // белого списка, и решение гейта зависит от предиката CanWriteFeatureVoice, а не
+                // от «не executor». Общий предикат для featureNote и awaitingHuman на эпике.
+                bool CanWriteVoiceHere()
                 {
-                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
-                        return Deny("Голос пишется только у фичи (role=feature)");
-                    // Членство — боевая BuildDetailed; TestVoiceLinkOverride — тестовый шов (в проде
-                    // null): через него тест подменяет ОДНУ связь (session, feature) вне белого списка,
-                    // и решение гейта зависит от предиката CanWriteFeatureVoice, а не от «не executor».
                     FeatureChatMembership.Link? voiceLink = null;
                     if (TestVoiceLinkOverride is { } testLink)
                     {
@@ -406,11 +406,33 @@ public sealed class TasksToolset(
                         if (membership.TryGetValue(session.Id, out var memberFeatures)
                             && memberFeatures.TryGetValue(existing.Id, out var prodLink)) voiceLink = prodLink;
                     }
-                    if (voiceLink is null || !CanWriteFeatureVoice(voiceLink))
+                    return voiceLink is not null && CanWriteFeatureVoice(voiceLink);
+                }
+                if (featureNoteArg is not null)
+                {
+                    if ((arguments.ContainsKey("role") ? StringArg(arguments, "role") : existing.Role) != TaskRoles.Feature)
+                        return Deny("Голос пишется только у фичи (role=feature)");
+                    if (!CanWriteVoiceHere())
                         return Deny("Голос фичи пишет оркестратор или человек");
                     // Права проверены — теперь ограничения таблицы оценки
                     if (featureEstimateArg?.Validate() is { } invalidEstimate) return Deny(invalidEstimate);
                 }
+
+                // FS-E1: ожидание человека. {ask} ставит, null снимает; Since штампует сервер. Гейты те
+                // же, что у остального tasks_update (выше), на эпике — ещё право голоса. Отказ — до
+                // первой мутации.
+                var awaitingPresent = arguments.ContainsKey("awaitingHuman");
+                string? awaitingAsk = null;
+                if (awaitingPresent && arguments["awaitingHuman"] is { } awaitingNode)
+                {
+                    if (awaitingNode is not JsonObject awaitingObj)
+                        return Deny("awaitingHuman: ожидается объект {ask} или null");
+                    awaitingAsk = awaitingObj["ask"] is JsonValue askValue && askValue.TryGetValue<string>(out var askText)
+                        ? askText : null;
+                    if (TaskManager.AwaitingAskError(awaitingAsk) is { } askError) return Deny(askError);
+                }
+                if (awaitingPresent && existing.Role == TaskRoles.Feature && !CanWriteVoiceHere())
+                    return Deny("Ожидание на эпике фичи ставит оркестратор или человек");
 
                 // Целевой проект для валидации колонки/персоны: текущий, либо новый из projectId
                 string? targetProjectId = existing.ProjectId;
@@ -614,12 +636,46 @@ public sealed class TasksToolset(
                 // конвейера (FeatureBrief.ActiveStageOf, та же база, что у StaleOf — B14 возврат
                 // FIN), категория — FeatureBrief.KindAtWriteOf (та же величина, что brief.kind —
                 // B15, дефект 415c1c80); пустой текст снимает голос внутри SetFeatureNote.
+                // FS-O2b: снимок учёта для строки estimate_set (stage/planState/accepted/total) —
+                // из той же проекции, что стадия и категория: run строится ОДИН раз, второй Build
+                // нет. run == null (проекции нет) — контекста нет, в журнал идут null.
                 if (featureNoteArg is not null)
                 {
                     var run = features.Project(existing.Id, context.OwnerId);
-                    updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
-                        run is null ? "" : FeatureBrief.ActiveStageOf(run),
-                        run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg) ?? updated;
+                    var stageAtWrite = run is null ? "" : FeatureBrief.ActiveStageOf(run);
+                    var estimateContext = run is null ? null
+                        : new TaskManager.FeatureEstimateContext(stageAtWrite,
+                            run.StepProgress.PlanState, run.StepProgress.Accepted, run.StepProgress.Total);
+                    try
+                    {
+                        updated = tasks.SetFeatureNote(existing.Id, featureNoteArg, session.Id, byUser: false,
+                            stageAtWrite,
+                            run is null ? "" : FeatureBrief.KindAtWriteOf(run), featureEstimateArg,
+                            estimateContext) ?? updated;
+                    }
+                    catch (TaskManager.FeatureEstimateShiftException ex)
+                    {
+                        // FS-O1: сдвиг оценки сверх порога без why. Гейт — в TaskManager под тем же
+                        // замком, что и запись (сравнение с актуальной оценкой, а не со снимком
+                        // тулсета); здесь отказ становится 400-текстом, без исключения наружу.
+                        // Основной Update этого же вызова уже применён (он идёт выше) — о нём
+                        // досвидательим, голос и оценка при этом не записаны.
+                        await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId,
+                            new TaskChangedMessage("updated", updated));
+                        return Deny(ex.Message);
+                    }
+                }
+                // FS-E1: ожидание человека — после Update (тот же приём, что голос выше): в закрытую
+                // этим же вызовом задачу ожидание не ставим (Update уже снял его при переходе в Done)
+                if (awaitingPresent)
+                {
+                    if (awaitingAsk is not null)
+                    {
+                        if (updated.Status != TaskItemStatus.Done)
+                            updated = tasks.SetAwaitingHuman(existing.Id, awaitingAsk) ?? updated;
+                    }
+                    else
+                        updated = tasks.ClearAwaitingHuman(existing.Id) ?? updated;
                 }
                 await broadcaster.ToTaskBoard(context.OwnerId, updated.ProjectId, new TaskChangedMessage("updated", updated));
 
@@ -1418,7 +1474,9 @@ public sealed class TasksToolset(
     {
         if (arguments["featureEstimate"] is not JsonObject est) return null;
         return new FeatureEstimate(
-            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why")).Normalize().NullIfEmpty();
+            LabelsArg(est, "remaining") ?? [], NullableIntArg(est, "etaMinutes"), OptionalArg(est, "why"),
+            // FS-O1: оценка итога шагов; диапазон — Validate, сдвиг сверх порога — гейт TaskManager.
+            NullableIntArg(est, "expectedSteps")).Normalize().NullIfEmpty();
     }
 
     // Критерии приёмки: [{id?, text}]; id пустой — присвоит TaskManager. null — ключа нет, не менять
@@ -1684,15 +1742,24 @@ public sealed class TasksToolset(
                     ["featureNote"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять вместе с оценкой. Исполнитель откажет. Пиши в каждом ходе с featureEstimate.",
+                        ["description"] = "Голос фичи (только у эпика): ≤600, \"\" — снять с оценкой. Пиши в каждом ходе с featureEstimate.",
                     },
                     ["featureEstimate"] = FeatureEstimateSchema(),
+                    ["awaitingHuman"] = new JsonObject
+                    {
+                        ["type"] = "object",
+                        ["description"] = "Ждёт человека: {ask} — запрос (≤120); null — снять; Since ставит сервер.",
+                        ["properties"] = new JsonObject
+                        {
+                            ["ask"] = new JsonObject { ["type"] = "string" },
+                        },
+                    },
                     ["verification"] = VerificationSchema(),
                     ["outcome"] = OutcomeSchema(),
                     ["projectId"] = new JsonObject
                     {
                         ["type"] = "string",
-                        ["description"] = "В другой проект (tasks_list_projects); \"\" — личная",
+                        ["description"] = "В другой проект; \"\" — личная",
                     },
                 },
             });
@@ -1880,14 +1947,14 @@ public sealed class TasksToolset(
     private static JsonObject ResultMarkdownSchema() => new()
     {
         ["type"] = "string",
-        ["description"] = "Итог выполнения (markdown), заменяет целиком; \"\" — очистить",
+        ["description"] = "Итог (markdown), заменяет целиком; \"\" — очистить",
     };
 
     private static JsonObject LinkedFilesSchema() => new()
     {
         ["type"] = "array",
         ["items"] = new JsonObject { ["type"] = "string" },
-        ["description"] = "Файлы проекта (от корня, через /); заменяют список целиком",
+        ["description"] = "Файлы проекта (от корня, через /), заменяют целиком",
     };
 
     private static JsonObject ColumnIdSchema() => new()
@@ -1931,7 +1998,11 @@ public sealed class TasksToolset(
             {
                 ["type"] = "string",
                 ["enum"] = StringArray(TaskVerdicts.All),
-                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn",
+                // Текст парный VERIFICATION_SCHEMA в mcp/tasks-server/index.js (TasksToolsetParityTests
+                // сверяет узел verification целиком). Вложенные описания не входят в сумму параметров
+                // (SumPropertyDescriptions считает только верхние) — лимит 1950 tasks_update не трогает.
+                ["description"] = "Исход витка: accepted · accepted_with_remarks · returned · withdrawn. "
+                    + "Исполнитель своего step/rework не снимает; агентский withdrawn — только с notes.",
             },
             ["returnReason"] = new JsonObject
             {
@@ -2036,7 +2107,7 @@ public sealed class TasksToolset(
     private static JsonObject FeatureEstimateSchema() => new()
     {
         ["type"] = "object",
-        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — причина расхождения; процента нет — его берёт трекер.",
+        ["description"] = "Срок и «что дальше» с featureNote, в каждом ходе; why — при расхождении; процент берёт трекер.",
         ["properties"] = new JsonObject
         {
             ["remaining"] = new JsonObject
@@ -2047,6 +2118,13 @@ public sealed class TasksToolset(
             },
             ["etaMinutes"] = new JsonObject { ["type"] = "integer", ["description"] = "Минут до готовности по самой длинной цепочке, ≥1; нет оценки — не указывай" },
             ["why"] = new JsonObject { ["type"] = "string", ["description"] = "Почему срок заметно отличается от обычного, ≤160; только при расхождении" },
+            // Описание вложенного свойства не входит в сумму верхних (SumPropertyDescriptions),
+            // лимит 1950 tasks_update не трогает.
+            ["expectedSteps"] = new JsonObject
+            {
+                ["type"] = "integer",
+                ["description"] = "Оценка итога шагов фичи, включая ещё не нарезанные; не процент. 1..500; сдвиг сверх порога — только с why",
+            },
         },
     };
 

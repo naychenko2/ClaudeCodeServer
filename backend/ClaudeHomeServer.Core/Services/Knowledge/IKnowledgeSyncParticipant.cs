@@ -1,7 +1,8 @@
 namespace ClaudeHomeServer.Services.Knowledge;
 
 // Участник синка знаний: каждая вертикаль со своим стором «id записи → {DocId, Hash}».
-// Регистрируется как forwarder в DI (`Program.cs:661-670`); каскад UserKnowledgeCascade
+// Регистрируется как forwarder в DI (`CoreSeamsGlue.cs:36-51`, заметки — `NotesKnowledgeGlue.cs:31`);
+// каскад UserKnowledgeCascade
 // получает участников через IEnumerable<IKnowledgeSyncParticipant>, а не по конкретным
 // типам — иначе разрез цикла Knowledge→Notes/Memory/Dossiers не сложить.
 //

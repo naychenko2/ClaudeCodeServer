@@ -155,7 +155,8 @@ const TRACKER_KIND_TEXT: Record<string, string> = {
   returned_no_rework: 'возврат без доработки',
   dead_verdict: 'вердикт, которого уже не нужно',
   reported_open: 'отчёт без закрытия задачи',
-  epic_open_after_merge: 'мерж закрыт, эпик открыт',
+  // epic_open_after_merge убран (FS-AC1, бэк его не присылает): старый ответ с этим
+  // видом проходит как неизвестный — слово как есть, экран не падает.
   orphans_in_closed: 'открытые задачи в закрытой фиче',
   unplanned_step: 'шаг вне плана',
 };

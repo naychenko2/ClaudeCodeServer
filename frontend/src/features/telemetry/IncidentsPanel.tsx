@@ -26,6 +26,7 @@ import { getNav } from '../../lib/nav';
 import { getFlag } from '../../lib/featureFlags';
 import { updateTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
+import { SUBSYSTEM_DISABLED_REASON } from '../../lib/subsystems';
 
 // Ширина колонки списка на десктопе — как у соседних разделов с деревом слева
 const LIST_W = 320;
@@ -239,7 +240,9 @@ function EmptyPlaceholder({ status, listStatus, isMobile }: {
         // Выключенный раздел — не авария: аварийный значок пугал бы на ровном месте
         icon={<Gauge size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
         title="Телеметрия не настроена"
-        subtitle="Раздел выключен администратором — инциденты никто не собирает."
+        // общая причина — из SUBSYSTEM_DISABLED_REASON (единый источник, п. 1b);
+        // уточняющий хвост про то, что именно выключено, — наш, телеметрийный
+        subtitle={`Раздел ${SUBSYSTEM_DISABLED_REASON} — инциденты никто не собирает.`}
       />
     );
   }

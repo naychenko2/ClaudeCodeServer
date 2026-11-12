@@ -26,6 +26,7 @@ import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHe
 import { initConnectivity, invalidateTokenCache, readStoredToken, readStoredUserId } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
+import { SubsystemDisabledState } from './components/SubsystemDisabledState'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
@@ -53,6 +54,7 @@ import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib
 import { useWallFocusProject, resetWallOwner } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { resetCacheWarnOnLogout, setCacheWarnThresholdsFromServer } from './lib/cacheWarnPrefs'
+import { resetFeaturesIndexOwner } from './lib/featuresIndex'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
 import { CalendarPage } from './features/tasks/CalendarPage'
@@ -579,6 +581,7 @@ export default function App() {
       resetCacheWarnOnLogout()
       resetWallOwner()
       resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
+      resetFeaturesIndexOwner() // срез индекса фич прежнего владельца (FI-3)
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
       // пользователя — при смене аккаунта человек видел бы чужой раздел
@@ -1361,6 +1364,7 @@ export default function App() {
     resetWallOwner()
     resetChatContextMemory() // контекст чатов и память чипов прежнего пользователя
     resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
+    resetFeaturesIndexOwner() // срез индекса фич прежнего владельца — см. cc-unauthorized выше
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
     localStorage.setItem(HUB_TAB_KEY, 'projects')
@@ -1436,10 +1440,14 @@ export default function App() {
             : activeSubsystemKey
               ? <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
                   {/* createElement, а не JSX: компонент не создаётся в рендере, а берётся
-                      из реестра — ленивый экземпляр живёт в манифесте и стабилен */}
-                  {ActiveSubsystemTab
+                      из реестра — ленивый экземпляр живёт в манифесте и стабилен.
+                      S2b-3c: сюда попадает вкладка, поставленная мимо гейта switchHubTab
+                      (начальный хэш #/spend ставит SPEND_TAB без гейта), при выключенной
+                      или незарегистрированной подсистеме — вместо пустоты заглушка
+                      с именем раздела из манифеста */}
+                  {ActiveSubsystemTab && isSubsystemEnabled(activeSubsystemKey)
                     ? createElement(ActiveSubsystemTab, { auth, onLogout: logout, onHubTab: switchHubTab })
-                    : null}
+                    : <SubsystemDisabledState title={getSubsystem(activeSubsystemKey)?.title} />}
                 </Suspense>
             : effectiveHubTab === 'personas'
               ? <PersonasPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />

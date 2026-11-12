@@ -192,6 +192,11 @@ public class TaskItem
     // Срок из первой оценки оркестратора после старта фичи (FeatureEstimate.EtaMinutes): пишется один раз
     // SetFeatureNote и не перезаписывается, снятие голоса его не трогает. Аддитивное nullable-поле.
     public int? InitialEtaMinutes { get; set; }
+    // Знаменатель плана на момент первой оценки при нарезанном (или полностью принятом) плане
+    // (FeatureEstimateContext.Total): пишется один раз SetFeatureNote и не меняется никогда —
+    // «было N» для строки «план расширен: было N, стало M» (решение Андрея 11.11). Фичи без оценки
+    // и старые задачи: null, ничего не мигрируем. Аддитивное nullable-поле.
+    public int? BaselineSteps { get; set; }
     // Глубина цепочки делегирования: 0 — создана не из чата-исполнителя (обычный чат/UI/API);
     // из чата-исполнителя родительской задачи — её DelegationDepth + 1 (TaskManager.Create).
     // Анти-рекурсия делегирования проверяется гейтом по глубине хода (DelegatedTurnGate /
@@ -264,13 +269,16 @@ public record FeatureNote(string Text, DateTime At, string? BySessionId, bool By
 // Оценка оркестратора (FeatureNote.Estimate): только срок и «что дальше». Процент готовности здесь не
 // живёт — он один, из run.stepProgress (FeatureStepAccounting). Remaining — ещё не начатое (первый
 // пункт — «дальше»), EtaMinutes — срок до готовности (null — не берётся оценить), Why — почему срок
-// заметно отличается от обычного. Старые записи с done/total/inProgress/percent читаются: лишние ключи
-// JSON игнорируются. Ограничения — Validate.
-public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why)
+// заметно отличается от обычного, ExpectedSteps — сколько всего шагов в фиче по оценке оркестатора,
+// включая ещё не нарезанные (FS-O1; хранится как есть, нижней границы «не меньше трекерного total»
+// нет; на экран не идёт — FeatureBrief.EstimateOfNote перечисляет поля явно). Старые записи с
+// done/total/inProgress/percent читаются: лишние ключи JSON игнорируются. Ограничения — Validate.
+public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? Why, int? ExpectedSteps = null)
 {
     public const int MaxRemaining = 8;
     public const int MaxRemainingLength = 40;
     public const int MaxWhyLength = 160;
+    public const int MaxExpectedSteps = 500;
 
     // Текст отказа или null. Remaining/Why вызывающий нормализует Normalize до проверки.
     public string? Validate()
@@ -281,13 +289,18 @@ public record FeatureEstimate(List<string>? Remaining, int? EtaMinutes, string? 
             return $"featureEstimate.remaining: пункт непустой, не длиннее {MaxRemainingLength} символов";
         if (EtaMinutes is < 1) return "featureEstimate.etaMinutes: не меньше 1";
         if (Why is { Length: > MaxWhyLength }) return $"featureEstimate.why: не длиннее {MaxWhyLength} символов";
+        if (ExpectedSteps is < 1 or > MaxExpectedSteps)
+            return $"featureEstimate.expectedSteps: целое от 1 до {MaxExpectedSteps}";
         // Пустую оценку (ни срока, ни remaining) вызывающий отбрасывает через NullIfEmpty до Validate.
         return null;
     }
 
-    // Без срока и без «что дальше» (в т.ч. {} и одни старые done/total) оценка бессодержательна: её молча
-    // отбрасывают (null), а не отказывают — голос, с которым она пришла, при этом сохраняется. Вызывать после Normalize.
-    public FeatureEstimate? NullIfEmpty() => EtaMinutes is null && (Remaining ?? []).Count == 0 ? null : this;
+    // Без срока, без «что дальше» и без оценки итога шагов (в т.ч. {} и одни старые done/total) оценка
+    // бессодержательна: её молча отбрасывают (null), а не отказывают — голос, с которым она пришла, при
+    // этом сохраняется. ExpectedSteps — содержание: «значение хранится как есть» (FS-O1).
+    // Вызывать после Normalize.
+    public FeatureEstimate? NullIfEmpty() =>
+        EtaMinutes is null && ExpectedSteps is null && (Remaining ?? []).Count == 0 ? null : this;
 
     // Trim пунктов и why; пустой why — null. Remaining null (ключа нет) — пустой список: после
     // Normalize Remaining не null.
@@ -307,10 +320,20 @@ public record AcceptanceEvidence(string CriterionId, string How, string Result);
 // Результат предгейта: Sha — коммит дерева, по которому гнали проверки; Green — вердикт; Summary — вывод
 // красных проверок (для зелёного пусто); RedKey — «отпечаток» причины красного (имена красных
 // проверок), RedStreak — сколько красных подряд по одному RedKey (зелёный обнуляет).
-// NothingApplicable — отдельный вердикт «ни одна проверка не применима» (Green при этом false: «зелёным» он не считается,
-// ни одна проверка не выполнена); закрытие шага он разрешает.
+// NothingApplicable — отдельный НЕЙТРАЛЬНЫЙ исход «ни одна проверка не применима» (Green при этом false: «зелёным» он
+// не считается, ни одна проверка не выполнена), но и не красный: в серию красных и эскалацию не входит, серию прежнего
+// красного переносит как есть (PregateRules.Next); закрытие шага он разрешает.
+// Outcome — производный трёхзначный исход для читателей вне кода (карточка, выгрузка, статистика): по одному Green
+// «нечего проверять» неотличим от провала. Хранится производно — формат записи и бэкапа не меняется.
 public record PregateRecord(string Sha, bool Green, string Summary, DateTime At, int RedStreak = 0, string? RedKey = null,
-    bool NothingApplicable = false);
+    bool NothingApplicable = false)
+{
+    public const string OutcomeGreen = "green";
+    public const string OutcomeRed = "red";
+    public const string OutcomeNeutral = "neutral";
+
+    public string Outcome => NothingApplicable ? OutcomeNeutral : Green ? OutcomeGreen : OutcomeRed;
+}
 
 public class TaskSubtask
 {

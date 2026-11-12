@@ -79,7 +79,6 @@ let ownerGlobalId = ''; // личная (глобальная) персона в
 let ownerUserId = '';
 let bOwnGlobalId = ''; // личная глобальная персона участника (его дефолт)
 let editorUserId = '';
-let readerUserId = '';
 
 // Создание персоны на стенде иногда встаёт в очередь (серверная блокировка после
 // прерванных запросов) — ретраим, а не падаем.
@@ -125,7 +124,7 @@ test.beforeAll(async () => {
   }
 
   const me = async (t: string) => (await api(t, 'GET', '/api/auth/me')).body.userId as string;
-  ownerUserId = await me(a); editorUserId = await me(b); readerUserId = await me(e);
+  ownerUserId = await me(a); editorUserId = await me(b);
   bOwnGlobalId = (await api(b, 'GET', '/api/auth/me')).body.defaultPersonaId as string;
 
   // Свой проект под приёмку.
@@ -182,7 +181,7 @@ test.setTimeout(180_000);
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('1a участник видит команду проекта в списках, личные персоны владельца — нет', async () => {
-  const a = await login('admin');
+  await login('admin');
   const b = await login('qa_b');
   const e = await login('qa_e');
 
@@ -216,7 +215,7 @@ test('1a участник видит команду проекта в списк
 });
 
 test('1b интерфейс: команда видна в панели проекта, в разделе «Персоны» и в командном центре', async ({ page }) => {
-  const a = await login('admin');
+  await login('admin');
   const b = await login('qa_b');
 
   // Панель проекта «Команда» (кнопка в рельсе панелей).
@@ -464,7 +463,7 @@ test('2c смена собеседника: только в своём чате,
 // ─────────────────────────────────────────────────────────────────────────────
 
 test('3a редактор правит имя и тон, зона/модель/доступ/специальность — выключены с подсказкой', async ({ page }) => {
-  const a = await login('admin');
+  await login('admin');
   const b = await login('qa_b');
 
   // API: имя — можно; поля зоны и денег — 403 owner_settings.
@@ -787,7 +786,7 @@ test('5a память: участник пишет в проектную пер�
 
 test('6a живое обновление: правка проектной персоны владельцем видна участнику без перезагрузки', async ({ browser }) => {
   const a = await login('admin');
-  const b = await login('qa_b');
+  await login('qa_b');
   const newName = N('аналитик (правка владельца)');
 
   const ctxOwner = await browser.newContext();

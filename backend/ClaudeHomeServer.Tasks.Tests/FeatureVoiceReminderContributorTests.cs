@@ -15,7 +15,9 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //  • убрать InTurnTail — тест «хвост хода» красный (секция уехала бы в системный блок);
 //  • не сверять сессию с ключевым чатом (убрать `!= sessionId`) — тест «чужой чат» красный;
 //  • не проверять Stale — тест «свежий голос» красный; не проверять Note is null — тест «нет голоса» красный;
-//  • убрать отсев закрытых — тест «закрытая фича» красный.
+//  • убрать отсев закрытых — тест «закрытая фича» красный;
+//  • FS-O2c: убрать ветку возраста из StaleOf (FeatureBrief.cs) — красный ровно
+//    «ГолосСтаршеПорогаПоВозрасту…» (та же фикстура свежая по стадии/категории — молчит).
 //
 // P2 (расхождения трекера в том же хвосте), мутации:
 //  • убрать `lines.Add(tracker)` — тесты «расхождение…», «несколько видов…», «волна после мержа…»
@@ -24,6 +26,12 @@ namespace ClaudeHomeServer.Tasks.Tests;
 //    (FeatureTracker fail-closed: вида нет, хотя он есть в трекере);
 //  • не отсеивать merged (убрать `Kinds.Merged`) — тест «смерженная фича…» красный: хвост nag-ил
 //    бы по фиче, которую P1 уже признал смерженной.
+//
+// P3 (FS-XT2, третий повод: финал принят + мержа нет + закрытый хвост), мутации:
+//  • убрать `run.Ready &&` (проверку IsFinalAccepted) — красный ровно «ФиналНеПринят…»;
+//  • убрать `run.Merge is null &&` — красный ровно «МержЗаведён…»;
+//  • убрать `run.ClosedTailKeys.Count > 0` — красные «ХвостаНет…» и «СнятиеХвоста…»
+//    (строка с нулём появилась бы там, где хвоста уже нет).
 public class FeatureVoiceReminderContributorTests : IDisposable
 {
     private const string Owner = "u";
@@ -111,6 +119,25 @@ public class FeatureVoiceReminderContributorTests : IDisposable
         (await Build(KeyChat)).Should().BeNull();
     }
 
+    // FS-O2c (c2): возраст голоса — отдельный сигнал: та же запись, свежая по стадии и категории,
+    // но с записи прошло 13 ч — больше FeatureBrief.StaleAgeHours (12). Стадии и категории не
+    // менялись: краснеет ровно ветка возраста в StaleOf (FeatureBrief.cs).
+    [Fact]
+    public async Task ГолосСтаршеПорогаПоВозрасту_НапоминаетОбновить()
+    {
+        var epic = NewFeature();
+        var run = new FeatureProjector(_tasks).Project(epic.Id, Owner)!;
+        _tasks.SetFeatureNote(epic.Id, "всё идёт", KeyChat, byUser: false,
+            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run));
+        (await Build(KeyChat)).Should().BeNull("контроль: та же запись свежая по возрасту — молчит");
+
+        epic.Note = epic.Note! with { At = DateTime.UtcNow.AddHours(-13) };
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull("возраст больше порога — напоминание срабатывает по нему");
+        section!.Text.Should().Contain("устарел");
+    }
+
     [Fact]
     public async Task ЧужойЧат_Молчит()
     {
@@ -193,10 +220,12 @@ public class FeatureVoiceReminderContributorTests : IDisposable
         (await Build(KeyChat)).Should().BeNull("merged — тот же отсев, что у закрытой");
     }
 
-    // П1 (волна после мержа): новый шаг после мержа снимает merged → открытый эпик становится
-    // расхождением, и оно в хвосте: это правит оркестратор, сервер только показывает.
+    // П1 (волна после мержа) + FS-AC1: новый шаг после мержа снимает merged → волна говорит
+    // через цепочечный вид (unreviewed). Открытый эпик после мержа — не расхождение и не повод
+    // (решение Андрея 11.11): строка не должна ссылаться на закрытие эпика. Мутация «вернуть
+    // ветку эпика» в FeatureTracker краснит тест (вид вернулся бы в строку).
     [Fact]
-    public async Task ВолнаПослеМержа_ЭпикОткрытПослеМержа_РасхождениеВХвосте()
+    public async Task ВолнаПослеМержа_ТолькоЦепочечныйВидБезЗакрытияЭпика()
     {
         var epic = NewFeature();
         AcceptedFinalAndMerge(epic.Id);
@@ -208,8 +237,8 @@ public class FeatureVoiceReminderContributorTests : IDisposable
 
         var line = TrackerLine(await Build(KeyChat));
 
-        line.Should().Contain("epic_open_after_merge ×1", "эпик открыт, вся работа сдана, мерж закрыт");
         line.Should().Contain("unreviewed ×1", "новый шаг сдан без покрывающего витка");
+        line.Should().NotContain("epic_open_after_merge", "открытый эпик после мержа — не расхождение (FS-AC1)");
     }
 
     // Ключевой чат фичи — не чат эпика: цепочка ведёт его по задачам, которые он запускал
@@ -222,6 +251,91 @@ public class FeatureVoiceReminderContributorTests : IDisposable
 
         TrackerLine(await Build(KeyChat)).Should().Contain("unreviewed ×1");
         (await Build("chat-other")).Should().BeNull("не ключевой чат — молчит");
+    }
+
+    // ─── P3 (FS-XT2): финал принят + мержа нет + закрытый хвост ─────────────────────────────
+
+    // c1: хвост из двух шагов → строка с числом и обоими путями решения. Шаги сданы без
+    // покрывающего витка (тот же посев, что у unreviewed) — по учёту это закрытый хвост.
+    [Fact]
+    public async Task ФиналПринятМержаНетХвостЕсть_НапоминаетОЗакрытыхШагах()
+    {
+        var epic = NewFeature();
+        AcceptedFinal(epic.Id);
+        LateSubmittedStep(epic.Id, "S1");
+        LateSubmittedStep(epic.Id, "S2");
+
+        var line = TailLine(await Build(KeyChat));
+
+        line.Should().Contain("«Сводка фичи»", "хвост поимённый по фичам — строка называет свою");
+        line.Should().Contain("2 закрытых непринятых шагов", "форма числа — как у 409 о хвосте (TasksController.cs:1643)");
+        line.Should().Contain("заведи ревью").And.Contain("сними с причиной", "оба пути решения — по разрезу §8.3");
+    }
+
+    // Хвоста нет: шаг покрыт принятым ревью (корзина accepted) — повода нет.
+    [Fact]
+    public async Task ХвостаНет_ОЗакрытыхШагахМолчит()
+    {
+        var epic = NewFeature();
+        AcceptedFinal(epic.Id);
+        var step = LateSubmittedStep(epic.Id);
+        var review = _tasks.Create(null, Owner, new CreateTaskRequest("ревью S1",
+            Role: TaskRoles.Review, FeatureId: epic.Id, ReviewOf: [step.Id]));
+        review.Status = TaskItemStatus.Done;
+        review.CompletedAt = DateTime.UtcNow.AddHours(-1);
+        review.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull("голос не записан — строка о голосе остаётся");
+        section!.Text.Should().NotContain("закрытых непринятых", "шаг принят: закрытый хвост пуст");
+    }
+
+    // Задача мержа заведена (Todo): решение о мерже уже принято оркестратором — повод гаснет.
+    [Fact]
+    public async Task МержЗаведён_ОЗакрытыхШагахМолчит()
+    {
+        var epic = NewFeature();
+        AcceptedFinal(epic.Id);
+        LateSubmittedStep(epic.Id);
+        _tasks.Create(null, Owner, new CreateTaskRequest("мерж", Role: TaskRoles.Merge, FeatureId: epic.Id));
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull();
+        section!.Text.Should().NotContain("закрытых непринятых", "merge-задача есть — напоминать не о чём");
+    }
+
+    // Финал не принят (вердикт returned): фича не на месте мержа — повода нет.
+    // Мутация «убрать run.Ready» (c2) — красный ровно этот тест.
+    [Fact]
+    public async Task ФиналНеПринят_ОЗакрытыхШагахМолчит()
+    {
+        var epic = NewFeature();
+        var final = _tasks.Create(null, Owner, new CreateTaskRequest("финал", Role: TaskRoles.Final, FeatureId: epic.Id));
+        final.Status = TaskItemStatus.Done;
+        final.CompletedAt = DateTime.UtcNow.AddHours(-3);
+        final.Verification = new TaskVerification { Verdict = TaskVerdicts.Returned };
+        LateSubmittedStep(epic.Id);
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull();
+        section!.Text.Should().NotContain("закрытых непринятых", "финал вернулся — фича не готова к мержу");
+    }
+
+    // «После снятия хвоста повод гаснет» (критерий §8.5 Х2): снятие тем же методом, что кнопка мержа.
+    [Fact]
+    public async Task СнятиеХвостаГаситПовод()
+    {
+        var epic = NewFeature();
+        AcceptedFinal(epic.Id);
+        LateSubmittedStep(epic.Id, "S1");
+        LateSubmittedStep(epic.Id, "S2");
+        TailLine(await Build(KeyChat)).Should().Contain("2 закрытых непринятых шагов", "фикстура: повод активен");
+
+        _tasks.WithdrawMergeTail(epic.Id, ["S1", "S2"], Owner).Withdrawn.Should().HaveCount(2);
+
+        var section = await Build(KeyChat);
+        section.Should().NotBeNull("голос не записан — строка о голосе остаётся");
+        section!.Text.Should().NotContain("закрытых непринятых", "хвост снят — ключи пусты, повод гаснет сам");
     }
 
     // ─── Посев под виды FeatureTracker ─────────────────────────────────────────────────────
@@ -252,14 +366,21 @@ public class FeatureVoiceReminderContributorTests : IDisposable
         return step;
     }
 
-    // Принятый финал + закрытый мерж: гард role=merge (TaskManager) требует принятого финала,
-    // поэтому он создаётся первым. Мерж закрыт час назад — «сейчас» для волны после мержа.
-    private void AcceptedFinalAndMerge(string epicId)
+    // Принятый финал без мержа (FS-XT2): гард role=merge (TaskManager) требует принятого финала,
+    // поэтому он создаётся первым. Финал без ReviewOf не трогает цепочки шагов
+    // (ExtractTargetKeys пуст): шаг остаётся сданным непринятым — закрытым хвостом.
+    private void AcceptedFinal(string epicId)
     {
         var final = _tasks.Create(null, Owner, new CreateTaskRequest("финал", Role: TaskRoles.Final, FeatureId: epicId));
         final.Status = TaskItemStatus.Done;
         final.CompletedAt = DateTime.UtcNow.AddHours(-3);
         final.Verification = new TaskVerification { Verdict = TaskVerdicts.Accepted };
+    }
+
+    // Принятый финал + закрытый мерж. Мерж закрыт час назад — «сейчас» для волны после мержа.
+    private void AcceptedFinalAndMerge(string epicId)
+    {
+        AcceptedFinal(epicId);
         var merge = _tasks.Create(null, Owner, new CreateTaskRequest("мерж", Role: TaskRoles.Merge, FeatureId: epicId));
         merge.Status = TaskItemStatus.Done;
         merge.CompletedAt = DateTime.UtcNow.AddHours(-1);
@@ -270,5 +391,13 @@ public class FeatureVoiceReminderContributorTests : IDisposable
     {
         section.Should().NotBeNull();
         return section!.Text.Split('\n').Single(l => l.StartsWith(TrackerLinePrefix));
+    }
+
+    // Строка именно о закрытом хвосте (P3): её начало — «У фичи»; строки о голосе («Голос(а)
+    // фичи») и о трекере («В трекере фичи») под этот префикс не попадают.
+    private static string TailLine(PromptSection? section)
+    {
+        section.Should().NotBeNull();
+        return section!.Text.Split('\n').Single(l => l.StartsWith("У фичи"));
     }
 }

@@ -92,3 +92,19 @@ export function findViolation(importer, source) {
   if (!hit) return null;
   return hit[2] ? `src/lib/${hit[2]}` : `src/${hit[3]}`;
 }
+
+// Транзитивный барьер сборки. Граф resolveId ШИРЕ итогового бандла: Rolldown загружает модули,
+// которые потом вычищает tree-shaking (в dist их нет), поэтому проверка импортов даёт ложные
+// срабатывания. Проверяем то, что реально попало в чанки: id модуля с непустым выводом.
+// Ловит вторую копию стора, пришедшую по любой цепочке (components/ui/*, хуки lib/*), —
+// только NARROW_FORBIDDEN: design/breakpoints есть в ките, и листовые components/ui/* берут
+// их законно.
+const BUNDLED_RE = new RegExp(`(^|\\/)src\\/lib\\/(${NARROW_FORBIDDEN.map(esc).join('|')})${EXT}$`);
+
+/** Запретный стор ядра, собранный в чанк: «src/lib/…» по id модуля либо null. */
+export function findBundledStore(moduleId) {
+  const id = toPosix(moduleId.split('?')[0]);
+  if (id.includes('/node_modules/')) return null;
+  const hit = BUNDLED_RE.exec(id);
+  return hit ? `src/lib/${hit[2]}` : null;
+}

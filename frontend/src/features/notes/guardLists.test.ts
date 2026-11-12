@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { ESLint } from 'eslint';
 import tseslint from 'typescript-eslint';
 import { notesStoreImportGuard, notesWikiImportGuard } from '../../../eslint.config.js';
-import { GUARD_AREAS, SRC_FORBIDDEN, findViolation } from '../../../modules/notes/guardLists.mjs';
+import { GUARD_AREAS, SRC_FORBIDDEN, findBundledStore, findViolation } from '../../../modules/notes/guardLists.mjs';
 
 const eslint = new ESLint({
   cwd: process.cwd(),
@@ -65,5 +65,29 @@ describe('барьер pages/** и lib/shell-kit для модуля «Заме�
     expect(await bothBlock(WIKI, '../../../pages/workspace/panelStackState', true)).toBe(false);
     expect(await bothBlock(WIKI, 'aihome_shell/kit')).toBe(false);
     expect(await bothBlock('src/pages/Other.tsx', './workspace/panelStackState')).toBe(false);
+  });
+});
+
+// Транзитивный барьер сборки: проверяются модули, реально попавшие в чанки remote (граф
+// resolveId шире бандла — tree-shaking вычищает загруженное). Сторы из NARROW_FORBIDDEN в
+// чанке — вторая копия, откуда бы она ни пришла; design/breakpoints есть в ките.
+describe('транзитивный барьер сборки remote «Заметок»', () => {
+  const at = (f: string) => path.resolve(process.cwd(), f);
+
+  it.each([
+    ['src/lib/offline.ts', 'src/lib/offline'],
+    ['src/lib/featureFlags.ts', 'src/lib/featureFlags'],
+    ['src/lib/signalr.ts?v=1', 'src/lib/signalr'],
+    ['src/lib/toast.ts', 'src/lib/toast'],
+    ['src/lib/wiki.ts', 'src/lib/wiki'],
+  ])('модуль %s в чанке ловится', (file, expected) => {
+    expect(findBundledStore(at(file))).toBe(expected);
+  });
+
+  it('design, breakpoints, пакеты и прочие модули не ловятся', () => {
+    expect(findBundledStore(at('src/lib/design.ts'))).toBeNull();
+    expect(findBundledStore(at('src/lib/breakpoints.ts'))).toBeNull();
+    expect(findBundledStore(at('src/lib/offlineHelpers.ts'))).toBeNull();
+    expect(findBundledStore(at('node_modules/x/src/lib/offline.ts'))).toBeNull();
   });
 });

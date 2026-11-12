@@ -54,7 +54,7 @@ public class SubsystemHostingExtensionsTests
     {
         var services = new ServiceCollection();
         // В Testing без явного Testing:EnableHostedServices=true hosted НЕ регистрируется —
-        // точная копия семантики хелпера AddHosted из Program.cs:121-130. Поведение,
+        // точная копия семантики хелпера AddHosted из Program.cs до его выноса. Поведение,
         // может, неудобное, но менять его в этой задаче нельзя: «копировать 1-в-1».
         var config = BuildConfig(("ASPNETCORE_ENVIRONMENT", "Testing"));
 

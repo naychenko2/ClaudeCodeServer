@@ -186,6 +186,34 @@ public class SpendReviewMinorTests : IDisposable
         ["DataPath"] = Path.Combine(_dir, "projects.json"),
     });
 
+    // --- R-S-SPEND-2 (п.6): реальный стор не отбрасывает догоняющую запись ---
+
+    // Трата генерации картинок проверяется на подделке ISpendCollector, а граница принятия
+    // реального стора для догоняющей записи (Generations = 0, сумма узнала позже) нигде не
+    // была сверена. Стор такую запись принимает (условие в SpendStore.Record: «сумма без
+    // генераций … терять нельзя») и она читается обратно в деталях дня.
+    [Fact]
+    public void Стор_ДогоняющаяЗаписьБезГенераций_НеПотеряна()
+    {
+        var store = new SpendStore(Path.Combine(_dir, "spend-topup"), detailDays: 30);
+        var ts = new DateTime(2026, 11, 8, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(new SpendRecord
+        {
+            Timestamp = ts,
+            OwnerId = "u1",
+            Source = SpendSources.Fal,
+            Provider = "fal",
+            Generations = 0,
+            CostUsd = 0.0123,
+            Label = "image-generation",
+        });
+
+        var day = DateOnly.FromDateTime(ts);
+        var rec = Assert.Single(store.DetailsBetween(day, day));
+        Assert.Equal(0.0123, rec.CostUsd);
+        Assert.Equal(0, rec.Generations);
+    }
+
     private sealed class CollectingSpend : ISpendCollector
     {
         public List<SpendRecord> Records { get; } = [];

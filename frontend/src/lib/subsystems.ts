@@ -18,15 +18,56 @@ import { useSyncExternalStore } from 'react';
 // Тонкий реестр ключей для type-safe вызовов useSubsystem. Дублирует ключи из
 // бэкового реестра подсистем (одна строка на подсистему). Описания/дефолты
 // приходят с сервера — здесь только ключи.
+// Полный набор сверен с регистрацией бэка: AddSubsystems(Program.cs) — статические
+// подсистемы — плюс секция DynamicModules в appsettings.json (динамические модули;
+// заглушка __stub не подсистема пользователя). Полноту держат два сторожа:
+// __tests__/subsystemsRegistry.test.ts (реестр против его же фикстуры) и бэковый кейс
+// SubsystemDisableMatrixTests.Фронтовый_реестр_содержит_каждый_ключ_стора (обратная
+// половина — Фронтовый_реестр_не_содержит_ключей_вне_стора): бэк добавляет подсистему —
+// реестр обязан пополниться, иначе следующий шаг (меню/рельса/маршрут) не сможет
+// гейтить её ключ.
 export const SUBSYSTEMS = {
-  notes: 'notes',
-  spend: 'spend',
   architecture: 'architecture',
+  audioeditor: 'audioeditor',
+  backgrounds: 'backgrounds',
+  changelog: 'changelog',
+  codeGraph: 'code-graph',
+  deploy: 'deploy',
+  dossiers: 'dossiers',
+  git: 'git',
+  imageeditor: 'imageeditor',
+  images: 'images',
+  knowledge: 'knowledge',
+  llm: 'llm',
+  memory: 'memory',
+  notes: 'notes',
+  plugins: 'plugins',
+  projectIcons: 'project-icons',
+  projectServices: 'project-services',
+  reader: 'reader',
+  skills: 'skills',
+  spend: 'spend',
+  tasks: 'tasks',
+  testRuns: 'test-runs',
+  tts: 'tts',
+  video: 'video',
+  videoeditor: 'videoeditor',
+  yandex: 'yandex',
 } as const;
 
 export type SubsystemKey = (typeof SUBSYSTEMS)[keyof typeof SUBSYSTEMS];
 
+// Продуктовая формулировка причины выключения — единый источник пользовательского
+// текста для заглушки раздела (components/SubsystemDisabledState) и строки контекста
+// (components/chat/ContextRow). Текст не менять: согласован с продуктом; точный
+// текст сторожит components/__tests__/SubsystemDisabledState.test.ts (хвост S2b-3b, п. 1a).
+export const SUBSYSTEM_DISABLED_REASON = 'выключен администратором';
+
 let _subsystems: Record<string, boolean> = {};
+// Отсортированный список активных ключей — снимат стабильной ссылки: он отдаётся
+// getSnapshot'ом useActiveSubsystemKeys (новый массив на каждый вызов заставил бы
+// React перерисовывать по кругу). Обновляется только вместе с _subsystems.
+let _activeKeys: string[] = [];
 const _listeners = new Set<() => void>();
 
 function emit() {
@@ -50,6 +91,7 @@ export function setAllSubsystems(subsystems: SubsystemsFromServer) {
   // Пустой массив → пустой набор; null/undefined → не вызываем.
   _subsystems = {};
   for (const k of subsystems) _subsystems[k] = true;
+  _activeKeys = Object.keys(_subsystems).sort();
   emit();
 }
 
@@ -68,6 +110,7 @@ export function getAllSubsystems(): Record<string, boolean> {
 // до логаута, между ними не пустеет.
 export function __resetSubsystems() {
   _subsystems = {};
+  _activeKeys = [];
   emit();
 }
 
@@ -84,4 +127,12 @@ export function useSubsystem(key: SubsystemKey): boolean {
     () => isSubsystemEnabled(key),
     () => isSubsystemEnabled(key),
   );
+}
+
+// Подписка на состав активных ключей — для потребителей, которые считают набор по
+// ВСЕМУ стору, а не по одному ключу (рельса воркспейса по PANEL_SUBSYSTEM, S2b-2c).
+// Снимат — _activeKeys: стабильная ссылка между setAllSubsystems, поэтому
+// useSyncExternalStore не перерисовывает без изменения состава.
+export function useActiveSubsystemKeys(): string[] {
+  return useSyncExternalStore(subscribeSubsystems, () => _activeKeys, () => _activeKeys);
 }

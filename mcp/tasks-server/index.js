@@ -371,7 +371,8 @@ const VERIFICATION_SCHEMA = {
     verdict: {
       type: 'string',
       enum: ['accepted', 'accepted_with_remarks', 'returned', 'withdrawn'],
-      description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn',
+      description: 'Исход витка: accepted · accepted_with_remarks · returned · withdrawn. '
+        + 'Исполнитель своего step/rework не снимает; агентский withdrawn — только с notes.',
     },
     returnReason: {
       type: 'string',

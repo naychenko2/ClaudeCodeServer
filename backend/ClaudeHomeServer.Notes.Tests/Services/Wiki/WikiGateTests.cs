@@ -1,40 +1,16 @@
 using ClaudeHomeServer.Services.Notes.Wiki;
+using static ClaudeHomeServer.Tests.Helpers.WikiGateFixtures;
 
 namespace ClaudeHomeServer.Tests.Services;
 
 // Строгая шапка, секции и сноски страницы + гейт правил раздела (S2a, ADR-035 §3, ADR-036 §4).
 // Чистые функции — юнит без окружения. На каждое правило гейта пара «проходит / отбит».
+// Каркас валидной страницы и карточки — общий с WikiPackageClaimTests, в WikiGateFixtures.
 public class WikiGateTests
 {
-    private const string P1 = "projects/p1";
-    private const string P1Dir = "Проекты/p1/";
     private const string Quote = "точная цитата из источника";
     private const string Foot = "[^s1]: [[Карточка]] — «" + Quote + "»";
     private const string Good = "- Бюджет на GPU — до 15 тыс. ₽ в месяц.[^s1]";
-
-    // Карточка источника той же страницы: сноска обязана указывать на type: source.
-    private static string Card(string title, string origin = "note", string dir = P1Dir) =>
-        Fm("source", $"origin: {origin}\nref: note:1\nhash: h1\ncaptured: 2026-10-28\n") + $"\n\n# {title}\n";
-
-    private static string Fm(string type, string extra = "") =>
-        "---\ntype: " + type + "\nsummary: тестовая страница\n" + extra + "status: active\n---";
-
-    // Обычная страница: четыре фиксированных секции; содержание — в «Сводке», сноски — в конце.
-    private static string Page(
-        string title = "Тет",
-        string swodka = "",
-        string footnotes = "",
-        string fmExtra = "",
-        string dir = P1Dir,
-        string type = "entity")
-    {
-        var body = $"\n\n# {title}\n\n## Сводка\n{swodka}\n\n## Хронология\n\n## Противоречия\n\n## История\n";
-        if (footnotes.Length > 0)
-            body += "\n" + footnotes + "\n";
-        return Fm(type, fmExtra) + body;
-    }
-
-    private static readonly WikiGate.Draft CardDraft = new(P1Dir + "Источники/Карточка.md", Card("Карточка"));
 
     private static WikiGate.Draft D(string path, string content) => new(path, content);
 
@@ -130,11 +106,11 @@ public class WikiGateTests
     }
 
     [Fact]
-    public void Шапка_типВнеСеми_отбита()
+    public void Шапка_типВнеРазрешённых_отбита()
     {
         var r = WikiFrontmatter.Parse(Fm("notion"));
         r.Model.Should().BeNull();
-        r.Errors.Should().Contain(e => e.Contains("не из семи разрешённых"));
+        r.Errors.Should().Contain(e => e.Contains("не из десяти разрешённых"));
     }
 
     [Fact]
@@ -568,13 +544,13 @@ public class WikiGateTests
     private static string PageWithNotes(string notes, string footnotes = "", string swodka = "") =>
         Page(swodka: swodka, footnotes: footnotes).Replace("## История\n", "## История\n\n## Заметки\n" + notes + "\n");
 
-    private static readonly WikiGate.Draft HumanCardDraft =
+    private static readonly WikiGate.Draft HumanCard =
         new(P1Dir + "Источники/Моя.md", Card("Моя", origin: "human"));
 
     [Fact]
     public void Гейт_карточкаHumanОтПакетаAi_отбита()
     {
-        var violations = WikiGate.Check([HumanCardDraft], P1, [], null, WikiGate.VerbatimScope.All,
+        var violations = WikiGate.Check([HumanCard], P1, [], null, WikiGate.VerbatimScope.All,
             WikiPackage.AuthorAi, baseState: []);
         violations.Should().Contain(e => e.Contains("origin: human") && e.Contains("автора human"));
     }
@@ -583,13 +559,13 @@ public class WikiGateTests
     public void Гейт_карточкаHumanПоУмолчаниюАвторAiБезБазы_отбита()
     {
         // Fail-closed: не названный автор — ai, базы нет — карточка считается новой.
-        Check([HumanCardDraft]).Should().Contain(e => e.Contains("origin: human"));
+        Check([HumanCard]).Should().Contain(e => e.Contains("origin: human"));
     }
 
     [Fact]
     public void Гейт_карточкаHumanОтПакетаHuman_проходит()
     {
-        WikiGate.Check([HumanCardDraft], P1, [], null, WikiGate.VerbatimScope.All,
+        WikiGate.Check([HumanCard], P1, [], null, WikiGate.VerbatimScope.All,
             WikiPackage.AuthorHuman, baseState: []).Should().BeEmpty();
     }
 
@@ -598,19 +574,19 @@ public class WikiGateTests
     {
         var state = new List<WikiGate.Draft>
         {
-            HumanCardDraft,
+            HumanCard,
             D(P1Dir + "Тет.md", Page(swodka: Good, footnotes: Foot.Replace("Карточка", "Моя"))),
         };
         // Карточка уже была до пакета: ИИ цитирует человека, создавать нечего.
-        WikiGate.Check(state, P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCardDraft])
+        WikiGate.Check(state, P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCard])
             .Should().BeEmpty();
     }
 
     [Fact]
     public void Гейт_пакетAiПодменилСуществующуюКарточкуHuman_отбит()
     {
-        var changed = new WikiGate.Draft(HumanCardDraft.Path, Card("Моя", origin: "human").Replace("hash: h1", "hash: h2"));
-        WikiGate.Check([changed], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCardDraft])
+        var changed = new WikiGate.Draft(HumanCard.Path, Card("Моя", origin: "human").Replace("hash: h1", "hash: h2"));
+        WikiGate.Check([changed], P1, [], null, WikiGate.VerbatimScope.All, WikiPackage.AuthorAi, baseState: [HumanCard])
             .Should().Contain(e => e.Contains("origin: human"));
     }
 

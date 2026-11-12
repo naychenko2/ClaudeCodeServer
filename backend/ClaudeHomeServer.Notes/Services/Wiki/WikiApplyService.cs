@@ -675,7 +675,28 @@ public sealed class WikiApplyService
             // У пути решения человека (S4g) текста источника нет и здесь: ни в карточке, ни в
             // пакете его нет, а дословность подтверждена при разборе (WikiPlanValidator.cs:199) —
             // рендерит тот же Text из Operations пакета, второй проверки тем же нечем.
-            if (op.Text is not { Length: > 0 } ||
+            var synth = op.Quotes is { Count: > 0 };
+            if (synth)
+            {
+                // Синтез (ADR-039): Text обязан совпадать с Claim; каждая цитата — дословно в
+                // источнике (при наличии его текста); auto с неподтверждённым числом не применяется.
+                if (op.Text is not { Length: > 0 } || op.Text != op.Claim)
+                {
+                    unconfirmed.Add($"операция «{op.Op}» на «{op.Page}»: текст не совпадает с утверждением");
+                    continue;
+                }
+                if (context is not null && op.Quotes!.Any(q => !QuoteMatcher.ContainsVerbatim(context.SourceText!, q)))
+                {
+                    unconfirmed.Add($"операция «{op.Op}» на «{op.Page}»: цитата не выводится из текста источника дословно");
+                    continue;
+                }
+                if (op.Decision == WikiPackage.DecisionAuto && WikiClaimNumbers.Unconfirmed(op.Claim!, op.Quotes!).Count > 0)
+                {
+                    unconfirmed.Add($"операция «{op.Op}» на «{op.Page}»: число утверждения не подтверждено цитатой");
+                    continue;
+                }
+            }
+            else if (op.Text is not { Length: > 0 } ||
                 (context is not null && !QuoteMatcher.ContainsVerbatim(context.SourceText!, op.Text)))
             {
                 unconfirmed.Add($"операция «{op.Op}» на «{op.Page}»: цитата не выводится из текста источника дословно");
@@ -687,7 +708,9 @@ public sealed class WikiApplyService
             {
                 // Общий рендер плана (S6b-2): вторая копия рендера в проекте не заводится.
                 // cardTitle — из ветки выбора карточки выше: принесённый или с самой карточки.
-                draft = WikiPlanValidator.RenderApply(working, op, op.Text, cardTitle);
+                draft = synth
+                    ? WikiPlanValidator.RenderApply(working, op, op.Quotes!, cardTitle)
+                    : WikiPlanValidator.RenderApply(working, op, op.Text, cardTitle);
             }
             catch (Exception)
             {

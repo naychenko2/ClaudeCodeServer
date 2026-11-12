@@ -299,43 +299,37 @@ describe('Тег: run.state → подпись (макет §3)', () => {
 
 // ═══ 2. Вкладки: дефолт, сохранение, 360 ════════════════════════════════════════
 describe('Вкладки (макет §4)', () => {
-  it('по умолчанию «Хронология»; мутация дефолта на «Чаты» → red', async () => {
+  it('по умолчанию «Ход»; мутация дефолта на «Разбор» → red', async () => {
     const c = render({});
     await settle();
     const tabs = findNodeByAttr(c, 'data-testid', 'feature-page-tabs');
     expect(tabs).not.toBeNull();
-    const tl = tabByLabel(c, 'Хронология');
+    const tl = tabByLabel(c, 'Ход');
     expect(tl).not.toBeNull();
     expect((tl as unknown as { getAttribute: (a: string) => string | null }).getAttribute('aria-selected')).toBe('true');
-    // Мутация (в отчёте): DEFAULT_TAB = 'chats' → «Хронология» не выбрана → red.
+    // Мутация (в отчёте): DEFAULT_MAIN_TAB = 'review' → «Ход» не выбран → red.
   });
 
-  it('выбор сохраняется: «Чаты» переживает размонтирование (стор, не DOM)', async () => {
+  it('выбор сохраняется: «Разбор» переживает размонтирование (стор, не DOM)', async () => {
     const c = render({});
     await settle();
-    // Переключаем на «Чаты» (стор страницы).
+    // Переключаем на «Разбор» (стор страницы; старое значение chats переводится в review).
     await act(async () => { setFeaturePageTab('chats'); });
     // Новый mount (страницу «скрыли и вернули»): выбор из стора.
     const c2 = render({});
     await settle();
-    const chats = tabByLabel(c2, 'Чаты');
+    const chats = tabByLabel(c2, 'Разбор');
     expect(chats).not.toBeNull();
     expect((chats as unknown as { getAttribute: (a: string) => string | null }).getAttribute('aria-selected')).toBe('true');
-    const tl = tabByLabel(c2, 'Хронология');
+    const tl = tabByLabel(c2, 'Ход');
     expect((tl as unknown as { getAttribute: (a: string) => string | null }).getAttribute('aria-selected')).toBe('false');
   });
 
-  it('счётчики: «Шаги» без трекера — без числа, события 0 — без счётчика', async () => {
-    // «Шаги» — знаменатель трекера (stepProgress.total); дефолтный run (pageData) = только
-    // эпик, трекера нет → счётчика нет. events = 0 → «История» без счётчика.
+  it('счётчик есть только у «Материалов»: у «Хода» и «Разбора» цифр нет', async () => {
     const c = render({});
     await settle();
-    const tasks = tabByLabel(c, 'Шаги');
-    expect(tasks).not.toBeNull();
-    expect(textNodes(tasks!).join('')).toBe('Шаги');
-    const events = tabByLabel(c, 'История');
-    expect(events).not.toBeNull();
-    expect(textNodes(events!).join('')).not.toContain('0');
+    expect(textNodes(tabByLabel(c, 'Ход')!).join('')).toBe('Ход');
+    expect(textNodes(tabByLabel(c, 'Разбор')!).join('')).toBe('Разбор');
   });
 
   it('360: полоса вкладок — горизонтальная прокрутка (tablist overflow-x)', async () => {
@@ -720,7 +714,7 @@ describe('Ф6: «Мерж…» на странице фичи', () => {
 
 describe('Единая тревога (Ш4)', () => {
   const OLD_TAG = 'feature-page-analysis-tag';
-  const TABS = ['timeline', 'plans', 'chats', 'tasks', 'events', 'stats'] as const;
+  const TABS = ['timeline', 'plans', 'stats'] as const;
 
   const attr = (n: AnyNode, a: string): string | null =>
     (n as unknown as { getAttribute: (a: string) => string | null }).getAttribute(a);
@@ -752,7 +746,7 @@ describe('Единая тревога (Ш4)', () => {
     now: [{ taskId: 't-1', stage: 'prod', title: 'Шаг', stepRef: 'Ш1', nudgedAt: new Date(NOW - 3 * 3_600_000).toISOString() }],
   });
 
-  it('полоса тревоги — одна и на каждой из шести вкладок (attention)', async () => {
+  it('полоса тревоги — одна и на каждой из трёх вкладок (attention)', async () => {
     mockGetFeature.result = pageData({ state: 'waiting', attention: attention('wait') });
     const c = render({});
     await settle();
@@ -763,7 +757,7 @@ describe('Единая тревога (Ш4)', () => {
     }
   });
 
-  it('«стоит» сторожа — в той же полосе на всех шести вкладках, тон stop, без второй тревоги', async () => {
+  it('«стоит» сторожа — в той же полосе на всех трёх вкладках, тон stop, без второй тревоги', async () => {
     mockGetFeature.result = stuckRun();
     const c = render({});
     await settle();
@@ -797,6 +791,41 @@ describe('Единая тревога (Ш4)', () => {
     expect(alarm).not.toBeNull();
     expect(attr(alarm!, 'data-tone')).toBe('warn');
     expect(textNodes(alarm!).join('')).toContain('тихо 24 ч');
+  });
+
+  // Живой путь: бэк отдаёт brief всегда (TasksController), поэтому тревога сторожа и
+  // «не начата» обязаны остаться над вкладками и при непустом brief.
+  const withBrief = (page: FeaturePageData): FeaturePageData => ({
+    ...page,
+    brief: {
+      kind: 'running', now: null, reason: null,
+      done: { stepsAccepted: 1, stepsTotal: 3, loops: 0, planState: 'cut' },
+      next: [], elapsedMinutes: null, estimate: null, queue: null, note: null,
+      ask: null, eta: null, computedAt: new Date(NOW).toISOString(),
+    },
+  });
+
+  it('brief есть: «без движения» сторожа остаётся над вкладками, тон stop', async () => {
+    mockGetFeature.result = withBrief(stuckRun());
+    const c = render({});
+    await settle();
+    for (const tab of TABS) {
+      act(() => { setFeaturePageTab(tab); });
+      const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+      expect(alarm, `вкладка ${tab}: тревоги нет`).not.toBeNull();
+      expect(countAlarms(c), `вкладка ${tab}: тревог не одна`).toBe(1);
+      expect(attr(alarm!, 'data-tone')).toBe('stop');
+      expect(textNodes(alarm!).join('')).toContain('без движения');
+    }
+  });
+
+  it('brief есть: «Фича ещё не начата» остаётся над вкладками', async () => {
+    mockGetFeature.result = withBrief(pageData({ state: 'not_started' }));
+    const c = render({});
+    await settle();
+    const alarm = findNodeByAttr(c, 'data-testid', 'feature-page-alarm');
+    expect(alarm).not.toBeNull();
+    expect(textNodes(alarm!).join('')).toContain('Фича ещё не начата');
   });
 
   it('тега «стоит/тихо» в шапке нет — ни на 1280, ни на 360', async () => {

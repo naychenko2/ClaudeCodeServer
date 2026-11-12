@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Notes.Controllers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Notes.Wiki;
 using ClaudeHomeServer.Services.Spheres;
@@ -112,6 +113,7 @@ public class WikiRevertTests : IDisposable
     private readonly WikiApplyService _sut;
     private readonly WikiPackageRevert _revert;
     private readonly WikiRetractService _retract;
+    private readonly WikiChatIngestService _chat;
 
     public WikiRevertTests()
     {
@@ -131,6 +133,13 @@ public class WikiRevertTests : IDisposable
         // S4f-2: конструктор контроллера требует сервис отката по источнику и каталог чатов.
         // Эти тесты retract не вызывают — экземпляры нужны, чтобы резолвился конструктор.
         _retract = new WikiRetractService(_notes, _keeper, _revert, new EmptySessions(), new NoSpheres(), _config);
+        // T-A2: конструктор контроллера требует сервис возврата окна (хук в AfterDecision).
+        // Эти тесты decide не вызывают — экземпляр нужен, чтобы резолвился конструктор.
+        var noSessions = new EmptySessions();
+        _chat = new WikiChatIngestService(
+            new WikiSourceCapture(_notes, _projects, noSessions, _config, _keeper),
+            new WikiIngestService(new NoopCheapRunner(), new NoSpheres(), _sut, _config),
+            noSessions, _keeper, _config);
         _keeper.EnsureInitializedAsync(User).GetAwaiter().GetResult();
     }
 
@@ -728,7 +737,7 @@ public class WikiRevertTests : IDisposable
     {
         var http = new DefaultHttpContext();
         http.User = new ClaimsPrincipal(new ClaimsIdentity([new Claim(JwtRegisteredClaimNames.Sub, user)], "test"));
-        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions())
+        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions(), _chat)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -737,7 +746,7 @@ public class WikiRevertTests : IDisposable
     private WikiPackagesController AnonymousController()
     {
         var http = new DefaultHttpContext(); // User без идентичности — путь боя без токена
-        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions())
+        return new WikiPackagesController(_projects, _config, _sut, _revert, _retract, new EmptySessions(), _chat)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -751,5 +760,28 @@ public class WikiRevertTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId) =>
             Task.FromResult<IReadOnlyList<StoredMessage>>([]);
         public bool SetWikiMark(string sessionId, string? mark) => false;
+    }
+
+    // Модель в этих тестах не зовётся ни разу (тот же отказной раннер, что в соседних
+    // файлах): если что-то позвал — пусть будет видно.
+    private sealed class NoopCheapRunner : ICheapTextRunner
+    {
+        private static Task<T> Throw<T>(string actionKey) =>
+            Task.FromException<T>(new InvalidOperationException("ИИ-действие не ожидалось: " + actionKey));
+
+        public bool UsesLocal(string actionKey) => false;
+        public bool HasFreeRoute(string actionKey) => false;
+        public bool HasRoute(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "none";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string>(actionKey);
+        public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
+            object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<string?>(actionKey);
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
+            string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Throw<OneShotResult>(actionKey);
     }
 }

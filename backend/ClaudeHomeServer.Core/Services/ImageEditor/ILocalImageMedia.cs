@@ -67,6 +67,7 @@ public static class LocalImageModels
     public const string Quality = "qwen-image-2.1";
     public const string Turbo = "qwen-image-2.1-turbo";
     public const string Klein = "flux3-klein";
+    public const string H3Image = "minimax-h3-image";
 
     // Больше картинок на входе Klein не проверяли (A/B и граф BFL — до четырёх)
     public const int KleinMaxImages = 10;
@@ -75,13 +76,24 @@ public static class LocalImageModels
     // 0,705 на одном фото, 0,765 на пяти; Qwen-Image на каждое фото рисует отдельного человека)
     public const int KleinCharacterPhotos = 5;
 
-    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein;
+    // MiniMax-H3-Image берёт до 16 картинок (<Picture 1>…<Picture 16>, карточка модели)
+    public const int H3ImageMaxImages = 16;
 
-    // Модель, на которой запуск пойдёт на самом деле. Персонажа Klein берёт сам — по фото, без
-    // LoRA (она обучена под Qwen). Не проверен он на подстановке лица (кроп), масках, дорисовке
-    // за края и длинных наборах входов — такие запуски уходят на Qwen «качественно»
+    // Сколько фото персонажа H3-Image берёт как одного человека (замер 2026-11-11, «Андрей», 2 сида):
+    // схожесть 0,603 на одном фото, 0,602–0,644 на трёх, 0,633–0,634 на пяти при 82–134 с против 48–78 с.
+    // На всех — один человек; пять фото не прибавляют сходства, а время почти удваивают
+    public const int H3ImageCharacterPhotos = 3;
+
+    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein or H3Image;
+
+    // Модели, которые берут персонажа сами — по фото, без LoRA (LoRA обучены под Qwen-Image)
+    public static bool TakesCharacterByPhotos(string? model) => model is Klein or H3Image;
+
+    // Модель, на которой запуск пойдёт на самом деле. Klein и H3-Image не проверены на подстановке
+    // лица (кроп), масках, дорисовке за края и длинных наборах входов — такие запуски уходят на
+    // Qwen «качественно»
     public static string? Effective(LocalImageRequest request) =>
-        request.Model == Klein && NeedsQwen(request) ? Quality : request.Model;
+        TakesCharacterByPhotos(request.Model) && NeedsQwen(request) ? Quality : request.Model;
 
     public static bool NeedsQwen(LocalImageRequest request) =>
         request.Crop is not null
@@ -89,7 +101,9 @@ public static class LocalImageModels
         || request.KeepMask is { Length: > 0 }
         || request.VeilMask is { Length: > 0 }
         || request.Pad is not null
-        || (request.Images?.Count ?? 0) > KleinMaxImages;
+        || (request.Images?.Count ?? 0) > MaxImagesOf(request.Model);
+
+    public static int MaxImagesOf(string? model) => model == H3Image ? H3ImageMaxImages : KleinMaxImages;
 }
 
 // Images: у Edit первая — холст, дальше образцы (до 16 всего); у Generate — необязательные

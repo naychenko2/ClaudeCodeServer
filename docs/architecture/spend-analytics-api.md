@@ -92,7 +92,7 @@
     "sessionId": "…", "chatName": "…", "projectId": "…", "projectName": "…",
     "taskId": null, "taskTitle": null, "personaId": null, "personaName": null,
     "provider": "claude", "model": "opus", "source": "chat-turn",
-    "label": null,          // подпись one-shot действия (ключ каталога) или endpoint fal
+    "label": null,          // подпись one-shot действия (ключ каталога), endpoint fal или метка генерации: image-generation | image-generation: без картинок | image-generation: сумма уточняется
     "tokens": { }, "generations": 0, "durationMs": 42000,
     "own": true             // ход текущего пользователя → фронт показывает «Открыть чат»
   } ]
@@ -182,3 +182,13 @@
 - **Хранилище**: `data/spend/turns-YYYY-MM-DD.jsonl` (детали) + `data/spend/daily.json`
   (дневные агрегаты по полному составному ключу разрезов). Rollup — фоновый сервис
   (при старте и раз в час). День живёт либо в деталях, либо в агрегатах — двойного счёта нет.
+- **Инициатор (`SpendRecord.Initiator`) зависит от транспорта MCP.** Асимметрия есть у обоих
+  путей, где агент тратит на картинку: автоаватар `personas_create` и `personas_generate_avatar`.
+  HTTP-тулсет (`PersonasToolset.cs:218` и `:489`) не знает, кто начал ход, и пишет `agent`
+  всегда. Stdio-путь (`mcp/personas-server/index.js:832` и `:989` → REST `POST /api/personas` и
+  `avatar/generate`, обе точки зовут `PersonasController.CallerSpendAttribution`) определяет
+  инициатора по началу хода (защёлка `TurnFromHuman`): в ходе, начатом человеком, получится
+  `human`. Это свойство транспорта, а не недоработка метода: одна и та же операция агента в
+  человеческом ходе даёт `human` через stdio и `agent` через HTTP — решение дефекта `2e7f094f`,
+  не баг. Аналитика поле сейчас не читает; когда появится разрез «человек/агент», срез по
+  картинкам надо строить с оглядкой на эту асимметрию.

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
@@ -10,7 +11,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // отсутствующая ограда — ошибка разбора с причиной, а не тихий пропуск.
 public sealed class WikiFrontmatter
 {
-    // Семь значений type (ADR-035, решение 3; седьмое — chronicle, решение 12б).
+    // Десять значений type (ADR-035, решение 3; седьмое — chronicle, решение 12б;
+    // rule/term/state — ADR-039, решение 3, аддитивно: legacy читаются, но не создаются).
     public const string TypeOverview = "overview";
     public const string TypeTopic = "topic";
     public const string TypeEntity = "entity";
@@ -18,6 +20,9 @@ public sealed class WikiFrontmatter
     public const string TypeDecision = "decision";
     public const string TypeSource = "source";
     public const string TypeChronicle = "chronicle";
+    public const string TypeRule = "rule";
+    public const string TypeTerm = "term";
+    public const string TypeState = "state";
 
     // Статусы считает код, не модель (ADR-035, решение 3).
     public const string StatusActive = "active";
@@ -26,11 +31,16 @@ public sealed class WikiFrontmatter
     public const string StatusDrift = "drift";
 
     public static readonly IReadOnlyList<string> TypeValues =
-        [TypeOverview, TypeTopic, TypeEntity, TypeConcept, TypeDecision, TypeSource, TypeChronicle];
+        [TypeOverview, TypeTopic, TypeEntity, TypeConcept, TypeDecision, TypeSource, TypeChronicle,
+         TypeRule, TypeTerm, TypeState];
+    // Виды, которые вправе создавать новые операции (ADR-039, решение 3). Legacy
+    // overview/topic/entity/concept парсер продолжает читать, но в этот список не входят.
+    public static readonly IReadOnlyList<string> CreatableTypeValues =
+        [TypeDecision, TypeRule, TypeTerm, TypeState, TypeSource, TypeChronicle];
     public static readonly IReadOnlyList<string> StatusValues =
         [StatusActive, StatusDisputed, StatusStale, StatusDrift];
 
-    // Поля модели: type, kind, summary, aliases, owns. Поля кода: sources, updated, status.
+    // Поля модели: type, kind, summary, as_of, aliases, owns. Поля кода: sources, updated, status.
     // Поля карточки (только type: source): origin, ref, hash, captured, signal, written.
     private const string Fence = "---";
 
@@ -45,6 +55,9 @@ public sealed class WikiFrontmatter
     public required string Type { get; init; }
     public string? Kind { get; init; }
     public string? Summary { get; init; }
+    // Дата «на когда» (ADR-039, решение 3): ГГГГ-ММ-ДД или 'unknown'. Необязательное;
+    // при рендере пишется сразу после type, пустое не пишется.
+    public string? AsOf { get; init; }
     public IReadOnlyList<string> Aliases { get; init; } = [];
     public IReadOnlyList<string> Owns { get; init; } = [];
     public IReadOnlyList<string> Sources { get; init; } = [];
@@ -124,14 +137,14 @@ public sealed class WikiFrontmatter
 
     private static WikiFrontmatter? BuildModel(Dictionary<string, string> raw, List<string> errors)
     {
-        // type обязателен и берётся из семи значений; status — из четырёх, по умолчанию active.
+        // type обязателен и берётся из десяти значений; status — из четырёх, по умолчанию active.
         string? type = null;
         if (!raw.TryGetValue("type", out var typeRaw))
             errors.Add("шапка: нет поля 'type'");
         else if (!ScalarValue(typeRaw, "type", errors))
             type = null;
         else if (!TypeValues.Contains(typeRaw))
-            errors.Add($"type '{typeRaw}' не из семи разрешённых");
+            errors.Add($"type '{typeRaw}' не из десяти разрешённых");
         else
             type = typeRaw;
 
@@ -169,6 +182,19 @@ public sealed class WikiFrontmatter
             }
         }
 
+        // as_of необязателен: ГГГГ-ММ-ДД или 'unknown'; иное — ошибка с именем поля.
+        string? asOf = null;
+        if (raw.TryGetValue("as_of", out var asOfRaw))
+        {
+            if (ScalarValue(asOfRaw, "as_of", errors))
+            {
+                if (asOfRaw == "unknown" || IsDate(asOfRaw))
+                    asOf = asOfRaw;
+                else
+                    errors.Add($"поле 'as_of': дата 'ГГГГ-ММ-ДД' или 'unknown'");
+            }
+        }
+
         var aliases = ListValue(raw, "aliases", errors);
         var owns = ListValue(raw, "owns", errors);
         var sources = ListValue(raw, "sources", errors);
@@ -189,6 +215,7 @@ public sealed class WikiFrontmatter
                 Type = type!,
                 Kind = kind,
                 Summary = summary,
+                AsOf = asOf,
                 Aliases = aliases,
                 Owns = owns,
                 Sources = sources,
@@ -210,6 +237,7 @@ public sealed class WikiFrontmatter
         var sb = new StringBuilder();
         sb.Append(Fence).Append('\n');
         sb.Append("type: ").Append(Type).Append('\n');
+        if (AsOf is { Length: > 0 }) sb.Append("as_of: ").Append(AsOf).Append('\n');
         if (Kind is { Length: > 0 }) sb.Append("kind: ").Append(Kind).Append('\n');
         if (Summary is { Length: > 0 }) sb.Append("summary: ").Append(Summary).Append('\n');
         if (Type == TypeSource)
@@ -238,6 +266,7 @@ public sealed class WikiFrontmatter
         yield return "type";
         yield return "kind";
         yield return "summary";
+        yield return "as_of";
         yield return "aliases";
         yield return "owns";
         yield return "sources";
@@ -250,6 +279,10 @@ public sealed class WikiFrontmatter
 
     private static bool IsKey(string key) =>
         key.Length > 0 && key.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
+
+    // Дата строгого формата ГГГГ-ММ-ДД: точный формат и реальная дата (13-й месяц — не дата).
+    private static bool IsDate(string value) =>
+        DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out _);
 
     private static bool ScalarValue(string value, string key, List<string> errors)
     {
@@ -299,7 +332,7 @@ public sealed class WikiFrontmatter
     // разбор» сравнивает модели, а ссылки списков после второго разбора другие.
     public bool Equals(WikiFrontmatter? other) =>
         other is not null
-        && Type == other.Type && Kind == other.Kind && Summary == other.Summary
+        && Type == other.Type && Kind == other.Kind && Summary == other.Summary && AsOf == other.AsOf
         && Aliases.SequenceEqual(other.Aliases) && Owns.SequenceEqual(other.Owns)
         && Sources.SequenceEqual(other.Sources) && Updated == other.Updated
         && Status == other.Status && Origin == other.Origin && Ref == other.Ref
@@ -310,7 +343,7 @@ public sealed class WikiFrontmatter
 
     public override int GetHashCode() =>
         HashCode.Combine(
-            HashCode.Combine(Type, Kind, Summary, Status, Updated, Origin, Ref, Hash),
-            HashCode.Combine(Captured, Signal, Written,
+            HashCode.Combine(Type, Kind, Summary, AsOf, Status, Updated, Origin, Ref),
+            HashCode.Combine(Hash, Captured, Signal, Written,
                 string.Join(",", Aliases), string.Join(",", Owns), string.Join(",", Sources)));
 }

@@ -2,8 +2,8 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { showToast } from '../lib/toast';
 import { talkDiag } from '../lib/talkDiag';
 import {
-  isMicKeyboardFallback, setMicKeyboardFallback,
-  describeSpeechError, isSilentSpeechError, MIC_FALLBACK_TEXT,
+  isMicKeyboardFallback, setMicKeyboardFallback, clearMicKeyboardFallback,
+  describeSpeechError, isSilentSpeechError, MIC_FALLBACK_TEXT, MIC_SLOW_TEXT,
 } from '../lib/voiceInput';
 
 // Сколько ждём первый звук от движка распознавания, прежде чем счесть его мёртвым.
@@ -175,7 +175,11 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, on
     // часть браузеров (Android, WebView) его не эмитит, хотя распознавание работает —
     // и watchdog убивал вполне рабочий движок.
     const alive = () => {
-      if (!gotAudio) onCycleStartRef.current?.();
+      if (!gotAudio) {
+        onCycleStartRef.current?.();
+        // Движок жив — прошлые «мёртвые» старты были случайностью, счётчик обнуляем
+        clearMicKeyboardFallback();
+      }
       gotAudio = true;
       clearWatchdog();
     };
@@ -227,19 +231,21 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, on
       talkDiag('engine: start() called');
       setListening(true);
       // Детектор «мёртвого» движка: если за MIC_WATCHDOG_MS не пришёл audiostart —
-      // распознавания в браузере нет (нет Google-сервисов). Переходим на клавиатурный
-      // ввод и запоминаем выбор, чтобы впредь сразу открывать клавиатуру.
+      // распознавания в браузере, похоже, нет (нет Google-сервисов). Засчитываем промах;
+      // после MIC_DEAD_STRIKES промахов подряд уходим на клавиатурный ввод насовсем.
       micWatchdogRef.current = window.setTimeout(() => {
         if (gotAudio) return;
         micWatchdogRef.current = null;
-        talkDiag('engine: watchdog — признаков жизни нет, считаем движок мёртвым');
         try { rec.abort(); } catch { /* noop */ }
         setListening(false);
-        setMicKeyboardFallback();
+        const dead = setMicKeyboardFallback();
+        talkDiag('engine: watchdog — признаков жизни нет', dead ? 'движок мёртвый, клавиатурный режим' : 'промах засчитан');
         // Синтетический код: режиму разговора мёртвый движок — повод немедленно выйти
         // из петли с сообщением, а не молча уехать в клавиатурный фолбэк
         onErrorRef.current?.('mic-dead');
-        if (!quietRef.current?.()) showToast('Голосовой ввод', MIC_FALLBACK_TEXT);
+        if (!quietRef.current?.()) {
+          showToast('Голосовой ввод', dead ? MIC_FALLBACK_TEXT : MIC_SLOW_TEXT);
+        }
       }, MIC_WATCHDOG_MS);
     } catch {
       setListening(false);

@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · фича в чате: как вписать в шапку и композер — 3 варианта</title>
+<!--
+  Макет к записке chat-feature-fit-v1-proposal.md (задача 4bd58ad8, запрос Андрея 11.11).
+  Код продукта не меняется. Данные карточки — те же, что у FeatureChatCard/featureChatCardModel
+  сегодня; меняется только подача и место.
+  Переключатели: вариант (как сейчас / А / Б / В), состояние фичи, тема, ширина 1280/360.
+  Адрес: ?v=a&s=wait&theme=dark&w=360 (v: now|a|b|c; s: run|wait|stop|done).
+  Цвета — только CSS-переменные из frontend/src/lib/theme.css (имена C.* в design.ts),
+  размеры — шкалы FS/SP/R/TB из design.ts (числа выписаны рядом с именем шкалы).
+-->
+<style>
+/* ===== Токены: копия значений frontend/src/lib/theme.css (обе темы), чтобы макет открывался без сети */
+:root{
+  --c-bg-main:#F4F0E8;--c-bg-panel:#EDE7DC;--c-bg-card:#FBF8F2;--c-bg-white:#FFFFFF;--c-bg-selected:#E8E1D4;--c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F;--c-text-primary:#39332B;--c-text-secondary:#756B5E;--c-text-muted:#9A8F7E;--c-on-accent:#FBF8F2;
+  --c-accent:#D97757;--c-accent-light:#F4ECE1;--c-accent-muted:#EAD3C5;--c-accent-soft:#E8A990;
+  --c-border:#E0D7C8;--c-border-light:#E8E1D4;--c-divider:#DDD4C4;--c-progress-track:#D8CFBE;
+  --c-success:#5E8B4E;--c-success-bg:#E9F1E8;--c-success-text:#3F7A4F;
+  --c-warning:#C9923E;--c-warning-bg:#FBEFE0;--c-warning-text:#8A6A28;
+  --c-danger:#B4452F;--c-danger-bg:#FBF1EC;--c-danger-text:#B4452F;--c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6;--c-info-bg:#E7EFF5;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);--shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);--shadow-sheet:0 -8px 28px rgba(60,50,35,.16);
+  --c-overlay:rgba(42,37,31,.32);
+}
+:root[data-theme="dark"]{
+  --c-bg-main:#201C18;--c-bg-panel:#272320;--c-bg-card:#2E2A25;--c-bg-white:#2E2A25;--c-bg-selected:#38332D;--c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1;--c-text-primary:#EDE6DB;--c-text-secondary:#B3A897;--c-text-muted:#8A8072;--c-on-accent:#201C18;
+  --c-accent:#E38A6A;--c-accent-light:#3A2E27;--c-accent-muted:#4A362C;--c-accent-soft:#9A5E48;
+  --c-border:#3D3830;--c-border-light:#34302A;--c-divider:#454037;--c-progress-track:#5C544A;
+  --c-success:#7CB86A;--c-success-bg:#232E20;--c-success-text:#8FCB79;
+  --c-warning:#E0AC5A;--c-warning-bg:#322717;--c-warning-text:#E7B96E;
+  --c-danger:#E8785E;--c-danger-bg:#331F1B;--c-danger-text:#EE8A72;--c-danger-border:#5A302A;
+  --c-info:#5FA0CC;--c-info-bg:#1E2A33;
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);--shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);--shadow-sheet:0 -10px 32px rgba(0,0,0,.55);
+  --c-overlay:rgba(0,0,0,.5);
+}
+/* FONT.sans / FONT.serif / FONT.mono */
+*{box-sizing:border-box}
+body{margin:0;font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--c-bg-inset);color:var(--c-text-primary);font-size:13px}
+.serif{font-family:'PT Serif',Georgia,serif}.mono{font-family:'JetBrains Mono','Courier New',monospace}
+button{font:inherit;cursor:pointer}
+
+/* ===== Пульт макета (не часть продукта) */
+.deck{position:sticky;top:0;z-index:50;display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;padding:10px 16px;background:var(--c-bg-panel);border-bottom:1px solid var(--c-border)}
+.deck b{font-size:11px;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.04em;margin-right:4px}
+.seg{display:inline-flex;background:var(--c-bg-selected);border-radius:9px;padding:2px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--c-text-secondary);padding:4px 10px;border-radius:8px;font-size:12px;font-weight:600}
+.seg button[aria-pressed="true"]{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.stage{display:flex;gap:24px;align-items:flex-start;padding:20px 16px 40px;flex-wrap:wrap}
+.notes{flex:1 1 320px;max-width:520px;background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:14px;padding:16px 18px;line-height:1.5}
+.notes h2{font-family:'PT Serif',Georgia,serif;font-weight:500;font-size:22px;margin:0 0 4px;color:var(--c-text-heading)}
+.notes h3{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--c-text-muted);margin:14px 0 4px}
+.notes ul{margin:0;padding-left:18px}.notes li{margin:2px 0}
+.notes .rec{background:var(--c-accent-light);color:var(--c-text-heading);border-radius:8px;padding:6px 10px;font-weight:600;display:inline-block;margin-top:6px}
+
+/* ===== Кадр-устройство */
+.device{flex-shrink:0;background:var(--c-bg-main);border:1px solid var(--c-divider);border-radius:14px;overflow:hidden;position:relative;display:flex;flex-direction:column;
+  /* дудл-холст продукта упрощён до мягкой сетки точек на C.bgMain */
+  background-image:radial-gradient(var(--c-border) 1px,transparent 1px);background-size:22px 22px}
+.device.w1280{width:1280px;height:760px}
+.device.w360{width:360px;height:740px}
+.col{width:100%;max-width:950px;margin:0 auto;display:flex;flex-direction:column;min-height:0} /* CHAT_MAX_W */
+
+/* Шапка-герой (ChatHeaderBar, island): поля 12 18 10, TB.gap 8 */
+.hero{position:relative;display:flex;align-items:center;gap:8px;padding:12px 18px 10px}
+.ava{flex-shrink:0;border-radius:50%;display:grid;place-items:center;background:var(--c-accent-light);color:var(--c-accent);font-weight:700}
+.hero .ava{width:44px;height:44px;font-size:16px}
+.hero .tt{font-family:'PT Serif',Georgia,serif;font-size:28px;font-weight:500;color:var(--c-text-heading);letter-spacing:-.01em;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.hero .tt span{color:var(--c-text-muted);font-size:21px}
+.meta{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--c-text-secondary);min-width:0;white-space:nowrap}
+.rc{margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0}
+.ib{width:32px;height:32px;border:0;border-radius:8px;background:transparent;color:var(--c-text-muted);display:grid;place-items:center;font-size:15px} /* TB.iconHitDesktop, R.md */
+.ib:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.limit{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border:1px solid var(--c-warning);border-radius:999px;font-size:11px;font-weight:700;color:var(--c-warning-text);background:var(--c-warning-bg)}
+.hline{height:1px;background:var(--c-border-light)} /* линия шапки при прокрутке */
+/* Тулбар 360: TB.heightMobile 56, TB.padXMobile 14 */
+.tb{display:flex;align-items:center;gap:8px;height:56px;padding:0 14px;flex-shrink:0}
+.tb .ava{width:32px;height:32px;font-size:12px}
+.tb .tt{font-family:'PT Serif',Georgia,serif;font-size:16px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tb .ib{width:40px;height:40px} /* TB.iconHitMobile */
+
+/* Лента */
+.feed{flex:1;min-height:0;overflow:auto;padding:12px 18px;display:flex;flex-direction:column;gap:12px;position:relative}
+.w360 .feed{padding:10px 16px} /* CHAT_GUTTER_MOBILE */
+.msg-u{align-self:flex-end;max-width:72%;background:var(--c-accent-light);color:var(--c-text-heading);border-radius:14px 14px 4px 14px;padding:8px 12px;line-height:1.45}
+.msg-a{line-height:1.55;color:var(--c-text-primary);max-width:720px}
+.tool{border:1px solid var(--c-border-light);background:var(--c-bg-card);border-radius:10px;padding:8px 10px;font-size:12px;color:var(--c-text-secondary);display:flex;gap:8px;align-items:center}
+
+/* Композер: строка контекста (ADR-023) 30/32 px, R.lg, C.bgPanel, рамка C.border; поле — остров */
+.cmp{padding:0 18px 14px;display:flex;flex-direction:column;gap:6px;flex-shrink:0}
+.w360 .cmp{padding:0 10px 10px}
+.ctx{display:flex;align-items:center;gap:6px;height:30px;padding:0 10px;background:var(--c-bg-panel);border:1px solid var(--c-border);border-radius:10px;font-size:12px;color:var(--c-text-secondary);min-width:0}
+.w360 .ctx{height:32px}
+.ctx .sep{width:1px;height:16px;background:var(--c-border);flex-shrink:0}
+.cchip{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;min-width:0;border:0;background:transparent;color:inherit;padding:2px 4px;border-radius:6px}
+.cchip:hover{background:var(--c-bg-selected)}
+.box{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:14px;box-shadow:var(--shadow-island)}
+.box .inp{padding:12px 14px;color:var(--c-text-muted);font-size:14px}
+.box .bar{display:flex;align-items:center;gap:10px;padding:6px 10px 8px;font-size:12px;color:var(--c-text-secondary);font-weight:600}
+
+/* ===== Примитивы ui/ (Button, Badge, StatusTag, FeatureGlyph, FeatureTrackerBar) */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;height:24px;padding:0 9px;font-size:12px;font-weight:600;line-height:1;border-radius:8px;white-space:nowrap;flex-shrink:0} /* Button xs */
+.btn.ghost{background:transparent;color:var(--c-text-secondary);border:1px solid var(--c-border)}
+.btn.ghost:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.btn.primary{background:var(--c-accent);color:var(--c-on-accent);border:0}
+.btn.secondary{background:var(--c-bg-panel);color:var(--c-text-secondary);border:0}
+.btn.t40{height:40px;padding:0 14px;font-size:13px;border-radius:10px} /* minHeight 40 на тач */
+.btn:focus-visible,.cchip:focus-visible,.fline:focus-visible{outline:none;box-shadow:var(--shadow-focus)}
+.badge{display:inline-flex;align-items:center;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:600;background:var(--c-accent-light);color:var(--c-accent)}
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 4px;border-radius:6px;font-size:11px;font-weight:600;white-space:nowrap;flex-shrink:0}
+.tag.run{background:var(--c-bg-selected);color:var(--c-text-heading)}
+.tag.wait{background:var(--c-info-bg);color:var(--c-text-primary)}
+.tag.wait::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--c-info)}
+.tag.stop{background:var(--c-danger-bg);color:var(--c-danger-text);box-shadow:inset 0 0 0 1px var(--c-danger)}
+.tag.merged{background:var(--c-success-bg);color:var(--c-success-text)}
+.glyph{width:14px;height:14px;border-radius:50%;flex-shrink:0;display:inline-block}
+.glyph.run{border:2px solid var(--c-info);border-right-color:transparent}
+.glyph.wait{border:2px solid var(--c-warning);background:var(--c-warning-bg)}
+.glyph.stop{background:var(--c-danger)}
+.glyph.done{background:var(--c-success)}
+.tbar{display:flex;gap:2px;height:4px;border-radius:999px;overflow:hidden}
+.tbar i{display:block;height:100%}
+.tbar.thin{height:2px;gap:0;border-radius:0}
+.cnt{font-family:'JetBrains Mono','Courier New',monospace;font-size:12px;color:var(--c-text-muted);white-space:nowrap;flex-shrink:0}
+.cnt b{color:var(--c-text-heading);font-weight:700}
+.cnt .paused{color:var(--c-warning-text)}
+.ph{font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ph b{color:var(--c-text-heading);font-weight:600}
+.ph .lbl{font-weight:600}
+.t-muted{color:var(--c-text-secondary)}.t-warn{color:var(--c-warning-text)}.t-danger{color:var(--c-danger-text)}.t-ok{color:var(--c-success-text)}
+
+/* ===== «Как сейчас»: FeatureChatCard в слоте featureBar */
+.now{display:flex;flex-direction:column;gap:2px;padding:0 16px 10px;background:var(--c-bg-main);border-bottom:1px solid var(--c-border)}
+.w1280 .now-wrap{padding:0 18px}
+.w360 .now{padding:0 14px 8px}
+.now .r1{display:flex;align-items:center;gap:8px;min-height:28px;min-width:0}
+.w360 .now .r1{min-height:20px}
+.now .r2{display:flex;align-items:center;gap:8px;min-height:24px;min-width:0}
+.w360 .now .r2{gap:4px;min-height:40px}
+.now .ttl{font-size:13px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+
+/* ===== Вариант А: фича — подзаголовок шапки */
+.fline{display:inline-flex;align-items:center;gap:6px;min-width:0;border:0;background:transparent;color:var(--c-text-secondary);font-size:12px;padding:2px 6px;margin-left:-6px;border-radius:6px;white-space:nowrap;max-width:100%}
+.fline:hover{background:var(--c-bg-selected)}
+.fline .fn{overflow:hidden;text-overflow:ellipsis;min-width:0;color:var(--c-text-primary);font-weight:600}
+.fline .chev{color:var(--c-text-muted);font-size:10px}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block}
+.pop{position:absolute;z-index:20;background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:12px;box-shadow:var(--shadow-dropdown);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.pop .ptitle{display:flex;align-items:center;gap:8px;min-width:0}
+.pop .ptitle span.n{font-weight:600;color:var(--c-text-heading);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.pop .pph{font-size:12px;line-height:1.45;white-space:normal}
+.pop .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.scrim{position:absolute;inset:0;background:var(--c-overlay);z-index:19}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:20;background:var(--c-bg-card);border-radius:22px 22px 0 0;box-shadow:var(--shadow-sheet);padding:8px 16px 16px;display:flex;flex-direction:column;gap:10px} /* R.sheet */
+.sheet .grab{width:36px;height:4px;border-radius:999px;background:var(--c-border);align-self:center;margin-bottom:4px}
+.sheet .acts{display:flex;flex-direction:column;gap:8px}
+.sheet .acts .btn{width:100%}
+
+/* ===== Вариант Б: фича в строке контекста + просьба над композером */
+.slip{display:flex;align-items:center;gap:8px;padding:6px 6px 6px 10px;border-radius:10px;font-size:12px;min-width:0}
+.slip.warn{background:var(--c-warning-bg);border:1px solid var(--c-warning)}
+.slip.danger{background:var(--c-danger-bg);border:1px solid var(--c-danger-border)}
+.mini{width:40px;flex-shrink:0}
+.rel{position:relative}
+
+/* ===== Вариант В: карточка-остров в ленте */
+.fcard{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:12px;box-shadow:var(--shadow-card);padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.fcard.sticky{position:sticky;top:0;z-index:5}
+.fcard.slim{padding:0 6px 0 12px;height:36px;flex-direction:row;align-items:center;gap:8px}
+.w360 .fcard.slim{height:44px}
+.fcard .hd{display:flex;align-items:center;gap:8px;min-width:0}
+.fcard .hd .n{font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.fcard .acts{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.hchip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:999px;border:1px solid var(--c-border-light);background:var(--c-bg-card);font-size:11px;color:var(--c-text-secondary);white-space:nowrap} /* MetaChip */
+</style>
+</head>
+<body>
+<div class="deck" role="toolbar" aria-label="Пульт макета">
+  <span><b>Вариант</b><span class="seg" data-k="v">
+    <button data-val="now">Как сейчас</button><button data-val="a">А · подзаголовок шапки</button><button data-val="b">Б · у композера</button><button data-val="c">В · карточка в ленте</button></span></span>
+  <span><b>Фича</b><span class="seg" data-k="s">
+    <button data-val="run">идёт</button><button data-val="wait">ждёт тебя</button><button data-val="stop">стоит</button><button data-val="done">смержена</button></span></span>
+  <span><b>Тема</b><span class="seg" data-k="theme"><button data-val="light">светлая</button><button data-val="dark">тёмная</button></span></span>
+  <span><b>Ширина</b><span class="seg" data-k="w"><button data-val="1280">1280</button><button data-val="360">360</button></span></span>
+</div>
+<div class="stage">
+  <div id="device"></div>
+  <aside class="notes" id="notes"></aside>
+</div>
+
+<script>
+// ===== Данные — те же величины, что отдаёт featureChatCardModel сегодня (записка v5 §3)
+const FEATURE = 'Фичи: упрощение и прозрачность раздела';
+const S = {
+  run:  { glyph:'run',  tag:['run','идёт · производство'], count:['6',' из 44'], eta:'≈ 2 д', paused:false, tone:'muted',
+          label:null, text:'Сейчас <b>Кузьма</b> — FS-B1b · stream и locate +3', short:'Сейчас <b>Кузьма</b> +3',
+          word:'производство', action:null, bar:true },
+  wait: { glyph:'wait', tag:['wait','в работе'], count:['6',' из 44'], eta:'часы стоят', paused:true, tone:'warn',
+          label:'Нужно от тебя', text:'<b>Александр</b> ждёт ответа — согласен, что «ещё N» в карточке можно убрать?', short:'Ждёт тебя: <b>Александр</b>',
+          word:'ждёт тебя', who:'Александр', action:['Ответить Александру','Ответить'], bar:true },
+  stop: { glyph:'stop', tag:['stop','стоит'], count:['6',' из 44'], eta:'часы стоят', paused:true, tone:'danger',
+          label:'Что мешает', text:'<b>Денис</b> не стартует — локальный движок недоступен', short:'Стоит: <b>Денис</b>',
+          word:'стоит', who:'Денис', action:['Открыть чат Дениса','Чат Дениса'], bar:true },
+  done: { glyph:'done', tag:['merged','смержена'], count:['12',' шагов'], eta:'15 ч 13 мин', paused:false, tone:'ok',
+          label:null, text:'Смержена 19 окт · обещали ≈ 10 ч', short:'Смержена 19 окт',
+          word:'смержена', action:null, bar:false },
+};
+const TONE = { muted:'t-muted', warn:'t-warn', danger:'t-danger', ok:'t-ok' };
+const DOT  = { muted:'var(--c-info)', warn:'var(--c-warning)', danger:'var(--c-danger)', ok:'var(--c-success)' };
+
+const q = new URLSearchParams(location.search);
+const st = { v:q.get('v')||'a', s:q.get('s')||'wait', theme:q.get('theme')||'light', w:q.get('w')||'1280', open:false, scrolled:false };
+
+// ===== Кусочки
+const glyph = d => `<span class="glyph ${d.glyph}" aria-hidden="true"></span>`;
+const tag = d => `<span class="tag ${d.tag[0]}">${d.tag[1]}</span>`;
+const cnt = (d, short) => `<span class="cnt"><b>${d.count[0]}</b>${short ? (d.count[1].includes('из') ? '/44' : ' шагов') : d.count[1]}${d.eta ? ` · <span class="${d.paused?'paused':''}">${d.eta}</span>` : ''}</span>`;
+const bar = (thin) => `<div class="tbar ${thin?'thin':''}" role="img" aria-label="6 приняты, 3 на ревью, 4 в работе, 31 в очереди">
+  <i style="flex:6;background:var(--c-success)"></i><i style="flex:3;background:var(--c-info)"></i><i style="flex:4;background:var(--c-accent)"></i><i style="flex:31;background:var(--c-progress-track)"></i></div>`;
+const phrase = (d, cls='') => `<span class="ph ${TONE[d.tone]} ${cls}">${d.label?`<span class="lbl">${d.label}:</span> `:''}${d.text}</span>`;
+const mob = () => st.w === '360';
+const btn = (txt, kind='ghost', extra='') => `<button class="btn ${kind} ${mob()?'t40':''} ${extra}" data-act="${txt}">${txt}</button>`;
+const actBtn = (d, i) => d.action ? btn(d.action[mob()?1:i||0], 'primary') : '';
+
+// Шапка чата: герой на 1280, тулбар на 360. metaInner — содержимое строки под заголовком.
+function header(metaInner, rightExtra='', lineHtml='<div class="hline"></div>', tapTitle=false) {
+  if (!mob()) return `<div class="hero">
+      <div class="ava">КЗ</div>
+      <div style="min-width:0;flex:1;display:flex;flex-direction:column;gap:2px">
+        <div class="tt">Кузьма <span>· FS-B1b · stream и locate</span></div>
+        <div class="meta">${metaInner ?? 'AI Home'}</div>
+      </div>
+      <div class="rc">${rightExtra}<span class="limit">Нед 71%</span><button class="ib" aria-label="Задачи">⧗</button><button class="ib" aria-label="Ещё">⋯</button></div>
+    </div>${lineHtml}`;
+  return `<div class="tb">
+      <button class="ib" aria-label="Назад">‹</button><div class="ava">КЗ</div>
+      <div ${tapTitle?'role="button" tabindex="0" data-open aria-haspopup="dialog" aria-label="Фича чата"':''} style="min-width:0;flex:1;display:flex;flex-direction:column;justify-content:center;min-height:40px${tapTitle?';cursor:pointer':''}">
+        <div class="tt">Кузьма · FS-B1b</div>
+        ${metaInner ? `<div class="meta" style="font-size:11px">${metaInner}</div>` : ''}
+      </div>${rightExtra}<button class="ib" aria-label="Ещё">⋯</button>
+    </div>${lineHtml}`;
+}
+const feedBody = () => `
+  <div class="msg-u">Собери, пожалуйста, stream и locate для карточки — по шагу FS-B1b.</div>
+  <div class="msg-a">Начинаю с разбора потока: читаю <span class="mono">featureRuns.ts</span> и сверяю, где карточка берёт счёт и срок. Потом допишу тест на деградацию без run.</div>
+  <div class="tool">▸ Read · frontend/src/lib/featureRuns.ts <span style="margin-left:auto" class="mono">0,4 с</span></div>
+  <div class="tool">▸ Grep · «useFeatureRuns» · 7 совпадений</div>
+  <div class="msg-a">Поток понятен. Счёт приходит из run, срок — из оценки эпика; без run карточка честно показывает числа индекса без срока.</div>
+  <div class="tool">▸ Edit · featureRuns.test.ts · +38 −2</div>`;
+function composer(ctxLead='', above='') {
+  return `<div class="cmp">${above}
+    <div class="ctx rel">${ctxLead}<button class="cchip mono" title="Ветка">⎇ ${mob()?'· 3 ▾':'feat/features-simplify · 3 изменения ▾'}</button><span class="sep"></span><button class="cchip">＋</button></div>
+    <div class="box"><div class="inp">Спросите Кузьму…</div>
+      <div class="bar"><span>Авто-правки ▾</span><span>＋</span><span style="margin-left:auto">${mob()?'✦ ▾':'✦ Модель ▾'}</span></div></div>
+  </div>`;
+}
+function page(head, feed, cmp, overlay='') {
+  return `<div class="device w${st.w}"><div class="col" style="flex:0 0 auto">${head}</div><div class="col" style="flex:1"><div class="feed" id="feed">${feed}</div>${cmp}</div>${overlay}</div>`;
+}
+// Тег в поповере не повторяем: состояние уже сказано словом в строке, а тег «ждёт вас» спорит с «Нужно от тебя»
+const popBody = (d, i=0) => `
+  <div class="ptitle">${glyph(d)}<span class="n" title="${FEATURE}">${FEATURE}</span></div>
+  <div class="pph ${TONE[d.tone]}">${d.label?`<span style="font-weight:600">${d.label}:</span> `:''}${d.text}</div>
+  ${d.bar ? bar() : ''}
+  <div style="display:flex;align-items:center;gap:8px">${cnt(d)}<span style="flex:1"></span></div>
+  <div class="acts">${actBtn(d,i)}${btn('Ключевой чат')}${btn('К фиче ›')}</div>`;
+
+// ===== Как сейчас: FeatureChatCard — своя полоса bgMain, рамка C.border, 2 строки + полоса 4 px
+function vNow(d) {
+  const r1 = mob()
+    ? `${glyph(d)}<span class="ttl">${FEATURE}</span>${cnt(d)}`
+    : `${glyph(d)}<span class="ttl">${FEATURE}</span>${tag(d)}${cnt(d)}<span style="flex:1"></span>${btn('Ключевой чат')}${btn('К фиче ›')}`;
+  const r2 = mob()
+    ? `${phrase({...d, label:null, text:d.short})}<span style="flex:1"></span>${actBtn(d)}${btn('К фиче')}${btn('Ключевой')}`
+    : `${phrase(d)}<span style="flex:1"></span>${actBtn(d)}`;
+  const card = `<div class="now-wrap"><div class="now"><div class="r1">${r1}</div><div class="r2">${r2}</div>${d.bar?bar():''}</div></div>`;
+  return page(header(null, '', '') + card, feedBody(), composer());
+}
+
+// ===== А: фича — строка подзаголовка шапки; детали — поповер (1280) / шторка (360);
+// тревога видна словом и цветом в той же строке, действие тревоги — в правом кластере (1280)
+function vA(d) {
+  const toneDot = `<span class="dot" style="background:${DOT[d.tone]}"></span>`;
+  const state = d.who ? `<span class="${TONE[d.tone]}" style="font-weight:600">${d.word}: ${d.who}</span>` : `<span class="${TONE[d.tone]}">${d.word}</span>`;
+  const line = mob()
+    ? `<span class="fline" style="padding:0;margin:0">${toneDot}${d.who ? state : cnt(d,true)}<span class="chev">▾</span></span>`
+    : `<span>AI Home</span><span style="color:var(--c-text-muted)">·</span>
+       <button class="fline" aria-haspopup="dialog" aria-expanded="${st.open}" data-open title="${FEATURE}">${glyph(d)}<span class="fn">${FEATURE}</span>${cnt(d)}<span style="color:var(--c-text-muted)">·</span>${state}<span class="chev">▾</span></button>`;
+  const right = !mob() && d.action ? actBtn(d) : '';
+  // Нижняя кромка шапки = полоса трекера 2 px (вместо линии C.borderLight), у смерженной — обычная линия
+  const edge = d.bar ? bar(true) : '<div class="hline"></div>';
+  let ov = '';
+  if (st.open) ov = mob()
+    ? `<div class="scrim" data-close></div><div class="sheet" role="dialog" aria-label="Фича чата"><div class="grab"></div>${popBody(d).replace('class="acts"','class="acts"')}</div>`
+    : `<div class="scrim" data-close style="background:transparent"></div><div class="pop" role="dialog" aria-label="Фича чата" style="left:${(1280-950)/2+70}px;top:74px;width:400px">${popBody(d)}</div>`;
+  return page(header(line, right, edge, mob()), feedBody(), composer(), ov);
+}
+
+// ===== Б: фича — первый чип строки контекста (она и есть «где работаем»); тревога — просьба над полем
+function vB(d) {
+  const chip = `<button class="cchip" aria-haspopup="dialog" aria-expanded="${st.open}" data-open title="${FEATURE}">${glyph(d)}
+     ${mob() ? cnt(d,true) : `<span style="font-weight:600;color:var(--c-text-primary);max-width:210px;overflow:hidden;text-overflow:ellipsis">${FEATURE}</span>${cnt(d)}`}
+     ${d.bar && !mob() ? `<span class="mini">${bar()}</span>` : ''}<span style="font-size:10px;color:var(--c-text-muted)">▴</span></button><span class="sep"></span>`;
+  const slip = d.action ? `<div class="slip ${d.tone==='warn'?'warn':'danger'}">
+      ${phrase(mob()?{...d,label:null,text:d.short}:d)}<span style="flex:1"></span>${d.tone==='warn' && !mob() ? btn('Ответить здесь','primary') : actBtn(d)}</div>` : '';
+  let ov = '';
+  if (st.open) ov = mob()
+    ? `<div class="scrim" data-close></div><div class="sheet" role="dialog" aria-label="Фича чата"><div class="grab"></div>${popBody(d)}</div>`
+    : `<div class="scrim" data-close style="background:transparent"></div><div class="pop" role="dialog" aria-label="Фича чата" style="left:${(1280-950)/2+18}px;bottom:${d.action?166:124}px;width:400px">${popBody(d)}</div>`;
+  return page(header(null), feedBody(), composer(chip, slip), ov);
+}
+
+// ===== В: карточка-остров первой в ленте; при прокрутке — тонкая закреплённая строка
+function vC(d) {
+  const slim = st.scrolled || (mob() && !st.open);
+  const card = slim
+    ? `<div class="fcard slim sticky">${glyph(d)}<span class="ph" style="font-weight:600;color:var(--c-text-heading)">${mob()?'Фича':FEATURE}</span>${cnt(d,mob())}
+        <span class="ph ${TONE[d.tone]}" style="flex:1">${d.who?`· ${d.word}: <b>${d.who}</b>`:''}</span>
+        ${!mob() && d.action ? actBtn(d) : ''}<button class="btn ghost ${mob()?'t40':''}" data-open aria-expanded="false">${mob()?'▾':'Подробнее ▾'}</button></div>`
+    : `<div class="fcard ${st.scrolled?'sticky':''}">
+        <div class="hd">${glyph(d)}<span class="n">${FEATURE}</span>${tag(d)}<span style="flex:1"></span>${cnt(d)}
+          ${mob()?`<button class="btn ghost t40" data-close aria-expanded="true" aria-label="Свернуть">▴</button>`:''}</div>
+        ${phrase(d,'pph')}
+        ${d.bar?bar():''}
+        <div class="acts">${actBtn(d)}${btn('Ключевой чат')}${btn('К фиче ›')}</div></div>`;
+  const tog = mob() ? '' : `<button class="hchip" data-scroll style="border-style:dashed">${st.scrolled?'↑ к началу ленты':'↓ прокрутить ленту'}</button>`;
+  return page(header(null, tog), card + feedBody() + feedBody(), composer());
+}
+
+// ===== Заметки к варианту
+const NOTES = {
+  now: `<h2>Как сейчас</h2><p>FeatureChatCard в слоте <span class="mono">featureBar</span> под шапкой-героем: своя полоса на C.bgMain, жёсткая линия C.border, две строки и трекер 4 px.</p>
+    <h3>Что выбивается</h3><ul>
+    <li><b>Отдельная плашка.</b> Шапка-герой стоит прямо на холсте без фона, а карточка заливает полосу C.bgMain и режет её линией C.border — получается «вторая шапка», приклеенная снизу.</li>
+    <li><b>Двойные поля.</b> Обёртка острова даёт 18 px, карточка — ещё TB.padX 16: текст фичи начинается на 34 px, а заголовок чата на 18. Левый край «гуляет».</li>
+    <li><b>Ритм высот.</b> Строки 28 + 24 + полоса 4 под героем 66 px: ни одна не совпадает с сеткой шапки (52/56) и строки контекста (30/32).</li>
+    <li><b>Линии.</b> Шапка рисует C.borderLight и только при прокрутке; карточка — всегда C.border. Две разные кромки на одном экране.</li>
+    <li><b>Кнопки-рамки.</b> «Ключевой чат», «К фиче ›» — ghost xs с рамкой C.border; в шапке все действия — иконки без рамок 32 px. Рамки делают полосу похожей на панель инструментов.</li>
+    <li><b>Три сигнала одного состояния.</b> «Ждёт»: глиф — синий ромб (C.info), тег — «в работе» на C.infoBg с синей точкой, фраза — янтарная «Нужно от тебя» (C.warningText). Тег и фраза говорят противоположное.</li>
+    <li><b>Голос.</b> На 360 фраза «Ждёт <i>вас</i>», на 1280 — «Нужно от <i>тебя</i>».</li>
+    <li><b>Трекер 4 px на всю колонку</b> — самый яркий объект экрана: четыре цвета на 950 px перебивают и заголовок, и ленту.</li>
+    <li><b>360.</b> Строка 2 — пять объектов (фраза, действие, «К фиче», «Ключевой», иногда «ещё N») по 40 px: фраза сжимается до «Ждёт тебя: Але…», карточка съедает 77 px из ~560 под ленту.</li>
+    <li><b>Типографика.</b> Над serif 28 (герой) стоит sans 13/600 названия фичи — та же «важность», что у имени файла: иерархии «чат → его фича» не видно.</li></ul>`,
+  a: `<h2>А · фича — подзаголовок шапки</h2>
+    <p>У чата фичи строка под заголовком (там, где сейчас имя проекта) рассказывает, <i>чей это чат</i>: глиф · название · «6 из 44 · ≈ 2 д» · слово состояния. Своей полосы, фона и рамки нет. Нижняя кромка шапки становится полосой трекера 2 px — она уже занимала это место линией.</p>
+    <h3>За 5 секунд</h3><ul><li>Этап и сколько осталось — в строке под заголовком.</li><li>Ждут ли меня — слово «ждёт тебя: Александр» тоном C.warningText прямо в строке; на 1280 рядом в шапке кнопка «Ответить Александру».</li><li>Что мешает — «стоит: Денис» тоном C.dangerText; причина — по клику.</li></ul>
+    <h3>Действия</h3><ul><li>Клик по строке — поповер (C.bgCard, R.xl, SHADOW.dropdown): полная фраза с вопросом, трекер 4 px, «Ключевой чат», «К фиче ›».</li><li>Действие тревоги — одним кликом из шапки (1280), в шторке (360).</li></ul>
+    <h3>360</h3><p>Строка под именем чата 11 px: точка тона + «6/44 · ≈ 2 д» или «ждёт тебя: Александр». Тап — шторка R.sheet с кнопками 40 px. Высота шапки не растёт (56 + 2).</p>
+    <h3>Плюсы</h3><ul><li>0 px сверху к шапке — лента получает ~66 px на 1280 и ~77 на 360.</li><li>Никаких новых поверхностей: типографика героя, кромка шапки, поповер Menu.</li><li>Иерархия честная: чат — заголовок, фича — его контекст.</li></ul>
+    <h3>Минусы</h3><ul><li>Текст вопроса Александра — по клику, не сразу.</li><li>На 360 действие тревоги — два тапа.</li><li>Строка подзаголовка нужна и под имя проекта: для чата фичи проект уходит в хлебные крошки.</li></ul>`,
+  b: `<h2>Б · фича у композера</h2>
+    <p>Фича — первый чип строки контекста (ADR-023): это и есть «где работаем», рядом с её же веткой. Когда фича ждёт тебя или стоит, над строкой появляется просьба тоном warning/danger с кнопкой — ровно там, где пишут ответ.</p>
+    <h3>За 5 секунд</h3><ul><li>Этап и сколько осталось — чип «6 из 44 · ≈ 2 д» и мини-трекер 40 px.</li><li>Ждут ли меня — просьба над полем ввода, её не пропустить.</li><li>Что мешает — та же плашка тоном danger.</li></ul>
+    <h3>Действия</h3><ul><li>«Ответить здесь» / «Открыть чат Дениса» — в плашке.</li><li>Клик по чипу — поповер вверх с «Ключевой чат», «К фиче ›».</li></ul>
+    <h3>360</h3><p>Чип сжимается до «● 6/44 ▴», плашка — одна строка «Ждёт тебя: Александр [Ответить]». Шапка чистая.</p>
+    <h3>Плюсы</h3><ul><li>Шапка вообще не меняется — «выбиваться» нечему.</li><li>Просьба стоит там, где на неё отвечают.</li></ul>
+    <h3>Минусы</h3><ul><li>Композер — самое тесное место 360: плашка + строка + поле съедают низ над клавиатурой.</li><li>Фича при прокрутке вверх не видна — а это «чей чат», информация шапочная.</li><li>Чип фичи спорит со строкой контекста за ширину (лестница схлопывания ADR-023 получает новую ступень).</li><li>Строка контекста — про ход, а фича — про чат: смешение слоёв, которое ADR-023 разводил.</li></ul>`,
+  c: `<h2>В · карточка-остров в ленте</h2>
+    <p>Фича — первая карточка ленты, тем же языком, что карточки задач и докладов (C.bgCard, R.xl, C.borderLight, SHADOW.card). При прокрутке сжимается в закреплённую строку 36 px (на 360 — 44 px и свёрнута сразу).</p>
+    <h3>За 5 секунд</h3><ul><li>Всё сразу и полностью — вопрос, причина, трекер, счёт.</li><li>В свёрнутом виде — «6 из 44 · ждёт тебя: Александр» и действие.</li></ul>
+    <h3>Действия</h3><ul><li>Все три под рукой в развёрнутой карточке; в свёрнутой — действие тревоги и «Подробнее».</li></ul>
+    <h3>360</h3><p>Свёрнутая строка 44 px, тап разворачивает карточку на месте, «▴» сворачивает.</p>
+    <h3>Плюсы</h3><ul><li>Карточка выглядит как «своя» — язык ленты.</li><li>Есть место под полный текст вопроса.</li></ul>
+    <h3>Минусы</h3><ul><li>Закреплённый остров над лентой — третья полоса между шапкой и сообщениями, та же проблема в другом платье.</li><li>Читается как сообщение: непонятно, кто его «написал» и почему оно вверху.</li><li>Ещё одно состояние «свёрнута/развёрнута» — то, от чего v5 сознательно ушёл (раскрывашка).</li></ul>`,
+};
+
+function render() {
+  document.documentElement.dataset.theme = st.theme;
+  document.querySelectorAll('.seg').forEach(g => g.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(st[g.dataset.k] === b.dataset.val))));
+  const d = S[st.s];
+  document.getElementById('device').innerHTML = ({ now:vNow, a:vA, b:vB, c:vC })[st.v](d);
+  document.getElementById('notes').innerHTML = NOTES[st.v] + (st.v==='a' ? '<div class="rec">Рекомендация — вариант А</div>' : '');
+  history.replaceState(null, '', `?v=${st.v}&s=${st.s}&theme=${st.theme}&w=${st.w}`);
+}
+document.querySelectorAll('.seg').forEach(g => g.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return; st[g.dataset.k] = b.dataset.val; st.open = false; st.scrolled = false; render();
+}));
+document.getElementById('device').addEventListener('click', e => {
+  if (e.target.closest('[data-open]')) { st.open = true; st.scrolled = false; render(); return; }
+  if (e.target.closest('[data-close]')) { st.open = false; render(); return; }
+  if (e.target.closest('[data-scroll]')) { st.scrolled = !st.scrolled; render(); return; }
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.open) { st.open = false; render(); } });
+render();
+</script>
+</body>
+</html>

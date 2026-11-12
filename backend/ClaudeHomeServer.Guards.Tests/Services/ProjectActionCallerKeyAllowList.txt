@@ -95,7 +95,12 @@ backend/ClaudeHomeServer/Controllers/ChatSubjectsController.cs|1
 # архивы, userState, штаб, продолжение) и автор записи. Ключом хранилищ общего проекта ничто не
 # служит: групповой чат пишется по арендатору (CreateGroupChatAsync/SetParticipants зовутся с
 # TenantOwnerId), вызывающий — автор (именованные аргументы createdByUserId/callerUserId).
-backend/ClaudeHomeServer/Controllers/ChatsController.cs|66
+# W3-SYNC (слияние master в ветку): 66→62 — снял master, не ветка: ручки «продолжить чат» и
+# «передать чат» (DenyOwnerTurn ×2, continuation.ContinueAsync, handoff.HandoffAsync) в master
+# убраны вместе с фичей continue/handoff. Места волны целы: ResolvePersona группы и вызовы
+# CreateGroupChatAsync/SetParticipants по TenantOwnerId, а автора там называли именованные
+# аргументы createdByUserId/callerUserId — в словарь они не входят.
+backend/ClaudeHomeServer/Controllers/ChatsController.cs|62
 backend/ClaudeHomeServer/Controllers/CodeGraphController.cs|1
 # S2c-8: FilesController 5→6 — ветка папки Delete: id вызывающего входит только в явную проверку
 # права Write (папка остаётся на Write, файл переведён на WriteContent); ключом хранилищ ничто
@@ -135,7 +140,7 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # 94c2fd37 доработка 1: PersonasController 110→111 — AskCallerIsPrivateOrUnknown: id вызывающего входит
 # только в GetOwnedVisible (видит ли человек чат-вызыватель persona_ask) для признака «приватный или
 # неизвестный» (fail-closed: запись фактов консультации в память отключена). Ключом хранилищ не стал.
-# FIN3-2 (доработка по возврату ревью cea595f7): PersonasController 111→112 — гейт «resume только
+# FIN3-2 (доработка по возврату ревью cea595f7): место входит в итоговые 111 (счётчик ниже) — гейт «resume только
 # для транскрипта, видимого вызывающему» при создании чата с персоной: id вызывающего входит только
 # в проверку видимости ключа транскрипта (IsTranscriptReservedForOthers → VisibleTo →
 # SessionAccess.CanSee), тот же класс мест, что SessionsController ниже. Ключом хранилищ он не
@@ -192,8 +197,20 @@ backend/ClaudeHomeServer/Controllers/OnboardingController.cs|18
 # входит только в адрес собственной SignalR-группы (user_{id}, тот же класс мест, что S1-4 выше),
 # ключом хранилищ не служит. Проектная ветка адресует группу проекта и группу владельца по
 # persona.ProjectId/persona.OwnerId — id вызывающего там не появляется.
-backend/ClaudeHomeServer/Controllers/PersonasController.cs|29
+# R-ТРАТА (master, слияние линии траты с ядром): те же девять строк, что на своём основании
+# master считал 111→118 — CallerSpendAttribution (GetOwned/GetTurnActor/IsTurnFromHuman) и
+# именованные аргументы атрибуции в Create/avatar/generate. Ключом хранилищ они не служат:
+# запись траты ключуется владельцем из RequestScope, id — лишь адрес чата-вызывателя.
+# W3-SYNC (слияние master в ветку): 29 + 9 = 38 — миграция ключа волны цела (ни одной строки
+# 29 мерж не снял), к ней легла атрибуция траты master (+9).
+backend/ClaudeHomeServer/Controllers/PersonasController.cs|38
 backend/ClaudeHomeServer/Controllers/PreviewController.cs|12
+# R-ФИНАЛ (сведение feat/opt-components с master): ProjectBackgroundsController 0→1 — явный
+# IProjectAccess.Resolve вместо [ProjectScope] (тот же путь, что CodeGraphController): на выключенной
+# вертикали отказ 503 с причиной обязан идти раньше разрешения проекта, а атрибут-фильтр ответил бы
+# 404 на nonexistent id до тела действия. Ключом хранилищ id вызывающего не стал: фон и тайл
+# адресуются id проекта (ProjectManager/BackgroundsDir), право — Write/Read из RequestScope.
+backend/ClaudeHomeServer/Controllers/ProjectBackgroundsController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMapController.cs|1
 backend/ClaudeHomeServer/Controllers/ProjectMembersController.cs|6
 backend/ClaudeHomeServer/Controllers/ProjectsController.cs|15
@@ -270,7 +287,22 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # «BuildExternalTaskScopes(UserId, …)», «TaskPersonaValidator.Error(personas, UserId, …)»; параметр
 # валидатора переименован в tenantId (тело «personas.Get(personaId, tenantId)» больше не ключ
 # вызывающего). Дверь мержа по-прежнему по вызывающему (чужая фича — 404 до этого кода).
-backend/ClaudeHomeServer/Controllers/TasksController.cs|89
+# FS-XT1 (master, e0e74d018, доработка по ревью 786941ae): тело мержа { tail } —
+# «tasks.WithdrawMergeTail(featureId, tailKeys, UserId)» (снятие делает стор по владельцу фичи),
+# два «ToTaskBoard(UserId, …)» на снятые задачи и эпик (адресат — владелец записей, тот же класс,
+# что SetFeatureHold выше) и «journal?.Append(UserId, featureId, …)» на решение «оставить» (журнал
+# фичи адресован владельцу). Ключом хранилищ ничто из этого не стало: задачи и журнал лежат у
+# арендатора, вызывающий входит только в право действия человека.
+# FS-B3b (master, b5afcd269): «locator.LocateManyAsync(UserId, project, paths)» в
+# LocateMockupFilesAsync (exists/branch файлов макета фичи). id вызывающего — владелец проекта
+# (проект взят GetByOwner), он нужен локатору только как владелец среды исполнения git-запросов
+# (ILauncherFactory.ForOwner) — тот же класс мест, что «git.WorktreeListAsync(UserId, …)» и
+# «git.CurrentBranchAsync(UserId, …)» выше в контроллере. Ключом хранилищ не стал: ничего не пишется.
+# W3-SYNC (слияние master в ветку): 89 + 5 = 94 — пять строк атрибуции master (WithdrawMergeTail,
+# ToTaskBoard ×2, journal.Append, LocateManyAsync) легли поверх миграции волны; ещё две — та же
+# строка в новой форме master (tasks.Create с CreatedByHuman = !IsServiceToken, MaskRunChats с
+# materials) — счёт не изменили. Миграции волны (89) мерж не тронул.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|94
 # QA-P1: TurnRightExtensions 6→7 — DenyContentWrite (право записи контента чата: переименование и
 # архив, редактор и выше) идёт тем же уровнем Deny, что RunTurn и Configure: id вызывающего входит
 # только в IProjectAccess.ResolveSession (запрошенное право WriteContent) и GetAccessible (развилка

@@ -10,7 +10,9 @@ namespace ClaudeHomeServer.Services.Composition;
 //   DynamicModules:0:Key / Title / Version / Enabled
 //   DynamicModules:0:Backend:AssemblyPath      — загрузчик берёт именно его
 //   DynamicModules:0:Frontend:RemoteUrl / ExposedModule   — необязательные (MF-remote)
-// Enabled=false — модуль в реестре, но загрузчик его пропускает (как гейт подсистем).
+// Enabled=false — модуль в реестре, но загрузчик его не регистрирует (как гейт подсистем);
+// имя и описание для админского снимка читаются из класса модуля, если сборка в развертке
+// (ModuleLoader.DescribeDisabled), иначе — из этого дескриптора (он знает только идентификатор).
 public sealed record ModuleDescriptor(
     string Key,
     string Title,

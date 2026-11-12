@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
+import { anchorFor, nextFileTaskAnchor, type FileTaskAnchor } from '../lib/featureOpenFile';
 import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen, DraftingCompass, Plug, Users, type LucideIcon } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService, SessionContextEntry } from '../types';
 import { DeviceAgentGate } from '../components/DeviceAgentGate';
@@ -12,7 +13,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { VideoPanel } from '../features/video/VideoPanel';
 import { useVideoPlaying, useVideoCenter } from '../lib/videoStage';
-import { keyAllowed, pluginPanelKey, WORKSPACE_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
+import { keyAllowed, pluginPanelKey, workspaceKeysFor, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -22,7 +23,7 @@ import { readStoredUserId } from '../lib/offline';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api, type PluginInfo, type PluginPanelView } from '../lib/api';
 import { chatNeighborForArchive } from '../lib/chatUpdate';
-import { SUBSYSTEMS, useSubsystem } from '../lib/subsystems';
+import { SUBSYSTEMS, useActiveSubsystemKeys, useSubsystem } from '../lib/subsystems';
 import { REVEAL_PANEL_EVENT, SLOT_WORKSPACE_PANEL_DEF, useSlot, useSlotItem, type RevealPanelDetail } from '../lib/subsystems/registry';
 import { markGenPanelDismissed } from '../lib/genPanelDismissed';
 import { ContextPanelHost } from '../components/generation/ContextPanelHost';
@@ -86,8 +87,7 @@ import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
-import { openKeysOf, wsPanels } from './workspace/panelStackState';
-import { followHost } from '../lib/genPanelFollow';
+import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -329,11 +329,13 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   useLocalModelWatcher(auth.role === 'admin');
   // Гейт подсистемы «Заметки»: при выключенной notes панель «notes» (notes/ репы)
   // не должна появляться в рельсе панелей и принимать клики. Рельсу собирает
-  // PanelZone из `allowedKeys` и `panels`: если ключ есть в WORKSPACE_KEYS, но
+  // PanelZone из `allowedKeys` и `panels`: если ключ есть в wsAllowedKeys, но
   // контента нет — keyAvailable возвращает false и кнопка скрыта. Так что
   // достаточно не передавать `notes` в panels (см. блок ниже). Здесь же
   // подписка на стор подсистем нужна — она же читается гейтом.
   const notesEnabled = useSubsystem(SUBSYSTEMS.notes)
+  const activeSubs = useActiveSubsystemKeys()
+  const wsAllowedKeys = useMemo(() => workspaceKeysFor(k => activeSubs.includes(k)), [activeSubs])
   // Панели плагинов (ADR-031, гейт V5): слот появляется, только когда у проекта есть
   // хотя бы один установленный плагин. M4: список грузим здесь (а не только в секции
   // настроек) — иначе стор пуст до первого открытия настроек, и слот «не виден сразу».
@@ -500,6 +502,9 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // Чат, из ленты которого открыт файл: пара привязана к пути, любой другой openFile её гасит сам
   const [openFileChat, setOpenFileChat] = useState<{ path: string; sessionId: string } | null>(null);
   const openFileSessionId = openFileChat && openFileChat.path === openFile ? openFileChat.sessionId : undefined;
+  // Материал задачи со страницы фичи (FS-F1c): якорь чтения — дерево задачи; взаимоисключается с openFileChat
+  const [openFileTask, setOpenFileTask] = useState<FileTaskAnchor | null>(null);
+  const { taskId: openFileTaskId, branch: openFileBranch } = anchorFor(openFileTask, openFile);
   // Монотонный счётчик событий «открыли» (страница фичи / файл) — владелец порядка
   // «последнее действие выигрывает». Счётчик — ref (не состояние): порядок определяется
   // в МОМЕНТ действия (повторное открытие того же файла/той же фичи — тоже событие),
@@ -581,24 +586,22 @@ export function WorkspacePage({ project, onProjectUpdated, onGoToProjects, onSwi
   // «История решений»: реветь панель по клику на файл в файловом менеджере — той
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
-  const { reveal: revealPanelKey, close: closePanelKey, replaceWith: replacePanelKey, zones: wsZones } = wsPanels.use();
-  const wsOpenKeys = useRef<string[]>([]);
-  wsOpenKeys.current = openKeysOf(wsZones);
+  const { reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
   // Показ панели по просьбе подсистемы (пунктирный чип «Персонаж» в полосе «Картинки»,
   // автооткрытие панели генерации). Вкладку detail.tab панель разбирает сама.
-  // Клик по карточке (follow) встаёт на место открытой соперницы — вид панели не меняется
   useEffect(() => {
     const onReveal = (e: Event) => {
       const d = (e as CustomEvent<Partial<RevealPanelDetail>>).detail;
       const key = d?.key as PanelKey | undefined;
-      if (!key || !keyAllowed(key, WORKSPACE_KEYS)) return;
-      const host = d?.follow ? followHost(wsOpenKeys.current, key) : null;
-      if (host && keyAllowed(host as PanelKey, WORKSPACE_KEYS)) replacePanelKey(key, host as PanelKey);
-      else revealPanelKey(key);
+      // Набор один — тот же мемоизированный, что у рельсы (wsAllowedKeys, выше):
+      // обработчик не строит своих копий набора на каждый событие и не может
+      // разойтись с тем, что рельса показывает в этот же момент (R-S2b-2c, п. 3).
+      if (!key || !keyAllowed(key, wsAllowedKeys)) return;
+      revealPanelKey(key);
     };
     window.addEventListener(REVEAL_PANEL_EVENT, onReveal);
     return () => window.removeEventListener(REVEAL_PANEL_EVENT, onReveal);
-  }, [revealPanelKey, replacePanelKey]);
+  }, [revealPanelKey, wsAllowedKeys]);
   // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
   // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
   // его читают. См. loadFileFullscreenPref в lib/workspaceState.
@@ -2112,6 +2115,7 @@ const windowWidth = useWindowWidth();
   // из дерева файлов → режим по глобальному предпочтению; опциональная строка для скролла
   const handleOpenFileFromTree = (filePath: string, line?: number) => {
     setOpenFileChat(null);
+    setOpenFileTask(null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2123,6 +2127,13 @@ const windowWidth = useWindowWidth();
     setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
     histDispatch({ type: 'push', entry: { path: filePath, line } });
+  };
+
+  // Со страницы фичи (FS-F1c): тот же путь открытия, что из дерева, плюс якорь дерева задачи.
+  // Без opts — ровно открытие из дерева (taskId/branch сброшены, вьюер читает корень проекта).
+  const handleOpenFileFromFeature = (filePath: string, opts?: { taskId?: string; branch?: string }) => {
+    handleOpenFileFromTree(filePath);
+    setOpenFileTask(nextFileTaskAnchor(filePath, opts));
   };
 
   // «История решений» из файлового менеджера: открываем файл (панель фильтрует
@@ -2153,6 +2164,7 @@ const windowWidth = useWindowWidth();
   // сплита нет — всегда fullscreen
   const handleOpenFileFromChat = (filePath: string, sessionId?: string) => {
     setOpenFileChat(sessionId ? { path: filePath, sessionId } : null);
+    setOpenFileTask(null);
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
@@ -2538,7 +2550,7 @@ const windowWidth = useWindowWidth();
               при открытой странице прячется display:none, чтобы ChatPanel (стрим хода
               и черновик композера) пережил переход и возврат (Ф2.3). Общий паттерн
               с десктопом — FeatureCenter (не копипаста). */}
-          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} projectOwnerId={project.ownerId ?? null} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromTree} yielded={pageYieldsToFile}>
+          <FeatureCenter open={featurePageOpen} featureId={openFeatureId} projectId={project.id} projectOwnerId={project.ownerId ?? null} isMobile={isMobile} onBack={handleFeatureBack} onOpenFile={handleOpenFileFromFeature} yielded={pageYieldsToFile}>
             {leftTab === 'tools'
               ? <ToolsPaneView {...toolsPaneProps} onBack={() => setMobileView('sidebar')} />
               : personasMode
@@ -2565,7 +2577,7 @@ const windowWidth = useWindowWidth();
             страница и файл делили экран 50/50 (MAJOR-2). */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden', display: pageOnTop ? 'none' : 'block' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} sessionId={openFileSessionId} taskId={openFileTaskId} branch={openFileBranch} backLabel={pageYieldsToFile ? 'К фиче' : undefined} />
           </div>
         )}
         {/* Ридер ссылок из контекста чата — та же контентная зона, что у файла.
@@ -2656,6 +2668,7 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
           railBadges={localModelBadge ? { ...railBadges, localModel: localModelBadge } : railBadges}
+          allowedKeys={wsAllowedKeys}
           onOpenProjectSettings={openProjectSettings}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -2676,6 +2689,9 @@ const windowWidth = useWindowWidth();
           onAttachedFilesChange={setAttachedFiles}
           openFile={openFile}
           openFileSessionId={openFileSessionId}
+          openFileTaskId={openFileTaskId}
+          openFileBranch={openFileBranch}
+          onOpenFileFromFeature={handleOpenFileFromFeature}
           openFileDiffMode={openFileDiffMode}
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}
@@ -2766,7 +2782,7 @@ const windowWidth = useWindowWidth();
                 onClose={() => { markGenPanelDismissed(activeSessionId, 'chatContext'); closePanelKey('chatContext'); }} />,
             } : {}),
             ...Object.fromEntries(panelDefs.flatMap(d => (
-              d.name && keyAllowed(d.name as PanelKey, WORKSPACE_KEYS) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
+              d.name && keyAllowed(d.name as PanelKey, wsAllowedKeys) && d.render && (d.action?.isAvailable?.(project.id) ?? true)
                 ? [[d.name, d.render({ projectId: project.id, sessionId: activeSessionId ?? null, isMobile: false, onClose: () => { markGenPanelDismissed(activeSessionId, d.name!); closePanelKey(d.name as PanelKey); } })]]
                 : []
             ))),

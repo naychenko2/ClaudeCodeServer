@@ -53,13 +53,9 @@ public class WikiChatsControllerTests : IDisposable
     private const string Claim1 = "Решение: перенести сборку на Linux";
     private const string Marker1 = "первый сбой был 12 октября";
 
-    private static string Claims(string claim) =>
-        $$"""{"claims":[{"text":"{{claim}}","quote":"{{claim}}"}]}""";
-
-    private static readonly string Plan1 = $$"""
-        {"chronicle":{"about":0,"decided":[0],"learned":[],"open_questions":[]},
-        "operations":[{"op":"append","page":"{{PageTitle}}","claim":0}]}
-        """;
+    // Ответ модели в формате синтеза: append на PageTitle, утверждение и цитата — одна и та же
+    // реплика (дедуп меры 2 опознаёт повтор по тексту утверждения на странице).
+    private static string Synth(string claim) => WikiSynthJson.Append(PageTitle, claim, claim);
 
     private static readonly string PageBase = $$"""
         ---
@@ -179,7 +175,7 @@ public class WikiChatsControllerTests : IDisposable
         AddSession("s-nowiki", projectId: "p1");
         _sessions.All.Single(s => s.Id == "s-nowiki").OwnerId = Foreign;
         SetShortHistory("s-nowiki");
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
 
         var res = await Controller(Foreign).AnalyzeCore("s-nowiki", Wait);
 
@@ -239,7 +235,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         AddSession();
         SetShortHistory();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
 
         var first = await Controller().AnalyzeCore(ChatId, Wait);
         ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
@@ -253,7 +249,7 @@ public class WikiChatsControllerTests : IDisposable
         var b2 = Body(again);
         b2.GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeUpToDate);
         b2.GetProperty("reason").GetString().Should().Contain("новых сообщений нет");
-        _llm.Calls.Should().HaveCount(2, "вторая заявка модель не звала");
+        _llm.Calls.Should().HaveCount(1, "вторая заявка модель не звала");
     }
 
     // ─── 4. Медленный прогон: 202, затем analyze-status от него ──────────────
@@ -264,7 +260,7 @@ public class WikiChatsControllerTests : IDisposable
         AddSession();
         SetShortHistory();
         var gate = new TaskCompletionSource();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
         _llm.GateA = gate;
 
         // Ожидание короче прогона: 202 с running — и прогон после отказа клиента не гасится
@@ -365,7 +361,7 @@ public class WikiChatsControllerTests : IDisposable
     {
         AddSession();
         SetShortHistory();
-        _llm.Script(("A", Claims(Claim1)), ("B", Plan1));
+        _llm.Script(("S", Synth(Claim1)));
         var first = await Controller().AnalyzeCore(ChatId, Wait);
         ((IStatusCodeActionResult)first).StatusCode.Should().Be(200);
         Body(first).GetProperty("outcome").GetString().Should().Be(WikiChatIngestService.OutcomeApplied);
@@ -609,6 +605,44 @@ public class WikiChatsControllerTests : IDisposable
         status.StatusCode.Should().Be(200);
     }
 
+    // C2R-Sh2b: awaiting_human стоит первой в списке, причина — «N операция/и/ий на решении»,
+    // а после решения всех спорных операций зона снимается (M1). Мутации: убрать фильтр
+    // SessionsAwaitingHuman → последний ассерт красный; вернуть зону в конец ZoneOrder →
+    // ассерт порядка красный.
+    [Fact]
+    public async Task Список_AwaitingHuman_ПерваяВСписке_СнимаетсяПослеРешенияПакета()
+    {
+        AddSession();
+        AddSession("s-other");
+        SetShortHistory();
+        ((IStatusCodeActionResult)await Controller().Recalculate()).StatusCode.Should().Be(200);
+        WikiSettingsStore.Mutate(_dir, User, st => st with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+        _llm.Script(("S", Synth(Claim1)));
+
+        var res = await _chat.AnalyzeAsync(User, ChatId);
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeAwaitingHuman, res.Reason);
+
+        var list = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        list.Items[0].SessionId.Should().Be(ChatId);
+        list.Items[0].Zone.Should().Be(WikiChatIngestService.ZoneAwaitingHuman);
+        list.Items[0].Reason.Should().Be("1 операция на решении");
+
+        var root = WikiPaths.Root(_dir, User);
+        var pkg = WikiPackageStore.List(root).Packages.Single();
+        WikiPackageStore.AcceptAllContested(root, pkg.Id).Ok.Should().BeTrue();
+
+        var after = (WikiChatsListDto)((OkObjectResult)Controller().List()).Value!;
+        var row = after.Items.Single(i => i.SessionId == ChatId);
+        row.Zone.Should().NotBe(WikiChatIngestService.ZoneAwaitingHuman, "все спорные операции решены");
+        row.Reason.Should().NotContain("на решении", "причина awaiting_human снята вместе с зоной");
+        after.Counts.ContainsKey(WikiChatIngestService.ZoneAwaitingHuman).Should().BeFalse();
+    }
+
     // ─── обвязка ──────────────────────────────────────────────────────────────
 
     // WaitAsync возвращается сразу по завершению разбора, поэтому большой потолок не удлиняет
@@ -709,7 +743,7 @@ public class WikiChatsControllerTests : IDisposable
                 (_answers.TryGetValue(pass, out var q) ? q : _answers[pass] = new Queue<string>()).Enqueue(answer);
         }
 
-        public bool UsesLocal(string actionKey) => false;
+        public bool UsesLocal(string actionKey) => true;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "fake";
@@ -731,12 +765,11 @@ public class WikiChatsControllerTests : IDisposable
         private string Answer(string actionKey, string prompt, CancellationToken ct)
         {
             var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
-                : prompt.Contains("extract durable") ? "A"
-                : prompt.Contains("turn the claims") ? "B"
+                : prompt.Contains("single pass") ? "S"
                 : "?";
             Calls.Add((actionKey, prompt, pass));
             actionKey.Should().Be(LocalActionCatalog.WikiIngest, "место разбора — wiki-ingest");
-            if (pass == "A" && GateA is not null && Calls.Count(c => c.Pass == "A") == 1)
+            if (pass == "S" && GateA is not null && Calls.Count(c => c.Pass == "S") == 1)
                 GateA.Task.WaitAsync(ct).GetAwaiter().GetResult();
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;

@@ -3,14 +3,18 @@ namespace ClaudeHomeServer.Services.Backup;
 // Какие архивы удалять при ротации. Чистая логика над списком — тестируется без диска.
 public static class BackupRotation
 {
-    public const int KeepDaily = 7;
-    public const int KeepWeekly = 4;
-    public const int KeepMonthly = 3;
+    // Только последние снимки, без недельных и месячных корзин: архив весит единицы ГБ
+    // (5 ГБ к 08.11.2026), и прежний GFS 7+4+3 держал в облаке до ~70 ГБ.
+    public const int KeepLast = 3;
 
     public record Candidate(string FileName, DateTime CreatedAt);
 
     /// <summary>
-    /// Отобрать архивы на удаление: свежий архив каждого из последних 7 дней, 4 недельных и 3 месячных остаются.
+    /// Отобрать архивы на удаление: остаются не более <see cref="KeepLast"/> файлов —
+    /// по одному (самому свежему) архиву на каждый из последних <see cref="KeepLast"/> дней.
+    /// Дневная корзина обязательна: выкатки и ручные снимки дают по несколько архивов в сутки
+    /// (6 на 24.10.2026, по 8 ГБ), и счёт по последним файлам оставил бы три снимка одного дня,
+    /// вытеснив из окна всю историю глубже вчерашнего.
     /// На вход подаются ТОЛЬКО свои архивы (чужой instanceId и нечитаемый sidecar
     /// отфильтровываются вызывающим — в общей облачной папке лежат архивы разных инстансов).
     /// </summary>
@@ -20,13 +24,7 @@ public static class BackupRotation
         var ordered = candidates.OrderByDescending(c => c.CreatedAt).ToList();
         var keep = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // «Дневные» — по одному (самому свежему) архиву на каждый из последних 7 дней, а не
-        // 7 последних файлов: выкатки и ручные снимки дают по 6 архивов в сутки (24.10.2026,
-        // по 8 ГБ), и счёт файлов вытеснял бы из окна всю историю глубже вчерашнего дня.
-        KeepFirstPerBucket(ordered, keep, KeepDaily, dt => dt.ToString("yyyy-MM-dd"));
-
-        KeepFirstPerBucket(ordered, keep, KeepWeekly, WeekKey);
-        KeepFirstPerBucket(ordered, keep, KeepMonthly, MonthKey);
+        KeepFirstPerBucket(ordered, keep, KeepLast, DayKey);
 
         return ordered.Where(c => !keep.Contains(c.FileName)).Select(c => c.FileName).ToList();
     }
@@ -44,12 +42,5 @@ public static class BackupRotation
         }
     }
 
-    private static string WeekKey(DateTime dt)
-    {
-        var week = System.Globalization.ISOWeek.GetWeekOfYear(dt);
-        var year = System.Globalization.ISOWeek.GetYear(dt);
-        return $"{year}-W{week:00}";
-    }
-
-    private static string MonthKey(DateTime dt) => $"{dt.Year}-{dt.Month:00}";
+    private static string DayKey(DateTime dt) => dt.ToString("yyyy-MM-dd");
 }

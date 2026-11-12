@@ -41,12 +41,11 @@ internal sealed class TeamStateService
     private readonly TeamPlanningService? _teamPlanning;
     private readonly IProjectManager _projects;
     private readonly IConfiguration? _config;
+    // Реестр приходит от фасада и обязателен: llm — неотключаемая подсистема (ADR-014 §5),
+    // её регистрации в контейнере не отсутствует. Возможности модели решает сам реестр: для
+    // нерезолвленной модели он отдаёт родной Claude (CapabilitiesFor, LlmProviderRegistry.cs:443)
+    // — своей запасной таблицы здесь нет и заводить нечего.
     private readonly LlmProviderRegistry _llmProviders;
-    // Лок-словарь штаба по sessionId: единственный держатель блокировки для мутаций
-    // SessionTeamImplement. Инициализируется по требованию, GC подберёт объект, когда
-    // режим выключат и ссылок не останется.
-    private readonly ConcurrentDictionary<string, object> _teamLocks = new();
-
     internal TeamStateService(SessionManager sessions, TeamPlanningService? teamPlanning,
         IProjectManager projects, IConfiguration? config, LlmProviderRegistry llmProviders)
     {
@@ -65,18 +64,10 @@ internal sealed class TeamStateService
     // завершения задачи, перевыдача из колбэка провала хода, квота из HTTP-фильтра), а
     // `int++` не атомарен — частичный лок означал бы потерянные инкременты и нечестный счёт
     // ровно там, ради чего Э4 и делался. Внутри — только синхронная работа с моделью.
-    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate)
-    {
-        var info = _dir.Get(sessionId);
-        if (info is null) return default;
-        var lockObj = _teamLocks.GetOrAdd(sessionId, _ => new object());
-        lock (lockObj)
-        {
-            var session = _sessions.GetById(sessionId);
-            if (session?.TeamImplement is not { } team) return default;
-            return mutate(team);
-        }
-    }
+    // Лок-словарь и тело транзакции переехали в SessionStore (S3-1): стор реализует
+    // ITeamRunState, и второго держателя блокировок над тем же SessionTeamImplement быть не может.
+    public T? WithTeamState<T>(string sessionId, Func<SessionTeamImplement, T> mutate) =>
+        _run.WithTeamState(sessionId, mutate);
 
     // Рассылка TeamImplementMessage по группе чата: стадия, номер волны, состав команды,
     // бюджет и флаги. Тело взято один в один из прежней
@@ -214,12 +205,18 @@ internal sealed class TeamStateService
     // → волна → снова интервью» обязан вернуть исходный выбор человека, а не Plan,
     // поставленный прошлым заходом), живой прогон CLI получает set_permission_mode
     // на лету через шов ITeamRunState.TrySetPermissionModeLive.
+    // Гейт план-фазы по модели — решение принимает реестр: он же отдаёт возможности родного
+    // Claude для нерезолвленной модели (CapabilitiesFor, LlmProviderRegistry.cs:443), тем же
+    // путём, что адаптер хода (ClaudeSession.cs:30). Ядро сессий по возможностям модели не
+    // деградирует: своего фолбэка поверх реестра здесь нет.
+    private bool SupportsPlanMode(string? model) => _llmProviders.CapabilitiesFor(model).SupportsPlanMode;
+
     public void EnterPlanPhaseMode(string sessionId)
     {
         var session = _sessions.GetById(sessionId);
         if (session?.TeamImplement is null) return;
         if (session.Mode == ClaudeMode.Plan) return;
-        if (!_llmProviders.CapabilitiesFor(session.Model).SupportsPlanMode) return;
+        if (!SupportsPlanMode(session.Model)) return;
         WithTeamState(sessionId, t => { t.SavedMode ??= session.Mode; return true; });
         session.Mode = ClaudeMode.Plan;
         _run.TrySetPermissionModeLive(sessionId, ClaudeMode.Plan);

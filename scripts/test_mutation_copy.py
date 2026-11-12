@@ -222,6 +222,37 @@ class SyntheticTests(Base):
         self.assertTrue(os.path.isdir(fresh))
         self.assertIn("живой процесс", p.stderr)
 
+    def test_create_сам_убирает_старые_копии_кроме_живой_и_свежей(self):
+        old, live, fresh = self.create(self.src), self.create(self.src), self.create(self.src)
+        self.age(old, 30)
+        self.age(live, 30)
+        self.procs.append(subprocess.Popen(["sleep", "600"], cwd=os.path.join(live, "backend")))
+        p = run(["create", "--from", self.src], self.env)
+        new = p.stdout.strip().splitlines()[-1]
+        self.created.append(new)
+        self.assertEqual([new], p.stdout.strip().splitlines(), "уборка молчит: stdout — только путь копии")
+        self.assertFalse(os.path.exists(old))
+        self.assertNotIn(old, worktrees(self.src))
+        self.assertFalse(os.path.exists(os.path.join(self.root, ".meta", os.path.basename(old))))
+        for d in (live, fresh, new):
+            self.assertTrue(os.path.isdir(d), d)
+
+    def test_create_не_падает_при_сбое_уборки(self):
+        broken = self.create(self.src)
+        # Битое время создания: арифметика gc падает с ошибкой разбора — уборка рушится целиком
+        meta = os.path.join(self.root, ".meta", os.path.basename(broken))
+        with open(meta, "w") as f:
+            f.write("created=1 +\n")
+        p = run(["create", "--from", self.src], self.env, check=False)
+        lines = p.stdout.strip().splitlines()
+        if lines:
+            self.created.append(lines[-1])
+        self.assertEqual(0, p.returncode, p.stderr)
+        self.assertIn(lines[-1], worktrees(self.src))
+        self.assertTrue(os.path.isdir(broken))
+        g = run(["gc"], self.env, check=False)
+        self.assertNotEqual(0, g.returncode, "сбой уборки настоящий: тот же gc напрямую падает")
+
     def test_gc_видит_открытый_файл_а_не_только_cwd(self):
         dst = self.create(self.src)
         self.age(dst, 30)

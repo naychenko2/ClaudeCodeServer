@@ -1,5 +1,9 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Sessions;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Services;
 
@@ -17,9 +21,25 @@ namespace ClaudeHomeServer.Services;
 /// инструментов. Владение сессией проверяется здесь по ownerId вызывающего — у контроллера
 /// это UserId из JWT, у тулсета — владелец сервисного токена.
 /// </summary>
+/// <param name="sessions">Оркестрация чатов: доставка отчёта и доклада-блокера.</param>
+/// <param name="projects">Резолв чипа-источника «откуда прилетело сообщение».</param>
+/// <param name="tasks">Резолв задачи по сессии (гейт B5) и постановка ожидания человека (FS-E2).</param>
+/// <param name="log">Логирование отказа постановки ожидания; null — без логирования (тесты).</param>
+/// <param name="broadcaster">Вещание task_changed после постановки ожидания (FS-E2 ревью, Major 1);
+/// null — без вещания (прямые construction-вызовы тестов, не проверяющих событие). В DI —
+/// синглтон ISessionBroadcaster (CoreSeamsGlue), как у остальных производителей события.</param>
 public sealed class SessionMessagingService(SessionManager sessions, ProjectManager projects,
-    TaskManager tasks)
+    TaskManager tasks, ILogger<SessionMessagingService>? log = null,
+    ISessionBroadcaster? broadcaster = null)
 {
+    // FS-E2: логгер нужен одной ветке — отказ постановки ожидания логируется, а не роняет
+    // доклад (контракт «отказ установки ожидания доклад не роняет»). Optional-параметр —
+    // как в соседних сервисах (WatchdogNotifier): DI подаёт ILogger<T> сам, прямые
+    // construction-вызовы тестов не затронуты. Тот же приём у broadcaster: в DI он
+    // синглтон (CoreSeamsGlue), в тестах без проверки вещания — null.
+    private readonly ILogger? _log = log;
+    private readonly ISessionBroadcaster? _broadcaster = broadcaster;
+
     /// <summary>Исход отправки сообщения в сессию (chats_send).</summary>
     public abstract record SendOutcome
     {
@@ -166,7 +186,9 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
 
     /// <summary>
     /// Отчёт в родительский чат. Промежуточный (blocker=false) — карточка в ленте бесплатно,
-    /// ход родителю не запускается; blocker=true — постановщика будит ход (Э4).
+    /// ход родителю не запускается; blocker=true — постановщика будит ход (Э4) и, если это
+    /// чат-исполнитель задачи, ставит её ожидание человека (FS-E2, §6.5 п.2): блокер штаба и
+    /// тревога фичи — один факт.
     /// </summary>
     public async Task<ReportOutcome> ReportUpAsync(string ownerId, string sessionId,
         string? text, bool blocker)
@@ -177,20 +199,113 @@ public sealed class SessionMessagingService(SessionManager sessions, ProjectMana
         // Финальный доклад по задаче постановщику уже доставил сервер (TaskExecutionService):
         // второе сообщение об одном факте гасим — именно оно и делало ленту дублирующей.
         // Ownership проверяем сами: ниже её делает SessionManager, а гейт стоит перед ним.
-        if (sessions.GetOwned(sessionId, ownerId) is not null
-            && IsCompletionAlreadyReported(tasks.GetBySession(sessionId), blocker))
+        // Задача резолвится один раз: тот же результат кормит гейт B5 и FS-E2-постановку.
+        var linkedTask = sessions.GetOwned(sessionId, ownerId) is not null
+            ? tasks.GetBySession(sessionId)
+            : null;
+        if (IsCompletionAlreadyReported(linkedTask, blocker))
             return new ReportOutcome.AlreadyReported();
 
         var result = blocker
             ? await sessions.ReportBlockerAsync(sessionId, trimmed, ownerId)
             : await sessions.ReportUpAsync(sessionId, trimmed, ownerId, withTurn: false);
-        return result switch
+        // явный тип: у switch-выражения без целевого типа общего типа веток нет (CS8506)
+        ReportOutcome outcome = result switch
         {
-            SessionManager.ReportUpResult.NotFound => new ReportOutcome.NotFound(),
-            SessionManager.ReportUpResult.NoParent => new ReportOutcome.NoParent(),
-            SessionManager.ReportUpResult.TooDeep => new ReportOutcome.TooDeep(),
+            ReportUpResult.NotFound => new ReportOutcome.NotFound(),
+            ReportUpResult.NoParent => new ReportOutcome.NoParent(),
+            ReportUpResult.TooDeep => new ReportOutcome.TooDeep(),
             _ => new ReportOutcome.Delivered(),
         };
+
+        // FS-E2 (docs/research/features-simplify-architecture-2026-11.md §6.5 п.2): порядок
+        // прежний — сначала доклад постановщику, ожидание после него; дошёл только состоявшийся
+        // доклад (Queued — тоже доставлен, в очередь родителя). Обычный доклад (blocker=false)
+        // ожидания не ставит: промежуточная сводка по ходу работы — не «жду тебя».
+        if (blocker && outcome is ReportOutcome.Delivered)
+            await TrySetAwaitingHumanForBlocker(linkedTask, trimmed);
+
+        return outcome;
+    }
+
+    // FS-E2: чат без задачи — ожидание не ставится (тот же null, что у гейта B5); Done-задача —
+    // сигнал устарел: переход в Done уже снял ожидание (TaskManager.Update при переходе в Done
+    // вызывает ClearAwaitingHuman), и ставить его после закрытия — «мёртвый» waiting_you на
+    // выполненной карточке. Исключение SetAwaitingHuman (несогласованный ask — сегодня
+    // единственный источник исключения) ловится и логируется: отказ установки ожидания не
+    // роняет доклад — постановщик блокер уже получил.
+    private async Task TrySetAwaitingHumanForBlocker(TaskItem? task, string reportText)
+    {
+        if (task is null || task.Status == TaskItemStatus.Done) return;
+        try
+        {
+            var updated = tasks.SetAwaitingHuman(task.Id, FirstPhrase(reportText));
+            // FS-E2 ревью (Major 1): стор фронта живёт только по task_changed (lib/tasks.ts,
+            // lib/featurePage.ts) — молчаливая постановка ожидания оставляла доску устаревшей
+            // (тот же класс дефекта, что линия паузы W4). Образец — TasksToolset: тот же
+            // TaskChangedMessage("updated") через ToTaskBoard. После await: событие несёт уже
+            // поставленное ожидание (payload = обновлённый TaskItem), а не состояние до ручки.
+            if (updated is not null && _broadcaster is not null)
+                await _broadcaster.ToTaskBoard(task.OwnerId ?? "", task.ProjectId,
+                    new TaskChangedMessage("updated", updated));
+        }
+        catch (InvalidOperationException e)
+        {
+            _log?.LogWarning(e, "report_up(blocker): ожидание человека задаче {TaskId} не поставлено", task.Id);
+        }
+    }
+
+    // Первая фраза доклада — до первого конца предложения (. ! ?) или конца строки; пустых
+    // отрезков нет (текст начинается с разделителя — берётся следующий непустой). Длиннее
+    // лимита TaskManager.AwaitingAskMaxLength — обрезка по границе слова: хвост отрезается
+    // на последнем пробельном не дальше лимита; первое слово длиннее лимита — жёсткая граница
+    // (лимит строгий: SetAwaitingHuman reject'ит ask длиннее). Многоточия нет: оно тоже
+    // символ, а лимит — про текст причины.
+    internal static string FirstPhrase(string text)
+    {
+        var start = 0;
+        while (true)
+        {
+            var end = start;
+            while (end < text.Length && !IsSentenceEndAt(text, end)) end++;
+            var phrase = text[start..end].Trim();
+            // Отрезок без буквы/цифры — не фраза («...» — пунктуация, а не причина): пропускаем.
+            // Фраз нет вовсе (текст из одних разделителей) — весь текст, тоже под лимитом
+            // (причина не пустеет).
+            if (phrase.Length > 0 && HasWordChar(phrase)) return LimitToWordBoundary(phrase);
+            if (end == text.Length) return LimitToWordBoundary(text.Trim());
+            start = end + 1;
+        }
+    }
+
+    // FS-E2 ревью (минор): '.' '!' '?' — конец предложения только за концом текста или за
+    // пробелом: точка внутри URL (docs/adr/012.md) или домена — не граница, иначе причина
+    // блокера резалась по первой точке ссылки. '\r' '\n' — безусловны: перевод строки —
+    // граница строки независимо от следующего символа.
+    private static bool IsSentenceEndAt(string text, int i) => text[i] switch
+    {
+        '\r' or '\n' => true,
+        '.' or '!' or '?' => i + 1 == text.Length || char.IsWhiteSpace(text[i + 1]),
+        _ => false,
+    };
+
+    // В отрезке есть буква или цифра — он несёт текст; нет — это пунктуация/пробелы.
+    private static bool HasWordChar(string s)
+    {
+        foreach (var c in s)
+            if (char.IsLetterOrDigit(c)) return true;
+        return false;
+    }
+
+    private static string LimitToWordBoundary(string phrase)
+    {
+        const int limit = TaskManager.AwaitingAskMaxLength;
+        if (phrase.Length <= limit) return phrase;
+        // Последний пробельный в окне [1..limit]: cut на нём оставляет префикс ≤limit,
+        // не разрезая слово (символ на позиции cut — пробел, он отрезан).
+        for (var cut = limit; cut > 0; cut--)
+            if (char.IsWhiteSpace(phrase[cut])) return phrase[..cut];
+        return phrase[..limit];
     }
 
     // Гейт B5: сессия — чат-исполнитель задачи (TaskManager.GetBySession), по которой доклад

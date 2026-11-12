@@ -3,7 +3,7 @@
 // Любой клик проваливает в «Анализ» с применённым контекстом.
 import type { ReactNode } from 'react';
 import { Lock } from 'lucide-react';
-import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
+import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from './types';
 import { C, FONT, FS, R, SHADOW, SP } from 'aihome_shell/kit';
 import {
   DIM_LABELS, SPEND_TIERS, TIER_KEYS, dayColumn, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong,

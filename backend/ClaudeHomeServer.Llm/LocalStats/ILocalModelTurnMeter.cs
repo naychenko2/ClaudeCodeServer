@@ -9,16 +9,22 @@ public sealed record TurnChatLive(
     string? ProjectId,
     string? Title,
     double? GenTps,
-    string Phase);
+    string Phase,
+    // B5: ключ провайдера, на который ушёл последний начатый запрос чата (null — провайдер не
+    // известен или счётчик построен без реестра). Дорожку чата в панели определяет по нему
+    // LlmProviderRegistry.StatsTrackOf; сама дорожка здесь не хранится.
+    string? ProviderKey = null);
 
 // Живой вид счётчика хода (LocalModelTurnMeter): чаты, идущие на локальном движке
 // прямо сейчас, и итог последнего завершённого хода сессии. Счётчик — singleton,
 // этот интерфейс — его второе имя (тот же инстанс, см. регистрацию в LlmSubsystem).
 public interface ILocalModelTurnMeter
 {
-    // Чаты с запросом в работе на локальном движке: фаза, скорость, владелец,
-    // проект и название. Пусто — движок не занят (или ходы не идут через шлюз).
-    IReadOnlyList<TurnChatLive> ActiveChats();
+    // Чаты с запросом в работе на локальном движке указанной дорожки: фаза, скорость,
+    // владелец, проект и название. Дорожка чата — дорожка его провайдера
+    // (LlmProviderRegistry.StatsTrackOf); в «main» уходят только null-провайдер и неизвестный ключ; у известного провайдера без дорожки чат не попадает ни в одну вкладку.
+    // Пусто — движок не занят (или ходы не идут через шлюз).
+    IReadOnlyList<TurnChatLive> ActiveChats(string track = "main");
 
     // Итог последнего завершённого хода сессии; null — ходов ещё не было (или рестарт).
     LocalModelTurnSummary? GetLastTurn(string sessionId);

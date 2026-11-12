@@ -28,6 +28,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/tasks")]
+[SubsystemUsage("tasks")]
 public class ProjectTasksController(
     TaskManager tasks, ProjectManager projects, PersonaManager personas,
     ISessionBroadcaster broadcaster, PersonaBindingsService bindings,
@@ -37,6 +38,13 @@ public class ProjectTasksController(
     IProjectAccess? access = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Признак сервисного токена (FS-XT3, находка 1 ревью 495d9c83): тот же claim, что у гарда
+    // Update и у тулсета задач (JwtService.TokenKindClaim). Node mcp/tasks-server зовёт ручку
+    // создания под сервисным токеном (mcp/tasks-server/index.js: path = /api/projects/…/tasks)
+    // — это агентский путь, не человеческий.
+    private bool IsServiceToken =>
+        User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind;
 
     // Проект запроса; доступ проверил [ProjectScope] (чужой — 404)
     private Project? OwnProject(string projectId) => projects.GetById(projectId);
@@ -122,9 +130,13 @@ public class ProjectTasksController(
         TaskItem task;
         try
         {
-            // Явный признак происхождения (S2b-1, доработка): этот эндпоинт — человеческий
-            // путь (UI/API), признак ставит сервер, а не тело запроса: агентские и серверные
-            // пути (тулсет задач, волна, merge, сборка архитектора) зовут TaskManager напрямую.
+            // Явный признак происхождения (S2b-1, доработка): признак ставит сервер, а не тело
+            // запроса. Эндпоинт — человеческий путь только под пользовательским токеном: под
+            // сервисным (typ=svc — Node mcp/tasks-server) он агентский, тот же признак, что у
+            // гарда Update ниже по файлу: самоснятие шага (withdrawn при рождении) этому пути
+            // доступно только с причиной (FS-XT3, находка 1 ревью 495d9c83). Агентские и
+            // серверные внутренние пути (тулсет задач, волна, merge, сборка архитектора) зовут
+            // TaskManager напрямую.
             // Ключ записи — арендатор проекта (Project.OwnerId, тот же источник, что у
             // RequestScope.TenantOwnerId в [ProjectScope]), автор — вызывающий (F2-T1): задача
             // участника общего проекта лежит под тем же ключом, что задачи владельца («ключ
@@ -132,7 +144,7 @@ public class ProjectTasksController(
             // выдачи арендатора; CreatedByUserId — тот, кто её поставил, по нему решается
             // удаление. Для владельца проекта оба id совпадают — прежний путь.
             task = tasks.Create(projectId, tenantId,
-                req with { CreatedByHuman = true, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
+                req with { CreatedByHuman = !IsServiceToken, CreatedByActorUserId = UserId, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -156,6 +168,7 @@ public class ProjectTasksController(
 [ApiController]
 [Authorize]
 [Route("api/tasks")]
+[SubsystemUsage("tasks")]
 public class TasksController(
     TaskManager tasks, ISessionBroadcaster broadcaster, TaskAiService ai, ProjectManager projects,
     PersonaManager personas, TaskExecutionService executor,
@@ -202,7 +215,12 @@ public class TasksController(
     // null — подсистема Tasks выключена: фолбэк на собственные задачи (GetByOwner).
     MyTasksQuery? myTasks = null,
     // Лимит слотов очереди для brief.queueStartEstimate (FeatureQueuePolicy.Limit): тот же ключ, что у снятия очереди.
-    IConfiguration? config = null) : ControllerBase
+    IConfiguration? config = null,
+    // FS-B3b: локатор деревьев проекта (единая точка резолвинга относительных путей по worktree,
+    // как в FilesController): exists/branch файлов макета считаются им по main и всем worktree
+    // проекта. null — прямая сборка без DI (тесты): exists остаётся таким, как его посчитали
+    // каталог и слияние W4-5 (прежнее поведение), без 500.
+    ProjectTreeLocator? locator = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -408,9 +426,10 @@ public class TasksController(
             // TeamWaveService) могут слать personal-карточки в review-колонку своих
             // проектов через bodyProjectId — это не «личная» задача в смысле обхода,
             // обычный кейс гейта.
-            // Явный признак происхождения (S2b-1, доработка): человеческий путь (UI/API),
-            // как в проектной ветке Create выше.
-            task = tasks.Create(null, UserId, req with { CreatedByHuman = true, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
+            // Явный признак происхождения (S2b-1, доработка): человеческий путь — только под
+            // пользовательским токеном, как в проектной ветке Create выше; под сервисным
+            // (Node mcp/tasks-server) эндпоинт агентский (FS-XT3, находка 1 ревью 495d9c83).
+            task = tasks.Create(null, UserId, req with { CreatedByHuman = !IsServiceToken, CreatedByActorUserId = null, SourceSessionId = null }, targetColumn);
         }
         catch (InvalidOperationException ex)
         {
@@ -632,6 +651,10 @@ public class TasksController(
                     // REST — нет) — через REST нельзя было закрыть review/qa/final фичи с вердиктом.
                     Verdict = req.Verification.Verdict,
                     ReturnReason = req.Verification.ReturnReason, // санирует TaskManager
+                    // Origin из тела не берётся нигде: его ставит только серверный путь снятия
+                    // закрытого хвоста (TaskManager.WithdrawMergeTail). Здесь поле не копируется —
+                    // тот же порядок, что у VerifiedAt/PersonaId; на MCP-двере его снимает
+                    // TaskManager.StripOriginFromBody.
                 },
             };
         }
@@ -909,6 +932,11 @@ public class TasksController(
         allFeatureTasks.AddRange(run.Plan);
         allFeatureTasks.AddRange(run.Unroled);
         var chats = FeatureProjector.BuildFeatureChats(run.Epic, allFeatureTasks, snapshot, resolver);
+        // FS-B3a: materials[] — документы (материалы) всех задач фичи с taskId автора (состав
+        // allFeatureTasks = тот же, что у ленты событий и chats[]; полноту состава держит
+        // сторож AllRunTasks_и_BuildPlans_НесутЗадачиКаждойРоли). Отбор, дубли, порядок и
+        // потолок — в FeatureMaterials.Build (чистая функция); здесь только вызов.
+        var materials = FeatureMaterials.Build(allFeatureTasks, run.Epic.ProjectId);
         // Б5a/Б5b: stats — график времени фичи по ПОЛНОМУ run (до SlimRun: интервалы work из
         // ClaudeStartedAt/CompletedAt, которые Slim не трогает, но run облегчён для ответа).
         // Индекс/список stats НЕ несут (лёгкий путь) — только страница фичи: чтение журнала
@@ -1086,7 +1114,13 @@ public class TasksController(
             Breakdown: breakdown,
             LongestNow: longestNow,
             Spend: featureSpend,
-            Typical: typical);
+            Typical: typical,
+            // FS-M56 (величина 5): медиана шага этой фичи — по уже посчитанным run.StepChains,
+            // второго прохода по задачам нет.
+            StepMedianMinutes: FeatureStats.StepMedianOf(run),
+            // FS-M478 (величины 4, 7, 8): отклонение оценок — по тому же journalResult, что уже
+            // прочитан выше (B1b: второго чтения журнала нет).
+            EstimateDrift: FeatureEstimateDrift.Build(run, journalResult));
         // B1b: brief — сводка состояния фичи (разрез п.6): чистая функция над теми же run/timeline/typical,
         // что пошли в stats: ни второго ProjectFull, ни второго FeatureTimeline.Build, ни второго
         // FeatureTypical.Build (разрез п.7). B2b: estimate считается над этим же typical; queue/note — null.
@@ -1096,7 +1130,7 @@ public class TasksController(
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);
-        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, stats,
+        return Ok(new { run = FeatureChatDoor.MaskRunChats(FeatureProjector.SlimRun(run), sessions, projects, UserId), events, eventsTotal, chats, plans, materials, stats,
             brief, mockups, mockupsUnavailable });
     }
 
@@ -1236,7 +1270,8 @@ public class TasksController(
     // сервер из проекции; стадия — активная стадия конвейера (FeatureBrief.ActiveStageOf, та же
     // база, что у StaleOf — B14 возврат FIN); категория — FeatureBrief.KindAtWriteOf, та же
     // величина, что brief.kind (B15, дефект 415c1c80); пустой text снимает голос. Не-эпик → 400,
-    // чужой/кривой id → 404.
+    // чужой/кривой id → 404. Снимок учёта для журнала оценок (FS-O2b) — тот же run: stage из
+    // активной стадии, planState/accepted/total из run.StepProgress.
 
     // Тело PUT note: text и необязательная оценка оркестратора (featureEstimate) — прочих полей FeatureNote
     // у клиента нет.
@@ -1267,8 +1302,24 @@ public class TasksController(
         var run = features.Project(featureId, UserId);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
 
-        var epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
-            FeatureBrief.ActiveStageOf(run), FeatureBrief.KindAtWriteOf(run), estimate);
+        TaskItem? epic;
+        try
+        {
+            // FS-O1: сдвиг оценки сверх порога без why — тот же 400-текст, что у MCP-двери
+            // (гейт в TaskManager под замком записи), а не 500 от необработанного исключения.
+            // FS-O2b: снимок учёта для строки estimate_set — из той же проекции, что штамп
+            // (run построена выше, одного раза): базовый срок TaskManager пишет только при
+            // planState == "cut", без контекста он не пишется вовсе.
+            var stageAtWrite = FeatureBrief.ActiveStageOf(run);
+            epic = tasks.SetFeatureNote(featureId, req?.Text, null, true,
+                stageAtWrite, FeatureBrief.KindAtWriteOf(run), estimate,
+                new TaskManager.FeatureEstimateContext(stageAtWrite,
+                    run.StepProgress.PlanState, run.StepProgress.Accepted, run.StepProgress.Total));
+        }
+        catch (TaskManager.FeatureEstimateShiftException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
         if (epic is null) return NotFound(new { error = "Фича не найдена" });
         await broadcaster.ToTaskBoard(UserId, epic.ProjectId, new TaskChangedMessage("updated", epic), sessions, projects);
         return Ok(new { note = epic.Note is null ? null : new { text = epic.Note.Text, at = epic.Note.At } });
@@ -1315,16 +1366,21 @@ public class TasksController(
     //      чужой/нет → mockups: [] (файлы чужого проекта не трогаем);
     //   2. локальный проект (ProjectCapabilities.FilesOnServer=false) → [] + "device"
     //      ДО любого вызова Docs (файлы на устройстве, диск сервера не читаем);
-    //   3. W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
-    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
-    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей, а exists
-    //      записи дерева проверяется по дереву фичи (W4-R1: читатель с ?featureId= читает
-    //      ровно дерево). Дерева нет или проверка не прошла — только main, как раньше.
-    //   4. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
+    //   3. Docs: catalog?.Find (null — каталога нет в DI → [] без флага, не 500; в проде
     //      Docs регистрируется безусловно, тумблера нет — ветка защитная, жива в тестах).
-    // TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
-    // которой есть path макета или любой из его files; иначе null. Сортировка: ModifiedAt
-    // убыв., null в конце (детерминизм — путь).
+    //      W4-5 (п.5.1): если у эпика есть проверенное дерево (FeatureTreePathAsync) — Find
+    //      вызывается ДВАЖДЫ: по дереву эпика и по корню проекта. Слияние по относительному
+    //      пути: запись дерева побеждает (ветка свежее), Files — объединение путей. Дерева нет
+    //      или проверка не прошла — только main, как раньше.
+    //   4. FS-B3b: exists/branch каждого файла решает НЕ пара деревьев, а локатор: один
+    //      LocateManyAsync на ответ по main и всем worktree проекта (ProjectTreeLocator).
+    //      Найден → exists=true, branch — ветка дерева, где найден (null — main); нет →
+    //      exists=false. Без локатора (null) — значения каталога/слияния (прежнее поведение).
+    //   5. TaskId/AuthorPersonaId записи — по первой (по CreatedAt) задаче фичи, в linkedFiles
+    //      которой есть path макета или любой из его files; иначе null. ownerTaskId (FS-B3b) —
+    //      автор записи: для записки с шапкой — та же OwnerTask; для запасного пути LinkedFiles —
+    //      задача, которая приложила path (см. AuthorTask).
+    //   6. Сортировка: ModifiedAt убыв., null в конце (детерминизм — путь).
     private async Task<(IReadOnlyList<MockupEntry> Mockups, string? Unavailable)> BuildMockups(FeatureRun run, MockupCatalog? catalog)
     {
         // 1. Проект эпика: только если он принадлежит текущему владельцу (GetByOwner, fail-closed).
@@ -1353,18 +1409,15 @@ public class TasksController(
         {
             if (merged.TryGetValue(e.Path, out var fromTree))
             {
-                // W4-R1 (вариант А): запись дерева побеждает (tree="feature"), Files —
-                // объединение путей: файл, существующий только в main, не исчезает из
-                // каталога. Для дерева фичи exists проверяется ПО дереву фичи: читатель
-                // с ?featureId= читает ровно дерево (фолбэка на main нет), поэтому
-                // exists=true обязан гарантировать, что файл откроется. Пути, лежащие
-                // только в main, остаются в списке с exists=false.
+                // W4-5: запись дерева побеждает (tree="feature"), Files — объединение
+                // путей: файл, существующий только в main, не исчезает из каталога.
+                // FS-B3b: Exists записей здесь не решает ни одно дерево — шаг 4 ниже.
                 var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 var files = new List<MockupFile>();
                 foreach (var f in fromTree.Files)
                     if (seen.Add(f.Path)) files.Add(f);
                 foreach (var f in e.Files)
-                    if (seen.Add(f.Path)) files.Add(f with { Exists = false });
+                    if (seen.Add(f.Path)) files.Add(f);
                 merged[e.Path] = fromTree with { Files = files };
             }
             else
@@ -1372,19 +1425,41 @@ public class TasksController(
                 merged[e.Path] = e with { Tree = MockupTree.Main };
             }
         }
+
+        // 4. FS-B3b: exists/branch файлов — вердикт локатора по main и всем worktree проекта,
+        //    а не по паре деревьев: карточка не должна говорить «не в master» про файл, который
+        //    открывается из ветки шага. Без локатора (null) — значения каталога/слияния
+        //    (прежнее поведение W4-5).
+        var located = await LocateMockupFilesAsync(project, merged);
+        if (located is not null)
+        {
+            foreach (var key in merged.Keys.ToArray())
+            {
+                var entry = merged[key];
+                var files = new List<MockupFile>(entry.Files.Count);
+                foreach (var f in entry.Files)
+                    files.Add(located.TryGetValue(f.Path, out var hit)
+                        ? f with { Exists = true, Branch = hit.Branch }
+                        : f with { Exists = false, Branch = null });
+                merged[key] = entry with { Files = files };
+            }
+        }
         var found = merged.Values;
 
-        // 4. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
-        //    path макета или любой из его files; иначе null.
+        // 5. TaskId/AuthorPersonaId — по первой (по CreatedAt) задаче, в linkedFiles которой есть
+        //    path макета или любой из его files; иначе null. FS-B3b: ownerTaskId — автор записи
+        //    (по ней фронт открывает файл анкером автора, FS-F1f): для записки с шапкой — та же
+        //    OwnerTask; для запасного пути LinkedFiles — задача, которая приложила path.
         var attributed = found
             .Select(e =>
             {
                 var owner = OwnerTask(run, e);
-                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId };
+                var author = e.Source == MockupSource.LinkedFiles ? AuthorTask(run, e) : owner;
+                return e with { TaskId = owner?.Id, AuthorPersonaId = owner?.PersonaId, OwnerTaskId = author?.Id };
             })
             .ToList();
 
-        // 5. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
+        // 6. Сортировка: ModifiedAt убыв., null в конце; детерминизм — путь.
         attributed = attributed
             .OrderBy(e => e.ModifiedAt is null)
             .ThenByDescending(e => e.ModifiedAt ?? DateTime.MinValue)
@@ -1443,12 +1518,51 @@ public class TasksController(
     {
         var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path };
         foreach (var f in entry.Files) targets.Add(f.Path);
+        return FirstLinkingTask(run, targets);
+    }
+
+    // Тело OwnerTask (одна копия, общий с AuthorTask): первая (по CreatedAt) задача проекта
+    // эпика, в linkedFiles которой есть один из targets.
+    private static TaskItem? FirstLinkingTask(FeatureRun run, HashSet<string> targets)
+    {
         var epicProject = run.Epic.ProjectId;
         return AllRunTasks(run)
             .Where(t => t.ProjectId == epicProject)
             .Where(t => t.LinkedFiles.Any(p => targets.Contains(NormalizeLinkedPath(p))))
             .OrderBy(t => t.CreatedAt)
             .FirstOrDefault();
+    }
+
+    // FS-B3b: автор записи (ownerTaskId). Для записки с шапкой — та же OwnerTask (author — тот,
+    // кто приложил записку или её файл). Для запасного пути LinkedFiles — задача, которая
+    // приложила именно этот path: запись создана из его linkedFiles, её Files — тот же путь,
+    // поэтому сверка только по path записи (без «или любой из files»).
+    private static TaskItem? AuthorTask(FeatureRun run, MockupEntry entry)
+    {
+        if (entry.Source != MockupSource.LinkedFiles) return OwnerTask(run, entry);
+        return FirstLinkingTask(run, new HashSet<string>(StringComparer.OrdinalIgnoreCase) { entry.Path });
+    }
+
+    // FS-B3b: exists/branch файлов макета — ОДИН LocateManyAsync на ответ (не на файл) по main и
+    // всем worktree проекта: все пути файлов слитых записей, дубли схлопнуты регистронезависимо.
+    // Ответ — карта найденных (ключ — путь как передан, регистронезависимая); не найденных нет.
+    // Без локатора (null) — null: вызывающий оставляет значения каталога/слияния (прежнее
+    // поведение). Ключ owner — текущий владелец: проект взят GetByOwner, вызывающий — его
+    // владелец (тот же ключ, что у git-гардов этого контроллера).
+    private async Task<Dictionary<string, LocatedPath>?> LocateMockupFilesAsync(
+        Project project, Dictionary<string, MockupEntry> merged)
+    {
+        if (locator is null) return null;
+        var paths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in merged.Values)
+            foreach (var f in entry.Files)
+                if (seen.Add(f.Path)) paths.Add(f.Path);
+        var byPath = new Dictionary<string, LocatedPath>(StringComparer.OrdinalIgnoreCase);
+        if (paths.Count == 0) return byPath; // пустого вызова локатора нет
+        foreach (var hit in await locator.LocateManyAsync(UserId, project, paths))
+            byPath[hit.Path] = hit;
+        return byPath;
     }
 
     // Нормализация пути linkedFiles для сравнения с путями каталога: прямые слэши, без
@@ -1468,16 +1582,29 @@ public class TasksController(
         return 100;
     }
 
+    // Тело POST merge (FS-XT1): решение о закрытом хвосте. "withdraw" — снять хвост и мержить,
+    // "keep" — мержить, оставив сданные непринятые шаги. null или другое значение = решения нет
+    // (при непустом хвосте — 409). При пустом хвосте тело не нужно вовсе: старый вызов без тела
+    // работает как раньше.
+    public record MergeFeatureRequest(string? Tail);
+
     // Мерж фичи (волна 2 «Обзор фич», POST /api/tasks/features/{featureId}/merge):
     // создаёт задачу role=merge с персоной-исполнителем DevopsExecutor и запускает её.
     // Fail-closed: 503 (подсистема выключена), 404 (нет/чужой эпик, тело { error: "Фича не найдена" }),
     // 409 (финал не принят, уже смержено/закрыто, worktree не на диске, 0 или >1 исполнителей DevOps).
     // Идемпотентна и атомарна: открытая merge-задача → вернуть её (создание сериализовано по featureId),
     // если todo — запустить, вторую не заводить.
+    // FS-XT1 (разрез §8.3): закрытый хвост — сданные, но не принятые шаги — молча не мержится:
+    // при непустом хвосте тело { tail: "withdraw" | "keep" } обязательно, иначе 409
+    // tail_decision_required с числом шагов. «withdraw» снимает хвост одним методом стора
+    // (TaskManager.WithdrawMergeTail, Origin = merge_tail), «keep» пишет в журнал merge_with_tail
+    // с числом оставленных шагов. Порядок: гарды → gate → свежий снимок → решение о хвосте →
+    // задача мержа. Создание задачи мержа падает (400) — снятие остаётся: решение о составе
+    // фичи не зависит от того, запустился ли Марк.
     [HttpPost("features/{featureId}/merge")]
     [DenyOnDelegatedTurn("Запуск мержа фичи", AllowInTeamImplement = true,
         AllowedDepth = McpEndpoints.RunExecutorAllowedDepth)]
-    public async Task<IActionResult> MergeFeature(string featureId)
+    public async Task<IActionResult> MergeFeature(string featureId, [FromBody] MergeFeatureRequest? body = null)
     {
         if (features is null)
             return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
@@ -1580,6 +1707,62 @@ public class TasksController(
                 // Ответ — хранимая задача идемпотентной ветки: та же маска чужих приватных чатов
                 // в копии, что во всех write-ответах (S2d-4i).
                 return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(existing), sessions, projects, ChatAudience.Viewer(UserId)));
+            }
+
+            // Решение о закрытом хвосте (§8.3): хвост не пуст и решения нет → 409 с числом шагов,
+            // мерж без явного выбора не идёт. Ключи — из свежего снимка после gate (тот же учёт,
+            // что показал их фронту): снимок, который видел фронт, под локом не читается.
+            // При пустом хвосте решения не требуют: тело игнорируется, вызов без тела работает как раньше.
+            var tailKeys = freshRun?.ClosedTailKeys ?? [];
+            var tail = body?.Tail?.Trim();
+            if (tailKeys.Count > 0 && tail is not ("withdraw" or "keep"))
+                return Conflict(new
+                {
+                    error = $"Нужно решение о закрытом хвосте: {tailKeys.Count} сданных непринятых шагов. "
+                        + "tail: \"withdraw\" — снять и мержить, \"keep\" — мержить с хвостом.",
+                    code = "tail_decision_required",
+                    tailSteps = tailKeys.Count,
+                });
+
+            if (tailKeys.Count > 0 && tail == "withdraw")
+            {
+                var res = tasks.WithdrawMergeTail(featureId, tailKeys, UserId);
+                // События по каждой снятой задаче и по эпику: его процент и лента шагов изменились,
+                // страница фичи обязана пересчитаться, как на любой мутации (образец — SetFeatureHold).
+                foreach (var t in res.Withdrawn)
+                    await broadcaster.ToTaskBoard(UserId, t.ProjectId,
+                        new TaskChangedMessage("updated", t), sessions, projects);
+                if (res.Withdrawn.Count > 0)
+                    await broadcaster.ToTaskBoard(UserId, run.Epic.ProjectId,
+                        new TaskChangedMessage("updated", run.Epic), sessions, projects);
+                // Состояние фичи изменилось между снимком выше и замком стора: у части шагов
+                // появился живой виток или вердикт — они больше не закрытый хвост, и снятие к ним
+                // не применялось (живую работу кнопка не трогает, §8.3). Мерж с составом, отличным
+                // от решённого человеком, не идёт: 409 с машинным кодом вместо молчаливой лжи;
+                // уже снятое остаётся снятым, решение — по свежему состоянию (фронт перечитает).
+                if (res.NotAppliedKeys.Count > 0)
+                    return Conflict(new
+                    {
+                        error = $"Снятие не применено: {res.NotAppliedKeys.Count} из {tailKeys.Count} шагов "
+                            + "перестали быть закрытым хвостом (у них появился живой виток или вердикт). "
+                            + "Мерж не начат — решите заново по текущему состоянию.",
+                        code = "tail_withdraw_not_applied",
+                        tailSteps = res.NotAppliedKeys.Count,
+                    });
+            }
+            else if (tailKeys.Count > 0)
+            {
+                // «keep» — тоже решение, и оно должно быть видно: одна запись журнала с числом
+                // оставленных шагов. Снятие отдельной записи не требует: оно видно по verdict
+                // с Origin = merge_tail на каждом снятом шаге. Сбой журнала наружу не летит
+                // (глотаёт сам стор), как и остальной журнал.
+                journal?.Append(UserId, featureId, new FeatureJournalEntry
+                {
+                    At = DateTime.UtcNow,
+                    Kind = "merge_with_tail",
+                    TaskId = run.Epic.Id,
+                    TailSteps = tailKeys.Count,
+                });
             }
 
             // Создаём задачу merge: FeatureId, ProjectId, WorktreePath/WorktreeBranch — из эпика.
@@ -1804,7 +1987,7 @@ public class TasksController(
         var outcome = await pregate.RunAsync(UserId, taskId, callerSessionId, ct);
         return outcome.Status switch
         {
-            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
+            TaskPregateStatus.Recorded => Ok(new { green = outcome.Record!.Green, outcome = outcome.Record.Outcome, sha = outcome.Record.Sha, text = outcome.Text, record = outcome.Record }),
             TaskPregateStatus.NotFound => NotFound(),
             TaskPregateStatus.Disabled => StatusCode(503, new { error = outcome.Text }),
             _ => Conflict(new { error = outcome.Text }),

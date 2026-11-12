@@ -10,18 +10,26 @@ namespace ClaudeHomeServer.Services.Tasks;
 // ходу, и в системном блоке он обнулял бы prefix cache всей истории (RecallInTurnText,
 // docs/architecture/llm-providers.md). Состав tools/list не трогаем — только текст.
 //
-// Условие: сессия — ключевой чат фичи (FeatureKeyChain.FirstLive — первое живое звено с
-// переходом по продолжениям, как keySessionId проектора), а голос эпика отсутствует или устарел
+// Условие: сессия — ключевой чат фичи (FeatureKeyChain.FirstLive — первое живое звено, как
+// keySessionId проектора), а голос эпика отсутствует или устарел
 // (brief.note.stale — тот же StaleOf, второго правила нет). Закрытые и смерженные фичи молчат.
 //
 // P2 (фича «Правдивый процент и гант фич»): в том же хвосте — по одной строке на фичу о
 // расхождениях FeatureTracker: «В трекере фичи «X» N расхождений: <вид> ×k». Только виды и
-// количества: список задач — блок «Сверка трекера» в tasks_get (TasksToolset.cs:1017), там же те
+// количества: список задач — блок «Сверка трекера» в tasks_get (TasksToolset.cs:1285–1303), там же те
 // же имена видов. Нет расхождений — строки нет (хвост не раздувается без причины — тот же мотив,
 // что у InTurnTail). Мерж и принятие — из P1 (TerminalState/WaveAfterMerge): смерженная и
-// закрытая фича молчит, а «эпик открыт после мержа» и волна после мержа — говорят: их правит
-// оркестратор, сервер только показывает.
+// закрытая фича молчит; волна после мержа говорит через цепочечные виды (её новый шаг). Открытый
+// эпик после мержа — не расхождение и не повод (решение Андрея 11.11, FS-AC1): фичу закрывает
+// человек кнопкой.
 //
+// P3 (FS-XT2, разрез «Упрощение фич» §8.3): третий повод в том же хвосте — финал принят, мержа нет,
+// закрытый хвост не пуст: «у фичи N закрытых непринятых шагов: заведи ревью или сними с причиной».
+// Все три условия берутся из run: Ready — IsFinalAccepted (FeatureProjector.cs:1801), Merge — последний
+// мерж (null — мержа нет), ClosedTailKeys — ключи того же учёта (FeatureStepAccounting): своего
+// предиката «что такое хвост» здесь нет. После снятия ключи пусты — повод гаснет сам. Форма числа —
+// как у 409 о хвосте (TasksController.cs:1643): родительный падеж без склонения.
+
 // ISessionDirectory (SessionManager) берётся лениво из IServiceProvider: контрибьюторов собирает
 // шина Turn, которую строит сам SessionManager, — прямая зависимость в конструкторе даёт цикл
 // DI и зависание резолва при старте хоста.
@@ -30,11 +38,11 @@ public sealed class FeatureVoiceReminderContributor(
 {
     public const string SectionKey = "feature-voice-reminder";
     // Больше трёх фич на один ключевой чат — аномалия; хвост держим коротким. Счёт — по фичам,
-    // не по строкам: на фичу их теперь до двух (голос + сверка трекера).
+    // не по строкам: на фичу их теперь до трёх (голос, сверка трекера, закрытый хвост).
     private const int MaxFeatures = 3;
 
     public string Key => SectionKey;
-    public string Title => "Голос фичи и сверка трекера";
+    public string Title => "Голос фичи, сверка трекера и закрытый хвост";
     // После правил про локальную модель (710), перед рекомендациями персоны (900)
     public int Order => 720;
     public string Group => "misc";
@@ -88,6 +96,11 @@ public sealed class FeatureVoiceReminderContributor(
             else if (brief.Note.Stale)
                 lines.Add($"Голос фичи «{title}» устарел (этап сменился после записи) — обнови `featureNote` и `featureEstimate` в этом ходе.");
             if (TrackerLine(title, run.Tracker) is { } tracker) lines.Add(tracker);
+            // Третий повод (§8.3): условия — из run, ничего не пересчитывается: Ready — это
+            // IsFinalAccepted в проекторе, Merge — последний мерж (null — мержа нет), ClosedTailKeys —
+            // ключи закрытого хвоста из учёта. Текст — одна строка, форма числа — как у 409 о хвосте.
+            if (run.Ready && run.Merge is null && run.ClosedTailKeys.Count > 0)
+                lines.Add($"У фичи «{title}» {run.ClosedTailKeys.Count} закрытых непринятых шагов: заведи ревью или сними с причиной.");
             if (lines.Count > before) shown++;
         }
         return lines.Count == 0 ? null : string.Join("\n", lines);
@@ -127,7 +140,6 @@ public sealed class FeatureVoiceReminderContributor(
         sessions.GetAll()
             .Where(s => sessions.ResolveOwnerId(s) == ownerId)
             .Select(s => new FeatureIndexSession(s.Id, s.TaskId, s.ProjectId, s.IsArchived, s.Model, s.PersonaId,
-                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting,
-                s.ContinuedInSessionId))
+                s.Status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting))
             .ToList();
 }

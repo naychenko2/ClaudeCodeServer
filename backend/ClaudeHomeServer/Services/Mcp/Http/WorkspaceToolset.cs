@@ -14,6 +14,7 @@ using ClaudeHomeServer.Services.Memory;
 using ClaudeHomeServer.Services.Notes;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Services.Files;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Services.Mcp.Http;
 
@@ -69,7 +70,6 @@ public sealed partial class WorkspaceToolset(
     CommitAttributionService commitAttribution,
     UserStore users,
     TeamMemoryService teamMemory,
-    DeployService deploy,
     SessionMessagingService messaging,
     TaskManager tasks,
     DefaultAssistantProvisioner provisioner,
@@ -80,8 +80,11 @@ public sealed partial class WorkspaceToolset(
     ITurnFrameSource frames,
     ITurnActorRegistry turnActors,
     IActorRightGate actorGate,
-    INoteAccessor? notes = null,
-    ChatContinueService? continuation = null) : IMcpParameterizedToolset
+    // `= null` — при Subsystems:deploy:Enabled=false сервис вертикали в контейнер не попадает,
+    // и без значения по умолчанию резолв тулсета падал, не поднимая весь хост (S2a-2, ADR-014).
+    // Состав tools/list не меняется: три deploy-ручки остаются объявленными и отвечают отказом
+    DeployService? deploy = null,
+    INoteAccessor? notes = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/wsp/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession)
@@ -173,7 +176,6 @@ public sealed partial class WorkspaceToolset(
             ["chats_report_up"] = "chats",
             ["chats_update"] = "chats",
             ["chats_archive"] = "chats",
-            ["chats_continue"] = "chats",
             ["files_delete"] = "destructive",
             ["chats_delete"] = "destructive",
             ["deploy_start"] = "deploy",
@@ -253,7 +255,7 @@ public sealed partial class WorkspaceToolset(
     /// </summary>
     private bool TryResolve(McpToolCallContext context,
         out Session session, out Persona? persona,
-        out SessionManager.WorkspaceMcpPlan plan,
+        out WorkspaceMcpPlan plan,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? error)
     {
         session = null!;
@@ -289,7 +291,7 @@ public sealed partial class WorkspaceToolset(
     /// записи — урок приёмки волны 2 (у tasks запись проверяла только readonly-подмножество,
     /// пропуская запись в любой проект владельца).
     /// </summary>
-    private string? ProjectDenied(McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan,
+    private string? ProjectDenied(McpToolCallContext context, WorkspaceMcpPlan plan,
         string? projectId)
     {
         if (string.IsNullOrWhiteSpace(projectId)) return "Не указан projectId";
@@ -302,7 +304,7 @@ public sealed partial class WorkspaceToolset(
     }
 
     // Проект с проверкой (ProjectDenied) + сам объект, без двойного чтения стора
-    private bool TryGetProject(McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan,
+    private bool TryGetProject(McpToolCallContext context, WorkspaceMcpPlan plan,
         JsonObject arguments, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out Project? project,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(false)] out string? denied)
     {
@@ -431,7 +433,7 @@ public sealed partial class WorkspaceToolset(
     // Сессия — только вызыватель из хвоста маршрута (TryResolve проверил владельца), параметра
     // нет намеренно: иначе модель спросила бы состав чужого чата. Формат — как у stdio-ветки.
     private McpToolCallResult ContextCall(Session session, McpToolCallContext context,
-        SessionManager.WorkspaceMcpPlan plan)
+        WorkspaceMcpPlan plan)
     {
         var all = contextResolver.Resolve(session, context.OwnerId);
         var projectId = session.ProjectId;
@@ -465,7 +467,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция projects (projects_* + tags_*) ---
 
     private async Task<McpToolCallResult> ProjectsCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {
@@ -827,7 +829,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция files (files_*): все пути — только через FileService (SafeJoin внутри него) ---
 
     private async Task<McpToolCallResult> FilesCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan, CancellationToken ct)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan, CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1205,7 +1207,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция knowledge (база знаний ПРОЕКТА) ---
 
     private async Task<McpToolCallResult> KnowledgeCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
             return Deny(denied);
@@ -1310,7 +1312,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция search (единый поиск по рабочему пространству) ---
 
     private async Task<McpToolCallResult> SearchCall(string tool, JsonObject arguments,
-        McpToolCallContext context, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, WorkspaceMcpPlan plan)
     {
         if (tool != "search_unified") return Deny($"Неизвестный инструмент: {tool}");
         var query = StringArg(arguments, "query").Trim();
@@ -1326,7 +1328,7 @@ public sealed partial class WorkspaceToolset(
     // stdio-ветка (она не передавала ?sessionId=, REST RootFor брал корень проекта) ---
 
     private async Task<McpToolCallResult> GitCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan,
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan,
         CancellationToken ct)
     {
         if (!TryGetProject(context, plan, arguments, out var p, out var denied))
@@ -1511,7 +1513,7 @@ public sealed partial class WorkspaceToolset(
     // --- Секция chats ---
 
     // Чужой приватный чат не виден актору хода ни в одной рамке (FIN3-1, пункт critical FINAL-3):
-    // та же точка, что у chats_list (S2d-4e) и chats_continue (S2d-7b-1). Актор — из реестра хода;
+    // та же точка, что у chats_list (S2d-4e). Актор — из реестра хода;
     // актор неизвестен (фон, исполнитель без инициатора) — приватный не виден (fail-closed).
     // Отказ неотличим от несуществующего чата: «не найдена», существование не раскрываем.
     // Владение (GetOwned) и зона (ProjectDenied) остаются как раньше — гейт добавляет только приватность.
@@ -1521,7 +1523,7 @@ public sealed partial class WorkspaceToolset(
             : $"Сессия {sessionId} не найдена.";
 
     private async Task<McpToolCallResult> ChatsCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {
@@ -1622,10 +1624,10 @@ public sealed partial class WorkspaceToolset(
                         if (personaId is not null)
                         {
                             try { sessions.EnsurePersonasVisibleInFrame(p.Id, new[] { personas.Get(personaId, context.OwnerId) }); }
-                            catch (SessionManager.GlobalPersonaInSharedException ex)
+                            catch (GlobalPersonaInSharedException ex)
                             {
                                 return Deny(JsonSerializer.Serialize(
-                                    new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }, JsonOpts));
+                                    new { error = ex.Message, code = GlobalPersonaInSharedException.Code }, JsonOpts));
                             }
                         }
                         personaId ??= await ResolveNewChatPersona(context.OwnerId, p.Id, default);
@@ -1701,49 +1703,6 @@ public sealed partial class WorkspaceToolset(
                 return archivedSession is null
                     ? Deny($"Сессия {sid} не найдена.")
                     : Json(new { id = archivedSession.Id, isArchived = archivedSession.IsArchived });
-            }
-
-            case "chats_continue":
-            {
-                if (continuation is null) return Deny("Продолжение в новом чате недоступно на этом сервере");
-                // Без sessionId — текущий чат агента (ротация на границе этапа)
-                var sid = StringArg(arguments, "sessionId");
-                var isSelf = sid.Length == 0 || sid == session.Id;
-                if (isSelf) sid = session.Id;
-                var target = sessions.GetOwned(sid, context.OwnerId);
-                if (target is null) return Deny($"Сессия {sid} не найдена.");
-                // S2d-7b-1: чужой приватный чат не продолжается даже владельцем проекта; актор неизвестен
-                // (фон, исполнитель без инициатора) — приватный чат не виден (fail-closed, как в chats_list)
-                var continueActor = turnActors.Actor(session.Id, context.OwnerId);
-                if (PrivateChatDenied(target, sid, context, session) is { } hidden) return Deny(hidden);
-                if (target.ProjectId is { } targetPid
-                    && ProjectDenied(context, plan, targetPid) is { } zoneDenied)
-                    return Deny(zoneDenied);
-                // Чужой чат делегированный ход не продолжает (тот же гейт, что у chats_send/chats_archive);
-                // собственный — можно: это ротация своей работы, а не вмешательство в чужую
-                if (!isSelf && DelegatedDenied(context, session, "Продолжение чата в новом") is { } gateDenied)
-                    return Deny(gateDenied);
-                if (target.Participants is { Count: > 0 } || target.TeamImplement is not null)
-                    return Deny("Групповой чат и режим «Командная реализация» нельзя продолжить в новом");
-                var userNote = OptionalArg(arguments, "note");
-                // Из собственного хода дождаться его конца нельзя — продолжение встаёт в очередь
-                // и стартует, когда ход кончится; чужой чат продолжаем сразу, но фоном
-                var queued = continuation.Schedule(context.OwnerId, sid, userNote, afterCurrentTurn: isSelf,
-                    actorUserId: continueActor);
-                return queued
-                    ? Json(new
-                    {
-                        status = "scheduled",
-                        hint = isSelf
-                            ? "продолжение стартует после завершения этого хода: завершай ход коротким сообщением "
-                              + "(записку-передачу попросит система отдельным ходом), в новом чате появится записка"
-                            : "продолжение запущено фоном: агент чата напишет записку, затем откроется новый чат",
-                    })
-                    : Json(new
-                    {
-                        status = "already_scheduled",
-                        hint = "продолжение этого чата уже стоит в очереди — повторно не ставь",
-                    });
             }
 
             case "chats_send":
@@ -1920,7 +1879,7 @@ public sealed partial class WorkspaceToolset(
     // вызов — как [DenyOnDelegatedTurn] на REST-эндпоинтах ---
 
     private async Task<McpToolCallResult> DestructiveCall(string tool, JsonObject arguments,
-        McpToolCallContext context, Session session, SessionManager.WorkspaceMcpPlan plan)
+        McpToolCallContext context, Session session, WorkspaceMcpPlan plan)
     {
         switch (tool)
         {
@@ -1979,6 +1938,13 @@ public sealed partial class WorkspaceToolset(
     private async Task<McpToolCallResult> DeployCall(string tool, JsonObject arguments,
         McpToolCallContext context, Session session, CancellationToken ct)
     {
+        // Вертикаль выкатки выключена — её сервиса нет, решать нечем. Отказ текстом, как прочие
+        // «не на этом сервере» (ADR-014): кодом 500 здесь нечем закрыть, а список инструментов
+        // от состояния соседней вертикали не зависит
+        if (deploy is null)
+            return Deny("Подсистема выкатки выключена (Subsystems:deploy:Enabled=false): "
+                + "deploy_start, deploy_status и deploy_rollback на этом сервере не работают");
+
         // Выкатка — admin-ручка: на делегированном ходу (ход процесса, chats_send) её нет, как и
         // у REST-ветки (AdminByStoreHandler, docs/architecture/mcp-toolsets.md, п. 10) — права админа у человека, а не у хода
         if (DelegatedDenied(context, session, "Выкатка прода", alsoWhenExecutorSuppressed: true) is { } gateDenied)

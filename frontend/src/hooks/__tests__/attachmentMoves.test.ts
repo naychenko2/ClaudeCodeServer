@@ -52,9 +52,9 @@ vi.mock('../../lib/signalr', () => ({
 
 const { remapPaths, remapSessionAttachedPaths, __test } = await import('../useSession');
 const { initialChatState } = await import('../../lib/chatReducer');
-// ChatVisibilityError — из НАСТОЯЩЕГО api (модуль выше замокан под нужды useSession;
-// здесь проверяется текст отказа, а не транспорт)
-const { ChatVisibilityError } = await vi.importActual<typeof import('../../lib/api')>('../../lib/api');
+// ChatVisibilityError — из НАСТОЯЩЕГО features/chat/api (lib/api выше замокан под
+// нужды useSession; здесь проверяется текст отказа, а не транспорт)
+const { ChatVisibilityError } = await vi.importActual<typeof import('../../features/chat/api')>('../../features/chat/api');
 
 describe('remapPaths: карта переноса', () => {
   it('путь из карты заменён, чужой путь как есть, порядок тот же', () => {

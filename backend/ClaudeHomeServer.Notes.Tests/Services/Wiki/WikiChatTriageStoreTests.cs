@@ -366,6 +366,77 @@ public class WikiChatTriageStoreTests : IDisposable
 
     // ─── Помощники ─────────────────────────────────────────────────────────
 
+    // ─── C2R-Sh2: RejectStreak ─────────────────────────────────────────────
+
+    [Fact]
+    public void RejectStreak_СтарыйФайлБезПоля_ЧитаетсяБезСерии()
+    {
+        WriteRaw($$"""[{"sessionId":"old","cursor":3,"cursorHash":"{{Hash}}","zone":null,"reason":null,"nothingNewStreak":0,"triagedAt":"{{Date}}"}]""");
+        var read = WikiChatTriageStore.Get(_root);
+        read.State.Should().Be(WikiTriageFileState.Valid, "аддитивное поле: файл до Sh2 читается строго");
+        var e = read.Entries.Single();
+        e.RejectStreak.Should().Be(0);
+        e.Cursor.Should().Be(3);
+        e.CursorHash.Should().Be(Hash);
+        e.NothingNewStreak.Should().Be(0);
+    }
+
+    [Fact]
+    public void RejectStreak_СохраняетсяПриПересчётеИСтупениДва()
+    {
+        WikiChatTriageStore.Upsert(_root, Entry("chat-a", 3, Hash) with { RejectStreak = 2 }).Ok.Should().BeTrue();
+
+        WikiChatTriageStore.UpdateScoring(_root, "chat-a", 5, null, "triage", "балл").Ok.Should().BeTrue();
+        WikiChatTriageStore.Get(_root).Entries.Single().RejectStreak.Should().Be(2, "пересчёт серией не владеет");
+
+        WikiChatTriageStore.UpdateStage2(_root, "chat-a", "gray", "серый", 4).Ok.Should().BeTrue();
+        WikiChatTriageStore.Get(_root).Entries.Single().RejectStreak.Should().Be(2, "ступень 2 серией не владеет");
+    }
+
+    // Гонка: «разбор» (Update с приращением серии) и «пересчёт» одной сессии одновременно.
+    // Первый вызов держит блокировку корня внутри build, пока второй приращение и пересчёт
+    // не пытаются войти; ожидание — через события, без Task.Delay. Мутация «читать запись
+    // вне блокировки» → второе приращение берёт устаревшее значение, серия 1 вместо 2.
+    [Fact]
+    public async Task TriageEntry_ConcurrentIngestAndRecalc_KeepsBothFields()
+    {
+        WikiChatTriageStore.Upsert(_root, Entry("chat-a", 1, Hash)).Ok.Should().BeTrue();
+        using var firstInside = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        using var secondInside = new ManualResetEventSlim();
+
+        WikiChatTriageEntry Inc(WikiChatTriageEntry? cur) =>
+            (cur ?? Entry("chat-a")) with { RejectStreak = (cur?.RejectStreak ?? 0) + 1 };
+
+        var first = Task.Run(() => WikiChatTriageStore.Update(_root, "chat-a", cur =>
+        {
+            firstInside.Set();
+            release.Wait(TimeSpan.FromSeconds(10));
+            return Inc(cur);
+        }));
+        firstInside.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        var second = Task.Run(() => WikiChatTriageStore.Update(_root, "chat-a", cur =>
+        {
+            secondInside.Set();
+            return Inc(cur);
+        }));
+        var recalc = Task.Run(() => WikiChatTriageStore.UpdateScoring(_root, "chat-a", 7, null, "triage", "балл"));
+
+        // Под блокировкой второй build не стартует, пока первый держит корень: ждём ограниченно.
+        secondInside.Wait(TimeSpan.FromMilliseconds(300)).Should().BeFalse("второй ждёт блокировку корня");
+        release.Set();
+
+        (await first).Ok.Should().BeTrue();
+        (await second).Ok.Should().BeTrue();
+        (await recalc).Ok.Should().BeTrue();
+
+        var e = WikiChatTriageStore.Get(_root).Entries.Single();
+        e.RejectStreak.Should().Be(2, "оба приращения учтены");
+        e.Score.Should().Be(7, "поля пересчёта не потеряны");
+        e.Stage1Zone.Should().Be("triage");
+    }
+
     private static WikiChatTriageEntry Entry(
         string id, int cursor = 0, string? cursorHash = null,
         string? zone = null, string? reason = null, int streak = 0,

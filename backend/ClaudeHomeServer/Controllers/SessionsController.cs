@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Sessions;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -51,7 +52,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // через эту дверь. Отказ — тот же, что на неизвестный id в теле («Персона не найдена»
         // ниже): существование чужого приватного не выдаётся. Неизвестный ключ не трогается —
         // продолжение чата (ветвление) подаёт свой новый csid до регистрации чата
-        // (SessionManager.cs:3660), внешний транскрипт — законный случай.
+        // (ChatCreation.cs:160), внешний транскрипт — законный случай.
         if (req.ResumeSessionId is { Length: > 0 } resumeId && sessions.IsTranscriptReservedForOthers(resumeId, UserId))
             return NotFound(new { error = "Чат не найден" });
         string? personaId = req.PersonaId;
@@ -115,8 +116,8 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
         // Глобальная персона в общем чате (R-S2a-8): 400 с машинным кодом — тот же, что при смене собеседника.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
-        { return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code }); }
+        catch (GlobalPersonaInSharedException ex)
+        { return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code }); }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
@@ -247,9 +248,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         }
         // Глобальная персона чату общего проекта (S2a-8): 400 с машинным кодом, чтобы фронт
         // различал этот отказ среди прочих 400 смены собеседника.
-        catch (SessionManager.GlobalPersonaInSharedException ex)
+        catch (GlobalPersonaInSharedException ex)
         {
-            return BadRequest(new { error = ex.Message, code = SessionManager.GlobalPersonaInSharedException.Code });
+            return BadRequest(new { error = ex.Message, code = GlobalPersonaInSharedException.Code });
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }

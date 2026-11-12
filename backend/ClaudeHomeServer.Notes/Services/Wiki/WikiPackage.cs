@@ -19,6 +19,9 @@ public sealed record WikiPackage
     /// входят в лимит.</summary>
     public const int MaxOpenPackages = 20;
 
+    /// <summary>Предел длины утверждения операции `claim` (ADR-039, решение 2).</summary>
+    public const int MaxClaimLength = 600;
+
     // Операций пять; удаления нет (ADR-035, решение 4): снятие знания — откат по пакету
     // или по источнику (решение 12г, меры 4–5), а не операция пакета.
     public const string OpCreate = "create";
@@ -73,7 +76,9 @@ public sealed record WikiPackage
 
     /// <summary>Допустимые переходы статуса. poza таблицей переходов нет: «недопустимый
     /// переход — отказ» (S4a).
-    /// checking → proposed | rejected_by_checks: вердикт проверок кода.
+    /// checking → proposed | rejected_by_checks: вердикт проверок кода; → stale: прежняя
+    ///   попытка заменена новым разбором того же окна до вердикта (дефект 03a50f53) —
+    ///   из живых вызывающих ставит его только гашение в Create.
     /// proposed → accepted | partially_accepted | rejected: решение человека по спорным
     ///   операциям (S4a); → applying: неспорные применяет код сам (ADR-035, решение 5);
     ///   → stale: база ops изменилась, авто-rebase нет (решение 4).
@@ -89,7 +94,7 @@ public sealed record WikiPackage
     public static readonly IReadOnlyDictionary<string, string[]> Transitions =
         new Dictionary<string, string[]>
         {
-            [StatusChecking] = [StatusProposed, StatusRejectedByChecks],
+            [StatusChecking] = [StatusProposed, StatusRejectedByChecks, StatusStale],
             [StatusProposed] = [StatusAccepted, StatusPartiallyAccepted, StatusRejected, StatusApplying, StatusStale],
             [StatusAccepted] = [StatusApplying, StatusStale],
             [StatusPartiallyAccepted] = [StatusApplying, StatusStale],
@@ -211,6 +216,22 @@ public sealed record WikiPackage
         /// <summary>Содержание намерения: текст утверждения (append/supersede), начальное
         /// содержание страницы (create).</summary>
         public string? Text { get; init; }
+        /// <summary>Утверждение операции отдельно от доказательства (ADR-039, решение 2):
+        /// что именно утверждает пакет. Обязателен, когда есть `Quotes`; старые пакеты
+        /// (без цитат) его не несут.</summary>
+        public string? Claim { get; init; }
+        /// <summary>Цитаты-доказательства: 1–3 элемента, каждый 8–300 символов после Trim
+        /// (границы — WikiPage.MinQuoteLength/MaxQuoteLength). Порядок сохраняется: номера
+        /// сносок берутся по нему (S2-7). null — старый пакет, где доказательство в `Text`
+        /// (цитата прежнего прохода A).</summary>
+        public IReadOnlyList<string>? Quotes { get; init; }
+        /// <summary>Вид создаваемой страницы: при применении становится полем шапки `type`
+        /// (ADR-039 §3), а НЕ полем шапки `kind` (WikiFrontmatter.Kind — другое поле).
+        /// Ключ JSON — `kind`: его уже ждёт промпт Synth. Проверка по списку видов — S2-6.</summary>
+        public string? Kind { get; init; }
+        /// <summary>Дата «на когда» для вида `state` (`ГГГГ-ММ-ДД` или `unknown`):
+        /// при применении уходит в шапку `as_of`. Проверка формата — S2-6.</summary>
+        public string? AsOf { get; init; }
         /// <summary>Класс `origin × op` — ставит код.</summary>
         public required string Class { get; init; }
         /// <summary>Решение политики — ставит код (S4d).</summary>
@@ -327,6 +348,31 @@ public sealed record WikiPackage
                     errors.Add($"операция «{op.Op}» без содержания");
                 if (op.Op is OpSupersede or OpConflict or OpLink or OpEdit or OpHeader && string.IsNullOrWhiteSpace(op.Target))
                     errors.Add($"операция «{op.Op}» без цели (замещаемого утверждения, ссылки или поля)");
+                // Утверждение отдельно от доказательства (ADR-039, решение 2). Пока цитат нет
+                // — старый пакет, форма прежняя; с цитатами claim обязателен и ограничен.
+                if (op.Quotes is not null)
+                {
+                    if (op.Quotes.Count is < 1 or > 3)
+                        errors.Add($"цитат операции «{op.Op}»: {op.Quotes.Count}, допустимо 1–3");
+                    foreach (var q in op.Quotes)
+                    {
+                        if (q is null)
+                        {
+                            errors.Add($"цитаты операции «{op.Op}»: null в списке");
+                            continue;
+                        }
+                        // Одна мера с гейтом (минор R-S2-3): нижняя граница по нормализованной
+                        // строке, верхняя — по сырой; Trim здесь не при чём — иначе пакет,
+                        // прошедший форму, отбивается гейтом.
+                        var (raw, norm, outOfContract) = QuoteMatcher.MeasureQuoteLength(q);
+                        if (outOfContract)
+                            errors.Add($"цитата операции «{op.Op}» {raw} символов ({norm} после нормализации), допустимо {WikiPage.MinQuoteLength}–{WikiPage.MaxQuoteLength}");
+                    }
+                    if (string.IsNullOrWhiteSpace(op.Claim))
+                        errors.Add($"операция «{op.Op}» с цитатами без утверждения (claim)");
+                    else if (op.Claim.Length > MaxClaimLength)
+                        errors.Add($"утверждение операции «{op.Op}» длиной {op.Claim.Length}, допустимо не более {MaxClaimLength}");
+                }
                 if (op.BaseHashes is null)
                 {
                     errors.Add("baseHashes операции null");

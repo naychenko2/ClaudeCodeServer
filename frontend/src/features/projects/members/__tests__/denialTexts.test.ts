@@ -8,7 +8,7 @@
 // (образец chatAuthorOnly.test.ts): их поведение живёт в компонентах, не в useSession.
 import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi } from 'vitest';
-import type { ChatItem } from '../../../types';
+import type { ChatItem } from '../../../../types';
 import { denialCodeOf, denialTextOf, isNotChatAuthorError } from '../participantGate';
 
 // Ошибка как её выставляет lib/offline: message = body.error, status и body прикреплены

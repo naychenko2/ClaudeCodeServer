@@ -14,10 +14,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, Archive, Check, Info, Plus, Undo2, X } from 'lucide-react';
-import { C, FONT, FS, R, SP, useIsMobile, WikiError, editWikiPage, loadWikiPage, wikiFootnoteLabel, type WikiFootnoteDto, type WikiSectionDto } from 'aihome_shell/kit';
+import { C, FONT, FS, R, SP, TextArea, useIsMobile, WikiError, editWikiPage, loadWikiPage, wikiFootnoteLabel, type WikiFootnoteDto, type WikiSectionDto } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
-import { TextArea } from '../../../components/ui/Field';
 import { IconButton } from '../../../components/ui/IconButton';
 import { Notice } from '../../../components/ui/Notice';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';

@@ -7,8 +7,9 @@ using ClaudeHomeServer.Services.Spheres;
 
 namespace ClaudeHomeServer.Services.Notes.Wiki;
 
-// Очередь заявок разбора (S6b-3, ADR-035 §12б этапы 5–8 и «Результат разбора»; ADR-036 §3).
-// Одна заявка = один прогон двух проходов по выдержке источника (промпты S6b-1; место
+// Очередь заявок разбора (S6b-3, ADR-035 §12б этапы 5–8 и «Результат разбора»; ADR-036 §3;
+// ADR-039, решение 1: синтез одним вызовом — отдельной разметки и двух проходов нет).
+// Одна заявка = один вызов синтеза по полному тексту выдержки источника (промпт S6b-1; место
 // разбора задаёт заявка своим actionKey, по умолчанию wiki-ingest; ключ вне каталога
 // LocalActionCatalog — заявка отказана на входе) → проверки кодом (S6b-2) → пакет (S4a) →
 // применение неспорных (S4b). Модель
@@ -21,30 +22,39 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // 2. Карточка источника читается с диска: она уже захвачена (S6h) и лежит в разделе
 //    назначения; её заголовок — цель сносок. Карточки нет или она не страница type: source —
 //    отказ до обращения к модели (неожиданный вход — отказ с причиной, не исключение).
-// 3. Проход A — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
-//    по умолчанию wiki-ingest): утверждения с дословными цитатами.
-// 4. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
-//    заголовок или алиас встречается в тексте утверждений (тот же порядок нормализации,
-//    что у индекса ByName — WikiDedup.NormalizeName), не больше 5. Их текст — в промпт
-//    прохода B («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
-// 5. Проход B — план (хроника + операции). В промпт — _index только раздела назначения и
+// 3. Код уточняет кандидатов-страниц: страницы раздела назначения и цепочки вверх, чей
+//    заголовок или алиас встречается в тексте выдержки (тот же порядок нормализации,
+//    что у индекса ByName — WikiDedup.NormalizeName), не больше MaxCandidatePages. Их текст —
+//    в промпт синтеза («CURRENT CONTENT»), чтобы supersede/conflict называли цель дословно.
+// 4. Синтез — one-shot без инструментов (ICheapTextRunner; место задаёт заявка,
+//    по умолчанию wiki-ingest): операции с утверждением и цитатами (ADR-039, решение 2).
+//    В промпт — _index только раздела назначения и
 //    цепочки вверх: каталогов соседних проектов и личного в промпте не бывает (ADR-036,
 //    решение 3; совпадения с соседями ищет код, не модель).
-// 6. WikiPlanValidator; решение — по Rejected: это вина плана. При ней — одна попытка
-//    ремонта с перечнем Rejected (третий вызов модели); после ремонта все операции пакета
-//    — «inbox» (признак PackageAfterModelRepair в политике: низкое качество прохода человек
-//    не пропускает). Второй отказ — заявка отказана, четвёртого прохода нет. Violations —
+// 5. WikiPlanValidator.ValidateSynth; решение — по Rejected: это вина плана. При ней — одна
+//    попытка ремонта с перечнем Rejected (следующий вызов модели); после ремонта все операции
+//    пакета
+//    — «inbox» (признак PackageAfterModelRepair в политике: низкое качество синтеза человек
+//    не пропускает). Второй отказ — заявка отказана, второй попытки ремонта нет. Violations —
 //    состояние раздела, а не вина плана (WikiPlanValidator.cs:60-64): ремонт из-за них не
 //    вызывают (модель его не чинит), но их видит вызывающий — они называются в причине
 //    исхода отдельно (ревью S6b-3, M2).
-// 7. Исход «нечего добавить» — штатный (ADR-035 §12б): пакет не создаётся, исход
+// 6. Исход «нечего добавить» — штатный (ADR-035 §12б): пакет не создаётся, исход
 //    nothing_new. Пустой план (операций нет) — тот же исход: модель сказала, что писать
-//    нечего, только маркер не поставила.
-// 8. Пакет — в WikiPackageStore (usage разбора — в операции пакета: токены того разбора,
-//    который их породил). Содержание операции — подтверждённая валидатором цитата прохода A:
-//    применение рендерит строку утверждения и сноску по op.Text и требует его дословности
-//    в источнике (S4b) — пересказ в op.Text был бы отказан по цитате, уже подтверждённой
-//    кодом (ревью S6b-3, M1). Status checking → proposed (вердикт проверок). Все операции
+//    нечего, только маркер не поставила. Дыра WC-2 (WN-3): в пустом разделе (нет ни
+//    одной страницы знаний) такой отказ — не решение «уже написано», а невидение цели:
+//    модель не видит ни одной страницы и не знает, что для этого знания — create.
+//    Тогда — ровно один повторный вызов синтеза с прямой причиной («в разделе нет
+//    страниц знаний, для этого знания — create»); второй отказ МОДЕЛИ — прежний
+//    nothing_new, цикла нет; упавший или пустой повтор — rejected с причиной сбоя
+//    (тот же инвариант WN-4: сбой вызова не маскируется решением модели, иначе окно
+//    чата уходит как «разобрано»). Ремонт по причине п.5 (отказ плана кодом) этого не
+//    ловит: там план
+//    есть и отвергнут, здесь плана нет и валидатор не звался.
+// 7. Пакет — в WikiPackageStore (usage разбора — в операции пакета: токены того разбора,
+//    который их породил). Содержание операции — утверждение своими словами модели,
+//    доказательство — цитаты, подтверждённые кодом: Text = Claim ставит валидатор
+//    (ADR-039, решение 2). Status checking → proposed (вердикт проверок). Все операции
 //    auto → proposed → accepted → WikiApplyService.ApplyAsync (состояние читается с диска).
 //    Есть inbox → пакет остаётся в «proposed», исход awaiting_human: решает человек (S4a).
 //
@@ -76,7 +86,7 @@ public sealed class WikiIngestService
     public const string OutcomeNothingNew = "nothing_new";
     public const string OutcomeRejected = "rejected";
 
-    /// <summary>Кандидатов-страниц, чей текст показывается модели в проходе B, не больше
+    /// <summary>Кандидатов-страниц, чей текст показывается модели в промпте синтеза, не больше
     /// пяти: промпт не должен разрастись до половины раздела.</summary>
     public const int MaxCandidatePages = 5;
 
@@ -98,9 +108,15 @@ public sealed class WikiIngestService
     /// токены этого разбора (WC-4a): 0 — пока ни один вызов модели не ответил (отказ входа,
     /// карточки, раздела; отказ вызова, после которого ничего не отвечало); после первого
     /// ответившего вызова — сумма всех состоявшихся вызовов прогона независимо от исхода:
-    /// отказанный план расход не отменяет (он понесён).</summary>
+    /// отказанный план расход не отменяет (он понесён). Dropped/DropReasons — операции синтеза,
+    /// отброшенные проверками кода при пакете из принятых (поштучный приём): число и первые
+    /// MaxDropReasons причин; 0/null — отбрасывать было нечего.</summary>
     public readonly record struct IngestResult(string Outcome, string? Reason, string? PackageId,
-        long InputTokens = 0);
+        long InputTokens = 0, int Dropped = 0, IReadOnlyList<string>? DropReasons = null,
+        int Operations = 0);
+
+    /// <summary>Сколько причин отброшенных операций нести в исходе.</summary>
+    public const int MaxDropReasons = 3;
 
     private readonly ICheapTextRunner _llm;
     private readonly ISphereDirectory _spheres;
@@ -176,6 +192,8 @@ public sealed class WikiIngestService
         }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         return task;
     }
+
+    private const string SynthUnparsed = "синтез: ответ модели не разобран";
 
     /// <summary>Ключ заявки — версия источника, а не только его ссылка. Путь карточки —
     /// функция (ref, version): имя карточки строится из хэша версии (WikiSourceCapture.cs:309,
@@ -276,46 +294,77 @@ public sealed class WikiIngestService
             // прежний Rejected: там расхода нет (usage пуст и сам, но форма называет смысл).
             IngestResult RejectedUsed(string reason) => new(OutcomeRejected, reason, null, usage.InputTokens);
 
-            // 3. Проход A: утверждения с дословными цитатами.
-            var promptA = WikiKeeperPrompts.Claims(
-                request.SourceText, sectionIndex, WikiKeeperPrompts.NewNonce(),
-                WikiPage.MinQuoteLength, WikiPage.MaxQuoteLength);
-            var answerA = await CallModelAsync(promptA, ownerId, "проход A", usage, ct, actionKey);
-            if (answerA.Reason is not null)
-                return RejectedUsed(answerA.Reason);
-            if (TryNothingToAdd(answerA.Text!, out var modelReasonA))
-                return new IngestResult(OutcomeNothingNew, modelReasonA, null, usage.InputTokens);
-            var claims = ParseClaims(answerA.Text!, out var parseErrorA);
-            if (claims is null)
-                return RejectedUsed(parseErrorA ?? "проход A: ответ модели не разобран");
-            if (claims.Count == 0)
-                return new IngestResult(OutcomeNothingNew, "проход A не назвал утверждений", null, usage.InputTokens);
-
-            // 4. Кандидаты-страницы: чей заголовок или алиас встречается в тексте утверждений
+            // 3. Кандидаты-страницы: чей заголовок или алиас встречается в тексте окна
             //    (нормализация — та же, что у индекса ByName), не больше MaxCandidatePages.
-            var candidates = PickCandidatePages(sectionPages, claims);
+            var candidates = PickCandidatePages(sectionPages, request.SourceText);
             string? existingPages = candidates.Count == 0
                 ? null
                 : string.Join("\n\n", candidates.Select(d => d.Content));
 
-            // 5. Проход B: план. В промпт — _index только раздела назначения и вверх.
-            var claimsJson = JsonSerializer.Serialize(
-                claims.Select(c => new { text = c.Text, quote = c.Quote }).ToList());
-            var promptB = WikiKeeperPrompts.Plan(
-                request.SourceText, claimsJson, sectionIndex,
-                WikiKeeperPrompts.NewNonce(), existingPages);
-            var answerB = await CallModelAsync(promptB, ownerId, "проход B", usage, ct, actionKey);
-            if (answerB.Reason is not null)
-                return RejectedUsed(answerB.Reason);
-            var plan = ParsePlan(answerB.Text!, out var nothingB, out var modelReasonB, out var parseErrorB);
-            if (nothingB)
-                return new IngestResult(OutcomeNothingNew, modelReasonB, null, usage.InputTokens);
-            if (plan is null)
-                return RejectedUsed(parseErrorB ?? "проход B: ответ модели не разобран");
-            if (plan.Operations is { Count: 0 })
+            // 4. Синтез одним вызовом по ПОЛНОМУ тексту окна (решение 10.11 №1): операции с
+            //    утверждением и цитатами. В промпт — _index только раздела назначения и вверх.
+            var promptS = WikiKeeperPrompts.Synth(
+                request.SourceText, sectionIndex, WikiKeeperPrompts.NewNonce(), existingPages,
+                WikiPage.MinQuoteLength, WikiPage.MaxQuoteLength);
+            var answerS = await CallModelAsync(promptS, ownerId, "синтез", usage, ct, actionKey);
+            if (answerS.Reason is not null)
+                return RejectedUsed(answerS.Reason);
+            var plan = ParseSynthPlan(answerS.Text!, out var nothingS, out var modelReasonS, out var parseErrorS);
+            string? nothingReasonS = nothingS ? modelReasonS : "план без операций: писать нечего";
+
+            // Дыра WC-2 (WN-3): отказ «нечего добавить» / пустой план в разделе без страниц
+            // знаний — не решение «уже написано»: модель не видит ни одной цели и не знает,
+            // что для этого знания — create. Ровно один повторный вызов с прямой причиной;
+            // второй отказ модели — прежний nothing_new, цикла нет; упавший повтор —
+            // rejected с причиной сбоя (см. ниже). Условия держат истинность причины:
+            // «в разделе нет страниц знаний» — правда ровно когда в разделе назначения нет ни
+            // одной страницы знаний (тот же предикат, что у PickCandidatePages: не карточка,
+            // разбирается), а пустой раздел с кандидатами по цепочке вверх — отказ без
+            // повтора: там цель у модели была. Буквальное «PickCandidatePages пуст» не взяли:
+            // оно красит штатный nothing_new непустого раздела (страница есть, но заголовок
+            // не встретился в тексте окна) и врёт модели про пустой раздел.
+            // Folder() уже со слэшем на конце (WikiSections.cs:63-65).
+            var targetFolder = WikiSections.Folder(sectionKey)!;
+            var sectionHasKnowledgePages = sectionPages.Any(d =>
+                d.Path.StartsWith(targetFolder, StringComparison.Ordinal) &&
+                WikiPage.Parse(d.Content).Model is { } pm && pm.Frontmatter.Type != WikiFrontmatter.TypeSource);
+            if ((nothingS || plan is { Operations: { Count: 0 } }) && candidates.Count == 0
+                && !sectionHasKnowledgePages)
+            {
+                var emptySectionPrompt =
+                    "THE TARGET SECTION HAS NO KNOWLEDGE PAGES (в разделе нет страниц знаний). "
+                    + "For the knowledge in this window the operation is create: a new page in the "
+                    + "target section. Produce a plan with a create operation, or answer the no-op "
+                    + "outcome again.\n\n"
+                    + promptS;
+                var answerE = await CallModelAsync(emptySectionPrompt, ownerId, "пустой раздел", usage, ct, actionKey);
+                if (answerE.Reason is not null)
+                    // Сбой самого повторного вызова — не отказ модели: она могла не зваться ни
+                    // разу (тот же инвариант WN-4, catch в CallModelAsync). Причина сбоя
+                    // доезжает дословно, иначе «движок занят» читается вызывающим как решение
+                    // «нечего добавить»: ночной путь трактует это как nothing_new, двигает
+                    // lastOkTo и окно чата теряется при completed ночи (ревью WN-3, major).
+                    return RejectedUsed(answerE.Reason);
+                var planE = ParseSynthPlan(answerE.Text!, out var nothingE, out var modelReasonE, out _);
+                if (nothingE)
+                    // Второй отказ молчит без своей причины — остаётся первая: модель
+                    // сказала это о том же окне, повтор её не опроверг.
+                    return new IngestResult(OutcomeNothingNew, modelReasonE ?? nothingReasonS, null, usage.InputTokens);
+                if (planE is not { Operations: { Count: > 0 } })
+                    return new IngestResult(OutcomeNothingNew, nothingReasonS, null, usage.InputTokens);
+                // Повтор дал план — он судится общим путём ниже (тот же валидатор и, при
+                // отказе кода, обычный ремонт: это ремонт плана, а не повтор nothing_new
+                // — цикл дыры WC-2 всё равно один).
+                plan = planE;
+            }
+            else if (nothingS)
+                return new IngestResult(OutcomeNothingNew, modelReasonS, null, usage.InputTokens);
+            else if (plan is null)
+                return RejectedUsed(parseErrorS ?? SynthUnparsed);
+            else if (plan.Operations is { Count: 0 })
                 return new IngestResult(OutcomeNothingNew, "план без операций: писать нечего", null, usage.InputTokens);
 
-            // 6. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
+            // 5. Проверки кода. Решение — по Rejected: это вина плана. Violations — состояние
             // раздела (уже лежит на страницах): план от него не зависит, модель его не чинит —
             // лишний вызов за него не платят (ревью S6b-3, M2).
             var source = new WikiPlanValidator.Source(request.Origin, cardTitle, request.SourceText);
@@ -337,24 +386,28 @@ public sealed class WikiIngestService
                 LastHumanEditAt = WikiJournalReader.ReadLastHumanEdits(root),
                 NewSourceTime = sourceWrittenAt,
             };
-            var verdict = WikiPlanValidator.Validate(
-                plan, claims, source, sectionKey, upChain, sectionPages, policy);
-            if (verdict.Rejected.Count > 0)
+            // Инвариант: ни одна операция синтеза не попадает в пакет мимо ValidateSynth.
+            var verdict = WikiPlanValidator.ValidateSynth(
+                WithCodeAsOf(plan, sourceWrittenAt), source, sectionKey, upChain, sectionPages, policy);
+            // Поштучный приём: пакет собирается из Accepted одного вызова, Rejected отбрасываются.
+            // Ремонт — только когда не принялось ничего, а отказы есть.
+            if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
             {
                 var issues = verdict.Rejected.Select(i => i.Reason).ToList();
                 var repairPrompt =
                     "YOUR PREVIOUS PLAN WAS REJECTED BY THE CODE. Produce a corrected plan in the same "
-                    + "format; fix every issue below, or answer the no-op outcome if the claims leave "
-                    + "nothing worth writing.\nISSUES:\n"
+                    + "format; fix every issue below (quotes must be verbatim, unused by another page, "
+                    + "every number in a quote, at least one quote per operation), or answer the no-op "
+                    + "outcome if the window leaves nothing worth writing.\nISSUES:\n"
                     + string.Join("\n", issues.Select(r => "- " + r)) + "\n\n"
-                    + promptB;
+                    + promptS;
                 var answerR = await CallModelAsync(repairPrompt, ownerId, "ремонт плана", usage, ct, actionKey);
                 if (answerR.Reason is not null)
                     return WithSectionIssues(RejectedUsed(answerR.Reason), verdict);
-                if (TryNothingToAdd(answerR.Text!, out var modelReasonR))
+                var planR = ParseSynthPlan(answerR.Text!, out var nothingR, out var modelReasonR, out var parseErrorR);
+                if (nothingR)
                     return WithSectionIssues(
                         new IngestResult(OutcomeNothingNew, modelReasonR, null, usage.InputTokens), verdict);
-                var planR = ParsePlan(answerR.Text!, out _, out _, out var parseErrorR);
                 if (planR is null)
                     return WithSectionIssues(RejectedUsed("ремонт не дал плана: " + parseErrorR), verdict);
                 if (planR.Operations is { Count: 0 })
@@ -363,10 +416,10 @@ public sealed class WikiIngestService
                             usage.InputTokens), verdict);
                 // Пакет после ремонта — весь в «Входящие»: признак низкого качества прохода
                 // (WikiApplyPolicy.PackageAfterModelRepair), человек решает, код не применяет.
-                verdict = WikiPlanValidator.Validate(
-                    planR, claims, source, sectionKey, upChain, sectionPages,
+                verdict = WikiPlanValidator.ValidateSynth(
+                    WithCodeAsOf(planR, sourceWrittenAt), source, sectionKey, upChain, sectionPages,
                     policy with { PackageAfterModelRepair = true });
-                if (verdict.Rejected.Count > 0)
+                if (verdict.Accepted.Count == 0 && verdict.Rejected.Count > 0)
                     return WithSectionIssues(
                         RejectedUsed("план после одной попытки ремонта снова отклонён кодом: "
                             + FirstReason(verdict)), verdict);
@@ -382,12 +435,11 @@ public sealed class WikiIngestService
                     usage.InputTokens), verdict);
             }
 
-            // 7. Пакет: usage разбора — в каждую его операцию (токены того разбора,
-            //    который их породил). Содержание операции — подтверждённая валидатором цитата
-            //    прохода A: применение рендерит строку утверждения и сноску по op.Text и
-            //    требует его дословности в источнике (WikiApplyService.cs:564) — пересказ в
-            //    op.Text был бы отказан по цитате, уже подтверждённой кодом (ревью S6b-3, M1).
-            //    Статус: checking → proposed (вердикт проверок кода).
+            // 6. Пакет: usage разбора — в каждую его операцию (токены того разбора,
+            //    который их породил). Содержание операции — утверждение своими словами
+            //    (Text = Claim ставит валидатор, ADR-039 реш. 2), доказательство — Quotes:
+            //    подмены Text цитатой для синтеза нет. Статус: checking → proposed (вердикт
+            //    проверок кода).
             var package = new WikiPackage
             {
                 Id = WikiPackageStore.NewId(),
@@ -397,29 +449,35 @@ public sealed class WikiIngestService
                 Operations = verdict.Accepted
                     .Select(op => op with
                     {
-                        Text = VerifiedQuote(claims, op.Text),
                         InputTokens = ToIntOrMax(usage.InputTokens),
                         OutputTokens = ToIntOrMax(usage.OutputTokens),
                     })
                     .ToList(),
                 Status = WikiPackage.StatusChecking,
             };
+            // Сбой хранилища пакета — не отмена разбора: операции, отброшенные поштучным
+            // приёмом, были отброшены независимо от того, дожил ли пакет. Эти отказы идут
+            // через WithSectionIssues, как остальные исходы после вердикта (минор ревью C2R-Sh1).
             var created = WikiPackageStore.Create(root, package);
             if (!created.Ok || created.Package is null)
-                return RejectedUsed($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"магазин пакетов не принял пакет: {created.Reason ?? created.Code}"), verdict);
 
             var proposed = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusProposed);
             if (!proposed.Ok)
-                return RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"вердикт проверок не записан: {proposed.Reason ?? proposed.Code}"), verdict);
 
             if (created.Package.Operations.Any(o => o.Decision != WikiPackage.DecisionAuto))
                 return WithSectionIssues(new IngestResult(OutcomeAwaitingHuman,
                     "в пакете есть спорные операции: их решает человек («Входящие»)", created.Package.Id,
-                    usage.InputTokens), verdict);
+                    usage.InputTokens,
+                    Operations: created.Package.Operations.Count(o => o.Decision == WikiPackage.DecisionInbox)), verdict);
 
             var accepted = WikiPackageStore.Transition(root, created.Package.Id, WikiPackage.StatusAccepted);
             if (!accepted.Ok)
-                return RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}");
+                return WithSectionIssues(
+                    RejectedUsed($"пакет не переведён в «accepted»: {accepted.Reason ?? accepted.Code}"), verdict);
 
             return WithSectionIssues(
                 await ApplyAutoAsync(ownerId, root, created.Package,
@@ -529,17 +587,14 @@ public sealed class WikiIngestService
         return sb.ToString();
     }
 
-    /// <summary>Кандидаты-страниц: существующие страницы раздела назначения и вверх, чей
-    /// заголовок или алиас встречается в тексте утверждений (нормализация — та же, что у
-    /// индекса резолва ByName: WikiDedup.NormalizeName). Карточки источников не кандидаты:
-    /// они цель сносок, а не страницы знаний. Не больше MaxCandidatePages.</summary>
+    /// <summary>Кандидаты-страницы: существующие страницы раздела назначения и вверх, чей
+    /// заголовок или алиас встречается в тексте окна (нормализация — та же, что у индекса
+    /// резолва ByName: WikiDedup.NormalizeName). Карточки источников не кандидаты: они цель
+    /// сносок, а не страницы знаний. Не больше MaxCandidatePages.</summary>
     private static List<WikiGate.Draft> PickCandidatePages(IReadOnlyList<WikiGate.Draft> sectionPages,
-        IReadOnlyList<WikiPlanValidator.Claim> claims)
+        string sourceText)
     {
-        var wanted = claims
-            .Where(c => c.Text is { Length: > 0 })
-            .Select(c => WikiDedup.NormalizeName(c.Text!))
-            .ToList();
+        var wanted = WikiDedup.NormalizeName(sourceText);
         var picked = new List<WikiGate.Draft>();
         foreach (var draft in sectionPages)
         {
@@ -548,7 +603,7 @@ public sealed class WikiIngestService
                 continue;
             var names = new List<string> { WikiDedup.NormalizeName(page.Title) };
             names.AddRange(page.Frontmatter.Aliases.Select(WikiDedup.NormalizeName));
-            if (names.Any(n => n.Length > 0 && wanted.Any(w => w.Contains(n, StringComparison.Ordinal))))
+            if (names.Any(n => n.Length > 0 && wanted.Contains(n, StringComparison.Ordinal)))
             {
                 picked.Add(draft);
                 if (picked.Count >= MaxCandidatePages)
@@ -580,6 +635,12 @@ public sealed class WikiIngestService
         // Кнопка «Разобрать» и агент wiki_ingest (actionKey не задан) — человеческие места,
         // облако там допустимо: прежний путь с учётом расхода.
         var noCloud = actionKey == LocalActionCatalog.WikiNightly;
+        // Решение 6 ADR-039 (поправляет ADR-035 §12ж): ночь не уходит в облако ни на одном
+        // шаге цепочки. Финальный claude-шаг гасит RunLocalOrChosenDetailedAsync, но шаг 1
+        // цепочки зовёт выбранную админом облачную модель — поэтому облачный маршрут места
+        // отказывает окно целиком, до вызова.
+        if (noCloud && !_llm.UsesLocal(LocalActionCatalog.WikiNightly))
+            return new ModelAnswer(null, $"{passName}: ночной разбор только локальной моделью");
         string? text;
         OneShotUsage? used = null;
         try
@@ -599,6 +660,21 @@ public sealed class WikiIngestService
                 text = result.Text;
                 used = result.Usage;
             }
+        }
+        catch (LocalEngineSlotRefusalException e)
+        {
+            // Движок занят, слота не дождались: модель не звалась ни разу. Это НЕ «модель дала
+            // пустой ответ» — та формулировка прятала сбой занятости за обычным исходом модели
+            // (ночь 06.11: 108 отказов, ни одного вызова). Причина доезжает до журнала ночи
+            // дословно — в rejected и firstRejectReason (WN-4).
+            return new ModelAnswer(null, $"{passName}: {e.Message}");
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ожидание слота прервано остановкой ночи / закрытием окна / остановкой службы:
+            // это не отказ одного чата, это конец прохода — он уходит наружу отменой, как и
+            // остальные точки прохода (тот же приём, что у цикла WikiNightlyService).
+            throw;
         }
         catch (Exception e)
         {
@@ -667,65 +743,21 @@ public sealed class WikiIngestService
         return false;
     }
 
-    /// <summary>Штатный исход модели «нечего добавить» (WikiKeeperPrompts.NothingToAdd).</summary>
-    private static bool TryNothingToAdd(string raw, out string? reason)
-    {
-        reason = null;
-        if (!TryJsonObject(raw, out var obj))
-            return false;
-        if (!obj.TryGetProperty("outcome", out var outcome) ||
-            outcome.ValueKind != JsonValueKind.String ||
-            outcome.GetString() != WikiKeeperPrompts.NothingToAdd)
-            return false;
-        if (obj.TryGetProperty("reason", out var r) && r.ValueKind == JsonValueKind.String)
-            reason = r.GetString();
-        return true;
-    }
-
-    /// <summary>Утверждения прохода A: каждый элемент — объект с текстом и дословной
-    /// цитатой. Любое отклонение — null с причиной (недоверенный ввод не «догадывается»).
-    /// Пустой массив — законный пустой список: вызывающий трактует его как nothing_new.</summary>
-    private static List<WikiPlanValidator.Claim>? ParseClaims(string raw, out string? error)
-    {
-        error = null;
-        if (!TryJsonObject(raw, out var obj))
-        {
-            error = "проход A: ответ модели не читается как JSON";
-            return null;
-        }
-        if (!obj.TryGetProperty("claims", out var claims) || claims.ValueKind != JsonValueKind.Array)
-        {
-            error = "проход A: в ответе нет массива claims";
-            return null;
-        }
-        var parsed = new List<WikiPlanValidator.Claim>();
-        foreach (var el in claims.EnumerateArray())
-        {
-            if (el.ValueKind != JsonValueKind.Object ||
-                !TryStringValue(el, "text", out var text) || text is not { Length: > 0 } ||
-                !TryStringValue(el, "quote", out var quote) || quote is not { Length: > 0 })
-            {
-                error = "проход A: утверждение без текста или дословной цитаты";
-                return null;
-            }
-            parsed.Add(new WikiPlanValidator.Claim(text, quote));
-        }
-        return parsed;
-    }
-
-    /// <summary>План прохода B: operations — массив объектов op/page/claim/target;
-    /// отсутствующее или нераспознаваемое поле остаётся null — форму судит
-    /// WikiPlanValidator (он же решает и «план без подтверждённого источника»).
-    /// nothing=true — маркер «нечего добавить».</summary>
-    private static WikiPlanValidator.Plan? ParsePlan(string raw, out bool nothing, out string? nothingReason,
-        out string? error)
+    /// <summary>План синтеза: operations — массив объектов op/kind/page/claim/quotes/target.
+    /// Ответ модели НЕ десериализуется в операцию пакета напрямую: поля читаются по одному.
+    /// `as_of` модели игнорируется — дату state ставит код (WithCodeAsOf, решение Андрея 11.11).
+    /// Отсутствующее или нераспознаваемое поле остаётся null, отсутствующие quotes — пустой список (операцию не выбрасываем молча: ValidateSynth
+    /// откажет её «утверждение без цитат», причина видна в ремонте). Форму и вид судит
+    /// WikiPlanValidator. nothing=true — маркер «нечего добавить».</summary>
+    private static WikiPlanValidator.SynthPlan? ParseSynthPlan(string raw, out bool nothing,
+        out string? nothingReason, out string? error)
     {
         nothing = false;
         nothingReason = null;
         error = null;
         if (!TryJsonObject(raw, out var obj))
         {
-            error = "проход B: ответ модели не читается как JSON";
+            error = SynthUnparsed + ": не читается как JSON (в том числе обрезан по лимиту вывода)";
             return null;
         }
         if (obj.TryGetProperty("outcome", out var outcome) &&
@@ -738,30 +770,52 @@ public sealed class WikiIngestService
             return null;
         }
         if (!obj.TryGetProperty("operations", out var operations))
-            return new WikiPlanValidator.Plan([]);
+            return new WikiPlanValidator.SynthPlan([]);
         if (operations.ValueKind != JsonValueKind.Array)
         {
-            error = "проход B: operations не массив";
+            error = SynthUnparsed + ": operations не массив";
             return null;
         }
-        var ops = new List<WikiPlanValidator.PlanOp>();
+        var ops = new List<WikiPlanValidator.SynthOp>();
         foreach (var el in operations.EnumerateArray())
         {
             if (el.ValueKind != JsonValueKind.Object)
             {
-                error = "проход B: операция плана не объект";
+                error = SynthUnparsed + ": операция плана не объект";
                 return null;
             }
             TryStringValue(el, "op", out var op);
+            TryStringValue(el, "kind", out var kind);
             TryStringValue(el, "page", out var page);
+            TryStringValue(el, "claim", out var claim);
             TryStringValue(el, "target", out var target);
-            int? claim = null;
-            if (el.TryGetProperty("claim", out var c) && c.ValueKind == JsonValueKind.Number &&
-                c.TryGetInt32(out var ci))
-                claim = ci;
-            ops.Add(new WikiPlanValidator.PlanOp(op, page, claim, target));
+            var quotes = new List<string>();
+            if (el.TryGetProperty("quotes", out var q))
+            {
+                if (q.ValueKind != JsonValueKind.Array)
+                {
+                    error = SynthUnparsed + ": quotes операции не массив";
+                    return null;
+                }
+                // Не строка в списке — пустая цитата: ValidateSynth откажет её с причиной.
+                foreach (var item in q.EnumerateArray())
+                    quotes.Add(item.ValueKind == JsonValueKind.String ? item.GetString() ?? "" : "");
+            }
+            ops.Add(new WikiPlanValidator.SynthOp(op, kind, page, claim, quotes, target, null));
         }
-        return new WikiPlanValidator.Plan(ops);
+        return new WikiPlanValidator.SynthPlan(ops);
+    }
+
+    /// <summary>`as_of` операций ставит код: дата источника (у чата — последняя реплика окна,
+    /// у заметки и файла — запись источника, всё это уже лежит в поле written карточки).
+    /// Значение модели в плане не доезжает (парсер его не читает). Нет даты — null: state без
+    /// as_of валидатор отклонит с причиной.</summary>
+    internal static WikiPlanValidator.SynthPlan? WithCodeAsOf(WikiPlanValidator.SynthPlan? plan, DateTimeOffset? at)
+    {
+        if (plan?.Operations is null) return plan;
+        var asOf = at?.UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        return new WikiPlanValidator.SynthPlan(
+            plan.Operations.Select(o => o with { AsOf = asOf }).ToList());
     }
 
     private static bool TryStringValue(JsonElement el, string name, out string? value)
@@ -779,25 +833,19 @@ public sealed class WikiIngestService
         verdict.Rejected.FirstOrDefault() is { } rejected ? rejected.Reason
         : verdict.Violations.FirstOrDefault() ?? "без причины";
 
-    /// <summary>Содержание операции пакета — цитата прохода A, подтверждённая валидатором
-    /// (мера 1). Принятую операцию валидатор построил из утверждения с этим Text
-    /// (WikiPlanValidator.cs:298-310), поэтому связь операции с утверждением — тот же Text;
-    /// цитата этого утверждения и есть то, что подтверждено дословно. Пересказ в op.Text
-    /// применение отказало бы по цитате, уже подтверждённой кодом (ревью S6b-3, M1):
-    /// применение рендерит строку утверждения и сноску по op.Text (WikiApplyService.cs:564,574).</summary>
-    private static string? VerifiedQuote(IReadOnlyList<WikiPlanValidator.Claim> claims, string? opText)
-    {
-        if (opText is not { Length: > 0 })
-            return opText;
-        var quote = claims.FirstOrDefault(c => c.Text == opText)?.Quote;
-        return quote is { Length: > 0 } ? quote : opText;
-    }
-
     /// <summary>Нарушения состояния раздела — не вина плана (WikiPlanValidator.cs:60-64):
     /// решение заявки от них не зависит, но их видит вызывающий — они доходят до него
     /// отдельной частью причины исхода (ревью S6b-3, M2).</summary>
     private static IngestResult WithSectionIssues(IngestResult r, WikiPlanValidator.Result verdict)
     {
+        // Отброшенные при пакете из принятых: Rejected при Accepted > 0 — только на этом пути
+        // (при Accepted == 0 отказы ушли в ремонт или в исход rejected, это не «отбрасывание»).
+        if (verdict.Accepted.Count > 0 && verdict.Rejected.Count > 0)
+            r = r with
+            {
+                Dropped = verdict.Rejected.Count,
+                DropReasons = verdict.Rejected.Take(MaxDropReasons).Select(i => i.Reason).ToList(),
+            };
         if (verdict.Violations.Count == 0)
             return r;
         var issues = "в разделе есть нарушения: " + string.Join("; ", verdict.Violations);

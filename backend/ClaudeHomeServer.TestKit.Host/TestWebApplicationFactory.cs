@@ -90,7 +90,7 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
         // `AppContext.BaseDirectory/wwwroot`, регистрирует `MapFallbackToFile` и
         // наш fallback-эндпоинт `/api/{**rest}`. Тест, проверяющий этот фикс,
         // ОБЯЗАН пройти через эту ветку, иначе он зелёный на пустоте. Каталог
-        // глобален на процесс (один и тот же путь проверяется в `Program.cs:1766`),
+        // глобален на процесс (один и тот же путь проверяется в `Program.cs:1349`),
         // поэтому учитываем ссылки на каталог через статический счётчик, чтобы
         // параллельные хосты в xUnit-коллекциях не снесли друг другу wwwroot.
         if (UseFrontend)
@@ -222,7 +222,7 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             Directory.CreateDirectory(root);
             // Минимальный «index.html», достаточный для `MapFallbackToFile` —
             // контент значения не имеет, важна только отдача text/html на любой SPA-маршрут.
-            // С `ContentTypeProvider` `Program.cs:1802` достаточно расширения `.html`.
+            // С `ContentTypeProvider` `Program.cs:1371` достаточно расширения `.html`.
             File.WriteAllText(Path.Combine(root, "index.html"),
                 "<!doctype html><title>test</title><div id=root>frontend test fixture</div>");
             _FrontendPath = root;

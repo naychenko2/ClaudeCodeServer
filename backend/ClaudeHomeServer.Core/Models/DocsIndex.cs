@@ -180,24 +180,29 @@ public enum MockupStatus { Draft, Approved, Rejected }
 // покрытый шапкой, не дублируется.
 public enum MockupSource { Header, LinkedFiles }
 
-// Дерево, где найден макет (волна 4, п.5.1): "feature" — проверенный worktree эпика (лежит
-// на диске и числится в `git worktree list` проекта), "main" — основное дерево проекта.
-// Один путь в обоих деревьях: запись дерева побеждает (ветка свежее); exists записи
-// "feature" проверяется по дереву фичи — читатель с ?featureId= читает ровно дерево, без
-// фолбэка на main (W4-R1). Записи "main" приходят только из main.
+// Дерево, где найдена запись макета (волна 4, п.5.1): "feature" — проверенный worktree
+// эпика (лежит на диске и числится в `git worktree list` проекта), "main" — основное дерево
+// проекта. Один путь в обоих деревьях: запись дерева побеждает (ветка свежее). Записи "main"
+// приходят только из main. FS-B3b: где лежит файл записи — отдельный вопрос: его exists/branch
+// решает локатор по всем деревьям проекта (см. MockupFile), а не дерево записи.
 public enum MockupTree { Main, Feature }
 
-// Файл макета (прототип .html, -tokens.md, …). Exists=false — файла нет в том дереве, на
-// которое указывает запись: для "feature" — нет в дереве эпика (даже если он есть в main),
-// для "main" — нет в main. При слиянии деревьев список Files — объединение путей: файл,
-// существующий только в main, не исчезает из каталога, но для записи дерева его exists=false.
-public record MockupFile(string Path, bool Exists);
+// Файл макета (прототип .html, -tokens.md, …). FS-B3b: exists/branch — вердикт контроллера по
+// ProjectTreeLocator: Exists=true — файл есть в одном из деревьев проекта (main или любой
+// worktree из `git worktree list`), Branch — ветка дерева, где найден (null — main);
+// Exists=false — ни в одном дереве проекта. Прежняя проверка по дереву записи (W4-R1: файл
+// только в main для записи дерева — exists=false) в ответ не попадает: карточка не должна
+// говорить «не в master» про файл, который открывается из ветки.
+public record MockupFile(string Path, bool Exists, string? Branch = null);
 
 // Запись каталога макетов фичи (MockupCatalog.Find). Path — записка .md (Source=Header)
 // или сам файл (Source=LinkedFiles). Title — H1 записки; у LinkedFiles — имя файла без
 // расширения. TaskId/AuthorPersonaId ставит контроллер (Main) — каталог их не знает.
 // ModifiedAt=null, если файла на диске нет. Tree проставляет контроллер при слиянии
 // вызовов каталога (W4-5); каталог сам дерева не различает — дефолт Main.
+// OwnerTaskId (FS-B3b) — задача-автор записи: для записки с шапкой — та же OwnerTask, что
+// даёт TaskId; для запасного пути LinkedFiles — задача, которая приложила этот path.
+// По ней фронт открывает файл анкером автора (FS-F1f). Ставит контроллер, каталог его не знает.
 public record MockupEntry(
     string Path,
     string Title,
@@ -207,4 +212,5 @@ public record MockupEntry(
     DateTime? ModifiedAt,
     string? TaskId = null,
     string? AuthorPersonaId = null,
-    MockupTree Tree = MockupTree.Main);
+    MockupTree Tree = MockupTree.Main,
+    string? OwnerTaskId = null);

@@ -170,6 +170,12 @@ export type WikiErrorCode =
   // не тронут; отказ записи файла — 500 с кодом, а не 500 без тела (WikiSettingsController.cs:160-170)
   | 'wiki_nightly'
   | 'wiki_settings_write_failed'
+  // Ручной запуск ночного разбора (WN-5, POST /api/wiki/settings/nightly/run): ночь выключена,
+  // этот владелец уже проходит, настройки нечитаемы (WikiSettingsController.cs:84-87, 237-251);
+  // «функция выключена» — уже известный wiki_llm_wiki_off, отдельного кода нет
+  | 'wiki_nightly_running'
+  | 'wiki_nightly_disabled'
+  | 'wiki_settings_invalid'
   // Правка страницы человеком (F4a, ADR-038): файл правили ещё раз / единые «Заметки и Вики»
   // выключены / гейт записи отказал по существу (violations, issues)
   | 'wiki_page_changed'
@@ -195,6 +201,7 @@ const WIKI_ERROR_CODES: ReadonlySet<string> = new Set<string>([
   'not_found', 'task_execution', 'marked_skip', 'personal_section', 'wiki_not_initialized',
   'packages_limit', 'wiki_note_id', 'wiki_triage_invalid',
   'wiki_nightly', 'wiki_settings_write_failed',
+  'wiki_nightly_running', 'wiki_nightly_disabled', 'wiki_settings_invalid',
   'wiki_page_changed', 'wiki_unified_off', 'wiki_edit_invalid',
   'wiki_note_transferred', 'wiki_transfer_target',
 ]);
@@ -521,6 +528,12 @@ export interface WikiPackageOperationDto {
   outputTokens: number | null;
   humanDecision: string | null;
   humanReason: string | null;
+  // Доказательства операции (null у старых): утверждение своими словами, 1–3 дословные
+  // цитаты, вид страницы (decision/rule/term/state) и «на дату» для state — строкой как есть
+  claim: string | null;
+  quotes: string[] | null;
+  kind: string | null;
+  asOf: string | null;
 }
 
 export interface WikiPackageDto {
@@ -838,8 +851,11 @@ export async function ingestWikiNote(noteId: string, target?: string | null): Pr
 // приоритетен, иначе зона ступени 1 — ShownZone на бэке) с причиной и сигналами. Нужен
 // экрану отбора (S7b): кнопка «открыть хронику» — по chroniclePath, статус «идёт» —
 // по running. Порядок — бэковый (по зонам, внутри зоны — по баллу), фронт его не меняет.
-// Зоны сегодня: 'triage' | 'gray' | 'skipped' | 'nothing_new' | 'excluded'
-// (WikiChatScorer.cs:39-42, WikiChatIngestService.cs:100); тип — string: неизвестная зона
+// Зоны сегодня: 'triage' | 'gray' | 'skipped' | 'excluded' (WikiChatScorer.cs:39-42),
+// 'nothing_new' (исход разбора, WikiChatIngestService.cs:114), 'rejected_skipped' (окно,
+// пропущенное после 3 отказов, C2R-Sh2 — WikiChatIngestService.cs:118) и 'awaiting_human'
+// (пакет во «Входящих», ждущий решения человека, C2R-Sh2b — WikiChatIngestService.cs:122);
+// тип — string: неизвестная зона
 // будущего шага — запись списка, а не отказ разбора (как на бэке, ZoneRank ведёт её в конец).
 // chroniclePath — формула бэка (WikiChatIngestService.ChroniclePath): для проектного дома
 // «Проекты/{id}/Хроники/{sessionId}.md», null для не-проектного дома (личный — с Ф2);
@@ -922,6 +938,11 @@ export interface WikiLastNight {
   toInbox: number;
   estTokens: number;
   outcome: WikiNightlyOutcome;
+  // Отвергнутые пакеты и отметка ручного прохода (WN-2/WN-5: Rejected/Manual в итоге ночи,
+  // сериализация — WikiSettingsController.cs:319-321, 358-362). Поля опциональны: старый бэк
+  // без них — не ошибка, отсутствие читается как есть (тот же приём, что отсутствующий lastNight)
+  rejected?: number;
+  manual?: boolean;
 }
 
 // Класс правок «origin×op» (ключ — форма бэкового WikiPackage.ClassKey, без пробелов) с
@@ -949,6 +970,11 @@ export interface WikiSettingsSnapshot {
   classes: WikiApplyClassDto[];
   nightly: WikiNightlySettings;
   lastNight: WikiLastNight | null;
+  // Идёт ли сейчас ночной проход этого владельца (WN-5: NightlyRunning в GET,
+  // WikiSettingsController.cs:267-269, 339). Состояние процесса, не файла: PUT его не несёт
+  // («никакой записи настроек действие не делает», :235) и сохраняет прочитанное, как lastNight;
+  // ручной запуск ставит его оптимистично и снимает по ответу опроса (WN-6a)
+  nightlyRunning: boolean;
 }
 
 let _settings: WikiSettingsSnapshot | null = null;
@@ -970,6 +996,11 @@ function readLastNight(body: unknown): WikiLastNight | null {
     ? b.lastNight as WikiLastNight
     : null;
 }
+
+// NightlyRunning (WN-5): бэк несёт его в GET всегда; старый бэк без поля — «не идёт»
+// (отсутствие поля — отрицательное значение, не ошибка: тот же приём, что отсутствующий lastNight)
+const readNightlyRunning = (body: unknown): boolean =>
+  (body as { nightlyRunning?: unknown } | null)?.nightlyRunning === true;
 
 const numOr0 = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const strOrNull = (v: unknown): string | null => (typeof v === 'string' ? v : null);
@@ -1051,7 +1082,7 @@ async function fetchWikiSettings(gen: number, owner: string | null): Promise<Wik
   const body = await wikiHttp<unknown>('/wiki/settings');
   const nightly = readNightly(body);
   if (!nightly) throw new WikiError(0, null, 'неожиданный ответ настроек вики');
-  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body) };
+  const snap: WikiSettingsSnapshot = { ...readApplyPart(body), nightly, lastNight: readLastNight(body), nightlyRunning: readNightlyRunning(body) };
   // Устаревший ответ или ответ чужого владельца в снимок не пишется (M1/M2)
   if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
@@ -1114,6 +1145,9 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     // lastNight — только из GET (N7c): ответ PUT его не несёт, и молча обнулять прочитанное
     // нечем — поле сохраняется от последнего чтения
     lastNight: readLastNight(body) ?? prev?.lastNight ?? null,
+    // то же с состоянием прогона (WN-5): PUT его не несёт — сохраняется от последнего чтения
+    // или оптимистичной записи ручного запуска, а не обнуляется
+    nightlyRunning: prev?.nightlyRunning ?? false,
   };
   // Устаревший ответ или ответ прежнего владельца в снимок не пишется (M1/M2);
   // вызывающий свой ответ получает как есть.
@@ -1122,6 +1156,94 @@ export async function putWikiNightly(patch: WikiNightlyPatch): Promise<WikiPutNi
     emit();
   }
   return { ok: true, snapshot: snap };
+}
+
+// ─── «Разобрать сейчас»: ручной запуск прохода и опрос до его конца (WN-6a) ───
+// POST /api/wiki/settings/nightly/run (WikiSettingsController.cs:237-251): 202 {started:true} —
+// проход начат; 409 — по причине отказа (wiki_llm_wiki_off / wiki_nightly_disabled /
+// wiki_nightly_running / wiki_settings_invalid). Результат, а не исключение (образец
+// putWikiNightly): вызывающий называет причину по `code`; сетевой сбой — {ok:false, code:null}
+// (это не отказ контракта, но и кнопки не обёртываются в try/catch — позиция та же, что у
+// toWikiError). 409 «уже идёт» — то же состояние, что 202: проход идёт, его и опрашиваем.
+//
+// О конце прохода бэк не сообщает (202 — только начало, работа в фоне службы): фронт опрашивает
+// GET /wiki/settings раз в 5 с, пока тот отвечает nightlyRunning=true; последний ответ — он и
+// финальный снимок со свежим lastNight. До первого ответа «идёт» показывает оптимистичная
+// запись в существующий снимок; снимка ещё нет — состояние принесёт первый опрос.
+
+export type WikiRunNightlyResult =
+  | { ok: true }
+  | { ok: false; code: WikiErrorCode | null };
+
+const NIGHTLY_POLL_MS = 5000;
+
+// Полёт запуска: второй вызов, пока первый в сети, делит его результат — ровно один POST
+// (тот же слот-приём, что у loadWikiSettings; замок бэка второй раз не проверяется).
+// Опрос — один на стор: цепочка одного таймера, привязанная к владельцу, начавшему запуск;
+// повторный старт (в т.ч. по 409 «уже идёт») второй цепочки не заводит.
+let _nightlyRunReq: Promise<WikiRunNightlyResult> | null = null;
+let _nightlyPoll: { owner: string | null; timer: ReturnType<typeof setTimeout> | null } | null = null;
+
+export function runWikiNightlyNow(): Promise<WikiRunNightlyResult> {
+  if (_nightlyRunReq) return _nightlyRunReq;
+  const req = doRunWikiNightly().finally(() => { if (_nightlyRunReq === req) _nightlyRunReq = null; });
+  _nightlyRunReq = req;
+  return req;
+}
+
+async function doRunWikiNightly(): Promise<WikiRunNightlyResult> {
+  const owner = readStoredUserId();
+  try {
+    await wikiHttp<unknown>('/wiki/settings/nightly/run', { method: 'POST' });
+  } catch (e) {
+    const we = toWikiError(e);
+    if (we?.code !== 'wiki_nightly_running') return { ok: false, code: we?.code ?? null };
+    // «разбор этой вики уже идёт» — не отказ действия: состояние то же, что после 202
+  }
+  if (owner !== readStoredUserId()) return { ok: true }; // смена аккаунта в полёте: проход её, стор уже чужой (M2)
+  ++_settingsGen; // чтения, начатые до запуска, устарели: их ответы не затерят состояние прохода
+  if (_settings) {
+    _settings = { ..._settings, nightlyRunning: true }; // оптимистично, как тумблер ночи
+    emit();
+  }
+  startNightlyPolling(owner);
+  return { ok: true };
+}
+
+function startNightlyPolling(owner: string | null): void {
+  if (_nightlyPoll) return;
+  _nightlyPoll = { owner, timer: null };
+  scheduleNightlyPoll();
+}
+
+function scheduleNightlyPoll(): void {
+  const poll = _nightlyPoll;
+  if (!poll) return;
+  poll.timer = setTimeout(() => { void tickNightlyPoll(); }, NIGHTLY_POLL_MS);
+}
+
+async function tickNightlyPoll(): Promise<void> {
+  const poll = _nightlyPoll;
+  if (!poll) return;
+  poll.timer = null;
+  // Смена владельца: опрос встаёт без нового запроса — читать чужой проход в чужой стор нечем (M2)
+  if (poll.owner !== readStoredUserId()) { _nightlyPoll = null; return; }
+  let snap: WikiSettingsSnapshot;
+  try {
+    // Обычная loadWikiSettings: медленный висящий GET делится, а не повторяется
+    snap = await loadWikiSettings();
+  } catch {
+    // Сбой чтения: проход мог и не кончаться — одиночный сбой опрос не останавливает,
+    // на следующем интервале спросим снова (состояние поправит успешный ответ)
+    if (_nightlyPoll === poll) scheduleNightlyPoll();
+    return;
+  }
+  if (_nightlyPoll !== poll) return; // опрос сняли во время запроса (смена владельца, тестовый шов)
+  if (poll.owner !== readStoredUserId()) { _nightlyPoll = null; return; }
+  if (snap.nightlyRunning) { scheduleNightlyPoll(); return; }
+  // Последний GET сказал «не идёт»: он и есть финальный снимок со свежим lastNight —
+  // его уже записал fetchWikiSettings. Опрос встаёт.
+  _nightlyPoll = null;
 }
 
 // ─── «Применение»: общий выключатель и возврат класса (S7d-1) ───
@@ -1172,6 +1294,7 @@ async function putApplySettings(
     classes: mergeClassStats(apply.classes, prev?.classes),
     nightly,
     lastNight: prev?.lastNight ?? null, // PUT итога не несёт (N7c) — сохраняется от последнего GET
+    nightlyRunning: prev?.nightlyRunning ?? false, // PUT состояния прогона не несёт (WN-5) — той же мерой
   };
   if (gen === _settingsGen && owner === readStoredUserId()) {
     _settings = snap;
@@ -1335,6 +1458,10 @@ export const __test = {
     _settingsGen = 0;
     _settingsReq = null;
     _catalogGen.clear();
+    // Полёт ручного запуска и цепочка опроса — тоже состояние стора: тест не наследует их
+    if (_nightlyPoll?.timer) clearTimeout(_nightlyPoll.timer);
+    _nightlyPoll = null;
+    _nightlyRunReq = null;
   },
   // Тестовый шов: подписка экрана на страницу. Открытой страницу делает счётчик, который
   // экран поднимает через useWikiPage, — те же операции retainOpenPage/releaseOpenPage;

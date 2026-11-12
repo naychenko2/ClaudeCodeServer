@@ -9,13 +9,21 @@ namespace ClaudeHomeServer.Tasks.Tests;
 // роли своей фиктурой: cut/design — тесты 1–2, plan/consult — тест 1a, R-DB M2), роль как есть
 // (step с заголовком «Разрез» не попадает), design в документах (М2: роль, hasText, mockupPaths,
 // не дедуплицируется), hasText (пустой/пробельный ResultMarkdown → false),
-// mockupPaths (путь с «..» отброшен, дубли схлопнуты, потолок 20). М5: mockupPaths несут и
+// mockupPaths (путь с «..» отброшен, дубли схлопнуты регистронезависимо). М5: mockupPaths несут и
 // LinkedFiles задачи (ADR/спеки/записки вне docs/mockups): порядок (сначала текст, потом
-// linkedFiles), дубли схлопнуты, пустые и «..» отброшены, потолок общий. Мутации:
+// linkedFiles), дубли схлопнуты, пустые и «..» отброшены. FS-B0: из LinkedFiles берётся только
+// материал или макет (FeatureMaterials.IsMaterial / IsMockup) — код и файлы вне docs/ не входят
+// никогда; потолок — общий 30 на фичу (FeatureMaterials.Cap), свежие задачи сверху: бюджет
+// обходится по CreatedAt desc, старые обрезаются. Мутации:
 //   • BuildPlans(SlimRun(run)) → у всех hasText=false (Slim обнуляет ResultMarkdown) — краснеет;
 //   • убрать фильтр «..» → путь с «..» появляется — краснеет;
 //   • не брать LinkedFiles (старый MockupPaths) — linkedFiles-тесты краснеют;
-//   • снять OrderBy у plan и consult — тест 1a краснеет (R-DB M2).
+//   • снять OrderBy у plan и consult — тест 1a краснеет (R-DB M2);
+//   • убрать фильтр материала в ветке LinkedFiles — краснеет ровно
+//     BuildPlans_LinkedFiles_КодИТесты_НеПопадают (backend/A.cs появляется);
+//   • снять потолок на фичу — тесты Потолок30 краснеют;
+//   • обходить budget в порядке CreatedAt asc (не свежие-сверху) —
+//     BuildPlans_Потолок30_НесколькоЗадач_СвежиеСверху краснеет.
 public class FeaturePlansTests
 {
     // ── Хелперы сборки ──────────────────────────────────────────────────────────────────────
@@ -195,7 +203,7 @@ public class FeaturePlansTests
         plans.Single(p => p.TaskId == "d").HasText.Should().BeFalse();
     }
 
-    // ── 5. mockupPaths: путь с «..» отброшен, дубли схлопнуты, потолок 20 ────────────────────
+    // ── 5. mockupPaths: путь с «..» отброшен, дубли схлопнуты, потолок 30 на фичу ────────────
 
     // Путь с «..» (pathtraversal) отброшен; валидные пути — в порядке появления.
     [Fact]
@@ -214,34 +222,36 @@ public class FeaturePlansTests
             "docs/mockups/a/b.html");
     }
 
-    // Дубликаты схлопнуты (distinct, порядок первого появления).
+    // Дубликаты схлопнуты (distinct, порядок первого появления), в т.ч. без учёта регистра (FS-B0).
     [Fact]
     public void BuildPlans_MockupPaths_Дубли_Схлопнуты()
     {
         var epic = Epic("epic");
-        var md = "docs/mockups/x.md и docs/mockups/x.md, потом docs/mockups/y.md.";
+        var md = "docs/mockups/x.md и docs/mockups/x.md, потом docs/mockups/X.MD " +
+                "и docs/mockups/y.md.";
         var plan = Child("p1", "epic", TaskRoles.Plan, "План", resultMarkdown: md);
 
         var plans = FeatureProjector.BuildPlans(Run(epic, plan));
 
+        // «X.MD» — дубль «x.md» без учёта регистра: схлопнут на позиции первого появления.
         plans.Single().MockupPaths.Should().Equal("docs/mockups/x.md", "docs/mockups/y.md");
     }
 
-    // Потолок 20: 25 уникальных путей → первые 20.
+    // Потолок 30 на фичу (FS-B0, вместо прежних 20 на задачу): 40 уникальных путей → первые 30.
     [Fact]
-    public void BuildPlans_MockupPaths_Потолок20()
+    public void BuildPlans_MockupPaths_Потолок30НаФичу()
     {
         var epic = Epic("epic");
         var sb = new System.Text.StringBuilder();
-        for (var i = 1; i <= 25; i++)
+        for (var i = 1; i <= 40; i++)
             sb.Append($"docs/mockups/m{i}.md ");
         var plan = Child("p1", "epic", TaskRoles.Plan, "План", resultMarkdown: sb.ToString());
 
         var plans = FeatureProjector.BuildPlans(Run(epic, plan));
 
-        plans.Single().MockupPaths.Should().HaveCount(20);
+        plans.Single().MockupPaths.Should().HaveCount(30);
         plans.Single().MockupPaths[0].Should().Be("docs/mockups/m1.md");
-        plans.Single().MockupPaths[^1].Should().Be("docs/mockups/m20.md");
+        plans.Single().MockupPaths[^1].Should().Be("docs/mockups/m30.md");
     }
 
     // ── 6. Мутация: BuildPlans(SlimRun(run)) → у всех hasText=false ─────────────────────────
@@ -328,25 +338,26 @@ public class FeaturePlansTests
         paths.Should().Equal("docs/adr/0042.md");
     }
 
-    // Потолок 20 — общий на оба источника: 15 путей из текста + 10 из linkedFiles → первые 20.
+    // Потолок 30 на фичу — общий на оба источника одной задачи: 25 путей из текста + 20 из
+    // linkedFiles → первые 30 (сначала текст, потом linkedFiles — порядок внутри задачи).
     [Fact]
-    public void BuildPlans_Paths_ОбщийПотолок20_НаДваИсточника()
+    public void BuildPlans_Paths_ОбщийПотолок30НаФичу_НаДваИсточника()
     {
         var epic = Epic("epic");
         var sb = new System.Text.StringBuilder();
-        for (var i = 1; i <= 15; i++)
+        for (var i = 1; i <= 25; i++)
             sb.Append($"docs/mockups/m{i}.md ");
-        var linked = Enumerable.Range(1, 10).Select(i => $"docs/adr/a{i}.md").ToArray();
+        var linked = Enumerable.Range(1, 20).Select(i => $"docs/adr/a{i}.md").ToArray();
         var plan = Child("p1", "epic", TaskRoles.Plan, "План", resultMarkdown: sb.ToString(),
             linkedFiles: linked);
 
         var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
 
-        paths.Should().HaveCount(20);
+        paths.Should().HaveCount(30);
         paths[0].Should().Be("docs/mockups/m1.md");
-        paths[14].Should().Be("docs/mockups/m15.md");
+        paths[24].Should().Be("docs/mockups/m25.md");
         // Осталось 5 слотов — из linkedFiles входят только первые пять.
-        paths[15].Should().Be("docs/adr/a1.md");
+        paths[25].Should().Be("docs/adr/a1.md");
         paths[^1].Should().Be("docs/adr/a5.md");
     }
 
@@ -364,5 +375,87 @@ public class FeaturePlansTests
 
         plans.Select(p => p.TaskId).Should().Equal("p1");
         plans.Single().MockupPaths.Should().BeEmpty();
+    }
+
+    // ── 9. FS-B0: правило материала в ветке LinkedFiles (код и тесты — не материал) ──────────
+
+    // Мутация «убрать фильтр материала в ветке LinkedFiles»: backend/A.cs и весь шум
+    // (тесты, скрипты, данные, индексы) появились бы в списке — красный ровно этот тест.
+    // Инвариант: код, тесты и файлы вне docs/ материалом не бывают никогда; материал
+    // (docs/research) и макет (docs/mockups) — на месте, в порядке LinkedFiles.
+    [Fact]
+    public void BuildPlans_LinkedFiles_КодИТесты_НеПопадают()
+    {
+        var epic = Epic("epic");
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План",
+            linkedFiles: [
+                "backend/A.cs", "docs/research/r.md", "docs/mockups/m.html",
+                "frontend/b.test.ts", "scripts/c.sh", "data/tasks.json",
+                "docs/CHANGELOG.md", "docs/README.md", "docs/guide/README.md", "docs/guide/index.md",
+            ]);
+
+        var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
+
+        paths.Should().Equal("docs/research/r.md", "docs/mockups/m.html");
+    }
+
+    // Ветка текста (FS-B0): код, упомянутый в ResultMarkdown, путём не становится —
+    // regex текста берёт только docs/mockups.
+    [Fact]
+    public void BuildPlans_Текст_КодВТексте_НеПопадает()
+    {
+        var epic = Epic("epic");
+        var plan = Child("p1", "epic", TaskRoles.Plan, "План",
+            resultMarkdown: "Правка в backend/X.cs и тесте frontend/y.test.ts; макет docs/mockups/ok.html.");
+
+        var paths = FeatureProjector.BuildPlans(Run(epic, plan)).Single().MockupPaths;
+
+        paths.Should().Equal("docs/mockups/ok.html");
+    }
+
+    // Дубли между задачами схлопываются регистронезависимо (FS-B0): тот же путь у двух задач
+    // остаётся один раз — у свежей (бюджет обходится свежие-сверху).
+    [Fact]
+    public void BuildPlans_ДублиМеждуЗадачами_Схлопнуты_НаСвежей()
+    {
+        var epic = Epic("epic");
+        var old = Child("p-old", "epic", TaskRoles.Plan, "План старый",
+            createdAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            linkedFiles: ["docs/adr/x.md"]);
+        var fresh = Child("p-new", "epic", TaskRoles.Plan, "План свежий",
+            createdAt: new DateTime(2026, 10, 2, 9, 0, 0),
+            linkedFiles: ["docs/ADR/X.MD"]);
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, old, fresh));
+
+        plans.Single(p => p.TaskId == "p-old").MockupPaths.Should().BeEmpty();
+        plans.Single(p => p.TaskId == "p-new").MockupPaths.Should().Equal("docs/ADR/X.MD");
+    }
+
+    // Потолок 30 — общий на фичу между задачами, свежие сверху: свежая (20 путей) целиком,
+    // старая — остаток бюджета (10), внутри задачи — порядок LinkedFiles.
+    [Fact]
+    public void BuildPlans_Потолок30_НесколькоЗадач_СвежиеСверху()
+    {
+        var epic = Epic("epic");
+        var old = Child("p-old", "epic", TaskRoles.Plan, "План старый",
+            createdAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            linkedFiles: Enumerable.Range(1, 25).Select(i => $"docs/research/o{i}.md").ToArray());
+        var fresh = Child("p-new", "epic", TaskRoles.Plan, "План свежий",
+            createdAt: new DateTime(2026, 10, 2, 9, 0, 0),
+            linkedFiles: Enumerable.Range(1, 20).Select(i => $"docs/research/f{i}.md").ToArray());
+
+        var plans = FeatureProjector.BuildPlans(Run(epic, old, fresh));
+
+        var oldPaths = plans.Single(p => p.TaskId == "p-old").MockupPaths;
+        var freshPaths = plans.Single(p => p.TaskId == "p-new").MockupPaths;
+        (oldPaths.Count + freshPaths.Count).Should().Be(30);
+        // Свежая — целиком.
+        freshPaths.Should().HaveCount(20);
+        freshPaths[0].Should().Be("docs/research/f1.md");
+        // Старая — остаток, порядок LinkedFiles.
+        oldPaths.Should().HaveCount(10);
+        oldPaths[0].Should().Be("docs/research/o1.md");
+        oldPaths[^1].Should().Be("docs/research/o10.md");
     }
 }

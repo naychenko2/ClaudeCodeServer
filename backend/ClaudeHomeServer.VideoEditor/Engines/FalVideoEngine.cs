@@ -123,6 +123,10 @@ public sealed class FalVideoEngine : IVideoEngine, IVideoQuoter
             }
             return null;
         }
+        // Узкий тип уместен: транспортный таймаут и чтение контента с отменённым токеном дают
+        // один TaskCanceledException (замерено, HttpClientCancellationContractTests) — с живым ct
+        // это «прайс недоступен». Отмена хоста (тот же тип с отменённым ct) не ловится и уходит
+        // наверх как отмена хода.
         catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException && !ct.IsCancellationRequested)
         {
             _log.LogDebug(ex, "fal: прайс {Endpoint} недоступен, беру ориентир каталога", endpoint);

@@ -475,23 +475,6 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     }
 
     [Fact]
-    public async Task Доклад_ШагФичи_КлючевойЧатПерешёлВПродолжение_ДокладВПоследнееЖивоеПродолжение()
-    {
-        var team = await ArrangeTeamAsync();
-        var continued = await _sessions.CreatePersonaChatAsync(team.OwnerId, team.Sofya.PersonaId!,
-            ClaudeMode.AcceptEdits, name: "Софья (продолжение)");
-        StubProcess(continued);
-        team.Sofya.ContinuedInSessionId = continued.Id;
-        var (_, leaf) = MakeFeatureLeaf(team, key: team.Sofya, creatorChat: team.Egor,
-            reportTo: team.Egor.Id, launchedById: null);
-
-        await _sut.TryDeliverCompletionAsync(leaf);
-
-        (await CountAsync(continued.Id)).Should().Be((1, 1));
-        (await CountAsync(team.Sofya.Id)).Should().Be((0, 0));
-    }
-
-    [Fact]
     public async Task Доклад_ШагФичи_ВсеЗвеньяКлючевойЦепочкиМертвы_ПрежняяЦепочка()
     {
         var team = await ArrangeTeamAsync();

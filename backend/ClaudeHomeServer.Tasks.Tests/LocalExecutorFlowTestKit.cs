@@ -82,7 +82,10 @@ internal sealed class LocalExecutorFlowKit : IDisposable
     {
         public List<LocalExecutor> Locals { get; } = [];
         public List<LocalExecutor> LocalNonExecutors { get; } = [];
+        // Слоты движка; при пустом ростере шов отдаёт null, как боевой
+        public LocalEngineSlots Slots { get; set; } = new(4, 0, 0);
         public IReadOnlyList<LocalExecutor> For(string ownerId, string? projectId) => Locals.ToList();
+        public LocalEngineSlots? SlotsFor(string ownerId, string? projectId) => Locals.Count == 0 ? null : Slots;
 
         public LocalTaskTurn? LocalTurnOf(TaskItem task, string ownerId)
         {

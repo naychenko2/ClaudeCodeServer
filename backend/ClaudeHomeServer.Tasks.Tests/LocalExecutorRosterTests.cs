@@ -37,6 +37,8 @@ public class LocalExecutorRosterTests : IDisposable
     private readonly SpecialtySettingsStore _specialty;
     private readonly IModelResolver _resolver;
     private readonly LocalExecutorRoster _sut;
+    // Свой счётчик допуска: глобальный Instance делили бы параллельные прогоны
+    private readonly LocalEngineBusyTracker _busy = new();
 
     public LocalExecutorRosterTests()
     {
@@ -78,7 +80,7 @@ public class LocalExecutorRosterTests : IDisposable
             new UserModelTierResolver(users, appSettings), _specialty, registry);
         _resolver = new LlmModelResolverAdapter(registry);
         _personas = new PersonaManager(config);
-        _sut = new LocalExecutorRoster(_personas, _models, _resolver, registry);
+        _sut = new LocalExecutorRoster(_personas, _models, _resolver, registry, _busy);
     }
 
     public void Dispose()
@@ -253,5 +255,24 @@ public class LocalExecutorRosterTests : IDisposable
 
         (_sut.LocalTurnOf(task, Owner) is not null).Should().Be(expected,
             $"эффективная модель задачи — «{model ?? "<не определена>"}»: решает только её провайдер");
+    }
+
+    // Слоты — из счётчика допуска по ключу провайдера исполнителей: потолок MaxConcurrentTurns
+    // (по умолчанию 3), занятые и ждущие — те же, что видит гейт ходов
+    [Fact]
+    public void SlotsFor_ПотолокПровайдераИСчётчикДопуска()
+    {
+        NewPersona("Кира", PersonaSpecialty.BackendExecutor, LocalModel);
+        using var slot = _busy.TryEnter("local-roster", 3);
+
+        _sut.SlotsFor(Owner, null).Should().Be(new LocalEngineSlots(3, 1, 0));
+    }
+
+    [Fact]
+    public void SlotsFor_ЛокальныхИсполнителейНет_Null()
+    {
+        NewPersona("Тимур", PersonaSpecialty.BackendExecutor, CloudModel);
+
+        _sut.SlotsFor(Owner, null).Should().BeNull();
     }
 }

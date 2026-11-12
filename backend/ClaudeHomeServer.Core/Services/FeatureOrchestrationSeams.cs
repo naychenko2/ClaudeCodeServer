@@ -15,6 +15,14 @@ public sealed record LocalExecutor(string PersonaId, string Name);
 // PersonaName — имя персоны задачи (null — у задачи нет персоны).
 public sealed record LocalTaskTurn(string? PersonaName);
 
+// Слоты локального движка по счётчику допуска ходов (LocalEngineBusyTracker): Limit —
+// MaxConcurrentTurns провайдера, Busy — занятые слоты (любые ходы и фон, не только задачи),
+// Queued — ждут допуска. Кто-то ждёт — свободного места нет, даже если счётчик его показывает.
+public sealed record LocalEngineSlots(int Limit, int Busy, int Queued)
+{
+    public int Free => Queued > 0 ? 0 : Math.Max(0, Limit - Busy);
+}
+
 public interface ILocalExecutorRoster
 {
     // Локальные персоны-исполнители владельца, доступные в проекте. Пусто — их нет или
@@ -26,6 +34,10 @@ public interface ILocalExecutorRoster
     // провайдера. Считаются НЕ только исполнители: ревью, доработка и хвост фичи с
     // переопределённым тиром занимают тот же слот движка. null — ход не локальный.
     LocalTaskTurn? LocalTurnOf(TaskItem task, string ownerId);
+
+    // Слоты движков, на которые разворачиваются локальные исполнители контекста (несколько
+    // провайдеров — сумма). null — локальных исполнителей нет.
+    LocalEngineSlots? SlotsFor(string ownerId, string? projectId);
 }
 
 // Карточка в ключевой чат фичи — та же доставка, что у карточек снятия паузы

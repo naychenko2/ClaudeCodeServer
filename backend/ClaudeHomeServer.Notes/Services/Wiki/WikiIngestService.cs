@@ -393,6 +393,11 @@ public sealed class WikiIngestService
                 // Правка человека (ADR-038) — отдельное от отката условие правила замены.
                 LastHumanEditAt = WikiJournalReader.ReadLastHumanEdits(root),
                 NewSourceTime = sourceWrittenAt,
+                // Флаг бэклога (разрез 2026-11-12, J-P1c): после чистки старой вики разбор
+                // идёт с нуля и лимит новых страниц на раздел поднят до конца флага. Сегодня —
+                // по тем же часам, что уже берёт сервис (_time): политика не заводит свой clock.
+                IsBacklogPass = WikiBacklogFlag.IsActive(
+                    root, DateOnly.FromDateTime(_time.GetUtcNow().UtcDateTime)),
             };
             // Инвариант: ни одна операция синтеза не попадает в пакет мимо ValidateSynth.
             var verdict = WikiPlanValidator.ValidateSynth(

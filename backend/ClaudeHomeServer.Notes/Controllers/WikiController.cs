@@ -15,7 +15,8 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // REST вики владельца (S2f, ADR-035/ADR-036): дерево разделов, каталог страниц раздела,
 // страница, «Завести», adopt, удаление раздела-сироты; здоровье раздела и запуск линта
 // по кнопке (S3-3); журнал своей вики (S7c-0, ADR-035 §12г меры 4–6); «Разобрать заметку
-// в базу» (S7b0b). Образец — NotesController.
+// в базу» (S7b0b); «Начать вики заново» — предпросмотр и запуск чистки ИИ-страниц (J-P2).
+// Образец — NotesController.
 //
 // Владелец — только из токена (claim sub), как во всей вертикали. Сервисный токен хода
 // (typ=svc) — все мутирующие ручки этого контроллера отказаны 403 (B2a): вику решает и
@@ -650,6 +651,54 @@ public class WikiController : ControllerBase
             res.Take, res.LinesRead, res.InvalidLines));
     }
 
+    // ─── «Начать вики заново»: чистка ИИ-страниц (J-P2, ADR-039 решение 10) ──
+
+    /// <summary>POST /api/wiki/purge?dryRun=true|false — предпросмотр и запуск чистки
+    /// ИИ-страниц своей вики (WikiKeeper.PurgeAiPagesAsync, J-P1a). Инициатор — только
+    /// человек (кнопка J-F4): сервисный токен — 403 как прочие мутирующие ручки (B2a);
+    /// MCP-инструмента у операции нет — разрушающая системная операция, как откат пакета
+    /// (AGENTS.md). Корень — только свой: владельца берёт токен, чужой корень назвать нечем.
+    /// Без явного dryRun — предпросмотр: разрушающее действие требует явного решения.
+    /// Ответ: dryRun=true — числа по разделам и классам и список путей (на диске не тронуто
+    /// ничего); dryRun=false — число удалённых, путь архива относительно корня вики и число
+    /// погашенных открытых пакетов. Нулевой состав — не отказ: 200 с нулями (второй запуск
+    /// гонки — именно такой). Коды Хранителя — 4xx/503 с причиной, не 500 (PurgeRefusal);
+    /// исключений из Хранителя нет ни на одном исходе (контракт J-P1a).</summary>
+    [HttpPost("purge")]
+    public async Task<IActionResult> Purge([FromQuery] bool? dryRun)
+    {
+        var userId = OwnerOrNull();
+        if (userId is null) return Unauthorized();
+        if (IsServiceToken) return ServiceTokenRefusal();
+
+        var res = await _keeper.PurgeAiPagesAsync(userId, dryRun ?? true);
+        if (!res.Ok) return PurgeRefusal(res);
+
+        // Состав (пути) отдаётся предпросмотру: в запуске этих файлов уже нет на диске.
+        // Числа по разделам и классам — в обоих режимах: их считает Хранитель, второй
+        // таблицы здесь нет.
+        return Ok(new WikiPurgeDto(
+            res.DryRun,
+            res.CountsBySection,
+            res.DryRun ? [.. res.Items.Select(i => new WikiPurgePageDto(i.PageKey, i.Section, i.Class))] : [],
+            res.DryRun ? 0 : res.Items.Count,
+            res.ArchivePath,
+            res.StaledPackages));
+    }
+
+    // Отказ чистки — код и причина самого Хранителя (словарь кодов — у стора, PurgeCode*).
+    // Невалидный манифест затронутого раздела — состояние вики, которое человек чинит сам
+    // (409, как прочие отказанные состояния); сбой чтения pages/ или журнала и сбой архива —
+    // транзитный сбой диска: 503, повторить можно, на полпути ничего не осталось
+    // (архив удалён, манифест починен по фактически удалённым). 500 нет ни на одном коде:
+    // молчаливых исходов у разрушающей операции тоже нет — причина всегда в message.
+    private IActionResult PurgeRefusal(WikiPurgeResult res) => res.Code switch
+    {
+        WikiKeeper.PurgeCodeManifest => StatusCode(409, new { code = res.Code, message = res.Reason }),
+        WikiKeeper.PurgeCodeIo or WikiKeeper.PurgeCodeArchive => StatusCode(503, new { code = res.Code, message = res.Reason }),
+        _ => StatusCode(409, new { code = res.Code ?? "wiki_refused", message = res.Reason }),
+    };
+
     // ─── Помощники ──────────────────────────────────────────────────────────
 
     // Раздел — ключ из проекта/сферы владельца (ADR-036, решение 1), не путь из тела:
@@ -885,3 +934,24 @@ public sealed record WikiNightDto(
     IReadOnlyList<WikiNightDecisionDto> JudgeRejected,
     IReadOnlyList<WikiNightDecisionDto> CodeRejected,
     IReadOnlyList<WikiNightDecisionDto> Waiting);
+
+/// <summary>Одна страница состава чистки (предпросмотр J-P2): pageKey — путь относительно
+/// pages/, section — ключ раздела, class — класс предиката («ai» | «together» | «chronicle» |
+/// «source», те же строки, что в таблице решения ADR-039): по классам UI aggregate-ит сводку,
+/// по путям человек решает (кнопка J-F4).</summary>
+public sealed record WikiPurgePageDto(string PageKey, string Section, string Class);
+
+/// <summary>Ответ чистки ИИ-страниц (POST /api/wiki/purge). dryRun — эхо режима.
+/// Предпросмотр: countsBySection — числа по разделам и классам, pages — состав (пути);
+/// на диске ничего не изменилось, archivePath null, Deleted 0. Запуск: Deleted — число
+/// удалённых, archivePath — путь архива относительно корня вики (keeper/archive/purge-….zip;
+/// null, когда архивировать было нечего), StaledPackages — число погашенных открытых
+/// ИИ-пакетов; pages пуст (этих файлов уже нет на диске). Пустой состав — не отказ:
+/// 200 с нулями и без архива.</summary>
+public sealed record WikiPurgeDto(
+    bool DryRun,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> CountsBySection,
+    IReadOnlyList<WikiPurgePageDto> Pages,
+    int Deleted,
+    string? ArchivePath,
+    int StaledPackages);

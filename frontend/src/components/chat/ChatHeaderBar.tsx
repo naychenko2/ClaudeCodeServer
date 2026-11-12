@@ -2429,11 +2429,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
-        {/* Кромка-трекер фичи: нижняя кромка шапки, 2 px на ширину колонки (макет А) */}
-        {feature?.edge && <div data-testid="chat-feature-edge">{feature.edge}</div>}
         {/* Контекст чата — своей строкой под заголовком, в том же острове: материалы
             стоят над лентой, а не сбоку от неё */}
         {contextBar && <div style={{ padding: '0 18px 10px' }}>{contextBar}</div>}
+        {/* Кромка-трекер фичи: нижняя кромка шапки, 2 px на ширину колонки (макет А) —
+            последняя строка шапки, после строки контекста */}
+        {feature?.edge && <div data-testid="chat-feature-edge">{feature.edge}</div>}
         {tagMenuEl}
         {ctxMenuEl}
         {ctxExpiryMenuEl}
@@ -2476,22 +2477,21 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     </Toolbar>
   );
   if (!feature?.edge && !contextBar) return toolbarEl;
-  // Кромка-трекер фичи — первой под тулбаром (нижняя кромка шапки). Контекст чата — строкой
-  // ниже неё, до ленты: фон свой не нужен (шапка уже отделена), линия снизу
-  // отбивает материалы от переписки.
+  // Контекст чата — строкой под тулбаром, до ленты. Кромка-трекер фичи — последней строкой
+  // шапки, после контекста; при кромке собственная линия строки контекста гасится (иначе двойная).
   return (
     <>
       {toolbarEl}
-      {feature?.edge && <div data-testid="chat-feature-edge" style={{ flexShrink: 0 }}>{feature.edge}</div>}
       {contextBar && (
         <div style={{
           flexShrink: 0, display: 'flex', alignItems: 'center',
           padding: `${SP.xs}px ${isCompact ? TB.padXMobile : TB.padX}px`,
-          borderBottom: `1px solid ${C.border}`,
+          borderBottom: feature?.edge ? 'none' : `1px solid ${C.border}`,
         }}>
           {contextBar}
         </div>
       )}
+      {feature?.edge && <div data-testid="chat-feature-edge" style={{ flexShrink: 0 }}>{feature.edge}</div>}
     </>
   );
 }

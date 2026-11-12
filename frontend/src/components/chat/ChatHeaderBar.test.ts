@@ -127,6 +127,30 @@ describe('ChatHeaderBar: фича как часть шапки', () => {
     expect(rootStyle(html)).toContain('border-bottom:none');
   });
 
+  // Кромка — последняя строка шапки: стоит ПОСЛЕ строки контекста (материалов), а не режет шапку
+  // между заголовком и чипами. Мутация «вернуть кромку до contextBar» краснит оба теста порядка.
+  const ctx = createElement('span', { 'data-testid': 'ctx' }, 'материалы');
+  const EDGE = 'data-testid="chat-feature-edge"';
+
+  it('остров: при feature.edge и contextBar кромка после строки контекста', () => {
+    const html = render({ island: true, scrolled: true, feature: parts(), contextBar: ctx });
+    expect(html.indexOf(EDGE)).toBeGreaterThan(html.indexOf('data-testid="ctx"'));
+  });
+
+  it('тулбар: при feature.edge и contextBar кромка после строки контекста, у строки контекста нет своей линии', () => {
+    const html = render({ scrolled: true, feature: parts(), contextBar: ctx });
+    expect(html.indexOf(EDGE)).toBeGreaterThan(html.indexOf('data-testid="ctx"'));
+    const ctxRow = html.slice(0, html.indexOf('data-testid="ctx"')).match(/<div[^>]*style="([^"]*)"[^>]*>(?:(?!<div)[\s\S])*$/);
+    expect(ctxRow?.[1]).toContain('border-bottom:none');
+    expect(ctxRow?.[1]).not.toContain(`border-bottom:1px solid ${C.border}`);
+  });
+
+  it('без feature.edge строка контекста сохраняет свою линию, порядок прежний', () => {
+    const html = render({ scrolled: true, feature: parts({ edge: null }), contextBar: ctx });
+    expect(html).not.toContain(EDGE);
+    expect(html).toContain(`border-bottom:1px solid ${C.border}`);
+  });
+
   it('остров без фичи: узла кромки нет — hero-шапка не обрастает пустым div, линия при прокрутке на месте', () => {
     const html = render({ island: true, scrolled: true });
     expect(html).not.toContain('chat-feature-edge');

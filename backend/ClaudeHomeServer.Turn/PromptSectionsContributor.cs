@@ -16,6 +16,12 @@ namespace ClaudeHomeServer.Services.Turn;
 // Этап 5, шаг 4: разрыв цикла Turn → Llm через Core-шов `IPromptSectionProvider`.
 // Опциональность (`?`) сохранена — без DI секция не собирается, и это осознанное
 // поведение, а не недосмотр (см. комментарий в `Core/Services/Llm/IPromptSectionProvider.cs`).
+//
+// P1c (разрез 2, Г6): EffectiveSectionsFor — единственное место, где зовётся
+// IPromptSectionProvider; поверх базовых секций специальности налагается слой персоны
+// (persona.PromptSections) через PromptSectionOverlay.Apply. Своего кэша нет: персона
+// читается из PromptSessionContext на каждый ход (устаревшее между ходами — следующий
+// BuildAsync видит новые секции).
 public sealed class PromptSectionsContributor : IPromptSectionContributor
 {
     private readonly IPromptSectionProvider? _sections;
@@ -38,14 +44,24 @@ public sealed class PromptSectionsContributor : IPromptSectionContributor
         && sessionContext.Persona.Specialty != PersonaSpecialty.None
         && (sessionContext.Session.Participants is null || sessionContext.Session.Participants.Count <= 1);
 
+    // Единственная точка чтения эффективных секций для персоны (Г6): базовые секции
+    // специальности через IPromptSectionProvider + наложение слоя персоны через
+    // PromptSectionOverlay.Apply. Ручка выдачи P1d зовёт этот метод.
+    public IReadOnlyList<EffectivePromptSection> EffectiveSectionsFor(string ownerId, Persona persona)
+    {
+        var baseStates = _sections!.EffectivePromptSections(ownerId, persona.Specialty);
+        return PromptSectionOverlay.Apply(baseStates, persona.PromptSections, SectionSource.Persona);
+    }
+
     public Task<PromptSectionContribution?> BuildAsync(
         PromptSessionContext sessionContext, string? turnText)
     {
         if (sessionContext.OwnerId is null || sessionContext.Persona is null || _sections is null)
             return Task.FromResult<PromptSectionContribution?>(null);
 
-        var sections = _sections.EffectivePromptSections(sessionContext.OwnerId, sessionContext.Persona.Specialty);
-        var text = sections.Count == 0 ? null : string.Join("\n\n", sections.Select(s => s.Text));
+        var sections = EffectiveSectionsFor(sessionContext.OwnerId, sessionContext.Persona);
+        var enabled = sections.Where(s => s.Enabled).ToList();
+        var text = enabled.Count == 0 ? null : string.Join("\n\n", enabled.Select(s => s.Text));
         if (string.IsNullOrWhiteSpace(text))
             return Task.FromResult<PromptSectionContribution?>(null);
 

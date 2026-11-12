@@ -131,6 +131,8 @@ services:
       # Русский интерфейс по умолчанию (первый язык списка)
       FORGEJO__i18n__LANGS: ru-RU,en-US
       FORGEJO__i18n__NAMES: Русский,English
+      # Артефакты CI живут 7 дней (по умолчанию 90) и в бэкап не едут — см. BackupPaths
+      FORGEJO__actions__ARTIFACT_RETENTION_DAYS: "7"
     ports:
       - "3000:3000"   # web + git по HTTP (push/pull бэкенда идёт сюда)
       - "2222:22"     # ssh (на будущее; MVP ходит по HTTP с токеном)

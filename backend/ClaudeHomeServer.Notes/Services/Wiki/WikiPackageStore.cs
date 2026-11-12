@@ -452,6 +452,48 @@ public static class WikiPackageStore
         }
     }
 
+    /// <summary>Гашение открытых пакетов автора ai при чистке вики (J-P1a, ADR-039 решение 10):
+    /// «proposed»/«checking»/«accepted»/«partially_accepted» → «stale» с причиной чистки — их
+    /// страницы удалены, намерение больше не к чему применять, следующий разбор соберёт новое.
+    /// Не трогать: автор human (решение человека), «applying» (применение уже идёт — его ведёт
+    /// тот прогон), закрытые статусы, и прежде всего применённые: их откат — кнопка человека,
+    /// не чистка. Все четыре открытых статуса имеют переход в «stale» по таблице — прямая
+    /// запись её не обходит (тот же приём, что у гашения в Create). Каждый пакет перечитывается
+    /// и пишется под своим блоком, проверка повторяется по живому состоянию: параллельное
+    /// решение человека или вердикт судьи не должны быть затёрты слепым статусом. Возвращает
+    /// число погашенных.</summary>
+    public static int StaleOpenAiPackages(string root, string reason)
+    {
+        var staled = 0;
+        foreach (var p in List(root).Packages)
+        {
+            if (p.Author != WikiPackage.AuthorAi || !IsStaleableByPurge(p.Status))
+                continue;
+            var done = WithPackageLock(root, p.Id, () =>
+            {
+                var (cur, fail) = RequireValid(root, p.Id);
+                if (fail is not null || cur!.Author != WikiPackage.AuthorAi || !IsStaleableByPurge(cur.Status))
+                    return false;
+                Write(root, cur! with
+                {
+                    Status = WikiPackage.StatusStale,
+                    StatusReason = reason,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                return true;
+            });
+            if (done) staled++;
+        }
+        return staled;
+    }
+
+    // Гасимое чисткой — открытое состояние, из которого переход в «stale» разрешён таблицей.
+    // «applying» здесь нет: заявка применения, которую ведёт живой прогон, — гашение посреди
+    // него рассогласовало бы прогон с его же пакетом.
+    private static bool IsStaleableByPurge(string status) =>
+        status is WikiPackage.StatusChecking or WikiPackage.StatusProposed
+            or WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted;
+
     // Что гасится: открытое, неприменённое и нерешённое человеком. «accepted»/
     // «partially_accepted» без человеческого решения — авто-путь, вставший перед применением
     // (человек такие операции не решает: DecideOperation берёт только inbox), — это ровно прежняя

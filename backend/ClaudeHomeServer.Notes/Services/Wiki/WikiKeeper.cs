@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 
@@ -26,6 +30,9 @@ public sealed class WikiKeeper : IWikiRelink
     private readonly string _dataDir;
     private readonly NotesService _notes;
     private readonly IProjectEventLogService? _events;
+    // Время сервера — то же, что у остальных дат вертикали (флаг бэклога чистки считает
+    // «сегодня» по нему, а не по DateTime.Now — ревью J-P1c).
+    private readonly TimeProvider _time;
 
     private readonly ConcurrentDictionary<(string Owner, string Section), SemaphoreSlim> _locks = new();
     /// <summary>Тестовый сигнал: операция подошла взять замок раздела — ДО ожидания. Нужен
@@ -67,10 +74,11 @@ public sealed class WikiKeeper : IWikiRelink
         а не по имени. Раздел заводится первой применённой операцией в нём.
         """;
 
-    public WikiKeeper(NotesService notes, IConfiguration config, IProjectEventLogService? events = null)
+    public WikiKeeper(NotesService notes, IConfiguration config, IProjectEventLogService? events = null, TimeProvider? time = null)
     {
         _notes = notes;
         _events = events;
+        _time = time ?? TimeProvider.System;
         // Каталог данных — как у всех сервисов (DataPath указывает на projects.json в dataDir).
         var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
         _dataDir = Path.GetDirectoryName(Path.GetFullPath(dataPath))!;
@@ -157,6 +165,299 @@ public sealed class WikiKeeper : IWikiRelink
             return new WikiOpResult(WikiOpStatus.Applied, null);
         });
     }
+
+    // ——— Чистка ИИ-страниц (J-P1a, ADR-039 решение 10, разрез 2026-11-12 §4) ———
+
+    /// <summary>Коды отказа чистки — контракт вызывающего (J-P2), устойчивые строки, как коды
+    /// стора пакетов.</summary>
+    public const string PurgeCodeArchive = "wiki_purge_archive";
+    public const string PurgeCodeIo = "wiki_purge_io";
+    public const string PurgeCodeManifest = "wiki_purge_manifest";
+
+    /// <summary>Срок флага бэклога после чистки (J-P1c): разбор всего архива — бэклог, и
+    /// поднятый лимит новых страниц раздела действует ровно отмеренный срок.</summary>
+    public const int PurgeBacklogDays = 14;
+
+    // Та же форма [[…]]-ссылки, что у парсера страницы (WikiPage.LinkRx): ссылка на карточку
+    // — это ссылка, где бы она ни стояла, в определении сноски или в теле.
+    private static readonly Regex PurgeLinkRx = new(@"\[\[([^]\r\n]+)\]\]", RegexOptions.CultureInvariant);
+
+    /// <summary>Чистка ИИ-страниц (ADR-039, решение 10): вики начинается заново — страницы
+    /// модели уходят, разбор перезапускается. Разрушающая: сначала предпросмотр (dryRun —
+    /// только результат, на диск ничего не пишется, архива нет), затем zip всего дерева
+    /// владельца, и только потом удаление. Инициатор — человек (кнопка J-P2): автор строки
+    /// журнала «user», тот же, что у revert/adopt.
+    ///
+    /// Предикат удаления (решение Андрея 12.11, №2): авторство по PageAuthorship — «ai» или
+    /// «together»; chronicle (по построению ИИ); карточка source, на которую не ссылается ни
+    /// одна оставшаяся страница (проверка — после помеченных страниц: сноска удалённой страницы
+    /// не должна держать карточку). Не трогать: «human», принятые как есть (строка op=adopt в
+    /// журнале — решение человека), проекции «_*», карточки, на которые ссылаются оставшиеся,
+    /// неразбираемые файлы (авторства по ним сказать нельзя — fail-closed).
+    ///
+    /// Все разделы владельца — под замками в каноническом порядке: параллельное применение в тот
+    /// же раздел ждёт; после обоих манифест согласен с диском. Невалидный манифест затронутого
+    /// раздела — отказ до первой записи: разрушающая операция должна быть доводима (при dryRun
+    /// не проверяется: предпросмотр описывает состав, а не исход). Архив не создан — ничего не
+    /// удаляем, исход — код; исключения наружу нет. После удаления — записи манифестов
+    /// разделов, строка журнала op=purge (по одной на раздел: формат журнала sectional),
+    /// перегенерация проекций, инвалидация графа, «stale» открытых ИИ-пакетов, сброс курсоров
+    /// разбора и флаг бэклога на PurgeBacklogDays дней (при dryRun и при любом отказе — не
+    /// звать). Применённые пакеты не трогаются.</summary>
+    public async Task<WikiPurgeResult> PurgeAiPagesAsync(string ownerId, bool dryRun)
+    {
+        // Корень — той же строкой, что у остальных вызовов стора (ревью a2db48b9): ключ замка
+        // ResetCursors — сам путь, root со слешем на конце дал бы другой семафор, и гонка вернулась.
+        var root = WikiPaths.Root(_dataDir, ownerId);
+        var pagesDir = Path.Combine(root, "pages");
+        if (!Directory.Exists(pagesDir))
+            return PurgeOk(dryRun, [], null, 0, 0); // вики нет или пустой pages/: удалять нечего
+
+        List<(string Rel, string Section)> files;
+        try
+        {
+            files = [];
+            foreach (var full in Directory.EnumerateFiles(pagesDir, "*.md", SearchOption.AllDirectories))
+            {
+                var rel = Path.GetRelativePath(pagesDir, full).Replace('\\', '/');
+                if (WikiPaths.IsProjection(rel)) continue; // служебный файл раздела — не страница
+                var section = WikiSections.Parse(rel);
+                if (section is null) continue; // путь вне разделов — не страница вики
+                files.Add((rel, section));
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return PurgeFail(dryRun, PurgeCodeIo, "каталог pages/ не читается — предпросмотр невозможен");
+        }
+
+        var sections = files.Select(f => f.Section).Distinct(StringComparer.Ordinal).ToList();
+        return await WithSectionsLockedAsync(ownerId, sections, () => PurgeUnderLock(ownerId, root, files, dryRun));
+    }
+
+    // Тело чистки под всеми замками (тот же порядок, что у RevertUnderLock): сам метод
+    // синхронный — весь его I/O последовательный, await здесь не для чего.
+    private Task<WikiPurgeResult> PurgeUnderLock(string ownerId, string root, List<(string Rel, string Section)> files, bool dryRun)
+    {
+        // Одно чтение всего состояния: авторство, ссылки и сиротский тест — по одному чтению
+        // одних и тех же файлов. Нечитаемый файл — «неразбираемый»: он остаётся нетронутым,
+        // но его текст участвует в поиске ссылок (ссылка не требует разобранной шапки).
+        var texts = new Dictionary<string, string>(StringComparer.Ordinal);
+        var models = new Dictionary<string, WikiPage?>(StringComparer.Ordinal);
+        foreach (var (rel, _) in files)
+        {
+            string text;
+            try { text = File.ReadAllText(SafePath.JoinBelowRoot(root, "pages/" + rel), Encoding.UTF8); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { text = ""; }
+            texts[rel] = text;
+            models[rel] = text.Length == 0 ? null : WikiPage.Parse(text).Model;
+        }
+
+        // Карточки — тот же ключ, что у авторства (WikiProjections.Cards): нормализованный заголовок.
+        var cards = new Dictionary<string, (string Rel, string Section, string? Origin)>(StringComparer.Ordinal);
+        foreach (var (rel, section) in files)
+            if (models[rel] is { } card && card.Frontmatter.Type == WikiFrontmatter.TypeSource)
+                cards.TryAdd(WikiGate.Norm(card.Title), (rel, section, card.Frontmatter.Origin));
+
+        var adopted = ReadAdoptedPageKeys(root);
+        if (adopted is null)
+            // Без журнала нельзя сказать, какие страницы человек уже принял: составить состав
+            // чистки нечем — честный отказ, а не чистка вслепую.
+            return Task.FromResult(PurgeFail(dryRun, PurgeCodeIo, "журнал не читается — состав чистки определить нельзя"));
+        var doomed = new List<WikiPurgeItem>();
+        foreach (var (rel, section) in files)
+        {
+            var page = models[rel];
+            if (page is null) continue; // неразбираемый: авторства нет — не трогать (fail-closed)
+            if (page.Frontmatter.Type == WikiFrontmatter.TypeSource) continue; // карточки — ниже, сиротским тестом
+            if (adopted.Contains(rel)) continue; // принятый как есть — решение человека (И6)
+            var authorship = WikiProjections.PageAuthorship(page,
+                t => cards.TryGetValue(WikiGate.Norm(t), out var c) ? c.Origin : null);
+            if (authorship == WikiProjections.AuthorshipHuman) continue; // человеческое — не трогать (И6)
+            // Решение Андрея 12.11 (№2): «together» уходит вместе с «ai» — содержимое в архиве,
+            // разбор соберёт страницу заново. Хроника — по построению ИИ, без проверки авторства.
+            doomed.Add(new WikiPurgeItem(rel, section,
+                page.Frontmatter.Type == WikiFrontmatter.TypeChronicle ? WikiFrontmatter.TypeChronicle : authorship));
+        }
+
+        // Ссылки оставшихся страниц на карточки: цель сноски и любая [[…]]-ссылка в тексте.
+        // Удалённые страницы в счёт не идут: их сноска не должна держать карточку (иначе ни
+        // одна карточка, названная в «Сводке» ИИ-страницы, не была бы сиротой никогда).
+        var doomedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in doomed) doomedKeys.Add(item.PageKey);
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+        var referencedQualified = new HashSet<(string Section, string Title)>();
+        foreach (var (rel, _) in files)
+        {
+            if (doomedKeys.Contains(rel)) continue;
+            if (models[rel] is { } own && own.Frontmatter.Type == WikiFrontmatter.TypeSource) continue; // карточка — не читатель
+            foreach (Match m in PurgeLinkRx.Matches(texts[rel]))
+            {
+                var target = m.Groups[1].Value;
+                referenced.Add(WikiGate.Norm(target)); // внутри раздела — голым заголовком
+                var slash = target.LastIndexOf('/');
+                if (slash > 0 && WikiSections.Parse(target) is { } qualified)
+                    referencedQualified.Add((qualified, WikiGate.Norm(target[(slash + 1)..]))); // с префиксом своего раздела
+            }
+        }
+
+        foreach (var (norm, card) in cards)
+            if (!referenced.Contains(norm) && !referencedQualified.Contains((card.Section, norm)))
+                doomed.Add(new WikiPurgeItem(card.Rel, card.Section, WikiFrontmatter.TypeSource));
+
+        var items = doomed.OrderBy(d => d.PageKey, StringComparer.Ordinal).ToList();
+        if (dryRun)
+            return Task.FromResult(PurgeOk(dryRun, items, null, 0, 0)); // предпросмотр: на диск ничего не пишется, архива нет
+        if (items.Count == 0)
+            return Task.FromResult(PurgeOk(dryRun, items, null, 0, 0)); // удалять нечего: ни архива, ни журнала, ни перезапуска
+
+        // Невалидный манифест затронутого раздела — отказ до первой записи: чистка обязана
+        // оставить манифест согласованным с диском, а с нечитаемым манифестом это невозможно.
+        foreach (var section in items.Select(i => i.Section).Distinct(StringComparer.Ordinal))
+            if (WikiManifest.TryRead(root, section).State == WikiManifestState.Invalid)
+                return Task.FromResult(PurgeFail(dryRun, PurgeCodeManifest, $"манифест раздела «{section}» невалиден — чистка невозможна"));
+
+        var archiveRel = $"keeper/archive/purge-{_time.GetUtcNow().ToString("yyyyMMdd'T'HHmmss'Z'", CultureInfo.InvariantCulture)}.zip";
+        var archiveFull = SafePath.Join(root, archiveRel);
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(archiveFull)!);
+            using (var fs = new FileStream(archiveFull, FileMode.CreateNew))
+            using (var zip = new ZipArchive(fs, ZipArchiveMode.Create))
+                AddTreeToZip(zip, root);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Половина архива не должна остаться в каталоге архивов: она притворяется архивом.
+            try { File.Delete(archiveFull); } catch (Exception) { /* уже нет — не наша уборка */ }
+            return Task.FromResult(PurgeFail(dryRun, PurgeCodeArchive, "архив не создан — ничего не удалено: разрушающая операция без архива не делается"));
+        }
+
+        int deletedCount = 0;
+        var counts = new Dictionary<string, IReadOnlyDictionary<string, int>>(StringComparer.Ordinal);
+        try
+        {
+            foreach (var item in items)
+            {
+                File.Delete(SafePath.JoinBelowRoot(root, "pages/" + item.PageKey));
+                deletedCount++;
+            }
+
+            foreach (var group in items.GroupBy(i => i.Section, StringComparer.Ordinal))
+            {
+                var byClass = group.GroupBy(i => i.Class, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+                counts[group.Key] = byClass;
+
+                // Манифест следует за диском: записей удалённых страниц больше нет (тот же
+                // RollbackTo, что у отката create-страницы). Empty-манифеста нет — чистить нечего.
+                var mres = WikiManifest.TryRead(root, group.Key);
+                if (mres.State == WikiManifestState.Valid)
+                    WikiManifest.RollbackTo(root, group.Key,
+                        group.ToDictionary(i => i.PageKey, _ => (string?)null));
+                // Строка журнала системной операции человека: одна на раздел (формат журнала
+                // sectional, тот же порядок, что у relink), policy null — меры политики нет.
+                WikiManifest.AppendLog(root, "purge", group.Key,
+                    group.Select(i => i.PageKey).ToList(), null, "user");
+                // _log.md раздела — производная журнала: без перегенерации он остался бы на
+                // полшага позади операции (тот же порядок, что у adopt/revert).
+                WikiProjections.RegenerateSection(root, group.Key);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // Архив уже на диске, состояние — частичное: следующий вызов увидит его по диску
+            // и продолжит; молчаливого «успеха» наполовину сделанной операции нет.
+            return Task.FromResult(PurgeFail(dryRun, PurgeCodeIo,
+                $"архив создан, удаление прервано: удалено {deletedCount} из {items.Count}"));
+        }
+
+        // Граф обязан не видеть удалённые страницы сразу (тот же шаг, что у записи); синк Dify
+        // подчистит их сам при следующем проходе, отдельного каскада не пишем (разрез §4.6).
+        _notes.Invalidate(ownerId);
+
+        // Перезапуск разбора — только после состоявшегося удаления (ревью J-P1c): открытые
+        // ИИ-пакеты гасятся, курсоры обнуляются, бэклог поднимается на отмеренный срок.
+        // Сбой здесь — не отказ чистки (она состоялась): исход с честной пометкой, исключения
+        // наружу нет ни на одном шаге операции.
+        try
+        {
+            var staled = WikiPackageStore.StaleOpenAiPackages(root, $"чистка вики {DateOnly.FromDateTime(_time.GetUtcNow().UtcDateTime):yyyy-MM-dd}");
+            var triage = WikiChatTriageStore.ResetCursors(root);
+            var until = DateOnly.FromDateTime(_time.GetUtcNow().UtcDateTime).AddDays(PurgeBacklogDays);
+            WikiBacklogFlag.Set(root, until);
+            return Task.FromResult(PurgeOk(dryRun, items, archiveRel, staled, triage.Ok ? triage.ResetCount : 0, counts));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return Task.FromResult(new WikiPurgeResult(true, null,
+                $"чистка выполнена, перезапуск разбора не доведён: {e.Message}", dryRun, items, counts, archiveRel, 0, 0));
+        }
+    }
+
+    /// <summary>Страницы, принятые как есть (приёмыши): pageKey из строк журнала op=adopt.
+    /// Строки читаются терпимо, как в проекциях: оборванная — не строка. Отказ чтения — пустое
+    /// множество: «приёмышей нет» хуже молчания о решении человека, поэтому вызывающий на сбое
+    /// журнала получает отказ (состав чистки без этой проверки сказать нельзя).</summary>
+    private static HashSet<string>? ReadAdoptedPageKeys(string root)
+    {
+        var adopted = new HashSet<string>(StringComparer.Ordinal);
+        var full = SafePath.Join(root, "keeper/log.jsonl");
+        string[] lines;
+        try { lines = File.Exists(full) ? File.ReadAllLines(full, Encoding.UTF8) : []; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { return null; }
+        foreach (var line in lines)
+        {
+            if (line.Length == 0) continue;
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                var obj = doc.RootElement;
+                if (obj.ValueKind != JsonValueKind.Object) continue;
+                if (!obj.TryGetProperty("op", out var op) || op.ValueKind != JsonValueKind.String || op.GetString() != "adopt") continue;
+                if (!obj.TryGetProperty("pages", out var pages) || pages.ValueKind != JsonValueKind.Array) continue;
+                foreach (var p in pages.EnumerateArray())
+                    if (p.ValueKind == JsonValueKind.String && p.GetString() is { Length: > 0 } pageKey)
+                        adopted.Add(pageKey);
+            }
+            catch (JsonException) { /* обрыв посреди записи — не строка (тот же приём, что у _log.md) */ }
+        }
+        return adopted;
+    }
+
+    /// <summary>Весь снимок вики владельца в архив: pages/ и keeper/, кроме самого каталога
+    /// archive/ (его снимок в самом архиве — бесконечен) и имени temp атомарной записи.
+    /// Имена записей — относительные пути с «/»: архив читается на любой системе.</summary>
+    private static void AddTreeToZip(ZipArchive zip, string root)
+    {
+        var archiveDir = Path.Combine(root, "keeper", "archive");
+        foreach (var dirRel in new[] { "pages", "keeper" })
+        {
+            var dir = Path.Combine(root, dirRel);
+            if (!Directory.Exists(dir)) continue;
+            foreach (var full in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            {
+                if (full.StartsWith(archiveDir + Path.DirectorySeparatorChar, StringComparison.Ordinal)) continue;
+                if (full.EndsWith(".tmp", StringComparison.Ordinal)) continue; // остаток упавшей атомарной записи
+                var entry = zip.CreateEntry(Path.GetRelativePath(root, full).Replace('\\', '/'), CompressionLevel.SmallestSize);
+                using var source = File.Open(full, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var target = entry.Open();
+                source.CopyTo(target);
+            }
+        }
+    }
+
+    private static WikiPurgeResult PurgeOk(bool dryRun, IReadOnlyList<WikiPurgeItem> items, string? archivePath,
+        int staledPackages, int triageReset,
+        IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>>? counts = null) =>
+        new(true, null, null, dryRun, items,
+            counts ?? items.GroupBy(i => i.Section, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => (IReadOnlyDictionary<string, int>)g.GroupBy(i => i.Class, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), StringComparer.Ordinal),
+            archivePath, staledPackages, triageReset);
+
+    private static WikiPurgeResult PurgeFail(bool dryRun, string code, string reason) =>
+        new(false, code, reason, dryRun, [], new Dictionary<string, IReadOnlyDictionary<string, int>>(StringComparer.Ordinal), null, 0, 0);
 
     /// <summary>relink — системная операция (ADR-035, решение 6): переименована (newTitle)
     /// или истекла/удалена (newTitle null) заметка, на которую ссылаются страницы вики.
@@ -429,6 +730,27 @@ public enum WikiOpStatus
 
 /// <summary>Результат операции Хранителя: статус + причина для вызывающего.</summary>
 public readonly record struct WikiOpResult(WikiOpStatus Status, string? Reason);
+
+/// <summary>Одна страница, помеченная чисткой: путь относительно pages/, раздел и класс —
+/// строка таблицы решения («ai» | «together» | «chronicle» | «source»): по классам предпросмотр
+/// aggregate-ится для человека, по путям он решает.</summary>
+public sealed record WikiPurgeItem(string PageKey, string Section, string Class);
+
+/// <summary>Исход чистки ИИ-страниц: Ok + код отказа для вызывающего (J-P2) + состав
+/// (пути и числа по разделам и классам) + путь архива (относительный корня вики — тот же
+/// формат, что у путей страниц) + число гасимых пакетов и обнулённых курсоров. При dryRun
+/// архива и эффектов нет: результат описывает только состав. Reasons — только там, где
+/// что-то не доведено: молчаливых исходов нет.</summary>
+public sealed record WikiPurgeResult(
+    bool Ok,
+    string? Code,
+    string? Reason,
+    bool DryRun,
+    IReadOnlyList<WikiPurgeItem> Items,
+    IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> CountsBySection,
+    string? ArchivePath,
+    int StaledPackages,
+    int TriageResetCount);
 
 /// <summary>Внутренний шов побочных писателей NotesService к Хранителю (ADR-035, решение 2):
 /// переименование или истечение заметки, на которую ссылаются страницы вики, — не правка

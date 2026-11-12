@@ -2,11 +2,15 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Реализация ICheapTextRunner (контракт и DTO живут в Core, чтобы вертикали могли
 // зависеть от шва без ProjectReference на Main).
+// namedEngines — реестр именованных движков (LocalEngines:*): нужен только прогону на
+// названный движок (RunOnLocalEngineDetailedAsync / IsLocalEngineReadyAsync) — там исполнитель
+// задан аргументом, и маршрут места его не выбирает. Параметр опционален, как у
+// LocalActionRouter: в DI — синглтон, в тестах передаётся руками.
 public sealed class CheapTextRunner(
     LocalActionRouter router, ILocalLlmClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log, ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null,
-    EngineCallLedger? ledger = null)
+    EngineCallLedger? ledger = null, NamedLocalEngines? namedEngines = null)
     : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
@@ -589,5 +593,104 @@ public sealed class CheapTextRunner(
                 actionKey, model);
         }
         return null;
+    }
+
+    // Ключ основной локальной модели — то же значение, что маршрут места «local»
+    // (LocalActionOverridesStore.LocalRoute): исполнитель ночи называется тем же словом,
+    // которым админ называет маршрут.
+    private static bool IsMainLocalEngine(string? engine) =>
+        string.Equals(engine, LocalActionOverridesStore.LocalRoute, StringComparison.OrdinalIgnoreCase);
+
+    // Готов ли названный движок принять работу ПРЯМО СЕЙЧАС, без самого вызова (разрез «ночь
+    // вики на нескольких локальных исполнителях» §3: проба готовности перед выдачей — ночь не
+    // готовит разбор чата, который некуда положить). Именованный движок — LocalEngine.IsReadyAsync
+    // (проба ReadyUrl с кэшем 1 с: дежурная модель под арбитром GPU выгружается штатно, отказ
+    // обязан быть мгновенным, а не таймаутом); движок без ReadyUrl — считаем готовым, решит сам
+    // вызов. Основная локаль: «движка нет» — не настроенный LocalLlm, «занят ходом исполнителя»
+    // — признак роутера (фоновые слоты его не взводят, ход — единственный, кто его взводит).
+    // Неизвестный движок — false.
+    public async Task<bool> IsLocalEngineReadyAsync(string engine, CancellationToken ct = default)
+    {
+        if (IsMainLocalEngine(engine)) return ollama.Enabled && !router.LocalBlockedByTurn;
+        var named = namedEngines?.Get(engine);
+        if (named is null || !named.Enabled) return false;
+        return await named.IsReadyAsync(ct);
+    }
+
+    // Вызов на ОДНОМ названном движке, с расходом (ICheapTextRunner.RunOnLocalEngineDetailedAsync,
+    // И3 пути 2 и 4). Отличие от RunLocalOrChosenDetailedAsync — нет шага «выбранная модель»
+    // (исполнитель задан аргументом, а не маршрутом места), нет страховки FallbackRoute этого
+    // движка, нет финального claude-шага: сам метод до облака не доходит никогда. Профиль и
+    // ожидание слота — те же, что у пути «без облака» (AwaitsSlot/WN-4): следующего шага нет,
+    // и отказ по занятости был бы потерей работы. null — движок неизвестен, выключен, не готов
+    // или не ответил; исключение движка — тоже null (в логе с причиной): подмены нет, решение
+    // за вызывающим (ночь — «выбытие исполнителя», W5). Наружу пробрасываются только два
+    // случая: отмена по ct (конец прохода, а не отказ одного чата — та же семантика, что у
+    // цепочки) и LocalEngineSlotRefusalException («движок занят» и «модель дала пустой ответ»
+    // — разные причины итога ночи, WN-4; вызывающий различает их именно по типу).
+    // Usage локального шага — OneShotUsage с CostUsd 0 (тот же контракт, что у цепочки).
+    public async Task<OneShotResult?> RunOnLocalEngineDetailedAsync(string engine, string actionKey,
+        string prompt, string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+    {
+        // Как во всех методах раннера: действие с картинками на входе текстовый раннер не
+        // выполняет (ADR-027 §2) — здесь это ещё и ошибка вызывающего, подмены нет.
+        if (RefuseImageAction(actionKey))
+            throw new InvalidOperationException(
+                $"Действие «{actionKey}» работает с картинками и не выполняется текстовым раннером");
+        try
+        {
+            if (IsMainLocalEngine(engine))
+            {
+                if (!ollama.Enabled) return null;
+                var (localText, localUsage) = await RunLocalAsync(actionKey, prompt, jsonFormat, ownerId, ct,
+                    awaitSlot: true);
+                return string.IsNullOrWhiteSpace(localText)
+                    ? null : new OneShotResult(localText, localUsage, 0);
+            }
+
+            var named = namedEngines?.Get(engine);
+            if (named is null)
+            {
+                log.LogWarning("cheap-runner: действие {Action} послано на неизвестный движок {Engine}",
+                    actionKey, engine);
+                return null;
+            }
+            // Журнал — тот же EngineCallLedger, что у цепочек к движку: текущий путь к
+            // именованному движку (RunLocalOrChosenDetailedAsync) в «кто сейчас на модели»
+            // виден, и прогон ночи на движке не должен исчезнуть из дежурства.
+            var call = ledger?.Begin(named.Name, actionKey);
+            try
+            {
+                // RunEngineAsync сам делает и Enabled-проверку, и пробу готовности:
+                // «выключен» и «не готов» — тот же null, без вызова движка.
+                var (text, usage) = await RunEngineAsync(named, actionKey, prompt, jsonFormat, ownerId, ct,
+                    call, awaitSlot: true);
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    call?.End(EngineCallOutcome.Missed);
+                    return null;
+                }
+                call?.End(EngineCallOutcome.Engine);
+                return new OneShotResult(text, usage, 0);
+            }
+            finally
+            {
+                // Как в цепочке: любой выход без явного End закрывает вызов «без ответа».
+                call?.End(EngineCallOutcome.Missed);
+            }
+        }
+        catch (LocalEngineSlotRefusalException)
+        {
+            // Отказ допуска — не сбой движка: модель не звалась ни разу, и вызывающий обязан
+            // назвать причину сам (WikiIngestService ловит этот тип вокруг цепочки сегодня;
+            // новый путь ловит его тем же catch).
+            throw;
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning(ex, "cheap-runner: действие {Action} — движок {Engine} дал сбой, подмены нет",
+                actionKey, engine);
+            return null;
+        }
     }
 }

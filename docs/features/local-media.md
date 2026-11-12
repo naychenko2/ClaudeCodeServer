@@ -185,6 +185,23 @@ Community License (коммерция до $1 млн годовой выручк
 невалидна — тоже она, с предупреждением в логе. Пример — копия таблицы из кода в
 `appsettings.Local.example.json`, тест `ПримерВКонфиге_ВалиденИСовпадаетСТаблицейИзКода` держит их вместе.
 
+```json
+"LocalMedia": {
+  "Routing": [
+    { "Id": "mask", "Ops": ["Inpaint", "Outpaint"], "Models": ["qwen-image-2.1"], "Reason": "маска или дорисовка" },
+    { "Id": "text-gen", "Ops": ["Generate"], "Any": ["QuotedText"], "Forbid": ["Inputs"],
+      "Models": ["flux3-klein", "moss-image"], "Reason": "в запросе надпись" },
+    { "Id": "people-gen", "Ops": ["Generate"], "Any": "People, Photo", "Forbid": ["Inputs"],
+      "Models": ["krea2-turbo"], "Reason": "люди или фотореализм" },
+    { "Id": "edit-default", "Ops": ["Edit"], "Models": ["qwen-image-2.1-turbo"], "Reason": "правка по умолчанию" },
+    { "Id": "gen-default", "Ops": ["Generate"], "Models": ["qwen-image-2.1-turbo"], "Reason": "по умолчанию" }
+  ]
+}
+```
+
+Фрагмент — образец формата (общие правила для всех четырёх операций в нём есть, так что он проходит проверку);
+полная копия таблицы — в `appsettings.Local.example.json`. Финальные значения даст слепая оценка Ш10.
+
 Fibo 2.0 Dev и MiniMax H3 в «Авто» не участвуют (Dev медленный и слабый, H3 печатает куски промпта в
 кадр) — только ручным выбором; тест `FiboDevИH3_ВАвтоНеУчаствуют` перебирает операции и
 признаки таблицы из кода (в конфиге их не запрещает никто — это выбор администратора). Ручной выбор модели главнее: таблица зовётся только при модели `auto`.

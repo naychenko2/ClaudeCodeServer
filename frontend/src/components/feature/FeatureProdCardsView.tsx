@@ -31,7 +31,7 @@
 //     и раскрытая; над лентой «Показать все N шагов (скрыто готовых: K)», N — из свёртки;
 //     выбор «показать все» живёт, пока лента смонтирована;
 //   • карточка, чья цепочка содержит хвост после мержа (run.postMergeTails — тот же источник,
-//     что у строк этапа, GC-F10a), помечается «· хвост после мержа».
+//     что у строк этапа, GC-F10a), помечается «· открыто после мержа» (FP-H2).
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactElement } from 'react';
@@ -52,6 +52,7 @@ import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
+import { plural } from '../../lib/plural';
 import { getPersonaById } from '../../lib/personas';
 import type { LaneAxis } from './FeatureLaneModel';
 import type { StageTurn } from '../../types/featureStats';
@@ -65,15 +66,6 @@ import type { FeatureRun, FeatureStepChain, FeatureStageExecutor, FeatureTask } 
 const TOUCH_H = 40;
 const NODE_H = 20; // раскладочная высота узла (отступы компенсируют вылет)
 const OVERHANG = (TOUCH_H - NODE_H) / 2; // 10 — раскладочный, фактический вылет 7
-
-// «Круг» по числу (та же схема, что словарь Ш1c): 1 — круг, 2–4 — круга, 5+ — кругов.
-// FP-H2: счётчик — chain.loops (returned + замечания), «возвраты» на странице — только
-// настоящие (verdicts.returned), поэтому здесь слово «круги», а не «возвраты».
-function cycleWord(n: number): string {
-  if (n === 1) return 'круг';
-  if (n <= 4) return 'круга';
-  return 'кругов';
-}
 
 // «Шаг» по числу (тот же приём, что pluralIntervals в FeatureTimelineTab): 1 шаг / 2–4 шага /
 // 5+ шагов; 11–14 — шагов.
@@ -510,9 +502,13 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
           data-testid="prod-status"
           style={{ ...stateTone(state), fontSize: FS.xs, fontWeight: 600, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '16px' }}
         >
-          {badge.word}{badge.rest}{isTail ? ' · хвост после мержа' : ''}
+          {badge.word}{badge.rest}{isTail ? ' · открыто после мержа' : ''}
         </span>
         <MiniTrack nodes={card.nodes} />
+        {/* «Круг» по числу — общий plural() (FP-H2; прежний локальный cycleWord давал
+            «21 кругов»). Счётчик — chain.loops (returned + замечания), «возвраты» на
+            странице — только настоящие (verdicts.returned), поэтому здесь слово
+            «круги», а не «возвраты». */}
         {card.cycles > 0 ? (
           <span
             data-testid="prod-cycles"
@@ -524,7 +520,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
               borderRadius: R.sm, padding: `0 ${SP.xs}px`, lineHeight: '18px', whiteSpace: 'nowrap',
             }}
           >
-            {card.cycles} {cycleWord(card.cycles)}
+            {card.cycles} {plural(card.cycles, 'круг', 'круга', 'кругов')}
           </span>
         ) : null}
       </div>

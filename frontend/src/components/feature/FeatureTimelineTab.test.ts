@@ -18,7 +18,7 @@
 // «оценивает →» → «reviewOfOutside > 0 даёт нейтральную подпись» краснеет;
 // GC-F10a: (7) tasksCountLabel → хардкод «${n} задач» → тест склонения краснеет;
 // (8) в StageRow isTail={isTail(x.taskId)} → isTail={false} → «помечен маркером» краснеет;
-// (9) условие строки хвостов tailIds.size > 0 → false → «хвосты после мержа · 2» краснеет.
+// (9) условие строки хвостов tailIds.size > 0 → false → «открыто после мержа · 2» краснеет.
 // GC-F10b: (10) в StageRow turns={turnsByTask.get(x.taskId)} → turns={null} → «ходы задачи»
 // краснеет; (11) в buildTurnsByTask убрать ветку синтеза живого хода → «живой ход» краснеет;
 // (12) в StageRow не передать axis → «Время шага на оси» краснеет.
@@ -1257,11 +1257,11 @@ describe('FeatureTimelineTab: хвосты после мержа (GC-F10a)', () 
     return out;
   }
 
-  it('смерженная фича с 2 хвостами → «хвосты после мержа · 2» после этапа «Мерж»', () => {
+  it('смерженная фича с 2 хвостами → «открыто после мержа · 2» после этапа «Мерж»', () => {
     const c = renderTab(mergedTailRun(['t-tail1', 't-tail2']));
     const tails = findNodeByAttr(c, 'data-testid', 'timeline-tails');
     expect(tails, 'сводная строка').not.toBeNull();
-    expect(textNodes(tails!).join('')).toBe('хвосты после мержа · 2');
+    expect(textNodes(tails!).join('')).toBe('открыто после мержа · 2');
     // Строка стоит после ленты этапов: «Мерж» — последний этап жизненного цикла.
     const order = testidOrder(c as never);
     expect(order.indexOf('timeline-tails'), 'строка после «Мержа»').toBeGreaterThan(order.indexOf('timeline-stage-merge'));
@@ -1289,8 +1289,9 @@ describe('FeatureTimelineTab: хвосты после мержа (GC-F10a)', () 
     // Каждая помечена ровно один раз; нигде в DOM второй копии маркера нет.
     expect(nodesByTestid(body as never, 'timeline-executor-tail').length, 'каждый хвост помечен').toBe(2);
     expect(nodesByTestid(c as never, 'timeline-executor-tail').length, 'маркер только в строках этапа').toBe(2);
-    // Сводка — только число, без id (иначе хвост показали бы дважды).
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'timeline-tails')!).join('')).toBe('хвосты после мержа · 2');
+    // Сводка — только число, без id (иначе хвост показали бы дважды). Имя числа —
+    // «открыто после мержа» (FP-H2), маркер строк этапа — прежний (отдельная доработка).
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'timeline-tails')!).join('')).toBe('открыто после мержа · 2');
   });
 
   // Мутация (в отчёте): в StageRow isTail={isTail(x.taskId)} → isTail={false} →

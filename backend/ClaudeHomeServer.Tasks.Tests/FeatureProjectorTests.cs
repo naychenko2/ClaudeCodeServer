@@ -2579,7 +2579,8 @@ public class FeatureProjectorTests
     // Две активные стадии (п.4): шапка и Гант — FeatureBrief.CurrentStageOf — берут первую активную
     // в топологическом порядке; файл FeatureBrief.cs под этим шагом не правился. Задача первого
     // топологического этапа запущена позже — Now[0] она, и обе половины CurrentStageOf (Now[0].Stage
-    // и первая active в run.Stages) дают одно и то же: step-back.
+    // и первая active в run.Stages) дают одно и то же: ключ стадии prod (R-G3: одно пространство имён;
+    // id этапа для различения параллельных — отдельное поле StageId).
     [Fact]
     public void CurrentStageOf_ДваАктивныхЭтапа_ШапкаПервыйВТопологическомПорядке()
     {
@@ -2622,12 +2623,112 @@ public class FeatureProjectorTests
 
         run.Now.Select(n => n.TaskId).Should().Equal(new[] { "s-back", "s-front" },
             "обе задачи идут; Now — по позднему старту впереди");
-        run.Now[0].Stage.Should().Be("step-back", "стадия задачи с маршрутом — id её этапа, не «prod»");
-        FeatureBrief.CurrentStageOf(run).Should().Be("step-back", "одна функция на все потребители");
-        FeatureBrief.ActiveStageOf(run).Should().Be("step-back", "внешний вход штампа голоса — та же база");
+        run.Now[0].Stage.Should().Be("prod",
+            "стадия задачи — ключ стадии (RoleToStage), то же пространство имён, что run.Stages[].Key (R-G3)");
+        run.Now[0].StageId.Should().Be("step-back", "id этапа для различения параллельных — отдельное поле, не Stage");
+        run.Now[1].StageId.Should().Be("step-front", "вторая идущая задача — свой этап в StageId");
+        FeatureBrief.CurrentStageOf(run).Should().Be("prod", "одна функция на все потребители");
+        FeatureBrief.ActiveStageOf(run).Should().Be("prod", "внешний вход штампа голоса — та же база");
+        run.Stages.First(s => s.State == "active").Key.Should().Be("prod",
+            "вторая половина CurrentStageOf (FirstActiveStageOf) даёт тот же ключ, что Now[0].Stage");
         run.Stages.First(s => s.State == "active").Id.Should().Be("step-back",
             "первая активная стадия в run.Stages — первый в топологическом порядке (Stages идут по графу)");
         StageById(run, "step-front").State.Should().Be("active", "второй этап остаётся активным");
+    }
+
+    // Р-G3 (инвариант «текущая стадия»): у фичи с маршрутом обе половины CurrentStageOf дают одно
+    // значение в пространстве ключа стадии — и при идущей задаче (Now[0].Stage == CurrentStageOf),
+    // и на паузе (Now пуст, работает вторая половина — FirstActiveStageOf): та же величина, что при
+    // работе. Мутация: вернуть в nowList Stage = TaskStageId (id этапа) — первая проверка краснеет
+    // («prod» ≠ «step-back»); убрать в CurrentStageOf fallback — вторая краснеет.
+    [Fact]
+    public void CurrentStageOf_ФичаСМаршрутом_ОдноЗначениеПриРаботеИНаПаузе()
+    {
+        var t = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-one-namespace";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        epic.Workflow = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5),
+        };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+            Stage = new StageSnapshot { TemplateId = "builtin-parallel-cycle", Role = "step", StageId = "step-back", After = ["plan"] },
+        };
+
+        // Идущая задача: Now[0].Stage и CurrentStageOf — одно значение (ключ стадии).
+        var run = FeatureProjector.Build(epic, [epic, plan, s1], t);
+        run.Now[0].Stage.Should().Be("prod");
+        FeatureBrief.CurrentStageOf(run).Should().Be(
+            run.Now[0].Stage, "обе половины при идущей задаче дают одно и то же");
+        run.Stages.First(s => s.State == "active").Key.Should().Be("prod",
+            "и третья точка — ключ активной стадии run.Stages");
+
+        // Пауза (Now гасится, W4-HOLD-D): та же величина — стадия не менялась.
+        epic.Hold = new FeatureHold(FeatureHoldReasons.Manual, t, null, true);
+        var runPaused = FeatureProjector.Build(epic, [epic, plan, s1], t);
+        runPaused.State.Should().Be(FeatureStates.Paused, "фикстура: явное удержание человека");
+        runPaused.Now.Should().BeEmpty("пауза гасит «Сейчас»");
+        FeatureBrief.CurrentStageOf(runPaused).Should().Be(
+            FeatureBrief.CurrentStageOf(run),
+            "на паузе — та же «текущая стадия», что при работе: одно значение независимо от того, идёт ли задача");
+    }
+
+    // Р-G3 сценарий 1: человек пишет голос на prod (штамп ActiveStageOf = CurrentStageOf), затем
+    // стартует шаг маршрута. До правки Now[0].Stage был id этапа («step-back») и StaleOf помечал
+    // голос устаревшим, хотя стадия не менялась. Теперь — не устаревший.
+    // Мутация: вернуть в nowList Stage = TaskStageId → Stale = true, тест красный.
+    [Fact]
+    public void Note_ГолосНаProdПриИдущемШагеМаршрутаНеУстаревший()
+    {
+        var t = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-voice-prod";
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            Note = new FeatureNote("работа идёт", t.AddHours(-2), "sess-1", true, "prod", "running"),
+        };
+        epic.Workflow = new FeatureWorkflow
+        {
+            TemplateId = "builtin-parallel-cycle", Scope = "global",
+            Stages =
+            [
+                new RouteStage { Id = "plan", Role = "plan" },
+                new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            ],
+            ConfirmedVersion = 1,
+            ConfirmedAt = t.AddHours(-7),
+            ConfirmedByUser = true,
+        };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back",
+            Status = TaskItemStatus.InProgress, ClaudeStartedAt = t.AddHours(-1),
+            Stage = new StageSnapshot { TemplateId = "builtin-parallel-cycle", Role = "step", StageId = "step-back", After = ["plan"] },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic, s1], t);
+        var brief = FeatureBrief.Build(run, null, null, t);
+
+        brief.Now!.Stage.Should().Be("prod", "brief.now.stage — ключ стадии, фронт находит по нему подпись");
+        brief.Note!.StageAtWrite.Should().Be("prod", "хранимый штамп не переписывается");
+        brief.Note.Stale.Should().BeFalse(
+            "стадия не менялась: голос записан на prod, текущая стадия — тоже prod");
     }
 
     // Задача без слепка и без линии при нескольких step-этапах (StageFor неоднозначен):

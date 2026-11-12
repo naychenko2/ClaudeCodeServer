@@ -174,8 +174,15 @@ public sealed class FeatureNow
 {
     // Id задачи.
     public string TaskId { get; init; } = "";
-    // Стадия конвейера: cut | plan | prod | review | qa | final | merge.
+    // Стадия конвейера: cut | plan | prod | review | qa | final | merge. Ключ стадии
+    // (FeatureTimeMath.RoleToStage) и для легаси, и для фичи с маршрутом: то же пространство имён,
+    // что run.Stages[].Key и FeatureBrief.CurrentStageOf (R-G3: одна «текущая стадия» независимо
+    // от того, идёт ли задача).
     public string Stage { get; init; } = "";
+    // Id этапа (доработка R-G3): у фичи с маршрутом — id этапа маршрута, к которому относится
+    // задача (для различения параллельных этапов одного вида: step-back/step-front); у легаси-фичи
+    // и задачи вне проекции — null (графа нет: ключ и есть единственный id).
+    public string? StageId { get; init; }
     // Исполнитель (PersonaId задачи).
     public string? PersonaId { get; init; }
     // Код шага (у step/rework).

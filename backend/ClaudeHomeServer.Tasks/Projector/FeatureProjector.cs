@@ -223,8 +223,9 @@ public sealed class FeatureProjector(TaskManager tasks)
         // WorkflowGraph.States; своей реализации «пройден ли этап» и «какой этап у задачи»
         // здесь нет. Снятые маршрутом стадии в проекцию не попадают (решение Андрея,
         // разрез workflow §3, шаг B5) — BuildStageDefs.
-        // Определения строятся ДО «Сейчас»: стадия задачи в Now — id её этапа в графе,
-        // та же величина, что ключ стадии в run.Stages (FS-V1: одна «текущая стадия»).
+        // Определения строятся ДО «Сейчас»: стадия задачи в Now — ключ стадии (RoleToStage),
+        // та же величина, что ключ стадии в run.Stages (FS-V1: одна «текущая стадия», R-G3);
+        // id этапа — в отдельном поле StageId.
         var stageDefs = BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge);
         var graph = epic.Workflow is { } confirmed ? confirmed.Stages : null;
 
@@ -241,12 +242,14 @@ public sealed class FeatureProjector(TaskManager tasks)
             .Select(t => new FeatureNow
             {
                 TaskId = t.Id,
-                // Стадия задачи: легаси — ключ по таблице RoleToStage; фича с маршрутом — id
-                // этапа, к которому задача относится (G3): шапка CurrentStageOf и Now[0] обязаны
-                // называть тот же этап, что и run.Stages, а не «prod» вместо step-back.
-                Stage = graph is not null
-                    ? TaskStageId(graph, t) ?? FeatureTimeMath.RoleToStage(t.Role)
-                    : FeatureTimeMath.RoleToStage(t.Role),
+                // Стадия задачи — ключ по таблице RoleToStage и для легаси, и для фичи с маршрутом
+                // (R-G3): та же величина, что ключ стадии в run.Stages и вторая половина
+                // CurrentStageOf. Роль задачи отображается в тот же ключ, что и роль её этапа
+                // (rework→prod = RoleToStage(step), consult→cut = RoleToStage(cut)).
+                Stage = FeatureTimeMath.RoleToStage(t.Role),
+                // Id этапа для различения параллельных этапов одного вида (R-G3) — отдельное поле,
+                // не через Stage. У легаси графа нет (ключ и есть id) — null; задача вне проекции — null.
+                StageId = graph is not null ? TaskStageId(graph, t) : null,
                 PersonaId = t.PersonaId,
                 StepRef = t.StepRef,
                 Title = t.Title,

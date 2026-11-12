@@ -47,6 +47,13 @@ public class TaskManagerWorkflowTests : IDisposable
         ],
     };
 
+    // Линейный маршрут по ролям: id этапа = роль, After = предыдущий (разрез 2 §0.3).
+    private static List<RouteStage> Linear(IEnumerable<string> roles)
+    {
+        var list = roles.ToList();
+        return list.Select((r, i) => new RouteStage { Id = r, Role = r, After = i == 0 ? [] : [list[i - 1]] }).ToList();
+    }
+
     private TaskItem Epic(WorkflowTemplate? saved = null, params string[] skipped)
     {
         var epic = _tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
@@ -54,7 +61,7 @@ public class TaskManagerWorkflowTests : IDisposable
         var route = saved.Stages.Select(s => s.Role).Where(r => !skipped.Contains(r)).ToList();
         _tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
         {
-            TemplateId = saved.Id, Scope = "global", Route = route, Skipped = skipped.ToList(),
+            TemplateId = saved.Id, Scope = "global", Stages = Linear(route), Skipped = skipped.ToList(),
             ConfirmedVersion = saved.Version, ConfirmedAt = DateTime.UtcNow,
         });
         return epic;
@@ -78,7 +85,7 @@ public class TaskManagerWorkflowTests : IDisposable
         var epic = tasks.Create(projectId, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
         tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
         {
-            TemplateId = tpl.Id, Scope = "global", Route = tpl.Stages.Select(s => s.Role).ToList(),
+            TemplateId = tpl.Id, Scope = "global", Stages = Linear(tpl.Stages.Select(s => s.Role)),
             Skipped = [], ConfirmedVersion = tpl.Version, ConfirmedAt = DateTime.UtcNow,
         });
         return epic;
@@ -428,7 +435,7 @@ public class TaskManagerWorkflowTests : IDisposable
         var confirm = Task.Run(() => _tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
         {
             TemplateId = tplB.Id, Scope = "global",
-            Route = [TaskRoles.Step, TaskRoles.Review, TaskRoles.Final, TaskRoles.Merge], Skipped = [TaskRoles.Qa],
+            Stages = Linear([TaskRoles.Step, TaskRoles.Review, TaskRoles.Final, TaskRoles.Merge]), Skipped = [TaskRoles.Qa],
             ConfirmedVersion = tplB.Version, ConfirmedAt = DateTime.UtcNow,
         }));
         var creates = Enumerable.Range(0, 40).Select(_ => Task.Run(() =>

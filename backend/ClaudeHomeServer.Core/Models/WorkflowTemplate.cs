@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services; // ModelTier — примитив спины (по образцу Persona.cs)
 
 namespace ClaudeHomeServer.Models;
@@ -46,6 +47,14 @@ public class WorkflowStage
 {
     // Ключ из TaskRoles: cut | design | plan | step | review | qa | final | merge.
     public string Role { get; set; } = "";
+    // Id этапа (разрез 2 §1.1): slug [a-z0-9-]{1,32}, уникален в шаблоне; null → Role
+    // (у линейных шаблонов id этапа равен роли). Роль может повторяться, id — нет.
+    public string? Id { get; set; }
+    // Предшественники: id этапов, стоящих РАНЬШЕ в списке; null → [предыдущий в списке];
+    // [] → корень. Порядок списка — топологический, поэтому цикл невозможен по построению.
+    public List<string>? After { get; set; }
+    // Линия работы, только у step: back | front | other (лексика FeatureProjector.NormalizeLane).
+    public string? Lane { get; set; }
     public string Presence { get; set; } = WorkflowStagePresence.On;
     // Кого звать: подсказка оркестратору и предзаполнение personaId (разрез §3 TaskManager.Create).
     // Взаимоисключимо с PersonaId (валидирует WorkflowRules).
@@ -107,6 +116,7 @@ public class WorkflowProposal
     public string TemplateId { get; set; } = "";
     // "global" | "project"
     public string Scope { get; set; } = "global";
+    // Id снятых этапов (у линейных шаблонов id = роль).
     public List<string> Skipped { get; set; } = [];
     public string? Rationale { get; set; }
     public DateTime ProposedAt { get; set; }
@@ -119,12 +129,35 @@ public class FeatureWorkflow
 {
     public string TemplateId { get; set; } = "";
     public string Scope { get; set; } = "global";
-    // Роли, что идут в маршруте (порядок шаблона), и снятые.
-    public List<string> Route { get; set; } = [];
+    // Граф маршрута после Resolve: замораживается при подтверждении и дальше от шаблона не зависит
+    // (разрез 2 §1.2). Порядок списка — топологический порядок запуска.
+    public List<RouteStage> Stages { get; set; } = [];
+    // Id снятых этапов (у линейных шаблонов значения те же, что были ролями).
     public List<string> Skipped { get; set; } = [];
+    // ПЕРЕХОДНЫЙ ШИМ (не хранится): id этапов маршрута в порядке списка. Читает FeatureProjector до G3.
+    // Сеттер — для линейного маршрута (id = роль, After = предыдущий): им пишут инициализаторы тестов
+    // B5, файл которых этот шаг не трогает. Оба конца шима удаляет G3.
+    [JsonIgnore]
+    public IReadOnlyList<string> Route
+    {
+        get => Stages.Select(s => s.Id).ToList();
+        set => Stages = value.Select((id, i) => new RouteStage
+        {
+            Id = id, Role = id, After = i == 0 ? [] : [value[i - 1]],
+        }).ToList();
+    }
     public int ConfirmedVersion { get; set; }
     public DateTime ConfirmedAt { get; set; }
     public bool ConfirmedByUser { get; set; } = true;
+}
+
+// Этап подтверждённого маршрута (разрез 2 §1.2): After — уже после обхода снятых этапов.
+public class RouteStage
+{
+    public string Id { get; set; } = "";
+    public string Role { get; set; } = "";
+    public string? Lane { get; set; }
+    public List<string> After { get; set; } = [];
 }
 
 // Слепок этапа на задаче фичи (TaskItem.Stage, разрез §1/§4, инварианты И3/И4): пишет только
@@ -135,6 +168,11 @@ public class StageSnapshot
     public string TemplateId { get; set; } = "";
     public int TemplateVersion { get; set; }
     public string Role { get; set; } = "";
+    // Этап маршрута, к которому привязана задача (разрез 2 §1.3); у слепков до графа — пусто.
+    public string StageId { get; set; } = "";
+    public string? Lane { get; set; }
+    // Предшественники из МАРШРУТА эпика на момент создания (не из шаблона); только id.
+    public List<string> After { get; set; } = [];
     public PersonaSpecialty? Specialty { get; set; }
     public string? PersonaId { get; set; }
     public string? Prompt { get; set; }

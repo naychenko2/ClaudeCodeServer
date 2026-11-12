@@ -531,7 +531,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // секции под одним листовым замком, шаг видит либо старый, либо новый маршрут целиком.
     private readonly Lock _workflowLock = new();
 
-    public const string StageSkippedText = "этап пропущен маршрутом";
+    public const string StageSkippedText = WorkflowGraph.StageSkippedText;
 
     // Роль этапа: rework берёт этап step; не-этапные роли (feature/consult) — null.
     private static string? StageRoleOf(string? role) =>

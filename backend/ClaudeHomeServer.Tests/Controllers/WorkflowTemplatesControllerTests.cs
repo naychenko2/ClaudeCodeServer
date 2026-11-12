@@ -137,6 +137,63 @@ public class WorkflowTemplatesControllerTests : IClassFixture<TestWebApplication
         kept.GetProperty("name").GetString().Should().Be("Первый");
     }
 
+    // ─── Круговой проезд графа (G1, доработка B1c): id/after/lane доезжают туда и обратно ───
+
+    [Fact]
+    public async Task ПолядляГрафа_IdAfterLane_КругомЧерезPostИGet_ИЧерезPut()
+    {
+        var id = NewId();
+        object[] stages =
+        [
+            new { role = "plan", presence = "on", id = "plan" },
+            new { role = "step", presence = "on", id = "step-back", after = new[] { "plan" }, lane = "back" },
+            new { role = "step", presence = "on", id = "step-front", after = new[] { "plan" }, lane = "front" },
+            new { role = "review", presence = "on", id = "review", after = new[] { "step-back", "step-front" } },
+        ];
+        var post = await Admin().PostAsJsonAsync("/api/workflow-templates", Body(id, "Граф", stages));
+        post.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var saved = await GetJsonAsync(Admin(), $"/api/workflow-templates/{id}");
+        AssertGraph(saved);
+
+        // Правка шаблона (PUT) эти же поля не теряет: стор пишет модель целиком.
+        var put = await Admin().PutAsJsonAsync($"/api/workflow-templates/{id}",
+            new { id, name = "Граф правка", stages, expectedVersion = 1 });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        AssertGraph(await GetJsonAsync(Admin(), $"/api/workflow-templates/{id}"));
+
+        static void AssertGraph(JsonElement template)
+        {
+            var got = template.GetProperty("stages").EnumerateArray().ToList();
+            got.Select(s => s.GetProperty("id").GetString()).Should().Equal("plan", "step-back", "step-front", "review");
+            got[0].TryGetProperty("after", out var rootAfter).Should().BeTrue();
+            (rootAfter.ValueKind == JsonValueKind.Null).Should().BeTrue("у этапа без After поле остаётся null — «после предыдущего»");
+            got[1].GetProperty("after").EnumerateArray().Select(a => a.GetString()).Should().Equal("plan");
+            got[1].GetProperty("lane").GetString().Should().Be("back");
+            got[2].GetProperty("lane").GetString().Should().Be("front");
+            got[3].GetProperty("after").EnumerateArray().Select(a => a.GetString())
+                .Should().Equal("step-back", "step-front");
+        }
+    }
+
+    [Fact]
+    public async Task ГрафНеПрошёлПравила_400_ШаблонНеСохранён()
+    {
+        var id = NewId();
+        // step-back никто не ждёт — висящая ветка (Г1).
+        object[] stages =
+        [
+            new { role = "plan", presence = "on", id = "plan" },
+            new { role = "step", presence = "on", id = "step-back", after = new[] { "plan" }, lane = "back" },
+            new { role = "review", presence = "on", id = "review", after = new[] { "plan" } },
+        ];
+
+        var post = await Admin().PostAsJsonAsync("/api/workflow-templates", Body(id, "Битый граф", stages));
+
+        post.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await Admin().GetAsync($"/api/workflow-templates/{id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
     // ─── Версия: expectedVersion (c5, c6) ──────────────────────────────────────
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Llm;
 
@@ -20,8 +21,15 @@ public static class WorkflowRules
     // а не логику валидатора.
     public static readonly IReadOnlyList<string> NonSkippable = [TaskRoles.Step, TaskRoles.Merge, TaskRoles.Final];
 
+    // Роли, которых в маршруте не больше одного (разрез 2 §1.6): cut, final и merge — по одному
+    // на фичу. Повторяться могут design, plan, step, review и qa — у каждого свой id.
+    public static readonly IReadOnlyList<string> SingleRoles = [TaskRoles.Cut, TaskRoles.Final, TaskRoles.Merge];
+
     // Лимит текста промпта этапа (разрез §1).
     public const int PromptLimit = 4000;
+
+    // Id этапа — slug (разрез 2 §1.1).
+    private static readonly Regex StageIdPattern = new("^[a-z0-9-]{1,32}$", RegexOptions.Compiled);
 
     // Проверить шаблон целиком: пустой список — валиден. Собираем ВСЕ ошибки, не первую:
     // редактор шаблонов (C1) показывает картину за один проход, правка по одной ошибке
@@ -42,34 +50,74 @@ public static class WorkflowRules
             return errors;
         }
 
-        var seenRoles = new HashSet<string>(StringComparer.Ordinal);
+        if (stages.Count > WorkflowGraph.MaxStages)
+            errors.Add($"в шаблоне {stages.Count} этапов, предел — {WorkflowGraph.MaxStages}.");
+
+        var nodes = WorkflowGraph.Normalize(stages);
+        // Id этапов, уже встреченных выше по списку: After смотрит только в них (ацикличность
+        // по построению). У пустой записи id пуст — он в наборе тоже, чтобы ссылка следующего
+        // этапа по умолчанию не давала вторую ошибку к уже названной «пустая запись».
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var singleRoleSeen = new HashSet<string>(StringComparer.Ordinal);
+        var laneSeen = new HashSet<string>(StringComparer.Ordinal);
 
         for (var i = 0; i < stages.Count; i++)
         {
-            // Метка в тексте ошибки: роль, если она известна; иначе порядковый номер —
-            // «неизвестная роль» именем этапа не назвать.
+            // Метка в тексте ошибки: id этапа (у линейных он равен роли), если роль известна;
+            // иначе порядковый номер — «неизвестная роль» именем этапа не назвать.
             var labelUnknown = $"этап #{i + 1}";
             if (stages[i] is not { } stage)
             {
                 errors.Add($"{labelUnknown}: пустая запись");
+                seenIds.Add(nodes[i].Id);
                 continue;
             }
 
-            var role = stage.Role?.Trim() ?? "";
+            var node = nodes[i];
+            var role = node.Role;
             // Presence и StallPolicy триммятся так же, как роль (R-B1a, п.3): строка из UI
             // с крающими пробелами — та же запись, а не «неизвестное значение».
-            var presence = stage.Presence?.Trim() ?? "";
+            var presence = node.Presence;
             var stallPolicy = stage.StallPolicy?.Trim() ?? "";
             var known = StageRoles.Contains(role);
-            var label = known ? $"этап «{role}»" : labelUnknown;
+            var label = known ? $"этап «{node.Id}»" : labelUnknown;
 
             if (!known)
             {
                 errors.Add($"{label}: неизвестная роль этапа «{role}». Допустимы: {string.Join(", ", StageRoles)}.");
             }
-            else if (!seenRoles.Add(role))
+            else if (SingleRoles.Contains(role) && !singleRoleSeen.Add(role))
             {
-                errors.Add($"{label}: роль встречается в маршруте дважды.");
+                errors.Add($"{label}: роль «{role}» одиночная — в маршруте она встречается дважды.");
+            }
+
+            // Id: slug и уникален. При неизвестной роли без явного id молчим — id совпал бы
+            // с ролью, а ошибка про роль уже названа.
+            if ((known || !string.IsNullOrWhiteSpace(stage.Id)) && !StageIdPattern.IsMatch(node.Id))
+                errors.Add($"{label}: id этапа «{node.Id}» не slug [a-z0-9-]{{1,32}}.");
+            var duplicateId = !seenIds.Add(node.Id);
+            if (duplicateId)
+                errors.Add($"{label}: id этапа «{node.Id}» встречается в маршруте дважды.");
+
+            // After — только на этапы выше по списку: себя и вперёд нельзя. У дубля id «после»
+            // не разбираем: ссылка по умолчанию указала бы на тот же id — шум поверх названной причины.
+            foreach (var parent in duplicateId ? [] : node.After)
+            {
+                if (parent == node.Id)
+                    errors.Add($"{label}: этап не может идти после самого себя.");
+                else if (!seenIds.Contains(parent))
+                    errors.Add($"{label}: «после» ссылается на «{parent}» — такого этапа выше по списку нет.");
+            }
+
+            // Линия — только у step, из белого списка, одна на этап.
+            if (node.Lane is { } lane)
+            {
+                if (role != TaskRoles.Step)
+                    errors.Add($"{label}: линия задаётся только у этапа step.");
+                else if (!WorkflowGraph.Lanes.Contains(lane))
+                    errors.Add($"{label}: неизвестная линия «{lane}». Допустимы: {string.Join(", ", WorkflowGraph.Lanes)}.");
+                else if (!laneSeen.Add(lane))
+                    errors.Add($"{label}: два этапа step с линией «{lane}».");
             }
 
             if (!WorkflowStagePresence.All.Contains(presence))
@@ -110,7 +158,38 @@ public static class WorkflowRules
             }
         }
 
+        // Графовые правила идут только по структурно целым данным: на дубле id или висящей ссылке
+        // «висящие ветки» и Resolve дали бы шум поверх уже названной причины.
+        if (errors.Count == 0) ValidateGraph(nodes, errors);
+
         return errors;
+    }
+
+    // Нет висящих веток: каждый этап, кроме последнего, стоит в «после» кого-то из более поздних,
+    // то есть все ветки сходятся в один сток. Затем та же проверка для маршрута после Resolve при
+    // любом наборе снятых optional (до 2^16 вариантов — потолок этапов): иначе снятие необязательного
+    // этапа оставляло бы ветку без стока уже в подтверждённом маршруте.
+    private static void ValidateGraph(List<WorkflowGraph.Node> nodes, List<string> errors)
+    {
+        // Сам шаблон целиком, ничего не снимая (в том числе off-этапы).
+        var full = WorkflowGraph.Resolve(
+            nodes.Select(n => n with { Presence = WorkflowStagePresence.On }).ToList(), []);
+        foreach (var id in WorkflowGraph.DanglingIds(full))
+            errors.Add($"этап «{id}»: на него никто не ссылается — ветка не сходится в общий сток.");
+        if (errors.Count > 0 || nodes.Count > WorkflowGraph.MaxStages) return;
+
+        var optional = nodes.Where(n => n.Presence == WorkflowStagePresence.Optional).Select(n => n.Id).ToList();
+        for (var mask = 0; mask < 1 << optional.Count; mask++)
+        {
+            var skipped = new HashSet<string>(
+                optional.Where((_, bit) => (mask >> bit & 1) == 1), StringComparer.Ordinal);
+            var dangling = WorkflowGraph.DanglingIds(WorkflowGraph.Resolve(nodes, skipped));
+            if (dangling.Count == 0) continue;
+            errors.Add(skipped.Count == 0
+                ? $"после снятия этапов off ветка не сходится в сток: висят {string.Join(", ", dangling)}."
+                : $"при снятии необязательных этапов {string.Join(", ", skipped)} ветка не сходится в сток: висят {string.Join(", ", dangling)}.");
+            return;
+        }
     }
 
     // Порог молчания этапа (И3 «таймаут нельзя обойти»): null/0/отрицательное — не «бесконечно»,

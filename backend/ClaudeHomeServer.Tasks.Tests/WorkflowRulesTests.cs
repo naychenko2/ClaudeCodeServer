@@ -64,13 +64,175 @@ public class WorkflowRulesTests
         ValidateOne(Stage(role)).Should().ContainSingle()
             .Which.Should().Contain("неизвестная роль");
 
+    // Разрез 2 §1.6: роль может повторяться (у этапа свой id), дублем считается id.
     [Fact]
-    public void ДубльРоли_Ошибка() =>
+    public void ДубльId_Ошибка() =>
         WorkflowRules.Validate(new WorkflowTemplate
         {
             Name = "тест",
             Stages = [Stage(), Stage()],
-        }).Should().ContainSingle().Which.Should().Contain("дважды");
+        }).Should().ContainSingle().Which.Should().Contain("id этапа «step»").And.Contain("дважды");
+
+    [Fact]
+    public void ПовторяемаяРольСРазнымиId_Допустима() =>
+        WorkflowRules.Validate(new WorkflowTemplate
+        {
+            Name = "тест",
+            Stages = [Stage(TaskRoles.Plan), WithId(TaskRoles.Plan, "plan-qa"), Stage(TaskRoles.Step)],
+        }).Should().BeEmpty();
+
+    [Theory]
+    [InlineData(TaskRoles.Cut)]
+    [InlineData(TaskRoles.Final)]
+    [InlineData(TaskRoles.Merge)]
+    public void ОдиночнаяРольДваждыСРазнымиId_Ошибка(string role) =>
+        WorkflowRules.Validate(new WorkflowTemplate
+        {
+            Name = "тест",
+            Stages = [WithId(role, "first"), WithId(role, "second")],
+        }).Should().ContainSingle().Which.Should().Contain("одиночная").And.Contain(role);
+
+    private static WorkflowStage WithId(string role, string id, string[]? after = null, string? lane = null,
+        string presence = WorkflowStagePresence.On) =>
+        new() { Role = role, Id = id, After = after?.ToList(), Lane = lane, Presence = presence };
+
+    private static List<string> ValidateStages(params WorkflowStage[] stages) =>
+        WorkflowRules.Validate(new WorkflowTemplate { Name = "тест", Stages = stages.ToList() });
+
+    [Theory]
+    [InlineData("Plan")]
+    [InlineData("plan_1")]
+    [InlineData("план")]
+    public void IdНеSlug_Ошибка(string id) =>
+        ValidateStages(WithId(TaskRoles.Plan, id)).Should().ContainSingle().Which.Should().Contain("не slug");
+
+    [Theory]
+    [InlineData(32, false)]
+    [InlineData(33, true)]
+    public void Id_ГраницаДлины(int length, bool expectError)
+    {
+        var errors = ValidateStages(WithId(TaskRoles.Plan, new string('a', length)));
+
+        if (expectError) errors.Should().ContainSingle().Which.Should().Contain("не slug");
+        else errors.Should().BeEmpty();
+    }
+
+    // After ссылается только на этапы выше по списку: себя, вперёд и в никуда — ошибка.
+    [Fact]
+    public void After_НаСебя_Ошибка() =>
+        ValidateStages(WithId(TaskRoles.Plan, "a", after: ["a"])).Should().ContainSingle()
+            .Which.Should().Contain("после самого себя");
+
+    [Fact]
+    public void After_НаЭтапНиже_Ошибка() =>
+        ValidateStages(WithId(TaskRoles.Plan, "a", after: ["b"]), WithId(TaskRoles.Step, "b", after: []))
+            .Should().ContainSingle().Which.Should().Contain("«b»").And.Contain("выше по списку");
+
+    [Fact]
+    public void After_НаНесуществующий_Ошибка() =>
+        ValidateStages(WithId(TaskRoles.Plan, "a"), WithId(TaskRoles.Step, "b", after: ["нет"]))
+            .Should().ContainSingle().Which.Should().Contain("«нет»");
+
+    // Висящая ветка: step-1 никто не ждёт, а последний этап — review.
+    [Fact]
+    public void ВисящаяВетка_Ошибка() =>
+        ValidateStages(
+            WithId(TaskRoles.Plan, "plan"),
+            WithId(TaskRoles.Step, "step-1", after: ["plan"], lane: "back"),
+            WithId(TaskRoles.Review, "review", after: ["plan"]))
+            .Should().ContainSingle().Which.Should().Contain("«step-1»").And.Contain("не сходится");
+
+    // Явный After: [] у не первого этапа — ещё один корень; ветки сходятся в review — допустимо.
+    [Fact]
+    public void НесколькоКорнейСоСтоком_Допустимо() =>
+        ValidateStages(
+            WithId(TaskRoles.Plan, "plan"),
+            WithId(TaskRoles.Qa, "qa-plan", after: []),
+            WithId(TaskRoles.Review, "review", after: ["plan", "qa-plan"])).Should().BeEmpty();
+
+    // Снятие необязательного этапа не должно оставлять ветку без стока: X и W сходятся только в Y.
+    // Проверка «все optional сняты разом» это пропустила бы — нужен перебор подмножеств.
+    [Fact]
+    public void СнятиеOptionalОставляетВисящуюВетку_Ошибка()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Plan, "a"),
+            WithId(TaskRoles.Design, "x", after: ["a"], presence: WorkflowStagePresence.Optional),
+            WithId(TaskRoles.Plan, "w", after: ["a"]),
+            WithId(TaskRoles.Qa, "y", after: ["x", "w"], presence: WorkflowStagePresence.Optional));
+
+        errors.Should().ContainSingle().Which.Should().Contain("при снятии").And.Contain("y").And.Contain("не сходится");
+    }
+
+    [Fact]
+    public void ОффЭтапОставляетВисящуюВетку_Ошибка()
+    {
+        // x выключен (off): w и z остаются без стока, а x был единственным их потомком.
+        var errors = ValidateStages(
+            WithId(TaskRoles.Plan, "a"),
+            WithId(TaskRoles.Plan, "w", after: ["a"]),
+            WithId(TaskRoles.Plan, "z", after: ["a"]),
+            WithId(TaskRoles.Design, "x", after: ["w", "z"], presence: WorkflowStagePresence.Off));
+
+        errors.Should().ContainSingle().Which.Should().Contain("off").And.Contain("не сходится");
+    }
+
+    [Theory]
+    [InlineData(TaskRoles.Step, "back", true)]
+    [InlineData(TaskRoles.Step, "front", true)]
+    [InlineData(TaskRoles.Step, "other", true)]
+    [InlineData(TaskRoles.Step, "mobile", false)]
+    [InlineData(TaskRoles.Review, "back", false)]
+    public void Линия_ТолькоУStepИзБелогоСписка(string role, string lane, bool valid)
+    {
+        var errors = ValidateStages(WithId(role, role, lane: lane));
+
+        if (valid) errors.Should().BeEmpty();
+        else errors.Should().ContainSingle().Which.Should().ContainAny("неизвестная линия", "только у этапа step");
+    }
+
+    [Fact]
+    public void ДвеStepСОднойЛинией_Ошибка() =>
+        ValidateStages(
+            WithId(TaskRoles.Step, "s1", lane: "back"),
+            WithId(TaskRoles.Step, "s2", after: ["s1"], lane: "back"))
+            .Should().ContainSingle().Which.Should().Contain("два этапа step").And.Contain("back");
+
+    [Fact]
+    public void ДвеStepСРазнымиЛиниями_БезОшибок() =>
+        ValidateStages(
+            WithId(TaskRoles.Plan, "plan"),
+            WithId(TaskRoles.Step, "s-back", after: ["plan"], lane: "back"),
+            WithId(TaskRoles.Step, "s-front", after: ["plan"], lane: "front"),
+            WithId(TaskRoles.Review, "review", after: ["s-back", "s-front"])).Should().BeEmpty();
+
+    // Потолок 16 этапов: граница запинена с обеих сторон.
+    [Theory]
+    [InlineData(16, false)]
+    [InlineData(17, true)]
+    public void ПотолокЭтапов(int count, bool expectError)
+    {
+        var errors = ValidateStages(Enumerable.Range(1, count)
+            .Select(i => WithId(TaskRoles.Plan, $"p{i}")).ToArray());
+
+        if (expectError) errors.Should().ContainSingle().Which.Should().Contain("предел — 16");
+        else errors.Should().BeEmpty();
+    }
+
+    // Форма parallel-cycle (разрез 2 §1.10) проходит валидатор целиком, включая перебор снятий.
+    [Fact]
+    public void ParallelCycle_Валиден() =>
+        ValidateStages(
+            Stage(TaskRoles.Cut),
+            WithId(TaskRoles.Design, "design", presence: WorkflowStagePresence.Optional),
+            WithId(TaskRoles.Plan, "plan", ["design"]),
+            WithId(TaskRoles.Qa, "qa-plan", ["design"], presence: WorkflowStagePresence.Optional),
+            WithId(TaskRoles.Step, "step-back", ["plan"], "back"),
+            WithId(TaskRoles.Step, "step-front", ["plan"], "front"),
+            WithId(TaskRoles.Review, "review", ["step-back", "step-front"]),
+            WithId(TaskRoles.Qa, "qa", ["review", "qa-plan"]),
+            Stage(TaskRoles.Final),
+            Stage(TaskRoles.Merge)).Should().BeEmpty();
 
     [Theory]
     [InlineData(null)]

@@ -20,6 +20,7 @@ using ClaudeHomeServer.Services.Tasks.Journal;
 using ClaudeHomeServer.Services.Tasks.Projector;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -35,7 +36,12 @@ public class ProjectTasksController(
     ISphereDirectory spheres, SessionManager sessions,
     // Явный резолв доступа к проекту — та же точка, что у FeatureOwnerGate на двери правки
     // (F2-M2); null — fail-closed (проект недоступен)
-    IProjectAccess? access = null) : ControllerBase
+    IProjectAccess? access = null,
+    // B4b (разрез workflow §5 «Запуск»): фоновый подбор маршрута при создании эпика. null —
+    // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
+    WorkflowRecommender? workflowRecommender = null,
+    // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
+    ILogger<ProjectTasksController>? log = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -153,6 +159,9 @@ public class ProjectTasksController(
         // Событие доски: адресат полной карточки — владелец записи (не тот, кто нажал кнопку):
         // группе проекта идёт проекция участника, арендатору — полная (ISessionBroadcaster.ToTaskBoard).
         await broadcaster.ToTaskBoard(task.OwnerId!, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // B4b (разрез workflow §5 «Запуск»): создание эпика запускает подбор маршрута фоном.
+        // Best-effort: сбой не роняет создание и не оставляет в фоне необработанного исключения.
+        EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, task);
         // Ответ записи — копия с маской чужих приватных чатов (S2d-4i), та же форма, что в GET-пути.
         // Проектная задача лежит под арендатором (TaskManager), а её чат-источник может быть
         // приватным чатом участника: ни id, ни название этого чата в ответ не идут. Запись стора не правится.
@@ -222,7 +231,12 @@ public class TasksController(
     // каталог и слияние W4-5 (прежнее поведение), без 500.
     ProjectTreeLocator? locator = null,
     // D1a: экран этапа (артефакты, вход и транскрипт, ревью). null — подсистема Tasks выключена → 503
-    StageScreenService? stage = null) : ControllerBase
+    StageScreenService? stage = null,
+    // B4b (разрез workflow §5 «Запуск»): фоновый подбор маршрута при создании эпика. null —
+    // подбора нет (прямая сборка без DI в тестах); в боевом хосте его регистрирует tasks.
+    WorkflowRecommender? workflowRecommender = null,
+    // Лог нужен только отказу фона (сам сбой модели логирует рекомендатель): null — без лога.
+    ILogger<TasksController>? log = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -438,6 +452,9 @@ public class TasksController(
             return BadRequest(new { error = ex.Message });
         }
         await broadcaster.ToTaskBoard(UserId, task.ProjectId, new TaskChangedMessage("created", task), sessions, projects);
+        // B4b (разрез workflow §5 «Запуск»): создание эпика запускает подбор маршрута фоном.
+        // Best-effort: сбой не роняет создание и не оставляет в фоне необработанного исключения.
+        EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, task);
         // Та же маска ответа записи, что в проектной ветке Create и в GET-путе (S2d-4i):
         // чат-источник из тела — id чата, и он может быть приватным чатом другого человека.
         return Ok(TaskView.MaskForeignChats(TaskView.CopyOf(task), sessions, projects, ChatAudience.Viewer(UserId)));
@@ -2146,4 +2163,38 @@ public static class TaskCreateJson
         PropertyNameCaseInsensitive = true,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
+}
+
+// B4b (разрез docs/research/ai-fabrika-workflow-cut-2026-11.md §5 «Запуск»): фоновый подбор
+// маршрута при создании эпика — общий для обеих веток создания этого файла (личной и проектной).
+// Best-effort: создание эпика не ждёт модель и не роняется её отказом. RecommendAsync сам не
+// бросает (сбой модели или мусор ответа — «предложения нет» с его же логом); catch здесь — только
+// то, что не доехало до него (нет DI, обрыв хоста), и оно не должно стать необработанным
+// исключением фона. Ключ владельца — арендатор записи (task.OwnerId), а не вызывающий: эпик общего
+// проекта ставит участник, предложение пишется владельцу. Пишется только epic.WorkflowProposal (И7),
+// до экрана — штатным task_changed по эпику: другого канала у фона нет.
+internal static class EpicWorkflowRecommend
+{
+    public static void Start(WorkflowRecommender? recommender, TaskManager tasks, ISessionBroadcaster broadcaster,
+        SessionManager sessions, ProjectManager projects, ILogger? log, TaskItem task)
+    {
+        if (recommender is not { } rec || task.Role != TaskRoles.Feature || task.OwnerId is not { } ownerId) return;
+        _ = RunAsync(rec, tasks, broadcaster, sessions, projects, log, task.Id, ownerId, task.ProjectId);
+    }
+
+    private static async Task RunAsync(WorkflowRecommender rec, TaskManager tasks, ISessionBroadcaster broadcaster,
+        SessionManager sessions, ProjectManager projects, ILogger? log, string epicId, string ownerId, string? projectId)
+    {
+        try
+        {
+            if (await rec.RecommendAsync(epicId, ownerId, CancellationToken.None) is null) return;
+            var epic = tasks.GetById(epicId);
+            if (epic is null) return;
+            await broadcaster.ToTaskBoard(ownerId, projectId, new TaskChangedMessage("updated", epic), sessions, projects);
+        }
+        catch (Exception ex)
+        {
+            log?.LogWarning(ex, "feature-workflow-recommend {Epic}: фоновый подбор маршрута не дошёл до записи", epicId);
+        }
+    }
 }

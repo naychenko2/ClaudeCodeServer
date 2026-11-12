@@ -1,6 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { layoutGraph } from './WorkflowGraphPreview';
+import { normalizeStages } from './workflowGraphModel';
 import type { WorkflowStage } from './types';
+
+// Форма встроенного пресета parallel-cycle (разрез 2 §1.10).
+const parallelCycle = (): WorkflowStage[] => [
+  { role: 'cut', presence: 'on' },
+  { role: 'design', presence: 'on' },
+  { role: 'plan', presence: 'on' },
+  { role: 'qa', presence: 'on', id: 'qa-plan', after: ['design'] },
+  { role: 'step', presence: 'on', id: 'step-back', lane: 'back', after: ['plan'] },
+  { role: 'step', presence: 'on', id: 'step-front', lane: 'front', after: ['plan'] },
+  { role: 'review', presence: 'on', after: ['step-back', 'step-front'] },
+  { role: 'qa', presence: 'on', id: 'qa', after: ['review', 'qa-plan'] },
+  { role: 'final', presence: 'on' },
+  { role: 'merge', presence: 'on' },
+];
 
 // plan → {step-back, step-front} → review: средняя колонка параллельна.
 const diamond = (): WorkflowStage[] => [
@@ -44,5 +59,32 @@ describe('layoutGraph', () => {
 
   it('пустой список — пустая раскладка', () => {
     expect(layoutGraph([], false).nodes).toEqual([]);
+  });
+
+  describe('parallel-cycle', () => {
+    const edgesExpected = normalizeStages(parallelCycle()).reduce((n, s) => n + (s.after ?? []).length, 0);
+
+    it('step-back и step-front — в одной колонке; рёбер столько же, сколько элементов в after', () => {
+      const g = layoutGraph(parallelCycle(), false);
+      const n = Object.fromEntries(g.nodes.map(x => [x.id, x]));
+      expect(n['step-back'].col).toBe(n['step-front'].col);
+      expect(n['step-back'].x).toBe(n['step-front'].x);
+      expect(g.edges).toHaveLength(edgesExpected);
+      expect(edgesExpected).toBe(11);
+    });
+
+    it('узкая раскладка: колонки вертикально, каждая колонка из двух этапов — в рамке «параллельно»', () => {
+      const g = layoutGraph(parallelCycle(), true);
+      expect(new Set(g.nodes.map(x => x.x)).size).toBe(1);
+      const n = Object.fromEntries(g.nodes.map(x => [x.id, x]));
+      expect(n.plan.y).toBeLessThan(n['step-back'].y);
+      expect(n['step-front'].y).toBeLessThan(n.review.y);
+      // Две колонки по два этапа: {plan, qa-plan} и {step-back, step-front}.
+      expect(g.groups).toHaveLength(2);
+      const inGroup = (id: string) => g.groups.some(b => n[id].y >= b.y && n[id].y + g.nodeH <= b.y + b.h);
+      expect(['step-back', 'step-front', 'plan', 'qa-plan'].every(inGroup)).toBe(true);
+      expect(inGroup('review')).toBe(false);
+      expect(g.edges).toHaveLength(edgesExpected);
+    });
   });
 });

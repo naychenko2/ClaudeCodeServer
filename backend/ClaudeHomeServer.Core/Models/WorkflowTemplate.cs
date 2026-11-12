@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services; // ModelTier — примитив спины (по образцу Persona.cs)
 
 namespace ClaudeHomeServer.Models;
@@ -134,18 +133,6 @@ public class FeatureWorkflow
     public List<RouteStage> Stages { get; set; } = [];
     // Id снятых этапов (у линейных шаблонов значения те же, что были ролями).
     public List<string> Skipped { get; set; } = [];
-    // ПЕРЕХОДНЫЙ ШИМ (не хранится): id этапов маршрута в порядке списка. Читает FeatureProjector до G3.
-    // Сеттер — для линейного маршрута (id = роль, After = предыдущий): им пишут инициализаторы тестов
-    // B5, файл которых этот шаг не трогает. Оба конца шима удаляет G3.
-    [JsonIgnore]
-    public IReadOnlyList<string> Route
-    {
-        get => Stages.Select(s => s.Id).ToList();
-        set => Stages = value.Select((id, i) => new RouteStage
-        {
-            Id = id, Role = id, After = i == 0 ? [] : [value[i - 1]],
-        }).ToList();
-    }
     public int ConfirmedVersion { get; set; }
     public DateTime ConfirmedAt { get; set; }
     public bool ConfirmedByUser { get; set; } = true;

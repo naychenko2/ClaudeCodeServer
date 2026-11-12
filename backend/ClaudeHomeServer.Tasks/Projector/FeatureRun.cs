@@ -88,6 +88,11 @@ public sealed class FeatureRun
     // Честный прогресс по шагам: корзины accepted/review/work/notCreated (сумма = Total),
     // вне знаменателя — withdrawn и unlinkedReworks. Вся арифметика на бэке.
     public FeatureStepProgress StepProgress { get; init; } = new();
+    // Счётчик этапов «пройдено N из M» (G3, разрез 2 §1.7): отдельная ось от процента по шагам
+    // (StepProgress не трогается): M = число этапов подтверждённого маршрута (у легаси-фичи — 0,
+    // графа нет); N = стадии с состоянием done (active/pending/absent в пройденные не входят).
+    public int StagesPassed { get; init; }
+    public int StagesTotal { get; init; }
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
     // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит без движения ≥ 24 часов.
@@ -260,11 +265,27 @@ public sealed class FeatureVerdicts
 // Арифметику считает бэк (FeatureProjector.Build); фронт только показывает (шаг Ф5).
 public sealed class FeatureStage
 {
-    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge.
+    // Ключ стадии: cut | design | plan | prod | review | qa | final | merge. Он же у фичи с маршрутом:
+    // вид стадии задаётся её ролью (вердикт R-B5 «по Role, а не по id»), параллельные этапы одной роли
+    // имеют общий ключ (step-back/step-front → prod) и различаются Id/Column/After (граф C3a).
     public string Key { get; init; } = "";
-    // Состояние: done — все задачи стадии закрыты; active — первая непройденная;
-    // pending — ещё не начата; absent — ноль задач, а следующая стадия уже начата;
-    // skipped — необязательная стадия «design» без задач (W4-DES-B).
+    // Id этапа (G3, разрез 2 §1.7): у фичи с маршрутом — id этапа маршрута (уникален в графе);
+    // у легаси-стадии — её ключ (графа нет, ключ и есть единственный id).
+    public string Id { get; init; } = "";
+    // Роль этапа (ключ TaskRoles): у фичи с маршрутом — из RouteStage.Role; у легаси-стадии —
+    // роль её задач (у prod — step).
+    public string Role { get; init; } = "";
+    // Линия этапа (back | front | other) — только у графового этапа роли step; иначе null.
+    public string? Lane { get; init; }
+    // Предшественники в графе (id этапов): у фичи с маршрутом — из маршрута; у легаси-стадии —
+    // пусто (графа нет).
+    public List<string> After { get; init; } = [];
+    // Колонка графа = длиннейший путь от корня (WorkflowGraph.Columns, разрез 2 §1.7);
+    // у легаси-стадии — 0 (графа нет).
+    public int Column { get; init; }
+    // Состояние: done — все задачи стадии закрыты; active — идущая или «готовая» (разрез 2 §1.7);
+    // pending — ещё не начата; absent — ноль задач, а наследник по графу уже начат;
+    // skipped — необязательная стадия «design» без задач (W4-DES-B, легаси).
     public string State { get; init; } = "pending";
     // Тон (только у active, иначе null): run — идёт; wait — ждёт человека;
     // stopped — исполнитель встал; loop — работа вернулась (доработка идёт).

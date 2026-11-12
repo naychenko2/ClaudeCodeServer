@@ -45,8 +45,8 @@ public class ImageEditorController(
 
     [HttpGet("format")]
     public async Task<IActionResult> Format(string projectId, [FromQuery] string? provider, [FromQuery] string? model,
-        [FromQuery] string? op, CancellationToken ct) =>
-        Gate(projectId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+        [FromQuery] string? op, [FromQuery] string? prompt, CancellationToken ct) =>
+        Gate(projectId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, prompt, ct) : denied;
 
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string projectId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>

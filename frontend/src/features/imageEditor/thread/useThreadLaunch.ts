@@ -5,7 +5,7 @@
 // отсюда же, чтобы полоса и кнопка не разошлись.
 
 import { useCallback, useMemo } from 'react';
-import { api as appApi, clearGenDraft, followChat, showToast } from 'aihome_shell/kit';
+import { api as appApi, clearGenDraft, followChat, getGenDraftText, showToast, useGenDraft } from 'aihome_shell/kit';
 import {
   AUTO_MODEL, imageEditorApi, type FaceTarget, type ImageEditCatalog, type ImageEditEstimate, type ImageEditOp, type ImageEditQuoteRequest,
 } from '../api';
@@ -24,7 +24,7 @@ import {
   activeChoice, DEFAULT_CHOICE, effectiveMode, footPrice, isOneVariant, launchMarks, modeOp, queueText, quickOf,
   runVerb, usePanelChoiceVersion, type PanelChoice,
 } from '../context/ops';
-import { useQuote } from '../useQuote';
+import { autoQuotePrompt, QUOTE_PROMPT_DEBOUNCE_MS, QUOTE_PROMPT_MAX, useDebouncedValue, useQuote } from '../useQuote';
 import { buildQuoteBody, marksSent } from './quoteBody';
 import { loadCatalog, useCatalog } from './catalog';
 import { getPrefs, modeSettings, setModeSettings, usePrefs } from './prefs';
@@ -33,6 +33,7 @@ import { activeStepOf } from './actions';
 import { currentVersion, findVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
+import { refineLabel, type VglField } from './vgl';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
 // (у личной области файлов нет: сервер не заводит ей нить по файлу)
@@ -109,6 +110,8 @@ export interface ContextLaunch {
   count: number;
   // Пропорции дорисовки или новой картинки; null — как решит модель
   aspect: string | null;
+  // Стиль Krea 2 Turbo (id из caps.styles); null — без стиля
+  style?: string | null;
   contextRevision: number;
   onJob?: (jobId: string) => void;
 }
@@ -214,6 +217,8 @@ export async function launchThread(
           ...inputCounts(),
           size, context: cx ? { sessionId, contextRevision: cx.contextRevision } : null,
           format: outpaintFormat,
+          // Авто-выбор модели решает и по тексту: котировка запуска видит тот же промпт, что и сам запуск
+          prompt: autoQuotePrompt(route?.model ?? m.id, plan.prompt),
         }));
     const legacy = isLegacyThread(thread);
     const version = legacy ? null : currentVersion(thread);
@@ -239,6 +244,7 @@ export async function launchThread(
       characterSlug: noSamples || cx ? undefined : prefs.characterSlug ?? undefined,
       matchSourceSize: settings.matchSourceSize,
       ...(aspectRatio ? { aspectRatio } : null),
+      ...(cx?.style ? { style: cx.style } : null),
       sessionId, threadId: thread.id, baseStepId: stepId ?? undefined, versionId: version?.id,
       ...(cx ? { contextRevision: cx.contextRevision } : null),
     });
@@ -312,6 +318,36 @@ export async function launchFaceSwap(
   return true;
 }
 
+// Доводка версии Fibo 2.0 (Ш8): котировка генерации local / fibo2 на один вариант и запуск с полем и
+// значением — сервер берёт JSON-описание, сид и холст версии, переписывает описание под изменение и
+// рисует новую версию. true — задача запущена, причина отказа уже показана тостом
+export async function launchRefine(
+  projectId: string, sessionId: string, thread: ImageThread, version: ImageThreadVersion,
+  field: VglField, value: string,
+): Promise<boolean> {
+  const api = imageEditorApi();
+  try {
+    const q = await api.quote(projectId, buildQuoteBody({
+      provider: 'local', model: FIBO2_MODEL, mode: 'auto', op: 'generate', count: 1,
+      hasImage: false, marks: [], withMask: false, removal: false, references: 0, hasCharacter: false,
+      size: null, context: null,
+    }));
+    await api.startJob(projectId, {
+      quoteId: q.quoteId, prompt: refineLabel(field, value),
+      sessionId, threadId: thread.id, versionId: version.id,
+      refineField: field, refineValue: value.trim(),
+    });
+    followChat(sessionId);
+    return true;
+  } catch (e) {
+    showToast(`Доводка не запущена: ${(e as Error).message}`, '', 'error');
+    return false;
+  }
+}
+
+// Модель доводки — Fibo 2.0 Dev каталога local
+export const FIBO2_MODEL = 'fibo2';
+
 export function useThreadLaunch(projectId: string, sessionId: string | null, thread: ImageThread | null) {
   const api = useMemo(() => imageEditorApi(), []);
   const catalog = useCatalog(projectId);
@@ -349,9 +385,15 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
     || (!pv || !m ? 'Рисовать нечем: администратор не настроил поставщиков картинок' : '')
     || (blocked ? `${m!.label}: ${blocked.charAt(0).toLowerCase()}${blocked.slice(1)}` : '');
 
+  // Текст поля ввода — в котировку только у «Авто» (иначе от текста ничего не зависит) и с задержкой:
+  // цена не дёргается на каждую букву. Подписка useGenDraft перерисовывает хук при правке черновика
+  useGenDraft(thread ? imageDraftKey(thread.id) : null);
+  const draftText = thread ? getGenDraftText(imageDraftKey(thread.id)) : null;
+  const quotePrompt = useDebouncedValue(draftText?.trim().slice(0, QUOTE_PROMPT_MAX) || null, QUOTE_PROMPT_DEBOUNCE_MS);
   const body = (provider: string, model: string, withMaskNow: boolean, refs: number, character: boolean) => buildQuoteBody({
     provider, model, mode, op: pr.op, count, hasImage, marks, withMask: withMaskNow, removal: false,
     references: refs, hasCharacter: character, size, context: null,
+    prompt: autoQuotePrompt(model, quotePrompt),
   });
   const quoteReq: ImageEditQuoteRequest | null = pr.reason ? null
     : route ? body(route.provider, route.model, false, references, !own && !!prefs.characterSlug)
@@ -369,6 +411,7 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   const price = estimate ? priceSum(estimate.amount, estimate.unit, estimate.approx, estimate) : null;
   const priceLines = footPrice(estimate, count);
   const queue = queueText(quote?.estimate ?? null);
+  const routeReason = quote?.routeReason ?? null;
 
   const setSettings = useCallback((patch: Partial<ImageThreadSettings>) => {
     const next = { ...settings, ...patch };
@@ -386,6 +429,6 @@ export function useThreadLaunch(projectId: string, sessionId: string | null, thr
   return {
     catalog, settings, prefs, imageMode: imgMode, provider: pv, model: m, blocked, quote, quoteLoading: loading,
     priceLabel, price, marks, drawn, whole, hasImage, hasMask, setSettings, launch, route,
-    op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, runLabel: runVerb(pr.op),
+    op: pr.op, quickAction: pr.quick, choice, count, maxCount, reason, priceLines, queue, routeReason, runLabel: runVerb(pr.op),
   };
 }

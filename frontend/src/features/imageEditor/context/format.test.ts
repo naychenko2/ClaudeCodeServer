@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { aspectLabel, outpaintSize } from './format';
+import { describe, expect, it, vi } from 'vitest';
+import { aspectLabel, outpaintSize, settler } from './format';
 
 // format.ts тянет kit и сторы; чистые функции проверяем отдельно от них
 describe('подпись пропорции исходника', () => {
@@ -22,5 +22,28 @@ describe('холст «дорисовать»', () => {
   });
   it('мусорные пропорции — нет холста', () => {
     expect(outpaintSize(1600, 1200, 'x')).toBeNull();
+  });
+});
+
+// Текст поля для «Авто» уходит в ручку формата не на каждую букву
+describe('отстоявшийся текст чипа формата', () => {
+  it('первое значение сразу, новое — через задержку после последней смены', () => {
+    vi.useFakeTimers();
+    try {
+      const onSettle = vi.fn();
+      const at = settler<string | null>(700, onSettle);
+      expect(at('t', null)).toBeNull();
+      expect(at('t', 'п')).toBeNull();
+      vi.advanceTimersByTime(500);
+      expect(at('t', 'портрет')).toBeNull();
+      vi.advanceTimersByTime(500);
+      expect(at('t', 'портрет')).toBeNull();
+      expect(onSettle).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(200);
+      expect(onSettle).toHaveBeenCalledOnce();
+      expect(at('t', 'портрет')).toBe('портрет');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

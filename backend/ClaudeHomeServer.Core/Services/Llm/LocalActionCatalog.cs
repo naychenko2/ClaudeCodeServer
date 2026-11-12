@@ -130,6 +130,9 @@ public static class LocalActionCatalog
     // Умный подбор фото персонажа (ADR-027, §6): ракурс и эмоция из текста запроса.
     // Только бесплатная цепочка (RunFreeAsync), платный claude не используется
     public const string CharacterSceneParse = "character-scene-parse";
+    // «Авто» локальных моделей картинок (Ш3): категория запроса, когда правила по словам молчат.
+    // Только бесплатная цепочка, котировка ждёт не дольше 2 с
+    public const string ImageRouteClassify = "image-route-classify";
     // Разметка фото персонажа (ADR-027, §2): модель смотрит на картинки, поэтому Input = Images
     public const string CharacterPhotoAngle = "character-photo-angle";
     public const string CharacterPhotoEmotion = "character-photo-emotion";
@@ -319,6 +322,8 @@ public static class LocalActionCatalog
         // профилем за три строки незачем
         new(ChatDigest, "Сводка карточки архива", "Сессии", CheapProfile.Small, DefaultLocal: true),
         new(CharacterSceneParse, "Разбор сюжета для подбора фото", "Персонажи", CheapProfile.Small, DefaultLocal: true),
+        new(ImageRouteClassify, "Категория запроса для автовыбора модели картинок", "Картинки", CheapProfile.Small,
+            DefaultLocal: true),
         // Места с картинками на входе: локаль слепая, поэтому DefaultLocal: false, Tier — слабая
         // (Small → weak по умолчанию). CheapTextRunner их не обслуживает
         new(CharacterPhotoAngle, "Ракурс фото персонажа", "Персонажи", CheapProfile.Small,

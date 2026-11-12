@@ -1,4 +1,6 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Media;
 
@@ -19,9 +21,13 @@ namespace ClaudeHomeServer.Services.ImageEditor;
 // очередь ComfyUI не забивается ожиданиями одного человека, а каждый готовый вариант сразу уходит
 // отчётом EditProgress.Ready. Граф ComfyWorkflows при этом не трогается — он общий с MCP-инструментом
 // local_generate_image, где batch_size остаётся.
-public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null) : IImageEditor, IImageEditQuoter
+public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate? gpuGate = null,
+    IConfiguration? config = null, ILogger<LocalImageEditor>? log = null) : IImageEditor, IImageEditQuoter, IImageEditRouter
 {
     public const string ProviderKey = "local";
+
+    // Таблица «Авто»: секция LocalMedia:Routing на лету, без неё или при ошибке — LocalImageRouting.Table
+    private readonly LocalImageRoutingSource _routing = new(config, Catalog, log);
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
     public const string FluxKlein = LocalImageModels.Klein;
     public const string MiniMaxH3Image = LocalImageModels.H3Image;
@@ -139,6 +145,15 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxReferences: 0, MaxCount: 4, FaceByReferences: false, Format: OneMegapixelFormat(formatLabel)),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
+    // Krea 2 Turbo (Ш4): генерация по тексту, девять стилевых LoRA плашками и один образец с ролью
+    // «стиль» (LoRA ostris). Образцы других ролей и всё, кроме генерации, шов отдаёт Qwen
+    private static ImageEditModelInfo Krea2Model() =>
+        new(Krea2Turbo, "Krea 2 Turbo — эстетика, 8 шагов",
+            new ImageEditCaps([ImageEditOp.Generate], MaskSupport.None,
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: false, Format: OneMegapixelFormat("Krea 2 Turbo"),
+                Styles: [.. Krea2Styles.All.Select(s => new ImageEditStyle(s.Id, s.Label))]),
+            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
+
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
     // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
     // он отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит. Персонажа
@@ -159,7 +174,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxFaceCropPhotos: 1, Format: Fibo2Format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         // Krea 2 Turbo и MOSS-Image (2026-11-12): только генерация по тексту
-        TextOnlyModel(Krea2Turbo, "Krea 2 Turbo — эстетика, 8 шагов", "Krea 2 Turbo"),
+        Krea2Model(),
         TextOnlyModel(MossImage, "MOSS-Image — надписи и вёрстка", "MOSS-Image"),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
@@ -174,15 +189,21 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxFaceCropPhotos: 1, Format: format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
-    // Умолчание авто-выбора — Qwen Turbo (решение Андрея 2026-10-22, заменяет «качественно» от 2026-10-17):
-    // по умолчанию важнее скорость. FLUX 3 Klein и «качественно» — по явному выбору человека
-    public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => op switch
+    // Авто-выбор — по таблице LocalImageRouting.Table (одно место: после оценки слепых листов меняется
+    // только она). Умолчание — Qwen Turbo (решение Андрея 2026-10-22: скорость важнее). Fibo Dev и H3 в
+    // «Авто» не участвуют. Ручной выбор модели главнее: до PickModel он не доходит (QuoteAsync)
+    public ImageEditModelInfo? PickModel(ImageEditOp op, EditMode mode, EditTraits traits) => Route(op, mode, traits)?.Model;
+
+    public ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits, string? category = null)
     {
-        ImageEditOp.EnhanceFaces => Catalog.First(m => m.Id == FaceDetailer),
-        ImageEditOp.Generate or ImageEditOp.Edit or ImageEditOp.Inpaint or ImageEditOp.Outpaint =>
-            Catalog.First(m => m.Id == QwenImageTurbo),
-        _ => null,
-    };
+        if (op == ImageEditOp.EnhanceFaces)
+            return new ImageRoute(Catalog.First(m => m.Id == FaceDetailer), "улучшение лиц");
+        var route = LocalImageRouting.Pick(_routing.Table, Catalog, op, traits, category);
+        return route is null ? null : route with { Reason = LocalImageRouting.Describe(route.Model, route.Reason) };
+    }
+
+    public bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits) =>
+        LocalImageRouting.NeedsClassifier(_routing.Table, Catalog, op, traits);
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 
@@ -225,7 +246,13 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     private static string EtaVariant(string id, ImageEditQuoteRequest request, int images)
     {
         if (LocalImageModels.TextOnly(id))
+        {
+            // Единственный образец без маски и персонажа — вероятно «стиль по образцу» Krea 2 (роли котировка не видит)
+            if (id == Krea2Turbo && request.Op == ImageEditOp.Generate && !request.HasMask && !request.HasCharacter
+                && request.References == 1 && !request.HasAnnotations)
+                return id;
             return request.Op != ImageEditOp.Generate || images > 0 || request.HasMask ? QwenImage : id;
+        }
         var toQwen = (LocalImageModels.TakesCharacterByPhotos(id) || LocalImageModels.IsFibo2(id))
                      && (request.HasMask
                          || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
@@ -260,11 +287,23 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 run = new LocalImageRequest(LocalImageOp.FaceDetail, "", [req.Source.Bytes], null, 1);
                 runs = 1;
                 break;
+            case ImageEditOp.Generate when req.Refine is { } refine:
+                // Доводка Fibo 2.0 (Ш8): JSON версии переписывается под одно поле и рисуется её сидом на её холсте
+                if (req.Model != Fibo2Dev) return Fail(EditOutcome.Failed, "Доводку по JSON-описанию рисует только Fibo 2.0");
+                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, [], null, 1, Seed: refine.Scene.Seed,
+                    Width: refine.Scene.Width, Height: refine.Scene.Height, Model: Fibo2Dev,
+                    Vgl: refine.Scene.Json, VglChange: new LocalVglChange(refine.Field, refine.Value));
+                runs = 1;
+                break;
             case ImageEditOp.Generate:
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
+                // Krea 2 Turbo: один образец с ролью «стиль» — «стиль по образцу», иначе стилевая LoRA по плашке
+                var styleRef = req.Model == Krea2Turbo && req.Character is null
+                               && req.References is [{ Role: ReferenceRole.Style }];
                 run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
-                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
+                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model,
+                    KreaStyle: req.Model == Krea2Turbo && !styleRef ? Krea2Styles.Find(req.Style)?.Id : null, StyleReference: styleRef);
                 if (IsKlein(run))
                     run = run with { Prompt = KleinCharacterPrompt(req) ?? req.Prompt, Lora = null };
                 runs = Math.Clamp(req.Count, 1, 4);
@@ -333,7 +372,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 await gpuGate.WaitForQuietAsync(LlmTurnWait, token);
             for (var i = 0; i < runs; i++)
             {
-                var submitted = await media.SubmitAsync(run, token);
+                // Fibo 2.0 с расширителем VGL: сид прогона — наш, он ложится в память версии вместе с описанием
+                var seed = run.Seed ?? (WritesVgl(run) ? Random.Shared.NextInt64(1, 1L << 50) : (long?)null);
+                var submitted = await media.SubmitAsync(run with { Seed = seed }, token);
                 if (submitted.Ticket is not { } ticket)
                 {
                     var error = submitted.Error ?? "Локальная видеокарта не приняла задачу";
@@ -354,8 +395,15 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                     return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
                         "Локальная модель не справилась: " + (done.Error ?? "ComfyUI завершил задачу ошибкой"));
                 }
+                // Доводка, после которой описание не изменилось, рисует ту же картинку: дубль версии не нужен
+                // (проверка 12.11: «зимний лес» фоном интерьера расширитель вписать не смог и вернул JSON как был)
+                if (req.Refine is { } same && done.Files.Count > 0 && done.Files.All(f => f.Vgl == same.Scene.Json))
+                    return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
+                        $"Описание сцены не изменилось: модель не нашла, куда вписать «{same.Value}». Сформулируйте иначе " +
+                        "или выберите другое поле");
                 // Готовый прогон уходит в отчёт сразу: вариант становится версией, не дожидаясь остальных
-                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType, f.Similarity))];
+                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType, f.Similarity,
+                    SceneOf(f, seed)))];
                 images.AddRange(ready);
                 progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null, Ready = ready });
             }
@@ -374,6 +422,16 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
             ? new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets), "Локальная модель не вернула картинок")
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
     }
+
+    // Граф Fibo 2.0 Dev без картинок пишет JSON-описание сцены (расширитель VGL или доводка) — Ш8
+    private static bool WritesVgl(LocalImageRequest run) =>
+        run.Op == LocalImageOp.Generate && run.Images.Count == 0 && LocalImageModels.Effective(run) == Fibo2Dev;
+
+    // Память версии Fibo 2.0: описание, сид прогона и холст — размер готовой картинки
+    private static ImageVglScene? SceneOf(LocalImageFile file, long? seed) =>
+        file.Vgl is { } json && seed is { } s && ImageDimensions.Read(file.Bytes) is { } size
+            ? new ImageVglScene(json, s, size.Width, size.Height)
+            : null;
 
     // Запуск пойдёт на Klein или H3-Image: LoRA персонажа обучены под Qwen-Image, поэтому ни её, ни триггера
     private static bool IsKlein(LocalImageRequest run) => LocalImageModels.TakesCharacterByPhotos(LocalImageModels.Effective(run));

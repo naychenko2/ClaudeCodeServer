@@ -577,7 +577,8 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
             Width: size?.Width,
             Height: size?.Height,
             Removal: EditIntent.IsRemoval(prompt),
-            Format: wish);
+            Format: wish,
+            Prompt: prompt);
         var quote = await _jobs!.QuoteAsync(ownerId, scope.Key, quoteRequest, ct);
         if (quote.Value is not { } q)
             return await FailAsync(quote.ErrorCode, quote.Error, ownerId, scope, quoteRequest, ct);

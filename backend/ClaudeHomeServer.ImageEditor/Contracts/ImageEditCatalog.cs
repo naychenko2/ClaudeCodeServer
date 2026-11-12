@@ -171,7 +171,8 @@ public static class ImageEditCatalog
     {
         var models = new List<ImageEditModelDto>
         {
-            new(AutoModelId, AutoModelLabel, AutoModes, null, null),
+            // У local режимов нет (решение Андрея 12.11): «Авто» выбирает по тексту и входам запроса
+            new(AutoModelId, AutoModelLabel, editor.Key == LocalImageEditor.ProviderKey ? null : AutoModes, null, null),
         };
         models.AddRange(SafeModels(editor).Select(WithInputLimits)
             .Select(m => new ImageEditModelDto(m.Id, m.Label, null, m.Caps, m.PriceHint)));

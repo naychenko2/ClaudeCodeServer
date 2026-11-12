@@ -278,12 +278,13 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
     // Журнал не пишется: строка одна на весь запуск, в финале
     public ImageThreadWrite AddLaunchVersions(string ownerId, string sessionId, string threadId, string jobId,
-        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants) =>
+        IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
+        IReadOnlyDictionary<int, ImageVglScene>? scenes = null) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
                 return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
-            var (after, added) = WithLaunchVersions(thread, launch, variants);
+            var (after, added) = WithLaunchVersions(thread, launch, variants, scenes);
             return added.Count == 0
                 ? new ImageThreadWrite(ImageThreadWriteStatus.Ok, state)
                 : Replace(state, after) with { NewVersions = added };
@@ -297,13 +298,14 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     public ImageThreadWrite FinishLaunch(string ownerId, string sessionId, string threadId, string jobId, string status,
         IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
         Func<ImageThread, IReadOnlyList<ImageThreadVersion>, ImageThreadEvent?>? log = null,
-        IReadOnlyList<(int N, string Status, double? Similarity)>? faceResults = null) =>
+        IReadOnlyList<(int N, string Status, double? Similarity)>? faceResults = null,
+        IReadOnlyDictionary<int, ImageVglScene>? scenes = null) =>
         Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
         {
             if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch)
                 return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
 
-            var (grown, added) = WithLaunchVersions(thread, launch, variants);
+            var (grown, added) = WithLaunchVersions(thread, launch, variants, scenes);
             var after = grown with
             {
                 Launches = [.. grown.Launches.Select(l => l.JobId == jobId
@@ -338,16 +340,19 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
     }
 
     // Версии вариантов запуска внизу нити; пара (JobId, Variant), уже ставшая версией, пропускается.
-    // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска
+    // Текущая сдвигается на первую новую, только пока текущей остаётся основа запуска. scenes — JSON-описания
+    // Fibo 2.0 по номеру варианта (Ш8)
     private (ImageThread After, List<ImageThreadVersion> Added) WithLaunchVersions(ImageThread thread,
-        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants)
+        ImageThreadLaunch launch, IReadOnlyList<(int Variant, string StepId, double? Similarity)> variants,
+        IReadOnlyDictionary<int, ImageVglScene>? scenes)
     {
         var number = thread.Versions.Max(v => v.Number) + 1;
         var now = Now();
         List<ImageThreadVersion> added = [.. variants
             .Where(v => !thread.Versions.Any(x => x.JobId == launch.JobId && x.Variant == v.Variant))
             .Select((v, i) => new ImageThreadVersion(NewId(), number + i, launch.JobId,
-                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now, v.Similarity))];
+                v.Variant, launch.BaseVersionId, launch.BaseStepId, [v.StepId], v.StepId, now, v.Similarity,
+                Vgl: scenes is not null && scenes.TryGetValue(v.Variant, out var scene) ? scene : null))];
         var moveCurrent = added.Count > 0 && thread.CurrentVersionId == launch.BaseVersionId;
         return (thread with
         {

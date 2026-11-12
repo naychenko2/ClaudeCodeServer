@@ -6,7 +6,8 @@ using FluentAssertions;
 namespace ClaudeHomeServer.Tests.Services;
 
 // Графы Fibo 2.0 против шаблонов ComfyUI 0.45.2 image_fibo2_edit_{dev,turbo}_pe.json и карточки
-// briaai/Fibo-2.0-dev: файлы моделей, шаги и CFG, выходы узла условий, проводка картинок
+// briaai/Fibo-2.0-dev: файлы моделей, шаги и CFG, выходы узла условий, проводка картинок; генерация Dev —
+// турбо-LoRA и расширитель VGL, рендер и доводка JSON-описания (Ш8)
 public class ComfyWorkflowsFibo2Tests
 {
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -16,7 +17,7 @@ public class ComfyWorkflowsFibo2Tests
     private static JsonArray Link(string node, int slot = 0) => new(node, slot);
 
     [Fact]
-    public void ГенерацияDev_ФайлыИСэмплер_КакВКарточке()
+    public void ГенерацияDev_ФайлыКакВКарточке_ТурбоLoRaВосемьШаговБезCfg()
     {
         var wf = ComfyWorkflows.Fibo2Generate("ёжик в тумане", 1424, 800, 77, 1, "ccs/p");
 
@@ -25,10 +26,15 @@ public class ComfyWorkflowsFibo2Tests
         Inputs(wf, "clip")["type"]!.GetValue<string>().Should().Be("fibo2");
         Inputs(wf, "vae")["vae_name"]!.GetValue<string>().Should().Be("flux2-vae.safetensors");
 
+        // Турбо-LoRA между unet и сэмплером (замер Ш5: качество Dev за 5 с)
+        Class(wf, "lora").Should().Be("LoraLoaderModelOnly");
+        Inputs(wf, "lora")["model"]!.ToJsonString().Should().Be(Link("unet").ToJsonString());
+        Inputs(wf, "lora")["lora_name"]!.GetValue<string>().Should().Be("fibo_2.0_turbo_lora_avg_rank_270_bf16.safetensors");
+        Inputs(wf, "lora")["strength_model"]!.GetValue<double>().Should().Be(1.0);
+
         Class(wf, "cond").Should().Be("TextEncodeFibo2");
         var cond = Inputs(wf, "cond");
-        cond["prompt"]!.GetValue<string>().Should().Be("ёжик в тумане");
-        cond["negative_prompt"]!.GetValue<string>().Should().Be(ComfyWorkflows.Fibo2NegativeT2I);
+        cond["negative_prompt"]!.GetValue<string>().Should().BeEmpty("с LoRA CFG 1 — негатив не работает");
         cond["width"]!.GetValue<int>().Should().Be(1424);
         cond["height"]!.GetValue<int>().Should().Be(800);
         cond["batch_size"]!.GetValue<int>().Should().Be(1);
@@ -36,16 +42,71 @@ public class ComfyWorkflowsFibo2Tests
 
         // Негатив и латент — второй и третий выходы узла условий
         var ks = Inputs(wf, "ks");
-        ks["model"]!.ToJsonString().Should().Be(Link("unet").ToJsonString());
+        ks["model"]!.ToJsonString().Should().Be(Link("lora").ToJsonString());
         ks["positive"]!.ToJsonString().Should().Be(Link("cond").ToJsonString());
         ks["negative"]!.ToJsonString().Should().Be(Link("cond", 1).ToJsonString());
         ks["latent_image"]!.ToJsonString().Should().Be(Link("cond", 2).ToJsonString());
-        ks["steps"]!.GetValue<int>().Should().Be(50);
-        ks["cfg"]!.GetValue<double>().Should().Be(5.0);
+        ks["steps"]!.GetValue<int>().Should().Be(8);
+        ks["cfg"]!.GetValue<double>().Should().Be(1.0);
         ks["sampler_name"]!.GetValue<string>().Should().Be("euler");
         ks["scheduler"]!.GetValue<string>().Should().Be("simple");
         ks["seed"]!.GetValue<long>().Should().Be(77);
         Inputs(wf, "save")["images"]!.ToJsonString().Should().Be(Link("dec").ToJsonString());
+    }
+
+    [Fact]
+    public void ГенерацияDev_РасширительVgl_ОписаниеВУзелУсловийИВИсторию()
+    {
+        var wf = ComfyWorkflows.Fibo2Generate("ёжик в тумане", 1424, 800, 77, 1, "ccs/p");
+
+        Inputs(wf, "vgl_clip")["clip_name"]!.GetValue<string>().Should().Be("qwen3vl_8b_int8_convrot.safetensors");
+        Class(wf, "vgl").Should().Be("TextGenerateV2");
+        var vgl = Inputs(wf, "vgl");
+        vgl["clip"]!.ToJsonString().Should().Be(Link("vgl_clip").ToJsonString());
+        vgl["system_prompt"]!.GetValue<string>().Should().Be(ComfyWorkflows.Fibo2VglGenerateSystem)
+            .And.NotContain("{style_preset_block}");
+        vgl["prompt"]!.GetValue<string>().Should().Be(
+            "Generate a detailed JSON object, adhering to the expected schema, for an imagined scene based on the following request: ёжик в тумане.");
+        vgl["sampling_mode"]!.GetValue<string>().Should().Be("on");
+        vgl["sampling_mode.temperature"]!.GetValue<double>().Should().Be(0.3);
+        vgl["sampling_mode.seed"]!.GetValue<long>().Should().Be(77);
+        vgl["max_length"]!.GetValue<int>().Should().Be(3000);
+
+        // JSON уходит и в узел условий, и в историю ComfyUI — оттуда его берёт адаптер
+        Inputs(wf, "cond")["prompt"]!.ToJsonString().Should().Be(Link("vgl").ToJsonString());
+        Class(wf, "vgl_view").Should().Be("PreviewAny");
+        Inputs(wf, "vgl_view")["source"]!.ToJsonString().Should().Be(Link("vgl").ToJsonString());
+    }
+
+    [Fact]
+    public void Рендер_ГотовыйJsonБезРасширителя_ТемЖеСидом()
+    {
+        const string json = "{\"short_description\":\"ёжик\"}";
+        var wf = ComfyWorkflows.Fibo2Render(json, 1248, 832, 101, "p");
+
+        wf.Should().NotContainKey("vgl").And.NotContainKey("vgl_view");
+        Inputs(wf, "cond")["prompt"]!.GetValue<string>().Should().Be(json, "текст описания — байт в байт: тот же текст и сид дают ту же картинку");
+        Inputs(wf, "cond")["width"]!.GetValue<int>().Should().Be(1248);
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be(Link("lora").ToJsonString());
+        Inputs(wf, "ks")["seed"]!.GetValue<long>().Should().Be(101);
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+    }
+
+    [Fact]
+    public void Доводка_РасширительПереписываетJsonПодИзменение_ЖадноТемЖеСидом()
+    {
+        const string json = "{\"background_setting\":\"street\"}";
+        var wf = ComfyWorkflows.Fibo2Refine(json, "background and setting", "зимний лес", 1248, 832, 101, "p");
+
+        var vgl = Inputs(wf, "vgl");
+        vgl["system_prompt"]!.GetValue<string>().Should().Be(ComfyWorkflows.Fibo2VglRefineSystem);
+        vgl["prompt"]!.GetValue<string>().Should().Be($"Current JSON:\n{json}\n\nChange: background and setting -> зимний лес");
+        vgl["sampling_mode"]!.GetValue<string>().Should().Be("off", "доводка не должна менять сцену случайно");
+        vgl.Should().NotContainKey("sampling_mode.seed");
+        Inputs(wf, "cond")["prompt"]!.ToJsonString().Should().Be(Link("vgl").ToJsonString());
+        Inputs(wf, "vgl_view")["source"]!.ToJsonString().Should().Be(Link("vgl").ToJsonString());
+        Inputs(wf, "ks")["seed"]!.GetValue<long>().Should().Be(101);
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be(Link("lora").ToJsonString());
     }
 
     [Fact]
@@ -58,6 +119,7 @@ public class ComfyWorkflowsFibo2Tests
         Inputs(wf, "cond")["batch_size"]!.GetValue<int>().Should().Be(3);
         Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(4);
         Inputs(wf, "ks")["cfg"]!.GetValue<double>().Should().Be(1.0);
+        wf.Should().NotContainKey("lora", "Turbo — свой дистиллят, LoRA Dev к нему не идёт");
     }
 
     [Fact]
@@ -88,7 +150,12 @@ public class ComfyWorkflowsFibo2Tests
         Inputs(wf, "cond")["prompt"]!.GetValue<string>().Should().Be("добавь лодку");
         Inputs(wf, "cond")["width"]!.GetValue<int>().Should().Be(1152);
         Inputs(wf, "unet")["unet_name"]!.GetValue<string>().Should().Be("fibo2_dev_int8_convrot.safetensors");
-        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(50);
+        // Правка Dev — тоже через турбо-LoRA (проверка Ш8 на трёх правках: 10–15 с против ~120 с, без потерь)
+        Inputs(wf, "lora")["lora_name"]!.GetValue<string>().Should().Be("fibo_2.0_turbo_lora_avg_rank_270_bf16.safetensors");
+        Inputs(wf, "ks")["model"]!.ToJsonString().Should().Be(Link("lora").ToJsonString());
+        Inputs(wf, "ks")["steps"]!.GetValue<int>().Should().Be(8);
+        Inputs(wf, "ks")["cfg"]!.GetValue<double>().Should().Be(1.0);
+        wf.Should().NotContainKey("vgl", "у правки расширителя нет");
     }
 
     [Fact]

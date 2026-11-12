@@ -114,7 +114,7 @@ public sealed partial class ImageEditorToolset
                 ["provider"] = Str("Поставщик (ключ из image_state): fal, higgsfield или local — «Локальные модели» "
                     + "на своей видеокарте, бесплатно, но с очередью. " + NotWithoutAsk),
                 ["model"] = Str("Модель поставщика из image_state или auto. " + NotWithoutAsk),
-                ["mode"] = OneOf(Modes, "Режим при модели auto"),
+                ["mode"] = OneOf(Modes, "Режим при модели auto; у local не действует"),
                 ["count"] = Count(),
                 ["references"] = new JsonObject
                 {

@@ -530,11 +530,11 @@ public class WikiControllerTests : IDisposable
         // дописывается, а не создаётся, и под заблокированным каталогом это удалось бы ему.
         BuildPurgeFixture();
         var keeperDir = WikiPaths.Keeper(_dir, User);
+        var flagFull = Path.Combine(keeperDir, "backlog-until.json");
         File.WriteAllText(Path.Combine(keeperDir, "log.jsonl"), "", new UTF8Encoding(false));
         Directory.CreateDirectory(Path.Combine(keeperDir, "archive"));
         if (OperatingSystem.IsWindows())
         {
-            var flagFull = Path.Combine(keeperDir, "backlog-until.json");
             File.WriteAllText(flagFull, "{}", new UTF8Encoding(false));
             File.SetAttributes(flagFull, FileAttributes.ReadOnly);
         }
@@ -550,10 +550,11 @@ public class WikiControllerTests : IDisposable
         }
         finally
         {
-            // Права возвращаем сразу: и assertions, и уборка дерева не должны спотыкаться
-            // о заблокированный каталог.
-            if (!OperatingSystem.IsWindows())
-                File.SetUnixFileMode(keeperDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            // Права возвращаем сразу на обеих платформах: и assertions, и Dispose (уборка
+            // дерева) не должны спотыкаться о заблокированные файл или каталог. Образец —
+            // WikiPurgeTests (тот же приём).
+            if (OperatingSystem.IsWindows()) File.SetAttributes(flagFull, FileAttributes.Normal);
+            else File.SetUnixFileMode(keeperDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
 
         // Состоявшаяся чистка не прячется в молчании: 200 + warning (J-P2, ревью 8bdbef69).

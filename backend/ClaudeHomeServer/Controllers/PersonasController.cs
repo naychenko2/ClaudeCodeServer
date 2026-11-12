@@ -49,6 +49,10 @@ public class PersonasController(
     IConfiguration config,
     ILogger<PersonasController> log,
     IHubContext<SessionHub> hub,
+    // Единственная точка чтения эффективных секций промпта (Г6): ручка {id}/prompt-sections
+    // считает через неё, своего наложения в контроллере нет. Зарегистрирована безусловно
+    // (Program.cs → AddPromptSectionContributors), поэтому зависимость обязательная
+    Services.Turn.PromptSectionsContributor promptSections,
     // `= null` — обязательность для DI (S2b-1, ADR-014): на выключенной вертикали images
     // активация контроллера не должна падать — аватарные ручки отвечают гейтом (503/catch),
     // остальные эндпоинты персон живут без неё
@@ -79,6 +83,7 @@ public class PersonasController(
     private readonly IConfiguration _config = config;
     private readonly ILogger<PersonasController> _log = log;
     private readonly IHubContext<SessionHub> _hub = hub;
+    private readonly Services.Turn.PromptSectionsContributor _promptSections = promptSections;
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -278,6 +283,27 @@ public class PersonasController(
         var scope = HttpContext.GetRequestScope();
         var persona = _personas.Get(id, scope.TenantOwnerId);
         return persona is null ? NotFound() : Ok(persona);
+    }
+
+    /// <summary>
+    /// Эффективное состояние секций промпта персоны (разрез 2, §2.6; инвариант Г6): базовые
+    /// секции её специальности с наложенным слоем самой персоны. Считается ТОЛЬКО через
+    /// PromptSectionsContributor.EffectiveSectionsFor — единственное место, где зовётся
+    /// IPromptSectionProvider и где живёт наложение (PromptSectionOverlay.Apply); своя копия
+    /// порядка здесь была бы второй точкой правды (урок MediaFormatResolver: фронт и любой
+    /// другой читатель получают готовое состояние).
+    /// Доступ — как у GET {id} выше: тот же [ProjectScope(From = Persona)] и тот же ключ
+    /// арендатора из резолва; чужая персона не доходит до тела. Ключ слоёв — владелец персоны
+    /// (тот же, под которым её отдал резолв). Specialty=None — пустой массив: у такой
+    /// специальности секций нет (§2.3), и своего слоя нечего накладывать.
+    /// </summary>
+    [HttpGet("{id}/prompt-sections")]
+    [ProjectScope(From = ScopeSource.Persona)]
+    public ActionResult<IReadOnlyList<Services.Llm.EffectivePromptSection>> PromptSections(string id)
+    {
+        var scope = HttpContext.GetRequestScope();
+        if (_personas.Get(id, scope.TenantOwnerId) is not { } persona) return NotFound();
+        return Ok(_promptSections.EffectiveSectionsFor(persona.OwnerId, persona));
     }
 
     // Арендатор проекта, названного в ТЕЛЕ записывающего действия персон (W3-B3a, разрез §3.1
@@ -2226,7 +2252,12 @@ public record CreatePersonaRequest(
     // Права «как у специальности» (true) или свои (false). null — false (свои права):
     // поведение прежнее — без специальности Full без ограничений, со специальностью
     // непереданные поля запроса берутся из её эффективного шаблона (A1d)
-    bool? InheritsAccess = null);
+    bool? InheritsAccess = null,
+    // Слой секций промпта персоны (разрез 2, §2.2): [{id, enabled?, text?}]. Id — только из
+    // каталога /api/specialties/prompt-sections; неизвестный id или текст сверх 1024 символов —
+    // 400 (нормализация PersonaManager, P1b), персона при этом не создана. null — «своих
+    // секций нет», всё как у специальности (поведение прежних вызовов не меняется)
+    List<Services.Llm.PromptSectionOverride>? PromptSections = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2271,7 +2302,12 @@ public record UpdatePersonaRequest(
     // Права «как у специальности» (true) / свои (false); null — не менять.
     // При итоговом true access/tools/disallowedTools запроса игнорируются: права —
     // эффективный шаблон специальности (A1d)
-    bool? InheritsAccess = null);
+    bool? InheritsAccess = null,
+    // Слой секций промпта: null — не менять; список — заменить целиком (по каталогу,
+    // нормализация и отказ 400 — в PersonaManager); пустой список — явный сброс к «всё как у
+    // специальности». При РЕАЛЬНОЙ смене specialty слой сбрасывается сам (§2.3), и ответ
+    // несёт об этом строку notice (§2.3, P1d)
+    List<Services.Llm.PromptSectionOverride>? PromptSections = null);
 
 public record CreatePersonaChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

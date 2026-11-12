@@ -363,6 +363,18 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    // Текст ответа о сбросе слоя секций (разрез 2, §2.3): одна строка на REST-тело и на ответ
+    // personas_update — она описывает ровно ту мутацию, что делает Update ниже, поэтому держит
+    // её писатель, а не каждый вызывающий свою формулировку (P1d).
+    public const string PromptSectionsResetNotice =
+        "свои секции промпта сброшены: сменилась специальность";
+
+    // Признак сброса — ровно тот же, что у мутации в Update: РЕАЛЬНАЯ смена специальности у
+    // персоны, у которой слой был. Одна функция на писателя и на ответ: иначе текст «сброшены»
+    // мог бы прозвучать о правке, которая ничего не сбрасывала (Г4).
+    internal static bool ResetsPromptSections(Persona persona, PersonaSpecialty? requestedSpecialty) =>
+        requestedSpecialty is { } s && s != persona.Specialty && persona.PromptSections is { Count: > 0 };
+
     // Нормализация слоя секций промпта персоны (разрез 2, §2.2 и Г4) — по образцу NormalizeContract:
     // id — только из каталога SpecialtyPromptPresets, текст — в общем с UI счётчиком лимите
     // SectionTextLimit; дубли id схлопываются (побеждает последняя запись — тот же смысл, что у
@@ -1029,10 +1041,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             // «специальность уже новая, старый слой ещё висит» нет вовсе — P1c наложил бы его
             // поверх новой. Соседние поля не теряются: обе правки — под одним _saveLock, итог
             // гонки «смена специальности ∥ свои секции» — одна из двух сериализаций целиком.
-            // Признак сброса — в результате: у обновлённой персоны слоя нет, хотя у её носителя
-            // он был (текст ответа REST/MCP — P1d).
-            var specialtyChanged = specialty is not null && specialty.Value != persona.Specialty;
-            if (specialtyChanged) persona.PromptSections = null;
+            // Признак — ResetsPromptSections: та же функция, которой ответ REST/MCP (P1d)
+            // сообщает сброс человеку; без слоя в записи сбрасывать нечего — мутация молчит.
+            if (ResetsPromptSections(persona, specialty)) persona.PromptSections = null;
             if (promptSections is not null) persona.PromptSections = normalizedSections;
             if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)

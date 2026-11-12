@@ -173,6 +173,9 @@ public sealed class PersonasCrudService(
             : specialtyTemplates.Apply(userId, createSpecialty, currentSpecialty: null,
                 access, req.Tools, req.DisallowedTools);
 
+        // Слой секций промпта (Г4, P1d) идёт в менеджер как есть: id по каталогу и лимит текста
+        // нормализует он же, тот же catch отдаёт 400, персона не создана. Не передан — «всё как
+        // у специальности» (поведение вызовов без поля не меняется).
         Persona persona;
         try
         {
@@ -182,7 +185,8 @@ public sealed class PersonasCrudService(
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
                 req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
-                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess);
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess,
+                promptSections: req.PromptSections);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -368,6 +372,12 @@ public sealed class PersonasCrudService(
         var beforeRole = current.Role;
         var beforeGreeting = current.Greeting;
         var beforeContract = current.Contract;
+        // Признак сброса своих секций промпта (§2.3, P1d) снимается ДО записи: personas.Update
+        // правит запись in-place (у не наследующей персоны current — она же), и после неё
+        // «был ли слой» уже не увидеть; у наследующей — hydrated-копия держала бы старый список,
+        // и проверка после записи врала бы в обратную сторону. Та же функция, которой
+        // PersonaManager сбрасывает слой (Г4) — текст ответа и действие не разъедутся.
+        var resetsPromptSections = PersonaManager.ResetsPromptSections(current, req.Specialty);
         Persona persona;
         try
         {
@@ -376,7 +386,11 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled, writeTools, req.Contract, writeAccess, writeDisallowed,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
                 req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
-                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess);
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess,
+                // Слой секций (Г4): как есть — нормализация и отказ по каталогу в менеджере,
+                // этот же catch отдаёт 400, персона остаётся нетронутой (там же порядком,
+                // что валидация handle до мутаций)
+                promptSections: req.PromptSections);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
@@ -387,7 +401,21 @@ public sealed class PersonasCrudService(
         if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             users.SetAssistantPersona(userId, null);
         if (broadcast) await Broadcast(userId, persona, "updated", id);
-        return Ok(persona);
+        // О сбросе своих секций промпта ответ сообщает строкой notice (§2.3): её читает тот,
+        // кто правку сделал (REST-форма и personas_update). Событие «updated» идёт карточкой
+        // без неё: адресату события эффект не нужен, а хранящаяся запись и personas.json не
+        // должны видеть текст ответа (поле ставится на копии — WhenWritingNull в модели).
+        return resetsPromptSections ? Ok(WithPromptSectionsReset(persona)) : Ok(persona);
+    }
+
+    // Копия персоны с строкой о сбросе слоя (P1d): ShallowCopy — тот же приём, что у Hydrate,
+    // чтобы не мутировать запись стора; текст держит PersonaManager — та же формулировка, что
+    // описывает мутацию
+    private static Persona WithPromptSectionsReset(Persona persona)
+    {
+        var response = persona.ShallowCopy();
+        response.Notice = PersonaManager.PromptSectionsResetNotice;
+        return response;
     }
 
     public async Task<IActionResult> DeleteAsync(string userId, string id, string? successorId)

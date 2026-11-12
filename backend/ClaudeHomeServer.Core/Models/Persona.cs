@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
@@ -184,6 +185,15 @@ public class Persona
     // чья модель уходит в провайдер с облегчённым профилем, остальным false; в рантайме
     // null читается как false.
     public bool? LightContext { get; set; }
+    // Строка о побочном эффекте последней правки — только для ответа REST/MCP (разрез 2, §2.3):
+    // сейчас это единственный случай «свои секции промпта сброшены: сменилась специальность».
+    // Поле ОТВЕТА, не хранения: его ставит PersonasCrudService на копии для ответа (ShallowCopy),
+    // хранящаяся запись его не мутируется, поэтому в personas.json он не появляется
+    // (WhenWritingNull — форма старых записей не меняется, прецедент проецируемых полей TaskItem).
+    // Текст держит PersonaManager.PromptSectionsResetNotice — та же строка, что описывает саму
+    // мутацию: ответ и действие не разъедутся.
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Notice { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }

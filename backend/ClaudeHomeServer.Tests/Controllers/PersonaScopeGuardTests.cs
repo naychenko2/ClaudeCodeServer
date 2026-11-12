@@ -35,6 +35,8 @@ public class PersonaScopeGuardTests
     private static readonly Dictionary<string, ProjectRight> IdActions = new(StringComparer.Ordinal)
     {
         ["Get"] = ProjectRight.Read,
+        // Чтение эффективных секций промпта (разрез 2, §2.6, P1d): то же право, что у карточки
+        ["PromptSections"] = ProjectRight.Read,
         ["Update"] = ProjectRight.WriteContent,
         ["Delete"] = ProjectRight.Configure,
         ["MakeDefault"] = ProjectRight.Configure,

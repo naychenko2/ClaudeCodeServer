@@ -125,6 +125,27 @@ Krea 2 Turbo — 8 шагов без CFG, VAE Qwen-Image, расширитель
 замене фона выкинула человека). Веса — `Comfy-Org/Krea-2`, `Comfy-Org/MOSS-Image` (int8_convrot), на
 Video в `~/ai-data/image-extra` (секция `image_extra` в `extra_model_paths.yaml`). Лицензии: Krea 2 —
 Community License (коммерция до $1 млн годовой выручки), MOSS-Image — Apache 2.0.
+
+**Стили Krea 2 Turbo** (Ш4 эпика 8b23149d, 2026-11-12) — девять стилевых LoRA и «стиль по образцу».
+Файлы — `Comfy-Org/Krea-2/loras`, на Video в `~/ai-data/image-extra/loras` (папка уже подключена секцией
+`image_extra`, перезапуск ComfyUI не нужен); sha256 всех десяти файлов сверены с LFS-хешами HF.
+- *Стили* (`Krea2Styles`, граф `ComfyWorkflows.Krea2StyleGenerate`): darkbrush, dotmatrix, kidsdrawing, neondrip,
+  rainywindow, retroanime, softwatercolor, sunsetblur, vintagetarot. `LoraLoaderModelOnly` между `UNETLoader` и
+  сэмплером, сила 0,8 (как в узле шаблона `image_krea2_turbo_t2i_int8.json`; заметка шаблона советует 1,0),
+  триггер стиля из заметки шаблона дописывается в промпт через «, » (то же, что `StringConcatenate` шаблона,
+  но строкой в C#). В редакторе — плашки у действия «Нарисовать» при выбранной Krea 2 Turbo (`caps.styles` →
+  параметр запуска `style` → поле формы `style` → `ImageEditRequest.Style` → `LocalImageRequest.KreaStyle`).
+  Неизвестный id стиля сервер отвергает (400), а не запускает без стиля.
+- *Стиль по образцу* (`Krea2StyleReference`, шаблон `image_krea2_turbo_int8_image_style_reference.json`):
+  LoRA `krea2_style_reference` (ostris) силой 1, `ModelSamplingFlux` 1,15/0,5, образец — в
+  `TextEncodeQwenImageEditPlus` + `FluxKontextMultiReferenceLatentMethod` (`index_timestep_zero`),
+  `CFGGuider` cfg 1 с негативом `ConditioningZeroOut`, 8 шагов euler/simple. Включается, когда у Krea ровно один
+  образец с ролью «стиль» и больше нет входов (`LocalImageModels.IsKreaStyleReference`); образцы других ролей,
+  два и больше образцов, персонаж и правка по-прежнему уходят на Qwen. Образец побеждает плашку стиля.
+  Котировка роли образцов не видит: один образец без маски и персонажа она считает как стиль по образцу.
+- *Замер* (RTX 3090, 1 Мп, 1 вариант, пустая очередь): стиль — 7–8,5 с прогретой, до 12 с с загрузкой LoRA; стиль по
+  образцу — 16–23 с (первая загрузка LoRA ostris +5 с). Примеры и листы — проект «Аудиотесты», `krea2-styles/`.
+  Раннер — `tools/krea2-styles` (через адаптер CCS, как `tools/image-bench`).
 | `local_job_status`, `local_jobs_wait` | — | статус и ожидание (до 15 с за вызов, до 12 задач) | — |
 | `local_models` | — | операции, размеры, длина очереди ComfyUI | — |
 

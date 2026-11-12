@@ -269,8 +269,10 @@ public sealed class WikiKeeper : IWikiRelink
         {
             var page = models[rel];
             if (page is null) continue; // неразбираемый: авторства нет — не трогать (fail-closed)
+            // Приёмыш — решение человека (И6), и оно раньше деления по типам: карточка,
+            // принятая как есть, защищена им наравне с принятой страницей (ревью R-P1a, M1).
+            if (adopted.Contains(rel)) continue; // принятый как есть — не трогать, любой тип
             if (page.Frontmatter.Type == WikiFrontmatter.TypeSource) continue; // карточки — ниже, сиротским тестом
-            if (adopted.Contains(rel)) continue; // принятый как есть — решение человека (И6)
             var authorship = WikiProjections.PageAuthorship(page,
                 t => cards.TryGetValue(WikiGate.Norm(t), out var c) ? c.Origin : null);
             if (authorship == WikiProjections.AuthorshipHuman) continue; // человеческое — не трогать (И6)
@@ -301,8 +303,10 @@ public sealed class WikiKeeper : IWikiRelink
             }
         }
 
+        // Сиротский тест не трогает принятые карточки: «приём как есть» — тот же И6, и он
+        // сильнее сиротства (ревью R-P1a, M1).
         foreach (var (norm, card) in cards)
-            if (!referenced.Contains(norm) && !referencedQualified.Contains((card.Section, norm)))
+            if (!adopted.Contains(card.Rel) && !referenced.Contains(norm) && !referencedQualified.Contains((card.Section, norm)))
                 doomed.Add(new WikiPurgeItem(card.Rel, card.Section, WikiFrontmatter.TypeSource));
 
         var items = doomed.OrderBy(d => d.PageKey, StringComparer.Ordinal).ToList();
@@ -333,14 +337,14 @@ public sealed class WikiKeeper : IWikiRelink
             return Task.FromResult(PurgeFail(dryRun, PurgeCodeArchive, "архив не создан — ничего не удалено: разрушающая операция без архива не делается"));
         }
 
-        int deletedCount = 0;
+        var deleted = new List<WikiPurgeItem>();
         var counts = new Dictionary<string, IReadOnlyDictionary<string, int>>(StringComparer.Ordinal);
         try
         {
             foreach (var item in items)
             {
                 File.Delete(SafePath.JoinBelowRoot(root, "pages/" + item.PageKey));
-                deletedCount++;
+                deleted.Add(item);
             }
 
             foreach (var group in items.GroupBy(i => i.Section, StringComparer.Ordinal))
@@ -366,10 +370,33 @@ public sealed class WikiKeeper : IWikiRelink
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            // Архив уже на диске, состояние — частичное: следующий вызов увидит его по диску
-            // и продолжит; молчаливого «успеха» наполовину сделанной операции нет.
-            return Task.FromResult(PurgeFail(dryRun, PurgeCodeIo,
-                $"архив создан, удаление прервано: удалено {deletedCount} из {items.Count}"));
+            // Архив на диске, часть страниц уже удалена. Манифест чинится здесь же, по
+            // фактически удалённым: удалённых файлов больше нет на диске, и повторная чистка
+            // до их записей не дойдёт — оставленные, они разошлись бы навсегда (ревью R-P1a, M2).
+            // Строки журнала нет: наполовину сделанная операция — не операция; фактический
+            // состав — в отказе. Сбой самой починки наружу не бросается (контракт «без
+            // исключений» держится на любом исходе чистки) — он назван в причине.
+            string repairNote;
+            try
+            {
+                foreach (var group in deleted.GroupBy(i => i.Section, StringComparer.Ordinal))
+                    if (WikiManifest.TryRead(root, group.Key).State == WikiManifestState.Valid)
+                        WikiManifest.RollbackTo(root, group.Key,
+                            group.ToDictionary(i => i.PageKey, _ => (string?)null));
+                repairNote = "манифест починен по фактически удалённым";
+            }
+            catch (Exception)
+            {
+                repairNote = "манифест не починен";
+            }
+
+            return Task.FromResult(new WikiPurgeResult(false, PurgeCodeIo,
+                $"архив создан, удаление прервано: удалено {deleted.Count} из {items.Count}; {repairNote}",
+                dryRun, deleted,
+                deleted.GroupBy(i => i.Section, StringComparer.Ordinal)
+                    .ToDictionary(g => g.Key, g => (IReadOnlyDictionary<string, int>)g.GroupBy(i => i.Class, StringComparer.Ordinal)
+                        .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal), StringComparer.Ordinal),
+                archiveRel, 0, 0));
         }
 
         // Граф обязан не видеть удалённые страницы сразу (тот же шаг, что у записи); синк Dify

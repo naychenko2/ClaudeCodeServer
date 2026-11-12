@@ -481,6 +481,132 @@ public class WikiPurgeTests : IDisposable
         WikiBacklogFlag.IsActive(Root, FixedToday).Should().BeFalse();
     }
 
+    // ─── R-P1a M1. Принятая как есть карточка переживает чистку: сиротский тест её не тронет ──
+
+    [Fact]
+    public async Task Чистка_ПринятаяКакЕстьКарточкаНеВСоставеИОстаетсяНаДиске_СиротскийТестЕеПропускает()
+    {
+        // Мутация «вернуть continue для source до проверки adopt» (исходный порядок и без
+        // guard'а в сиротском тесте): карточка уходит в состав → «NotContain» и «файл на
+        // месте» краснеют. Мутация «убрать adopted из сиротского теста» (один guard): тот
+        // же исход — сиротство без adopt-защиты.
+        BuildFixture();
+        // Человек принимает карточку источника как есть: строка op=adopt по пути карточки —
+        // тот же формат журнала, что у строки страницы. На карточку до чистки ссылалась только
+        // удаляемая ИИ-страница: без приёмыша она стала бы сиротой.
+        var line = JsonSerializer.Serialize(new
+        {
+            ts = DateTimeOffset.UtcNow,
+            op = "adopt",
+            section = "common",
+            pages = new[] { CardAiPath },
+            source = (string?)null,
+            actor = "user",
+            policy = (string?)null,
+        });
+        File.AppendAllText(Path.Combine(Root, "keeper", "log.jsonl"), line + "\n", new UTF8Encoding(false));
+
+        var preview = await _keeper.PurgeAiPagesAsync(User, dryRun: true);
+        preview.Ok.Should().BeTrue(preview.Reason);
+        preview.Items.Select(i => i.PageKey).Should().NotContain(CardAiPath,
+            "карточка принята как есть: решение человека сильнее сиротства (И6)");
+
+        var res = await _keeper.PurgeAiPagesAsync(User, dryRun: false);
+        res.Ok.Should().BeTrue(res.Reason);
+        res.Items.Select(i => i.PageKey).Should().NotContain(CardAiPath);
+
+        // Остальной состав — как был: защита карточки не меняет прочие классы.
+        res.Items.Select(i => i.PageKey).Should().BeEquivalentTo(Doomed.Except([CardAiPath]));
+
+        var cardFull = Path.Combine(WikiPaths.Pages(_dir, User), CardAiPath);
+        File.Exists(cardFull).Should().BeTrue("принятая карточка переживает чистку");
+        foreach (var page in Doomed.Except([CardAiPath]))
+            File.Exists(Path.Combine(WikiPaths.Pages(_dir, User), page)).Should().BeFalse($"«{page}» — класс чистки, файл удалён");
+
+        // Журнал: карточки в строке чистки нет — её не удаляли.
+        var purgeLine = LogLines().Single(l => l.Contains("\"op\":\"purge\""));
+        purgeLine.Should().NotContain(CardAiPath, "несостоявшееся удаление не записывается в журнал");
+    }
+
+    // ─── R-P1a M2. Частичный сбой удаления: манифест согласован с диском, отказ — с фактическим составом ──
+
+    [Fact]
+    public async Task ЧисткаЧастичныйСбойУдаления_ИсходКодомБезИсключения_МанифестСогласенСДиском_ВОтказеФактическиУдалённые()
+    {
+        // Мутация «убрать починку манифеста» (возвращать отказ без RollbackTo по удалённым):
+        // записи удалённых файлов остаются в манифеста → «записи манифеста без файла — нет»
+        // краснеет. Мутация «молчать о фактическом составе» (возвращать PurgeFail с пустым
+        // Items): «Items равны фактически удалённым» краснеет.
+        await BuildFixtureViaKeeper(); // манифест с записями — сверка «манифест ↔ диск» без них не меряется
+
+        // Последняя по сортировке (Ordinal) страница состава — «Общее/Хроники/с1.md»: на её
+        // удалении процесс и прерывается, первые три (по порядку) успевают удалиться.
+        // Блокировка — состоянием диска, без шва в коде: на Windows файл read-only
+        // (File.Delete отказывает по атрибуту), на Unix — каталог-родитель без права записи
+        // (unlink по EACCES). Тот же приём, что у отказа архива: недоступный файл.
+        var blockedFull = Path.Combine(WikiPaths.Pages(_dir, User), ChroniclePage);
+        var blockedDir = Path.GetDirectoryName(blockedFull)!;
+        if (OperatingSystem.IsWindows()) File.SetAttributes(blockedFull, FileAttributes.ReadOnly);
+        else File.SetUnixFileMode(blockedDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+
+        WikiPurgeResult res;
+        try
+        {
+            res = await _keeper.PurgeAiPagesAsync(User, dryRun: false);
+        }
+        finally
+        {
+            // Права возвращаем сразу: и assertions, и Dispose (уборка дерева) не должны
+            // спотыкаться о заблокированный каталог.
+            if (OperatingSystem.IsWindows()) File.SetAttributes(blockedFull, FileAttributes.Normal);
+            else File.SetUnixFileMode(blockedDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        res.Ok.Should().BeFalse();
+        res.Code.Should().Be(WikiKeeper.PurgeCodeIo);
+        res.Reason.Should().Contain("прервано");
+
+        // Фактический состав в отказе: ровно удалённые (первые по сортировке), без блокатора.
+        var actuallyDeleted = new[] { AiPage, CardAiPath, TogetherPage };
+        res.Items.Select(i => i.PageKey).Should().BeEquivalentTo(actuallyDeleted,
+            "отказ называет фактическое удаление, а не задуманный состав");
+        res.CountsBySection["common"].Should().Equal(new Dictionary<string, int>
+        {
+            [WikiProjections.AuthorshipAi] = 1,
+            [WikiProjections.AuthorshipTogether] = 1,
+            [WikiFrontmatter.TypeSource] = 1,
+        });
+        res.ArchivePath.Should().NotBeNull("архив создан до удаления — он на диске");
+        File.Exists(Path.Combine(Root, res.ArchivePath!)).Should().BeTrue();
+
+        foreach (var page in actuallyDeleted)
+            File.Exists(Path.Combine(WikiPaths.Pages(_dir, User), page)).Should().BeFalse($"«{page}» удалён до сбоя");
+        File.Exists(blockedFull).Should().BeTrue("сбой — на последней по сортировке: она цела");
+
+        // Манифест согласован с диском в обе стороны — инвариант «после любого исхода»:
+        // ни записи без файла, ни файла без записи (проекции — вне манифеста по контракту).
+        var manifest = WikiManifest.TryRead(Root, "common");
+        manifest.State.Should().Be(WikiManifestState.Valid);
+        var pagesDir = WikiPaths.Pages(_dir, User);
+        foreach (var (page, hash) in manifest.Manifest)
+        {
+            var full = Path.Combine(pagesDir, page);
+            File.Exists(full).Should().BeTrue($"запись манифеста «{page}» без файла — починка не сделана");
+            Sha(File.ReadAllBytes(full)).Should().Be(hash, $"хэш манифеста «{page}» не по диску");
+        }
+        var diskFiles = Directory.EnumerateFiles(Path.Combine(pagesDir, "Общее"), "*.md", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(pagesDir, f).Replace('\\', '/'))
+            .Where(p => !WikiPaths.IsProjection(p))
+            .ToHashSet();
+        var manifestKeys = manifest.Manifest.Keys.ToHashSet();
+        foreach (var rel in diskFiles)
+            manifestKeys.Should().Contain(rel, $"файл «{rel}» без записи манифеста");
+
+        // Полчистки — не чистка: журнал и перезапуск разбора за ней не стоят.
+        LogLines().Should().NotContain(l => l.Contains("\"op\":\"purge\""), "наполовину сделанная операция журнал не пишет");
+        WikiBacklogFlag.IsActive(Root, FixedToday).Should().BeFalse();
+    }
+
     // ─── c5. Гашение открытых ИИ-пакетов, применённые и human не тронуты; курсоры и флаг ────
 
     private static WikiPackage.Operation Op(string op, string page, string? text,

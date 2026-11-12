@@ -225,6 +225,68 @@ public class StageScreenServiceTests : IDisposable
         t.ToolCalls[0].Summary.Should().NotContain(secret);
     }
 
+    private sealed class FakeAccess(bool sessionVisible) : IProjectAccess
+    {
+        public RequestScope? Resolve(string? callerUserId, string? projectId, ProjectRight right = ProjectRight.Read) =>
+            new(callerUserId ?? "", Owner, ProjectRole.Reader);
+
+        public RequestScope? ResolveSession(string? callerUserId, string? sessionId, ProjectRight right = ProjectRight.Read) =>
+            sessionVisible ? new(callerUserId ?? "", Owner, ProjectRole.Reader) : null;
+    }
+
+    private TaskItem SharedStep()
+    {
+        var step = Step(Epic());
+        step.ProjectId = "p1";
+        step.LinkedSessionId = "chat-1";
+        return step;
+    }
+
+    [Fact]
+    public void Участник_проекта_без_доступа_к_чату_не_видит_ленту_остальное_отдаётся()
+    {
+        var step = SharedStep();
+        step.ResultMarkdown = "сделано";
+        var transcripts = new FakeTranscripts(new StoredUserMessage("приватная постановка"));
+
+        var screen = Sut(transcripts, new FakeAccess(sessionVisible: false)).Build(step.Id, Stranger).Value!;
+
+        screen.Input.TranscriptAvailable.Should().BeFalse();
+        screen.Input.Transcript.Should().BeNull();
+        screen.Artifacts.ResultMarkdown.Should().Be("сделано", "остальные блоки отдаются");
+    }
+
+    [Fact]
+    public void Участник_проекта_с_доступом_к_чату_видит_ленту()
+    {
+        var step = SharedStep();
+        var transcripts = new FakeTranscripts(new StoredUserMessage("постановка"));
+
+        var screen = Sut(transcripts, new FakeAccess(sessionVisible: true)).Build(step.Id, Stranger).Value!;
+
+        screen.Input.TranscriptAvailable.Should().BeTrue();
+        screen.Input.Transcript!.Prompt.Should().Be("постановка");
+    }
+
+    [Fact]
+    public void Секрет_на_границе_усечения_не_виден_частично()
+    {
+        var step = Step(Epic());
+        step.LinkedSessionId = "chat-1";
+        const string secret = "sk-ant-abcdefghijklmnop1234567890";
+        // токен пересекает позицию 160 в аргументе и MaxPromptChars в постановке
+        var command = new string('a', StageScreenService.MaxSummaryChars - 10) + " " + secret;
+        var prompt = new string('b', StageScreenService.MaxPromptChars - 10) + " " + secret;
+        var transcripts = new FakeTranscripts(
+            new StoredUserMessage(prompt),
+            new StoredToolUseMessage { Id = "1", Name = "Bash", Input = JsonSerializer.SerializeToElement(new { command }) });
+
+        var t = Sut(transcripts).Build(step.Id, Owner).Value!.Input.Transcript!;
+
+        t.ToolCalls[0].Summary.Should().NotContain("sk-ant").And.NotContain("abcdefghij");
+        t.Prompt.Should().NotContain("sk-ant").And.NotContain("abcdefghij");
+    }
+
     [Fact]
     public void Нет_дерева_или_git_читатель_null_список_пуст_и_помечен_недоступным()
     {

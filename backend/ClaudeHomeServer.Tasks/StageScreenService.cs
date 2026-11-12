@@ -159,7 +159,14 @@ public sealed class StageScreenService(
     {
         var prompt = history.OfType<StoredUserMessage>().FirstOrDefault()?.Text;
         if (prompt is not null)
-            prompt = SecretRedactor.Redact(prompt.Length > MaxPromptChars ? prompt[..MaxPromptChars] : prompt);
+        {
+            // Сначала редакция, потом усечение: граница усечения не должна разрезать секрет (PEM без END
+            // и токен без хвоста регулярки не опознают). Точные секреты инстанса (InstanceSecretsProvider)
+            // живут в вертикали Dossiers, а Tasks от неё зависеть не вправе, поэтому здесь — только
+            // регулярки: ключ стороннего провайдера без узнаваемого префикса не вырезается.
+            prompt = SecretRedactor.Redact(prompt);
+            if (prompt.Length > MaxPromptChars) prompt = prompt[..MaxPromptChars];
+        }
 
         var calls = new List<StageToolCall>();
         var files = new List<string>();
@@ -203,8 +210,10 @@ public sealed class StageScreenService(
             if (!obj.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String) continue;
             var text = (value.GetString() ?? "").ReplaceLineEndings(" ").Trim();
             if (text.Length == 0) continue;
+            // Редакция до усечения (см. BuildTranscript)
+            text = SecretRedactor.Redact(text);
             if (text.Length > MaxSummaryChars) text = text[..MaxSummaryChars] + "…";
-            return SecretRedactor.Redact(text);
+            return text;
         }
         return null;
     }

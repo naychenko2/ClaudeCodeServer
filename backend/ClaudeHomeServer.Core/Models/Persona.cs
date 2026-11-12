@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Memory;
 
 namespace ClaudeHomeServer.Models;
@@ -100,6 +101,14 @@ public class Persona
     public string? SystemPrompt { get; set; }
     // Структурированный контракт (P1); null — legacy-режим с единым SystemPrompt
     public PersonaContract? Contract { get; set; }
+    // Слой секций промпта персоны поверх секций её специальности (разрез 2, §2.2, Г4): null —
+    // «всё как у специальности». Id — только из каталога SpecialtyPromptPresets; Enabled/Text
+    // наследуются попараметрно (PromptSectionOverlay.Apply). Пишется только через
+    // PersonaManager.Create/Update (нормализация там же); при реальной смене специальности
+    // сбрасывается целиком (§2.3). У Specialty=None слой хранится, но не действует: секций
+    // специальности нет. Аддитивное nullable-поле: старый personas.json читается без миграции,
+    // BackupSchema.Version не растёт (§2.5).
+    public List<PromptSectionOverride>? PromptSections { get; set; }
     // Модель CLI (алиас/id любого провайдера); null = дефолт сервера
     public string? Model { get; set; }
     // УСТАРЕЛО (15.08.2026, упрощение модели): уровень модели персоны выведен из цепочки

@@ -363,6 +363,39 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     private static string? TrimToNull(string? s) =>
         string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+    // Нормализация слоя секций промпта персоны (разрез 2, §2.2 и Г4) — по образцу NormalizeContract:
+    // id — только из каталога SpecialtyPromptPresets, текст — в общем с UI счётчиком лимите
+    // SectionTextLimit; дубли id схлопываются (побеждает последняя запись — тот же смысл, что у
+    // «последний слот патча побеждает» в MergeContract); пустой override (Enabled == null и текста
+    // нет — «ни один параметр не задан») выбрасывается, пустой список → null («всё как у
+    // специальности»). Id нормализуется к каталожному (регистронезависимый поиск, канонический
+    // вид — из каталога), Text — трим.
+    // Ошибки — ArgumentException: та же точка отказа, что у handle в Create/Update, — контроллер
+    // отдаёт 400, персона остаётся нетронутой.
+    internal static List<PromptSectionOverride>? NormalizePromptSections(List<PromptSectionOverride>? sections)
+    {
+        if (sections is not { Count: > 0 }) return null;
+        var byId = new Dictionary<string, PromptSectionOverride>(StringComparer.OrdinalIgnoreCase);
+        foreach (var s in sections)
+        {
+            if (s is null || !SpecialtyPromptPresets.TryGetSection(s.Id, out var meta))
+                throw new ArgumentException($"Неизвестная секция промпта: {s?.Id}");
+            if (s.Text?.Length > SpecialtyPromptPresets.SectionTextLimit)
+                throw new ArgumentException(
+                    $"Текст секции промпта «{meta.Label}» длиннее {SpecialtyPromptPresets.SectionTextLimit} символов");
+            var text = TrimToNull(s.Text);
+            // Пустой override ничего не меняет в эффективном состоянии — его нет; если той же
+            // секции значение уже задано, решает последняя запись (пустая — снимает)
+            if (s.Enabled is null && text is null)
+            {
+                byId.Remove(meta.Id);
+                continue;
+            }
+            byId[meta.Id] = s with { Id = meta.Id, Text = text };
+        }
+        return byId.Count > 0 ? [.. byId.Values] : null; // порядок — порядок первых упоминаний каталога в запросе
+    }
+
     // --- Потолок контракта персоны ---
 
     // Весь слой персоны уезжает в claude аргументом --append-system-prompt (ClaudeSession),
@@ -434,7 +467,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
         bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
-        bool? inheritsAccess = null)
+        bool? inheritsAccess = null, List<PromptSectionOverride>? promptSections = null)
     {
         var persona = new Persona
         {
@@ -476,6 +509,10 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             // (PersonasCrudService) материализует эффективный шаблон в полях выше —
             // персистентные поля остаются снимком для отката кода
             InheritsAccess = inheritsAccess ?? false,
+            // Слой секций промпта (Г4): не передан — null, «всё как у специальности» (поведение
+            // pantheon/connect, ai/quick-create, ai/team, Onboarding не меняется); передан —
+            // нормализованный набор по каталогу
+            PromptSections = NormalizePromptSections(promptSections),
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         // Генерация handle и вставка атомарны: без лока два одновременных Create
@@ -925,10 +962,15 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
         bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
-        bool? inheritsAccess = null)
+        bool? inheritsAccess = null, List<PromptSectionOverride>? promptSections = null)
     {
         var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
+
+        // Нормализация слоя секций — ДО мутаций и вне лока: отказ по каталогу или лимиту не должен
+        // тронуть персону (тот же порядок, что у валидации handle ниже). null — «не менять»,
+        // пустой список — явный сброс к «всё как у специальности» (нормализуется в null)
+        var normalizedSections = promptSections is null ? null : NormalizePromptSections(promptSections);
 
         var oldHandle = persona.Handle;
         // Мутации полей — под _saveLock, чтобы параллельные читатели (Save/enumerate _personas)
@@ -975,7 +1017,23 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (tierMedium is not null) persona.TierMedium = NormalizeModel(tierMedium);
             if (tierWeak is not null) persona.TierWeak = NormalizeModel(tierWeak);
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
-            // Специальность (функциональная роль): null — не менять; None — сбросить явно
+            // Специальность (функциональная роль): null — не менять; None — сбросить явно.
+            // «Смена» — только реальная разница значений: тот же признак, что у
+            // SpecialtyTemplatesService.Apply (та же специальность — не смена, права не трогает).
+            // Слой секций промпта (Г4): null — не менять; список — нормализованный набор по
+            // каталогу (пустой → null, «всё как у специальности»); при РЕАЛЬНОЙ смене специальности
+            // сбрасывается целиком (§2.3, временное решение вопроса Андрею №2): тексты секций
+            // ролевые — под новой специальностью они бессмысленны. Порядок внутри одного лока —
+            // сброс, запись новых секций, затем специальность: «Update с секциями и новой
+            // специальностью» = «секции поверх новой специальности», а не старой; промежуточного
+            // «специальность уже новая, старый слой ещё висит» нет вовсе — P1c наложил бы его
+            // поверх новой. Соседние поля не теряются: обе правки — под одним _saveLock, итог
+            // гонки «смена специальности ∥ свои секции» — одна из двух сериализаций целиком.
+            // Признак сброса — в результате: у обновлённой персоны слоя нет, хотя у её носителя
+            // он был (текст ответа REST/MCP — P1d).
+            var specialtyChanged = specialty is not null && specialty.Value != persona.Specialty;
+            if (specialtyChanged) persona.PromptSections = null;
+            if (promptSections is not null) persona.PromptSections = normalizedSections;
             if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)
             {

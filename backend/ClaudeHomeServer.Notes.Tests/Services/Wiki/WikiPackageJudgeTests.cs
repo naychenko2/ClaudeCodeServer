@@ -171,6 +171,56 @@ public class WikiPackageJudgeTests : IDisposable
     }
 
     [Fact]
+    public void ПовторныйВердиктСудьи_ПервыйВердиктОстаётся_ПопыткиНеРастут()
+    {
+        // Гвард «без JudgeDecision» (WikiPackageStore.cs:356): вердикт пишется только в
+        // нерешённую операцию. Повторный ответ судьи по уже решённой им операции — молча
+        // пропущен, как устаревший: принятое не перетирается и не дописывается вторым,
+        // и не считается попыткой. Пакет держим «Входящим» второй спорной операцией:
+        // отказ по статусу не должен прятать сам пропуск.
+        var id = AtProposed([InboxOp("Общее/A.md"), InboxOp("Общее/B.md")]);
+        WikiPackageStore.JudgeOperations(_root, id,
+            [new WikiPackageStore.JudgeOutcome(0, false, "первая причина отказа", JudgeModel, 0.002m)])
+            .Ok.Should().BeTrue();
+
+        var first = Read(id);
+        first.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanRejected);
+        var firstAt = first.Operations[0].JudgeAt!.Value;
+        var before = File.ReadAllText(PackageFile(id));
+
+        // Второй вердикт по тому же индексу — другой знак, другая модель, другая цена:
+        // ни одно поле принятого вердикта не двигается.
+        var again = WikiPackageStore.JudgeOperations(_root, id,
+            [new WikiPackageStore.JudgeOutcome(0, true, null, "other-model", 0.003m)]);
+        again.Ok.Should().BeTrue("повторный ответ — не отказ: он молча пропущен");
+
+        var after = Read(id);
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanRejected, "первый вердикт не перетёрт другим знаком");
+        after.Operations[0].JudgeReason.Should().Be("первая причина отказа");
+        after.Operations[0].JudgeModel.Should().Be(JudgeModel);
+        after.Operations[0].JudgeAt.Should().Be(firstAt, "дата принятого вердикта не двигается");
+        after.Operations[0].JudgeCostUsd.Should().Be(0.002m);
+        after.Operations[0].JudgeAttempts.Should().Be(0, "пропущенный вердикт — не попытка");
+
+        // «Вердикта нет» по решённой операции — тоже молча: счётчик попыток не трогается
+        // (без гварда ушла бы в ветку попыток и подняла бы его).
+        WikiPackageStore.JudgeOperations(_root, id, [new WikiPackageStore.JudgeOutcome(0, null, null, JudgeModel, null)])
+            .Ok.Should().BeTrue();
+        after = Read(id);
+        after.Operations[0].JudgeAttempts.Should().Be(0, "у решённой операции не бывает попыток");
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanRejected);
+
+        // Нечего решать — нечего и писать: файл после повторов байт в байт, как после
+        // первого вердикта.
+        File.ReadAllText(PackageFile(id)).Should().Be(before);
+
+        // Пропущено ровно то, что решено: вторая спорная цела и нерешена, пакет «Входящий».
+        after.Operations[1].JudgeDecision.Should().BeNull();
+        after.Operations[1].HumanDecision.Should().BeNull();
+        after.Status.Should().Be(WikiPackage.StatusProposed);
+    }
+
+    [Fact]
     public void ВердиктаНет_ТолькоСчётчикПопыток_ПакетОстаётсяВходящим()
     {
         var id = AtProposed(InboxOp("Общее/C.md"));

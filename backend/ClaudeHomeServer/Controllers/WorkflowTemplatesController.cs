@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Access;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -21,6 +22,12 @@ namespace ClaudeHomeServer.Controllers;
 // затирать чужую правку. POST передаёт expectedVersion: 0 — существующий id даёт 409, а не
 // тихую перезапись. Отказы стора раскладываются по Kind: Validation→400 (со списком Errors),
 // Conflict→409, NotFound→404, Forbidden→403.
+// Группа матрицы — Platform (сторож G1): содержимое живёт в data/workflow-templates.json
+// (WorkflowTemplateStore), к файлам проекта на сервере не обращаемся — вход работает у любого
+// проекта, включая локальный. Права это не отменяет: чтение проектной области — ProjectRight.Read,
+// запись — Configure (И8), их по-прежнему проверяет IProjectAccess в теле (DenyProjectRead /
+// DenyWrite); глобальная область — только admin, группа к ней не применяется (без projectId).
+[ProjectCapability(ProjectCapabilityArea.Platform)]
 [ApiController]
 [Authorize]
 [Route("api/workflow-templates")]

@@ -737,7 +737,7 @@ public class WikiController : ControllerBase
 
     private static WikiNightDecisionDto NightDto(WikiJournalReader.DecisionEntry e) =>
         new(e.PackageId, e.Page, e.Claim, e.ReasonCode, e.JudgeDecision, e.JudgeReason,
-            e.JudgeAt, e.JudgeCostUsd, e.JudgeModel, e.Reason);
+            e.JudgeAt, e.JudgeCostUsd, e.JudgeModel, e.Reason, e.PackageStatus);
 
     // Живое имя раздела: проект — имя проекта (только своего; чужое имя в своё дерево
     // не протекает), сфера — имя из справочника; сирота — null (живого имени нет).
@@ -930,11 +930,13 @@ public sealed record WikiJournalDto(
 /// packageId/page/claim — что и где предлагалось; reason — исходная причина спора (текст) и
 /// reasonCode — его машинный код (по нему решался допуск к судье); judgeDecision/judgeReason/
 /// judgeAt/judgeCostUsd/judgeModel — вердикт (для группы waiting их нет вовсе: решение ещё
-/// не вынесено; judgeModel == «code» — отказ вынесен кодом, без вызова модели).</summary>
+/// не вынесено; judgeModel == «code» — отказ вынесен кодом, без вызова модели);
+/// packageStatus — текущее состояние пакета (applied/reverted/apply_failed/…): вердикт судьи
+/// не гарантирует применения, фронт по этому полю ставит кнопку отката только у applied.</summary>
 public sealed record WikiNightDecisionDto(
     string PackageId, string Page, string? Claim, string? ReasonCode,
     string? JudgeDecision, string? JudgeReason, DateTimeOffset? JudgeAt, decimal? JudgeCostUsd,
-    string? JudgeModel, string? Reason);
+    string? JudgeModel, string? Reason, string PackageStatus);
 
 /// <summary>Сводка «Решений за ночь» (J-J5): вердикты судьи по окну [from, to) — принятые,
 /// отклонённые, и отклонённые кодом (не вердикт модели, И4′) — плюс очередь того, что ещё

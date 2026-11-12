@@ -931,6 +931,26 @@ public class WikiJournalReaderTests : IDisposable
         return id;
     }
 
+    // Пакет «принятый судьёй», дошедший до названного итогового состояния: вердикт accepted,
+    // дальше — только легальные шаги таблицы переходов (accepted → applying → applied |
+    // apply_failed; applied → reverted).
+    private string AcceptedNightPackage(string finalStatus, DateTimeOffset judgeAt, string page, string claim)
+    {
+        var id = NightPackage(WikiPackage.StatusAccepted, NightOp(page, claim) with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted,
+            JudgeModel = "m",
+            JudgeAt = judgeAt,
+        });
+        var toApplied = finalStatus is WikiPackage.StatusApplied or WikiPackage.StatusReverted
+            ? WikiPackage.StatusApplied : finalStatus;
+        WikiPackageStore.Transition(Root(), id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(Root(), id, toApplied).Ok.Should().BeTrue();
+        if (finalStatus == WikiPackage.StatusReverted)
+            WikiPackageStore.Transition(Root(), id, WikiPackage.StatusReverted).Ok.Should().BeTrue();
+        return id;
+    }
+
     [Fact]
     public void Ночь_ЧетыреГруппы_ПоОднойОперации_ПоляВерны()
     {
@@ -1078,6 +1098,27 @@ public class WikiJournalReaderTests : IDisposable
         res.JudgeAccepted.Should().BeEmpty();
         res.JudgeRejected.Should().BeEmpty();
         res.CodeRejected.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Ночь_ПринятоСудьёй_НесётСтатусПакета()
+    {
+        // Мутация «не заполнять packageStatus» (убрать p.Status из RowOf, WikiJournalReader.cs):
+        // краснеет на всех трёх PackageStatus — фронт не отличает применённый пакет от откатанного
+        // и неприменённого и ставит кнопку «Откатить пакет» на них (дефекты b58d81c0, 76f4c7d6).
+        var idApplied = AcceptedNightPackage(WikiPackage.StatusApplied, NightFrom.AddHours(1), "Общее/А.md", "утверждение применено");
+        var idReverted = AcceptedNightPackage(WikiPackage.StatusReverted, NightFrom.AddHours(2), "Общее/Б.md", "утверждение откатано");
+        var idApplyFailed = AcceptedNightPackage(WikiPackage.StatusApplyFailed, NightFrom.AddHours(3), "Общее/В.md", "утверждение не применено");
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        // Вердикт есть вердикт: все три строки остаются в группе «Принято судьёй» — человек
+        // видит, что решил судья. Но каждая несёт своё состояние пакета: фронт по нему
+        // ставит кнопку отката только у applied, у прочих — пометку.
+        res.JudgeAccepted.Should().HaveCount(3);
+        res.JudgeAccepted.Select(x => x.PackageId).Should().Equal(idApplied, idReverted, idApplyFailed);
+        res.JudgeAccepted.Select(x => x.PackageStatus).Should()
+            .Equal(WikiPackage.StatusApplied, WikiPackage.StatusReverted, WikiPackage.StatusApplyFailed);
     }
 
     [Fact]

@@ -254,7 +254,10 @@ public sealed class WikiJournalReader
     /// <summary>Запись «Решений за ночь»: одна операция пакета с её вердиктом. Причина спора
     /// (Reason/ReasonCode) остаётся рядом с вердиктом: человек видит, ЗАЧТО его заявку позвали
     /// к судье и что тот ответил. `claim` — утверждение операции (WikiPackage.Operation.Claim),
-    /// у старых пакетов его нет: null, а не выдумка.</summary>
+    /// у старых пакетов его нет: null, а не выдумка. `PackageStatus` — текущее состояние пакета
+    /// (WikiPackage.Status*): вердикт судьи и судьба пакета — разные вещи (принятый судьёй мог
+    /// не примениться — apply_failed — или быть откатан человеком — reverted), и фронт по этому
+    /// полю решает, ставить ли кнопку «Откатить пакет».</summary>
     public sealed record DecisionEntry(
         string PackageId,
         string Page,
@@ -265,7 +268,8 @@ public sealed class WikiJournalReader
         DateTimeOffset? JudgeAt,
         decimal? JudgeCostUsd,
         string? JudgeModel,
-        string? Reason);
+        string? Reason,
+        string PackageStatus);
 
     /// <summary>Четыре группы утренней сводки: что принял судья, что отклонил, что отклонено
     /// кодом без вызова модели (И4′: это не вердикт судьи, в «отклонено судьёй» ему не место),
@@ -323,7 +327,7 @@ public sealed class WikiJournalReader
 
     private static DecisionEntry RowOf(WikiPackage p, WikiPackage.Operation op) =>
         new(p.Id, op.Page, op.Claim, op.ReasonCode, op.JudgeDecision, op.JudgeReason,
-            op.JudgeAt, op.JudgeCostUsd, op.JudgeModel, op.Reason);
+            op.JudgeAt, op.JudgeCostUsd, op.JudgeModel, op.Reason, p.Status);
 
     private static List<DecisionEntry> Sorted(
         List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)> rows) =>

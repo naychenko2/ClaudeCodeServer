@@ -130,6 +130,22 @@ function kvCell(v: number, label: string) {
   );
 }
 
+// Сводка облачного судья этой ночи (J-F3): «Судья: принял K, отклонил L, отклонено кодом C;
+// вызовов N, $X» — по полям J-F0 (WikiLastNight, J-J4). Скрыта при judgeCalls==0 &&
+// codeRejected==0: ни вызова модели, ни кодового отказа — сказать нечего (тот же приём, что
+// с «отказано N»). Цена — два знака: потолка вызовов нет (решение Андрея 12.11), сумма на
+// виду. Формулировка — по постановке J-F3 (Софья 12.11); та же сводка в бэковом уведомлении
+// собрана в Title (WikiNightlyService.cs:999-1000) — здесь она той же мысли, но по форме
+// этой карточки.
+const judgeSummaryLine = (l: WikiLastNight): string =>
+  `Судья: принял ${l.judgeApplied}, отклонил ${l.judgeRejected}, отклонено кодом ${l.codeRejected}; ` +
+  `вызовов ${l.judgeCalls}, $${l.judgeCostUsd.toFixed(2)}`;
+
+// «Судья недоступен — ждут решения: M» — форма Софьи 12.11, как в бэковом уведомлении
+// (NotificationBody, WikiNightlyService.cs:959): «M операций ждут» читается обрывком
+// фразы; здесь — та же строка с заглавной, как отдельная строка карточки.
+const judgeDeferredLine = (m: number): string => `Судья недоступен — ждут решения: ${m}`;
+
 // «отказано N» — пятая метрика итога (WN-6b): отказанные разборы среди analyzed
 // (WikiNightlyService.cs:117-119). Не голое число, как остальные: слово с числом одной строкой,
 // подпись называет связь с соседней метрикой («из разобранного» — ровно то, что считает бэк)
@@ -196,6 +212,18 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             ≈ {fmtNum(last.estTokens)} из {fmtNum(snapshot.nightly.inputTokenBudget)}
           </span>
         </div>
+        {/* J-F3: предупреждение об отложенных операциях — над сводкой: оно о том, чего
+            судья не сделал; цвет — warning-токен дизайн-системы */}
+        {last.judgeDeferred > 0 && (
+          <div data-testid="wiki-nightly-judge-deferred" style={{ fontSize: FS.sm, color: C.warningText, marginTop: SP.md }}>
+            {judgeDeferredLine(last.judgeDeferred)}
+          </div>
+        )}
+        {last.judgeCalls > 0 || last.codeRejected > 0 ? (
+          <div data-testid="wiki-nightly-judge-line" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
+            {judgeSummaryLine(last)}
+          </div>
+        ) : null}
         <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
           {last.outcome === 'completed' ? NIGHTLY_COMPLETED_LINE : ''}
           {onOpenJournal && (

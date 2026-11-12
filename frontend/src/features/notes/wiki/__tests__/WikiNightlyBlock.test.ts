@@ -46,6 +46,13 @@
 // (9) не ставить disabled при nightlyRunning → «nightlyRunning:…» и «клик…:…» краснеют
 //     (в «клике» — строка «кнопка выключена после успеха»);
 // (10) не добавлять ячейку rejected в итог → «rejected=2:…» краснеет.
+//
+// J-F3 (итог судья и цена в карточке ночи): сводка «Судья: принял K, отклонил L, отклонено
+// кодом C; вызовов N, $X» по полям J-F0 (WikiLastNight), цена — два знака; при нулевых
+// вызовах и нулевом codeRejected строки нет; judgeDeferred>0 — предупреждение «Судья
+// недоступен — ждут решения: M» (форма Софьи 12.11, как в бэковом уведомлении).
+// (11) не рендерить строку сводки судья → «судья работал:…» и «цена два знака:…» краснеют;
+// (12) не рендерить предупреждение judgeDeferred → «judgeDeferred=3:…» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -609,5 +616,65 @@ describe('«Запустить сейчас» (WN-6b)', () => {
     // отказ — не старт: стор не ставит проход, кнопка возвращается в активное состояние
     expect(getWikiSettingsSnapshot()!.nightlyRunning).toBe(false);
     expect(isDisabled(runBtn(c))).toBe(false);
+  });
+});
+
+// ─── J-F3: итог судья и цена в карточке ночи ───
+// Сводка — по полям J-F0/J-J4 (WikiLastNight.judge*); скрыта при нулевых вызовах и
+// кодовых отказах; предупреждение об отложенных — независимо от сводки.
+describe('итог судья и цена ночи (J-F3)', () => {
+  it('судья работал: «Судья: принял 1, отклонил 1, отклонено кодом 2; вызовов 1, $0.04»', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 1, codeRejected: 2, judgeCalls: 1, judgeCostUsd: 0.04 }) });
+    const c = render();
+    await settle();
+    // мутация (11): без строки сводки в карточке эта проверка краснеет
+    expect(has(c, 'Судья: принял 1, отклонил 1, отклонено кодом 2; вызовов 1, $0.04')).toBe(true);
+  });
+
+  it('цена — два знака после точки: 0.1 → $0.10, 1.234 → $1.23', async () => {
+    // поля заполнены как их отдаёт бэк (в ответе они всегда есть, J-J4): сверяем только цену
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 0, codeRejected: 0, judgeCalls: 1, judgeCostUsd: 0.1 }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Судья: принял 1, отклонил 0, отклонено кодом 0; вызовов 1, $0.10')).toBe(true);
+
+    server = settings({ lastNight: LAST({ judgeApplied: 1, judgeRejected: 1, codeRejected: 0, judgeCalls: 2, judgeCostUsd: 1.234 }) });
+    const c2 = render();
+    await settle();
+    expect(has(c2, 'Судья: принял 1, отклонил 1, отклонено кодом 0; вызовов 2, $1.23')).toBe(true);
+  });
+
+  it('нет вызовов и нет кодовых отказов: строки сводки нет (и у старого итога без полей)', async () => {
+    server = settings({ lastNight: LAST({ judgeApplied: 0, judgeRejected: 0, codeRejected: 0, judgeCalls: 0, judgeCostUsd: 0 }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'Судья:')).toBe(false);
+
+    // старый keeper/nightly-last.json без judge-полей (аддитивность J-J4): строки тоже нет
+    server = settings({ lastNight: LAST({}) });
+    const cOld = render();
+    await settle();
+    expect(has(cOld, 'Судья:')).toBe(false);
+  });
+
+  it('judgeDeferred=3: «Судья недоступен — ждут решения: 3»; =0 и без поля — нет', async () => {
+    server = settings({ lastNight: LAST({ judgeDeferred: 3 }) });
+    const c = render();
+    await settle();
+    // мутация (12): без предупреждения об отложенных эти строки краснеют
+    expect(has(c, 'Судья недоступен — ждут решения: 3')).toBe(true);
+    // предупреждение независимо от сводки: при нулевых вызовах сводки нет
+    expect(has(c, 'Судья:')).toBe(false);
+
+    server = settings({ lastNight: LAST({ judgeDeferred: 0 }) });
+    const c0 = render();
+    await settle();
+    expect(has(c0, 'Судья недоступен')).toBe(false);
+
+    // старая карточка без поля — того же не показываем
+    server = settings({ lastNight: LAST({}) });
+    const cN = render();
+    await settle();
+    expect(has(cN, 'Судья недоступен')).toBe(false);
   });
 });

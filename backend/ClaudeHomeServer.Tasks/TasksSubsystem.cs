@@ -101,6 +101,8 @@ public sealed class TasksSubsystem : IAppSubsystem
         // IHostedService (Tasks, не Main — граница подсистем держится), явная регистрация
         // по образцу строки выше.
         services.AddGatedHostedService<AwaitingHumanAnswerSubscriber>(config, "tasks");
+        // Стор шаблонов процесса фичи (data/workflow-templates.json): singleton — лок на файл один.
+        services.AddSingleton<WorkflowTemplateStore>();
         // Шов IPersonaAutomationRunner (Core) — регистрация фабрики вынесена в
         // Program.cs рядом с `PersonaAutomationRunnerAdapter`, потому что адаптер
         // живёт в Main (обёртка над `PersonaAutomationService`).

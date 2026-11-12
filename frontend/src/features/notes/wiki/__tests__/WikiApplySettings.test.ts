@@ -381,7 +381,10 @@ describe('блок «Применение» (S7d-1)', () => {
     await settle();
     const sw = findNodeByAttr(c, 'data-testid', 'wiki-apply-switch')!;
     const toggle = findNodeByAttr(sw, 'role', 'switch')!;
-    click(toggle, 'тумблер «Применять без ревью»');
+    // J-F1 (QA b0065470): имя тумблера для скринридера равно видимой подписи — экран и
+    // доступное имя не расходятся
+    expect(toggle.getAttribute('aria-label'), 'aria-label = видимая подпись').toBe('Применять неспорное само');
+    click(toggle, 'тумблер «Применять неспорное само»');
     // до ответа: новое значение уже в сторе — UI тумблера не ждёт сети (мутация 4)
     expect(getWikiSettingsSnapshot()!.autoApplyEnabled).toBe(false);
     await settle();

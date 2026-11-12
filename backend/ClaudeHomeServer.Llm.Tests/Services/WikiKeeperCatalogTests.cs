@@ -53,4 +53,47 @@ public class WikiKeeperCatalogTests
         Assert.Equal(ModelTier.Medium, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.WikiNightly));
         Assert.Equal(ModelTier.Weak, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.WikiTriage));
     }
+
+    [Fact]
+    public void МестоСудьи_ОблачноеИСильное_ЗаписиНочиИОтбораНеТронуты()
+    {
+        // Судья спорных правок вики (J-J1a): место есть, оно НЕ локальное по умолчанию
+        // (исполнителя выбирает админ в «Поставщиках моделей»), слот — сильный.
+        var judge = LocalActionCatalog.Find(LocalActionCatalog.WikiJudge);
+        Assert.NotNull(judge);
+        Assert.Contains(LocalActionCatalog.All, a => a.Key == LocalActionCatalog.WikiJudge);
+
+        Assert.Equal("Судья спорных правок вики", judge.Title);
+        Assert.Equal("Заметки", judge.Group);
+        Assert.Equal(CheapProfile.Large, judge.Profile);
+        Assert.False(judge.DefaultLocal);
+        Assert.Equal(ModelTier.Strong, judge.Tier);
+        Assert.Equal(ModelTier.Strong, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.WikiJudge));
+
+        // Снимок записей ночи и отбора с master 648ff986e: эта задача их не меняет, и тест
+        // ловит случайную правку полей (профиль, слот, локальные лимиты) как красную.
+        var nightly = LocalActionCatalog.Find(LocalActionCatalog.WikiNightly);
+        Assert.NotNull(nightly);
+        Assert.Equal("wiki-nightly", nightly.Key);
+        Assert.Equal("Ночной разбор вики", nightly.Title);
+        Assert.Equal("Заметки", nightly.Group);
+        Assert.Equal(CheapProfile.Large, nightly.Profile);
+        Assert.True(nightly.DefaultLocal);
+        Assert.Equal(ModelTier.Medium, nightly.Tier);
+        Assert.Equal(65_536, nightly.NumCtx);
+        Assert.Equal(16_384, nightly.NumPredict);
+        Assert.Equal(600_000, nightly.TimeoutMs);
+
+        var triage = LocalActionCatalog.Find(LocalActionCatalog.WikiTriage);
+        Assert.NotNull(triage);
+        Assert.Equal("wiki-triage", triage.Key);
+        Assert.Equal("Отбор чатов для вики", triage.Title);
+        Assert.Equal("Заметки", triage.Group);
+        Assert.Equal(CheapProfile.Small, triage.Profile);
+        Assert.True(triage.DefaultLocal);
+        Assert.Equal(ModelTier.Weak, triage.Tier);
+        Assert.Null(triage.NumCtx);
+        Assert.Null(triage.NumPredict);
+        Assert.Null(triage.TimeoutMs);
+    }
 }

@@ -229,6 +229,28 @@ public class WikiSettingsControllerTests : IDisposable
     }
 
     [Fact]
+    public async Task GETНесётПоляСудьи_СтарыйФайлБезНихЧитаетсяНулями()
+    {
+        // J-J4: те же поля, что в файле и в строке журнала. Старый файл (без них) — нули, без
+        // исключения и без 500: аддитивность того же чтения, что у inputTokens/rejected.
+        WriteLastNight("""{"date":"2026-11-02","selected":1,"analyzed":1,"applied":0,"toInbox":1,"estTokens":0,"outcome":"completed","judgeCalls":1,"judgeCostUsd":0.02,"judgeApplied":1,"judgeRejected":0,"judgeDeferred":3,"codeRejected":2}""");
+
+        var dto = (WikiSettingsDto)((OkObjectResult)(await Controller().Get()).Result!).Value!;
+        dto.LastNight!.JudgeCalls.Should().Be(1);
+        dto.LastNight!.JudgeCostUsd.Should().Be(0.02m);
+        dto.LastNight!.JudgeApplied.Should().Be(1);
+        dto.LastNight!.JudgeRejected.Should().Be(0);
+        dto.LastNight!.JudgeDeferred.Should().Be(3);
+        dto.LastNight!.CodeRejected.Should().Be(2);
+
+        WriteLastNight(LastNightJson);
+        var old = (WikiSettingsDto)((OkObjectResult)(await Controller().Get()).Result!).Value!;
+        old.LastNight!.JudgeCalls.Should().Be(0);
+        old.LastNight!.JudgeCostUsd.Should().Be(0m);
+        old.LastNight!.JudgeDeferred.Should().Be(0);
+    }
+
+    [Fact]
     public async Task GETБезФайлаИтогаОтдаётNull_Без500()
     {
         var res = await Controller().Get();

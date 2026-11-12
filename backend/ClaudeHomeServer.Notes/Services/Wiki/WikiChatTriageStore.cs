@@ -283,6 +283,51 @@ public static class WikiChatTriageStore
         });
     }
 
+    /// <summary>Сбросить курсоры разбора всех записей (J-P1b): после чистки старой вики
+    /// разбор чатов начинается заново — cursor=0, cursorHash/zone/reason=null,
+    /// nothingNewStreak=0, rejectStreak=0 (хэш обнуляется вместе с курсором, как при откате
+    /// окна: back==0 → null, WikiChatIngestService). Всё остальное остаётся как есть:
+    /// score/signals и stage1* (поля пересчёта), вердикт ступени 2, чужие поля записей
+    /// (в т.ч. пометка человека — она живёт на чате, а не в сторе: стор её не создаёт,
+    /// но и не теряет) — их пересчитывать не нужно. То же разведение владения, что у
+    /// UpdateScoring/UpdateStage2, только в обратную сторону: обнуляются поля разбора,
+    /// чужие не трогаются. triagedAt ставит сервер: запись изменена. Тот же цикл под тем же
+    /// блоком корня и тот же fail-closed: нечитаемый стор — CodeInvalid, файл не трогается.
+    /// Файла нет или пустой стор — Ok с числом 0: файл не создаётся, сбрасывать нечего.</summary>
+    public static WikiTriageOpResult ResetCursors(string root, ILogger? log = null)
+    {
+        return WithRootLock<WikiTriageOpResult>(root, () =>
+        {
+            var (state, nodes, _) = ReadAll(root);
+            if (state == WikiTriageFileState.Invalid)
+            {
+                log?.LogWarning("Стор разбора чатов нечитаем, сброс курсоров невозможен: {Path}", TriageRelPath);
+                return Fail(CodeInvalid, "файл разбора чатов не читается — сброс в нём невозможен");
+            }
+            if (nodes.Count == 0)
+                return Ok(null);
+
+            var now = DateTimeOffset.UtcNow;
+            foreach (var node in nodes)
+            {
+                // После ReadAll все узлы — проверенные объекты. Правка только полей разбора
+                // (как точечная правка своих полей у UpdateScoring): всё прочее в узле —
+                // балл, ступени, чужие поля — остаётся без изменения.
+                var obj = (JsonObject)node!;
+                obj["cursor"] = 0;
+                obj["cursorHash"] = null;
+                obj["zone"] = null;
+                obj["reason"] = null;
+                obj["nothingNewStreak"] = 0;
+                obj["rejectStreak"] = 0;
+                obj["triagedAt"] = now;
+            }
+            nodes.Sort((a, b) => string.CompareOrdinal(KeyOf(a), KeyOf(b)));
+            WikiFileWriter.Write(root, TriageRelPath, JsonSerializer.Serialize(nodes, JsonOpts));
+            return Ok(null, nodes.Count);
+        });
+    }
+
     /// <summary>Удалить запись чата (чистка стора пересчётом, хвост R-WIKI-PRIV п.3): записи
     /// приватных чатов, попавшие в стор до правила приватности, не читаются ни одним
     /// потребителем (List, BuildQueue) и не должны оставаться в файле. Тот же цикл под блоком
@@ -480,7 +525,8 @@ public static class WikiChatTriageStore
     }
 
     // Entry nullable: Remove возвращает Ok без записи, когда удалять нечего (файл не тронут).
-    private static WikiTriageOpResult Ok(WikiChatTriageEntry? entry) => new(true, "", null, entry);
+    // resetCount — только для ResetCursors (число обнулённых записей); для остальных операций 0.
+    private static WikiTriageOpResult Ok(WikiChatTriageEntry? entry, int resetCount = 0) => new(true, "", null, entry, resetCount);
     private static WikiTriageOpResult Fail(string code, string reason) => new(false, code, reason, null);
 }
 
@@ -530,5 +576,6 @@ public enum WikiTriageFileState
 public readonly record struct WikiTriageReadResult(WikiTriageFileState State, IReadOnlyList<WikiChatTriageEntry> Entries);
 
 /// <summary>Результат записи: Ok + запись после постановки (с датой сервера), либо код отказа
-/// и текст для вызывающего.</summary>
-public readonly record struct WikiTriageOpResult(bool Ok, string Code, string? Reason, WikiChatTriageEntry? Entry);
+/// и текст для вызывающего. ResetCount — число обнулённых записей (ResetCursors: их много
+/// на один вызов, в Entry не умещаются); для остальных операций 0.</summary>
+public readonly record struct WikiTriageOpResult(bool Ok, string Code, string? Reason, WikiChatTriageEntry? Entry, int ResetCount = 0);

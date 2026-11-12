@@ -324,6 +324,15 @@ public class WikiSettingsController : ControllerBase
                 Rejected = lastNight.Rejected,
                 FirstRejectReason = lastNight.FirstRejectReason,
                 Manual = lastNight.Manual,
+                // Судья (J-J4): те же числа, что в файле и в строке журнала. Поля отброшенных
+                // операций (Dropped) и отказов ступени 2 в DTO не идут по прежнему правилу этого
+                // блока: их адресат — журнал процесса, не карточка настроек.
+                JudgeCalls = lastNight.JudgeCalls,
+                JudgeCostUsd = lastNight.JudgeCostUsd,
+                JudgeApplied = lastNight.JudgeApplied,
+                JudgeRejected = lastNight.JudgeRejected,
+                JudgeDeferred = lastNight.JudgeDeferred,
+                CodeRejected = lastNight.CodeRejected,
             },
         };
     }
@@ -365,6 +374,15 @@ public sealed class WikiLastNightDto
     // WN-5: проход был запущен кнопкой вручную (не ночным тиком); старый файл без поля
     // читается false (та же аддитивность).
     public bool Manual { get; set; }
+    // J-J4: итог прохода облачного судья, запущенного в конце этого же прохода. Счётчики — по
+    // операциям, не по пакетам; JudgeCostUsd — стоимость его вызовов (единственные деньги в
+    // итоге). Старый файл без этих полей читается нулями (та же аддитивность).
+    public int JudgeCalls { get; set; }
+    public decimal JudgeCostUsd { get; set; }
+    public int JudgeApplied { get; set; }
+    public int JudgeRejected { get; set; }
+    public int JudgeDeferred { get; set; }
+    public int CodeRejected { get; set; }
 }
 
 /// <summary>Блок «Ночной разбор» (макет Ф2): тумблер, окно [WindowStartHour, WindowEndHour),

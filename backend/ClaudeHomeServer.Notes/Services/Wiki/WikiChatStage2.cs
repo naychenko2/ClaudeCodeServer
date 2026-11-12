@@ -13,8 +13,9 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 // списком отбора с приоритетом nothing_new > ступень 2 > ступень 1 (WikiChatsController.ShownZone).
 //
 // Инварианты:
-// - Отказ ступени 2 → серая зона. Любой сбой (нет маршрута, исключение модели, отмена ct, пустой
-//   ответ, невалидный JSON, JSON без булева hasKnowledge, нечитаемый стор при записи) даёт
+// - Отказ ступени 2 → серая зона. Любой сбой (нет маршрута, нелокальный маршрут, исключение
+//   модели, отмена ct, пустой ответ, невалидный JSON, JSON без булева hasKnowledge, нечитаемый
+//   стор при записи) даёт
 //   Refused: stage2Zone НЕ пишется, чат остаётся серым, исключение наружу не летит — ночной
 //   BackgroundService от него не падает.
 // - Skip побеждает балл. Модель зовётся ТОЛЬКО для записи со stage1Zone=gray: skip, исполнение
@@ -116,6 +117,11 @@ public sealed class WikiChatStage2
 
         if (!_llm.HasRoute(LocalActionCatalog.WikiTriage))
             return Refused("у места wiki-triage нет маршрута");
+        // И3 (J-W0): ступень 2 не уходит в облако ни на каком шаге цепочки. Облачный маршрут
+        // места (админ или массовый пресет) отказывает ступень до чтения истории и до вызова —
+        // тот же страж, что в ночном окне (WikiIngestService.cs:655).
+        if (!_llm.UsesLocal(LocalActionCatalog.WikiTriage))
+            return Refused("ступень 2 только локальной моделью: у места wiki-triage нелокальный маршрут");
 
         var history = await _sessions.GetHistoryAsync(sessionId);
         ct.ThrowIfCancellationRequested();
@@ -125,9 +131,11 @@ public sealed class WikiChatStage2
             return Refused("в чате нет реплик");
 
         var prompt = PromptHeader + Slice(lines);
-        // Решение Андрея 02.11: ступень 2 не уходит в облако. RunLocalOrChosenDetailedAsync —
-        // та же цепочка без финального claude-шага при локальном маршруте; недоступность/сбой
-        // локали — отказ вызова, чат остаётся в серой зоне (stage2Zone не пишется). Фактический
+        // Решение Андрея 02.11 (J-W0): ступень 2 не уходит в облако. Защита от облака — страж
+        // UsesLocal выше (нелокальный маршрут отказывает ступень до чтения истории), а не только
+        // «без claude-шага»: RunLocalOrChosenDetailedAsync — та же цепочка без финального
+        // claude-шага при локальном маршруте; недоступность/сбой локали — отказ вызова, чат
+        // остаётся в серой зоне (stage2Zone не пишется). Фактический
         // вход этого ответа (usage движка) идёт в Stage2Result.InputTokens — ночь суммирует
         // его в итоге; метрик не было → 0, вердикт от этого не меняется. Отмена — не сбой,
         // её пробрасываем.

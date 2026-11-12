@@ -375,14 +375,14 @@ describe('Вкладка «Вики»: ошибки и подвкладки (д�
     try {
       const c = render(TREE);
       await settle();
-      const pills = () => findNodeByAttr(c, 'aria-label', 'Входящие');
-      click(pills(), 'Входящие');
+      const pills = () => findNodeByAttr(c, 'aria-label', 'Решения');
+      click(pills(), 'Решения');
       await settle();
       expect(has(c, `раздел=projects/${PROJECT_ID}`)).toBe(true);
       click(findNodeByAttr(c, 'aria-label', 'Страницы'), 'Страницы');
       await settle();
       expect(findNodeByAttr(c, 'data-testid', 'stub-inbox')).toBeNull();
-      click(pills(), 'Входящие');
+      click(pills(), 'Решения');
       await settle();
       expect(findNodeByAttr(c, 'data-testid', 'stub-inbox')).not.toBeNull();
     } finally {

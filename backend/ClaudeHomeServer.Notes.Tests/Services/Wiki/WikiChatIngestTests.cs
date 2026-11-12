@@ -1275,6 +1275,22 @@ public class WikiChatIngestTests : IDisposable
         return windows[0].Lines[^1].Index;
     }
 
+    // Дельта из пяти окон: та же фикстура, что TwoWindowHistory, только длиннее — 63
+    // служебные реплики по 6000 знаков. Границы окон считает слайсер (WindowTokens 35k
+    // с перекрытием в 2 реплики), тест лишь проверяет число окон и берёт конец первого
+    // из них — как EndOfFirstWindow для двух.
+    private List<StoredMessage> FiveWindowHistory()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("claude", "default"),
+            new StoredUserMessage($"{Claim1}. Хронология: {Marker1}."),
+        };
+        for (var i = 0; i < 63; i++) history.Add(new StoredTextMessage(new string('x', 6_000)));
+        history.Add(new StoredUserMessage("Хватит. Итога нет."));
+        return history;
+    }
+
     // Вне шага WC-3: только «нечего добавить» до отказа — по-старому отказ всего разбора:
     // курсор на месте, половины хроники нет.
     [Fact]
@@ -1332,6 +1348,40 @@ public class WikiChatIngestTests : IDisposable
             .Should().Be(1, "хроника по применённому написана");
         File.ReadAllText(PathOf(PagePath)).Should().Contain(Claim1, "применённое окно осталось на странице");
         llm.CountOf("S").Should().Be(2, "первое окно разобрано, второе отказано, дальше цикл не идёт");
+    }
+
+    // J-P1c (разрез §5): чат из пяти окон, вызов модели второго окна отказан — так выглядит
+    // «входной бюджет кончился» на этом пути (движок отказывает вызов, а не окно как таковое).
+    // Первое окно применено. Курсор — на конце последнего применённого окна: не на 0
+    // (применённое окно не стирается) и не на конце чата (отказанное окно и три за ним не
+    // разбирались). Тот же механизм, что у двухоконного WC-3, но на длинной дельте:
+    // проверка именно в том, что курсор не прыгает к history.Count.
+    [Fact]
+    public async Task ПятьОкон_БюджетОборвалсяНаВтором_КурсорНаКонцеПервого()
+    {
+        AddSession();
+        var history = FiveWindowHistory();
+        SetHistory(ChatId, history);
+        var windows = WikiChatSlicer.Windows(history, 1, history.Count);
+        windows.Should().HaveCount(5, "дельта — ровно пять окон");
+        var endOfFirst = windows[0].Lines[^1].Index;
+
+        var llm = new FakeLlm(
+            ("S", Synth(Claim1)),
+            ("S", "модель ответила прозой вместо JSON"));
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeApplied, res.Reason);
+        res.Partial.Should().BeTrue("разбор оборвался на втором окне — применённое осталось");
+        res.Reason.Should().Contain("окна m", "причина отказанного окна остаётся в результате");
+
+        var entry = WikiChatTriageStore.Get(Root).Entries.Single();
+        entry.Cursor.Should().Be(endOfFirst, "курсор на конце последнего применённого окна");
+        entry.Cursor.Should().NotBe(0, "применённое окно не возвращает курсор в 0");
+        entry.Cursor.Should().NotBe(history.Count, "курсор не прыгает за отказанное окно к концу чата");
+        entry.CursorHash.Should().NotBeNullOrEmpty("хэш записи, на которой стоит курсор");
+
+        llm.CountOf("S").Should().Be(2, "окна 3—5 после отказа не разбираются");
     }
 
     // c3 (WC-3): хроника частичного исхода не записана — исход refused, курсор на месте

@@ -13,7 +13,7 @@ import { sanitizeLayout } from './panelStackState';
 
 const WIKI = ['wikiInbox', 'wikiJournal', 'wikiHealth', 'wikiSettings'] as const;
 const TITLES: Record<string, string> = {
-  wikiInbox: 'Входящие', wikiJournal: 'Журнал', wikiHealth: 'Здоровье', wikiSettings: 'Настройки',
+  wikiInbox: 'Решения', wikiJournal: 'Журнал', wikiHealth: 'Здоровье', wikiSettings: 'Настройки',
 };
 
 describe('ключи панелей вики в реестре панелей', () => {

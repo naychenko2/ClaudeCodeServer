@@ -709,7 +709,7 @@ describe('«Разобрать в базу» у заметки (S7b, логик�
 
   it('409 packages_limit — текстом; 404 — текстом, функция не бросает (экран не падает)', async () => {
     req.mockImplementation(() => Promise.reject({ status: 409, body: { code: 'packages_limit', message: 'open packages limit reached' } }));
-    expect(await requestNoteIngest('note-1')).toContain('Открытых пакетов слишком много');
+    expect(await requestNoteIngest('note-1')).toContain('Открытых пакетов уже 20');
 
     req.mockImplementation(() => Promise.reject({ status: 404 }));
     expect(await requestNoteIngest('note-1')).toBe('Не найдено');

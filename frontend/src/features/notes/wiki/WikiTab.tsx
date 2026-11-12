@@ -533,8 +533,8 @@ export function WikiTab({ unified = false, treeHost = null, drawerTree, onSectio
               onClick={() => setDrawer(d => d === 'tree' ? null : 'tree')}>{null}</Button>
             <span style={{ flex: 1 }} />
             <span style={{ position: 'relative', display: 'inline-flex' }}>
-            <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Входящие, журнал, здоровье, настройки"
-              title="Входящие, журнал, здоровье, настройки"
+            <Button variant="ghost" size="md" dataTestId="wiki-open-panel" ariaLabel="Решения, журнал, здоровье, настройки"
+              title="Решения, журнал, здоровье, настройки"
               leftIcon={<PanelRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />} ariaExpanded={drawer === 'panel'} ariaControls={DRAWER_PANEL_ID}
               style={{ width: DRAWER_BTN, height: DRAWER_BTN, padding: 0 }}
               onClick={() => {

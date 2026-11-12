@@ -93,6 +93,9 @@ public static class LocalActionCatalog
     public const string WikiFact = "wiki-fact";
     public const string WikiNightly = "wiki-nightly";
     public const string WikiTriage = "wiki-triage";
+    // Судья спорных правок вики (J-J1): вердикт по спорной операции пакета. Место добавлено
+    // отдельно от ночной работы: ночной синтез остаётся только локальным, судью выбирает админ.
+    public const string WikiJudge = "wiki-judge";
     public const string ChatTitle = "chat-title";
     public const string ChatRetitle = "chat-retitle";
     public const string ChatExtractTasks = "chat-extract-tasks";
@@ -247,6 +250,15 @@ public static class LocalActionCatalog
         // маленький JSON. Слот weak — явный.
         new(WikiTriage, "Отбор чатов для вики", "Заметки", CheapProfile.Small,
             DefaultLocal: true, Tier: ModelTier.Weak),
+        // Судья спорных правок вики (J-J1): по каждой спорной операции пакета вердикт
+        // «применить / отклонить + почему» (промпт — WikiJudgePrompts, разбор — WikiJudgeVerdict).
+        // Large: на вход идут текст страницы, формулировки операций и дословные цитаты —
+        // меньший профиль обрезал бы их до отсечения, и судья судил бы по неполным данным.
+        // DefaultLocal: false и явный Strong: локаль по умолчанию здесь не предлагается —
+        // исполнителя для этого места выбирает админ в «Поставщиках моделей». Ночной синтез
+        // (wiki-nightly) этой записи не касается: он остаётся только локальным.
+        new(WikiJudge, "Судья спорных правок вики", "Заметки", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Strong),
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),

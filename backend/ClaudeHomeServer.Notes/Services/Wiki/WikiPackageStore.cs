@@ -111,7 +111,7 @@ public static class WikiPackageStore
             // не должен занимать место в лимите) и после гашения: закрытые попытки своё место
             // освободили, новый считается по тому, что осталось открытым.
             if (CountOpen(root) >= WikiPackage.MaxOpenPackages)
-                return Fail(CodeLimit, $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: лимит на всю вики");
+                return Fail(CodeLimit, $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: судья не успевает или недоступен — заявка подождёт");
 
             var now = DateTimeOffset.UtcNow;
             var created = package with
@@ -272,6 +272,10 @@ public static class WikiPackageStore
             // тоже отказ, двойного эффекта нет.
             if (op.HumanDecision is not null)
                 return Fail(CodeAlreadyDecided, $"операция {index} уже решена как «{op.HumanDecision}»: решение не меняется");
+            // Вердикт судьи — тоже решение этой операции (И1): человек его не переворачивает
+            // молча и не дополняет своим; пересмотр — новым пакетом, не вторым решением.
+            if (op.JudgeDecision is not null)
+                return Fail(CodeAlreadyDecided, $"операция {index} уже решена судьёй как «{op.JudgeDecision}»: решение не меняется");
             if (!accept && string.IsNullOrWhiteSpace(reason))
                 return Fail(CodeReasonRequired, "отклонить спорную операцию можно только с причиной");
 
@@ -288,7 +292,8 @@ public static class WikiPackageStore
 
     /// <summary>«Принять всё спорное пакета» (кнопка «Входящих»): все нерешённые `inbox`
     /// принимаются, пакет становится accepted. Пакета без спорных операций это не касается:
-    /// решать нечего (отказ), неспорные применяет политика.</summary>
+    /// решать нечего (отказ), неспорные применяет политика. Операции, решённые судьёй,
+    /// пропускаются: их вердикт остаётся как есть (И1 — у операции одно решение).</summary>
     public static WikiPackageOpResult AcceptAllContested(string root, string id)
     {
         // Тот же цикл «чтение → пересчёт → перезапись», что у DecideOperation: кнопка
@@ -304,7 +309,7 @@ public static class WikiPackageStore
                 return Fail(CodeNothingToDecide, "в пакете нет спорных операций: решать нечего");
 
             var operations = pkg.Operations
-                .Select(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null
+                .Select(o => o.Decision == WikiPackage.DecisionInbox && o.HumanDecision is null && o.JudgeDecision is null
                     ? o with { HumanDecision = WikiPackage.HumanAccepted, HumanReason = null }
                     : o)
                 .ToArray();
@@ -312,15 +317,89 @@ public static class WikiPackageStore
         });
     }
 
+    /// <summary>Один вердикт судьи по одной операции пакета (вход JudgeOperations).
+    /// Apply == null — «вердикта нет» (модель звала — исхода нет); Why — текст отказа
+    /// (обязателен у rejected: форма пакета отказа без причины не допускает); Model — имя
+    /// модели или метка WikiPackage.JudgeModelCode; CostUsd — стоимость облачного вызова.</summary>
+    public sealed record JudgeOutcome(int Index, bool? Apply, string? Why, string Model, decimal? CostUsd);
+
+    /// <summary>Решения облачного судьи по спорным операциям пакета (J-J2a): вердикт пишется
+    /// в поля `Judge*` той же операции, которую решает человек через DecideOperation, — и только
+    /// в операцию, которую ещё никто не решил: `inbox`, без HumanDecision и без JudgeDecision.
+    /// Всё остальное — молча пропускается: устаревший ответ модели (человек уже решил, пакет
+    /// ушёл в stale, индекса больше нет) — не исключение и не отказ: за время облачного вызова
+    /// с пакетом могло случиться что угодно, и sweeping-вызывающий (J-J3a) не обязан это знать.
+    /// Пакет вне `proposed` — отказ кодом (тот же CodeNotDecidable, что у DecideOperation):
+    /// здесь нечего решать, исключения нет. Вердикт ведёт статус пакета так же, как решение
+    /// человека (StatusAfterDecisions): И1 — у спорной операции ровно одно решение.</summary>
+    public static WikiPackageOpResult JudgeOperations(string root, string id, IReadOnlyList<JudgeOutcome> outcomes)
+    {
+        // Тот же цикл «чтение → пересчёт → перезапись» под блоком пакета, что у DecideOperation:
+        // вердикт модели гонится с решением человека по той же операции, и без блока одно из
+        // двух решений терялось бы последним письмом (ревью S4a, MAJOR 1, та же мера).
+        return WithPackageLock(root, id, () =>
+        {
+            var (pkg, fail) = RequireValid(root, id);
+            if (fail is not null) return fail.Value;
+            if (pkg!.Status != WikiPackage.StatusProposed)
+                return Fail(CodeNotDecidable, $"решают по операциям пакета в «{WikiPackage.StatusProposed}», сейчас «{pkg.Status}»");
+
+            var operations = pkg.Operations.ToArray();
+            var changed = false;
+            foreach (var o in outcomes)
+            {
+                if (o is null || o.Index < 0 || o.Index >= operations.Length)
+                    continue;
+                var op = operations[o.Index];
+                // Решить можно только нерешённое: чужое решение (человека или прежний вердикт)
+                // не переворачивается и не дополняется вторым.
+                if (op.Decision != WikiPackage.DecisionInbox || op.HumanDecision is not null || op.JudgeDecision is not null)
+                    continue;
+                // Отказ без причины — не вердикт: записать его форма не позволит (та же мера,
+                // что CodeReasonRequired у человека). Такая попытка считается попыткой.
+                var accept = o.Apply == true;
+                if (o.Apply is null || (!accept && string.IsNullOrWhiteSpace(o.Why)))
+                {
+                    operations[o.Index] = op with { JudgeAttempts = op.JudgeAttempts + 1 };
+                    changed = true;
+                    continue;
+                }
+                operations[o.Index] = op with
+                {
+                    // Значения те же, что у решения человека: автор — в имени поля (J-J2a).
+                    JudgeDecision = accept ? WikiPackage.HumanAccepted : WikiPackage.HumanRejected,
+                    JudgeReason = accept ? null : o.Why,
+                    JudgeModel = o.Model,
+                    // Дату ставит сервер (ревью S4a, минор 6): время облачного ответа — не дата
+                    // решения; решено то, что записано здесь и сейчас.
+                    JudgeAt = DateTimeOffset.UtcNow,
+                    JudgeCostUsd = o.CostUsd,
+                };
+                changed = true;
+            }
+            // Ничего не решаемого не было: файл не трогается, отказа нет — вызывающий видит
+            // состояние пакета и по нему узнаёт, что его ответ устарел.
+            if (!changed)
+                return Ok(pkg);
+            return WriteAndOk(root, pkg with { Operations = operations, Status = StatusAfterDecisions(pkg, operations), UpdatedAt = DateTimeOffset.UtcNow });
+        });
+    }
+
     // Вердикт по всем спорным операциям: пока хоть одна не решена — proposed (решение
-    // человека не считается до конца). Решённые все → по их исходам. Неспорные операции
-    // в вердикт не входят: их не человек решает.
+    // по спорной операции не считается до конца). Решённые все → по их исходам. Неспорные
+    // операции в вердикт не входят: их не человек решает.
+    // Спорная операция решена, если решил человек ИЛИ судья (J-J2a): вердикт модели ведёт
+    // статус ровно так же, как решение человека. Оба решения по одной операции невозможны
+    // в бою (и то и другое ставится только в нерешённую операцию); если всё же лежат рядом,
+    // ведёт человека — его решение старше.
     private static string StatusAfterDecisions(WikiPackage pkg, WikiPackage.Operation[] operations)
     {
         var contested = operations.Where(o => o.Decision == WikiPackage.DecisionInbox).ToArray();
-        if (contested.Any(o => o.HumanDecision is null))
+        if (contested.Any(o => o.HumanDecision is null && o.JudgeDecision is null))
             return WikiPackage.StatusProposed;
-        var accepted = contested.Count(o => o.HumanDecision == WikiPackage.HumanAccepted);
+        var accepted = contested.Count(o => o.HumanDecision is not null
+            ? o.HumanDecision == WikiPackage.HumanAccepted
+            : o.JudgeDecision == WikiPackage.HumanAccepted);
         if (accepted == contested.Length) return WikiPackage.StatusAccepted;
         if (accepted == 0) return WikiPackage.StatusRejected;
         return WikiPackage.StatusPartiallyAccepted;
@@ -372,6 +451,48 @@ public static class WikiPackageStore
             });
         }
     }
+
+    /// <summary>Гашение открытых пакетов автора ai при чистке вики (J-P1a, ADR-039 решение 10):
+    /// «proposed»/«checking»/«accepted»/«partially_accepted» → «stale» с причиной чистки — их
+    /// страницы удалены, намерение больше не к чему применять, следующий разбор соберёт новое.
+    /// Не трогать: автор human (решение человека), «applying» (применение уже идёт — его ведёт
+    /// тот прогон), закрытые статусы, и прежде всего применённые: их откат — кнопка человека,
+    /// не чистка. Все четыре открытых статуса имеют переход в «stale» по таблице — прямая
+    /// запись её не обходит (тот же приём, что у гашения в Create). Каждый пакет перечитывается
+    /// и пишется под своим блоком, проверка повторяется по живому состоянию: параллельное
+    /// решение человека или вердикт судьи не должны быть затёрты слепым статусом. Возвращает
+    /// число погашенных.</summary>
+    public static int StaleOpenAiPackages(string root, string reason)
+    {
+        var staled = 0;
+        foreach (var p in List(root).Packages)
+        {
+            if (p.Author != WikiPackage.AuthorAi || !IsStaleableByPurge(p.Status))
+                continue;
+            var done = WithPackageLock(root, p.Id, () =>
+            {
+                var (cur, fail) = RequireValid(root, p.Id);
+                if (fail is not null || cur!.Author != WikiPackage.AuthorAi || !IsStaleableByPurge(cur.Status))
+                    return false;
+                Write(root, cur! with
+                {
+                    Status = WikiPackage.StatusStale,
+                    StatusReason = reason,
+                    UpdatedAt = DateTimeOffset.UtcNow,
+                });
+                return true;
+            });
+            if (done) staled++;
+        }
+        return staled;
+    }
+
+    // Гасимое чисткой — открытое состояние, из которого переход в «stale» разрешён таблицей.
+    // «applying» здесь нет: заявка применения, которую ведёт живой прогон, — гашение посреди
+    // него рассогласовало бы прогон с его же пакетом.
+    private static bool IsStaleableByPurge(string status) =>
+        status is WikiPackage.StatusChecking or WikiPackage.StatusProposed
+            or WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted;
 
     // Что гасится: открытое, неприменённое и нерешённое человеком. «accepted»/
     // «partially_accepted» без человеческого решения — авто-путь, вставший перед применением

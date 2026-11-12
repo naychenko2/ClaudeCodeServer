@@ -24,13 +24,22 @@
 // страницу существующим каналом requestOpenWikiPage (стор держит один запрос: двойной клик не
 // откроет второго), где хук возврата уже подключён (useRestoreWikiStatement, F3b). Спора
 // возвращать нечего — текст человека на месте, его действие — «Открыть страницу».
+//
+// «Решения за ночь» (J-F2): второй вид той же ручки — утренняя сводка: четыре группы
+// вердиктов облачного судьи за последнюю ночь и очередь нерешённого (J-F0,
+// GET /api/wiki/journal?view=night). Окно считает фронт: бэк принимает только даты,
+// а ночное окно сервера переходит через полночь — [вчера, завтра) наименьшее окно,
+// накрывающее её целиком. «Откатить пакет» (мера 4) наконец имеет место: строка ночи
+// несёт id пакета — дефект ead65823 закрыт этой ручкой.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AlertTriangle, History } from 'lucide-react';
+import { AlertTriangle, History, Moon } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile, openChatById, requestOpenWikiPage, showToast,
   WikiError, loadWikiJournal, retractWikiSource, useWikiTree,
+  loadWikiNightDecisions, revertWikiPackage,
   type WikiJournalDto, type WikiJournalEntryOverrideDto,
+  type WikiNightDecisionDto, type WikiNightDecisionsDto, type WikiRevertDto,
 } from 'aihome_shell/kit';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
@@ -38,9 +47,10 @@ import { Chip } from '../../../components/ui/Chip';
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog';
 import { EmptyState } from '../../../components/ui/EmptyState';
 import { Notice } from '../../../components/ui/Notice';
+import { SegmentedControl } from '../../../components/ui/Segmented';
 import { Select } from '../../../components/ui/Select';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { OVERRIDE_TEXT, ORIGIN_META, countWord, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
+import { OVERRIDE_TEXT, ORIGIN_META, countWord, isOne, retractResultText, sectionPrefix, wikiErrorText } from './wikiLabels';
 
 // ─── Словари подписей ───
 
@@ -309,6 +319,162 @@ function JournalEntry({
   );
 }
 
+// ─── «Решения за ночь» (J-F2) ───
+
+const NIGHT_VIEW_OPTIONS: { value: 'all' | 'night'; label: string }[] = [
+  { value: 'all', label: 'Все записи' },
+  { value: 'night', label: 'Решения за ночь' },
+];
+
+const localDay = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+// Окно «последней ночи»: [вчера, завтра) локальных дат. Полное окно сервера переходит
+// через полночь (WikiNightlyService.InWindow: start > end), а from/to бэка — даты без
+// времени: любое более узкое окно отрезает часть ночи до или после полуночи. Дневная
+// часть окна не случайна: проход судья идёт не только в конце ночи, но и после спорной
+// заявки (4a7248841) — сегодняшние вердикты утренней сводке тоже нужны.
+function nightWindow(): { from: string; to: string } {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const from = localDay(d);
+  d.setDate(d.getDate() + 2);
+  return { from, to: localDay(d) };
+}
+
+const dayNum = (key: string) => {
+  const [, m, d] = key.split('-');
+  return `${d}.${m}`;
+};
+
+type NightGroupKey = keyof WikiNightDecisionsDto;
+
+// Группа = поле ответа бэка + её заголовок. В «Отклонено кодом» входят и операции, по которым
+// судья не вынес решения за 3 попытки: бэк метит их JudgeModelCode (WikiJudgeSweep.cs:368-374),
+// и читатель ночи кладёт в эту же группу (WikiJournalReader.cs:306) — отдельной ветки на
+// фронте для них нет.
+const NIGHT_GROUPS: { key: NightGroupKey; title: string }[] = [
+  { key: 'judgeAccepted', title: 'Принято судьёй' },
+  { key: 'judgeRejected', title: 'Отклонено судьёй' },
+  { key: 'codeRejected', title: 'Отклонено кодом' },
+  // Эти операции ждут и человека, и судья (J-F2, доработка приёмки b0065470): «судья» в
+  // заголовке обещал бы только автоматическую половину
+  { key: 'waiting', title: 'Ждут решения' },
+];
+
+// Решение в строке — короткое: полное имя уже в заголовке группы. У «Ждут решения» решения
+// нет вовсе — строка без бейджа: пустое поле честнее выдумки.
+const GROUP_BADGE: Record<Exclude<NightGroupKey, 'waiting'>, { tone: 'success' | 'danger'; text: string }> = {
+  judgeAccepted: { tone: 'success', text: 'принято' },
+  judgeRejected: { tone: 'danger', text: 'отклонено' },
+  codeRejected: { tone: 'danger', text: 'отклонено кодом' },
+};
+
+// Судьба пакета — не вердикт судьи: в «Принято судьёй» строка может нести уже откатанный
+// (reverted) или не применившийся (apply_failed) пакет — пометка говорит об этом прямо,
+// строка остаётся в своей группе (вердикт никуда не делся). Прочие статусы не помечаются:
+// словарь не выдумывает смысл незнакомому слову (тот же приём, что UNKNOWN_OP_TEXT).
+const PACKAGE_STATUS_BADGE: Record<string, { tone: 'neutral' | 'danger'; text: string }> = {
+  reverted: { tone: 'neutral', text: 'откачен' },
+  apply_failed: { tone: 'danger', text: 'не применён' },
+};
+
+// Строка ночи не несёт раздела (в отличие от строки журнала): только ключ страницы.
+// Раздел берётся из дерева по наиболее длинному префиксу ключа (ключ страницы начинается
+// с ключа раздела + '/'): раздела в дереве нет — открыть страницу нечем, строка показывает
+// ключ текстом, без ссылки.
+function pageSectionKey(tree: ReturnType<typeof useWikiTree>, page: string): string | null {
+  let best: string | null = null;
+  for (const s of tree?.sections ?? []) {
+    if ((page === s.key || page.startsWith(`${s.key}/`)) && (!best || s.key.length > best.length)) best = s.key;
+  }
+  return best;
+}
+
+// Исход отката пакета — текстом (формулировки черновые, тексты фичи за Софьей): счёт —
+// по возвращённым страницам, согласование countWord (тот же приём, что retractResultText).
+function revertPackageResultText(r: WikiRevertDto): string {
+  const n = r.restoredPages.length;
+  if (!n) return 'ничего не изменилось';
+  // причастие по правилу файла: при «1» согласуется с существительным, при остальных — средний род
+  return `${countWord(n, 'страница', 'страницы', 'страниц')} ${isOne(n) ? 'возвращена' : 'возвращено'}`;
+}
+
+// Отказы отката пакета — русским текстом по коду бэка (тот же приём, что retractErrorText):
+// 'wiki_revert_status' — состояние пакета не «applied» (включая уже откатанный),
+// 'wiki_revert_changed' — страницы изменены после применения (перечень страниц в отказе
+// несёт WikiRevertError; здесь — короткий текст, перечень человек увидит на странице).
+function revertPackageErrorText(e: WikiError): string {
+  switch (e.code) {
+    case 'wiki_revert_status': return 'Пакет в этом состоянии откатать нельзя';
+    case 'wiki_revert_changed': return 'Страницы изменились после применения: проверьте их и повтори';
+  }
+  return wikiErrorText(e);
+}
+
+// Строка операции ночи: ссылка на страницу (открывает её существующим каналом
+// requestOpenWikiPage), claim, решение, «почему» судьи, исходная причина спора и
+// «Откатить пакет» — только у строки с packageStatus === 'applied': откатывают применённый
+// пакет (WikiController.cs:178-179), а вердикт судьи и судьба пакета — разные вещи
+// (J-F2, доработка b0065470): принятый судьёй мог не примениться (apply_failed) или быть
+// откатан (reverted) — такая строка остаётся в своей группе с пометкой статуса, без кнопки.
+// Всё оборачивается: на 360 px строка не даёт горизонтальной прокрутки.
+function NightRow({ row, group, busy, onRevert }: {
+  row: WikiNightDecisionDto;
+  group: NightGroupKey;
+  busy: boolean;
+  onRevert: () => void;
+}) {
+  const tree = useWikiTree();
+  const sectionKey = pageSectionKey(tree, row.page);
+  const section = sectionKey ? tree?.sections.find(s => s.key === sectionKey) : undefined;
+  const badge = group === 'waiting' ? null : GROUP_BADGE[group];
+  const statusBadge = PACKAGE_STATUS_BADGE[row.packageStatus] ?? null;
+  return (
+    <div data-testid="wiki-night-row" style={{ padding: `${SP.sm}px ${SP.md}px`, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      {(section || badge || statusBadge) && (
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+          {section && (
+            <span style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{sectionPrefix(section)}</span>
+          )}
+          {badge && <Badge tone={badge.tone}>{badge.text}</Badge>}
+          {statusBadge && <Badge tone={statusBadge.tone}>{statusBadge.text}</Badge>}
+        </span>
+      )}
+      {sectionKey ? (
+        <button
+          type="button"
+          data-testid="wiki-night-open"
+          onClick={() => requestOpenWikiPage({ section: sectionKey, path: row.page })}
+          style={{
+            border: 'none', background: 'transparent', padding: 0, cursor: 'pointer', textAlign: 'left',
+            fontFamily: FONT.mono, fontSize: FS.base, fontWeight: 500, color: C.textHeading, overflowWrap: 'anywhere',
+          }}
+        >
+          {row.page}
+        </button>
+      ) : (
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.base, color: C.textMuted, overflowWrap: 'anywhere' }}>{row.page}</span>
+      )}
+      {row.claim && (
+        <span style={{ fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'break-word' }}>{row.claim}</span>
+      )}
+      {row.judgeReason && (
+        <span style={{ fontSize: FS.sm, color: C.textSecondary, overflowWrap: 'break-word' }}>
+          <span style={{ color: C.textMuted }}>почему:</span> {row.judgeReason}
+        </span>
+      )}
+      {row.reason && (
+        <span style={{ fontSize: FS.sm, color: C.textMuted, overflowWrap: 'break-word' }}>причина спора: {row.reason}</span>
+      )}
+      {row.packageStatus === 'applied' && (
+        <span style={{ marginTop: SP.xs }}>
+          <Button variant="secondary" size="sm" dataTestId="wiki-night-revert" disabled={busy} onClick={onRevert}>Откатить пакет</Button>
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ─── Подвкладка ───
 
 // sectionScope (W9b): раздел задаёт снаружи — в панели его выбирает чип в шапке, и Select
@@ -334,6 +500,14 @@ export function WikiJournal(
   const [confirm, setConfirm] = useState<WikiJournalEntryOverrideDto | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Вид (J-F2): 'all' — прежний журнал, 'night' — утренняя сводка. Данные вида живут
+  // отдельно: при смене вида старый список не рендерится, но и не сбрасывается — тот же
+  // порядок, что у фильтров (старый остаётся до ответа нового).
+  const [view, setView] = useState<'all' | 'night'>('all');
+  // Окно запроса храния рядом с ответом: подпись окна должна соответствовать тем данным,
+  // что на экране (пересчёт на рендере показал бы окно другой ночи).
+  const [night, setNight] = useState<{ from: string; to: string; data: WikiNightDecisionsDto } | null>(null);
+  const [nightError, setNightError] = useState<string | null>(null);
   // Поколение загрузок (урок S5b/S5e, образец — loadSeq в WikiInbox): только последний запрос
   // пишет список; filters живут в запросе — поздний ответ прежнего фильтра не затеряет новый
   const loadSeq = useRef(0);
@@ -349,10 +523,19 @@ export function WikiJournal(
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
     setLoadError(null);
+    // Тот же инвариант поколения для обоих видов: поздний ответ одного вида не перезатрёт
+    // экран другого (урок S5b/S5e).
+    if (view === 'night') {
+      const w = nightWindow();
+      loadWikiNightDecisions(w.from, w.to)
+        .then(d => { if (loadSeq.current === mine) setNight({ ...w, data: d }); })
+        .catch(e => { if (loadSeq.current === mine) setLoadError(e); });
+      return;
+    }
     loadWikiJournal({ section: activeSection, origin: originFilter || null, overrodeHuman: overrodeOnly })
       .then(d => { if (loadSeq.current === mine) setData(d); })
       .catch(e => { if (loadSeq.current === mine) setLoadError(e); });
-  }, [activeSection, originFilter, overrodeOnly]);
+  }, [view, activeSection, originFilter, overrodeOnly]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании подвкладки и при смене фильтра: другого места старта нет, список живёт в компоненте
@@ -391,6 +574,25 @@ export function WikiJournal(
     }
   };
 
+  // «Откатить пакет» (мера 4, J-F2): в один клик, без подтверждения — строка уже назвала
+  // всё, что откатывается (страница, claim, вердикт). Успех — перечитка ночи: вердикт
+  // судьи никуда не уходит (сводка — про вердикты), строка остаётся в своей группе, но
+  // пакет получает статус reverted и пометку «откачен» вместо кнопки (доработка b0065470).
+  const doRevertPackage = async (row: WikiNightDecisionDto) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await revertWikiPackage(row.packageId);
+      setNightError(null);
+      showToast('Пакет откатан', revertPackageResultText(r), r.restoredPages.length ? 'success' : 'error');
+      load();
+    } catch (e) {
+      setNightError(e instanceof WikiError ? revertPackageErrorText(e) : 'Не удалось откатить пакет');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   // Что снимется при откате по источнику — из того, что видно в журнале сейчас: точный
   // исход (что по прообразам, что останется из-за другого источника) знает только бэк.
   // Число — по нормальной форме источника: окна одного чата считаются все (урок c1 S7c-1).
@@ -423,10 +625,26 @@ export function WikiJournal(
     />
   );
 
+  // Переключатель вида — на верхнем уровне обоих видов (в раскрытой записи журнала его
+  // нет, как там нет и фильтров: это подэкран одного вида), и в состоянии ошибки тоже
+  // (ревью bb48be19): если вид ночи падает (500, обрыв сети), вернуться к «Все записи»
+  // должно быть чем — состояние ошибки остаётся одним Notice с «Повторить», добавляется
+  // только сам переключатель над ним. Фильтры — только у журнала: бэк игнорирует их для
+  // вида ночи (WikiController.cs:615-616), показывать их было бы обещанием, которого
+  // вид не выполняет.
+  const viewRow = (
+    <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
+      <SegmentedControl value={view} options={NIGHT_VIEW_OPTIONS} onChange={setView} />
+    </div>
+  );
+
   if (loadError) {
-    const text = loadError instanceof WikiError ? wikiErrorText(loadError) : 'Не удалось прочитать «Журнал»';
+    const text = loadError instanceof WikiError
+      ? wikiErrorText(loadError)
+      : (view === 'night' ? 'Не удалось прочитать «Решения за ночь»' : 'Не удалось прочитать «Журнал»');
     return (
       <div data-testid="wiki-journal-error" style={{ padding: SP.sm }}>
+        {viewRow}
         <Notice tone="danger" icon={AlertTriangle} title={text} action={<Button variant="ghost" size="sm" onClick={load}>Повторить</Button>} />
       </div>
     );
@@ -450,7 +668,49 @@ export function WikiJournal(
     </div>
   );
 
-  if (!data) return <>{filterRow}<LoadingSkeleton /></>;
+  if (view === 'night') {
+    if (!night) return <>{viewRow}<LoadingSkeleton /></>;
+    // Пустая группа не показывается вовсе: «Отклонено кодом: 0» — это не сводка, а шум.
+    const groups = NIGHT_GROUPS.map(g => ({ ...g, rows: night.data[g.key] })).filter(g => g.rows.length > 0);
+    return (
+      <div style={{ padding: `0 0 ${SP.md}px` }}>
+        {viewRow}
+        <div data-testid="wiki-night-window" style={{ padding: `${SP.sm}px ${SP.md}px 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
+          {`Окно вердиктов: с ${dayNum(night.from)} (включая) по ${dayNum(night.to)} (не включая); очередь — вне окна: она про «сейчас»`}
+        </div>
+        {nightError && (
+          <div style={{ marginTop: SP.sm }}>
+            <Notice tone="danger" icon={AlertTriangle} title={nightError} />
+          </div>
+        )}
+        {groups.length === 0 ? (
+          <EmptyState
+            icon={<Moon size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="За ночь решений нет"
+            subtitle={
+              <span style={{ maxWidth: 360 }}>
+                Судья в этом окне ничего не решил, и пакетов, ждущих решения, тоже нет.
+              </span>
+            }
+          />
+        ) : (
+          groups.map(g => (
+            <div key={g.key} data-testid="wiki-night-group">
+              <div style={{ padding: `${SP.md}px ${SP.md}px ${SP.xs}px`, display: 'flex', gap: SP.sm, alignItems: 'baseline' }}>
+                <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>{g.title}</span>
+                <span style={{ fontSize: FS.xs, fontFamily: FONT.mono, color: C.textMuted }}>{g.rows.length}</span>
+              </div>
+              {g.rows.map(r => (
+                <NightRow key={`${g.key}|${r.packageId}|${r.page}`} row={r} group={g.key} busy={busy} onRevert={() => { void doRevertPackage(r); }} />
+              ))}
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
+  if (!data) return <>{viewRow}{filterRow}<LoadingSkeleton /></>;
 
   if (opened) {
     return (
@@ -470,6 +730,7 @@ export function WikiJournal(
   let lastDay: string | null = null;
   return (
     <div style={{ padding: `0 0 ${SP.md}px` }}>
+      {viewRow}
       {filterRow}
       {data.invalidLines > 0 && (
         <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>

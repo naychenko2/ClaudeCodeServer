@@ -130,6 +130,35 @@ function kvCell(v: number, label: string) {
   );
 }
 
+// Цена вызовов судья (J-F3, доработка по приёмке Веры b0065470): два знака после точки;
+// сумма больше нуля, но меньше цента — «<$0.01» (0.0065 показывать как «$0.01» — неправда:
+// toFixed округляет вверх и карточка приписывает ночи несуществующий цент); ровно ноль —
+// «$0.00». Та же форма — в бэковом уведомлении (правит Денис, та же постановка J-F3).
+const fmtUsd = (v: number): string => {
+  if (v <= 0) return '$0.00';
+  if (v < 0.01) return '<$0.01';
+  return `$${v.toFixed(2)}`;
+};
+
+// Сводка облачного судья этой ночи (J-F3, форма по доработке 12.11): «Судья: принял K,
+// отклонил L; вызовов N, $X» — по полям J-F0 (WikiLastNight, J-J4). Показывается только
+// при judgeCalls>0: без вызова модели судья ничего не делал — строки о нём нет. Кодовые
+// отказы в неё не входят — их отдельная строка ниже. Та же сводка в бэковом уведомлении
+// собрана в Title (WikiNightlyService.cs:999-1000) — здесь она той же мысли, но по форме
+// этой карточки.
+const judgeSummaryLine = (l: WikiLastNight): string =>
+  `Судья: принял ${l.judgeApplied}, отклонил ${l.judgeRejected}; вызовов ${l.judgeCalls}, ${fmtUsd(l.judgeCostUsd)}`;
+
+// «Отклонено кодом: C» — отдельная строка (доработка J-F3 по приёмке Веры): код отклоняет
+// операции сам, без судья, — в его сводку эти числа не входят. Показывается при
+// codeRejected>0; при нуле сказать нечего (тот же приём, что с «отказано N»).
+const codeRejectedLine = (c: number): string => `Отклонено кодом: ${c}`;
+
+// «Судья недоступен — ждут решения: M» — форма Софьи 12.11, как в бэковом уведомлении
+// (NotificationBody, WikiNightlyService.cs:959): «M операций ждут» читается обрывком
+// фразы; здесь — та же строка с заглавной, как отдельная строка карточки.
+const judgeDeferredLine = (m: number): string => `Судья недоступен — ждут решения: ${m}`;
+
 // «отказано N» — пятая метрика итога (WN-6b): отказанные разборы среди analyzed
 // (WikiNightlyService.cs:117-119). Не голое число, как остальные: слово с числом одной строкой,
 // подпись называет связь с соседней метрикой («из разобранного» — ровно то, что считает бэк)
@@ -196,6 +225,26 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             ≈ {fmtNum(last.estTokens)} из {fmtNum(snapshot.nightly.inputTokenBudget)}
           </span>
         </div>
+        {/* J-F3: предупреждение об отложенных операциях — над сводкой: оно о том, чего
+            судья не сделал; цвет — warning-токен дизайн-системы */}
+        {last.judgeDeferred > 0 && (
+          <div data-testid="wiki-nightly-judge-deferred" style={{ fontSize: FS.sm, color: C.warningText, marginTop: SP.md }}>
+            {judgeDeferredLine(last.judgeDeferred)}
+          </div>
+        )}
+        {/* J-F3 (доработка по приёмке Веры): сводка судья и кодовые отказы — две независимые
+            строки: код отклоняет операции сам, без судья. Порядок — по ходу ночи: сначала
+            то, что код отверг без вызова модели, затем — что сделал судья. */}
+        {last.codeRejected > 0 ? (
+          <div data-testid="wiki-nightly-code-rejected" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>
+            {codeRejectedLine(last.codeRejected)}
+          </div>
+        ) : null}
+        {last.judgeCalls > 0 ? (
+          <div data-testid="wiki-nightly-judge-line" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
+            {judgeSummaryLine(last)}
+          </div>
+        ) : null}
         <div style={{ fontSize: FS.sm, color: C.textMuted, marginTop: SP.xs }}>
           {last.outcome === 'completed' ? NIGHTLY_COMPLETED_LINE : ''}
           {onOpenJournal && (

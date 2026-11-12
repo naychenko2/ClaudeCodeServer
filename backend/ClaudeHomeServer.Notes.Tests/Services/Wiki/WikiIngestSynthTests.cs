@@ -473,20 +473,62 @@ public class WikiIngestSynthTests : IDisposable
         llm.Calls.Should().ContainSingle();
     }
 
+    // ── сторож И3, расширение J-J3a: ночь + проход судьи ──
+
+    [Fact]
+    public async Task НочьИПроходСудьи_NightlyНикогдаНеОблаком_СудьяЗовётТолькоWikiJudge()
+    {
+        // Класс выключен человеком → append идёт во «Входящие» с допущенным кодом
+        // class_disabled: это кандидат прохода судьи (J-J3a). Ночь — на локальном маршруте.
+        // Мутация «судья зовёт место wiki-nightly» (RunDetailedAsync с ключом ночи) или
+        // «ночь уходит в облачный шаг» (RunDetailedAsync вместо RunLocalOrChosen) — краснит
+        // этот тест (проверено на копии).
+        WikiSettingsStore.Mutate(_dir, User, st => st with
+        {
+            Classes = [new WikiSettingsStore.ClassState(
+                WikiPackage.ClassKey("session", WikiPackage.OpAppend), true,
+                "класс выключен человеком", DateTimeOffset.UtcNow, null)],
+        });
+        var llm = new FakeLlm(WikiSynthJson.Append(PageTitle, Claim1, Quote1),
+            judge: """{"verdicts":[{"index":0,"decision":"apply","why":"цитаты подтверждают"}]}""");
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        var pkgId = res.PackageId!;
+
+        var sweep = await new WikiJudgeSweep(llm, _apply, _config).RunAsync(User, Root);
+
+        llm.Calls.Should().NotContain(c => c.ActionKey == LocalActionCatalog.WikiNightly && c.Route != "local",
+            "И3: ни один шаг ночи не уходит в облако");
+        llm.Calls.Should().NotContain(c => c.ActionKey == LocalActionCatalog.WikiJudge && c.Route != "detailed",
+            "судья зовёт обычную цепочку места (RunDetailedAsync), а не локальный шаг ночи");
+        llm.Calls.Select(c => c.ActionKey).Distinct().Should().BeEquivalentTo(
+            new[] { LocalActionCatalog.WikiNightly, LocalActionCatalog.WikiJudge },
+            "за ночной проход и проход судьи звались ровно эти два места: судья — только своим");
+        sweep.Calls.Should().Be(1);
+        var pkg = WikiPackageStore.TryRead(Root, pkgId).Package!;
+        pkg.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted,
+            "вердикт дошёл до стора: сквозной путь ночной операции закрыт");
+    }
+
     // ── подмена модели ──
 
     private sealed class FakeLlm : ICheapTextRunner
     {
-        public List<(string ActionKey, string Prompt, string Pass)> Calls { get; } = [];
+        // Route — метод шва, которым позвали: "local" (RunLocalOrChosen*, без облачного
+        // шага), "detailed"/"cloud" (полная цепочка). Сторож И3 различает по нему, каким
+        // путём прошло место: ключ сам по себе этого не говорит.
+        public List<(string ActionKey, string Prompt, string Pass, string Route)> Calls { get; } = [];
         public bool LocalRoute { get; init; } = true;
 
         private readonly Dictionary<string, Queue<string>> _answers = new();
 
-        public FakeLlm(string synth, string? repair = null, string? emptySection = null)
+        public FakeLlm(string synth, string? repair = null, string? emptySection = null, string? judge = null)
         {
             _answers["S"] = new Queue<string>([synth]);
             _answers["R"] = new Queue<string>([repair ?? synth]);
             _answers["E"] = new Queue<string>([emptySection ?? "нет ответа для прохода E"]);
+            _answers["J"] = new Queue<string>([judge ?? """{"verdicts":[]}"""]);
         }
 
         public bool UsesLocal(string actionKey) => LocalRoute;
@@ -496,25 +538,26 @@ public class WikiIngestSynthTests : IDisposable
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(Answer(actionKey, prompt));
+            Task.FromResult(Answer(actionKey, prompt, "cloud"));
 
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult<string?>(Answer(actionKey, prompt));
+            Task.FromResult<string?>(Answer(actionKey, prompt, "local"));
 
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt,
             string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default) =>
             Task.FromResult(new OneShotResult(
-                Answer(actionKey, prompt), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
+                Answer(actionKey, prompt, "detailed"), new OneShotUsage(10, 0, 0, 5, 0.0, "fake"), 1));
 
-        private string Answer(string actionKey, string prompt)
+        private string Answer(string actionKey, string prompt, string route)
         {
-            var pass = prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
+            var pass = prompt.Contains("СПОРНЫЕ ОПЕРАЦИИ ПАКЕТА") ? "J"
+                : prompt.Contains("YOUR PREVIOUS PLAN WAS REJECTED") ? "R"
                 : prompt.Contains("THE TARGET SECTION HAS NO KNOWLEDGE PAGES") ? "E"
                 : prompt.Contains("single pass") ? "S"
                 : "?";
-            lock (Calls) Calls.Add((actionKey, prompt, pass));
+            lock (Calls) Calls.Add((actionKey, prompt, pass, route));
             var queue = _answers.TryGetValue(pass, out var q) ? q : null;
             return queue is { Count: > 0 } ? queue.Dequeue() : "нет ответа для прохода " + pass;
         }

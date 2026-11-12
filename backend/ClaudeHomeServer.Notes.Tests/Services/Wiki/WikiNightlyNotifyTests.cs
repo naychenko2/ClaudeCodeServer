@@ -18,10 +18,18 @@ namespace ClaudeHomeServer.Tests.Services;
 // Утреннее уведомление ночного разбора (Ф2, N7c). Отделён от WikiNightlyServiceTests (там идёт
 // доработка N7b): фикстуры те же, проверяется только конец прохода — сообщение владельцу.
 //
-// Контракт: ровно одно уведомление за проход с человеческим текстом «Ночной разбор: применено N,
-// во „Входящих” M» и названием пути «Вики → Журнал» (Url ведёт во вкладку «Вики», обещания перехода
-// в тексте нет); при исходе, отличном от обычного, — причина простым
-// языком. Молчание: analyzed=0 и completed; флаг/Enabled выключен (там и итога нет). Сбой
+// Контракт: ровно одно уведомление за проход с человеческим текстом. Заголовок (сводка J-J4) —
+// «Ночной разбор: применено N; судья принял K, отклонил L; ждут M; <цена>»; цена — форма витрины
+// (доработка QA, пункт 2): два знака после точки, непустая сумма меньше цента — «<$0.01», ноль —
+// «$0.00» (точной цены в уведомлении нет: она остаётся в строке журнала); в теле — сколько пакетов
+// ещё ждёт решения человека («Во «Входящих» …», перенесено из заголовка), почему судья не ответил,
+// если не ответил («судья недоступен — ждут решения: N»), сколько операций закрыл отказом сам код
+// («отклонено кодом: N», в заголовке их нет), и названием пути «Вики → Журнал» (Url ведёт во
+// вкладку «Вики», обещания перехода в тексте нет); при исходе, отличном от обычного, — причина
+// простым языком. Молчание: analyzed=0, completed, судья модель не звал, ничего не отложил И код
+// ничего не отказал (вынесенные вердикты, отложенные операции и отказы кода — не молчание, хвост 1,
+// хвост 4 и доработка QA J-J4); флаг/Enabled
+// выключен (там и итога нет). Сбой
 // доставки: предупреждение в журнале, итог ночи уже записан, исключение не выходит из службы.
 public class WikiNightlyNotifyTests : IDisposable
 {
@@ -102,9 +110,17 @@ public class WikiNightlyNotifyTests : IDisposable
     private WikiNightlyService Sut(
         Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
         INotificationSender? notifier = null,
-        ILogger<WikiNightlyService>? log = null) =>
+        ILogger<WikiNightlyService>? log = null,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier, _keeper);
+            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now,
+            notifier, _keeper, judge);
+
+    // Фейк прохода судьи (J-J4): сводка в уведомлении проверяется без облачной модели.
+    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
+        int applied = 0, int rejected = 0, int deferred = 0, int codeRejected = 0, int calls = 0, decimal cost = 0m) =>
+        (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
+            calls, cost, applied, rejected, deferred, codeRejected, null));
 
     private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
         (owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -167,13 +183,105 @@ public class WikiNightlyNotifyTests : IDisposable
         notifier.Sent.Should().HaveCount(1, "уведомление — одно на проход");
         var n = notifier.Sent[0];
         n.Title.Should().Contain("применено 3");
-        n.Title.Should().Contain("во «Входящих» 1");
+        // J-J4: «во «Входящих»» из заголовка перенесено в тело — заголовок несёт сводку судьи
+        // одной строкой чисел, и её нулевые значения тоже называются. Нулевая цена — «$0.00»
+        // (форма витрины, доработка QA, пункт 2), а не «$0».
+        n.Title.Should().Contain("судья принял 0, отклонил 0; ждут 0; $0.00");
+        n.Body.Should().Contain("Во «Входящих» 1 пакет ждёт решения.");
         // Путь назван текстом, а не обещан переходом: Url ведёт во вкладку «Вики» (подкладка
         // «Журнал» deep-link не имеет), текст — «во вкладке «Вики» → «Журнал»».
         n.Url.Should().Be("#/wiki");
         n.Body.Should().Contain("во вкладке «Вики» → «Журнал»");
         n.Body.Should().NotContain("в «Журнале»", "текст не обещает перехода, которого Url не делает");
         n.Kind.Should().Be("info", "обычный исход — не предупреждение");
+    }
+
+    // ─── J-J4 (c2): сводка судьи — заголовок; «судья недоступен» — тело ─────────
+
+    [Fact]
+    public async Task СудьяПринял1Отклонил1За004_ЗаголовокРавенСводке_СтрокиОСудьеВТелеНет()
+    {
+        // Мутации: «судью — в тело, а не в заголовок» → Be() красный; «не печатать стоимость» →
+        // Be() красный; «дописывать строку о судье при нуле» → NotContain красный.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        var notifier = new Notifier();
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        {
+            "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, null, ["pkg-1", "pkg-2"])),
+            _ => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [])),
+        };
+
+        await Tick(Sut(Analyze, notifier, judge: Judge(applied: 1, rejected: 1, calls: 2, cost: 0.04m)));
+
+        var n = notifier.Sent[0];
+        n.Title.Should().Be("Ночной разбор: применено 2; судья принял 1, отклонил 1; ждут 0; $0.04");
+        n.Body.Should().NotContain("судья недоступен", "отложенных операций нет — строки о них нет");
+        n.Body.Should().NotContain("отклонено кодом", "отказов кода нет — нулевой строки в теле нет");
+        n.Kind.Should().Be("info", "судья отложил вердикты, а не отказ — это не предупреждение");
+    }
+
+    [Theory]
+    [InlineData(0.0067d, "<$0.01")]
+    [InlineData(0.04d, "$0.04")]
+    [InlineData(0.0d, "$0.00")]
+    public async Task ЦенаНочиВУведомлении_ДваЗнака_МеньшеЦентаСоЗнакомМеньше(double cost, string expected)
+    {
+        // Доработка QA (пункт 2, правило Софьи): цена в заголовке — форма витрины: два знака
+        // после точки; непустая сумма меньше цента — «<$0.01» (вызов модели
+        // был, а «$0.00» об этом врёт); ноль — «$0.00». Старой инвариантной записи («$0.0067»)
+        // в уведомлении быть не должно: она остаётся в строке журнала. Мутация «CostText вместо
+        // NoticeCostText» — строки 0.0067 и 0.0 краснеют (0.04 даёт ту же запись, она форму не
+        // различает).
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        var notifier = new Notifier();
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) =>
+            Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, null, ["pkg-1"]));
+
+        await Tick(Sut(Analyze, notifier, judge: Judge(applied: 1, calls: 1, cost: (decimal)cost)));
+
+        notifier.Sent.Should().HaveCount(1);
+        notifier.Sent[0].Title.Should().Be(
+            $"Ночной разбор: применено 1; судья принял 1, отклонил 0; ждут 0; {expected}");
+    }
+
+    [Fact]
+    public async Task СудьяНеВынесВердикитаПоТрёмОперациям_ТелоНазываетЭтоПрямо()
+    {
+        // Хвост 2 (решение Софья, 12.11): форма без согласования с числом — «судья недоступен —
+        // ждут решения: 3»; старой «3 операций ждут» в теле быть не должно.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(deferred: 3, calls: 1)));
+
+        var n = notifier.Sent[0];
+        n.Title.Should().Contain("ждут 3");
+        n.Body.Should().Contain("судья недоступен — ждут решения: 3");
+        n.Body.Should().NotContain("операций ждут", "старой формы с согласованием числа в тексте нет");
+    }
+
+    [Fact]
+    public async Task КодОтклонилДвеОперацииБезСудьи_ТелоНазываетОтказы()
+    {
+        // Хвост 3: форма заголовка задана c2 и отказов кода не несёт — без строки в теле владелец
+        // не видит, что часть пакета закрыта не судьёй. Нулевой случай (строки нет) проверяет
+        // NotContain в тесте «СудьяПринял1Отклонил1…».
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(codeRejected: 2, calls: 1)));
+
+        var n = notifier.Sent[0];
+        Last().CodeRejected.Should().Be(2);
+        n.Body.Should().Contain("отклонено кодом: 2");
     }
 
     // ─── B4b (ADR-038, предохранитель 6): сводные строки о человеке — в то же уведомление ───
@@ -232,7 +340,7 @@ public class WikiNightlyNotifyTests : IDisposable
     [InlineData(21, "21 вашу формулировку", "21 странице")]
     public void NotificationBody_ЧислоСклоняется(int n, string replaced, string pages)
     {
-        var body = WikiNightlyService.NotificationBody(null, n, n);
+        var body = WikiNightlyService.NotificationBody(null, n, n, 0, 0, 0);
 
         body.Should().Contain($"ИИ заменил {replaced}.");
         body.Should().Contain($"ИИ отметил противоречие на {pages}.");
@@ -254,6 +362,74 @@ public class WikiNightlyNotifyTests : IDisposable
         Last().Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
         Last().Analyzed.Should().Be(0);
         notifier.Sent.Should().BeEmpty("нечего сказать: ни разборов, ни отказа");
+    }
+
+    [Fact]
+    public async Task НичегоНеРазобраноСудьяОтложилДве_УведомлениеНеМолчит()
+    {
+        // Хвост 1: та же ночь с analyzed=0 и обычным исходом, но судья отложил спорные операции
+        // дневной заявки — пакет застрял, и владелец должен это видеть. Мутация «вернуть старое
+        // условие молчания» (без result.JudgeDeferred == 0) — этот тест краснеет: Sent пусто.
+        Configure();
+        AddChat("c1", humans: 2);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(deferred: 2, calls: 1)));
+
+        var last = Last();
+        last.Analyzed.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.JudgeDeferred.Should().Be(2);
+        notifier.Sent.Should().HaveCount(1, "отложенные судьёй операции — не молчание");
+        notifier.Sent[0].Body.Should().Contain("судья недоступен — ждут решения: 2");
+    }
+
+    [Fact]
+    public async Task НичегоНеРазобраноКодОтклонилДвеБезСудьи_УведомлениеНеМолчит()
+    {
+        // Хвост 4 (решение Софья, 12.11, пункт Глеба к fee95fb44): та же ночь с analyzed=0 и
+        // обычным исходом, но судья модель не звал, а код сам отказал операции дневной заявки
+        // (CodeRejected > 0, JudgeDeferred = 0). Пакет закрыт не судьёй — владелец обязан это
+        // увидеть. Мутация «вернуть старое условие молчания» (без result.CodeRejected == 0) —
+        // этот тест краснеет: Sent пусто.
+        Configure();
+        AddChat("c1", humans: 2);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(codeRejected: 2, calls: 1)));
+
+        var last = Last();
+        last.Analyzed.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.JudgeDeferred.Should().Be(0);
+        last.CodeRejected.Should().Be(2);
+        notifier.Sent.Should().HaveCount(1, "отказы, вынесенные кодом, — не молчание");
+        notifier.Sent[0].Body.Should().Contain("отклонено кодом: 2");
+    }
+
+    [Fact]
+    public async Task НичегоНеРазобраноСудьяВынесДваВердикита_УведомлениеНеМолчит()
+    {
+        // Доработка QA (пункт 1, замечание Веры b0065470): та же ночь с analyzed=0 и обычным
+        // исходом, но судья звал модель и вынес вердикты по спорным операциям дневной заявки
+        // (ничего не отложено, код ничего не отказал) — раньше такая ночь молчала: ни вердиктов,
+        // ни их цены владелец не видел. Мутация «вернуть старое условие молчания» (без
+        // result.JudgeCalls == 0) — этот тест краснеет: Sent пусто.
+        Configure();
+        AddChat("c1", humans: 2);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(rejected: 2, calls: 2, cost: 0.04m)));
+
+        var last = Last();
+        last.Analyzed.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.JudgeCalls.Should().Be(2);
+        last.JudgeRejected.Should().Be(2);
+        last.JudgeDeferred.Should().Be(0);
+        last.CodeRejected.Should().Be(0);
+        notifier.Sent.Should().HaveCount(1, "вынесенные вердикты судьи — не молчание");
+        notifier.Sent[0].Title.Should().Contain("судья принял 0, отклонил 2");
     }
 
     [Fact]

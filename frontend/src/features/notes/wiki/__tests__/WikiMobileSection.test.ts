@@ -240,7 +240,7 @@ describe('Мобильная шторка вики: строка раздела 
       const drawer = findNodeByAttr(c, 'data-testid', 'wiki-drawer-right');
       expect(drawer).not.toBeNull();
       const order = allNodes(drawer!);
-      const switchIdx = order.findIndex(n => n.getAttribute('aria-label') === 'Входящие');
+      const switchIdx = order.findIndex(n => n.getAttribute('aria-label') === 'Решения');
       expect(switchIdx, 'переключатель панелей в шторке').toBeGreaterThanOrEqual(0);
       expect(order.indexOf(line!), 'строка под переключателем').toBeGreaterThan(switchIdx);
     } finally { restore(); }

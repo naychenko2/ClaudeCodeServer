@@ -184,8 +184,9 @@ public class WikiIngestTests : IDisposable
         string ref_ = "session:s1#m1-9", string card = CardPath) =>
         new("session", ref_, card, SourceText, home, target);
 
-    private WikiIngestService Sut(FakeLlm llm) =>
-        new(llm, new NoSpheres(), _apply, _config);
+    private WikiIngestService Sut(FakeLlm llm,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        new(llm, new NoSpheres(), _apply, _config, null, judge);
 
     private IReadOnlyList<WikiPackage> PackagesOnDisk() => WikiPackageStore.List(Root).Packages;
 
@@ -511,6 +512,64 @@ public class WikiIngestTests : IDisposable
             .Should().ContainKey(PagePath).WhoseValue.Should().Be(ts);
     }
 
+    // ── J-J4 (точка «б»): заявка со спорными операциями зовёт судью в том же обработчике ──
+
+    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> CountingJudge(
+        List<string> roots) =>
+        (owner, root, ct) =>
+        {
+            lock (roots) roots.Add(root);
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+        };
+
+    [Fact]
+    public async Task J4_ЗаявкаAwaitingHuman_СудьяВТомЖеОбработчике_РовноОдинПроход()
+    {
+        // Мутация «убрать вызов (б)» (условие в RunProtectedAsync) → 0 вызовов, красный.
+        LogLine(DaysAgo(1), "revert", "user", PagePath); // та же спорность пакета, что у N7d
+        var roots = new List<string>();
+
+        var res = await Sut(new FakeLlm(synth: SynthJson), CountingJudge(roots)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.PackageId.Should().NotBeNullOrEmpty();
+        roots.Should().HaveCount(1, "спорное не обязано ждать следующей ночи: судья идёт в этом же прогоне заявки");
+        roots[0].Should().Be(Root, "проход судьи работает по своему корню владельца");
+    }
+
+    [Fact]
+    public async Task J4_ЗаявкаApplied_СудьяНеЗван()
+    {
+        // Граница условия: исход applied — спорных операций нет, судье не о чём решать.
+        var roots = new List<string>();
+
+        var res = await Sut(new FakeLlm(synth: SynthJson), CountingJudge(roots)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+        roots.Should().BeEmpty("неприменённого спорного нет — прохода судьи нет");
+    }
+
+    [Fact]
+    public async Task J4r_НочнаяЗаявкаСоСпорнымОкном_СудьяВТочкеБНеЗван()
+    {
+        // Доработка финала J-J4 (пункт 1 «до мержа»): окна ночи идут через этот же IngestAsync
+        // с местом wiki-nightly, но точка (б) судью для них не пускает: у ночи один полный
+        // проход — в конце RunPassAsync (точка (а) WikiNightlyService), его числа и идут в итог
+        // ночи. Посреди ночи тот проход выбрасывал свой итог и шёл без ct ночи. Дневная заявка
+        // (actionKey null — кнопка и MCP-заявка) зовёт судью здесь же, как прежде: тест выше.
+        // Мутация «вернуть судью в точку (б) для ночи» (убрать guard по actionKey) → 1 вызов, красный.
+        LogLine(DaysAgo(1), "revert", "user", PagePath);
+        var roots = new List<string>();
+
+        // nightly: true — место ночи идёт локальным маршрутом (иначе отказ окна до вызова).
+        var res = await Sut(new FakeLlm(synth: SynthJson, nightly: true), CountingJudge(roots))
+            .IngestAsync(User, Req(), CancellationToken.None, LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.PackageId.Should().NotBeNullOrEmpty("окно спорное: пакет всё равно создаётся — он ждёт человека");
+        roots.Should().BeEmpty("для ночи точка (б) судью не пускает: её полный проход — в конце ночи");
+    }
+
     // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────
 
     [Fact]
@@ -795,6 +854,29 @@ public class WikiIngestTests : IDisposable
             "ночная заявка идёт со своим местом, не с wiki-ingest");
     }
 
+    // ── J-O1 (дефект 2e13d45c): мёртвый локальный маршрут назван честно ──
+
+    [Fact]
+    public async Task НочнойРазбор_ЛокальныйМаршрутМёртв_ПричинаЛокальнаяМодельНедоступна_ANePustoyOtvet()
+    {
+        // Ночь 12.11: 3 прохода × 41 отказ при 0 токенов с ложной причиной «модель дала пустой
+        // ответ» — её давал null без исключения, который ниже читался пустым ответом модели.
+        // Мутации: «убрать ветку viaLocal is null» (text=null → строка «пустой ответ») или
+        // «вернуть прежнюю формулировку» → NotContain краснеет; «считать это успешным ответом» →
+        // Outcome краснеет.
+        var llm = new FakeLlm(synth: NothingJson, nightly: true) { LocalDown = true };
+
+        var res = await Sut(llm).IngestAsync(User, Req(), actionKey: LocalActionCatalog.WikiNightly);
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeRejected);
+        res.Reason.Should().Contain(WikiIngestService.ReasonLocalUnavailable, "причина маршрута, а не ответ модели");
+        res.Reason.Should().NotContain("пустой ответ", "модель не зввалась ни разу — «пустой ответ» лжёт");
+        res.Reason.Should().NotContain("qwen", "имени движка в причине нет: их может быть несколько (J-W2)");
+        res.InputTokens.Should().Be(0, "ответа не было — понесённого расхода нет");
+        llm.Calls.Should().ContainSingle(c => c.ActionKey == LocalActionCatalog.WikiNightly,
+            "отказ не повторяет вызов и не зовёт облако");
+    }
+
     // ── подменённый ICheapTextRunner: классифицирует вызов по промпту, помечает всё ──
 
     private sealed class FakeLlm : ICheapTextRunner
@@ -809,6 +891,10 @@ public class WikiIngestTests : IDisposable
         // (LocalEngineSlotRefusalException). Здесь ключ — проход, а не actionKey: все
         // вызовы разбора идут одним местом, различить их можно только по промпту.
         public Func<string, Exception?>? Throw;
+
+        // «Локальный движок мёртв» (дефект 2e13d45c): цепочка без облачного шага отдаёт null
+        // без исключения — движок не настроен/не готов/не ответил. Вызов при этом состоялся.
+        public bool LocalDown;
 
         public FakeLlm(string synth, string? repair = null, string? emptySection = null, bool nightly = false)
         {
@@ -845,10 +931,16 @@ public class WikiIngestTests : IDisposable
 
         // Ночная ветка CallModelAsync зовёт detailed-вариант (тот же путь без облака): тот же
         // ответ плюс usage движка — полный вход 1 000, вывод 50, CostUsd 0 (локаль бесплатна).
+        // LocalDown — та же цепочка при мёртвом движке: вызов зарегистрирован, ответа нет (null).
         public Task<OneShotResult?> RunLocalOrChosenDetailedAsync(string actionKey, string prompt,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult<OneShotResult?>(new OneShotResult(
-                Answer(actionKey, prompt), new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            var text = Answer(actionKey, prompt);
+            return LocalDown
+                ? Task.FromResult<OneShotResult?>(null)
+                : Task.FromResult<OneShotResult?>(new OneShotResult(
+                    text, new OneShotUsage(1_000, 0, 0, 50, 0.0, "qwen-local"), 1));
+        }
 
         private string Answer(string actionKey, string prompt)
         {

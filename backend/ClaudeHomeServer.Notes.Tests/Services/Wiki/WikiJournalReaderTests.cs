@@ -883,4 +883,279 @@ public class WikiJournalReaderTests : IDisposable
         items.GetArrayLength().Should().Be(1);
         items[0].GetProperty("op").GetString().Should().Be("conflict");
     }
+
+    // ─── 8. «Решения за ночь» (J-J5): четыре группы из пакетов ──────────────
+
+    // Окно ночи: [from, to) — half-open, как в контракте метода.
+    private static readonly DateTimeOffset NightFrom = new(2026, 11, 12, 0, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset NightTo = new(2026, 11, 12, 8, 0, 0, TimeSpan.Zero);
+
+    // Спорная операция ночи: та же форма, что у Op(), но с кодом допуска к судье и claim —
+    // и то и другое читает сводка (ReasonCode ставит код, не модель).
+    private static WikiPackage.Operation NightOp(string page, string claim) => new()
+    {
+        Op = WikiPackage.OpSupersede,
+        Page = page,
+        Text = "новая формулировка",
+        Target = "прежнее утверждение человека",
+        Claim = claim,
+        Class = WikiPackage.ClassKey(WikiGate.OriginSession, WikiPackage.OpSupersede),
+        Decision = WikiPackage.DecisionInbox,
+        Reason = "замещает утверждение человека",
+        ReasonCode = WikiApplyPolicy.CodeOverridesHuman,
+        BaseHashes = new Dictionary<string, string> { [page] = Hash },
+    };
+
+    // Пакет с уже вынесенными вердиктами: тот же путь, что у живого стора (рождается в
+    // checking, доводится разрешёнными переходами), но даты вердикта — из фикстуры:
+    // JudgeAt ставит стор (JudgeOperations), и его «сейчас» в окно ночи не уложить.
+    private string NightPackage(string status, params WikiPackage.Operation[] ops)
+    {
+        var id = WikiPackageStore.NewId();
+        WikiPackageStore.Create(Root(), new WikiPackage
+        {
+            Id = id,
+            Section = "common",
+            Sources = [new WikiPackage.SourceRef(WikiGate.OriginSession, "session:night-" + id)],
+            Operations = ops,
+            Status = WikiPackage.StatusChecking,
+        }).Ok.Should().BeTrue();
+        if (status != WikiPackage.StatusChecking)
+        {
+            WikiPackageStore.Transition(Root(), id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+            // Дальше — только другое состояние: «Proposed → Proposed» таблицей переходов
+            // не разрешён, а «Входящий» пакет — это уже то, что нужно фикстуре.
+            if (status != WikiPackage.StatusProposed)
+                WikiPackageStore.Transition(Root(), id, status).Ok.Should().BeTrue();
+        }
+        return id;
+    }
+
+    // Пакет «принятый судьёй», дошедший до названного итогового состояния: вердикт accepted,
+    // дальше — только легальные шаги таблицы переходов (accepted → applying → applied |
+    // apply_failed; applied → reverted).
+    private string AcceptedNightPackage(string finalStatus, DateTimeOffset judgeAt, string page, string claim)
+    {
+        var id = NightPackage(WikiPackage.StatusAccepted, NightOp(page, claim) with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted,
+            JudgeModel = "m",
+            JudgeAt = judgeAt,
+        });
+        var toApplied = finalStatus is WikiPackage.StatusApplied or WikiPackage.StatusReverted
+            ? WikiPackage.StatusApplied : finalStatus;
+        WikiPackageStore.Transition(Root(), id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(Root(), id, toApplied).Ok.Should().BeTrue();
+        if (finalStatus == WikiPackage.StatusReverted)
+            WikiPackageStore.Transition(Root(), id, WikiPackage.StatusReverted).Ok.Should().BeTrue();
+        return id;
+    }
+
+    [Fact]
+    public void Ночь_ЧетыреГруппы_ПоОднойОперации_ПоляВерны()
+    {
+        // Мутации (по одной): перенести проверку JudgeModelCode ниже accepted/rejected —
+        // codeRejected пуста и judgeRejected HaveCount(1) краснеет; убрать условие
+        // HumanDecision is null у waiting — waiting краснеет на решённой человеком операции
+        // второго теста; убрать Reason из RowOf — краснеет на Reason.
+        var idAccepted = NightPackage(WikiPackage.StatusAccepted, NightOp("Общее/А.md", "утверждение А") with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted,
+            JudgeModel = "claude-sonnet-4.5",
+            JudgeAt = NightFrom.AddHours(2),
+            JudgeCostUsd = 0.004m,
+        });
+        var idRejected = NightPackage(WikiPackage.StatusRejected, NightOp("Общее/Б.md", "утверждение Б") with
+        {
+            JudgeDecision = WikiPackage.HumanRejected,
+            JudgeReason = "не подтверждено источником",
+            JudgeModel = "claude-sonnet-4.5",
+            JudgeAt = NightFrom.AddHours(3),
+            JudgeCostUsd = 0.003m,
+        });
+        var idCode = NightPackage(WikiPackage.StatusRejected, NightOp("Общее/В.md", "утверждение В") with
+        {
+            JudgeDecision = WikiPackage.HumanRejected,
+            JudgeReason = "отказ по коду проверки",
+            JudgeModel = WikiPackage.JudgeModelCode,
+            JudgeAt = NightFrom.AddHours(4),
+        });
+        var idWaiting = NightPackage(WikiPackage.StatusProposed, NightOp("Общее/Г.md", "утверждение Г"));
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        var a = res.JudgeAccepted.Should().ContainSingle().Which;
+        a.PackageId.Should().Be(idAccepted);
+        a.Page.Should().Be("Общее/А.md");
+        a.Claim.Should().Be("утверждение А");
+        a.ReasonCode.Should().Be(WikiApplyPolicy.CodeOverridesHuman);
+        a.JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        a.JudgeReason.Should().BeNull("принятый вердикт — без причины отказа");
+        a.JudgeAt.Should().Be(NightFrom.AddHours(2));
+        a.JudgeCostUsd.Should().Be(0.004m);
+        a.JudgeModel.Should().Be("claude-sonnet-4.5");
+        a.Reason.Should().Be("замещает утверждение человека", "исходная причина спора остаётся рядом с вердиктом");
+
+        var r = res.JudgeRejected.Should().ContainSingle().Which;
+        r.PackageId.Should().Be(idRejected);
+        r.JudgeReason.Should().Be("не подтверждено источником");
+        r.JudgeModel.Should().Be("claude-sonnet-4.5");
+
+        // «Отклонено кодом» — не вердикт судьи (И4′): своя группа, и в «отклонено судьёй» его нет.
+        var c = res.CodeRejected.Should().ContainSingle().Which;
+        c.PackageId.Should().Be(idCode);
+        c.JudgeModel.Should().Be(WikiPackage.JudgeModelCode);
+        c.JudgeCostUsd.Should().BeNull("кодовой отказ — без облачного вызова");
+        res.JudgeRejected.Should().HaveCount(1, "отказ кода не становится отказом модели");
+
+        var w = res.Waiting.Should().ContainSingle().Which;
+        w.PackageId.Should().Be(idWaiting);
+        w.Page.Should().Be("Общее/Г.md");
+        w.ReasonCode.Should().Be(WikiApplyPolicy.CodeOverridesHuman);
+        (w.JudgeDecision, w.JudgeReason, w.JudgeAt, w.JudgeCostUsd, w.JudgeModel).Should()
+            .Be((null, null, null, null, null), "решения ещё нет — полей решения нет");
+    }
+
+    [Fact]
+    public void Ночь_ОкноHalfOpen_ЗаОкномВГруппыНеПопадает_ВОкнеХронология()
+    {
+        // Мутация «убрать фильтр по времени» (условие at >= from && at < to): judgeAccepted
+        // стал бы HaveCount(4) и краснеет на HaveCount(3); judgeRejected принял бы вердикт
+        // ровно на `to` и краснеет на BeEmpty.
+        var idLeft = NightPackage(WikiPackage.StatusAccepted, NightOp("Общее/А.md", "ровно на from") with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted, JudgeModel = "m", JudgeAt = NightFrom,
+        });
+        var idMid = NightPackage(WikiPackage.StatusAccepted, NightOp("Общее/Б.md", "середина ночи") with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted, JudgeModel = "m", JudgeAt = NightFrom.AddHours(5),
+        });
+        var idEarly = NightPackage(WikiPackage.StatusAccepted, NightOp("Общее/В.md", "за час до окна") with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted, JudgeModel = "m", JudgeAt = NightFrom.AddHours(-1),
+        });
+        var idRight = NightPackage(WikiPackage.StatusRejected, NightOp("Общее/Г.md", "ровно на to") with
+        {
+            JudgeDecision = WikiPackage.HumanRejected, JudgeReason = "отказ у границы окна",
+            JudgeModel = "m", JudgeAt = NightTo,
+        });
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        // Ровно на `from` — внутри; ровно на `to` — уже нет; раньше окна — уже нет.
+        // Ровно на `from` — внутри, ровно на `to` — уже нет, раньше окна — уже нет;
+        // порядок — хронологический.
+        res.JudgeAccepted.Select(x => x.PackageId).Should().Equal(idLeft, idMid);
+        res.JudgeRejected.Should().BeEmpty("вердикт ровно на `to` — за окном");
+        res.Waiting.Should().BeEmpty("решённая операция не ждёт, даже вне окна");
+    }
+
+    [Fact]
+    public void Ночь_ЖдутТолькоОткрытые_ИРешённаяОперацияНеЖдёт()
+    {
+        // Мутации (по одной): убрать open (WikiPackage.IsOpen) — краснеет на пустом waiting
+        // (stale дал бы свою операцию); убрать HumanDecision is null — краснеет на HaveCount(1)
+        // (решил человек — всё равно ждёт?).
+        NightPackage(WikiPackage.StatusStale, NightOp("Общее/А.md", "погашенный пакет"));
+        var open = NightPackage(WikiPackage.StatusProposed,
+            NightOp("Общее/Б.md", "решил человек") with
+            {
+                HumanDecision = WikiPackage.HumanRejected, HumanReason = "не нужно мне",
+            },
+            NightOp("Общее/В.md", "ещё не решена"));
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        res.Waiting.Should().ContainSingle()
+            .Which.Page.Should().Be("Общее/В.md", "ждёт ровно нерешённая операция открытого пакета");
+        res.Waiting.Select(x => x.PackageId).Should().Equal(open);
+        res.JudgeAccepted.Should().BeEmpty();
+        res.JudgeRejected.Should().BeEmpty();
+        res.CodeRejected.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Ночь_АвтоОперацияОткрытогоПакетаНеЖдёт()
+    {
+        // Мутация «убрать op.Decision == DecisionInbox из условия waiting» (WikiJournalReader.cs:314):
+        // авто-операция открытого пакета (open, без HumanDecision и JudgeDecision) прошла бы по
+        // остальным трём условиям и попала в очередь — ContainSingle краснеет на двух. С кодом в
+        // «ждут» только нерешённая inbox-операция: признак inbox держит авто-операции вне очереди.
+        var open = NightPackage(WikiPackage.StatusProposed,
+            NightOp("Общее/А.md", "авто-операция") with
+            {
+                Decision = WikiPackage.DecisionAuto,
+                Reason = null,
+                ReasonCode = null,
+            },
+            NightOp("Общее/Б.md", "нерешённая спорная"));
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        res.Waiting.Should().ContainSingle()
+            .Which.Page.Should().Be("Общее/Б.md", "ждёт только нерешённая inbox-операция; auto-операция открытого пакета не ждёт");
+        res.Waiting.Select(x => x.Page).Should().Equal("Общее/Б.md");
+        res.JudgeAccepted.Should().BeEmpty();
+        res.JudgeRejected.Should().BeEmpty();
+        res.CodeRejected.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Ночь_ПринятоСудьёй_НесётСтатусПакета()
+    {
+        // Мутация «не заполнять packageStatus» (убрать p.Status из RowOf, WikiJournalReader.cs):
+        // краснеет на всех трёх PackageStatus — фронт не отличает применённый пакет от откатанного
+        // и неприменённого и ставит кнопку «Откатить пакет» на них (дефекты b58d81c0, 76f4c7d6).
+        var idApplied = AcceptedNightPackage(WikiPackage.StatusApplied, NightFrom.AddHours(1), "Общее/А.md", "утверждение применено");
+        var idReverted = AcceptedNightPackage(WikiPackage.StatusReverted, NightFrom.AddHours(2), "Общее/Б.md", "утверждение откатано");
+        var idApplyFailed = AcceptedNightPackage(WikiPackage.StatusApplyFailed, NightFrom.AddHours(3), "Общее/В.md", "утверждение не применено");
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        // Вердикт есть вердикт: все три строки остаются в группе «Принято судьёй» — человек
+        // видит, что решил судья. Но каждая несёт своё состояние пакета: фронт по нему
+        // ставит кнопку отката только у applied, у прочих — пометку.
+        res.JudgeAccepted.Should().HaveCount(3);
+        res.JudgeAccepted.Select(x => x.PackageId).Should().Equal(idApplied, idReverted, idApplyFailed);
+        res.JudgeAccepted.Select(x => x.PackageStatus).Should()
+            .Equal(WikiPackage.StatusApplied, WikiPackage.StatusReverted, WikiPackage.StatusApplyFailed);
+    }
+
+    [Fact]
+    public void Ручка_Night_ОтдаётГруппы_ИОтказыПоВидуИОкну()
+    {
+        const string from = "2026-11-12T00:00:00+00:00", to = "2026-11-12T08:00:00+00:00";
+        var idAccepted = NightPackage(WikiPackage.StatusAccepted, NightOp("Общее/А.md", "утверждение А") with
+        {
+            JudgeDecision = WikiPackage.HumanAccepted, JudgeModel = "m", JudgeAt = NightFrom.AddHours(2),
+        });
+        var idWaiting = NightPackage(WikiPackage.StatusProposed, NightOp("Общее/Б.md", "утверждение Б"));
+
+        var dto = (WikiNightDto)((OkObjectResult)Controller()
+            .Journal(null, null, null, null, false, "night", from, to)).Value!;
+        dto.JudgeAccepted.Should().ContainSingle().Which.PackageId.Should().Be(idAccepted);
+        dto.Waiting.Should().ContainSingle().Which.PackageId.Should().Be(idWaiting);
+        dto.JudgeRejected.Should().BeEmpty();
+        dto.CodeRejected.Should().BeEmpty();
+
+        // Пустое окно — не отказ: вердиктов в нём нет. Очередь окна не касается:
+        // нерешённая операция остаётся в waiting при любом окне.
+        var empty = (WikiNightDto)((OkObjectResult)Controller()
+            .Journal(null, null, null, null, false, "night", from, from)).Value!;
+        (empty.JudgeAccepted.Count, empty.JudgeRejected.Count, empty.CodeRejected.Count).Should().Be((0, 0, 0));
+        empty.Waiting.Should().ContainSingle().Which.PackageId.Should().Be(idWaiting);
+
+        // Вид вне перечня, даты нет / не дата / from позже to — 400 с именем причины.
+        AssertCode(Controller().Journal(null, null, null, null, false, "day", from, to), 400, "wiki_view_key");
+        AssertCode(Controller().Journal(null, null, null, null, false, "night", null, to), 400, "wiki_date_range");
+        AssertCode(Controller().Journal(null, null, null, null, false, "night", "вчера", to), 400, "wiki_date_range");
+        AssertCode(Controller().Journal(null, null, null, null, false, "night", to, from), 400, "wiki_date_range");
+        // Флаг выключен — тот же 409, что у журнала: сводка строится из той же вики.
+        AssertCode(Controller(new FlagOff()).Journal(null, null, null, null, false, "night", from, to), 409, "wiki_llm_wiki_off");
+
+        // Без вида (и с пустым видом) — прежний контракт ручки не меняется.
+        ((OkObjectResult)Controller().Journal(null, null, null, null)).Value.Should().BeAssignableTo<WikiJournalDto>();
+        ((OkObjectResult)Controller().Journal(null, null, null, null, false, "", null, null)).Value
+            .Should().BeAssignableTo<WikiJournalDto>();
+    }
 }

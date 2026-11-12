@@ -58,6 +58,17 @@ describe('getContextDefaultPersonaId', () => {
     expect(getContextDefaultPersonaId(project)).toBe('personal-default');
   });
 
+  // W4-FB1 (дефект 8041ed7c): в общем проекте личная персона не подставляется никому, включая
+  // владельца: личная (глобальная/сферная) собеседником общего чата быть не может — бэк отказывает
+  // 400 global_persona_in_shared. Признак общего проекта — myRole (isSharedProject); у владельца
+  // общего проекта бэк отдаёт myRole='owner' (ProjectMembershipService.Summary).
+  it('общий проект без руководителя, вызывающий — владелец (myRole owner): личная персона НЕ подставляется', () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { defaultPersonaId: null, ownerId: 'u1', myRole: 'owner' as const };
+
+    expect(getContextDefaultPersonaId(project)).toBeNull();
+  });
+
   // Руководитель важнее признака владельца: участнику общего проекта с руководителем —
   // руководитель (ничего не меняется).
   it('общий проект с руководителем, вызывающий — не владелец: дефолт проекта', () => {
@@ -213,7 +224,24 @@ describe('createChatWithContextPersona', () => {
     expect((error as Error).message).toBe(serverText);
   });
 
-  // Владелец проекта без руководителя — прежний путь: чат от лица личной персоны.
+  // W4-FB1 (дефект 8041ed7c): владелец общего проекта без руководителя — запрос идёт БЕЗ
+  // personaId (через sessions.create), а не через личную глобальную персону: бэк сам
+  // провижнит собеседника проекта (201); путь через глобальную — 400 global_persona_in_shared.
+  it('владелец общего проекта без руководителя — sessions.create без personaId, не через личную персону', async () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { id: 'proj-1', defaultPersonaId: null, ownerId: 'u1', myRole: 'owner' as const };
+    vi.mocked(api.sessions.create).mockResolvedValue(fakeSession);
+
+    const result = await createChatWithContextPersona(project, { mode: 'auto' });
+
+    expect(result).toBe(fakeSession);
+    expect(api.personas.createChat).not.toHaveBeenCalled();
+    expect(api.sessions.create).toHaveBeenCalledWith(
+      'proj-1', 'auto', undefined, undefined, undefined, undefined, undefined, undefined);
+  });
+
+  // Владелец личного проекта без руководителя (myRole нет — не общий) — прежний путь: чат от
+  // лица личной персоны.
   it('владелец проекта без руководителя — создаёт чат от лица личной персоны, как раньше', async () => {
     setMeFromServer(fakeMe('personal-default'));
     const project = { id: 'proj-1', defaultPersonaId: null, ownerId: 'u1' };

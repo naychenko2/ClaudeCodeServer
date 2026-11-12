@@ -7,6 +7,7 @@ import type { Me, Project, Session } from '../types';
 import { api } from './api';
 import { OfflineError, RequestTimeoutError, readStoredUserId } from './offline';
 import { onMessage } from './signalr';
+import { isSharedProject } from '../features/projects/members/messageAuthor';
 
 interface MeState {
   loaded: boolean;
@@ -145,21 +146,28 @@ export function useMe(): MeState {
 // та была причина дефекта в WorkspacePage, где контекст собирают литералом.
 // Вызывающий с полным Project передаёт его как есть: хелпер сам нормализует Project в
 // контекст (у Project поле ownerId остаётся необязательным — старые данные).
-export type ProjectChatContext = Pick<Project, 'id' | 'defaultPersonaId'> & { ownerId: string | null };
+// myRole (W4-FB1) — признак общего проекта (isSharedProject): в общем проекте личный фолбэк не
+// работает. Поле необязательное: в личном проекте и у старого бэка его нет — отсутствие
+// читается как «не общий», поведение прежнее.
+export type ProjectChatContext = Pick<Project, 'id' | 'defaultPersonaId' | 'myRole'> & { ownerId: string | null };
 
-// Дефолт-персона контекста: в проекте — его руководитель, а если руководителя ещё нет —
-// личная дефолт-персона (проект без командных механик ведёт личный ассистент); вне проекта —
-// сразу личная. null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
+// Дефолт-персона контекста: в проекте — его руководитель; вне проекта — сразу личная.
+// null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
 // провижн на рубеже 2.4).
-// Исключение (W3-F2a, дефект D1): в общем проекте, где вызывающий не владелец (ownerId
-// != me.userId), личная персона НЕ подставляется: личный ассистент увёл бы чат из проекта
-// (бэк создал бы его личным, вне проекта — «молча» для участника). null — запрос идёт без
-// personaId, бэк отвечает 400 no_project_persona, текст доходит до вызывающего как тост.
-// Владелец (ownerId == me.userId) и проект без ownerId (null — старые данные) — прежний фолбэк.
+// Исключение (W3-F2a, дефект D1; расширено W4-FB1, дефект 8041ed7c): в общем проекте
+// (isSharedProject — по myRole) личная персона НЕ подставляется никому, включая владельца:
+// личная (глобальная/сферная) персона собеседником общего чата быть не может — бэк
+// отказывает 400 global_persona_in_shared (SessionCoreContracts.cs:80). Без руководителя
+// запрос идёт без personaId: владельцу бэк сам провижнит собеседника проекта (201),
+// участнику — 400 no_project_persona, текст доходит до вызывающего как тост.
+// Старый признак участия (бэк без myRole): не-владелец по ownerId — как раньше (W3-F2a).
+// Личный проект (myRole нет) и проект без ownerId (null — старые данные) — личный фолбэк.
 export function getContextDefaultPersonaId(
-  project?: Pick<ProjectChatContext, 'defaultPersonaId' | 'ownerId'> | null,
+  project?: Pick<ProjectChatContext, 'defaultPersonaId' | 'ownerId' | 'myRole'> | null,
 ): string | null {
   if (project?.defaultPersonaId) return project.defaultPersonaId;
+  // Общий проект — личная персона не кандидат, даже владельцу (W4-FB1).
+  if (isSharedProject(project)) return null;
   if (project && project.ownerId && _me.userId && project.ownerId !== _me.userId) return null;
   return _me.defaultPersonaId;
 }
@@ -196,8 +204,9 @@ export async function createChatWithContextPersona(
 ): Promise<Session> {
   // Полный Project нормализуем в контекст: его ownerId всё ещё необязателен (старые
   // данные) — отсутствующий становится null, резолвер читает это как «проект без владельца».
+  // myRole прокидывается как есть: где он есть — проект общий, личный фолбэк не работает (W4-FB1).
   const ctx = project
-    ? { defaultPersonaId: project.defaultPersonaId ?? null, ownerId: project.ownerId ?? null }
+    ? { defaultPersonaId: project.defaultPersonaId ?? null, ownerId: project.ownerId ?? null, myRole: project.myRole }
     : null;
   const defaultId = getContextDefaultPersonaId(ctx);
   if (defaultId) {

@@ -286,7 +286,7 @@ export async function mockApi(page: Page) {
       return json(c);
     }
     const OBJ: Record<string, unknown> = {
-      '/modules': { items: [] }, '/models': { models: [] }, '/settings': {}, '/usage': { snapshots: [] }, '/home/summary': { active: [], recent: [] },
+      '/tasks/features/index': { features: [], chats: {} }, '/modules': { items: [] }, '/models': { models: [] }, '/settings': {}, '/usage': { snapshots: [] }, '/home/summary': { active: [], recent: [] },
       '/chats/agents-presence': { agents: [], commands: [] }, '/watchdogs': { sessions: [], projects: [] },
       '/notifications/unread-count': { count: 0 }, '/subsystem-modules': { items: world.imageRemote ? [{ id: 'imageeditor', remoteUrl: '/image-editor-remote/remoteEntry.js', exposedModule: './subsystem' }] : [] },
     };

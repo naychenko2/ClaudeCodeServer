@@ -121,6 +121,21 @@ test('полоса «Вернуть» стоит в хосте строки', as
   await shot(page, 'undo-host-1440.png');
 });
 
+test('«Вернуть» без текстовой строки: полоса есть, самой строки нет', async ({ page }) => {
+  // Ветка ContextRowView без ушка: ни ветки, ни объекта (проект без git) — строки контекста нет,
+  // но полоса «Вернуть» обязана остаться (иначе снятый объект не вернуть).
+  newWorld({ noGit: true, ctx: { primary: primary() } });
+  await openChat(page, { vp: D });
+  await expect(chip(page, 'primary')).toBeVisible({ timeout: 30_000 });
+  await chip(page, 'primary').locator('[data-chip-x]').click();
+  await expect(page.locator('[data-context-notice]'), '«Вернуть» не появился').toBeVisible();
+  await expect(page.locator('[data-context-row]'), 'строки контекста нет — объект снят, ветки нет').toHaveCount(0);
+  await expect(page.locator('[data-context-row-host] [data-context-notice]'), '«Вернуть» в хосте').toHaveCount(1);
+  await page.locator('[data-undo]').click();
+  await expect(chip(page, 'primary'), 'объект не вернулся').toBeVisible();
+  await expect(page.locator('[data-context-notice]')).toHaveCount(0);
+});
+
 test('«+N ›» открывает список подключённого, «Очистить контекст» снимает всё', async ({ page }) => {
   // 6 референсов не влезают в строку: часть уходит в «+N ›»
   const refs = ['Аня', 'palette.png', 'mood.jpg', 'logo.png', 'sky.png', 'sun.png'].map((n, i) => ref(`r${i}`, n, { role: i === 0 ? 'char' : 'style' }));

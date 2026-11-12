@@ -139,6 +139,15 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxReferences: 0, MaxCount: 4, FaceByReferences: false, Format: OneMegapixelFormat(formatLabel)),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
 
+    // Krea 2 Turbo (Ш4): генерация по тексту, девять стилевых LoRA плашками и один образец с ролью
+    // «стиль» (LoRA ostris). Образцы других ролей и всё, кроме генерации, шов отдаёт Qwen
+    private static ImageEditModelInfo Krea2Model() =>
+        new(Krea2Turbo, "Krea 2 Turbo — эстетика, 8 шагов",
+            new ImageEditCaps([ImageEditOp.Generate], MaskSupport.None,
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: false, Format: OneMegapixelFormat("Krea 2 Turbo"),
+                Styles: [.. Krea2Styles.All.Select(s => new ImageEditStyle(s.Id, s.Label))]),
+            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image"));
+
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
     // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
     // он отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит. Персонажа
@@ -159,7 +168,7 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 MaxFaceCropPhotos: 1, Format: Fibo2Format),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         // Krea 2 Turbo и MOSS-Image (2026-11-12): только генерация по тексту
-        TextOnlyModel(Krea2Turbo, "Krea 2 Turbo — эстетика, 8 шагов", "Krea 2 Turbo"),
+        Krea2Model(),
         TextOnlyModel(MossImage, "MOSS-Image — надписи и вёрстка", "MOSS-Image"),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
@@ -225,7 +234,13 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     private static string EtaVariant(string id, ImageEditQuoteRequest request, int images)
     {
         if (LocalImageModels.TextOnly(id))
+        {
+            // Единственный образец без маски и персонажа — вероятно «стиль по образцу» Krea 2 (роли котировка не видит)
+            if (id == Krea2Turbo && request.Op == ImageEditOp.Generate && !request.HasMask && !request.HasCharacter
+                && request.References == 1 && !request.HasAnnotations)
+                return id;
             return request.Op != ImageEditOp.Generate || images > 0 || request.HasMask ? QwenImage : id;
+        }
         var toQwen = (LocalImageModels.TakesCharacterByPhotos(id) || LocalImageModels.IsFibo2(id))
                      && (request.HasMask
                          || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
@@ -263,8 +278,12 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
             case ImageEditOp.Generate:
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
+                // Krea 2 Turbo: один образец с ролью «стиль» — «стиль по образцу», иначе стилевая LoRA по плашке
+                var styleRef = req.Model == Krea2Turbo && req.Character is null
+                               && req.References is [{ Role: ReferenceRole.Style }];
                 run = new LocalImageRequest(LocalImageOp.Generate, WithTrigger(req.Prompt, req), references, req.AspectRatio, 1,
-                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model);
+                    Width: req.Format?.Width, Height: req.Format?.Height, Lora: LoraOf(req), FaceReferences: req.Character?.FacePhotos, Model: req.Model,
+                    KreaStyle: req.Model == Krea2Turbo && !styleRef ? Krea2Styles.Find(req.Style)?.Id : null, StyleReference: styleRef);
                 if (IsKlein(run))
                     run = run with { Prompt = KleinCharacterPrompt(req) ?? req.Prompt, Lora = null };
                 runs = Math.Clamp(req.Count, 1, 4);

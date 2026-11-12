@@ -111,10 +111,16 @@ public static class LocalImageModels
     public static string? Effective(LocalImageRequest request) =>
         ((TakesCharacterByPhotos(request.Model) || IsFibo2(request.Model)) && NeedsQwen(request))
         || (IsFibo2(request.Model) && request.Lora is not null)
-        || (TextOnly(request.Model) && (request.Op != LocalImageOp.Generate || (request.Images?.Count ?? 0) > 0
+        || (TextOnly(request.Model) && (request.Op != LocalImageOp.Generate
+                                        || ((request.Images?.Count ?? 0) > 0 && !IsKreaStyleReference(request))
                                         || request.Lora is not null || NeedsQwen(request)))
             ? Quality
             : request.Model;
+
+    // Krea 2 Turbo с одним образцом-стилем и без прочих входов остаётся на Krea (LoRA ostris)
+    public static bool IsKreaStyleReference(LocalImageRequest request) =>
+        request.Model == Krea2Turbo && request.StyleReference && request.Op == LocalImageOp.Generate
+        && request.Images?.Count == 1 && request.Lora is null && request.FaceReferences is not { Count: > 0 };
 
     public static bool NeedsQwen(LocalImageRequest request) =>
         request.Crop is not null
@@ -172,7 +178,10 @@ public sealed record LocalImageRequest(
     byte[]? VeilMask = null,
     string? Model = null,
     // Метка происхождения прогона (шаг 23): null — вызывающая сторона ещё не передаёт (шаги 28–30).
-    LocalJobOrigin? Origin = null);
+    LocalJobOrigin? Origin = null,
+    // Только Krea 2 Turbo (Ш4): id стилевой LoRA (Krea2Styles) либо StyleReference — Images[0] «стиль по образцу»
+    string? KreaStyle = null,
+    bool StyleReference = false);
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);

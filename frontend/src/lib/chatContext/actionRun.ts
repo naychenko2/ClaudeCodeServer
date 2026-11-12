@@ -107,7 +107,7 @@ export function mergeParams(base: readonly LaunchParam[], values: Readonly<Recor
 export function launchParams(action: ContextAction, params: readonly LaunchParam[], values: Readonly<Record<string, number | string>>): LaunchParams {
   const out: Record<string, string | number | boolean> = {};
   for (const p of params) {
-    if (p.kind === 'variants' || p.kind === 'duration' || p.kind === 'aspect') out[p.kind] = p.value;
+    if (p.kind === 'variants' || p.kind === 'duration' || p.kind === 'aspect' || p.kind === 'style') out[p.kind] = p.value;
   }
   const q = action.question;
   if (q) out[q.param] = values[q.param] ?? q.options[0]?.value ?? '';

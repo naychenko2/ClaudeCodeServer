@@ -526,6 +526,9 @@ public sealed partial class LocalMediaService(
     // холодной. MOSS-Image SFT, 25 шагов с расширителем промпта: 16–27 с
     public static int Krea2GenerateEta(int count) => 4 + 7 * Math.Max(1, count);
 
+    // «Стиль по образцу» Krea 2 Turbo: энкодер читает образец, плюс LoRA ostris — оценка до замера Ш4
+    public static int Krea2StyleReferenceEta(int count) => 8 + 9 * Math.Max(1, count);
+
     public static int MossGenerateEta(int count) => 8 + 17 * Math.Max(1, count);
 
     public const int FaceDetailEta = 25;

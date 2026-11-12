@@ -41,6 +41,8 @@ export interface ImageEditCaps {
   maxInputSide?: number | null;
   maxInputMegapixels?: number | null;
   maxInputMb?: number | null;
+  // Стили модели (Krea 2 Turbo): плашки выбора; id уходит в запуск полем style. Нет — стилей у модели нет
+  styles?: { id: string; label: string }[] | null;
 }
 
 export interface ImageEditPriceHint { amount: number; unit: string; per: string }
@@ -177,6 +179,8 @@ export interface ImageEditJobInput {
   referencePaths?: ImageEditProjectReference[];
   // Пропорции «Дорисовать за края»: 1:1, 16:9, 9:16
   aspectRatio?: string;
+  // Стиль Krea 2 Turbo (id из caps.styles); без поля — без стиля
+  style?: string;
   // Вернуть размер оригинала после скачивания (ADR-018 §9); по умолчанию сервер — true
   matchSourceSize?: boolean;
   chatSessionId?: string;
@@ -222,6 +226,7 @@ export function jobForm(input: ImageEditJobInput): FormData {
     form.append('referencePathRoles', r.role);
   }
   if (input.aspectRatio) form.append('aspectRatio', input.aspectRatio);
+  if (input.style) form.append('style', input.style);
   if (input.matchSourceSize != null) form.append('matchSourceSize', String(input.matchSourceSize));
   if (input.chatSessionId) form.append('chatSessionId', input.chatSessionId);
   if (input.sessionId) form.append('sessionId', input.sessionId);
@@ -680,6 +685,13 @@ const liveApi: ImageEditorApi = {
 const caps = (ops: ImageEditOp[], mask: MaskSupport): ImageEditCaps =>
   ({ ops, mask, maxReferences: 4, maxCount: 4, faceByReferences: mask !== 'native' });
 const ALL_EDIT: ImageEditOp[] = ['generate', 'edit', 'inpaint', 'outpaint', 'removeBackground', 'upscale'];
+// Стили Krea 2 Turbo для макета без бэкенда: те же id и подписи, что в Krea2Styles на сервере
+const MOCK_KREA2_STYLES = [
+  ['darkbrush', 'Тёмная кисть'], ['dotmatrix', 'Пунктир'], ['kidsdrawing', 'Детский рисунок'],
+  ['neondrip', 'Неоновые потёки'], ['rainywindow', 'Дождь на стекле'], ['retroanime', 'Ретро-аниме'],
+  ['softwatercolor', 'Акварель'], ['sunsetblur', 'Закатное размытие'], ['vintagetarot', 'Винтажное таро'],
+].map(([id, label]) => ({ id, label }));
+
 const AUTO_ITEM: ImageEditModel = { id: AUTO_MODEL, label: 'Авто', modes: ['fast', 'precise', 'photoreal'] };
 
 const MOCK_PROVIDERS: ImageEditProvider[] = [
@@ -704,7 +716,7 @@ const MOCK_PROVIDERS: ImageEditProvider[] = [
     { id: 'minimax-h3-image', label: 'MiniMax H3 Image — детали и 4K', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2', label: 'Fibo 2.0 — состав сцены и текст, некоммерч.', caps: caps(['generate', 'edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'fibo2-turbo', label: 'Fibo 2.0 Turbo — быстрая правка, некоммерч.', caps: caps(['edit', 'inpaint'], 'asReference'), priceHint: { amount: 0, unit: 'free', per: 'image' } },
-    { id: 'krea2-turbo', label: 'Krea 2 Turbo — эстетика, 8 шагов', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
+    { id: 'krea2-turbo', label: 'Krea 2 Turbo — эстетика, 8 шагов', caps: { ...caps(['generate'], 'none'), maxReferences: 15, faceByReferences: false, styles: MOCK_KREA2_STYLES }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'moss-image', label: 'MOSS-Image — надписи и вёрстка', caps: { ...caps(['generate'], 'none'), maxReferences: 0, faceByReferences: false }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
     { id: 'face-detailer', label: 'Улучшить лица', caps: { ...caps(['enhanceFaces'], 'none'), maxReferences: 0, maxCount: 1 }, priceHint: { amount: 0, unit: 'free', per: 'image' } },
   ] },

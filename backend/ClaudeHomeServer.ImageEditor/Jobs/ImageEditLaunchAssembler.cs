@@ -146,6 +146,11 @@ public sealed class ImageEditLaunchAssembler(
                 return Invalid($"Пропорции {aspectRatio} не поддерживаются: только {string.Join(", ", AspectRatios)}");
         }
 
+        // Стиль Krea 2 Turbo: неизвестный id — отказ, а не молчаливый запуск без стиля
+        var style = Krea2Styles.Find(req.Style);
+        if (!string.IsNullOrWhiteSpace(req.Style) && style is null)
+            return Invalid($"Стиль «{req.Style}» неизвестен");
+
         var limits = ImageEditCatalog.DefaultLimits;
         var sizes = new[] { source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
             .Concat(req.Uploaded.Select(r => r.Bytes))
@@ -209,7 +214,8 @@ public sealed class ImageEditLaunchAssembler(
             AspectRatio: aspectRatio,
             ThreadId: threadId,
             BaseVersionId: baseVersionId,
-            CharacterPicker: picker));
+            CharacterPicker: picker,
+            Style: style?.Id));
     }
 
     // Подбор фото персонажа под сюжет (ADR-027 §7). Возвращает
@@ -548,4 +554,6 @@ public sealed record ImageEditLaunchRequest(
     IReadOnlyList<string>? CharacterPhotos = null,
     // Подстановка персонажа на лицо (ADR-028, этап 2): при наличии контекст чата игнорируется
     // целиком, образцы — только персонаж, маска строится сервером
-    FaceTarget? FaceTarget = null);
+    FaceTarget? FaceTarget = null,
+    // Стиль Krea 2 Turbo (Krea2Styles.Id); пусто — без стиля
+    string? Style = null);

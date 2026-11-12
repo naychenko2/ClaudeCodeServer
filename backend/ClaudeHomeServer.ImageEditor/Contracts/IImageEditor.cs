@@ -96,7 +96,12 @@ public record ImageEditCaps(
     int? MaxFaceCropPhotos = null,
     // Выходные пропорции, ступени и «Точно…» модели (ADR-025); null — модель размеров не сообщает:
     // «Как у модели», текущее поведение
-    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null);
+    ClaudeHomeServer.Services.Media.MediaFormatCaps? Format = null,
+    // Стили модели (Krea 2 Turbo, Ш4): плашки выбора в редакторе; id уходит в запуск как ImageEditRequest.Style.
+    // null — у модели стилей нет
+    IReadOnlyList<ImageEditStyle>? Styles = null);
+
+public record ImageEditStyle(string Id, string Label);
 
 // Ориентир цены для каталога; точная сумма — только в котировке
 public record ImageEditPriceHint(double Amount, string Unit, string Per);
@@ -185,7 +190,9 @@ public record ImageEditRequest(
     bool Heavy = false,
     // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
     string? ProjectId = null,
-    string? SourceJobId = null);
+    string? SourceJobId = null,
+    // Стиль Krea 2 Turbo (id из Krea2Styles); null — без стиля. Остальные драйверы поле не читают
+    string? Style = null);
 
 // Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
 public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);

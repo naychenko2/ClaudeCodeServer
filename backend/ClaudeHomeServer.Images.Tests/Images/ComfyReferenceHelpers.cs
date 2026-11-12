@@ -75,7 +75,8 @@ public static class ComfyGraphDiff
 public static class ComfyGraphValidator
 {
     private static readonly HashSet<string> FileListInputs =
-        ["LoadImage.image", "LoadImageMask.image", "LoadVideo.file", "LoadAudio.audio", "LoadLatent.latent"];
+        ["LoadImage.image", "LoadImageMask.image", "LoadVideo.file", "LoadAudio.audio", "LoadLatent.latent",
+         "LoraLoaderModelOnly.lora_name"];
 
     public static IReadOnlyList<string> Validate(JsonObject graph, JsonObject objectInfo)
     {

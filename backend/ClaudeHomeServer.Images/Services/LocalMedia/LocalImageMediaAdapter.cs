@@ -149,6 +149,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
     public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsKrea2(model) => LocalMediaService.Krea2GenerateEta(Math.Max(1, count)),
+        LocalImageOp.Generate when images == 1 && ComfyWorkflows.IsKrea2(model) => LocalMediaService.Krea2StyleReferenceEta(Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsMoss(model) => LocalMediaService.MossGenerateEta(Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsFibo2(model) =>
             LocalMediaService.Fibo2GenerateEta(model == LocalImageModels.Fibo2Turbo, Math.Max(1, count)),
@@ -381,8 +382,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                     KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) =>
                     H3ImageGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
+                LocalImageOp.Generate when ComfyWorkflows.IsKrea2(model) && request.StyleReference && names.Count == 1 =>
+                    ComfyWorkflows.Krea2StyleReference(prompt, names[0], OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
                 LocalImageOp.Generate when ComfyWorkflows.IsKrea2(model) =>
-                    ComfyWorkflows.Krea2Generate(prompt, OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
+                    ComfyWorkflows.Krea2StyleGenerate(prompt, Krea2Styles.Find(request.KreaStyle), OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
                 LocalImageOp.Generate when ComfyWorkflows.IsMoss(model) =>
                     ComfyWorkflows.MossGenerate(prompt, OneMegapixelCanvas(request).Width, OneMegapixelCanvas(request).Height, seed, count, prefix),
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsFibo2(model) =>

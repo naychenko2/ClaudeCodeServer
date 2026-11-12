@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using Microsoft.Extensions.Logging;
 
@@ -83,7 +84,7 @@ public sealed class ChatVisibility
             if (makePrivate)
             {
                 var project = info.ProjectId is not null ? _projects.GetById(info.ProjectId) : null;
-                if (!CanBePrivate(project))
+                if (!ProjectAccess.IsShared(project))
                     return new(ChatVisibilityOutcome.NotSharedProject, null);
                 // Штаб «Командной реализации» и групповой чат — режимы общего контура (S2d-7b-3).
                 // QA-D45 (D4): отказ режима идёт раньше авторского — у штаба и группы нет автора,
@@ -140,11 +141,11 @@ public sealed class ChatVisibility
         return new(ChatVisibilityOutcome.Ok, info) { AttachmentMoves = moves };
     }
 
-    // «Приватным можно сделать только чат общего проекта» (W4-B1a): одно определение общего
-    // проекта — есть участники. Им же отказывает тумблер (NotSharedProject выше) и контроллер
-    // создания чата с флагом private (SessionsController.Create), чтобы отказ был одинаковым
-    // в обеих точках (тот же 409 not_shared_project).
-    public static bool CanBePrivate(Project? project) => project?.Members is { Count: > 0 };
+    // «Приватным можно сделать только чат общего проекта» (W4-B1a, доработка по возврату ревью
+    // f62c03b7): определение общего проекта живёт не здесь, а в точке членства вне ядра сессий —
+    // ProjectAccess.IsShared (ProjectAccess.cs). Им же отказывают обе точки создания чата с флагом
+    // private (тот же 409 not_shared_project), и ссылка контроллера на него не красит правило 4
+    // сторожа формы ядра. Прежний CanBePrivate свёрнут: второго определения не осталось.
 
     // Чат — штаб «Командной реализации» (роль штаба) или групповой (есть участники-персоны).
     private static bool IsTeamOrGroup(Session info) =>

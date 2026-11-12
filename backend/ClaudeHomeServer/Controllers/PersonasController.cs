@@ -481,7 +481,7 @@ public class PersonasController(
             var targetProjectId = PersonaZone.IsProjectPersona(privatePersona)
                 ? PersonaZone.OwnProjectId(privatePersona)
                 : req.ProjectId;
-            if (!_sessions.CanBePrivateChat(
+            if (!ProjectAccess.IsShared(
                     targetProjectId is { Length: > 0 } tpid ? _projects.GetById(tpid) : null))
                 return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
         }

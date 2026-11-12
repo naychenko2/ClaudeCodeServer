@@ -554,7 +554,7 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
     // (fail-closed, как остальной авторство-путь).
     private GitCommitAuthor? AuthorOfRequestUser(Models.Project p)
     {
-        if (p.Members is not { Count: > 0 }) return null;
+        if (!ProjectAccess.IsShared(p)) return null;
         var userId = UserId;
         if (userId is null) return null;
         var user = users.GetById(userId);

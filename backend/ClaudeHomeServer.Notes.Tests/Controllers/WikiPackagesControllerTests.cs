@@ -488,8 +488,9 @@ public class WikiPackagesControllerTests : IDisposable
     [Fact]
     public async Task ПоследнееРешениеПринято_СтраницаЗаписана_ПакетApplied_ПричинаПуста()
     {
-        // Мутация «не вызывать ApplyAsync после решения» (снять вызов в AfterDecision):
-        // краснеет Applied/Status/файл страницы/журнал этого теста.
+        // Мутация «не вызывать ApplyAsync после решения» (снять вызов в
+        // WikiApplyService.ApplyDecidedAsync): краснеет Applied/Status/файл страницы/журнал
+        // этого теста.
         var id = await NewRealPackage([RealOp()]);
 
         var dto = ((OkObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, true, "подтверждаю")))
@@ -796,7 +797,8 @@ public class WikiPackagesControllerTests : IDisposable
         // Сбой, вышедший из ApplyAsync наружу (здесь — чужой формат владельца: Root бросает
         // ArgumentException до заявки), не даёт 500: «Входящие» отвечают результатом-отказом с
         // причиной, решения человека целы, пакет не двинут (ревью S4g, M3). Мутация «снять
-        // try/catch» в ApplyOutcomeAsync: тест падает с исключением, а не с ответом.
+        // try/catch» в WikiApplyService.ApplyGuardedAsync: тест падает с исключением, а не
+        // с ответом.
         var id = await NewRealPackage([RealOp()]);
         var root = WikiPaths.Root(_dir, User);
         var decided = WikiPackageStore.DecideOperation(root, id, 0, true, "подтверждаю");
@@ -817,12 +819,12 @@ public class WikiPackagesControllerTests : IDisposable
     {
         // «applying» без закрытия доводит только сторож старта; здесь сбой закрывается
         // переходом сразу (ревью S4g, M3). Мутация «не закрывать переходом» (убрать Transition
-        // в CrashedApply): StatusOnDisk краснеет — пакет остался бы в «applying».
+        // в WikiApplyService.CrashedApply): StatusOnDisk краснеет — пакет остался бы в «applying».
         var id = NewPackage(WikiPackage.StatusProposed, "common", Op(WikiPackage.OpAppend, WikiPackage.DecisionAuto));
         var root = WikiPaths.Root(_dir, User);
         WikiPackageStore.Transition(root, id, WikiPackage.StatusApplying).Ok.Should().BeTrue();
 
-        var r = WikiPackagesController.CrashedApply(root, id, new IOException("диск отказал"));
+        var r = WikiApplyService.CrashedApply(root, id, new IOException("диск отказал"));
 
         r.Applied.Should().BeFalse();
         r.Code.Should().Be(WikiApplyService.CodeInternal);
@@ -1276,6 +1278,70 @@ public class WikiPackagesControllerTests : IDisposable
             Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
         ListOf(Controller(serviceToken: true).List(null)).Select(p => p.Id).Should().Contain(id);
         ((OkObjectResult)Controller(serviceToken: true).Get(id)).StatusCode.Should().Be(200);
+    }
+
+    // ─── 14. Вердикт судьи через REST (J-J2b): он решение операции, а не её правка ──────
+    //
+    // И1: у спорной операции ровно одно решение. Человек не переворачивает вердикт вторым
+    // решением (409 с его путём), «принять всё» меняет только то, что ещё не решено, — а
+    // применяет после этого весь принятый пакет, включая принятые судьёй операции.
+
+    [Fact]
+    public async Task РешённуюСудьейОперациюНеРешаютВторично_409СПутемОтката()
+    {
+        // Мутация «не давать подсказку» (убрать ветку JudgeDecision в Refusal): Contain
+        // краснеет — человек читал бы «решение не меняется» без своего пути.
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox),
+            Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox, "Общее/Z.md"));
+        var root = WikiPaths.Root(_dir, User);
+        WikiPackageStore.JudgeOperations(root, id,
+            [new WikiPackageStore.JudgeOutcome(0, true, null, "judge-model", null)]).Ok.Should().BeTrue();
+        // Пакет ещё proposed: вторая спорная не решена никем.
+        StatusOnDisk(id).Should().Be(WikiPackage.StatusProposed);
+
+        var obj = ((ObjectResult)await Controller().Decide(id, new WikiDecideRequest(0, false, "не согласен")));
+        obj.StatusCode.Should().Be(409);
+        var body = JsonDocument.Parse(JsonSerializer.Serialize(obj.Value)).RootElement;
+        body.GetProperty("code").GetString().Should().Be(WikiPackageStore.CodeAlreadyDecided);
+        body.GetProperty("message").GetString().Should()
+            .Contain("решил судья; путь человека — откат пакета", "отказ по вердикту называет человеку его путь");
+
+        // Отказ ничего не меняет: вердикт цел, второго решения нет.
+        var after = WikiPackageStore.TryRead(root, id).Package!;
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        after.Operations[0].HumanDecision.Should().BeNull();
+        after.Operations[1].HumanDecision.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ПринятьВсёМеняетТолькоОткрытую_ВердиктСудьиНеТронут_ПакетПринятЦеликом()
+    {
+        // Мутация «accept-all решает и решённые судьёй» (убрать `o.JudgeDecision is null` из
+        // выборки AcceptAllContested): HumanDecision[0] краснеет — вердикт был бы перекрыт
+        // решением человека, т.е. у операции стало бы два решения (И1).
+        var id = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox),
+            Op(WikiPackage.OpConflict, WikiPackage.DecisionInbox, "Общее/Z.md"));
+        var root = WikiPaths.Root(_dir, User);
+        WikiPackageStore.JudgeOperations(root, id,
+            [new WikiPackageStore.JudgeOutcome(0, true, null, "judge-model", null)]).Ok.Should().BeTrue();
+
+        var dto = ((OkObjectResult)await Controller().AcceptAll(id)).Value
+            .Should().BeAssignableTo<WikiDecisionDto>().Which;
+        // Меняется только открытое: вердикт остаётся вердиктом (его полей в контракте фронта
+        // нет — J-J2a их туда не выносил, человек видит исход по статусу пакета).
+        dto.Package.Operations[0].HumanDecision.Should().BeNull();
+        dto.Package.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
+        // Обе спорные решены → пакет принят: applying зовётся тем же запросом (здесь —
+        // отказан: вики этого владельца не заведена, решения целы на диске).
+        dto.Package.Status.Should().Be(WikiPackage.StatusAccepted);
+        dto.Apply!.Applied.Should().BeFalse();
+        dto.Apply.Code.Should().Be(WikiApplyService.CodeOff);
+        var after = WikiPackageStore.TryRead(root, id).Package!;
+        after.Status.Should().Be(WikiPackage.StatusAccepted);
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        after.Operations[1].HumanDecision.Should().Be(WikiPackage.HumanAccepted);
     }
 
     // Пакет боевой пробы: карточка и страница записаны Хранителем (манифест согласован —

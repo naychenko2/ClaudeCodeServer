@@ -19,8 +19,10 @@ namespace ClaudeHomeServer.Notes.Controllers;
 // их никто не создаёт (их строит Хранитель). Решение человека замкнуто применением (S4g,
 // ADR-035 §5): тот же запрос, который оставил в пакете ноль нерешённых спорных операций и
 // хотя бы одну принятую, применяет его через WikiApplyService и отвечает итоговое состояние
-// пакета; решение, оставившее нерешённые спорные (proposed) или отклонившее все (rejected),
-// ничего не применяет. Отдельной ручки «применить» нет (повтор применения человеком — не здесь);
+// пакета; вердикт облачного судьи — решение той же операции (И1, J-J2b): оно применяется тем
+// же путём и с теми же гейтами кода, а человек его вторым решением не переворачивает (409 с
+// его путём — откатом пакета); решение, оставившее нерешённые спорные (proposed) или
+// отклонившее все (rejected), ничего не применяет. Отдельной ручки «применить» нет (повтор применения человеком — не здесь);
 // откат применённого пакета — только кнопкой человека (мера 4), MCP-инструмента нет (решение 5).
 //
 // Пакеты лежат в data/wiki/{владельца}/keeper/packages/, поэтому чужой пакет в свой список
@@ -110,7 +112,8 @@ public class WikiPackagesController : ControllerBase
     /// <summary>POST /api/wiki/packages/{id}/decide — {index, accept, reason?}: принять или
     /// отклонить с причиной одну спорную операцию. 409: операция не спорная (auto), пакет не
     /// в proposed, index вне списка, отказ без причины, файл пакета нечитаем, операция уже
-    /// решена (решение не меняется). Успех — {package, apply}: карточка пакета после решения
+    /// решена — человеком или судьёй (решение не меняется; по вердикту судья в теле — путь
+    /// человека: откат пакета). Успех — {package, apply}: карточка пакета после решения
     /// и, если решение оставило ноль нерешённых спорных и хотя бы одну принятую операцию,
     /// исход применения этого же пакета; для proposed/rejected apply — null.</summary>
     [HttpPost("{id}/decide")]
@@ -121,22 +124,24 @@ public class WikiPackagesController : ControllerBase
         if (IsServiceToken) return ServiceTokenRefusal();
         if (req?.Index is null || req.Accept is null)
             return BadRequest(new { code = CodeRequest, message = "нужны index операции и accept" });
-        if (Owned(userId, id, out var root) is { } refusal) return refusal;
+        if (Owned(userId, id, out var root, out var before) is { } refusal) return refusal;
         var res = WikiPackageStore.DecideOperation(root, id, req.Index.Value, req.Accept.Value, req.Reason);
-        if (!res.Ok) return Refusal(res);
+        if (!res.Ok) return Refusal(res, before, req.Index);
         return await AfterDecision(userId, root, res.Package!);
     }
 
     /// <summary>POST /api/wiki/packages/{id}/accept-all — «принять всё спорное пакета».
-    /// 409, если спорных операций нет: неспорные решает политика, а не человек. Успех и
-    /// применение — те же, что у decide.</summary>
+    /// 409, если спорных операций нет: неспорные решает политика, а не человек. Спорные,
+    /// решённые судьёй, пропускаются: их вердикт остаётся как есть (И1 — у операции одно
+    /// решение), меняется только то, что ещё не решено. Успех и применение — те же, что у
+    /// decide: после «принять всё» применяются и принятые судьёй операции тоже.</summary>
     [HttpPost("{id}/accept-all")]
     public async Task<IActionResult> AcceptAll(string id)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (IsServiceToken) return ServiceTokenRefusal();
-        if (Owned(userId, id, out var root) is { } refusal) return refusal;
+        if (Owned(userId, id, out var root, out _) is { } refusal) return refusal;
         var res = WikiPackageStore.AcceptAllContested(root, id);
         if (!res.Ok) return Refusal(res);
         return await AfterDecision(userId, root, res.Package!);
@@ -158,7 +163,7 @@ public class WikiPackagesController : ControllerBase
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (IsServiceToken) return ServiceTokenRefusal();
-        if (Owned(userId, id, out _) is { } refusal) return refusal;
+        if (Owned(userId, id, out _, out _) is { } refusal) return refusal;
 
         var r = await _revert.RevertAsync(userId, id).ConfigureAwait(false);
         if (r.Reverted)
@@ -228,62 +233,62 @@ public class WikiPackagesController : ControllerBase
     // Пакет читается из своего корня — чужого по построению нет; остаётся раздел: он не
     // должен называть чужой проект (тот же контракт, что ResolveSection у WikiController).
     // 404 — пакета нет, 409 — его файл нечитаем: это разные исходы для фронта.
-    private IActionResult? Owned(string userId, string id, out string root)
+    private IActionResult? Owned(string userId, string id, out string root, out WikiPackage? package)
     {
         root = WikiPaths.Root(_dataDir, userId);
+        package = null;
         var res = WikiPackageStore.TryRead(root, id);
         if (res.State == WikiPackageFileState.Missing) return NotFound();
         if (res.State != WikiPackageFileState.Valid)
             return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
         if (IsForeignSection(userId, res.Package!.Section))
             return StatusCode(403, new { code = CodeForeign, message = "только своя вики" });
+        package = res.Package;
         return null;
     }
 
     // Коды стора → HTTP: «нет пакета» — 404 (здесь он возможен только в гонке с удалением),
     // остальное — 409 с причиной для человека.
-    private IActionResult Refusal(WikiPackageOpResult res) =>
-        res.Code == WikiPackageStore.CodeNotFound
-            ? NotFound()
-            : StatusCode(409, new { code = res.Code, message = res.Reason });
+    //
+    // «Операция уже решена» по вердикту судьи (J-J2b): человеку нужен его путь. Вердикт —
+    // тоже решение этой операции (И1), человек его не переворачивает вторым решением:
+    // пересмотр — новым пакетом (разбором того же окна), откат уже применённого — кнопкой
+    // отката. Без этой строки 409 читался бы как сбой, а не как «тебя уже спросили».
+    private IActionResult Refusal(WikiPackageOpResult res, WikiPackage? before = null, int? index = null)
+    {
+        if (res.Code == WikiPackageStore.CodeNotFound) return NotFound();
+        var message = res.Reason;
+        if (res.Code == WikiPackageStore.CodeAlreadyDecided
+            && index is >= 0 && before is not null && index < before.Operations.Count
+            && before.Operations[index.Value].JudgeDecision is not null)
+            message = $"{res.Reason} (решил судья; путь человека — откат пакета)";
+        return StatusCode(409, new { code = res.Code, message });
+    }
 
-    /// <summary>Решение человека замкнуто применением (S4g, ADR-035 §5): если оно оставило в
-    /// пакете ноль нерешённых спорных операций и хотя бы одну принятую (accepted |
-    /// partially_accepted), тот же запрос применяет пакет; решение, оставившее нерешённые
-    /// спорные (proposed) или отклонившее все (rejected), ничего не применяет — применять
-    /// нечего, и это видно по статусу в ответе. Применение читает пакет с диска под своей
-    /// блокировкой (ApplyAsync, решение человека берётся только из дисковых HumanDecision),
-    /// его сбой — результат-отказ с причиной, а не исключение и не «зависший applying»:
-    /// решения записаны до применения и остаются на диске. Итоговый статус — прочитанный с
-    /// диска после применения, а не предположение: «applied»/«apply_failed»/«stale» или
-    /// прежний, если применять было нечего; если применение удалось, а файла уже нет —
-    /// «applied», а не «accepted» из памяти вызывающего (W3-1).
+    /// <summary>Здесь только отображение результата применения в HTTP (J-J2b): правило
+    /// «решение замкнуто применением» (S4g, ADR-035 §5) и обхват исключения живут в
+    /// WikiApplyService.ApplyDecidedAsync — их зовёт и этот запрос, и проход судьи (J-J3a),
+    /// и коды ответов не имеют права разойтись. Коды — как на master: 200 с карточкой после
+    /// применения и её исходом; 200 с последней прочитанной карточкой, если файла пакета уже
+    /// нет (ревью S4g, M2, W3-1); 409 — файл не читается.
     ///
-    /// Пакет, который человек решил, но который не применился («apply_failed»/«stale»),
-    /// возвращает здесь своё окно в разбор — ReturnDecidedWindowsAsync (T-A2), но в ФОНЕ,
-    /// не дожидаясь (T-A3): форма HTTP-ответа от этого не меняется и не ждёт прогона чата.
+    /// Пакет, который решили, но который не применился («apply_failed»/«stale»), возвращает
+    /// здесь своё окно в разбор (ReturnDecidedWindowsAsync, T-A2) — в ФОНЕ, не дожидаясь
+    /// (T-A3): форма HTTP-ответа от этого не меняется и не ждёт прогона чата. Окно — дело
+    /// разбора чата, а не применения: сам возврат зовёт _chat (в сервисе применения он был бы
+    /// циклом DI: Apply → Chat → Ingest → Apply), поэтому здесь остаётся его вызов.
     ///
     /// internal — граница после применения: тест ставит диск в состояние «файла пакета уже
-    /// нет» и в состояние «исключение из ApplyAsync» и видит форму ответа, а не гонку
+    /// нет» и в состояние «исключение из применения» и видит форму ответа, а не гонку
     /// (ревью S4g, M2/M3).</summary>
     internal async Task<IActionResult> AfterDecision(string userId, string root, WikiPackage decided)
     {
-        WikiApplyOutcomeDto? apply = null;
-        if (decided.Status is WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted)
-            apply = await ApplyOutcomeAsync(userId, root, decided).ConfigureAwait(false);
-        var after = WikiPackageStore.TryRead(root, decided.Id);
-        // Файла пакета уже нет на перечитывании (гонка с удалением): не 404 — человек видел бы
-        // пустой отказ там, где он только что вынес решение и где есть его исход. Ответ несёт
-        // результат применения и последнюю прочитанную карточку (ревью S4g, M2). Но если
-        // применение удалось и файл исчез после него — статус в ответе реальный: «applied»,
-        // «accepted» из памяти рядом с applied=true читался бы как «ждёт применения» о пакете,
-        // который применился и был удалён (W3-1).
-        if (after.State == WikiPackageFileState.Missing)
-            return Ok(new WikiDecisionDto(
-                apply?.Applied == true ? Dto(decided with { Status = WikiPackage.StatusApplied }) : Dto(decided),
-                apply));
-        if (after.State != WikiPackageFileState.Valid || after.Package is null)
-            return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = "файл пакета не читается" });
+        var r = await _apply.ApplyDecidedAsync(userId, root, decided).ConfigureAwait(false);
+        var apply = MapApply(r.Apply);
+        if (r.Outcome == WikiApplyService.DecidedOutcome.PackageMissing)
+            return Ok(new WikiDecisionDto(Dto(r.Package!), apply));
+        if (r.Outcome == WikiApplyService.DecidedOutcome.PackageUnreadable)
+            return StatusCode(409, new { code = WikiPackageStore.CodeInvalid, message = r.Reason });
         // T-A3 (ревью T-A2, замечание 3): возврат окна — в фоне, не дожидаясь. При идущем
         // прогоне чата ReturnWindow ждёт его конца, а человеку ответ решения нужен сразу:
         // кнопка «Входящих» не имеет права висеть на чужом разборе. Фоне нужны только
@@ -293,48 +298,16 @@ public class WikiPackagesController : ControllerBase
         // неё нет: ReturnWindowAsync fail-closed на входе и весь его корпус под обхватом
         // (WikiChatIngestService.cs:359-386), остальное — разбор прочитанной карточки без
         // обращений к вводу.
-        _ = ReturnDecidedWindowsAsync(userId, after.Package, apply);
-        return Ok(new WikiDecisionDto(Dto(after.Package), apply));
+        _ = ReturnDecidedWindowsAsync(userId, r.Package!, r.Apply);
+        return Ok(new WikiDecisionDto(Dto(r.Package!), apply));
     }
 
-    /// <summary>Исход применения решения — результат-отказ на любой исход, включая
-    /// исключение (ревью S4g, M3): «Входящие» — HTTP-дверь, и 500 из неё значит для человека
-    /// «ничего не известно», хотя решения его записаны и пакет можно закрыть. Проверка и
-    /// запись обёрнуты внутри сервиса; наружу оттуда не выходит ничего. Остаётся то, что до
-    /// обхватов: разбор пути владельца и запись перехода заявки — их и держит этот обхват.</summary>
-    private async Task<WikiApplyOutcomeDto> ApplyOutcomeAsync(string userId, string root, WikiPackage decided)
-    {
-        try
-        {
-            var r = await _apply.ApplyAsync(userId, decided).ConfigureAwait(false);
-            return new WikiApplyOutcomeDto(r.Applied, r.Code, r.Reason, r.Violations);
-        }
-        catch (Exception ex)
-        {
-            return CrashedApply(root, decided.Id, ex);
-        }
-    }
-
-    /// <summary>Сбой применения вне контракта сервиса (исключение): тот же результат-отказ
-    /// с причиной, что у любого отказа (тот же код, что у внутренних сбоев сервиса), и
-    /// «applying» не зависает: он закрывается переходом там, где он ещё возможен (ревью S4g,
-    /// M3) — иначе его доводит только сторож старта. Где статус на диске уже не «applying»
-    /// (заявка не состоялась) — пакета не трогать: это видно по ответу, а не молчит.
-    /// internal — та же граница для теста: файловый сбой ДО заявки (там, где обхвата в
-    /// сервисе нет) детерминированно не поставить, поэтому форма отказа проверяется здесь,
-    /// на диске с нужным статусом, а обхват — в AfterDecision.</summary>
-    internal static WikiApplyOutcomeDto CrashedApply(string root, string packageId, Exception ex)
-    {
-        var reason = $"внутренний сбой применения: {ex.Message}";
-        var onDisk = WikiPackageStore.TryRead(root, packageId);
-        if (onDisk.State == WikiPackageFileState.Valid && onDisk.Package!.Status == WikiPackage.StatusApplying)
-        {
-            var t = WikiPackageStore.Transition(root, packageId, WikiPackage.StatusApplyFailed, reason);
-            if (!t.Ok)
-                reason = $"{reason} (статус «apply_failed» не записан: {t.Reason ?? t.Code})";
-        }
-        return new WikiApplyOutcomeDto(false, WikiApplyService.CodeInternal, reason, [reason]);
-    }
+    /// <summary>Исход применения сервиса → тело ответа (S7a): форма контракта фронта не
+    /// меняется — те же поля applied/code/reason/violations.</summary>
+    private static WikiApplyOutcomeDto? MapApply(WikiApplyService.ApplyResult? apply) =>
+        apply is null
+            ? null
+            : new WikiApplyOutcomeDto(apply.Value.Applied, apply.Value.Code, apply.Value.Reason, apply.Value.Violations);
 
     /// <summary>T-A2: пакет, который человек решил, но который не применился, не теряет своё
     /// окно: курсор разбора каждого чата-источника возвращается на его начало (ReturnWindowAsync,
@@ -355,7 +328,7 @@ public class WikiPackagesController : ControllerBase
     /// обхватом ReturnWindowGuardedAsync (WikiChatIngestService.cs:373-386), остальной код —
     /// разбор прочитанной карточки (словарь, TryParseSessionRef, Math.Min) без обращений к
     /// вводу; зависимости — только singleton _chat и значения вызова.</summary>
-    private async Task ReturnDecidedWindowsAsync(string userId, WikiPackage pkg, WikiApplyOutcomeDto? apply)
+    private async Task ReturnDecidedWindowsAsync(string userId, WikiPackage pkg, WikiApplyService.ApplyResult? apply)
     {
         if (pkg.Status is not (WikiPackage.StatusApplyFailed or WikiPackage.StatusStale))
             return;

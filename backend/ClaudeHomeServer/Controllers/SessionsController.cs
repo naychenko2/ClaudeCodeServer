@@ -50,7 +50,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         // проектом — та же проверка и тот же отказ, что у тумблера видимости (ChatsController
         // .SetVisibility → not_shared_project). Отказ идёт ДО всякой работы (резолва персоны,
         // провижна ассистента): отказанное создание не оставило в проекте ни чата, ни персоны.
-        if (req.Private && !ChatVisibility.CanBePrivate(projects.GetById(projectId)))
+        if (req.Private && !sessions.CanBePrivateChat(projects.GetById(projectId)))
             return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
         // FIN3-2 (FINAL-3, п. 3 ревью b13f2105): resume принимается только для транскрипта чата,
         // видимого вызывающему. ClaudeSessionId — ключ истории (HistoryKeyOf, SessionManager.cs:557)

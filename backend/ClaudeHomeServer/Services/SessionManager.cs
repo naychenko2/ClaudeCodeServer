@@ -715,6 +715,13 @@ public class SessionManager : IDisposable, ITeamNotifier, ISessionDirectory,
     // сохранение вложения в нужную раскладку, вышибание чужих соединений, opt-out паспортов.
     // Замок VisibilityLock — составляющая записи SessionEntry (по сессии), ключ не менялся.
 
+    // «Приватным можно сделать только чат общего проекта»: одно определение общего проекта
+    // (есть участники) — то же, что у тумблера ниже, им же отказывают точки создания чата с флагом
+    // private (POST /api/projects/{pid}/sessions и POST /api/personas/{id}/chats). Держит его роль
+    // (ChatVisibility.CanBePrivate, ChatVisibility.cs:147); фасад — единственная дверь контроллера
+    // к типу ядра (сторож правила 4, SessionCoreShapeGuardTests), поэтому контроллеры зовут её здесь.
+    public bool CanBePrivateChat(Project? project) => ChatVisibility.CanBePrivate(project);
+
     public ChatVisibilityResult SetChatVisibility(string sessionId, string userId, bool makePrivate) =>
         _visibility.SetChatVisibility(sessionId, userId, makePrivate);
 

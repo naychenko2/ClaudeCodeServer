@@ -91,9 +91,32 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в Update ДО OnPersonaChanged.
     public event Action<Persona, string>? OnPersonaHandleChanged;
 
+    // Выдача персоны наружу: при InheritsAccess права подставляются эффективным шаблоном
+    // специальности в КОПИИ, запись кэша не трогается (там остаются материализованные значения).
+    // Шаблон читается одним снимком на вызов, поэтому группа Access/Tools/DisallowedTools не
+    // рвётся; сбой чтения — материализованные поля персоны.
+    internal Persona Hydrate(Persona p)
+    {
+        if (!p.InheritsAccess) return p;
+        try
+        {
+            var template = SpecialtyTemplatesService.EffectiveAccessTemplate(_specialty, p.OwnerId, p.Specialty);
+            var copy = p.ShallowCopy();
+            copy.Access = template?.Access ?? PersonaAccess.Full;
+            copy.Tools = NormalizeTools(template?.Tools?.ToList());
+            copy.DisallowedTools = template?.DisallowedTools?.ToList();
+            return copy;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось прочитать шаблон прав специальности для персоны {Id}", p.Id);
+            return p;
+        }
+    }
+
     public IReadOnlyCollection<Persona> GetByOwner(string userId) =>
         _personas.Values.Where(p => p.OwnerId == userId)
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
 
     // Сфера проекта на текущий момент (без кэша); null — вне сфер, флаг выключен или справочника нет
     private string? SphereOfProject(string userId, string? projectId) =>
@@ -107,7 +130,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
                 && (p.Scope == PersonaScope.Global
                     || PersonaZone.IsProjectTeam(p, projectId)
                     || (sphereId is not null && PersonaZone.IsSphereTeam(p, sphereId))))
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
     }
 
     // Контекст + внешние кросс-проектные scope-ы вызывающей персоны (ProjectPersonas-привязки):
@@ -159,20 +182,26 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             .Where(p => PersonaZone.OwnProjectId(p) is { } ownProjectId
                 && tenants.TryGetValue(ownProjectId, out var tenant)
                 && p.OwnerId == tenant)
-            .OrderByDescending(p => p.UpdatedAt).ToList();
+            .OrderByDescending(p => p.UpdatedAt).Select(Hydrate).ToList();
     }
 
     // Персона по id с проверкой владельца (null — нет или чужая)
     public Persona? Get(string id, string userId) =>
+        _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? Hydrate(p) : null;
+
+    // Запись кэша как есть (без подстановки прав) — ТОЛЬКО для мутаторов самого менеджера:
+    // правка копии из Hydrate пропала бы
+    internal Persona? GetRaw(string id, string userId) =>
         _personas.TryGetValue(id, out var p) && p.OwnerId == userId ? p : null;
 
     // Персона по id без проверки владельца — ТОЛЬКО для внутренних сервисов (авто-память),
     // где владелец берётся из самой персоны. Не использовать в обработчиках запросов.
-    public Persona? GetByIdInternal(string id) => _personas.GetValueOrDefault(id);
+    public Persona? GetByIdInternal(string id) =>
+        _personas.TryGetValue(id, out var p) ? Hydrate(p) : null;
 
     // Все персоны всех владельцев — ТОЛЬКО для фоновых сервисов (консолидация памяти),
     // где гейт по владельцу делается через саму персону. Не использовать в обработчиках запросов.
-    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.ToList();
+    public IReadOnlyCollection<Persona> GetAllInternal() => _personas.Values.Select(Hydrate).ToList();
 
     // Персона владельца по handle без учёта контекста (legacy). Handle больше НЕ уникален
     // per-owner (проектные персоны разных проектов могут делить handle) — предпочитайте
@@ -445,7 +474,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         if (persona.Scope == PersonaScope.Project && !string.IsNullOrEmpty(persona.ProjectId))
             _events?.Append(persona.ProjectId, userId, ProjectEventTypes.TeamJoined, "user",
                 $"В команде: {PersonaLabel(persona)}", persona.Id);
-        OnPersonaCreated?.Invoke(persona);
+        OnPersonaCreated?.Invoke(Hydrate(persona));
         return persona;
     }
 
@@ -699,7 +728,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
         bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
 
         var oldHandle = persona.Handle;
@@ -805,8 +834,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Сначала чистка старых .md по прежнему handle, затем запись новых через OnPersonaChanged
         if (!string.Equals(oldHandle, persona.Handle, StringComparison.Ordinal))
             OnPersonaHandleChanged?.Invoke(persona, oldHandle);
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Голос персоны в голосовом режиме; сохранение мгновенное. Пустой объект (ни голоса,
@@ -817,7 +846,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // и двадцать пятый позиционный аргумент ради голоса — плохой шов.
     public Persona SetVoice(string id, string userId, PersonaVoice? voice)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -829,15 +858,15 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Полная замена привязок персоны (фича persona-bindings); сохранение мгновенное.
     // Пустой список нормализуется в null (поведение как без привязок).
     public Persona UpdateBindings(string id, string userId, List<PersonaBinding>? bindings)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -845,8 +874,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Добавление одной привязки к набору (W3-B5a, POST {id}/bindings): список строится
@@ -856,7 +885,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // классическая потерянная правка. Полная замена — остаётся за UpdateBindings.
     public Persona AppendBinding(string id, string userId, PersonaBinding binding)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -864,8 +893,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Правка одной привязки (W3-B5a доработка, PUT {id}/bindings/{bindingId}; возврат ревью
@@ -877,7 +906,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public PersonaBinding? UpdateBinding(string id, string userId, string bindingId,
         Action<PersonaBinding> mutate)
     {
-        var persona = Get(id, userId);
+        var persona = GetRaw(id, userId);
         if (persona is null) return null;
         PersonaBinding? updated = null;
         lock (_saveLock)
@@ -890,7 +919,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             updated = current;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
+        OnPersonaChanged?.Invoke(Hydrate(persona));
         return updated;
     }
 
@@ -899,7 +928,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в null (как UpdateBindings). false — персоны или привязки уже нет.
     public bool RemoveBinding(string id, string userId, string bindingId)
     {
-        var persona = Get(id, userId);
+        var persona = GetRaw(id, userId);
         if (persona is null) return false;
         lock (_saveLock)
         {
@@ -909,7 +938,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
+        OnPersonaChanged?.Invoke(Hydrate(persona));
         return true;
     }
 
@@ -919,7 +948,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // в PersonaAutomationService, чтобы не переписывать personas.json на каждом тике.
     public Persona UpdateRules(string id, string userId, List<PersonaAutomationRule>? rules)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
@@ -934,8 +963,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             persona.UpdatedAt = DateTime.UtcNow;
         }
         Save();
-        OnPersonaChanged?.Invoke(persona);
-        return persona;
+        OnPersonaChanged?.Invoke(Hydrate(persona));
+        return Hydrate(persona);
     }
 
     // Массовый сброс СВОИХ уровней персон владельца («Сбросить исключения», scope=owner):
@@ -949,7 +978,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         // Мутации — под _saveLock (как Update/Delete), Save и события — вне его
         lock (_saveLock)
         {
-            foreach (var p in GetByOwner(userId))
+            foreach (var p in _personas.Values.Where(x => x.OwnerId == userId).OrderByDescending(x => x.UpdatedAt).ToList())
             {
                 if (string.IsNullOrWhiteSpace(p.TierStrong) && string.IsNullOrWhiteSpace(p.TierMedium)
                     && string.IsNullOrWhiteSpace(p.TierWeak)) continue;
@@ -962,7 +991,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         }
         if (!apply || changed.Count == 0) return changed;
         Save();
-        foreach (var p in changed) OnPersonaChanged?.Invoke(p);
+        foreach (var p in changed) OnPersonaChanged?.Invoke(Hydrate(p));
         _log?.LogInformation("Сброшены свои уровни моделей у {Count} персон (owner={Owner})",
             changed.Count, userId);
         return changed;
@@ -972,7 +1001,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: null);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: null);
@@ -982,7 +1011,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = null;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Загруженный аватар: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
@@ -990,7 +1019,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
     public Persona SetAvatarUploaded(string id, string userId, string imageFile, string originalFile,
         AvatarCropState? crop)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         DeleteAsset(id, persona.Avatar.OriginalFile, keep: originalFile);
@@ -1000,14 +1029,14 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = crop;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры;
     // прежняя картинка с её миниатюрами удаляется.
     public Persona SetAvatarRecropped(string id, string userId, string imageFile, AvatarCropState? crop)
     {
-        var persona = Get(id, userId)
+        var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         DeleteAvatarAssets(id, persona.Avatar.ImageFile, keep: imageFile);
         persona.Avatar.Kind = PersonaAvatarKind.Image;
@@ -1015,7 +1044,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         persona.Avatar.Crop = crop;
         persona.UpdatedAt = DateTime.UtcNow;
         Save();
-        return persona;
+        return Hydrate(persona);
     }
 
     // Удалить файл-ассет персоны (кроме keep); ошибки удаления не критичны
@@ -1048,7 +1077,7 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         Persona? deleted;
         lock (_saveLock)
         {
-            deleted = Get(id, userId);
+            deleted = GetRaw(id, userId);
             if (deleted is null) return false;
             // Запоминаем проектную принадлежность до удаления — для лога команды проекта
             if (deleted.Scope == PersonaScope.Project && !string.IsNullOrEmpty(deleted.ProjectId))

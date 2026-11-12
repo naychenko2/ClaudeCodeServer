@@ -148,6 +148,12 @@ public class Persona
     public PersonaAccess Access { get; set; } = PersonaAccess.Full;
     // Свой список запрещённых инструментов — только при Access == Custom
     public List<string>? DisallowedTools { get; set; }
+    // Права (Access/Tools/DisallowedTools) наследуются от специальности: при true PersonaManager
+    // на каждой выдаче подставляет эффективный шаблон специальности, персистентные поля остаются
+    // материализованными (откат кода видит последнее значение). false — поля персоны это её override.
+    public bool InheritsAccess { get; set; }
+    // Поверхностная копия: PersonaManager отдаёт её вместо записи кэша, когда подставляет права
+    public Persona ShallowCopy() => (Persona)MemberwiseClone();
     // Первое приветственное сообщение при открытии чата (опционально)
     public string? Greeting { get; set; }
     // Ключ каталога пантеона OmO (omo-sisyphus…), если персона подключена из него:

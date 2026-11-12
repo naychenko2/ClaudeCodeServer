@@ -53,7 +53,8 @@ export function setPresence(
 // больше 240 — клампим. Тот же WorkflowRules.NormalizeStall: кламп — часть контракта,
 // а не ошибка — редактор сохраняет клампнутое значение, валидатору на диапазон ругаться не за что.
 export function clampStall(n: number | null | undefined): number | null {
-  if (n === null || n === undefined || n <= 0) return null;
+  // NaN/нечисло (поле таймаута из UI) — не значение: null, а не NaN в состоянии и теле запроса.
+  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return null;
   if (n < 5) return 5;
   if (n > 240) return 240;
   return n;

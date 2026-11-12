@@ -3,6 +3,7 @@
 import { Workflow } from 'lucide-react';
 import { useMe } from '../../lib/defaultPersona';
 import { AccordionSection } from '../projects/dialogs/AccordionSection';
+import { canWriteProjectTemplates } from './workflowEditorLogic';
 import { WorkflowTemplatesEditor } from './WorkflowTemplatesEditor';
 import type { Project } from '../../types';
 
@@ -12,7 +13,7 @@ export function WorkflowTemplatesProjectSection({ project }: { project: Project 
     <AccordionSection icon={Workflow} title="Шаблоны процесса">
       <WorkflowTemplatesEditor
         projectId={project.id}
-        canWrite={project.ownerId === me.userId}
+        canWrite={canWriteProjectTemplates(project.ownerId, me.userId)}
         isAdmin={me.role === 'admin'}
         mcpChoices={project.mcpServersOn ?? []}
       />

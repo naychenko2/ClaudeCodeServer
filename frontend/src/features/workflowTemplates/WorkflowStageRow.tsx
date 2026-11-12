@@ -14,8 +14,8 @@ import { TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { useIsMobile } from '../../lib/breakpoints';
 import type { Persona } from '../personas/types';
 import type { SpecialtyCatalogEntry } from '../specialties/types';
-import { isNonSkippable, PROMPT_LIMIT, STALL_POLICIES } from './workflowTemplateModel';
-import { listOrNull, parseList } from './workflowEditorLogic';
+import { PROMPT_LIMIT, STALL_POLICIES } from './workflowTemplateModel';
+import { listOrNull, parseList, presenceEditable } from './workflowEditorLogic';
 import type { WorkflowStage, WorkflowStagePresence } from './types';
 
 // Подписи ролей этапа (ключи — TaskRoles, разрез §0.3).
@@ -55,7 +55,7 @@ export function WorkflowStageRow({
 }: Props): React.ReactElement {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
-  const fixed = isNonSkippable(stage.role);
+  const fixed = !presenceEditable(stage.role);
   const label = STAGE_ROLE_LABEL[stage.role] ?? stage.role;
   const prompt = stage.prompt ?? '';
   const patch = (p: Partial<WorkflowStage>) => onChange({ ...stage, ...p });
@@ -206,6 +206,7 @@ export function WorkflowStageRow({
                   value={stage.stallMinutes == null ? '' : String(stage.stallMinutes)}
                   onChange={v => {
                     const n = parseInt(v.replace(/\D/g, ''), 10);
+                    // Поле набирается по цифре: кламп — при сохранении, иначе «15» не набрать.
                     patch({ stallMinutes: Number.isFinite(n) ? n : null });
                   }}
                   inputMode="numeric"

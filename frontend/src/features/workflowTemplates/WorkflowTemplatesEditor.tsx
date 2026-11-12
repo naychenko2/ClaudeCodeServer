@@ -24,7 +24,7 @@ import { showToast } from '../../lib/toast';
 import { workflowTemplatesApi } from './api';
 import { stageErrors } from './workflowTemplateModel';
 import {
-  CONFLICT_MESSAGE, blankTemplate, forkToProject, saveGuarded, templateSnapshot,
+  CONFLICT_MESSAGE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded, templateSnapshot,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageRow } from './WorkflowStageRow';
@@ -142,7 +142,7 @@ export function WorkflowTemplatesEditor({
     const scope = sel.scope;
     const sentSeq = formSeq.current;
     const res = await saveGuarded({
-      tpl: draft,
+      tpl: normalizeForSave(draft),
       save: t => workflowTemplatesApi.saveTemplate(t, scope === 'project' ? projectId : undefined),
       activeKey: () => String(formSeq.current),
     });
@@ -320,7 +320,7 @@ export function WorkflowTemplatesEditor({
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>
-        {canWrite && !readOnly && (
+        {showWriteButton(canWrite, readOnly) && (
           <Button onClick={() => void handleSave()} disabled={!canSave} loading={busy}>
             {busy ? 'Сохраняю…' : 'Сохранить'}
           </Button>

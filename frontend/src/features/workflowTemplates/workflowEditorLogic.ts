@@ -2,7 +2,7 @@
 // Здесь всё, что в тесте можно проверить без отрисовки: гонки сохранения, разбор отказов
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
-import { STAGE_ROLES } from './workflowTemplateModel';
+import { STAGE_ROLES, clampStall, isNonSkippable } from './workflowTemplateModel';
 import type { WorkflowStage, WorkflowTemplate } from './types';
 
 export const CONFLICT_MESSAGE = 'Шаблон изменился на сервере — перечитайте его и повторите правку.';
@@ -114,4 +114,24 @@ export async function saveGuarded(opts: {
   } catch (e) {
     return classifySaveError(e);
   }
+}
+
+// Перед отправкой: порог молчания клампится (И3), как это делает сервер.
+export function normalizeForSave(tpl: WorkflowTemplate): WorkflowTemplate {
+  return { ...tpl, stages: tpl.stages.map(s => ({ ...s, stallMinutes: clampStall(s.stallMinutes) })) };
+}
+
+// Переключатель присутствия доступен только у съёмных ролей (у step/merge/final — нет).
+export function presenceEditable(role: string): boolean {
+  return !isNonSkippable(role);
+}
+
+// Кнопка записи видна только тому, кому область разрешает писать, и не на чужом (глобальном в проекте) шаблоне.
+export function showWriteButton(canWrite: boolean, readOnly: boolean): boolean {
+  return canWrite && !readOnly;
+}
+
+// Владелец проекта пишет проектные шаблоны (временно, до ответа на вопрос 3 Андрею).
+export function canWriteProjectTemplates(ownerId: string | undefined, userId: string | undefined): boolean {
+  return !!ownerId && ownerId === userId;
 }

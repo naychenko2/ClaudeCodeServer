@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CONFLICT_MESSAGE, blankTemplate, classifySaveError, forkToProject, listOrNull, parseList,
-  saveGuarded, templateSnapshot,
+  saveGuarded, templateSnapshot, normalizeForSave, presenceEditable, showWriteButton,
+  canWriteProjectTemplates,
 } from './workflowEditorLogic';
 import { STAGE_ROLES } from './workflowTemplateModel';
 import type { WorkflowTemplate } from './types';
@@ -95,5 +96,28 @@ describe('saveGuarded', () => {
     const save = vi.fn().mockRejectedValue(Object.assign(new Error('c'), { status: 409 }));
     const r = await saveGuarded({ tpl: tpl(), save, activeKey: () => 'a' });
     expect(r.kind).toBe('conflict');
+  });
+});
+
+describe('права и нормализация', () => {
+  it('переключатель присутствия: у step/merge/final недоступен, у остальных — да', () => {
+    for (const r of ['step', 'merge', 'final']) expect(presenceEditable(r)).toBe(false);
+    for (const r of ['cut', 'design', 'plan', 'review', 'qa']) expect(presenceEditable(r)).toBe(true);
+  });
+  it('кнопка записи: не-владелец проекта её не видит', () => {
+    expect(canWriteProjectTemplates('u1', 'u2')).toBe(false);
+    expect(canWriteProjectTemplates('u1', undefined)).toBe(false);
+    expect(canWriteProjectTemplates('u1', 'u1')).toBe(true);
+    expect(showWriteButton(false, false)).toBe(false);
+    expect(showWriteButton(true, true)).toBe(false);
+    expect(showWriteButton(true, false)).toBe(true);
+  });
+  it('перед отправкой порог молчания клампится, NaN не уходит в тело', () => {
+    const t = normalizeForSave(tpl({ stages: [
+      { role: 'plan', presence: 'on', stallMinutes: 2 },
+      { role: 'qa', presence: 'on', stallMinutes: NaN },
+      { role: 'review', presence: 'on', stallMinutes: 999 },
+    ] }));
+    expect(t.stages.map(s => s.stallMinutes)).toEqual([5, null, 240]);
   });
 });

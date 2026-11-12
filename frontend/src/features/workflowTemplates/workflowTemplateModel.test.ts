@@ -45,6 +45,12 @@ const tpl = (stages: WorkflowStage[], over: Partial<WorkflowTemplate> = {}): Wor
 
 describe('clampStall — порог молчания (И3, зеркало NormalizeStall)', () => {
   // null/0/отрицательное — не «бесконечно», а дефолт конфига (null — берёт вызывающая сторона).
+  it('NaN и нечисло (поле таймаута из UI) → null, а не NaN', () => {
+    expect(clampStall(NaN)).toBeNull();
+    expect(clampStall('abc' as unknown as number)).toBeNull();
+    expect(clampStall(Infinity)).toBeNull();
+  });
+
   it('null/undefined/0/отрицательное → null (дефолт конфига)', () => {
     expect(clampStall(null)).toBeNull();
     expect(clampStall(undefined)).toBeNull();

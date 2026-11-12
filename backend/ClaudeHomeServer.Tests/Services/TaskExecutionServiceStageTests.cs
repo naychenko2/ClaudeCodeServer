@@ -255,6 +255,54 @@ public class TaskExecutionServiceStageTests : IDisposable
         ex.Should().NotBeOfType<FeatureRouteLaunchException>();
     }
 
+    // --- Повторный гейт после claim'а (R-B3, major) ----------------------------
+    // ExecuteClaimedAsync зовём напрямую, как в Hold_RecheckAfterClaim_RefusesBeforeFirstTurn:
+    // claim взят, первый гейт ПРОЙДЕН (утверждаем его явно), состояние меняется между ними.
+    // Мутация: убрать FeatureRouteLaunchRefusal в ExecuteClaimedAsync — тесты краснеют
+    // (запуск идёт дальше гейта, исключения FeatureRouteLaunchException нет).
+    private Task<TaskItem> ExecuteClaimed(TaskItem task)
+    {
+        var claimed = typeof(TaskExecutionService).GetMethod("ExecuteClaimedAsync",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!;
+        return (Task<TaskItem>)claimed.Invoke(_sut, new object?[] { task, false, null, null })!;
+    }
+
+    [Fact]
+    public async Task ExecuteClaimed_МаршрутПредложенПослеПервогоГейта_ПовторныйГейтОтказываетДоСтарта()
+    {
+        var epic = Epic(confirm: false); // легаси: первый гейт пропускает
+        var step = _tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step,
+            StepRef: "B1", Assignee: TaskItemAssignee.Claude));
+        _tasks.FeatureRouteLaunchRefusal(step).Should().BeNull("первый гейт пройден");
+
+        // Между первой проверкой и стартом маршрут предложен и ещё не подтверждён
+        _tasks.SetWorkflowProposal(epic.Id, new WorkflowProposal { TemplateId = "tpl" });
+
+        var act = async () => await ExecuteClaimed(step);
+
+        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should().Be("маршрут фичи не подтверждён");
+        _tasks.GetById(step.Id)!.ClaudeStartedAt.Should().BeNull("исполнитель не стартовал");
+    }
+
+    [Fact]
+    public async Task ExecuteClaimed_ПредшественникПереоткрытПослеПервогоГейта_ПовторныйГейтОтказываетДоСтарта()
+    {
+        var epic = Epic();
+        Done(Stage(epic, "step-back", TaskRoles.Step, "back"));
+        var front = Stage(epic, "step-front", TaskRoles.Step, "front");
+        Done(front);
+        var node = MergeNode(epic);
+        _tasks.FeatureRouteLaunchRefusal(node).Should().BeNull("первый гейт слияния пройден: все предшественники Done");
+
+        // Между первой проверкой и стартом предшественник возвращён в работу
+        _tasks.Update(front.Id, new UpdateTaskRequest(Status: TaskItemStatus.InProgress));
+
+        var act = async () => await ExecuteClaimed(node);
+
+        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should().Contain("«step-front»");
+        _tasks.GetById(node.Id)!.ClaudeStartedAt.Should().BeNull("исполнитель не стартовал");
+    }
+
     [Fact]
     public async Task Execute_ЗадачаБезФичи_ГейтСлиянияНеЗадевает()
     {

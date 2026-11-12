@@ -47,9 +47,9 @@ public static class PersonaSpecialtyMigration
         bool IsChange,
         // Маркер уже стоит: повторная миграция эту персону не пересматривает
         bool AlreadyMigrated,
-        // A2: Skill-привязки, совпавшие с профилем специальности по SkillName (поимённо —
-        // строки отчёта сухого прогона). Пусто для уже решённых маркером: план описывает
-        // то, что следующий прогон сделает, — а он их не тронет
+        // A2: точные копии записей профиля специальности — Skill-привязки, совпавшие с профилем
+        // по SkillName, Mode и Condition (поимённо — строки отчёта сухого прогона). Пусто для
+        // уже решённых маркером: план описывает то, что следующий прогон сделает, — а он их не тронет
         IReadOnlyList<RemovedSkillBinding> RemovedSkills);
 
     public sealed record SpecialtyCells(string? Strong, string? Medium, string? Weak);
@@ -58,10 +58,13 @@ public static class PersonaSpecialtyMigration
     // бы очистить, но шаг A1b её НЕ чистит (вопрос 2 Андрею) — только показывает в отчёте.
     public sealed record ModelCellMatch(string PersonaId, string Name, string Cell, string Value);
 
-    // A2 (разрез §2 «Миграция», п.4): Skill-привязка персоны, совпавшая с профилем специальности
-    // по SkillName, — копия, которая больше не нужна: умение наследуется в рантайме
+    // A2 (разрез §2 «Миграция», п.4): точная копия записи профиля специальности — Skill-привязка,
+    // совпавшая с профилем по SkillName, Mode и Condition. Она больше не нужна: рантайм подставит
+    // унаследованную запись того же профиля, эффективное поведение персоны не изменится
     // (PersonaBindingsService.EffectiveBindings). Удаляется при применении плана (тот же маркер
-    // и флаг, что у прав); в сухом прогоне — только строка отчёта. Несовпавшие и AI-привязки
+    // и флаг, что у прав); в сухом прогоне — только строка отчёта. Копии с другим Mode или своим
+    // Condition — собственное решение персоны об умении, оно и так гасит унаследованное: удаление
+    // вернуло бы выключенное умение и стёрло настройку (R-A2 M1). Несовпавшие и AI-привязки
     // не трогаются.
     public sealed record RemovedSkillBinding(string BindingId, string Target);
 
@@ -80,7 +83,8 @@ public static class PersonaSpecialtyMigration
     /// точка SpecialtyTemplatesService.EffectiveAccessTemplate (та же, что у Hydrate).
     /// cellsOf — ячейки моделей специальности (для отчёта о ячейках); null — отчёт без них.
     /// defaultBindingsOf — типовой профиль умений специальности (та же точка EffectiveDefaultBindings,
-    /// что у рантайма): по нему находятся Skill-копии для удаления (A2); null — шаг Skill не выполняется.
+    /// что у рантайма): по нему находятся точные копии профиля для удаления — совпадение по SkillName,
+    /// Mode и Condition (A2, R-A2 M1); null — шаг Skill не выполняется.
     /// </summary>
     public static Plan Build(
         IEnumerable<Persona> personas,
@@ -204,25 +208,29 @@ public static class PersonaSpecialtyMigration
             cells.Add(new ModelCellMatch(p.Id, p.Name, cell, own.Trim()));
     }
 
-    // A2 (разрез §2 «Миграция», п.4): Skill-привязки, совпавшие с профилем специальности по
-    // SkillName, — поимённо. Совпадение без учёта регистра (то же сравнение целей, что
-    // ValidateAsync/EffectiveBindings); Mode не учитывается: по имени это копия унаследованного
-    // умения, её подавление фронт создаёт заново (A3b). Несовпавшие (чужой SkillName, плагин-
-    // цель профиля против голового имени персоны) остаются; не-Skill привязки не трогаются.
-    // Битый SkillName профиля (без имени) не с чем сравнить — он ничего не удаляет.
+    // A2 (разрез §2 «Миграция», п.4) + R-A2 M1: точные копии записей профиля — поимённо.
+    // Совпадение по трём полям: SkillName без учёта регистра и с Trim (то же сравнение целей,
+    // что ValidateAsync/EffectiveBindings), Mode — равный профилю, Condition — равный после
+    // Trim. Только такие копии можно удалить: рантайм подставит унаследованную запись тех же
+    // Mode и Condition, эффективное поведение персоны не изменится. Копия с другим Mode
+    // (подавление Off) или своим Condition — настройка персоны об умении: она и так гасит
+    // унаследованное и остаётся; удалить её значило бы вернуть выключенное умение в промпт
+    // и стереть настройку. Несовпавшие (чужой SkillName, плагин-цель профиля против голового
+    // имени персоны) остаются; не-Skill привязки не трогаются. Битый SkillName профиля
+    // (без имени) не с чем сравнить — он ничего не удаляет.
     private static List<RemovedSkillBinding> MatchSkillCopies(
         Persona p, IReadOnlyList<SpecialtyDefaultBinding> profile)
     {
         if (p.Bindings is not { Count: > 0 } || profile.Count == 0) return [];
-        var names = profile
-            .Where(e => e.Type == PersonaBindingType.Skill)
-            .Select(e => e.SkillName?.Trim())
-            .Where(n => !string.IsNullOrEmpty(n))
+        var wanted = profile
+            .Where(e => e.Type == PersonaBindingType.Skill && !string.IsNullOrWhiteSpace(e.SkillName))
             .ToList();
-        if (names.Count == 0) return [];
+        if (wanted.Count == 0) return [];
         return p.Bindings
-            .Where(b => b.Type == PersonaBindingType.Skill
-                && names.Any(n => string.Equals(b.Target.Trim(), n, StringComparison.OrdinalIgnoreCase)))
+            .Where(b => b.Type == PersonaBindingType.Skill && wanted.Any(e =>
+                string.Equals(b.Target.Trim(), e.SkillName!.Trim(), StringComparison.OrdinalIgnoreCase)
+                && b.Mode == e.Mode
+                && string.Equals(b.Condition?.Trim() ?? "", e.Condition?.Trim() ?? "", StringComparison.Ordinal)))
             .Select(b => new RemovedSkillBinding(b.Id, b.Target))
             .ToList();
     }

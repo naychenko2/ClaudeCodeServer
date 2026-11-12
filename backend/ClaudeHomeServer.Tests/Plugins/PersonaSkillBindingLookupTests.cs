@@ -1,14 +1,21 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Composition;
+using ClaudeHomeServer.Services.Knowledge;
+using ClaudeHomeServer.Services.Skills;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 
 namespace ClaudeHomeServer.Tests.Plugins;
 
 // M4.2: PersonaSkillBindingLookup отсеивает Skill-привязки с Mode == Off — выключенная
 // человеком привязка не должна открывать пакет (--plugin-dir). Персона читается PersonaManager'ом
 // из stора (personas.json), поэтому тест кладёт персону с биндингами в файл и строит lookup.
+// R-A2 M2: цели берутся из EffectiveBindings; без стора настроек специальностей (этот тест)
+// эффективный список = свои привязки — поведение прежнее. Наследованные цели — в тесте
+// Миграции/Наследования (PersonaBindingsInheritanceTests, там есть стор настроек).
 public class PersonaSkillBindingLookupTests : IDisposable
 {
     private const string OwnerId = "owner-a";
@@ -50,7 +57,17 @@ public class PersonaSkillBindingLookupTests : IDisposable
             ]
             """);
         var personas = new PersonaManager(config);
-        return new PersonaSkillBindingLookup(personas);
+        // Минимальная обвязка PersonaBindingsService (R-A2 M2: lookup читает EffectiveBindings;
+        // без specialtySettings он = свои привязки — предмет этого теста)
+        var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(),
+            NullLogger<UserStore>.Instance);
+        var projects = new ProjectManager(config, users, new AppSettingsService(config));
+        var wkStore = new WorkspaceKnowledgeStore(config);
+        var knowledge = new KnowledgeService(new Mock<IHttpClientFactory>().Object,
+            Microsoft.Extensions.Options.Options.Create(new DifyOptions()), wkStore);
+        var bindings = new PersonaBindingsService(personas, projects, wkStore, knowledge, new SkillsService(),
+            users, config, NullLogger<PersonaBindingsService>.Instance);
+        return new PersonaSkillBindingLookup(personas, bindings);
     }
 
     // M4.2: выключенная (Mode == Off) Skill-привязка не попадает в SkillBindingTargets —

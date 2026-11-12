@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Knowledge;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Plugins;
@@ -20,9 +21,18 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   + свои привязки персоны; своя привязка с тем же SkillName гасит унаследованную
 ///   (Mode=Off — выключает целиком, любой другой Mode — своё решение персоны, без дубля);
 /// - MaterializeDefaultBindingsAsync Skill-часть не материализует (AI-часть — копия);
-/// - миграция (тот же флаг и маркер, что A1b) удаляет Skill-копии, совпавшие с профилем по
-///   SkillName; сухой прогон только перечисляет их поимённо и ничего не пишет.
+/// - миграция (тот же флаг и маркер, что A1b) удаляет точные копии профиля — совпавшие по
+///   SkillName, Mode и Condition (R-A2 M1: Off-копия и копия со своим Condition — настройка
+///   персоны, она остаётся и сама гасит унаследованное); сухой прогон только перечисляет
+///   удаляемые поимённо и ничего не пишет.
 /// И1: ни материализация, ни запись привязок не пишут specialty-settings.json (хеш).
+///
+/// R-A2 (доработка A2):
+/// - M1 — MatchSkillCopies сравнивает и Mode/Condition, не только имя (тесты сохраняемости);
+/// - M2 — четвёртый путь чтения привязок (PersonaSkillBindingLookup → --plugin-dir) берёт цели
+///   из EffectiveBindings: пакет доставляется, пока живое умение в промпте (тест лука);
+/// - M3 — проводка доказывается вызовом BuildSubagentIndex, а не хелпера ActiveBindingsForTurn
+///   (тест индекса сабагента).
 ///
 /// Мутации (проверяются на копиях дерева, scripts/mutation-copy.sh):
 /// - вернуть Skill-цикл в MaterializeDefaultBindingsAsync — краснеет
@@ -34,12 +44,23 @@ namespace ClaudeHomeServer.Tests.Services;
 ///   Миграция_СовпавшиеSkillКопииУдалены… и СухойПрогон_ПеречисляетУдаляемыеSkillПривязки…;
 /// - снять lock(_saveLock) в применении плана — краснеет
 ///   SkillMigration_ДваПрогонаПараллельно_ОдинРезультат (сухой прогон видит полуприменённое
-///   состояние: часть персон уже помечена и очищена, часть ещё нет).
+///   состояние: часть персон уже помечена и очищена, часть ещё нет);
+/// - снять условие Mode/Condition в MatchSkillCopies (оставить только имя, как было до R-A2 M1) —
+///   краснеют Миграция_OffИНастроенныеКопииСохраняются… и СухойПрогон_OffИНастроенныеКопии…
+///   (Off-копия удалена, выключенное умение ожило);
+/// - вернуть persona.Bindings в PersonaSkillBindingLookup (свой список вместо EffectiveBindings) —
+///   краснеет Лук_УнаследованноеPluginУмениеДаетЦель (унаследованной цели нет — пакет не открыт);
+/// - вернуть persona.Bindings в BuildSubagentIndex — краснеет
+///   СабагентИндекс_УнаследованноеПлагинУмениеВИндексе… (унаследованного нет в индексе).
 /// </summary>
 public class PersonaBindingsInheritanceTests : IDisposable
 {
     private const string Owner = "owner-1";
     private const string SkillName = "code-review";
+    // Условие типового профиля (SetSkillProfile) — та же строка, что ставят копии профиля
+    private const string ProfileCondition = "когда читаю код";
+    // Плагин-умение профиля для тестов M2/M3: формат plugin:{publisher}/{slug}/{skill}
+    private const string PluginSkill = "plugin:local-a/pkg/my-skill";
 
     private readonly string _tempDir;
     private readonly string _storePath;
@@ -85,8 +106,11 @@ public class PersonaBindingsInheritanceTests : IDisposable
         if (Directory.Exists(_tempDir)) Directory.Delete(_tempDir, recursive: true);
     }
 
-    private PersonaBindingsService BuildBindingsService(SpecialtySettingsStore specialtyStore) =>
-        new(_personas, _projects, _wkStore, _knowledge, new SkillsService(), _users, _config,
+    private PersonaBindingsService BuildBindingsService(SpecialtySettingsStore specialtyStore,
+        // Плагин-резолвер в тесте индекса сабагента: SkillsService с этим же конфигом читает
+        // пакет владельца из _tempDir (DataPath) — тот же корень, что пишет PluginStore теста
+        SkillsService? skills = null) =>
+        new(_personas, _projects, _wkStore, _knowledge, skills ?? new SkillsService(), _users, _config,
             NullLogger<PersonaBindingsService>.Instance,
             specialtySettings: specialtyStore,
             // Плагин-навыки в тесте материализации: шов принимает всё — проверка существования
@@ -113,7 +137,7 @@ public class PersonaBindingsInheritanceTests : IDisposable
             {
                 Type = PersonaBindingType.Skill,
                 SkillName = n,
-                Condition = "когда читаю код",
+                Condition = ProfileCondition,
             }).ToList(),
         };
         store.SetGlobal(layer).Should().BeNull();
@@ -123,8 +147,13 @@ public class PersonaBindingsInheritanceTests : IDisposable
         new() { OwnerId = Owner, Name = "тест", Handle = "тест", Specialty = specialty, Bindings = bindings };
 
     private static PersonaBinding SkillBinding(string id, string target,
-        PersonaBindingMode mode = PersonaBindingMode.Auto) =>
-        new() { Id = id, Type = PersonaBindingType.Skill, Target = target, Mode = mode };
+        PersonaBindingMode mode = PersonaBindingMode.Auto, string? condition = null) =>
+        new() { Id = id, Type = PersonaBindingType.Skill, Target = target, Mode = mode, Condition = condition ?? "" };
+
+    // Копия, равная записи типового профиля SetSkillProfile (Mode=Auto по умолчанию, Condition
+    // из профиля): именно такие копии удаляет миграция (R-A2 M1)
+    private static PersonaBinding ProfileCopy(string id, string target) =>
+        SkillBinding(id, target, PersonaBindingMode.Auto, ProfileCondition);
 
     private static PersonaBinding NoteBinding(string id, string target) =>
         new() { Id = id, Type = PersonaBindingType.Notes, Target = target };
@@ -240,6 +269,74 @@ public class PersonaBindingsInheritanceTests : IDisposable
             .Select(b => b.Target).Should().Equal(SkillName, "personal");
     }
 
+    // --- R-A2 M3: проводка доказывается реальным BuildSubagentIndex, а не хелпером ---
+
+    // Разрешаемый навык — плагинный: тест сам ставит пакет и запись (PluginStore пишет в
+    // _tempDir по DataPath — тот же корень, что читает SkillsService с этим конфигом).
+    // Глобальное имя резолвилось бы по ~/.claude/skills хоста — тест стал бы зависим от машины.
+    [Fact]
+    public void СабагентИндекс_УнаследованноеПлагинУмениеВИндексе_ПогашённоеOffНет()
+    {
+        SetSkillProfile(_specialty, PluginSkill);
+        var store = new PluginStore(_config);
+        var pkg = store.PackageDir(Owner, "local-a/pkg", "1.0.0");
+        Directory.CreateDirectory(Path.Combine(pkg, "skills", "my-skill"));
+        File.WriteAllText(Path.Combine(pkg, "skills", "my-skill", "SKILL.md"),
+            "---\nname: my-skill\ndescription: t\n---\n# my-skill\n");
+        store.SaveInstalled(Owner,
+        [
+            new PluginInstall { Id = "local-a/pkg", Version = "1.0.0", Sha256 = "a", Enabled = true, Source = "upload" },
+        ]);
+
+        var sut = BuildBindingsService(_specialty, new SkillsService(_config));
+
+        // Своих привязок нет: унаследованное доходит до индекса через эффективный список.
+        // Мутация «вернуть persona.Bindings» — индекс null (своих нет), тест красный.
+        var index = sut.BuildSubagentIndex(Owner, PersonaWith(PersonaSpecialty.Reviewer, null));
+        index.Should().NotBeNull();
+        index.Should().Contain("pkg:my-skill", "унаследованное плагин-умение — в индексе сабагента");
+        index.Should().Contain(ProfileCondition, "условие строки — из профиля");
+
+        // Своя Off-копия гасит унаследованное по имени: в индекс не попадает ни та, ни другая.
+        var offIndex = sut.BuildSubagentIndex(Owner, PersonaWith(PersonaSpecialty.Reviewer,
+            [SkillBinding("s1", PluginSkill, PersonaBindingMode.Off)]));
+        offIndex.Should().BeNull("погашённое умение не в индексе");
+    }
+
+    // --- R-A2 M2: четвёртый путь (--plugin-dir через PersonaSkillBindingLookup) — те же цели,
+    // что видит промпт ---
+
+    // Существование самого плагина здесь не предмет теста: лук отдаёт цель как есть, а наличие
+    // пакета решает PluginDirSource по установленной записи — ровно как для своих привязок.
+    [Fact]
+    public void Лук_УнаследованноеPluginУмениеДаетЦель_СвояOffЕёГасит()
+    {
+        var config = Config();
+        var specialty = TestSpecialtyStore.Create(config);
+        SetSkillProfile(specialty, PluginSkill);
+        WriteStore(
+            Stored("plain", PersonaSpecialty.Reviewer, null),
+            Stored("off-owner", PersonaSpecialty.Reviewer, [SkillBinding("s1", PluginSkill, PersonaBindingMode.Off)]));
+
+        var manager = NewManager(config, specialty);
+        var bindings = new PersonaBindingsService(manager, _projects, _wkStore, _knowledge,
+            new SkillsService(), _users, config, NullLogger<PersonaBindingsService>.Instance,
+            specialtySettings: specialty);
+        var lookup = new PersonaSkillBindingLookup(manager, bindings);
+
+        // Персона со специальностью, своих привязок нет: унаследованная цель — в списке,
+        // пакет доставляется, пока умение в промпте. Мутация «вернуть persona.Bindings» —
+        // список пуст, тест красный.
+        var plain = lookup.Get(Owner, "plain");
+        plain.Should().NotBeNull();
+        plain!.SkillBindingTargets.Should().Equal(PluginSkill);
+
+        // Своя Off-копия гасит унаследованное: выключенное умение пакет не открывает (M4.2).
+        var off = lookup.Get(Owner, "off-owner");
+        off.Should().NotBeNull();
+        off!.SkillBindingTargets.Should().BeEmpty();
+    }
+
     // --- Материализация: Skill-часть больше не копируется ---
 
     [Fact]
@@ -304,7 +401,7 @@ public class PersonaBindingsInheritanceTests : IDisposable
         var specialty = TestSpecialtyStore.Create(config);
         SetSkillProfile(specialty, SkillName);
         WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [
-            SkillBinding("copy", "Code-Review"),      // копия профиля (регистр не мешает совпадению)
+            ProfileCopy("copy", "Code-Review"),       // точная копия профиля (регистр имени не мешает)
             SkillBinding("own-other", "other-skill"), // несовпавшая — остаётся
             NoteBinding("ai-note", "personal"),       // AI-привязка — не трогается
         ]));
@@ -319,6 +416,38 @@ public class PersonaBindingsInheritanceTests : IDisposable
         stored.Should().Contain("own-other").And.Contain("personal").And.NotContain("Code-Review");
     }
 
+    // R-A2 M1: удаляются только точные копии профиля. Off-копия и копия со своим Mode/Condition —
+    // настройка персоны об умении: она и так гасит унаследованное, а её удаление вернуло бы
+    // выключенное умение в промпт и стёрло настройку. Condition, равный с Trim, — равный
+    // (копия могла быть записана из профиля с обрамляющими пробелами).
+    [Fact]
+    public void Миграция_OffИНастроенныеКопииСохраняются_ТочнаяКопияУдалена()
+    {
+        var config = Config(migrationOn: true);
+        var specialty = TestSpecialtyStore.Create(config);
+        SetSkillProfile(specialty, SkillName);
+        WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [
+            SkillBinding("off-copy", SkillName, PersonaBindingMode.Off),                  // подавление — остаётся
+            SkillBinding("own-always", SkillName, PersonaBindingMode.Always),             // свой режим — остаётся
+            SkillBinding("own-cond", SkillName, PersonaBindingMode.Auto, "своё условие"), // своё условие — остаётся
+            SkillBinding("trim-copy", SkillName, PersonaBindingMode.Auto, "  " + ProfileCondition + " "), // равен с Trim — удаляется
+            ProfileCopy("exact", "CODE-Review"),                                          // точная копия — удаляется
+        ]));
+
+        var manager = NewManager(config, specialty);
+
+        var raw = manager.GetRaw("vera", Owner)!;
+        // настройки персоны целы; удалены точная копия и копия, равная с Trim
+        raw.Bindings!.Select(b => b.Id).Should().Equal("off-copy", "own-always", "own-cond");
+
+        // Инвариант: эффективное поведение не изменилось. Выключенное умение осталось выключенным
+        // (Off-копия в эффективном списке, унаследованное ей погашено), своё условие — своим.
+        var eff = BuildBindingsService(specialty).EffectiveBindings(_userId, raw);
+        eff.Should().ContainSingle(b => b.Binding.Id == "off-copy" && b.Binding.Mode == PersonaBindingMode.Off);
+        eff.Should().NotContain(b => b.Inherited,
+            "свои копии того же имени гасят унаследованное — ожившего умения нет");
+    }
+
     [Fact]
     public void СухойПрогон_ПеречисляетУдаляемыеSkillПривязки_НичегоНеПишет()
     {
@@ -326,7 +455,7 @@ public class PersonaBindingsInheritanceTests : IDisposable
         var specialty = TestSpecialtyStore.Create(config);
         SetSkillProfile(specialty, SkillName);
         WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [
-            SkillBinding("copy", SkillName), SkillBinding("own-other", "other-skill")]));
+            ProfileCopy("copy", SkillName), SkillBinding("own-other", "other-skill")]));
 
         var manager = NewManager(config, specialty);
         var personasHash = Hash(_storePath);
@@ -345,13 +474,39 @@ public class PersonaBindingsInheritanceTests : IDisposable
         manager.GetRaw("vera", Owner)!.InheritsAccessMigratedAt.Should().BeNull();
     }
 
+    // R-A2 M1: в отчёте сухого прогона — только точные копии; Off и настроенные в план удаления
+    // не попадают (их следующий прогон тоже не тронет).
+    [Fact]
+    public void СухойПрогон_OffИНастроенныеКопииВУдаляемыеНеПопадают()
+    {
+        var config = Config(); // флаг выключен: сухой прогон доступен всегда
+        var specialty = TestSpecialtyStore.Create(config);
+        SetSkillProfile(specialty, SkillName);
+        WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [
+            SkillBinding("off-copy", SkillName, PersonaBindingMode.Off),
+            SkillBinding("own-cond", SkillName, PersonaBindingMode.Auto, "своё условие"),
+            ProfileCopy("exact", SkillName),
+        ]));
+
+        var manager = NewManager(config, specialty);
+        var personasHash = Hash(_storePath);
+
+        var plan = manager.DryRunSpecialtyInheritance();
+
+        var d = plan.Decisions.Single(x => x.PersonaId == "vera");
+        // план удаляет только равные профилю копии; Off и настроенные — не в удалении
+        d.RemovedSkills.Select(r => r.BindingId).Should().Equal("exact");
+        plan.CountRemovedSkills().Should().Be(1);
+        Hash(_storePath).Should().Be(personasHash, "сухой прогон ничего не пишет");
+    }
+
     [Fact]
     public void Миграция_ПовторныйПрогон_НольИзменений()
     {
         var config = Config(migrationOn: true);
         var specialty = TestSpecialtyStore.Create(config);
         SetSkillProfile(specialty, SkillName);
-        WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [SkillBinding("copy", SkillName)]));
+        WriteStore(Stored("vera", PersonaSpecialty.Reviewer, [ProfileCopy("copy", SkillName)]));
 
         NewManager(config, specialty); // первый пуск при загрузке: копия удалена, маркер стоит
         var hashAfterFirst = Hash(_storePath);
@@ -375,7 +530,7 @@ public class PersonaBindingsInheritanceTests : IDisposable
         // на 60 персон окно было слишком коротким и мутация «снять лок» проходила незамеченной
         var ids = Enumerable.Range(0, 300).Select(i => $"p{i}").ToList();
         WriteStore(ids.Select(id => Stored(id, PersonaSpecialty.Reviewer,
-            [SkillBinding(id + ":copy", SkillName), SkillBinding(id + ":own", "other-skill")])).ToArray());
+            [ProfileCopy(id + ":copy", SkillName), SkillBinding(id + ":own", "other-skill")])).ToArray());
 
         var manager = NewManager(config, specialty);
         // Вернём состояние «ещё не решено»: первый пуск при загрузке уже прошёл — снимем маркеры
@@ -384,7 +539,7 @@ public class PersonaBindingsInheritanceTests : IDisposable
         {
             var raw = manager.GetRaw(id, Owner)!;
             raw.InheritsAccessMigratedAt = null;
-            raw.Bindings = [SkillBinding(id + ":copy", SkillName), SkillBinding(id + ":own", "other-skill")];
+            raw.Bindings = [ProfileCopy(id + ":copy", SkillName), SkillBinding(id + ":own", "other-skill")];
         }
 
         var apply1 = Task.Run(manager.RunSpecialtyInheritanceMigration);

@@ -37,6 +37,8 @@ public class ComfyWorkflowsTests
         "ImageScaleToTotalPixels",
         // MiniMax-H3-Image (2026-11-11): узел условий из ComfyUI 0.45 и пачка вариантов
         "MiniMaxH3ImageConditioning", "RepeatLatentBatch",
+        // Fibo 2.0 (2026-11-12): узел условий из ComfyUI 0.45
+        "TextEncodeFibo2",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -471,6 +473,10 @@ public class ComfyWorkflowsTests
                 crop: new LocalImageCrop(8, 16, 64, 32, 128, 64))),
             ("klein-generate", ComfyWorkflows.KleinGenerate("ёжик", 1664, 928, 1, 2, "p")),
             ("h3image-generate", ComfyWorkflows.H3ImageGenerate("ёжик", 2752, 1536, 1, 1, "p")),
+            ("fibo2-generate", ComfyWorkflows.Fibo2Generate("ёжик", 1424, 800, 1, 2, "p")),
+            ("fibo2-generate-turbo", ComfyWorkflows.Fibo2Generate("ёжик", 1024, 1024, 1, 1, "p", turbo: true)),
+            ("fibo2-edit", ComfyWorkflows.Fibo2Edit("добавь лодку", ["x.png"], null, 1, "p", turbo: true)),
+            ("fibo2-multi", ComfyWorkflows.Fibo2Edit("сложи", ["a.png", "b.png", "c.png", "d.png"], (1024, 1024), 1, "p", turbo: false)),
             ("h3image-generate-batch", ComfyWorkflows.H3ImageGenerate("ёжик", 2048, 2048, 1, 3, "p")),
             ("h3image-edit", ComfyWorkflows.H3ImageEdit("добавь лодку", ["x.png"], (2048, 2048), 1, "p")),
             ("h3image-multi", ComfyWorkflows.H3ImageEdit("сложи", Enumerable.Range(1, 16).Select(i => $"r{i}.png").ToList(),

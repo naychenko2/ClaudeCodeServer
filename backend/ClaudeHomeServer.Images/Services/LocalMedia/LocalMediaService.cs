@@ -514,6 +514,14 @@ public sealed partial class LocalMediaService(
 
     public static int H3ImageEditEta(int images) => 40 + 20 * (Math.Max(1, images) - 1);
 
+    // Fibo 2.0, ~1 Мп (замер 2026-11-12, RTX 3090): Dev, 50 шагов с CFG — 53 с прогретой моделью
+    // (холодный старт ~63 с), Turbo, 4 шага — 11 с на генерацию и 17 с на правку. Пачка из count
+    // вариантов идёт одним прогоном — время растёт почти линейно
+    public static int Fibo2GenerateEta(bool turbo, int count) => turbo ? 5 + 6 * Math.Max(1, count) : 5 + 50 * Math.Max(1, count);
+
+    public static int Fibo2EditEta(bool turbo, int images, int count) =>
+        (turbo ? 10 + 7 * Math.Max(1, count) : 10 + 60 * Math.Max(1, count)) + 5 * (Math.Max(1, images) - 1);
+
     public const int FaceDetailEta = 25;
 
     // Время — зачётные прогоны замера d653be60 (одна RTX 3090, модели уже загружены); первый

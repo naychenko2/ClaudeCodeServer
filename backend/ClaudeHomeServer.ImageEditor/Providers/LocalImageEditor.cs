@@ -25,6 +25,8 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     // Qwen Turbo (8 шагов) — умолчание авто-выбора; FLUX 3 Klein и Qwen «качественно» (25 шагов) — по выбору
     public const string FluxKlein = LocalImageModels.Klein;
     public const string MiniMaxH3Image = LocalImageModels.H3Image;
+    public const string Fibo2Dev = LocalImageModels.Fibo2;
+    public const string Fibo2Turbo = LocalImageModels.Fibo2Turbo;
     public const string QwenImage = LocalImageModels.Quality;
     public const string QwenImageTurbo = LocalImageModels.Turbo;
     public const string FaceDetailer = "face-detailer";
@@ -106,6 +108,25 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         [new FormatTierSpec(FormatTier.Standard, "~4 Мп", H3Sizes), new FormatTierSpec(FormatTier.High, "~16 Мп", H3SizesHigh)],
         new ExactSizeSpec(Step: 32, MinSide: 512, MaxSide: 6272, MaxMegapixels: 16.8));
 
+    // Fibo 2.0 обучена на ~1 Мп (выше послушность падает): обученные размеры узла TextEncodeFibo2 —
+    // зеркало ComfyWorkflows.Fibo2Sizes (сверка в тестах). «Точно…» — кратно 16 в пределах ~1,2 Мп
+    public static readonly IReadOnlyDictionary<string, FormatSize> Fibo2Sizes = new Dictionary<string, FormatSize>(StringComparer.Ordinal)
+    {
+        ["1:1"] = new(1024, 1024),
+        ["16:9"] = new(1424, 800),
+        ["9:16"] = new(800, 1424),
+        ["4:3"] = new(1152, 864),
+        ["3:4"] = new(864, 1152),
+        ["3:2"] = new(1248, 832),
+        ["2:3"] = new(832, 1248),
+    };
+
+    private static readonly MediaFormatCaps Fibo2Format = new("Fibo 2.0",
+        [.. Fibo2Sizes.Keys],
+        [new FormatTierSpec(FormatTier.Standard, "~1 Мп", Fibo2Sizes)],
+        new ExactSizeSpec(Step: 16, MinSide: 256, MaxSide: 2048, MaxMegapixels: 1.2),
+        null, "один размер ~1 Мп");
+
     // Генерация — до 4 вариантов, прогон на вариант; правка — до 16 картинок всего (холст и 15 образцов).
     // Возможности у Klein те же, что у Qwen: маски, дорисовку, подстановку на лицо и больше 10 картинок
     // он отдаёт Qwen «качественно» (LocalImageModels.NeedsQwen), отказа человек не видит. Персонажа
@@ -116,6 +137,15 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
         QwenModel(FluxKlein, "FLUX 3 Klein — текст и точная правка", KleinFormat, LocalImageModels.KleinCharacterPhotos),
         QwenModel(QwenImage, "Qwen-Image 2.1 — качественно", QwenFormat, 1),
         QwenModel(MiniMaxH3Image, "MiniMax H3 Image — детали и 4K", H3Format, LocalImageModels.H3ImageCharacterPhotos),
+        // Fibo 2.0 (2026-11-12): веса CC BY-NC — только некоммерческое использование. Turbo — правка за
+        // 4 шага; генерацию по тексту Bria для неё не заявляет (замер: путает предметы), поэтому без Generate
+        QwenModel(Fibo2Dev, "Fibo 2.0 — состав сцены и текст, некоммерч.", Fibo2Format, 1),
+        new(Fibo2Turbo, "Fibo 2.0 Turbo — быстрая правка, некоммерч.",
+            new ImageEditCaps([ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint],
+                MaskSupport.Veil,
+                MaxReferences: 15, MaxCount: 4, FaceByReferences: true, MaxCharacterPhotos: 1,
+                MaxFaceCropPhotos: 1, Format: Fibo2Format),
+            new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
         new(FaceDetailer, "Улучшить лица",
             new ImageEditCaps([ImageEditOp.EnhanceFaces], MaskSupport.None, MaxReferences: 0, MaxCount: 1, FaceByReferences: false),
             new ImageEditPriceHint(0, ImageEditPriceUnits.Free, "image")),
@@ -174,11 +204,14 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
     }
 
     // Модель, на которой запуск пойдёт на самом деле, — грубо, по признакам котировки: точный
-    // выбор делает шов (LocalImageModels.Effective) по готовому запросу. Персонаж Klein не уводит
+    // выбор делает шов (LocalImageModels.Effective) по готовому запросу. Персонаж Klein не уводит,
+    // а Fibo 2.0 — уводит: LoRA персонажа обучены под Qwen
     private static string EtaVariant(string id, ImageEditQuoteRequest request, int images) =>
-        LocalImageModels.TakesCharacterByPhotos(id) && (request.HasMask
-                            || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
-                            || images + 1 > LocalImageModels.MaxImagesOf(id))
+        (LocalImageModels.TakesCharacterByPhotos(id) || LocalImageModels.IsFibo2(id))
+        && (request.HasMask
+            || request.Op is ImageEditOp.Inpaint or ImageEditOp.Outpaint
+            || images + 1 > LocalImageModels.MaxImagesOf(id)
+            || (LocalImageModels.IsFibo2(id) && request.HasCharacter))
             ? QwenImage
             : id;
 

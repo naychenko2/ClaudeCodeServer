@@ -68,6 +68,9 @@ public static class LocalImageModels
     public const string Turbo = "qwen-image-2.1-turbo";
     public const string Klein = "flux3-klein";
     public const string H3Image = "minimax-h3-image";
+    // Fibo 2.0 (Bria): Dev — 50 шагов с CFG, генерация и правка; Turbo — дистиллят на 4 шага для правки
+    public const string Fibo2 = "fibo2";
+    public const string Fibo2Turbo = "fibo2-turbo";
 
     // Больше картинок на входе Klein не проверяли (A/B и граф BFL — до четырёх)
     public const int KleinMaxImages = 10;
@@ -84,16 +87,25 @@ public static class LocalImageModels
     // На всех — один человек; пять фото не прибавляют сходства, а время почти удваивают
     public const int H3ImageCharacterPhotos = 3;
 
-    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein or H3Image;
+    // Fibo 2.0 обучена на правке по одной картинке и по образцам до четырёх (карточка модели)
+    public const int Fibo2MaxImages = 4;
+
+    public static bool IsKnown(string? model) => model is null or Quality or Turbo or Klein or H3Image or Fibo2 or Fibo2Turbo;
 
     // Модели, которые берут персонажа сами — по фото, без LoRA (LoRA обучены под Qwen-Image)
     public static bool TakesCharacterByPhotos(string? model) => model is Klein or H3Image;
 
-    // Модель, на которой запуск пойдёт на самом деле. Klein и H3-Image не проверены на подстановке
-    // лица (кроп), масках, дорисовке за края и длинных наборах входов — такие запуски уходят на
-    // Qwen «качественно»
+    public static bool IsFibo2(string? model) => model is Fibo2 or Fibo2Turbo;
+
+    // Модель, на которой запуск пойдёт на самом деле. Klein, H3-Image и Fibo 2.0 не проверены на
+    // подстановке лица (кроп), масках, дорисовке за края и длинных наборах входов — такие запуски
+    // уходят на Qwen «качественно». Персонажа Fibo 2.0 по фото не проверяли, а LoRA обучены под
+    // Qwen-Image — запуск с LoRA персонажа тоже уходит на Qwen
     public static string? Effective(LocalImageRequest request) =>
-        TakesCharacterByPhotos(request.Model) && NeedsQwen(request) ? Quality : request.Model;
+        ((TakesCharacterByPhotos(request.Model) || IsFibo2(request.Model)) && NeedsQwen(request))
+        || (IsFibo2(request.Model) && request.Lora is not null)
+            ? Quality
+            : request.Model;
 
     public static bool NeedsQwen(LocalImageRequest request) =>
         request.Crop is not null
@@ -103,7 +115,12 @@ public static class LocalImageModels
         || request.Pad is not null
         || (request.Images?.Count ?? 0) > MaxImagesOf(request.Model);
 
-    public static int MaxImagesOf(string? model) => model == H3Image ? H3ImageMaxImages : KleinMaxImages;
+    public static int MaxImagesOf(string? model) => model switch
+    {
+        H3Image => H3ImageMaxImages,
+        Fibo2 or Fibo2Turbo => Fibo2MaxImages,
+        _ => KleinMaxImages,
+    };
 }
 
 // Images: у Edit первая — холст, дальше образцы (до 16 всего); у Generate — необязательные

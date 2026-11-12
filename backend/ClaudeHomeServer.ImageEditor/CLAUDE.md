@@ -289,6 +289,11 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   (`LocalImageModels.TakesCharacterByPhotos`/`NeedsQwen`). Формат свой: ~4 Мп (таблица Qwen на площади
   2048², зеркало `ComfyWorkflows.H3ImageSizes`) и «Высокое» ~16 Мп, стороны кратны 32; холст правки —
   исходник, приведённый к 2048². Нужен ComfyUI 0.45+ (узел `MiniMaxH3ImageConditioning`).
+  **Fibo 2.0 (`fibo2` — Dev, `fibo2-turbo` — правка за 4 шага, с 2026-11-12)**: персонажа по фото
+  не берёт — запуск с LoRA персонажа, маски, дорисовка, подстановка на лицо и больше 4 картинок уходят на
+  Qwen «качественно» (`LocalImageModels.Effective`), котировка считает так же (`EtaVariant`). У Turbo нет
+  `Generate`. Формат ~1 Мп (`ComfyWorkflows.Fibo2Sizes` ↔ `LocalImageEditor.Fibo2Sizes`); холст правки
+  выбирает узел `TextEncodeFibo2` по пропорции исходника. Веса CC BY-NC — в подписи модели «некоммерч.».
   **LoRA персонажа и режим B.** LoRA — блок `providers.local` манифеста (`lora`, `trigger`,
   `strength`, по умолчанию 0,8); читается в `CharacterStore.ForRequest` — **единственной точке**
   создания `CharacterRef`; `CharacterRef.Lora` под `JsonIgnore`, наружу не уходит. **Режим B =

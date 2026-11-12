@@ -303,7 +303,8 @@ public class LocalImageEditorTests : IDisposable
     {
         var editor = new LocalImageEditor(new FakeMedia());
 
-        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "minimax-h3-image", "face-detailer");
+        editor.Models.Select(m => m.Id).Should().Equal("qwen-image-2.1-turbo", "flux3-klein", "qwen-image-2.1", "minimax-h3-image",
+            "fibo2", "fibo2-turbo", "face-detailer");
         editor.Models[0].Label.Should().Be("Qwen-Image 2.1 Turbo — быстро");
         editor.Models[1].Label.Should().Be("FLUX 3 Klein — текст и точная правка");
         editor.Models[2].Label.Should().Be("Qwen-Image 2.1 — качественно");
@@ -360,6 +361,43 @@ public class LocalImageEditorTests : IDisposable
             (size.W % 32).Should().Be(0);
             (size.H % 32).Should().Be(0);
         }
+    }
+
+    // Fibo 2.0: Dev — операции Qwen, Turbo — без генерации по тексту; формат ~1 Мп; персонаж — через Qwen
+    [Fact]
+    public void Каталог_Fibo2_DevКакQwen_TurboБезГенерации()
+    {
+        var models = new LocalImageEditor(new FakeMedia()).Models;
+        var dev = models.Single(m => m.Id == LocalImageEditor.Fibo2Dev);
+        var turbo = models.Single(m => m.Id == LocalImageEditor.Fibo2Turbo);
+        var qwen = models.Single(m => m.Id == LocalImageEditor.QwenImage).Caps;
+
+        dev.Caps.Ops.Should().Equal(qwen.Ops);
+        turbo.Caps.Ops.Should().Equal(ImageEditOp.Edit, ImageEditOp.Inpaint, ImageEditOp.Outpaint);
+        dev.Label.Should().Contain("некоммерч");
+        turbo.Label.Should().Contain("некоммерч");
+        foreach (var caps in new[] { dev.Caps, turbo.Caps })
+        {
+            caps.Mask.Should().Be(qwen.Mask);
+            caps.MaxCharacterPhotos.Should().Be(1, "персонаж с LoRA уходит на Qwen");
+            caps.Format!.ModelLabel.Should().Be("Fibo 2.0");
+            caps.Format.Tiers[0].Sizes["16:9"].Should().Be(new FormatSize(1424, 800));
+            caps.Format.Exact!.Step.Should().Be(16);
+        }
+    }
+
+    [Fact]
+    public async Task КотировкаFibo2_ПерсонажИКистьУводятНаQwen()
+    {
+        var media = new FakeMedia();
+        var service = Service(Editor(media));
+
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Edit) with { Model = LocalImageEditor.Fibo2Turbo }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage).And.NotContain(LocalImageEditor.Fibo2Turbo);
+
+        while (media.EtaModels.TryDequeue(out _)) { }
+        await service.QuoteAsync("user-a", Project, CharacterQuote(ImageEditOp.Edit, mask: true) with { Model = LocalImageEditor.Fibo2Dev }, default);
+        media.EtaModels.Should().Contain(LocalImageEditor.QwenImage, "кисть Fibo отдаёт Qwen");
     }
 
     [Fact]

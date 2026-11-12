@@ -190,6 +190,17 @@ public class MediaFormatDriversTests
             (size.W, size.H).Should().Be(source[aspect], aspect);
     }
 
+    // То же для Fibo 2.0: обученные размеры узла TextEncodeFibo2
+    [Fact]
+    public void Размеры_Fibo2_в_каталоге_совпадают_с_ComfyWorkflows()
+    {
+        var source = ClaudeHomeServer.Services.Images.LocalMedia.ComfyWorkflows.Fibo2Sizes;
+
+        LocalImageEditor.Fibo2Sizes.Keys.Should().BeEquivalentTo(source.Keys);
+        foreach (var (aspect, size) in LocalImageEditor.Fibo2Sizes)
+            (size.W, size.H).Should().Be(source[aspect], aspect);
+    }
+
     // Зеркало потолка холста (ADR-028, Ш3): MaxCanvasMb у Qwen-Image = потолок загрузки узла
     // (LocalMediaService.MaxMediaInputBytes, 90 МБ) — адаптер принимает холст с кропом до него,
     // поэтому редактор не пережимает его; расхождение чисел 90 ↔ адаптер → красный

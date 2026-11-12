@@ -148,6 +148,10 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
 
     public int? EtaSeconds(LocalImageOp op, int count, int images, string? model) => op switch
     {
+        LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsFibo2(model) =>
+            LocalMediaService.Fibo2GenerateEta(model == LocalImageModels.Fibo2Turbo, Math.Max(1, count)),
+        LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsFibo2(model) =>
+            LocalMediaService.Fibo2EditEta(model == LocalImageModels.Fibo2Turbo, images, Math.Max(1, count)),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsH3Image(model) => LocalMediaService.H3ImageGenerateEta(Math.Max(1, count)),
         LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) => LocalMediaService.H3ImageEditEta(images),
         LocalImageOp.Generate when images == 0 && ComfyWorkflows.IsKlein(model) => LocalMediaService.KleinGenerateEta(Math.Max(1, count)),
@@ -275,7 +279,7 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 return LocalImageSubmitted.Fail("Кроп выходит за пределы холста.");
         }
 
-        // Фактическая модель: Klein и H3-Image в непроверенных для них случаях идут на Qwen «качественно»
+        // Фактическая модель: Klein, H3-Image и Fibo 2.0 в непроверенных для них случаях идут на Qwen «качественно»
         var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
 
         // Графы Klein и H3-Image LoRA не применяют — и не проверяют
@@ -375,6 +379,8 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                     KleinGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsH3Image(model) =>
                     H3ImageGraph(prompt, request, names, images, faceRefs, seed, count, prefix),
+                LocalImageOp.Generate or LocalImageOp.Edit when ComfyWorkflows.IsFibo2(model) =>
+                    Fibo2Graph(prompt, request, names, model, faceRefs, seed, count, prefix),
                 LocalImageOp.Generate when names.Count == 0 => GenerateGraph(prompt, request with { Model = model }, seed, count, prefix),
                 // Генерация по образцам — граф правки на пустом холсте нужного размера
                 LocalImageOp.Generate => ComfyWorkflows.EditImage(prompt, names, CanvasFor(request), seed, prefix, lora, faceRefs, model: model),
@@ -481,6 +487,25 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         ComfyWorkflows.H3ImageSizes.TryGetValue(aspect?.Trim() ?? "", out var exact)
             ? exact
             : ComfyWorkflows.H3ImageCanvas(SizeFor(aspect).Width, SizeFor(aspect).Height);
+
+    // Fibo 2.0: генерация по тексту и по образцам — холст из формата или из таблицы Fibo (~1 Мп);
+    // правка — размер выбирает узел условий: обученный размер под пропорцию исходника
+    private static System.Text.Json.Nodes.JsonObject Fibo2Graph(string prompt, LocalImageRequest request, IReadOnlyList<string> names,
+        string? model, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
+    {
+        var turbo = model == LocalImageModels.Fibo2Turbo;
+        var size = request.Width is > 0 && request.Height is > 0
+            ? (request.Width.Value, request.Height.Value)
+            : Fibo2SizeFor(request.Aspect);
+        if (names.Count == 0)
+            return ComfyWorkflows.Fibo2Generate(prompt, size.Item1, size.Item2, seed, count, prefix, turbo);
+        return ComfyWorkflows.Fibo2Edit(prompt, names, request.Op == LocalImageOp.Generate ? size : null, seed, prefix, turbo,
+            faceRefs, count);
+    }
+
+    // Размер из таблицы Fibo 2.0; соотношение не из таблицы — 1024²
+    internal static (int Width, int Height) Fibo2SizeFor(string? aspect) =>
+        ComfyWorkflows.Fibo2Sizes.TryGetValue(aspect?.Trim() ?? "", out var exact) ? exact : ComfyWorkflows.Fibo2Sizes["1:1"];
 
     private (int Width, int Height)? SourceSize(byte[] image) =>
         raster?.Probe(image) is { } probe ? (probe.DisplayWidth, probe.DisplayHeight) : ImageDimensions.Read(image);

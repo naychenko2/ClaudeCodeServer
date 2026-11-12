@@ -59,7 +59,8 @@ export const personasApi = {
     // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового.
     // projectId — глобальная персона, позванная из проекта, получает чат В этом проекте.
     chats: (id: string) => request<Session[]>(`/personas/${encodeURIComponent(id)}/chats`),
-    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string }) =>
+    // private (W4-FB1): приватный чат общего проекта; без флага поле в теле нет (контракт W4-B1b)
+    createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string; private?: boolean }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
     // Подобрать максимально релевантную персону под задачу (для чат-действий AI-хаба). null — нет подходящей.
     // requiredTool — ключ инструментов, без которого действие не выполнить: персоны без него

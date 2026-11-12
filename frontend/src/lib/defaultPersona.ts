@@ -187,9 +187,12 @@ export class OnboardingRequiredError extends Error {
 // руководителя и провижна участника нет; это не онбординг (участник сам не починит —
 // назначает только владелец), поэтому текст сервера уходит вызывающему как есть,
 // а не оборачивается в OnboardingRequiredError.
+// opts.private (W4-FB1): приватный чат общего проекта (контракт W4-B1a/W4-B1b). Флаг
+// доходит до тела запроса в обеих проектных ветках; чат вне проекта его не получает —
+// там приватности нет. Без флага тела запросов прежние.
 export async function createChatWithContextPersona(
   project?: ProjectChatContext | Project | null,
-  opts?: { mode?: string; name?: string },
+  opts?: { mode?: string; name?: string; private?: boolean },
 ): Promise<Session> {
   // Полный Project нормализуем в контекст: его ownerId всё ещё необязателен (старые
   // данные) — отсутствующий становится null, резолвер читает это как «проект без владельца».
@@ -202,11 +205,12 @@ export async function createChatWithContextPersona(
       mode: opts?.mode,
       name: opts?.name,
       projectId: project?.id,
+      ...(opts?.private ? { private: true } : {}),
     });
   }
   try {
     return project
-      ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name)
+      ? await api.sessions.create(project.id, opts?.mode, undefined, opts?.name, undefined, undefined, undefined, opts?.private)
       : await api.chats.create(opts?.mode, undefined, opts?.name);
   } catch (e) {
     const err = e as Error & { status?: number; body?: { code?: string; error?: string } };

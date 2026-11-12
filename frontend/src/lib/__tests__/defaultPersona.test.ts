@@ -205,7 +205,10 @@ describe('createChatWithContextPersona', () => {
     const error = await createChatWithContextPersona(project, { mode: 'auto' }).catch(e => e);
 
     expect(api.personas.createChat).not.toHaveBeenCalled();
-    expect(api.sessions.create).toHaveBeenCalledWith('proj-1', 'auto', undefined, undefined);
+    // 8 аргументов с хвостовыми undefined — форма вызова W4-FB1; undefined не попадают
+    // в JSON тела (JSON.stringify их опускает), тело запроса прежнее.
+    expect(api.sessions.create).toHaveBeenCalledWith(
+      'proj-1', 'auto', undefined, undefined, undefined, undefined, undefined, undefined);
     expect(error).not.toBeInstanceOf(OnboardingRequiredError);
     expect((error as Error).message).toBe(serverText);
   });
@@ -236,5 +239,49 @@ describe('createChatWithContextPersona', () => {
 
     expect(error).not.toBeInstanceOf(OnboardingRequiredError);
     expect((error as Error).message).toBe('Bad Request');
+  });
+
+  // W4-FB1: флаг private (приватный чат общего проекта, контракт W4-B1a/W4-B1b) доходит
+  // до тела запроса в обеих проектных ветках; без флага — поля private нет вовсе.
+  it('private: с руководителем — createChat получает тело с private: true', async () => {
+    setMeFromServer(fakeMe('personal-default'));
+    const project = { id: 'proj-1', defaultPersonaId: 'project-lead', ownerId: 'u1' };
+    vi.mocked(api.personas.createChat).mockResolvedValue(fakeSession);
+
+    await createChatWithContextPersona(project, { mode: 'auto', private: true });
+
+    expect(api.personas.createChat).toHaveBeenCalledWith('project-lead',
+      { mode: 'auto', name: undefined, projectId: 'proj-1', private: true });
+  });
+
+  it('private: без руководителя — sessions.create вызван с 8-м аргументом true', async () => {
+    setMeFromServer(fakeMe(null));
+    const project = { id: 'proj-1', defaultPersonaId: null, ownerId: 'u1' };
+    vi.mocked(api.sessions.create).mockResolvedValue(fakeSession);
+
+    await createChatWithContextPersona(project, { mode: 'auto', private: true });
+
+    expect(api.sessions.create).toHaveBeenCalledWith(
+      'proj-1', 'auto', undefined, undefined, undefined, undefined, undefined, true);
+  });
+
+  it('private: чат вне проекта через api.chats.create — флаг не прокидывается', async () => {
+    setMeFromServer(fakeMe(null));
+    vi.mocked(api.chats.create).mockResolvedValue(fakeSession);
+
+    await createChatWithContextPersona(null, { mode: 'auto', private: true });
+
+    expect(api.chats.create).toHaveBeenCalledWith('auto', undefined, undefined);
+    expect(api.personas.createChat).not.toHaveBeenCalled();
+  });
+
+  it('без флага — в теле createChat нет ключа private', async () => {
+    setMeFromServer(fakeMe('assistant-1'));
+    vi.mocked(api.personas.createChat).mockResolvedValue(fakeSession);
+
+    await createChatWithContextPersona(null, { mode: 'auto' });
+
+    const body = vi.mocked(api.personas.createChat).mock.calls[0][1];
+    expect(body).not.toHaveProperty('private');
   });
 });

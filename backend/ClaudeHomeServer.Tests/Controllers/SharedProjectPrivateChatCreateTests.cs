@@ -450,4 +450,81 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
         (await ChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказанное создание не оставило в проекте чата: отказ до фабрики, без побочных эффектов");
     }
+
+    [Fact]
+    public async Task ПерсонаЛичногоПроектаСОбщимProjectIdВТеле_409ЦелевойПроектБерётсяИзПерсоны()
+    {
+        // Тело называет общий проект, но целевой проект гейта — проект проектной персоны
+        // (PersonasController.cs:481-483), не req.ProjectId: персона живёт в личном проекте
+        // владельца без участников (IsShared — «есть участники», ProjectAccess.cs:95), и отказ
+        // идёт по проекту персоны. Резолв атрибута — тоже по персоне: вызывающий — её владелец.
+        var personalProjectId = await PersonalProjectAsync(role: null);
+        var personaId = await CreatePersonaAsync(Owner(), personalProjectId, "Двойная-" + Guid.NewGuid().ToString("N")[..6]);
+        var sharedProjectId = await SharedProjectAsync();
+        var beforePersonal = await ChatIdsAsync(Owner(), personalProjectId);
+        var beforeShared = await ChatIdsAsync(Owner(), sharedProjectId);
+        var beforePersonaChats = await PersonaChatIdsAsync(Owner(), personaId);
+
+        var r = await Owner().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true), ("projectId", sharedProjectId)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await BodyAsync(r);
+        body.GetProperty("code").GetString().Should().Be("not_shared_project");
+        body.GetProperty("error").GetString().Should().Be("Приватным можно сделать только чат общего проекта",
+            "тот же текст и код, что у тумблера ChatsController.SetVisibility");
+        (await ChatIdsAsync(Owner(), personalProjectId)).Should().BeEquivalentTo(beforePersonal,
+            "отказанное создание не оставило чата в проекте персоны");
+        (await ChatIdsAsync(Owner(), sharedProjectId)).Should().BeEquivalentTo(beforeShared,
+            "и в общем проекте из тела: отказ до фабрики, чата там не родилось ни при каком резолве");
+        (await PersonaChatIdsAsync(Owner(), personaId)).Should().BeEquivalentTo(beforePersonaChats);
+    }
+
+    [Fact]
+    public async Task ГлобальнаяПерсонаСФлагомPrivate_409НеSharedProjectИБезНовогоЧата()
+    {
+        // Глобальной персоне не из чего брать свой проект: целевой — req.ProjectId
+        // (PersonasController.cs:481-483); в теле его нет → null → IsShared(null) = false
+        // (ProjectAccess.cs:95). До гейта доходит: резолв атрибута глобальной персоны — по
+        // владению (ProjectAccessService.cs:70-72), вызывающий — владелец персоны.
+        var personaId = await CreatePersonaAsync(Owner(), null, "Глобальная-" + Guid.NewGuid().ToString("N")[..6]);
+        var before = await PersonaChatIdsAsync(Owner(), personaId);
+
+        var r = await Owner().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await BodyAsync(r);
+        body.GetProperty("code").GetString().Should().Be("not_shared_project");
+        body.GetProperty("error").GetString().Should().Be("Приватным можно сделать только чат общего проекта",
+            "тот же текст и код, что у тумблера ChatsController.SetVisibility");
+        (await PersonaChatIdsAsync(Owner(), personaId)).Should().BeEquivalentTo(before,
+            "отказ до фабрики: чата вне проекта (куда ушла бы глобальная персона без гейта) нет");
+    }
+
+    [Fact]
+    public async Task ПриватныйЧатСПерсонойПоIdНеОтличимОтНесуществующего_АвторПолучает()
+    {
+        var (_, personaId) = await SharedProjectWithProjectPersonaAsync();
+
+        var created = await Member().PostAsync($"/api/personas/{personaId}/chats",
+            Body(("mode", "auto"), ("private", true)));
+        created.StatusCode.Should().Be(HttpStatusCode.OK);
+        var chatId = IdOf(await created.Content.ReadAsStringAsync());
+
+        // Отказ второму участнику неотличим от несуществующего: тот же код, что у заведомо
+        // чужого id — по одному ответу нельзя сказать, был ли такой чат (ChatsController.cs:130:
+        // невидимый и несуществующий — один NotFound)
+        var ghost = Guid.NewGuid().ToString("N");
+        var forSecondMember = await SecondMember().GetAsync($"/api/chats/{chatId}");
+        var forGhost = await SecondMember().GetAsync($"/api/chats/{ghost}");
+        forSecondMember.StatusCode.Should().Be(forGhost.StatusCode,
+            "отказ неотличим: существование чужого приватного не раскрываем");
+        forSecondMember.StatusCode.Should().Be(HttpStatusCode.NotFound);
+
+        // Автор свой приватный получает по id: отказ чужим — фильтр видимости, не отсутствие записи
+        var forAuthor = await Member().GetAsync($"/api/chats/{chatId}");
+        forAuthor.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await BodyAsync(forAuthor)).GetProperty("id").GetString().Should().Be(chatId);
+    }
 }

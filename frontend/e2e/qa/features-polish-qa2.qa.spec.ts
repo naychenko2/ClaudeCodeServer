@@ -11,7 +11,6 @@ import { collectConsoleErrors, login } from './helpers';
 // сейчас идёт из-за него). Прямой hash-route и pending-канал на этом стенде открывают последний
 // активный чат (подтверждено первым прогоном) — берём тот, что открывается сам, он тот же по классу.
 const PID = 'fedfe8c3-eaab-48ae-a5bd-1661bb68f7cc';
-const CH_PERSONA = 'cb53ef27-2998-4b02-bca4-493d75fa0ef0'; // «Задача: Вера · повторная проверка QA-2…», персона Вера
 const PERSONA_NAME = 'Вера';
 const PERSONA_ID = '5270c8a6-7122-49ee-8bc4-a4ebe7aecea3';
 const F_MERGED = '66b5e075-f7e5-4761-8a84-e1dd05302aca'; // «LLM-wiki: новая постановка ночной вики», смержена
@@ -225,20 +224,21 @@ test('D3 b9e6460d · 360: вся зона цели строки кликабел
     }
     const feedR = feed?.getBoundingClientRect();
     // имя чата/персоны в шапке
-    let nameR: DOMRect | null = null;
+    const nameRects: DOMRect[] = [];
     const walk = (el: Element) => {
       for (const c of el.children) {
         const own = [...c.childNodes].some(n => n.nodeType === 3 && (n.textContent || '').includes(name as string));
         const r = c.getBoundingClientRect();
-        if (own && r.top < 160 && !nameR) nameR = r;
+        if (own && r.top < 160) nameRects.push(r);
         walk(c);
       }
     };
     walk(document.body);
+    const nameFound = nameRects[0] ?? null;
     return {
       bar: barR ? { tag: bar!.tagName, testid: bar!.getAttribute('data-testid') || '', y: barR.y, h: barR.height, bottom: barR.bottom } : null,
       feedTop: feedR ? { top: feedR.top } : null,
-      name: nameR ? { y: nameR.y, bottom: nameR.bottom } : null,
+      name: nameFound ? { y: nameFound.y, bottom: nameFound.bottom } : null,
       zoneBottom,
     };
   }, [box!.y + box!.height, PERSONA_NAME]);
@@ -375,7 +375,7 @@ function checkFeature(res: Record<string, unknown>) {
   const tiles = (first.heroTiles as string[] | undefined) ?? [];
   const heroReturns = tiles.find(t => /возврат/i.test(t))?.match(/(\d+)/)?.[1] ?? null;
   const heroFollow = tiles.find(t => /доработок после мержа/i.test(t))?.match(/(\d+)/)?.[1] ?? null;
-  const lineText = rev.analysisLine ?? first.analysisLine ?? null;
+  const lineText = (rev.analysisLine ?? first.analysisLine ?? null) as string | null;
   const bar = rev.outcomeBar ?? null;
   const parsed = {
     heroReturns,

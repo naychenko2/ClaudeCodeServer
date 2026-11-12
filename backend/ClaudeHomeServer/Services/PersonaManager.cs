@@ -433,7 +433,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool allProjectsAccess = false, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
+        bool? inheritsAccess = null)
     {
         var persona = new Persona
         {
@@ -469,6 +470,12 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             DisallowedTools = access == PersonaAccess.Custom ? NormalizeDisallowed(disallowedTools) : null,
             // Доступ ко всем проектам имеет смысл только у глобальных персон
             AllProjectsAccess = scope == PersonaScope.Global && allProjectsAccess,
+            // Наследование прав от специальности: null — false (MCP, ai/quick-create, ai/team,
+            // pantheon/connect флаг не передают → поведение не меняется). true — права при
+            // каждой выдаче подставляет шаблон специальности (Hydrate); вызывающий
+            // (PersonasCrudService) материализует эффективный шаблон в полях выше —
+            // персистентные поля остаются снимком для отката кода
+            InheritsAccess = inheritsAccess ?? false,
             Avatar = new PersonaAvatar { Kind = PersonaAvatarKind.Initials, Color = color },
         };
         // Генерация handle и вставка атомарны: без лока два одновременных Create
@@ -851,7 +858,8 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         bool? allProjectsAccess = null, string? handle = null,
         string? modelTier = null,
         string? tierStrong = null, string? tierMedium = null, string? tierWeak = null,
-        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null)
+        bool? lightContext = null, PersonaGender? gender = null, string? sphereId = null,
+        bool? inheritsAccess = null)
     {
         var persona = GetRaw(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -922,6 +930,10 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             if (greeting is not null) persona.Greeting = greeting.Length == 0 ? null : greeting;
             if (memoryEnabled is not null) persona.MemoryEnabled = memoryEnabled.Value;
             if (lightContext is not null) persona.LightContext = lightContext.Value;
+            // Наследование прав (A1d): null — не менять (частичный PUT не сбрасывает флаг);
+            // запись — в объект из GetRaw под тем же _saveLock, что и остальные поля:
+            // гидратированная копия из Hydrate наружу не пишется, её правка пропала бы (A1a)
+            if (inheritsAccess is not null) persona.InheritsAccess = inheritsAccess.Value;
             // null — не менять; явный Unspecified — сбросить сигнал рода
             if (gender is not null) persona.Gender = gender.Value;
             // null — не менять; список — установить (полный набор нормализуется в null)

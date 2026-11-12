@@ -2222,7 +2222,11 @@ public record CreatePersonaRequest(
     string? SphereId = null,
     // Голос (валидация как у PUT /voice). null — подобрать по характеру после создания
     // (best-effort); пустой объект — создать без голоса (голос инстанса), ничего не подбирая
-    PersonaVoice? Voice = null);
+    PersonaVoice? Voice = null,
+    // Права «как у специальности» (true) или свои (false). null — при создании права
+    // наследуются: без специальности это ровно прежнее поведение (Full без ограничений),
+    // с специальностью — её эффективный шаблон (A1d)
+    bool? InheritsAccess = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2263,7 +2267,11 @@ public record UpdatePersonaRequest(
     // Явный пол; null — не менять, "unspecified" — сбросить сигнал рода
     PersonaGender? Gender = null,
     // Сфера для Scope.Sphere (смена scope на Sphere требует её); null — не менять
-    string? SphereId = null);
+    string? SphereId = null,
+    // Права «как у специальности» (true) / свои (false); null — не менять.
+    // При итоговом true access/tools/disallowedTools запроса игнорируются: права —
+    // эффективный шаблон специальности (A1d)
+    bool? InheritsAccess = null);
 
 public record CreatePersonaChatRequest(string? Mode = null, string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

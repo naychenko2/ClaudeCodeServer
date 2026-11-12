@@ -163,9 +163,15 @@ public sealed class PersonasCrudService(
         // Шаблон специальности: при выборе специальности неподставленные
         // access/tools/disallowedTools берутся из эффективного шаблона;
         // явные поля запроса всегда побеждают, после создания поля правятся вручную.
+        // InheritsAccess=true (A1d): явные права запроса игнорируются — персистентные поля
+        // пишутся эффективным шаблоном (снимок для отката кода); None — шаблон кода Full без
+        // ограничений (дефолты Create), «нет шаблона» — свои права запроса (passthrough Apply).
+        // null/false — поведение прежнее.
         var createSpecialty = req.Specialty ?? PersonaSpecialty.None;
-        var templated = specialtyTemplates.Apply(userId, createSpecialty, currentSpecialty: null,
-            access, req.Tools, req.DisallowedTools);
+        var templated = req.InheritsAccess == true
+            ? InheritedGroupForCreate(userId, createSpecialty, access, req.Tools, req.DisallowedTools)
+            : specialtyTemplates.Apply(userId, createSpecialty, currentSpecialty: null,
+                access, req.Tools, req.DisallowedTools);
 
         Persona persona;
         try
@@ -175,7 +181,8 @@ public sealed class PersonasCrudService(
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindingList.Count > 0)
@@ -232,6 +239,26 @@ public sealed class PersonasCrudService(
         return Ok(persona);
     }
 
+    // Группа прав при создании с InheritsAccess=true (A1d): персистентные поля — снимок
+    // эффективного шаблона специальности (для отката кода), явные права запроса игнорируются.
+    // Соглашение M3 (то же, что у Hydrate и миграции): None — не «нет шаблона», а шаблон кода
+    // Full без ограничений; «нет шаблона» не становится Full — свои права запроса, как в Apply.
+    private SpecialtyTemplatesService.Applied InheritedGroupForCreate(
+        string userId, PersonaSpecialty specialty,
+        PersonaAccess? explicitAccess, List<string>? explicitTools, List<string>? explicitDisallowed)
+    {
+        if (specialty == PersonaSpecialty.None)
+            return new(PersonaAccess.Full, null, null, true);
+        if (SpecialtyTemplatesService.EffectiveAccessTemplate(specialtySettings, userId, specialty)
+                is { } template)
+            // Tools шаблона null = «все»: разворачиваем в полный список — Create нормализует
+            // его в null стора («без ограничений»), тот же приём, что у Apply
+            return new(template.Access,
+                template.Tools?.ToList() ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                template.DisallowedTools?.ToList(), true);
+        return new(explicitAccess, explicitTools, explicitDisallowed, false);
+    }
+
     // broadcast: false — вызывающий доводит правку следующей мутацией (голос в MCP
     // personas_update) и шлёт одно событие «updated» сам, по её итогу
     public async Task<ActionResult<Persona>> UpdateAsync(string userId, string id,
@@ -269,11 +296,57 @@ public sealed class PersonasCrudService(
                 return BadRequest(new { error = tooBig });
         }
 
-        // Шаблон специальности: применяется только при реальной СМЕНЕ специальности;
-        // неподставленные access/tools/disallowedTools берутся из шаблона, явные поля
-        // запроса побеждают. Та же специальность в запросе — поля не трогает.
-        var templated = specialtyTemplates.Apply(userId, req.Specialty ?? current.Specialty, current.Specialty,
-            access, req.Tools, req.DisallowedTools);
+        // Группа прав (A1d) — что пишется в персистентные поля, с учётом итогового флага
+        // наследования: переданного или текущего у персоны (null — не менять).
+        var finalInherits = req.InheritsAccess ?? current.InheritsAccess;
+        PersonaAccess? writeAccess;
+        List<string>? writeTools;
+        List<string>? writeDisallowed;
+        if (finalInherits)
+        {
+            // Права — шаблон специальности: access/tools/disallowedTools запроса игнорируются,
+            // персистентные поля пишутся эффективным шаблоном — снимок для отката кода.
+            // Соглашение M3 (как Hydrate/миграция): None — шаблон кода Full без ограничений;
+            // «нет шаблона» не становится Full — поля не трогается (эффективные права такой
+            // персоны — её собственные).
+            var effSpecialty = req.Specialty ?? current.Specialty;
+            if (effSpecialty == PersonaSpecialty.None)
+                // null в Update значит «не менять», поэтому «без ограничений» — полный список:
+                // он нормализуется в null стора (тот же приём, что у Apply)
+                (writeAccess, writeTools, writeDisallowed) =
+                    (PersonaAccess.Full, SpecialtyTemplatesService.AllToolKeys.ToList(), null);
+            else if (SpecialtyTemplatesService.EffectiveAccessTemplate(specialtySettings, userId, effSpecialty)
+                     is { } template)
+                // Пустые значения шаблона пишутся явно («пустой» список нормализуется в null
+                // стора): null в Update означал бы «не менять», и старый снимок пережил бы
+                // шаблон, где прав уже нет
+                (writeAccess, writeTools, writeDisallowed) = (template.Access,
+                    template.Tools?.ToList() ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                    template.DisallowedTools?.ToList() ?? []);
+            else
+                (writeAccess, writeTools, writeDisallowed) = (null, null, null);
+        }
+        else if (current.InheritsAccess)
+        {
+            // Переход true → false («своё»): человек фиксирует ровно то, что видел — поля
+            // запроса побеждают, непереданные берутся из гидратированной персоны (personas.Get
+            // уже подставил ей эффективные права), а не из сырой записи. Пустые эффективные
+            // значения — тоже явно: «без ограничений» полным списком, пустой запрет — []
+            (writeAccess, writeTools, writeDisallowed) = (access ?? current.Access,
+                req.Tools ?? current.Tools ?? SpecialtyTemplatesService.AllToolKeys.ToList(),
+                req.DisallowedTools ?? current.DisallowedTools ?? []);
+        }
+        else
+        {
+            // Флаг false или null у не наследующей персоны — как раньше: шаблон специальности
+            // применяется только при реальной СМЕНЕ специальности; неподставленные
+            // access/tools/disallowedTools берутся из шаблона, явные поля запроса побеждают.
+            // Та же специальность в запросе — поля не трогает.
+            var templated = specialtyTemplates.Apply(userId, req.Specialty ?? current.Specialty,
+                current.Specialty, access, req.Tools, req.DisallowedTools);
+            (writeAccess, writeTools, writeDisallowed) = (templated.Access, templated.Tools,
+                templated.DisallowedTools);
+        }
 
         // Статус заготовки снимает только ЧЕЛОВЕК из раздела «Персоны». Правка, пришедшая из
         // личного знакомства владельца, статус НЕ снимает: интервью само зовёт personas_update
@@ -300,9 +373,10 @@ public sealed class PersonasCrudService(
         {
             persona = personas.Update(id, userId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
+                req.MemoryEnabled, writeTools, req.Contract, writeAccess, writeDisallowed,
                 req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
-                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender, sphereId: req.SphereId);
+                req.TierStrong, req.TierMedium, req.TierWeak, req.LightContext, req.Gender,
+                sphereId: req.SphereId, inheritsAccess: req.InheritsAccess);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки

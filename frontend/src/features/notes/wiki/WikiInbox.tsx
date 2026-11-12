@@ -4,8 +4,10 @@
 // - выключен → ручная очередь «Входящие»: спорные операции решает человек на экране пакета
 //   (S7a, поведение без изменений);
 // - включён → «Решения судьи»: очередь — судья, список только для чтения — вердикт по каждой
-//   спорной операции, его причина, ссылка на страницу, «Откатить пакет» (мера 4). Решённое
-//   судьёй заново решить нельзя (И1): путь человека — откат. Пока снимок настроек не прочитан,
+//   спорной операции, его причина, ссылка на страницу. Решённое судьёй заново решить нельзя
+//   (И1): путь человека — откат, но не отсюда: очередь несёт только непринятые пакеты, а
+//   откатывают применённый — кнопка строки всегда получала 409 (дефект 24c61d60); откат
+//   живёт в «Журнале» → «Решения за ночь». Пока снимок настроек не прочитан,
 //   список ручной (прежнее лицо экрана); отказ чтения настроек не отказ списка и здесь не
 //   показывается.
 // Пакеты со статусом proposed. Операции с решением политики auto здесь не показываются
@@ -31,10 +33,6 @@ import {
   loadWikiSettings, requestOpenWikiPage, useWikiSettings,
   type WikiPackageDto, type WikiPackageOperationDto,
 } from 'aihome_shell/kit';
-// Транспорт отката пакета (мера 4) в экспортную строку кита не добавлен (тот файл — не в
-// списке задачи, его правят другие шаги этой ветки) — прямой импорт того же модуля:
-// экземпляр стора тот же, дубля состояния нет.
-import { revertWikiPackage, WikiRevertError } from '../../../lib/wiki';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { EmptyState } from '../../../components/ui/EmptyState';
@@ -169,11 +167,17 @@ function pageName(pkg: WikiPackageDto, page: string): string {
   return page.startsWith(prefix) ? page.slice(prefix.length) : page;
 }
 
-// Бейдж вердикта: чужое решение называется (И1: человек видит, чьё решение стоит);
+// Бейдж решения: чужое решение называется (И1: человек видит, чьё решение стоит);
+// решение человека, записанное в ручном режиме до включения автоприменения, остаётся и
+// показывается решением человека — тем же порядком, что decidedBadge в экране пакета
+// (WikiPackageView): «вердикта ещё нет» — только про то, что не решил никто (доработка
+// J-F1, ревью 4a5a06f8);
 // judgeModel === 'code' — отказ вынес код без вызова модели (И4′), это не вердикт судья;
 // вердикта нет — честное «вердикта ещё нет», а не пустая строка: такой пакет здесь и есть
 // (проход отложил его или не допустил).
 function judgeVerdict(o: WikiPackageOperationDto) {
+  if (o.humanDecision === 'accepted') return <Badge tone="success" size="xs">принята</Badge>;
+  if (o.humanDecision === 'rejected') return <Badge tone="danger" size="xs">отклонена</Badge>;
   if (o.judgeDecision === 'accepted') return <Badge tone="success" size="xs">{JUDGE_TEXT.verdictAccepted}</Badge>;
   if (o.judgeDecision === 'rejected') {
     return o.judgeModel === 'code'
@@ -184,9 +188,11 @@ function judgeVerdict(o: WikiPackageOperationDto) {
 }
 
 // Строка только для чтения: перехода на экран пакета нет — решать здесь судья, а не человек;
-// действия строки — ссылка на страницу (тот же канал, что «Открыть страницу» в «Журнале») и
-// «Откатить пакет» (мера 4). Мета строки — та же, что у ручной строки: те же данные, тот же вид.
-function JudgeRow({ pkg, busy, onRevert }: { pkg: WikiPackageDto; busy: boolean; onRevert: () => void }) {
+// действие строки — ссылка на страницу (тот же канал, что «Открыть страницу» в «Журнале»).
+// Кнопки отката здесь нет (дефект 24c61d60): очередь несёт непринятые пакеты, откатывают
+// применённый (WikiPackageRevert) — кнопка всегда получала 409; откат — в «Журнале» →
+// «Решения за ночь». Мета строки — та же, что у ручной строки: те же данные, тот же вид.
+function JudgeRow({ pkg }: { pkg: WikiPackageDto }) {
   const isMobile = useIsMobile();
   const tree = useWikiTree();
   const src = pkg.sources[0];
@@ -241,11 +247,6 @@ function JudgeRow({ pkg, busy, onRevert }: { pkg: WikiPackageDto; busy: boolean;
           </div>
         );
       })}
-      <div style={{ marginTop: SP.sm }}>
-        <Button variant="secondary" size="sm" dataTestId="wiki-pkg-revert" disabled={busy} onClick={onRevert}>
-          {JUDGE_TEXT.revert}
-        </Button>
-      </div>
     </div>
   );
 }
@@ -272,8 +273,6 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
   // отказ чтения настроек не отказ списка и здесь не показывается.
   const settings = useWikiSettings();
   const judgeMode = settings?.autoApplyEnabled === true;
-  const [revertError, setRevertError] = useState<unknown>(null);
-  const [reverting, setReverting] = useState(false);
 
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
@@ -302,20 +301,6 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
     // Счётчик «Входящих» на рельсе (W12): решённый пакет мог выйти из inbox — число перечитывается
     refreshWikiRailCounts();
   }, [load]);
-
-  // «Откатить пакет» (мера 4): единственное действие вида «Решения судьи». Успех — перечитка
-  // списка и счётчика: откатанный пакет из очереди уходит (статус reverted — не proposed).
-  // Отказ — текст по коду (pkgErrorText); у wiki_revert_changed дополнительно перечень
-  // изменённых страниц (WikiRevertError, контракт S4b-3) — человек видит, на что смотреть.
-  const revertPackage = useCallback((p: WikiPackageDto) => {
-    if (reverting) return;
-    setReverting(true);
-    setRevertError(null);
-    revertWikiPackage(p.id)
-      .then(() => { load(); refreshWikiRailCounts(); })
-      .catch(e => setRevertError(e))
-      .finally(() => setReverting(false));
-  }, [reverting, load]);
 
   if (opened) return <WikiPackageView pkg={opened} onBack={closePackage} />;
 
@@ -350,21 +335,6 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
           </Notice>
         )}
       </div>
-      {revertError ? (
-        <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
-          <Notice
-            tone="danger" icon={AlertTriangle}
-            title={revertError instanceof WikiError ? pkgErrorText(revertError) : 'Не удалось откатить пакет'}
-            action={<Button variant="ghost" size="sm" onClick={() => setRevertError(null)}>Закрыть</Button>}
-          >
-            {/* wiki_revert_changed несёт перечень изменённых страниц (S4b-3): на них надо
-                посмотреть перед повторной попыткой */}
-            {revertError instanceof WikiRevertError && revertError.pages.length > 0
-              ? <>Страницы, изменённые после применения: {revertError.pages.join(', ')}</>
-              : null}
-          </Notice>
-        </div>
-      ) : null}
       {data.invalidCount > 0 && (
         <div style={{ padding: `${SP.sm}px ${SP.md}px 0` }}>
           <Notice tone="warning" icon={AlertTriangle} title={`Нечитаемых файлов пакета: ${data.invalidCount}`}>
@@ -401,7 +371,7 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
         <>
           {packages.map(p => judgeMode ? (
             // Вид судьи: строка только для чтения, экран пакета (место решения человека) не открывается
-            <div key={p.id}><JudgeRow pkg={p} busy={reverting} onRevert={() => revertPackage(p)} /></div>
+            <div key={p.id}><JudgeRow pkg={p} /></div>
           ) : (
             <div key={p.id}><PackageRow pkg={p} onOpen={() => setOpened(p)} /></div>
           ))}

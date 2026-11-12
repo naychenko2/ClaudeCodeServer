@@ -21,7 +21,9 @@
 //  (7) игнорировать тумблер (judgeMode = const) → «тумблер включён» или «тумблер выключен»
 //      краснеет (J-F1);
 //  (8) снять !o.judgeDecision из pendingContested → «1 на решение» и «нет кнопок по решённой
-//      судьёй» краснеют (хвост R-J-J2a).
+//      судьёй» краснеют (хвост R-J-J2a);
+//  (9) убрать проверку humanDecision из judgeVerdict → «решённая человеком в виде судьи»
+//      краснеет (доработка J-F1, ревью 4a5a06f8).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -135,6 +137,10 @@ function allNodes(root: AnyNode, out: AnyNode[] = []): AnyNode[] {
 
 function opRows(container: Cont): AnyNode[] {
   return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-op-row');
+}
+
+function judgeOpRows(container: Cont): AnyNode[] {
+  return allNodes(container).filter(n => n.getAttribute('data-testid') === 'wiki-judge-op');
 }
 
 function buttonByTestId(container: Cont, testId: string): AnyNode | null {
@@ -532,8 +538,10 @@ describe('область раздела (W9a)', () => {
 });
 
 // ─── «Решения» (J-F1): режим — тумблером «Применять без ревью» (ADR-039, решение 9) ───
-// Включён → «Решения судьи»: список только для чтения (вердикт, причина, ссылка на страницу,
-// «Откатить пакет»), кнопок решения нет. Выключен → прежние «Входящие» (поведение без изменений).
+// Включён → «Решения судьи»: список только для чтения (вердикт, причина, ссылка на страницу),
+// кнопок решения нет; кнопки отката в строке очереди тоже нет (дефект 24c61d60: очередь
+// несёт непринятые пакеты, откатывают применённый — кнопка всегда получала 409; откат —
+// в «Журнале» → «Решения за ночь»). Выключен → прежние «Входящие» (поведение без изменений).
 // Снимка настроек нет → ручная очередь: отказ чтения настроек не отказ списка (этим живут все
 // тесты выше: они не сечат /wiki/settings).
 
@@ -572,6 +580,27 @@ const JPKG = {
   ],
 };
 
+// Пакет после частичного решения человека: в ручном режиме op0 принята, op1 отклонена,
+// потом включено автоприменение; op2 (index 2) ещё не решена никем — пакет в очереди
+// (proposed). В строке «Решений судьи» решённые человеком показывают решение человека,
+// а не «вердикта ещё нет» (доработка J-F1, ревью 4a5a06f8).
+const JPKG_HUMAN = {
+  ...PKG,
+  operations: [
+    op({ humanDecision: 'accepted' }),
+    op({
+      index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
+      class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
+      humanDecision: 'rejected', humanReason: 'это уже не верно',
+    }),
+    op({
+      index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
+      class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+    }),
+    PKG.operations[1],
+  ],
+};
+
 describe('«Решения судьи» (J-F1)', () => {
   it('тумблер включён: «Решения судьи», вердикты и «почему», кнопок «Принять»/«Отклонить» нет', async () => {
     seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
@@ -601,43 +630,30 @@ describe('«Решения судьи» (J-F1)', () => {
     expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'projects/p1/gleb' });
   });
 
-  it('«Откатить пакет»: действие строки; успех — перечитка списка', async () => {
+  it('в строке очереди вида судьи нет кнопки «Откатить пакет» (дефект 24c61d60)', async () => {
+    // очередь несёт непринятые пакеты, откатывают применённый — кнопка строки всегда
+    // получала 409; откат живёт в «Журнале» → «Решения за ночь»
     seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
     const c = render();
     await settle();
-    req.mockImplementation((url: string, init?: { method?: string }) => {
-      if (init?.method === 'POST') return Promise.resolve({ restoredPages: ['projects/p1/gleb'], alreadyPages: [] });
-      if (url.startsWith('/wiki/packages')) return Promise.resolve({ packages: [JPKG], invalidCount: 0 });
-      if (url.startsWith('/wiki/settings')) return Promise.resolve(SETTINGS_ON);
-      return Promise.resolve(null);
-    });
-    const before = listCalls().length;
-    click(buttonByTestId(c, 'wiki-pkg-revert'), 'Откатить пакет');
-    await settle();
-    const posts = req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST');
-    expect(posts).toHaveLength(1);
-    expect(String(posts[0][0])).toContain('/revert');
-    // успех перечитывает список: откатанный пакет из очереди уходит (status reverted — не proposed)
-    expect(listCalls().length).toBeGreaterThan(before);
+    expect(buttonByTestId(c, 'wiki-pkg-revert')).toBeNull();
+    expect(buttonByText(c, 'Откатить пакет')).toBeNull();
   });
 
-  it('отказ отката — текст по коду и перечень изменённых страниц (S4b-3), не сырой код', async () => {
-    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+  it('решённая человеком операция в виде судьи: бейдж решения человека, не «вердикта ещё нет» (доработка J-F1)', async () => {
+    seedBoth({ packages: [JPKG_HUMAN], invalidCount: 0 }, SETTINGS_ON);
     const c = render();
     await settle();
-    req.mockImplementation((url: string, init?: { method?: string }) => {
-      if (init?.method === 'POST') {
-        return Promise.reject({ status: 409, body: { code: 'wiki_revert_changed', message: 'x', pages: ['projects/p1/gleb'] } });
-      }
-      if (url.startsWith('/wiki/packages')) return Promise.resolve({ packages: [JPKG], invalidCount: 0 });
-      if (url.startsWith('/wiki/settings')) return Promise.resolve(SETTINGS_ON);
-      return Promise.resolve(null);
-    });
-    click(buttonByTestId(c, 'wiki-pkg-revert'), 'Откатить пакет');
-    await settle();
-    expect(has(c, 'Страницы изменились после применения — откат не прошёл')).toBe(true);
-    expect(has(c, 'projects/p1/gleb')).toBe(true);
-    expect(has(c, 'wiki_revert_changed')).toBe(false);
+    const rows = judgeOpRows(c);
+    expect(rows).toHaveLength(3);
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    // op0/op1 решил человек: бейдж — решение человека, тем же текстом, что в экране пакета
+    expect(rowText(rows[0])).toContain('принята');
+    expect(rowText(rows[0])).not.toContain('вердикта ещё нет');
+    expect(rowText(rows[1])).toContain('отклонена');
+    expect(rowText(rows[1])).not.toContain('вердикта ещё нет');
+    // op2 не решил никто — прежнее честное «вердикта ещё нет»
+    expect(rowText(rows[2])).toContain('вердикта ещё нет');
   });
 
   it('тумблер выключен: прежние «Входящие» с кнопками, поведение без изменений', async () => {

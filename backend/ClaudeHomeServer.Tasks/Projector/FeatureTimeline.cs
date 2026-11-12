@@ -379,8 +379,6 @@ public sealed record FeatureTimeline(
             .Where(e => e.Kind == "status" && e.To == "Done")
             .GroupBy(e => e.TaskId ?? "")
             .ToDictionary(g => g.Key, g => g.OrderBy(e => e.At).ToList());
-        var waitingClearedByTask = GroupByTask(journal.Entries, "waiting_cleared");
-        var deviceWaitClearedByTask = GroupByTask(journal.Entries, "device_wait_cleared");
 
         // taskId → stage по задаче хода (минор 7): подписи этапов на графике. run даёт задачи
         // фичи (роль → stage); taskId из журнала не в run → "" (без подписи). Track выводится
@@ -394,7 +392,7 @@ public sealed record FeatureTimeline(
 
         // Интервалы очереди фич (R-Q3B-2) считаем ДО промежутка 1: на них опираются и
         // net-длительность эпизодов ожидания (R-Q3B-4, ниже), и вычитание из видов (итог).
-        var queueIntervals = QueueIntervals(journal.Entries, from, to, now);
+        var queueIntervals = FeatureTimeMath.QueueIntervals(journal.Entries, from, to, now);
 
         // Промежуток 1: интервалы ожидания (waiting + device_wait) + счётчики. Собираем ДО work:
         // started-период режем на них, чтобы work не включал минуты ожидания (major 1).
@@ -409,46 +407,29 @@ public sealed record FeatureTimeline(
         // не отменяет сам факт ожидания человека, из времени вычитается только очередь.
         string? longestWaitTaskId = null;
         DateTime? longestWaitFrom = null;
-        foreach (var e in journal.Entries)
+        // Эпизоды — общая функция (И4, FeatureTimeMath.WaitingEpisodes): waiting — ожидание
+        // человека waiting…(waiting_cleared | now); device_wait — ожидание устройства локального
+        // проекта device_wait…(device_wait_cleared | now). Контракт TimelineSegment (Б5a) не имеет
+        // отдельного под-вида ожидания, поэтому device_wait рисуется как обычный waiting
+        // (kind="waiting"); WaitingMinutes — сумма обоих. Считаются только эпизоды, начавшиеся
+        // внутри окна [from, to) (замечание 3 ревью Глеба): ожидание, начавшееся после `to`,
+        // длится в окне ноль минут, но без верхней границы давало WaitingCount = 1 при нулевых
+        // минутах. Конец обрезан по `to` (дефект 8d9b5718): незакрытое ожидание фичи, закрытой
+        // ДО now, тянется до now, а не до закрытия — поэтому и самое длинное ожидание режем тем же `to`.
+        var episodes = FeatureTimeMath.WaitingEpisodes(journal.Entries,
+            [("waiting", "waiting_cleared"), ("device_wait", "device_wait_cleared")], from, to, now);
+        foreach (var ep in episodes)
         {
-            // waiting: ожидание человека waiting…(waiting_cleared | now).
-            // Считаются только эпизоды, начавшиеся внутри окна [from, to) (замечание 3 ревью
-            // Глеба): ожидание, начавшееся после `to`, длится в окне ноль минут, но без верхней
-            // границы давало WaitingCount = 1 при нулевых минутах.
-            if (e.Kind == "waiting" && e.At >= from && e.At < to)
+            waitingCount++;
+            // Net-длительность (R-Q3B-4): минуты внутри очереди — не ожидание человека.
+            var net = FeatureTimeMath.NetSpan(ep.Start, ep.End, queueIntervals);
+            if (longestWaitFrom is null || net > longestWait)
             {
-                var wEnd = FirstAfter(waitingClearedByTask, e.TaskId, e.At) ?? now;
-                waitingCount++;
-                // Обрезка по `to` (дефект 8d9b5718): незакрытое ожидание фичи, закрытой ДО now,
-                // тянется до now, а не до закрытия — интервалы sweep'ом режутся к [from, to],
-                // поэтому и самое длинное ожидание обрезаем тем же `to` (иначе: закрыта 08:30,
-                // waiting 08:00 без cleared, now=20:00 → Waiting=30, LongestWait=720).
-                // Net-длительность (R-Q3B-4): минуты внутри очереди — не ожидание человека.
-                var net = NetSpan(e.At, wEnd <= to ? wEnd : to, queueIntervals);
-                if (longestWaitFrom is null || net > longestWait)
-                {
-                    longestWait = net;
-                    longestWaitTaskId = e.TaskId;
-                    longestWaitFrom = e.At;
-                }
-                waitingIntervals.Add(new JournalInterval(e.At, wEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
+                longestWait = net;
+                longestWaitTaskId = ep.TaskId;
+                longestWaitFrom = ep.Start;
             }
-            // waiting: ожидание устройства device_wait…(device_wait_cleared | now). Контракт
-            // TimelineSegment (Б5a) не имеет отдельного под-вида ожидания, поэтому device_wait
-            // рисуется как обычный waiting (kind="waiting"); WaitingMinutes — сумма обоих.
-            else if (e.Kind == "device_wait" && e.At >= from && e.At < to)
-            {
-                var dEnd = FirstAfter(deviceWaitClearedByTask, e.TaskId, e.At) ?? now;
-                waitingCount++;
-                var net = NetSpan(e.At, dEnd <= to ? dEnd : to, queueIntervals);
-                if (longestWaitFrom is null || net > longestWait)
-                {
-                    longestWait = net;
-                    longestWaitTaskId = e.TaskId;
-                    longestWaitFrom = e.At;
-                }
-                waitingIntervals.Add(new JournalInterval(e.At, dEnd, "waiting", PriorityWaiting, LabelOf(e.TaskId), e.TaskId));
-            }
+            waitingIntervals.Add(new JournalInterval(ep.Start, ep.End, "waiting", PriorityWaiting, LabelOf(ep.TaskId), ep.TaskId));
         }
 
         // Промежуток 2: work (ходы + started-периоды, резанные на ожидание) и error.
@@ -568,7 +549,7 @@ public sealed record FeatureTimeline(
         {
             var s = FeatureTimeMath.Clamp(w.Start, from, to);
             var e = FeatureTimeMath.Clamp(w.End, from, to);
-            if (e > s) agentsSpan += NetSpan(s, e, queueIntervals);
+            if (e > s) agentsSpan += FeatureTimeMath.NetSpan(s, e, queueIntervals);
         }
         var agentsSum = FeatureTimeMath.CeilMinutes(agentsSpan);
         var notWorking = Math.Max(0, elapsed - workWall);
@@ -630,45 +611,6 @@ public sealed record FeatureTimeline(
     // b ≥ next_p ⇔ b > p). Приоритет — по виду: выигрывает самый «конкретный» активный вид.
     // Track/stage: work — из taskId (стадия задачи), иначе main/""; taskId — у одиночного work.
     // internal — для теста эквивалентности (новый линейный sweep == старый O(n²) на случайных входах).
-    // Интервалы очереди фич (R-Q3B-2): held(reason=queue) открывает интервал, его закрывает
-    // ближайший hold_cleared или другой held (смена причины), иначе — now. Обрезанные к [from, to],
-    // half-open [start, end), пустые отброшены; между собой не пересекаются (каждый held
-    // закрывается следующим hold-событием).
-    private static List<(DateTime Start, DateTime End)> QueueIntervals(
-        IReadOnlyList<FeatureJournalEntry> entries, DateTime from, DateTime to, DateTime now)
-    {
-        var holds = entries.Where(e => e.Kind is "held" or "hold_cleared").OrderBy(e => e.At).ToList();
-        var result = new List<(DateTime Start, DateTime End)>();
-        for (var i = 0; i < holds.Count; i++)
-        {
-            if (holds[i].Kind != "held" || holds[i].Reason != FeatureHoldReasons.Queue) continue;
-            var start = holds[i].At;
-            var end = i + 1 < holds.Count ? holds[i + 1].At : now;
-            var qs = FeatureTimeMath.Clamp(start, from, to);
-            var qe = FeatureTimeMath.Clamp(end, from, to);
-            if (qe > qs) result.Add((qs, qe));
-        }
-        return result;
-    }
-
-    // Net-длительность интервала [start, end): сырой интервал минус пересечения с интервалами
-    // очереди — пока фича стояла в очереди, она ждала место, а не человека (R-Q3B-4, waiting) и
-    // не работала (R-Q3B-5, AgentsSum). start/end уже обрезаны к [from, to]; интервалы очереди
-    // не пересекаются между собой (построение QueueIntervals), поэтому пересечения не
-    // складываются дважды и net ≥ 0.
-    private static TimeSpan NetSpan(
-        DateTime start, DateTime end, List<(DateTime Start, DateTime End)> queueIntervals)
-    {
-        var net = end - start;
-        foreach (var (qs, qe) in queueIntervals)
-        {
-            var os = start > qs ? start : qs;
-            var oe = end < qe ? end : qe;
-            if (oe > os) net -= oe - os;
-        }
-        return net;
-    }
-
     internal static List<TimelineSegment> Sweep(List<JournalInterval> intervals, DateTime from, DateTime to)
     {
         // Границы: from, to + обрезанные start/end всех интервалов.

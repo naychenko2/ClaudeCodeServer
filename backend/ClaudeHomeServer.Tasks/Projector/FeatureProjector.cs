@@ -1350,7 +1350,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         => t.AwaitingHumanSince is not null || HasValidStopMark(t);
 
     // «Задача идёт»: InProgress и не held. Единая точка правды для run.now и stage.runningSince.
-    private static bool IsRunning(TaskItem t)
+    internal static bool IsRunning(TaskItem t)
         => t.Status == TaskItemStatus.InProgress && !IsHeld(t);
 
     // Б2: статус исполнителя из полей задачи. Приоритет: running (ход идёт сейчас —

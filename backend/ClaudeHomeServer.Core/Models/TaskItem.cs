@@ -178,7 +178,8 @@ public class TaskItem
     // nullable-поле: допустимо ТОЛЬКО у role=plan (валидация — TaskManager), у прочих ролей и в
     // старых задачах — null. BackupSchema.Version не растёт (прецедент ReviewOf).
     public List<PlannedStep>? PlanSteps { get; set; }
-    // «Ждёт вас»: с какого момента и почему (merge, decision); у эпика.
+    // «Ждёт вас»: с какого момента и почему. Пишет пара TaskManager.SetAwaitingHuman/ClearAwaitingHuman
+    // у любой задачи (MCP tasks_update, report_up(blocker)); у эпика — merge/decision.
     public DateTime? AwaitingHumanSince { get; set; }
     public string? AwaitingHumanReason { get; set; }
     // Удержание фичи (волна 4, разрез §1): null — работа разрешена; иначе — причина (FeatureHoldReasons).

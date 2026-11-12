@@ -110,7 +110,14 @@ public class StageScreenEndpointTests : IClassFixture<TestWebApplicationFactory>
         body.GetProperty("input").GetProperty("transcript").GetProperty("prompt").GetString().Should().Be("Сделай ручку этапа");
         body.GetProperty("input").GetProperty("transcript").GetProperty("toolCalls").GetArrayLength().Should().Be(2);
         body.GetProperty("review").GetProperty("reviews")[0].GetProperty("verdict").GetString().Should().Be("returned");
-        body.GetProperty("metrics").ValueKind.Should().Be(JsonValueKind.Null);
+        // D1b: блок метрик заполнен (журнал фичи пишется с created → режим journal), ревью этапа — одно. Ревью чужой
+        // фичи со ссылкой на этот шаг создать нельзя (ValidateFeatureFields), чужой пользователь — 404 ниже (И3)
+        var metrics = body.GetProperty("metrics");
+        metrics.ValueKind.Should().Be(JsonValueKind.Object);
+        metrics.GetProperty("mode").GetString().Should().Be("journal");
+        metrics.GetProperty("review").GetProperty("tasks").GetArrayLength().Should().Be(1);
+        metrics.GetProperty("review").GetProperty("tasks")[0].GetProperty("verdict").GetString().Should().Be("returned");
+        metrics.GetProperty("human").GetProperty("minutes").GetInt32().Should().Be(0);
     }
 
     [Fact]

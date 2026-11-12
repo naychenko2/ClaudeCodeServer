@@ -383,4 +383,23 @@ public class SpendFeatureReaderTests : IDisposable
         // ∞-цена не в сумму.
         Assert.Equal(0, totals.CostUsd);
     }
+
+    // D1b: Initiator записи хода доезжает в срез (по нему метрики этапа считают реплики человека);
+    // у дневных агрегатов инициатора нет. Мутация «не заполнять Initiator в ToRecord» → null ≠ human.
+    [Fact]
+    public void Records_Initiator_ДоезжаетИзДетальнойЗаписи()
+    {
+        var store = NewStore();
+        var ts = new DateTime(2026, 10, 1, 12, 0, 0, DateTimeKind.Utc);
+        store.Record(new SpendRecord
+        {
+            Timestamp = ts, OwnerId = "u1", TaskId = "t1", SessionId = "s1",
+            Source = SpendSources.ChatTurn, CostUsd = 1.0, InputTokens = 1,
+            Initiator = SpendInitiators.Human,
+        });
+
+        var records = NewReader(store).Records("u1", ["t1"], [], [], null);
+
+        Assert.Equal(SpendInitiators.Human, Assert.Single(records).Initiator);
+    }
 }

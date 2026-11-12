@@ -128,7 +128,8 @@ public class StageScreenServiceTests : IDisposable
         screen.Review.Reviews[0].Blocker.Should().BeTrue();
         screen.Review.Reviews[0].Notes.Should().Be("много");
         screen.Review.AwaitingHuman!.Reason.Should().Be("нужен выбор");
-        screen.Metrics.Should().BeNull("метрики — D1b");
+        screen.Metrics.Should().NotBeNull("метрики этапа заполняет D1b; журнала в фикстуре нет → approx");
+        screen.Metrics!.Mode.Should().Be("approx");
     }
 
     [Fact]

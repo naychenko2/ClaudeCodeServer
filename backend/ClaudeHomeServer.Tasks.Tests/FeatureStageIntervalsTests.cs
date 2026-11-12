@@ -76,7 +76,7 @@ public class FeatureStageIntervalsTests
     };
 
     private static FeatureJournalEntry Turn(string taskId, DateTime from, DateTime to,
-        string outcome = "finished", string? model = null) =>
+        string outcome = "success", string? model = null) =>
         Entry("turn", to, taskId, startedAt: from, endedAt: to, outcome: outcome, model: model);
 
     // ── 1. Склейка: зазор ≤ GlueGap → один интервал ─────────────────────────────────────────
@@ -184,13 +184,36 @@ public class FeatureStageIntervalsTests
             T0.AddHours(12))!;
         errored["prod"][0].LastOutcome.Should().Be("error");
 
-        // Последний ход finished → null (этап не оборвался, хотя первый ход был cancelled).
-        var finished = FeatureStageIntervals.Build(run, Journal(
+        // Последний ход success → null (этап не оборвался, хотя первый ход был cancelled).
+        var succeeded = FeatureStageIntervals.Build(run, Journal(
             Entry("created", T0, taskId: "epic"),
             Turn("s1", a, a.AddMinutes(30), outcome: "cancelled"),
             Turn("s1", a.AddMinutes(31), a.AddMinutes(60)))!,
             T0.AddHours(12))!;
-        finished["prod"][0].LastOutcome.Should().BeNull();
+        succeeded["prod"][0].LastOutcome.Should().BeNull();
+    }
+
+    // И7 (D1b): LastOutcome — по предикату IsFailedTurn: failed/crashed/local_* показываются,
+    // success и null — нет. Раньше их глотал список «cancelled/interrupted/error».
+    // Мутация «вернуть список BadOutcomes» → failed/crashed/local_down краснеют.
+    [Theory]
+    [InlineData("failed")]
+    [InlineData("crashed")]
+    [InlineData("egress_down")]
+    [InlineData("local_down")]
+    [InlineData("local_busy")]
+    [InlineData("local_file_missing")]
+    [InlineData("window_1m_unavailable")]
+    public void Build_LastOutcome_УпавшийХодПоСловарюПоказывается(string outcome)
+    {
+        var epic = Epic("epic");
+        var s1 = Child("s1", "epic", startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
+            completedAt: new DateTime(2026, 10, 1, 10, 0, 0));
+        var a = new DateTime(2026, 10, 1, 9, 0, 0);
+        var result = FeatureStageIntervals.Build(Run(epic, s1), Journal(
+            Entry("created", T0, taskId: "epic"),
+            Turn("s1", a, a.AddMinutes(30), outcome: outcome))!, T0.AddHours(12))!;
+        result["prod"][0].LastOutcome.Should().Be(outcome);
     }
 
     // ── 5. Гейты журнала: null / не с created / Truncated → null ────────────────────────────
@@ -282,7 +305,7 @@ public class FeatureStageIntervalsTests
         for (var i = 0; i < turns; i++)
         {
             var at = baseTime.AddMinutes(rng.NextDouble() * 1440);
-            var outcome = rng.Next(5) == 0 ? "error" : "finished"; // ~20% error
+            var outcome = rng.Next(5) == 0 ? "error" : "success"; // ~20% error
             entries.Add(Turn("s1", at, at.AddMinutes(rng.Next(1, 10)), outcome));
         }
         return Journal(entries.ToArray());

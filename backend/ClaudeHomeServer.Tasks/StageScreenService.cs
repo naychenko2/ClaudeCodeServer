@@ -5,14 +5,17 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Access;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Dossiers;
+using ClaudeHomeServer.Services.Spend;
+using ClaudeHomeServer.Services.Tasks.Journal;
+using ClaudeHomeServer.Services.Tasks.Projector;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
 // Данные экрана этапа (D1a, разрез ai-fabrika-workflow-cut-2026-11.md §8, строка D1): три блока —
 // артефакты (коммиты с трейлером CCS-Task, linkedFiles, resultMarkdown), вход и транскрипт
 // (слепок этапа, постановка исполнителю, прочитанные файлы и вызванные инструменты), ревью
-// (вердикт, ревью-задачи, ожидание человека). Четвёртый блок — метрики — зарезервирован полем
-// metrics = null (D1b). Сервис только читает: ни задач, ни git, ни ленты чата не меняет.
+// (вердикт, ревью-задачи, ожидание человека). Четвёртый блок — метрики этапа (D1b): исполнитель,
+// ревью и человек раздельно, считает FeatureStageMetrics по журналу и расходу фичи. Сервис только читает: ни задач, ни git, ни ленты чата не меняет.
 //
 // Видимость: экран видит тот, кто видит задачу фичи — владелец записи или участник проекта с
 // правом Read (IProjectAccess); иначе — «нет такой» (404), без различия «чужая» и «нет». Лента
@@ -23,7 +26,10 @@ public sealed class StageScreenService(
     TaskManager tasks,
     IProjectAccess? access = null,
     IWorktreeCommitReader? git = null,
-    IChatTranscriptReader? transcripts = null)
+    IChatTranscriptReader? transcripts = null,
+    // D1b: журнал фичи и шов расхода — оба опциональны (подсистема выключена → approx / null-поля, не 500)
+    FeatureJournalStore? journal = null,
+    ISpendFeatureReader? spend = null)
 {
     // Потолок размера диффа одного коммита (символов): дальше — truncated = true
     public const int MaxDiffChars = 200_000;
@@ -55,8 +61,34 @@ public sealed class StageScreenService(
             Artifacts: new StageArtifacts(commits, commitsAvailable, task.LinkedFiles.ToList(), task.ResultMarkdown),
             Input: BuildInput(task, actorId),
             Review: BuildReview(task),
-            Metrics: null);
+            Metrics: BuildMetrics(task));
         return StageResult<StageScreen>.Ok(screen);
+    }
+
+    // Метрики этапа (D1b). T берётся только внутри фичи собственной задачи (FeatureId → эпик того же
+    // арендатора), R(T) — только из её же задач: чужое в ответ не попадает (И3). Задача без эпика
+    // (нет FeatureId, эпик пропал) — metrics = null: считать нечего, экран остальное отдаёт.
+    private StageMetrics? BuildMetrics(TaskItem task)
+    {
+        if (task.FeatureId is null) return null;
+        var epic = tasks.GetById(task.FeatureId);
+        if (epic is null || epic.OwnerId is not { } ownerId || ownerId != task.OwnerId) return null;
+
+        var reviews = tasks.GetAll()
+            .Where(t => t.Role == TaskRoles.Review && t.OwnerId == task.OwnerId && t.FeatureId == task.FeatureId
+                && t.ReviewOf?.Contains(task.Id) == true)
+            .OrderBy(t => t.CreatedAt)
+            .ToList();
+
+        var read = journal?.Read(ownerId, epic.Id);
+        IReadOnlyList<FeatureSpendRecord>? records = null;
+        if (spend is not null)
+        {
+            var ids = new HashSet<string>(StringComparer.Ordinal) { task.Id };
+            foreach (var r in reviews) ids.Add(r.Id);
+            records = spend.Slice(ownerId, ids, [], [], null).Records;
+        }
+        return FeatureStageMetrics.Build(task, reviews, read, records, DateTime.UtcNow);
     }
 
     public StageResult<StageCommitDiff> BuildDiff(string taskId, string? sha, string actorId)
@@ -249,10 +281,10 @@ public sealed record StageResult<T>(StageOutcome Outcome, T? Value, string? Erro
     public static StageResult<T> BadRequest(string error) => new(StageOutcome.BadRequest, null, error);
 }
 
-// Ответ GET /api/tasks/{id}/stage. Metrics зарезервирован под D1b (всегда null в D1a)
+// Ответ GET /api/tasks/{id}/stage. Metrics — блок метрик этапа (D1b); null — у задачи нет фичи с эпиком
 public sealed record StageScreen(
     string TaskId, string? FeatureId, string? Role, string? StepRef, string Title, string Status,
-    StageSnapshot? Stage, StageArtifacts Artifacts, StageInput Input, StageReview Review, object? Metrics);
+    StageSnapshot? Stage, StageArtifacts Artifacts, StageInput Input, StageReview Review, StageMetrics? Metrics);
 
 // CommitsAvailable = false — дерево задачи недоступно или git не ответил (список пуст не потому, что коммитов нет)
 public sealed record StageArtifacts(

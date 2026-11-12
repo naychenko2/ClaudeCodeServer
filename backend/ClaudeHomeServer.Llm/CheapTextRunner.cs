@@ -2,15 +2,19 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // Реализация ICheapTextRunner (контракт и DTO живут в Core, чтобы вертикали могли
 // зависеть от шва без ProjectReference на Main).
-// namedEngines — реестр именованных движков (LocalEngines:*): нужен только прогону на
-// названный движок (RunOnLocalEngineDetailedAsync / IsLocalEngineReadyAsync) — там исполнитель
-// задан аргументом, и маршрут места его не выбирает. Параметр опционален, как у
-// LocalActionRouter: в DI — синглтон, в тестах передаётся руками.
+// namedEngines — реестр именованных движков (LocalEngines:*): нужен прогону на названный
+// движок (RunOnLocalEngineDetailedAsync / IsLocalEngineReadyAsync) — там исполнитель задан
+// аргументом, и маршрут места его не выбирает — и подписи движка в списке исполнителей
+// (LocalExecutorsFor). executorsStore — стор списка исполнителей места
+// (data/local-action-executors.json): единственный источник этого списка (место без
+// строки в нём идёт по своему маршруту, как до фичи). Оба параметра опциональны, как у
+// LocalActionRouter: в DI — синглтоны, в тестах передаются руками.
 public sealed class CheapTextRunner(
     LocalActionRouter router, ILocalLlmClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log, ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null,
-    EngineCallLedger? ledger = null, NamedLocalEngines? namedEngines = null)
+    EngineCallLedger? ledger = null, NamedLocalEngines? namedEngines = null,
+    LocalActionExecutorsStore? executorsStore = null)
     : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
@@ -593,6 +597,42 @@ public sealed class CheapTextRunner(
                 actionKey, model);
         }
         return null;
+    }
+
+    // Исполнители-движки места (ICheapTextRunner.LocalExecutorsFor, разрез §2): список
+    // берётся из стора админа, порядок списка — приоритет (свободный слот первого получает
+    // чат раньше). Пусто — исполнителей нет: вызывающий идёт по своему маршруту
+    // (RunLocalOrChosen*), а не «куда-нибудь» — конфиг, который назначает месту один
+    // движок, здесь подмены не даёт. Title — подпись движка для владельца, та же сборка,
+    // что у LocalActionRouter.EngineLabel (Title → модель → имя): человеку нужно видеть,
+    // КУДА он отправляет ночь, а не технический ключ. У основной локали подписи движка нет —
+    // её именем становится модель, на которую она реально ходит (TextModel), а без неё —
+    // сам ключ «local».
+    public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey)
+    {
+        if (executorsStore?.TryGet(actionKey) is not { } cfg) return [];
+        var list = new List<LocalEngineExecutor>(cfg.Executors.Count);
+        foreach (var e in cfg.Executors)
+        {
+            var engine = e.Engine.Trim();
+            // Стор живые имена уже пропустил; здесь — защита от расхождения двух снимков
+            // (стор перечитан, реестр движков ещё нет): несуществующий движок в список не идёт.
+            if (!IsMainLocalEngine(engine) && namedEngines?.Get(engine) is null) continue;
+            // Parallel в записи шва (W1a) — признак «на этом движке можно вести несколько
+            // работ», а не число слотов: счётчик через неё не проходит. Число остаётся в
+            // сторе; координатору ночи (W4) оно нужно — разряд в записи шва поднимался
+            // отдельно, здесь контракт W1a не меняем.
+            list.Add(new LocalEngineExecutor(engine, EngineTitle(engine), e.Parallel > 1));
+        }
+        return list;
+    }
+
+    private string EngineTitle(string engine)
+    {
+        if (IsMainLocalEngine(engine))
+            return !string.IsNullOrWhiteSpace(ollama.TextModel) ? ollama.TextModel
+                : !string.IsNullOrWhiteSpace(ollama.Model) ? ollama.Model : engine;
+        return namedEngines?.Get(engine)?.Spec is { } s ? s.Title ?? s.Model ?? s.Name : engine;
     }
 
     // Ключ основной локальной модели — то же значение, что маршрут места «local»

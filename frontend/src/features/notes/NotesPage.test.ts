@@ -77,6 +77,8 @@ const { wikiMock } = vi.hoisted(() => ({
   wikiMock: {
     tree: null as unknown, catalog: null as unknown, page: null as unknown,
     packages: [] as unknown[], healthCalls: [] as string[],
+    // снимок настроек для подсказки «Решений» (J-F1): null — ещё не читали
+    settings: null as { autoApplyEnabled: boolean } | null,
   },
 }));
 vi.mock('../../lib/wiki', async (importOriginal) => {
@@ -94,6 +96,8 @@ vi.mock('../../lib/wiki', async (importOriginal) => {
     useWikiTree: () => wikiMock.tree,
     useWikiCatalog: () => wikiMock.catalog,
     useWikiPage: () => wikiMock.page,
+    // J-F1: режим очереди («Решений» подсказка) — снимок настроек; здесь он подменный
+    useWikiSettings: () => wikiMock.settings,
   };
 });
 // S5d-доработка: NoteView читает заметку через офлайн-слой (getNoteForView) — подменяем
@@ -504,6 +508,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     wikiMock.packages = [];
     wikiMock.tree = null;
     wikiMock.catalog = null;
+    wikiMock.settings = null;
     noteMock.detail = null;
     notesMock.length = 0;
     delete (globalThis as { requestAnimationFrame?: unknown }).requestAnimationFrame;
@@ -633,13 +638,35 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('W3: число очереди решений на рельсе — с подсказкой «N ждут вашего решения»', async () => {
+  // J-F1 (QA b0065470): в режиме судьи очередь решает не человек — «вашего» в подсказке нет.
+  const railInboxAria = (container: AnyNode) =>
+    (railButtons(container as unknown as AnyNode, 'Решения')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
+
+  it('W3: подсказка «Решений» — режим судьи или снимка настроек нет: «N ждут решения», без «вашего»', async () => {
     setAllFlags({ 'llm-wiki': true });
     wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    // снимка ещё нет: страница только что открыта, панелей настроек не касались — нейтральная форма
+    {
+      const { root, container } = mountNotes();
+      await settle();
+      expect(railInboxAria(container as unknown as AnyNode), 'без снимка — без «вашего»').toBe('Решения: 2 ждут решения');
+      root.unmount();
+    }
+    // режим судьи включён («Применять неспорное само») — та же форма
+    wikiMock.settings = { autoApplyEnabled: true };
     const { root, container } = mountNotes();
     await settle();
-    const al = (railButtons(container as unknown as AnyNode, 'Решения')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
-    expect(al).toBe('Решения: 2 ждут вашего решения');
+    expect(railInboxAria(container as unknown as AnyNode), 'режим судьи — без «вашего»').toBe('Решения: 2 ждут решения');
+    root.unmount();
+  });
+
+  it('W3: ручная очередь (тумблер выключен) — подсказка прежняя: «N ждут вашего решения»', async () => {
+    setAllFlags({ 'llm-wiki': true });
+    wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
+    wikiMock.settings = { autoApplyEnabled: false };
+    const { root, container } = mountNotes();
+    await settle();
+    expect(railInboxAria(container as unknown as AnyNode)).toBe('Решения: 2 ждут вашего решения');
     root.unmount();
   });
 

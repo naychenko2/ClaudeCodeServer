@@ -139,8 +139,9 @@ public class ActorRightGateUnitTests
     [InlineData("personas", "personas_update")]
     [InlineData("personas", "personas_bindings_set")]
     [InlineData("personas", "personas_suggest_bindings")]
-    // pmem_<handle> — алиас тулсета memory (ключ консультанта): тот же инструмент закрывает строка
-    // OwnerOnly memory/memory_remember, а не default-deny (решение 12.11)
+    // ключа pmem_* в таблице нет (TryGet ищет по литеральному имени) — здесь проверяется
+    // default-deny; путь продукта (тулсет memory, его ServerName — «memory», McpEndpoints.cs:18)
+    // держит кейс выше: строка OwnerOnly memory/memory_remember
     [InlineData("pmem_timur", "memory_remember")]
     [InlineData("higgsfield", "generate_video")]
     public void ЛюбойУчастник_ПишущееИИсполняющееДругихСерверов_Отказ(string server, string tool)

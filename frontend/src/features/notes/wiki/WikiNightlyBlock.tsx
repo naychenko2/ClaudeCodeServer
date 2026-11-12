@@ -130,16 +130,29 @@ function kvCell(v: number, label: string) {
   );
 }
 
-// Сводка облачного судья этой ночи (J-F3): «Судья: принял K, отклонил L, отклонено кодом C;
-// вызовов N, $X» — по полям J-F0 (WikiLastNight, J-J4). Скрыта при judgeCalls==0 &&
-// codeRejected==0: ни вызова модели, ни кодового отказа — сказать нечего (тот же приём, что
-// с «отказано N»). Цена — два знака: потолка вызовов нет (решение Андрея 12.11), сумма на
-// виду. Формулировка — по постановке J-F3 (Софья 12.11); та же сводка в бэковом уведомлении
+// Цена вызовов судья (J-F3, доработка по приёмке Веры b0065470): два знака после точки;
+// сумма больше нуля, но меньше цента — «<$0.01» (0.0065 показывать как «$0.01» — неправда:
+// toFixed округляет вверх и карточка приписывает ночи несуществующий цент); ровно ноль —
+// «$0.00». Та же форма — в бэковом уведомлении (правит Денис, та же постановка J-F3).
+const fmtUsd = (v: number): string => {
+  if (v <= 0) return '$0.00';
+  if (v < 0.01) return '<$0.01';
+  return `$${v.toFixed(2)}`;
+};
+
+// Сводка облачного судья этой ночи (J-F3, форма по доработке 12.11): «Судья: принял K,
+// отклонил L; вызовов N, $X» — по полям J-F0 (WikiLastNight, J-J4). Показывается только
+// при judgeCalls>0: без вызова модели судья ничего не делал — строки о нём нет. Кодовые
+// отказы в неё не входят — их отдельная строка ниже. Та же сводка в бэковом уведомлении
 // собрана в Title (WikiNightlyService.cs:999-1000) — здесь она той же мысли, но по форме
 // этой карточки.
 const judgeSummaryLine = (l: WikiLastNight): string =>
-  `Судья: принял ${l.judgeApplied}, отклонил ${l.judgeRejected}, отклонено кодом ${l.codeRejected}; ` +
-  `вызовов ${l.judgeCalls}, $${l.judgeCostUsd.toFixed(2)}`;
+  `Судья: принял ${l.judgeApplied}, отклонил ${l.judgeRejected}; вызовов ${l.judgeCalls}, ${fmtUsd(l.judgeCostUsd)}`;
+
+// «Отклонено кодом: C» — отдельная строка (доработка J-F3 по приёмке Веры): код отклоняет
+// операции сам, без судья, — в его сводку эти числа не входят. Показывается при
+// codeRejected>0; при нуле сказать нечего (тот же приём, что с «отказано N»).
+const codeRejectedLine = (c: number): string => `Отклонено кодом: ${c}`;
 
 // «Судья недоступен — ждут решения: M» — форма Софьи 12.11, как в бэковом уведомлении
 // (NotificationBody, WikiNightlyService.cs:959): «M операций ждут» читается обрывком
@@ -219,7 +232,15 @@ function LastNightBlock({ last, snapshot, isMobile, onOpenInbox, onOpenJournal }
             {judgeDeferredLine(last.judgeDeferred)}
           </div>
         )}
-        {last.judgeCalls > 0 || last.codeRejected > 0 ? (
+        {/* J-F3 (доработка по приёмке Веры): сводка судья и кодовые отказы — две независимые
+            строки: код отклоняет операции сам, без судья. Порядок — по ходу ночи: сначала
+            то, что код отверг без вызова модели, затем — что сделал судья. */}
+        {last.codeRejected > 0 ? (
+          <div data-testid="wiki-nightly-code-rejected" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.md }}>
+            {codeRejectedLine(last.codeRejected)}
+          </div>
+        ) : null}
+        {last.judgeCalls > 0 ? (
           <div data-testid="wiki-nightly-judge-line" style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
             {judgeSummaryLine(last)}
           </div>

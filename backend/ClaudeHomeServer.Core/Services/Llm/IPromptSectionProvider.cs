@@ -6,7 +6,9 @@ namespace ClaudeHomeServer.Services.Llm;
 // после снятия слоёв (этап 5, ADR-012, версия v5 SpecialtySettingsStore) недостижимы,
 // но остаются в enum: он живёт в wire-контракте фронта и в чужих файлах — сужение
 // отдельной задачей после мерджа (ADR-012, «Хвосты»).
-public enum SectionSource { Code, Global, User, Owner }
+// Persona — слой персоны (разрез 2, Г6; добавлен в конец: числа enum — wire-контракт фронта,
+// вставка в середину сдвинула бы существующие значения).
+public enum SectionSource { Code, Global, User, Owner, Persona }
 
 // Эффективное состояние секции промпта: enabled и text наследуются КАЖДЫЙ СВОИМ
 // параметром (см. EffectivePromptSectionStates).
@@ -19,6 +21,12 @@ public enum SectionSource { Code, Global, User, Owner }
 public sealed record EffectivePromptSection(
     string Id, bool Enabled, string Text,
     SectionSource EnabledSource, SectionSource TextSource);
+
+// Переопределение секции для функции наложения PromptSectionOverlay.Apply (разрез 2, Г6):
+// параметр «задан» только когда имеет значение — null остаётся базовым; Text null или
+// пустой — «не задан» (типовой текст базы). Id — из каталога; переопределение с id,
+// которого нет в базе, Apply игнорирует.
+public sealed record PromptSectionOverride(string Id, bool? Enabled, string? Text);
 
 // Узкий шов под единственный метод `EffectivePromptSections(ownerId, specialty)`
 // SpecialtySettingsStore, который контрибьютор секций промпта хода дёргает сейчас через

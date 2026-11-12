@@ -33,16 +33,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 // модуля, — к тому времени оба уже вычислены
 import { pendingContested, pkgErrorText } from './WikiInbox';
 import { sectionPrefix } from './WikiTab';
-import { ORIGIN_META, PAGE_TYPE } from './wikiLabels';
-
-// op — пять, удаления нет (WikiPackage.OpValues)
-const OP_META: Record<string, { text: string; tone: BadgeTone }> = {
-  create: { text: 'новая страница', tone: 'accent' },
-  append: { text: 'дописать', tone: 'neutral' },
-  supersede: { text: 'замещение', tone: 'warning' },
-  conflict: { text: 'противоречие', tone: 'warning' },
-  link: { text: 'связь', tone: 'neutral' },
-};
+import { JUDGE_TEXT, OP_META, ORIGIN_META, PAGE_TYPE } from './wikiLabels';
 
 // Статусы пакета (WikiPackage.StatusValues) — то, что человек видит в шапке после решения
 const PKG_STATUS: Record<string, { tone: BadgeTone; text: string }> = {
@@ -123,11 +114,20 @@ function OperationCard({
 }) {
   const isMobile = useIsMobile();
   const meta = OP_META[op.op];
+  // Знак решения: человека — по humanDecision, судьи — по judgeDecision (И1: ровно одно
+  // решение на операцию, чужое называется). Вердикт судьи — решение этой операции (J-J2b):
+  // кнопок «Принять/Отклонить» под ним нет — человек его вторым решением не переворачивает,
+  // его путь — откат пакета (хвост ревью R-J-J2a).
   const decidedBadge = op.humanDecision === 'accepted'
     ? <Badge tone="success" size="xs">принята</Badge>
     : op.humanDecision === 'rejected'
       ? <Badge tone="danger" size="xs">отклонена</Badge>
-      : null;
+      : op.judgeDecision === 'accepted'
+        ? <Badge tone="success" size="xs">{JUDGE_TEXT.verdictAccepted}</Badge>
+        : op.judgeDecision === 'rejected'
+          // «отклонена кодом» — не вердикт модели (И4′): нейтральный тон, как у «откатан»
+          ? <Badge tone={op.judgeModel === 'code' ? 'neutral' : 'danger'} size="xs">{op.judgeModel === 'code' ? JUDGE_TEXT.verdictByCode : JUDGE_TEXT.verdictRejected}</Badge>
+          : null;
   const diff = intentLines(op);
   // kind приходит из поля модели в любом регистре: подпись PAGE_TYPE ищется по
   // нижнему регистру, и признак «state» меряется по приведённому значению

@@ -29,7 +29,7 @@ import { SUBSYSTEMS } from '../../lib/subsystems';
 // в любой из них.
 export type Zone = 'left' | 'right';
 
-// Панели вики раздела «Заметки»: «Входящие», «Журнал»,
+// Панели вики раздела «Заметки»: «Решения», «Журнал»,
 // «Здоровье», «Настройки». Ключи живут в общем реестре сразу после графа заметок —
 // вики читается рядом с ними; домашняя зона — правая (см. PANEL_HOME), набор
 // выведен через shell-kit для вклада раздела.
@@ -182,11 +182,13 @@ export const PANEL_META: Record<Exclude<PanelKey, 'pluginPanels'>, { title: stri
   // проекта; notesGraph — граф ЗАМЕТОК, а graph — граф зависимостей кода.
   notesList:     { title: 'Заметки',  Icon: NotebookPen },
   notesGraph:    { title: 'Граф',     Icon: Network },
-  // Панели вики раздела «Заметки»: «Входящие» — очередь
-  // входящих разборов (ArrowDownToLine — входящее вниз, в очередь), «Журнал» —
+  // Панели вики раздела «Заметки»: «Решения» — очередь разборов, ждущих решения
+  // (при выключенном автоприменении — ручная очередь «Входящих», при включённом —
+  // «Решения судьи»; J-F1), «Журнал» —
   // лента событий вики (History), «Здоровье» — состояние страниц (Activity —
   // живой сигнал), «Настройки» — управление отбором (Settings).
-  wikiInbox:     { title: 'Входящие', Icon: ArrowDownToLine },
+  // Подпись обязана совпадать со строкой WIKI_SUBTABS (сторожа wikiPanelKeys).
+  wikiInbox:     { title: 'Решения', Icon: ArrowDownToLine },
   wikiJournal:   { title: 'Журнал',   Icon: History },
   wikiHealth:    { title: 'Здоровье', Icon: Activity },
   wikiSettings:  { title: 'Настройки', Icon: Settings },

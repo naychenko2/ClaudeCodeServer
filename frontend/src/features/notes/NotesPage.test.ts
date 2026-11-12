@@ -463,7 +463,7 @@ describe('NotesPage: вкладка «Вики» за флагом llmWiki (S5d)
     const drawer = findNodeByAttr(container, 'data-testid', 'wiki-drawer-right')!;
     // заголовок шторки — название раздела, а не общее «Панель вики»
     expect(findNodeByAttr(drawer, 'data-testid', 'wiki-panel-close'), 'шапка шторки есть').not.toBeNull();
-    expect(hasText(drawer, 'Входящие'), 'заголовок — выбранный раздел').toBe(true);
+    expect(hasText(drawer, 'Решения'), 'заголовок — выбранный раздел').toBe(true);
     root.unmount();
   });
 
@@ -575,7 +575,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     await settle();
     expect(rails(container as unknown as AnyNode).length, 'самодельной рельсы нет').toBe(0);
     expect(findNodeByAttr(container, 'data-testid', 'wiki-rail-pages'), 'кнопки «Страницы» нет').toBeNull();
-    for (const label of ['Входящие', 'Журнал', 'Здоровье', 'Настройки'])
+    for (const label of ['Решения', 'Журнал', 'Здоровье', 'Настройки'])
       expect(railButtons(container as unknown as AnyNode, label).length, `кнопка «${label}» ровно одна`).toBe(1);
     root.unmount();
   });
@@ -624,7 +624,7 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     const { root, container } = mountNotes();
     await settle();
     expect(findNodeByAttr(container, 'data-testid', 'wiki-empty'), 'пустое состояние в центре').not.toBeNull();
-    expect(railButtons(container as unknown as AnyNode, 'Входящие').length, 'кнопка есть, числа и подсказки нет').toBe(1);
+    expect(railButtons(container as unknown as AnyNode, 'Решения').length, 'кнопка есть, числа и подсказки нет').toBe(1);
     wikiMock.packages = [];
     expect(findButtonByText(container, 'Завести вики'), 'кнопки «Завести вики» нет').toBeNull();
     openWikiPanel('wikiInbox');
@@ -633,13 +633,13 @@ describe('NotesPage: десктоп, «Вики» и выбор заметки (
     root.unmount();
   });
 
-  it('W3: число «Входящих» на рельсе — с подсказкой «N ждут вашего решения»', async () => {
+  it('W3: число очереди решений на рельсе — с подсказкой «N ждут вашего решения»', async () => {
     setAllFlags({ 'llm-wiki': true });
     wikiMock.packages = [{ id: 'p1' }, { id: 'p2' }];
     const { root, container } = mountNotes();
     await settle();
-    const al = (railButtons(container as unknown as AnyNode, 'Входящие')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
-    expect(al).toBe('Входящие: 2 ждут вашего решения');
+    const al = (railButtons(container as unknown as AnyNode, 'Решения')[0] as unknown as { getAttribute(n: string): string }).getAttribute('aria-label');
+    expect(al).toBe('Решения: 2 ждут вашего решения');
     root.unmount();
   });
 

@@ -17,7 +17,11 @@
 //  (4) убрать !o.humanDecision из pendingContested → «0 на решение» краснеет;
 //  (5) убрать проверку loadSeq в загрузке списка → «гонка поколений» краснеет;
 //  (6) игнорировать sectionScope (scope = null при любом пропe) → «область раздела» и
-//      «смена пропa без перезапроса» краснеют (W9a).
+//      «смена пропa без перезапроса» краснеют (W9a);
+//  (7) игнорировать тумблер (judgeMode = const) → «тумблер включён» или «тумблер выключен»
+//      краснеет (J-F1);
+//  (8) снять !o.judgeDecision из pendingContested → «1 на решение» и «нет кнопок по решённой
+//      судьёй» краснеют (хвост R-J-J2a).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -46,7 +50,7 @@ vi.mock('../../../../lib/offline', async (orig) => ({
 import { request } from '../../../../lib/offline';
 // Стор дерева — он же, что читает компонент через кит: тесту нужен снимок tree.sections
 // для имени раздела (тот же шов, что в WikiNightlyBlock.test)
-import { __test as wikiStore, loadWikiTree } from '../../../../lib/wiki';
+import { __test as wikiStore, consumeOpenWikiPage, loadWikiTree } from '../../../../lib/wiki';
 
 type MockFn = ReturnType<typeof vi.fn>;
 const req = request as unknown as MockFn;
@@ -524,5 +528,148 @@ describe('область раздела (W9a)', () => {
     await settle();
     expect(has(c, 'Разобрано')).toBe(true);
     expect(has(c, 'Всё, что ИИ предлагал по разделу «projects/unknown», применено или отклонено.')).toBe(true);
+  });
+});
+
+// ─── «Решения» (J-F1): режим — тумблером «Применять без ревью» (ADR-039, решение 9) ───
+// Включён → «Решения судьи»: список только для чтения (вердикт, причина, ссылка на страницу,
+// «Откатить пакет»), кнопок решения нет. Выключен → прежние «Входящие» (поведение без изменений).
+// Снимка настроек нет → ручная очередь: отказ чтения настроек не отказ списка (этим живут все
+// тесты выше: они не сечат /wiki/settings).
+
+// Форма ответа настроек, читаемая loadWikiSettings: без nightly — не снимок (бросается), поэтому
+// фикстура несёт пустой блок; режим меряет только autoApplyEnabled.
+const SETTINGS_ON = { autoApplyEnabled: true, classes: [], nightly: { enabled: true }, lastNight: null, nightlyRunning: false };
+const SETTINGS_OFF = { ...SETTINGS_ON, autoApplyEnabled: false };
+
+function seedBoth(data: { packages: unknown[]; invalidCount: number }, settings: unknown) {
+  req.mockImplementation((url: string) => {
+    if (url.startsWith('/wiki/packages')) return Promise.resolve(data);
+    if (url.startsWith('/wiki/settings')) return Promise.resolve(settings);
+    return Promise.resolve(null);
+  });
+}
+
+// Пакет с вердиктами судьи, ещё в очереди: проход решил op0 (отказ с причиной) и op1 (принятие),
+// op2 отложил (вердикта нет) — пакет остаётся proposed (StatusAfterDecisions: есть нерешённые).
+const JPKG = {
+  ...PKG,
+  operations: [
+    op({
+      judgeDecision: 'rejected', judgeReason: 'числа в утверждении не подтверждены цитатой',
+      judgeModel: 'claude-x', judgeAt: '2026-11-12T03:40:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
+    }),
+    op({
+      index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
+      class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
+      judgeDecision: 'accepted', judgeModel: 'claude-x', judgeAt: '2026-11-12T03:41:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
+    }),
+    op({
+      index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
+      class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+    }),
+    PKG.operations[1],
+  ],
+};
+
+describe('«Решения судьи» (J-F1)', () => {
+  it('тумблер включён: «Решения судьи», вердикты и «почему», кнопок «Принять»/«Отклонить» нет', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(has(c, 'Решения судьи')).toBe(true);
+    // вердикт по каждой спорной операции, с именем агента решения (И1: видно, чьё решение);
+    // недоделанное — честно «вердикта ещё нет», а не пустая строка
+    expect(has(c, 'отклонена судьёй')).toBe(true);
+    expect(has(c, 'принята судьёй')).toBe(true);
+    expect(has(c, 'вердикта ещё нет')).toBe(true);
+    // «почему» — judgeReason из фикстуры
+    expect(has(c, 'числа в утверждении не подтверждены цитатой')).toBe(true);
+    // список только для чтения: экрана пакета и кнопок решения нет вовсе
+    expect(buttonByText(c, 'Принять')).toBeNull();
+    expect(buttonByText(c, 'Отклонить')).toBeNull();
+    expect(opRows(c)).toHaveLength(0);
+    // auto-операций нет и здесь (тот же контракт S4a)
+    expect(has(c, 'Вера ведёт QA редактора видео.')).toBe(false);
+  });
+
+  it('ссылка на страницу — существующим каналом requestOpenWikiPage (тот же, что в «Журнале»)', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    click(buttonByTestId(c, 'wiki-judge-open-page-0'), 'Открыть страницу');
+    expect(consumeOpenWikiPage()).toEqual({ section: 'projects/p1', path: 'projects/p1/gleb' });
+  });
+
+  it('«Откатить пакет»: действие строки; успех — перечитка списка', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') return Promise.resolve({ restoredPages: ['projects/p1/gleb'], alreadyPages: [] });
+      if (url.startsWith('/wiki/packages')) return Promise.resolve({ packages: [JPKG], invalidCount: 0 });
+      if (url.startsWith('/wiki/settings')) return Promise.resolve(SETTINGS_ON);
+      return Promise.resolve(null);
+    });
+    const before = listCalls().length;
+    click(buttonByTestId(c, 'wiki-pkg-revert'), 'Откатить пакет');
+    await settle();
+    const posts = req.mock.calls.filter(([, init]) => (init as { method?: string } | undefined)?.method === 'POST');
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0][0])).toContain('/revert');
+    // успех перечитывает список: откатанный пакет из очереди уходит (status reverted — не proposed)
+    expect(listCalls().length).toBeGreaterThan(before);
+  });
+
+  it('отказ отката — текст по коду и перечень изменённых страниц (S4b-3), не сырой код', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    req.mockImplementation((url: string, init?: { method?: string }) => {
+      if (init?.method === 'POST') {
+        return Promise.reject({ status: 409, body: { code: 'wiki_revert_changed', message: 'x', pages: ['projects/p1/gleb'] } });
+      }
+      if (url.startsWith('/wiki/packages')) return Promise.resolve({ packages: [JPKG], invalidCount: 0 });
+      if (url.startsWith('/wiki/settings')) return Promise.resolve(SETTINGS_ON);
+      return Promise.resolve(null);
+    });
+    click(buttonByTestId(c, 'wiki-pkg-revert'), 'Откатить пакет');
+    await settle();
+    expect(has(c, 'Страницы изменились после применения — откат не прошёл')).toBe(true);
+    expect(has(c, 'projects/p1/gleb')).toBe(true);
+    expect(has(c, 'wiki_revert_changed')).toBe(false);
+  });
+
+  it('тумблер выключен: прежние «Входящие» с кнопками, поведение без изменений', async () => {
+    seedBoth(LIST, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    expect(has(c, 'Решения судьи')).toBe(false);
+    expect(has(c, 'Здесь только то, где нужен человек')).toBe(true);
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+  });
+
+  it('решённая судьёй операция в ручном режиме: не «на решение», без кнопок «Принять»/«Отклонить» (хвост R-J-J2a)', async () => {
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    // в счётчике строки — только то, что не решил ни человек, ни судья (op2)
+    expect(has(c, '1 на решение')).toBe(true);
+    openPackage(c);
+    await settle();
+    // по вердикту судья кнопок решения нет: человек его вторым решением не переворачивает (И1)
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-1')).toBeNull();
+    // решённое видно и называется чьим оно
+    expect(has(c, 'отклонена судьёй')).toBe(true);
+    expect(has(c, 'принята судьёй')).toBe(true);
+    // не решённая никем — прежняя, с кнопками
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-2')).not.toBeNull();
   });
 });

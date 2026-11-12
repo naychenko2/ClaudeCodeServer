@@ -225,6 +225,23 @@ public class WikiJudgeVerdictTests
         skipped.Should().Be(0);
     }
 
+    [Theory]
+    // Отличается от входов выше: здесь FirstJsonObject доходит до закрытия по своей же {
+    // (глубина обнуляется) и отдаёт вынутый объект в JsonDocument.Parse — а JSON внутри
+    // нечитаемый: незакрытый массив или лишняя } внутри него. Держит такой ответ только
+    // catch (JsonException) в Parse: станет rethrow — нечитаемый JSON долетает до
+    // вызывающего исключением.
+    [InlineData("{\"verdicts\":[}")]
+    [InlineData("{\"verdicts\":[{\"index\":0,\"decision\":\"apply\",\"why\":\"x\"}}]")]
+    public void СбалансированныйНоНечитаемыйJSON_НольВердиктовБезИсключения(string text)
+    {
+        var (verdicts, skipped) = WikiJudgeVerdict.Parse(text, Allowed);
+
+        verdicts.Should().BeEmpty();
+        // Разобранного списка item-ов нет — считать пропуск не по чему.
+        skipped.Should().Be(0);
+    }
+
     [Fact]
     public void IndexНеЧислом_Пропущен_ItemНеОбъектПропущен()
     {

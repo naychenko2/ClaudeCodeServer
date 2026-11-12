@@ -7,7 +7,10 @@
 //   warning бэка показан рядом с числом, warning null — предупреждения нет;
 // — N=0: «Удалять нечего», кнопка подтверждения выключена;
 // — отказ предпросмотра: плашка у кнопки, модалки нет; отказ чистки: плашка в модалке,
-//   она остаётся в состоянии предпросмотра.
+//   она остаётся в состоянии предпросмотра;
+// — итог принадлежит блоку, не модалке (QA J-F4): закрыть окно во время чистки — запрос
+//   доходит, «Удалено N… Архив: …» выходит строкой под кнопкой; пока запрос не ответил —
+//   подтверждение выключено и под кнопкой «Чистка выполняется…».
 // Стор мокан на уровне операций (тот же приём, что WikiEmpty.test): настоящая чистка в
 // тестах не запускается — ни одного запроса на провод.
 //
@@ -16,7 +19,11 @@
 //     краснеет;
 // (2) не ставить confirmDisabled при N=0 → «N=0» краснеет (кнопка активна);
 // (3) не показывать warning в итоге → «warning» краснеет;
-// (4) показывать строку архива и при archivePath null → «архива нет» краснеет.
+// (4) показывать строку архива и при archivePath null → «архива нет» краснеет;
+// (5) держать итог только в модалке (не писать lastResult) → «закрыть окно во время
+//     чистки» краснеет (под кнопкой пусто);
+// (6) не строить строку статуса при runBusy → «Чистка выполняется…» краснеет в обоих
+//     новых тестах.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -250,5 +257,50 @@ describe('блок «Начать вики заново» (J-F4)', () => {
     expect(has(docBody(), 'Будет удалено 7 страниц:')).toBe(true);
     expect(has(docBody(), 'Удалено 7 страниц.')).toBe(false);
     expect(isDisabled(buttonByExactText(docBody(), 'Удалить 7 страниц')!)).toBe(false);
+  });
+
+  it('пока чистка не ответила: подтверждение выключено, под кнопкой «Чистка выполняется…»', async () => {
+    // Ответ приходит по нашему сигналу: тест ловит состояние ДО settle-а ответа
+    let resolveRun: (v: Record<string, unknown>) => void = () => {};
+    run.mockImplementation(() => new Promise<Record<string, unknown>>((res) => { resolveRun = res; }));
+    const c = render();
+    await settle();
+    click(openBtn(c), 'Начать вики заново');
+    await settle();
+    click(buttonByExactText(docBody(), 'Удалить 7 страниц')!, 'удалить');
+    await settle(1);
+    const confirm = buttonByExactText(docBody(), 'Удалить 7 страниц');
+    expect(confirm).not.toBeNull();
+    // loading у Button гасит подтверждение: повторить разрушающее действие нельзя
+    expect(isDisabled(confirm!)).toBe(true);
+    // мутация (6): не строить строку статуса при runBusy — здесь краснеет
+    expect(has(c, 'Чистка выполняется…')).toBe(true);
+    // итога ещё нет: ответ не пришёл
+    expect(has(c, 'Удалено 7 страниц.')).toBe(false);
+    await act(async () => { resolveRun(RESULT()); });
+    await settle();
+    expect(has(c, 'Удалено 7 страниц.')).toBe(true);
+  });
+
+  it('закрыть окно во время чистки: запрос доходит, итог — строкой под кнопкой (QA J-F4)', async () => {
+    let resolveRun: (v: Record<string, unknown>) => void = () => {};
+    run.mockImplementation(() => new Promise<Record<string, unknown>>((res) => { resolveRun = res; }));
+    const c = render();
+    await settle();
+    click(openBtn(c), 'Начать вики заново');
+    await settle();
+    click(buttonByExactText(docBody(), 'Удалить 7 страниц')!, 'удалить');
+    await settle(1);
+    expect(has(c, 'Чистка выполняется…')).toBe(true);
+    // сценарий QA: крестик в шапке (Esc в fakeDom нет; крестик — тот же onClose)
+    click(findNodeByAttr(docBody(), 'aria-label', 'Закрыть')!, 'крестик');
+    expect(has(docBody(), 'Начать вики заново?')).toBe(false);
+    // закрытие окна не отменило запрос: он доходит после закрытия
+    await act(async () => { resolveRun(RESULT()); });
+    await settle();
+    expect(run.mock.calls.length).toBe(1);
+    // мутация (5): держать итог только в модалке — эти две строки краснеют
+    expect(has(c, 'Удалено 7 страниц.')).toBe(true);
+    expect(has(c, 'Архив: keeper/purge-2026-11-12.zip')).toBe(true);
   });
 });

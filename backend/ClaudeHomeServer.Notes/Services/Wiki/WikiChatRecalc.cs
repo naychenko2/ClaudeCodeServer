@@ -83,7 +83,7 @@ public sealed class WikiChatRecalc
             var res = WikiChatScorer.Score(new WikiChatScorer.WikiChatInput(
                 session.TaskExecution, session.WikiMark, session.IsPinned,
                 session.SummaryNoteId is not null,
-                session.ContinuedFromSessionId, session.BranchedFromSessionId,
+                session.BranchedFromSessionId,
                 session.CreatedAt, session.UpdatedAt,
                 streaks.TryGetValue(session.Id, out var st) ? st : 0,
                 history));

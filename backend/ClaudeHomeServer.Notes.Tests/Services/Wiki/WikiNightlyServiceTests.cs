@@ -1439,7 +1439,7 @@ public class WikiNightlyServiceTests : IDisposable
     }
 
     private WikiChatScorer.WikiChatInput ScorerInput(Session s) =>
-        new(s.TaskExecution, s.WikiMark, s.IsPinned, false, null, null, s.CreatedAt, s.UpdatedAt, 0, _sessions.History[s.Id]);
+        new(s.TaskExecution, s.WikiMark, s.IsPinned, false, null, s.CreatedAt, s.UpdatedAt, 0, _sessions.History[s.Id]);
 
     // ─── подмены ───────────────────────────────────────────────────────────
 

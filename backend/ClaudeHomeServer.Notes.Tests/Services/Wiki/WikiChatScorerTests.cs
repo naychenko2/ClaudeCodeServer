@@ -242,7 +242,7 @@ public class WikiChatScorerTests : IDisposable
             U(Plain("ссылка на регламент: docs/регламент.md и задача task:abcd")), // связи
             U(Plain("продолжим разговор про логистику склада")),
             T("итогом встречи: решили хранить прежний порядок " + new string('а', 1_500)), // решения в последнем ответе
-        }) with { ContinuedFromSessionId = "chat-parent" }); // продолжение — возврат к теме
+        }) with { BranchedFromSessionId = "chat-parent" }); // ветка — возврат к теме
 
         r.Signals.Should().Contain(s => s.Name == WikiChatScorer.SignalDecisionWords && s.Weight == 8);
         r.Signals.Should().Contain(s => s.Name == WikiChatScorer.SignalCourseCorrections && s.Weight == 4);
@@ -628,7 +628,7 @@ public class WikiChatScorerTests : IDisposable
         IReadOnlyList<StoredMessage> messages,
         bool taskExec = false, string? mark = null, bool pinned = false, bool summary = false,
         int streak = 0) =>
-        new(taskExec, mark, pinned, summary, null, null, Base, Base, streak, messages);
+        new(taskExec, mark, pinned, summary, null, Base, Base, streak, messages);
 
     private static WikiChatScorer.WikiChatScoreResult Score(WikiChatScorer.WikiChatInput input) =>
         WikiChatScorer.Score(input);

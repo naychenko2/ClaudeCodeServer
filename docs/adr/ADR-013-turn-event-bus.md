@@ -104,6 +104,8 @@ public interface ITurnEventBus
 | `session/deleted` | Notification | `SessionManager.DeleteAsync` (после уборки истории и транскрипта) | `ImageThreadLifecycle` модуля редактора картинок (сносит файл нитей чата) | Жизненный цикл чата для подсистем, [ADR-019](ADR-019-image-editor-v3-in-chat.md) §2. `ChatDeletedMessage` — событие для фронта, подсистеме со своим состоянием по `sessionId` нужен факт на шине. Хода нет: `TurnSeq = 0` |
 | `session/branched` | Notification | `SessionManager.BranchAsync` (ветка создана, её `history.json` на диске) | `ImageThreadLifecycle` (копирует нити источника под новый `sessionId` с теми же `threadId`) | То же, ADR-019 §2: записи ленты, скопированные в ветку, продолжают разрешаться. `SourceSessionId` — чат-источник, `Turn.SessionId` — ветка |
 
+Удалено 11.2026: событие продолжения чата (ключ continued в группе session; чат-продолжение, публикатор `CreateContinuationAsync`, подписка `ChatContextLifecycle`) — механика «продолжить / перенести в новый чат» убрана (эпик ebb3ef9b). В таблицу не возвращаем: сторож `TurnEventsMapContractTests` требует, чтобы каждая её строка была живым событием.
+
 Строки `Outcome` и `ErrorClass` — не `enum`'ы: шина не должна зависеть от внутренних
 типов слоя LLM, чтобы миграция каталога исходов/классов не трогала подписчиков.
 `CompactOutcome` (`Passport.CompactOutcome`) даёт потребителям, которым достаточно исхода,

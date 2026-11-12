@@ -1427,7 +1427,9 @@ public sealed partial class WorkspaceToolset(
     // нет: git-конфиг репозитория и есть владелец, поведение прежнее.
     private Git.GitCommitAuthor? AuthorOfTurn(Project p, Session session, string ownerId)
     {
-        if (p.Members is not { Count: > 0 }) return null;
+        // Признак общего проекта — единственная точка ProjectAccess.IsShared (W4-T10), как в
+        // GitAutoCommitService.AuthorOfTurn: инлайновая копия здесь живала отдельно от определения
+        if (!ProjectAccess.IsShared(p)) return null;
         var actorId = turnActors.Actor(session.Id, ownerId);
         if (actorId is null) return null;
         var user = users.GetById(actorId);

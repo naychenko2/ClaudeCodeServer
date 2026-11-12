@@ -55,8 +55,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// «очистить запреты при неизменённом доступе» и «сменить специальность» держат обходы прежнего
 /// гейта (теперь тот же отказ даёт Configure на самом действии).
 ///
-/// Гонки «две вкладки владельца» (последний раздел файла): ParallelMemoryWrite_TwoOwnerRequests_
-/// BothEntriesKept, ParallelCreate_TwoOwnerRequests_TwoPersonasAndValidStore и
+/// Гонки «две вкладки владельца» (последний раздел файла): ParallelMemoryWrite_TwoOwnerTabs_
+/// AllEntriesKept, ParallelCreate_TwoOwnerTabs_UniqueHandlesAndValidStore и
 /// ParallelUpdate_TwoOwnerRequests_SinglePersonaBothFieldsKept. Создание — единственный тест,
 /// проверяющий, что personas.json после двух одновременных сохранений остаётся валидным JSON.
 ///
@@ -64,9 +64,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// действия записи или понизить его право до WriteContent — краснеет соответствующая строка
 /// матрицы для Editor (2xx вместо 403); снять проверку права в теле создания — краснеют строки
 /// «создать проектную» / «quick-create проектной» / «ai-команда проекта» для Editor; снять
-/// _saveLock в PersonaMemoryService.Remember — краснеет ParallelMemoryWrite_TwoOwnerRequests_
-/// BothEntriesKept, снять _saveLock в PersonaManager.Update/Create — ParallelUpdate_… и
-/// ParallelCreate_….
+/// _saveLock в PersonaMemoryService.Remember (lock → lock (new object())) — краснеет
+/// ParallelMemoryWrite_TwoOwnerTabs_AllEntriesKept (замер: потеряна запись из 40). Снятие
+/// _saveLock в PersonaManager.Update и Create тесты ParallelUpdate_… и ParallelCreate_… НЕ
+/// краснит (замер в копии): Update правит один живой объект, а Save у обоих вне лока — эти
+/// тесты охраняют целостность personas.json и отсутствие дублей, но не сам лок.
 /// </summary>
 [Trait("Category", "Host")]
 public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationFactory>
@@ -987,53 +989,55 @@ public class SharedProjectPersonaRightsTests : IClassFixture<TestWebApplicationF
 
     private string StorePath => Path.Combine(_factory.TempDir, "personas.json");
 
+    // Две вкладки владельца шлют по пачке записей: на одной паре запросов критическая секция
+    // слишком короткая, и снятый _saveLock тест не краснил (замер мутации) — нужен поток.
     [Fact]
-    public async Task ParallelMemoryWrite_TwoOwnerRequests_BothEntriesKept()
+    public async Task ParallelMemoryWrite_TwoOwnerTabs_AllEntriesKept()
     {
         var (_, personaId) = await ArrangeAsync(Owner);
-        var firstText = "Запись вкладки 1 " + RunId();
-        var secondText = "Запись вкладки 2 " + RunId();
+        const int perTab = 20;
+        var run = RunId();
+        var texts = Enumerable.Range(0, perTab * 2).Select(i => $"Запись {i} вкладки {i % 2} {run}").ToList();
 
-        var first = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
-            new { type = "semantic", text = firstText });
-        var second = OwnerClient().PostAsJsonAsync($"/api/personas/{personaId}/memory",
-            new { type = "semantic", text = secondText });
-        foreach (var response in await Task.WhenAll(first, second))
+        var tabs = new[] { OwnerClient(), OwnerClient() };
+        var posts = texts.Select((text, i) => Task.Run(() => tabs[i % 2].PostAsJsonAsync(
+            $"/api/personas/{personaId}/memory", new { type = "semantic", text })));
+        foreach (var response in await Task.WhenAll(posts))
             response.EnsureSuccessStatusCode();
 
-        var texts = Memory.List(TenantId, personaId, null).Select(e => e.Text).ToList();
-        texts.Should().Contain(firstText, "запись первой вкладки в сторе");
-        texts.Should().Contain(secondText, "запись второй вкладки в том же сторе: одновременная запись ничего не потеряла");
+        Memory.List(TenantId, personaId, null).Select(e => e.Text).Where(t => t.EndsWith(run))
+            .Should().BeEquivalentTo(texts, "все записи обеих вкладок в сторе: одновременная запись ничего не потеряла");
     }
 
+    // Две вкладки создают персон с одним и тем же именем пачками: уникальность handle
+    // (MakeUniqueHandle) держится только блокировкой _saveLock вокруг генерации и вставки.
     [Fact]
-    public async Task ParallelCreate_TwoOwnerRequests_TwoPersonasAndValidStore()
+    public async Task ParallelCreate_TwoOwnerTabs_UniqueHandlesAndValidStore()
     {
         var (projectId, fixturePersonaId) = await ArrangeAsync(Owner);
-        var firstName = "Парная вкладки 1-" + RunId();
-        var secondName = "Парная вкладки 2-" + RunId();
+        const int total = 10;
+        var name = "Парная-" + RunId();
 
-        var first = OwnerClient().PostAsJsonAsync("/api/personas",
-            new { name = firstName, scope = "project", projectId });
-        var second = OwnerClient().PostAsJsonAsync("/api/personas",
-            new { name = secondName, scope = "project", projectId });
+        var posts = Enumerable.Range(0, total).Select(i => Task.Run(() => OwnerClient().PostAsJsonAsync(
+            "/api/personas", new { name, scope = "project", projectId })));
         var ids = new List<string>();
-        foreach (var response in await Task.WhenAll(first, second))
+        foreach (var response in await Task.WhenAll(posts))
         {
             response.EnsureSuccessStatusCode();
             ids.Add(IdOf(await response.Content.ReadAsStringAsync()));
         }
 
-        Personas.GetProjectTeam(TenantId, projectId).Select(p => p.Id).Should().BeEquivalentTo(
-            new[] { fixturePersonaId, ids[0], ids[1] },
-            "ровно три записи команды: существующая не потеряна, новые — две, без дублей");
+        var team = Personas.GetProjectTeam(TenantId, projectId);
+        team.Select(p => p.Id).Should().BeEquivalentTo(ids.Append(fixturePersonaId),
+            "команда: существующая персона не потеряна, новые — все десять, без дублей");
+        var handles = ids.Select(id => Personas.Get(id, TenantId)!.Handle).ToList();
+        handles.Should().OnlyHaveUniqueItems("генерация handle атомарна: одно имя не дало двух одинаковых слагов");
 
-        // Стор на диске читается: после двух одновременных сохранений personas.json — валидный JSON
-        // с обеими записями. Имена в файле экранированы (\uXXXX), поэтому проверка — по разобранному JSON.
+        // Стор на диске читается: после одновременных сохранений personas.json — валидный JSON
+        // со всеми записями. Проверка — по разобранному JSON (имена экранированы \uXXXX).
         var stored = JsonDocument.Parse(File.ReadAllText(StorePath)).RootElement.EnumerateArray()
-            .Select(e => e.GetProperty("Name").GetString()).ToList();
-        stored.Should().Contain(firstName, "запись первой вкладки лежит на диске");
-        stored.Should().Contain(secondName, "запись второй вкладки лежит на диске: файл не оборван, ничего не потеряно");
+            .Select(e => e.GetProperty("Id").GetString()).ToList();
+        stored.Should().Contain(ids, "все записи лежат на диске: файл не оборван, ничего не потеряно");
     }
 
     [Fact]

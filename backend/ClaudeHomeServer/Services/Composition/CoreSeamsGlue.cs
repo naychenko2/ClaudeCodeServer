@@ -76,6 +76,8 @@ public static class CoreSeamsGlue
             ClaudeHomeServer.Services.Composition.PersonaAvatarStoreAdapter>();
         services.AddSingleton<ClaudeHomeServer.Services.IChatHistoryLoader,
             ClaudeHomeServer.Services.Composition.ChatHistoryLoaderAdapter>();
+        services.AddSingleton<ClaudeHomeServer.Services.Composition.IChatTranscriptReader,
+            ClaudeHomeServer.Services.Composition.ChatTranscriptReaderAdapter>();
         services.AddSingleton<ClaudeHomeServer.Services.ITaskLookup,
             ClaudeHomeServer.Services.Composition.TaskLookupAdapter>();
 

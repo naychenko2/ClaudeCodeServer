@@ -220,7 +220,9 @@ public class TasksController(
     // как в FilesController): exists/branch файлов макета считаются им по main и всем worktree
     // проекта. null — прямая сборка без DI (тесты): exists остаётся таким, как его посчитали
     // каталог и слияние W4-5 (прежнее поведение), без 500.
-    ProjectTreeLocator? locator = null) : ControllerBase
+    ProjectTreeLocator? locator = null,
+    // D1a: экран этапа (артефакты, вход и транскрипт, ревью). null — подсистема Tasks выключена → 503
+    StageScreenService? stage = null) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -513,6 +515,33 @@ public class TasksController(
         // Посторонний, отозванный, выключенный флаг, личная задача владельца — всегда 404:
         // «нет» и «чужое» не различаем.
         return NotFound();
+    }
+
+    // Экран этапа задачи фичи (D1a): три блока — артефакты, вход и транскрипт, ревью; metrics
+    // зарезервирован под D1b (null). Только чтение. Чужая/несуществующая/не-фичевая задача — один 404
+    [HttpGet("{taskId}/stage")]
+    public IActionResult GetStage(string taskId)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.Build(taskId, UserId);
+        return result.Outcome == StageOutcome.Ok ? Ok(result.Value) : NotFound(new { error = "Задача не найдена" });
+    }
+
+    // Дифф одного коммита из списка этапа с потолком размера (truncated = true — обрезан). sha вне
+    // белого списка [0-9a-f]{7,40} — 400; не из списка этапа — 404
+    [HttpGet("{taskId}/stage/commits/{sha}/diff")]
+    public IActionResult GetStageCommitDiff(string taskId, string sha)
+    {
+        if (stage is null)
+            return StatusCode(503, new { error = "Подсистема задач выключена на этом сервере" });
+        var result = stage.BuildDiff(taskId, sha, UserId);
+        return result.Outcome switch
+        {
+            StageOutcome.Ok => Ok(result.Value),
+            StageOutcome.BadRequest => BadRequest(new { error = result.Error }),
+            _ => NotFound(new { error = "Коммит не найден" }),
+        };
     }
 
     [HttpPut("{taskId}")]

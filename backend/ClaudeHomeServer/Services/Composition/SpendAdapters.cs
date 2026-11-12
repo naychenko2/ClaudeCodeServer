@@ -63,6 +63,18 @@ public sealed class ChatHistoryLoaderAdapter(ChatHistoryService history) : IChat
         history.LastContextFromHistory(claudeSessionId);
 }
 
+// Шов чтения ленты чата без побочек для экрана этапа (D1a): сессия → ключ истории → толерантное чтение файла
+public sealed class ChatTranscriptReaderAdapter(ISessionDirectory sessions, ChatHistoryService history) : IChatTranscriptReader
+{
+    public Task<IReadOnlyList<StoredMessage>> ReadAsync(string sessionId)
+    {
+        var session = sessions.GetById(sessionId);
+        if (session is null) return Task.FromResult<IReadOnlyList<StoredMessage>>([]);
+        // Тот же ключ, что у SessionHistory.HistoryKeyOf
+        return Task.FromResult(history.ReadTolerant(session.ClaudeSessionId ?? session.Id));
+    }
+}
+
 public sealed class TaskLookupAdapter(TaskManager tasks) : ITaskLookup
 {
     public TaskItem? GetById(string id) => tasks.GetById(id);

@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Execution;
 
@@ -7,7 +9,7 @@ namespace ClaudeHomeServer.Services.Tasks;
 // Состояние git дерева шага. Бэкенд работает с хостовыми путями, git идёт на хосте через системный
 // драйвер (ILauncherFactory.Local); любой сбой (нет git, не репозиторий, таймаут) — null, а гейт тогда
 // отказывает закрытию
-public sealed class GitWorktreeHeadReader(ILauncherFactory launchers) : IWorktreeHeadReader
+public sealed class GitWorktreeHeadReader(ILauncherFactory launchers) : IWorktreeHeadReader, IWorktreeCommitReader
 {
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
 
@@ -41,6 +43,97 @@ public sealed class GitWorktreeHeadReader(ILauncherFactory launchers) : IWorktre
             if (best is null || files.Length < best.Count) best = files;
         }
         return best;
+    }
+
+    // Разделители записей и полей формата log: управляющие символы не встречаются в сообщениях коммитов
+    private const char RecordSep = '\u001e';
+    private const char FieldSep = '\u001f';
+
+    // Строка-трейлер задачи: id берётся целиком (\S+), поэтому префикс чужого id совпадением не считается
+    private static readonly Regex TaskTrailer = new(@"(?m)^CCS-Task:[ \t]*(\S+)[ \t]*$", RegexOptions.Compiled);
+
+    public IReadOnlyList<WorktreeCommit>? CommitsWithTaskTrailer(string worktreePath, string taskId, int limit)
+    {
+        if (string.IsNullOrWhiteSpace(taskId) || limit <= 0) return [];
+        // --grep — лишь предфильтр git (подстрока без привязки к концу слова); точное совпадение id
+        // проверяется ниже по телу коммита. Id — аргумент массива Args, не строка оболочки; regex-метасимволы
+        // в нём экранируются
+        var output = Git(worktreePath, "-c", "core.quotepath=false", "log", "HEAD", "-n", limit.ToString(),
+            "--grep=^CCS-Task:[[:space:]]*" + Regex.Escape(taskId), "--name-only",
+            $"--format={RecordSep}%H{FieldSep}%cI{FieldSep}%s{FieldSep}%B{FieldSep}");
+        if (output is null) return null;
+
+        var commits = new List<WorktreeCommit>();
+        foreach (var record in output.Split(RecordSep, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = record.Split(FieldSep);
+            if (parts.Length < 5) continue;
+            if (!TaskTrailer.Matches(parts[3]).Any(m => m.Groups[1].Value == taskId)) continue;
+            var at = DateTimeOffset.TryParse(parts[1], out var parsed) ? parsed.UtcDateTime : (DateTime?)null;
+            var files = parts[4].Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            commits.Add(new WorktreeCommit(parts[0].Trim(), parts[2], at, files));
+        }
+        // git отдаёт от нового к старому — экран хранит цепочку версий от старой к новой
+        commits.Reverse();
+        return commits;
+    }
+
+    public WorktreeDiff? CommitDiff(string worktreePath, string fullSha, int maxChars)
+    {
+        // Полный sha — только hex: иначе «sha» мог бы стать опцией git. Вызывающий и так берёт его из списка коммитов
+        if (fullSha.Length < 7 || !fullSha.All(Uri.IsHexDigit) || maxChars <= 0) return null;
+        return GitCapped(worktreePath, maxChars, "-c", "core.quotepath=false", "show", "--no-color",
+            "--no-ext-diff", "--format=", "--patch", fullSha);
+    }
+
+    // Как Git, но вывод режется по maxChars: огромный дифф не читается в память целиком, процесс гасится
+    private WorktreeDiff? GitCapped(string worktreePath, int maxChars, params string[] args)
+    {
+        if (string.IsNullOrWhiteSpace(worktreePath) || !Directory.Exists(worktreePath)) return null;
+        var spec = new ProcessSpec
+        {
+            FileName = "git",
+            Args = args,
+            WorkingDirectory = worktreePath,
+            RedirectStdin = false,
+            StdioEncoding = new UTF8Encoding(false),
+            TurnId = Guid.NewGuid().ToString("N"),
+            Track = false,
+        };
+        var launcher = launchers.Local;
+        Process? process = null;
+        try
+        {
+            process = launcher.Start(spec);
+            process.StandardError.ReadToEndAsync();
+            var buffer = new char[maxChars + 1];
+            var read = 0;
+            // Читаем на один символ больше потолка: так отличаем «ровно потолок» от «длиннее»
+            var reader = Task.Run(() =>
+            {
+                int n;
+                while (read < buffer.Length && (n = process.StandardOutput.Read(buffer, read, buffer.Length - read)) > 0)
+                    read += n;
+            });
+            if (!reader.Wait(Timeout))
+            {
+                launcher.Kill(process, spec.TurnId);
+                return null;
+            }
+            var truncated = read > maxChars;
+            if (truncated) launcher.Kill(process, spec.TurnId);
+            else if (!process.WaitForExit(Timeout)) { launcher.Kill(process, spec.TurnId); return null; }
+            else if (process.ExitCode != 0) return null;
+            return new WorktreeDiff(new string(buffer, 0, Math.Min(read, maxChars)), truncated);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+        finally
+        {
+            process?.Dispose();
+        }
     }
 
     // Вывод git или null при любом сбое (ненулевой код выхода тоже сбой)

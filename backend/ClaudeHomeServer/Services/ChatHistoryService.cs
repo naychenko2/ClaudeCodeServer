@@ -70,6 +70,45 @@ public class ChatHistoryService
         return Task.FromResult(messages);
     }
 
+    // Чтение ленты ТОЛЬКО на просмотр (экран этапа, D1a): в отличие от LoadAsync не трогает файл —
+    // LoadAsync на синтаксически битом history.json через JsonFileStore уносит его в .corrupt-бэкап, а
+    // файл, который в этот момент дописывается, может быть виден обрезанным посередине записи. Здесь
+    // записи разбираются по одной; недописанная хвостовая (и всё после неё) пропускается без исключения,
+    // запись с неизвестным kind — тоже. Живой аккумулятор хода не учитывается: берётся то, что на диске.
+    public IReadOnlyList<StoredMessage> ReadTolerant(string claudeSessionId)
+    {
+        if (!SessionIdGuard.IsSafe(claudeSessionId)) return [];
+        var path = GetPath(claudeSessionId);
+        byte[] bytes;
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            bytes = buffer.ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { return []; }
+
+        var messages = new List<StoredMessage>();
+        var reader = new Utf8JsonReader(bytes, isFinalBlock: true, state: default);
+        try
+        {
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartArray) return messages;
+            while (reader.Read() && reader.TokenType != JsonTokenType.EndArray)
+            {
+                // ParseValue бросает на недописанном значении — это и есть конец разбираемой части
+                using var doc = JsonDocument.ParseValue(ref reader);
+                try
+                {
+                    if (doc.RootElement.Deserialize<StoredMessage>(_opts) is { } message) messages.Add(message);
+                }
+                catch (Exception ex) when (ex is JsonException or NotSupportedException) { }
+            }
+        }
+        catch (JsonException) { }
+        return messages;
+    }
+
     // Последний известный размер контекста чата из истории — серверный аналог фронтового
     // lastContextOf: обратный проход до последнего result с ContextTokens>0. Фолбэк оценки
     // контекста для ContextCapacityRegistry, когда живое значение (usage текущего хода,

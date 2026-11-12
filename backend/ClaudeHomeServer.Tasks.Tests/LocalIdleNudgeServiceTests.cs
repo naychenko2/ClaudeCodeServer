@@ -8,14 +8,18 @@ using static ClaudeHomeServer.Tasks.Tests.LocalExecutorFlowKit;
 
 namespace ClaudeHomeServer.Tasks.Tests;
 
-// Серверный пинок при простое локального исполнителя (часть C). Мутации (вывод — в отчёте):
+// Серверный пинок при простое слотов локального движка. Мутации (вывод — в отчёте):
 //  • убрать проверку IdleMinutes — тест «раньше срока» красный;
 //  • убрать кулдаун — тест «кулдаун» красный;
 //  • не проверять Hold — тест «пауза фичи» красный; не проверять статус ключевого чата — «ключевой чат занят» красный;
-//  • не проверять незапущенные шаги — тест «нет шагов» красный.
+//  • не проверять незапущенные шаги — тест «нет шагов» красный;
+//  • считать свободным при очереди к движку — тест «очередь» красный;
+//  • вернуть учёт по персонам (занятая персона выпадает) — тест «персона занята другим шагом» красный;
+//  • убрать break после карточки — тест «две фичи» красный.
 public class LocalIdleNudgeServiceTests : IDisposable
 {
     private static readonly DateTime T0 = new(2026, 11, 2, 12, 0, 0, DateTimeKind.Utc);
+    private const string Tail = "Одного исполнителя можно запускать на несколько шагов параллельно. ";
     private readonly LocalExecutorFlowKit _kit = new();
     private Dictionary<string, string?> _cfg = new();
 
@@ -32,6 +36,7 @@ public class LocalIdleNudgeServiceTests : IDisposable
     private TaskItem Arrange()
     {
         _kit.Roster.Locals.Add(new LocalExecutor("kira", "Кира"));
+        _kit.Roster.Slots = new LocalEngineSlots(6, 4, 0);
         var epic = _kit.NewFeature("X");
         _kit.NewStep(epic, "kira", "S2");
         _kit.NewStep(epic, "kira", "R-3", role: TaskRoles.Rework);
@@ -39,9 +44,11 @@ public class LocalIdleNudgeServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task СвободнаДесятьМинут_ЕстьШаги_КарточкаВКлючевойЧат()
+    public async Task СлотыСвободныДесятьМинут_ЕстьШаги_КарточкаСоСлотамиИВсемиИсполнителями()
     {
-        Arrange();
+        var epic = Arrange();
+        _kit.Roster.Locals.Add(new LocalExecutor("denis", "Денис"));
+        _kit.NewStep(epic, "denis", "S5");
         var sut = Sut();
 
         await sut.TickAsync(T0);
@@ -50,13 +57,27 @@ public class LocalIdleNudgeServiceTests : IDisposable
 
         var card = _kit.Sender.Sent.Should().ContainSingle().Subject;
         card.SessionId.Should().Be(KeyChat);
-        card.Text.Should().Be("Свободен локальный исполнитель: Кира без работы 10 мин. " +
-            "В фиче есть его незапущенные шаги: R-3, S2. " +
-            "Сверь «После:» и запусти готовые; готовых нет — ответь одной строкой, почему.");
+        card.Text.Should().Be("Свободно слотов локальной модели: 2 из 6, простаивают 10 мин. " +
+            "В фиче есть незапущенные шаги локальных исполнителей — Денис: S5; Кира: R-3, S2. " + Tail +
+            "Сверь «После:» и запусти готовые, до 2; готовых нет — ответь одной строкой, почему.");
+    }
+
+    // Главное отличие от учёта по персонам: персона, уже ведущая шаг, не мешает позвать её на другой
+    [Fact]
+    public async Task ПерсонаЗанятаДругимШагом_ЕёНезапущенныеШагиВКарточке()
+    {
+        var epic = Arrange();
+        _kit.NewStep(epic, "kira", "S1", running: true);
+        var sut = Sut();
+
+        await sut.TickAsync(T0);
+        await sut.TickAsync(T0.AddMinutes(10));
+
+        _kit.Sender.Sent.Should().ContainSingle().Which.Text.Should().Contain("Кира: R-3, S2");
     }
 
     [Fact]
-    public async Task СвободнаРаньшеСрока_НеПинаем()
+    public async Task СвободноРаньшеСрока_НеПинаем()
     {
         Arrange();
         var sut = Sut();
@@ -68,7 +89,7 @@ public class LocalIdleNudgeServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Кулдаун_ПарыФичаПерсона_НеЧащеРазаВПолчаса()
+    public async Task Кулдаун_Фичи_НеЧащеРазаВПолчаса()
     {
         Arrange();
         var sut = Sut();
@@ -97,24 +118,70 @@ public class LocalIdleNudgeServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task ПерсонаЗанята_ПростойОтсчитываетсяОтОсвобождения()
+    public async Task ВсеСлотыЗаняты_ПростойОтсчитываетсяОтОсвобождения()
     {
-        var epic = Arrange();
-        var running = _kit.NewStep(epic, "kira", "S1", running: true);
+        Arrange();
+        _kit.Roster.Slots = new LocalEngineSlots(6, 6, 0);
         var sut = Sut();
         await sut.TickAsync(T0);
         await sut.TickAsync(T0.AddMinutes(20));
-        _kit.Sender.Sent.Should().BeEmpty("занята — не простаивает");
+        _kit.Sender.Sent.Should().BeEmpty("свободных слотов нет — не простаивает");
 
-        _kit.Sessions.GetById(running.LinkedSessionId!)!.Status = SessionStatus.Active;
+        _kit.Roster.Slots = new LocalEngineSlots(6, 5, 0);
         await sut.TickAsync(T0.AddMinutes(21));
-        _kit.Sender.Sent.Should().BeEmpty("освободилась только что");
+        _kit.Sender.Sent.Should().BeEmpty("слот освободился только что");
         await sut.TickAsync(T0.AddMinutes(31));
-        _kit.Sender.Sent.Should().HaveCount(1);
+        _kit.Sender.Sent.Should().ContainSingle().Which.Text.Should().StartWith("Свободно слотов локальной модели: 1 из 6, простаивают 10 мин.");
     }
 
-    // Персона выпала из обхода (реестр пуст — провайдер выключен): отсчёт простоя теряется,
-    // после возврата он идёт заново, а не от первого наблюдения часы назад
+    // Ход ждёт допуска — место на движке уже разобрано, даже если счётчик занятых его не догнал
+    [Fact]
+    public async Task ОчередьКДвижку_НеПинаем()
+    {
+        Arrange();
+        _kit.Roster.Slots = new LocalEngineSlots(6, 4, 1);
+        var sut = Sut();
+
+        await sut.TickAsync(T0);
+        await sut.TickAsync(T0.AddMinutes(15));
+
+        _kit.Sender.Sent.Should().BeEmpty();
+    }
+
+    // Слоты общие для фич: две карточки в одном тике раздали бы одни и те же слоты дважды
+    [Fact]
+    public async Task ДвеФичи_ОднаКарточкаЗаТик_ВтораяВСледующем()
+    {
+        Arrange();
+        _kit.Sessions.Add("chat-key-y", SessionStatus.Active);
+        var y = _kit.Tasks.Create(null, Owner, new CreateTaskRequest("Y", Role: TaskRoles.Feature));
+        y.ExecutorLaunchedBySessionId = "chat-key-y";
+        _kit.NewStep(y, "kira", "S7");
+        var sut = Sut();
+
+        await sut.TickAsync(T0);
+        await sut.TickAsync(T0.AddMinutes(10));
+        _kit.Sender.Sent.Should().HaveCount(1);
+        await sut.TickAsync(T0.AddMinutes(11));
+
+        _kit.Sender.Sent.Select(s => s.SessionId).Should().BeEquivalentTo([KeyChat, "chat-key-y"]);
+    }
+
+    [Fact]
+    public async Task ШагиНеЛокальныхПерсон_ВКарточкуНеПопадают()
+    {
+        var epic = Arrange();
+        _kit.NewStep(epic, "cloud-gleb", "S9");
+        var sut = Sut();
+
+        await sut.TickAsync(T0);
+        await sut.TickAsync(T0.AddMinutes(10));
+
+        _kit.Sender.Sent.Should().ContainSingle().Which.Text.Should().NotContain("S9");
+    }
+
+    // Ростер опустел (провайдер выключен): отсчёт простоя теряется, после возврата идёт заново,
+    // а не от первого наблюдения часы назад
     [Fact]
     public async Task ВыпалаИзОбхода_ОтсчётПростояЗаново()
     {
@@ -129,7 +196,7 @@ public class LocalIdleNudgeServiceTests : IDisposable
         await sut.TickAsync(T0.AddMinutes(31));
         _kit.Sender.Sent.Should().BeEmpty("простой начался заново в 31 мин");
         await sut.TickAsync(T0.AddMinutes(41));
-        _kit.Sender.Sent.Should().ContainSingle().Which.Text.Should().Contain("без работы 10 мин");
+        _kit.Sender.Sent.Should().ContainSingle().Which.Text.Should().Contain("простаивают 10 мин");
     }
 
     [Fact]

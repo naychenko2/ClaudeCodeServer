@@ -5,13 +5,14 @@ using ClaudeHomeServer.Services.Turn;
 
 namespace ClaudeHomeServer.Services.Tasks;
 
-// Счётчик локальных исполнителей в хвосте хода оркестратора: одна строка вида
-// «Локальные исполнители сейчас: занято N из M — Кира (фича «X», S2), Денис (фича «Y», R-3);
-// свободны: Кузьма. Локальных ходов на движке: K — …» Оркестратор просыпается только от доклада
-// своего чата и не видит чужих занятых персон — строка даёт ему картину по ВСЕМ фичам и чатам
-// владельца. Числа два и они разные: персоны ростера (кого занять нельзя) и физические слоты
-// локального движка (любой локальный ход, включая ревью и доработки вне ростера) — по уроку
-// 06.11: при лимите 4 разом ушло до 12 ходов, потому что ревью на слабой модели в счёт не входило.
+// Счётчик локальной модели в хвосте хода оркестратора: одна строка вида
+// «Локальная модель: свободно слотов 2 из 6. Локальных ходов задач на движке: 3 — Кира (фича «X»,
+// S2), … Локальные исполнители: Денис, Кира — одного можно запускать на несколько шагов
+// параллельно.» Оркестратор просыпается только от доклада своего чата и не видит чужих ходов —
+// строка даёт ему картину по ВСЕМ фичам и чатам владельца. Упор — в слоты движка (счётчик
+// допуска, тот же, что пускает ходы; в нём и чаты, и фон), а не в персоны: персону можно
+// занять несколькими шагами сразу. Ходы задач перечислены отдельно — по уроку 06.11: при лимите
+// 4 разом ушло до 12 ходов, потому что ревью на слабой модели в счёт не входило.
 //
 // Секция едет ХВОСТОМ хода (InTurnTail): текст меняется от хода к ходу и в системном блоке
 // обнулял бы prefix cache. Состав tools/list не трогаем (McpToolsetStabilityTests). Признак
@@ -58,7 +59,7 @@ public sealed class LocalExecutorsContributor(TaskManager tasks, IServiceProvide
 
         var locals = roster.For(ownerId, session.ProjectId);
         if (locals.Count == 0) return null;
-        return Format(locals, LocalExecutorLoad.BusyBy(owner, locals, sessions),
+        return Format(locals, roster.SlotsFor(ownerId, session.ProjectId),
             LocalExecutorLoad.LocalTurnsBy(owner, sessions, roster, ownerId));
     }
 
@@ -75,25 +76,18 @@ public sealed class LocalExecutorsContributor(TaskManager tasks, IServiceProvide
         return false;
     }
 
-    // Две разные величины в одной строке: занятые персоны-исполнители (ростер) и локальные
-    // ходы на движке (любой задачи с локальной эффективной моделью, включая ревью вне ростера).
-    // «занято 3 из 3» не читается как «движок близок к потолку»: три ревью на слабой модели
-    // плюс три исполнителя — это шесть ходов, и видно какие.
-    internal static string Format(IReadOnlyList<LocalExecutor> locals,
-        IReadOnlyDictionary<string, List<LocalExecutorLoad.BusyEntry>> busy,
+    // Слоты движка (счётчик допуска: все ходы и фон) и ходы задач (любой задачи с локальной
+    // эффективной моделью, включая ревью вне ростера) — разные величины: слотов занято может быть
+    // больше, чем ходов задач (чаты человека, фоновые действия).
+    internal static string Format(IReadOnlyList<LocalExecutor> locals, LocalEngineSlots? slots,
         IReadOnlyList<LocalExecutorLoad.LocalTurn> turns)
     {
-        var busyParts = locals.Where(l => busy.ContainsKey(l.PersonaId))
-            .SelectMany(l => busy[l.PersonaId].Select(b => $"{l.Name} (фича «{b.FeatureTitle}», {b.Step})"))
-            .ToList();
-        var busyCount = locals.Count(l => busy.ContainsKey(l.PersonaId));
-        var free = locals.Where(l => !busy.ContainsKey(l.PersonaId)).Select(l => l.Name).ToList();
-        var text = $"Локальные исполнители сейчас: занято {busyCount} из {locals.Count}";
-        if (busyParts.Count > 0) text += " — " + string.Join(", ", busyParts);
-        if (free.Count > 0) text += "; свободны: " + string.Join(", ", free);
-        text += ". Локальных ходов на движке: " + turns.Count;
+        var text = slots is null ? "" : $"Локальная модель: свободно слотов {slots.Free} из {slots.Limit}" +
+            (slots.Queued > 0 ? $", в очереди {slots.Queued}" : "") + ". ";
+        text += "Локальных ходов задач на движке: " + turns.Count;
         if (turns.Count > 0)
             text += " — " + string.Join(", ", turns.Select(t => $"{t.Name} (фича «{t.FeatureTitle}», {t.Step})"));
-        return text + ".";
+        return text + ". Локальные исполнители: " + string.Join(", ", locals.Select(l => l.Name)) +
+            " — одного можно запускать на несколько шагов параллельно.";
     }
 }

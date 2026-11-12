@@ -28,9 +28,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// SharedProjectPersonaRightsTests): владелец — без сужения, как раньше (mcp-цель без реестра у него
 /// даёт 400 валидации, а не 403); остальные роли — отказ по праву независимо от цели.
 ///
-/// Сужение NonOwnerBindingEditDenied осталось вторым рубежом: до не-владельца через REST оно не
-/// доходит (фильтр отказывает раньше), поэтому его покрывают отдельные тесты прямым вызовом
-/// сервиса и путями, где нет фильтра на действии, — ниже по файлу.
+/// Сужение NonOwnerBindingEditDenied осталось вторым рубежом: до не-владельца через
+/// записывающие действия оно не доходит (фильтр отказывает раньше), тестов прямым вызовом
+/// сервиса нет. Путь без фильтра на действии — каталог целей (GET binding-targets, [ProjectScope]
+/// на действии нет): каждый его элемент проходит тот же сужение, путь держит
+/// BindingTargets_РедакторЧужойПроектнойПерсоны_ТолькоЦелиЭтогоПроекта.
 ///
 /// Порядок отказа: сужение решается ДО ValidateAsync (отказ по праву не зависит от валидности
 /// цели: mcp-сервера может не быть в реестре — 403 всё равно 403). Отдельный тест держит это:
@@ -911,8 +913,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // «personal» доходит до ответа (регрессии нет; mcp и knowledge у него отбиты валидацией —
     // их нет в тестовом хосте, это не этот шаг). suggest и generate идут по одному пути
     // обработки кандидатов — проверяются оба.
-    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync — красный:
-    // редактор видит «notes|personal».
+    // Мутация: снять [ProjectScope] с действий SuggestBindings/GenerateBindings — красный:
+    // редактор получает 500 вместо 403 (без фильтра GetRequestScope бросает — fail-closed).
 
     private static List<string> CandidateKeys(JsonElement body) =>
         body.GetProperty("candidates").EnumerateArray()
@@ -946,8 +948,8 @@ public class SharedProjectPersonaBindingsTests : IClassFixture<TestWebApplicatio
     // имени стаб отдаёт «personal»-заметки и несуществующую базу знаний. Для редактора обе
     // чужие: applied=0, стор нетронут. Владелец тем же вызовом добавляет «personal» —
     // кандидаты были достижимы тем же конвейером, тест не вакуумный.
-    // Мутация: снять проверку NonOwnerBindingEditDenied в SuggestBindingsAsync /
-    // MaterializeDefaultBindingsAsync — красный: applied=1 вместо 0 и личная привязка в сторе.
+    // Мутация: снять [ProjectScope] с действия ApplyDefaultBindings — красный: редактор
+    // получает 500 вместо 403 (тот же механизм: без фильтра GetRequestScope бросает).
 
     [Fact]
     public async Task ТиповыеУмения_РедакторНеДобавляетЛичныхЦелейВладельца()

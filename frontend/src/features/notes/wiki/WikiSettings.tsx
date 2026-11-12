@@ -14,6 +14,7 @@
 import { WikiNightlyBlock } from './WikiNightlyBlock';
 import { WikiApplySettings } from './WikiApplySettings';
 import { WikiChatTriageList } from './WikiChatTriageList';
+import { WikiPurgeBlock } from './WikiPurgeBlock';
 
 export function WikiSettings() {
   return (
@@ -21,6 +22,7 @@ export function WikiSettings() {
       <WikiNightlyBlock />
       <WikiApplySettings />
       <WikiChatTriageList />
+      <WikiPurgeBlock />
     </div>
   );
 }

@@ -46,6 +46,7 @@ export {
   useWikiTree, useWikiCatalog, useWikiPage, useWikiPageGone,
   requestOpenWikiPage, consumeOpenWikiPage, useWikiOpenRequest,
   loadWikiSettings, useWikiSettings, putWikiNightly, runWikiNightlyNow, putWikiAutoApply, resumeWikiApplyClass,
+  previewWikiPurge, runWikiPurge,
   wikiAuthorshipOf, editWikiPage, wikiFootnoteLabel, loadWikiSourceCard,
   restoreWikiPage, wikiOverridesOf, wikiHasReplacement, normWikiStatement, wikiActiveLines, useWikiReplacementDot,
 } from '../wiki';
@@ -59,6 +60,7 @@ export type {
   WikiAuthorship, WikiPageInfoAuthoredDto, WikiCatalogDto, WikiSourceCardInfo, WikiPageEditableDto, WikiConflictPage, WikiFootnoteDto,
   WikiOverrideDto, WikiOverrideOp, WikiPageOverriddenDto, WikiOverrodeKind, WikiJournalEntryOverrideDto,
   WikiAdoptMineResult,
+  WikiPurgeDto, WikiPurgePageDto,
 } from '../wiki';
 
 // ─── subsystems ──────────────────────────────────────────────────────────────

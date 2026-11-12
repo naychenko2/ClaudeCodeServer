@@ -25,9 +25,54 @@ public static class WikiApplyPolicy
     /// менее стольких дней назад, автоприменение не меняет — пакет идёт во «Входящие».
     public const int RevertQuarantineDays = 7;
 
+    // Машинный код причины «Входящих» (решение 12.11): допуск к облачному судье решает код,
+    // а не русский текст Reason (он остаётся для человека). Код ставит код в каждой ветке
+    // политики; старые пакеты без кода читаются как null — к судье не допускаются (И4′).
+    public const string CodeAutoApplyOff = "autoapply_off";
+    public const string CodeUnknownOp = "unknown_op";
+    public const string CodeNoClass = "no_class";
+    public const string CodeBadClass = "bad_class";
+    public const string CodeNoPage = "no_page";
+    public const string CodeClassDisabled = "class_disabled";
+    public const string CodeRevertQuarantine = "revert_quarantine";
+    public const string CodeNoHistorySection = "no_history_section";
+    public const string CodeOverridesHuman = "overrides_human";
+    public const string CodePageDuplicate = "page_duplicate";
+    public const string CodeSectionNewPagesLimit = "section_new_pages_limit";
+    public const string CodeOriginUrl = "origin_url";
+    public const string CodePersonalToCommon = "personal_to_common";
+    public const string CodeTargetDisputed = "target_disputed";
+    public const string CodeAfterModelRepair = "after_model_repair";
+    /// <summary>Код валидатора (число утверждения не подтверждено цитатой), не политики:
+    /// числа проверяются в WikiPlanValidator после вердикта.</summary>
+    public const string CodeNumberUnconfirmed = "number_unconfirmed";
+
+    /// <summary>Полный перечень кодов причины: форма пакета проверяется по нему.</summary>
+    public static readonly IReadOnlyList<string> ReasonCodes =
+        [CodeAutoApplyOff, CodeUnknownOp, CodeNoClass, CodeBadClass, CodeNoPage, CodeClassDisabled,
+         CodeRevertQuarantine, CodeNoHistorySection, CodeOverridesHuman, CodePageDuplicate,
+         CodeSectionNewPagesLimit, CodeOriginUrl, CodePersonalToCommon, CodeTargetDisputed,
+         CodeAfterModelRepair, CodeNumberUnconfirmed];
+
+    /// <summary>Допуск к облачному судье (решение Андрея 12.11): ровно «только для человека»
+    /// случаи — выключенный класс, откатанная страница, замена без секции «История», замена
+    /// утверждения человека, возможный дубль, сверх лимита новых страниц, личное в «Общем»,
+    /// спорная страница, пакет после ремонта, неподтверждённое число. autoapply_off (ручной
+    /// режим судью не зовёт вовсе) и отсутствие кода (старые пакеты) — не допущены (И4′).</summary>
+    public static bool JudgeAdmitted(string? code) => code is CodeClassDisabled or CodeRevertQuarantine
+        or CodeNoHistorySection or CodeOverridesHuman or CodePageDuplicate or CodeSectionNewPagesLimit
+        or CodePersonalToCommon or CodeTargetDisputed or CodeAfterModelRepair or CodeNumberUnconfirmed;
+
+    /// <summary>Отказ по коду: внешний текст и fail-closed ветки — судье там не о чём решать
+    /// (И4′: операция с этими кодами к судье не попадает).</summary>
+    public static bool CodeRejected(string? code) => code is CodeUnknownOp or CodeNoClass
+        or CodeBadClass or CodeNoPage or CodeOriginUrl;
+
     /// Вердикт политики: Decision — WikiPackage.DecisionAuto | DecisionInbox; Reason —
-    /// текст для человека (для «inbox» обязателен: «Входящие» приходят с объяснением).
-    public readonly record struct Verdict(string Decision, string Reason)
+    /// текст для человека (для «inbox» обязателен: «Входящие» приходят с объяснением);
+    /// ReasonCode — машинный код причины (решение 12.11): допуск к судье решает код, не
+    /// текст. У «auto» — null.
+    public readonly record struct Verdict(string Decision, string Reason, string? ReasonCode)
     {
         public bool IsAuto => Decision == WikiPackage.DecisionAuto;
     }
@@ -129,25 +174,25 @@ public static class WikiApplyPolicy
     {
         // 1. Общий выключатель (мера 7).
         if (context is null || !context.AutoApplyEnabled)
-            return Inbox("выключатель «Применять без ревью» выключен — каждая правка идёт через «Входящие»");
+            return Inbox(CodeAutoApplyOff, "выключатель «Применять без ревью» выключен — каждая правка идёт через «Входящие»");
 
         // 2. Класс. Нераспознанная операция и кривой класс — не класс: fail-closed.
         if (op is null || op.Op is null || !WikiPackage.OpValues.Contains(op.Op))
-            return Inbox($"операция «{op?.Op ?? "—"}» вне перечня — политике не о чём выносить решение");
+            return Inbox(CodeUnknownOp, $"операция «{op?.Op ?? "—"}» вне перечня — политике не о чём выносить решение");
         if (string.IsNullOrWhiteSpace(op.Class))
-            return Inbox("операция без класса origin × op — политику не спросить: класс не назван");
+            return Inbox(CodeNoClass, "операция без класса origin × op — политику не спросить: класс не назван");
         var origin = OriginOf(op.Class, op.Op);
         if (origin is null)
-            return Inbox($"класс «{op.Class}» не пары «источник × {op.Op}» — класс правки не опознан");
+            return Inbox(CodeBadClass, $"класс «{op.Class}» не пары «источник × {op.Op}» — класс правки не опознан");
         if (op.Page is null || op.Page.Length == 0)
-            return Inbox("операция без страницы — политику не спросить: цель не названа");
+            return Inbox(CodeNoPage, "операция без страницы — политику не спросить: цель не названа");
         if (context.DisabledClasses.Contains(op.Class))
-            return Inbox($"класс правки «{op.Class}» выключен — его правки идут через ревью человека");
+            return Inbox(CodeClassDisabled, $"класс правки «{op.Class}» выключен — его правки идут через ревью человека");
 
         // Анти-петля (N7d): откат человека сильнее любой автоматики — включая create по тому же
         // пути (revert пакета с create удаляет страницу, и тот же источник создал бы её снова).
         if (context.RecentlyRevertedPages.TryGetValue(op.Page, out var revertedAt))
-            return Inbox($"страницу откатили вручную {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
+            return Inbox(CodeRevertQuarantine, $"страницу откатили вручную {revertedAt:yyyy-MM-dd}: автоприменение не меняет её {RevertQuarantineDays} дней");
 
         // 3. Риски — по строкам таблицы §12г.
         // Замена и оспаривание (ADR-038, решение 4): само — только если новый источник новее и
@@ -155,26 +200,26 @@ public static class WikiApplyPolicy
         // целей ai и human: ветки по автору цели нет (автор влияет на класс, не на условия).
         if (op.Op == WikiPackage.OpSupersede
             && context.TargetAuthor == WikiPackage.AuthorHuman && context.TargetHasNoHistory)
-            return Inbox("На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами");
+            return Inbox(CodeNoHistorySection, "На этой странице нет секции «История», прежняя формулировка не сохранится — решите сами");
         if (op.Op is WikiPackage.OpSupersede or WikiPackage.OpConflict
             && ReplacementBlocker(op, context) is { } blocker)
-            return Inbox(blocker);
+            return Inbox(CodeOverridesHuman, blocker);
         if (op.Op == WikiPackage.OpCreate && !context.TargetIsChronicle)
         {
             if (context.PageDuplicate is { } dup)
-                return Inbox($"возможный дубль страницы: {dup.Field} совпадает с {dup.ExistingField} страницы «{dup.Path}»");
+                return Inbox(CodePageDuplicate, $"возможный дубль страницы: {dup.Field} совпадает с {dup.ExistingField} страницы «{dup.Path}»");
             var limit = context.IsBacklogPass ? MaxNewKnowledgePagesPerSectionBacklog : MaxNewKnowledgePagesPerSection;
             if (context.Counters.NewKnowledgePagesInSection > limit)
-                return Inbox($"сверх лимита новых страниц раздела за ночь: {context.Counters.NewKnowledgePagesInSection} из {limit}");
+                return Inbox(CodeSectionNewPagesLimit, $"сверх лимита новых страниц раздела за ночь: {context.Counters.NewKnowledgePagesInSection} из {limit}");
         }
         if (origin == WikiGate.OriginUrl)
-            return Inbox("внешний текст (origin url): промпт-инъекция извне");
+            return Inbox(CodeOriginUrl, "внешний текст (origin url): промпт-инъекция извне");
         if (WikiSections.Parse(op.Page) == WikiSections.Common && context.SourceHomeIsPersonal)
-            return Inbox("личное в «Общем»: решение о видимости принимает человек (ADR-036, решение 3)");
+            return Inbox(CodePersonalToCommon, "личное в «Общем»: решение о видимости принимает человек (ADR-036, решение 3)");
         if (context.TargetPageStatus is WikiFrontmatter.StatusDisputed or WikiFrontmatter.StatusDrift)
-            return Inbox($"целевая страница в статусе «{context.TargetPageStatus}»: там уже нужен человек");
+            return Inbox(CodeTargetDisputed, $"целевая страница в статусе «{context.TargetPageStatus}»: там уже нужен человек");
         if (context.PackageAfterModelRepair)
-            return Inbox("пакет после ремонта модели: признак низкого качества прохода");
+            return Inbox(CodeAfterModelRepair, "пакет после ремонта модели: признак низкого качества прохода");
 
         // 4. Само — «Что применяется само» (§12г), после проверок кода.
         return Auto(op, context);
@@ -229,10 +274,10 @@ public static class WikiApplyPolicy
         WikiPackage.OpConflict =>
             Auto("оспаривание: источник новее оспариваемого утверждения и вашей правки (ADR-038)"),
         _ =>
-            Inbox($"операция «{op.Op ?? "—"}» вне известных автоприменению: её риска политика не знает"),
+            Inbox(CodeUnknownOp, $"операция «{op.Op ?? "—"}» вне известных автоприменению: её риска политика не знает"),
     };
 
-    private static Verdict Auto(string reason) => new(WikiPackage.DecisionAuto, reason);
+    private static Verdict Auto(string reason) => new(WikiPackage.DecisionAuto, reason, null);
 
     // Класс правки — ключ «origin × op» (WikiPackage.ClassKey). Origin берётся из него же:
     // второй источник origin у операции нет. Кривой ключ (не две части, origin вне перечня,
@@ -241,5 +286,5 @@ public static class WikiApplyPolicy
     private static string? OriginOf(string classKey, string op) =>
         WikiPackage.ParseClassKey(classKey) is { } parsed && parsed.Op == op ? parsed.Origin : null;
 
-    private static Verdict Inbox(string reason) => new(WikiPackage.DecisionInbox, reason);
+    private static Verdict Inbox(string code, string reason) => new(WikiPackage.DecisionInbox, reason, code);
 }

@@ -422,6 +422,7 @@ public static class WikiPlanValidator
             // а «Входящие» с причиной: решает человек.
             var decision = verdict.Decision;
             var decisionReason = verdict.Reason;
+            var decisionReasonCode = verdict.ReasonCode;
             if (synth && WikiClaimNumbers.Unconfirmed(claimText, quotes) is { Count: > 0 } unconfirmed)
             {
                 decision = WikiPackage.DecisionInbox;
@@ -435,6 +436,11 @@ public static class WikiPlanValidator
                 decisionReason = verdict.Decision == WikiPackage.DecisionInbox && !string.IsNullOrWhiteSpace(decisionReason)
                     ? decisionReason + "; " + numbers
                     : numbers;
+                // Код причины (решение 12.11): та же логика, что у текста. Если политика уже
+                // отправила операцию во «Входящие» — её код (главный риск — риск политики);
+                // иначе код чисел. Снимать код политики нельзя: по нему судья решает допуск.
+                if (verdict.Decision != WikiPackage.DecisionInbox)
+                    decisionReasonCode = WikiApplyPolicy.CodeNumberUnconfirmed;
             }
             if (synth)
                 foreach (var q in quotes)
@@ -455,6 +461,7 @@ public static class WikiPlanValidator
                 Class = opClass,
                 Decision = decision,
                 Reason = decisionReason,
+                ReasonCode = decisionReasonCode,
                 BaseHashes = isCreate
                     ? new Dictionary<string, string>()
                     : new Dictionary<string, string> { [page.Path] = Sha256Hex(page.Content) },

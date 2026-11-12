@@ -239,6 +239,10 @@ public sealed record WikiPackage
         /// <summary>Почему операция спорная (обязательна для `inbox`: «Входящие» приходят
         /// к человеку с причиной, а не без объяснения).</summary>
         public string? Reason { get; init; }
+        /// <summary>Машинный код причины `inbox` (решение 12.11): допуск к облачному судье
+        /// решает код, а не текст Reason. Ставит код (WikiApplyPolicy / WikiPlanValidator);
+        /// старые пакеты без поля читаются как null — к судье не допускаются (И4′).</summary>
+        public string? ReasonCode { get; init; }
         /// <summary>Хэши базового состояния страниц, на которые опирается намерение
         /// (та же форма, что в манифесте — WikiManifest.Sha256Hex). Пусто для create.</summary>
         public IReadOnlyDictionary<string, string> BaseHashes { get; init; } = new Dictionary<string, string>();
@@ -334,6 +338,10 @@ public sealed record WikiPackage
                     errors.Add($"решение политики «{op.Decision}» не из перечня");
                 if (op.Decision == DecisionInbox && string.IsNullOrWhiteSpace(op.Reason))
                     errors.Add($"операция «{op.Op}» во «Входящих» без причины");
+                // Код причины — только из перечня политики (старые пакеты без кода допустимы:
+                // null здесь не ошибка, отсутствие кода — отсутствие допуска к судье).
+                if (op.ReasonCode is not null && !WikiApplyPolicy.ReasonCodes.Contains(op.ReasonCode))
+                    errors.Add($"код причины «{op.ReasonCode}» операции «{op.Op}» не из перечня");
                 // Класс ставится из источника пакета и op: своя строка класса невозможна.
                 // Для нераспознанной op про класс молчим — про неё уже сказано выше.
                 if (!knownOp)

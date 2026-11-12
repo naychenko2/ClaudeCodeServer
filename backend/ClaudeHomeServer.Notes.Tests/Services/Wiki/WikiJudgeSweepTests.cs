@@ -26,6 +26,9 @@ namespace ClaudeHomeServer.Tests.Services;
 //   сохраняется, вердикт судьи его не перекрывает (И1);
 // - счётчики (ревью J-J2a): в Applied/Rejected/Deferred идёт только то, что реально
 //   записалось в файл.
+// - группа вызова (доработка ревью J-J3a, Н1): пакет с допущенными операциями на разных
+//   страницах — отдельный вызов на каждую страницу: в вход группы идут текст и claim
+//   только своей страницы (потеря GroupBy по Page не красила ни одного теста раньше).
 //
 // Фейк модели — тот же приём, что в WikiIngestSynthTests: запись каждого вызова
 // (ключ, метод шва, prompt), ответ — JSON вердиктов. Пакеты ставит сам стор (тот же
@@ -37,7 +40,9 @@ public class WikiJudgeSweepTests : IDisposable
     private const string CardTitle = "Карточка чата";
     private const string CardPath = "Общее/Карточка-чата.md";
     private const string PagePath = "Общее/Сущность.md";
+    private const string Page2Path = "Общее/Сущность-2.md";
     private const string OldClaim = "Прежний план был остаться на Windows";
+    private const string Page2OldClaim = "Прежний план второй страницы был остаться на второй машине";
     private const string ExternalClaim = "ВНЕШНИЙ-ТЕКСТ-СУДЬЕ-НЕ-ПОКАЗАТЬ";
 
     private static readonly string CardFile = """
@@ -77,6 +82,32 @@ public class WikiJudgeSweepTests : IDisposable
         ## История
 
         [^s1]: [[{{CardTitle}}]] — «{{OldClaim}}»
+        """;
+
+    // Вторая целевая страница — со своим текстом и своим прежним планом: по нему видно,
+    // чей текст попал в вход судьи (тест группы вызова, ревью J-J3a Н1). Ставится не в
+    // фикстуре, а в самом тесте: остальным тестам класса вторая страница не нужна.
+    private static readonly string BasePage2 = $$"""
+        ---
+        type: topic
+        aliases: []
+        owns: []
+        sources: []
+        status: active
+        ---
+
+        # Сущность-2
+
+        ## Сводка
+        {{Page2OldClaim}} [^s1]
+
+        ## Хронология
+
+        ## Противоречия
+
+        ## История
+
+        [^s1]: [[{{CardTitle}}]] — «{{Page2OldClaim}}»
         """;
 
     private readonly string _dir;
@@ -333,6 +364,59 @@ public class WikiJudgeSweepTests : IDisposable
         Read(id).Operations[0].JudgeDecision.Should().BeNull();
     }
 
+    // ─── c5: группа «пакет + целевая страница»: разные страницы — свой вызов на группу ─
+
+    [Fact]
+    public async Task ОперацииНаДвухСтраницах_ДваВызова_ВКаждом_ТекстИClaimТолькоСвоейСтраницы()
+    {
+        await WriteViaKeeper(Page2Path, BasePage2);
+        // Порядок в пакете перемешан: группа — не подряд идущие операции, а все операции
+        // одной страницы (GroupBy по Page).
+        var id = NewPackage([
+            Supersede(0, "Первый план: перенести сборку на Linux"),
+            SupersedeOnPage2(1, "Второй план: перенести синтез на локальную модель"),
+            Supersede(2, "Третий план: собрать в контейнере"),
+        ]);
+        var llm = new FakeJudge(VerdictsJson(
+            (0, true, "цитаты подтверждают"), (1, true, "подтверждено"), (2, true, "подтверждено")));
+
+        var res = await Sut(llm).RunAsync(User, Root());
+
+        res.Calls.Should().Be(2, "одна страница — один вызов группы: две страницы — два");
+        llm.Calls.Should().HaveCount(2);
+        llm.Calls.Should().OnlyContain(c => c.ActionKey == LocalActionCatalog.WikiJudge);
+
+        // Первая группа — «Сущность»: её операции и текст ЕЁ страницы, ничего из «Сущность-2».
+        var first = llm.Calls[0].Prompt;
+        first.Should().Contain("page: " + PagePath);
+        first.Should().Contain("Первый план: перенести сборку на Linux");
+        first.Should().Contain("Третий план: собрать в контейнере");
+        first.Should().Contain(OldClaim, "вход группы — текст её целевой страницы");
+        first.Should().NotContain("page: " + Page2Path);
+        first.Should().NotContain("Второй план: перенести синтез на локальную модель",
+            "claim чужой группы в этот вызов не идёт");
+        first.Should().NotContain(Page2OldClaim, "текст чужой страницы в этот вызов не идёт");
+
+        // Вторая группа — «Сущность-2»: зеркально.
+        var second = llm.Calls[1].Prompt;
+        second.Should().Contain("page: " + Page2Path);
+        second.Should().Contain("Второй план: перенести синтез на локальную модель");
+        second.Should().Contain(Page2OldClaim, "вход группы — текст её целевой страницы");
+        second.Should().NotContain("page: " + PagePath);
+        second.Should().NotContain("Первый план: перенести сборку на Linux");
+        second.Should().NotContain("Третий план: собрать в контейнере");
+        second.Should().NotContain(OldClaim, "текст чужой страницы в этот вызов не идёт");
+
+        var pkg = Read(id);
+        pkg.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        pkg.Operations[1].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        pkg.Operations[2].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        res.Applied.Should().Be(3, "вердикты обеих групп записаны");
+        res.Rejected.Should().Be(0);
+        res.Deferred.Should().Be(0);
+        res.FirstFailure.Should().BeNull();
+    }
+
     // ─── Фикстура ─────────────────────────────────────────────────────────────────────
 
     private string Root() => WikiPaths.Root(_dir, User);
@@ -353,15 +437,22 @@ public class WikiJudgeSweepTests : IDisposable
         OpWithCode(WikiPackage.OpSupersede, WikiApplyPolicy.CodeTargetDisputed,
             $"целевая страница в статусе «disputed»: там уже нужен человек {n}", claim, OldClaim);
 
+    // Та же спорная операция, но о второй целевой странице: цель — прежний план СВОЕЙ
+    // страницы (проход группирует по Page, и цель должна принадлежать своей странице).
+    private static WikiPackage.Operation SupersedeOnPage2(int n, string claim) =>
+        OpWithCode(WikiPackage.OpSupersede, WikiApplyPolicy.CodeTargetDisputed,
+            $"целевая страница в статусе «disputed»: там уже нужен человек {n}", claim,
+            Page2OldClaim, Page2Path);
+
     private static WikiPackage.Operation External(string claim) =>
         OpWithCode(WikiPackage.OpAppend, WikiApplyPolicy.CodeOriginUrl,
             "внешний текст (origin url): промпт-инъекция извне", claim);
 
     private static WikiPackage.Operation OpWithCode(string op, string? reasonCode, string reason,
-        string claim, string? target = null) => new()
+        string claim, string? target = null, string? page = null) => new()
     {
         Op = op,
-        Page = PagePath,
+        Page = page ?? PagePath,
         Text = claim,
         Target = target,
         Class = WikiPackage.ClassKey("session", op),

@@ -97,8 +97,9 @@ export function PersonaBindingsPanel({ persona, projects, accent, isMobile }: {
 }) {
   // Гейт по роли (W3-F1f, разрез §2/§3.4 + решение 12.11 из W4-FA1): роль — только через
   // personaRights по проекту персоны. Нет роли (своя персона / обычный проект / старый бэк)
-  // и owner — всё как раньше; редактору и читателю закрыто всё редактирование привязок
-  // (bindingWrite), открыт только чат с персоной.
+  // и owner — всё как раньше; редактору и читателю закрыто всё редактирование привязок;
+  // редактору открыт только чат с персоной, читателю — ничего (canPersona для reader
+  // возвращает false по любому действию, включая chat).
   const role = personaRole(persona, projects);
   const mayBind = canPersona(role, 'bindingWrite');
   const mayMcpPlugin = canPersona(role, 'bindingMcpPlugin');

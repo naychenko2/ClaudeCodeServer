@@ -463,11 +463,14 @@ public class PersonaSpecialtyMigrationTests : IDisposable
 /// dryRun=true ничего не пишет, без dryRun и при выключенном флаге — 400 с указанием флага.
 /// </summary>
 [Trait("Category", "Host")]
-public class PersonaSpecialtyInheritanceEndpointTests : IDisposable
+public class PersonaSpecialtyInheritanceEndpointTests : IClassFixture<PersonaSpecialtyInheritanceEndpointTests.Hosts>
 {
-    private readonly TestWebApplicationFactory _factory = new();
+    private readonly TestWebApplicationFactory _factory;
 
-    public void Dispose() => _factory.Dispose();
+    // Хост на КЛАСС: конфигурация одна — обычный тестовый хост, обе ручки проверяются поверх него
+    public sealed class Hosts : TestWebApplicationFactory { }
+
+    public PersonaSpecialtyInheritanceEndpointTests(Hosts hosts) => _factory = hosts;
 
     [Fact]
     public async Task Ручка_БезРолиAdmin403_СAdmin200()

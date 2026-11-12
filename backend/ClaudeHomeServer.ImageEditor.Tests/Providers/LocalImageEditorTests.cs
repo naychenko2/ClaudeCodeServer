@@ -41,6 +41,8 @@ public class LocalImageEditorTests : IDisposable
         public int? QueuedFrom { get; set; }
         // Сходство лица, которое адаптер возвращает в каждом файле результата
         public double? Similarity { get; set; }
+        // JSON-описание Fibo 2.0, которое адаптер возвращает в каждом файле результата (Ш8)
+        public string? Vgl { get; set; }
         // Снимок очереди GPU, который адаптер возвращает в каждом опросе (шаг 28)
         public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
         private readonly ConcurrentDictionary<string, bool> _seen = new();
@@ -82,7 +84,7 @@ public class LocalImageEditorTests : IDisposable
                 return Task.FromResult(new LocalImagePoll(LocalImageState.Queued, 5, [], null, Gpu: Gpu));
             var request = Submitted.ElementAt(int.Parse(ticket[1..]) - 1);
             var files = Enumerable.Range(0, request.Count)
-                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity))
+                .Select(i => new LocalImageFile(TestImages.Png(8, 8, (byte)i), "image/png", Similarity, Vgl))
                 .ToList();
             return Task.FromResult(new LocalImagePoll(LocalImageState.Completed, null, files, null, Gpu: Gpu));
         }
@@ -630,6 +632,104 @@ public class LocalImageEditorTests : IDisposable
             (EditStage.Downloading, 1, 1), (EditStage.Downloading, 2, 1), (EditStage.Downloading, 3, 1));
         result.Images.Should().HaveCount(3, "итог несёт все варианты по порядку")
             .And.Equal(ready.SelectMany(r => r.Ready!));
+    }
+
+    // ── Fibo 2.0: JSON-описание сцены и доводка (Ш8) ──
+
+    private const string Scene = "{\"background_setting\":\"street\"}";
+
+    [Fact]
+    public async Task ГенерацияFibo2_СидНаПрогон_ОписаниеСидИХолстВВарианте()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var request = new ImageEditRequest(ImageEditOp.Generate, "ёжик", null, null, [], 2, "1:1", null,
+            LocalImageEditor.Fibo2Dev, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        var sent = media.Submitted.ToList();
+        sent.Should().HaveCount(2).And.OnlyContain(r => r.Seed > 0 && r.Vgl == null && r.VglChange == null);
+        sent[0].Seed.Should().NotBe(sent[1].Seed, "у каждого варианта свой сид");
+        result.Images.Select(i => i.Scene).Should().Equal(
+            new ImageVglScene(Scene, sent[0].Seed!.Value, 8, 8), new ImageVglScene(Scene, sent[1].Seed!.Value, 8, 8));
+    }
+
+    [Fact]
+    public async Task ГенерацияQwen_БезСидаИОписания_КакРаньше()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var request = new ImageEditRequest(ImageEditOp.Generate, "ёжик", null, null, [], 1, "1:1", null,
+            LocalImageEditor.QwenImage, null);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        media.Submitted.Should().ContainSingle().Which.Seed.Should().BeNull("сид выбирает адаптер");
+        result.Images.Should().ContainSingle().Which.Scene.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Доводка_ОдинПрогон_JsonСидИХолстВерсии_НовоеОписаниеВВарианте()
+    {
+        const string rewritten = "{\"background_setting\":\"winter forest\"}";
+        var media = new FakeMedia { Vgl = rewritten };
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 101, 1248, 832), "background", "зимний лес");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "Доводка: фон → зимний лес", null, null, [], 3, null, null,
+            LocalImageEditor.Fibo2Dev, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        var sent = media.Submitted.Should().ContainSingle("доводка — один вариант").Subject;
+        sent.Model.Should().Be(LocalImageModels.Fibo2);
+        sent.Vgl.Should().Be(Scene);
+        sent.VglChange.Should().Be(new LocalVglChange("background", "зимний лес"));
+        sent.Seed.Should().Be(101);
+        (sent.Width, sent.Height).Should().Be((1248, 832));
+        sent.Images.Should().BeEmpty();
+        result.Images.Should().ContainSingle().Which.Scene.Should().Be(new ImageVglScene(rewritten, 101, 8, 8));
+    }
+
+    [Fact]
+    public async Task Доводка_ОписаниеНеИзменилось_ОтказВместоДубляВерсии()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 101, 1248, 832), "background", "зимний лес");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "x", null, null, [], 1, null, null,
+            LocalImageEditor.Fibo2Dev, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        result.Images.Should().BeEmpty();
+        result.Error.Should().Contain("не изменилось").And.Contain("зимний лес");
+    }
+
+    [Fact]
+    public async Task Доводка_НеFibo_Отказ()
+    {
+        var media = new FakeMedia();
+        var refine = new ImageVglRefine(new ImageVglScene(Scene, 1, 1024, 1024), "light", "ночь");
+        var request = new ImageEditRequest(ImageEditOp.Generate, "x", null, null, [], 1, null, null,
+            LocalImageEditor.QwenImage, null, Refine: refine);
+
+        var result = await Editor(media).RunAsync(request, new Progress<EditProgress>(), default);
+
+        result.Outcome.Should().Be(EditOutcome.Failed);
+        media.Submitted.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ЗадачаFibo2_ОписаниеВариантаДоходитДоDto()
+    {
+        var media = new FakeMedia { Vgl = Scene };
+        var service = Service(Editor(media));
+
+        var job = await RunAsync(service, Quote(ImageEditOp.Generate) with { Model = LocalImageEditor.Fibo2Dev }, Input("ёжик"));
+
+        job.Status.Should().Be(ImageEditJobStatus.Completed, job.Error);
+        job.Scenes.Should().ContainKey(1).WhoseValue.Json.Should().Be(Scene);
+        job.Scenes![1].Seed.Should().Be(media.Submitted.Single().Seed);
     }
 
     [Fact]

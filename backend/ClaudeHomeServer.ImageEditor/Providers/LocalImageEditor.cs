@@ -287,6 +287,14 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 run = new LocalImageRequest(LocalImageOp.FaceDetail, "", [req.Source.Bytes], null, 1);
                 runs = 1;
                 break;
+            case ImageEditOp.Generate when req.Refine is { } refine:
+                // Доводка Fibo 2.0 (Ш8): JSON версии переписывается под одно поле и рисуется её сидом на её холсте
+                if (req.Model != Fibo2Dev) return Fail(EditOutcome.Failed, "Доводку по JSON-описанию рисует только Fibo 2.0");
+                run = new LocalImageRequest(LocalImageOp.Generate, req.Prompt, [], null, 1, Seed: refine.Scene.Seed,
+                    Width: refine.Scene.Width, Height: refine.Scene.Height, Model: Fibo2Dev,
+                    Vgl: refine.Scene.Json, VglChange: new LocalVglChange(refine.Field, refine.Value));
+                runs = 1;
+                break;
             case ImageEditOp.Generate:
                 // Холст генерации по тексту не нужен: берутся только образцы человека. Прогон на
                 // вариант и без образцов: первый вариант виден сразу, а не после всей пачки
@@ -364,7 +372,9 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                 await gpuGate.WaitForQuietAsync(LlmTurnWait, token);
             for (var i = 0; i < runs; i++)
             {
-                var submitted = await media.SubmitAsync(run, token);
+                // Fibo 2.0 с расширителем VGL: сид прогона — наш, он ложится в память версии вместе с описанием
+                var seed = run.Seed ?? (WritesVgl(run) ? Random.Shared.NextInt64(1, 1L << 50) : (long?)null);
+                var submitted = await media.SubmitAsync(run with { Seed = seed }, token);
                 if (submitted.Ticket is not { } ticket)
                 {
                     var error = submitted.Error ?? "Локальная видеокарта не приняла задачу";
@@ -385,8 +395,15 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
                     return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
                         "Локальная модель не справилась: " + (done.Error ?? "ComfyUI завершил задачу ошибкой"));
                 }
+                // Доводка, после которой описание не изменилось, рисует ту же картинку: дубль версии не нужен
+                // (проверка 12.11: «зимний лес» фоном интерьера расширитель вписать не смог и вернул JSON как был)
+                if (req.Refine is { } same && done.Files.Count > 0 && done.Files.All(f => f.Vgl == same.Scene.Json))
+                    return new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets),
+                        $"Описание сцены не изменилось: модель не нашла, куда вписать «{same.Value}». Сформулируйте иначе " +
+                        "или выберите другое поле");
                 // Готовый прогон уходит в отчёт сразу: вариант становится версией, не дожидаясь остальных
-                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType, f.Similarity))];
+                List<EditedImage> ready = [.. done.Files.Select(f => new EditedImage(f.Bytes, f.ContentType, f.Similarity,
+                    SceneOf(f, seed)))];
                 images.AddRange(ready);
                 progress.Report(at with { Stage = EditStage.Downloading, QueuePosition = null, Ready = ready });
             }
@@ -405,6 +422,16 @@ public sealed class LocalImageEditor(ILocalImageMedia? media, IMediaGpuYieldGate
             ? new ImageEditResult(EditOutcome.Failed, [], Free, false, RemoteId(tickets), "Локальная модель не вернула картинок")
             : new ImageEditResult(EditOutcome.Ok, images, Free, false, RemoteId(tickets), null);
     }
+
+    // Граф Fibo 2.0 Dev без картинок пишет JSON-описание сцены (расширитель VGL или доводка) — Ш8
+    private static bool WritesVgl(LocalImageRequest run) =>
+        run.Op == LocalImageOp.Generate && run.Images.Count == 0 && LocalImageModels.Effective(run) == Fibo2Dev;
+
+    // Память версии Fibo 2.0: описание, сид прогона и холст — размер готовой картинки
+    private static ImageVglScene? SceneOf(LocalImageFile file, long? seed) =>
+        file.Vgl is { } json && seed is { } s && ImageDimensions.Read(file.Bytes) is { } size
+            ? new ImageVglScene(json, s, size.Width, size.Height)
+            : null;
 
     // Запуск пойдёт на Klein или H3-Image: LoRA персонажа обучены под Qwen-Image, поэтому ни её, ни триггера
     private static bool IsKlein(LocalImageRequest run) => LocalImageModels.TakesCharacterByPhotos(LocalImageModels.Effective(run));

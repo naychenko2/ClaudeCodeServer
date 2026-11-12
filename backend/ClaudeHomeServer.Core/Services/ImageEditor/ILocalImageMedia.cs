@@ -181,7 +181,31 @@ public sealed record LocalImageRequest(
     LocalJobOrigin? Origin = null,
     // Только Krea 2 Turbo (Ш4): id стилевой LoRA (Krea2Styles) либо StyleReference — Images[0] «стиль по образцу»
     string? KreaStyle = null,
-    bool StyleReference = false);
+    bool StyleReference = false,
+    // JSON-описание сцены Fibo 2.0 (VGL, Ш8): только у Generate модели fibo2 без картинок. Задано — граф рисует
+    // по нему без расширителя (Prompt — лишь подпись запуска); с VglChange расширитель сначала переписывает его
+    // под одно изменение. Сид и размер — у вызывающего (те же, что у версии, от которой доводка)
+    string? Vgl = null,
+    LocalVglChange? VglChange = null);
+
+// Доводка по JSON-описанию Fibo 2.0: Field — ключ Fibo2VglFields, Value — новое значение словами человека
+public sealed record LocalVglChange(string Field, string Value);
+
+// Поля панели «Доводка» (Ш8): ключ → что меняется, словами для расширителя VGL (он пишет JSON по-английски).
+// Набор — из постановки: время суток и свет, ракурс и камера, одежда или цвет главного объекта, фон, стиль
+public static class Fibo2VglFields
+{
+    public const int MaxValueLength = 300;
+
+    public static readonly IReadOnlyDictionary<string, string> Aspects = new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        ["light"] = "time of day and lighting",
+        ["camera"] = "camera angle, shot and lens",
+        ["subject"] = "clothing or colour of the main subject",
+        ["background"] = "background and setting",
+        ["style"] = "style and medium of the image",
+    };
+}
 
 // LoRA персонажа: имя файла в ComfyUI и сила применения
 public sealed record LocalImageLora(string Name, double Strength);
@@ -213,7 +237,8 @@ public sealed record LocalImagePoll(
     LocalGpuQueueInfo? Gpu = null);
 
 // Similarity — сходство лица с эталоном (0..1); null — не считалось или лицо не найдено
-public sealed record LocalImageFile(byte[] Bytes, string ContentType, double? Similarity = null);
+// Vgl — JSON-описание сцены, по которому Fibo 2.0 нарисовала картинку (Ш8); null — граф без расширителя VGL
+public sealed record LocalImageFile(byte[] Bytes, string ContentType, double? Similarity = null, string? Vgl = null);
 
 // Poses — по одному на вход, в том же порядке; null — лицо не найдено.
 // Busy — очередь занята или ComfyUI не ответил: «попробуй позже», фото не помечаются

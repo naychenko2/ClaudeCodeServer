@@ -111,6 +111,7 @@ public sealed class ImageEditLaunchAssembler(
             return Invalid("Вне проекта нельзя брать образцы, персонажей и исходник из файлов проекта");
 
         string? threadId = null, chatId = null, baseVersionId = null;
+        ImageVglScene? baseScene = null;
         var source = req.Source;
         var baseStepId = string.IsNullOrWhiteSpace(req.BaseStepId) ? null : req.BaseStepId.Trim();
         if (!string.IsNullOrWhiteSpace(req.ThreadId))
@@ -126,6 +127,7 @@ public sealed class ImageEditLaunchAssembler(
             if (version is null)
                 return Fail<ImageEditJobInput>(ImageEditErrorCodes.VersionNotFound, "Версии нет в этой картинке");
             baseVersionId = version.Id;
+            baseScene = version.Vgl;
             var versionStep = thread.ImageStepOf(version);
             baseStepId ??= versionStep;
             if (source is null && versionStep is not null && steps?.Open(ownerId, scope.Key, versionStep) is { } found)
@@ -150,6 +152,9 @@ public sealed class ImageEditLaunchAssembler(
         var style = Krea2Styles.Find(req.Style);
         if (!string.IsNullOrWhiteSpace(req.Style) && style is null)
             return Invalid($"Стиль «{req.Style}» неизвестен");
+
+        var refine = Refine(req, quoteInfo, threadId, baseScene);
+        if (refine.Error is { } refineError) return Invalid(refineError);
 
         var limits = ImageEditCatalog.DefaultLimits;
         var sizes = new[] { source?.Bytes, req.Mask?.Bytes, req.Annotated?.Bytes }
@@ -220,7 +225,29 @@ public sealed class ImageEditLaunchAssembler(
             ThreadId: threadId,
             BaseVersionId: baseVersionId,
             CharacterPicker: picker,
-            Style: style?.Id));
+            Style: style?.Id,
+            Refine: refine.Value));
+    }
+
+    // Доводка по JSON-описанию (Ш8): нить с версией Fibo 2.0, у которой описание есть, одно известное поле,
+    // непустое значение, котировка генерации local / fibo2, без образцов и персонажа — иначе отказ до запуска,
+    // а не молчаливая обычная генерация
+    private static (ImageVglRefine? Value, string? Error) Refine(ImageEditLaunchRequest req, ImageEditQuoteInfo? quote,
+        string? threadId, ImageVglScene? scene)
+    {
+        if (string.IsNullOrWhiteSpace(req.RefineField) && string.IsNullOrWhiteSpace(req.RefineValue)) return (null, null);
+        var field = req.RefineField?.Trim() ?? "";
+        var value = req.RefineValue?.Trim() ?? "";
+        if (!Fibo2VglFields.Aspects.ContainsKey(field)) return (null, $"Поле доводки «{field}» неизвестно");
+        if (value.Length == 0) return (null, "Не указано новое значение поля");
+        if (value.Length > Fibo2VglFields.MaxValueLength)
+            return (null, $"Значение поля длиннее {Fibo2VglFields.MaxValueLength} символов");
+        if (threadId is null || scene is null) return (null, "Доводка — только у версии, нарисованной Fibo 2.0 с JSON-описанием");
+        if (quote is not { Op: ImageEditOp.Generate, Provider: LocalImageEditor.ProviderKey, Model: LocalImageModels.Fibo2 })
+            return (null, "Доводку рисует Fibo 2.0: нужна котировка генерации локальной моделью fibo2");
+        if (req.Uploaded.Count > 0 || req.ReferencePaths.Count > 0 || req.CharacterSlug is { Length: > 0 })
+            return (null, "Доводка идёт без образцов и персонажа");
+        return (new ImageVglRefine(scene, field, value), null);
     }
 
     // Подбор фото персонажа под сюжет (ADR-027 §7). Возвращает
@@ -561,4 +588,8 @@ public sealed record ImageEditLaunchRequest(
     // целиком, образцы — только персонаж, маска строится сервером
     FaceTarget? FaceTarget = null,
     // Стиль Krea 2 Turbo (Krea2Styles.Id); пусто — без стиля
-    string? Style = null);
+    string? Style = null,
+    // Доводка версии Fibo 2.0 по JSON-описанию (Ш8): поле (Fibo2VglFields) и новое значение. Основа —
+    // версия VersionId (или текущая) со своим описанием; котировка — генерация local / fibo2
+    string? RefineField = null,
+    string? RefineValue = null);

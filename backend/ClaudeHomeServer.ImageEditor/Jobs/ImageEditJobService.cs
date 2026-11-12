@@ -142,6 +142,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public List<FacePassChain.FacePassResult> FaceResults { get; } = [];
         // Сходство лица по номеру варианта; записи нет, если драйвер его не посчитал
         public Dictionary<int, double> Similarities { get; } = [];
+        // JSON-описание Fibo 2.0 по номеру варианта (Ш8); записи нет, если модель его не дала
+        public Dictionary<int, ImageVglScene> Scenes { get; } = [];
         public EditCost? Cost { get; set; }
         public EditOutcome? Outcome { get; set; }
         public bool? Charged { get; set; }
@@ -259,7 +261,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
     public ImageEditQuoteInfo? QuoteInfo(string ownerId, string projectId, string quoteId) =>
         _quotes.TryGetValue(quoteId, out var q) && q.OwnerId == ownerId && q.ProjectId == projectId && q.ExpiresAt >= Now()
             ? new ImageEditQuoteInfo(q.Op, q.ContextRevision, q.Provider, q.FacePasses,
-                ImageEditCatalog.WithInputLimits(q.Model).Caps)
+                ImageEditCatalog.WithInputLimits(q.Model).Caps, q.Model.Id)
             : null;
 
     // Пропорции, которые человек выбрал явно в старом интерфейсе (поле aspectRatio запуска генерации), стоят выше
@@ -595,6 +597,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 {
                     job.Variants.Add(n);
                     if (ready[i].Similarity is { } similarity) job.Similarities[n] = similarity;
+                    if (ready[i].Scene is { } scene) job.Scenes[n] = scene;
                     if (mismatch) job.SizeNote = ImageEditSizeNotes.AspectMismatch;
                 }
             }
@@ -627,7 +630,10 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         {
             job.Variants.AddRange(tail);
             foreach (var n in tail)
+            {
                 if (result.Images[n - 1].Similarity is { } similarity) job.Similarities[n] = similarity;
+                if (result.Images[n - 1].Scene is { } scene) job.Scenes[n] = scene;
+            }
             job.Cost = cost;
             job.Outcome = EditOutcome.Ok;
             job.Charged = result.Charged ?? true;
@@ -968,7 +974,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 j.Quote.FacePasses is { } n && n > 1 ? null : (j.Similarities.Count > 0 ? new Dictionary<int, double>(j.Similarities) : null),
                 Op: ImageEditOpNames.OpName(j.Quote.Op),
                 FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
-                Gpu: j.Gpu);
+                Gpu: j.Gpu,
+                Scenes: j.Scenes.Count > 0 ? new Dictionary<int, ImageVglScene>(j.Scenes) : null);
     }
 
     // Тяжёлый ли прогон (шаг 28): у локальных картинок прогоны короткие (секунды–десятки секунд),

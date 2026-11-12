@@ -201,6 +201,9 @@ export interface ImageEditJobInput {
   // верхнеуровневый characterSlug при подстановке не едет; с ней contextRevision/mask/annotated
   // и референсы контекста в тело не кладутся (сборка — buildQuoteBody/buildJobBody)
   faceTarget?: FaceTarget | null;
+  // Доводка версии Fibo 2.0 по JSON-описанию (Ш8): поле (VglField) и новое значение; версия — versionId
+  refineField?: string;
+  refineValue?: string;
 }
 
 export interface ImageEditUploadedReference { file: Blob; name: string; role: ReferenceRole }
@@ -242,6 +245,8 @@ export function jobForm(input: ImageEditJobInput): FormData {
   // {versionId, facesKey, faces: [{face, characterSlug}]}, уходит JSON-строкой (как photoLabels);
   // сервер десериализует в FaceTarget
   if (input.faceTarget) form.append('faceTarget', JSON.stringify(input.faceTarget));
+  if (input.refineField) form.append('refineField', input.refineField);
+  if (input.refineValue) form.append('refineValue', input.refineValue);
   return form;
 }
 

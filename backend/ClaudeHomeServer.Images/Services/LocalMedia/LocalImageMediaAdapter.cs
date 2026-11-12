@@ -285,6 +285,19 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
         // Фактическая модель: Klein, H3-Image и Fibo 2.0 в непроверенных для них случаях идут на Qwen «качественно»
         var model = request.Op == LocalImageOp.FaceDetail ? null : LocalImageModels.Effective(request);
 
+        // Доводка по JSON-описанию (Ш8): только генерация Fibo 2.0 Dev без картинок и LoRA
+        if (request.Vgl is not null || request.VglChange is not null)
+        {
+            if (request.Op != LocalImageOp.Generate || images.Count > 0 || model != LocalImageModels.Fibo2 || request.Vgl is null)
+                return LocalImageSubmitted.Fail("Доводка по JSON-описанию — только у генерации Fibo 2.0 без образцов.");
+            if (request.Vgl.Length > ComfyWorkflows.MaxVglLength || ParseVgl(request.Vgl) is null)
+                return LocalImageSubmitted.Fail("JSON-описание сцены повреждено.");
+            if (request.VglChange is { } change
+                && (!Fibo2VglFields.Aspects.ContainsKey(change.Field) || string.IsNullOrWhiteSpace(change.Value)
+                    || change.Value.Length > Fibo2VglFields.MaxValueLength))
+                return LocalImageSubmitted.Fail("Поле доводки задано неверно.");
+        }
+
         // Графы Klein и H3-Image LoRA не применяют — и не проверяют
         if (request.Lora is { } requested && !LocalImageModels.TakesCharacterByPhotos(model))
         {
@@ -498,12 +511,17 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             : ComfyWorkflows.H3ImageCanvas(SizeFor(aspect).Width, SizeFor(aspect).Height);
 
     // Fibo 2.0: генерация по тексту и по образцам — холст из формата или из таблицы Fibo (~1 Мп);
-    // правка — размер выбирает узел условий: обученный размер под пропорцию исходника
+    // правка — размер выбирает узел условий: обученный размер под пропорцию исходника; доводка — рендер
+    // JSON-описания (с переписыванием под изменение или без) на холсте и сиде версии
     private static System.Text.Json.Nodes.JsonObject Fibo2Graph(string prompt, LocalImageRequest request, IReadOnlyList<string> names,
         string? model, IReadOnlyList<string> faceRefs, long seed, int count, string prefix)
     {
         var turbo = model == LocalImageModels.Fibo2Turbo;
         var size = OneMegapixelCanvas(request);
+        if (request.Vgl is { } vgl)
+            return request.VglChange is { } change
+                ? ComfyWorkflows.Fibo2Refine(vgl, Fibo2VglFields.Aspects[change.Field], change.Value.Trim(), size.Width, size.Height, seed, prefix)
+                : ComfyWorkflows.Fibo2Render(vgl, size.Width, size.Height, seed, prefix);
         if (names.Count == 0)
             return ComfyWorkflows.Fibo2Generate(prompt, size.Width, size.Height, seed, count, prefix, turbo);
         return ComfyWorkflows.Fibo2Edit(prompt, names, request.Op == LocalImageOp.Generate ? size : null, seed, prefix, turbo,
@@ -593,12 +611,13 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
             if (!history.Completed) return new LocalImagePoll(LocalImageState.Running, 0, [], null, Gpu: _gpuBuilder.Build(ticket, 0));
 
             var similarity = ParseSimilarity(history.Texts);
+            var vgl = history.Texts.Select(ParseVgl).FirstOrDefault(v => v is not null);
             var files = new List<LocalImageFile>();
             foreach (var file in history.Files)
             {
                 var type = LocalMediaService.ContentTypeOf(Path.GetExtension(file.FileName));
                 if (type is null || !type.StartsWith("image/", StringComparison.Ordinal)) continue;
-                files.Add(new LocalImageFile(await comfy.DownloadAsync(file, ct), type, similarity));
+                files.Add(new LocalImageFile(await comfy.DownloadAsync(file, ct), type, similarity, vgl));
             }
             return files.Count == 0
                 ? Failed("ComfyUI не вернул картинок.")
@@ -640,6 +659,30 @@ public sealed class LocalImageMediaAdapter : ILocalImageMedia
                 : null;
         }
         return null;
+    }
+
+    // JSON-описание сцены из истории (PreviewAny расширителя VGL): объект JSON, в том числе в ограде ```json.
+    // Текст отдаётся как есть, без переразметки: тот же текст с тем же сидом даёт ту же картинку
+    // (проверка 12.11.2026 — разница 0). Не объект или мусор — null: у прогона описания нет
+    internal static string? ParseVgl(string text)
+    {
+        var body = text.Trim();
+        if (body.StartsWith("```", StringComparison.Ordinal))
+        {
+            var start = body.IndexOf('\n');
+            var end = body.LastIndexOf("```", StringComparison.Ordinal);
+            if (start < 0 || end <= start) return null;
+            body = body[(start + 1)..end].Trim();
+        }
+        if (!body.StartsWith('{')) return null;
+        try
+        {
+            return System.Text.Json.Nodes.JsonNode.Parse(body) is System.Text.Json.Nodes.JsonObject ? body : null;
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
     }
 
     // Потолок ожидания расчёта — как у воркера сходства

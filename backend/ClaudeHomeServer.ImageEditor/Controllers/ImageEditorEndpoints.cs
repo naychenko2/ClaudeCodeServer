@@ -229,7 +229,9 @@ public abstract class ImageEditorEndpoints(
             ContextRevision: form.ContextRevision,
             CharacterPhotos: form.CharacterPhotos,
             FaceTarget: faceTarget,
-            Style: form.Style);
+            Style: form.Style,
+            RefineField: form.RefineField,
+            RefineValue: form.RefineValue);
 
         var started = await launcher.LaunchAsync(scope.Tenant, UserId, scope, request, ct);
         return Map(started, created => StatusCode(StatusCodes.Status202Accepted, created));
@@ -350,6 +352,9 @@ public abstract class ImageEditorEndpoints(
         // и отвергнуть как «Не удалось разобрать faceTarget», а не проглотить как обычную правку
         [System.ComponentModel.DataAnnotations.DisplayFormat(ConvertEmptyStringToNull = false)]
         public string? FaceTarget { get; set; }
+        // Доводка версии Fibo 2.0 (Ш8): поле JSON-описания (Fibo2VglFields) и новое значение; версия — VersionId
+        public string? RefineField { get; set; }
+        public string? RefineValue { get; set; }
     }
 
     // Строковой проверки SafePath мало: символическая ссылка внутри проекта (refs → /etc)

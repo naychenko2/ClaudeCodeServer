@@ -182,7 +182,7 @@ CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одно
 
 `multipart/form-data` на `POST …/image-editor/jobs`; здесь — поля формы как JSON-объект. С ревизией `source`,
 `references`, `referencePaths`, `characterSlug`, `threadId`, `versionId` не нужны; остаются `quoteId`, `prompt`, `marks`,
-`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `characterPhotos`, `baseStepId`, `faceTarget` — клиент шлёт их по месту (маска, аннотации, роли референсов, фото персонажа, шаг истории, подстановка на лицо).
+`aspectRatio`, `matchSourceSize`. Остальные поля формы, которых нет в примере: `sourcePath`, `source`, `mask`, `annotated`, `referenceRoles`, `referencePathRoles`, `characterPhotos`, `baseStepId`, `faceTarget`, `refineField`, `refineValue` — клиент шлёт их по месту (маска, аннотации, роли референсов, фото персонажа, шаг истории, подстановка на лицо, доводка Fibo 2.0).
 
 ```json image-job-form
 {
@@ -199,6 +199,9 @@ CONSULT-CONTEXT-SUBJECT): у аудитории рассылки нет одно
 
 `prompt` котировки — текст запроса для «Авто» локальных моделей (без него выбор идёт по операции);
 `style` формы запуска — id стиля Krea 2 Turbo (только при ручном выборе этой модели).
+`refineField` и `refineValue` — доводка версии Fibo 2.0 по JSON-описанию сцены: ключ поля (`light`, `camera`, `subject`,
+`background`, `style`) и новое значение; основа — версия `versionId` (или текущая) с описанием, котировка — генерация
+`local` / `fibo2`.
 
 ### Котировка звука: тело
 

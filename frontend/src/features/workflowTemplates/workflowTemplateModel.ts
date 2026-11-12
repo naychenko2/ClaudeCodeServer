@@ -1,0 +1,145 @@
+// Чистая модель редактора шаблонов процесса (feature-workflows, C1a): ни DOM, ни запросов.
+// Зеркало серверных WorkflowRules (backend/ClaudeHomeServer.Tasks/WorkflowRules.cs): те же
+// белые списки, тот же кламп, те же тексты подсказок. Истина при этом остаётся серверным
+// валидатором: stageErrors только показывает картину ДО отправки (редактор правит за один
+// проход, а не по одной ошибке на сохранение), сервер проверяет сам и при несогласии
+// отвечает 400 со своим списком.
+// Порядок stages = порядок маршрута (по позиции) — модель порядок не меняет.
+
+import type { WorkflowStagePresence, WorkflowStageRole, WorkflowTemplate } from './types';
+
+// Роли этапов: ключи TaskRoles без feature/rework/consult (разрез §0.3) — шаблон не вводит
+// новых видов работ; rework берёт этап step, эпик и consult вне маршрута.
+export const STAGE_ROLES: readonly WorkflowStageRole[] =
+  ['cut', 'design', 'plan', 'step', 'review', 'qa', 'final', 'merge'];
+
+// Несъёмные роли (разрез §1): step — сама работа, merge — закрытие фичи, final — единственная
+// проверка решения целиком, а его скрытый пропуск — уже названный риск эпика.
+// final несъёмный ВРЕМЕННО — открытый вопрос 1 Андрею; его ответ правит эту строку,
+// а не логику ниже (на бэке — та же строка в WorkflowRules.NonSkippable).
+export const NON_SKIPPABLE: readonly WorkflowStageRole[] = ['step', 'merge', 'final'];
+
+// Присутствие этапа (разрез §1 «Пропуск») и политика простоя (серверные WorkflowStagePresence.All /
+// WorkflowStallPolicies.All).
+export const STAGE_PRESENCES: readonly WorkflowStagePresence[] = ['on', 'optional', 'off'];
+export const STALL_POLICIES: readonly string[] = ['nudge-alert', 'alert', 'stop-alert'];
+
+// Лимит текста промпта этапа (серверный WorkflowRules.PromptLimit).
+export const PROMPT_LIMIT = 4000;
+
+export function isNonSkippable(role: string): boolean {
+  return (NON_SKIPPABLE as readonly string[]).includes(role);
+}
+
+// Присутствие этапа: возвращает КОПИЮ шаблона с новым presence этапа роли (несущность —
+// состояние редактора в React). Несъёмную роль снять нельзя: 'off'/'optional' для неё —
+// шаблон возвращается без изменений (тот же запрет, что у серверного валидатора).
+// Роли нет в шаблоне — без изменений: ставить некуда.
+export function setPresence(
+  tpl: WorkflowTemplate,
+  role: string,
+  presence: WorkflowStagePresence,
+): WorkflowTemplate {
+  const idx = tpl.stages.findIndex(s => s.role === role);
+  if (idx < 0) return tpl;
+  if (isNonSkippable(role) && presence !== 'on') return tpl;
+  const stages = [...tpl.stages];
+  stages[idx] = { ...stages[idx], presence };
+  return { ...tpl, stages };
+}
+
+// Порог молчания этапа (И3 «таймаут обойти нельзя»): null/0/отрицательное — не «бесконечно»,
+// а дефолт конфига (null — его берёт вызывающая сторона); 1..4 — ниже пола, поднимаем до 5;
+// больше 240 — клампим. Тот же WorkflowRules.NormalizeStall: кламп — часть контракта,
+// а не ошибка — редактор сохраняет клампнутое значение, валидатору на диапазон ругаться не за что.
+export function clampStall(n: number | null | undefined): number | null {
+  if (n === null || n === undefined || n <= 0) return null;
+  if (n < 5) return 5;
+  if (n > 240) return 240;
+  return n;
+}
+
+// Ячейка матрицы — та же проверка, что серверной ModelCellRules.ValidateModelCell:
+// пустая валидна; "tier:*" запрещён (ячейка уже адресована уровнем). Без trim: сервер
+// тоже триммит не ячейку, а только пустоту — " tier:strong " для него валидная строка-id.
+function modelCellError(cell: string | null | undefined, label: string): string | null {
+  if (cell === null || cell === undefined || cell.trim() === '') return null;
+  if (['tier:strong', 'tier:medium', 'tier:weak'].includes(cell.toLowerCase())) {
+    return `${label}: в ячейке уровня не может быть tier:* — уровень уже выбран строкой`;
+  }
+  return null;
+}
+
+// Подсказки по шаблону до отправки — зеркало WorkflowRules.Validate, включая контракт
+// «собрать ВСЕ ошибки, не первую» и поведение против пустых записей (null-этап — ошибка
+// в списке, а не исключение). Метки те же: роль, если она известна, иначе порядковый номер.
+export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] {
+  const errors: string[] = [];
+  if (!tpl) {
+    errors.push('шаблон не задан.');
+    return errors;
+  }
+  const stages = tpl.stages;
+  if (!Array.isArray(stages)) {
+    errors.push('шаблон: список этапов не задан.');
+    return errors;
+  }
+
+  const seenRoles = new Set<string>();
+
+  stages.forEach((stage, i) => {
+    // Метка: роль, если она известна; иначе порядковый номер — «неизвестную роль»
+    // именем этапа не назвать.
+    const labelUnknown = `этап #${i + 1}`;
+    if (!stage) {
+      errors.push(`${labelUnknown}: пустая запись`);
+      return;
+    }
+
+    const role = (stage.role ?? '').trim();
+    // Presence и StallPolicy триммятся так же, как роль (R-B1a, п.3): строка из UI
+    // с крающими пробелами — та же запись, а не «неизвестное значение».
+    const presence = (stage.presence ?? '').trim();
+    const stallPolicy = (stage.stallPolicy ?? '').trim();
+    const known = (STAGE_ROLES as readonly string[]).includes(role);
+    const label = known ? `этап «${role}»` : labelUnknown;
+
+    if (!known) {
+      errors.push(`${label}: неизвестная роль этапа «${role}». Допустимы: ${STAGE_ROLES.join(', ')}.`);
+    } else if (seenRoles.has(role)) {
+      // Та же семантика, что у серверного `!seenRoles.Add(role)`: проверка и запись — вместе.
+      errors.push(`${label}: роль встречается в маршруте дважды.`);
+    } else {
+      seenRoles.add(role);
+    }
+
+    if (!(STAGE_PRESENCES as readonly string[]).includes(presence)) {
+      errors.push(`${label}: неизвестное Presence «${presence}». Допустимы: ${STAGE_PRESENCES.join(', ')}.`);
+    } else if (isNonSkippable(role) && (presence === 'off' || presence === 'optional')) {
+      // Несъёмную роль нельзя ни снять, ни сделать опциональной: пропуск должен быть
+      // виден, а не исчезать тихо (риск эпика «скрытый пропуск финала»).
+      errors.push(`${label}: роль несъёмная, Presence «${presence}» запрещён.`);
+    }
+
+    // Кого звать — одно: специальность ИЛИ конкретная персона (разрез §1).
+    // specialty='none' — «не задана», не выбор, с personaId не конфликтует.
+    if (stage.specialty && stage.specialty !== 'none' && (stage.personaId ?? '').trim() !== '') {
+      errors.push(`${label}: Specialty и PersonaId взаимоисключающи: укажите что-то одно.`);
+    }
+
+    if ((stage.prompt ?? '').length > PROMPT_LIMIT) {
+      errors.push(`${label}: текст промпта этапа длиннее ${PROMPT_LIMIT} символов`);
+    }
+
+    for (const cell of [stage.tierStrong, stage.tierMedium, stage.tierWeak]) {
+      const cellError = modelCellError(cell, label);
+      if (cellError) errors.push(cellError);
+    }
+
+    if (stallPolicy !== '' && !(STALL_POLICIES as readonly string[]).includes(stallPolicy)) {
+      errors.push(`${label}: неизвестная политика простоя «${stallPolicy}». Допустимы: ${STALL_POLICIES.join(', ')}.`);
+    }
+  });
+
+  return errors;
+}

@@ -1928,7 +1928,8 @@ public class WikiChatIngestTests : IDisposable
 
     // Минор ревью C2R-Sh1, п.1: отброшенные поштучным приёмом суммируются по всем окнам,
     // первая причина — из первого окна с отказами. Мутации: «убрать dropped += ing.Dropped»
-    // → 2 вместо 3; «брать причину последнего окна» → чужая причина. Обе красные.
+    // → 0 вместо 3 (сумма не набирается вовсе; сверено мутацией 11.11); «брать причину
+    // последнего окна» → чужая причина. Обе красные.
     [Fact]
     public async Task ДваОкна_DroppedСуммируются_ПерваяПричинаИзПервогоОкна()
     {
@@ -1977,5 +1978,33 @@ public class WikiChatIngestTests : IDisposable
         res.FirstDropReason.Should().NotBeNull().And.Contain("отсутствует в источнике дословно",
             "причина отброшенной операции доходит вместе с числом");
         llm.CountOf("S").Should().Be(1, "разбор оборвался на первом окне");
+    }
+
+    // T-C1 (хвост ffb0cdf3): сбой записи стора разбора после применённого окна — отказ
+    // несёт уже понесённое: Dropped и первую причину, как пути WindowFailure/RecordRejection.
+    // Стор ставится нечитаемым перед вызовом модели: файла до первого разбора нет — Get в
+    // начале прогона видит «нет файла» как норму, а Update в конце ловит Invalid.
+    // Мутация «не нести dropped/firstDropReason в Refused на пути upApplied» → Dropped 0 и
+    // пустая причина: красен ровно этот тест.
+    [Fact]
+    public async Task СбойЗаписиСтораПослеПрименённогоОкна_ОтказНесётDroppedИПервуюПричину()
+    {
+        AddSession();
+        SetShortHistory();
+
+        var llm = new FakeLlm(("S", WikiSynthJson.Ok(
+            WikiSynthJson.Op("append", PageTitle, Claim1, [Claim1]),
+            WikiSynthJson.Op("append", PageTitle, "Отброленное первое", [NoQuote]),
+            WikiSynthJson.Op("append", PageTitle, "Отброленное второе", [NoQuote]))));
+        llm.BeforeNextCall(() => File.WriteAllText(
+            Path.Combine(Root, "keeper", "chat-triage.json"), "не JSON"));
+
+        var res = await Sut(llm).AnalyzeAsync(User, ChatId);
+
+        res.Outcome.Should().Be(WikiChatIngestService.OutcomeRejected, res.Reason);
+        res.Reason.Should().Contain("курсор разбора не записан", "сбой записи стора назван причиной отказа");
+        res.Dropped.Should().Be(2, "отказ стора не стирает отброшенное: оно было понесено");
+        res.FirstDropReason.Should().NotBeNull().And.Contain("отсутствует в источнике дословно",
+            "причина отброшенной операции доходит вместе с числом");
     }
 }

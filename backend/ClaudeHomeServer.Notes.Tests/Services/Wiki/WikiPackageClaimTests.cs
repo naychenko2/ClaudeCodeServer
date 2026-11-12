@@ -1,5 +1,6 @@
 using System.Text;
 using ClaudeHomeServer.Services.Notes.Wiki;
+using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 using Xunit;
 
@@ -128,8 +129,13 @@ public class WikiPackageClaimTests : IDisposable
     public void ЦитатаВОбрамленииРазметки_ФормаИГейтОдинВердикт(string quote, bool допустима)
     {
         var formErrors = WikiPackage.ShapeErrors(Pkg(OpWithQuotes([quote], Claim)));
+        // Та же валидная страница и та же карточка, что в WikiGateTests: общий каркас.
+        var page = WikiGateFixtures.Page(
+            swodka: "- Утверждение с цитатой.[^s1]",
+            footnotes: "[^s1]: [[Карточка]] — «" + quote + "»");
         var gate = WikiGate.Check(
-            [new WikiGate.Draft(GateDir + "Тет.md", GatePage(quote)), GateCardDraft], "projects/p1", []);
+            [new WikiGate.Draft(WikiGateFixtures.P1Dir + "Тет.md", page), WikiGateFixtures.CardDraft],
+            WikiGateFixtures.P1, []);
 
         if (допустима)
         {
@@ -220,21 +226,4 @@ public class WikiPackageClaimTests : IDisposable
         OpWith(WikiPackage.OpAppend) with { Quotes = quotes, Claim = claim };
 
     private string PackageFile(string id) => Path.Combine(_root, "keeper", "packages", id + ".json");
-
-    // ─── каркас гейта (общий тест «одна мера»): страница с сноской + карточка источника ───
-
-    private const string GateDir = "Проекты/p1/";
-    private const string GateGood = "- Утверждение с цитатой.[^s1]";
-
-    private static string GateFm(string type, string extra = "") =>
-        "---\ntype: " + type + "\nsummary: тестовая страница\n" + extra + "status: active\n---";
-
-    private static string GateCard() =>
-        GateFm("source", "origin: note\nref: note:1\nhash: h1\ncaptured: 2026-10-28\n") + "\n\n# Карточка\n";
-
-    private static string GatePage(string quote) =>
-        GateFm("entity") + $"\n\n# Тет\n\n## Сводка\n{GateGood}\n\n## Хронология\n\n## Противоречия\n\n## История\n" +
-        $"\n[^s1]: [[Карточка]] — «{quote}»\n";
-
-    private static readonly WikiGate.Draft GateCardDraft = new(GateDir + "Источники/Карточка.md", GateCard());
 }

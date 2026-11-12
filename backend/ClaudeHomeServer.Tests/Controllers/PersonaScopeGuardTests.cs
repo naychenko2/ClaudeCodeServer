@@ -97,6 +97,9 @@ public class PersonaScopeGuardTests
         ["KnowledgeSearch"] = "агентский путь: доступ к датасету по владельцу (§3.1 «без изменений»)",
         ["AiCondition"] = "AI-формулировка условия: id персоны нет (§3.1 «без изменений»)",
         ["Ask"] = "агентский путь: DenyOnDelegatedTurn, токен арендатора (§3.1 «без изменений»)",
+        ["MigrateSpecialtyInheritance"] = "разовая миграция прав персон: маршрут админский ([Authorize(Roles = "
+            + "\"admin\")]), объекта персоны в пути нет, доступ проверяется ролью, а не scope — A1b (c7334f391), "
+            + "разрез ai-fabrika-workflow-cut-2026-11 §2 «Миграция»",
     };
 
     private static List<(MethodInfo Method, string Verb, string Template)> RouteActions()
@@ -139,7 +142,10 @@ public class PersonaScopeGuardTests
     public void Сторож_ДействияПерсонБезId_ВЯвномСпискеСПричинойИБезАтрибута()
     {
         var withoutId = RouteActions().Where(a => !a.Template.Contains("{id}", StringComparison.Ordinal)).ToList();
-        withoutId.Should().HaveCount(14, "базовый состав действий без {id} — 14 (пантеон, списки, ai-пути, ask)");
+        // 15 = базовые 14 (пантеон, списки, ai-пути, ask) + админская ручка разовой миграции A1b
+        // (c7334f391): объекта персоны в пути нет, доступ закрыт ролью admin.
+        withoutId.Should().HaveCount(15, "базовый состав действий без {id} — 15 (пантеон, списки, ai-пути, ask, "
+            + "админская миграция A1b)");
 
         foreach (var (m, verb, template) in withoutId)
         {

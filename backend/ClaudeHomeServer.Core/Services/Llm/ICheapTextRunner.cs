@@ -31,11 +31,7 @@ public sealed class LlmTimeoutException(string? message = null)
 // Parallel — можно ли на этом движке вести несколько работ места одновременно (ночной разбор
 // вики разбирает чаты параллельно; остальным местам это не нужно — см.
 // LocalAction.ParallelExecutors).
-//
-// Имя совпадает с LocalExecutor из ClaudeHomeServer.Services.Composition: там — персона-
-// исполнитель задачи, здесь — движок локальной модели. Понятия разные, namespace'ы разные; в
-// файле, который видит оба, имя уточняют явно (LocalExecutorRoster).
-public sealed record LocalExecutor(string Engine, string Title, bool Parallel);
+public sealed record LocalEngineExecutor(string Engine, string Title, bool Parallel);
 
 // Единая точка «дешёвого» текстового one-shot вызова для фоновых действий. Скрывает от
 // потребителя выбор исполнителя: если действие сконфигурировано на локаль (LocalActionRouter)
@@ -127,7 +123,7 @@ public interface ICheapTextRunner
     // Тело по умолчанию — пустой список: своих движков не знает ни одна существующая реализация
     // и ни одна тестовая заглушка — для них это прежний ответ «движков не вижу». Абстрактный
     // метод сломал бы их всех сразу (их десятки) — поэтому дефолт, а не обязательный член.
-    public IReadOnlyList<LocalExecutor> LocalExecutorsFor(string actionKey) => [];
+    public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey) => [];
 
     // Готов ли названный движок принять работу ПРЯМО СЕЙЧАС — без самого вызова: проба
     // готовности по ReadyUrl (дежурная модель под арбитром GPU выгружается штатно, и отказ

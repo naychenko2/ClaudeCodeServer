@@ -43,7 +43,7 @@ public class LocalExecutorsSeamTests
     [Fact]
     public void DefaultLocalExecutors_Empty()
     {
-        // Шов, который про движках ничего не знает, не должен выдумывать исполнителя:
+        // Шов, который про движки ничего не знает, не должен выдумывать исполнителя:
         // пустой список = «работу не начинаем», а не «идём куда-нибудь».
         Assert.Empty(OldShape().LocalExecutorsFor(LocalActionCatalog.WikiNightly));
     }

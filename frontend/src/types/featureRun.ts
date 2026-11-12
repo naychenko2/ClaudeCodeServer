@@ -291,9 +291,12 @@ export interface FeatureMergeMark {
 
 // Возвраты одного источника (ревью/проверка/финал) (бэк: `FeatureSourceReturns`).
 export interface FeatureSourceReturns {
-  // Число уникальных задач с вердиктом returned/accepted_with_remarks.
+  // Возвраты этого источника — витки только с вердиктом returned. Сумма по источникам = verdicts.returned.
   count: number;
-  // Сколько из них, чья доработка ещё не done (бейдж в тревожный тон).
+  // Принято с замечаниями (accepted_with_remarks): в возвраты не входит. Сумма по источникам =
+  // verdicts.acceptedWithRemarks. Необязательное: старые ответы поля не несут.
+  remarks?: number;
+  // Сколько из возвратов (count), чья доработка ещё не done (бейдж в тревожный тон).
   open: number;
 }
 
@@ -314,7 +317,7 @@ export interface FeatureLane {
   total: number;
   // Принятые (Done) шаги.
   accepted: number;
-  // Шаги с возвратом.
+  // Шаги линии, у которых был хотя бы один виток returned («принято с замечаниями» здесь нет).
   returns: number;
 }
 

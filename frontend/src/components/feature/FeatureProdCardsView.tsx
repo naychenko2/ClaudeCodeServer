@@ -4,7 +4,7 @@
 // Модель — W4-2F1 (FeatureProdCards.buildProdCards): здесь только разметка, ничего
 // не пересчитывается. Одна карточка на шаг в порядке старта; цепочка узлов
 // «работа → вернул → доработка → принят», узлы с chatId — переходы в чат витка;
-// счётчик возвратов (2+ — тон предупреждения); текущий узел обведён акцентом; строки
+// счётчик кругов (2+ — тон предупреждения); текущий узел обведён акцентом; строки
 // «старт · чат · задача» нет — переходы живут на коде шага (Menu) и на узлах.
 //
 // Замечания ревью (Глеб, R4c), держатся здесь:
@@ -31,7 +31,7 @@
 //     и раскрытая; над лентой «Показать все N шагов (скрыто готовых: K)», N — из свёртки;
 //     выбор «показать все» живёт, пока лента смонтирована;
 //   • карточка, чья цепочка содержит хвост после мержа (run.postMergeTails — тот же источник,
-//     что у строк этапа, GC-F10a), помечается «· хвост после мержа».
+//     что у строк этапа, GC-F10a), помечается «· открыто после мержа» (FP-H2).
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { CSSProperties, FocusEvent, ReactElement } from 'react';
@@ -52,6 +52,7 @@ import { openChatById } from '../../lib/openChat';
 import { openTaskInSection } from '../../lib/tasks';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
+import { plural } from '../../lib/plural';
 import { getPersonaById } from '../../lib/personas';
 import type { LaneAxis } from './FeatureLaneModel';
 import type { StageTurn } from '../../types/featureStats';
@@ -65,13 +66,6 @@ import type { FeatureRun, FeatureStepChain, FeatureStageExecutor, FeatureTask } 
 const TOUCH_H = 40;
 const NODE_H = 20; // раскладочная высота узла (отступы компенсируют вылет)
 const OVERHANG = (TOUCH_H - NODE_H) / 2; // 10 — раскладочный, фактический вылет 7
-
-// «Возврат» по числу (словарь Ш1c): 1 — возврат, 2–4 — возврата, 5+ — возвратов.
-function returnWord(n: number): string {
-  if (n === 1) return 'возврат';
-  if (n <= 4) return 'возврата';
-  return 'возвратов';
-}
 
 // «Шаг» по числу (тот же приём, что pluralIntervals в FeatureTimelineTab): 1 шаг / 2–4 шага /
 // 5+ шагов; 11–14 — шагов.
@@ -508,13 +502,17 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
           data-testid="prod-status"
           style={{ ...stateTone(state), fontSize: FS.xs, fontWeight: 600, padding: `0 ${SP.xs}px`, borderRadius: R.sm, whiteSpace: 'nowrap', lineHeight: '16px' }}
         >
-          {badge.word}{badge.rest}{isTail ? ' · хвост после мержа' : ''}
+          {badge.word}{badge.rest}{isTail ? ' · открыто после мержа' : ''}
         </span>
         <MiniTrack nodes={card.nodes} />
+        {/* «Круг» по числу — общий plural() (FP-H2; прежний локальный cycleWord давал
+            «21 кругов»). Счётчик — chain.loops (returned + замечания), «возвраты» на
+            странице — только настоящие (verdicts.returned), поэтому здесь слово
+            «круги», а не «возвраты». */}
         {card.cycles > 0 ? (
           <span
             data-testid="prod-cycles"
-            title="Возвратов ревью"
+            title="Кругов ревью"
             style={{
               fontSize: FS.xs, fontWeight: 700,
               color: card.cycles >= 2 ? C.warningText : C.textSecondary,
@@ -522,7 +520,7 @@ function ProdCardView({ card, chain, executors, featureId, featureTitle, project
               borderRadius: R.sm, padding: `0 ${SP.xs}px`, lineHeight: '18px', whiteSpace: 'nowrap',
             }}
           >
-            {card.cycles} {returnWord(card.cycles)}
+            {card.cycles} {plural(card.cycles, 'круг', 'круга', 'кругов')}
           </span>
         ) : null}
       </div>

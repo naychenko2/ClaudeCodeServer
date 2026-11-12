@@ -8,8 +8,8 @@
 // витка, «Итог», «Время шага на оси фичи»); planned-карточка — пунктирная кромка и текст
 // «в плане, не заведён» (по признаку planned, не по state 'queue' — N4); свёртка ленты
 // (foldProd) с кнопкой «Показать все N шагов (скрыто готовых: K)»; канал подсветки —
-// onShowIntervals с taskIds шага; хвост после мержа — метка «· хвост после мержа»
-// (run.postMergeTails); одна раскрытая карточка за раз.
+// onShowIntervals с taskIds шага; хвост после мержа — метка плашки «· открыто после
+// мержа» (run.postMergeTails, FP-H2); одна раскрытая карточка за раз.
 //
 // Тесты: обычный цикл; возврат + доработка (клик по узлу → чат витка); активная
 // задача («сейчас» только над текущей карточкой, «текущий» узел — акцентная рамка,
@@ -35,7 +35,7 @@
 //   (7) onShowIntervals вызвать без taskIds шага → краснеет «вызывает с taskIds шага»;
 //   (8) не передать acceptance последней задачи в FeatureStepDetails → краснеет «Приёмка
 //       — критерии последней задачи»;
-//   (9) не пометить хвост (isTail игнорируется) → краснеет «· хвост после мержа»;
+//   (9) не пометить хвост (isTail игнорируется) → краснеет «· открыто после мержа»;
 //   (10) N кнопки взять из visible (не из свёртки) → краснеет «Показать все 48 шагов».
 
 import { act, createElement } from 'react';
@@ -265,24 +265,39 @@ describe('возврат и доработка', () => {
     expect(mockOpenChat.calls).toEqual(['chat-gleb']);
   });
 
-  it('один возврат — без предупреждения; два возврата — тон warning', () => {
+  // FP-H2: счётчик карточки — chain.loops (returned + замечания), слово — «круги»;
+  // «возвраты» на странице — только настоящие (verdicts.returned). Узлы цепочки при
+  // этом называются по вердикту («вернул» / «принят с замечаниями») — они настоящие.
+  it('один круг — без предупреждения; два круга — тон warning', () => {
     const { container: one } = mount(createElement(FeatureProdCardsView, { run: returnedRun(1), featureId: 'F' }));
     const c1 = findNodeByAttr(one, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c1).join('')).toBe('1 возврат');
+    expect(textNodes(c1).join('')).toBe('1 круг');
     expect(styleOf(c1).color).toBe(C.textSecondary);
     expect(styleOf(c1).border).toBe(`1px solid ${C.border}`);
 
     const { container: two } = mount(createElement(FeatureProdCardsView, { run: returnedRun(2), featureId: 'F' }));
     const c2 = findNodeByAttr(two, 'data-testid', 'prod-cycles')!;
-    expect(textNodes(c2).join('')).toBe('2 возврата');
+    expect(textNodes(c2).join('')).toBe('2 круга');
     expect(styleOf(c2).color).toBe(C.warningText);
     expect(styleOf(c2).border).toBe(`1px solid ${C.warning}`);
 
-    // Словарь Ш1c проверяется весь: 2–4 — «возврата» (здесь и «3 возврата»), 5+ — «возвратов».
+    // 2–4 — «круга» (здесь и «3 круга»), 5 — «кругов»; полная схема склонения — в тесте ниже.
     const { container: three } = mount(createElement(FeatureProdCardsView, { run: returnedRun(3), featureId: 'F' }));
-    expect(textNodes(findNodeByAttr(three, 'data-testid', 'prod-cycles')!).join('')).toBe('3 возврата');
+    expect(textNodes(findNodeByAttr(three, 'data-testid', 'prod-cycles')!).join('')).toBe('3 круга');
     const { container: five } = mount(createElement(FeatureProdCardsView, { run: returnedRun(5), featureId: 'F' }));
-    expect(textNodes(findNodeByAttr(five, 'data-testid', 'prod-cycles')!).join('')).toBe('5 возвратов');
+    expect(textNodes(findNodeByAttr(five, 'data-testid', 'prod-cycles')!).join('')).toBe('5 кругов');
+  });
+
+  // FP-H2: «круг» склоняется общим plural() (тот же приём, что «задач» в хронологии и
+  // «доработок» в герое). Прежний локальный cycleWord давал «21 кругов» и «22 кругов».
+  it('склонение «круг» по числу: 1/2/5/11/21/22 → круг/круга/кругов/кругов/круг/круга', () => {
+    const cases: Array<[number, string]> = [
+      [1, 'круг'], [2, 'круга'], [5, 'кругов'], [11, 'кругов'], [21, 'круг'], [22, 'круга'],
+    ];
+    for (const [n, word] of cases) {
+      const { container } = mount(createElement(FeatureProdCardsView, { run: returnedRun(n), featureId: 'F' }));
+      expect(textNodes(findNodeByAttr(container, 'data-testid', 'prod-cycles')!).join('')).toBe(`${n} ${word}`);
+    }
   });
 
   // Мутация (1): тон «текущего» без акцентной рамки краснит этот тест.
@@ -768,20 +783,18 @@ describe('хвост после мержа', () => {
     stepChains: [chain({ stepRef: 'Ш1', title: 'Хвост', taskIds: ['t1'], status: 'ждёт ревью', outcome: 'pending' })],
   });
 
-  it('задача цепочки в postMergeTails — плашка и блок времени помечены «· хвост после мержа»', () => {
+  it('задача цепочки в postMergeTails — плашка помечена «· открыто после мержа»', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: tailRun(['t1']), featureId: 'F', axis: AXIS_LIVE }));
     expand(container, 'Ш1');
     const badge = textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!).join('');
-    expect(badge).toBe('ждёт ревью · хвост после мержа');
-    // Блок времени — тот же маркер: это не обычная работа стадии.
-    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join('')).toContain('Время шага на оси фичи · хвост после мержа');
+    expect(badge).toBe('ждёт ревью · открыто после мержа');
   });
 
   it('нет хвоста в postMergeTails — маркера нет', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: tailRun([]), featureId: 'F' }));
     expand(container, 'Ш1');
     const badge = textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!).join('');
-    expect(badge).not.toContain('хвост');
+    expect(badge).not.toContain('открыто после мержа');
   });
 });
 

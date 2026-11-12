@@ -169,7 +169,7 @@ function TimeBlock({ turns, axis, isTail, isMobile, nowMs }: {
     kind === 'review' ? C.plan : kind === 'live' ? C.accent : C.success;
   return (
     <div data-testid="step-time">
-      <div style={SEC_LABEL}>Время шага на оси фичи{isTail ? ' · хвост после мержа' : ''}</div>
+      <div style={SEC_LABEL}>Время шага на оси фичи{isTail ? ' · открыто после мержа' : ''}</div>
       <div data-testid="step-strip" aria-hidden style={{ position: 'relative', height: 14, background: C.bgInset, borderRadius: R.sm }}>
         {visible.map((t, i) => {
           // Доли — ровно axisFrac (та же шкала, что у дорожки этапа). Минимум 0.3 % —

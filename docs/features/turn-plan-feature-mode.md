@@ -139,7 +139,7 @@ id чата, которого нет в снимке (чужой, удалённ
 | `rail` | сегмент[7] | `cut, plan, prod, review, qa, final, merge` по порядку |
 | `chips` | string[] | `open`, `waiting`, `stopped`, `merge`, `closed` |
 | `stepsAccepted`, `stepsTotal` | number | шаги: принятые (`Done`) / все |
-| `loops` | number | возвраты (`Verdicts.Loops`) |
+| `loops` | number | круги (returned + замечания) |
 | `now0` | объект \| null | первая `InProgress`-задача; `null` — фича не идёт |
 | `lastActivityAt` | ISO \| null | максимум `CompletedAt`/`ClaudeStartedAt` |
 | `summary` | `{ mergedAt: ISO \| null, durationMinutes }` \| null | только у закрытой |
@@ -225,8 +225,9 @@ id чата, которого нет в снимке (чужой, удалённ
   задача-возврат, её роль → `review`/`qa`/`final`; связи нет → `null` (догадок не делаем).
 - **Шаг = `stepRef`**: по нему доработка склеивается со своим шагом; в цепочку входят задача шага
   (`step`) и её доработки (`rework`, тот же `stepRef`).
-- **«С правками» считается возвратом**: вердикт `accepted_with_remarks` — работа вернулась к
-  исполнителю, поэтому идёт в `Loops`/↺.
+- **«С правками» считается кругом, а не возвратом**: вердикт `accepted_with_remarks` — работа
+  принята с замечаниями, к исполнителю не возвращалась, поэтому идёт в `Loops`/↺, но в счётчики
+  возвратов (`returnsBySource.count`, линии) не попадает.
 - **`Ready`** = финал закрыт (`Done`) + принят (`accepted`/`accepted_with_remarks`).
 
 ## Принцип: бэк считает, фронт показывает

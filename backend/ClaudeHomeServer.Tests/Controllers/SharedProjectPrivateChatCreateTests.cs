@@ -75,6 +75,9 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
     private string MemberId() => _factory.Services.GetRequiredService<UserStore>()
         .FindByUsername(TestWebApplicationFactory.SecondUsername)!.Id;
 
+    private string OwnerId() => _factory.Services.GetRequiredService<UserStore>()
+        .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
+
     private static async Task SetFlagAsync(HttpClient client) =>
         (await client.PutAsJsonAsync("/api/feature-flags/shared-projects", new { enabled = true }))
             .EnsureSuccessStatusCode();
@@ -154,6 +157,12 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
     /// после полного запроса.</summary>
     private Session Stored(string sessionId) =>
         _factory.Services.GetRequiredService<SessionManager>().GetById(sessionId)!;
+
+    /// <summary>Персоны владельца — из стора (тот же приём, что у Stored()): проверяется
+    /// состояние хранилища, а не видимость в ответе.</summary>
+    private List<string> OwnerPersonaIds() =>
+        _factory.Services.GetRequiredService<PersonaManager>().GetByOwner(OwnerId())
+            .Select(p => p.Id).ToList();
 
     private async Task<HubConnection> ConnectAsync(string username, string password)
     {
@@ -268,7 +277,18 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
     public async Task ЛичныйПроектСФлагомPrivate_409НеSharedProjectИБезНовогоЧата()
     {
         var projectId = await PersonalProjectAsync(role: null);
+
+        // Штатный ассистент владельца удалён (он заведён стартовым провижном хоста,
+        // StartupWarmup.cs:188-200): «персоны не появилось» проверяется отсутствием новой записи
+        // в сторе, а не идемпотентностью EnsureAsync — иначе перестановка 409 после провижна
+        // осталась бы зелёной: EnsureAsync вернул бы существующего ассистента и счёт не изменился
+        // бы (тот же приём, что в SharedProjectPersonaSessionTests).
+        var assistantId = _factory.Services.GetRequiredService<UserStore>().GetById(OwnerId())!.DefaultPersonaId;
+        if (assistantId is not null)
+            (await Owner().DeleteAsync($"/api/personas/{assistantId}")).EnsureSuccessStatusCode();
+
         var before = await ChatIdsAsync(Owner(), projectId);
+        var beforePersonas = OwnerPersonaIds();
 
         var r = await Owner().PostAsync($"/api/projects/{projectId}/sessions",
             Body(("mode", "auto"), ("private", true)));
@@ -280,6 +300,9 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
             "тот же текст и код, что у тумблера ChatsController.SetVisibility");
         (await ChatIdsAsync(Owner(), projectId)).Should().BeEquivalentTo(before,
             "отказанное создание не оставило в проекте чата");
+        OwnerPersonaIds().Should().BeEquivalentTo(beforePersonas,
+            "отказ идёт до провижна: в сторе не появилось персоны-ассистента — перестановка 409 " +
+            "после провижна краснеет на этом (провижн личного проекта создал бы её)");
     }
 
     [Fact]

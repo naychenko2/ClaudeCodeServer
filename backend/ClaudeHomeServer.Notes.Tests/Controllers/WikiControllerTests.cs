@@ -376,10 +376,12 @@ public class WikiControllerTests : IDisposable
     // ─── 8. «Начать вики заново»: чистка ИИ-страниц (J-P2) ──────────────────
 
     // Контракт ручки: svc — 403 до операции; предпросмотр — числа по разделам/классам и пути,
-    // ни одного байта на диске; запуск — удалён ровно состав предпросмотра, архив относительно
-    // корня вики; отказ Хранителя — 4xx с причиной, не 500; два одновременных запуска — оба 200,
-    // второй ничего не удаляет. Сам предикат чистки, формат журнала и содержимое архива —
-    // в WikiPurgeTests (J-P1a): здесь их не дублируем.
+    // страницы/манифест/журнал побайтно целы (маркеры доводки основ при первом входе под замок
+    // — названы в снимке, а не скрыты прогревом); запуск — удалён ровно состав предпросмотра,
+    // архив относительно корня вики; недведенный шаг после состоявшейся чистки — 200 с warning,
+    // без пути хоста в тексте; отказ Хранителя — 4xx с причиной, не 500; два одновременных
+    // запуска — оба 200, второй ничего не удаляет. Сам предикат чистки, формат журнала и
+    // содержимое архива — в WikiPurgeTests (J-P1a): здесь их не дублируем.
 
     [Fact]
     public async Task Чистка_СервисныйТокен_403_ВикаПобайтноЦела()
@@ -397,9 +399,6 @@ public class WikiControllerTests : IDisposable
     public async Task Чистка_Предпросмотр_ЧислаПоКлассамИПути_ДискПобайтноЦел_БезАрхива()
     {
         BuildPurgeFixture();
-        // Первый вход в замок раздела делает ленивую доводку основ (WikiKeeper.cs:596) — это
-        // не чистка: без прогрева снимок мерил бы её, а не предпросмотр (тот же приём, что в J-P1a).
-        await _keeper.WithSectionsLockedAsync(User, ["common", "personal"], () => Task.FromResult(0));
         var before = SnapshotWiki();
 
         var body = ((OkObjectResult)await Controller().Purge(dryRun: true)).Value
@@ -420,8 +419,19 @@ public class WikiControllerTests : IDisposable
         body.ArchivePath.Should().BeNull("предпросмотр не создаёт архив");
         body.StaledPackages.Should().Be(0);
 
-        // Мутация «dryRun пишет или удаляет»: любой файл или журнал изменены — Equal красный.
-        SnapshotWiki().Should().Equal(before, "предпросмотр описывает состав, ничего не меняя");
+        // Первый вход в раздел под замком делает ленивую доводку основ (WikiKeeper.cs:599,
+        // WikiBaselines.cs:72): маркеры keeper/baselines-backfilled/ — единственное, что
+        // предпросмотр дописывает на диске; прогревать их больше нечем — честный снимок
+        // называет их прямо (ревью 8bdbef69). Мутация «dryRun пишет или удаляет»: изменённый
+        // хэш страницы/манифеста/журнала или удалённый файл — соответствующая строка красная.
+        var after = SnapshotWiki();
+        var expectedMarkers = new[] { "common", "personal" }
+            .Select(s => $"keeper/baselines-backfilled/{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s))).ToLowerInvariant()}");
+        after.Keys.Except(before.Keys).Should().BeEquivalentTo(expectedMarkers,
+            "добавились только маркеры доводки основ — по одному на затронутый раздел");
+        before.Keys.Except(after.Keys).Should().BeEmpty("предпросмотр ничего не удаляет");
+        foreach (var (key, hash) in before)
+            after[key].Should().Be(hash, "страницы, манифест и журнал байт в байт прежние");
     }
 
     [Fact]
@@ -455,6 +465,8 @@ public class WikiControllerTests : IDisposable
         var archiveFull = Path.Combine(WikiPaths.Root(_dir, User), body.ArchivePath!);
         File.Exists(archiveFull).Should().BeTrue("путь — относительно корня вики, файл на диске");
         body.StaledPackages.Should().Be(0, "открытых ИИ-пакетов в фикстуре нет");
+        // Мутация «заполнять warning всегда»: эта строка красная — предупреждать не о чем.
+        body.Warning.Should().BeNull("перезапуск разбора доведён: предупреждать не о чем");
 
         foreach (var page in new[] { PurgeAiPage, PurgeChronicle, PurgeCardAi })
             File.Exists(Path.Combine(_pages, page)).Should().BeFalse($"«{page}» — класс чистки, файл удалён");
@@ -503,6 +515,59 @@ public class WikiControllerTests : IDisposable
         deleted.Sum().Should().Be(3, "ни одна страница не удалена дважды и ни одна не потеряна");
         deleted.Should().BeEquivalentTo([0, 3], "один запуск делает чистку целиком, второй — ноль");
         File.Exists(Path.Combine(_pages, PurgeHumanPage)).Should().BeTrue("человеческое цело при любом порядке гонки");
+    }
+
+    [Fact]
+    public async Task Чистка_ПерезапускРазбораНеДоведён_200_СWarning_БезПутиХоста()
+    {
+        // Путь Хранителя Ok=true с причиной (WikiKeeper.cs:420): чистка состоялась, а запись
+        // флага бэклога — единственный шаг перезапуска, бросающий вызывающему (гашение пакетов
+        // и сброс курсоров молчат о своём отказе). Блокируем её состоянием диска, без шва в
+        // коде (тот же приём, что в ЧисткаЧастичныйСбойУдаления J-P1a): на Windows файл флага
+        // read-only — File.Move с overwrite отказывает по атрибуту; на Unix каталог keeper/
+        // без права записи — temp-файл флага не создаётся (EACCES). Всё, что идёт до флага,
+        // остаётся писательным: каталог архива и файл журнала готовятся заранее — журнал
+        // дописывается, а не создаётся, и под заблокированным каталогом это удалось бы ему.
+        BuildPurgeFixture();
+        var keeperDir = WikiPaths.Keeper(_dir, User);
+        File.WriteAllText(Path.Combine(keeperDir, "log.jsonl"), "", new UTF8Encoding(false));
+        Directory.CreateDirectory(Path.Combine(keeperDir, "archive"));
+        if (OperatingSystem.IsWindows())
+        {
+            var flagFull = Path.Combine(keeperDir, "backlog-until.json");
+            File.WriteAllText(flagFull, "{}", new UTF8Encoding(false));
+            File.SetAttributes(flagFull, FileAttributes.ReadOnly);
+        }
+        else
+        {
+            File.SetUnixFileMode(keeperDir, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        }
+
+        IActionResult res;
+        try
+        {
+            res = await Controller().Purge(dryRun: false);
+        }
+        finally
+        {
+            // Права возвращаем сразу: и assertions, и уборка дерева не должны спотыкаться
+            // о заблокированный каталог.
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(keeperDir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        // Состоявшаяся чистка не прячется в молчании: 200 + warning (J-P2, ревью 8bdbef69).
+        // Мутация «не заполнять warning» (всегда null): Be и NotContain ниже — красные.
+        var body = ((OkObjectResult)res).Value.Should().BeAssignableTo<WikiPurgeDto>().Which;
+        body.DryRun.Should().BeFalse();
+        body.Deleted.Should().Be(3, "чистка состоялась: предупреждение её не отменяет");
+        body.ArchivePath.Should().NotBeNull("архив до флага: операция дошла до конца");
+        body.Warning.Should().Be("чистка выполнена, но перезапуск разбора не доведён — повтори позже");
+        // e.Message дословно не отдаётся: в нём абсолютный путь хоста — тестовый корень.
+        // Мутация «warning = res.Reason дословно»: эта строка красная.
+        body.Warning.Should().NotContain(_dir, "в warning нет пути хоста");
+        WikiBacklogFlag.IsActive(WikiPaths.Root(_dir, User), DateOnly.FromDateTime(DateTime.UtcNow))
+            .Should().BeFalse("флаг не поставлен: причина честная");
     }
 
     // ─── Помощники ─────────────────────────────────────────────────────────

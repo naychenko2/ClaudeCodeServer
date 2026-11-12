@@ -659,11 +659,15 @@ public class WikiController : ControllerBase
     /// MCP-инструмента у операции нет — разрушающая системная операция, как откат пакета
     /// (AGENTS.md). Корень — только свой: владельца берёт токен, чужой корень назвать нечем.
     /// Без явного dryRun — предпросмотр: разрушающее действие требует явного решения.
-    /// Ответ: dryRun=true — числа по разделам и классам и список путей (на диске не тронуто
-    /// ничего); dryRun=false — число удалённых, путь архива относительно корня вики и число
+    /// Ответ: dryRun=true — числа по разделам и классам и список путей (страницы, манифест и
+    /// журнал не тронуты; служебные маркеры доводки основ keeper/baselines-backfilled/ пишутся
+    /// при первом входе в раздел под замком — это не эффект предпросмотра, WikiKeeper.cs:599);
+    /// dryRun=false — число удалённых, путь архива относительно корня вики и число
     /// погашенных открытых пакетов. Нулевой состав — не отказ: 200 с нулями (второй запуск
     /// гонки — именно такой). Коды Хранителя — 4xx/503 с причиной, не 500 (PurgeRefusal);
-    /// исключений из Хранителя нет ни на одном исходе (контракт J-P1a).</summary>
+    /// причина недведенного шага состоявшейся чистки при 200 не теряется — она в warning
+    /// (своя формулировка, без пути хоста). Исключений из Хранителя нет ни на одном
+    /// исходе (контракт J-P1a).</summary>
     [HttpPost("purge")]
     public async Task<IActionResult> Purge([FromQuery] bool? dryRun)
     {
@@ -677,13 +681,20 @@ public class WikiController : ControllerBase
         // Состав (пути) отдаётся предпросмотру: в запуске этих файлов уже нет на диске.
         // Числа по разделам и классам — в обоих режимах: их считает Хранитель, второй
         // таблицы здесь нет.
+        // Ok=true с непустой причиной — недведенный шаг состоявшейся операции (перезапуск
+        // разбора, WikiKeeper.cs:420): молчание в 200 скрыло бы его от человека. Формулировка
+        // своя: e.Message отдавать нельзя — в нём абсолютный путь хоста.
+        var warning = res.Reason is { Length: > 0 }
+            ? "чистка выполнена, но перезапуск разбора не доведён — повтори позже"
+            : null;
         return Ok(new WikiPurgeDto(
             res.DryRun,
             res.CountsBySection,
             res.DryRun ? [.. res.Items.Select(i => new WikiPurgePageDto(i.PageKey, i.Section, i.Class))] : [],
             res.DryRun ? 0 : res.Items.Count,
             res.ArchivePath,
-            res.StaledPackages));
+            res.StaledPackages,
+            warning));
     }
 
     // Отказ чистки — код и причина самого Хранителя (словарь кодов — у стора, PurgeCode*).
@@ -943,15 +954,20 @@ public sealed record WikiPurgePageDto(string PageKey, string Section, string Cla
 
 /// <summary>Ответ чистки ИИ-страниц (POST /api/wiki/purge). dryRun — эхо режима.
 /// Предпросмотр: countsBySection — числа по разделам и классам, pages — состав (пути);
-/// на диске ничего не изменилось, archivePath null, Deleted 0. Запуск: Deleted — число
+/// страницы, манифест и журнал не тронуты (служебные маркеры доводки основ
+/// keeper/baselines-backfilled/ пишутся при первом входе в раздел под замком — не эффект
+/// предпросмотра), archivePath null, Deleted 0. Запуск: Deleted — число
 /// удалённых, archivePath — путь архива относительно корня вики (keeper/archive/purge-….zip;
 /// null, когда архивировать было нечего), StaledPackages — число погашенных открытых
 /// ИИ-пакетов; pages пуст (этих файлов уже нет на диске). Пустой состав — не отказ:
-/// 200 с нулями и без архива.</summary>
+/// 200 с нулями и без архива. warning — предупреждение при состоявшейся чистке: шаг после
+/// неё не доведён (перезапуск разбора) и человек должен это знать; null, когда предупреждать
+/// не о чем. Текст формулирует контроллер, пути хоста в нём нет.</summary>
 public sealed record WikiPurgeDto(
     bool DryRun,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, int>> CountsBySection,
     IReadOnlyList<WikiPurgePageDto> Pages,
     int Deleted,
     string? ArchivePath,
-    int StaledPackages);
+    int StaledPackages,
+    string? Warning);

@@ -185,10 +185,20 @@ public record ImageEditRequest(
     bool Heavy = false,
     // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
     string? ProjectId = null,
-    string? SourceJobId = null);
+    string? SourceJobId = null,
+    // Доводка версии Fibo 2.0 по JSON-описанию (Ш8): только Generate драйвера local; null — обычный запуск
+    ImageVglRefine? Refine = null);
 
-// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось
-public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null);
+// Similarity — сходство лица с образцом персонажа (0..1); null — не считалось. Scene — JSON-описание,
+// по которому Fibo 2.0 нарисовала вариант (Ш8); null — у модели его нет
+public record EditedImage(byte[] Bytes, string ContentType, double? Similarity = null, ImageVglScene? Scene = null);
+
+// JSON-описание сцены Fibo 2.0 (VGL, Ш8), по которому нарисована версия. Seed и размер холста — чтобы
+// доводка перерисовала её тем же сидом на том же холсте
+public sealed record ImageVglScene(string Json, long Seed, int Width, int Height);
+
+// Доводка: сцена версии-основы и одно изменение (Field — ключ Fibo2VglFields, Value — новое значение)
+public sealed record ImageVglRefine(ImageVglScene Scene, string Field, string Value);
 
 // Сумма в единицах поставщика (ImageEditPriceUnits.*)
 public record EditCost(double Amount, string Unit);

@@ -181,7 +181,9 @@ public record ImageEditJobInput(
     ImageBytes? KeepMask = null,
     // Проходы подстановки (ADR-028, этап 3): N = число лиц. N = 1 — один элемент (те же данные,
     // что в FaceCrop/KeepMask/Character/References/FaceTarget); N > 1 — цепочка. null — обычная правка
-    IReadOnlyList<FacePass>? FacePasses = null)
+    IReadOnlyList<FacePass>? FacePasses = null,
+    // Доводка версии Fibo 2.0 по JSON-описанию (Ш8); null — обычный запуск. Проверяет сборщик запуска
+    ImageVglRefine? Refine = null)
 {
     // Вход прохода подстановки (ADR-028, этап 3): поля прохода поверх базового входа. Единственная
     // точка подстановки — и для верхних полей N = 1 (сборщик), и для каждого прохода цепочки, —
@@ -255,7 +257,10 @@ public record ImageEditJobDto(
     // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
     // или задача вне локальных моделей. camelCase как соседние поля, null не пишется
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null,
+    // JSON-описания Fibo 2.0 по номеру варианта (Ш8): только нитям — версия хранит своё; клиенту не уходят
+    [property: JsonIgnore]
+    IReadOnlyDictionary<int, ImageVglScene>? Scenes = null);
 
 public static class ImageEditSizeNotes
 {

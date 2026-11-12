@@ -294,6 +294,13 @@ count }` и `Edit { provider, model, count, op, editMode, ratio }`; плоски
   Qwen «качественно» (`LocalImageModels.Effective`), котировка считает так же (`EtaVariant`). У Turbo нет
   `Generate`. Формат ~1 Мп (`ComfyWorkflows.Fibo2Sizes` ↔ `LocalImageEditor.Fibo2Sizes`); холст правки
   выбирает узел `TextEncodeFibo2` по пропорции исходника. Веса CC BY-NC — в подписи модели «некоммерч.».
+  **Доводка Fibo 2.0 (Ш8)**: генерация `fibo2` без образцов пишет JSON-описание сцены — оно идёт
+  `LocalImageFile.Vgl` → `EditedImage.Scene` (с сидом прогона и холстом) → `Job.Scenes` → `ImageThreadVersion.Vgl`,
+  тем же путём, что сходство лица. Сид таких прогонов выбирает драйвер, а не адаптер: иначе версия не знала
+  бы своего сида. Запуск доводки — поля `refineField`/`refineValue` ручки jobs при котировке генерации
+  `local`/`fibo2`; сборщик берёт описание из версии-основы и отказывает до запуска (версия без описания,
+  неизвестное поле, пустое значение, чужая котировка, образцы или персонаж). Агенту описание не уходит:
+  `image_state` собирает версии поштучно.
   **Krea 2 Turbo (`krea2-turbo`) и MOSS-Image (`moss-image`), с 2026-11-12** — только `Generate`
   (`TextOnlyModel`: без образцов, масок и персонажа, формат ~1 Мп). Любая картинка на входе, LoRA или
   не-генерация уводят запуск на Qwen «качественно» (`LocalImageModels.TextOnly` в `Effective`), котировку —

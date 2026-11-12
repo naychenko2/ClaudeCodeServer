@@ -39,6 +39,8 @@ public class ComfyWorkflowsTests
         "MiniMaxH3ImageConditioning", "RepeatLatentBatch",
         // Fibo 2.0 (2026-11-12): узел условий из ComfyUI 0.45
         "TextEncodeFibo2", "EmptyLatentImage",
+        // Fibo 2.0 с расширителем VGL (Ш8): JSON-описание сцены пишет Qwen3-VL 8B
+        "TextGenerateV2",
     ];
 
     private static JsonObject Inputs(JsonObject wf, string node) => wf[node]!["inputs"]!.AsObject();
@@ -476,6 +478,9 @@ public class ComfyWorkflowsTests
             ("fibo2-generate", ComfyWorkflows.Fibo2Generate("ёжик", 1424, 800, 1, 2, "p")),
             ("krea2-generate", ComfyWorkflows.Krea2Generate("ёжик", 1424, 800, 1, 2, "p")),
             ("moss-generate", ComfyWorkflows.MossGenerate("ёжик", 832, 1248, 1, 1, "p")),
+            ("fibo2-render", ComfyWorkflows.Fibo2Render("{\"short_description\":\"ёжик\"}", 1424, 800, 1, "p")),
+            ("fibo2-refine", ComfyWorkflows.Fibo2Refine("{\"short_description\":\"ёжик\"}", "background and setting", "зимний лес",
+                1424, 800, 1, "p")),
             ("fibo2-generate-turbo", ComfyWorkflows.Fibo2Generate("ёжик", 1024, 1024, 1, 1, "p", turbo: true)),
             ("fibo2-edit", ComfyWorkflows.Fibo2Edit("добавь лодку", ["x.png"], null, 1, "p", turbo: true)),
             ("fibo2-multi", ComfyWorkflows.Fibo2Edit("сложи", ["a.png", "b.png", "c.png", "d.png"], (1024, 1024), 1, "p", turbo: false)),

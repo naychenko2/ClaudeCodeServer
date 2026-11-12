@@ -33,6 +33,7 @@ import { activeStepOf } from './actions';
 import { currentVersion, findVersion, isLegacyThread, originFile, threadHasImage, versionStep } from './model';
 import { getSamples, getThreadMarks, imageDraftKey, isWholeImage, mutate, setThreadMarks, useThreadStoreVersion } from './threadStore';
 import { threadsApi, type ImageThread, type ImageThreadSettings, type ImageThreadVersion } from './threadsApi';
+import { refineLabel, type VglField } from './vgl';
 
 // Картинка позиции нити: шаг — из рабочей папки редактора, исходник — файл проекта
 // (у личной области файлов нет: сервер не заводит ей нить по файлу)
@@ -311,6 +312,36 @@ export async function launchFaceSwap(
   followChat(sessionId);
   return true;
 }
+
+// Доводка версии Fibo 2.0 (Ш8): котировка генерации local / fibo2 на один вариант и запуск с полем и
+// значением — сервер берёт JSON-описание, сид и холст версии, переписывает описание под изменение и
+// рисует новую версию. true — задача запущена, причина отказа уже показана тостом
+export async function launchRefine(
+  projectId: string, sessionId: string, thread: ImageThread, version: ImageThreadVersion,
+  field: VglField, value: string,
+): Promise<boolean> {
+  const api = imageEditorApi();
+  try {
+    const q = await api.quote(projectId, buildQuoteBody({
+      provider: 'local', model: FIBO2_MODEL, mode: 'auto', op: 'generate', count: 1,
+      hasImage: false, marks: [], withMask: false, removal: false, references: 0, hasCharacter: false,
+      size: null, context: null,
+    }));
+    await api.startJob(projectId, {
+      quoteId: q.quoteId, prompt: refineLabel(field, value),
+      sessionId, threadId: thread.id, versionId: version.id,
+      refineField: field, refineValue: value.trim(),
+    });
+    followChat(sessionId);
+    return true;
+  } catch (e) {
+    showToast(`Доводка не запущена: ${(e as Error).message}`, '', 'error');
+    return false;
+  }
+}
+
+// Модель доводки — Fibo 2.0 Dev каталога local
+export const FIBO2_MODEL = 'fibo2';
 
 export function useThreadLaunch(projectId: string, sessionId: string | null, thread: ImageThread | null) {
   const api = useMemo(() => imageEditorApi(), []);

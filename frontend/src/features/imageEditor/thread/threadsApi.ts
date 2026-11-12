@@ -33,7 +33,11 @@ export interface ImageThreadVersion {
   similarity?: number | null;
   // Самая похожая среди версий своего запуска
   mostSimilar?: boolean;
+  // JSON-описание сцены, по которому Fibo 2.0 нарисовала версию (Ш8), с сидом и холстом; нет — доводки нет
+  vgl?: ImageVglScene | null;
 }
+
+export interface ImageVglScene { json: string; seed: number; width: number; height: number }
 
 export type ImageThreadLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
 

@@ -193,6 +193,11 @@ public sealed class ImageEditLaunchAssembler(
             return PhotosInvalid();
         if (references.Count > limits.MaxReferences)
             return Invalid($"Образцов не больше {limits.MaxReferences}");
+        // Стиль Krea с персонажем или образцами не роли «стиль» шов увёл бы на Qwen и выбросил стиль
+        // (LocalImageModels.Effective) — отказ вместо картинки без стиля
+        if (style is not null && quoteInfo?.InputCaps?.Styles is { Count: > 0 }
+            && (character is not null || references is not ([] or [{ Role: ReferenceRole.Style }])))
+            return Invalid("Стиль Krea работает без образцов или с одним образцом-стилем");
 
         if (req.SourcePath is { Length: > 0 } sourcePath && ProjectLinkGuard.ResolveInsideAs(scope.Project!.RootPath, sourcePath, actorId) is null)
             return Invalid("Исходник вне папки проекта или идёт через символическую ссылку");

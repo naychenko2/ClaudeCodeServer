@@ -34,13 +34,28 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
     private static readonly ResultMessage Result = new("success", 100, 1, null, null);
 
+    // Пределы ожидания: отрицательная проверка — «сигнал не появился в окне» (пайплайн быстрый,
+    // это доказывает положительный контроль «общий чат»); положительная — «сигнал появился»,
+    // предел нужен только чтобы при мёртвом пайплайне тест был красный, а не висел.
+    private static readonly TimeSpan NegativeWait = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan PositiveWait = TimeSpan.FromSeconds(5);
+
     private readonly string _dir = Path.Combine(
         Path.GetTempPath(), "persona-autolearn-priv-" + Guid.NewGuid().ToString("N"));
     private readonly CapturingObserver _observer = new();
     private readonly CountingCheap _cheap = new();
     private readonly StubSessions _sessions = new();
-    private readonly Persona _persona = new() { Id = PersonaId, OwnerId = Owner, Name = "Тест" };
+    // Проектная персона: сценарий теста — общий проект, и глобальная персона не может быть
+    // собеседником его чата (global_persona_in_shared, см. PersonaMemoryAutolearnService:75).
+    // Для проектной персоны автообучение на успешной записи отдаёт событие журнала
+    // MemoryLearned (PersonaMemoryAutolearnService:152-159) — на нём дублёр поднимает сигнал.
+    private readonly Persona _persona = new()
+    {
+        Id = PersonaId, OwnerId = Owner, Name = "Тест",
+        Scope = PersonaScope.Project, ProjectId = ProjectId,
+    };
     private readonly PersonaMemoryService _memory;
+    private readonly SignalledEventLog _events = new();
     private readonly PersonaMemoryAutolearnService _sut;
 
     public PersonaMemoryAutolearnPrivateChatTests()
@@ -68,7 +83,7 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         _sut = new PersonaMemoryAutolearnService(
             _sessions, _observer, lookup.Object, _memory, consolidation, _cheap, config,
-            NullLogger<PersonaMemoryAutolearnService>.Instance);
+            NullLogger<PersonaMemoryAutolearnService>.Instance, _events);
     }
 
     public void Dispose()
@@ -95,8 +110,10 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        // даём фону шанс «догнать» (контроль «общий чат» ниже доказывает, что пайплайн быстрый)
-        await Task.Delay(300);
+        // ожидание сигнала первого шага пайплайна (чтение истории): он не должен появиться
+        // (контроль «общий чат» ниже доказывает, что пайплайн быстрый)
+        await AwaitNoSignal(_sessions.HistoryRead.Task, NegativeWait,
+            "приватный чат не должен дойти до чтения истории");
         _sessions.HistoryCalls.Should().Be(0, "приватный чат отсекается ДО чтения истории");
         _cheap.Calls.Should().Be(0,
             "приватный чат не должен доходить ни до истории, ни до платного LLM");
@@ -120,7 +137,8 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        await Task.Delay(300);
+        await AwaitNoSignal(_sessions.HistoryRead.Task, NegativeWait,
+            "пустой PrivateToUserId — тот же fail-closed: до чтения истории дело не доходит");
         _sessions.HistoryCalls.Should().Be(0);
         _cheap.Calls.Should().Be(0);
     }
@@ -139,10 +157,9 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
-        winner.Should().Be(_cheap.Done.Task,
-            "в общем чате пайплайн живой: извлечение обязано дойти до LLM — иначе тест приватного "
-            + "чата зелёный при сломанном сервисе");
+        // сигнал — сам вызов LLM; при мёртвом пайплайне — TimeoutException. Контроль
+        // non-vacuousness: без него тест приватного чата зелёный и при сломанном сервисе
+        await _cheap.Done.Task.WaitAsync(PositiveWait);
         _cheap.Calls.Should().Be(1);
     }
 
@@ -161,8 +178,8 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
-        winner.Should().Be(_cheap.Done.Task, "персонный чат вне проекта — как раньше: доходит до LLM");
+        // сигнал — сам вызов LLM: приватность вне проекта не читается, пайплайн как раньше
+        await _cheap.Done.Task.WaitAsync(PositiveWait);
         _cheap.Calls.Should().Be(1);
     }
 
@@ -189,29 +206,22 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 
         await _observer.Handler(session, Result);
 
-        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
-        winner.Should().Be(_cheap.Done.Task,
-            "чат редактора общего проекта не отсекается: пайплайн живой, как в общем чате");
+        // сигнал — сам вызов LLM: чат редактора не отсекается, пайплайн живой как в общем чате
+        await _cheap.Done.Task.WaitAsync(PositiveWait);
         _cheap.Calls.Should().Be(1);
 
-        // Запись памяти — уже ПОСЛЕ LLM в том же фоновом прогоне (LearnSafeAsync): ждём её
-        // появления, а не проверяем сразу после вызова.
-        var appeared = false;
-        for (var i = 0; i < 100 && !appeared; i++)
-        {
-            appeared = _memory.List(Owner, PersonaId, null).Count > 0;
-            if (!appeared) await Task.Delay(50);
-        }
-        // Ключ записи — persona.OwnerId (арендатор). Write-path (Remember/RememberAsync)
-        // допускает запись только той персоны, которую видит этот пользователь
-        // (_personas.Get(personaId, ownerId) is null → null): проключили бы автора чата —
-        // редактора — записи не было бы вовсе, ни под Owner, ни под Editor.
-        appeared.Should().BeTrue(
-            "факт из чата редактора обязан попасть в память проектной персоны под ключом владельца проекта");
+        // Запись памяти — уже ПОСЛЕ LLM в том же фоновом прогоне (LearnSafeAsync). Сигнал на ней —
+        // событие журнала MemoryLearned: сервис отдаёт его только после успешной записи и только
+        // проектной персоны (PersonaMemoryAutolearnService:152-159). Не дошла бы запись до стора —
+        // сигнала нет, тест красный по таймауту ожидания, а не висит.
+        await _events.MemoryLearned.Task.WaitAsync(PositiveWait);
         var entry = _memory.List(Owner, PersonaId, null).Single();
         entry.SourceSessionId.Should().Be(session.Id, "запись пришла из этого чата редактора");
-        _memory.List(Editor, PersonaId, null).Should().BeEmpty(
-            "полка персоны принадлежит арендатору: под ключом редактора записи нет");
+        // Ключ записи — persona.OwnerId: write-path (Remember:156) допускает запись только той
+        // персоны, которую видит этот пользователь (_personas.Get(personaId, ownerId) is null →
+        // null). Отдельного ассерта «под ключом Editor записи нет» здесь нет: resolver-мок отдаёт
+        // персону только Owner'у (ctor), и запись под ключом Editor отсёк бы тот же гейт — такой
+        // ассерт был бы верен по построению мока и не краснел бы ни при какой правке сервиса.
     }
 
     // --- Консультация persona_ask (S2d-5b): LearnFromConsultation ---
@@ -224,7 +234,8 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
     {
         _sut.LearnFromConsultation(_persona, LongQuestion, LongAnswer, callerIsPrivate: true);
 
-        await Task.Delay(300);
+        await AwaitNoSignal(_cheap.Done.Task, NegativeWait,
+            "факты приватного чата не должны дойти до LLM");
         _cheap.Calls.Should().Be(0, "факты приватного чата не уходят в общую полку персоны");
         _memory.List(Owner, PersonaId, null).Should().BeEmpty();
     }
@@ -234,9 +245,24 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
     {
         _sut.LearnFromConsultation(_persona, LongQuestion, LongAnswer, callerIsPrivate: false);
 
-        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
-        winner.Should().Be(_cheap.Done.Task, "контроль: без гейта путь живой, нули выше не тривиальны");
+        // сигнал — сам вызов LLM: контроль, без гейта путь живой, нули выше не тривиальны
+        await _cheap.Done.Task.WaitAsync(PositiveWait);
         _cheap.Calls.Should().Be(1);
+    }
+
+    // Ожидание БЕЗ сигнала: сигнал появился раньше предела — тест красный с причиной; не появился —
+    // ожидание просто вернулась, дальше проверяются счётчики.
+    private static async Task AwaitNoSignal(Task signal, TimeSpan timeout, string because)
+    {
+        try
+        {
+            await signal.WaitAsync(timeout);
+        }
+        catch (TimeoutException)
+        {
+            return;
+        }
+        Assert.Fail($"сигнал появился раньше предела {timeout.TotalMilliseconds} мс: {because}");
     }
 
     // --- Стабы ---
@@ -251,6 +277,8 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
     private sealed class StubSessions : ISessionDirectory
     {
         public int HistoryCalls;
+        // сигнал первого шага пайплайна (чтение истории): на его отсутствии стоят отрицательные тесты
+        public readonly TaskCompletionSource HistoryRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public IReadOnlyList<StoredMessage> History = [];
         public Session? GetById(string id) => null;
         public IReadOnlyCollection<Session> GetAll() => [];
@@ -258,9 +286,23 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
         public Task<IReadOnlyList<StoredMessage>> GetHistoryAsync(string sessionId)
         {
             HistoryCalls++;
+            HistoryRead.TrySetResult();
             return Task.FromResult(History);
         }
         public bool SetWikiMark(string sessionId, string? mark) => false;
+    }
+
+    // Дублёр журнала: поднимает сигнал на событии MemoryLearned — сервис отдаёт его только после
+    // успешной записи памяти и только проектной персоны (PersonaMemoryAutolearnService:152-159).
+    private sealed class SignalledEventLog : IProjectEventLogService
+    {
+        public readonly TaskCompletionSource MemoryLearned = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public ProjectEvent? Append(string projectId, string ownerId, string type, string actor,
+            string summary, string? entityRef = null, string? actorUserId = null)
+        {
+            if (type == ProjectEventTypes.MemoryLearned) MemoryLearned.TrySetResult();
+            return null;
+        }
     }
 
     // Стаб раннера: «[]» — парсер читает как «нечего запоминать»; счётчик и сигнал вызова.
@@ -270,7 +312,9 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
     {
         public int Calls;
         public string Response = "[]";
-        public readonly TaskCompletionSource Done = new();
+        // RunContinuationsAsynchronously: продолжение await (теста) не должно выполняться на треде,
+        // выставившем сигнал (фоновый тред сервиса)
+        public readonly TaskCompletionSource Done = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
         public bool HasRoute(string actionKey) => true;

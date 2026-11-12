@@ -168,10 +168,11 @@ test('тумблер ручного режима возвращает кнопк
   // и пакет остаётся proposed: решение человека видно и в виде судьи.
   const pkgId = seedHumanPackage();
 
-  // Выключаем тумблер «Применять без ревью» через интерфейс.
+  // Выключаем тумблер «Применять неспорное само» через интерфейс (имя = видимая подпись, J-F1).
   await openPanelTab(page, 'wikiSettings');
-  const sw = page.getByLabel('Применять без ревью');
-  await expect(sw, 'тумблер «Применять без ревью» есть в настройках вики').toBeVisible({ timeout: 20000 });
+  const sw = page.getByLabel('Применять неспорное само');
+  await expect(sw, 'тумблер «Применять неспорное само» есть в настройках вики').toBeVisible({ timeout: 20000 });
+  await expect(sw.getAttribute('aria-label'), 'aria-label тумблера = видимая подпись').toBe('Применять неспорное само');
   if ((await sw.getAttribute('aria-checked')) === 'true') {
     await sw.click();
     await expect.poll(async () => (await client.get<{ autoApplyEnabled: boolean }>('/api/wiki/settings')).autoApplyEnabled,
@@ -218,13 +219,13 @@ test('«Журнал» → «Решения за ночь»: четыре гру
   const titles = groups.map(g => g.split(/\d/)[0].trim());
   expect(titles.join(' | '), 'есть группа «Принято судьёй»').toContain('Принято судьёй');
   expect(titles.join(' | '), 'есть группа «Отклонено судьёй»').toContain('Отклонено судьёй');
-  expect(titles.join(' | '), 'есть группа «Ждут судью»').toContain('Ждут судью');
+  expect(titles.join(' | '), 'есть группа «Ждут решения»').toContain('Ждут решения');
 
   // Откат применённого пакета: берём из данных тот пакет, который и правда применён
   // (уже откатанный откатить нельзя — 409), находим его строку и жмём «Откатить пакет».
   // Вердикты судьи живут в «Решениях за ночь» (список пакетов их не отдаёт — дефект D1),
   // а статус пакета — в карточке пакета: ищем тот, который и правда применён.
-  const night = await client.get<{ judgeAccepted: Array<{ packageId: string; claim: string | null }> }>(
+  const night = await client.get<{ judgeAccepted: Array<{ packageId: string; page: string; packageStatus: string }> }>(
     '/api/wiki/journal?view=night&from=2026-11-11&to=2026-11-13');
   const candidates: Array<{ id: string; page: string }> = [];
   for (const row of night.judgeAccepted) {
@@ -245,12 +246,15 @@ test('«Журнал» → «Решения за ночь»: четыре гру
   await revertBtn.scrollIntoViewIfNeeded();
   await expect(revertBtn, 'кнопка отката активна').toBeEnabled({ timeout: 10000 });
   await revertBtn.click();
-  // Откат состоялся: пакет перешёл в «reverted». (Строка ночи при этом остаётся на экране —
-  // дефект D2, отдельная карточка: вид ночи не отсекает откатанные пакеты.)
+  // Откат состоялся: пакет перешёл в «reverted», строка остаётся в своей группе с пометкой
+  // «откачен» вместо кнопки (J-F2, доработка b58d81c0/76f4c7d6).
   await expect.poll(async () => {
     const p = await client.get<{ status: string }>(`/api/wiki/packages/${applied!.id}`);
     return p.status;
   }, { timeout: 20000 }).toBe('reverted');
+  await expect(appliedRow.getByText('откачен', { exact: true }), 'после отката строка помечена «откачен»')
+    .toBeVisible({ timeout: 20000 });
+  await expect(appliedRow.getByTestId('wiki-night-revert'), 'кнопки отката у откатанного больше нет').toHaveCount(0);
 
   // Сбой загрузки вида — возврат к «Все записи».
   await page.route('**/api/wiki/journal?view=night*', r => r.abort());

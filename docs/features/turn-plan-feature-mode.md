@@ -139,7 +139,7 @@ id чата, которого нет в снимке (чужой, удалённ
 | `rail` | сегмент[7] | `cut, plan, prod, review, qa, final, merge` по порядку |
 | `chips` | string[] | `open`, `waiting`, `stopped`, `merge`, `closed` |
 | `stepsAccepted`, `stepsTotal` | number | шаги: принятые (`Done`) / все |
-| `loops` | number | возвраты (`Verdicts.Loops`) |
+| `loops` | number | круги (returned + замечания) |
 | `now0` | объект \| null | первая `InProgress`-задача; `null` — фича не идёт |
 | `lastActivityAt` | ISO \| null | максимум `CompletedAt`/`ClaudeStartedAt` |
 | `summary` | `{ mergedAt: ISO \| null, durationMinutes }` \| null | только у закрытой |

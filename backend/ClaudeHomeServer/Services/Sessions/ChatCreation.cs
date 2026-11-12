@@ -399,6 +399,11 @@ public sealed class ChatCreation
             // должен ни на миг стать общим — иначе его увидели бы участники проекта
             // Пустая строка — «не видит никто» (fail-closed): не нормализуем её в null
             PrivateToUserId = privateToUserId,
+            // Приватный чат с рождения исключён из «Истории решений» (W4-B1a): тот же смысл, что
+            // ставит тумблер (ChatVisibility.cs:115) — паспорта приватного разговора не попадают
+            // в общую историю проекта. Отказ от приватности флаг сам не снимает: только явное
+            // согласие автора (TrySetExcludeFromDossiers после снятия), как у тумблера.
+            ExcludeFromDossiers = privateToUserId is not null,
         };
 
         await _process.StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -509,6 +514,9 @@ public sealed class ChatCreation
                 CreatedByUserId = string.IsNullOrWhiteSpace(createdByUserId) ? null : createdByUserId.Trim(),
                 // Пустая строка — «не видит никто» (fail-closed): не нормализуем её в null
                 PrivateToUserId = privateToUserId,
+                // Приватный чат с рождения исключён из «Истории решений» (W4-B1a): тот же смысл,
+                // что у тумблера (ChatVisibility.cs:115)
+                ExcludeFromDossiers = privateToUserId is not null,
             };
             await _process.StartNewSessionAsync(projectSession, project.RootPath, project.SystemPrompt,
                 () => _projects.GetById(project.Id)?.PermissionRules

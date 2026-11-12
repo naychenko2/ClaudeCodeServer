@@ -83,7 +83,7 @@ public sealed class ChatVisibility
             if (makePrivate)
             {
                 var project = info.ProjectId is not null ? _projects.GetById(info.ProjectId) : null;
-                if (project?.Members is not { Count: > 0 })
+                if (!CanBePrivate(project))
                     return new(ChatVisibilityOutcome.NotSharedProject, null);
                 // Штаб «Командной реализации» и групповой чат — режимы общего контура (S2d-7b-3).
                 // QA-D45 (D4): отказ режима идёт раньше авторского — у штаба и группы нет автора,
@@ -139,6 +139,12 @@ public sealed class ChatVisibility
         _store.SaveSessions();
         return new(ChatVisibilityOutcome.Ok, info) { AttachmentMoves = moves };
     }
+
+    // «Приватным можно сделать только чат общего проекта» (W4-B1a): одно определение общего
+    // проекта — есть участники. Им же отказывает тумблер (NotSharedProject выше) и контроллер
+    // создания чата с флагом private (SessionsController.Create), чтобы отказ был одинаковым
+    // в обеих точках (тот же 409 not_shared_project).
+    public static bool CanBePrivate(Project? project) => project?.Members is { Count: > 0 };
 
     // Чат — штаб «Командной реализации» (роль штаба) или групповой (есть участники-персоны).
     private static bool IsTeamOrGroup(Session info) =>

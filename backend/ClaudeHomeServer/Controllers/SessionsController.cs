@@ -46,6 +46,12 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     [ProjectScope(Right = ProjectRight.RunTurn)]
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
+        // Приватный чат создаётся приватным атомарно (W4-B1a): флаг принимается только общим
+        // проектом — та же проверка и тот же отказ, что у тумблера видимости (ChatsController
+        // .SetVisibility → not_shared_project). Отказ идёт ДО всякой работы (резолва персоны,
+        // провижна ассистента): отказанное создание не оставило в проекте ни чата, ни персоны.
+        if (req.Private && !ChatVisibility.CanBePrivate(projects.GetById(projectId)))
+            return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
         // FIN3-2 (FINAL-3, п. 3 ревью b13f2105): resume принимается только для транскрипта чата,
         // видимого вызывающему. ClaudeSessionId — ключ истории (HistoryKeyOf, SessionManager.cs:557)
         // и транскрипта CLI: новый общий чат с csid чужого приватного получил бы его разговор
@@ -110,8 +116,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
                 sessions.EnsurePersonasVisibleInFrame(projectId, new[] { assigned });
             }
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
+            // Приватность ставится в объект чата ДО его регистрации (S2d-7b-1, W4-B1a): окно,
+            // в котором чат был бы общим, отсутствует по построению
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId, createdByUserId: UserId,
+                privateToUserId: req.Private ? UserId : null);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -415,7 +424,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
-public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null);
+// Private (W4-B1a) — создать чат приватным сразу (виден только вызывающему); принимается только
+// общим проектом, иначе 409 not_shared_project. По умолчанию false — поведение прежнего запроса не изменилось.
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null, bool Private = false);
 
 // Запись контекста чата на вход PUT (Type/Id/Title — см. SessionContextEntry; Title
 // необязателен — подпись со стороны добавившего, сервер только тримит).

@@ -42,7 +42,8 @@ namespace ClaudeHomeServer.Services.Notes.Wiki;
 /// попытки») — пакет не может висеть в «Входящих» бесконечно, а человек не обязан
 /// дежурить у прохода. Отказ вызова (исключение, пустой ответ) — попытка +1 всем
 /// допущенным операции группы: пакет остаётся proposed, Deferred считает их, FirstFailure
-/// несёт первую причину.
+/// несёт первую причину. Отмена прохода (ct) — не отказ модели: вызов, прерванный отменой,
+/// не карает попыток группе, проход останавливается на месте (ревью J-J3a, Н2).
 ///
 /// Пакет, у которого проход решил ВСЕ спорные операции, применяется тем же путём, что
 /// решение человека (ApplyDecidedAsync, J-J2b): решение замкнуто применением (S4g).
@@ -88,8 +89,9 @@ public sealed class WikiJudgeSweep
     /// <summary>После стольких неудач по одной операции вердикт выносит код (шаг 5).</summary>
     public const int MaxAttempts = 3;
 
-    /// <summary>Метка, когда вердикт вынесен, но имени модели шов не назвал (usage=null),
-    /// и когда отказ вынес код после исчерпания попыток — модели, которая решила, нет.</summary>
+    /// <summary>Метка, когда вердикт вынесла модель, но имени модели шов не назвал (usage=null).
+    /// Отказ, который вынес код (по коду причины или после исчерпания попыток), — не вердикт
+    /// модели: он несёт метку WikiPackage.JudgeModelCode (ревью J-J3a, Н4).</summary>
     public const string ModelUnknown = "unknown";
 
     /// <summary>Замок прохода: ключ — путь корня вики, не экземпляр (тот же приём, что
@@ -116,8 +118,9 @@ public sealed class WikiJudgeSweep
     /// их стоимости (то, что взял облако; по операциям делится поровну — это в полях
     /// JudgeCostUsd, здесь — факт вызовов). Applied / Rejected — операции, чей вердикт
     /// РЕАЛЬНО записался в файл прохода (accepted / rejected судьёй); CodeRejected —
-    /// отказы, вынесенные кодом без вызова модели (И4′), — отдельный счёт, в Rejected
-    /// не входят. Deferred — операции, которым засчитана попытка без вердикта (отказ
+    /// отказы, вынесенные кодом: по коду причины без вызова модели (И4′) и «судья не вынес
+    /// решения за N попытки» — ни одна модель такого отказа не выносила; отдельный счёт,
+    /// в Rejected не входят. Deferred — операции, которым засчитана попытка без вердикта (отказ
     /// вызова или ответ без вердикта по этой операции). FirstFailure — первая причина
     /// любого сбоя прохода (отказ вызова, отказ стора, чужой корень); null — сбоя не было.
     /// Пропущенное молча (человек решил во время вызова, пакет ушёл в stale) в счётчики
@@ -131,7 +134,8 @@ public sealed class WikiJudgeSweep
     /// вызывающий: проход работает только по СВОЕМУ корню владельца
     /// (WikiPaths.Root(_dataDir, ownerId)) и чужой root отказывает на входе без единого
     /// вызова. Исключений наружу нет; ct — остановка прохода (остановка службы, закрытие
-    /// окна): начатый вызов доводится до конца, новых не начинается.</summary>
+    /// окна): вызов, прерванный отменой, не карает попытки группе (отмена — не отказ модели),
+    /// новых вызовов не начинается.</summary>
     public async Task<JudgeSweepResult> RunAsync(string ownerId, string root, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(ownerId))
@@ -143,14 +147,17 @@ public sealed class WikiJudgeSweep
         try
         {
             ownRoot = WikiPaths.Root(_dataDir, ownerId);
+            // Нормализация названного корня — тоже здесь: Path.GetFullPath может бросить
+            // (недопустимые символы пути), и это — отказ с причиной на входе, а не исключение
+            // наружу (ревью J-J3a, Н5).
+            if (!string.Equals(Path.GetFullPath(root), Path.GetFullPath(ownRoot), StringComparison.OrdinalIgnoreCase))
+                return new JudgeSweepResult(0, 0m, 0, 0, 0, 0,
+                    "корень прохода не корень этого владельца: работать можно только по своей вики");
         }
         catch (ArgumentException e)
         {
             return new JudgeSweepResult(0, 0m, 0, 0, 0, 0, e.Message);
         }
-        if (!string.Equals(Path.GetFullPath(root), Path.GetFullPath(ownRoot), StringComparison.OrdinalIgnoreCase))
-            return new JudgeSweepResult(0, 0m, 0, 0, 0, 0,
-                "корень прохода не корень этого владельца: работать можно только по своей вики");
 
         var sem = _rootLocks.GetOrAdd(Path.GetFullPath(ownRoot), _ => new SemaphoreSlim(1));
         var counters = new SweepCounters();
@@ -219,7 +226,7 @@ public sealed class WikiJudgeSweep
             .ToList();
         if (codeOutcomes.Count > 0)
         {
-            current = WriteOutcomes(root, current, codeOutcomes, counters, codePath: true) ?? current;
+            current = WriteOutcomes(root, current, codeOutcomes, counters) ?? current;
         }
 
         // 3б/4. Допущенные операции — группами по целевой странице: один вызов на группу.
@@ -248,20 +255,28 @@ public sealed class WikiJudgeSweep
                 text = result.Text;
                 usage = result.Usage;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Отмена прохода — не отказ модели: судье не дали ответить, и это не его
+                // отказ. Ни одной операции группы попытка не засчитана, пакет ждёт следующего
+                // прохода с теми же попытками; проход останавливается здесь (внешний цикл
+                // видит ct и новых групп не начнёт). Ревью J-J3a, Н2.
+                return;
+            }
             catch (Exception e)
             {
                 // Отказ вызова (таймаут, 429, занятый слот, прочее) — попытка +1 всем
                 // допущенным группы; пакет остаётся proposed. Первая причина — в итог.
                 counters.FirstFailure ??= $"судья: вызов модели не удался: {e.Message}";
                 current = WriteOutcomes(root, current,
-                    members.Select(t => FailOutcome(t.op, t.i)).ToList(), counters, codePath: false) ?? current;
+                    members.Select(t => FailOutcome(t.op, t.i)).ToList(), counters) ?? current;
                 continue;
             }
             if (string.IsNullOrWhiteSpace(text))
             {
                 counters.FirstFailure ??= "судья: модель дала пустой ответ";
                 current = WriteOutcomes(root, current,
-                    members.Select(t => FailOutcome(t.op, t.i)).ToList(), counters, codePath: false) ?? current;
+                    members.Select(t => FailOutcome(t.op, t.i)).ToList(), counters) ?? current;
                 continue;
             }
 
@@ -280,7 +295,7 @@ public sealed class WikiJudgeSweep
                 ? new WikiPackageStore.JudgeOutcome(t.i, v.Apply, v.Why, model, perOp)
                 // Операция без вердикта — попытка +1 (на 3-й — отказ кода).
                 : FailOutcome(t.op, t.i)).ToList();
-            current = WriteOutcomes(root, current, outcomes, counters, codePath: false) ?? current;
+            current = WriteOutcomes(root, current, outcomes, counters) ?? current;
         }
 
         // 6. Пакет, который довел до решения сам проход, применяется тем же путём, что
@@ -289,7 +304,14 @@ public sealed class WikiJudgeSweep
         if (counters.WroteVerdictFor(candidate.Id)
             && current.Status is WikiPackage.StatusAccepted or WikiPackage.StatusPartiallyAccepted)
         {
-            await _apply.ApplyDecidedAsync(ownerId, root, current).ConfigureAwait(false);
+            var decided = await _apply.ApplyDecidedAsync(ownerId, root, current).ConfigureAwait(false);
+            // Отказ применения — сбой прохода: по контракту итога FirstFailure несёт первую
+            // причину любого сбоя, и причина применения — в ней (ревью J-J3a, Н3).
+            // PackageMissing — не отказ: решение вынесено, файл ушёл в гонке с удалением (W3-1).
+            if (decided.Apply is { Applied: false } app)
+                counters.FirstFailure ??= $"судья: применение отказало: {app.Reason ?? app.Code}";
+            else if (decided.Outcome == WikiApplyService.DecidedOutcome.PackageUnreadable)
+                counters.FirstFailure ??= $"судья: {decided.Reason ?? "файл пакета не читается"}";
         }
     }
 
@@ -299,7 +321,7 @@ public sealed class WikiJudgeSweep
     /// отказал (пакета нет, он нечитаем, вне proposed): причина в FirstFailure, состояние
     /// пакета не изменилось.</summary>
     private WikiPackage? WriteOutcomes(string root, WikiPackage before,
-        IReadOnlyList<WikiPackageStore.JudgeOutcome> outcomes, SweepCounters counters, bool codePath)
+        IReadOnlyList<WikiPackageStore.JudgeOutcome> outcomes, SweepCounters counters)
     {
         var res = WikiPackageStore.JudgeOperations(root, before.Id, outcomes);
         if (!res.Ok || res.Package is null)
@@ -322,7 +344,10 @@ public sealed class WikiJudgeSweep
             }
             else if (opAfter.JudgeDecision == WikiPackage.HumanRejected)
             {
-                if (codePath) counters.CodeRejected++;
+                // Источник отказа — на записанном вердикте: метка «code» несёт отказ,
+                // вынесенный кодом (по коду причины или после исчерпания попыток); отказ
+                // модели идёт в Rejected (ревью J-J3a, Н4).
+                if (opAfter.JudgeModel == WikiPackage.JudgeModelCode) counters.CodeRejected++;
                 else counters.Rejected++;
                 wrote = true;
             }
@@ -341,11 +366,12 @@ public sealed class WikiJudgeSweep
 
     /// <summary>Исход неудачи по одной операции: до 3-й — «вердикта нет» (стор поднимает
     /// JudgeAttempts), на 3-й — отказ, который выносит код: «судья не вынес решения за
-    /// 3 попытки». Ни одна модель такого отказа не выносила — метка ModelUnknown.</summary>
+    /// 3 попытки». Ни одна модель такого отказа не выносила — метка та же, что у отказа по
+    /// коду: JudgeModelCode (ревью J-J3a, Н4).</summary>
     private static WikiPackageStore.JudgeOutcome FailOutcome(WikiPackage.Operation op, int index) =>
         op.JudgeAttempts + 1 >= MaxAttempts
             ? new WikiPackageStore.JudgeOutcome(index, false,
-                $"судья не вынес решения за {MaxAttempts} попытки", ModelUnknown, null)
+                $"судья не вынес решения за {MaxAttempts} попытки", WikiPackage.JudgeModelCode, null)
             : new WikiPackageStore.JudgeOutcome(index, null, null, ModelUnknown, null);
 
     private static bool IsUndecidedContested(WikiPackage.Operation op) =>

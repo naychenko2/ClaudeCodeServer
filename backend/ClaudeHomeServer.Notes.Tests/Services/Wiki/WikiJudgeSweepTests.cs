@@ -28,7 +28,10 @@ namespace ClaudeHomeServer.Tests.Services;
 //   записалось в файл.
 // - группа вызова (доработка ревью J-J3a, Н1): пакет с допущенными операциями на разных
 //   страницах — отдельный вызов на каждую страницу: в вход группы идут текст и claim
-//   только своей страницы (потеря GroupBy по Page не красила ни одного теста раньше).
+//   только своей страницы (потеря GroupBy по Page не красила ни одного теста раньше);
+// - хвосты ревью J-J3a (Н2–Н5): отмена прохода — не отказ модели (попытка не тратится);
+//   отказ применения — в FirstFailure; отказ после 3 попыток — в CodeRejected и с меткой
+//   «code»; недопустимый корень — исход с причиной, а не исключение наружу.
 //
 // Фейк модели — тот же приём, что в WikiIngestSynthTests: запись каждого вызова
 // (ключ, метод шва, prompt), ответ — JSON вердиктов. Пакеты ставит сам стор (тот же
@@ -42,6 +45,10 @@ public class WikiJudgeSweepTests : IDisposable
     private const string PagePath = "Общее/Сущность.md";
     private const string Page2Path = "Общее/Сущность-2.md";
     private const string OldClaim = "Прежний план был остаться на Windows";
+    // Второй прежний план на той же странице: две принятые supersede-операции одного пакета
+    // должны замещать разные цели — иначе вторая теряет цель после замещения первой, и
+    // применение отказано рендером (факт, вскрытый разбором результата применения, Н3).
+    private const string OldClaim2 = "Прежнее решение было вести сборку на Windows-машине";
     private const string Page2OldClaim = "Прежний план второй страницы был остаться на второй машине";
     private const string ExternalClaim = "ВНЕШНИЙ-ТЕКСТ-СУДЬЕ-НЕ-ПОКАЗАТЬ";
 
@@ -76,6 +83,7 @@ public class WikiJudgeSweepTests : IDisposable
         {{OldClaim}} [^s1]
 
         ## Хронология
+        {{OldClaim2}} [^s1]
 
         ## Противоречия
 
@@ -146,7 +154,7 @@ public class WikiJudgeSweepTests : IDisposable
         var id = NewPackage([
             Supersede(0, "Первый план: перенести сборку на Linux"),
             Supersede(1, "Второй план: собрать на второй машине"),
-            Supersede(2, "Третий план: собрать в контейнере"),
+            Supersede(2, "Третий план: собрать в контейнере", OldClaim2),
             External(ExternalClaim),
         ]);
         var llm = new FakeJudge(VerdictsJson((0, true, "цитаты подтверждают"), (1, false, "противоречит странице"), (2, true, "подтверждено")));
@@ -250,11 +258,13 @@ public class WikiJudgeSweepTests : IDisposable
         Read(id).Operations.Should().OnlyContain(o => o.JudgeAttempts == 2 && o.JudgeDecision == null);
 
         var r3 = await sut.RunAsync(User, Root());
-        r3.Rejected.Should().Be(2, "на 3-й неудаче отказ выносит код");
+        r3.Rejected.Should().Be(0, "ни одного отказа не вынесла модель");
+        r3.CodeRejected.Should().Be(2, "отказ после 3 попыток вынесён кодом — отдельный счёт (ревью J-J3a, Н4)");
         r3.Deferred.Should().Be(0);
         var pkg = Read(id);
         pkg.Operations.Should().OnlyContain(o => o.JudgeDecision == WikiPackage.HumanRejected
-            && o.JudgeReason!.Contains("3 попытки"));
+            && o.JudgeReason!.Contains("3 попытки")
+            && o.JudgeModel == WikiPackage.JudgeModelCode, "отказ вынесён кодом — метка вердикта «code», не «unknown»");
         pkg.Status.Should().Be(WikiPackage.StatusRejected, "все спорные отклонены — статус ведёт вердикт");
         llm.Calls.Should().HaveCount(3, "каждый проход звал модель заново: потолка вызовов за ночь нет");
     }
@@ -375,7 +385,7 @@ public class WikiJudgeSweepTests : IDisposable
         var id = NewPackage([
             Supersede(0, "Первый план: перенести сборку на Linux"),
             SupersedeOnPage2(1, "Второй план: перенести синтез на локальную модель"),
-            Supersede(2, "Третий план: собрать в контейнере"),
+            Supersede(2, "Третий план: собрать в контейнере", OldClaim2),
         ]);
         var llm = new FakeJudge(VerdictsJson(
             (0, true, "цитаты подтверждают"), (1, true, "подтверждено"), (2, true, "подтверждено")));
@@ -417,6 +427,75 @@ public class WikiJudgeSweepTests : IDisposable
         res.FirstFailure.Should().BeNull();
     }
 
+    // ─── хвосты ревью J-J3a (Н2–Н5) ──────────────────────────────────────────────────────
+
+    // Н2: отмена прохода — не отказ модели. Вызов, прерванный ct, — не отказ судьи: ни одной
+    // операции группы попытка не засчитана, пакет ждёт следующего прохода с теми же
+    // попытками; проход останавливается, исключения наружу нет.
+    [Fact]
+    public async Task ОтменаПроходаВоВремяВызова_ПопыткаНеТратится_ПакетЖдётСледующегоПрохода()
+    {
+        var id = NewPackage([Supersede(0, "Первый план: перенести сборку на Linux")]);
+        var cts = new CancellationTokenSource();
+        var llm = new FakeJudge(VerdictsJson((0, true, "этот ответ не будет прочитан"))) { CancelWith = cts };
+
+        var res = await Sut(llm).RunAsync(User, Root(), cts.Token);
+
+        res.Calls.Should().Be(1, "вызов был начат — факт вызова остаётся");
+        res.Deferred.Should().Be(0, "отмена — не отказ: попытка группе не засчитана");
+        res.FirstFailure.Should().BeNull("отмена прохода — не сбой прохода: причина не модельная");
+        var pkg = Read(id);
+        pkg.Operations[0].JudgeAttempts.Should().Be(0, "судье не дали ответить — попытка не потрачена");
+        pkg.Operations[0].JudgeDecision.Should().BeNull();
+        pkg.Status.Should().Be(WikiPackage.StatusProposed);
+    }
+
+    // Н3: судья решил все спорные, но применение отказало: карточка источника пакета
+    // (session:chat-9#m99-9) не в его разделе — отказ после заявки (CodeSourceUnavailable).
+    // По контракту итога FirstFailure обязана нести первую причину любого сбоя, и отказ
+    // применения — в ней.
+    [Fact]
+    public async Task ВсеСпорныеРешеныСудьей_ПрименениеОтказало_FirstFailureНесётПричинуПрименения()
+    {
+        var pkg0 = new WikiPackage
+        {
+            Id = WikiPackageStore.NewId(),
+            Section = Section,
+            Sources = [new WikiPackage.SourceRef("session", "session:chat-9#m99-9")],
+            Operations = [Supersede(0, "Первый план: перенести сборку на Linux")],
+            Status = WikiPackage.StatusChecking,
+        };
+        WikiPackageStore.Create(Root(), pkg0).Ok.Should().BeTrue();
+        WikiPackageStore.Transition(Root(), pkg0.Id, WikiPackage.StatusProposed).Ok.Should().BeTrue();
+        var llm = new FakeJudge(VerdictsJson((0, true, "цитаты подтверждают")));
+
+        var res = await Sut(llm).RunAsync(User, Root());
+
+        res.Calls.Should().Be(1);
+        res.Applied.Should().Be(1, "вердикт записан — факт прохода остаётся");
+        res.FirstFailure.Should().NotBeNull("отказ применения — сбой прохода");
+        res.FirstFailure.Should().Contain("карточка источника пакета не найдена",
+            "первая причина — причина применения, а не модели");
+        var after = Read(pkg0.Id);
+        after.Operations[0].JudgeDecision.Should().Be(WikiPackage.HumanAccepted);
+        after.Status.Should().Be(WikiPackage.StatusApplyFailed, "применение отказано после заявки");
+    }
+
+    // Н5: недопустимый корень — исход с причиной, а не исключение: нормализация
+    // названного вызывающим корня — внутри обхвата.
+    [Fact]
+    public async Task НедопустимыйСимволВКорне_ИсходСFirstFailure_ИсключенияНаружуНет()
+    {
+        var id = NewPackage([Supersede(0, "Первый план: перенести сборку на Linux")]);
+        var llm = new FakeJudge(VerdictsJson((0, true, "не должен быть позван")));
+
+        var res = await Sut(llm).RunAsync(User, "\0");
+
+        res.Calls.Should().Be(0, "корень отказан на входе: модель не звалась");
+        res.FirstFailure.Should().NotBeNull();
+        Read(id).Operations[0].JudgeDecision.Should().BeNull();
+    }
+
     // ─── Фикстура ─────────────────────────────────────────────────────────────────────
 
     private string Root() => WikiPaths.Root(_dir, User);
@@ -433,9 +512,9 @@ public class WikiJudgeSweepTests : IDisposable
 
     // Спорная операция на общей странице с допущенным кодом (target_disputed):
     // индекс в Operations — тот, что отдаёт проход (позиция в пакете).
-    private static WikiPackage.Operation Supersede(int n, string claim) =>
+    private static WikiPackage.Operation Supersede(int n, string claim, string? target = null) =>
         OpWithCode(WikiPackage.OpSupersede, WikiApplyPolicy.CodeTargetDisputed,
-            $"целевая страница в статусе «disputed»: там уже нужен человек {n}", claim, OldClaim);
+            $"целевая страница в статусе «disputed»: там уже нужен человек {n}", claim, target ?? OldClaim);
 
     // Та же спорная операция, но о второй целевой странице: цель — прежний план СВОЕЙ
     // страницы (проход группирует по Page, и цель должна принадлежать своей странице).
@@ -504,6 +583,9 @@ public class WikiJudgeSweepTests : IDisposable
         public Exception? Throw { get; init; }
         public TaskCompletionSource? Enter { get; init; }
         public TaskCompletionSource? Release { get; init; }
+        /// <summary>Отмена прохода во время вызова: в момент обращения к модели его ct
+        /// cancel'ится, и вызов заканчивается OperationCanceledException — как у живого шва.</summary>
+        public CancellationTokenSource? CancelWith { get; init; }
 
         private readonly string? _answer;
 
@@ -533,6 +615,11 @@ public class WikiJudgeSweepTests : IDisposable
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             Record(actionKey, "RunDetailed", prompt);
+            if (CancelWith is not null)
+            {
+                CancelWith.Cancel();
+                ct.ThrowIfCancellationRequested();
+            }
             if (Enter is not null)
             {
                 Enter.SetResult();

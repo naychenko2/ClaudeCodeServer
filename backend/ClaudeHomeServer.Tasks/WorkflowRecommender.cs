@@ -11,8 +11,10 @@ namespace ClaudeHomeServer.Services.Tasks;
 // спискам», наружу — только отрезанное.
 //
 // Белый список 1: templateId обязан быть id из переданного каталога (урок дедупа: выдуманный
-// id ведёт в пустоту). Белый список 2: skipped — только роли этапов ВЫБРАННОГО шаблона с
-// Presence=optional: этап «on» снять нельзя, а этапа «off» в маршруте и нет. Всё остальное
+// id ведёт в пустоту). Белый список 2: skipped — только id этапов ВЫБРАННОГО шаблона с
+// Presence=optional (ключ этапа = s.Id ?? s.Role, R-B4a Major 1: у линейных шаблонов id этапа
+// равен роли, у графовых — свой slug; Skipped читается дальше именно по id — WorkflowGraph.States):
+// этап «on» снять нельзя, а этапа «off» в маршруте и нет. Всё остальное
 // отбрасывается; мусор/сбой модели — предложения нет, без исключения: рекомендация улучшает
 // создание фичи, её отсутствие — обычное рабочее состояние (маршрут выбирает человек).
 //
@@ -81,11 +83,12 @@ public sealed class WorkflowRecommender(
         var sb = new StringBuilder();
         sb.AppendLine("Подбери шаблон процесса (маршрут этапов) для фичи ниже по её названию и описанию.");
         sb.AppendLine("Ответь ТОЛЬКО JSON-объектом без пояснений и без markdown-обёртки:");
-        sb.AppendLine("{\"templateId\":\"<id шаблона>\",\"skipped\":[\"<роль, которую снимаем>\"],\"rationale\":\"одно предложение почему\"}");
+        sb.AppendLine("{\"templateId\":\"<id шаблона>\",\"skipped\":[\"<id этапа, который снимаем>\"],\"rationale\":\"одно предложение почему\"}");
         sb.AppendLine("templateId — строго один из id списка ниже, не выдумывай его.");
-        sb.AppendLine("skipped — только роли помеченные presence=optional у выбранного шаблона, если по описанию");
-        sb.AppendLine("фичи они не нужны (маленькая правка — снять design и qa); если снимать нечего — пустой массив.");
-        sb.AppendLine("roles с presence=on снять нельзя.");
+        sb.AppendLine("skipped — только id этапов, помеченные presence=optional у выбранного шаблона (id — первое поле в");
+        sb.AppendLine("скобках этапов), если по описанию фичи они не нужны (маленькая правка — снять design и qa);");
+        sb.AppendLine("если снимать нечего — пустой массив.");
+        sb.AppendLine("этапы с presence=on снять нельзя.");
         sb.AppendLine();
         sb.AppendLine($"Название фичи: «{epic.Title}»");
         var description = epic.Description ?? "";
@@ -96,14 +99,18 @@ public sealed class WorkflowRecommender(
             sb.AppendLine(description);
         }
         sb.AppendLine();
-        sb.AppendLine("Шаблоны (id | название | описание | этапы роль(presence) в порядке маршрута):");
+        sb.AppendLine("Шаблоны (id | название | описание | этапы id(роль, presence) в порядке маршрута):");
         foreach (var entry in catalog)
         {
-            var stages = string.Join(", ", entry.Template.Stages.Select(s => $"{s.Role}({s.Presence})"));
+            var stages = string.Join(", ", entry.Template.Stages.Select(s => $"{StageKey(s)}({s.Role}, {s.Presence})"));
             sb.AppendLine($"- {entry.Template.Id} | {entry.Template.Name} | {entry.Template.Description ?? ""} | {stages}");
         }
         return sb.ToString();
     }
+
+    // Ключ этапа в промпте и в Skipped — его id (WorkflowStage.Id, разрез 2 §1.1); у линейных
+    // шаблонов Id=null и ключ равен роли — те же токены, что ждёт ConfirmWorkflow/WorkflowGraph.
+    private static string StageKey(WorkflowStage s) => string.IsNullOrWhiteSpace(s.Id) ? s.Role : s.Id!;
 
     // Разбор ответа и резание по белым спискам. Любой сбой — null (см. шапку класса).
     internal static WorkflowProposal? ParseAndCut(string raw, IReadOnlyList<WorkflowTemplateEntry> catalog)
@@ -136,10 +143,11 @@ public sealed class WorkflowRecommender(
         var entry = catalog.FirstOrDefault(e => e.Template.Id == templateId);
         if (entry is null) return null;
 
-        // Белый список 2: снять можно только этап с Presence=optional выбранного шаблона
+        // Белый список 2: снять можно только этап с Presence=optional выбранного шаблона,
+        // ключ этапа — его id (у линейных шаблонов id = роль, у графовых — свой slug)
         var optional = entry.Template.Stages
             .Where(s => s.Presence == WorkflowStagePresence.Optional)
-            .Select(s => s.Role)
+            .Select(StageKey)
             .ToHashSet(StringComparer.Ordinal);
         var kept = skipped.Where(optional.Contains).Distinct(StringComparer.Ordinal).ToList();
 

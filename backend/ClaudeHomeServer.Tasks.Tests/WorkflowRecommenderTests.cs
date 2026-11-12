@@ -6,7 +6,8 @@ using Microsoft.Extensions.Configuration;
 namespace ClaudeHomeServer.Tasks.Tests;
 
 // B4a (разрез workflow §5, И7): рекомендатель маршрута фичи на фейковом ICheapTextRunner.
-// Сервер режет по белым спискам: чужой templateId и роль этапа с Presence=on отбрасываются,
+// Сервер режет по белым спискам: чужой templateId и токен, которого нет среди id optional-этапов
+// выбранного шаблона (роль с Presence=on или роль вместо id графового этапа — R-B4a), отбрасываются;
 // не-JSON и сбой модели — предложения нет, без исключения. И7: epic.Workflow не трогается
 // никогда. Устаревшее предложение (маршрут подтвердили, пока ждали ответ) не пишется; два
 // параллельных подбора оставляют в эпике одно целое предложение.
@@ -97,6 +98,23 @@ public class WorkflowRecommenderTests : IDisposable
         ],
     }, WorkflowTemplateScope.Global);
 
+    // Графовый шаблон (R-B4a Major 2): два этапа одной роли review с разными id — ровно та форма,
+    // где id этапа НЕ равен роли. На step её не построить: роль несъёмная, Presence «optional»
+    // ей запрещён (WorkflowRules.cs:22,127), а повторить без id нельзя — id = роль был бы дублем.
+    private WorkflowTemplate GraphTemplate() => _store.Save(new WorkflowTemplate
+    {
+        Name = "граф",
+        Description = "ревью своей веткой",
+        Stages =
+        [
+            new() { Role = TaskRoles.Plan },
+            new() { Role = TaskRoles.Step },
+            new() { Id = "review-back", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional },
+            new() { Id = "review-front", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional },
+            new() { Role = TaskRoles.Final },
+        ],
+    }, WorkflowTemplateScope.Global);
+
     private TaskItem Epic(string? projectId = null, string description = "малая правка") =>
         _tasks.Create(projectId, Owner, new CreateTaskRequest("фича", Description: description, Role: TaskRoles.Feature));
 
@@ -142,6 +160,42 @@ public class WorkflowRecommenderTests : IDisposable
         // review — Presence=on, снять его нельзя; qa — единственный optional, он остался
         result.Skipped.Should().Equal(new[] { TaskRoles.Qa });
         _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal(new[] { TaskRoles.Qa });
+    }
+
+    // Графовый шаблон (R-B4a Major 1/2): белый список и промпт идут по id этапа — ответ модели
+    // «review-front» остаётся в Skipped именно этим id (его читает WorkflowGraph.States)
+    [Fact]
+    public async Task Recommend_ГрафовыйШаблон_SkippedПоIdЭтапа()
+    {
+        var tpl = GraphTemplate();
+        var epic = Epic();
+        var runner = new StubRunner { Text = Answer(tpl.Id, "\"review-front\"") };
+
+        var result = await MakeService(runner).RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.Skipped.Should().Equal("review-front", "ключ этапа — его id, а не роль");
+        _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal("review-front");
+        // промпт показывает этапы как id(роль, presence): модель отвечает тем же токеном,
+        // который потом читается по id
+        runner.LastPrompt.Should().Contain("review-front(review, optional)");
+        runner.LastPrompt.Should().Contain("review-back(review, optional)");
+    }
+
+    // Роль вместо id: среди id этапов выбранного шаблона токена «review» нет — Skipped пустой.
+    // На линейном шаблоне роль и есть id, там тот же ответ прошёл бы — дрейф ловит только граф
+    [Fact]
+    public async Task Recommend_ГрафовыйШаблон_РольВместоId_СкипПустой()
+    {
+        var tpl = GraphTemplate();
+        var epic = Epic();
+
+        var result = await MakeService(new StubRunner { Text = Answer(tpl.Id, "\"review\"") })
+            .RecommendAsync(epic.Id, Owner, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result!.Skipped.Should().BeEmpty("роль не ключ этапа: её нет среди id шаблона");
+        _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().BeEmpty();
     }
 
     // Не-JSON (проза вместо объекта) — null, без исключения наружу и без записи на эпик

@@ -216,8 +216,10 @@ public readonly record struct PromptHints(bool QuotedText, bool Sign, bool Peopl
     private static readonly Regex PeopleRx = new("(?<!\\p{L})(человек|людей|люди|портрет|девушк|парен|мужчин|женщин|ребён|ребен|дет[ие]|лиц[оа]|селфи|person|people|portrait|woman|man\\b|girl|boy|face)", O, T);
     private static readonly Regex PhotoRx = new("(?<!\\p{L})(фото|реалистич|фотореал|photo|realistic)", O, T);
     // Без «стил»/«style»: правка стиля идёт мимо fast-edit (Fibo Turbo на ней — 3,0 из 5, Ш10)
-    private static readonly Regex FastRx = new("(?<!\\p{L})(фон|аксессуар|очки|очков|шляп|background|accessor)", O, T);
-    private static readonly Regex PreciseRx = new("(?<!\\p{L})(одежд|футболк|куртк|платье|плать|рубашк|штан|костюм|пальто|clothes|clothing|shirt|dress|jacket|точн)", O, T);
+    // «фон» — только формы самого слова, не «фонарь» и «фонтан»
+    private static readonly Regex FastRx = new("(?<!\\p{L})(фон(а|е|у|ом|ы|ов)?(?!\\p{L})|аксессуар|очки|очков|шляп|background|accessor)", O, T);
+    // «точн» — только «точнее» и «точная правка», не «точно» и «точка»
+    private static readonly Regex PreciseRx = new("(?<!\\p{L})(одежд|футболк|куртк|платье|плать|рубашк|штан|костюм|пальто|clothes|clothing|shirt|dress|jacket|точнее|точн(ая|ую|ой) правк)", O, T);
 
     public static PromptHints Of(string? prompt)
     {

@@ -151,6 +151,33 @@ public class LocalImageRoutingTests : IDisposable
         r.Reason.Should().Be("Авто → Qwen «качественно»: одежда или точная правка");
     }
 
+    // Корни «фон» и «точн» ловили «фонарь», «фонтан», «точно» (ревью 29d36971)
+    [Theory]
+    [InlineData("добавь фонарь у двери")]
+    [InlineData("поставь фонтан в саду")]
+    [InlineData("поставь точку на карте")]
+    [InlineData("сделай точно такой же")]
+    public void Правка_ПохожиеСлова_НеПризнакиПравки(string prompt)
+    {
+        var h = PromptHints.Of(prompt);
+        h.Fast.Should().BeFalse();
+        h.Precise.Should().BeFalse();
+        Pick(ImageEditOp.Edit, T(prompt, mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+    }
+
+    [Theory]
+    [InlineData("поменяй фон", true, false)]
+    [InlineData("на фоне моря", true, false)]
+    [InlineData("убери Фон", true, false)]
+    [InlineData("сделай точнее", false, true)]
+    [InlineData("нужна точная правка руки", false, true)]
+    public void Правка_ФонИТочная_Срабатывают(string prompt, bool fast, bool precise)
+    {
+        var h = PromptHints.Of(prompt);
+        h.Fast.Should().Be(fast);
+        h.Precise.Should().Be(precise);
+    }
+
     // Незакрытая кавычка в огромном промпте давала откат регулярки и RegexMatchTimeoutException → 500
     [Theory]
     [InlineData("«")]

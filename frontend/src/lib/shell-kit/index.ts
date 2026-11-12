@@ -102,7 +102,7 @@ export { autoRevealGenerationPanel, isGenPanelKey, markGenPanelDismissed } from 
 // Панель генерации следует за выбором: клик по карточке, подсказка выбора агентом,
 // черновики полей по ключу элемента
 export { followSelection, isCardPick } from '../genPanelFollow';
-export { noteGenDraft, clearGenDraft, useGenDraft } from '../genDrafts';
+export { noteGenDraft, clearGenDraft, useGenDraft, getGenDraftText } from '../genDrafts';
 export { followPeeked } from '../genPanelOpen';
 
 // ─── offline ─────────────────────────────────────────────────────────────────

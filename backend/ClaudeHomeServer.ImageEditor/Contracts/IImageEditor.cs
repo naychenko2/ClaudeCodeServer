@@ -66,7 +66,24 @@ public enum EditStage { Queued, Running, Downloading }
 // HasAnnotations — на холсте есть стрелка, рамка или подпись: их видно только на размеченной
 // копии, поэтому модели нужен канал образцов. Removal — запрос просит стереть отмеченное:
 // чистый инпейнт по маске дорисовывает, а не стирает
-public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false);
+// Prompt, SourceMegapixels и FaceSwap нужны только авто-выбору локальных моделей (LocalImageRouting):
+// текст запроса (надпись в кавычках, люди, фото, вывеска), размер исходника правки в Мп (null —
+// неизвестен или это генерация) и подстановка персонажа на лицо. Остальные поставщики их не читают
+public record EditTraits(bool HasMask, int References, bool HasCharacter, bool HasAnnotations = false, bool Removal = false,
+    string? Prompt = null, double? SourceMegapixels = null, bool FaceSwap = false);
+
+// Выбор «Авто» с причиной для котировки и интерфейса («Авто → Klein: в запросе надпись»)
+public record ImageRoute(ImageEditModelInfo Model, string Reason);
+
+// Поставщик, умеющий объяснить выбор «Авто»; PickModel его Model и возвращает
+public interface IImageEditRouter
+{
+    // category — ответ классификатора неоднозначных запросов (ImageRouteClassifier); null — только правила
+    ImageRoute? Route(ImageEditOp op, EditMode mode, EditTraits traits, string? category = null);
+
+    // Правила дошли до умолчания, а текст запроса есть — стоит спросить классификатор
+    bool NeedsClassifier(ImageEditOp op, EditMode mode, EditTraits traits);
+}
 
 // Возможности МОДЕЛИ, а не поставщика: недоступные операции UI показывает серыми.
 // SeparateMaskPass — кисть вместе со стрелками, рамками и подписями модель в одном запросе не

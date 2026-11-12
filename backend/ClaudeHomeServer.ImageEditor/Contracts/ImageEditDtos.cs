@@ -88,7 +88,9 @@ public record ImageEditQuoteRequest(
     // обычную локальную правку (бесплатно, ETA правки). Персонаж задаётся внутри FaceTarget.Faces;
     // верхний CharacterSlug при FaceTarget не требуется — прислан вместе с FaceTarget, это двусмысленный вход
     FaceTarget? FaceTarget = null,
-    string? CharacterSlug = null);
+    string? CharacterSlug = null,
+    // Текст запроса для авто-выбора локальных моделей (надпись, люди, фото); без него выбор идёт по операции
+    string? Prompt = null);
 
 // Source: ImageEditEstimateSources.*; Amount = null — «цена станет известна после запуска».
 // EtaSeconds и QueueLength — у поставщика без цены (локальные модели, Unit = free): время
@@ -113,7 +115,11 @@ public record ImageEditQuoteDto(
     // UI показывает «N прохода» (шаг 16); для N > 1 вариантов ровно 1.
     // null (обычная правка) не пишется в JSON: без атрибута клиент видел бы «facePasses: null»
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    int? FacePasses = null);
+    int? FacePasses = null,
+    // Почему «Авто» выбрало эту модель («Авто → Klein: в запросе надпись»); null — модель названа явно
+    // или поставщик выбор не объясняет
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? RouteReason = null);
 
 public static class ImageEditEstimateSources
 {

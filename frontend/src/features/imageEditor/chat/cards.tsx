@@ -88,6 +88,7 @@ interface LaunchResult {
   model: string | null;
   estimate: ImageEditEstimate | null;
   expectedSeconds: number | null;
+  routeReason: string | null;
   changes: LaunchChange[];
 }
 
@@ -102,7 +103,7 @@ export function parseLaunchResult(text: string | undefined): LaunchResult | null
     : [];
   return {
     jobId, provider: str(quote.provider), model: str(quote.model), estimate: est,
-    expectedSeconds: num(quote.expectedSeconds), changes,
+    expectedSeconds: num(quote.expectedSeconds), routeReason: str(quote.routeReason), changes,
   };
 }
 

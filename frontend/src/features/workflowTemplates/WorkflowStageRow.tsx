@@ -3,10 +3,10 @@
 // Образец — SpecialtyEditView: те же RoutePicker для ячеек и те же примитивы ui-кита.
 
 import { useState } from 'react';
-import { ChevronDown, Lock } from 'lucide-react';
+import { ChevronDown, Lock, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Badge, Field, PillSwitch, Select, TextArea, TextField } from '../../components/ui';
+import { Badge, Button, Chip, Field, PillSwitch, Select, TextArea, TextField } from '../../components/ui';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels } from '../../lib/models';
 import { usePresets, routeDisplayLabel } from '../../lib/presets';
@@ -16,6 +16,7 @@ import type { Persona } from '../personas/types';
 import type { SpecialtyCatalogEntry } from '../specialties/types';
 import { PROMPT_LIMIT, STALL_POLICIES } from './workflowTemplateModel';
 import { listOrNull, parseList, presenceEditable } from './workflowEditorLogic';
+import { afterOptions, normalizeStages } from './workflowGraphModel';
 import type { WorkflowStage, WorkflowStagePresence } from './types';
 
 // Подписи ролей этапа (ключи — TaskRoles, разрез §0.3).
@@ -36,10 +37,22 @@ const POLICY_LABEL: Record<string, string> = {
   'stop-alert': 'Остановить и тревога',
 };
 
+const LANE_OPTIONS = [
+  { value: 'back', label: 'Бэк' },
+  { value: 'front', label: 'Фронт' },
+  { value: 'other', label: 'Другое' },
+];
+
+// Серверный формат id этапа (разрез 2 §1.1): slug [a-z0-9-]{1,32}.
+const STAGE_ID_RE = /^[a-z0-9-]{1,32}$/;
+
 export const NON_SKIPPABLE_HINT = 'Несъёмный этап: без него маршрут не закрыть — его нельзя выключить или сделать необязательным.';
 
 interface Props {
   stage: WorkflowStage;
+  // Все этапы шаблона и место этого этапа в списке: из них считаются id для «после» и дубли id.
+  stages: WorkflowStage[];
+  index: number;
   // Ошибки валидатора сервера и подсказки модели по этому этапу (показываются под заголовком).
   errors: string[];
   readOnly: boolean;
@@ -48,10 +61,13 @@ interface Props {
   // Ключи MCP, уже выданные (проекту/персоне): шаблон может только сузить, не выдать новое.
   mcpChoices: string[];
   onChange: (next: WorkflowStage) => void;
+  // Переименование id с каскадом по «после» других этапов (делает родитель: нужен весь список).
+  onRenameId: (newId: string) => void;
+  onRemove: () => void;
 }
 
 export function WorkflowStageRow({
-  stage, errors, readOnly, specialties, personas, mcpChoices, onChange,
+  stage, stages, index, errors, readOnly, specialties, personas, mcpChoices, onChange, onRenameId, onRemove,
 }: Props): React.ReactElement {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
@@ -62,6 +78,27 @@ export function WorkflowStageRow({
   const mcpOn = stage.mcpAllow ?? [];
   // Ключ, которого уже нет среди выданных, оставляем в списке — иначе правка молча его сотрёт.
   const mcpShown = Array.from(new Set([...mcpChoices, ...mcpOn]));
+  const stageId = stage.id?.trim() || stage.role;
+  // Текст поля id, пока человек его набирает (null — показываем настоящий id этапа).
+  const [idText, setIdText] = useState<string | null>(null);
+  const takenIds = normalizeStages(stages).filter((_, i) => i !== index).map(s => s.id);
+  const idError = idText === null ? undefined
+    : !STAGE_ID_RE.test(idText.trim()) ? 'Латинские буквы, цифры и дефис, до 32 символов'
+    : takenIds.includes(idText.trim()) ? 'Такой id уже есть у другого этапа' : undefined;
+  const onIdInput = (v: string) => {
+    setIdText(v);
+    const t = v.trim();
+    // Принимаем только годное имя: ссылки других этапов правятся каскадом сразу.
+    if (STAGE_ID_RE.test(t) && !takenIds.includes(t)) onRenameId(t);
+  };
+  const after = stage.after ?? null;
+  const parentOptions = afterOptions(stages, index);
+  const afterShown = Array.from(new Set([...parentOptions, ...(after ?? [])]));
+  const toggleAfter = (id: string) => {
+    const cur = after ?? [];
+    const next = cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id];
+    patch({ after: next.length > 0 ? next : null });
+  };
 
   return (
     <div style={{
@@ -83,7 +120,12 @@ export function WorkflowStageRow({
           size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
           style={{ flexShrink: 0, transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.12s' }}
         />
-        <span style={{ fontSize: FS.base, fontWeight: 600, flex: 1, minWidth: 0 }}>{label}</span>
+        <span style={{ fontSize: FS.base, fontWeight: 600, flex: 1, minWidth: 0 }}>
+          {label}
+          {stageId !== stage.role && (
+            <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{stageId}</span>
+          )}
+        </span>
         {fixed && (
           <Badge tone="neutral" size="xs" icon={<Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} title={NON_SKIPPABLE_HINT}>
             несъёмный
@@ -121,6 +163,54 @@ export function WorkflowStageRow({
               />
             )}
           </Field>
+
+          <Field label="Id этапа" hint="Имя этапа в маршруте: на него ссылаются поля «после». При переименовании ссылки обновятся сами." error={idError}>
+            <TextField
+              value={idText ?? stageId}
+              onChange={onIdInput}
+              onBlur={() => setIdText(null)}
+              mono
+              disabled={readOnly}
+              placeholder={stage.role}
+            />
+          </Field>
+
+          <Field
+            label="После"
+            hint={index === 0
+              ? 'Первый этап всегда начинает маршрут.'
+              : 'Этапы, которых этот ждёт. Ничего не выбрано — после предыдущего по списку; несколько — ждёт их все.'}
+          >
+            {index === 0 ? (
+              <span style={{ fontSize: FS.sm, color: C.textSecondary }}>С начала маршрута</span>
+            ) : (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                <Chip
+                  variant="toggle" selected={after !== null && after.length === 0} disabled={readOnly}
+                  onClick={() => !readOnly && patch({ after: after !== null && after.length === 0 ? null : [] })}
+                >с начала</Chip>
+                {afterShown.map(id => (
+                  <Chip
+                    key={id} variant="toggle" selected={(after ?? []).includes(id)} disabled={readOnly}
+                    onClick={() => !readOnly && toggleAfter(id)}
+                  >{id}</Chip>
+                ))}
+              </div>
+            )}
+          </Field>
+
+          {stage.role === 'step' && (
+            <Field label="Линия" hint="Бэк или фронт — по какой линии идёт этот шаг. Не задана — общая.">
+              <Select
+                value={stage.lane ?? ''}
+                onChange={v => patch({ lane: v || null })}
+                disabled={readOnly}
+                placeholder="Не задана"
+                options={LANE_OPTIONS}
+                title="Линия шага"
+              />
+            </Field>
+          )}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
             <Field label="Кто работает" hint="Специальность или конкретная персона — одно из двух. Выбор одного сбрасывает другое.">
@@ -227,6 +317,15 @@ export function WorkflowStageRow({
               </Field>
             </div>
           </div>
+
+          {!readOnly && (
+            <div>
+              <Button
+                variant="danger" size="sm" onClick={onRemove}
+                leftIcon={<Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+              >Убрать этап</Button>
+            </div>
+          )}
         </div>
       )}
     </div>

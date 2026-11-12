@@ -69,10 +69,29 @@ export function removeStage(stages: WorkflowStage[], id: string): WorkflowStage[
   return norm.filter(s => s.id !== id).map(s => ({ ...s, after: (s.after ?? []).filter(a => a !== id) }));
 }
 
+// Удаление этапа действием человека: наследники удалённого подцепляются к его родителям
+// (как серверный Resolve для снятых этапов, но уже в самом шаблоне), чтобы после удаления
+// ветка не оторвалась от маршрута молча. У удалённого корня наследники сами становятся корнями.
+// Неизвестного id нет — список возвращается как есть.
+export function removeStageReconnect(stages: WorkflowStage[], id: string): WorkflowStage[] {
+  const norm = normalizeStages(stages);
+  const removed = norm.find(s => s.id === id);
+  if (!removed) return stages;
+  const parents = (removed.after ?? []).filter(a => a !== id);
+  return norm.filter(s => s.id !== id).map(s => {
+    const after = s.after ?? [];
+    if (!after.includes(id)) return s;
+    const next: string[] = [];
+    for (const a of after) for (const b of a === id ? parents : [a]) if (!next.includes(b)) next.push(b);
+    return { ...s, after: next };
+  });
+}
+
 // Колонка этапа для мини-превью (G6b): глубина = длиннейший путь от корня (корень — 0),
 // зеркало WorkflowGraph.Columns. Ребро на неизвестный id колонки не даёт (на бэке —
 // то же: нет глубины предка — нет и колонки от него). Валидации здесь нет: битый граф
-// колонку тоже получит — её нарисует превью, а откажет сервер.
+// колонку тоже получит — её нарисует превью, а что с ним не так (висящая ссылка, дубль id),
+// скажет сервер. Несколько корней — не ошибка: граф без единого стока тоже валиден на входе.
 export function previewColumns(stages: WorkflowStage[]): Record<string, number> {
   // Объект без прототипа — как Ordinal-словарь на бэке: id «constructor» не должен
   // доставать глубину из Object.prototype.

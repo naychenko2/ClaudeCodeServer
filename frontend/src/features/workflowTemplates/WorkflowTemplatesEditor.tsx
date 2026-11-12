@@ -28,6 +28,8 @@ import {
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageRow } from './WorkflowStageRow';
+import { WorkflowGraphPreview } from './WorkflowGraphPreview';
+import { normalizeStages, removeStageReconnect, renameStageId } from './workflowGraphModel';
 import type { WorkflowStage, WorkflowTemplate } from './types';
 
 export interface WorkflowTemplatesEditorProps {
@@ -207,6 +209,11 @@ export function WorkflowTemplatesEditor({
     }
   };
 
+  const renameStage = (oldId: string, newId: string) =>
+    setDraft(d => (d ? { ...d, stages: renameStageId(d.stages, oldId, newId) } : d));
+  const dropStage = (id: string) =>
+    setDraft(d => (d ? { ...d, stages: removeStageReconnect(d.stages, id) } : d));
+
   const setStage = (idx: number, next: WorkflowStage) =>
     setDraft(d => (d ? { ...d, stages: d.stages.map((s, i) => (i === idx ? next : s)) } : d));
 
@@ -301,12 +308,18 @@ export function WorkflowTemplatesEditor({
       </Field>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+        <ListLabel>Схема маршрута</ListLabel>
+        <WorkflowGraphPreview stages={draft.stages} />
         <ListLabel>Этапы маршрута</ListLabel>
         {draft.stages.map((s, i) => (
           <WorkflowStageRow
             key={`${s.role}:${i}`}
             stage={s}
-            errors={errorsByRole[s.role] ?? []}
+            stages={draft.stages}
+            index={i}
+            errors={errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
+            onRenameId={newId => renameStage(normalizeStages(draft.stages)[i].id ?? s.role, newId)}
+            onRemove={() => dropStage(normalizeStages(draft.stages)[i].id ?? s.role)}
             readOnly={readOnly}
             specialties={catalog ?? []}
             personas={personas}

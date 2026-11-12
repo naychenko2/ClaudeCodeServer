@@ -47,6 +47,17 @@ describe('templateSnapshot', () => {
     const edited = tpl({ stages: [{ role: 'step', presence: 'on', prompt: 'y' }] });
     expect(templateSnapshot(edited)).not.toBe(templateSnapshot(tpl()));
   });
+  it('правка id, «после» и линии делает шаблон «грязным»; неявные значения — нет', () => {
+    const two = (over: object) => tpl({ stages: [
+      { role: 'plan', presence: 'on' },
+      { role: 'step', presence: 'on', ...over },
+    ] });
+    const base = templateSnapshot(two({}));
+    expect(templateSnapshot(two({ id: 'step', after: ['plan'] }))).toBe(base);
+    expect(templateSnapshot(two({ id: 'step-b' }))).not.toBe(base);
+    expect(templateSnapshot(two({ after: [] }))).not.toBe(base);
+    expect(templateSnapshot(two({ lane: 'back' }))).not.toBe(base);
+  });
 });
 
 describe('classifySaveError', () => {

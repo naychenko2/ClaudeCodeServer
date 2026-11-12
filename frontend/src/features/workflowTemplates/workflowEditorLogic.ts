@@ -2,6 +2,7 @@
 // Здесь всё, что в тесте можно проверить без отрисовки: гонки сохранения, разбор отказов
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
+import { normalizeStages } from './workflowGraphModel';
 import { STAGE_ROLES, clampStall, isNonSkippable } from './workflowTemplateModel';
 import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
@@ -56,7 +57,8 @@ export function forkToProject(global: WorkflowTemplate): WorkflowTemplate {
 export function templateSnapshot(t: WorkflowTemplate): string {
   return JSON.stringify({
     name: t.name, description: t.description ?? '',
-    stages: t.stages.map(s => ({
+    stages: normalizeStages(t.stages).map(s => ({
+      id: s.id, after: s.after, lane: s.lane ?? null,
       role: s.role, presence: s.presence,
       specialty: s.specialty ?? null, personaId: s.personaId ?? null,
       prompt: s.prompt ?? '', tierStrong: s.tierStrong ?? null, tierMedium: s.tierMedium ?? null,

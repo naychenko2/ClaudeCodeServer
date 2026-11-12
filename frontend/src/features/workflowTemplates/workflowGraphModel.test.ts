@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { afterOptions, normalizeStages, previewColumns, removeStage, renameStageId } from './workflowGraphModel';
+import { afterOptions, normalizeStages, previewColumns, removeStage, removeStageReconnect, renameStageId } from './workflowGraphModel';
 import type { WorkflowStage } from './types';
 
 // Форма тестов — третий встроенный пресет parallel-cycle (разрез 2 §1.10):
@@ -133,5 +133,27 @@ describe('previewColumns', () => {
   it('линейный — колонка = позиция; ребро на неизвестный id колонки не даёт', () => {
     expect(previewColumns(linear())).toEqual({ cut: 0, design: 1, merge: 2 });
     expect(previewColumns([{ role: 'cut', presence: 'on', after: ['призрака'] }])).toEqual({ cut: 0 });
+  });
+});
+
+describe('removeStageReconnect', () => {
+  it('наследники удалённого подцепляются к его родителям, без дублей', () => {
+    const r = removeStageReconnect(parallelCycle(), 'plan');
+    const byId = Object.fromEntries(r.map(s => [s.id, s.after]));
+    expect(r.some(s => s.id === 'plan')).toBe(false);
+    expect(byId['step-back']).toEqual(['design']);
+    expect(byId['step-front']).toEqual(['design']);
+  });
+
+  it('неявный «предыдущий» не превращается в корень', () => {
+    const r = removeStageReconnect(linear(), 'design');
+    expect(r.map(s => [s.id, s.after])).toEqual([['cut', []], ['merge', ['cut']]]);
+  });
+
+  it('удалён корень — наследники становятся корнями; неизвестный id — список как есть', () => {
+    const r = removeStageReconnect(linear(), 'cut');
+    expect(r.map(s => [s.id, s.after])).toEqual([['design', []], ['merge', ['design']]]);
+    const src = linear();
+    expect(removeStageReconnect(src, 'nope')).toBe(src);
   });
 });

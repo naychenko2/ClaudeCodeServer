@@ -99,3 +99,52 @@ public class WorkflowTemplateFile
     public List<WorkflowTemplate> Global { get; set; } = [];
     public Dictionary<string, List<WorkflowTemplate>> Projects { get; set; } = new(StringComparer.Ordinal);
 }
+
+// Предложение маршрута на эпике (TaskItem.WorkflowProposal, разрез §1): пишет только
+// TaskManager.SetWorkflowProposal (рекомендатель, B4a). Скип-лист — только этапы Presence=optional.
+public class WorkflowProposal
+{
+    public string TemplateId { get; set; } = "";
+    // "global" | "project"
+    public string Scope { get; set; } = "global";
+    public List<string> Skipped { get; set; } = [];
+    public string? Rationale { get; set; }
+    public DateTime ProposedAt { get; set; }
+    public string? Model { get; set; }
+}
+
+// Подтверждённый человеком маршрут эпика (TaskItem.Workflow, разрез §1, инвариант И7): единственный
+// писатель — TaskManager.ConfirmWorkflow. Состав маршрута правкой шаблона не меняется.
+public class FeatureWorkflow
+{
+    public string TemplateId { get; set; } = "";
+    public string Scope { get; set; } = "global";
+    // Роли, что идут в маршруте (порядок шаблона), и снятые.
+    public List<string> Route { get; set; } = [];
+    public List<string> Skipped { get; set; } = [];
+    public int ConfirmedVersion { get; set; }
+    public DateTime ConfirmedAt { get; set; }
+    public bool ConfirmedByUser { get; set; } = true;
+}
+
+// Слепок этапа на задаче фичи (TaskItem.Stage, разрез §1/§4, инварианты И3/И4): пишет только
+// TaskManager.Create из ТЕКУЩЕЙ версии шаблона; исполнитель читает только его, шаблон — никогда.
+// Если шаблон удалён после подтверждения, поля этапа пусты (остаются TemplateId/Role).
+public class StageSnapshot
+{
+    public string TemplateId { get; set; } = "";
+    public int TemplateVersion { get; set; }
+    public string Role { get; set; } = "";
+    public PersonaSpecialty? Specialty { get; set; }
+    public string? PersonaId { get; set; }
+    public string? Prompt { get; set; }
+    public string? TierStrong { get; set; }
+    public string? TierMedium { get; set; }
+    public string? TierWeak { get; set; }
+    public ModelTier? DefaultTier { get; set; }
+    public List<string>? DisallowedTools { get; set; }
+    public List<string>? McpAllow { get; set; }
+    // Уже после WorkflowRules.NormalizeStall.
+    public int? StallMinutes { get; set; }
+    public string? StallPolicy { get; set; }
+}

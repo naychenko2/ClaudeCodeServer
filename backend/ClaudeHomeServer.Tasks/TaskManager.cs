@@ -73,6 +73,8 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // проактивного уведомления о спавне следующего экземпляра регулярной задачи.
     // Полный PersonaManager ради одного `GetByIdInternal` — overkill.
     private readonly IPersonaLookup? _personas;
+    // Стор шаблонов процесса фичи (слепок этапа в Create); null — легаси без шаблонов.
+    private readonly WorkflowTemplateStore? _workflows;
     // Журнал событий фичи (волна 3, Б8b): append-only JSONL. Запись переходов задач
     // фичи (старт/остановка/ожидание/статус/вердикт/снятие) — см. WriteJournalTransitions.
     // Опциональный: тесты без журнала (null) пишут в воздух. Та же вертикаль (Tasks.Journal),
@@ -95,8 +97,10 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
 
     public TaskManager(IConfiguration config, IProjectEventLogService? events = null,
         ITaskNotificationDispatcher? notif = null, IPersonaLookup? personas = null,
-        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null)
+        FeatureJournalStore? journal = null, ILogger<TaskManager>? log = null,
+        WorkflowTemplateStore? workflows = null)
     {
+        _workflows = workflows;
         _events = events;
         _notif = notif;
         _personas = personas;
@@ -482,6 +486,9 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ValidateFeatureFields(task.FeatureId, task.Role, task.Verification?.Verdict,
             task.ReviewOf, task.PersonaId, ownerId,
             planSteps: task.PlanSteps, enforceReworkReviewOf: true);
+        // Маршрут эпика: этап, снятый маршрутом, → отказ; слепок этапа и предзаполнение personaId.
+        if (task.PlanSteps is not null) EnsurePlanStepsInRoute(task.FeatureId, task.PlanSteps);
+        ApplyWorkflowStage(task, explicitRole: Trimmed(req.Role));
         EnsureReturnReason(task.Verification);
         // Origin из тела не принимается (§8.4): та же единственная точка нормализации, что у
         // ReturnReason; дальше по методу идут валидаторы и самоснятие — они видят чистый вердикт.
@@ -517,6 +524,133 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         ScheduleSave();
         LogTask(task, ProjectEventTypes.TaskCreated, $"Создана задача «{task.Title}»");
         return task;
+    }
+
+    // ─── Маршрут процесса фичи (разрез workflow §1, §3, §4) ──────────────────────────
+    // Замок маршрута: чтение epic.Workflow в Create и запись в ConfirmWorkflow/SetWorkflowProposal —
+    // секции под одним листовым замком, шаг видит либо старый, либо новый маршрут целиком.
+    private readonly Lock _workflowLock = new();
+
+    public const string StageSkippedText = "этап пропущен маршрутом";
+
+    // Роль этапа: rework берёт этап step; не-этапные роли (feature/consult) — null.
+    private static string? StageRoleOf(string? role) =>
+        role == TaskRoles.Rework ? TaskRoles.Step
+        : role is not null && WorkflowRules.StageRoles.Contains(role) ? role
+        : null;
+
+    // Единственная точка записи Task.Stage (И3/И4). Эпик без Workflow — легаси, Stage = null.
+    // Роль задана явно: автоназначенная роль дефекта (qa) маршрутом не режется — дефект не теряем.
+    private void ApplyWorkflowStage(TaskItem task, string? explicitRole)
+    {
+        if (task.FeatureId is null || explicitRole is null) return;
+        var stageRole = StageRoleOf(task.Role);
+        if (stageRole is null) return;
+        var epic = GetById(task.FeatureId);
+        if (epic is null) return;
+
+        StageSnapshot snapshot;
+        lock (_workflowLock)
+        {
+            var route = epic.Workflow;
+            if (route is null) return;
+            if (!route.Route.Contains(stageRole, StringComparer.Ordinal))
+                throw new InvalidOperationException($"{StageSkippedText}: роль «{task.Role}» снята в маршруте фичи.");
+            snapshot = BuildStageSnapshot(route, stageRole, epic.ProjectId);
+        }
+        task.Stage = snapshot;
+        if (task.PersonaId is null && snapshot.PersonaId is { Length: > 0 } stagePersona)
+        {
+            task.PersonaId = stagePersona;
+            NormalizePersonaAssignee(task);
+        }
+    }
+
+    // Слепок из ТЕКУЩЕЙ версии шаблона; шаблон удалён/этап убран — слепок без полей этапа (логируем).
+    private StageSnapshot BuildStageSnapshot(FeatureWorkflow route, string stageRole, string? projectId)
+    {
+        var scope = string.Equals(route.Scope, "project", StringComparison.Ordinal)
+            ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        var template = _workflows?.Get(route.TemplateId, scope, projectId);
+        var stage = template?.Stages.FirstOrDefault(s => s.Role == stageRole);
+        if (template is null || stage is null)
+        {
+            _log?.LogWarning("Шаблон «{Template}» или этап «{Role}» не найден: слепок без полей этапа",
+                route.TemplateId, stageRole);
+            return new StageSnapshot
+            {
+                TemplateId = route.TemplateId,
+                TemplateVersion = route.ConfirmedVersion,
+                Role = stageRole,
+            };
+        }
+        return new StageSnapshot
+        {
+            TemplateId = template.Id,
+            TemplateVersion = template.Version,
+            Role = stageRole,
+            Specialty = stage.Specialty,
+            PersonaId = Trimmed(stage.PersonaId),
+            Prompt = stage.Prompt,
+            TierStrong = stage.TierStrong,
+            TierMedium = stage.TierMedium,
+            TierWeak = stage.TierWeak,
+            DefaultTier = stage.DefaultTier,
+            DisallowedTools = stage.DisallowedTools?.ToList(),
+            McpAllow = stage.McpAllow?.ToList(),
+            StallMinutes = WorkflowRules.NormalizeStall(stage.StallMinutes),
+            StallPolicy = stage.StallPolicy,
+        };
+    }
+
+    // Шаги плана вида review/qa/final у роли, снятой маршрутом эпика, → отказ. Эпик без Workflow — no-op.
+    private void EnsurePlanStepsInRoute(string? featureId, List<PlannedStep> steps)
+    {
+        if (featureId is null || steps.Count == 0) return;
+        var route = GetById(featureId)?.Workflow;
+        if (route is null) return;
+        foreach (var step in steps)
+        {
+            var role = step?.Kind switch
+            {
+                PlannedStep.KindReview => TaskRoles.Review,
+                PlannedStep.KindQa => TaskRoles.Qa,
+                PlannedStep.KindFinal => TaskRoles.Final,
+                _ => null,
+            };
+            if (role is not null && !route.Route.Contains(role, StringComparer.Ordinal))
+                throw new InvalidOperationException(
+                    $"{StageSkippedText}: шаг «{step!.StepRef}» вида {step.Kind} — роль «{role}» снята в маршруте фичи.");
+        }
+    }
+
+    // Единственный писатель epic.WorkflowProposal (И7): рекомендатель (B4a).
+    public TaskItem? SetWorkflowProposal(string epicId, WorkflowProposal? proposal)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            epic.WorkflowProposal = proposal;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
+    }
+
+    // Единственный писатель epic.Workflow (И7): подтверждение человека (B4b). Запись под замком маршрута —
+    // параллельный Create шага видит старый или новый маршрут целиком.
+    public TaskItem? ConfirmWorkflow(string epicId, FeatureWorkflow workflow)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            epic.Workflow = workflow;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
     }
 
     // Локи по FeatureId (не по экземпляру менеджера и не глобальный): сериализуют только создание
@@ -1117,6 +1251,7 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             legacyStepRefs: req.PlanSteps is null || task.PlanSteps is null ? null
                 : task.PlanSteps.Where(s => s.IsStep && !string.IsNullOrWhiteSpace(s.StepRef))
                     .Select(s => s.StepRef.Trim()).ToHashSet(FeatureStepAccounting.StepKeyComparer));
+        if (req.PlanSteps is not null && effPlanSteps is not null) EnsurePlanStepsInRoute(effFeatureId, effPlanSteps);
         EnsureReturnReason(req.Verification);
         // Та же норма на двери Update (major ревью d27c643c: раньше защищался только контроллер):
         // applied ниже — task.Verification = req.Verification, поэтому без снятия сюда подделка

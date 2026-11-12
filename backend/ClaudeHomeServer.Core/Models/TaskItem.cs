@@ -189,6 +189,14 @@ public class TaskItem
     // (role=feature), пишет TaskManager.SetFeatureNote. Аддитивное nullable-поле: старый tasks.json
     // без «note» читается как null, BackupSchema.Version не растёт.
     public FeatureNote? Note { get; set; }
+    // Маршрут процесса фичи (разрез workflow §1, только у role=feature): предложение рекомендателя и
+    // подтверждённый человеком маршрут. Пишут ТОЛЬКО TaskManager.SetWorkflowProposal / ConfirmWorkflow
+    // (И7); через PUT/MCP не принимаются. Аддитивные nullable-поля: BackupSchema.Version не растёт.
+    public WorkflowProposal? WorkflowProposal { get; set; }
+    public FeatureWorkflow? Workflow { get; set; }
+    // Слепок этапа шаблона на задаче фичи (любая роль, кроме feature/consult): пишет ТОЛЬКО
+    // TaskManager.Create (И3/И4), дальше неизменен. Эпик без Workflow — null (легаси).
+    public StageSnapshot? Stage { get; set; }
     // Срок из первой оценки оркестратора после старта фичи (FeatureEstimate.EtaMinutes): пишется один раз
     // SetFeatureNote и не перезаписывается, снятие голоса его не трогает. Аддитивное nullable-поле.
     public int? InitialEtaMinutes { get; set; }

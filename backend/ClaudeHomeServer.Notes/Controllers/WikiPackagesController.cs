@@ -358,7 +358,8 @@ public class WikiPackagesController : ControllerBase
             i, o.Op, o.Page, o.Target, o.Text, o.Class, o.Decision, o.Reason, o.BaseHashes,
             o.InputTokens, o.OutputTokens, o.HumanDecision, o.HumanReason,
             o.Claim, o.Quotes, o.Kind, o.AsOf,
-            o.JudgeDecision, o.JudgeReason, o.JudgeModel, o.JudgeAt, o.JudgeCostUsd))]);
+            o.JudgeDecision, o.JudgeReason, o.JudgeModel, o.JudgeAt, o.JudgeCostUsd,
+            o.ReasonCode))]);
 
     // Раздел пакета — чужой проект? Имя проекта не показывается и не решается: только своя
     // вики (ADR-036, решение 1).
@@ -395,7 +396,11 @@ public sealed record WikiPackageSourceDto(string Origin, string Ref);
 /// пакета как есть (WikiPackage.Operation); для старой операции без полей — null, quotes — null,
 /// а не []. Вердикт облачного судьи (дефект 67cd64d0): judgeDecision/judgeReason/judgeModel/
 /// judgeAt/judgeCostUsd — тоже как есть из операции: вкладка «Решения» фронта (lib/wiki.ts)
-/// читает ровно эти имена; у операции без вердикта — null, а не отсутствие поля.</summary>
+/// читает ровно эти имена; у операции без вердикта — null, а не отсутствие поля.
+/// Код причины (дефект из ревью a92a9550): reasonCode — машинный код вердикта политики
+/// (перечень WikiApplyPolicy.ReasonCodes), как есть из операции: по нему решается допуск
+/// к облачному судье (WikiApplyPolicy.JudgeAdmitted). У операции без кода (старый пакет)
+/// — null, а не отсутствие поля.</summary>
 public sealed record WikiPackageOperationDto(
     int Index,
     string Op,
@@ -418,7 +423,8 @@ public sealed record WikiPackageOperationDto(
     string? JudgeReason = null,
     string? JudgeModel = null,
     DateTimeOffset? JudgeAt = null,
-    decimal? JudgeCostUsd = null);
+    decimal? JudgeCostUsd = null,
+    string? ReasonCode = null);
 
 /// <summary>Решение по одной спорной операции. accept=false требует reason.</summary>
 public sealed record WikiDecideRequest(int? Index, bool? Accept, string? Reason);

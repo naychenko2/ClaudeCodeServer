@@ -328,6 +328,50 @@ public class WikiPackagesControllerTests : IDisposable
         }
     }
 
+    // ─── 4d. Список пакетов отдаёт код причины операции (доработка J-F1) ────
+
+    [Fact]
+    public void СписокПакетов_ОтдаётReasonCode_БезКодаNull()
+    {
+        // Фронт (доработка 856f45e4) читает reasonCode и сравнивает его с перечнем
+        // JudgeAdmitted (WikiApplyPolicy.cs:62-64), чтобы отличить «ждёт человека» от
+        // «вне допуска». Дефект из ревью a92a9550: Dto() не нёс o.ReasonCode — в проде
+        // reasonCode undefined → любая нерешённая спорная считалась вне допуска.
+        // Мутация «Dto() не несёт o.ReasonCode» (подставить null) — проверка ниже краснеет.
+        var coded = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "возможный дубль существующей страницы",
+            ReasonCode = WikiApplyPolicy.CodePageDuplicate,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+        };
+        var codedId = NewPackage(WikiPackage.StatusProposed, "common", coded);
+        var plainId = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+
+        // Тот же контракт транспорта, что у MVC-ответа (JsonSerializerDefaults.Web):
+        // проверяется форма ответа списка, а не C#-объект маппинга (образец — 4c выше).
+        var dto = ((OkObjectResult)Controller().List(true)).Value
+            .Should().BeAssignableTo<WikiPackagesDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        // Имя поля — camelCase от имени свойства: по этой строке его читает фронт, и литерал
+        // кода должен дойти ровно тем же — на нём держится сравнение с JudgeAdmitted.
+        var op = OperationOf(doc, codedId);
+        op.GetProperty("reasonCode").GetString().Should().Be(WikiApplyPolicy.CodePageDuplicate);
+
+        // Операция без кода (старый пакет): поле есть в JSON как null — не отсутствие поля
+        // (та же форма, что у judge* в 4c: фронт различает «кода нет» и «ответа нет»).
+        var plain = OperationOf(doc, plainId);
+        plain.TryGetProperty("reasonCode", out var field).Should().BeTrue("поле «reasonCode» есть в JSON");
+        field.ValueKind.Should().Be(JsonValueKind.Null, "«reasonCode» — null, а не отсутствие поля");
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]

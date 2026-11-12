@@ -474,15 +474,24 @@ public class PersonasController(
         // POST /api/projects/{pid}/sessions (W4-B1a, SessionsController.cs:49). Целевой проект —
         // тот же, что у фабрики (CreatePersonaChatAsync): проектная персона → её проект,
         // иначе запросный. Отказ идёт ДО фабрики: отказанное создание не оставило ни чата, ни
-        // следа. Неизвестная персона остаётся на отказе фабрики (400) — 409 только тому чату,
-        // который реально родился бы в необщем месте.
+        // следа. 409 — только чату, который реально родился бы в необщем месте (W4-T13, финал
+        // d13dffc7): проектной персоне необщего проекта и глобальной без запросного проекта.
+        // Неизвестная персона и битая проектная (ProjectId пуст или проект удалён) остаются на
+        // отказе фабрики (400): такой чат не родился бы вовсе, и ответ с флагом не отличается
+        // от ответа без него.
         if (req.Private && _personas.Get(id, scope.TenantOwnerId) is { } privatePersona)
         {
-            var targetProjectId = PersonaZone.IsProjectPersona(privatePersona)
-                ? PersonaZone.OwnProjectId(privatePersona)
-                : req.ProjectId;
-            if (!ProjectAccess.IsShared(
-                    targetProjectId is { Length: > 0 } tpid ? _projects.GetById(tpid) : null))
+            if (PersonaZone.IsProjectPersona(privatePersona))
+            {
+                // Битая проектная персона (OwnProjectId пуст или проект не находится) — гейт
+                // пропускает: решает фабрика (ChatCreation.cs:467-473 → 400), как без флага.
+                var ownProjectId = PersonaZone.OwnProjectId(privatePersona);
+                var ownProject = ownProjectId is { Length: > 0 } opid ? _projects.GetById(opid) : null;
+                if (ownProject is not null && !ProjectAccess.IsShared(ownProject))
+                    return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
+            }
+            else if (!ProjectAccess.IsShared(
+                    req.ProjectId is { Length: > 0 } rpid ? _projects.GetById(rpid) : null))
                 return Conflict(new { error = "Приватным можно сделать только чат общего проекта", code = "not_shared_project" });
         }
         // FIN3-2 (доработка по возврату ревью cea595f7): тот же гейт, что на POST /sessions

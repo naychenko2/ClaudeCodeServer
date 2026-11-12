@@ -20,7 +20,9 @@ namespace ClaudeHomeServer.Tests.Controllers;
 /// чат был бы общим, нет по построению. Ответ — тот же Session (privateToUserId = id
 /// вызывающего, excludeFromDossiers = true). Отказ: не общий проект — 409 not_shared_project
 /// (тот же текст и код, что у тумблера ChatsController.SetVisibility) и чата в проекте не
-/// появилось; читатель — 403 (отказ правом, атрибут RunTurn).
+/// появилось; читатель — 403 (отказ правом, атрибут RunTurn). Битая проектная персона
+/// (ProjectId пуст или проект удалён) — приватный гейт молчит: 400 фабрики, тот же ответ,
+/// что без флага (W4-T13); 409 — только чату, который реально родился бы в необщем месте.
 /// Для ручки персон целевой проект — тот же, что у фабрики: проектная персона → её проект
 /// (явного projectId в теле не нужно), иначе запросный; статус ответа — прежний контракт
 /// ручки (200, SharedProjectPersonaChatTests), в отличие от 201 на sessions.
@@ -284,8 +286,12 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
         // осталась бы зелёной: EnsureAsync вернул бы существующего ассистента и счёт не изменился
         // бы (тот же приём, что в SharedProjectPersonaSessionTests).
         var assistantId = _factory.Services.GetRequiredService<UserStore>().GetById(OwnerId())!.DefaultPersonaId;
-        if (assistantId is not null)
-            (await Owner().DeleteAsync($"/api/personas/{assistantId}")).EnsureSuccessStatusCode();
+        // Минор ревью 1341af61: отсутствие стартового ассистента — явный отказ, а не тихий пропуск:
+        // без удаления проверка «персоны не появилось» прошла бы на пустоте.
+        assistantId.Should().NotBeNull(
+            "провижн хоста заводит ассистента владельца (StartupWarmup.cs:188-200) — нечего удалять, " +
+            "и проверка отказа до провижна теряет смысл");
+        (await Owner().DeleteAsync($"/api/personas/{assistantId}")).EnsureSuccessStatusCode();
 
         var before = await ChatIdsAsync(Owner(), projectId);
         var beforePersonas = OwnerPersonaIds();
@@ -501,6 +507,62 @@ public class SharedProjectPrivateChatCreateTests : IClassFixture<SharedProjectPr
         (await ChatIdsAsync(Owner(), sharedProjectId)).Should().BeEquivalentTo(beforeShared,
             "и в общем проекте из тела: отказ до фабрики, чата там не родилось ни при каком резолве");
         (await PersonaChatIdsAsync(Owner(), personaId)).Should().BeEquivalentTo(beforePersonaChats);
+    }
+
+    // Битая проектная персона (W4-T13, финал d13dffc7): приватный гейт молчит и отдаёт решение
+    // фабрике — ответ с флагом private тот же, что без него (400 «не работает вне своего
+    // проекта», ChatCreation.cs:467-473). 409 остаётся только чату, который реально родился бы
+    // в необщем месте: ниже — глобальная персона без запросного проекта.
+
+    [Fact]
+    public async Task БитаяПроектнаяПерсонаСПустымProjectIdСФлагомPrivate_400ФабрикиНе409()
+    {
+        // Через REST такая запись не заводится (PersonasCrudService.cs:101: проектной персоне
+        // нужен корректный projectId) — только напрямую в сторе, как в ProjectAccessPersonaTests.
+        var persona = _factory.Services.GetRequiredService<PersonaManager>()
+            .Create(OwnerId(), "Битая-" + Guid.NewGuid().ToString("N")[..6], null, null, null, null, null,
+                PersonaScope.Project, null, null, null, false);
+
+        var r = await Owner().PostAsync($"/api/personas/{persona.Id}/chats",
+            Body(("mode", "auto"), ("private", true)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "битую проектную персону отказывает фабрика (ChatCreation.cs:467-473), а не приватный гейт: " +
+            "такой чат не родился бы ни при каком флаге");
+        var body = await BodyAsync(r);
+        body.GetProperty("error").GetString().Should().Contain("не работает вне своего проекта",
+            "отказ — текст фабрики, тот же, что без флага");
+        (await PersonaChatIdsAsync(Owner(), persona.Id)).Should().BeEmpty(
+            "отказанное создание не оставило чата");
+    }
+
+    [Fact]
+    public async Task ПроектнаяПерсонаСИсчезнувшимПроектомСФлагомPrivate_400ФабрикиНе409КакБезФлага()
+    {
+        // Осиротевшая запись: ProjectId указывает на несуществующий проект — тот же приём, что в
+        // ProjectAccessPersonaTests.cs:160-169 («Проектная_ПроектИсчез»). Боевым путём такой не
+        // сделать: удаление проекта каскадом удаляет его персоны (ProjectsController.cs:600-610),
+        // поэтому осиротевание — аномалия данных и заводится напрямую в сторе. Резолв атрибута
+        // такой персоны — по владению (ProjectAccessService.cs:68-72), до тела ручки доходит.
+        var persona = _factory.Services.GetRequiredService<PersonaManager>()
+            .Create(OwnerId(), "Осиротевшая-" + Guid.NewGuid().ToString("N")[..6], null, null, null, null, null,
+                PersonaScope.Project, "нет-такого-проекта", null, null, false);
+
+        var withoutFlag = await Owner().PostAsync($"/api/personas/{persona.Id}/chats",
+            Body(("mode", "auto")));
+        withoutFlag.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "отказ фабрики без флага (второй рубеж, ChatCreation.cs:467-473) — от него и меряется равенство");
+
+        var r = await Owner().PostAsync($"/api/personas/{persona.Id}/chats",
+            Body(("mode", "auto"), ("private", true)));
+
+        r.StatusCode.Should().Be(HttpStatusCode.BadRequest,
+            "битая запись отвечает одинаково при любом флаге: приватный гейт пропущен, решает фабрика");
+        var body = await BodyAsync(r);
+        body.GetProperty("error").GetString().Should().Contain("не работает вне своего проекта",
+            "тот же текст, что без флага: отказ пришёл из фабрики, не из гейта");
+        (await PersonaChatIdsAsync(Owner(), persona.Id)).Should().BeEmpty(
+            "ни одна из отказанных попыток не оставила чата");
     }
 
     [Fact]

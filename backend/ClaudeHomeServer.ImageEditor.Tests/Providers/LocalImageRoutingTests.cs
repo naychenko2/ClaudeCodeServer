@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.Controllers;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -325,5 +326,21 @@ public class LocalImageRoutingTests : IDisposable
         var quote = await service.QuoteAsync("u", "p", req, default);
         quote.Value!.Model.Should().Be(LocalImageEditor.QwenImageTurbo);
         quote.Value.RouteReason.Should().Contain("подстановка на лицо");
+    }
+
+    // Чип «Формат» при «Авто» показывал формат умолчания, хотя по тексту «Авто» уходит на другую модель
+    [Fact]
+    public async Task ЧипФормата_АвтоСПромптом_МодельКакВКотировке()
+    {
+        using var service = Service();
+        var scope = new ImageEditScope("p", null) { TenantOwnerId = "u" };
+        var byText = await ImageEditorEndpoints.FormatModelAsync(_editor, service, scope, ImageEditOp.Generate,
+            ImageEditCatalog.AutoModelId, "портрет старика у окна", default);
+        var noText = await ImageEditorEndpoints.FormatModelAsync(_editor, service, scope, ImageEditOp.Generate,
+            ImageEditCatalog.AutoModelId, null, default);
+        var quoted = await service.QuoteAsync("u", "p", Quote(ImageEditCatalog.AutoModelId, "портрет старика у окна"), default);
+
+        byText!.Id.Should().Be(quoted.Value!.Model).And.Be(LocalImageEditor.Krea2Turbo);
+        noText!.Id.Should().Be(LocalImageEditor.FluxKlein);
     }
 }

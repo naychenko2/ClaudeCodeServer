@@ -7,7 +7,7 @@
 //  — `aspectLabel`: подпись исходника правки («4:3» у файла 400×300), а не формат — в модель не уходит.
 
 import {
-  FORMAT_TEXT, generateChip, getChatContextState, notifyKindChanged, objectKey, presetAction,
+  FORMAT_TEXT, generateChip, getChatContextState, getGenDraftText, notifyKindChanged, objectKey, presetAction,
   type CropAnchor, type FormatEditModel, type FormatModel, type MediaFormatState, type MediaFormatWish, type ContextKindCtx,
 } from 'aihome_shell/kit';
 import { imageEditorApi, type ImageEditOp } from '../api';
@@ -15,7 +15,8 @@ import { enterScope, isPersonalScope } from '../scope';
 import { getCatalog } from '../thread/catalog';
 import { threadName } from '../thread/model';
 import { formatSig, getPrefs, prefsSettled, setPrefs } from '../thread/prefs';
-import { getThreadMarks, mutate } from '../thread/threadStore';
+import { getThreadMarks, imageDraftKey, mutate } from '../thread/threadStore';
+import { autoQuotePrompt, QUOTE_PROMPT_DEBOUNCE_MS } from '../useQuote';
 import { threadsApi, type ImageThread } from '../thread/threadsApi';
 import { activeSrc, loadImage, resolveModel } from '../thread/useThreadLaunch';
 import { settingsOf } from './executors';
@@ -46,15 +47,38 @@ function bumpEpoch(scope: string) {
   notifyKindChanged();
 }
 
-function stateFor(scope: string, provider: string, model: string, op: ImageEditOp): MediaFormatState | null {
+// Значение, которое «отстоялось»: новое отдаётся через ms после последней смены, onSettle перерисовывает чип
+export function settler<T>(ms: number, onSettle: () => void): (key: string, value: T) => T {
+  const settled = new Map<string, T>();
+  const pending = new Map<string, { value: T; timer: ReturnType<typeof setTimeout> }>();
+  return (key, value) => {
+    if (!settled.has(key)) { settled.set(key, value); return value; }
+    const cur = settled.get(key) as T;
+    const p = pending.get(key);
+    if (Object.is(cur, value)) {
+      if (p) { clearTimeout(p.timer); pending.delete(key); }
+      return cur;
+    }
+    if (!p || !Object.is(p.value, value)) {
+      if (p) clearTimeout(p.timer);
+      pending.set(key, { value, timer: setTimeout(() => { pending.delete(key); settled.set(key, value); onSettle(); }, ms) });
+    }
+    return cur;
+  };
+}
+
+// Текст поля для «Авто»: формат — у модели, которую «Авто» выберет по тексту. С той же задержкой, что у котировки
+const settledPrompt = settler<string | null>(QUOTE_PROMPT_DEBOUNCE_MS, notifyKindChanged);
+
+function stateFor(scope: string, provider: string, model: string, op: ImageEditOp, prompt: string | null): MediaFormatState | null {
   const base = `${scope}|${provider}|${model}|${op}`;
-  const key = `${base}|${_epoch.get(scope) ?? 0}`;
+  const key = `${base}|${_epoch.get(scope) ?? 0}|${prompt ?? ''}`;
   const hit = _state.get(key);
   if (hit) return hit;
   if (!_loading.has(key)) {
     _loading.add(key);
     defer(() => {
-      void imageEditorApi().format(scope, { provider, model, op })
+      void imageEditorApi().format(scope, { provider, model, op, ...(prompt ? { prompt } : null) })
         .then(s => { _state.set(key, s); _last.set(base, s); }, () => { _state.set(key, FALLBACK); })
         .finally(() => { _loading.delete(key); notifyKindChanged(); });
     });
@@ -210,7 +234,8 @@ export function imageFormat(ctx: ContextKindCtx, actionId: string | null): Forma
 
   const { pv, m } = resolveModel(catalog, settingsOf(scope, thread, op));
   if (!pv || !m) return null;
-  const state = stateFor(scope, pv.key, m.id, op);
+  const prompt = settledPrompt(thread.id, autoQuotePrompt(m.id, getGenDraftText(imageDraftKey(thread.id))));
+  const state = stateFor(scope, pv.key, m.id, op, prompt);
 
   if (op === 'generate') {
     const by = state?.wish?.by ?? null;

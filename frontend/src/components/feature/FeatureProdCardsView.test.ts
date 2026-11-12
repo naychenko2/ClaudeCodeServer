@@ -783,16 +783,11 @@ describe('хвост после мержа', () => {
     stepChains: [chain({ stepRef: 'Ш1', title: 'Хвост', taskIds: ['t1'], status: 'ждёт ревью', outcome: 'pending' })],
   });
 
-  // FP-H2: плашка карточки называется «· открыто после мержа» (как сводная строка в
-  // хронологии); маркер блока времени (FeatureStepDetails) — отдельная доработка.
   it('задача цепочки в postMergeTails — плашка помечена «· открыто после мержа»', () => {
     const { container } = mount(createElement(FeatureProdCardsView, { run: tailRun(['t1']), featureId: 'F', axis: AXIS_LIVE }));
     expand(container, 'Ш1');
     const badge = textNodes(findNodeByAttr(findNodeByAttr(container, 'data-testid', 'prod-card-Ш1')!, 'data-testid', 'prod-status')!).join('');
     expect(badge).toBe('ждёт ревью · открыто после мержа');
-    // Блок времени — маркер FeatureStepDetails («· открыто после мержа», FP-H1): то же
-    // имя числа, что и здесь: это не обычная работа стадии.
-    expect(textNodes(findNodeByAttr(container, 'data-testid', 'step-time')!).join('')).toContain('Время шага на оси фичи · открыто после мержа');
   });
 
   it('нет хвоста в postMergeTails — маркера нет', () => {

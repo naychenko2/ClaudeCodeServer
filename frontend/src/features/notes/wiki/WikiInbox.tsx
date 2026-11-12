@@ -9,7 +9,11 @@
 //   откатывают применённый — кнопка строки всегда получала 409 (дефект 24c61d60); откат
 //   живёт в «Журнале» → «Решения за ночь». Пока снимок настроек не прочитан,
 //   список ручной (прежнее лицо экрана); отказ чтения настроек не отказ списка и здесь не
-//   показывается.
+//   показывается. Исключение — пакет с нерешёнными операциями вне допуска к судье
+//   (autoapply_off, пакет без кода причины): судья их не трогает вовсе (WikiJudgeSweep.cs:23-24),
+//   пакет висит без срока и занимает лимит 20 (ночь встаёт на open_limit). Такой пакет
+//   открыт человеку как в ручном режиме — той же строкой и экраном пакета (доработка J-F1,
+//   финал 9c305f19, вариант (а)); операции с вердиктом судьи остаются только для чтения.
 // Пакеты со статусом proposed. Операции с решением политики auto здесь не показываются
 // вовсе: их решает код, не человек (контракт S4a: через REST auto не решается, 409
 // wiki_pkg_auto). Неспорное и применённое — «Журнал» (S7b), не этот экран.
@@ -80,6 +84,26 @@ export function pkgErrorText(e: WikiError): string {
 // R-J-J2a: решённая судьёй не считается «на решение» и не просит человека заново).
 export function pendingContested(p: WikiPackageDto): WikiPackageOperationDto[] {
   return p.operations.filter(o => o.decision === 'inbox' && !o.humanDecision && !o.judgeDecision);
+}
+
+// Допуск к облачному судье — зеркало бэкового перечня допущенных кодов
+// (WikiApplyPolicy.JudgeAdmitted, WikiApplyPolicy.cs:62-64): допуск решает код, не текст
+// причины (И4′). Зеркало держит ДОПУЩЕННЫЕ коды, а не недопущенные: незнакомый код
+// считается недопущенным → открытым человеку (человек решить может), обратный умолчание
+// («незнакомый = допущенный») оставил бы новый код висеть в очереди без судьи — ровно тот
+// дефект, который чинит эта доработка (J-F1).
+const JUDGE_ADMITTED_CODES = new Set([
+  'class_disabled', 'revert_quarantine', 'no_history_section', 'overrides_human', 'page_duplicate',
+  'section_new_pages_limit', 'personal_to_common', 'target_disputed', 'after_model_repair', 'number_unconfirmed',
+]);
+
+// Спорная (decision=inbox) операция вне допуска к судье: её не вынес ни человек, ни судья,
+// и код причины не допускает до судьи — или кода нет вовсе (старые пакеты; и все операции,
+// пока бэк не отдаёт reasonCode в списке — см. находку в отчёте J-F1). Проход судьи такую
+// не трогает (WikiJudgeSweep.cs:23-24), поэтому в режиме судьи её решает человек
+// (финал 9c305f19). auto-операции здесь нет: их решил код, они не «на решение» (S4a).
+export function outsideJudgeScope(o: WikiPackageOperationDto): boolean {
+  return o.decision === 'inbox' && !o.humanDecision && !o.judgeDecision && !JUDGE_ADMITTED_CODES.has(o.reasonCode ?? '');
 }
 
 // Возраст пакета — коротко: минуты/часы свежие, дальше дата. Возраст — второстепенная
@@ -302,7 +326,7 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
     refreshWikiRailCounts();
   }, [load]);
 
-  if (opened) return <WikiPackageView pkg={opened} onBack={closePackage} />;
+  if (opened) return <WikiPackageView pkg={opened} judgeMode={judgeMode} onBack={closePackage} />;
 
   if (loadError) {
     const text = loadError instanceof WikiError ? pkgErrorText(loadError) : 'Не удалось прочитать список';
@@ -369,8 +393,11 @@ export function WikiInbox({ sectionScope }: { sectionScope?: string | null | 'al
         )
       ) : (
         <>
-          {packages.map(p => judgeMode ? (
-            // Вид судьи: строка только для чтения, экран пакета (место решения человека) не открывается
+          {packages.map(p => judgeMode && !p.operations.some(o => outsideJudgeScope(o)) ? (
+            // Вид судьи: строка только для чтения, экран пакета (место решения человека) не
+            // открывается — но только пока в пакете есть что решать судье. Пакет с нерешёнными
+            // операциями вне его допуска (autoapply_off, пакет без кода) — ручная строка:
+            // судья их не тронет, а висеть им в очереди без срока — open_limit (J-F1)
             <div key={p.id}><JudgeRow pkg={p} /></div>
           ) : (
             <div key={p.id}><PackageRow pkg={p} onOpen={() => setOpened(p)} /></div>

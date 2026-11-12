@@ -23,7 +23,10 @@
 //  (8) снять !o.judgeDecision из pendingContested → «1 на решение» и «нет кнопок по решённой
 //      судьёй» краснеют (хвост R-J-J2a);
 //  (9) убрать проверку humanDecision из judgeVerdict → «решённая человеком в виде судьи»
-//      краснеет (доработка J-F1, ревью 4a5a06f8).
+//      краснеет (доработка J-F1, ревью 4a5a06f8);
+//  (10) вернуть в режиме судьи всё только для чтения (убрать условие outsideJudgeScope в
+//       рендере списка) → «пакет с операцией autoapply_off» краснеет (доработка J-F1,
+//       финал 9c305f19).
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -560,21 +563,27 @@ function seedBoth(data: { packages: unknown[]; invalidCount: number }, settings:
 
 // Пакет с вердиктами судьи, ещё в очереди: проход решил op0 (отказ с причиной) и op1 (принятие),
 // op2 отложил (вердикта нет) — пакет остаётся proposed (StatusAfterDecisions: есть нерешённые).
+// У всех — допущенный код причины: без кода или с autoapply_off операция в очереди судьи
+// открыта человеку (J-F1 доработка), а здесь — очередь целиком судье.
 const JPKG = {
   ...PKG,
   operations: [
     op({
+      reasonCode: 'overrides_human',
       judgeDecision: 'rejected', judgeReason: 'числа в утверждении не подтверждены цитатой',
       judgeModel: 'claude-x', judgeAt: '2026-11-12T03:40:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
     }),
     op({
       index: 1, op: 'append', page: 'projects/p1/vera', target: null, text: 'Вера ведёт QA.',
       class: 'session×append', decision: 'inbox', reason: 'Дополняет страницу',
+      reasonCode: 'class_disabled',
       judgeDecision: 'accepted', judgeModel: 'claude-x', judgeAt: '2026-11-12T03:41:00Z', judgeCostUsd: 0.01, judgeAttempts: 1,
     }),
     op({
       index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
       class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+      // допущена и отложена проходом (попыток < 3): «вердикта ещё нет» — ожидание судьи, не человек
+      reasonCode: 'target_disputed',
     }),
     PKG.operations[1],
   ],
@@ -596,6 +605,8 @@ const JPKG_HUMAN = {
     op({
       index: 2, op: 'link', page: 'projects/p1/gleb', target: 'projects/p1/vera', text: null,
       class: 'session×link', decision: 'inbox', reason: 'Новая связь',
+      // допущенная и нерешённая: в очереди судьи она остаётся только для чтения (J-F1 доработка)
+      reasonCode: 'overrides_human',
     }),
     PKG.operations[1],
   ],
@@ -687,5 +698,85 @@ describe('«Решения судьи» (J-F1)', () => {
     // не решённая никем — прежняя, с кнопками
     expect(buttonByTestId(c, 'wiki-op-accept-2')).not.toBeNull();
     expect(buttonByTestId(c, 'wiki-op-reject-2')).not.toBeNull();
+  });
+});
+
+// ─── Доработка J-F1 (финал 9c305f19, вариант (а)): пакет с операциями вне судьи — человеку ───
+// Судья не трогает операции с autoapply_off и пакеты без кода причины (WikiJudgeSweep.cs:23-24,
+// И4′): они висят без срока и занимают лимит 20 (ночь встаёт на open_limit). В режиме судьи
+// такой пакет — ручная строка и экран пакета: нерешённая операция вне допуска получает кнопки;
+// допустительная без вердикта — без кнопок («вердикта ещё нет» — ожидание прохода), вердикт
+// судьи — без кнопок (И1). Пакет, где всё нерешённое допущено, остаётся строкой судьи.
+
+// op0 — autoapply_off (создана в ручном режиме, потом тумблер включили): судья её не зовёт.
+// op1 — допущена и ещё не решена. op2 — вердикт судьи.
+const JPKG_OUT = {
+  ...PKG,
+  operations: [
+    op({ reasonCode: 'autoapply_off', reason: 'выключатель «Применять без ревью» выключен — каждая правка через «Входящие»' }),
+    op({ index: 1, reasonCode: 'overrides_human' }),
+    op({ index: 2, judgeDecision: 'rejected', judgeReason: 'числа не подтверждены цитатой', judgeModel: 'claude-x' }),
+  ],
+};
+
+describe('режим судьи: пакет с операциями вне допуска открыт человеку (доработка J-F1)', () => {
+  it('пакет с операцией autoapply_off: ручная строка, экран пакета, кнопки у неё', async () => {
+    seedBoth({ packages: [JPKG_OUT], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    // строка ручная (кликабельная), не строка судьи
+    expect(buttonByTestId(c, 'wiki-pkg-row')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).toBeNull();
+    openPackage(c);
+    await settle();
+    // операция вне допуска — с кнопками, как в ручном режиме (c1)
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+    const rows = opRows(c);
+    expect(rows).toHaveLength(3);
+    const rowText = (n: AnyNode) => textNodes(n).map(t => t.trim()).join(' ');
+    // допустительная без вердикта — без кнопок, метка ожидания прохода (c2)
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-1')).toBeNull();
+    expect(rowText(rows[1])).toContain('вердикта ещё нет');
+    // вердикт судьи — без кнопок (И1) и называется своим
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-2')).toBeNull();
+    expect(rowText(rows[2])).toContain('отклонена судьёй');
+  });
+
+  it('пакет без кода причины (старый, хвост master): открыт человеку так же', async () => {
+    // PKG: op0 без reasonCode — «кода нет вовсе» = не допущена (И4′)
+    seedBoth({ packages: [PKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).not.toBeNull();
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-reject-0')).not.toBeNull();
+  });
+
+  it('пакет, где всё нерешённое допущено к судье, остаётся строкой только для чтения', async () => {
+    // JPKG: op0/op1 с вердиктами, op2 допущена и отложена — ни одной человеческой операции
+    seedBoth({ packages: [JPKG], invalidCount: 0 }, SETTINGS_ON);
+    const c = render();
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'wiki-judge-row')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-pkg-row')).toBeNull();
+    expect(buttonByText(c, 'Принять')).toBeNull();
+    expect(buttonByText(c, 'Отклонить')).toBeNull();
+  });
+
+  it('ручной режим не меняется: пакет без кода — с кнопками, как прежде', async () => {
+    // тот же JPKG_OUT при выключенном тумблере — прежнее поведение (кнопки у всех нерешённых)
+    seedBoth({ packages: [JPKG_OUT], invalidCount: 0 }, SETTINGS_OFF);
+    const c = render();
+    await settle();
+    openPackage(c);
+    await settle();
+    expect(buttonByTestId(c, 'wiki-op-accept-0')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();
+    expect(buttonByTestId(c, 'wiki-op-accept-2')).toBeNull();
   });
 });

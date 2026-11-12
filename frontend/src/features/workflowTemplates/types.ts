@@ -94,3 +94,10 @@ export interface ConfirmWorkflowBody {
   scope: WorkflowTemplateScope;
   skipped: string[];
 }
+
+// Строка списка GET /api/workflow-templates (WorkflowTemplateEntry на бэке): шаблон с областью.
+export interface WorkflowTemplateEntry {
+  scope: 'global' | 'project';
+  projectId: string | null;
+  template: WorkflowTemplate;
+}

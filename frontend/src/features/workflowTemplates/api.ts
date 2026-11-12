@@ -8,7 +8,7 @@
 // recommendWorkflow/confirmWorkflow — ручки B4b (разрез §5): только обёртки, вызывает их
 // блок подтверждения маршрута (C2).
 import { request } from '../../lib/offline';
-import type { ConfirmWorkflowBody, WorkflowProposal, WorkflowTemplate } from './types';
+import type { ConfirmWorkflowBody, WorkflowProposal, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Строка запроса области: без параметра — глобальная, с параметром — проектная (ScopeOf на бэке).
 function scopeQs(projectId?: string): string {
@@ -17,8 +17,10 @@ function scopeQs(projectId?: string): string {
 
 export const workflowTemplatesApi = {
   // Список: глобальные; с projectId — глобальные плюс проектные этого проекта.
+  // Сервер отдаёт обёртки { scope, projectId, template } — раскрываем их здесь,
+  // область каждой строки берёт вызывающий из entry.scope.
   listTemplates: (projectId?: string) =>
-    request<WorkflowTemplate[]>(`/workflow-templates${scopeQs(projectId)}`),
+    request<WorkflowTemplateEntry[]>(`/workflow-templates${scopeQs(projectId)}`),
 
   // Сохранение. Новый шаблон (version 0 — ещё не лежал в сторе) → POST с expectedVersion: 0:
   // существующий id сервер отказывает 409, а не тихой перезаписью.

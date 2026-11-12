@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   CONFLICT_MESSAGE, blankTemplate, classifySaveError, forkToProject, listOrNull, parseList,
   saveGuarded, templateSnapshot, normalizeForSave, presenceEditable, showWriteButton,
-  canWriteProjectTemplates,
+  canWriteProjectTemplates, splitEntries,
 } from './workflowEditorLogic';
 import { STAGE_ROLES } from './workflowTemplateModel';
 import type { WorkflowTemplate } from './types';
@@ -119,5 +119,29 @@ describe('права и нормализация', () => {
       { role: 'review', presence: 'on', stallMinutes: 999 },
     ] }));
     expect(t.stages.map(s => s.stallMinutes)).toEqual([5, null, 240]);
+  });
+});
+
+describe('splitEntries: форма ответа списка — обёртки с областью', () => {
+  const entries = [
+    { scope: 'global' as const, projectId: null, template: tpl({ id: 'g1', name: 'Глобальный' }) },
+    { scope: 'project' as const, projectId: 'p1', template: tpl({ id: 'l1', name: 'Свой' }) },
+  ];
+
+  it('в проекте: глобальные отдельно, «Проектные» без глобальных', () => {
+    const r = splitEntries(entries, true);
+    expect(r.globals.map(t => t.id)).toEqual(['g1']);
+    expect(r.locals.map(t => t.id)).toEqual(['l1']);
+  });
+
+  it('админская вкладка: раскрывает шаблоны, а не обёртки', () => {
+    const r = splitEntries([entries[0]], false);
+    expect(r.locals[0].name).toBe('Глобальный');
+    expect(r.locals[0].stages).toBeDefined();
+  });
+
+  it('глобальный с тем же id, что у проектного, не прячет проектный', () => {
+    const r = splitEntries([entries[0], { ...entries[1], template: tpl({ id: 'g1', name: 'Копия' }) }], true);
+    expect(r.locals.map(t => t.name)).toEqual(['Копия']);
   });
 });

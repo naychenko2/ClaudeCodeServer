@@ -24,7 +24,7 @@ import { showToast } from '../../lib/toast';
 import { workflowTemplatesApi } from './api';
 import { stageErrors } from './workflowTemplateModel';
 import {
-  CONFLICT_MESSAGE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded, templateSnapshot,
+  CONFLICT_MESSAGE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded, templateSnapshot, splitEntries,
   type SaveFailure,
 } from './workflowEditorLogic';
 import { WorkflowStageRow } from './WorkflowStageRow';
@@ -73,11 +73,8 @@ export function WorkflowTemplatesEditor({
   const busyRef = useRef(false);
 
   const load = useCallback(async (): Promise<{ globals: WorkflowTemplate[]; locals: WorkflowTemplate[] }> => {
-    const g = await workflowTemplatesApi.listTemplates();
-    if (!projectId) return { globals: g, locals: g };
-    const all = await workflowTemplatesApi.listTemplates(projectId);
-    const gIds = new Set(g.map(t => t.id));
-    return { globals: g, locals: all.filter(t => !gIds.has(t.id)) };
+    // Один GET: с projectId сервер отдаёт глобальные плюс проектные, область — в entry.scope.
+    return splitEntries(await workflowTemplatesApi.listTemplates(projectId), !!projectId);
   }, [projectId]);
 
   useEffect(() => {

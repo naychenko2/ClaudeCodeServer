@@ -3,7 +3,17 @@
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
 import { STAGE_ROLES, clampStall, isNonSkippable } from './workflowTemplateModel';
-import type { WorkflowStage, WorkflowTemplate } from './types';
+import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
+
+// Список обёрток { scope, template } → области. Разбиение — по метке entry.scope, а не по id:
+// без projectId глобальные же отдаются и как «свои» (админская вкладка); с projectId
+// глобальные не попадают в «Проектные».
+export function splitEntries(
+  entries: WorkflowTemplateEntry[], projectMode: boolean,
+): { globals: WorkflowTemplate[]; locals: WorkflowTemplate[] } {
+  const globals = entries.filter(e => e.scope === 'global').map(e => e.template);
+  return { globals, locals: projectMode ? entries.filter(e => e.scope === 'project').map(e => e.template) : globals };
+}
 
 export const CONFLICT_MESSAGE = 'Шаблон изменился на сервере — перечитайте его и повторите правку.';
 

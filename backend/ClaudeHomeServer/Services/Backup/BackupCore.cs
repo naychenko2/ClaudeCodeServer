@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO.Enumeration;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -6,11 +7,12 @@ using Microsoft.Data.Sqlite;
 
 namespace ClaudeHomeServer.Services.Backup;
 
-public record BackupResult(bool Ok, string? ArchivePath, string? Error, BackupManifest? Manifest);
+public record BackupResult(
+    bool Ok, string? ArchivePath, string? Error, BackupManifest? Manifest, BackupMetrics? Metrics = null);
 public record RestoreResult(bool Ok, string? Error, string? MovedDataTo, BackupManifest? Manifest);
 
 // Снятие и восстановление снапшота каталога data.
-public static class BackupCore
+public static partial class BackupCore
 {
     private const string ManifestEntryName = "manifest.json";
     public const string ManifestSuffix = ".manifest.json";
@@ -42,6 +44,7 @@ public static class BackupCore
             return new BackupResult(false, null, "Бэкап уже выполняется", null);
 
         var staging = Path.Combine(ctx.DataDir, BackupPaths.StagingDirName);
+        var metrics = new BackupMetrics { Mode = "zip" };
         BackupResult result;
         try
         {
@@ -54,12 +57,18 @@ public static class BackupCore
             DeleteOrphanParts(ctx.BackupDir);
             DeleteOrphanParts(ctx.SecretsDir);
 
-            var copied = CopyDataTo(ctx, staging, log);
-            var manifest = BuildManifest(ctx, staging, copied);
+            var copied = CopyDataTo(ctx, staging, log, metrics);
+            metrics.Copied = copied.Count;
+            metrics.CopiedBytes = copied.Sum(f => f.Size);
 
-            File.WriteAllText(
-                Path.Combine(staging, ManifestEntryName),
-                JsonSerializer.Serialize(manifest, ManifestJson));
+            BackupManifest manifest = null!;
+            metrics.Measure("манифест", () =>
+            {
+                manifest = BuildManifest(ctx, staging, copied);
+                File.WriteAllText(
+                    Path.Combine(staging, ManifestEntryName),
+                    JsonSerializer.Serialize(manifest, ManifestJson));
+            });
 
             var name = $"{ArchivePrefix}{InstanceIdentity.Short(manifest.InstanceId)}-" +
                        $"{manifest.CreatedAt:yyyyMMdd-HHmmss}";
@@ -73,25 +82,30 @@ public static class BackupCore
             // 61 с против 237 с (в 3.9 раза быстрее, zip — 61% времени всего снапшота)
             // ценой +37% размера (1789 → 2453 МБ). Время критичнее: таймаут агента
             // выкатки на съёмке бэкапа уже поднимали до 2400 с, снапшот рос с транскриптами
-            ZipFile.CreateFromDirectory(staging, partPath, CompressionLevel.Fastest, false);
-            if (File.Exists(finalPath)) File.Delete(finalPath);
-            File.Move(partPath, finalPath);
+            metrics.Measure("zip", () =>
+                ZipFile.CreateFromDirectory(staging, partPath, CompressionLevel.Fastest, false));
+            metrics.Measure("финал", () =>
+            {
+                if (File.Exists(finalPath)) File.Delete(finalPath);
+                File.Move(partPath, finalPath);
 
-            File.WriteAllText(
-                Path.Combine(ctx.BackupDir, name + ManifestSuffix),
-                JsonSerializer.Serialize(manifest, ManifestJson));
+                File.WriteAllText(
+                    Path.Combine(ctx.BackupDir, name + ManifestSuffix),
+                    JsonSerializer.Serialize(manifest, ManifestJson));
 
-            SnapshotSecrets(ctx, manifest.CreatedAt, log);
-            if (rotate) Rotate(ctx, log);
+                SnapshotSecrets(ctx, manifest.CreatedAt, log);
+                if (rotate) Rotate(ctx, log);
+            });
 
-            log?.LogInformation("Бэкап снят: {Path} ({Size} КБ)",
-                finalPath, new FileInfo(finalPath).Length / 1024);
-            result = new BackupResult(true, finalPath, null, manifest);
+            metrics.ArchiveBytes = new FileInfo(finalPath).Length;
+            log?.LogInformation("Бэкап снят: {Path} ({Size} КБ)\n{Metrics}",
+                finalPath, metrics.ArchiveBytes / 1024, metrics.Format());
+            result = new BackupResult(true, finalPath, null, manifest, metrics);
         }
         catch (Exception ex)
         {
             log?.LogError(ex, "Не удалось снять бэкап");
-            result = new BackupResult(false, null, ex.Message, null);
+            result = new BackupResult(false, null, ex.Message, null, metrics);
         }
         finally
         {
@@ -133,83 +147,45 @@ public static class BackupCore
     // поверх копирования. Само копирование оставлено на File.Copy: kernel-путь
     // (CopyFileW) стабильно быстр, user-mode пострельное копирование на загруженной
     // машине деградирует в разы (замер: 21 с против 233 с на одном корпусе).
-    private static List<BackupFile> CopyDataTo(BackupContext ctx, string staging, ILogger? log)
+    private static List<BackupFile> CopyDataTo(
+        BackupContext ctx, string staging, ILogger? log, BackupMetrics metrics)
     {
         var copied = new List<string>();
-        var backupDirFull = SafeFull(ctx.BackupDir);
-        var secretsDirFull = SafeFull(ctx.SecretsDir);
-
-        using var queue = new BlockingCollection<(string Target, string Rel)>();
-        var entries = new ConcurrentDictionary<string, BackupFile>();
-        var hashFailures = new ConcurrentQueue<Exception>();
-        var workers = new Thread[Math.Clamp(Environment.ProcessorCount - 1, 1, 4)];
-        for (var i = 0; i < workers.Length; i++)
-        {
-            workers[i] = new Thread(() =>
-            {
-                foreach (var (target, rel) in queue.GetConsumingEnumerable())
-                {
-                    try
-                    {
-                        var info = new FileInfo(target);
-                        entries[rel] = new BackupFile
-                        {
-                            Path = rel,
-                            Size = info.Length,
-                            Sha256 = HashFile(target),
-                        };
-                    }
-                    catch (Exception ex)
-                    {
-                        // Хеш обязан быть у каждой записи манифеста — иначе сверка
-                        // контрольных сумм при восстановлении слабеет. Ошибку копим
-                        // и роняем снимок после Join, а не молчим.
-                        hashFailures.Enqueue(ex);
-                    }
-                }
-            });
-            workers[i].Start();
-        }
+        using var hashes = new HashPipeline();
 
         try
         {
-            foreach (var absolute in Directory.EnumerateFiles(ctx.DataDir, "*", SearchOption.AllDirectories))
+            foreach (var (absolute, relative) in EnumerateDataFiles(ctx, metrics))
             {
-                var relative = Path.GetRelativePath(ctx.DataDir, absolute).Replace('\\', '/');
-
-                if (!BackupPaths.ShouldInclude(relative)) continue;
-                // Папки архивов могли быть настроены куда угодно, в том числе внутрь data
-                // под нестандартным именем — их ловим по абсолютному пути
-                var fullPath = SafeFull(absolute);
-                if (IsUnder(fullPath, backupDirFull) || IsUnder(fullPath, secretsDirFull)) continue;
-                // Лог событий уносим отдельно, вместе с WAL-хвостом
-                if (Path.GetFileName(relative).StartsWith(EventsDbName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 var target = Path.Combine(staging, relative.Replace('/', Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                var start = BackupMetrics.Now();
                 CopyWithRetry(absolute, target);
+                metrics.AddSince("копирование", start);
                 copied.Add(relative);
-                queue.Add((target, relative));
+                hashes.Add(target, relative);
             }
 
             var eventsDb = Path.Combine(ctx.DataDir, EventsDbName);
             if (File.Exists(eventsDb))
             {
                 var target = Path.Combine(staging, EventsDbName);
+                var start = BackupMetrics.Now();
                 if (TryBackupSqlite(eventsDb, target, log)) copied.Add(EventsDbName);
+                metrics.AddSince("sqlite", start);
             }
         }
         finally
         {
-            // Join обязан быть рядом с CompleteAdding: при исключении в цикле копирования
-            // Snapshot из своего finally начнёт DeleteDirectoryForce(staging), и без
-            // дожидания воркеров удаление ловило бы sharing violation на читаемых файлах
-            queue.CompleteAdding();
-            foreach (var worker in workers) worker.Join();
+            // Drain обязан быть рядом с исключением в цикле: при падении Snapshot из своего
+            // finally начнёт DeleteDirectoryForce(staging), и без дожидания воркеров удаление
+            // ловило бы sharing violation на читаемых файлах
+            var start = BackupMetrics.Now();
+            hashes.Drain();
+            metrics.AddSince("хеши (ожидание)", start);
         }
 
-        if (!hashFailures.IsEmpty) throw hashFailures.First();
+        hashes.ThrowIfFailed();
 
         // Порядок записей — порядок обхода (как в манифесте до конвейера); events db,
         // скопированный последним, хешируем тут же: это один файл, а не проход по staging
@@ -228,11 +204,127 @@ public static class BackupCore
             }
             else
             {
-                result.Add(entries[relative]);
+                result.Add(hashes.Entries[relative]);
             }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Файлы data, которые идут в бэкап (общий фильтр состава для zip и снимка): путь
+    /// через <see cref="BackupPaths.ShouldInclude"/>, папки архивов/секретов/снимков
+    /// отсекаются ЦЕЛИКОМ при обходе. Прунинг важен: каталог снимков лежит внутри data
+    /// и держит сотни тысяч файлов — обход по ним впустую стоил бы секунд на каждом бэкапе.
+    /// Время самого обхода уходит в фазу «обход».
+    /// </summary>
+    internal static IEnumerable<(string Absolute, string Relative)> EnumerateDataFiles(
+        BackupContext ctx, BackupMetrics metrics)
+    {
+        // Папки архивов могли быть настроены куда угодно, в том числе внутрь data
+        // под нестандартным именем — их ловим по абсолютному пути
+        var excluded = new[]
+        {
+            SafeFull(ctx.BackupDir), SafeFull(ctx.SecretsDir), SafeFull(ctx.SnapshotsDir),
+        };
+
+        // Те же умолчания, что у Directory.EnumerateFiles(..., AllDirectories); добавлен
+        // только отказ заходить в исключённые папки
+        var options = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            AttributesToSkip = 0,
+            IgnoreInaccessible = false,
+        };
+        var enumerable = new FileSystemEnumerable<string>(
+            ctx.DataDir, static (ref FileSystemEntry e) => e.ToFullPath(), options)
+        {
+            ShouldIncludePredicate = static (ref FileSystemEntry e) => !e.IsDirectory,
+            ShouldRecursePredicate = (ref FileSystemEntry e) =>
+            {
+                var full = e.ToFullPath();
+                foreach (var dir in excluded)
+                    if (IsUnder(full, dir)) return false;
+                return true;
+            },
+        };
+
+        using var walker = enumerable.GetEnumerator();
+        while (true)
+        {
+            var start = BackupMetrics.Now();
+            var has = walker.MoveNext();
+            metrics.AddSince("обход", start);
+            if (!has) yield break;
+
+            var absolute = walker.Current;
+            var relative = Path.GetRelativePath(ctx.DataDir, absolute).Replace('\\', '/');
+
+            if (!BackupPaths.ShouldInclude(relative)) continue;
+            // Лог событий уносим отдельно, вместе с WAL-хвостом
+            if (Path.GetFileName(relative).StartsWith(EventsDbName, StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            yield return (absolute, relative);
+        }
+    }
+
+    // Конвейер хеширования: воркеры читают только что записанные копии параллельно с
+    // продолжающимся копированием. Хеш обязан быть у каждой записи манифеста — иначе
+    // сверка контрольных сумм при восстановлении слабеет, поэтому ошибки копятся и
+    // роняют снимок после Drain, а не теряются.
+    private sealed class HashPipeline : IDisposable
+    {
+        private readonly BlockingCollection<(string Target, string Rel)> _queue = new();
+        private readonly ConcurrentQueue<Exception> _failures = new();
+        private readonly Thread[] _workers = new Thread[Math.Clamp(Environment.ProcessorCount - 1, 1, 4)];
+
+        public ConcurrentDictionary<string, BackupFile> Entries { get; } = new();
+
+        public HashPipeline()
+        {
+            for (var i = 0; i < _workers.Length; i++)
+            {
+                _workers[i] = new Thread(Work);
+                _workers[i].Start();
+            }
+        }
+
+        public void Add(string target, string rel) => _queue.Add((target, rel));
+
+        // Идемпотентен: зовётся из finally, исключение цикла не должно оставить воркеров висеть
+        public void Drain()
+        {
+            _queue.CompleteAdding();
+            foreach (var worker in _workers) worker.Join();
+        }
+
+        public void ThrowIfFailed()
+        {
+            if (!_failures.IsEmpty) throw _failures.First();
+        }
+
+        private void Work()
+        {
+            foreach (var (target, rel) in _queue.GetConsumingEnumerable())
+            {
+                try
+                {
+                    Entries[rel] = new BackupFile
+                    {
+                        Path = rel,
+                        Size = new FileInfo(target).Length,
+                        Sha256 = HashFile(target),
+                    };
+                }
+                catch (Exception ex)
+                {
+                    _failures.Enqueue(ex);
+                }
+            }
+        }
+
+        public void Dispose() => _queue.Dispose();
     }
 
     // Рекурсивное удаление со сбросом read-only. Git-объекты Forgejo помечены read-only,

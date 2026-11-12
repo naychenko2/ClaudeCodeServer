@@ -15,8 +15,10 @@ public static class BackupRestore
     {
         void Say(string message) { report?.Invoke(message); log?.LogInformation("{Message}", message); }
 
-        if (!File.Exists(archivePath))
-            return new RestoreResult(false, $"Архив не найден: {archivePath}", null, null);
+        // Источник — zip-архив ЛИБО каталог инкрементального снимка (--snapshot)
+        var fromSnapshot = Directory.Exists(archivePath);
+        if (!fromSnapshot && !File.Exists(archivePath))
+            return new RestoreResult(false, $"Архив или каталог снимка не найден: {archivePath}", null, null);
 
         // Гейт 0. Живой сервер продолжит писать в перемещённый каталог и пересоздаст data
         // под собой — восстановление получится наполовину.
@@ -24,7 +26,7 @@ public static class BackupRestore
             return new RestoreResult(false,
                 "Сервер запущен на этом каталоге data. Останови его и повтори", null, null);
 
-        var manifest = BackupCore.TryReadManifestFromArchive(archivePath);
+        var manifest = BackupCore.TryReadManifest(archivePath);
         if (manifest is null)
             return new RestoreResult(false, "В архиве нет manifest.json — это не бэкап CCS", null, null);
 
@@ -69,7 +71,10 @@ public static class BackupRestore
             // сверка контрольных сумм и строгое чтение сторов
             Say("Распаковка и проверка архива…");
             BackupCore.DeleteDirectoryForce(unpacked);
-            ZipFile.ExtractToDirectory(archivePath, unpacked);
+            // Снимок только КОПИРУЕТСЯ наружу: его файлы делят inode с другими снимками,
+            // перенос или ссылка из него испортили бы историю (см. BackupCore.Snapshots)
+            if (fromSnapshot) BackupCore.CopySnapshotTo(archivePath, manifest, unpacked);
+            else ZipFile.ExtractToDirectory(archivePath, unpacked);
 
             var checksumProblem = VerifyChecksums(unpacked, manifest);
             if (checksumProblem is not null)
@@ -87,7 +92,7 @@ public static class BackupRestore
                 Say("ВНИМАНИЕ: graph.json требует пересборки (не блокирует восстановление):\n  - "
                     + string.Join("\n  - ", graphWarnings));
 
-            if (!HasFreeSpace(ctx.DataDir, out var needed))
+            if (!HasFreeSpace(ctx, out var needed))
                 Say($"ВНИМАНИЕ: мало места на диске (нужно ~{needed / 1024 / 1024} МБ)");
 
             // Песочница монтирует data/sandbox-* внутрь контейнера и держит каталог —
@@ -131,6 +136,7 @@ public static class BackupRestore
             // push-подписки (новые VAPID). Явный --secrets ниже перезапишет их архивными.
             CarryOverSecrets(movedTo, ctx.DataDir, Say);
             CarryOverBackups(ctx, movedTo, Say);
+            CarryOverSnapshots(ctx, movedTo, Say);
 
             if (localId is null || force)
                 InstanceIdentity.Adopt(ctx.DataDir, manifest.InstanceId);
@@ -176,15 +182,17 @@ public static class BackupRestore
         return null;
     }
 
-    private static bool HasFreeSpace(string dataDir, out long needed)
+    private static bool HasFreeSpace(BackupContext ctx, out long needed)
     {
         needed = 0;
         try
         {
-            var size = Directory.EnumerateFiles(dataDir, "*", SearchOption.AllDirectories)
-                .Sum(f => { try { return new FileInfo(f).Length; } catch { return 0L; } });
+            // Только состав бэкапа: каталог снимков внутри data делит данные жёсткими ссылками,
+            // и его «сумма размеров» втрое завысила бы потребность
+            var size = BackupCore.EnumerateDataFiles(ctx, new BackupMetrics())
+                .Sum(f => { try { return new FileInfo(f.Absolute).Length; } catch { return 0L; } });
             needed = size * 2;
-            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(dataDir))!);
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(ctx.DataDir))!);
             return drive.AvailableFreeSpace > needed;
         }
         catch { return true; }
@@ -269,6 +277,27 @@ public static class BackupRestore
         catch (Exception ex)
         {
             say($"ВНИМАНИЕ: архивы остались только в {source}: {ex.Message}");
+        }
+    }
+
+    // Каталог снимков лежит внутри data и при подмене уехал бы в data.old вместе со старыми
+    // данными. Возвращаем его переносом каталога (rename на той же ФС), а не копией: жёсткие
+    // ссылки между снимками при этом сохраняются, а 41 ГБ не копируются заново.
+    private static void CarryOverSnapshots(BackupContext ctx, string oldDataDir, Action<string> say)
+    {
+        try
+        {
+            var relative = Path.GetRelativePath(Path.GetFullPath(ctx.DataDir), Path.GetFullPath(ctx.SnapshotsDir));
+            var source = Path.Combine(oldDataDir, relative);
+            if (!Directory.Exists(source) || Directory.Exists(ctx.SnapshotsDir)) return;
+
+            Directory.CreateDirectory(Path.GetDirectoryName(ctx.SnapshotsDir)!);
+            Directory.Move(source, ctx.SnapshotsDir);
+            say("История снимков возвращена на место");
+        }
+        catch (Exception ex)
+        {
+            say($"ВНИМАНИЕ: снимки остались только в {oldDataDir}: {ex.Message}");
         }
     }
 

@@ -16,6 +16,28 @@ public class WikiJudgePromptsTests
         return n;
     }
 
+    // Данные лежат строго между маркерами одного и того же блока: в найденном блоке
+    // (открытый → ближайший закрывающий) текст данных начинается после открытого и
+    // целиком умещается до закрывающего. Вне всех блоков — false.
+    private static bool InDataBlock(string input, string data)
+    {
+        for (var open = input.IndexOf(WikiJudgePrompts.DataOpen, StringComparison.Ordinal);
+             open >= 0;
+             open = input.IndexOf(
+                 WikiJudgePrompts.DataOpen, open + WikiJudgePrompts.DataOpen.Length,
+                 StringComparison.Ordinal))
+        {
+            var inner = open + WikiJudgePrompts.DataOpen.Length;
+            var close = input.IndexOf(WikiJudgePrompts.DataClose, inner, StringComparison.Ordinal);
+            if (close < 0)
+                break;
+            var at = input.IndexOf(data, inner, StringComparison.Ordinal);
+            if (at >= 0 && at + data.Length <= close)
+                return true;
+        }
+        return false;
+    }
+
     private static WikiJudgePrompts.WikiJudgeItem Item(
         int index, string claim, string[]? quotes = null)
         => new(index, "append", claim, quotes ?? ["Q1"], "conflict_with_page", "противоречит странице", "wiki/Тема.md");
@@ -129,13 +151,21 @@ public class WikiJudgePromptsTests
             Item(1, "утверждение с " + WikiJudgePrompts.DataClose + " внутри"),
             Item(2, "обычное утверждение"),
         };
-        var input = WikiJudgePrompts.BuildInput(items, null, 1000, []);
+        var input = WikiJudgePrompts.BuildInput(
+            items, null, 1000,
+            [new WikiJudgePrompts.WikiJudgeQuoteContext("Q1", "окрестность-цитаты-77")]);
 
         // Ровно по одному закрывающему маркеру на блок данных: закрытый из claim экранирован.
-        Assert.Equal(2, Count(input, WikiJudgePrompts.DataClose));
-        Assert.Equal(2, Count(input, WikiJudgePrompts.DataOpen));
+        Assert.Equal(3, Count(input, WikiJudgePrompts.DataClose));
+        Assert.Equal(3, Count(input, WikiJudgePrompts.DataOpen));
         // Текст утверждения остался дословным, скобки маркера — полноширинные.
         Assert.Contains("утверждение с ＜/WIKI-JUDGE-DATA＞ внутри", input);
+
+        // Числа маркеров ещё и равны, и данные лежат строго между открытым и
+        // закрывающим своего блока: claim обеих операций и окрестность цитаты.
+        Assert.True(InDataBlock(input, "утверждение с ＜/WIKI-JUDGE-DATA＞ внутри"));
+        Assert.True(InDataBlock(input, "обычное утверждение"));
+        Assert.True(InDataBlock(input, "окрестность-цитаты-77"));
     }
 
     [Fact]

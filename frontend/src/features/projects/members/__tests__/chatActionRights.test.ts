@@ -49,6 +49,13 @@ describe('chatDeleteDeniedReason (удалить)', () => {
     expect(chatDeleteDeniedReason({ myRole: 'editor' }, null, ME)).toBe(CHAT_DELETE_DENIED);
     expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: ME, privateToUserId: ME }, null)).toBe(CHAT_DELETE_DENIED);
   });
+  it('редактору без своей id-пары (null/undefined) чат без автора — отказ: guard !!myUserId (ревью R-W4-FC1)', () => {
+    // Без guard'а оба null чата совпали бы с null/undefined myUserId (null === null) —
+    // удаление открылось бы тому, у кого нет id-пары; на бэке тот же fail-closed (NoAuthorChatId)
+    for (const myId of [null, undefined]) {
+      expect(chatDeleteDeniedReason({ myRole: 'editor' }, { createdByUserId: null, privateToUserId: null }, myId)).toBe(CHAT_DELETE_DENIED);
+    }
+  });
   it('читателю: любой чат, даже свой приватный (и через диспетчер)', () => {
     expect(chatDeleteDeniedReason({ myRole: 'reader' }, { createdByUserId: ME, privateToUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);
     expect(chatActionDeniedReason('delete', { myRole: 'reader' }, { createdByUserId: ME, privateToUserId: ME }, ME)).toBe(CHAT_DELETE_DENIED);

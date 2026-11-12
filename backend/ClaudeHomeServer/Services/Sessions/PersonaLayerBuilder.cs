@@ -393,7 +393,8 @@ public sealed class PersonaLayerBuilder
     internal IReadOnlyList<string>? BuildExtraDisallowed(string? ownerId, Persona? persona, Session session)
     {
         var byPersona = PersonaAccessPolicy.BuildExtraDisallowed(persona,
-            webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"));
+            webAllowed: _bindings.EffectiveToolEnabled(ownerId, persona, "web"),
+            stageDisallowed: session.StageDisallowedTools);
         if (session.TeamImplement is not { } team) return byPersona;
         // Режим включён — ExitPlanMode запрещён всегда (Э8): на стадиях интервью и планирования
         // штаб сидит в план-режиме, и штатная карточка plan_review дала бы второе согласование

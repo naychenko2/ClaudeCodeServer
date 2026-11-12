@@ -56,6 +56,12 @@ public static class ExecutorStopClassifier
     public const string DeviceWaitExpiredReason = "device_wait_expired";
 
     /// <summary>
+    /// Исполнитель замолчал, а политика простоя этапа — stop-alert (B3, И3): остановка тем же
+    /// путём, что «Стоп» человека, плюс уведомление. Терминальная: дальше решает человек.
+    /// </summary>
+    public const string StageStallStopReason = "stage_stall_stop";
+
+    /// <summary>
     /// Фичу поставили на паузу (W4-HOLD-D, разрез §1): человек снял активный ход исполнителя
     /// задачи. Терминальная причина: сам ход не продолжается — его возвращает только снятие
     /// паузы (шаг D), а пока фича удержана, гейт закрывает новые запуски по ней.

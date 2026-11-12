@@ -546,6 +546,13 @@ public class Session
     // Задача-владелец чата-исполнителя (TaskExecutionService): для отображения контекста
     // («в рамках какой задачи») на плашке чата, в шапке и в артефактах сессии.
     public string? TaskId { get; set; }
+    // Сужение прав слепком этапа (И5): фиксируется при создании сессии-исполнителя
+    // (TaskExecutionService), дальше неизменно — свойство СЕССИИ, а не хода, поэтому состав
+    // MCP не мерцает (McpToolsetStabilityTests). Только сужение поверх прав персоны.
+    // StageDisallowedTools — доп. запреты инструментов; StageMcpAllow — подмножество ключей
+    // MCP-серверов (null — без сужения; tasks исполнителю не снимается никогда).
+    public List<string>? StageDisallowedTools { get; set; }
+    public List<string>? StageMcpAllow { get; set; }
     // Онбординг-сессия: "user" | "project" (см. OnboardingKinds),
     // null — обычный чат. Задаёт врезку онбординг-промпта в BuildPersonaLayer и гейт
     // MCP-вызова make-default (назначить дефолт из чата может только онбординг-сессия).

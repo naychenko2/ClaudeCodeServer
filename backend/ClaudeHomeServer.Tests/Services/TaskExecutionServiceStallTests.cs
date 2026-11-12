@@ -186,6 +186,91 @@ public class TaskExecutionServiceStallTests : IDisposable
         action.Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
     }
 
+    // --- Порог и политика простоя из слепка этапа (B3, И3) ---
+
+    private static TaskItem StageTask(int? minutes, string? policy)
+    {
+        var task = StaleTask();
+        task.Stage = new StageSnapshot { Role = TaskRoles.Step, StallMinutes = minutes, StallPolicy = policy };
+        return task;
+    }
+
+    [Fact]
+    public void ClassifyStall_ПорогЭтапа_ЗаменяетПорогКонфига()
+    {
+        // Чат молчит 20 мин: порог конфига 15 → оклик, порог этапа 30 → ещё рано
+        var chat = Chat(SessionStatus.Active, Now.AddMinutes(-20));
+
+        TaskExecutionService.ClassifyStall(StageTask(30, null), chat, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.None);
+        TaskExecutionService.ClassifyStall(StageTask(10, null), chat, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+        // Без слепка — порог конфига, как раньше
+        TaskExecutionService.ClassifyStall(StaleTask(), chat, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПолитикаNudgeAlert_ОкликКакСейчас()
+    {
+        TaskExecutionService.ClassifyStall(StageTask(null, WorkflowStallPolicies.NudgeAlert),
+                Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПолитикаAlert_БезАвтохода_СразуЧеловек()
+    {
+        TaskExecutionService.ClassifyStall(StageTask(null, WorkflowStallPolicies.Alert),
+                Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Alert);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПолитикаStopAlert_ОстановкаИсполнителя()
+    {
+        TaskExecutionService.ClassifyStall(StageTask(null, WorkflowStallPolicies.StopAlert),
+                Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.StopAlert);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПолитикаStopAlert_ЧатУдалён_ТожеОстановка()
+    {
+        TaskExecutionService.ClassifyStall(StageTask(null, WorkflowStallPolicies.StopAlert), null, Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.StopAlert);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПолитикаAlert_ОткрытыйБлокер_ОсталсяТекстБлокера()
+    {
+        TaskExecutionService.ClassifyStall(StageTask(null, WorkflowStallPolicies.Alert),
+                Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale, hasOpenBlocker: true)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.AlertWaitingForBlocker);
+    }
+
+    [Fact]
+    public void ClassifyStall_УзелСлиянияСНезавершённымПредшественником_НаджНеБлокируется()
+    {
+        // Гейт слияния стоит только на ЗАПУСКЕ (ExecuteAsync): толкач простоя продолжает уже
+        // запущенного исполнителя узла слияния, даже если ветка предшественника ещё не закрыта
+        var task = StageTask(null, null);
+        task.Stage!.StageId = "final";
+        task.Stage.After = ["step-back", "step-front"];
+
+        TaskExecutionService.ClassifyStall(task, Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
+    [Fact]
+    public void ClassifyStall_ПоНеизвестнойПолитике_Оклик()
+    {
+        // Слепок написал более новый код: незнакомую строку читаем как nudge-alert, не роняя страховку
+        TaskExecutionService.ClassifyStall(StageTask(null, "бог-знает-что"),
+                Chat(SessionStatus.Active, Now.AddMinutes(-16)), Now, Stale)
+            .Should().Be(TaskExecutionService.ExecutorStallAction.Nudge);
+    }
+
     [Fact]
     public void ClassifyStall_ЧатМолчитДольшеОкнаСвежести_СразуЗовёмЧеловека()
     {

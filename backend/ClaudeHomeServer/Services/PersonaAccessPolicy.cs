@@ -66,11 +66,20 @@ public static class PersonaAccessPolicy
     // webAllowed — готовое решение по «web» от вызывающего (PersonaBindingsService.
     // EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools); null — фолбэк
     // по Persona.Tools для путей без привязок. Запреты складываются: побеждает более строгий.
-    public static IReadOnlyList<string>? BuildExtraDisallowed(Persona? persona, bool? webAllowed = null)
+    // stageDisallowed — запреты слепка этапа (Stage.DisallowedTools, И5): итог прав = права
+    // персоны ∩ права этапа, то есть запреты СКЛАДЫВАЮТСЯ; расширить права этап не может.
+    // Действует и у исполнителя без персоны.
+    public static IReadOnlyList<string>? BuildExtraDisallowed(Persona? persona, bool? webAllowed = null,
+        IReadOnlyList<string>? stageDisallowed = null)
     {
-        if (persona is null) return null;
+        if (persona is null && stageDisallowed is not { Count: > 0 }) return null;
 
         var result = new List<string>();
+        if (persona is null)
+        {
+            result.AddRange(stageDisallowed!);
+            return Clean(result);
+        }
 
         // Возможность «web» выключена — запрещаем встроенные веб-тулы CLI
         var webEnabled = webAllowed
@@ -97,6 +106,12 @@ public static class PersonaAccessPolicy
                 break;
         }
 
+        if (stageDisallowed is { Count: > 0 }) result.AddRange(stageDisallowed);
+        return Clean(result);
+    }
+
+    private static IReadOnlyList<string>? Clean(List<string> result)
+    {
         var clean = result
             .Select(t => t.Trim())
             .Where(t => t.Length > 0)

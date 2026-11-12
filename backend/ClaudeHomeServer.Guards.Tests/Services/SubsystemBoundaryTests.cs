@@ -1964,6 +1964,9 @@ public class SubsystemBoundaryTests
         // FeatureKeyChain читают Tasks и корень — владения вертикалью нет. По прецеденту
         // TaskUrl — в корневном namespace, поимённо; Services.Tasks в allow-list не добавляется.
         "ClaudeHomeServer.Services.FeatureHoldException",
+        // Тот же протокол для отказа по маршруту фичи (B3): бросает корневой TaskExecutionService,
+        // автозапуск Tasks отличает его от падения — по прецеденту FeatureHoldException, поимённо.
+        "ClaudeHomeServer.Services.FeatureRouteLaunchException",
         "ClaudeHomeServer.Services.FeatureKeyChain",
         // Общий предикат «фичу закрывает/возобновляет только человек» (хвост B статуса-модели,
         // пункт 1 вердикта 3d2d793c): композицию читают корневый TasksController и TasksToolset —

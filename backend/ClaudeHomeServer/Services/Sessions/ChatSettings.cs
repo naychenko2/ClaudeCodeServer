@@ -500,6 +500,17 @@ public sealed class ChatSettings
     // считается непрочитанность, а смена настройки хранения — не активность чата. Отсчёт
     // срока при этом не должен стартовать в прошлом, поэтому включение ставит ExpiryAnchor —
     // дедлайн считается от него, если он позже последней активности.
+    // Сужение прав чата-исполнителя слепком этапа (И5): пишется один раз при создании сессии,
+    // до первого хода. UpdatedAt не двигаем — это настройка, а не активность.
+    public Session? SetStageLimits(string sessionId, IReadOnlyList<string>? disallowedTools, IReadOnlyList<string>? mcpAllow)
+    {
+        if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.StageDisallowedTools = disallowedTools is { Count: > 0 } ? disallowedTools.ToList() : null;
+        entry.Info.StageMcpAllow = mcpAllow?.ToList();
+        _store.SaveSessions();
+        return entry.Info;
+    }
+
     public Session? SetExpiry(string sessionId, int? minutes)
     {
         if (!_store.Sessions.TryGetValue(sessionId, out var entry)) return null;

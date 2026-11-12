@@ -281,6 +281,13 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // пересчётом гейта (W4-HOLD-I).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
             throw new FeatureHoldException(holdRefusal);
+        // Гейты маршрута фичи (B3): маршрут не подтверждён / у узла слияния не завершён
+        // предшественник. Эпик и состояния предшественников читаются в момент гейта, а не из
+        // снимка на входе (TaskManager.FeatureRouteLaunchRefusal). Здесь сходятся оба входа
+        // запуска (MCP tasks_run_executor и POST /execute), автоматика и штаб — второй точки нет;
+        // толкач простоя и возобновление ExecuteAsync не зовут.
+        if (_tasks.FeatureRouteLaunchRefusal(task) is { } routeRefusal)
+            throw new FeatureRouteLaunchException(routeRefusal);
 
         // Claim ДО гарда «одна сессия на задачу»: сам гард читает LinkedSessionId, который
         // этот же метод выставит только через несколько строк ниже (после подъёма CLI-процесса)
@@ -323,6 +330,10 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // «не запущена» для доказательства мало).
         if (_tasks.FeatureHoldRefusal(task) is { } holdRefusal)
             throw new FeatureHoldException(holdRefusal);
+        // Повтор гейта маршрута после claim'а: подтверждение/закрытие предшественника между
+        // первой проверкой и стартом видно сразу, ложного пропуска нет (тот же приём, что у паузы)
+        if (_tasks.FeatureRouteLaunchRefusal(task) is { } routeRefusal)
+            throw new FeatureRouteLaunchException(routeRefusal);
 
         // Не более одной живой сессии на задачу
         if (task.LinkedSessionId is not null &&
@@ -385,6 +396,11 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             : await _sessions.CreateChatAsync(task.OwnerId, ClaudeMode.AcceptEdits, name: name, model: model,
                 effort: persona?.Effort, personaId: persona?.Id, taskExecution: true, taskId: task.Id);
         if (task.ExecutionExpiresAfterMinutes is { } ttl) _sessions.SetExpiry(session.Id, ttl);
+        // Сужение прав слепком этапа (И5): фиксируется при создании сессии, до первого хода;
+        // читается только task.Stage — шаблон не читается никогда (И4)
+        if (task.Stage is { } stageLimits
+            && (stageLimits.DisallowedTools is { Count: > 0 } || stageLimits.McpAllow is not null))
+            _sessions.SetStageLimits(session.Id, stageLimits.DisallowedTools, stageLimits.McpAllow);
 
         // Задача с деревом (штаб «Командной реализации» раздаёт исполнителям своё): чат
         // стартует сразу в нём. Дерево уже существует — только присваиваем поля свежей
@@ -738,6 +754,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         sb.AppendLine("- Застрял или выполнить невозможно — не завершай задачу: эскалируй через " +
                       "chats_report_up тому, кто её поставил (blocker: true — работа встала).");
         AppendPregateRule(sb, task);
+        AppendStageSection(sb, task);
         return ToLf(sb.ToString());
     }
 
@@ -787,6 +804,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             sb.AppendLine(RenderRulesTemplate(template, aliases, categoryProfilesPath));
             AppendPregateRule(sb, task);
+            AppendStageSection(sb, task);
             AppendContextSection(sb, task);
             return sb.ToString();
         }
@@ -844,8 +862,26 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         if (categoryProfilesPath is not null)
             sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
         AppendPregateRule(sb, task);
+        AppendStageSection(sb, task);
         AppendContextSection(sb, task);
         return sb.ToString();
+    }
+
+    // Первая строка секции ЭТАП (разрез 2 §2.4): фиксированная, дословная.
+    internal const string StagePriorityLine =
+        "Требования этапа уточняют твою роль в этой фиче и сильнее инструкций специальности и персоны; ПРАВИЛА выше этапа";
+
+    // Секция ЭТАП (B3, разрез §3 BuildPersonaPrompt): Stage.Prompt из слепка задачи, после
+    // ПРАВИЛА/ДЕЛЕГИРОВАНИЕ и до КОНТЕКСТ. Доп. текст только ДОБАВЛЯЕТСЯ к правилам (И6):
+    // блок ПРАВИЛА ниже/выше не трогается ни байтом. Читается только task.Stage (И4).
+    private static void AppendStageSection(StringBuilder sb, TaskItem task)
+    {
+        if (task.Stage?.Prompt is not { } stagePrompt || string.IsNullOrWhiteSpace(stagePrompt)) return;
+        sb.AppendLine();
+        sb.AppendLine("## ЭТАП");
+        sb.AppendLine(StagePriorityLine);
+        sb.AppendLine();
+        sb.AppendLine(stagePrompt.Trim());
     }
 
     // Подстановка плейсхолдеров шаблона. Пустое значение убирает СТРОКУ целиком: иначе
@@ -1816,6 +1852,8 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             "вызов инструмента раз за разом уходит в текст, повторить его штатно не удалось",
         ExecutorStopClassifier.DeviceWaitExpiredReason =>
             "устройство локального проекта так и не стало доступно — исполнитель не запускался",
+        ExecutorStopClassifier.StageStallStopReason =>
+            "исполнитель молчит дольше порога этапа, политика этапа — остановка",
         ExecutorStopClassifier.FeatureHeldExpiredReason =>
             "чат исполнителя исчез за время паузы — продолжения нет, шаг нужно перезапустить",
         _ => "исполнение прервано",
@@ -1899,6 +1937,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     {
         None,   // не наш случай либо порог тишины ещё не вышел
         Nudge,  // напомнить самому исполнителю (один автоход)
+        // Политика простоя этапа stop-alert (B3): исполнитель остановлен существующим путём
+        // «Стоп» (пометка остановки + уведомление), без автохода
+        StopAlert,
         Alert,  // напоминание не помогло (или напоминать некому) — звать человека
         // Волна 2 team-blocker-honest: по задаче висит открытая карточка блокера —
         // исполнитель НЕ молчит, а ждёт ответа штаба/человека. Зовём человека с ДРУГИМ
@@ -1933,6 +1974,12 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
     {
         if (task.CompletionDelivered) return ExecutorStallAction.None;
         if (task.Status == TaskItemStatus.Done) return ClassifyUndeliveredDone(task, session, nowUtc, staleAfter);
+        // Порог и политика простоя — только из слепка этапа (И3/И4, кламп StallMinutes — в
+        // WorkflowRules.NormalizeStall при создании задачи); шаблон не читается никогда.
+        // Нет слепка или поля пусты — Tasks:ExecutorStaleMinutes и nudge-alert, как раньше.
+        if (task.Stage?.StallMinutes is { } stageMinutes && stageMinutes > 0)
+            staleAfter = TimeSpan.FromMinutes(stageMinutes);
+        var stallPolicy = task.Stage?.StallPolicy;
         // Фича на паузе (W4-HOLD-I, контракт §1 :179): причина тишины — сама пауза, оклик и
         // зов человека будят оркестатора во время остановки. Закрытая задача осталась выше:
         // её доклад — карточка без хода (подавление внутри ReportToDelegatorAsync).
@@ -1967,12 +2014,21 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         // (та же защита от лавины, что AutoStartWindow у автозапуска). Человеку при этом
         // сказать всё равно надо — уведомление уходит без окна.
         if (session is null || idle > NudgeWindow)
-            return hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker : ExecutorStallAction.Alert;
+            return hasOpenBlocker ? ExecutorStallAction.AlertWaitingForBlocker
+                : stallPolicy == WorkflowStallPolicies.StopAlert ? ExecutorStallAction.StopAlert
+                : ExecutorStallAction.Alert;
         // При открытой карточке блокера Nudge пропускаем: исполнитель и так ждёт ответа —
         // ещё один «закрой или эскалируй» отправит его эскалировать повторно, а не решит
         // блокер. Идём сразу в Alert с другой формулировкой.
         if (hasOpenBlocker) return ExecutorStallAction.AlertWaitingForBlocker;
-        return ExecutorStallAction.Nudge;
+        // Политики этапа: alert — человека зовём сразу, без автохода; stop-alert — остановка
+        // исполнителя существующим путём «Стоп» и уведомление; nudge-alert — оклик, как раньше
+        return stallPolicy switch
+        {
+            WorkflowStallPolicies.Alert => ExecutorStallAction.Alert,
+            WorkflowStallPolicies.StopAlert => ExecutorStallAction.StopAlert,
+            _ => ExecutorStallAction.Nudge,
+        };
     }
 
     // Задача закрыта, а доклад не ушёл. Ждать R бессмысленно, если ход точно не идёт: чат
@@ -2034,6 +2090,9 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
             case ExecutorStallAction.Alert:
                 await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: false);
                 break;
+            case ExecutorStallAction.StopAlert:
+                await StopStalledByStagePolicyAsync(task);
+                break;
             case ExecutorStallAction.AlertWaitingForBlocker:
                 await AlertStaleTaskAsync(task, nowUtc, waitingForBlocker: true);
                 break;
@@ -2089,6 +2148,18 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         }
     }
 
+    // Политика этапа stop-alert: тишина дольше порога — исполнитель останавливается ровно тем же
+    // путём, что и терминальный отказ (пометка остановки, слот ревью освобождён, уведомление
+    // владельцу, доклад постановщику-персоне). Процесс уже простаивает (ClassifyStall не
+    // срабатывает на живом ходе), поэтому гасить нечего — повторного окрика не будет, потому что
+    // пометка остановки гасит страховку.
+    private async Task StopStalledByStagePolicyAsync(TaskItem task)
+    {
+        _log.LogWarning("Задача {TaskId} «{Title}»: тишина дольше порога этапа, политика stop-alert — останавливаю",
+            task.Id, task.Title);
+        await HandleExecutorStoppedAsync(task, ExecutorStopClassifier.StageStallStopReason);
+    }
+
     // Оклик не помог (или окликать было некого) — уведомление человеку. Пометку «исполнитель
     // встал» не ставим: она про терминальный отказ провайдера, а здесь работа просто брошена.
     // waitingForBlocker (волна 2 team-blocker-honest): по задаче открыта карточка блокера —
@@ -2110,7 +2181,7 @@ public class TaskExecutionService : Execution.IDeviceOnlineHandler, IFeatureHold
         {
             try
             {
-                var minutes = _staleAfter.TotalMinutes;
+                var minutes = updated.Stage?.StallMinutes is { } stageMin and > 0 ? stageMin : _staleAfter.TotalMinutes;
                 var text = waitingForBlocker
                     ? $"⚠️ Исполнитель задачи «{updated.Title}» ждёт ответа по блокеру {minutes:0} мин: " +
                       "ответь ему в чат или сними задачу."

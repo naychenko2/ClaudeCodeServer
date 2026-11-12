@@ -164,4 +164,39 @@ public class PersonaAccessPolicyTests
             catalog.Should().Contain(name,
                 $"deny-имя {name} обязано совпадать с инструментом каталога wsp — иначе запрет молча не работает");
     }
+    // --- Сужение прав слепком этапа (B3, И5): итог = права персоны ∩ права этапа ---
+
+    [Fact]
+    public void ЗапретыЭтапа_СужаютПраваПерсоны_ПрофильПерсоныСохраняется()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(
+            Make(PersonaAccess.Custom, disallowed: ["WebSearch"]), stageDisallowed: ["Bash", "mcp__notes__notes_create"]);
+
+        result.Should().BeEquivalentTo(["WebSearch", "Bash", "mcp__notes__notes_create"]);
+    }
+
+    [Fact]
+    public void ЗапретыЭтапа_НеДублируютсяСЗапретамиПерсоны()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(
+            Make(PersonaAccess.Custom, disallowed: ["Bash"]), stageDisallowed: ["Bash"]);
+
+        result.Should().Equal("Bash");
+    }
+
+    [Fact]
+    public void ЗапретыЭтапа_ДействуютИУИсполнителяБезПерсоны()
+    {
+        PersonaAccessPolicy.BuildExtraDisallowed(null, stageDisallowed: ["Edit"]).Should().Equal("Edit");
+        PersonaAccessPolicy.BuildExtraDisallowed(null, stageDisallowed: []).Should().BeNull();
+        PersonaAccessPolicy.BuildExtraDisallowed(null).Should().BeNull();
+    }
+
+    [Fact]
+    public void ЗапретыЭтапа_НеСнимаютЗапретПерсоныReadOnly()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly), stageDisallowed: ["WebFetch"]);
+
+        result.Should().Contain("Bash").And.Contain("WebFetch");
+    }
 }

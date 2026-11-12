@@ -2345,6 +2345,47 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
             : "Фича — черновик, запустите её на странице фичи.";
     }
 
+    // Роли и вид, которым гейт слияния не мешает (разрез 2 §1.8, одним списком): ревью идёт
+    // конвейером по шагу через ReviewOf (временное решение, вопрос Андрею №1 — правится только
+    // этот список), rework и consult — не узлы графа, дефект живёт вне маршрута.
+    private static readonly string[] MergeGateExemptRoles = [TaskRoles.Review, TaskRoles.Rework, TaskRoles.Consult];
+
+    // Гейты запуска по маршруту фичи (B3, разрез §5 «Без подтверждения» и разрез 2 §1.8):
+    // читают ТОЛЬКО эпик (Workflow/WorkflowProposal) и слепок task.Stage, шаблон — никогда (И4).
+    // Эпик и задачи фичи читаются в момент вызова, а не из снимка на входе в ExecuteAsync:
+    // подтверждение маршрута и закрытие предшественника между двумя вызовами видны сразу.
+    // Отказ — штатная строка, не исключение. null — запуск разрешён. Эпик без Proposal и без
+    // Workflow — легаси, гейтов нет; задача без фичи гейтов не знает вовсе.
+    // Гейт на ЗАПУСКЕ: толкач простоя и возобновление идущего исполнителя сюда не заходят.
+    public string? FeatureRouteLaunchRefusal(TaskItem task)
+    {
+        var epic = FeatureEpicOf(task);
+        if (epic is null) return null;
+
+        // Гейт подтверждения: маршрут предложен, но не подтверждён человеком
+        if (epic.WorkflowProposal is not null && epic.Workflow is null)
+            return task.Role == TaskRoles.Consult ? null : "маршрут фичи не подтверждён";
+
+        // Гейт слияния: узел с ≥2 предшественниками ждёт их все
+        if (epic.Workflow is not { } route
+            || task.Stage is not { } stage || stage.After.Count < 2
+            || MergeGateExemptRoles.Contains(task.Role) || task.Kind == TaskKind.Defect)
+            return null;
+
+        var featureTasks = _tasks.Values.Where(t => t.FeatureId == epic.Id && t.OwnerId == epic.OwnerId).ToList();
+        var states = WorkflowGraph.States(route.Stages, featureTasks);
+        foreach (var parent in stage.After)
+        {
+            if (!states.TryGetValue(parent, out var state)) continue;
+            if (state == WorkflowGraph.StageStates.Done) continue;
+            var started = featureTasks.Any(t => t.Stage?.StageId == parent);
+            return started
+                ? $"ветка «{parent}» не завершена: узел слияния ждёт все предшественники"
+                : $"ветка «{parent}» не начата; если она не нужна — обновите маршрут фичи";
+        }
+        return null;
+    }
+
     // «Фича задачи на паузе» — та же сфера, что у гейта запуска (W4-HOLD-I, контракт §1 :179,
     // :183): сторож зависших и пробуждения по докладам читают это перед действием. Черновик —
     // не пауза: его задачи подготовки живут как раньше.

@@ -27,9 +27,9 @@ const EXPECTED: Record<PersonaAction, Record<'none' | 'owner' | 'editor' | 'read
   bindingMcpPlugin: { none: true, owner: true, editor: false, reader: false },
   skills: { none: true, owner: true, editor: false, reader: false },
   aiTeam: { none: true, owner: true, editor: false, reader: false },
-  // Правка привязки к цели вне этого проекта — за владельцем (И-4): редактору закрыта,
-  // поэтому «своя/чужая цель» в панели решается на mayBind/mayBindForeign, а не своей
-  // проверкой роли.
+  // Правка привязки к цели вне этого проекта — за владельцем (И-4). Различения своей и
+  // чужой цели в панели больше нет: после решения 12.11 (W4-FA1) не осталось роли с
+  // bindingWrite без этого права. Ключ держит паритет с бэком, а не гейт панели.
   bindingForeignTarget: { none: true, owner: true, editor: false, reader: false },
 };
 

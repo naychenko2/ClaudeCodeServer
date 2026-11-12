@@ -174,8 +174,9 @@ public class WorkflowRecommenderTests : IDisposable
         var result = await MakeService(runner).RecommendAsync(epic.Id, Owner, CancellationToken.None);
 
         result.Should().NotBeNull();
-        result!.Skipped.Should().Equal("review-front", "ключ этапа — его id, а не роль");
-        _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal("review-front");
+        // ключ этапа — его id, а не роль: в Skipped ровно тот токен, что вернула модель
+        result!.Skipped.Should().Equal(new[] { "review-front" });
+        _tasks.GetById(epic.Id)!.WorkflowProposal!.Skipped.Should().Equal(new[] { "review-front" });
         // промпт показывает этапы как id(роль, presence): модель отвечает тем же токеном,
         // который потом читается по id
         runner.LastPrompt.Should().Contain("review-front(review, optional)");

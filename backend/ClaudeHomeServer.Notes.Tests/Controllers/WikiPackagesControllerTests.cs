@@ -271,6 +271,63 @@ public class WikiPackagesControllerTests : IDisposable
         }
     }
 
+    // ─── 4c. Список пакетов отдаёт поля вердикта судьи (дефект 67cd64d0) ────
+
+    [Fact]
+    public void СписокПакетов_ОтдаётПоляСудьи_БезВердиктаNull()
+    {
+        // Фронт читает вердикт из списка пакетов (lib/wiki.ts: judgeDecision/judgeReason/
+        // judgeModel/judgeAt/judgeCostUsd), вкладка «Решения» опирается ровно на эти имена.
+        // Дефект 67cd64d0: DTO списка не нёс полей судьи — вкладка писала «вердикта ещё нет»
+        // у каждой операции, хотя вердикт в файле пакета был (вид journal?view=night их
+        // отдавал). Мутация «Dto() не несёт o.JudgeDecision» (подставить null) — проверка
+        // judgeDecision ниже краснеет.
+        var judgeAt = new DateTimeOffset(2026, 11, 11, 3, 40, 0, TimeSpan.Zero);
+        var judged = new WikiPackage.Operation
+        {
+            Op = WikiPackage.OpSupersede,
+            Page = Page,
+            Text = Claim,
+            Target = OldClaim,
+            Class = WikiPackage.ClassKey("session", WikiPackage.OpSupersede),
+            Decision = WikiPackage.DecisionInbox,
+            Reason = "замещает действующее утверждение",
+            ReasonCode = WikiApplyPolicy.CodeOverridesHuman,
+            BaseHashes = new Dictionary<string, string> { [Page] = Hash },
+            JudgeDecision = WikiPackage.HumanRejected,
+            JudgeReason = "утверждение противоречит источнику",
+            JudgeModel = "claude-sonnet-4.5",
+            JudgeAt = judgeAt,
+            JudgeCostUsd = 0.0042m,
+        };
+        var judgedId = NewPackage(WikiPackage.StatusProposed, "common", judged);
+        var plainId = NewPackage(WikiPackage.StatusProposed, "common",
+            Op(WikiPackage.OpSupersede, WikiPackage.DecisionInbox));
+
+        // Тот же контракт транспорта, что у MVC-ответа (JsonSerializerDefaults.Web):
+        // проверяется форма ответа списка, а не C#-объект маппинга (образец — 4b выше).
+        var dto = ((OkObjectResult)Controller().List(true)).Value
+            .Should().BeAssignableTo<WikiPackagesDto>().Which;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(dto, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
+
+        // Имена полей — camelCase от имён свойств: по этим строкам их читает фронт.
+        var op = OperationOf(doc, judgedId);
+        op.GetProperty("judgeDecision").GetString().Should().Be(WikiPackage.HumanRejected);
+        op.GetProperty("judgeReason").GetString().Should().Be("утверждение противоречит источнику");
+        op.GetProperty("judgeModel").GetString().Should().Be("claude-sonnet-4.5");
+        DateTimeOffset.Parse(op.GetProperty("judgeAt").GetString()!).ToUniversalTime().Should().Be(judgeAt);
+        op.GetProperty("judgeCostUsd").GetDecimal().Should().Be(0.0042m);
+
+        // Операция без вердикта: все пять полей есть в JSON как null — не отсутствие поля
+        // (та же форма, что у claim/quotes в 4b: фронт различает «вердикта нет» и «ответа нет»).
+        var plain = OperationOf(doc, plainId);
+        foreach (var name in new[] { "judgeDecision", "judgeReason", "judgeModel", "judgeAt", "judgeCostUsd" })
+        {
+            plain.TryGetProperty(name, out var field).Should().BeTrue($"поле «{name}» есть в JSON");
+            field.ValueKind.Should().Be(JsonValueKind.Null, $"«{name}» — null, а не отсутствие поля");
+        }
+    }
+
     // ─── 5. Нет пакета и нечитаемый файл — разные исходы ────────────────────
 
     [Fact]
@@ -1501,6 +1558,13 @@ public class WikiPackagesControllerTests : IDisposable
 
     private static IReadOnlyList<WikiPackageDto> ListOf(IActionResult result) =>
         ((OkObjectResult)result).Value.Should().BeAssignableTo<WikiPackagesDto>().Which.Packages;
+
+    // Операция пакета в JSON ответа списка: поиск по id, а не по позиции — порядок ответа
+    // строится по CreatedAt, тест не должен зависеть от него.
+    private static JsonElement OperationOf(JsonDocument doc, string packageId) =>
+        doc.RootElement.GetProperty("packages").EnumerateArray()
+            .First(p => p.GetProperty("id").GetString() == packageId)
+            .GetProperty("operations")[0];
 
     private static void AssertCode(IActionResult result, int status, string code)
     {

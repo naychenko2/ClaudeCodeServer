@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services.ImageEditor;
+using ClaudeHomeServer.Services.ImageEditor.Controllers;
 using ClaudeHomeServer.Tests.ImageEditor.Fakes;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -151,6 +152,55 @@ public class LocalImageRoutingTests : IDisposable
         r.Reason.Should().Be("Авто → Qwen «качественно»: одежда или точная правка");
     }
 
+    // Корни «фон» и «точн» ловили «фонарь», «фонтан», «точно» (ревью 29d36971)
+    [Theory]
+    [InlineData("добавь фонарь у двери")]
+    [InlineData("поставь фонтан в саду")]
+    [InlineData("поставь точку на карте")]
+    [InlineData("сделай точно такой же")]
+    public void Правка_ПохожиеСлова_НеПризнакиПравки(string prompt)
+    {
+        var h = PromptHints.Of(prompt);
+        h.Fast.Should().BeFalse();
+        h.Precise.Should().BeFalse();
+        Pick(ImageEditOp.Edit, T(prompt, mp: 0.8)).Model.Id.Should().Be(LocalImageEditor.QwenImageTurbo);
+    }
+
+    [Theory]
+    [InlineData("поменяй фон", true, false)]
+    [InlineData("на фоне моря", true, false)]
+    [InlineData("убери Фон", true, false)]
+    [InlineData("сделай точнее", false, true)]
+    [InlineData("нужна точная правка руки", false, true)]
+    public void Правка_ФонИТочная_Срабатывают(string prompt, bool fast, bool precise)
+    {
+        var h = PromptHints.Of(prompt);
+        h.Fast.Should().Be(fast);
+        h.Precise.Should().Be(precise);
+    }
+
+    // Незакрытая кавычка в огромном промпте давала откат регулярки и RegexMatchTimeoutException → 500
+    [Theory]
+    [InlineData("«")]
+    [InlineData("\"")]
+    [InlineData("“")]
+    public async Task Котировка_ДлинныйПромптСНезакрытойКавычкой_Отвечает(string quote)
+    {
+        var prompt = string.Concat(Enumerable.Repeat(quote + "кот в шляпе ", 5_000));
+        var hints = () => PromptHints.Of(prompt);
+        hints.Should().NotThrow();
+        using var service = Service();
+        var quoted = await service.QuoteAsync("u", "p", Quote(ImageEditCatalog.AutoModelId, prompt), default);
+        quoted.Value.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Признаки_ТолькоПоНачалуПромпта()
+    {
+        PromptHints.Of(new string('х', PromptHints.MaxPromptChars) + " вывеска «Бар»").Should().Be(default(PromptHints));
+        PromptHints.Of("вывеска «Бар» " + new string('х', 50_000)).QuotedText.Should().BeTrue();
+    }
+
     [Fact]
     public void Правка_Надпись_Klein()
     {
@@ -276,5 +326,21 @@ public class LocalImageRoutingTests : IDisposable
         var quote = await service.QuoteAsync("u", "p", req, default);
         quote.Value!.Model.Should().Be(LocalImageEditor.QwenImageTurbo);
         quote.Value.RouteReason.Should().Contain("подстановка на лицо");
+    }
+
+    // Чип «Формат» при «Авто» показывал формат умолчания, хотя по тексту «Авто» уходит на другую модель
+    [Fact]
+    public async Task ЧипФормата_АвтоСПромптом_МодельКакВКотировке()
+    {
+        using var service = Service();
+        var scope = new ImageEditScope("p", null) { TenantOwnerId = "u" };
+        var byText = await ImageEditorEndpoints.FormatModelAsync(_editor, service, scope, ImageEditOp.Generate,
+            ImageEditCatalog.AutoModelId, "портрет старика у окна", default);
+        var noText = await ImageEditorEndpoints.FormatModelAsync(_editor, service, scope, ImageEditOp.Generate,
+            ImageEditCatalog.AutoModelId, null, default);
+        var quoted = await service.QuoteAsync("u", "p", Quote(ImageEditCatalog.AutoModelId, "портрет старика у окна"), default);
+
+        byText!.Id.Should().Be(quoted.Value!.Model).And.Be(LocalImageEditor.Krea2Turbo);
+        noText!.Id.Should().Be(LocalImageEditor.FluxKlein);
     }
 }

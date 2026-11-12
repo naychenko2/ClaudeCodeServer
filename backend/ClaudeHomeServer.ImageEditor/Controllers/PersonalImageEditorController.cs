@@ -37,8 +37,8 @@ public class PersonalImageEditorController(
 
     [HttpGet("format")]
     public async Task<IActionResult> Format(string sessionId, [FromQuery] string? provider, [FromQuery] string? model,
-        [FromQuery] string? op, CancellationToken ct) =>
-        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, ct) : denied;
+        [FromQuery] string? op, [FromQuery] string? prompt, CancellationToken ct) =>
+        Gate(sessionId, out var scope, out var denied) ? await FormatIn(scope, provider, model, op, prompt, ct) : denied;
 
     [HttpPost("quote")]
     public async Task<IActionResult> Quote(string sessionId, [FromBody] ImageEditQuoteRequest req, CancellationToken ct) =>

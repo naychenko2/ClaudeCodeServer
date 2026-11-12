@@ -66,18 +66,17 @@ public abstract class ImageEditorEndpoints(
     // Формат проекта для генерации без явного формата в теле (ADR-025: умолчание — желание из префов)
     private MediaFormat? StoredFormat(ImageEditScope scope) => PrefsService?.Get(scope.Tenant, scope).Format;
 
-    // GET …/format?provider&model&op — состояние чипа «Формат»: всё посчитано на сервере (ADR-025 §3), у
+    // GET …/format?provider&model&op[&prompt] — состояние чипа «Формат»: всё посчитано на сервере (ADR-025 §3), у
     // каждой ступени своя цена из той же котировки, что на кнопке запуска
-    protected async Task<IActionResult> FormatIn(ImageEditScope scope, string? provider, string? model, string? op, CancellationToken ct)
+    protected async Task<IActionResult> FormatIn(ImageEditScope scope, string? provider, string? model, string? op,
+        string? prompt, CancellationToken ct)
     {
         var editor = ImageEditCatalog.FindAvailable(editors, provider);
         if (editor is null)
             return Error(StatusCodes.Status409Conflict, ImageEditErrorCodes.ProviderUnavailable,
                 ImageEditCatalog.UnavailableError(editors, provider));
         var operation = Enum.TryParse<ImageEditOp>(op, ignoreCase: true, out var parsed) ? parsed : ImageEditOp.Generate;
-        var info = string.Equals(model?.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(model)
-            ? editor.PickModel(operation, EditMode.Auto, new EditTraits(false, 0, false))
-            : editor.Models.FirstOrDefault(m => string.Equals(m.Id, model.Trim(), StringComparison.OrdinalIgnoreCase));
+        var info = await FormatModelAsync(editor, jobs, scope, operation, model, prompt, ct);
         if (info is null)
             return Error(StatusCodes.Status400BadRequest, ImageEditErrorCodes.InvalidRequest,
                 $"Модели «{model}» нет у поставщика {editor.Label}");
@@ -99,6 +98,22 @@ public abstract class ImageEditorEndpoints(
             tiers.Add(tier with { Price = price });
         }
         return Ok(state with { Tiers = tiers });
+    }
+
+    // Модель, чей формат показывает чип. «Авто» с текстом запроса выбирает по тексту (Krea, Klein, MOSS, Fibo —
+    // у них свой формат), поэтому модель берётся из той же котировки, что на кнопке запуска
+    internal static async Task<ImageEditModelInfo?> FormatModelAsync(IImageEditor editor, IImageEditJobs? jobs,
+        ImageEditScope scope, ImageEditOp op, string? model, string? prompt, CancellationToken ct)
+    {
+        var auto = string.IsNullOrWhiteSpace(model) || string.Equals(model.Trim(), ImageEditCatalog.AutoModelId, StringComparison.OrdinalIgnoreCase);
+        if (!auto) return editor.Models.FirstOrDefault(m => string.Equals(m.Id, model!.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(prompt) && jobs is not null)
+        {
+            var quoted = await jobs.QuoteAsync(scope.Tenant, scope.Key,
+                new ImageEditQuoteRequest(editor.Key, ImageEditCatalog.AutoModelId, EditMode.Auto, op, 1, false, Prompt: PromptHints.Clip(prompt)), ct);
+            if (quoted.Value?.Model is { } id && editor.Models.FirstOrDefault(m => m.Id == id) is { } chosen) return chosen;
+        }
+        return editor.PickModel(op, EditMode.Auto, new EditTraits(false, 0, false));
     }
 
     protected async Task<IActionResult> QuoteIn(ImageEditScope scope, ImageEditQuoteRequest req, CancellationToken ct)

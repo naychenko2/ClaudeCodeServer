@@ -495,7 +495,8 @@ export interface ImageEditorApi {
   catalog(projectId: string): Promise<ImageEditCatalog>;
   quote(projectId: string, req: ImageEditQuoteRequest): Promise<ImageEditQuote>;
   // Состояние чипа «Формат» (ADR-025): возможности модели, желание, действующий формат, ступени с ценой
-  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp }): Promise<MediaFormatState>;
+  // prompt — текст запроса у «Авто»: формат считается по модели, которую «Авто» выберет по тексту
+  format(projectId: string, q: { provider: string; model: string; op: ImageEditOp; prompt?: string }): Promise<MediaFormatState>;
   startJob(projectId: string, input: ImageEditJobInput): Promise<{ jobId: string }>;
   // Образец с диска человека в рабочую папку модуля; дальше он встаёт в контекст чата ref'ом {upload}
   uploadSample(projectId: string, file: Blob, name: string): Promise<{ uploadId: string }>;

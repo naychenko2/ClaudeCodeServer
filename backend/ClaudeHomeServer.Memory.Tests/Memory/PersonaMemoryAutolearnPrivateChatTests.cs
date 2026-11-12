@@ -20,10 +20,15 @@ namespace ClaudeHomeServer.Tests.Services.Memory;
 ///
 /// Последние два теста — контроль non-vacuousness: в общем чате и вне проекта пайплайн
 /// живой (LLM зовётся один раз). Без них первый тест зелёный и при сломанном сервисе.
+///
+/// Третий контроль (W4-A2, решение Андрея от 12.11): чат редактора общего проекта — тот же
+/// живой пайплайн. Авто-память проектной персоны — поведение персоны, а не правка человеком:
+/// она пополняется и из чатов редактора, а запись уходит под ключом арендатора (persona.OwnerId).
 /// </summary>
 public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
 {
     private const string Owner = "owner-1";
+    private const string Editor = "editor-1";
     private const string ProjectId = "p-shared";
     private const string PersonaId = "persona-1";
 
@@ -161,6 +166,54 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
         _cheap.Calls.Should().Be(1);
     }
 
+    [Fact]
+    public async Task ЧатРедактораОбщегоПроекта_АвтообучениеРаботает_ПамятьПодКлючомВладельца()
+    {
+        await _sut.StartAsync(CancellationToken.None);
+        // Чат общего проекта мог создать редактор, а не владелец (W4). Авто-память персоны —
+        // поведение персоны, а не правка человеком: она пополняется и из такого чата. Сервис
+        // автора чата с владельцем проекта не сверяет вовсе: на путь влияют только приватность
+        // (PrivateToUserId — здесь null) и гейт содержательности (AutolearnGate — пройден).
+        // Проект в этом пути не читается: «общий» здесь выражен самим чатом — ProjectId +
+        // автор-редактор; owner-ключ берётся из персоны (persona.OwnerId = арендатор).
+        _cheap.Response = """{"items":[{"type":"semantic","text":"Пользователь ведёт волну 4.","salience":0.7}],"focus":null}""";
+        var session = new Session
+        {
+            Id = "s-editor", ProjectId = ProjectId, PersonaId = PersonaId, CreatedByUserId = Editor,
+        };
+        _sessions.History =
+        [
+            new StoredUserMessage(new string('а', 450)),
+            new StoredTextMessage(new string('б', 300)),
+        ];
+
+        await _observer.Handler(session, Result);
+
+        var winner = await Task.WhenAny(_cheap.Done.Task, Task.Delay(5000));
+        winner.Should().Be(_cheap.Done.Task,
+            "чат редактора общего проекта не отсекается: пайплайн живой, как в общем чате");
+        _cheap.Calls.Should().Be(1);
+
+        // Запись памяти — уже ПОСЛЕ LLM в том же фоновом прогоне (LearnSafeAsync): ждём её
+        // появления, а не проверяем сразу после вызова.
+        var appeared = false;
+        for (var i = 0; i < 100 && !appeared; i++)
+        {
+            appeared = _memory.List(Owner, PersonaId, null).Count > 0;
+            if (!appeared) await Task.Delay(50);
+        }
+        // Ключ записи — persona.OwnerId (арендатор). Write-path (Remember/RememberAsync)
+        // допускает запись только той персоны, которую видит этот пользователь
+        // (_personas.Get(personaId, ownerId) is null → null): проключили бы автора чата —
+        // редактора — записи не было бы вовсе, ни под Owner, ни под Editor.
+        appeared.Should().BeTrue(
+            "факт из чата редактора обязан попасть в память проектной персоны под ключом владельца проекта");
+        var entry = _memory.List(Owner, PersonaId, null).Single();
+        entry.SourceSessionId.Should().Be(session.Id, "запись пришла из этого чата редактора");
+        _memory.List(Editor, PersonaId, null).Should().BeEmpty(
+            "полка персоны принадлежит арендатору: под ключом редактора записи нет");
+    }
+
     // --- Консультация persona_ask (S2d-5b): LearnFromConsultation ---
 
     private static readonly string LongQuestion = new('в', 450);
@@ -211,9 +264,12 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
     }
 
     // Стаб раннера: «[]» — парсер читает как «нечего запоминать»; счётчик и сигнал вызова.
+    // Response — ответ по умолчанию (ничего не запоминать); тесту, которому нужен разбор,
+    // подменяется тело на валидный JSON формата {items, focus}.
     private sealed class CountingCheap : ICheapTextRunner
     {
         public int Calls;
+        public string Response = "[]";
         public readonly TaskCompletionSource Done = new();
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => false;
@@ -224,14 +280,14 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
         {
             Calls++;
             Done.TrySetResult();
-            return Task.FromResult("[]");
+            return Task.FromResult(Response);
         }
         public Task<string?> RunLocalOrChosenAsync(string actionKey, string prompt, string? ownerId = null,
             object? jsonFormat = null, CancellationToken ct = default)
         {
             Calls++;
             Done.TrySetResult();
-            return Task.FromResult<string?>("[]");
+            return Task.FromResult<string?>(Response);
         }
         public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null,
@@ -239,7 +295,7 @@ public class PersonaMemoryAutolearnPrivateChatTests : IDisposable
         {
             Calls++;
             Done.TrySetResult();
-            return Task.FromResult(new OneShotResult("[]", null, 0));
+            return Task.FromResult(new OneShotResult(Response, null, 0));
         }
     }
 }

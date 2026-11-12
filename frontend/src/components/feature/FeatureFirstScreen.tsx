@@ -94,6 +94,7 @@ export function FeatureFirstScreen({
     return run.summary ? (
       <FeatureClosedSummary
         summary={run.summary}
+        verdicts={run.verdicts}
         initialEtaMinutes={brief.initialEtaMinutes}
         tailsCount={run.postMergeTails?.length ?? 0}
         showCloseHint={brief.kind === 'merged'}

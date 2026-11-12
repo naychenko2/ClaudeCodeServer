@@ -9,6 +9,10 @@
 //   · merged (showCloseHint=true) — подсказка «Закройте фичу, когда доработки не нужны»
 //     сразу под строкой итога (FS-AC3b); у closed её нет: ни без мержа (mergedAt null/мусор),
 //     ни после мержа (showCloseHint=false при валидном mergedAt — бэк его оставляет).
+// FP-H1 (дефект Веры e128aac4): «возвраты» в герое — только verdicts.returned, не summary.loops
+// (returned + замечания); замечаний в герое нет; «хвосты» → «доработки после мержа»; без
+// verdicts (старый ответ) — плитки возвратов нет, не падаем. Мутация «вернуть summary.loops»
+// краснит «возвраты = verdicts.returned».
 // Дата мержа форматируется в местном поясе (как featureTime) — поэтому зону пиним явно
 // (Europe/Moscow). Пин — как в FeatureLaneAxis.test.ts. Фикстура близка к полуночи UTC
 // (22:00Z → MSK следующий день, 01:00): подмена «локальная зона → UTC» в компоненте
@@ -32,9 +36,12 @@ afterEach(() => {
   else process.env.TZ = ORIGINAL_TZ;
 });
 
+// Фикстура — как в дефекте Веры: summary.loops = returned + замечания = 35,
+// настоящих возвратов 15. Плитка обязана показывать 15.
 function mountSummary(over: Partial<FeatureClosedSummaryProps> = {}) {
   const props: FeatureClosedSummaryProps = {
-    summary: { mergedAt: '2026-11-10T22:00:00Z', durationMinutes: 200, tasks: 9, steps: 7, loops: 2 },
+    summary: { mergedAt: '2026-11-10T22:00:00Z', durationMinutes: 200, tasks: 9, steps: 7, loops: 35 },
+    verdicts: { accepted: 5, acceptedWithRemarks: 20, returned: 15, withdrawn: 0, loops: 35 },
     tailsCount: 1,
     showCloseHint: true,
     ...over,
@@ -52,10 +59,10 @@ describe('FeatureClosedSummary', () => {
     for (const k of ['steps', 'loops', 'tails']) {
       expect(findNodeByAttr(container, 'data-testid', `closed-tile-${k}`)).not.toBeNull();
     }
-    // Метки плиток склоняются по числу: 7 → «шагов», 2 → «возврата», 1 → «хвост».
+    // Метки плиток склоняются по числу: 7 → «шагов», 15 → «возвратов», 1 → «доработка после мержа».
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возврата');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвост');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('15возвратов');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1доработка после мержа');
     const tiles = findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!;
     expect(tiles.childNodes.length).toBe(3);
   });
@@ -112,8 +119,8 @@ describe('FeatureClosedSummary', () => {
     // Строка итога и числа плиток — ровно как без followUp.
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-line'))).toBe(baseLine);
     expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps'))).toBe('7шагов');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('2возврата');
-    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1хвост');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops'))).toBe('15возвратов');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails'))).toBe('1доработка после мержа');
     // «план расширен» в итогах не показываем.
     expect(textOf(container)).not.toContain('план расширен');
     uninstallFakeDom(); installFakeDom();
@@ -177,5 +184,43 @@ describe('FeatureClosedSummary', () => {
     expect(textOf(btn)).toContain('Разбор');
     (reactProps(btn)!.onClick as () => void)();
     expect(onOpenReview).toHaveBeenCalledTimes(1);
+  });
+});
+
+// FP-H1 (дефект Веры e128aac4): одно слово — одна величина на странице.
+describe('«Возвраты» в герое — только настоящие (FP-H1)', () => {
+  it('вердикты {returned 15, замечания 20}: плитка «15 возвратов», не «35» (сумма loops)', () => {
+    const { container } = mountSummary();
+    // Плитка — ровно verdicts.returned; summary.loops = 35 в DOM плиток нет.
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-loops')!)).toBe('15возвратов');
+    const tiles = findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!;
+    expect(textOf(tiles)).not.toContain('35');
+  });
+
+  it('замечаний в герое нет: ни числа, ни слова «замечания»', () => {
+    const { container } = mountSummary();
+    expect(textOf(container)).not.toContain('замечани');
+    // 20 — только из вердиктов; в DOM числа 20 нет (duration 200 → «3 ч 20 мин» — не число вердиктов).
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!)).not.toContain('20');
+  });
+
+  it('без verdicts (старый ответ): плитки возвратов нет, герой не падает', () => {
+    const { container } = mountSummary({ verdicts: null });
+    expect(findNodeByAttr(container, 'data-testid', 'closed-tile-loops')).toBeNull();
+    const tiles = findNodeByAttr(container, 'data-testid', 'closed-summary-tiles')!;
+    // Остальные две плитки — на месте.
+    expect(tiles.childNodes.length).toBe(2);
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-steps')!)).toBe('7шагов');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('1доработка после мержа');
+  });
+
+  it('«доработки после мержа», не «хвосты»: слова «хвост» в герое нет; склонение по числу', () => {
+    const { container } = mountSummary({ tailsCount: 5 });
+    expect(textOf(container)).not.toContain('хвост');
+    expect(textOf(findNodeByAttr(container, 'data-testid', 'closed-tile-tails')!)).toBe('5доработок после мержа');
+    uninstallFakeDom(); installFakeDom();
+    // 0 — родительный множественный, как у «0 шагов».
+    const zero = mountSummary({ tailsCount: 0 });
+    expect(textOf(findNodeByAttr(zero.container, 'data-testid', 'closed-tile-tails')!)).toBe('0доработок после мержа');
   });
 });

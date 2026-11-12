@@ -1,6 +1,11 @@
-// «Итоги» закрытой фичи (FS-FI): строка итога и три плитки — первый экран закрытой
+// «Итоги» закрытой фичи (FS-FI): строка итога и плитки — первый экран закрытой
 // фичи вместо «от тебя» и «Объём | Срок» (макет v2, состояние «Закрыта»).
-// Только рендер: числа берём из run.summary как есть, ничего не пересчитываем.
+// Только рендер: числа берём из ответа как есть, ничего не пересчитываем.
+// «Возвраты» — только настоящие, run.verdicts.returned (FP-H1): summary.loops —
+// это returned + замечания, в герое под словом «возвраты» не показывается; нет
+// verdicts (старый ответ) — плитки возвратов нет, не падаем. Замечаний в герое
+// нет вовсе: они в полосе «Разбора» (FeatureReviewReturns). «Хвосты» названы
+// так же, как в «Объёме» (FeatureReviewVolume), — «доработки после мержа».
 // Четвёртой плитки «точность срока» нет — этой величины в контракте нет.
 // Подсказка «Закройте фичу, когда доработки не нужны» — только у merged (FS-AC3b):
 // фича остаётся «смержена», пока человек сам не нажмёт «Закрыть» (FeaturePageHeader).
@@ -12,10 +17,13 @@ import { C, R, FS, SP, FONT } from '../../lib/design';
 import { CLOSED_NO_MERGE_STATUS, formatDuration } from '../../lib/chatGroups';
 import { plural } from '../../lib/plural';
 import { Button } from '../ui/Button';
-import type { FeatureSummary } from '../../types/featureRun';
+import type { FeatureSummary, FeatureVerdicts } from '../../types/featureRun';
 
 export interface FeatureClosedSummaryProps {
   summary: FeatureSummary;
+  // run.verdicts как есть (FP-H1): плитка «возвратов» строится только по verdicts.returned.
+  // null / отсутствует (старый ответ) — плитки возвратов нет.
+  verdicts?: FeatureVerdicts | null;
   // brief.initialEtaMinutes — первое обещание срока; нет — «обещали» не пишем.
   initialEtaMinutes?: number | null;
   // run.postMergeTails.length
@@ -75,15 +83,21 @@ function summaryLine(summary: FeatureSummary, initialEtaMinutes: number | null |
 }
 
 export function FeatureClosedSummary({
-  summary, initialEtaMinutes, tailsCount, showCloseHint, followUp, isMobile = false, onOpenReview,
+  summary, verdicts, initialEtaMinutes, tailsCount, showCloseHint, followUp, isMobile = false, onOpenReview,
 }: FeatureClosedSummaryProps) {
   // Метки плиток склоняются по числу (тот же приём, что «Все N шагов» в FeatureProgressTab):
-  // «1 / шаг», «2 / возврата», «7 / шагов»; 0 — родительный множественный («0 хвостов»).
+  // «1 / шаг», «2 / возврата», «7 / шагов»; 0 — родительный множественный («0 доработок после мержа»).
   const tiles = [
     { key: 'steps', label: plural(summary.steps, 'шаг', 'шага', 'шагов'), value: summary.steps },
-    { key: 'loops', label: plural(summary.loops, 'возврат', 'возврата', 'возвратов'), value: summary.loops },
-    { key: 'tails', label: plural(tailsCount, 'хвост', 'хвоста', 'хвостов'), value: tailsCount },
   ];
+  // «Возвраты» — только настоящие (FP-H1): verdicts.returned. summary.loops — returned +
+  // замечания — под этим словом не показывается; замечаний в герое нет (они в «Разборе»).
+  // Нет verdicts (старый ответ) — плитки нет, не падаем.
+  if (verdicts?.returned != null) {
+    tiles.push({ key: 'loops', label: plural(verdicts.returned, 'возврат', 'возврата', 'возвратов'), value: verdicts.returned });
+  }
+  // То же имя, что в «Объёме» (FeatureReviewVolume): «доработки после мержа», не «хвосты» (FP-H1).
+  tiles.push({ key: 'tails', label: `${plural(tailsCount, 'доработка', 'доработки', 'доработок')} после мержа`, value: tailsCount });
 
   return (
     <div data-testid="closed-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>

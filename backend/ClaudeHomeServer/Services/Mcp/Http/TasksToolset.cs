@@ -60,7 +60,10 @@ public sealed class TasksToolset(
     UserStore users,
     IProjectAccess access,
     IActorRightGate actorGate,
-    INoteTaskSync? noteSync = null) : IMcpParameterizedToolset
+    INoteTaskSync? noteSync = null,
+    // B4c: подбор маршрута при агентском создании эпика — тот же фоновый запуск, что у REST-дверей
+    WorkflowRecommender? workflowRecommender = null,
+    ILogger<TasksToolset>? log = null) : IMcpParameterizedToolset
 {
     // Имя сервера = первый сегмент маршрута POST /mcp/tasks/{sessionId}. Константа —
     // единственная точка правды для URL конфига хода (ClaudeSession); живёт в Core
@@ -351,6 +354,9 @@ public sealed class TasksToolset(
                     return Deny(ex.Message);
                 }
                 await broadcaster.ToTaskBoard(context.OwnerId, created.ProjectId, new TaskChangedMessage("created", created));
+                // B4c: агентски созданный эпик получает предложение маршрута так же, как созданный
+                // через REST; ключ владельца — арендатор записи (внутри Start), сбой не роняет ответ
+                EpicWorkflowRecommend.Start(workflowRecommender, tasks, broadcaster, sessions, projects, log, created);
                 return Json(ForCaller(created, session, context.OwnerId));
             }
 

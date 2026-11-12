@@ -174,6 +174,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // Раскрытая свайпом карточка (мобильная раскладка) — как в глобальном ChatList:
   // одна максимум, закрывается скроллом/открытием другой
   const [openSwipeId, setOpenSwipeId] = useState<string | null>(null);
+  // «Новый» блокируется на время запроса (R-W4-FB3): пока идёт создание, повторный клик
+  // не заводит второй чат, а кнопка в тулбаре стоит с loading. Тот же порядок, что в
+  // ChatsPage (newChat): ранний выход по creating → setCreating(true) → снятие в finally
+  const [creating, setCreating] = useState(false);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
@@ -433,14 +437,24 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const privateAllowed = isSharedProject(project) && canCreateChats(project);
 
   // opts.private (W4-FB3): приватный чат общего проекта — тот же путь создания (W4-FB1),
-  // тот же путь обновления списка и открытия
-  const createNew = async (opts?: { private?: boolean }): Promise<Session> => {
-    // Чат создаётся от лица дефолт-персоны проекта
-    const s = await createChatWithContextPersona(project, { mode: 'auto', private: opts?.private });
-    // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
-    if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
-    onSelect(s);
-    return s;
+  // тот же путь обновления списка и открытия.
+  // Блок на время запроса (R-W4-FB3): повторный вызов, пока creating=true, ничего не
+  // создаёт (null); ответ или отказ снимают блок в finally — текст отказа уходит
+  // вызывающему через reportNewChatError. Ответ после размонтирования — setState на
+  // несмонтированном дереве в React no-op, наружу ничего не летит.
+  const createNew = async (opts?: { private?: boolean }): Promise<Session | null> => {
+    if (creating) return null;
+    setCreating(true);
+    try {
+      // Чат создаётся от лица дефолт-персоны проекта
+      const s = await createChatWithContextPersona(project, { mode: 'auto', private: opts?.private });
+      // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
+      if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
+      onSelect(s);
+      return s;
+    } finally {
+      setCreating(false);
+    }
   };
 
   // Загрузка и поллинг сессий
@@ -1278,6 +1292,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         // Общий проект: кнопка «Новый» предлагает выбор «Обычный / Приватный» (W4-FB2).
         // Отказ (409 not_shared_project и любой другой) — текст сервера через reportNewChatError
         onNewPrivate={privateAllowed ? () => { createNew({ private: true }).catch(reportNewChatError); } : undefined}
+        // Блок на время запроса (R-W4-FB3): тулбар отдаёт его в Button loading (W4-FB2)
+        creating={creating}
         hideNew={!online || !canCreateChats(project)}
         sessions={sessions}
         filters={groupBy === filters.groupBy ? filters : { ...filters, groupBy }}

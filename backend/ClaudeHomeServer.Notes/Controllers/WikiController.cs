@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
@@ -105,6 +106,11 @@ public class WikiController : ControllerBase
     private const string CodeLlmWikiOff = "wiki_llm_wiki_off";
     private const string CodeOriginKey = "wiki_origin_key";
     private const string CodeClassKey = "wiki_class_key";
+    // J-J5 «Решения за ночь»: вид журнала и отказ по его окну. Имя параметра — контракт для
+    // фронта (J-F0): GET /api/wiki/journal?view=night&from=&to=
+    private const string ViewNight = "night";
+    private const string CodeViewKey = "wiki_view_key";
+    private const string CodeDateRange = "wiki_date_range";
     // S7b0b «Разобрать заметку в базу»: заметка, не ставшая источником, — 404 not_found.
     // Состояния «вики не заведена» здесь больше нет: с LI-2 вика заявителя заводится до заявки
     // (тот же код остаётся за MCP-инструментом и сервисами — вторая линия защиты).
@@ -479,7 +485,7 @@ public class WikiController : ControllerBase
         await _keeper.EnsureInitializedAsync(userId);
         if (WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages)
             return StatusCode(409, new { code = CodePackagesLimit,
-                message = $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: разберите Входящие, потом повторяй заявку." });
+                message = $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: судья не успевает или недоступен — повтори заявку позже." });
 
         var cap = await _capture.CaptureNote(userId, req.NoteId, req.Target);
         if (!cap.Ok)
@@ -585,16 +591,44 @@ public class WikiController : ControllerBase
     /// Отказы: 403 — раздел называет чужой проект (тот же ResolveSection, что у раздела и
     /// страницы), 400 — не ключ / значение фильтра вне закрытого перечня, 409 — функция
     /// выключена (тот же код, что у линта и настроек). Несуществующий раздел — не отказ:
-    /// журнал пустой (раздел мог не иметь ни одной операции).</summary>
+    /// журнал пустой (раздел мог не иметь ни одной операции).
+    ///
+    /// view=night&amp;from=&amp;to= (J-J5) — другой вид той же ручки: «Решения за ночь»
+    /// (WikiJournalReader.NightDecisions) — четыре группы вердиктов судьи по окну [from, to)
+    /// и очередь нерешённого. from/to — обязательные даты ISO-8601 (тот же формат, что ts
+    /// строк журнала); прочие параметры вида игнорируются: сводка — по всей вике, а не по
+    /// разделу. Отказ 400 — вид вне перечня (wiki_view_key), даты нет / не дата / from позже
+    /// to (wiki_date_range). Пустое окно — не отказ: вердиктов в нём нет; очередь от окна
+    /// не зависит — она про «сейчас», а не про «за ночь».</summary>
     [HttpGet("journal")]
     public IActionResult Journal(
         [FromQuery] string? section, [FromQuery] string? origin, [FromQuery] string? @class, [FromQuery] int? take,
-        [FromQuery] bool overrodeHuman = false)
+        [FromQuery] bool overrodeHuman = false,
+        [FromQuery] string? view = null, [FromQuery] string? from = null, [FromQuery] string? to = null)
     {
         var userId = OwnerOrNull();
         if (userId is null) return Unauthorized();
         if (_flags?.IsEnabled(userId, FeatureFlagKeys.LlmWiki) != true)
             return StatusCode(409, new { code = CodeLlmWikiOff, message = "журнал не прочитан: функция выключена" });
+
+        // «Решения за ночь» — свой вид: данные другие (пакеты, а не строки журнала), окно
+        // другое (дата вердикта, а не число строк). Проверяется до разбора прочих фильтров:
+        // они этому виду не нужны, и отказ по ним был бы отказом не по делу.
+        if (!string.IsNullOrEmpty(view))
+        {
+            if (view != ViewNight)
+                return BadRequest(new { code = CodeViewKey, message = $"вид «{view}» не из закрытого перечня" });
+            if (!TryIsoDate(from, out var fromAt) || !TryIsoDate(to, out var toAt))
+                return BadRequest(new { code = CodeDateRange, message = "нужны from и to: даты окна вердиктов (ISO-8601)" });
+            if (fromAt > toAt)
+                return BadRequest(new { code = CodeDateRange, message = "окно пустое: from позже to" });
+            var night = WikiJournalReader.NightDecisions(WikiPaths.Root(_dataDir, userId), fromAt, toAt);
+            return Ok(new WikiNightDto(
+                [.. night.JudgeAccepted.Select(NightDto)],
+                [.. night.JudgeRejected.Select(NightDto)],
+                [.. night.CodeRejected.Select(NightDto)],
+                [.. night.Waiting.Select(NightDto)]));
+        }
 
         string? key = null;
         if (!string.IsNullOrWhiteSpace(section))
@@ -635,6 +669,15 @@ public class WikiController : ControllerBase
     private static bool IsSectionKey(string key) =>
         key is WikiSections.Common or WikiSections.Personal
         || WikiSections.TryProjectId(key, out _) || WikiSections.TrySphereId(key, out _);
+
+    // Дата окна — ISO-8601 с относительным сдвигом (та же форма, что ts строк журнала):
+    // «2026-11-12T00:00:00+00:00». Без сдвига — локальное время сервера (RoundtripKind).
+    private static bool TryIsoDate(string? raw, out DateTimeOffset value) =>
+        DateTimeOffset.TryParse(raw ?? "", CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out value);
+
+    private static WikiNightDecisionDto NightDto(WikiJournalReader.DecisionEntry e) =>
+        new(e.PackageId, e.Page, e.Claim, e.ReasonCode, e.JudgeDecision, e.JudgeReason,
+            e.JudgeAt, e.JudgeCostUsd, e.JudgeModel, e.Reason);
 
     // Живое имя раздела: проект — имя проекта (только своего; чужое имя в своё дерево
     // не протекает), сфера — имя из справочника; сирота — null (живого имени нет).
@@ -822,3 +865,23 @@ public sealed record WikiJournalEntryDto(
 /// притворяются записями.</summary>
 public sealed record WikiJournalDto(
     IReadOnlyList<WikiJournalEntryDto> Entries, int Take, int LinesRead, int InvalidLines);
+
+/// <summary>Запись «Решений за ночь» (J-J5): одна операция пакета с её вердиктом.
+/// packageId/page/claim — что и где предлагалось; reason — исходная причина спора (текст) и
+/// reasonCode — его машинный код (по нему решался допуск к судье); judgeDecision/judgeReason/
+/// judgeAt/judgeCostUsd/judgeModel — вердикт (для группы waiting их нет вовсе: решение ещё
+/// не вынесено; judgeModel == «code» — отказ вынесен кодом, без вызова модели).</summary>
+public sealed record WikiNightDecisionDto(
+    string PackageId, string Page, string? Claim, string? ReasonCode,
+    string? JudgeDecision, string? JudgeReason, DateTimeOffset? JudgeAt, decimal? JudgeCostUsd,
+    string? JudgeModel, string? Reason);
+
+/// <summary>Сводка «Решений за ночь» (J-J5): вердикты судьи по окну [from, to) — принятые,
+/// отклонённые, и отклонённые кодом (не вердикт модели, И4′) — плюс очередь того, что ещё
+/// не решил ни человек, ни судья (без фильтра по времени). Порядок: судейские группы —
+/// хронологический, waiting — по давности пакета. Пустая группа — пустой список.</summary>
+public sealed record WikiNightDto(
+    IReadOnlyList<WikiNightDecisionDto> JudgeAccepted,
+    IReadOnlyList<WikiNightDecisionDto> JudgeRejected,
+    IReadOnlyList<WikiNightDecisionDto> CodeRejected,
+    IReadOnlyList<WikiNightDecisionDto> Waiting);

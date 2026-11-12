@@ -249,6 +249,86 @@ public sealed class WikiJournalReader
         _ => take.Value,
     };
 
+    // ─── Решения за ночь (J-J5) ─────────────────────────────────────────────
+
+    /// <summary>Запись «Решений за ночь»: одна операция пакета с её вердиктом. Причина спора
+    /// (Reason/ReasonCode) остаётся рядом с вердиктом: человек видит, ЗАЧТО его заявку позвали
+    /// к судье и что тот ответил. `claim` — утверждение операции (WikiPackage.Operation.Claim),
+    /// у старых пакетов его нет: null, а не выдумка.</summary>
+    public sealed record DecisionEntry(
+        string PackageId,
+        string Page,
+        string? Claim,
+        string? ReasonCode,
+        string? JudgeDecision,
+        string? JudgeReason,
+        DateTimeOffset? JudgeAt,
+        decimal? JudgeCostUsd,
+        string? JudgeModel,
+        string? Reason);
+
+    /// <summary>Четыре группы утренней сводки: что принял судья, что отклонил, что отклонено
+    /// кодом без вызова модели (И4′: это не вердикт судьи, в «отклонено судьёй» ему не место),
+    /// и что всё ещё ждёт решения. Пустая группа — пустой список, не отказ.</summary>
+    public sealed record NightResult(
+        IReadOnlyList<DecisionEntry> JudgeAccepted,
+        IReadOnlyList<DecisionEntry> JudgeRejected,
+        IReadOnlyList<DecisionEntry> CodeRejected,
+        IReadOnlyList<DecisionEntry> Waiting);
+
+    /// <summary>«Решения за ночь» (J-J5): сводка вердиктов по окну [from, to) и очередь
+    /// нерешённого. Только чтение пакетов: ни одной записи на диск, ни одного вызова модели —
+    /// log.jsonl здесь не нужен, он несёт событие применения, а вердикт живёт в операции
+    /// пакета. Окно half-open: вердикт ровно на `from` — внутри, ровно на `to` — уже нет.
+    /// Порядок судейских групп — хронологический (ночь читается по порядку её событий;
+    /// равные даты — по id пакета, затем по порядку операции); waiting — по CreatedAt пакета
+    /// (дольше всех ждущие первыми; равные — по id, затем по порядку операции): очередь не
+    /// «за ночь», она «сейчас», и её фильтр по времени был бы ложью.</summary>
+    public static NightResult NightDecisions(string root, DateTimeOffset from, DateTimeOffset to)
+    {
+        // Ключ сортировки живёт рядом с записью и наружу не выходит.
+        var accepted = new List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)>();
+        var rejected = new List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)>();
+        var byCode = new List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)>();
+        var waiting = new List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)>();
+
+        foreach (var p in WikiPackageStore.List(root).Packages)
+        {
+            // «Ждёт» — только открытый пакет (тот же признак, что у лимита 20): закрытый
+            // (отказанный, применённый, устаревший, откатанный) своей операции уже не ждёт.
+            var open = WikiPackage.IsOpen(p.Status);
+            for (var i = 0; i < p.Operations.Count; i++)
+            {
+                var op = p.Operations[i];
+                if (op.JudgeAt is { } at && at >= from && at < to)
+                {
+                    var row = RowOf(p, op);
+                    if (op.JudgeModel == WikiPackage.JudgeModelCode)
+                        byCode.Add((at, p.Id, i, row));
+                    else if (op.JudgeDecision == WikiPackage.HumanAccepted)
+                        accepted.Add((at, p.Id, i, row));
+                    else if (op.JudgeDecision == WikiPackage.HumanRejected)
+                        rejected.Add((at, p.Id, i, row));
+                    continue;
+                }
+                if (open && op.Decision == WikiPackage.DecisionInbox
+                    && op.HumanDecision is null && op.JudgeDecision is null)
+                    waiting.Add((p.CreatedAt, p.Id, i, RowOf(p, op)));
+            }
+        }
+
+        return new NightResult(
+            Sorted(accepted), Sorted(rejected), Sorted(byCode), Sorted(waiting));
+    }
+
+    private static DecisionEntry RowOf(WikiPackage p, WikiPackage.Operation op) =>
+        new(p.Id, op.Page, op.Claim, op.ReasonCode, op.JudgeDecision, op.JudgeReason,
+            op.JudgeAt, op.JudgeCostUsd, op.JudgeModel, op.Reason);
+
+    private static List<DecisionEntry> Sorted(
+        List<(DateTimeOffset At, string Id, int Index, DecisionEntry Row)> rows) =>
+        [.. rows.OrderBy(x => x.At).ThenBy(x => x.Id, StringComparer.Ordinal).ThenBy(x => x.Index).Select(x => x.Row)];
+
     // ─── Хвост файла ────────────────────────────────────────────────────────
 
     // Начало хвоста — offset первого байта последних `take` полных строк. Идём назад блоками и

@@ -891,7 +891,7 @@ public sealed class NotesToolset(
     /// CountOpen уже считает их (fail-closed).</summary>
     private static string? OpenPackagesRefusal(string root) =>
         WikiPackageStore.CountOpen(root) >= WikiPackage.MaxOpenPackages
-            ? $"Открытых пакетов уже {WikiPackage.MaxOpenPackages}: разберите Входящие, потом повторяй заявку."
+            ? $"открытых пакетов уже {WikiPackage.MaxOpenPackages}: судья не успевает или недоступен — повтори заявку позже."
             : null;
 
     /// <summary>Недоверенный ввод ссылки/аргумента: длина, управляющие символы, «..» —

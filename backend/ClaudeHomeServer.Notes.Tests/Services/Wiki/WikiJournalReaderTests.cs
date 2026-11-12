@@ -1055,6 +1055,32 @@ public class WikiJournalReaderTests : IDisposable
     }
 
     [Fact]
+    public void Ночь_АвтоОперацияОткрытогоПакетаНеЖдёт()
+    {
+        // Мутация «убрать op.Decision == DecisionInbox из условия waiting» (WikiJournalReader.cs:314):
+        // авто-операция открытого пакета (open, без HumanDecision и JudgeDecision) прошла бы по
+        // остальным трём условиям и попала в очередь — ContainSingle краснеет на двух. С кодом в
+        // «ждут» только нерешённая inbox-операция: признак inbox держит авто-операции вне очереди.
+        var open = NightPackage(WikiPackage.StatusProposed,
+            NightOp("Общее/А.md", "авто-операция") with
+            {
+                Decision = WikiPackage.DecisionAuto,
+                Reason = null,
+                ReasonCode = null,
+            },
+            NightOp("Общее/Б.md", "нерешённая спорная"));
+
+        var res = WikiJournalReader.NightDecisions(Root(), NightFrom, NightTo);
+
+        res.Waiting.Should().ContainSingle()
+            .Which.Page.Should().Be("Общее/Б.md", "ждёт только нерешённая inbox-операция; auto-операция открытого пакета не ждёт");
+        res.Waiting.Select(x => x.Page).Should().Equal("Общее/Б.md");
+        res.JudgeAccepted.Should().BeEmpty();
+        res.JudgeRejected.Should().BeEmpty();
+        res.CodeRejected.Should().BeEmpty();
+    }
+
+    [Fact]
     public void Ручка_Night_ОтдаётГруппы_ИОтказыПоВидуИОкну()
     {
         const string from = "2026-11-12T00:00:00+00:00", to = "2026-11-12T08:00:00+00:00";

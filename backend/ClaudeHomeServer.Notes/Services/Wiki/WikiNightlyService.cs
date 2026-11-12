@@ -938,10 +938,10 @@ public sealed class WikiNightlyService : BackgroundService
     /// <summary>Текст тела утреннего уведомления — ЕДИНСТВЕННАЯ точка сборки (ADR-038, предохранитель 6):
     /// причина необычного исхода, затем по одной сводной строке за ночь («ИИ заменил N ваших
     /// формулировок», «ИИ отметил противоречие на N страницах», «Во «Входящих» N пакетов…»,
-    /// «судья недоступен: N операций ждут»; нулевая строка не пишется, строки на каждую замену
-    /// нет) и путь к «Журналу». Второго уведомления нет.</summary>
+    /// «судья недоступен — ждут решения: N», «отклонено кодом: N»; нулевая строка не пишется,
+    /// строки на каждую замену нет) и путь к «Журналу». Второго уведомления нет.</summary>
     internal static string NotificationBody(string? reason, int overrodeHuman, int disputedPages,
-        int toInbox, int judgeDeferred)
+        int toInbox, int judgeDeferred, int codeRejected)
     {
         var parts = new List<string>();
         if (reason is not null) parts.Add(reason);
@@ -953,10 +953,15 @@ public sealed class WikiNightlyService : BackgroundService
         // поэтому это число — здесь: сказать владельцу, сколько ещё ждёт его решения, надо.
         if (toInbox > 0)
             parts.Add($"Во «Входящих» {toInbox} {Plural(toInbox, "пакет ждёт решения", "пакета ждут решения", "пакетов ждут решения")}.");
-        // J-J4: судья не вынес вердикта — операции ждут следующего прохода. Форма числа —
-        // как в постановке шага (c2).
+        // J-J4 (хвост 2, решение Софьи): форма без согласования с числом — «судья недоступен —
+        // ждут решения: N»: «3 операций ждут» читается как обрывок фразы; склонять тут нечего.
         if (judgeDeferred > 0)
-            parts.Add($"судья недоступен: {judgeDeferred} {Plural(judgeDeferred, "операция ждёт", "операций ждут", "операций ждут")}.");
+            parts.Add($"судья недоступен — ждут решения: {judgeDeferred}.");
+        // J-J4 (хвост 3): отказы, вынесенные кодом без вызова модели, — только здесь: форма
+        // заголовка задана c2 и их не несёт, без этой строки владелец не видит, что часть пакета
+        // закрыта не судьёй.
+        if (codeRejected > 0)
+            parts.Add($"отклонено кодом: {codeRejected}.");
         parts.Add("Подробности — во вкладке «Вики» → «Журнал».");
         return string.Join(' ', parts);
     }
@@ -970,13 +975,15 @@ public sealed class WikiNightlyService : BackgroundService
     }
 
     /// <summary>Сообщение владельцу об итоге ночи — ровно одно на проход, после записи итога.
-    /// Молчание: диспетчера нет в составе; или «ничего не разобрано, и ночь обычная» (сказать
-    /// нечего). Иной исход — с причиной из OutcomeReason. Сбой доставки — предупреждение в
-    /// журнале: итог уже записан, исключение наружу из службы не выходит.</summary>
+    /// Молчание: диспетчера нет в составе; или «ничего не разобрано, ночь обычная и судья ничего
+    /// не отложил» (сказать нечего). Отложенные судьёй операции — не молчание (хвост 1 J-J4):
+    /// ночь могла ничего не разобрать, а пакет дневной заявки всё равно застрял без вердикта —
+    /// владелец обязан это увидеть. Иной исход — с причиной из OutcomeReason. Сбой доставки —
+    /// предупреждение в журнале: итог уже записан, исключение наружу из службы не выходит.</summary>
     private async Task TryNotifyAsync(string ownerId, NightResult result)
     {
         if (_notifications is null) return; // диспетчера в этом составе нет (тест/сборка без шва): итог всё равно в файле
-        if (result.Analyzed == 0 && result.Outcome == OutcomeCompleted) return;
+        if (result.Analyzed == 0 && result.Outcome == OutcomeCompleted && result.JudgeDeferred == 0) return;
 
         var reason = OutcomeReason(result.Outcome);
         try
@@ -991,7 +998,7 @@ public sealed class WikiNightlyService : BackgroundService
                 Title = $"Ночной разбор: применено {result.Applied}; судья принял {result.JudgeApplied}, "
                     + $"отклонил {result.JudgeRejected}; ждут {result.JudgeDeferred}; ${CostText(result.JudgeCostUsd)}",
                 Body = NotificationBody(reason, result.OverrodeHuman, result.DisputedPages,
-                    result.ToInbox, result.JudgeDeferred),
+                    result.ToInbox, result.JudgeDeferred, result.CodeRejected),
                 // Url открывает вкладку «Вики» на её подкладке по умолчанию («Страницы»): deep-link на
                 // подвкладку «Журнал» во фронте не предусмотрен (WikiTab держит подвкладку локально),
                 // поэтому текст называет путь, а не обещает переход.

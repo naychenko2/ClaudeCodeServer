@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 using ClaudeHomeServer.Tests.Helpers;
@@ -17,6 +19,7 @@ namespace ClaudeHomeServer.Tests.Controllers;
 //
 // И7: epic.Workflow пишет только confirm — есть тест владельца и тест не-владельца (личная чужая
 // фича и участник общего проекта: право ведения — Write, а не WriteContent, FeatureOwnerGate).
+// Подтверждённый маршрут никогда не отдаётся вместе с предложением (Recommend_ПослеConfirm, R-B4b).
 // Г1: Stages строит только WorkflowGraph.Resolve — тело с чужими полями графа игнорируется.
 // Ключ: чужой/несуществующий/не-эпик — один 404, несъёмный или чужой id пропуска — 400.
 // Конкурентность: два confirm — в эпике последний целиком; подбор, пришедший во время
@@ -33,14 +36,23 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
     // Хост с управляемым раннером дешёвых one-shot: тест сам ставит ответ модели, её отказ или
     // держит вызов открытым (тест гонки). Дефолный стаб фабрики («[]») ответа не даёт, а сбой
     // модели от него не отличим — для этих тестов он неуправляем.
+    //
+    // ISessionBroadcaster подменён на тестовый: «ручка не вещает task_changed» — проверяемое
+    // свойство Recommend_ПослеConfirm (R-B4b Major); concrete SessionHubBroadcaster (CoreSeamsGlue)
+    // в DI остаётся, подменяется только регистрация интерфейса — другие потребители его не теряют.
     public sealed class Host : TestWebApplicationFactory
     {
         internal readonly StubRunner Runner = new();
+        internal readonly TestSessionBroadcaster Bc = new();
 
         public Host()
         {
             ExtraConfig[SharedProjectsGate.SwitchKey] = "true";
-            ExtraServices = s => s.AddSingleton<ICheapTextRunner>(Runner);
+            ExtraServices = s =>
+            {
+                s.AddSingleton<ICheapTextRunner>(Runner);
+                s.AddSingleton<ISessionBroadcaster>(Bc);
+            };
         }
     }
 
@@ -373,6 +385,49 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
         var task = Tasks.Create(null, OwnerId, new CreateTaskRequest("обычная задача"));
         var notFeature = await _owner.PostAsync($"/api/tasks/{task.Id}/workflow/recommend", null);
         notFeature.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    /// <summary>R-B4b Major: подтверждённый маршрут никогда не сопровождается «живым» предложением.
+    /// ConfirmWorkflow предложения не очищает (TaskManager.cs:726) — устаревшее предложение остаётся
+    /// в сторе, но в ответ не доезжает и о нём не вещается. Мутация «отдать epic.WorkflowProposal
+    /// без проверки Workflow» краснит этот тест.</summary>
+    [Fact]
+    public async Task Recommend_ПослеConfirm_200БезПредложения_БезTaskChanged()
+    {
+        var epic = Epic();
+        _host.Runner.Reset();
+        _host.Runner.Text = """
+            {"templateId":"builtin-fast-track","skipped":["plan"],"rationale":"малая правка"}
+            """;
+
+        // 1. подбор — предложение есть и доезжает до ответа
+        var first = await _owner.PostAsync($"/api/tasks/{epic.Id}/workflow/recommend", null);
+        first.StatusCode.Should().Be(HttpStatusCode.OK);
+        var firstBody = JsonSerializer.Deserialize<JsonElement>(await first.Content.ReadAsStringAsync());
+        firstBody.GetProperty("proposal").ValueKind.Should().Be(JsonValueKind.Object);
+        Tasks.GetById(epic.Id)!.WorkflowProposal.Should().NotBeNull();
+
+        // 2. confirm — маршрут подтверждён; предложение ConfirmWorkflow не трогает: оно остаётся
+        // в сторе именно как устаревшее
+        var confirm = await _owner.PostAsJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm",
+            new { templateId = FullCycle, skipped = Array.Empty<string>() });
+        confirm.StatusCode.Should().Be(HttpStatusCode.OK);
+        var stored = Tasks.GetById(epic.Id)!;
+        stored.Workflow.Should().NotBeNull();
+        stored.WorkflowProposal.Should().NotBeNull("ConfirmWorkflow предложения не очищает");
+
+        // 3. повторный подбор на подтверждённом эпике: RecommendAsync молчит (Workflow is not null,
+        // WorkflowRecommender.cs:47), ответ — 200 с proposal = null и без task_changed
+        _host.Bc.Clear();
+        var second = await _owner.PostAsync($"/api/tasks/{epic.Id}/workflow/recommend", null);
+        second.StatusCode.Should().Be(HttpStatusCode.OK);
+        var secondBody = JsonSerializer.Deserialize<JsonElement>(await second.Content.ReadAsStringAsync());
+        secondBody.GetProperty("proposal").ValueKind.Should().Be(JsonValueKind.Null);
+        _host.Bc.Owner.Should().NotContain(e => e.Message is TaskChangedMessage,
+            "устаревшего предложения в ответе нет — о нём нечего вещать");
+
+        // Устаревшее предложение осталось в сторе (доработка его не чистит) — наружу не доезжает
+        Tasks.GetById(epic.Id)!.WorkflowProposal.Should().NotBeNull();
     }
 
     // ─── фоновый подбор при создании эпика ─────────────────────────────────────────────

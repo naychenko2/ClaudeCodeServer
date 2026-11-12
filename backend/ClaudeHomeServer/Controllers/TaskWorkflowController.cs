@@ -46,22 +46,28 @@ public class TaskWorkflowController(
 
     // POST /api/tasks/{id}/workflow/recommend — запуск подбора (место feature-workflow-recommend,
     // B4a) и ответ текущим предложением эпика. Предложения может не быть: сбой модели, мусор
-    // ответа, уже подтверждённый маршрут, пустой каталог — обычное рабочее состояние (маршрут
-    // выбирает человек), поэтому 200 с proposal = null, а не отказ.
+    // ответа, уже подтверждённый маршрут (его устаревшее предложение в ответ не доезжает), пустой
+    // каталог — обычное рабочее состояние (маршрут выбирает человек), поэтому 200 с proposal = null,
+    // а не отказ.
     [HttpPost("recommend")]
     public async Task<IActionResult> Recommend(string taskId, CancellationToken ct)
     {
-        if (EpicOfCaller(taskId) is null) return NotFound(new { error = "Фича не найдена" });
+        if (EpicOfCaller(taskId) is not { } epic) return NotFound(new { error = "Фича не найдена" });
 
         // RecommendAsync сам не бросает (кроме осознанной отмены вызывающим): наружу идёт только
-        // отрезанное им по белым спискам предложение.
-        await recommender.RecommendAsync(taskId, UserId, ct);
+        // отрезанное им по белым спискам предложение. Ключ — владелец записи, а не тот, кто нажал
+        // кнопку: RecommendAsync сверяет ownerId с OwnerId эпика (WorkflowRecommender.cs:45), и
+        // вызов по UserId молча дал бы null, если право Write когда-нибудь получит участник.
+        await recommender.RecommendAsync(taskId, epic.OwnerId!, ct);
 
         // Ответ — то, что стало в эпике после вызова, а не объект, вернувший рекомендатель:
         // параллельный подбор мог записать в эпике своё предложение целым.
-        var epic = tasks.GetById(taskId);
-        var proposal = epic?.WorkflowProposal;
-        if (proposal is not null) await TaskBoardAsync(epic!);
+        var current = tasks.GetById(taskId);
+        // И7: подтверждённый маршрут никогда не сопровождается «живым» предложением в ответе.
+        // ConfirmWorkflow предложения не очищает (TaskManager.cs:726), поэтому у подтверждённого
+        // эпика устаревшее предложение не отдаём и о нём не вещаем.
+        var proposal = current?.Workflow is null ? current?.WorkflowProposal : null;
+        if (proposal is not null) await TaskBoardAsync(current!);
         return Ok(new { proposal });
     }
 

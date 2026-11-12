@@ -713,6 +713,87 @@ describe('SessionList: reportNewChatError — отказ «Нового чата
   });
 });
 
+// === W4-FB3: «Приватный чат» при создании в общем проекте ===
+// В общем проекте (myRole owner/editor) тулбар получает onNewPrivate: его вызов создаёт
+// чат одним запросом с private: true (W4-FB1) и сразу открывает его. В обычном проекте
+// (myRole нет) проп не передаётся — кнопка ведёт себя как раньше. Читателю «Новый»
+// скрыт (hideNew) и onNewPrivate не передаётся. Мутация (c2): заменить privateAllowed
+// на `true` → кейс «без myRole» красный (onNewPrivate становится функцией), читатель — тоже.
+const toolbarProps = vi.hoisted(() => [] as { onNew?: () => void; onNewPrivate?: () => void; hideNew?: boolean }[]);
+const createChatMock = vi.hoisted(() => vi.fn());
+// Обёртка настоящего тулбара: рендерит как он (кейсы файла ниже зависят от его разметки),
+// но записывает пропсы — признак готовности именно в них (меню внутри тулбара проверено
+// его тестом, W4-FB2)
+vi.mock('./ChatListToolbar', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./ChatListToolbar')>();
+  return { ...orig, ChatListToolbar: (props: Parameters<typeof orig.ChatListToolbar>[0]) => {
+    toolbarProps.push(props);
+    return createElement(orig.ChatListToolbar, props);
+  } };
+});
+// Хелпер создания: аргументы проверяются (mode + private), реальный запрос не идёт;
+// остальные экспорты остаются как есть
+vi.mock('../lib/defaultPersona', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../lib/defaultPersona')>();
+  return { ...orig, createChatWithContextPersona: createChatMock };
+});
+
+describe('SessionList: W4-FB3 «Приватный чат» при создании в общем проекте', () => {
+  const createdChat = (): Session => ({
+    id: 'new-private', projectId: 'p1', name: 'Приватный чат', mode: 'auto', status: 'waiting',
+    messageCount: 0, createdAt: '2026-11-12T10:00:00Z', updatedAt: '2026-11-12T10:00:00Z',
+    origin: 'manual', privateToUserId: 'u1',
+  } as Session);
+
+  // Рендер списка с данным проектом → пропсы последнего рендера тулбара + onSelect
+  async function renderToolbar(pr: Project) {
+    featuresIndexTest.reset();
+    mockIndex = { features: [], chats: {} };
+    mockSessions = [];
+    store.clear();
+    toolbarProps.length = 0;
+    createChatMock.mockReset();
+    const container = new _FakeNode();
+    const root = createRoot(container);
+    const onSelect = vi.fn();
+    await act(async () => { root.render(createElement(SessionList, { project: pr, activeSession: null, onSelect })); });
+    return { props: toolbarProps[toolbarProps.length - 1], onSelect, unmount: () => root.unmount() };
+  }
+
+  it('общий проект (owner): тулбар получает onNewPrivate; вызов → один запрос с private: true и открытие чата', async () => {
+    const pr = { ...project, myRole: 'owner' as const };
+    const { props, onSelect, unmount } = await renderToolbar(pr);
+    expect(typeof props.onNewPrivate, 'тулбар общего проекта обязан получить onNewPrivate').toBe('function');
+    const created = createdChat();
+    createChatMock.mockImplementation(async () => created);
+    await act(async () => { props.onNewPrivate!(); });
+    expect(createChatMock, 'приватный чат создаётся одним запросом').toHaveBeenCalledTimes(1);
+    expect(createChatMock).toHaveBeenCalledWith(pr, { mode: 'auto', private: true });
+    expect(onSelect, 'созданный чат сразу открывается').toHaveBeenCalledWith(created);
+    unmount();
+  });
+
+  it('общий проект (editor): тулбар получает onNewPrivate', async () => {
+    const { props, unmount } = await renderToolbar({ ...project, myRole: 'editor' as const });
+    expect(typeof props.onNewPrivate, 'редактору доступен приватный чат').toBe('function');
+    unmount();
+  });
+
+  it('читатель: «Новый» скрыт (hideNew), onNewPrivate не передаётся', async () => {
+    const { props, unmount } = await renderToolbar({ ...project, myRole: 'reader' as const });
+    expect(props.onNewPrivate, 'читателю приватный чат не предлагается').toBeUndefined();
+    expect(props.hideNew, 'кнопка «Новый» читателю скрыта').toBe(true);
+    unmount();
+  });
+
+  it('обычный проект (myRole нет): onNewPrivate не передаётся, onNew прежний', async () => {
+    const { props, unmount } = await renderToolbar(project);
+    expect(props.onNewPrivate, 'в обычном проекте создание прежнее — без выбора вида').toBeUndefined();
+    expect(typeof props.onNew, 'обычная кнопка «Новый» остаётся').toBe('function');
+    unmount();
+  });
+});
+
 // === FI-4 (хвосты ревью FI-2): отсев чатов чужого проекта + «Чатов пока нет» рядом со строкой загрузки ===
 describe('SessionList: FI-4 отсев чатов чужого проекта', () => {
   // Форма индекса — как в Ф-2.2: kind — единственный признак состояния; «живой» чат

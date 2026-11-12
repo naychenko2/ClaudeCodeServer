@@ -18,8 +18,10 @@ namespace ClaudeHomeServer.Tests.Services;
 // Утреннее уведомление ночного разбора (Ф2, N7c). Отделён от WikiNightlyServiceTests (там идёт
 // доработка N7b): фикстуры те же, проверяется только конец прохода — сообщение владельцу.
 //
-// Контракт: ровно одно уведомление за проход с человеческим текстом «Ночной разбор: применено N,
-// во „Входящих” M» и названием пути «Вики → Журнал» (Url ведёт во вкладку «Вики», обещания перехода
+// Контракт: ровно одно уведомление за проход с человеческим текстом. Заголовок (сводка J-J4) —
+// «Ночной разбор: применено N; судья принял K, отклонил L; ждут M; $X»; в теле — сколько пакетов
+// ещё ждёт решения человека («Во «Входящих» …», перенесено из заголовка), почему судья не ответил,
+// если не ответил, и названием пути «Вики → Журнал» (Url ведёт во вкладку «Вики», обещания перехода
 // в тексте нет); при исходе, отличном от обычного, — причина простым
 // языком. Молчание: analyzed=0 и completed; флаг/Enabled выключен (там и итога нет). Сбой
 // доставки: предупреждение в журнале, итог ночи уже записан, исключение не выходит из службы.
@@ -102,9 +104,17 @@ public class WikiNightlyNotifyTests : IDisposable
     private WikiNightlyService Sut(
         Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>>? analyze = null,
         INotificationSender? notifier = null,
-        ILogger<WikiNightlyService>? log = null) =>
+        ILogger<WikiNightlyService>? log = null,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
         new(_sessions, new WikiChatRecalc(_sessions, _config), new WikiChatStage2(_llm, _sessions, _config),
-            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now, notifier, _keeper);
+            analyze ?? Done(), _llm, _config, log ?? NullLogger<WikiNightlyService>.Instance, _flag, () => _now,
+            notifier, _keeper, judge);
+
+    // Фейк прохода судьи (J-J4): сводка в уведомлении проверяется без облачной модели.
+    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> Judge(
+        int applied = 0, int rejected = 0, int deferred = 0, int calls = 0, decimal cost = 0m) =>
+        (owner, root, ct) => Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(
+            calls, cost, applied, rejected, deferred, 0, null));
 
     private static Func<string, string, CancellationToken, Task<WikiChatIngestService.ChatResult>> Done() =>
         (owner, chat, ct) => Task.FromResult(new WikiChatIngestService.ChatResult(
@@ -167,13 +177,57 @@ public class WikiNightlyNotifyTests : IDisposable
         notifier.Sent.Should().HaveCount(1, "уведомление — одно на проход");
         var n = notifier.Sent[0];
         n.Title.Should().Contain("применено 3");
-        n.Title.Should().Contain("во «Входящих» 1");
+        // J-J4: «во «Входящих»» из заголовка перенесено в тело — заголовок несёт сводку судьи
+        // одной строкой чисел, и её нулевые значения тоже называются.
+        n.Title.Should().Contain("судья принял 0, отклонил 0; ждут 0; $0");
+        n.Body.Should().Contain("Во «Входящих» 1 пакет ждёт решения.");
         // Путь назван текстом, а не обещан переходом: Url ведёт во вкладку «Вики» (подкладка
         // «Журнал» deep-link не имеет), текст — «во вкладке «Вики» → «Журнал»».
         n.Url.Should().Be("#/wiki");
         n.Body.Should().Contain("во вкладке «Вики» → «Журнал»");
         n.Body.Should().NotContain("в «Журнале»", "текст не обещает перехода, которого Url не делает");
         n.Kind.Should().Be("info", "обычный исход — не предупреждение");
+    }
+
+    // ─── J-J4 (c2): сводка судьи — заголовок; «судья недоступен» — тело ─────────
+
+    [Fact]
+    public async Task СудьяПринял1Отклонил1За004_ЗаголовокРавенСводке_СтрокиОСудьеВТелеНет()
+    {
+        // Мутации: «судью — в тело, а не в заголовок» → Be() красный; «не печатать стоимость» →
+        // Be() красный; «дописывать строку о судье при нуле» → NotContain красный.
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        AddChat("c2", ageMinutes: 1);
+        var notifier = new Notifier();
+        Task<WikiChatIngestService.ChatResult> Analyze(string owner, string chat, CancellationToken ct) => chat switch
+        {
+            "c1" => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeApplied, null, ["pkg-1", "pkg-2"])),
+            _ => Task.FromResult(new WikiChatIngestService.ChatResult(
+                WikiChatIngestService.OutcomeNothingNew, null, [])),
+        };
+
+        await Tick(Sut(Analyze, notifier, judge: Judge(applied: 1, rejected: 1, calls: 2, cost: 0.04m)));
+
+        var n = notifier.Sent[0];
+        n.Title.Should().Be("Ночной разбор: применено 2; судья принял 1, отклонил 1; ждут 0; $0.04");
+        n.Body.Should().NotContain("судья недоступен", "отложенных операций нет — строки о них нет");
+        n.Kind.Should().Be("info", "судья отложил вердикты, а не отказ — это не предупреждение");
+    }
+
+    [Fact]
+    public async Task СудьяНеВынесВердикитаПоТрёмОперациям_ТелоНазываетЭтоПрямо()
+    {
+        Configure();
+        AddChat("c1", ageMinutes: 0);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(deferred: 3, calls: 1)));
+
+        var n = notifier.Sent[0];
+        n.Title.Should().Contain("ждут 3");
+        n.Body.Should().Contain("судья недоступен: 3 операций ждут");
     }
 
     // ─── B4b (ADR-038, предохранитель 6): сводные строки о человеке — в то же уведомление ───
@@ -232,7 +286,7 @@ public class WikiNightlyNotifyTests : IDisposable
     [InlineData(21, "21 вашу формулировку", "21 странице")]
     public void NotificationBody_ЧислоСклоняется(int n, string replaced, string pages)
     {
-        var body = WikiNightlyService.NotificationBody(null, n, n);
+        var body = WikiNightlyService.NotificationBody(null, n, n, 0, 0);
 
         body.Should().Contain($"ИИ заменил {replaced}.");
         body.Should().Contain($"ИИ отметил противоречие на {pages}.");

@@ -184,8 +184,9 @@ public class WikiIngestTests : IDisposable
         string ref_ = "session:s1#m1-9", string card = CardPath) =>
         new("session", ref_, card, SourceText, home, target);
 
-    private WikiIngestService Sut(FakeLlm llm) =>
-        new(llm, new NoSpheres(), _apply, _config);
+    private WikiIngestService Sut(FakeLlm llm,
+        Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>>? judge = null) =>
+        new(llm, new NoSpheres(), _apply, _config, null, judge);
 
     private IReadOnlyList<WikiPackage> PackagesOnDisk() => WikiPackageStore.List(Root).Packages;
 
@@ -509,6 +510,43 @@ public class WikiIngestTests : IDisposable
         WikiJournalReader.ReadRecentHumanReverts(Root, ts).Should().BeEmpty("окно полуоткрытое: ts == since — вне");
         WikiJournalReader.ReadRecentHumanReverts(Root, ts.AddMilliseconds(-1))
             .Should().ContainKey(PagePath).WhoseValue.Should().Be(ts);
+    }
+
+    // ── J-J4 (точка «б»): заявка со спорными операциями зовёт судью в том же обработчике ──
+
+    private static Func<string, string, CancellationToken, Task<WikiJudgeSweep.JudgeSweepResult>> CountingJudge(
+        List<string> roots) =>
+        (owner, root, ct) =>
+        {
+            lock (roots) roots.Add(root);
+            return Task.FromResult(new WikiJudgeSweep.JudgeSweepResult(0, 0m, 0, 0, 0, 0, null));
+        };
+
+    [Fact]
+    public async Task J4_ЗаявкаAwaitingHuman_СудьяВТомЖеОбработчике_РовноОдинПроход()
+    {
+        // Мутация «убрать вызов (б)» (условие в RunProtectedAsync) → 0 вызовов, красный.
+        LogLine(DaysAgo(1), "revert", "user", PagePath); // та же спорность пакета, что у N7d
+        var roots = new List<string>();
+
+        var res = await Sut(new FakeLlm(synth: SynthJson), CountingJudge(roots)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeAwaitingHuman, res.Reason);
+        res.PackageId.Should().NotBeNullOrEmpty();
+        roots.Should().HaveCount(1, "спорное не обязано ждать следующей ночи: судья идёт в этом же прогоне заявки");
+        roots[0].Should().Be(Root, "проход судьи работает по своему корню владельца");
+    }
+
+    [Fact]
+    public async Task J4_ЗаявкаApplied_СудьяНеЗван()
+    {
+        // Граница условия: исход applied — спорных операций нет, судье не о чём решать.
+        var roots = new List<string>();
+
+        var res = await Sut(new FakeLlm(synth: SynthJson), CountingJudge(roots)).IngestAsync(User, Req());
+
+        res.Outcome.Should().Be(WikiIngestService.OutcomeApplied, res.Reason);
+        roots.Should().BeEmpty("неприменённого спорного нет — прохода судьи нет");
     }
 
     // ── B4a: правка человека (ADR-038) — отдельный читатель, не откат ───────────────

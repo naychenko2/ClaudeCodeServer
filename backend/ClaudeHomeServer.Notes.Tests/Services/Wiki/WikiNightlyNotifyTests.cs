@@ -24,8 +24,9 @@ namespace ClaudeHomeServer.Tests.Services;
 // если не ответил («судья недоступен — ждут решения: N»), сколько операций закрыл отказом сам код
 // («отклонено кодом: N», в заголовке их нет), и названием пути «Вики → Журнал» (Url ведёт во
 // вкладку «Вики», обещания перехода в тексте нет); при исходе, отличном от обычного, — причина
-// простым языком. Молчание: analyzed=0, completed И судья ничего не отложил (отложенные операции
-// — не молчание, хвост 1 J-J4); флаг/Enabled выключен (там и итога нет). Сбой
+// простым языком. Молчание: analyzed=0, completed, судья ничего не отложил И код ничего не
+// отказал (отложенные операции и отказы кода — не молчание, хвост 1 и хвост 4 J-J4); флаг/Enabled
+// выключен (там и итога нет). Сбой
 // доставки: предупреждение в журнале, итог ночи уже записан, исключение не выходит из службы.
 public class WikiNightlyNotifyTests : IDisposable
 {
@@ -351,6 +352,29 @@ public class WikiNightlyNotifyTests : IDisposable
         last.JudgeDeferred.Should().Be(2);
         notifier.Sent.Should().HaveCount(1, "отложенные судьёй операции — не молчание");
         notifier.Sent[0].Body.Should().Contain("судья недоступен — ждут решения: 2");
+    }
+
+    [Fact]
+    public async Task НичегоНеРазобраноКодОтклонилДвеБезСудьи_УведомлениеНеМолчит()
+    {
+        // Хвост 4 (решение Софья, 12.11, пункт Глеба к fee95fb44): та же ночь с analyzed=0 и
+        // обычным исходом, но судья модель не звал, а код сам отказал операции дневной заявки
+        // (CodeRejected > 0, JudgeDeferred = 0). Пакет закрыт не судьёй — владелец обязан это
+        // увидеть. Мутация «вернуть старое условие молчания» (без result.CodeRejected == 0) —
+        // этот тест краснеет: Sent пусто.
+        Configure();
+        AddChat("c1", humans: 2);
+        var notifier = new Notifier();
+
+        await Tick(Sut(notifier: notifier, judge: Judge(codeRejected: 2, calls: 1)));
+
+        var last = Last();
+        last.Analyzed.Should().Be(0);
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted);
+        last.JudgeDeferred.Should().Be(0);
+        last.CodeRejected.Should().Be(2);
+        notifier.Sent.Should().HaveCount(1, "отказы, вынесенные кодом, — не молчание");
+        notifier.Sent[0].Body.Should().Contain("отклонено кодом: 2");
     }
 
     [Fact]

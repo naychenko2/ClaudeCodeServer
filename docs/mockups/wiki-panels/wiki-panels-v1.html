@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Панели вики в узкой зоне · v1 · макет</title>
+<!--
+  Макет к записке wiki-panels-v1-proposal.md. Код продукта не правится.
+  Привязка: featureId dbaa0a17-4a82-4535-acea-35d9d9070327, задача дизайна 3524bf87.
+  stepRef появятся, когда Егор нарежет шаги по кускам М0–М7.
+  Каждый кадр нарисован дважды — светлая и тёмная тема рядом (data-theme на обёртке кадра).
+  Ширины кадров: 340 — правая зона на окне 1280; 360 — мобила (шторка/подвкладка); 600 — растянутая зона.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, семантика — C.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--c-*). ===== */
+:root, [data-theme="light"] {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-overlay:rgba(23,19,15,.42);
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-card:0 1px 2px rgba(60,50,35,.06);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-overlay:rgba(0,0,0,.62);
+  --c-success:#7CB86A; --c-success-bg:#232E20;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-card:0 1px 2px rgba(0,0,0,.30);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+}
+/* Шкалы (design.ts): FS xs11 sm12 base13 md14 lg16 · SP 2/4/8/12/16/24 · R sm6 md8 lg10 · LIST_MAX_H 420 (новый, М0) */
+* { box-sizing: border-box; }
+body { margin: 0; font-family: "Hanken Grotesk", system-ui, sans-serif; background: var(--c-bg-main); color: var(--c-text-primary); }
+.serif { font-family: "PT Serif", Georgia, serif; }
+.mono { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+.doc { max-width: 1400px; margin: 0 auto; padding: 24px 16px 64px; }
+.doc > h1 { font-size: 22px; color: var(--c-text-heading); margin: 0 0 6px; }
+.doc > h2 { font-size: 18px; color: var(--c-text-heading); margin: 40px 0 6px; }
+.lead { font-size: 14px; color: var(--c-text-secondary); line-height: 1.6; max-width: 920px; margin: 0 0 8px; }
+.cap { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 20px 0 8px; }
+.tag { font-family: "JetBrains Mono", monospace; font-size: 11px; padding: 2px 7px; border-radius: 6px; background: var(--c-accent-light); color: var(--c-accent); font-weight: 600; }
+.cap b { font-size: 14px; color: var(--c-text-heading); }
+.cap .note { font-size: 13px; color: var(--c-text-secondary); line-height: 1.5; flex-basis: 100%; }
+.row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+.themed { background: var(--c-bg-main); padding: 12px; border-radius: 14px; border: 1px solid var(--c-border); color: var(--c-text-primary); }
+.themed > .lbl { font-size: 11px; color: var(--c-text-muted); font-family: "JetBrains Mono", monospace; margin-bottom: 6px; }
+
+/* ===== Таблицы документа ===== */
+table.t { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; background: var(--c-bg-card); border-radius: 8px; overflow: hidden; }
+table.t th, table.t td { text-align: left; vertical-align: top; padding: 8px 10px; border-bottom: 1px solid var(--c-border-light); }
+table.t th { background: var(--c-bg-inset); color: var(--c-text-heading); font-weight: 600; }
+.hi { color: var(--c-danger); font-weight: 600; } .mid { color: var(--c-warning-text); font-weight: 600; }
+
+/* ===== Примитивы продукта (зеркала components/ui) ===== */
+.panel { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 14px; box-shadow: var(--shadow-island);
+  display: flex; flex-direction: column; overflow: hidden; }
+.phead { display: flex; align-items: center; gap: 4px; min-height: 48px; padding: 0 4px 0 12px; border-bottom: 1px solid var(--c-border); flex-shrink: 0; }
+.phead .ttl { flex: 1; font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+.pbody { overflow-y: auto; flex: 1; position: relative; }
+.x { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; color: var(--c-text-muted); }
+.blk { padding: 8px 12px 12px; }
+.blk h2 { margin: 4px 0 0; font-family: "PT Serif", Georgia, serif; font-size: 16px; color: var(--c-text-heading); font-weight: 700; }
+.blk h3 { margin: 16px 0 4px; font-size: 14px; color: var(--c-text-heading); }
+.sub { font-size: 12px; color: var(--c-text-secondary); margin-top: 4px; line-height: 1.45; }
+.foot { font-size: 11px; color: var(--c-text-muted); margin-top: 8px; line-height: 1.45; }
+.btn { display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 500; padding: 0 10px; height: 28px;
+  border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary); white-space: nowrap; cursor: pointer; }
+.btn.xs { height: 24px; padding: 0 8px; font-size: 11px; }
+.btn.ghost { border-color: transparent; background: transparent; color: var(--c-text-secondary); }
+.btn.on-imp { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); }
+.btn.on-skip { background: var(--c-bg-selected); border-color: var(--c-border); color: var(--c-text-heading); }
+.btn.danger { background: var(--c-danger); border-color: var(--c-danger); color: var(--c-on-accent); }
+.btn.touch { min-height: 40px; }
+.btn.full { width: 100%; justify-content: center; }
+.badge { display: inline-flex; align-items: center; font-size: 11px; line-height: 1; padding: 3px 6px; border-radius: 6px; font-weight: 600; white-space: nowrap; }
+.b-success { background: var(--c-success-bg); color: var(--c-success); }
+.b-warning { background: var(--c-warning-bg); color: var(--c-warning-text); }
+.b-danger { background: var(--c-danger-bg); color: var(--c-danger); }
+.b-neutral { background: var(--c-bg-inset); color: var(--c-text-secondary); }
+.b-accent { background: var(--c-accent-light); color: var(--c-accent); }
+.b-info { background: var(--c-info-bg); color: var(--c-info); }
+.seg { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.seg span { flex: 1; text-align: center; font-size: 12px; padding: 6px 8px; border-radius: 10px; border: 1px solid var(--c-border); color: var(--c-text-secondary); background: var(--c-bg-white); white-space: nowrap; }
+.seg span.on { background: var(--c-accent-light); border-color: var(--c-accent-muted); color: var(--c-accent); font-weight: 600; }
+.seg span.muted { border-style: dashed; }
+.seg.touch span { min-height: 40px; display: grid; place-items: center; }
+.field { margin-top: 8px; height: 32px; border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-white); font-size: 13px; color: var(--c-text-muted); display: flex; align-items: center; padding: 0 10px; }
+.notice { display: flex; gap: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12px; line-height: 1.45; }
+.n-info { background: var(--c-info-bg); color: var(--c-text-primary); }
+.n-warning { background: var(--c-warning-bg); color: var(--c-text-primary); }
+.n-danger { background: var(--c-danger-bg); color: var(--c-text-primary); border: 1px solid var(--c-danger-border); }
+.notice b { color: var(--c-text-heading); }
+
+/* ===== Список с пределом высоты (П2) ===== */
+.lbox { border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-panel); box-shadow: var(--shadow-card); margin-top: 12px;
+  max-height: 420px; overflow-y: auto; overscroll-behavior: contain; }
+.lbox.short { max-height: 300px; } /* только чтобы кадр влез на страницу макета; в продукте — LIST_MAX_H */
+.lhead { position: sticky; top: 0; display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border); font-size: 12px; color: var(--c-text-secondary); }
+.lhead .grow { flex: 1; }
+.card { padding: 8px 12px; border-bottom: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 4px; }
+.card:last-child { border-bottom: 0; }
+.r1 { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.r1 .nm { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--c-text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meta { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--c-text-muted); }
+.r2 { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.why { font-size: 12px; color: var(--c-text-secondary); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.why b { color: var(--c-text-muted); font-weight: 600; }
+.marks { display: flex; gap: 4px; }
+.wide .card { flex-direction: row; align-items: flex-start; }
+.wide .card .txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+
+/* ===== Закреплённая полоса (П4) ===== */
+.dz { position: sticky; bottom: 0; background: var(--c-bg-white); border-top: 1px solid var(--c-border); padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+.dz .line { display: flex; gap: 8px; align-items: center; }
+.dz .line .t { flex: 1; font-size: 12px; color: var(--c-text-secondary); line-height: 1.35; }
+.dz .res { font-size: 12px; color: var(--c-text-primary); display: flex; gap: 8px; align-items: flex-start; }
+.dz .res .mono { font-size: 11px; color: var(--c-text-secondary); overflow-wrap: anywhere; }
+
+/* ===== «Было» — схема текущего вида ===== */
+.old .card { flex-direction: row; flex-wrap: wrap; align-items: flex-start; }
+.old .score { width: 28px; text-align: right; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--c-text-secondary); }
+.old .txt { flex: 1; min-width: 0; }
+.old .txt .nm2 { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+.old .txt .w2 { font-size: 12px; color: var(--c-text-secondary); overflow-wrap: break-word; }
+.ghostline { font-size: 11px; color: var(--c-text-muted); text-align: center; padding: 10px; border-top: 1px dashed var(--c-border); }
+
+/* ===== Здоровье ===== */
+.cnt { display: grid; gap: 8px; padding: 0 12px; }
+.cnt div { background: var(--c-bg-inset); border-radius: 8px; padding: 8px; }
+.cnt small { display: block; font-size: 11px; color: var(--c-text-muted); }
+.cnt b { display: block; font-family: "JetBrains Mono", monospace; font-size: 16px; color: var(--c-text-heading); font-weight: 500; }
+.fr { padding: 8px 12px; border-top: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 4px; }
+.fr .p { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fr .m { font-size: 13px; color: var(--c-text-primary); }
+.grp { display: flex; gap: 8px; align-items: center; padding: 8px 12px; }
+
+/* ===== Модалка ===== */
+.scrim { background: var(--c-overlay); padding: 24px 12px; border-radius: 12px; }
+.modal { background: var(--c-bg-white); border-radius: 14px; box-shadow: var(--shadow-modal); max-width: 340px; margin: 0 auto; overflow: hidden; }
+.modal .mh { padding: 12px 16px; font-size: 14px; font-weight: 600; color: var(--c-text-heading); border-bottom: 1px solid var(--c-border-light); }
+.modal .mb { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 13px; }
+.modal .mf { padding: 12px 16px; display: flex; gap: 8px; justify-content: flex-end; border-top: 1px solid var(--c-border-light); }
+.sec { padding: 4px 0 4px 8px; border-left: 2px solid var(--c-border); }
+.sec small { display: block; font-size: 12px; color: var(--c-text-muted); }
+
+.grid2 { display: grid; grid-template-columns: 1fr; gap: 12px; margin-top: 12px; }
+.fl small { display: block; font-size: 12px; font-weight: 600; color: var(--c-text-secondary); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 6px; }
+.fl .in { display: flex; gap: 8px; align-items: center; }
+.fl .in .field { margin: 0; flex: 1; color: var(--c-text-primary); }
+.fl .in span { font-size: 12px; color: var(--c-text-muted); white-space: nowrap; }
+.kv { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.kv b { display: block; font-family: "JetBrains Mono", monospace; font-size: 16px; color: var(--c-text-heading); font-weight: 500; }
+.kv small { font-size: 11px; color: var(--c-text-muted); }
+.sticky-top { position: sticky; top: 0; background: var(--c-bg-white); border-bottom: 1px solid var(--c-border-light); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; z-index: 0; }
+.sel { height: 32px; border: 1px solid var(--c-border); border-radius: 8px; padding: 0 10px; font-size: 12px; display: inline-flex; align-items: center; color: var(--c-text-primary); background: var(--c-bg-white); }
+.chip { height: 28px; border: 1px solid var(--c-border); border-radius: 14px; padding: 0 10px; font-size: 12px; display: inline-flex; align-items: center; gap: 6px; color: var(--c-text-secondary); }
+.day { padding: 12px 12px 4px; font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--c-text-muted); }
+.jr { display: flex; gap: 8px; padding: 8px 12px; }
+.jr .ic { width: 16px; height: 16px; border-radius: 4px; background: var(--c-bg-inset); flex-shrink: 0; margin-top: 2px; }
+.jr .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.jact { padding: 0 12px 8px 48px; } /* SP.md + ICON_SIZE.sm + SP.sm */
+</style>
+</head>
+<body>
+<div class="doc">
+  <h1>Панели вики в узкой зоне · v1</h1>
+  <p class="lead">«Решения», «Журнал», «Здоровье» и «Настройки» живут в правой зоне шириной 340–420 px, но раскладку выбирают по ширине окна. Поэтому на десктопе в узкой панели они рисуют широкую раскладку, а самый длинный список, «Отбор чатов», уводит «Начать вики заново» на десяток экранов вниз. Ниже — аудит, решения по блокам (каждый кадр в светлой и тёмной теме) и куски М0–М7 для исполнения. Подробная спецификация с токенами — в <span class="mono">wiki-panels-v1-proposal.md</span>.</p>
+
+  <h2>1. Аудит</h2>
+  <p class="lead">Аудит сделан по коду и по ширинам, которые он задаёт; живой стенд с данными вики не поднимался. Таблиц в разметке нет. «Табличность» создают шапка-легенда, колонка балла и колонки времени справа от текста.</p>
+  <table class="t">
+    <tr><th>#</th><th>Где</th><th>Панель 340–380 (окно 1280)</th><th>360 мобила</th><th></th></tr>
+    <tr><td>А1</td><td>Отбор чатов</td><td>Без предела высоты. Пометки справа от текста — заголовок и «Почему» ужаты до ~150 px. Шапка-легенда «балл · состояние · причина · пометка».</td><td>Пометки своей строкой; длина бесконечная</td><td class="hi">высокая</td></tr>
+    <tr><td>А2</td><td>Начать вики заново</td><td>Стоит после всего списка: при 100 чатах до неё 8–12 экранов.</td><td>то же</td><td class="hi">высокая</td></tr>
+    <tr><td>А3</td><td>Ночной разбор</td><td>Поля в 2 колонки по ~145 px, единица прилипает к полю. Итог — 5 клеток по ~60 px, подписи ломаются.</td><td>норма</td><td class="mid">средняя</td></tr>
+    <tr><td>А4</td><td>Применение</td><td>Классы правок без предела. Выключенные, ради которых пришёл человек, теряются среди включённых.</td><td>то же</td><td class="mid">средняя</td></tr>
+    <tr><td>А5</td><td>Решения</td><td>Колонка возраста съедает ~40 px. Плашка на 3–4 строки стоит над списком всегда. В пустом состоянии устаревший текст «Журнал придёт следующим шагом».</td><td>плашка, текст</td><td class="mid">средняя</td></tr>
+    <tr><td>А6</td><td>Журнал</td><td>Колонка времени. Фильтры уходят вверх с прокруткой. Окно вердиктов ночи — mono-строка на 3–4 строки.</td><td>фильтры, окно</td><td class="mid">средняя</td></tr>
+    <tr><td>А7</td><td>Здоровье</td><td>4 счётчика по ~70 px. Строка находки — 5–6 обрывков в одну flex-строку. Группа без предела.</td><td>строка находки</td><td class="mid">средняя</td></tr>
+    <tr><td>А8</td><td>Тексты</td><td colspan="2">«Входящие» осталось в 12 видимых строках при вкладке «Решения» — таблица в разделе 7.</td><td>низкая</td></tr>
+  </table>
+
+  <h2>2. «Отбор чатов» — было и стало</h2>
+  <div class="cap"><span class="tag">А1 · М1</span><b>Панель 340, 100 чатов</b>
+    <span class="note">Слева — схема текущего вида. Справа — новый: фильтр «Ждут вас» стоит по умолчанию, если хоть один чат ждёт решения. Рамка не выше LIST_MAX_H (420) со своим скроллом, шапка «Показано N из M» закреплена. Карточка: название и балл → бейджи и мета → «Почему» в 2 строки → пометки своим рядом.</span></div>
+  <div class="row" id="f-triage"></div>
+
+  <div class="cap"><span class="tag">М1</span><b>Состояния: пусто под фильтром, поиск без результата, мобила 360</b>
+    <span class="note">Поиск появляется, только когда чатов больше 10. Сегмент с нулём остаётся живым (muted, пунктир), а не выключенным. На 360 сегменты и пометки — тач 40 px.</span></div>
+  <div class="row" id="f-triage-states"></div>
+
+  <div class="cap"><span class="tag">М1</span><b>Зона растянута до 600+</b>
+    <span class="note">Широкая раскладка: пометки возвращаются вправо. Колонки балла нет и здесь.</span></div>
+  <div class="row" id="f-triage-wide"></div>
+
+  <h2>3. «Настройки» целиком и «Начать вики заново»</h2>
+  <div class="cap"><span class="tag">А2 · М2</span><b>Полоса прилипает к низу тела панели</b>
+    <span class="note">Кнопка видна при любой длине стопки, в панели, шторке и подвкладке мобилы. Многоточие в «Начать заново…» означает, что дальше будет окно. Подтверждение не меняется: предпросмотр, затем «Удалить N страниц». Итог чистки показывается в полосе с кнопкой «Скрыть».</span></div>
+  <div class="row" id="f-settings"></div>
+
+  <div class="cap"><span class="tag">М2</span><b>Подтверждение — прежнее окно, пояснение переехало в него</b></div>
+  <div class="row" id="f-modal"></div>
+
+  <h2>4. «Ночной разбор» и «Применение»</h2>
+  <div class="cap"><span class="tag">А3 · М3 / А4 · М4</span><b>Панель 340: поля в одну колонку, итог 2×N; классы в рамке, выключенные наверху</b></div>
+  <div class="row" id="f-nightly"></div>
+
+  <h2>5. «Решения» и «Журнал»</h2>
+  <div class="cap"><span class="tag">А5 · М5 / А6 · М6</span><b>Возраст и время — в строку меты; плашка сворачивается; фильтры журнала закреплены</b>
+    <span class="note">Здесь список и есть вся панель, поэтому вложенного скролла нет: прокручивается панель, а закрепляется ряд фильтров.</span></div>
+  <div class="row" id="f-inbox"></div>
+
+  <h2>6. «Здоровье»</h2>
+  <div class="cap"><span class="tag">А7 · М7</span><b>Два счётчика в ряд, находка читается сверху вниз, «Показать ещё N» после пяти</b></div>
+  <div class="row" id="f-health"></div>
+
+  <h2>7. «Входящие» → «Решения»</h2>
+  <table class="t">
+    <tr><th>Где</th><th>Сейчас</th><th>Станет</th></tr>
+    <tr><td class="mono">WikiJournal.tsx:79</td><td>через Входящие</td><td>через Решения</td></tr>
+    <tr><td class="mono">WikiJournal.tsx:280</td><td>…и во «Входящие» не идут</td><td>…и в «Решения» не идут</td></tr>
+    <tr><td class="mono">WikiNightlyBlock.tsx:95, 96</td><td>…лимит «Входящих»</td><td>…лимит «Решений»</td></tr>
+    <tr><td class="mono">WikiNightlyBlock.tsx:217</td><td>ждут вас во «Входящих»</td><td>ждут вас в «Решениях»</td></tr>
+    <tr><td class="mono">WikiNightlyBlock.tsx:229</td><td>Открыть «Входящие»</td><td>Открыть «Решения»</td></tr>
+    <tr><td class="mono">WikiNightlyBlock.tsx:459</td><td>…спорное ждёт вас во «Входящих»</td><td>…в «Решениях»</td></tr>
+    <tr><td class="mono">WikiApplySettings.tsx:248, 262</td><td>…во «Входящие»</td><td>…в «Решения»</td></tr>
+    <tr><td class="mono">WikiChatTriageList.tsx:54</td><td>ждёт решения во «Входящих»</td><td>ждёт решения в «Решениях»</td></tr>
+    <tr><td class="mono">WikiPackageView.tsx:350</td><td>aria: к списку «Входящих»</td><td>к списку «Решений»</td></tr>
+    <tr><td class="mono">wikiLabels.ts:232</td><td>Остановились: во «Входящих» N…</td><td>в «Решениях» N…</td></tr>
+    <tr><td class="mono">WikiPageView.tsx:498</td><td>…ни из «Входящих»</td><td>…ни из «Решений»</td></tr>
+    <tr><td class="mono">notes/WikiChatActions.tsx:63, 90</td><td>…во «Входящих»</td><td>…в «Решениях»</td></tr>
+  </table>
+
+  <h2>8. Куски для исполнения</h2>
+  <p class="lead">Нужен бэк: <b>нет</b>, всё считается из уже отдаваемых данных. М0 нужен до М1, М3, М4, М5 и М6; остальные куски друг от друга не зависят. Файлы и критерии — в записке.</p>
+  <table class="t">
+    <tr><th>Кусок</th><th>Файлы</th><th>Суть</th></tr>
+    <tr><td>М0</td><td class="mono">lib/design.ts, lib/shell-kit/index.ts, wiki/useWikiNarrow.ts (+тест)</td><td>Токен LIST_MAX_H = 420; хук «узко = ширина контейнера &lt; MOBILE_MAX или мобила»</td></tr>
+    <tr><td>М1</td><td class="mono">wiki/WikiChatTriageList.tsx (+тест фильтра)</td><td>Фильтры, поиск, рамка с пределом, карточка</td></tr>
+    <tr><td>М2</td><td class="mono">wiki/WikiPurgeBlock.tsx, wiki/WikiSettings.tsx</td><td>Закреплённая полоса, пояснение в модалке</td></tr>
+    <tr><td>М3</td><td class="mono">wiki/WikiNightlyBlock.tsx, wiki/wikiLabels.ts</td><td>Одна колонка полей, итог 2×N, тексты</td></tr>
+    <tr><td>М4</td><td class="mono">wiki/WikiApplySettings.tsx</td><td>Рамка классов, выключенные наверху</td></tr>
+    <tr><td>М5</td><td class="mono">wiki/WikiInbox.tsx, wiki/WikiPackageView.tsx</td><td>Возраст в мету, свёртка плашки, тексты</td></tr>
+    <tr><td>М6</td><td class="mono">wiki/WikiJournal.tsx</td><td>Время в мету, закреплённые фильтры, короткое окно ночи</td></tr>
+    <tr><td>М7</td><td class="mono">wiki/WikiHealth.tsx</td><td>2 счётчика, вертикальная находка, «Показать ещё»</td></tr>
+  </table>
+</div>
+
+<script>
+// Кадр рисуется дважды — в светлой и тёмной теме. width — ширина кадра в CSS-пикселях.
+function twice(id, label, width, html, height) {
+  const host = document.getElementById(id);
+  for (const theme of ['light', 'dark']) {
+    const w = document.createElement('div');
+    w.className = 'themed'; w.dataset.theme = theme;
+    w.innerHTML = `<div class="lbl">${label} · ${width} px · ${theme === 'light' ? 'светлая' : 'тёмная'}</div>` +
+      `<div style="width:${width}px;${height ? `height:${height}px;display:flex;` : ''}">${html}</div>`;
+    host.appendChild(w);
+  }
+}
+const panel = (title, body, opts = {}) =>
+  `<div class="panel" style="width:100%;${opts.h ? 'height:100%;' : ''}">` +
+  (opts.noHead ? '' : `<div class="phead"><span class="ttl">${title}</span><span class="x">×</span></div>`) +
+  `<div class="pbody">${body}</div></div>`;
+
+const CHATS = [
+  { n: 'Разбор ночного падения vLLM на втором узле', s: 9, b: [['warning', 'ждёт решения в «Решениях»']], m: '12.11 · разобран до m41', w: 'есть пакет на решение: спорная замена формулировки человека', mk: '' },
+  { n: 'Деплой и откат релиза 0.29', s: 7, b: [['danger', 'пропущено после 3 отказов'], ['accent', 'важный']], m: '11.11', w: 'три разбора подряд отбиты проверками кода: ссылки на несуществующие страницы', mk: 'imp' },
+  { n: 'Макет панели вики, итерация v4', s: 8, b: [['success', 'разбирается']], m: '13.11 · разбор идёт', w: 'новые решения по дизайну и ссылки на макеты; балл выше порога', mk: '' },
+  { n: 'Как настроить NO_PROXY для MCP', s: 3, b: [['warning', 'серая зона']], m: '10.11', w: 'короткий разговор, решений мало; отдано модели на отбор спорных', mk: '' },
+  { n: 'Список покупок на выходные', s: 1, b: [['neutral', 'не разбирать']], m: '09.11', w: 'бытовой разговор вне проекта', mk: 'skip' },
+];
+const badges = bs => bs.map(([t, x]) => `<span class="badge b-${t}">${x}</span>`).join('');
+const marks = (mk, touch) =>
+  `<div class="marks"><span class="btn ghost xs ${mk === 'imp' ? 'on-imp' : ''} ${touch ? 'touch' : ''}">★ Важный</span>` +
+  `<span class="btn ghost xs ${mk === 'skip' ? 'on-skip' : ''} ${touch ? 'touch' : ''}">⊘ Не разбирать</span></div>`;
+const card = (c, touch) =>
+  `<div class="card"><div class="r1"><span class="nm">${c.n}</span><span class="meta">балл ${c.s}</span></div>` +
+  `<div class="r2">${badges(c.b)}<span class="meta">· ${c.m}</span></div>` +
+  `<div class="why" title="${c.w}"><b>Почему:</b> ${c.w}</div>${marks(c.mk, touch)}</div>`;
+const cardWide = c =>
+  `<div class="card"><div class="txt"><div class="r1"><span class="nm">${c.n}</span><span class="meta">балл ${c.s}</span></div>` +
+  `<div class="r2">${badges(c.b)}<span class="meta">· ${c.m}</span></div>` +
+  `<div class="why"><b>Почему:</b> ${c.w}</div></div>${marks(c.mk)}</div>`;
+const triageHead = `<div class="blk" style="padding-bottom:0"><h2>Отбор чатов</h2>
+  <div class="sub">Какие разговоры Хранитель разбирает ночью и почему. Ваша пометка перекрывает автомат.</div></div>`;
+const seg = (on, touch, counts = [2, 5, 100]) =>
+  `<div class="seg ${touch ? 'touch' : ''}"><span class="${on === 0 ? 'on' : ''} ${counts[0] === 0 ? 'muted' : ''}">Ждут вас · ${counts[0]}</span>` +
+  `<span class="${on === 1 ? 'on' : ''} ${counts[1] === 0 ? 'muted' : ''}">Важные · ${counts[1]}</span><span class="${on === 2 ? 'on' : ''}">Все · ${counts[2]}</span></div>`;
+const search = q => `<div class="field">${q ? `<span style="color:var(--c-text-primary)">${q}</span>` : 'Найти чат по названию'}</div>`;
+const lhead = t => `<div class="lhead"><span class="grow">${t}</span></div>`;
+const footnote = `<div class="foot">«Важный» минует балл и модель, но не исключение чатов исполнителя задач.</div>`;
+
+// — было —
+const oldRow = c => `<div class="card"><span class="score">${c.s}</span><span class="txt"><span class="nm2">${c.n}</span> ${badges(c.b)}
+  <div class="w2"><b style="color:var(--c-text-muted)">Почему:</b> ${c.w}</div><div class="meta">${c.m}</div></span>${marks(c.mk)}</div>`;
+const oldTriage = triageHead + `<div class="blk old" style="padding-top:0"><div class="lbox" style="max-height:none;overflow:visible">
+  <div class="lhead"><b class="grow" style="color:var(--c-text-heading)">100 чатов</b><span style="font-size:11px">балл · состояние · причина · пометка</span></div>
+  ${CHATS.slice(0, 3).map(oldRow).join('')}<div class="ghostline">… ещё 97 строк, ≈ 9 экранов …</div></div></div>
+  <div class="ghostline">↓ «Начать вики заново» — после всего списка</div>`;
+twice('f-triage', 'БЫЛО', 340, panel('Настройки', oldTriage));
+
+const newTriage = triageHead + `<div class="blk" style="padding-top:0">${seg(0)}${search()}
+  <div class="lbox short">${lhead('Показано <span class="mono">2</span> из <span class="mono">100</span>')}${CHATS.slice(0, 2).map(c => card(c)).join('')}</div>${footnote}</div>`;
+twice('f-triage', 'СТАЛО · фильтр «Ждут вас»', 340, panel('Настройки', newTriage));
+
+const allTriage = triageHead + `<div class="blk" style="padding-top:0">${seg(2)}${search()}
+  <div class="lbox short">${lhead('Показано <span class="mono">100</span> из <span class="mono">100</span>')}${CHATS.map(c => card(c)).join('')}</div>${footnote}</div>`;
+twice('f-triage', 'СТАЛО · «Все», внутренний скролл', 340, panel('Настройки', allTriage));
+
+// — состояния —
+const emptyFilter = (title, sub, extra = '') =>
+  `<div style="padding:24px 12px;text-align:center"><div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">${title}</div>
+   <div class="sub" style="margin-top:4px">${sub}</div>${extra}</div>`;
+twice('f-triage-states', '«Важные» пусто', 340, panel('Настройки', triageHead + `<div class="blk" style="padding-top:0">${seg(1, false, [0, 0, 48])}${search()}
+  <div class="lbox">${lhead('Показано <span class="mono">0</span> из <span class="mono">48</span>')}${emptyFilter('Важных чатов нет', 'Пометьте звёздочкой то, что нельзя пропустить.')}</div></div>`));
+twice('f-triage-states', 'Мобила, поиск без результата', 360, panel('', triageHead + `<div class="blk" style="padding-top:0">${seg(2, true)}${search('релиз 0.31')}
+  <div class="lbox">${lhead('Показано <span class="mono">0</span> из <span class="mono">100</span>')}${emptyFilter('Ничего не нашлось по «релиз 0.31»', '', '<div style="margin-top:8px"><span class="btn ghost">Сбросить поиск</span></div>')}</div></div>`, { noHead: true }));
+twice('f-triage-states', 'Мобила, карточки', 360, panel('', triageHead + `<div class="blk" style="padding-top:0">${seg(0, true)}${search()}
+  <div class="lbox short">${lhead('Показано <span class="mono">2</span> из <span class="mono">100</span>')}${CHATS.slice(0, 2).map(c => card(c, true)).join('')}</div></div>`, { noHead: true }));
+
+twice('f-triage-wide', 'Широко', 600, panel('Настройки', triageHead + `<div class="blk wide" style="padding-top:0">${seg(2)}${search()}
+  <div class="lbox short">${lhead('Показано <span class="mono">100</span> из <span class="mono">100</span>')}${CHATS.slice(0, 3).map(cardWide).join('')}</div></div>`));
+
+// — Настройки целиком + полоса —
+const nightlyStub = `<div class="blk"><h2>Ночной разбор</h2><div class="sub">Каждую ночь Хранитель разбирает свежие чаты…</div>
+  <div class="ghostline" style="border:0">… поля окна, бюджета, «Чем разбирать», «Прошлая ночь» …</div></div>`;
+const applyStub = `<div class="blk"><h2>Применение</h2><div class="ghostline" style="border:0">… тумблер и классы правок (рамка, см. раздел 4) …</div></div>`;
+const dz = (res, touch) => `<div class="dz">${res || ''}<div class="line"><span class="t">Удалить страницы ИИ и начать заново</span>
+  <span class="btn danger ${touch ? 'touch' : ''}">Начать заново…</span></div></div>`;
+const settingsBody = nightlyStub + applyStub + triageHead + `<div class="blk" style="padding-top:0">${seg(0)}
+  <div class="lbox short">${lhead('Показано <span class="mono">2</span> из <span class="mono">100</span>')}${CHATS.slice(0, 2).map(c => card(c)).join('')}</div>${footnote}</div>`;
+twice('f-settings', 'Панель, прокрутка в середине', 340, panel('Настройки', settingsBody + dz(), { h: true }), 560);
+const res = `<div class="res"><div style="flex:1"><div>Удалено 37 страниц.</div><div class="mono">Архив: data/wiki/a300…/purge-2026-11-13T07-40.zip</div></div><span class="x" title="Скрыть">×</span></div>`;
+twice('f-settings', 'Мобила, итог чистки', 360, panel('', settingsBody + dz(res, true), { noHead: true, h: true }), 560);
+
+// — модалка —
+const modal = `<div class="scrim"><div class="modal"><div class="mh">Начать вики заново?</div><div class="mb">
+  <div style="color:var(--c-text-secondary)">Удалятся все страницы, написанные ИИ: хроники, карточки источников и страницы, написанные вместе с вами.</div>
+  <div>Будет удалено 37 страниц:</div>
+  <div class="sec">Проект AI Home — 29<small>написанные ИИ — 21, хроники — 8</small></div>
+  <div class="sec">Общее — 8<small>карточки источников — 8</small></div>
+  <div style="font-size:12px;color:var(--c-text-secondary)">Страницы, написанные вами, и приёмыши остаются. Всё удалённое сохранится в zip-архиве.</div>
+  </div><div class="mf"><span class="btn">Отмена</span><span class="btn danger">Удалить 37 страниц</span></div></div></div>`;
+twice('f-modal', 'Окно предпросмотра', 360, modal);
+
+// — Ночной разбор / Применение —
+const nightly = `<div class="blk"><h2>Ночной разбор</h2><div class="sub">Спорное ждёт вас в «Решениях». Утром — уведомление с итогом.</div>
+  <div class="grid2">
+   <div class="fl"><small>Окно</small><div class="in"><div class="field">01:00</div><span>—</span><div class="field">06:00</div></div></div>
+   <div class="fl"><small>Пакетов за ночь</small><div class="in"><div class="field">12</div><span>пакетов</span></div></div>
+   <div class="fl"><small>Бюджет за ночь</small><div class="in"><div class="field">700000</div><span>токенов</span></div></div></div>
+  <h3>Прошлая ночь · 12–13.11</h3>
+  <div class="kv"><div><b>14</b><small>чатов разобрано</small></div><div><b>9</b><small>применено само</small></div>
+   <div><b>3</b><small>ждут вас в «Решениях»</small></div><div><b>2</b><small>отклонено кодом</small></div></div>
+  <div style="margin-top:12px"><span class="btn">Открыть «Решения»</span></div></div>`;
+twice('f-nightly', 'Ночной разбор', 340, panel('Настройки', nightly));
+const cls = (k, off, why) => `<div class="card"><div class="r2"><span class="mono" style="font-size:12px;color:var(--c-text-heading)">${k}</span>
+  <span class="badge ${off ? 'b-warning' : 'b-success'}">${off ? 'выключен' : 'само'}</span></div>
+  <div class="meta" style="font-family:inherit">7 дн: 24 · откатов 4 % · 30 дн: 96 · 3 %</div>
+  ${off ? `<div class="sub" style="margin:0">${why}</div><div><span class="btn">Снова применять само</span></div>` : ''}</div>`;
+const apply = `<div class="blk"><h2>Применение</h2><div class="sub">Неспорное применяется само после проверок кода. Спорное идёт в «Решения».</div>
+  <h3>Классы правок</h3><div class="lbox short"><div class="lhead"><span class="grow">Классов: <span class="mono">14</span></span><span class="badge b-warning">выключено 2</span></div>
+  ${cls('ai × supersede', true, 'Доля откатов 18 % за 7 дней — выше порога · 11.11')}${cls('keeper × chronicle', true, 'Выключили вы · 09.11')}${cls('ai × create')}${cls('ai × link')}</div></div>`;
+twice('f-nightly', 'Применение', 340, panel('Настройки', apply));
+
+// — Решения / Журнал —
+const inbox = `<div style="padding:8px 12px 0"><div class="notice n-info" style="align-items:center"><span style="flex:1"><b>Здесь только то, где нужен человек</b></span><span class="btn ghost xs">Подробнее</span></div></div>
+  ${[['AI Home · чат', 'Разбор ночного падения vLLM', 'замена вашей формулировки', '2 ч', 2], ['Общее · заметка', 'Правила деплоя', 'пакет без кода причины', '1 д', 1]].map(([s, n, w, a, k]) =>
+  `<div class="jr"><span class="ic"></span><span class="tx"><span class="meta">${s} · ${a}</span><span class="r1"><span class="nm" style="font-weight:500">${n}</span></span>
+   <span style="font-size:12px"><b style="color:var(--c-text-muted)">Почему здесь:</b> ${w}</span><span class="meta" style="font-family:inherit">${k} на решение</span></span></div>`).join('')}
+  <div class="foot" style="padding:0 12px">При 20 открытых пакетах ночной разбор останавливается, а не копит очередь.</div>`;
+twice('f-inbox', 'Решения · плашка свёрнута', 340, panel('Решения', inbox));
+const journal = `<div class="sticky-top"><span class="sel">Все источники ▾</span><span class="chip">ИИ поменял моё <b>2</b></span></div>
+  <div class="day">13.11, сегодня</div>
+  <div class="jr"><span class="ic"></span><span class="tx"><span class="meta">AI Home · чат · 07:12</span><span class="r1"><span class="nm" style="font-weight:500">Макет панели вики, итерация v4</span></span>
+   <span class="meta" style="font-family:inherit">применено · 3 стр.</span><span class="r2"><span class="badge b-warning">через Решения</span><span class="badge b-danger">заменил ваше</span></span></span></div>
+  <div class="jact"><span class="btn">Вернуть мою</span></div>
+  <div class="jr"><span class="ic"></span><span class="tx"><span class="meta">Общее · заметка · 03:40</span><span class="r1"><span class="nm" style="font-weight:500">Правила деплоя</span></span>
+   <span class="meta" style="font-family:inherit">применено · 1 стр.</span><span class="r2"><span class="badge b-success">само</span></span></span></div>`;
+twice('f-inbox', 'Журнал · фильтры закреплены', 340, panel('Журнал', journal));
+
+// — Здоровье —
+const fr = (p, m, meta, act) => `<div class="fr"><span class="p" title="${p}">${p}</span><span class="m">${m}</span>${meta ? `<span class="meta" style="font-family:inherit">${meta}</span>` : ''}${act ? `<div>${act}</div>` : ''}</div>`;
+const health = `<div class="cnt" style="grid-template-columns:repeat(2,minmax(0,1fr));padding-top:12px"><div><small>нет источников</small><b>40</b></div><div><small>дрейф</small><b>2</b></div>
+  <div><small>битые ссылки</small><b>5</b></div><div><small>без изменений</small><b>11</b></div></div>
+  <div class="grp"><span class="badge b-warning">дрейф</span><span class="meta">2</span></div>
+  ${fr('projects/ai-home/llm/local-models-vllm-hyperqwen.md', 'Страница изменена мимо вики', 'связанные: vllm-kv-tier.md · ключ: 9f3a', '<span class="btn">Принять как мою правку</span>')}
+  <div class="grp"><span class="badge b-neutral">нет источников</span><span class="meta">40</span></div>
+  ${fr('common/howto/no-proxy-mcp.md', 'Утверждение без источника', 'счёт: 3 утверждения')}
+  ${fr('common/howto/worktree-setup.md', 'Утверждение без источника', 'счёт: 1 утверждение')}
+  <div class="ghostline" style="border:0">… ещё 3 из первых пяти …</div>
+  <div style="padding:4px 12px 12px"><span class="btn ghost">Показать ещё 35</span></div>`;
+twice('f-health', 'Здоровье', 340, panel('Здоровье', health));
+</script>
+</body>
+</html>

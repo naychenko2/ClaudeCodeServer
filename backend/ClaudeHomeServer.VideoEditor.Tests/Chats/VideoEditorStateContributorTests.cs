@@ -79,6 +79,13 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
+    public void Правило_называет_увеличение_и_озвучку_одной_строкой()
+    {
+        foreach (var rule in new[] { VideoEditorStateContributor.PriorityRule, VideoEditorStateContributor.PersonalPriorityRule })
+            rule.Should().Contain("Увеличить версию — video_enhance, озвучить сцену — video_voice");
+    }
+
+    [Fact]
     public async Task Блок_несёт_правило_приоритета_и_правило_после_сцены_спроси()
     {
         var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));

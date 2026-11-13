@@ -48,7 +48,7 @@ internal sealed class AgentWorld : IDisposable
     public string Chat => FilmWorld.Session;
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
-        bool withContext = false, IVideoEngine? extraEngine = null)
+        bool withContext = false, IVideoEngine? extraEngine = null, IVideoSceneVoice? voice = null)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
@@ -74,7 +74,7 @@ internal sealed class AgentWorld : IDisposable
             .Returns((string _, string _, string action) => delegatedDenied ? $"{action}: делегированный ход — отказ" : null);
 
         Toolset = new VideoEditorToolset(accessor.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
-            Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config);
+            Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config, voice: voice);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
         var access = new Mock<ClaudeHomeServer.Services.Access.IProjectAccess>();

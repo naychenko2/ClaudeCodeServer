@@ -115,8 +115,8 @@ public static class ActorToolRights
         Server("image-editor", ["image_state", "image_find_faces", "image_suggest_prompt"],
             ["image_cancel", "image_focus", "image_generate", "image_new"]);
         Server("video-editor", ["video_state", "video_suggest_prompt", "video_wait"],
-            ["video_cancel", "video_film_build", "video_film_edit", "video_focus", "video_new",
-             "video_save_scene", "video_scene_set", "video_shoot"]);
+            ["video_cancel", "video_enhance", "video_film_build", "video_film_edit", "video_focus", "video_new",
+             "video_save_scene", "video_scene_set", "video_shoot", "video_voice"]);
         Server("codegraph", ["codegraph_find", "codegraph_hubs", "codegraph_neighbors"], []);
         Server("dev", [], ["build", "start_stand", "stop_stand"]);
         Server("tests", [], ["pregate", "run_tests", "ui_probe"]);

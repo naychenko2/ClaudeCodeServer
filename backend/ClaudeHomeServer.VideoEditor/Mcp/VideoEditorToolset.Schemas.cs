@@ -24,6 +24,8 @@ public sealed partial class VideoEditorToolset
     public const string ToolSceneSet = "video_scene_set";
     public const string ToolSuggestPrompt = "video_suggest_prompt";
     public const string ToolShoot = "video_shoot";
+    public const string ToolEnhance = "video_enhance";
+    public const string ToolVoice = "video_voice";
     public const string ToolCancel = "video_cancel";
     public const string ToolWait = "video_wait";
     public const string ToolSaveScene = "video_save_scene";
@@ -218,9 +220,40 @@ public sealed partial class VideoEditorToolset
                     + "Если съёмка уже недоступна (рестарт сервера или прошло больше 12 ч) — отказ «переснимите сцену». " + NotWithoutAsk),
             }, "sceneId")),
 
+        new(ToolEnhance,
+            "«Увеличить ×2/×4»: увеличивает версию сцены (RelayVSR) на локальной видеокарте — бесплатно, в личных чатах и в "
+            + "проектах. Итог — новая версия сцены со звуком исходника, исходная остаётся; идёт отдельно от хода (отмена — "
+            + "video_cancel, ожидание — video_wait). Отказ: версия уже увеличена, кадр или длина вне замеренных пределов "
+            + "(до 1344×768 и 10 с), локальные модели недоступны. Возвращает { jobId, sceneId, quote }.",
+            Obj(new JsonObject
+            {
+                ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
+                ["versionId"] = Str("Версия сцены; не указана — текущая"),
+                ["scale"] = new JsonObject
+                {
+                    ["type"] = "integer", ["enum"] = new JsonArray(2, 4),
+                    ["description"] = "Во сколько раз увеличить: 2 или 4 (по умолчанию 2)",
+                },
+            }, "sceneId")),
+
+        new(ToolVoice,
+            "«Озвучить сцену»: звук по видео версии сцены (локальные HunyuanVideo-Foley XL/XXL и MMAudio) — бесплатно, в личных "
+            + "чатах и в проектах. Итог — новая версия сцены со вклеенным звуком (исходная остаётся) и дорожка в нити звука; "
+            + "идёт отдельно от хода (отмена — video_cancel, ожидание — video_wait с jobId явным списком). "
+            + "model не передавай без просьбы человека — берётся «Авто» каталога звука, то есть Foley XL. "
+            + "Клип длиннее предела модели озвучить нельзя. Возвращает { jobId, sceneId, threadId, quote }.",
+            Obj(new JsonObject
+            {
+                ["sceneId"] = Str("Сцена этого чата (sceneId из video_state)"),
+                ["versionId"] = Str("Версия сцены; не указана — текущая"),
+                ["text"] = Str("Подсказка, какой звук нужен (необязательно)"),
+                ["model"] = Str("Модель звука по видео: foley-xl, foley-xxl или mmaudio (id из каталога звука). "
+                    + "Не указывай без просьбы человека — по умолчанию «Авто» (Foley XL)"),
+            }, "sceneId")),
+
         new(ToolCancel,
-            "Отменяет съёмку этого чата. Готовые варианты остаются версиями; остановленное до принятия поставщиком не списывается.",
-            Obj(new JsonObject { ["jobId"] = Str("jobId из результата video_shoot") }, "jobId")),
+            "Отменяет съёмку, увеличение или озвучку этого чата. Готовые варианты остаются версиями; остановленное до принятия поставщиком не списывается.",
+            Obj(new JsonObject { ["jobId"] = Str("jobId из результата video_shoot, video_enhance или video_voice") }, "jobId")),
 
         new(ToolWait,
             "Ждёт конца съёмок до timeoutSeconds (не больше 15 с) и возвращает их состояние. allDone=false — вызови ещё "
@@ -232,7 +265,7 @@ public sealed partial class VideoEditorToolset
                 ["jobIds"] = new JsonObject
                 {
                     ["type"] = "array", ["items"] = new JsonObject { ["type"] = "string" }, ["maxItems"] = 12,
-                    ["description"] = "jobId из video_shoot; не указаны — все идущие съёмки этого чата",
+                    ["description"] = "jobId из video_shoot, video_enhance, video_voice; не указаны — все идущие съёмки и увеличения этого чата (озвучку — только явным jobId)",
                 },
                 ["timeoutSeconds"] = new JsonObject
                 {

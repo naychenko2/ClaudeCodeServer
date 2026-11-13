@@ -19,6 +19,7 @@ const { __applyChatContext, __resetChatContextStore } = await import('../../../l
 const { __resetExecutorState, NO_AI_ROW } = await import('./executors');
 const { audioKindApi } = await import('./kind');
 import type { AudioCatalog, AudioThread, AudioThreadsState } from '../api';
+const { rowExecOf } = await import('../../../lib/chatContext/rowExec');
 import type { ChatContextDto } from '../../../lib/chatContext/types';
 
 const P = 'p1';
@@ -194,5 +195,71 @@ describe('цена, «Чем» и параметры', () => {
     expect(audioKindApi.params!(CTX, 'stems')).toEqual([]);
     apply(withStems());
     expect(audioKindApi.params!(CTX, 'mix')).toEqual([]);
+  });
+});
+
+describe('«Чем» в «Чате»: модель режима нити — как у audio_generate', () => {
+  const processed = (patch: object = {}) => thread({
+    ...withStems(), settings: { mode: 'process', operation: 'separate', provider: 'local', model: 'demucs6', fields: null, inputs: { language: 'ru' }, ...patch },
+  });
+  let written: { id: string; settings: Record<string, unknown> }[];
+  beforeEach(() => {
+    written = [];
+    vi.spyOn(audioApi, 'settings').mockImplementation(async (_s, _c, id, settings) => {
+      written.push({ id, settings: { ...settings } });
+      return state(thread({ ...withStems(), settings }));
+    });
+  });
+
+  it('нить без настроек идёт «Голосом»: раздел с моделями речи, «Авто»; та же модель на повторный вызов', () => {
+    apply(thread());
+    const s = audioKindApi.chatExecutors!(CTX);
+    expect(s.map(x => [x.chip, x.head])).toEqual([['Голос', 'Голос для этого звука']]);
+    expect(s[0].value).toBe('auto');
+    expect(s[0].rows.map(r => r.id)).toEqual(['auto', 'local|qwen']);
+    expect(audioKindApi.chatExecutors!(CTX)).toBe(s);
+    // Строка в «Чате» (действие не выбрано): чип «Чем» есть, его меню — этот раздел
+    const row = rowExecOf(audioKindApi, CTX, { action: null, executors: null })!;
+    expect(row).toMatchObject({ title: 'Чем выполнить', value: 'auto' });
+    expect(row.sections).toBe(s);
+  });
+
+  it('подпись — режим нити: «Музыка», «Обработка» с моделью из настроек нити', () => {
+    apply(song());
+    expect(audioKindApi.chatExecutors!(CTX).map(x => x.chip)).toEqual(['Музыка']);
+    apply(processed());
+    const [p] = audioKindApi.chatExecutors!(CTX);
+    expect([p.chip, p.value]).toEqual(['Обработка', 'local|demucs6']);
+    expect(p.rows.map(r => r.id)).toContain('fal|fal-ai/stems4');
+  });
+
+  it('у нити модель не задана — показывается выбор режима области', () => {
+    __setScopeData(P, catalog, { voice: { operation: null, provider: 'local', model: 'qwen', count: null, fields: null }, music: null, process: null });
+    apply(thread());
+    expect(audioKindApi.chatExecutors!(CTX)[0].value).toBe('local|qwen');
+  });
+
+  it('нить не найдена — раздела нет', () => {
+    __applyThreads(S, P, { focus: null, revision: 3, threads: [] });
+    __applyChatContext(S, context(7));
+    expect(audioKindApi.chatExecutors!(CTX)).toEqual([]);
+  });
+
+  it('выбор пишет настройки нити: режим и входы целы, чип показывает новую модель', async () => {
+    apply(processed());
+    audioKindApi.chatExecutors!(CTX)[0].onChange('fal|fal-ai/stems4');
+    await vi.waitFor(() => expect(written).toHaveLength(1));
+    expect(written[0]).toEqual({ id: 't1', settings: {
+      mode: 'process', operation: 'separate', provider: 'fal', model: 'fal-ai/stems4', fields: null, inputs: { language: 'ru' },
+    } });
+    expect(audioKindApi.chatExecutors!(CTX)[0].value).toBe('fal|fal-ai/stems4');
+  });
+
+  it('«Авто» пишется явно и перебивает выбор режима области; нить без настроек получает режим «Голос»', async () => {
+    __setScopeData(P, catalog, { voice: { operation: null, provider: 'local', model: 'qwen', count: null, fields: null }, music: null, process: null });
+    apply(thread());
+    audioKindApi.chatExecutors!(CTX)[0].onChange('auto');
+    await vi.waitFor(() => expect(written).toHaveLength(1));
+    expect(written[0].settings).toEqual({ mode: 'voice', operation: null, fields: null, provider: null, model: 'auto' });
   });
 });

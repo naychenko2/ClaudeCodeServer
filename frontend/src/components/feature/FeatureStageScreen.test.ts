@@ -1,7 +1,10 @@
 // Экран этапа (D1c/D1e, вариант A): гонка ответов при смене задачи, один запрос диффа на коммит,
 // отказ диффа не гасит экран, metrics = null — вкладки «Метрики» нет.
-// Вкладки: активна одна — остальных блоков в DOM нет; сводка — над полосой при любой вкладке;
-// при выборе другой задачи открыта первая вкладка; полоса на 360 скроллится внутри себя.
+// Вкладки: активна одна — остальных блоков в DOM нет; сводка — над полосой при любой вкладке
+// (порядок проверяется относительно самой полосы, а не только относительно её содержимого);
+// при выборе другой задачи открыта первая вкладка; полоса на 360 скроллится внутри себя без
+// видимой прокрутки (класс + инжект стиля), активная вкладка докручивается — и заново при
+// смене задачи (deps эффекта помечены рендером состояния).
 //
 // Мутации (в отчёте): (1) убрать `if (signal.aborted) return` в StageBody → тест гонки красный;
 // (2) убрать защиту inFlight в FeatureStageArtifacts → тест «один запрос» красный;
@@ -12,7 +15,13 @@
 // (7) вернуть Date.now() в SummaryKpis вместо useNow → тест «живое ждёт вас» красный: после
 //     клика по вкладке сводка считает по часам рендера («3 ч 02 мин») вместо последнего тика;
 // (8) не передать nowMs в FeatureStageMetrics → тест «живое ждёт вас» красный: метрики считают
-//     по Date.now() момента клика («3 ч 02 мин») и расходятся со сводкой («3 ч 01 мин»).
+//     по Date.now() момента клика («3 ч 02 мин») и расходятся со сводкой («3 ч 01 мин»);
+// (9) перенести сводку под Tabs в StageBody → тест «сводка над полосой» красный: порядок детей
+//     body меняется (сводка за tablist);
+// (10) не добавить NO_SB_CLASS в className у Tabs → тест «без видимой прокрутки» красный:
+//     класса на tablist нет;
+// (11) вернуть deps эффекта докрутки к [tabSel, isMobile] (без метки рендера) → тест
+//     «докручивается при смене задачи» красный: после возврата к задаче полоса недокручена.
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -172,6 +181,14 @@ describe('FeatureStageScreen', () => {
     expect(t).toContain('Время');
     expect(t).toContain('Ходы');
     expect(t).toContain('Ждёт вас');
+    // порядок — относительно самой полосы: сводка стоит раньше tablist среди детей body
+    // (мутация «перенести сводку под вкладки» — red: порядок детей меняется)
+    const kids = findNodeByAttr(container, 'data-testid', 'stage-screen-body')!.children;
+    const iSummary = kids.findIndex(k => k.getAttribute('data-testid') === 'stage-screen-summary');
+    const iTabs = kids.findIndex(k => k.getAttribute('role') === 'tablist');
+    expect(iSummary, 'сводки нет среди детей body').toBeGreaterThanOrEqual(0);
+    expect(iTabs, 'полосы нет среди детей body').toBeGreaterThanOrEqual(0);
+    expect(iSummary, 'сводка обязана стоять перед полосой вкладок').toBeLessThan(iTabs);
   });
 
   it('metrics = null — вкладки «Метрики» нет и блока метрик нет', async () => {
@@ -211,13 +228,47 @@ describe('FeatureStageScreen', () => {
     expect(findTab(container, 'Артефакты')!.getAttribute('aria-selected')).toBe('true');
   });
 
-  it('полоса вкладок на 360 скроллится внутри себя, а не выпирает', async () => {
+  it('полоса на 360: горизонтальный скролл без видимой прокрутки — класс на tablist и инжект стиля (R-D1e)', async () => {
     stageMock.mockResolvedValue(screen('A'));
-    const { container } = render([{ id: 'A', title: 'A' }], true);
+    // Инжект — побочный эффект загрузки модуля: при статическом импорте в тестовом окружении
+    // (node) document ещё нет. Перегрузить модуль при установленном fake-DOM — как браузер
+    // при загрузке страницы (тот же приём с vi.resetModules, что в App.deeplink.test).
+    installFakeDom();
+    vi.resetModules();
+    const { FeatureStageScreen: FreshScreen } = await import('./FeatureStageScreen');
+    const r = mount(createElement(FreshScreen, { tasks: [{ id: 'A', title: 'A' }], isMobile: true }));
+    roots.push(r.root);
     await act(async () => { await flush(); });
-    const tablist = findNodeByAttr(container, 'role', 'tablist');
+    const style = document.getElementById('cc-stage-screen-tabs-style');
+    expect(style, 'инжекта стиля полосы нет').not.toBeNull();
+    expect(style!.textContent).toContain('.cc-stage-screen-tabs::-webkit-scrollbar{display:none;}');
+    expect(style!.textContent).toContain('.cc-stage-screen-tabs{scrollbar-width:none;}');
+    const tablist = findNodeByAttr(r.container, 'role', 'tablist');
     expect(tablist).not.toBeNull();
+    expect(tablist!.getAttribute('class'), 'класса без прокрутки на полосе нет').toContain('cc-stage-screen-tabs');
     expect((tablist as { style?: Record<string, string> }).style?.overflowX).toBe('auto');
+  });
+
+  it('360: активная вкладка докручивается; при смене задачи — докручивается заново (R-D1e)', async () => {
+    stageMock.mockImplementation((id: string) => Promise.resolve(screen(id)));
+    const { container } = render([{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }], true);
+    await act(async () => { await flush(); });
+    const anyTab = findTab(container, 'Ревью');
+    expect(anyTab, 'вкладки «Ревью»').not.toBeNull();
+    // узлы полосы пересоздаются при каждом монтировании — шпион на прототипе узла,
+    // чтобы ловить вызовы на любых узлах
+    const proto = Object.getPrototypeOf(anyTab!) as { scrollIntoView: (...args: unknown[]) => void };
+    const spy = vi.spyOn(proto, 'scrollIntoView');
+    clickTab(container, 'Ревью');
+    expect(spy.mock.calls.length, 'клик по вкладке обязан докрутить полосу').toBeGreaterThanOrEqual(1);
+    click(container, 'stage-screen-pick-B');
+    await act(async () => { await flush(); });
+    click(container, 'stage-screen-pick-A');
+    await act(async () => { await flush(); });
+    // возврат к A: выбор вкладки помечен taskId, активна снова «Ревью» (не первая) — полоса
+    // обязана докрутиться к ней (с deps [tabSel, isMobile] — вызовов больше не будет)
+    expect(spy.mock.calls.length, 'после смены задачи полоса осталась недокрученной').toBeGreaterThanOrEqual(2);
+    expect(findTab(container, 'Ревью')!.getAttribute('aria-selected')).toBe('true');
   });
 
   it('гонка: ответ этапа A после выбора этапа B не применяется', async () => {

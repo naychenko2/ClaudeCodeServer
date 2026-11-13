@@ -25,6 +25,7 @@ import { FeatureStageArtifacts } from './FeatureStageArtifacts';
 import { FeatureStageInput } from './FeatureStageInput';
 import { FeatureStageReview } from './FeatureStageReview';
 import { FeatureStageMetrics } from './FeatureStageMetrics';
+import { NO_DATA, taskStatusLabel } from './FeatureLabels';
 import { formatDuration, minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
 import type { StageScreen } from '../../types/featureStage';
@@ -42,9 +43,6 @@ type LoadState = { taskId: string } & (
 type StageTab = 'artifacts' | 'input' | 'review' | 'metrics';
 const FIRST_TAB: StageTab = 'artifacts';
 const TAB_LABEL: Record<StageTab, string> = { artifacts: 'Артефакты', input: 'Вход', review: 'Ревью', metrics: 'Метрики' };
-
-const TASK_STATUS: Record<string, string> = { todo: 'не начата', inProgress: 'в работе', done: 'готово' };
-const NO_DATA = 'нет данных';
 
 // Горизонтальный скролл полосы без видимой полосы прокрутки — тот же приём, что у
 // FeaturePageTabs (инжект отдельный: чужой стиль переживать не будем).
@@ -71,7 +69,7 @@ function StageSummary({ s, now }: { s: StageScreen; now: number }) {
           {s.stepRef ? `${s.stepRef} · ` : ''}{s.title}
         </span>
         <span data-testid="stage-screen-status" style={{ fontSize: FS.xs, color: C.textMuted }}>
-          {TASK_STATUS[s.status] ?? 'не начата'}
+          {taskStatusLabel(s.status)}
         </span>
       </div>
       {s.metrics && <SummaryKpis metrics={s.metrics} now={now} />}
@@ -125,15 +123,23 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
     return () => controller.abort();
   }, [taskId, attempt]);
 
-  // На 360: активная вкладка докручивается в видимость (полоса скроллится внутри себя).
-  useEffect(() => {
-    if (!isMobile) return;
-    const el = bodyRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    el?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
-  }, [tabSel, isMobile]);
-
   const state: LoadState = loaded.taskId === taskId ? loaded : { taskId, status: 'loading' };
   const tab: StageTab = tabSel.taskId === taskId ? tabSel.tab : FIRST_TAB;
+  // На 360: активная вкладка докручивается в видимость (полоса скроллится внутри себя).
+  // Эффект помечен выбором (tabSel) и рендером состояния (loaded): при смене задачи её
+  // полоса монтируется заново, и выбор может остаться за этой задачей (он помечен taskId) —
+  // эффект обязан сработать в момент, когда содержание появилось, а не только при смене
+  // выбора. Одного taskId в deps не хватает: первый рендер новой задачи — загрузка (полосы
+  // ещё нет в DOM), а к рендеру с содержанием taskId уже равен прошлому — без loaded в deps
+  // докрутка после возврата к задаче с активной не-первой вкладкой не происходит (R-D1e).
+  useEffect(() => {
+    if (!isMobile) return;
+    if (loaded.taskId !== taskId || loaded.status !== 'ok') return; // полосы ещё нет в DOM
+    if (tabSel.taskId !== taskId) return; // чужой выбор → активна первая вкладка, она у левого края
+    const el = bodyRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    el?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }, [tabSel, taskId, loaded, isMobile]);
+
   // Живое «сейчас» для всего экрана — одно значение у сводки и блока «Метрики» (R-D1e):
   // через useNow, и интервал живёт только когда есть от чего считать (waitingNow).
   const waitingActive = state.status === 'ok' && state.screen.metrics?.human.waitingNow != null;

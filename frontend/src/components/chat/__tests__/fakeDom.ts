@@ -82,16 +82,16 @@ class FNode {
   focus() { this.ownerDocument.activeElement = this; }
   blur() { if (this.ownerDocument.activeElement === this) this.ownerDocument.activeElement = null; }
   scrollIntoView() {}
-  // querySelector: поддерживает атрибутный селектор [attr="value"] (PipelineFlow ищет строку
-  // шага data-step-ref внутри своего корня); прочие формы — null (как раньше).
+  // querySelector: атрибутные селекторы [attr="value"], в том числе составные —
+  // несколько сразу ([role="tab"][aria-selected="true"] — экран этапа ищет активную
+  // вкладку полосы); прочие формы — null (как раньше).
   querySelector(sel: string): FNode | null {
-    const m = sel.match(/^\[([a-zA-Z-]+)="([^"]*)"\]$/);
-    if (!m) return null;
-    const [, attr, value] = m;
+    const conds = [...sel.matchAll(/\[([a-zA-Z-]+)="([^"]*)"\]/g)];
+    if (!conds.length || sel.replace(/\[[a-zA-Z-]+="[^"]*"\]/g, '').trim()) return null;
     let hit: FNode | null = null;
     const walk = (x: FNode) => {
       if (hit) return;
-      if (x.nodeType === 1 && x.getAttribute(attr) === value) { hit = x; return; }
+      if (x.nodeType === 1 && conds.every(([, attr, value]) => x.getAttribute(attr) === value)) { hit = x; return; }
       for (const c of x.childNodes) walk(c);
     };
     walk(this);

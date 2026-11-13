@@ -162,19 +162,23 @@ public sealed class LocalMediaDefaultContributor(IConfiguration config) : IPromp
 
     private const string PersonalImagesAndVideo = PersonalImages + PersonalNoVideoRule + "\n";
 
-    // Локального видео в личной области нет и у модуля «Видео»: облако — его video_shoot
+    // Модуль «Видео» в личной области снимает и локально: video_shoot с provider local. Первый кадр — картинка
+    // из «Картинок» этого чата (файлов проекта здесь нет), фильмов и сохранения в проект тоже
     public const string PersonalVideoEditorRule =
-        "Видео: локального видео здесь нет — скажи прямо и предложи облако через "
-        + "video_new → video_shoot (см. блок «Видео в этом чате»).\n";
+        "Видео: video_new → video_scene_set → video_shoot (см. блок «Видео в этом чате»); если в «Чем» контекста хода "
+        + "указан поставщик — используй его (не подменяй), если стоит «по умолчанию» — video_shoot передавай с provider "
+        + "local (это исключение из правила «не передавай provider»). Фильмов и сохранения в проект в этом чате нет.\n";
 
     public const string PersonalRule = PersonalImagesAndVideo
         + "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако.\n"
         + NoticeRule;
 
-    // Локального звука в личной области нет и у модуля «Звук»: облако — его audio_generate
+    // Модуль «Звук» в личной области работает и локально: audio_generate с provider local. Голосов из библиотеки,
+    // входов из файлов проекта и сохранения в проект здесь нет
     public const string PersonalAudioEditorRule =
-        "Звук и музыка: локальных моделей в этом чате нет — скажи прямо и предложи облако через "
-        + "audio_new → audio_generate (см. блок «Звук в этом чате»).";
+        "Звук и музыка: audio_new → audio_generate (см. блок «Звук в этом чате»); если в «Чем» контекста хода указан "
+        + "поставщик — используй его (не подменяй), если стоит «по умолчанию» — audio_generate передавай с provider "
+        + "local (это исключение из правила «не передавай provider»).";
 
     public const string PersonalRuleWithAudioEditor = PersonalImagesAndVideo + PersonalAudioEditorRule + "\n" + NoticeRule;
 

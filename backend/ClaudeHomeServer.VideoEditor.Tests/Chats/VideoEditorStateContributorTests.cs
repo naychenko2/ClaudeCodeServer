@@ -107,13 +107,17 @@ public sealed class VideoEditorStateContributorTests : IDisposable
     }
 
     [Fact]
-    public async Task Личный_чат_получает_правило_без_локальных_моделей()
+    public async Task Личный_чат_получает_правило_с_локальными_моделями_без_фильмов()
     {
         var contributor = new VideoEditorStateContributor(new VideoThreadStore(_dir));
 
         var text = (await contributor.BuildAsync(Ctx(projectId: null), null))!.Sections.Single().Text;
 
-        text.Should().Contain(VideoEditorStateContributor.PersonalPriorityRule).And.NotContain("provider local");
+        text.Should().Contain(VideoEditorStateContributor.PersonalPriorityRule)
+            .And.Contain("video_shoot с provider local")
+            .And.Contain("фильмов и сохранения в проект")
+            .And.NotContain("Локальных моделей для видео");
+        text.Should().NotContain("а не local_image_to_video", "прямых local_* в личном чате нет");
     }
 
     [Fact]

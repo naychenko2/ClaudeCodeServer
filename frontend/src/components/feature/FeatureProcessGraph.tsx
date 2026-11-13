@@ -297,8 +297,10 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
   for (const col of cols) {
     for (const s of col.stages) stagesById.set(stageNodeId(s), s);
   }
-  // Строка легенды «предложено» — только при proposed-узле на графе (F33a, макет :463).
-  const hasProposed = [...stagesById.values()].some(s => s.proposed === true);
+  // Строка легенды «предложено» — только при незавершённом proposed-узле на графе
+  // (F33a, макет :463; R-F33a·дельта: та же формула, что у узла и ребра — «предложено»
+  // только у незавершённых; при полностью выполненном маршруте фиолетовых узлов нет).
+  const hasProposed = [...stagesById.values()].some(s => s.proposed === true && s.state !== 'done');
   let farLane = 0;
 
   return (
@@ -336,7 +338,11 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect, template
             // Пройденное ребро — зелёное (макет .link.done): источник done — поток прошёл.
             const done = from?.state === 'done';
             // Ребро предложенного маршрута (макет P26) — фиолетовый пунктир: ещё не подтверждено.
-            const proposed = stagesById.get(e.to)?.proposed === true;
+            // R-F33a·дельта: та же формула, что у узла (см. рендер узла): «предложено» только
+            // у незавершённой цели — к завершённому узлу предложенного маршрута ребро обычное
+            // (макет :374).
+            const to = stagesById.get(e.to);
+            const proposed = to?.proposed === true && to.state !== 'done';
             const far = isFarEdge(ranks, e);
             return (
               <path

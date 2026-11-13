@@ -17,6 +17,10 @@
 //   завершённый узел предложенного маршрута — обычный done (рамка и заголовок как у done
 //   без признака, пометки нет), в мете суффикс «до маршрута» (с исполнителем — после « · »,
 //   без него — без висящего разделителя); незавершённый proposed в том же графе — как раньше.
+// - доработка R-F33a·дельта (дефект 7c75b702): та же формула доведена до рёбер и легенды —
+//   ребро к завершённому proposed-узлу обычное (не фиолетовое и не пунктирное), строка
+//   легенды «предложено» только при незавершённом proposed-узле; незавершённый
+//   proposed-конец — фиолетовый пунктир и легенда на месте (макет :374).
 // Колонки, рёбра и состояния компонент не пересчитывает — это покрыто в FeatureProcessGraphModel.test.ts.
 //
 // Мутации (проверяются прогоном): (1) убрать `if (stage.title)` в nodeTitle — краснеет
@@ -25,6 +29,8 @@
 // (4) игнорировать признак proposed (nodeMeta и рендер узла) — краснеют блоки F33a;
 // (5) вернуть оформление proposed без учёта state (asProposed → stage.proposed в nodeMeta
 // и в рендере узла) — краснеет блок R-F33a.
+// (6) вернуть сырой proposed в цвете ребра и в условии легенды (без state) — краснеет
+//     тест рёбер и легенды (R-F33a·дельта).
 
 import { createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -332,5 +338,34 @@ describe('FeatureProcessGraph: завершённый узел предложе�
     expect(txt(get(c, 'pgraph-meta-dz'))).toBe('Александр · до маршрута');
     expect(txt(get(c, 'pgraph-meta-pl'))).toBe('до маршрута');
     expect(txt(get(c, 'pgraph-meta-pl'))).not.toContain('предложено');
+  });
+
+  it('ребро к завершённому proposed-узлу — обычное; незавершённый proposed-конец — фиолетовый пунктир; легенда — только при незавершённом', () => {
+    // Сценарий major-пункта (дефект 7c75b702): оба этапа предложенного маршрута завершены.
+    // Ребро к завершённому цели не фиолетовое и не пунктирное (тот же отделённый флаг, что у
+    // узла), строки легенды нет: фиолетовых узлов на графе нет (макет :374).
+    const donePair = render([
+      { ...mkStage('design', 'dz', 'design', 0, 'done'), proposed: true },
+      { ...mkStage('plan', 'pl', 'plan', 1, 'done', ['dz']), proposed: true },
+    ]);
+    const edge = get(donePair, 'pgraph-edge-dz-pl')!;
+    expect(edge.getAttribute('data-proposed')).toBeNull();
+    const props = reactProps(edge as never) as { stroke?: string; strokeDasharray?: string };
+    expect(props.stroke).not.toBe('var(--c-plan-border)');
+    expect(props.stroke).toBe('var(--c-success)'); // источник done — пройденное ребро (макет .link.done)
+    expect(props.strokeDasharray).toBeUndefined();
+    expect(get(donePair, 'pgraph-legend-proposed')).toBeNull();
+    // Контрольный: незавершённый proposed-конец в том же графе — фиолетовый пунктир (F33a),
+    // легенда на месте.
+    const openEnd = render([
+      { ...mkStage('design', 'dz', 'design', 0, 'done'), proposed: true },
+      { ...mkStage('plan', 'pl', 'plan', 1, 'pending', ['dz']), proposed: true },
+    ]);
+    const openEdge = get(openEnd, 'pgraph-edge-dz-pl')!;
+    expect(openEdge.getAttribute('data-proposed')).toBe('true');
+    const openProps = reactProps(openEdge as never) as { stroke?: string; strokeDasharray?: string };
+    expect(openProps.stroke).toBe('var(--c-plan-border)');
+    expect(openProps.strokeDasharray).toBe('5 4');
+    expect(get(openEnd, 'pgraph-legend-proposed')).not.toBeNull();
   });
 });

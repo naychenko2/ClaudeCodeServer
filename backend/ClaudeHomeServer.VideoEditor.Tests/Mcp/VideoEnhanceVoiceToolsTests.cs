@@ -288,6 +288,16 @@ public sealed class VideoEnhanceVoiceToolsTests
     }
 
     [Fact]
+    public async Task Video_state_напоминает_про_оба_действия()
+    {
+        using var w = new AgentWorld();
+
+        var state = AgentWorld.Parse(await w.Call(ToolState));
+
+        state["humanChoice"]!["rule"]!.GetValue<string>().Should().Contain("video_enhance").And.Contain("video_voice");
+    }
+
+    [Fact]
     public void Автодопуск_и_права_участника_знают_оба_инструмента()
     {
         ClaudeHomeServer.Services.VideoEditor.VideoEditorAgentTools.AutoAllowTools

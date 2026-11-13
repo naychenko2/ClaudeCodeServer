@@ -739,7 +739,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             {
                 prefs = _prefs.Get(owner, scope),
                 rule = "Это выбор человека: настройки сцены, затем префы области, затем умолчание. Не передавай provider, "
-                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам.",
+                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам. "
+                    + "Увеличить версию — video_enhance, озвучить сцену — video_voice (локально, бесплатно, итог — новая версия).",
                 format = DescribeFormat(owner, scope),
             },
             agentLaunch = _agentLaunch,

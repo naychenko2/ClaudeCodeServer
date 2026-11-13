@@ -15,7 +15,7 @@
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr } from '../../../../components/chat/__tests__/fakeDom';
+import { mount, installFakeDom, uninstallFakeDom, textNodes, findNodeByAttr, reactProps } from '../../../../components/chat/__tests__/fakeDom';
 import { WikiPackageView } from '../WikiPackageView';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
@@ -29,6 +29,9 @@ vi.mock('../../../../lib/offline', async (orig) => ({
   request: vi.fn(() => Promise.resolve(null)),
   readStoredUserId: vi.fn(() => 'u1'),
 }));
+
+import { request } from '../../../../lib/offline';
+const req = request as unknown as ReturnType<typeof vi.fn>;
 
 const op = (over: Record<string, unknown>) => ({
   index: 0, op: 'supersede', page: 'projects/p1/gleb', target: 'Глеб ревьюит только бэкенд.',
@@ -220,5 +223,36 @@ describe('режим судьи: кнопки только у операций �
     // тот же пакет без допустительной — «Принять всё» на прежнем месте
     const c2 = renderOps([out1, out2], true);
     expect(findNodeByAttr(c2, 'data-testid', 'wiki-pkg-accept-all')).not.toBeNull();
+  });
+});
+
+// ─── Плашка смешанного пакета (T2): часть решена — остальные ещё ждут человека ───
+// apply=null ровно когда применять нечего: статус остался proposed. Плашка подтверждает,
+// что решение записано, и называет оставшуюся долю: заголовок «Решение записано. Ещё N
+// спорных ждут вас», текст «Они ниже — решите их, и пакет применится целиком.»
+// (формулировки — из карточки T2; условие показа плашки не менялось).
+
+async function settle(times = 10) {
+  for (let i = 0; i < times; i++) await act(async () => { await Promise.resolve(); });
+}
+
+describe('плашка смешанного пакета: решение записано, остальные ждут (T2)', () => {
+  it('решение одной из трёх (apply=null): «Решение записано. Ещё 2 спорных ждут вас»', async () => {
+    const three = [op({}), op({ index: 1 }), op({ index: 2 })];
+    // ответ бэка на «Принять» по op0: op0 решена человеком, op1–op2 остались,
+    // apply=null (применять нечего — статус остался proposed)
+    const afterFirst = { ...pkg({}), operations: [op({ humanDecision: 'accepted' }), op({ index: 1 }), op({ index: 2 })] };
+    req.mockImplementation((_url: string, init?: { method?: string }) =>
+      init?.method === 'POST' ? Promise.resolve({ package: afterFirst, apply: null }) : Promise.resolve(null));
+    const c = renderOps(three);
+    await settle();
+    const accept = findNodeByAttr(c, 'data-testid', 'wiki-op-accept-0');
+    expect(accept).not.toBeNull();
+    act(() => { (reactProps(accept!) as { onClick: (e: unknown) => void }).onClick(undefined); });
+    await settle();
+    expect(all(c)).toContain('Решение записано. Ещё 2 спорных ждут вас');
+    expect(all(c)).toContain('Они ниже — решите их, и пакет применится целиком.');
+    // транспорт возвращаем к прежнему поведению файла — следующий тест не наследует мок
+    req.mockImplementation(() => Promise.resolve(null));
   });
 });

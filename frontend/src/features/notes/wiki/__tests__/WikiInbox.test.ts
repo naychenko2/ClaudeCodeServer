@@ -316,6 +316,8 @@ describe('«Входящие» (S7a)', () => {
     const c = render();
     await settle();
     expect(has(c, 'Спорного нет')).toBe(true);
+    // текст (T2): журнал есть — обещания «он придёт следующим шагом» в нём нет
+    expect(has(c, 'Всё, что Хранитель сделал, применилось само. Что именно — в «Журнале».')).toBe(true);
     expect(opRows(c)).toHaveLength(0);
   });
 
@@ -326,7 +328,7 @@ describe('«Входящие» (S7a)', () => {
     expect(has(c, 'Нечитаемых файлов пакета: 2')).toBe(true);
   });
 
-  it('частичное решение (apply=null, статус proposed): плашка «Решение записано, осталось N спорных»', async () => {
+  it('частичное решение (apply=null, статус proposed): плашка «Решение записано. Ещё N спорных ждут вас»', async () => {
     // пакет с двумя спорными: решение по первой оставляет вторую нерешённой — бэк отвечает
     // {package: proposed с нерешённой операцией, apply: null} (применять нечего)
     const two = {
@@ -346,7 +348,7 @@ describe('«Входящие» (S7a)', () => {
     click(buttonByTestId(c, 'wiki-op-accept-0'), 'Принять');
     await settle();
     expect(has(c, 'Решение записано')).toBe(true);
-    expect(has(c, 'осталось 1 спорных')).toBe(true);
+    expect(has(c, 'Ещё 1 спорных ждут вас')).toBe(true);
     // решённая операция больше не на решение (бейдж «принята»), нерешённая осталась с кнопками
     expect(has(c, 'принята')).toBe(true);
     expect(buttonByTestId(c, 'wiki-op-accept-1')).not.toBeNull();

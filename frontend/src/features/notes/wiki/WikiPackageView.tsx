@@ -335,8 +335,8 @@ export function WikiPackageView({ pkg: initialPkg, judgeMode = false, onBack }: 
       // остался proposed. Подтверждаем, что решение записано, и говорим, сколько осталось:
       // человек продолжает решать на этом же экране (оставшиеся операции — ниже плашки).
       return (
-        <Notice tone="info" icon={Inbox} title={`Решение записано, осталось ${openHuman.length} спорных`} style={{ marginTop: SP.sm }}>
-          Остальные спорные операции ниже — решите их, и пакет применится.
+        <Notice tone="info" icon={Inbox} title={`Решение записано. Ещё ${openHuman.length} спорных ждут вас`} style={{ marginTop: SP.sm }}>
+          Они ниже — решите их, и пакет применится целиком.
         </Notice>
       );
     }

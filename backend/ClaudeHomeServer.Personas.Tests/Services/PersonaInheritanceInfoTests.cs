@@ -155,6 +155,30 @@ public class PersonaInheritanceInfoTests : IDisposable
     }
 
     [Fact]
+    public void СменаСпециальности_СбрасываетБазуСекций_ЛожногоОбновленияНет()
+    {
+        var p = Create();
+        _sut.MarkSectionsSeen(p.Id, Owner).SectionsSeenVersion.Should().NotBeNullOrEmpty();
+
+        _sut.Update(p.Id, Owner, null, null, null, null, null, null, null, null, null, null, null,
+            null, null, null, null, specialty: PersonaSpecialty.Planner);
+
+        var after = _sut.Get(p.Id, Owner)!;
+        after.SectionsSeenVersion.Should().BeNull("база привязана к старой специальности");
+        after.ChangedByAdminSince.Should().NotBe(true);
+    }
+
+    [Fact]
+    public void AccessDiffCount_НеCustomШаблонСЗапретами_ЛишнейЕдиницыНет()
+    {
+        SetTemplate(PersonaAccess.ReadOnly, ["tasks"], ["Bash"]);
+        var p = Create(inherits: true);
+        Update(p.Id, inheritsAccess: false, access: PersonaAccess.ReadOnly, tools: ["tasks"]);
+
+        _sut.Get(p.Id, Owner)!.AccessDiffCount.Should().Be(0, "запреты не-Custom шаблона не считаются");
+    }
+
+    [Fact]
     public void ПравкаСвоегоСлояПерсоны_ВерсиюСекцийСпециальностиНеДвигает()
     {
         var p = Create();

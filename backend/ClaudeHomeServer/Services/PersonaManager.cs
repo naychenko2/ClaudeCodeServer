@@ -142,7 +142,11 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
         var diff = p.Access != template.Access ? 1 : 0;
         var tools = NormalizeTools(template.Tools?.ToList());
         if (!SameSet(p.Tools, tools)) diff++;
-        if (!SameSet(p.DisallowedTools, template.DisallowedTools?.ToList())) diff++;
+        // Как в RematerializeSpecialtyAccess: запреты живут только при Custom, иначе null
+        var disallowed = template.Access == PersonaAccess.Custom
+            ? NormalizeDisallowed(template.DisallowedTools?.ToList())
+            : null;
+        if (!SameSet(p.DisallowedTools, disallowed)) diff++;
         return diff;
     }
 
@@ -1142,6 +1146,9 @@ public class PersonaManager : IPersonaLookup, IPersonaResolver, IPersonaAvatarSt
             // сообщает сброс человеку; без слоя в записи сбрасывать нечего — мутация молчит.
             if (ResetsPromptSections(persona, specialty)) persona.PromptSections = null;
             if (promptSections is not null) persona.PromptSections = normalizedSections;
+            // База «секции просмотрены» привязана к набору СТАРОЙ специальности: после смены хеш
+            // другой, и без сброса все секции получили бы ложное «обновилось от специальности».
+            if (specialty is not null && specialty != persona.Specialty) persona.SectionsSeenVersion = null;
             if (specialty is not null) persona.Specialty = specialty.Value;
             if (scope is not null)
             {

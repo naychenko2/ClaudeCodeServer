@@ -63,6 +63,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
     private readonly FilmAssembler _assembler;
     private readonly IDelegatedTurnGate? _turnGate;
     private readonly bool _agentLaunch;
+    private readonly IVideoSceneVoice? _voice;
 
     public VideoEditorToolset(
         IMcpSessionAccessor sessions,
@@ -77,8 +78,10 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         FilmAssembler assembler,
         IDelegatedTurnGate? turnGate = null,
         IConfiguration? config = null,
-        ITurnActorRegistry? turnActors = null)
+        ITurnActorRegistry? turnActors = null,
+        IVideoSceneVoice? voice = null)
     {
+        _voice = voice;
         _turnActors = turnActors;
         _sessions = sessions;
         _projects = projects;
@@ -128,6 +131,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             ToolSceneSet => await SceneSetAsync(arguments, owner, session, scope),
             ToolSuggestPrompt => SuggestPrompt(arguments),
             ToolShoot => await ShootAsync(arguments, owner, session, scope, ct),
+            ToolEnhance => await EnhanceAsync(arguments, owner, session, scope, ct),
+            ToolVoice => await VoiceAsync(arguments, owner, session, scope, ct),
             ToolCancel => await CancelAsync(arguments, owner, session, scope, ct),
             ToolWait => await WaitAsync(arguments, owner, session, scope, ct),
             ToolSaveScene => await SaveSceneAsync(arguments, owner, session, scope, ct),
@@ -434,6 +439,70 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         });
     }
 
+    // ── video_enhance и video_voice ────────────────────────────────────────────
+
+    // «Увеличить ×2/×4» — тот же сервисный метод, что у кнопки человека (те же отказы); локально и бесплатно.
+    // Итог — новая версия сцены local/relayvsr-x2|x4 со звуком исходника
+    private async Task<McpToolCallResult> EnhanceAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (Str(args, "sceneId") is not { } sceneId)
+            return Deny("Не указан sceneId: увеличение идёт только в конкретную сцену чата. Возьми id из video_state.");
+        if (GateTurn(owner, session, "Увеличение видео") is { } denied) return denied;
+        if (!TryInt(args, "scale", out var scaleArg) || scaleArg is not (null or 2 or 4))
+            return Deny("scale — 2 или 4.");
+        var scale = scaleArg ?? 2;
+        if (Store.Get(owner, session.Id).Scenes.FirstOrDefault(s => s.SceneId == sceneId) is not { } scene)
+            return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
+        var versionId = Str(args, "versionId") ?? scene.CurrentVersionId;
+        if (versionId is null) return Deny("У сцены ещё нет версий: сначала сними её (video_shoot).");
+
+        var started = await _jobs.EnhanceAsync(owner, scope, session.Id, sceneId, versionId, scale, VideoInitiators.Agent, ct);
+        if (started.Value is not { } created) return Fail(started.ErrorCode, started.Error);
+        return Json(new
+        {
+            jobId = created.JobId,
+            sceneId,
+            quote = new { sourceVersionId = created.SourceVersionId, scale = created.Scale, model = $"relayvsr-x{created.Scale}",
+                provider = "local", price = 0, etaSeconds = created.EtaSeconds },
+            note = "Увеличение идёт отдельно от хода на локальной видеокарте (бесплатно): остановка разговора его не отменяет, отмена — video_cancel. "
+                + "Итог — НОВАЯ версия сцены (relayvsr), исходная остаётся; ждать — video_wait.",
+        });
+    }
+
+    // «Озвучить сцену» — звук по видео версии сцены (локальные Foley XL/XXL, MMAudio, бесплатно): шов IVideoSceneVoice
+    // запускает ту же цепочку, что кнопка человека. Итог — новая версия сцены со вклеенным звуком и дорожка в нити звука
+    private async Task<McpToolCallResult> VoiceAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
+        CancellationToken ct)
+    {
+        if (Str(args, "sceneId") is not { } sceneId)
+            return Deny("Не указан sceneId: озвучка идёт только по конкретной сцене чата. Возьми id из video_state.");
+        if (GateTurn(owner, session, "Озвучка сцены") is { } denied) return denied;
+        if (Store.Get(owner, session.Id).Scenes.FirstOrDefault(s => s.SceneId == sceneId) is not { } scene)
+            return Deny($"Сцены {sceneId} нет в этом чате. Список — video_state.");
+        var versionId = Str(args, "versionId");
+        if (versionId is not null && scene.Versions.All(v => v.VersionId != versionId))
+            return Deny($"У сцены {sceneId} нет версии {versionId}. Список — video_state.");
+        if (versionId is null && scene.CurrentVersionId is null)
+            return Deny("У сцены ещё нет версий: сначала сними её (video_shoot).");
+        if (_voice is null)
+            return Fail(VideoEditorErrors.ProviderUnavailable, "Модуль «Звук» на этом сервере не подключён: сцену озвучить нельзя");
+
+        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), scope.Project?.Id, session.Id,
+            sceneId, versionId, Str(args, "text"), Str(args, "model")), ct);
+        if (started.Value is not { } created) return Fail(started.Code, started.Error);
+        return Json(new
+        {
+            jobId = created.JobId,
+            sceneId,
+            threadId = created.ThreadId,
+            quote = new { created.Provider, created.Model, created.License, price = 0, etaSeconds = created.EtaSeconds },
+            note = "Озвучка идёт отдельно от хода на локальной видеокарте (бесплатно): отмена — video_cancel. "
+                + "Итог — НОВАЯ версия сцены со вклеенным звуком (исходная остаётся) и звук в нити «Звука»; ждать — video_wait "
+                + "с этим jobId (явным списком jobIds).",
+        });
+    }
+
     private async Task<McpToolCallResult> CancelAsync(JsonObject args, string owner, Session session, VideoEditScope scope,
         CancellationToken ct)
     {
@@ -441,6 +510,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         var jobId = Str(args, "jobId") ?? "";
         // Задача другого чата (или чужая) неотличима от несуществующей
         var job = _jobs.Get(owner, scope.Key, jobId);
+        if (job is null && _voice?.Get(owner, scope.Key, jobId) is { } voiceJob && voiceJob.ChatSessionId == session.Id)
+        {
+            var stopped = await _voice.CancelAsync(owner, scope.Key, jobId, ct);
+            return stopped is null
+                ? Deny("Задача не найдена.")
+                : Json(new { stopped.JobId, stopped.Status, variants = stopped.Variants });
+        }
         if (job is null || job.ChatSessionId != session.Id) return Deny("Задача не найдена.");
         var cancelled = await _jobs.CancelAsync(owner, scope.Key, jobId, ct);
         return cancelled is null
@@ -468,15 +544,17 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         else
             return Deny("jobIds — массив jobId из video_shoot.");
 
+        // Задача озвучки (video_voice) живёт в модуле звука: её jobId ждётся тем же video_wait, но только явным списком
         foreach (var id in ids)
-            if (_jobs.Get(owner, scope.Key, id) is not { } known || known.ChatSessionId != session.Id)
+            if (!(_jobs.Get(owner, scope.Key, id) is { } known && known.ChatSessionId == session.Id)
+                && !(_voice?.Get(owner, scope.Key, id) is { } voiced && voiced.ChatSessionId == session.Id))
                 return Deny($"Задача {id} не найдена.");
 
         var deadline = DateTime.UtcNow + budget;
         List<VideoJobDto> jobs;
         while (true)
         {
-            jobs = [.. ids.Select(id => _jobs.Get(owner, scope.Key, id)).OfType<VideoJobDto>()];
+            jobs = [.. ids.Select(id => _jobs.Get(owner, scope.Key, id) is { } j ? j : VoiceAsJob(owner, scope.Key, id)).OfType<VideoJobDto>()];
             if (jobs.All(IsJobTerminal) || DateTime.UtcNow >= deadline) break;
             var left = deadline - DateTime.UtcNow;
             await Task.Delay(left < WaitPoll ? left : WaitPoll, ct);
@@ -492,6 +570,13 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
                 : "Съёмка ещё идёт: вызови video_wait снова, не заканчивай ход на ожидании.",
         });
     }
+
+    // Задача озвучки в форме задачи видео — для общего ожидания; сцена получает версию со звуком, когда задача completed
+    private VideoJobDto? VoiceAsJob(string owner, string scopeKey, string id) =>
+        _voice?.Get(owner, scopeKey, id) is { } v
+            ? new VideoJobDto(v.JobId, v.ScopeKey, v.Status, v.Provider, v.Model, 1, [.. Enumerable.Range(1, v.Variants)], null, null,
+                null, v.Error, v.QueuePosition, v.EtaSeconds, DateTime.UtcNow, v.ChatSessionId, null, VideoInitiators.Agent, "")
+            : null;
 
     private static bool IsJobTerminal(VideoJobDto job) =>
         job.Status is VideoJobStatuses.Completed or VideoJobStatuses.Failed or VideoJobStatuses.Cancelled;
@@ -654,7 +739,8 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
             {
                 prefs = _prefs.Get(owner, scope),
                 rule = "Это выбор человека: настройки сцены, затем префы области, затем умолчание. Не передавай provider, "
-                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам.",
+                    + "model, durationSec, count, aspect и quality без его просьбы — video_shoot возьмёт выбор сам. "
+                    + "Увеличить версию — video_enhance, озвучить сцену — video_voice (локально, бесплатно, итог — новая версия).",
                 format = DescribeFormat(owner, scope),
             },
             agentLaunch = _agentLaunch,

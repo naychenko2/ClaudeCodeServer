@@ -189,14 +189,13 @@ public class PersonalChatEndpointTests : IClassFixture<PersonalChatEndpointTests
     }
 
     [Fact]
-    public async Task Сохранения_у_личного_чата_нет_а_персонаж_без_папки_Личного_не_найден()
+    public async Task Проверка_имени_без_папки_Личного_свободна_а_персонаж_не_найден()
     {
         var chat = await PersonalChat();
 
-        (await _client.PostAsJsonAsync($"{Personal(chat.Id)}/save", new { stepId = "s", variant = 0 }))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        // Сохранение в «Личное» (Ф2-3): проверка имени — GET, папку не создаёт; без папки имя свободно
         (await _client.GetAsync($"{Personal(chat.Id)}/save/check?name=a&format=png"))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+            .StatusCode.Should().Be(HttpStatusCode.OK);
         // Персонажи личной области — в папке «Личного» (ADR-040, Ф2-4); героя в ней нет
         (await _client.GetAsync($"{Personal(chat.Id)}/characters/hero"))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);

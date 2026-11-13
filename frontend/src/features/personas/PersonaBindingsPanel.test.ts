@@ -55,10 +55,17 @@ vi.mock('../../lib/api', () => ({
       suggest: vi.fn(),
       installForPersona: vi.fn(),
     },
+    // Каталог специальностей и её типовой профиль (skillNames) — панель читает их
+    // для секций вкладки «Умения» (useSpecialtyCatalog / loadPromptSectionsCatalog)
+    specialties: {
+      list: vi.fn(),
+      promptSectionsCatalog: vi.fn(),
+    },
   },
 }));
 
 const { api } = await import('../../lib/api');
+const { showToast } = await import('../../lib/toast');
 const { installFakeDom, mount, textNodes, uninstallFakeDom } = await import(
   '../../components/chat/__tests__/fakeDom'
 );
@@ -112,6 +119,28 @@ const TOOL_TARGETS = [
   { id: 'tasks', label: 'Задачи', hint: null, meta: null },
   { id: 'mcp:foo', label: 'Foo MCP сервер', hint: null, meta: null },
 ];
+
+// === Фикстуры вкладки «Умения» (A3b) ===
+// Каталог ролей (подпись «QA-тестер» для шапки секции) и skill-профиль специальности —
+// defaultBindings каталога prompt-sections, эффективные вызывающему
+// (SpecialtiesController.cs:52-54,82). По этому профилю фронт опознаёт «отключено
+// вами»: бэк исключает унаследованную копию при своей off-записи с тем же именем
+// (PersonaBindingsService.cs:696) — без профиля такая строка неотличима от своей.
+const SPECIALTY_QA = { key: 'qa-tester', label: 'QA-тестер', executorFamily: false, template: null };
+const PROMPT_CATALOG = {
+  textLimit: 1024,
+  sections: [],
+  specialties: {
+    'qa-tester': {
+      sections: [],
+      defaultBindings: [
+        { type: 'skill', mode: 'auto', condition: 'проверка UI', skillName: 'playwright-e2e' },
+        { type: 'skill', mode: 'auto', condition: 'матрица регрессий', skillName: 'regression-matrix' },
+        { type: 'skill', mode: 'auto', condition: 'аудит дизайна UI', skillName: 'web-design-guidelines' },
+      ],
+    },
+  },
+};
 
 // === Хелперы (типы нод fakeDom не экспортируются — через сигнатуру textNodes) ===
 type FNode = Parameters<typeof textNodes>[0];
@@ -196,6 +225,42 @@ function countActionMenus(container: FNode): number {
   return n;
 }
 
+// Диалог (ConfirmDialog → Modal) рендерится порталом в document.body — вне контейнера
+// панели: его текст и кнопки читаются по body, а не по container
+function bodyRoot(): FNode | null {
+  const doc = (globalThis as { document?: { body: FNode } }).document;
+  return doc?.body ?? null;
+}
+
+// Все элементы с таким aria-label («×» — «Убрать»)
+function countByAriaLabel(container: FNode, label: string): number {
+  let n = 0;
+  const walk = (x: FNode) => {
+    if (x.nodeType === 1 && x.getAttribute('aria-label') === label) n++;
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(container);
+  return n;
+}
+
+// ВСЕ кнопки с полным текстом == label, в порядке DOM. Для диалога искать по bodyRoot():
+// Modal рендерится порталом в body, и «Вернуть» строки (в container) ему не помеха
+function findAllButtons(container: FNode, label: string): { onClick: () => void }[] {
+  const hits: { onClick: () => void }[] = [];
+  const walk = (x: FNode) => {
+    if (x.nodeType === 1) {
+      const p = Object.keys(x).find(k => k.startsWith('__reactProps$'));
+      if (p) {
+        const props = (x as unknown as Record<string, unknown>)[p] as Record<string, unknown> | undefined;
+        if (props?.onClick && textOf(x) === label) hits.push({ onClick: props.onClick as () => void });
+      }
+    }
+    for (const c of x.childNodes) walk(c);
+  };
+  walk(container);
+  return hits;
+}
+
 // Монтирует панель и даёт первичной загрузке (bindings) дойти.
 // Без opts — своя глобальная персона (роли нет → «как сейчас», старые кейсы не меняются);
 // с opts — персона и проекты для кейсов гейта (W3-F1f).
@@ -213,12 +278,13 @@ async function renderPanel(opts?: { persona?: Persona; projects?: Project[] }) {
   if (!g.localStorage) g.localStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
   // joinUserGroup (personas.ts:25) читает cc_user_id из sessionStorage, если его нет в localStorage
   if (!g.sessionStorage) g.sessionStorage = { getItem: () => null, setItem: () => {}, removeItem: () => {} };
-  const { container } = mount(createElement(PersonaBindingsPanel, {
+  const { root, container } = mount(createElement(PersonaBindingsPanel, {
     // eslint-disable-next-line design/no-raw-color -- фикстура: accent-цвет передаётся как есть, не стиль
     persona: opts?.persona ?? PERSONA, projects: opts?.projects ?? [], accent: '#D97757', isMobile: false,
   }));
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
-  return { container, text: () => textNodes(container).join(' ') };
+  // root — для кейсов смены персоны (re-render того же экземпляра панели)
+  return { root, container, text: () => textNodes(container).join(' ') };
 }
 
 beforeEach(() => {
@@ -227,8 +293,13 @@ beforeEach(() => {
   vi.mocked(api.personas.addBinding).mockReset();
   vi.mocked(api.personas.bindingTargets).mockReset().mockResolvedValue([]);
   vi.mocked(api.plugins.list).mockReset().mockResolvedValue([PLUGIN]);
+  // Каталог ролей и профиль типовых умений — модульный кэш (lib/specialties): одна
+  // фикстура на весь файл, повторных запросов после первой загрузки нет
+  vi.mocked(api.specialties.list).mockReset().mockResolvedValue([SPECIALTY_QA] as never);
+  vi.mocked(api.specialties.promptSectionsCatalog).mockReset().mockResolvedValue(PROMPT_CATALOG as never);
+  vi.mocked(showToast).mockClear();
   // Кэш каталогов целей — модульный (bindingMeta): кейсы гейта подменяют bindingTargets
-  // разными каталогами, их промисы не должны переживать границу теста
+  // разными каталогами, их промисы не должны переживать границы теста
   invalidateBindingTargets('tool');
   invalidateBindingTargets('knowledge');
 });
@@ -502,5 +573,156 @@ describe('Унаследованные умения', () => {
     expect(api.personas.addBinding).toHaveBeenCalledWith('persona-inh',
       { type: 'skill', target: 'review-pr', condition: 'на ревью', mode: 'off' });
     expect(api.personas.removeBinding).not.toHaveBeenCalled();
+  });
+});
+
+// === A3b: секции вкладки «Умения» (макет persona-inheritance.html P29–P37,
+// сверка reconciliation-report.md §2.1; счётчик по факту — §2.4 п.2; кнопки по
+// состоянию строки — §2.4 п.6) + конкурентность «Отключить»/«Вернуть» ===
+describe('Секции вкладки «Умения»', () => {
+  const QA_PERSONA = { ...PERSONA, id: 'persona-skills', specialty: 'qa-tester' } as Persona;
+
+  // Унаследованное умение профиля (mode auto) — строка с «Отключить»
+  const INHERIT_AUTO = {
+    id: '', type: 'skill', target: 'playwright-e2e', path: null, condition: 'проверка UI',
+    mode: 'auto', createdAt: '', updatedAt: '', inherited: true,
+  };
+  // Своя off-запись к умению профиля: бэк исключил унаследованную копию — это
+  // «отключено вами», строка с «Вернуть»
+  const OFF_YOU = {
+    id: 'b-off-you', type: 'skill', target: 'web-design-guidelines', path: null,
+    condition: 'аудит дизайна UI', mode: 'off', createdAt: '', updatedAt: '',
+  };
+  // Эффективный список как его отдаёт бэк (EffectiveBindings): два негашёных умения
+  // профиля, своя off-запись, своё умение вне профиля, свой инструмент, одна
+  // проектная копия — всего 6 строк трёх секций
+  const SKILLS_FIXTURE = [
+    INHERIT_AUTO,
+    { id: '', type: 'skill', target: 'regression-matrix', path: null, condition: 'матрица регрессий', mode: 'auto', createdAt: '', updatedAt: '', inherited: true },
+    OFF_YOU,
+    { id: 'b-own-skill', type: 'skill', target: 'my-skill', path: null, condition: 'своё', mode: 'auto', createdAt: '', updatedAt: '' },
+    { id: 'b-own-tool', type: 'tool', target: 'tasks', path: null, condition: 'задачи', mode: 'auto', createdAt: '', updatedAt: '' },
+    { id: 'b-copy', type: 'project', target: 'p-ai', path: null, condition: 'файлы проекта', mode: 'auto', createdAt: '', updatedAt: '' },
+  ];
+
+  it('три секции с тегами; счётчик шапки = фактическое число строк; «×» у своих и копий', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue(SKILLS_FIXTURE as never);
+    const { container, text } = await renderPanel({ persona: QA_PERSONA });
+    const t = text();
+    // §2.4 п.2: шесть строк → «Умения 6», не «7» из макета
+    expect(t).toMatch(/Умения\s+6/);
+    expect(findButton(container, '+ Умение'), 'кнопка «+ Умение» не найдена').not.toBeNull();
+    // «От специальности «QA-тестер»» + тег «наследуются»
+    expect(t).toContain('От специальности «QA-тестер»');
+    expect(t).toContain('наследуются');
+    // «Свои» и «Подобраны ИИ под проект» + тег «копия, не наследуются»
+    expect(t).toContain('Свои');
+    expect(t).toContain('Подобраны ИИ под проект');
+    expect(t).toContain('копия, не наследуются');
+    // Отключённое унаследованное: тег «отключено вами» и кнопка «Вернуть» (§2.4 п.6)
+    expect(t).toContain('отключено вами');
+    expect(findButton(container, 'Вернуть'), 'кнопка «Вернуть» не найдена').not.toBeNull();
+    expect(findButton(container, 'Отключить'), 'кнопка «Отключить» не найдена').not.toBeNull();
+    expect(findButtonByIncludes(container, 'Подобрать ещё под проект'), 'кнопка «Подобрать ещё под проект» не найдена').not.toBeNull();
+    // «×» — свои (умение + инструмент) и проектная копия: 3; у унаследованных строк его нет
+    expect(countByAriaLabel(container, 'Убрать')).toBe(3);
+    // Подсказка о наследовании (макет P34)
+    expect(t).toContain('Новое умение специальности появится у');
+    expect(t).toContain('гасит');
+  });
+
+  it('без специальности — «типовых умений нет — только свои», секции «От специальности» нет', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue([
+      { id: 'b-own-skill', type: 'skill', target: 'my-skill', path: null, condition: 'своё', mode: 'auto', createdAt: '', updatedAt: '' },
+    ] as never);
+    const { text } = await renderPanel({ persona: { ...PERSONA, id: 'persona-nospec' } as Persona });
+    expect(text()).toContain('Без специальности типовых умений нет — только свои.');
+    expect(text()).not.toContain('От специальности');
+    expect(text()).toMatch(/Умения\s+1/);
+  });
+
+  it('быстрый двойной клик «Отключить» — ровно один запрос (guard по id умения, не по экземпляру)', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue([INHERIT_AUTO] as never);
+    let resolveAdd: (v: unknown) => void = () => {};
+    vi.mocked(api.personas.addBinding).mockReturnValue(new Promise(r => { resolveAdd = r; }) as never);
+
+    const { container } = await renderPanel({ persona: QA_PERSONA });
+    const off = findButton(container, 'Отключить');
+    expect(off, 'кнопка «Отключить» не найдена').not.toBeNull();
+    await act(async () => {
+      off!.onClick();
+      off!.onClick(); // второй клик — пока первый запрос не завершён
+      resolveAdd(undefined);
+      await new Promise(r => setTimeout(r, 0));
+    });
+    // Мутация «снять guard» (if (skillReq.current.has(key)) return;) — здесь 2 вызова
+    expect(api.personas.addBinding).toHaveBeenCalledTimes(1);
+  });
+
+  it('«Вернуть» — подтверждение и ровно один DELETE; отказ запроса — ошибка без необработанного исключения', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue([OFF_YOU] as never);
+    vi.mocked(api.personas.removeBinding).mockReset();
+    let resolveDel: (v: unknown) => void = () => {};
+    vi.mocked(api.personas.removeBinding).mockReturnValue(new Promise(r => { resolveDel = r; }) as never);
+
+    const { container, text } = await renderPanel({ persona: QA_PERSONA });
+    expect(text()).toContain('отключено вами');
+    const row = findButton(container, 'Вернуть');
+    expect(row, 'кнопка «Вернуть» не найдена').not.toBeNull();
+    await act(async () => { row!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    // Тот же путь подтверждения, что у пресета «Минимум»: диалог «Вернуть «…»?»
+    // (Modal — портал в document.body, его текст вне контейнера панели)
+    const body = bodyRoot();
+    expect(body, 'диалог подтверждения не открылся').not.toBeNull();
+    expect(textNodes(body!).join(' ')).toContain('Вернуть «');
+    const confirms = findAllButtons(body!, 'Вернуть');
+    expect(confirms.length, 'кнопка «Вернуть» в диалоге не найдена').toBe(1);
+    await act(async () => {
+      confirms[0].onClick();
+      confirms[0].onClick(); // второй клик — пока первый DELETE не завершён
+      resolveDel(undefined);
+      await new Promise(r => setTimeout(r, 0));
+    });
+    // Мутация «снять guard» — здесь 2 вызова
+    expect(api.personas.removeBinding).toHaveBeenCalledTimes(1);
+    expect(api.personas.removeBinding).toHaveBeenCalledWith('persona-skills', 'b-off-you');
+
+    // Отказ — текст сервера в тосте, без необработанного исключения (иначе act его выбросит);
+    // guard снят в finally: следующая попытка проходит
+    vi.mocked(api.personas.removeBinding).mockReset().mockRejectedValue(new Error('Сервер отказал'));
+    const row2 = findButton(container, 'Вернуть');
+    expect(row2, 'после отказа кнопка «Вернуть» пропала').not.toBeNull();
+    await act(async () => { row2!.onClick(); await new Promise(r => setTimeout(r, 0)); });
+    const confirms2 = findAllButtons(body!, 'Вернуть');
+    expect(confirms2.length, 'диалог не открылся второй раз').toBe(1);
+    await act(async () => {
+      confirms2[0].onClick();
+      await new Promise(r => setTimeout(r, 0));
+    });
+    expect(showToast).toHaveBeenCalledWith('Умения', 'Сервер отказал');
+  });
+
+  it('устаревший ответ после смены персоны игнорируется: перечитывания старой персоны нет', async () => {
+    vi.mocked(api.personas.bindings).mockResolvedValue([INHERIT_AUTO] as never);
+    let resolveAdd: (v: unknown) => void = () => {};
+    vi.mocked(api.personas.addBinding).mockReturnValue(new Promise(r => { resolveAdd = r; }) as never);
+
+    const { root, container } = await renderPanel({ persona: { ...QA_PERSONA, id: 'persona-A' } as Persona });
+    const off = findButton(container, 'Отключить');
+    expect(off, 'кнопка «Отключить» не найдена').not.toBeNull();
+    await act(async () => { off!.onClick(); }); // запрос «persona-A» висит
+
+    // Смена персоны, пока ждём ответ: панель перечитывает новую (это легитимно)
+    await act(async () => {
+      root.render(createElement(PersonaBindingsPanel, {
+        // eslint-disable-next-line design/no-raw-color -- фикстура: accent-цвет передаётся как есть, не стиль
+        persona: { ...QA_PERSONA, id: 'persona-B' } as Persona, projects: [], accent: '#D97757', isMobile: false,
+      }));
+      await new Promise(r => setTimeout(r, 0));
+    });
+    await act(async () => { resolveAdd(undefined); await new Promise(r => setTimeout(r, 0)); });
+
+    // Мутация (убрать проверку personaIdRef) — появляется третий вызов 'persona-A'
+    expect(vi.mocked(api.personas.bindings).mock.calls.map(c => c[0])).toEqual(['persona-A', 'persona-B']);
   });
 });

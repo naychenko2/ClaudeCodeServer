@@ -1,3 +1,4 @@
+using System.Reflection;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
@@ -14,16 +15,20 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
 {
     private const string Owner = "u";
     private readonly string _dir = Path.Combine(Path.GetTempPath(), $"tmrg-{Guid.NewGuid():N}");
+    private readonly IConfiguration _config;
     private readonly TaskManager _tasks;
 
     public TaskManagerRouteLaunchGateTests()
     {
         Directory.CreateDirectory(_dir);
-        var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, "projects.json") })
-            .Build();
-        _tasks = new TaskManager(config, workflows: new WorkflowTemplateStore(Path.Combine(_dir, "workflow-templates.json")));
+        _config = Config("projects");
+        _tasks = new TaskManager(_config, workflows: new WorkflowTemplateStore(Path.Combine(_dir, "workflow-templates.json")));
     }
+
+    // Отдельный tasks.json в той же папке: второй TaskManager не воюет с основным за общий файл.
+    private IConfiguration Config(string name) => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["DataPath"] = Path.Combine(_dir, $"{name}.json") })
+        .Build();
 
     public void Dispose()
     {
@@ -52,6 +57,15 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
         return epic;
     }
 
+    // Легаси-запись: эпик, рождённый до маркера режима маршрута (M1) — RouteRequired = null,
+    // как в tasks.json у фич, созданных до этого шага. Снимаем маркер напрямую: другой точки,
+    // где он читается, нет (через PUT/MCP маркер не принимается).
+    private static TaskItem AsLegacy(TaskItem epic)
+    {
+        epic.RouteRequired = null;
+        return epic;
+    }
+
     // Задача этапа, созданная штатно (получает слепок из подтверждённого маршрута)
     private TaskItem Stage(TaskItem epic, string stageId, string role, string? lane = null) =>
         _tasks.Create(null, Owner, new CreateTaskRequest(stageId, FeatureId: epic.Id, Role: role, StepRef: stageId,
@@ -75,7 +89,7 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
         _tasks.SetWorkflowProposal(epic.Id, new WorkflowProposal { TemplateId = "tpl" });
         var step = new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step };
 
-        _tasks.FeatureRouteLaunchRefusal(step).Should().Be("маршрут фичи не подтверждён");
+        _tasks.FeatureRouteLaunchRefusal(step).Should().Be("маршрут фичи не подтверждён — подтвердите его на странице фичи");
     }
 
     [Fact]
@@ -91,7 +105,7 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
     [Fact]
     public void Подтверждение_ЛегасиЭпикБезПредложенияИМаршрута_Проходит()
     {
-        var epic = Epic(confirmed: false);
+        var epic = AsLegacy(Epic(confirmed: false));
         var step = new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step };
 
         _tasks.FeatureRouteLaunchRefusal(step).Should().BeNull();
@@ -117,6 +131,63 @@ public class TaskManagerRouteLaunchGateTests : IDisposable
         _tasks.ConfirmWorkflow(epic.Id, Route());
 
         _tasks.FeatureRouteLaunchRefusal(stale).Should().BeNull();
+    }
+
+    // --- Маркер режима маршрута (M1) ----------------------------------------
+    // Инвариант: ни один эпик, созданный или переведённый в feature при подключённом сторе с
+    // непустым каталогом, не запускает шаги без подтверждённого маршрута.
+
+    [Fact]
+    public void Маркер_ЭпикПриНепустомКаталоге_БезПредложенияИМаршрута_СтоитНаГейте()
+    {
+        // Каталог непустой всегда: стор дополняет файл пресетами кода (EnsureBuiltIns).
+        var epic = _tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        epic.RouteRequired.Should().BeTrue("стор подключён и каталог не пуст — фича в режиме маршрута");
+
+        var step = new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step };
+        _tasks.FeatureRouteLaunchRefusal(step).Should()
+            .Be("маршрут фичи не подтверждён — подтвердите его на странице фичи");
+    }
+
+    [Fact]
+    public void Маркер_ПереводЗадачиВFeature_СтавитМаркерИГейтСтоит()
+    {
+        var task = _tasks.Create(null, Owner, new CreateTaskRequest("была задачей"));
+        task.RouteRequired.Should().BeNull("не фича — маркера нет");
+
+        _tasks.Update(task.Id, new UpdateTaskRequest(Role: TaskRoles.Feature));
+
+        _tasks.GetById(task.Id)!.RouteRequired.Should().BeTrue("переход в feature — то же правило, что у Create");
+        _tasks.FeatureRouteLaunchRefusal(new TaskItem { OwnerId = Owner, FeatureId = task.Id, Role = TaskRoles.Step })
+            .Should().NotBeNull();
+    }
+
+    [Fact]
+    public void Маркер_БезСтораШаблонов_МаркераНетИГейтНеСтоит()
+    {
+        using var tasks = new TaskManager(Config("no-store"));
+        var epic = tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+
+        epic.RouteRequired.Should().NotBeTrue("стора нет — подтвердить маршрут нечем, фичу не запираем");
+        tasks.FeatureRouteLaunchRefusal(new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step })
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void Маркер_ПустойКаталогШаблонов_МаркераНетИГейтНеСтоит()
+    {
+        // Пустого каталога в работе не бывает (пресеты кода добавляются всегда) — состояние
+        // достраиваем напрямую в файле стора, чтобы проверить сам guard.
+        var store = new WorkflowTemplateStore(Path.Combine(_dir, "empty-templates.json"));
+        typeof(WorkflowTemplateStore).GetField("_file", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(store, new WorkflowTemplateFile());
+        using var tasks = new TaskManager(Config("empty-catalog"), workflows: store);
+
+        var epic = tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+
+        epic.RouteRequired.Should().NotBeTrue("каталог пуст — подтвердить нечем, фичу не запираем");
+        tasks.FeatureRouteLaunchRefusal(new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step })
+            .Should().BeNull();
     }
 
     // --- Гейт слияния -------------------------------------------------------

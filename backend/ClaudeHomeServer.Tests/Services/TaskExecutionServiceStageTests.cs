@@ -141,6 +141,14 @@ public class TaskExecutionServiceStageTests : IDisposable
         return epic;
     }
 
+    // Легаси-запись: эпик до маркера режима маршрута (M1) — RouteRequired = null, как в tasks.json
+    // у фич, созданных до этого шага: маркер снимаем напрямую, через PUT/MCP он не принимается.
+    private static TaskItem AsLegacy(TaskItem epic)
+    {
+        epic.RouteRequired = null;
+        return epic;
+    }
+
     private TaskItem Stage(TaskItem epic, string stageId, string role, string? lane = null) =>
         _tasks.Create(null, Owner, new CreateTaskRequest(stageId, FeatureId: epic.Id, Role: role, StepRef: stageId,
             StageId: stageId, Lane: lane, Assignee: TaskItemAssignee.Claude));
@@ -164,14 +172,15 @@ public class TaskExecutionServiceStageTests : IDisposable
 
         var act = async () => await _sut.ExecuteAsync(step, auto: false);
 
-        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should().Be("маршрут фичи не подтверждён");
+        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should()
+            .Be("маршрут фичи не подтверждён — подтвердите его на странице фичи");
         _tasks.GetById(step.Id)!.ClaudeStartedAt.Should().BeNull("отказ — до claim'а и подъёма процесса");
     }
 
     [Fact]
     public async Task Execute_ЛегасиЭпикБезПредложения_ГейтУПодтвержденияНеСрабатывает()
     {
-        var epic = Epic(confirm: false);
+        var epic = AsLegacy(Epic(confirm: false));
         var step = _tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step,
             StepRef: "B1", Assignee: TaskItemAssignee.Claude));
 
@@ -270,7 +279,7 @@ public class TaskExecutionServiceStageTests : IDisposable
     [Fact]
     public async Task ExecuteClaimed_МаршрутПредложенПослеПервогоГейта_ПовторныйГейтОтказываетДоСтарта()
     {
-        var epic = Epic(confirm: false); // легаси: первый гейт пропускает
+        var epic = AsLegacy(Epic(confirm: false)); // легаси: первый гейт пропускает
         var step = _tasks.Create(null, Owner, new CreateTaskRequest("шаг", FeatureId: epic.Id, Role: TaskRoles.Step,
             StepRef: "B1", Assignee: TaskItemAssignee.Claude));
         _tasks.FeatureRouteLaunchRefusal(step).Should().BeNull("первый гейт пройден");
@@ -280,7 +289,8 @@ public class TaskExecutionServiceStageTests : IDisposable
 
         var act = async () => await ExecuteClaimed(step);
 
-        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should().Be("маршрут фичи не подтверждён");
+        (await act.Should().ThrowAsync<FeatureRouteLaunchException>()).Which.Message.Should()
+            .Be("маршрут фичи не подтверждён — подтвердите его на странице фичи");
         _tasks.GetById(step.Id)!.ClaudeStartedAt.Should().BeNull("исполнитель не стартовал");
     }
 

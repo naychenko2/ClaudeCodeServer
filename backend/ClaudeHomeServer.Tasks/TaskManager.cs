@@ -513,12 +513,18 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // created: эпик фичи — первая запись её журнала (журнал точный, только если
         // начинается с created; дочерние задачи фичи created не пишут).
         if (task.Role == TaskRoles.Feature)
+        {
+            // Маркер режима маршрута (M1): фича, рождённая при подключённом сторе с непустым
+            // каталогом, обязана подтвердить маршрут до запуска своих шагов. При пустом каталогe
+            // маркера нет: подтвердить нечем, и фича осталась бы заперта навсегда.
+            task.RouteRequired = RouteRequiredFor(task.ProjectId);
             AppendJournal(task.OwnerId ?? "", task.Id, new FeatureJournalEntry
             {
                 At = task.CreatedAt,
                 Kind = "created",
                 TaskId = task.Id,
             });
+        }
         // Переходы: начальные значения полей (свежая задача → before = дефолт Todo).
         WriteJournalTransitions(task, new TaskTransition { Status = TaskItemStatus.Todo });
         ScheduleSave();
@@ -1447,6 +1453,11 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         // Снятие списка явным [] при сохранении роли plan — выше: остаётся пустым списком (не null).
         if (roleBefore == TaskRoles.Plan && effRole != TaskRoles.Plan)
             task.PlanSteps = null;
+        // Маркер режима маршрута (M1): переход в role=feature из другой роли ставит маркер по тому
+        // же правилу, что Create. У уже-фичи и при уходе из feature не трогаем: снятый маркер вернул
+        // бы легаси-фичу на гейт без причины.
+        if (roleBefore != TaskRoles.Feature && task.Role == TaskRoles.Feature)
+            task.RouteRequired = RouteRequiredFor(task.ProjectId);
         if (req.AwaitingHumanSince is not null) task.AwaitingHumanSince = req.AwaitingHumanSince;
         if (req.AwaitingHumanReason is not null) task.AwaitingHumanReason = Trimmed(req.AwaitingHumanReason);
 
@@ -2350,21 +2361,33 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
     // этот список), rework и consult — не узлы графа, дефект живёт вне маршрута.
     private static readonly string[] MergeGateExemptRoles = [TaskRoles.Review, TaskRoles.Rework, TaskRoles.Consult];
 
+    // Маркер режима маршрута (M1): true — при подключённом сторе с непустым каталогом шаблонов,
+    // иначе null (маркера нет): при пустом каталогe подтвердить маршрут нечем, и фича была бы
+    // заперта навсегда. Единственные писатели маркера — Create и переход роли в feature (Update);
+    // List у стора исключений не бросает (пустой каталог — пустой список).
+    private bool? RouteRequiredFor(string? projectId) =>
+        _workflows is not null && _workflows.List(projectId).Count > 0 ? true : null;
+
     // Гейты запуска по маршруту фичи (B3, разрез §5 «Без подтверждения» и разрез 2 §1.8):
-    // читают ТОЛЬКО эпик (Workflow/WorkflowProposal) и слепок task.Stage, шаблон — никогда (И4).
+    // читают ТОЛЬКО эпик (RouteRequired/Workflow/WorkflowProposal) и слепок task.Stage,
+    // шаблон — никогда (И4).
     // Эпик и задачи фичи читаются в момент вызова, а не из снимка на входе в ExecuteAsync:
     // подтверждение маршрута и закрытие предшественника между двумя вызовами видны сразу.
-    // Отказ — штатная строка, не исключение. null — запуск разрешён. Эпик без Proposal и без
-    // Workflow — легаси, гейтов нет; задача без фичи гейтов не знает вовсе.
+    // Отказ — штатная строка, не исключение. null — запуск разрешён. Эпик без маркера RouteRequired,
+    // без Proposal и без Workflow — легаси (фичи до M1 или при пустом каталоге шаблонов), гейтов нет;
+    // задача без фичи гейтов не знает вовсе.
     // Гейт на ЗАПУСКЕ: толкач простоя и возобновление идущего исполнителя сюда не заходят.
     public string? FeatureRouteLaunchRefusal(TaskItem task)
     {
         var epic = FeatureEpicOf(task);
         if (epic is null) return null;
 
-        // Гейт подтверждения: маршрут предложен, но не подтверждён человеком
-        if (epic.WorkflowProposal is not null && epic.Workflow is null)
-            return task.Role == TaskRoles.Consult ? null : "маршрут фичи не подтверждён";
+        // Гейт подтверждения: фича в режиме маршрута (маркер M1) или с предложением рекомендателя,
+        // но без подтверждённого человеком маршрута
+        if (epic.Workflow is null && (epic.RouteRequired == true || epic.WorkflowProposal is not null))
+            return task.Role == TaskRoles.Consult
+                ? null
+                : "маршрут фичи не подтверждён — подтвердите его на странице фичи";
 
         // Гейт слияния: узел с ≥2 предшественниками ждёт их все
         if (epic.Workflow is not { } route

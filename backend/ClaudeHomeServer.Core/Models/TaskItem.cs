@@ -195,6 +195,14 @@ public class TaskItem
     // (И7); через PUT/MCP не принимаются. Аддитивные nullable-поля: BackupSchema.Version не растёт.
     public WorkflowProposal? WorkflowProposal { get; set; }
     public FeatureWorkflow? Workflow { get; set; }
+    // Маркер «фича в режиме маршрута» (M1, только у role=feature): true — эпик создан или переведён
+    // в feature при подключённом сторе шаблонов с непустым каталогом; до подтверждения маршрута его
+    // задачи стоят на гейте запуска (FeatureRouteLaunchRefusal). Ставит ТОЛЬКО TaskManager (Create и
+    // переход роли в feature); через PUT/MCP не принимается. У легаси-эпиков (рождённых до M1) и при
+    // пустом каталоге — null: при пустом каталоге подтвердить маршрут нечем, запирать фичу нельзя.
+    // Аддитивное nullable-поле: старый tasks.json без «routeRequired» читается как null,
+    // BackupSchema.Version не растёт.
+    public bool? RouteRequired { get; set; }
     // Слепок этапа шаблона на задаче фичи (любая роль, кроме feature/consult): пишет ТОЛЬКО
     // TaskManager.Create (И3/И4), дальше неизменен. Эпик без Workflow — null (легаси).
     public StageSnapshot? Stage { get; set; }

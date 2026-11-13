@@ -18,10 +18,12 @@ import {
   NON_SKIPPABLE,
   SINGLE_ROLES,
   STAGE_ROLES,
+  TITLE_LIMIT,
   clampStall,
   isNonSkippable,
   setPresence,
   stageErrors,
+  titleRequired,
 } from './workflowTemplateModel';
 import { workflowTemplatesApi } from './api';
 import type { WorkflowStage, WorkflowTemplate } from './types';
@@ -190,6 +192,16 @@ describe('stageErrors — подсказки до отправки (зеркал
     expect(stageErrors(tpl([stage({ role: 'step', tierMedium: 'model-1', tierWeak: 'preset:p1' })]))).toEqual([]);
   });
 
+  // Зеркало бэка (WorkflowRules.cs:153): длина имени после обрезки, лимит TitleLimit=40.
+  it('имя этапа длиннее 40 — отказ; ровно 40 и крающие пробелы внутри 40 — нет', () => {
+    expect(TITLE_LIMIT).toBe(40);
+    expect(stageErrors(tpl([stage({ role: 'step', title: 'а'.repeat(41) })]))
+      .some(x => x.includes('имя этапа длиннее 40'))).toBe(true);
+    expect(stageErrors(tpl([stage({ role: 'step', title: 'а'.repeat(40) })]))).toEqual([]);
+    expect(stageErrors(tpl([stage({ role: 'step', title: `  ${'а'.repeat(40)}  ` })]))).toEqual([]);
+    expect(stageErrors(tpl([stage({ role: 'step', title: null })]))).toEqual([]);
+  });
+
   it('неизвестная политика простоя — отказ; пустая/известная — нет', () => {
     expect(stageErrors(tpl([stage({ role: 'step', stallPolicy: 'shout' })]))
       .some(x => x.includes('неизвестная политика простоя'))).toBe(true);
@@ -209,6 +221,53 @@ describe('stageErrors — подсказки до отправки (зеркал
     expect(stageErrors(broken).some(x => x.includes('список этапов не задан'))).toBe(true);
     expect(stageErrors(tpl([null as unknown as WorkflowStage]))
       .some(x => x.includes('этап #1: пустая запись'))).toBe(true);
+  });
+});
+
+// Подсказка поля «Имя этапа»: тот же критерий группы, что ValidateTitleGroups на бэке
+// (WorkflowRules.cs:191-221) — роль+линия, только известные роли, группа от двух этапов.
+describe('titleRequired — имя обязательно этапу группы (Role, Lane)', () => {
+  const qaPair = (): WorkflowStage[] => [
+    { role: 'qa', presence: 'optional', id: 'qa-plan', after: ['design'] },
+    { role: 'qa', presence: 'optional', id: 'qa', after: ['review', 'qa-plan'] },
+  ];
+
+  it('два этапа одной роли (qa-plan и qa): имя требуется каждому', () => {
+    expect(titleRequired(qaPair(), 0)).toBe(true);
+    expect(titleRequired(qaPair(), 1)).toBe(true);
+  });
+
+  it('одиночный этап своей роли — имя не требуется', () => {
+    expect(titleRequired([stage({ role: 'qa', id: 'qa' })], 0)).toBe(false);
+  });
+
+  it('этапы step разных линий — не группа: имена не требуются; одной линии — требуются', () => {
+    const diffLanes = [
+      stage({ role: 'step', id: 'step-back', lane: 'back' }),
+      stage({ role: 'step', id: 'step-front', lane: 'front' }),
+    ];
+    expect(titleRequired(diffLanes, 0)).toBe(false);
+    expect(titleRequired(diffLanes, 1)).toBe(false);
+    const sameLane = [
+      stage({ role: 'step', id: 'step-a', lane: 'back' }),
+      stage({ role: 'step', id: 'step-b', lane: 'back' }),
+    ];
+    expect(titleRequired(sameLane, 0)).toBe(true);
+    expect(titleRequired(sameLane, 1)).toBe(true);
+  });
+
+  it('роль вне белого списка группы не даёт; индекса нет — false', () => {
+    const withUnknown = [stage({ role: 'deploy' }), stage({ role: 'deploy' })];
+    expect(titleRequired(withUnknown, 0)).toBe(false);
+    expect(titleRequired([stage({ role: 'qa' })], 5)).toBe(false);
+  });
+
+  it('роль и линия триммятся перед сравнением (тот же Normalize, что на бэке)', () => {
+    const padded = [
+      stage({ role: ' qa ', id: 'qa-a' }),
+      stage({ role: 'qa', id: 'qa-b' }),
+    ];
+    expect(titleRequired(padded, 0)).toBe(true);
   });
 });
 

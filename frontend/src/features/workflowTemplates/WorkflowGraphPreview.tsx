@@ -23,7 +23,7 @@ const LABEL_H = 18;
 const COL_GAP = 20;
 const BOW = 28;
 
-export interface GraphNode { id: string; role: string; lane: string | null; presence: string; col: number; x: number; y: number }
+export interface GraphNode { id: string; role: string; lane: string | null; title: string | null; presence: string; col: number; x: number; y: number }
 export interface GraphEdge { from: string; to: string; d: string }
 export interface GraphGroup { x: number; y: number; w: number; h: number }
 export interface GraphLayout {
@@ -43,7 +43,8 @@ export function layoutGraph(stages: WorkflowStage[], compact: boolean): GraphLay
   const nodes: GraphNode[] = [];
   const groups: GraphGroup[] = [];
   const mk = (s: WorkflowStage, col: number, x: number, y: number): GraphNode => ({
-    id: s.id ?? '', role: s.role, lane: s.lane ?? null, presence: s.presence, col, x, y,
+    id: s.id ?? '', role: s.role, lane: s.lane ?? null, title: (s.title ?? '').trim() || null,
+    presence: s.presence, col, x, y,
   });
   let width: number;
   let height = 0;
@@ -141,10 +142,14 @@ export function WorkflowGraphPreview({ stages }: { stages: WorkflowStage[] }): R
         {g.nodes.map(n => {
           const label = ROLE_LABEL[n.role] ?? n.role;
           const lane = n.lane ? LANE_LABEL[n.lane] ?? n.lane : null;
+          // Имя узла — из шаблона (тот же порядок, что nodeTitle в FeatureProcessGraph):
+          // Title, фолбэк — подпись роли с линией. Без этого параллельные этапы одной роли
+          // (qa-plan и qa) дают две неотличимые «Проверки».
+          const name = n.title || `${label}${lane ? ` · ${lane}` : ''}`;
           return (
             <div
               key={n.id}
-              title={`${label} · ${n.id}`}
+              title={`${name} · ${n.id}`}
               style={{
                 position: 'absolute', left: n.x, top: n.y, width: g.nodeW, height: g.nodeH,
                 boxSizing: 'border-box', padding: `0 ${SP.sm}px`, background: C.bgWhite,
@@ -157,7 +162,7 @@ export function WorkflowGraphPreview({ stages }: { stages: WorkflowStage[] }): R
               <span style={{
                 fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-              }}>{label}{lane ? ` · ${lane}` : ''}</span>
+              }}>{name}</span>
               {n.id !== n.role && (
                 <span style={{
                   fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono,

@@ -39,6 +39,16 @@ describe('blankTemplate / forkToProject', () => {
     p.stages[0].prompt = 'изменено';
     expect(g.stages[0].prompt).toBe('x');
   });
+  // Дефект G7: копия обязана нести имена этапов — без них «Создать проектный» терял Title,
+  // и в копии были бы две неотличимые «Проверки».
+  it('копия в проект несёт имена этапов', () => {
+    const g = tpl({ stages: [
+      { role: 'qa', presence: 'optional', id: 'qa-plan', title: 'Проверка плана' },
+      { role: 'qa', presence: 'optional', id: 'qa', title: 'Проверка' },
+    ] });
+    const p = forkToProject(g);
+    expect(p.stages.map(s => s.title)).toEqual(['Проверка плана', 'Проверка']);
+  });
 });
 
 describe('templateSnapshot', () => {
@@ -57,6 +67,17 @@ describe('templateSnapshot', () => {
     expect(templateSnapshot(two({ id: 'step-b' }))).not.toBe(base);
     expect(templateSnapshot(two({ after: [] }))).not.toBe(base);
     expect(templateSnapshot(two({ lane: 'back' }))).not.toBe(base);
+  });
+  // Дефект G7: без имени в снимке правка одного Title не делала бы форму «грязной» —
+  // её нельзя было бы сохранить.
+  it('правка одного имени этапа делает шаблон «грязным»', () => {
+    const two = (t: string | null) => tpl({ stages: [
+      { role: 'qa', presence: 'optional', id: 'qa-plan', title: t },
+      { role: 'qa', presence: 'optional', id: 'qa', title: 'Проверка' },
+    ] });
+    expect(templateSnapshot(two('Проверка плана'))).not.toBe(templateSnapshot(two(null)));
+    expect(templateSnapshot(two('Проверка плана'))).not.toBe(templateSnapshot(two('Проверка плана2')));
+    expect(templateSnapshot(two('Проверка плана'))).toBe(templateSnapshot(two('Проверка плана')));
   });
 });
 
@@ -130,6 +151,15 @@ describe('права и нормализация', () => {
       { role: 'review', presence: 'on', stallMinutes: 999 },
     ] }));
     expect(t.stages.map(s => s.stallMinutes)).toEqual([5, null, 240]);
+  });
+  // Та же нормализация имени, что на сторе (WorkflowTemplateStore.Normalize: trim, «пустая → null»).
+  it('перед отправкой имя этапа триммится; из одних пробелов — null', () => {
+    const t = normalizeForSave(tpl({ stages: [
+      { role: 'qa', presence: 'on', id: 'qa-plan', title: '  Проверка плана ' },
+      { role: 'qa', presence: 'on', id: 'qa', title: '   ' },
+      { role: 'final', presence: 'on' },
+    ] }));
+    expect(t.stages.map(s => s.title)).toEqual(['Проверка плана', null, null]);
   });
 });
 

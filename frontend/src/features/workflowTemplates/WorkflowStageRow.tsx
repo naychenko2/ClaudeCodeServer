@@ -14,7 +14,7 @@ import { TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { useIsMobile } from '../../lib/breakpoints';
 import type { Persona } from '../personas/types';
 import type { SpecialtyCatalogEntry } from '../specialties/types';
-import { PROMPT_LIMIT, STALL_POLICIES } from './workflowTemplateModel';
+import { PROMPT_LIMIT, STALL_POLICIES, TITLE_LIMIT, titleRequired } from './workflowTemplateModel';
 import { listOrNull, parseList, presenceEditable } from './workflowEditorLogic';
 import { afterOptions, normalizeStages } from './workflowGraphModel';
 import type { WorkflowStage, WorkflowStagePresence } from './types';
@@ -74,6 +74,13 @@ export function WorkflowStageRow({
   const fixed = !presenceEditable(stage.role);
   const label = STAGE_ROLE_LABEL[stage.role] ?? stage.role;
   const prompt = stage.prompt ?? '';
+  // Имя этапа для показа (тот же порядок, что nodeTitle в FeatureProcessGraph): имя из шаблона,
+  // фолбэк — подпись роли. Роль и id остаются подписью строки: с именем этапы одной роли
+  // различимы, без него — как раньше (id, когда он отличается от роли).
+  const titleText = (stage.title ?? '').trim();
+  const nameShown = titleText || label;
+  const titleLen = titleText.length;
+  const titleNeeded = titleRequired(stages, index);
   const patch = (p: Partial<WorkflowStage>) => onChange({ ...stage, ...p });
   const mcpOn = stage.mcpAllow ?? [];
   // Ключ, которого уже нет среди выданных, оставляем в списке — иначе правка молча его сотрёт.
@@ -109,7 +116,7 @@ export function WorkflowStageRow({
         type="button"
         onClick={() => setOpen(o => !o)}
         aria-expanded={open}
-        aria-label={`Этап «${label}»`}
+        aria-label={`Этап «${nameShown}»`}
         style={{
           width: '100%', display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left',
           padding: `${SP.md}px`, minHeight: 44, background: 'none', border: 'none', cursor: 'pointer',
@@ -121,7 +128,10 @@ export function WorkflowStageRow({
           style={{ flexShrink: 0, transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.12s' }}
         />
         <span style={{ fontSize: FS.base, fontWeight: 600, flex: 1, minWidth: 0 }}>
-          {label}
+          {nameShown}
+          {titleText && (
+            <span style={{ marginLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{label}</span>
+          )}
           {stageId !== stage.role && (
             <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{stageId}</span>
           )}
@@ -172,6 +182,21 @@ export function WorkflowStageRow({
               mono
               disabled={readOnly}
               placeholder={stage.role}
+            />
+          </Field>
+
+          <Field
+            label="Имя этапа"
+            hint={titleNeeded
+              ? `Этап делит роль и линию с другим этапом — имя обязательно и должно от него отличаться (иначе в списке и на схеме две неотличимые «${label}»). До ${TITLE_LIMIT} символов.`
+              : `Имя для человека: видно в списке этапов и на схеме маршрута. До ${TITLE_LIMIT} символов.`}
+            error={titleLen > TITLE_LIMIT ? `Имя длиннее ${TITLE_LIMIT} символов` : undefined}
+          >
+            <TextField
+              value={stage.title ?? ''}
+              onChange={v => patch({ title: v })}
+              disabled={readOnly}
+              placeholder={label}
             />
           </Field>
 

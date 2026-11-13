@@ -61,6 +61,18 @@ describe('layoutGraph', () => {
     expect(layoutGraph([], false).nodes).toEqual([]);
   });
 
+  // Дефект G7: узел обязан нести имя этапа (Title) — иначе qa-plan и qa дают две
+  // неотличимые «Проверки» (тот же порядок имени, что nodeTitle в FeatureProcessGraph).
+  it('узел несёт имя этапа (Title); без имени — null; крающие пробелы срезаны', () => {
+    const titled = parallelCycle().map(s =>
+      s.id === 'qa-plan' ? { ...s, title: '  Проверка плана ' } : s.id === 'qa' ? { ...s, title: 'Проверка' } : s);
+    const n = Object.fromEntries(layoutGraph(titled, false).nodes.map(x => [x.id, x]));
+    expect(n['qa-plan'].title).toBe('Проверка плана');
+    expect(n['qa'].title).toBe('Проверка');
+    expect(n['step-back'].title).toBeNull();
+    expect(n.plan.title).toBeNull();
+  });
+
   describe('parallel-cycle', () => {
     const edgesExpected = normalizeStages(parallelCycle()).reduce((n, s) => n + (s.after ?? []).length, 0);
 

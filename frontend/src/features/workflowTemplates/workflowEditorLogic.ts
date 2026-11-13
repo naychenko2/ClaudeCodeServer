@@ -59,6 +59,9 @@ export function templateSnapshot(t: WorkflowTemplate): string {
     name: t.name, description: t.description ?? '',
     stages: normalizeStages(t.stages).map(s => ({
       id: s.id, after: s.after, lane: s.lane ?? null,
+      // Имя этапа в снимке обязательно: без него правка одного имени не делала бы форму
+      // «грязной» и не доходила бы до кнопки «Сохранить».
+      title: s.title ?? null,
       role: s.role, presence: s.presence,
       specialty: s.specialty ?? null, personaId: s.personaId ?? null,
       prompt: s.prompt ?? '', tierStrong: s.tierStrong ?? null, tierMedium: s.tierMedium ?? null,
@@ -128,9 +131,17 @@ export async function saveGuarded(opts: {
   }
 }
 
-// Перед отправкой: порог молчания клампится (И3), как это делает сервер.
+// Перед отправкой: порог молчания клампится (И3), имя этапа нормализуется (trim, пустое → null) —
+// как это делает сервер (WorkflowTemplateStore.Normalize: WorkflowRules.NormalizeStall и «пустая → null»).
 export function normalizeForSave(tpl: WorkflowTemplate): WorkflowTemplate {
-  return { ...tpl, stages: tpl.stages.map(s => ({ ...s, stallMinutes: clampStall(s.stallMinutes) })) };
+  return {
+    ...tpl,
+    stages: tpl.stages.map(s => ({
+      ...s,
+      stallMinutes: clampStall(s.stallMinutes),
+      title: (s.title ?? '').trim() || null,
+    })),
+  };
 }
 
 // Переключатель присутствия доступен только у съёмных ролей (у step/merge/final — нет).

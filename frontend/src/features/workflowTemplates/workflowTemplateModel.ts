@@ -6,7 +6,7 @@
 // отвечает 400 со своим списком.
 // Порядок stages = порядок маршрута (по позиции) — модель порядок не меняет.
 
-import type { WorkflowStagePresence, WorkflowStageRole, WorkflowTemplate } from './types';
+import type { WorkflowStage, WorkflowStagePresence, WorkflowStageRole, WorkflowTemplate } from './types';
 
 // Роли этапов: ключи TaskRoles без feature/rework/consult (разрез §0.3) — шаблон не вводит
 // новых видов работ; rework берёт этап step, эпик и consult вне маршрута.
@@ -32,8 +32,30 @@ export const STALL_POLICIES: readonly string[] = ['nudge-alert', 'alert', 'stop-
 // Лимит текста промпта этапа (серверный WorkflowRules.PromptLimit).
 export const PROMPT_LIMIT = 4000;
 
+// Лимит имени этапа (G7, решение контракта a5d0c76e; серверный WorkflowRules.TitleLimit).
+export const TITLE_LIMIT = 40;
+
 export function isNonSkippable(role: string): boolean {
   return (NON_SKIPPABLE as readonly string[]).includes(role);
+}
+
+// Ключ группы имён — тот же, что ValidateTitleGroups на бэке (WorkflowRules.cs:199): роль + линия;
+// линия есть только у step, поэтому группы прочих ролей — по одной роли. Роль вне белого списка
+// группы не даёт (на бэке та же отсечка).
+function titleGroupKey(stage: WorkflowStage): string {
+  return `${(stage?.role ?? '').trim()} ${(stage?.lane ?? '').trim()}`;
+}
+
+// Нужен ли этому этапу Title (G7): он делит пару (Role, Lane) с другим этапом — без имени
+// граф показал бы две неотличимые «Проверки» (qa-plan и qa). Это ПОДСКАЗКА для поля редактора
+// до отправки; истина — за серверным валидатором (его тексты приходят с 400 по id этапа).
+export function titleRequired(stages: WorkflowStage[], index: number): boolean {
+  const cur = stages[index];
+  if (!cur || !(STAGE_ROLES as readonly string[]).includes((cur.role ?? '').trim())) return false;
+  const key = titleGroupKey(cur);
+  return stages.some((s, i) => i !== index && s
+    && (STAGE_ROLES as readonly string[]).includes((s.role ?? '').trim())
+    && titleGroupKey(s) === key);
 }
 
 // Присутствие этапа: возвращает КОПИЮ шаблона с новым presence этапа роли (несущность —
@@ -141,6 +163,13 @@ export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] 
 
     if ((stage.prompt ?? '').length > PROMPT_LIMIT) {
       errors.push(`${label}: текст промпта этапа длиннее ${PROMPT_LIMIT} символов`);
+    }
+
+    // Имя этапа (G7): длина — по каждому этапу, как на бэке (WorkflowRules.cs:153, трим перед
+    // сравнением). Требование группы (обязательность и различность) по одному этапу ответить
+    // нельзя — его скажет сервер (ValidateTitleGroups), редактор покажет отказ у поля.
+    if ((stage.title ?? '').trim().length > TITLE_LIMIT) {
+      errors.push(`${label}: имя этапа длиннее ${TITLE_LIMIT} символов`);
     }
 
     for (const cell of [stage.tierStrong, stage.tierMedium, stage.tierWeak]) {

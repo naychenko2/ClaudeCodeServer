@@ -74,6 +74,8 @@ public class LocalAudioEngineTests
         engine.ScopeRefusal(AudioEditScope.Of(ServerProject)).Should().BeNull();
         engine.ScopeRefusal(AudioEditScope.Of(DeviceProject)).Should().Be(LocalAudioEngine.DeviceProjectReason);
         engine.ScopeRefusal(new AudioEditScope(AudioEditScope.Personal, null)).Should().BeNull("личная область пускает локальный звук");
+        // «Личное» с папкой (ADR-040): ключ personal, Project есть — движок по-прежнему пускает
+        engine.ScopeRefusal(new AudioEditScope(AudioEditScope.Personal, ServerProject)).Should().BeNull("личная область с папкой пускает локальный звук");
     }
 
     [Theory]

@@ -1,13 +1,15 @@
 // Вкладка «Планы и макеты» (волна 4, вариант 5В): сетка карточек-превью (3 колонки,
 // на 360 — одна), клик по карточке — читалка/карточка на всю ширину с возвратом к сетке;
-// порядок документов (cut → design → plan → consult), карточка design с меткой «дизайн»,
+// порядок документов (cut → design → plan → consult), карточка с текстовым тегом роли
+// («разрез», «дизайн») и подписью «автор · дата»,
 // неизвестная роль не роняет сетку, hasText=false → «Текста пока нет»,
 // exists=false не открывает файл, mockupsUnavailable='device', счётчик вкладки,
 // ошибка загрузки текста + «Повторить».
 // «Прочие документы» (FS-F1e): по materials[] из бэка — карточки ровно как пришли
-// (состав и порядок, фронт не фильтрует), клик — onOpenFile(path, { taskId }).
+// (состав и порядок, фронт не фильтрует), клик — onOpenFile(path, { taskId });
+// строка карточки — «каталог · задача {stepRef}» (M28).
 // Старый ответ (materials нет) — прежний путь M7: linkedFiles задач из plans[].mockupPaths
-// (имя + путь), не дублируются с макетами (ни их path, ни файлы макета),
+// (имя + каталог), не дублируются с макетами (ни их path, ни файлы макета),
 // схлопываются между планами и по регистру, входят в счётчик; при 'device' группы нет.
 //
 // Окружение node (без jsdom): fakeDom (mount) + mock api.tasks.get (текст документа).
@@ -18,6 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePlansTab, plansTabCount } from './FeaturePlansTab';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import { getBackNav, clearBackNav, featureBackNavFromTask } from '../../lib/featureBackNav';
+import { dateTimeLabel } from '../chat/feature/featureTime';
 import type { FeaturePage } from '../../types/featureIndex';
 import type { FeaturePlan, FeatureMockup, FeatureMaterial } from '../../types/featurePlans';
 
@@ -44,6 +47,13 @@ vi.mock('../../lib/api', () => ({
 // openTaskInSection (lib/tasks) — запись вызовов: переход в задачу обязан нести проект эпика.
 const mockOpenTask = vi.hoisted(() => ({ calls: [] as { id: string; projectId?: string }[] }));
 vi.mock('../../lib/tasks', () => ({ openTaskInSection: (t: { id: string; projectId?: string }) => { mockOpenTask.calls.push(t); } }));
+
+// Подписи авторов (M27): getPersonaById даёт имя — реальный стор в node недоступен.
+const mockPersonas = vi.hoisted(() => [{ id: 'p-alex', name: 'Александр' }]);
+vi.mock('../../lib/personas', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../../lib/personas')>();
+  return { ...orig, getPersonaById: (id: string) => mockPersonas.find(p => p.id === id) };
+});
 
 function plan(over: Partial<FeaturePlan> = {}): FeaturePlan {
   return {
@@ -124,6 +134,17 @@ function chipTextInRow(container: FNode, rowTitle: string): string | null {
   return chipText;
 }
 
+// Текст строки макета с заданным title (путь), включая метку версии; строка не найдена → null.
+function rowTextByTitle(container: FNode, rowTitle: string): string | null {
+  let row: FNode | null = null;
+  (function walk(n: FNode): void {
+    if (row) return;
+    if (n.nodeType === 1 && n.getAttribute('data-testid') === 'mockup-row' && n.getAttribute('title') === rowTitle) { row = n; return; }
+    for (const c of n.childNodes) walk(c);
+  })(container);
+  return row ? textNodes(row).join('') : null;
+}
+
 // Клик по строке макета с заданным title (путь): ищет mockup-row и вызывает onClick.
 function clickRowByTitle(container: FNode, rowTitle: string): void {
   let row: FNode | null = null;
@@ -177,18 +198,19 @@ describe('FeaturePlansTab', () => {
     expect(rows[3]).toContain('Консультация');
   });
 
-  // === 1a. Роль design: карточка рендерится, глиф и метка читалки — «дизайн» ===
-  // Мутация (убрать design из PLAN_ROLE_LABEL) краснеет: aria-label и метка не «дизайн».
-  it('карточка design: глиф и метка «дизайн»', async () => {
+  // === 1a. Роль design: карточка рендерится, текстовый тег роли и метка читалки — «дизайн» ===
+  // Мутация (убрать design из PLAN_ROLE_LABEL) краснеет: тег и метка не «дизайн».
+  it('карточка design: тег роли «дизайн» и метка читалки', async () => {
     const page = pageData({ plans: [plan({ taskId: 'd1', role: 'design', title: 'Дизайн интерфейса' })] });
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
     const rows = collectText(container, 'plan-row');
     expect(rows.length).toBe(1);
     expect(rows[0]).toContain('Дизайн интерфейса');
-    // Значок роли — с доступным именем «дизайн» (тот же текст, что в roleLabel задач).
-    const glyph = findNodeByAttr(container as FNode, 'data-testid', 'plan-role-glyph');
-    expect(glyph, 'глиф роли design не найден').not.toBeNull();
-    expect(glyph!.getAttribute('aria-label')).toBe('дизайн');
+    // Текстовый тег роли (M27): та же метка, что в шапке читалки; значка-глифа в карточке нет.
+    const tag = findNodeByAttr(container as FNode, 'data-testid', 'plan-role-tag');
+    expect(tag, 'тег роли design не найден').not.toBeNull();
+    expect(textNodes(tag!).join('')).toBe('дизайн');
+    expect(findNodeByAttr(container as FNode, 'data-testid', 'plan-role-glyph'), 'глиф остался в карточке').toBeNull();
     // Читалка: метка роли — «дизайн».
     click(container as FNode, 'plan-row');
     await flush();
@@ -197,8 +219,28 @@ describe('FeaturePlansTab', () => {
     expect(textNodes(role!).join('')).toBe('дизайн');
   });
 
+  // === 1c. Роль cut: текстовый тег «разрез» + заголовок + «автор · дата» (M27) ===
+  // Мутация (убрать тег / автора / дату из PlanCard) краснеет по соответствующему ассерту.
+  it('карточка cut: тег «разрез» и «автор · дата»', () => {
+    const completedAt = '2026-10-19T12:00:00Z';
+    const page = pageData({
+      plans: [plan({ taskId: 'c1', role: 'cut', title: 'Разрез этапа', authorPersonaId: 'p-alex', completedAt })],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const rows = collectText(container, 'plan-row');
+    expect(rows.length).toBe(1);
+    const tag = findNodeByAttr(container as FNode, 'data-testid', 'plan-role-tag');
+    expect(tag, 'тег роли cut не найден').not.toBeNull();
+    expect(textNodes(tag!).join(''), 'тег не «разрез»').toBe('разрез');
+    expect(rows[0]).toContain('Разрез этапа');
+    // «автор · дата»: имя персоны + «дд.мм ЧЧ:ММ». Ожидаемое значение считается тем же
+    // dateTimeLabel — тест не зависит от пояса; формат отдельным ассертом.
+    expect(rows[0], 'в карточке нет «автор · дата»').toContain(`Александр · ${dateTimeLabel(completedAt)}`);
+    expect(rows[0], 'даты в формате «дд.мм ЧЧ:ММ» нет').toMatch(/\d{2}\.\d{2} \d{2}:\d{2}/);
+  });
+
   // === 1b. Неизвестная роль из ответа не роняет сетку: её карточки нет, остальные — на месте ===
-  // Мутация «не фильтровать по роли» (рендерить все plans) краснеет: RoleGlyph падает
+  // Мутация «не фильтровать по роли» (рендерить все plans) краснеет: тег падает
   // на незнакомой роли (деструктурирование undefined в PLAN_ROLE_STYLE[role]).
   it('неизвестная роль не роняет сетку', () => {
     const page = pageData({
@@ -348,6 +390,36 @@ describe('FeaturePlansTab', () => {
     expect(textNodes(chip!).join(''), 'чип в карточке не «заменён»').toBe('заменён');
   });
 
+  // === 6e. Метка версии карточки (M29): «v2 · прошлые версии: 1» у текущей версии,
+  // «v1» у прошлой и у единственной. Мутация (убрать «прошлые версии» из versionLabel)
+  // краснеет: у текущей строки нет счётчика. ===
+  it('метка версии: «v2 · прошлые версии: 1» у текущей, «v1» у прошлой', async () => {
+    const page = pageData({
+      mockups: [
+        mockup({ path: 'docs/mockups/foo-1.html', title: 'foo 1', status: 'approved' }),
+        mockup({ path: 'docs/mockups/foo-2.html', title: 'foo 2', status: 'approved' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    expect(rowTextByTitle(container as FNode, 'docs/mockups/foo-2.html'), 'метки текущей версии нет').toContain('v2 · прошлые версии: 1');
+    // Прошлая версия — только «v1»: её состояние говорит чип «заменён».
+    click(container as FNode, 'mockup-past-toggle');
+    await flush();
+    const past = rowTextByTitle(container as FNode, 'docs/mockups/foo-1.html');
+    expect(past, 'строки прошлой версии нет').not.toBeNull();
+    expect(past!).toContain('v1');
+    expect(past!, '«прошлые версии» попала в карточку прошлой версии').not.toContain('прошлые версии');
+  });
+
+  it('метка версии: единственный макет — «v1», без «прошлые версии»', () => {
+    const page = pageData({ mockups: [mockup({ path: 'docs/mockups/bar.html', title: 'bar', status: 'approved' })] });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
+    const text = rowTextByTitle(container as FNode, 'docs/mockups/bar.html');
+    expect(text, 'строки единственного макета нет').not.toBeNull();
+    expect(text!).toContain('v1');
+    expect(text!, '«прошлые версии» появилась без прошлых версий').not.toContain('прошлые версии');
+  });
+
   // === 6c. device без планов (major 4): плашка, а не «нет ничего» ===
   it('device без планов → плашка «на устройстве», не «нет ничего»', () => {
     const page = pageData({ plans: [], mockups: [], mockupsUnavailable: 'device' });
@@ -415,7 +487,7 @@ describe('FeaturePlansTab', () => {
   // === 7b. «Прочие документы» (M7): linkedFiles задач показаны карточками (имя + путь),
   // путь, покрытый макетом, не дублируется; клик → onOpenFile(путь).
   // Мутация «не рисовать группу» (otherDocs не проходит в сетку) краснеет: other-doc-row нет. ===
-  it('прочие документы: linkedFiles задачи — карточки (имя + путь), путь макета не дублируется', () => {
+  it('прочие документы: linkedFiles задачи — карточки (имя + каталог), путь макета не дублируется', () => {
     const onOpenFile = vi.fn();
     const page = pageData({
       plans: [plan({
@@ -428,9 +500,9 @@ describe('FeaturePlansTab', () => {
     const rows = collectText(container, 'other-doc-row');
     expect(rows.length).toBe(2);
     expect(rows[0]).toContain('031-feature.md');
-    expect(rows[0]).toContain('docs/adr/031-feature.md');
+    expect(rows[0]).toContain('docs/adr');
     expect(rows[1]).toContain('design-note.md');
-    expect(rows[1]).toContain('notes/design-note.md');
+    expect(rows[1]).toContain('notes');
     // Путь, покрытый макетом (его path или файл), в «прочих документах» не дублируется.
     expect(rows.some(r => r.includes('docs/mockups/x.html'))).toBe(false);
     // Клик по карточке → onOpenFile с путём.
@@ -451,8 +523,10 @@ describe('FeaturePlansTab', () => {
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false }));
     const docRows = collectText(container, 'other-doc-row');
     expect(docRows.length).toBe(2);
-    expect(docRows[0]).toContain('docs/adr/031.md');
-    expect(docRows[1]).toContain('docs/spec-x.md');
+    expect(docRows[0]).toContain('031.md');
+    expect(docRows[0]).toContain('docs/adr');
+    expect(docRows[1]).toContain('spec-x.md');
+    expect(docRows[1]).toContain('docs');
     // Счётчик = видимые документы (2) + прочие (2); карточки ровно те же.
     expect(plansTabCount(page)).toBe(4);
     expect(collectText(container, 'plan-row').length + docRows.length).toBe(plansTabCount(page));
@@ -533,9 +607,12 @@ describe('FeaturePlansTab', () => {
     const rows = collectText(container, 'other-doc-row');
     // Ровно materials и в их порядке; старый путь (docs/adr/OLD.md) не подмешан.
     expect(rows.length).toBe(3);
-    expect(rows[0]).toContain('docs/adr/031-feature.md');
-    expect(rows[1]).toContain('docs/mockups/x.html');
-    expect(rows[2]).toContain('notes/design-note.md');
+    expect(rows[0]).toContain('031-feature.md');
+    expect(rows[0]).toContain('docs/adr');
+    expect(rows[1]).toContain('x.html');
+    expect(rows[1]).toContain('docs/mockups');
+    expect(rows[2]).toContain('design-note.md');
+    expect(rows[2]).toContain('notes');
     expect(rows.some(r => r.includes('docs/adr/OLD.md'))).toBe(false);
     // Клик — ровно один вызов: путь + taskId автора.
     click(container as FNode, 'other-doc-row');
@@ -580,6 +657,36 @@ describe('FeaturePlansTab', () => {
     expect(plansTabCount(page)).toBe(0);
     const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials }));
     expect(collectText(container, 'other-doc-row').length).toBe(0);
+  });
+
+  // === 7l. Строка карточки материала (M28): «имя · каталог · задача {stepRef}» — stepRef
+  // автора из run; нет stepRef — короткий id (первые 8 знаков taskId, та же форма, что
+  // ссылки на задачи в MarkdownViewer/FeatureStepDetails). Мутация (убрать «задача …» из
+  // OtherDocCard) краснеет: в строке нет ссылки. ===
+  it('materials: «имя · каталог · задача B1» по шагу автора из run', () => {
+    const page = pageData({
+      run: {
+        featureId: 'f1', state: 'running',
+        steps: [{ id: 'b1c2d3e4-f5a6', title: 'Шаг бэка', stepRef: 'B1' }],
+        reviews: [], qa: [], final: null, merge: null,
+        verdicts: { accepted: 0, acceptedWithRemarks: 0, returned: 0, withdrawn: 0, loops: 0 },
+        progress: 0, ready: false,
+      } as FeaturePage['run'],
+      materials: [
+        material({ path: 'docs/adr/032-workflow-templates.md', taskId: 'b1c2d3e4-f5a6' }),
+        material({ path: 'docs/spec.md', taskId: 'a1b2c3d4-e5f6' }),
+      ],
+    });
+    const { container } = mount(createElement(FeaturePlansTab, { page, isMobile: false, materials: page.materials }));
+    const rows = collectText(container, 'other-doc-row');
+    expect(rows.length).toBe(2);
+    expect(rows[0], 'в карточке нет имени').toContain('032-workflow-templates.md');
+    expect(rows[0], 'в карточке нет каталога').toContain('docs/adr');
+    expect(rows[0], 'в карточке нет «задача B1»').toContain('задача B1');
+    // Нет шага с таким id в run — короткий id taskId.
+    expect(rows[1]).toContain('spec.md');
+    expect(rows[1]).toContain('docs');
+    expect(rows[1], 'нет ссылки на короткий id').toContain('задача a1b2c3d4');
   });
 
   // === 8. Markdown через ОБЩИЙ рендер (лента): GFM-таблица → <table> ===

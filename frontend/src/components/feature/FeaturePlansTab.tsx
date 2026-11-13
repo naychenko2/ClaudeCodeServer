@@ -5,14 +5,15 @@
 // всю ширину с «‹ Все документы» для возврата к сетке; клик по «прочему документу» —
 // открытие файла проекта (onOpenFile).
 //
-// Документы (plans): порядок cut → design → plan → consult; карточка — значок роли,
-// заголовок, автор, время, «без текста». Читалка — FeaturePlanReader (markdown через
-// общий рендер). Прочие документы (FS-F1e): materials[] из бэка (файлы задач фичи
-// с taskId автора — ADR, спеки, записки): фронт их не фильтрует — состав и порядок
-// ровно как пришли; клик — onOpenFile(path, { taskId }). Старый ответ (materials нет) —
-// прежний путь: plans[].mockupPaths, не покрытые ни одним макетом (M7).
-// карточка «имя файла + путь». Макеты — FeatureMockups (карточки-превью с миниатюрой-
-// заглушкой, карточка, «Прошлые версии»).
+// Документы (plans): порядок cut → design → plan → consult; карточка — текстовый тег роли
+// (тот же текст и цвета, что метка читалки), заголовок, «автор · дата», «без текста» (M27).
+// Читалка — FeaturePlanReader (markdown через общий рендер). Прочие документы (FS-F1e):
+// materials[] из бэка (файлы задач фичи с taskId автора — ADR, спеки, записки): фронт их не
+// фильтрует — состав и порядок ровно как пришли; клик — onOpenFile(path, { taskId });
+// карточка — «имя · каталог · задача {stepRef}» (M28). Старый ответ (materials нет) —
+// прежний путь: plans[].mockupPaths, не покрытые ни одним макетом (M7), карточка без
+// ссылки на задачу. Макеты — FeatureMockups (карточки-превью с миниатюрой-заглушкой,
+// карточка, «Прошлые версии»).
 //
 // Состояния: документов нет, макеты есть → «Планов пока нет…»; mockupsUnavailable='device'
 // → «Макеты локального проекта видны только на устройстве» (и «прочих документов» нет:
@@ -23,12 +24,11 @@ import { ChevronLeft, FileText, MessageCircle } from 'lucide-react';
 import { C, R, FS, FONT, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { getPersonaById } from '../../lib/personas';
-import { dateOnly, hhmm } from '../chat/feature/featureTime';
+import { dateTimeLabel } from '../chat/feature/featureTime';
 import { splitMockups, isCurrentOfGroup } from '../../lib/mockupVersions';
 import { recordFeatureReturn } from '../../lib/featureBackNav';
 import { openTaskInSection } from '../../lib/tasks';
-import { RoleGlyph } from './FeaturePlanReader';
-import { FeaturePlanReader } from './FeaturePlanReader';
+import { FeaturePlanReader, PLAN_ROLE_LABEL, PLAN_ROLE_STYLE } from './FeaturePlanReader';
 import { Button } from '../ui/Button';
 import { buildNavMarks, type NavMarks } from '../../lib/featureNavMarks';
 import { MockupCard, MockupListSection, MockupDeviceNotice } from './FeatureMockups';
@@ -61,7 +61,9 @@ export interface FeaturePlansTabProps {
 // Колонки сетки: 3 на десктопе, 1 на 360 (вариант 5В: «на 360 карточки в одну колонку»).
 const gridColumns = (isMobile: boolean) => (isMobile ? '1fr' : 'repeat(3, minmax(0, 1fr))');
 
-// Карточка-превью документа (сетка): значок роли · заголовок · автор · время · «без текста».
+// Карточка-превью документа (сетка, M27): текстовый тег роли · заголовок · «автор · дата» ·
+// «без текста». Тег — тот же текст и цвета, что метка роли в читалке (PLAN_ROLE_*): один
+// документ подписан одинаково и в списке, и в читалке.
 // Высота карточки не зависит от ширины: сетка сама сужает колонки на 360 (одна колонка).
 function PlanCard({ plan, onSelect }: {
   plan: FeaturePlan; onSelect: () => void;
@@ -69,7 +71,8 @@ function PlanCard({ plan, onSelect }: {
   const [hover, setHover] = useState(false);
   const persona = plan.authorPersonaId ? getPersonaById(plan.authorPersonaId) : undefined;
   const authorName = persona?.name ?? (plan.authorPersonaId ? plan.authorPersonaId : null);
-  const time = plan.completedAt ? `${dateOnly(plan.completedAt)} · ${hhmm(plan.completedAt)}` : null;
+  // «12.11 14:20» — дата и время одной меткой (формат макета, локальный пояс).
+  const time = dateTimeLabel(plan.completedAt);
   return (
     <div
       data-testid="plan-row"
@@ -90,7 +93,10 @@ function PlanCard({ plan, onSelect }: {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-        <RoleGlyph role={plan.role} />
+        {/* Текстовый тег роли (M27): та же метка, что в шапке читалки (plan-reader-role). */}
+        <span data-testid="plan-role-tag" style={{ fontSize: FS.xs, fontWeight: 600, color: PLAN_ROLE_STYLE[plan.role].fg, background: PLAN_ROLE_STYLE[plan.role].bg, borderRadius: R.sm, padding: '0 6px', whiteSpace: 'nowrap', flexShrink: 0 }}>
+          {PLAN_ROLE_LABEL[plan.role]}
+        </span>
         {/* Заголовок — до двух строк (макет): line-clamp 2, строка растёт (minHeight). */}
         <span style={{ fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {plan.title}
@@ -170,16 +176,21 @@ function otherDocPaths(plans: FeaturePlan[], mockups: FeatureMockup[]): string[]
 }
 
 // Элемент группы «Прочие документы»: материал из бэка (FS-F1e) или, для старого ответа
-// (без materials), путь из plans[].mockupPaths — без автора.
-type OtherDocItem = { path: string; taskId?: string };
+// (без materials), путь из plans[].mockupPaths — без автора. taskRef — видимая ссылка на
+// задачу-автора (M28): stepRef задачи, иначе её короткий id.
+type OtherDocItem = { path: string; taskId?: string; taskRef?: string };
 
-// Карточка «прочего документа»: имя файла + путь (mono). Клик → onOpenFile (когда дан;
-// без него карточка не интерактивна — не обещаем то, что не можем). Для материала —
-// с taskId автора (вьюер откроет файл из дерева задачи); для пути старого ответа —
-// как прежде, без opts.
-function OtherDocCard({ path, onOpen }: { path: string; onOpen?: () => void }) {
+// Карточка «прочего документа» (M28): имя файла + строка «каталог · задача {ref}» (mono).
+// Каталог вместо полного пути: путь целиком — в подсказке (title) и в onOpenFile.
+// Клик → onOpenFile (когда дан; без него карточка не интерактивна — не обещаем то,
+// что не можем). Для материала — с taskId автора (вьюер откроет файл из дерева задачи);
+// для пути старого ответа — как прежде, без opts.
+function OtherDocCard({ path, taskRef, onOpen }: { path: string; taskRef?: string; onOpen?: () => void }) {
   const [hover, setHover] = useState(false);
   const name = path.split('/').pop() || path;
+  const slash = path.lastIndexOf('/');
+  const dir = slash > 0 ? path.slice(0, slash) : null;
+  const sub = [dir, taskRef ? `задача ${taskRef}` : null].filter(Boolean).join(' · ');
   return (
     <div
       data-testid="other-doc-row"
@@ -206,9 +217,11 @@ function OtherDocCard({ path, onOpen }: { path: string; onOpen?: () => void }) {
           {name}
         </span>
       </div>
-      <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {path}
-      </span>
+      {sub && (
+        <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {sub}
+        </span>
+      )}
     </div>
   );
 }
@@ -231,10 +244,23 @@ export function FeaturePlansTab({ page, isMobile = false, materials, onOpenFile,
   // Старый ответ (materials нет) — прежний путь по ВСЕМ планам (материалы фичи не зависят
   // от того, чья карточка показана). При 'device' группы нет: файлы локального проекта на
   // устройстве, страница их не откроет — та же причина, что у плашки макетов «на устройстве».
+  // Ссылки задач для строки «прочих документов» (M28): stepRef из задач этого run
+  // (epic/steps/reviews/qa/final/merge/cut/plan); у задачи без stepRef (план, разрез,
+  // консультация) или отсутствующей в run (старые ответы) — короткий id, как в других
+  // подписях проекта («Приёмка · {id}»): ссылка есть всегда, выдуманного шага нет.
+  const taskRefs = useMemo(() => {
+    const refs = new Map<string, string>();
+    const add = (t?: { id: string; stepRef?: string | null } | null) => { if (t?.stepRef) refs.set(t.id, t.stepRef); };
+    add(page.run.epic); add(page.run.final); add(page.run.merge);
+    for (const l of [page.run.steps, page.run.reviews, page.run.qa, page.run.cut, page.run.plan]) {
+      for (const t of l ?? []) add(t);
+    }
+    return refs;
+  }, [page.run]);
   const otherDocs: OtherDocItem[] = device
     ? []
     : materials
-      ? materials.map(m => ({ path: m.path, taskId: m.taskId }))
+      ? materials.map(m => ({ path: m.path, taskId: m.taskId, taskRef: taskRefs.get(m.taskId) ?? m.taskId.slice(0, 8) }))
       : otherDocPaths(page.plans ?? [], mockups).map(path => ({ path }));
 
   // Сетка — состояние по умолчанию (5В: «сначала сетка карточек»). Если выбранный
@@ -296,7 +322,7 @@ export function FeaturePlansTab({ page, isMobile = false, materials, onOpenFile,
               <div data-testid="plans-grid-other-docs" style={{ display: 'grid', gridTemplateColumns: gridColumns(isMobile), gap: SP.md }}>
                 {otherDocs.map(d => (
                   // Идентичность карточки — path (бэковый дедуп гарантирует уникальность), автор — taskId.
-                  <OtherDocCard key={d.path} path={d.path} onOpen={onOpenFile ? () => (d.taskId ? onOpenFile(d.path, { taskId: d.taskId }) : onOpenFile(d.path)) : undefined} />
+                  <OtherDocCard key={d.path} path={d.path} taskRef={d.taskRef} onOpen={onOpenFile ? () => (d.taskId ? onOpenFile(d.path, { taskId: d.taskId }) : onOpenFile(d.path)) : undefined} />
                 ))}
               </div>
             </div>

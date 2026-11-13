@@ -1,7 +1,7 @@
 // Группа «Макеты» вкладки «Планы и макеты» (волна 4, вариант 5В).
 //
 // Сетка карточек-превью (3 колонки на десктопе, 1 на 360): миниатюра-заглушка
-// 100%×64, название, статус-чип, «дата · N версий», чип «не в master». Клик —
+// 100%×64, название, статус-чип, метка версии «vN · прошлые версии: K» (M29), чип «не в master». Клик —
 // карточка макета на всю ширину (деталь): метка «макет», название, статус, автор
 // «чат · задача» (при taskId), путь, большая заглушка с «Открыть макет» (первый
 // существующий html → onOpenFile; exists:false → disabled «макет появится после
@@ -21,8 +21,7 @@ import { NavTargetButton } from './NavTargetButton';
 import { EMPTY_NAV_MARKS, type NavMarks } from '../../lib/featureNavMarks';
 import { openTaskInSection } from '../../lib/tasks';
 import { getPersonaById } from '../../lib/personas';
-import { dateOnly } from '../chat/feature/featureTime';
-import { MOCKUP_STATUS_LABEL, MOCKUP_STATUS_STYLE, mainHtmlFile, versionCounts, isCurrentOfGroup } from '../../lib/mockupVersions';
+import { MOCKUP_STATUS_LABEL, MOCKUP_STATUS_STYLE, mainHtmlFile, parseMockupVersion, isCurrentOfGroup } from '../../lib/mockupVersions';
 import type { FeatureMockup, FeatureMockupStatus, FeaturePlan } from '../../types/featurePlans';
 
 // Статус-чип макета (R.sm, FS.xs полужирный; цвета — макет §состояния).
@@ -120,6 +119,21 @@ export function MockupThumb({ large, preview, isMobile = false }: { large?: bool
   );
 }
 
+// Метка версии карточки (M29): «v2 · прошлые версии: 1» для текущей версии группы,
+// «v1» для единственной; для прошлой версии — только «v{позиция}» (её состояние говорит
+// чип «заменён»/«отклонён»). Позиция — ранг версии в группе по корню имени: без хвоста
+// = 0-я, число = своё значение, «-final» — последняя (тот же порядок, что currentVersion).
+function versionLabel(m: FeatureMockup, all: FeatureMockup[]): string {
+  const { root, version } = parseMockupVersion(m.path);
+  const rank = (v: number | 'final' | null): number => (v === 'final' ? Number.MAX_SAFE_INTEGER : typeof v === 'number' ? v : 0);
+  const group = all.filter(x => parseMockupVersion(x.path).root === root);
+  const ranks = group.map(x => rank(parseMockupVersion(x.path).version)).sort((a, b) => a - b);
+  const pos = ranks.indexOf(rank(version)) + 1;
+  if (!isCurrentOfGroup(m, all)) return `v${pos}`;
+  const past = group.length - 1;
+  return past > 0 ? `v${pos} · прошлые версии: ${past}` : `v${pos}`;
+}
+
 // «не в master»: есть html, но ни один не существует (макет появится после мержа).
 function notInMaster(m: FeatureMockup): boolean {
   const hasHtml = m.files.some(f => f.path.endsWith('.html'));
@@ -138,7 +152,6 @@ export interface MockupListSectionProps {
 // Раздел «Макеты · N» в сетке: живые карточки + «Прошлые версии · N» (свёрнуто).
 export function MockupListSection({ mockups, onSelect, isMobile = false }: MockupListSectionProps) {
   const [pastOpen, setPastOpen] = useState(false);
-  const counts = versionCounts(mockups);
   // Живые = текущая версия группы, не отклонённые; прошлые — остальное.
   const live = mockups.filter(m => m.status !== 'rejected' && isCurrentOfGroup(m, mockups));
   const past = mockups.filter(m => !live.includes(m));
@@ -153,7 +166,7 @@ export function MockupListSection({ mockups, onSelect, isMobile = false }: Mocku
         <>
           <div data-testid="plans-grid-mockups" style={{ display: 'grid', gridTemplateColumns: columns, gap: SP.md }}>
             {live.map(m => (
-              <MockupPreviewCard key={m.path} m={m} versions={counts.get(m.path) ?? 1} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
+              <MockupPreviewCard key={m.path} m={m} label={versionLabel(m, mockups)} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
             ))}
           </div>
           {past.length > 0 && (
@@ -176,7 +189,7 @@ export function MockupListSection({ mockups, onSelect, isMobile = false }: Mocku
                 <div data-testid="plans-grid-mockups-past" style={{ display: 'grid', gridTemplateColumns: columns, gap: SP.md }}>
                   {past.map(m => (
                     // «заменён» — версия не текущая в группе; текущая, но отклонённая — «отклонён» (свой статус).
-                    <MockupPreviewCard key={m.path} m={m} versions={counts.get(m.path) ?? 1} dimmed replaced={!isCurrentOfGroup(m, mockups)} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
+                    <MockupPreviewCard key={m.path} m={m} label={versionLabel(m, mockups)} dimmed replaced={!isCurrentOfGroup(m, mockups)} isMobile={isMobile} onSelect={() => onSelect?.(m.path)} />
                   ))}
                 </div>
               )}
@@ -229,12 +242,11 @@ function EmptyRow({ text, isMobile }: { text: string; isMobile: boolean }) {
   );
 }
 
-// Карточка-превью макета в сетке: миниатюра · название · статус-чип · «дата · N версий» · «не в master».
-function MockupPreviewCard({ m, versions, dimmed, replaced, isMobile, onSelect }: {
-  m: FeatureMockup; versions: number; dimmed?: boolean; replaced?: boolean; isMobile: boolean; onSelect: () => void;
+// Карточка-превью макета в сетке: миниатюра · название · статус-чип · метка версии · «не в master».
+function MockupPreviewCard({ m, label, dimmed, replaced, isMobile, onSelect }: {
+  m: FeatureMockup; label: string; dimmed?: boolean; replaced?: boolean; isMobile: boolean; onSelect: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const date = m.modifiedAt ? dateOnly(m.modifiedAt) : null;
   const nMaster = notInMaster(m);
   return (
     <div
@@ -265,7 +277,7 @@ function MockupPreviewCard({ m, versions, dimmed, replaced, isMobile, onSelect }
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
         <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {date ? `${date} · ` : ''}{versions} {versions === 1 ? 'версия' : 'версий'}
+          {label}
         </span>
         {nMaster && (
           <span data-testid="mockup-not-in-master" style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, border: `1px dashed ${C.dashed}`, borderRadius: R.sm, padding: '0 5px', whiteSpace: 'nowrap', flexShrink: 0 }}>

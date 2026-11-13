@@ -284,6 +284,17 @@ describe('FeatureReviewTab: сборка страницы', () => {
     }
   });
 
+  // === Кнопка резюме (M30): на «Разборе» она называется «Резюме фичи»; старой подписи
+  // «Анализ моделью» на странице нет ни в каком виде. Мутация (вернуть {a.label} в
+  // FeatureAnalysisLine) краснеет по обоим ассертам. ===
+  it('кнопка строки итога — «Резюме фичи»; «Анализ моделью» в DOM нет', () => {
+    const c = renderTab();
+    const btn = findNodeByAttr(c, 'data-testid', 'analysis-line-summary');
+    expect(btn, 'кнопка резюме не найдена').not.toBeNull();
+    expect(textNodes(btn!).join(''), 'подпись кнопки не «Резюме фичи»').toBe('Резюме фичи');
+    expect(textNodes(c as never).join(''), 'старая подпись осталась на странице').not.toContain('Анализ моделью');
+  });
+
   it('источник и полнота цифр — та же строка, что на «Статистике» (AccuracyBadges)', () => {
     const c = renderTab();
     const badges = findNodeByAttr(c, 'data-testid', 'stats-accuracy') as unknown as AnyNode;

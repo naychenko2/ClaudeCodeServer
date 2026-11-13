@@ -623,7 +623,7 @@ describe('FeatureStatsTab: «тихо» без Ганта (GC-F12)', () => {
   });
 
   // Строки «тихо» на Ганте больше нет (GC-F12); с Ш4 сигнал несёт тревога страницы
-  // (FeaturePageAlert), а строка анализа остаётся с одним «Анализ моделью» — без фразы.
+  // (FeaturePageAlert), а строка анализа остаётся с одним «Резюме фичи» — без фразы.
   it('без stats — сводки нет; сигнал «тихо» в строке не повторяется (его говорит тревога страницы)', () => {
     installFakeDom();
     const run: FeatureRun = { ...mkGanttRun(), quiet: true, lastActivityAt: '2026-10-20T17:10:00Z' };
@@ -633,7 +633,7 @@ describe('FeatureStatsTab: «тихо» без Ганта (GC-F12)', () => {
     expect(line, 'строка анализа на месте').not.toBeNull();
     const lineText = textNodes(line as never).join('');
     expect(lineText, 'сигнал «тихо» — не в строке').not.toContain('тихо');
-    expect(lineText, 'у строки остаётся «Анализ моделью»').toContain('Анализ моделью');
+    expect(lineText, 'у строки остаётся «Резюме фичи»').toContain('Резюме фичи');
   });
 });
 

@@ -46,10 +46,10 @@ type C = ReturnType<typeof mount>['container'];
 const text = (c: C) => textNodes(c).join(' ');
 const byId = (c: C, id: string) => findNodeByAttr(c, 'data-testid', id);
 
-async function render(props: { proposal?: { templateId: string; scope: 'global'; skipped: string[] } | null; confirmed?: ConfirmedRoute | null; routeRequired?: boolean }) {
+async function render(props: { sheetOpenRequest?: boolean; proposal?: { templateId: string; scope: 'global'; skipped: string[] } | null; confirmed?: ConfirmedRoute | null; routeRequired?: boolean }) {
   const { container } = mount(createElement(FeatureWorkflowConfirm, {
     featureId: 'f1', proposal: props.proposal, confirmed: props.confirmed ?? null,
-    routeRequired: props.routeRequired, isMobile: true, quiet: true,
+    routeRequired: props.routeRequired, isMobile: true, quiet: true, sheetOpenRequest: props.sheetOpenRequest,
   }));
   await act(async () => { await new Promise(r => setTimeout(r, 0)); });
   return container;
@@ -110,5 +110,24 @@ describe('FeatureWorkflowConfirm: мобильная строка и шторк�
     const t = text(c);
     expect(t).toContain('Подобрать заново');
     expect(t).not.toContain('Подобрать ещё раз');
+  });
+
+  it('подтверждённый маршрут в шторке: подвал — только «Закрыть»', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ confirmed: CONFIRMED, sheetOpenRequest: true });
+    const footer = text(byId(c, 'sheet-footer') as unknown as C);
+    expect(footer).toContain('Закрыть');
+    expect(footer).not.toContain('Подтвердить маршрут');
+    expect(footer).not.toContain('Подобрать заново');
+  });
+
+  it('тач-цели: «Посмотреть» и кнопки подвала высотой не меньше 40', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ proposal: { templateId: 'full-cycle', scope: 'global', skipped: [] } });
+    const minH = (id: string) => (reactProps(byId(c, id)!)!.style as { minHeight?: number }).minHeight;
+    expect(minH('feature-workflow-confirm-mobile-open')).toBeGreaterThanOrEqual(40);
+    await open(c);
+    expect(minH('feature-workflow-confirm-submit')).toBeGreaterThanOrEqual(40);
+    expect(minH('feature-workflow-confirm-recommend')).toBeGreaterThanOrEqual(40);
   });
 });

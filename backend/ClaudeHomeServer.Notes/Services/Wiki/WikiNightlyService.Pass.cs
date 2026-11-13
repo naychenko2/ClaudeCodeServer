@@ -635,13 +635,13 @@ public sealed partial class WikiNightlyService
 
     /// <summary>Отказ «слот движка занят» (LocalEngineSlotRefusalException, WN-4): причина
     /// доезжает до ночи дословно — «локальный движок «…»: занят: слота не дождались (…, занято N
-    /// из M)» (LocalEngineBusyTracker.cs:224, обёртка passName в WikiIngestService.cs:788), и
-    /// нулевой вход подтверждает, что модель не звалась. В ряд выбывания не входит: движок занят,
-    /// а не мёртв (ApplyResult обнуляет его ряд через NoteLive); но чат с таким отказом не
-    /// повторяет свою судьбу до следующей ночи — координатор отдаёт его один раз другому
-    /// исполнителю (тот же лимит повтора, что у мёртвого: не больше одного на чат).</summary>
+    /// из M)» (метка ReasonMarker, LocalEngineBusyTracker.cs:224; обёртка passName в
+    /// WikiIngestService.cs:788), и нулевой вход подтверждает, что модель не звалась. Опознание
+    /// держится общей константы, не местного литерала: правка формулировки меняет его заодно.
+    /// В ряд выбывания не входит: движок занят, а не мёртв (ApplyResult обнуляет его ряд через
+    /// NoteLive); чат с таким отказом координатор отдаёт один раз другому исполнителю.</summary>
     private static bool IsSlotRefusalRejection(WikiChatIngestService.ChatResult r) =>
-        r.InputTokens == 0 && r.Reason?.Contains("занят: слота не дождались", StringComparison.Ordinal) == true;
+        r.InputTokens == 0 && r.Reason?.Contains(LocalEngineSlotRefusalException.ReasonMarker, StringComparison.Ordinal) == true;
 
     /// <summary>Имя исполнителя для журнала и итога: имя движка из списка стора; путь без
     /// названного исполнителя называется маршрутом места (имени движка там нет, J-W2).</summary>

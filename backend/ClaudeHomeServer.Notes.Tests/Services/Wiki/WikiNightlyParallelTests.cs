@@ -1140,6 +1140,41 @@ public class WikiNightlyParallelTests : IDisposable
         last.Rejected.Should().Be(1, "отказ занятости — обычный отказ строки итога");
     }
 
+    [Fact]
+    public async Task SlotRefusal_RecognizedBySharedMarker_BothRefusalReasons()
+    {
+        // Опознание отказа держится общей метки LocalEngineSlotRefusalException.ReasonMarker, а
+        // не текста теста: причина здесь собрана из самого исключения при обеих причинах отказа
+        // («очередь полна» и «вышло время ожидания») — их сообщения различаются всем, кроме этой
+        // метки, поэтому опознание не привязано к формулировке и правка её в Core не выключает
+        // единственный повтор. Мутация «сравнивать IsSlotRefusalRejection по другой строке» →
+        // оба первых assert красные: ни один чат не добран, итог error, а не completed.
+        Configure();
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 2), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+
+        await Tick(Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            return engine == "local"
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: " + new LocalEngineSlotRefusalException(
+                        "local", chat == "c1" ? LocalTurnRefusal.QueueFull : LocalTurnRefusal.Timeout, 4, 4).Message,
+                    [], InputTokens: 0)
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeNothingNew, null, []);
+        }));
+
+        _calls.Count(c => c.Chat == "c1").Should().Be(2, "отказ «очередь полна» опознан: чат добирает другой исполнитель");
+        _calls.Count(c => c.Chat == "c2").Should().Be(2, "отказ «вышло время ожидания» опознан тем же признаком");
+        _calls.Should().Contain(c => c.Chat == "c1" && c.Engine == "gemma");
+        _calls.Should().Contain(c => c.Chat == "c2" && c.Engine == "gemma");
+        var last = Last();
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeCompleted, "занятость — не смерть: ряд не растёт, ночь доиграна");
+        last.Rejected.Should().Be(2, "оба отказа — обычные отказы строки итога");
+    }
+
     // ─── подмены ─────────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner

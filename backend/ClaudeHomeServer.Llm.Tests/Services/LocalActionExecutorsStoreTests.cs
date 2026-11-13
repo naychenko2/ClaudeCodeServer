@@ -21,6 +21,8 @@ namespace ClaudeHomeServer.Tests.Services;
 //   не становится исполнителем и не роняет чтение;
 // • та же судьба у битой СТРОКИ списка: «"executors":[null]» и элемент без имени —
 //   пропуск с Warning, а не NRE в TryGet / LocalExecutorsFor / GET /api/usage;
+// • повтор имени движка в правленном руками файле: остаётся ПЕРВАЯ строка (порядок =
+//   приоритет), дубли выпадают — иначе два кандидата на одном физическом движке;
 // • числа из правленного руками файла урезаются при чтении до тех же границ, что держит
 //   Validate: maxTotal 1..MaxTotalLimit, parallel 1..потолок движка.
 public class LocalActionExecutorsStoreTests
@@ -330,6 +332,27 @@ public class LocalActionExecutorsStoreTests
         Assert.All(cfg.Executors, e => Assert.False(string.IsNullOrWhiteSpace(e.Engine)));
     }
 
+    [Theory]
+    // Файл правят руками: строку копируют. Validate при записи повтор запрещает (:131), в
+    // чтении его держит Load: остаётся ПЕРВАЯ строка — порядок списка есть приоритет, а две
+    // строки одного движка дали бы два кандидата в LocalExecutorsFor и до 2× его потолка
+    // слотов на одном физическом движке. Регистр имени не меняет (тот же ключ, что у Validate).
+    [InlineData("""{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"gemma","parallel":1},{"engine":"local","parallel":1},{"engine":"local","parallel":2},{"engine":"gemma","parallel":2}]}}""")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"gemma","parallel":1},{"engine":"Gemma","parallel":2},{"engine":"local","parallel":1},{"engine":"LOCAL","parallel":2}]}}""")]
+    public void Load_DuplicateEngine_KeepsFirstLineOthersInOrder(string json)
+    {
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir), json);
+        var store = Store(dir, Engines(("gemma", 2)));
+
+        var cfg = store.TryGet(Key);
+        Assert.NotNull(cfg);
+        // Первая строка каждого имени — со своими числами (parallel 1), хвостовые дубли
+        // выпали; порядок остальных имён — прежний.
+        Assert.Equal(["gemma", "local"], cfg.Executors.Select(e => e.Engine));
+        Assert.Equal([1, 1], cfg.Executors.Select(e => e.Parallel));
+    }
+
     [Fact]
     public void Load_HandEditedNumbers_ClampedToTheBoundsValidateEnforces()
     {
@@ -498,5 +521,23 @@ public class LocalActionExecutorsStoreTests
             """{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"gemma","parallel":1},{"engine":"claude-sonnet-4-5","parallel":1}]}}""");
         var (runner, _) = Stand(dir, Engines(("gemma", 2)));
         Assert.Equal(["gemma"], runner.LocalExecutorsFor(Key).Select(e => e.Engine));
+    }
+
+    [Fact]
+    public void LocalExecutorsFor_DuplicateEngineInFile_NotDoubled()
+    {
+        // Тот же правленный руками файл на стороне вызывающего ночи: без дедупа в списке
+        // было бы два «local» (parallel 1 и 2) — два кандидата и 3 слота на одном физическом
+        // движке, а его потолок без реестра провайдеров — DefaultLimit (3), то есть дубль
+        // впритык съел бы весь потолок. С дедупом — одна первая строка.
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir),
+            """{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"local","parallel":1},{"engine":"local","parallel":2}]}}""");
+        var (runner, _) = Stand(dir, Engines(("gemma", 2)));
+
+        var list = runner.LocalExecutorsFor(Key);
+        Assert.Equal(["local"], list.Select(e => e.Engine));
+        Assert.Equal([1], list.Select(e => e.Parallel));
+        Assert.True(list.Sum(e => e.Parallel) <= TrackedLocalLlmClient.DefaultLimit);
     }
 }

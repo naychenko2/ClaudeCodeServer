@@ -223,8 +223,13 @@ public sealed class LocalEngineBusyException(string providerKey)
 // Сообщение с нижнего регистра: его всегда составляют в предложение вызывающего.
 public sealed class LocalEngineSlotRefusalException(string engineKey, LocalTurnRefusal why, int running, int limit)
     : InvalidOperationException(
-        $"локальный движок «{engineKey}» занят: слота не дождались ({Reason(why)}, занято {running} из {limit})")
+        $"локальный движок «{engineKey}» {ReasonMarker} ({Reason(why)}, занято {running} из {limit})")
 {
+    // Общая метка отказа по занятости: ею же опознаёт отказ вызывающий, который различает его по
+    // тексту причины (IsSlotRefusalRejection в ночи вики): формулировка и опознание держатся на
+    // одной строке — правка текста здесь меняет их заодно, а не молча выключает повтор.
+    public const string ReasonMarker = "занят: слота не дождались";
+
     // Причина отказа — для вызывающего, который различает «очередь полна» и «вышли время
     // ожидания» (в журнале ночи это разные строки).
     public LocalTurnRefusal Why { get; } = why;

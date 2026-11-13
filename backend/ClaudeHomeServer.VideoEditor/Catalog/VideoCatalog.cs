@@ -106,7 +106,7 @@ public static class VideoCatalogView
 
     private static VideoModelDto ToDto(VideoModelInfo m) =>
         new(m.Id, m.Label, m.Caps.Durations, m.Caps.Aspects, m.Caps.Sound, m.Caps.LastFrame, m.Caps.License.Label, m.Caps.Format,
-            m.ManualOnly, m.Caps.FirstFrameOptional, m.Hint);
+            m.ManualOnly ? true : null, m.Caps.FirstFrameOptional ? true : null, m.Hint);
 }
 
 public static class VideoThreadLimits

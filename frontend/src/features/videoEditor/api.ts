@@ -130,6 +130,12 @@ export interface VideoModelInfo {
   license?: string;
   // Ступени и пропорции «Формата»; нет — «Как у модели»
   format?: MediaFormatCaps;
+  // Экспериментальная: «Авто» и умолчания её не берут, только ручной выбор
+  experimental?: boolean;
+  // Снимает и по одному тексту, и по кадру A (кадра B нет)
+  firstFrameOptional?: boolean;
+  // Что модель даёт и чем хуже соседей
+  hint?: string;
 }
 
 export interface VideoProvider {

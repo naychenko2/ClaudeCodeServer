@@ -68,9 +68,8 @@ public static partial class ComfyWorkflows
             }),
         };
 
-        var positive = Link("pos");
-        var negative = Link("neg");
-        var latent = Link("lat");
+        // Ссылки собираются заново на каждом входе: JsonNode нельзя вставить в два узла
+        (string Node, int Slot) positive = ("pos", 0), negative = ("neg", 0), latent = ("lat", 0);
         if (firstFrame is not null)
         {
             wf["img"] = Node("LoadImage", new JsonObject { ["image"] = firstFrame });
@@ -86,14 +85,14 @@ public static partial class ComfyWorkflows
             wf["ienc"] = Node("VAEEncode", new JsonObject { ["pixels"] = Link("isc"), ["vae"] = Link("vae") });
             wf["i2v"] = Node("Kandinsky6ImageToVideoAudio", new JsonObject
             {
-                ["positive"] = positive,
-                ["negative"] = negative,
-                ["empty_latent"] = latent,
+                ["positive"] = Link(positive.Node, positive.Slot),
+                ["negative"] = Link(negative.Node, negative.Slot),
+                ["empty_latent"] = Link(latent.Node, latent.Slot),
                 ["reference_latent"] = Link("ienc"),
             });
-            positive = Link("i2v", 0);
-            negative = Link("i2v", 1);
-            latent = Link("i2v", 2);
+            positive = ("i2v", 0);
+            negative = ("i2v", 1);
+            latent = ("i2v", 2);
         }
 
         wf["smp"] = Node("Kandinsky6Sampler", new JsonObject
@@ -104,20 +103,20 @@ public static partial class ComfyWorkflows
             ["cfg"] = 1.0,
             ["sampler_name"] = "euler",
             ["scheduler"] = "simple",
-            ["positive"] = positive,
-            ["negative"] = negative,
-            ["latent_image"] = latent,
+            ["positive"] = Link(positive.Node, positive.Slot),
+            ["negative"] = Link(negative.Node, negative.Slot),
+            ["latent_image"] = Link(latent.Node, latent.Slot),
             ["denoise"] = 1.0,
         });
-        var joint = Link("smp");
+        var joint = "smp";
         if (firstFrame is not null)
         {
             wf["rr"] = Node("Kandinsky6RemoveReferenceLatent", new JsonObject { ["joint_latent"] = Link("smp") });
-            joint = Link("rr");
+            joint = "rr";
         }
 
-        wf["vdec"] = Node("VAEDecode", new JsonObject { ["samples"] = joint, ["vae"] = Link("vae") });
-        wf["adec"] = Node("Kandinsky6AudioVAEDecode", new JsonObject { ["audio_vae"] = Link("avae"), ["joint_latent"] = joint });
+        wf["vdec"] = Node("VAEDecode", new JsonObject { ["samples"] = Link(joint), ["vae"] = Link("vae") });
+        wf["adec"] = Node("Kandinsky6AudioVAEDecode", new JsonObject { ["audio_vae"] = Link("avae"), ["joint_latent"] = Link(joint) });
         wf["video"] = Node("CreateVideo", new JsonObject { ["images"] = Link("vdec"), ["fps"] = VideoFps, ["audio"] = Link("adec") });
         wf["save"] = Node("SaveVideo", new JsonObject
         {

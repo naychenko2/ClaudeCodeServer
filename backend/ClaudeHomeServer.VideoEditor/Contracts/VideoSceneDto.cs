@@ -203,6 +203,6 @@ public sealed record VideoModelDto(
     bool LastFrame,
     string? License,
     MediaFormatCaps? Format = null,
-    bool Experimental = false,
-    bool FirstFrameOptional = false,
+    bool? Experimental = null,
+    bool? FirstFrameOptional = null,
     string? Hint = null);

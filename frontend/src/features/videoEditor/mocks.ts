@@ -27,7 +27,11 @@ export const CATALOG: VideoCatalog = {
   providers: [
     {
       key: 'local', label: 'Локальные модели', priceUnit: 'free', available: true,
-      models: [{ id: 'minimax-h3', label: 'MiniMax H3', durations: [5, 10], aspects: ['16:9', '9:16'], sound: true, lastFrame: true, format: H3_FORMAT }],
+      models: [
+        { id: 'minimax-h3', label: 'MiniMax H3', durations: [5, 10], aspects: ['16:9', '9:16'], sound: true, lastFrame: true, format: H3_FORMAT },
+        { id: 'kandinsky-6-lite', label: 'Kandinsky 6 Lite', durations: [5], aspects: ['16:9'], sound: true, lastFrame: false,
+          experimental: true, firstFrameOptional: true, hint: 'Экспериментальная. Вдвое медленнее H3, кадра B нет' },
+      ],
     },
     {
       key: 'fal', label: 'fal.ai', priceUnit: 'usd', available: true,

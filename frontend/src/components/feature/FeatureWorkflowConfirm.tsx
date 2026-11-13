@@ -27,7 +27,7 @@ import { WorkflowLadder } from './WorkflowLadder';
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
 import {
-  applyRecommend, confirmBodyOf, confirmedByText, confirmedLineText, confirmedSummaryText, doubtReasonText,
+  applyRecommend, confirmBodyOf, confirmedLineText, doubtReasonText,
   initialRemovedIds, pickInitialTemplate, rationaleByText, routeBlockState, templateUpdateText,
   type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
@@ -222,8 +222,7 @@ export function FeatureWorkflowConfirm({
         <Badge tone="success" size="xs">✓ маршрут</Badge>
         {confirmed!.autoConfirmed === true && <Badge tone="plan" size="xs">авто</Badge>}
         <span data-testid="feature-workflow-confirm-line" style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 0 }}>
-          {confirmedSummaryText(confirmed!, confirmedTemplate)}
-          <span style={{ color: C.textMuted }}>{` · ${confirmedByText(confirmed!)}`}</span>
+          {confirmedLineText(confirmed!, confirmedTemplate)}
         </span>
         <span style={{ flex: 1 }} />
         <Button

@@ -309,7 +309,7 @@ describe('FeatureWorkflowConfirm: состояния блока (F03)', () => {
     expect(text(c)).toContain('Фича меняет бэкенд и экраны');
     expect(text(c)).toContain('Flash · 12.11 18:02 · обоснование модели');
     expect(text(c)).toContain('Шаблон');
-    expect(JSON.stringify(reactProps(selectOf(c))!.options)).toContain('full-cycle · глобальный · v3');
+    expect(text(c)).toContain('full-cycle · глобальный · v3');
     expect(text(c)).toContain('Подобрать заново');
     expect(text(c)).toContain('Пока не подтвердите, исполнители фичи не стартуют.');
   });

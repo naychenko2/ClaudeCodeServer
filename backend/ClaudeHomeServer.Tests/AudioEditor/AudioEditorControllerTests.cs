@@ -295,8 +295,11 @@ public class AudioEditorControllerTests : IClassFixture<AudioEditorControllerTes
         prefs.GetProperty("voice").GetProperty("inputs").GetProperty("language").GetString().Should().Be("ru");
 
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный");
-        (await _client.PutAsJsonAsync($"/api/audio-editor/chats/{chat.Id}/prefs/voice", new { inputs })).StatusCode
-            .Should().Be(HttpStatusCode.BadRequest, "у личного чата путей проекта нет");
+        // Файлы в личном чате — только из «Личного» (Ф2-3); есть ли у стенда его папка, зависит от соседних тестов класса,
+        // поэтому проверяем неизменное: выход из корня отвергается всегда
+        (await _client.PutAsJsonAsync($"/api/audio-editor/chats/{chat.Id}/prefs/voice",
+                new { inputs = new { referencePath = "../secret.mp3" } })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "путь вне корня личного чата отвергается");
     }
 
     [Fact]

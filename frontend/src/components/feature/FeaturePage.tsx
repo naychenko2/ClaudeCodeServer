@@ -358,8 +358,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     const graphShown = hasRouteOfRun(okRun);
     // Граф предложения (F08): узлы есть, маршрут не подтверждён — детали этапов ждут подтверждения.
     const proposalGraph = hasProposalGraph(okRun);
-    // «Модель не предложила» / режим маршрута без этапов: графа нет и конвейер не рисуем.
-    const emptyGraph = !graphShown && runRouteKind(okRun.epic) === 'none';
+    // «Модель не предложила» / режим маршрута без этапов: графа нет и конвейер не рисуем;
+    // этапы из задач есть — «Этапов пока нет» было бы ложью, остаётся «Ход».
+    const emptyGraph = !graphShown && runRouteKind(okRun.epic) === 'none' && (okRun.stages ?? []).length === 0;
     const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>

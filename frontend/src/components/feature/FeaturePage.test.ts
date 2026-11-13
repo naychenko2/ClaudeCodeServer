@@ -2920,6 +2920,24 @@ describe('FeaturePage: состояния без подтверждённого 
     expect(has(c, 'feature-page-empty-graph')).toBe(true);
     expect(has(c, 'feature-page-unconfirmed')).toBe(false);
   });
+
+  it('state=none, но этапы из задач есть (без after): не граф предложения, нет Notice «Разрез готов», «Ход» виден', async () => {
+    setRun({ workflowProposal: { ...proposal, state: 'none' } }, [stage('a', [], 0, false)]);
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-process-graph'), 'графа предложения нет').toBe(false);
+    expect(has(c, 'feature-page-unconfirmed'), 'Notice «Разрез готов…» нет').toBe(false);
+    expect(has(c, 'feature-page-unconfirmed-hint')).toBe(false);
+    expect(has(c, 'progress-tab'), '«Ход» виден').toBe(true);
+  });
+
+  it('режим маршрута без предложения, но этапы из задач есть: «Ход» виден, «Этапов пока нет» не показываем', async () => {
+    setRun({ routeRequired: true }, [stage('a', [], 0, false)]);
+    const c = render({});
+    await settle();
+    expect(has(c, 'feature-page-empty-graph'), 'утверждение «Этапов пока нет» ложно').toBe(false);
+    expect(has(c, 'progress-tab')).toBe(true);
+  });
 });
 
 describe('hasWorkflowRoute: монтирование блока маршрута по маркеру режима (M5)', () => {

@@ -1,4 +1,6 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Tasks;
 using Microsoft.Extensions.Configuration;
@@ -233,7 +235,47 @@ public class WorkflowAutoConfirmTests : IDisposable
 
         var current = _tasks.GetById(epic.Id)!;
         current.Workflow!.AutoConfirmed.Should().BeTrue();
-        // гейт: маршрут есть — отказа «не подтверждён» нет
+        // предложение пишет RecommendAsync, TryAutoConfirm его не трогает: оно остаётся рядом с маршрутом
         current.WorkflowProposal.Should().NotBeNull();
+    }
+
+    private sealed class OwnerCapture : ISessionBroadcaster
+    {
+        public readonly List<TaskItem> Sent = [];
+        public readonly TaskCompletionSource First = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Task ToSession(string sessionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToSessionExcept(string sessionId, string exceptConnectionId, ServerMessage message) => Task.CompletedTask;
+        public Task ToProject(string projectId, ServerMessage message) => Task.CompletedTask;
+        public Task ToPreviewLog(string projectId, string serviceId, ServerMessage message) => Task.CompletedTask;
+        public Task ToOwner(string ownerId, ServerMessage message)
+        {
+            if (message is TaskChangedMessage { Task: { } t }) lock (Sent) Sent.Add(t);
+            First.TrySetResult();
+            return Task.CompletedTask;
+        }
+    }
+
+    // Порядок фонового пути: авто-подтверждение — до рассылки, рассылка одна и несёт уже подтверждённый маршрут
+    [Fact]
+    public async Task ФоновыйПуть_АвтоПодтверждениеДоРассылки_РассылкаОдна()
+    {
+        var tpl = Template();
+        var epic = Epic();
+        var runner = new StubRunner
+        {
+            Text = "{\"templateId\":\"" + tpl.Id + "\",\"skipped\":[],\"rationale\":\"x\",\"needsHuman\":false}",
+        };
+        var board = new OwnerCapture();
+
+        EpicWorkflowRecommend.Start(MakeService(runner), _tasks, board, null, null, null, epic);
+        await board.First.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(100); // хвост: вторая рассылка, если бы она была, успела бы дойти
+
+        lock (board.Sent)
+        {
+            board.Sent.Should().ContainSingle();
+            board.Sent[0].Workflow.Should().NotBeNull();
+            board.Sent[0].Workflow!.AutoConfirmed.Should().BeTrue();
+        }
     }
 }

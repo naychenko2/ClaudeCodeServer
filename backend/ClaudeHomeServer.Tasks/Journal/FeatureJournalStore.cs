@@ -141,11 +141,17 @@ public sealed record FeatureJournalEntry
     [JsonPropertyName("endedAt")]
     public DateTime? EndedAt { get; init; }
 
-    /// <summary>Итог (для stopped/turn: finished / error / cancelled).</summary>
+    /// <summary>
+    /// Итог (для turn): словарь исходов паспорта хода — success | failed | egress_down |
+    /// interrupted | cancelled | crashed, плюс отказные исходы фолбэка локального движка
+    /// (local_*, window_1m_unavailable): TurnRunPassport.cs:12 и присвоения в
+    /// FallbackLlmSessionAdapter.cs:546-1202. Значения «error»/«finished» в журнале не бывает.
+    /// null — исхода нет (паспорт не собран); stopped-строка исход не несёт (у неё Reason).
+    /// </summary>
     [JsonPropertyName("outcome")]
     public string? Outcome { get; init; }
 
-    /// <summary>Класс ошибки (для turn с outcome=error).</summary>
+    /// <summary>Класс ошибки (для turn с отказным исходом).</summary>
     [JsonPropertyName("errorClass")]
     public string? ErrorClass { get; init; }
 

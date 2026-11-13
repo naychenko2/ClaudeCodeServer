@@ -216,7 +216,8 @@ public sealed record FeatureSpendShared(
 //     разрезанным на waiting-интервалы (work не включает минуты ожидания, major 1);
 //   • waiting — waiting…(waiting_cleared | now) + device_wait…(device_wait_cleared | now)
 //     (ожидание устройства — как waiting; см. комментарий в BuildJournal);
-//   • error — turn.outcome=error (startedAt..endedAt) + stopped (точка);
+//   • error — ход с отказным исходом (FeatureTimeMath.IsFailedTurn: любой outcome паспорта,
+//     кроме success: failed/crashed/egress_down/local_*; startedAt..endedAt) + stopped (точка);
 //   • idle — остаток (не work/waiting/error). Sweep-line: перекрытия решаются приоритетом
 //     error > waiting > work (work исключает waiting/error; инвариант
 //     work+waiting+error+idle+queued = elapsed, итоги из сегментов, major 2). Заполняются
@@ -443,12 +444,16 @@ public sealed record FeatureTimeline(
         var errorCount = 0;
         foreach (var e in journal.Entries)
         {
-            // work: ход (startedAt..endedAt); если ход завершился ошибкой — и error (счёт).
+            // work: ход (startedAt..endedAt); если ход завершился отказом — и error (счёт).
+            // Упавший ход — единый предикат И7 (FeatureTimeMath.IsFailedTurn), как в метриках
+            // этапа и в LastOutcome интервала стадии. Прежняя проверка строки "error" не
+            // срабатывала никогда: словарь исходов паспорта хода (TurnRunPassport.cs:12) его не
+            // содержит — упавший ход попадал в work, а стадия теряла признак обрыва (дефект a6b5a2d0).
             if (e.Kind == "turn" && e.StartedAt is not null && e.EndedAt is not null)
             {
                 var stage = LabelOf(e.TaskId);
                 workIntervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "work", PriorityWork, stage, e.TaskId));
-                if (e.Outcome == "error")
+                if (FeatureTimeMath.IsFailedTurn(e.Outcome))
                 {
                     errorCount++;
                     errorIntervals.Add(new JournalInterval(e.StartedAt.Value, e.EndedAt.Value, "error", PriorityError, stage, e.TaskId));

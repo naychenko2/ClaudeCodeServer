@@ -548,7 +548,7 @@ public class FeatureEstimateJournalTests : IDisposable
             Entry("created", new DateTime(2026, 10, 1, 8, 0, 0), taskId: "epic"),
             Entry("turn", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1",
                 startedAt: new DateTime(2026, 10, 1, 9, 0, 0),
-                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "finished"),
+                endedAt: new DateTime(2026, 10, 1, 10, 0, 0), outcome: "success"),
             Entry("waiting", new DateTime(2026, 10, 1, 10, 0, 0), taskId: "s1"),
             Entry("waiting_cleared", new DateTime(2026, 10, 1, 11, 0, 0), taskId: "s1"),
         };

@@ -654,8 +654,8 @@ export function FeaturePageToolbar({ run, feature, isMobile, onMerge, canClose }
       onClick: () => void resumeClick(),
     });
   }
-  // На мобиле кнопки «Ключевой чат» в ряду нет (не лезет в 360) — пункт шторки.
-  if (isMobile && keyChat) {
+  // На мобиле кнопки «Ключевой чат» в ряду нет (не лезет в 360) — пункт шторки; на десктопе — дубль кнопки.
+  if (keyChat) {
     items.push({
       key: 'key-chat',
       icon: <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,

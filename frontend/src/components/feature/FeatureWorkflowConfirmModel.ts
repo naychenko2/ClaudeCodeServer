@@ -30,6 +30,13 @@ export interface ConfirmedRoute {
   // Подтверждение сделано моделью (бэк: `FeatureWorkflow.AutoConfirmed`): true — строка
   // блока говорит «выбрано моделью — можно сменить». Отсутствует/false — «подтверждён вами».
   autoConfirmed?: boolean;
+  // Из предложения, которое сервер не стирает при подтверждении (TaskWorkflowController.ConfirmedDto):
+  // обоснование относится к шаблону ПРЕДЛОЖЕНИЯ (proposedTemplateId), не обязательно подтверждённого.
+  rationale?: string | null;
+  proposedAt?: string | null;
+  proposedTemplateId?: string | null;
+  needsHuman?: boolean | null;
+  doubtReason?: string | null;
 }
 
 // Съёмный ли этап: presence='optional' и роль съёмная. Несъёмные (step/merge/final) — без
@@ -145,29 +152,64 @@ export function routeBlockState(
   confirmed: ConfirmedRoute | null | undefined,
 ): RouteBlockState | null {
   if (confirmed) return 'confirmed';
-  if (proposal) return 'proposal';
+  // {state:'none'} — «модель не предложила»: предложением не считается, блок в режиме маршрута.
+  if (proposal && proposal.state !== 'none') return 'proposal';
+  if (proposal && proposal.state === 'none') return 'none';
   if (routeRequired === true) return 'none';
   return null;
 }
 
-// Постоянная строка о подтверждённом маршруте (M4): кто выбрал и что снято. Этапы
-// маршрута в строку не перечисляются — они только в графе. Имя снятого этапа — title
-// этапа шаблона с этим id (после нормализации id = роль), иначе сам id: замороженного
-// RouteStage.Title здесь нет — строка строится по шаблону, он под рукой.
-export function confirmedLineText(route: ConfirmedRoute, template: WorkflowTemplate | null): string {
-  const parts: string[] = [
-    template?.name || route.templateId,
-    `v${route.confirmedVersion}`,
-  ];
+// Сводка подтверждённого маршрута (R25): «Имя vN · снято: … / все этапы». Этапы маршрута
+// в строку не перечисляются — они только в графе. Имя снятого этапа — title этапа шаблона
+// с этим id (после нормализации id = роль), иначе сам id: замороженного RouteStage.Title
+// здесь нет — строка строится по шаблону, он под рукой.
+export function confirmedSummaryText(route: ConfirmedRoute, template: WorkflowTemplate | null): string {
+  const head = `${template?.name || route.templateId} v${route.confirmedVersion}`;
   const skipped = route.skipped ?? [];
-  if (skipped.length > 0) {
-    const titles = new Map(
-      normalizeStages(template?.stages ?? [])
-        .map(s => [(s.id ?? '').trim(), (s.title ?? '').trim()] as const)
-        .filter(([id, title]) => id && title),
-    );
-    parts.push(`снято: ${skipped.map(id => titles.get(id) ?? id).join(', ')}`);
+  if (skipped.length === 0) return `${head} · все этапы`;
+  const titles = new Map(
+    normalizeStages(template?.stages ?? [])
+      .map(s => [(s.id ?? '').trim(), (s.title ?? '').trim()] as const)
+      .filter(([id, title]) => id && title),
+  );
+  return `${head} · снято: ${skipped.map(id => titles.get(id) ?? id).join(', ')}`;
+}
+
+// Кто подтвердил (R25/R26): человек или модель сама, когда выбор был очевиден.
+export function confirmedByText(route: ConfirmedRoute): string {
+  return route.autoConfirmed === true
+    ? 'выбрано моделью автоматически — выбор был очевиден'
+    : 'подтвердил человек';
+}
+
+// Постоянная строка о подтверждённом маршруте (M4): сводка и кто подтвердил одной строкой.
+export function confirmedLineText(route: ConfirmedRoute, template: WorkflowTemplate | null): string {
+  return `${confirmedSummaryText(route, template)} · ${confirmedByText(route)}`;
+}
+
+// Причины сомнения модели (серверный WorkflowDoubtReasons): человеческая подпись к тегу
+// «ждёт вас»; незнакомое значение показывается как есть, пустое — без пояснения.
+const DOUBT_LABEL: Record<string, string> = {
+  'no-fit': 'ни один шаблон не подходит под описание',
+  'ambiguous': 'несколько шаблонов подходят одинаково',
+  'custom-route': 'нужен маршрут сложнее, чем снятие этапов',
+  'low-confidence': 'выбор неочевиден',
+};
+export function doubtReasonText(reason: string | null | undefined): string | null {
+  const r = (reason ?? '').trim();
+  return r ? DOUBT_LABEL[r] ?? r : null;
+}
+
+// Подпись автора обоснования: «Flash · 12.11 18:02 · обоснование модели». Нет даты или
+// модели — без них; даты нет в данных — не выдумываем.
+export function rationaleByText(model: string | null | undefined, proposedAt: string | null | undefined, suffix: string): string {
+  const parts: string[] = [];
+  if ((model ?? '').trim()) parts.push(model!.trim());
+  const d = proposedAt ? new Date(proposedAt) : null;
+  if (d && !Number.isNaN(d.getTime())) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    parts.push(`${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`);
   }
-  parts.push(route.autoConfirmed === true ? 'выбрано моделью — можно сменить' : 'подтверждён вами');
+  if (suffix) parts.push(suffix);
   return parts.join(' · ');
 }

@@ -226,7 +226,7 @@ describe('routeBlockState / состояние блока маршрута (M4)'
   });
 });
 
-describe('confirmedLineText / строка о подтверждённом маршруте (M4)', () => {
+describe('confirmedLineText / сводка и «кто подтвердил» (M4, F03)', () => {
   // Тот же шаблон, но у снятого optional-'qa' есть title — по нему строка называет этап.
   const titledTemplate = baseTemplate({
     stages: baseTemplate().stages.map(s => (s.role === 'qa' ? { ...s, title: 'Проверка' } : s)),
@@ -234,32 +234,32 @@ describe('confirmedLineText / строка о подтверждённом ма�
 
   it('autoConfirmed со снятым этапом: имя · vN · снято: <title> · выбрано моделью', () => {
     expect(confirmedLineText({ ...CONFIRMED, autoConfirmed: true }, titledTemplate))
-      .toBe('Полный цикл · v3 · снято: Проверка · выбрано моделью — можно сменить');
+      .toBe('Полный цикл v3 · снято: Проверка · выбрано моделью автоматически — выбор был очевиден');
   });
 
-  it('autoConfirmed не задан, снятых нет: подтверждён вами', () => {
+  it('autoConfirmed не задан, снятых нет: «все этапы · подтвердил человек»', () => {
     const noSkipped = { ...CONFIRMED, skipped: [] };
     expect(confirmedLineText(noSkipped, baseTemplate()))
-      .toBe('Полный цикл · v3 · подтверждён вами');
+      .toBe('Полный цикл v3 · все этапы · подтвердил человек');
     // autoConfirmed=false — то же, что не задан.
     expect(confirmedLineText({ ...noSkipped, autoConfirmed: false }, baseTemplate()))
-      .toBe('Полный цикл · v3 · подтверждён вами');
+      .toBe('Полный цикл v3 · все этапы · подтвердил человек');
   });
 
   it('шаблона нет: имя = templateId, имя снятого этапа = его id', () => {
     expect(confirmedLineText(CONFIRMED, null))
-      .toBe('full-cycle · v3 · снято: qa · подтверждён вами');
+      .toBe('full-cycle v3 · снято: qa · подтвердил человек');
   });
 
   it('этап без title — его id; несколько снятых — через «, » в порядке skipped', () => {
     const twoSkipped = { ...CONFIRMED, skipped: ['review', 'qa'] };
     expect(confirmedLineText(twoSkipped, baseTemplate()))
-      .toBe('Полный цикл · v3 · снято: review, qa · подтверждён вами');
+      .toBe('Полный цикл v3 · снято: review, qa · подтвердил человек');
     // review с title, qa без — смешанная подпись.
     const reviewTitled = baseTemplate({
       stages: baseTemplate().stages.map(s => (s.role === 'review' ? { ...s, title: 'Ревью плана' } : s)),
     });
     expect(confirmedLineText({ ...twoSkipped, autoConfirmed: true }, reviewTitled))
-      .toBe('Полный цикл · v3 · снято: Ревью плана, qa · выбрано моделью — можно сменить');
+      .toBe('Полный цикл v3 · снято: Ревью плана, qa · выбрано моделью автоматически — выбор был очевиден');
   });
 });

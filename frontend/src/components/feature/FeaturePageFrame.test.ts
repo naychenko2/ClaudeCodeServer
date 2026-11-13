@@ -15,7 +15,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { FeaturePage, type FeaturePageBackTarget } from './FeaturePage';
 import { featureRunStatusTag, featurePageStatusTag, featurePrimaryAction } from './FeaturePageHeader';
 import { shortRunTagLabel } from './FeatureStatusTag';
-import { __test as pageTest, setFeaturePageTab } from '../../lib/featurePage';
+import { __test as pageTest, setFeaturePageTab, setFeatureMainTab } from '../../lib/featurePage';
 import { __test as indexTest } from '../../lib/featuresIndex';
 import { __test as backNavTest } from '../../lib/featureBackNav';
 import { C } from '../../lib/design';
@@ -920,5 +920,23 @@ describe('Ш9a: тег статуса на 360', () => {
     await settle();
     expect(findNodeByAttr(c2, 'data-testid', 'feature-page-stages-meta')).toBeNull();
     expect(findNodeByAttr(c2, 'data-testid', 'feature-page-progress')).toBeNull();
+  });
+
+  it('метастрока и полоса видны на вкладках «Процесс», «Материалы», «Разбор»; progressPct=40; approx без полосы', async () => {
+    mockGetFeature.result = pageData({ state: 'running', meta: { stagesDone: 4, stagesTotal: 10, parallelBranches: 2, etaMinutes: 180, progressPct: 40, approx: true } });
+    for (const tab of ['progress', 'materials', 'review'] as const) {
+      setFeatureMainTab(tab);
+      const c = render({});
+      await settle();
+      expect(findNodeByAttr(c, 'data-testid', 'feature-page-stages-meta'), `метастрока на «${tab}»`).not.toBeNull();
+      const bar = findNodeByAttr(c, 'data-testid', 'feature-page-progress')!;
+      expect((bar as unknown as { attributes: Record<string, string> }).attributes['aria-valuenow'], `полоса на «${tab}»`).toBe('40');
+    }
+    setFeatureMainTab('progress');
+    mockGetFeature.result = pageData({ state: 'running', meta: { stagesDone: 4, stagesTotal: 10, parallelBranches: 0, etaMinutes: 90, progressPct: null, approx: true } });
+    const c = render({});
+    await settle();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-progress'), 'без progressPct полосы нет').toBeNull();
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-stages-meta')!).join('')).toContain('≈ 2 ч до финала');
   });
 });

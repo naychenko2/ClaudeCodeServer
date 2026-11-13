@@ -93,10 +93,10 @@ describe('FeatureWorkflowConfirm: стык recommend с реальной фор�
     net.entries = [entry(fullCycle())];
     net.recommend = () => Promise.resolve({ proposal: null });
     const c = await renderBlock({ routeRequired: true });
-    expect(text(c)).toContain('Предложения пока нет');
+    expect(text(c)).toContain('Модель не предложила маршрут');
     await clickRecommend(c);
     // Пустой ответ — то же состояние «нет предложения», а не «Предложение модели» без шаблона.
-    expect(text(c)).toContain('Предложения пока нет, модель обычно отвечает до полуминуты.');
+    expect(text(c)).toContain('Модель не предложила маршрут');
     expect(text(c)).not.toContain('Предложение модели');
     expect(text(c)).toContain('Подобрать ещё раз');
     expect(reactProps(selectOf(c))!.value).toBe('');
@@ -111,7 +111,7 @@ describe('FeatureWorkflowConfirm: стык recommend с реальной фор�
     // Предложение развёрнуто: его шаблон выбран, его обоснование видно.
     expect(reactProps(selectOf(c))!.value).toBe('global:full-cycle');
     expect(text(c)).toContain('по описанию фичи');
-    expect(text(c)).not.toContain('Предложения пока нет');
+    expect(text(c)).not.toContain('Модель не предложила маршрут');
     expect(text(c)).not.toContain('не найден в каталоге');
   });
 

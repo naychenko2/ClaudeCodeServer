@@ -11,26 +11,25 @@
 // запрос: ref-guard синхронный, state busy догорает до ответа. Ошибка — текст в блоке
 // (role=alert), необработанных rejection нет.
 //
-// Этапы — по id: порядок как в маршруте (normalizeStages, G6a), линия (бэк/фронт) — рядом
-// с подписью роли, только когда задана; переключатель — только у съёмных optional.
-// Имя строки — title из шаблона, фолбэк — подпись роли (тот же порядок, что nameShown в
-// WorkflowStageRow и nodeTitle в FeatureProcessGraph): с именем параллельные этапы одной
-// роли различимы по нему, роль и id остаются серой подписью строки.
-// Вид карточки — как FeatureAskBlock/FeaturePageAlert: поля SP.md, R.lg, спокойный тон
-// bgSelected/borderLight; тревожная строка («шаблон изменился», отказ) — токены Notice.
-// Мобила 360: кнопки полной шириной, тач-цели ≥40 (Checkbox — 40×40 из ui-кита).
+// Этапы рисует WorkflowLadder (F02): колонки, снятие кликом по чипу, имена и линии — там.
+// Тон карточки по состоянию (F03): предложение модели — planLight, подтверждённый — bgWhite,
+// прочее (нет предложения, «Подбираем») — bgSelected; тревожные строки — токены Notice.
+// Состояния: «предлагает» (тег «ждёт вас» только при needsHuman), «правит человек» (тег
+// «сменили вы», вместо обоснования пометка), «подтверждено» (✓ маршрут / авто, «Почему так»),
+// «Подбираем» (идущий recommend) и «Модель не предложила маршрут» (proposal.state='none').
+// Мобила 360: кнопки полной шириной, тач-цели ≥40.
 // Встраивание в шапку страницы фичи и мини-граф — вне этого шага (C3b / хвосты).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { Badge, Button, Checkbox, Select } from '../../components/ui';
-import { laneWord } from '../../lib/roleLabel';
+import { Badge, Button, Select } from '../../components/ui';
+import { WorkflowLadder } from './WorkflowLadder';
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
-import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStageRow';
 import {
-  applyRecommend, confirmBodyOf, confirmedLineText, initialRemovedIds, isRemovableStage,
-  pickInitialTemplate, routeBlockState, templateUpdateText, type ConfirmedRoute,
+  applyRecommend, confirmBodyOf, confirmedByText, confirmedLineText, confirmedSummaryText, doubtReasonText,
+  initialRemovedIds, pickInitialTemplate, rationaleByText, routeBlockState, templateUpdateText,
+  type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowProposal, WorkflowTemplateEntry, WorkflowTemplateScope } from '../../features/workflowTemplates/types';
 
@@ -71,6 +70,10 @@ export function FeatureWorkflowConfirm({
   const [errorText, setErrorText] = useState<string | null>(null);
   // Тихий режим: подтверждённый маршрут свёрнут в строку, «Сменить» разворачивает блок.
   const [expanded, setExpanded] = useState(false);
+  // «Почему так» у подтверждённого маршрута: раскрытое обоснование под строкой.
+  const [whyOpen, setWhyOpen] = useState(false);
+  // «Выбрать вручную» в состоянии «Подбираем»: показать Select, не дожидаясь ответа модели.
+  const [manual, setManual] = useState(false);
 
   const featureIdRef = useRef(featureId);
   // ref-guard, а не state: state обновился бы только со следующим рендером, а двойной
@@ -88,6 +91,8 @@ export function FeatureWorkflowConfirm({
     setLocalProposal(null);
     setErrorText(null);
     setExpanded(false);
+    setWhyOpen(false);
+    setManual(false);
     abortRef.current?.abort();
   }
 
@@ -104,7 +109,9 @@ export function FeatureWorkflowConfirm({
   // Уход с экрана: висящий recommend (модель ждёт десятки секунд) не должен доживать здесь.
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  const shownProposal = localProposal ?? proposal ?? null;
+  // {state:'none'} — «модель не предложила маршрут»: шаблона в нём нет, предложением оно не считается.
+  const rawProposal = localProposal ?? proposal ?? null;
+  const shownProposal = rawProposal && rawProposal.state !== 'none' ? rawProposal : null;
   const selectedEntry = useMemo(() => {
     if (!entries) return null;
     if (selKey) return entries.find(e => e.template?.id === selKey.id && e.scope === selKey.scope) ?? null;
@@ -178,7 +185,6 @@ export function FeatureWorkflowConfirm({
       });
   };
 
-  const stages = selectedEntry ? normalizeStages(selectedEntry.template.stages ?? []) : [];
   const loading = entries === null;
   // Предложенного/подтверждённого шаблона нет в каталоге (например, удалён): сказать прямо,
   // человек выбирает другой — «удалённый шаблон не ломает идущие фичи» (§4).
@@ -195,26 +201,66 @@ export function FeatureWorkflowConfirm({
   const canConfirm = !!selectedEntry && !busyConfirm;
   // Тихий режим: нужен ответ человека (предложение ждёт подтверждения, подобрали новое) или
   // шаблон подтверждённого маршрута изменился; ошибка и идущий запрос блок не прячут.
-  const blockState = routeBlockState(routeRequired, shownProposal, confirmed ?? null);
+  const blockState = routeBlockState(routeRequired, rawProposal, confirmed ?? null);
   const actionable = (!!shownProposal && !confirmed) || !!localProposal || !!updateText
     || blockState === 'none' || !!errorText || busyConfirm || busyRecommend;
   // Пока каталог не загружен, имя шаблона неизвестно: строку не рисуем, иначе она мигнёт id → имя.
-  const lineText = confirmed && !loading ? confirmedLineText(confirmed, confirmedTemplate) : null;
+  const lineReady = !!confirmed && !loading;
+  const lineText = lineReady ? confirmedLineText(confirmed!, confirmedTemplate) : null;
+
+  // Обоснование подтверждённого: из самого маршрута, а если там нет — из предложения эпика
+  // (сервер его не стирает). Показывается только по «Почему так».
+  const confirmedRationale = (confirmed?.rationale ?? proposal?.rationale ?? '').trim();
+  const confirmedModel = proposal?.model ?? null;
+  const confirmedProposedAt = confirmed?.proposedAt ?? proposal?.proposedAt ?? null;
+
+  // Строка подтверждённого: тег, сводка, кто подтвердил, «Почему так» (R25–R27). Один вид для
+  // тихой строки и раскрытого блока.
+  const confirmedRow = (withChange: boolean) => (
+    <div data-testid="feature-workflow-confirm-confirmed" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Badge tone="success" size="xs">✓ маршрут</Badge>
+        {confirmed!.autoConfirmed === true && <Badge tone="plan" size="xs">авто</Badge>}
+        <span data-testid="feature-workflow-confirm-line" style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 0 }}>
+          {confirmedSummaryText(confirmed!, confirmedTemplate)}
+          <span style={{ color: C.textMuted }}>{` · ${confirmedByText(confirmed!)}`}</span>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Button
+          variant="ghost" size={isMobile ? 'sm' : 'xs'} dataTestId="feature-workflow-confirm-why"
+          ariaExpanded={whyOpen} style={isMobile ? { minHeight: 40 } : undefined}
+          onClick={() => setWhyOpen(v => !v)}
+        >
+          Почему так
+        </Button>
+        {withChange && (
+          <Button variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: 40 } : undefined} dataTestId="feature-workflow-confirm-change" onClick={() => setExpanded(true)}>
+            Сменить
+          </Button>
+        )}
+      </div>
+      {whyOpen && (
+        <div data-testid="feature-workflow-confirm-why-text">
+          {confirmedRationale
+            ? quote(confirmedRationale, rationaleByText(confirmedModel, confirmedProposedAt, confirmed!.autoConfirmed === true ? 'выбрано моделью автоматически' : 'подтвердил человек'))
+            : <div style={{ fontSize: FS.sm, color: C.textMuted }}>Обоснования нет: маршрут подтверждён без предложения модели.</div>}
+        </div>
+      )}
+    </div>
+  );
+
   if (quiet && !actionable) {
     if (!confirmed || !lineText) return <></>;
     if (!expanded) {
       return (
         <div
-          data-testid="feature-workflow-confirm-line"
+          data-testid="feature-workflow-confirm-compact"
           style={{
-            display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
-            marginBottom: SP.md, fontFamily: FONT.sans,
+            padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, marginBottom: SP.md,
+            background: C.bgWhite, border: `1px solid ${C.borderLight}`, fontFamily: FONT.sans,
           }}
         >
-          <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: 0 }}>{lineText}</span>
-          <Button variant="ghost" size="sm" dataTestId="feature-workflow-confirm-change" onClick={() => setExpanded(true)}>
-            Сменить
-          </Button>
+          {confirmedRow(true)}
         </div>
       );
     }
@@ -222,8 +268,35 @@ export function FeatureWorkflowConfirm({
 
   const templateOptions = (entries ?? []).map(e => ({
     value: `${e.scope}:${e.template.id}`,
-    label: e.scope === 'project' ? `${e.template.name} (проект)` : e.template.name,
+    label: `${e.template.name} · ${e.scope === 'project' ? 'проект' : 'глобальный'} · v${e.template.version}`,
   }));
+
+  // Состояния блока (R2): предложение модели, пусто/«Подбираем», подтверждено. «Правит человек» —
+  // предложение, у которого человек выбрал другой шаблон.
+  const showProposal = !!shownProposal && !confirmed;
+  const edited = showProposal && !!selKey && !!selectedEntry
+    && (selectedEntry.template.id !== shownProposal!.templateId || selectedEntry.scope !== shownProposal!.scope);
+  const needsHuman = showProposal && shownProposal!.needsHuman === true;
+  const doubt = needsHuman ? doubtReasonText(shownProposal!.doubtReason) : null;
+  // «Подбираем» и «Предложения нет» по данным различимы только идущим запросом (proposal.state
+  // из B03 даёт 'none'; пока ответа нет — подбор идёт).
+  const searching = busyRecommend && !showProposal && !confirmed && !manual;
+  const noneState = !showProposal && !confirmed && !searching && blockState === 'none';
+  const isConfirmed = !!confirmed;
+  const tone = isConfirmed
+    ? { bg: C.bgWhite, border: C.borderLight }
+    : showProposal ? { bg: C.planLight, border: C.planBorder } : { bg: C.bgSelected, border: C.borderLight };
+  const showEditor = !searching && (!isConfirmed || !quiet || expanded);
+  const recommendLabel = showProposal ? 'Подобрать заново' : noneState ? 'Подобрать ещё раз' : 'Подобрать маршрут';
+  const recommendBtn = (
+    <Button
+      variant="ghost" size={isMobile ? 'sm' : 'xs'} loading={busyRecommend}
+      style={isMobile ? { minHeight: 40 } : undefined}
+      dataTestId="feature-workflow-confirm-recommend" onClick={onRecommend}
+    >
+      {recommendLabel}
+    </Button>
+  );
 
   return (
     <div
@@ -231,21 +304,52 @@ export function FeatureWorkflowConfirm({
       style={{
         display: 'flex', flexDirection: 'column', gap: SP.md,
         padding: SP.md, borderRadius: R.lg,
-        background: C.bgSelected, border: `1px solid ${C.borderLight}`,
+        background: tone.bg, border: `1px solid ${tone.border}`,
         fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
         // В шапке страницы отступ вниз несёт сам блок: когда он молчит, зазора нет.
         ...(quiet ? { marginBottom: SP.md } : {}),
       }}
     >
-      <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>Маршрут фичи</div>
+      {isConfirmed && lineReady && confirmedRow(false)}
 
-      {lineText && (
-        <div data-testid="feature-workflow-confirm-line" style={{ fontSize: FS.sm, color: C.textSecondary }}>{lineText}</div>
+      {!isConfirmed && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+          {needsHuman && (
+            <Badge tone="warning" size="xs" title={doubt ?? undefined}>ждёт вас</Badge>
+          )}
+          <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading }}>
+            {showProposal ? 'Маршрут предлагает модель'
+              : searching ? 'Подбираем маршрут…'
+                : noneState ? 'Модель не предложила маршрут' : 'Маршрут фичи'}
+          </span>
+          <span style={{ flex: 1 }} />
+          {!searching && recommendBtn}
+        </div>
       )}
 
-      {blockState === 'none' && (
+      {doubt && (
+        <div data-testid="feature-workflow-confirm-doubt" style={{ fontSize: FS.sm, color: C.warningText }}>
+          Сомневаюсь: {doubt}.
+        </div>
+      )}
+
+      {searching && (
+        <div data-testid="feature-workflow-confirm-searching" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, alignItems: 'flex-start' }}>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+            Модель обычно отвечает до полуминуты: она читает название и описание фичи и выбирает из шаблонов проекта и глобальных.
+          </div>
+          <Button
+            variant="ghost" size={isMobile ? 'sm' : 'xs'} style={isMobile ? { minHeight: 40 } : undefined}
+            dataTestId="feature-workflow-confirm-manual" onClick={() => setManual(true)}
+          >
+            Выбрать вручную
+          </Button>
+        </div>
+      )}
+
+      {noneState && (
         <div data-testid="feature-workflow-confirm-none" style={{ fontSize: FS.sm, color: C.textSecondary }}>
-          Предложения пока нет, модель обычно отвечает до полуминуты.
+          Подбор не ответил или ответ не прошёл проверку. Выберите шаблон сами, этапы появятся ниже.
         </div>
       )}
 
@@ -253,120 +357,89 @@ export function FeatureWorkflowConfirm({
         <div role="alert" style={{ fontSize: FS.sm, fontWeight: 600, color: C.warningText }}>{updateText}</div>
       )}
 
-      {shownProposal && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-          <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted }}>
-            Предложение модели{shownProposal.model ? `: ${shownProposal.model}` : ''}
+      {showEditor && (
+        <>
+          <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.sm, alignItems: isMobile ? 'stretch' : 'center', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: FS.xs, color: C.textMuted }}>Шаблон</span>
+            <div style={{ flex: isMobile ? undefined : '0 1 auto', minWidth: 0 }}>
+              <Select
+                value={selectedEntry ? `${selectedEntry.scope}:${selectedEntry.template.id}` : ''}
+                onChange={pickTemplate}
+                disabled={loading || templateOptions.length === 0}
+                placeholder={loading ? 'Загрузка шаблонов…' : 'Выберите шаблон…'}
+                options={templateOptions}
+                title="Шаблон маршрута"
+              />
+            </div>
+            {edited && <Badge tone="neutral" size="xs">сменили вы</Badge>}
           </div>
-          {shownProposal.rationale && (
-            <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>{shownProposal.rationale}</div>
-          )}
-        </div>
-      )}
 
-      <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.sm, alignItems: isMobile ? 'stretch' : 'flex-end' }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <Select
-            value={selectedEntry ? `${selectedEntry.scope}:${selectedEntry.template.id}` : ''}
-            onChange={pickTemplate}
-            disabled={loading || templateOptions.length === 0}
-            placeholder={loading ? 'Загрузка шаблонов…' : 'Выберите шаблон'}
-            options={templateOptions}
-            title="Шаблон маршрута"
-          />
-        </div>
-      </div>
-
-      {missingTemplate && (
-        <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
-          Предложенный шаблон не найден в каталоге — выберите другой.
-        </div>
-      )}
-
-      {selectedEntry && stages.length > 0 && (
-        <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {stages.map(s => {
-            const label = STAGE_ROLE_LABEL[s.role] ?? s.role;
-            // Имя этапа для показа (тот же порядок, что nameShown в редакторе и nodeTitle в
-            // FeatureProcessGraph): имя из шаблона, фолбэк — подпись роли. Роль и id остаются
-            // подписью строки: с именем этапы одной роли различимы, без него — как раньше.
-            const titleText = (s.title ?? '').trim();
-            const nameShown = titleText || label;
-            const lane = laneWord(s.lane ?? null);
-            const off = (s.presence ?? '').trim() === 'off';
-            const dropped = removedSet.has(s.id ?? '');
-            const dimmed = off || dropped;
-            return (
-              <div
-                key={s.id}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: SP.sm,
-                  minHeight: 40, padding: `${SP.xxs}px 0`,
-                }}
-              >
-                <span
-                  style={{
-                    fontSize: FS.base, fontWeight: 600,
-                    color: dimmed ? C.textMuted : C.textHeading,
-                    textDecoration: dimmed ? 'line-through' : undefined,
-                  }}
-                >
-                  {nameShown}
-                  {titleText && (
-                    <span style={{ marginLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{label}</span>
-                  )}
-                  {s.id !== s.role && (
-                    <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
-                      {s.id}
-                    </span>
-                  )}
-                </span>
-                {lane && <Badge tone="neutral" size="xs">{lane}</Badge>}
-                {off && <span style={{ fontSize: FS.xs, color: C.textMuted }}>не в маршруте</span>}
-                {isRemovableStage(s) && (
-                  <span style={{ marginLeft: 'auto' }}>
-                    <Checkbox
-                      checked={!dropped}
-                      onChange={() => toggleRemoved(s.id ?? '')}
-                      ariaLabel={`Этап «${nameShown}» включён в маршрут`}
-                    />
-                  </span>
+          {showProposal && (edited
+            ? (
+              <div data-testid="feature-workflow-confirm-edited">
+                {quote(
+                  'Модель предлагала другой шаблон. Вы выбрали этот — обоснование к нему не относится, решение за вами.',
+                  rationaleByText(shownProposal!.model, shownProposal!.proposedAt, ''),
                 )}
               </div>
-            );
-          })}
-        </div>
+            )
+            : (shownProposal!.rationale ?? '').trim() && (
+              <div data-testid="feature-workflow-confirm-rationale">
+                {quote(shownProposal!.rationale!.trim(), rationaleByText(shownProposal!.model, shownProposal!.proposedAt, 'обоснование модели'))}
+              </div>
+            ))}
+
+          {missingTemplate && (
+            <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+              Предложенный шаблон не найден в каталоге — выберите другой.
+            </div>
+          )}
+
+          <WorkflowLadder
+            stages={selectedEntry ? normalizeStages(selectedEntry.template.stages ?? []) : null}
+            removedIds={removedIds}
+            onToggle={toggleRemoved}
+            isMobile={isMobile}
+          />
+        </>
       )}
 
       {errorText && (
         <div role="alert" style={{ fontSize: FS.sm, fontWeight: 600, color: C.dangerText }}>{errorText}</div>
       )}
 
-      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
-        <Button
-          variant="primary"
-          size="sm"
-          loading={busyConfirm}
-          disabled={!canConfirm}
-          fullWidth={isMobile}
-          style={isMobile ? { minHeight: 40 } : undefined}
-          dataTestId="feature-workflow-confirm-submit"
-          onClick={onConfirm}
-        >
-          Подтвердить маршрут
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          loading={busyRecommend}
-          fullWidth={isMobile}
-          style={isMobile ? { minHeight: 40 } : undefined}
-          dataTestId="feature-workflow-confirm-recommend"
-          onClick={onRecommend}
-        >
-          {blockState === 'none' ? 'Подобрать ещё раз' : 'Подобрать маршрут'}
-        </Button>
-      </div>
+      {showEditor && (
+        <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Button
+            variant="primary"
+            size="sm"
+            loading={busyConfirm}
+            disabled={!canConfirm}
+            fullWidth={isMobile}
+            style={isMobile ? { minHeight: 40 } : undefined}
+            dataTestId="feature-workflow-confirm-submit"
+            onClick={onConfirm}
+          >
+            Подтвердить маршрут
+          </Button>
+          {!isConfirmed && (
+            <span style={{ fontSize: FS.sm, color: C.textMuted }}>
+              {selectedEntry ? 'Пока не подтвердите, исполнители фичи не стартуют.' : 'Сначала шаблон.'}
+            </span>
+          )}
+          {isConfirmed && recommendBtn}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Обоснование модели цитатой с акцентной полосой и подписью «Flash · дата · …» (R6).
+function quote(text: string, by: string): React.ReactElement {
+  return (
+    <div style={{ borderLeft: `3px solid ${C.accent}`, paddingLeft: SP.md, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+      <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>{text}</div>
+      {by && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{by}</div>}
     </div>
   );
 }

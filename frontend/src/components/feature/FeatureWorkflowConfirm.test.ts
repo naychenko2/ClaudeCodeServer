@@ -121,7 +121,7 @@ describe('FeatureWorkflowConfirm: строка «шаблон изменился
   it('подтверждённый шаблон в каталоге не отредактирован — строки нет', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ confirmed: CONFIRMED });
-    expect(text(c)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
+    expect(text(c)).toContain('full-cycle v3 · снято: qa · подтвердил человек');
     expect(text(c)).not.toContain('Шаблон изменился');
   });
 
@@ -167,8 +167,7 @@ describe('FeatureWorkflowConfirm: имена этапов в списке (де�
   it('этап без имени — фолбэк прежний: подпись роли и машинный id', async () => {
     catalog.entries = [entry(parallelCycle(false))];
     const c = await renderBlock({ proposal: { templateId: 'parallel-cycle', scope: 'global', skipped: [] } });
-    // Имени нет → строка как до правки: роль «Проверка» + id «qa-plan».
-    expect(text(c)).toContain('qa-plan');
+    // Имени нет → чип называется подписью роли «Проверка».
     expect(findNodeByAttr(c, 'aria-label', 'Этап «Проверка» включён в маршрут')).not.toBeNull();
   });
 });
@@ -180,7 +179,7 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
   it('none в тихом режиме: блок виден, текст, без предвыбора, подтверждение выключено, кнопка «Подобрать ещё раз»', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ routeRequired: true, quiet: true });
-    expect(text(c)).toContain('Предложения пока нет, модель обычно отвечает до полуминуты.');
+    expect(text(c)).toContain('Модель не предложила маршрут');
     expect(reactProps(selectOf(c))?.value).toBe('');
     expect(reactProps(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-submit')!)?.disabled).toBe(true);
     expect(text(c)).toContain('Подобрать ещё раз');
@@ -196,14 +195,14 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
   it('легаси без маркера и предложения — «предложения нет» не показывается', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({});
-    expect(text(c)).not.toContain('Предложения пока нет');
+    expect(text(c)).not.toContain('Модель не предложила маршрут');
     expect(text(c)).toContain('Подобрать маршрут');
   });
 
   it('тихий режим + подтверждённый: только строка и «Сменить»; клик разворачивает полный блок', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ confirmed: CONFIRMED, quiet: true });
-    expect(text(c)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
+    expect(text(c)).toContain('full-cycle v3 · снято: qa · подтвердил человек');
     expect(selectOf(c)).toBeNull();
     const change = findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-change')!;
     await act(async () => { (reactProps(change)!.onClick as () => void)(); });
@@ -213,7 +212,8 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
   it('автоподтверждение моделью — строка «выбрано моделью — можно сменить»', async () => {
     catalog.entries = [entry(fullCycle(3))];
     const c = await renderBlock({ confirmed: { ...CONFIRMED, autoConfirmed: true }, quiet: true });
-    expect(text(c)).toContain('выбрано моделью — можно сменить');
+    expect(text(c)).toContain('выбрано моделью автоматически — выбор был очевиден');
+    expect(text(c)).toContain('авто');
   });
 
   it('перерисовка с none на confirmed: строка подтверждённого, Select скрыт (тихий режим)', async () => {
@@ -226,7 +226,7 @@ describe('FeatureWorkflowConfirm: состояние «предложения н
     expect(selectOf(container)).not.toBeNull();
     await act(async () => { root.render(mk(CONFIRMED)); });
     expect(selectOf(container)).toBeNull();
-    expect(text(container)).toContain('подтверждён вами');
+    expect(text(container)).toContain('подтвердил человек');
   });
 });
 
@@ -267,6 +267,102 @@ describe('FeatureWorkflowConfirm: гонки и загрузка каталог�
     expect(text(container)).not.toContain('full-cycle');
     expect(findNodeByAttr(container, 'data-testid', 'feature-workflow-confirm-line')).toBeNull();
     await act(async () => { release(); await new Promise(r => setTimeout(r, 0)); });
-    expect(text(container)).toContain('full-cycle · v3 · снято: qa · подтверждён вами');
+    expect(text(container)).toContain('full-cycle v3 · снято: qa · подтвердил человек');
+  });
+});
+
+describe('FeatureWorkflowConfirm: состояния блока (F03)', () => {
+  beforeEach(() => { installFakeDom(); });
+  afterEach(() => { uninstallFakeDom(); catalog.recommend = () => new Promise<never>(() => {}); });
+
+  const proposed = (over: Partial<WorkflowProposal> = {}): WorkflowProposal => ({
+    templateId: 'full-cycle', scope: 'global', skipped: [], state: 'proposed',
+    rationale: 'Фича меняет бэкенд и экраны', model: 'Flash', proposedAt: '2026-11-12T18:02:00', ...over,
+  });
+  const byTestId = (c: ReturnType<typeof mount>['container'], id: string) => findNodeByAttr(c, 'data-testid', id);
+
+  it('needsHuman=true: тег «ждёт вас» и причина сомнения; список этапов — лестница', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: proposed({ needsHuman: true, doubtReason: 'ambiguous' }) });
+    expect(text(c)).toContain('ждёт вас');
+    expect(text(c)).toContain('Маршрут предлагает модель');
+    expect(byTestId(c, 'feature-workflow-confirm-doubt')).not.toBeNull();
+    expect(text(c)).toContain('несколько шаблонов подходят одинаково');
+    // Этапы рисует WorkflowLadder: колонки и чипы, а не строки с Checkbox справа.
+    expect(byTestId(c, 'workflow-ladder')).not.toBeNull();
+    expect(byTestId(c, 'workflow-ladder-column')).not.toBeNull();
+    expect(findNodeByAttr(c, 'data-ladder-chip', 'plan')).not.toBeNull();
+  });
+
+  it('needsHuman=false или не задан: тега «ждёт вас» нет', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c1 = await renderBlock({ proposal: proposed({ needsHuman: false }) });
+    expect(text(c1)).not.toContain('ждёт вас');
+    expect(byTestId(c1, 'feature-workflow-confirm-doubt')).toBeNull();
+    const c2 = await renderBlock({ proposal: proposed() });
+    expect(text(c2)).not.toContain('ждёт вас');
+  });
+
+  it('предложение: обоснование цитатой с подписью «Flash · дата · обоснование модели»; «Шаблон» и опции «Имя · область · vN»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: proposed() });
+    expect(text(c)).toContain('Фича меняет бэкенд и экраны');
+    expect(text(c)).toContain('Flash · 12.11 18:02 · обоснование модели');
+    expect(text(c)).toContain('Шаблон');
+    expect(JSON.stringify(reactProps(selectOf(c))!.options)).toContain('full-cycle · глобальный · v3');
+    expect(text(c)).toContain('Подобрать заново');
+    expect(text(c)).toContain('Пока не подтвердите, исполнители фичи не стартуют.');
+  });
+
+  it('подтверждено человеком: «✓ маршрут», «подтвердил человек», «Почему так» раскрывает confirmed.rationale', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ confirmed: { ...CONFIRMED, rationale: 'Бэк и экраны — подходит этот шаблон' }, quiet: true });
+    expect(text(c)).toContain('✓ маршрут');
+    expect(text(c)).toContain('подтвердил человек');
+    expect(text(c)).not.toContain('авто');
+    expect(text(c)).not.toContain('Бэк и экраны — подходит этот шаблон');
+    await act(async () => { (reactProps(byTestId(c, 'feature-workflow-confirm-why')!)!.onClick as () => void)(); });
+    expect(text(c)).toContain('Бэк и экраны — подходит этот шаблон');
+  });
+
+  it('подтверждено моделью: тег «авто» и «выбрано моделью автоматически — выбор был очевиден»; без снятых — «все этапы»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ confirmed: { ...CONFIRMED, skipped: [], autoConfirmed: true }, quiet: true });
+    expect(text(c)).toContain('авто');
+    expect(text(c)).toContain('full-cycle v3 · все этапы');
+    expect(text(c)).toContain('выбрано моделью автоматически — выбор был очевиден');
+  });
+
+  it('смена шаблона человеком: тег «сменили вы», обоснования модели в DOM нет', async () => {
+    catalog.entries = [entry(fullCycle(3)), entry(fastTrack())];
+    const c = await renderBlock({ proposal: proposed() });
+    expect(text(c)).toContain('Фича меняет бэкенд и экраны');
+    expect(text(c)).not.toContain('сменили вы');
+    await selectTemplate(c, 'global:fast-track');
+    expect(text(c)).toContain('сменили вы');
+    expect(text(c)).not.toContain('Фича меняет бэкенд и экраны');
+    expect(text(c)).toContain('обоснование к нему не относится');
+  });
+
+  it('proposal.state=none: «Модель не предложила маршрут», без шаблона «Подтвердить» выключена и рядом «Сначала шаблон.»', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ proposal: { state: 'none', templateId: '', scope: 'global', skipped: [] }, routeRequired: true });
+    expect(text(c)).toContain('Модель не предложила маршрут');
+    expect(text(c)).toContain('Сначала шаблон.');
+    expect(reactProps(byTestId(c, 'feature-workflow-confirm-submit')!)?.disabled).toBe(true);
+    expect(text(c)).toContain('Этапы появятся здесь, когда вы выберете шаблон');
+    await selectTemplate(c, 'global:full-cycle');
+    expect(text(c)).not.toContain('Сначала шаблон.');
+    expect(reactProps(byTestId(c, 'feature-workflow-confirm-submit')!)?.disabled).toBeFalsy();
+  });
+
+  it('идущий подбор: «Подбираем», «Выбрать вручную» открывает выбор шаблона', async () => {
+    catalog.entries = [entry(fullCycle(3))];
+    const c = await renderBlock({ routeRequired: true });
+    await act(async () => { (reactProps(byTestId(c, 'feature-workflow-confirm-recommend')!)!.onClick as () => void)(); });
+    expect(text(c)).toContain('Подбираем маршрут');
+    expect(selectOf(c)).toBeNull();
+    await act(async () => { (reactProps(byTestId(c, 'feature-workflow-confirm-manual')!)!.onClick as () => void)(); });
+    expect(selectOf(c)).not.toBeNull();
   });
 });

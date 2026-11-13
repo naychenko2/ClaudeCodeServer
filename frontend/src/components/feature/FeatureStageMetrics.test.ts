@@ -106,4 +106,35 @@ describe('FeatureStageMetrics', () => {
     }));
     expect(card(out, 'human')).toContain('45 мин · нужен ответ');
   });
+
+  it('таблица «Кто × Время/Ходы/Токены/Ожидание» с «Итого» и полосой из трёх сегментов', () => {
+    const out = html(mk());
+    expect(out).toContain('stage-metrics-table');
+    expect(out).toContain('Ожидание');
+    expect(out).toContain('Итого');
+    expect(out).toContain('1:14');
+    expect(out).toContain('0:41');
+    expect(out).toContain('stage-metrics-seg-executor');
+    expect(out).toContain('stage-metrics-seg-review');
+    expect(out).toContain('stage-metrics-seg-human');
+    expect(out).toContain('ждало вас 41 мин');
+    expect(out).toContain('Ожидание — время, пока этап стоял с вопросом к вам.');
+    expect(out).toContain('stage-metrics-details');
+  });
+
+  it('мало замеров — пустое состояние без таблицы', () => {
+    const out = html(mk({ review: null, human: { minutes: null, waits: 0, replies: 0, waitingNow: null } }));
+    expect(out).toContain('Замеров пока мало');
+    expect(out).toContain('Исполнитель работает 1 ч 14 мин');
+    expect(out).not.toContain('stage-metrics-table');
+  });
+
+  it('легаси (approx) — Notice и «Этап целиком ≈»', () => {
+    const out = html(mk({ mode: 'approx', executor: share({ minutes: 100, turns: null }), review: null,
+      human: { minutes: null, waits: null, replies: null, waitingNow: null } }));
+    expect(out).toContain('Старая фича: ходы и токены');
+    expect(out).toContain('Этап целиком');
+    expect(out).toContain('≈ 1:40');
+    expect(out).not.toContain('stage-metrics-seg-');
+  });
 });

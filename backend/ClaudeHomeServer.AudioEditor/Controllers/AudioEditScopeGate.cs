@@ -84,6 +84,15 @@ public sealed class AudioEditScopeGate(
         return true;
     }
 
+    // Пишущий путь или вход, которому нужен диск: «Личное» создаётся здесь, лениво (ADR-040 §1.2).
+    // Область проекта и личная область с готовой папкой возвращаются как есть; не вышло — тоже как есть
+    // (Project остаётся null), вызывающий отвечает отказом «папка недоступна»
+    public async Task<AudioEditScope> WithFolderAsync(AudioEditScope scope, CancellationToken ct = default)
+    {
+        if (!scope.IsPersonal || scope.Project is not null || personal is null) return scope;
+        return await personal.EnsureAsync(scope.TenantOwnerId, ct) is { } project ? scope with { Project = project } : scope;
+    }
+
     private static ObjectResult ChatNotFound() =>
         new(new { error = "Чат не найден", code = AudioEditErrorCodes.ChatNotFound }) { StatusCode = StatusCodes.Status404NotFound };
 }

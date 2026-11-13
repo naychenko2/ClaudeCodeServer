@@ -156,7 +156,9 @@ public sealed class StageScreenService(
     // Метрики этапа (D1b). T берётся только внутри фичи собственной задачи (FeatureId → эпик того же
     // арендатора), R(T) — только из её же задач: чужое в ответ не попадает (И3). Задача без эпика
     // (нет FeatureId, эпик пропал) — metrics = null: считать нечего, экран остальное отдаёт.
-    private StageMetrics? BuildMetrics(TaskItem task)
+    // claimed — ревью, уже учтённые в KPI этапа: общее ревью (ReviewOf из нескольких задач) входит в
+    // агрегат ровно один раз, у первой задачи, которая его встретила; null — одиночный экран задачи.
+    private StageMetrics? BuildMetrics(TaskItem task, HashSet<string>? claimed = null)
     {
         if (task.FeatureId is null) return null;
         var epic = tasks.GetById(task.FeatureId);
@@ -167,6 +169,11 @@ public sealed class StageScreenService(
                 && t.ReviewOf?.Contains(task.Id) == true)
             .OrderBy(t => t.CreatedAt)
             .ToList();
+        if (claimed is not null)
+        {
+            reviews = reviews.Where(r => !claimed.Contains(r.Id)).ToList();
+            foreach (var r in reviews) claimed.Add(r.Id);
+        }
 
         var read = journal?.Read(ownerId, epic.Id);
         IReadOnlyList<FeatureSpendRecord>? records = null;
@@ -190,6 +197,7 @@ public sealed class StageScreenService(
 
         var rows = new List<StageSummaryTask>();
         var metrics = new List<StageMetrics>();
+        var claimedReviews = new HashSet<string>(StringComparer.Ordinal);
         foreach (var group in byStep)
         {
             var main = group.OrderBy(t => t.Role == TaskRoles.Step ? 0 : 1).ThenBy(t => t.CreatedAt).First();
@@ -206,7 +214,7 @@ public sealed class StageScreenService(
             int? minutes = null;
             foreach (var t in chain)
             {
-                var m = BuildMetrics(t);
+                var m = BuildMetrics(t, claimedReviews);
                 if (m is null) continue;
                 metrics.Add(m);
                 if (m.Executor.Minutes is { } em) minutes = (minutes ?? 0) + em;
@@ -338,13 +346,13 @@ public sealed class StageScreenService(
             PersonaName(lead.PersonaId ?? lead.Stage?.PersonaId));
     }
 
-    // Чат исполнителя — только если читатель вправе его видеть (та же дверь, что у транскрипта)
+    // Чат исполнителя — только владельцу задачи (постановка B07): участнику проекта с правом Read
+    // sessionId не уходит, даже если транскрипт ему открыт (там своя дверь, строка ниже по файлу)
     private string? ExecutorSessionId(TaskItem task, string actorId)
     {
         var sessionId = task.LinkedSessionId;
         if (string.IsNullOrEmpty(sessionId)) return null;
-        var canSee = task.OwnerId == actorId || access?.ResolveSession(actorId, sessionId, ProjectRight.Read) is not null;
-        return canSee ? sessionId : null;
+        return task.OwnerId == actorId ? sessionId : null;
     }
 
     public StageResult<StageCommitDiff> BuildDiff(string taskId, string? sha, string actorId)

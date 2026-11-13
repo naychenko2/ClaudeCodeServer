@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Tasks;
+using ClaudeHomeServer.Services.Tasks.Journal;
 using FluentAssertions;
 using ClaudeHomeServer.Services.Access;
 using Microsoft.Extensions.Configuration;
@@ -132,6 +133,57 @@ public class StageSummaryTests : IDisposable
     }
 
     // Читатель видит задачу (доступ к проекту), но не чат исполнителя: sessionId не отдаётся
+    [Fact]
+    public void Общее_ревью_двух_задач_этапа_входит_в_KPI_один_раз()
+    {
+        var epic = Epic(routed: true);
+        var a = Step(epic, "B1", "back", _tim);
+        var b = Step(epic, "B2", "back", _tim);
+        var wf = epic.Workflow;
+        epic.Workflow = null;
+        var r = _tasks.Create(null, Owner, new CreateTaskRequest("общее ревью", FeatureId: epic.Id, Role: TaskRoles.Review, ReviewOf: [a.Id, b.Id]));
+        epic.Workflow = wf;
+        var t0 = a.CreatedAt; // окно этапа начинается с CreatedAt задачи, журнал отсчитываем от него
+        a.ClaudeStartedAt = t0;
+        a.Status = TaskItemStatus.Done; a.CompletedAt = t0.AddMinutes(20);
+        r.ClaudeStartedAt = t0.AddMinutes(100);
+        r.Status = TaskItemStatus.Done; r.CompletedAt = t0.AddMinutes(160);
+        var journal = new FeatureJournalStore(Path.Combine(_dir, "feature-journal"));
+        FeatureJournalEntry E(string kind, DateTime at, string taskId, DateTime? from = null, DateTime? to = null) =>
+            new() { At = at, Kind = kind, TaskId = taskId, StartedAt = from, EndedAt = to, Outcome = kind == "turn" ? "success" : null };
+        journal.Append(Owner, epic.Id, E("created", t0, epic.Id));
+        journal.Append(Owner, epic.Id, E("turn", t0.AddMinutes(20), a.Id, t0, t0.AddMinutes(20)));
+        journal.Append(Owner, epic.Id, E("turn", t0.AddMinutes(130), r.Id, t0.AddMinutes(100), t0.AddMinutes(130)));
+        journal.Append(Owner, epic.Id, E("waiting", t0.AddMinutes(140), r.Id));
+        journal.Append(Owner, epic.Id, E("waiting_cleared", t0.AddMinutes(150), r.Id));
+        var sut = new StageScreenService(_tasks, journal: journal, personas: new FakePersonas(_tim, _kira));
+
+        var kpi = sut.Build(a.Id, Owner).Value!.StageSummary.Kpi;
+
+        kpi.ExecMinutes.Should().Be(20);
+        kpi.ReviewMinutes.Should().Be(30, "ревью на обе задачи считается один раз, а не по разу на задачу");
+        kpi.WaitedHumanMinutes.Should().Be(10);
+        kpi.Turns.Should().Be(2, "ход исполнителя и ход ревью, без задвоения");
+        kpi.TotalMinutes.Should().Be(60);
+    }
+
+    [Fact]
+    public void Читатель_проекта_не_получает_сессию_исполнителя_даже_когда_транскрипт_ему_открыт()
+    {
+        var epic = Epic(routed: true);
+        var a = Step(epic, "B1", "back", _tim);
+        a.ProjectId = "p1";
+        a.LinkedSessionId = "sess-1";
+        var access = new Mock<IProjectAccess>();
+        var reader = new RequestScope(Stranger, Owner, ProjectRole.Reader);
+        access.Setup(x => x.Resolve(Stranger, "p1", It.IsAny<ProjectRight>())).Returns(reader);
+        access.Setup(x => x.ResolveSession(Stranger, "sess-1", It.IsAny<ProjectRight>())).Returns(reader);
+        var sut = new StageScreenService(_tasks, access.Object, personas: new FakePersonas(_tim, _kira));
+
+        sut.Build(a.Id, Stranger).Value!.StageSummary.ExecutorSessionId.Should().BeNull();
+        sut.Build(a.Id, Owner).Value!.StageSummary.ExecutorSessionId.Should().Be("sess-1");
+    }
+
     [Fact]
     public void Чужой_чат_исполнителя_не_отдаётся_а_свой_отдаётся()
     {

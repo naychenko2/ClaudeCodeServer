@@ -70,6 +70,8 @@ describe('FeatureWorkflowConfirm: мобильная строка и шторк�
     expect(row).toContain('Полный цикл · 4 из 5 этапов');
     expect(row).toContain('Посмотреть');
     expect(byId(c, 'sheet')).toBeNull();
+    // Полной лестницы в шапке нет — она только в шторке.
+    expect(byId(c, 'workflow-ladder')).toBeNull();
   });
 
   it('«Посмотреть» открывает шторку: подвал — «Подтвердить маршрут» и «Подобрать заново»', async () => {
@@ -80,6 +82,14 @@ describe('FeatureWorkflowConfirm: мобильная строка и шторк�
     expect(footer).toContain('Подтвердить маршрут');
     expect(footer).toContain('Подобрать заново');
     expect(byId(c, 'feature-workflow-confirm-submit')).not.toBeNull();
+    expect(byId(c, 'workflow-ladder')).not.toBeNull();
+  });
+
+  it('подтверждённый маршрут без перемен: тихая компактная строка, кнопки «Посмотреть» нет', async () => {
+    catalog.entries = [entry(tpl(3))];
+    const c = await render({ confirmed: CONFIRMED });
+    expect(byId(c, 'feature-workflow-confirm-mobile-open')).toBeNull();
+    expect(byId(c, 'feature-workflow-confirm-compact')).not.toBeNull();
   });
 
   it('«шаблон изменился»: строка с тегом, подвал — «Обновить маршрут до v4» и «Оставить v3»', async () => {

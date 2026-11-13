@@ -15,7 +15,10 @@ export interface WorkflowRouteSheetProps {
 
 export function WorkflowRouteSheet({ onClose, children, footer }: WorkflowRouteSheetProps): React.ReactElement {
   return (
-    <Modal title="Маршрут фичи" onClose={onClose} footer={footer}>
+    <Modal
+      title="Маршрут фичи" onClose={onClose}
+      footer={<div data-testid="workflow-route-sheet-footer" style={{ position: 'sticky', bottom: 0, display: 'flex', flexDirection: 'column', gap: 10 }}>{footer}</div>}
+    >
       <div data-testid="workflow-route-sheet" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
         {children}
       </div>

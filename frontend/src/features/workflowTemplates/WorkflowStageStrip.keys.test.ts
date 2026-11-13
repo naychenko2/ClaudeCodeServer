@@ -29,18 +29,51 @@ function rowKeys(list: WorkflowStage[]): Record<string, number> {
     onStagesChange: noop, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop,
   });
   const out: Record<string, number> = {};
-  const walk = (n: ReactNode) => {
-    if (Array.isArray(n)) { n.forEach(walk); return; }
+  // Ключ строки — ключ ближайшей ключеванной обёртки (сама строка лежит в ней без ключа).
+  const walk = (n: ReactNode, key: string | null) => {
+    if (Array.isArray(n)) { n.forEach(c => walk(c, key)); return; }
     if (!isValidElement(n)) return;
     const el = n as ReactElement<{ index?: number; children?: ReactNode }>;
-    if (el.type === WorkflowStageRow) out[String(el.key)] = el.props.index as number;
-    walk(el.props.children);
+    if (el.type === WorkflowStageRow) out[String(el.key ?? key)] = el.props.index as number;
+    walk(el.props.children, el.key !== null ? String(el.key) : key);
   };
-  walk(tree);
+  walk(tree, null);
+  return out;
+}
+
+// Путь предков каждой строки (тип/ключ каждого узла от корня до строки, включая обёртку строки).
+function rowParents(list: WorkflowStage[]): Record<string, string> {
+  const tree = WorkflowStageStrip({
+    stages: list, readOnly: false, specialties: [], personas: [], mcpChoices: [], errorsFor: () => [],
+    onStagesChange: noop, onStageChange: noop, onRenameStage: noop, onRemoveStage: noop,
+  });
+  const out: Record<string, string> = {};
+  const walk = (n: ReactNode, path: string[]) => {
+    if (Array.isArray(n)) { n.forEach(c => walk(c, path)); return; }
+    if (!isValidElement(n)) return;
+    const el = n as ReactElement<{ stage?: WorkflowStage; children?: ReactNode }>;
+    if (el.type === WorkflowStageRow) { out[(el.props.stage?.id ?? el.props.stage?.role) as string] = path.join('>'); return; }
+    const label = `${typeof el.type === 'string' ? el.type : 'C'}:${el.key ?? ''}`;
+    walk(el.props.children, [...path, label]);
+  };
+  walk(tree, []);
   return out;
 }
 
 describe('лента этапов — ключ строки по id этапа', () => {
+  it('после перестановки стрелкой путь предков строки не меняется', () => {
+    const before = rowParents(stages());
+    const after = rowParents(moveStage(stages(), 0, 1));
+    expect(after['cut']).toBe(before['cut']);
+    expect(after['plan']).toBe(before['plan']);
+  });
+
+  it('перестановка внутри и через рамку «параллельно» тоже не пересаживает строку', () => {
+    const before = rowParents(stages());
+    const after = rowParents(moveStage(stages(), 1, 3));
+    for (const k of ['cut', 'plan', 'step-back', 'step-front']) expect(after[k]).toBe(before[k]);
+  });
+
   it('ключ этапа не меняется после moveStage, меняется только его позиция', () => {
     const before = rowKeys(stages());
     const after = rowKeys(moveStage(stages(), 0, 1));

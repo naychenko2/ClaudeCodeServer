@@ -2,7 +2,7 @@
 // «параллельно», подсказки, «+ Добавить этап», пустое состояние. Состояний шаблона не держит:
 // список этапов приходит и уходит через onStagesChange, правку этапа — через onStageChange.
 
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, Workflow } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -164,13 +164,33 @@ export function WorkflowStageStrip({
           </Button>
         )}
       />
-      {groups.map(g => {
-        const rows = [];
-        for (let i = g.from; i <= g.to; i++) {
-          const s = stages[i];
-          rows.push(
+      {stages.map((s, i) => {
+        // Рамка «параллельно» — оформление обёртки самой строки (боковые рёбра, у крайних — верх/низ),
+        // а не контейнер группы: все обёртки лежат под одним родителем и ключуются id этапа,
+        // поэтому перестановка не пересаживает строку и не сбрасывает ей фокус и `open`.
+        const g = groups.find(x => i >= x.from && i <= x.to);
+        const inFrame = !!g?.parallel;
+        const first = inFrame && i === g!.from;
+        const last = inFrame && i === g!.to;
+        const edge = `1px dashed ${C.accentMuted}`;
+        const frameStyle: React.CSSProperties = inFrame ? {
+          borderLeft: edge, borderRight: edge,
+          borderTop: first ? edge : undefined, borderBottom: last ? edge : undefined,
+          borderTopLeftRadius: first ? R.xl : 0, borderTopRightRadius: first ? R.xl : 0,
+          borderBottomLeftRadius: last ? R.xl : 0, borderBottomRightRadius: last ? R.xl : 0,
+          paddingLeft: SP.sm, paddingRight: SP.sm,
+          paddingTop: SP.sm, paddingBottom: last ? SP.sm : 0,
+          // Внутри группы гасим зазор ленты, чтобы боковые рёбра шли без разрывов.
+          marginTop: first ? 0 : -SP.sm,
+        } : {};
+        return (
+          <div key={keys[i]} style={frameStyle}>
+            {first && (
+              <span style={{ display: 'block', marginBottom: SP.sm, fontSize: FS.xs, fontWeight: 600, color: C.accent, fontFamily: FONT.sans }}>
+                ⇉ колонка {g!.column} · параллельно
+              </span>
+            )}
             <WorkflowStageRow
-              key={keys[i]}
               stage={s}
               stages={stages}
               index={i}
@@ -188,22 +208,7 @@ export function WorkflowStageStrip({
               grip={{ onPointerDown: e => startDrag(i, e), onKeyDown: e => onGripKey(i, e) }}
               dragging={drag?.from === i}
               dropHere={!!drag && drag.over === i && drag.from !== i}
-            />,
-          );
-        }
-        if (!g.parallel) return <Fragment key={g.from}>{rows}</Fragment>;
-        return (
-          <div
-            key={g.from}
-            style={{
-              border: `1px dashed ${C.accentMuted}`, borderRadius: R.xl, padding: SP.sm,
-              display: 'flex', flexDirection: 'column', gap: SP.sm,
-            }}
-          >
-            <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.accent, fontFamily: FONT.sans }}>
-              ⇉ колонка {g.column} · параллельно
-            </span>
-            {rows}
+            />
           </div>
         );
       })}

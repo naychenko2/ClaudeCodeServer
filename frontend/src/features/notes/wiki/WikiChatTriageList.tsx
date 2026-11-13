@@ -17,9 +17,17 @@
 // ничего не выигрывает — пометка не меняет зон и порядка, а неверный оптимизм пришлось бы
 // откатывать). На время запроса кнопки пометок заблокированы. У чата исполнения задач кнопки
 // выключены с подсказкой (сигнал — см. TASK_REASON ниже).
+//
+// Фильтры и поиск (M1a, wiki-panels-v1-proposal «Отбор чатов» А1): над рамкой — SegmentedControl
+// «Ждут вас / Важные / Все» со счётчиками; по умолчанию «Ждут вас», если есть чат в action-зоне
+// (тот же ACTION_ZONES), иначе «Все»; выбор не запоминается. Поиск (TextField) — только при >10
+// чатов, клиентский, по name ?? sessionId без учёта регистра, вместе с сегментом. Пусто под
+// фильтром — EmptyState compact inline с текстом по состоянию; загрузка, отказ и «чатов нет
+// вообще» — как раньше. Рамка, её шапка и карточка строки — следующий шаг (M1b), здесь не
+// тронуты; число в шапке рамки равно тому, что под ней (иначе шапка лжёт о пустом списке).
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
-import { AlertTriangle, Ban, MessageSquare, Star } from 'lucide-react';
+import { AlertTriangle, Ban, MessageSquare, SearchX, Star } from 'lucide-react';
 import {
   C, FONT, FS, R, SHADOW, SP, useIsMobile,
   WikiError, loadWikiChats, setWikiChatMark,
@@ -28,7 +36,9 @@ import {
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { EmptyState } from '../../../components/ui/EmptyState';
+import { TextField } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
+import { SegmentedControl } from '../../../components/ui/Segmented';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { countWord, wikiErrorText } from './wikiLabels';
 
@@ -78,6 +88,41 @@ const TASK_REASON = 'ступень 0: чат исполнения задачи'
 export const TASK_HINT = 'Чат исполнителя задачи: пометки не действуют, знание приходит итогом задачи';
 
 export const isTaskChat = (i: WikiChatTriage): boolean => i.reason === TASK_REASON;
+
+// ─── Фильтры и поиск (M1a, план «Над рамкой» / «Что видно по умолчанию» / «Поиск») ───
+
+export type TriageFilter = 'awaiting' | 'important' | 'all';
+
+// Что видно по умолчанию: «Ждут вас», если есть хоть один чат в action-зоне (тот же
+// ACTION_ZONES), иначе «Все». Выбор не запоминается: в следующий раз человек должен сначала
+// увидеть то, что ждёт его решения.
+export const defaultFilter = (items: WikiChatTriage[]): TriageFilter =>
+  items.some(i => ACTION_ZONES.has(i.zone)) ? 'awaiting' : 'all';
+
+// Счётчики сегментов: «Ждут вас» — action-зоны, «Важные» — пометка человека 'important'
+// (N1b). Сегмент с нулём остаётся живым (muted), а не выключенным: он показывает, где такой
+// чат мог бы появиться, — завтрашняя картина списка не повод выключать выбор сегодня.
+export const triageCounts = (items: WikiChatTriage[]): Record<TriageFilter, number> => ({
+  awaiting: items.filter(i => ACTION_ZONES.has(i.zone)).length,
+  important: items.filter(i => i.mark === 'important').length,
+  all: items.length,
+});
+
+// Клиентский фильтр: сегмент плюс поиск по name ?? sessionId без учёта регистра (план:
+// «вместе с сегментом»). Порядок бэка не меняется: отфильтрованное сохраняет его.
+// Пробельный запрос — не поиск: он не фильтрует.
+export const filterTriage = (items: WikiChatTriage[], filter: TriageFilter, query: string): WikiChatTriage[] => {
+  const seg = items.filter(i =>
+    filter === 'awaiting' ? ACTION_ZONES.has(i.zone)
+    : filter === 'important' ? i.mark === 'important'
+    : true);
+  const q = query.trim().toLowerCase();
+  return q ? seg.filter(i => (i.name ?? i.sessionId).toLowerCase().includes(q)) : seg;
+};
+
+// Поиск показывается только в длинном списке (план «Поиск»): в коротком все имена видны
+// сразу, и поле — лишний контрол над пятью строками.
+const SEARCH_MIN_CHATS = 10;
 
 // Бейджи строки. Порядок — «действие поверх пометки» (дефект 82567033): для action-зон
 // первым идёт бейдж зоны, пометка — вторым (ряд заголовка flexWrap: непоместившийся
@@ -197,8 +242,13 @@ function TriageRow({ item, busy, onMark }: {
 // ─── Блок «Отбор чатов» ───
 
 export function WikiChatTriageList() {
+  const isMobile = useIsMobile();
   const [items, setItems] = useState<WikiChatTriage[] | null>(null);
   const [loadError, setLoadError] = useState<unknown>(null);
+  // Фильтр и запрос (M1a) живут в состоянии и нигде больше: выбор не запоминается —
+  // в следующий раз список открывается с дефолтного сегмента (defaultFilter)
+  const [filter, setFilter] = useState<TriageFilter | null>(null);
+  const [query, setQuery] = useState('');
   const [actionError, setActionError] = useState<string | null>(null);
   // Одна идущая пометка: вторая раньше ответа первой показала бы состояние, которого
   // сервер ещё не подтвердил (пометки на чате — одно поле, последняя побеждает)
@@ -246,6 +296,13 @@ export function WikiChatTriageList() {
     );
   }
 
+  // Что видно на экране: выбранный сегмент, а если человек не выбирал — дефолтный (M1a);
+  // запрос обрезается по пробелам: запрос из одних пробелов — не поиск
+  const q = query.trim();
+  const activeFilter: TriageFilter = items ? (filter ?? defaultFilter(items)) : 'all';
+  const counts = triageCounts(items ?? []);
+  const shown = items ? filterTriage(items, activeFilter, q) : [];
+
   return (
     <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>
@@ -270,19 +327,59 @@ export function WikiChatTriageList() {
         />
       ) : (
         <>
-          <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card, overflow: 'hidden', marginTop: SP.md }}>
-            <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', flexWrap: 'wrap', padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`, background: C.bgInset }}>
-              <b style={{ color: C.textHeading, fontSize: FS.md, flex: 1 }}>{countWord(items.length, 'чат', 'чата', 'чатов')}</b>
-              <span style={{ fontSize: FS.xs, color: C.textMuted }}>балл · состояние · причина · пометка</span>
+          {/* Над рамкой — сегменты со счётчиками (M1a, план «Над рамкой»): ноль — живой
+              (muted) сегмент, не выключенный; на тач — touch-раскладка сегментов */}
+          <div style={{ marginTop: SP.md }}>
+            <SegmentedControl
+              value={activeFilter}
+              onChange={setFilter}
+              touch={isMobile}
+              options={[
+                { value: 'awaiting', label: `Ждут вас · ${counts.awaiting}`, muted: counts.awaiting === 0 },
+                { value: 'important', label: `Важные · ${counts.important}`, muted: counts.important === 0 },
+                { value: 'all', label: `Все · ${counts.all}` },
+              ]}
+            />
+          </div>
+          {/* Поиск — только в длинном списке (план «Поиск»): в коротком имена видны сразу */}
+          {items.length > SEARCH_MIN_CHATS && (
+            <div style={{ marginTop: SP.sm }}>
+              <TextField value={query} onChange={setQuery} placeholder="Найти чат по названию" inputMode="search" />
             </div>
-            {items.map(it => (
-              <TriageRow key={it.sessionId} item={it} busy={busy} onMark={(item, mark) => { void doMark(item, mark); }} />
-            ))}
-          </div>
-          <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted }}>
-            «Важный» минует балл и модель, но не исключение чатов исполнителя задач. Закреплённый чат
-            и чат с «Итогом» считаются важными.
-          </div>
+          )}
+          {shown.length === 0 ? (
+            /* Пусто под фильтром (план «Состояния»): текст по состоянию. Сегмент «Все» с
+               пустым запросом не бывает пустым — последней ветки для него не случается */
+            <div style={{ marginTop: SP.md }}>
+              <EmptyState
+                compact inline
+                icon={q
+                  ? <SearchX size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />
+                  : <MessageSquare size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+                title={q
+                  ? `Ничего не нашлось по «${q}»`
+                  : activeFilter === 'awaiting' ? 'Ваших решений не ждёт ни один чат' : 'Важных чатов нет.'}
+                subtitle={q || activeFilter === 'awaiting' ? undefined : 'Пометьте звёздочкой то, что нельзя пропустить'}
+                action={q ? <Button variant="ghost" size="sm" onClick={() => setQuery('')}>Сбросить поиск</Button> : undefined}
+              />
+            </div>
+          ) : (
+            <>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card, overflow: 'hidden', marginTop: SP.md }}>
+                <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', flexWrap: 'wrap', padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`, background: C.bgInset }}>
+                  <b style={{ color: C.textHeading, fontSize: FS.md, flex: 1 }}>{countWord(shown.length, 'чат', 'чата', 'чатов')}</b>
+                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>балл · состояние · причина · пометка</span>
+                </div>
+                {shown.map(it => (
+                  <TriageRow key={it.sessionId} item={it} busy={busy} onMark={(item, mark) => { void doMark(item, mark); }} />
+                ))}
+              </div>
+              <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted }}>
+                «Важный» минует балл и модель, но не исключение чатов исполнителя задач. Закреплённый чат
+                и чат с «Итогом» считаются важными.
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

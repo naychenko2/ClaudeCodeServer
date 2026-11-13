@@ -69,6 +69,8 @@ public sealed class VideoEditorSubsystem : IAppSubsystem
         // Чтение кадров сцены: файлы проекта и (швом IImageFrameSource, необязательным) версии нитей «Картинок»
         services.AddSingleton<Jobs.VideoFrameReader>();
         services.AddSingleton<Jobs.VideoJobThreads>();
+        // Шов «Звук → Видео сцены» (Ш4): клип версии для озвучки и версия сцены со вклеенным звуком
+        services.AddSingleton<IVideoSceneSound, Jobs.VideoSceneSound>();
         services.AddSingleton<Jobs.VideoEditJobService>();
         // Операции над сценами, общие для ручек и тулсета агента: проверки, якорь в ленте, рассылка
         services.AddSingleton<Scenes.VideoSceneService>();

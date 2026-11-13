@@ -126,6 +126,12 @@ public sealed class AudioStartJobForm
     public string? VoiceIndexPath { get; set; }
     // Голос из библиотеки «Голоса»: voice:<slug>
     public string? Voice { get; set; }
+    // Звук по видео: файл проекта (VideoPath) либо версия сцены чата (VideoSceneId, VideoVersionId — пусто: текущая).
+    // PasteIntoScene — по готовности добавить в сцену новую версию со вклеенным звуком (только у версии сцены)
+    public string? VideoPath { get; set; }
+    public string? VideoSceneId { get; set; }
+    public string? VideoVersionId { get; set; }
+    public bool? PasteIntoScene { get; set; }
     // Ревизия контекста чата (ADR-023 §Д2.1)
     public long? ContextRevision { get; set; }
 }

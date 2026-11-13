@@ -65,6 +65,7 @@ public sealed class AudioEditJobService : IDisposable
     private readonly ISessionDirectory? _sessions;
     private readonly Voices.VoiceLibrary? _voices;
     private readonly ChatContext.AudioContextLaunch? _context;
+    private readonly ClaudeHomeServer.Services.Media.IVideoSceneSound? _videoScenes;
     private readonly ILogger<AudioEditJobService> _log;
     private readonly TimeProvider _time;
     private readonly ConcurrentDictionary<string, Quote> _quotes = new();
@@ -84,8 +85,10 @@ public sealed class AudioEditJobService : IDisposable
         TimeProvider? time = null,
         Voices.VoiceLibrary? voices = null,
         ChatContext.AudioContextLaunch? context = null,
-        ISessionDirectory? sessions = null)
+        ISessionDirectory? sessions = null,
+        ClaudeHomeServer.Services.Media.IVideoSceneSound? videoScenes = null)
     {
+        _videoScenes = videoScenes;
         _sessions = sessions;
         _context = context;
         _engines = engines;
@@ -151,6 +154,8 @@ public sealed class AudioEditJobService : IDisposable
         public bool SpendWritten { get; set; }
         public double? RecordedAmount { get; set; }
         public Task Completion { get; set; } = Task.CompletedTask;
+        // Звук по видео: версия сцены, от которой озвучка (null — видеофайл проекта)
+        public AudioVideoLink? VideoLink { get; set; }
 
         public bool IsActive => Status is AudioEditJobStatus.Queued or AudioEditJobStatus.Running or AudioEditJobStatus.Downloading;
     }
@@ -358,6 +363,8 @@ public sealed class AudioEditJobService : IDisposable
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, QuoteMismatchText);
         if (await CheckParamsAsync(engine, quote.Model, quote.Op, parameters, ct) is { } badParams)
             return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, badParams);
+        if (quote.Op == AudioOp.VideoToAudio && input.Video is null)
+            return Fail<AudioJobCreatedDto>(AudioEditErrorCodes.InvalidRequest, "Для звука по видео нужно видео: версия сцены или файл проекта");
         var voice = await ResolveVoiceAsync(ownerId, scope, quote, engine, input.Voice, ct);
         if (voice.ErrorCode is not null)
             return new AudioEditCallResult<AudioJobCreatedDto>(null, voice.ErrorCode, voice.Error) { Recreate = voice.Recreate };
@@ -411,7 +418,8 @@ public sealed class AudioEditJobService : IDisposable
             input.Language, input.DurationSec, input.StartSec, input.EndSec, parameters,
             input.Source, input.Reference, input.Clips, input.VoiceModel, input.VoiceIndex, input.Seed, voice.Value,
             OwnerId: job.OwnerId, SessionId: job.ChatSessionId, Heavy: HeavyOf(job),
-            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id);
+            ProjectId: job.Scope.Project?.Id, SourceJobId: job.Id, Video: input.Video);
+        job.VideoLink = input.VideoLink;
         job.Completion = Task.Run(() => RunAsync(job, engine, request));
 
         _workspace.Sweep(Now());
@@ -423,6 +431,7 @@ public sealed class AudioEditJobService : IDisposable
         AudioResult? failure = null;
         var cancelled = false;
         var costs = new List<AudioCost?>();
+        AudioFile? pasteAudio = null;
         try
         {
             for (var variant = 1; variant <= job.Quote.Count; variant++)
@@ -461,6 +470,8 @@ public sealed class AudioEditJobService : IDisposable
                     break;
                 }
                 OnAccepted(job);
+                if (variant == 1 && job.VideoLink is { Paste: true })
+                    pasteAudio = result.Files.FirstOrDefault(f => f.Role == AudioFileRoles.Main);
                 costs.Add(result.ActualCost);
                 lock (job.Gate) job.Variants.Add(saved);
             }
@@ -468,7 +479,10 @@ public sealed class AudioEditJobService : IDisposable
             int ready;
             lock (job.Gate) ready = job.Variants.Count;
             if (!cancelled && ready > 0)
-                await CompleteAsync(job, costs, failure?.Error);
+            {
+                var pasteError = pasteAudio is null ? null : await PasteIntoSceneAsync(job, request, pasteAudio);
+                await CompleteAsync(job, costs, failure?.Error ?? pasteError);
+            }
             else
                 await FailAsync(job, engine,
                     cancelled ? AudioResult.Fail(AudioOutcome.Cancelled, "Остановлено по запросу", charged: null)
@@ -484,6 +498,26 @@ public sealed class AudioEditJobService : IDisposable
                 job.Outcome = AudioOutcome.Failed;
                 job.Error = "Не удалось сохранить результат";
             }
+        }
+    }
+
+    // Звук по видео сцены: готовая дорожка первого варианта встаёт новой версией сцены (шов IVideoSceneSound).
+    // Сбой не ломает задачу — звук уже версия нити: возвращаем текст для partialError
+    private async Task<string?> PasteIntoSceneAsync(Job job, AudioRequest request, AudioFile audio)
+    {
+        if (job.VideoLink is not { Paste: true } link || job.ChatSessionId is not { } sessionId) return null;
+        if (_videoScenes is null) return "Звук готов, но модуль «Видео» не подключён: версия сцены не добавлена";
+        try
+        {
+            var added = await _videoScenes.AddSoundVersionAsync(
+                new ClaudeHomeServer.Services.Media.VideoSceneRef(job.OwnerId, job.Scope.Key, sessionId, link.SceneId, link.VersionId),
+                audio.Bytes, audio.Extension, request.Model, CancellationToken.None);
+            return added.VersionId is null ? "Звук готов, но в сцену он не вклеился: " + added.Error : null;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Звук: версия сцены {SceneId} со звуком задачи {JobId} не добавлена", link.SceneId, job.Id);
+            return "Звук готов, но в сцену он не вклеился: сбой записи версии";
         }
     }
 

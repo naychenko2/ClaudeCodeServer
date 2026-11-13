@@ -106,15 +106,17 @@ public sealed class FfmpegVideoDsp(
         return Finish(run, outPath, "Не удалось снять последний кадр.");
     }
 
-    // Копия без перекодирования: картинка из videoPath, звук первой дорожки audioSourcePath (нет дорожки — одна картинка)
-    public async Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioSourcePath, string outPath, CancellationToken ct)
+    // Вклейка звука: видеодорожка копируется, звук — AAC (источник — аудиофайл или ролик); нет звуковой дорожки
+    // у источника — копия одного видео; -shortest держит длину по видео
+    public async Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioPath, string outPath, CancellationToken ct)
     {
         if (!Available) return VideoDspResult.Fail(Unavailable);
-        if (!Rooted(videoPath) || !Rooted(audioSourcePath) || !Rooted(outPath)) return VideoDspResult.Fail("Пути к файлам должны быть полными.");
+        if (!Rooted(videoPath) || !Rooted(audioPath) || !Rooted(outPath))
+            return VideoDspResult.Fail("Пути к файлам должны быть полными.");
         var run = await RunShortAsync(Ffmpeg, [.. Head, "-protocol_whitelist", "file", "-i", videoPath,
-            "-protocol_whitelist", "file", "-i", audioSourcePath, "-map", "0:v:0", "-map", "1:a:0?", "-c", "copy",
-            "-shortest", "-movflags", "+faststart", outPath], ct);
-        return Finish(run, outPath, "Не удалось вернуть звук в ролик.");
+            "-protocol_whitelist", "file", "-i", audioPath, "-map", "0:v:0", "-map", "1:a:0?", "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", "-f", "mp4", outPath], ct);
+        return Finish(run, outPath, "Не удалось вклеить звук в видео.");
     }
 
     // ── Сборка фильма ─────────────────────────────────────────────────────────────

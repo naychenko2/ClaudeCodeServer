@@ -10,12 +10,12 @@ public class AudioCatalogTests
     private static AudioModelInfo Model(string id) => AudioCatalog.Local.Single(m => m.Info.Id == id).Info;
 
     [Fact]
-    public void Local_CoversAllNineLocalMediaOps()
+    public void Local_CoversAllElevenLocalMediaOps()
     {
         var covered = AudioCatalog.Local.SelectMany(m => m.Bindings.Values).Select(b => b.Op).ToHashSet();
 
         covered.Should().BeEquivalentTo(Enum.GetValues<LocalAudioOp>());
-        Enum.GetValues<LocalAudioOp>().Should().HaveCount(9);
+        Enum.GetValues<LocalAudioOp>().Should().HaveCount(11);
     }
 
     [Fact]
@@ -64,9 +64,16 @@ public class AudioCatalogTests
     {
         AudioCatalog.Local.Should().OnlyContain(m => m.Info.Caps.PriceUnit == AudioPriceUnits.Free);
         AudioCatalog.Local.SelectMany(m => m.Info.Caps.Ops).Should().NotContain(op => AudioOps.IsNoAi(op));
-        // Тяжёлые у local-media: обучение голоса и extract/lego/complete (LocalMediaService.IsHeavyAudio)
-        var heavy = AudioCatalog.Local.SelectMany(m => m.Info.Caps.Ops.Where(m.Info.Caps.IsHeavy)).ToHashSet();
-        heavy.Should().BeEquivalentTo([AudioOp.TrainVoice, AudioOp.Extract, AudioOp.Lego, AudioOp.Complete]);
+        // Тяжёлые у local-media: обучение голоса, extract/lego/complete и эффекты MOSS-SFX / Foley XXL
+        // (LocalMediaService.IsHeavyAudio) — тяжесть у модели, а не у операции целиком
+        var heavy = AudioCatalog.Local
+            .SelectMany(m => m.Info.Caps.Ops.Where(m.Info.Caps.IsHeavy).Select(op => (m.Info.Id, op))).ToHashSet();
+        heavy.Should().BeEquivalentTo(new[]
+        {
+            (AudioCatalog.Rvc, AudioOp.TrainVoice),
+            (AudioCatalog.AceStep, AudioOp.Extract), (AudioCatalog.AceStep, AudioOp.Lego), (AudioCatalog.AceStep, AudioOp.Complete),
+            (AudioCatalog.MossSfx, AudioOp.Sfx), (AudioCatalog.FoleyXxl, AudioOp.VideoToAudio),
+        });
     }
 
     [Fact]
@@ -83,7 +90,9 @@ public class AudioCatalogTests
         AudioCatalog.Resolve(models, AudioOp.Speak, AudioCatalog.AutoModelId)!.Id.Should().Be(AudioCatalog.QwenTts);
         AudioCatalog.Resolve(models, AudioOp.Speak, AudioCatalog.MossTts)!.Id.Should().Be(AudioCatalog.MossTts);
         AudioCatalog.Resolve(models, AudioOp.Song, AudioCatalog.QwenTts).Should().BeNull();
-        AudioCatalog.Resolve(models, AudioOp.Sfx, null).Should().BeNull();
+        // «Авто» для эффектов — первая локальная модель операции (MOSS-SFX), для звука по видео — Foley XL
+        AudioCatalog.Resolve(models, AudioOp.Sfx, null)!.Id.Should().Be(AudioCatalog.MossSfx);
+        AudioCatalog.Resolve(models, AudioOp.VideoToAudio, AudioCatalog.AutoModelId)!.Id.Should().Be(AudioCatalog.FoleyXl);
     }
 
     [Fact]

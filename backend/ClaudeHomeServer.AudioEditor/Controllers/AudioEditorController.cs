@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Services.Media;
 using System.Diagnostics.CodeAnalysis;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
 using ClaudeHomeServer.Services.AudioEditor.Prefs;
@@ -25,8 +26,9 @@ public class AudioEditorController(
     Engines.DspAudioEngine dsp,
     AudioConcatService concat,
     IProjectFiles? files = null,
-    ChatContext.AudioContextLaunch? context = null)
-    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context)
+    ChatContext.AudioContextLaunch? context = null,
+    IVideoSceneSound? videoScenes = null)
+    : AudioEditorEndpoints(engines, jobs, threads, prefs, workspace, dsp, concat, context, videoScenes)
 {
     private readonly AudioJobThreads _threads = threads;
     private readonly AudioEditWorkspace _workspace = workspace;

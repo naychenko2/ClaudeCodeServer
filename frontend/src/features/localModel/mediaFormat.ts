@@ -339,6 +339,11 @@ const OP_LABEL: Record<string, string> = {
   audio_to_midi: 'в MIDI',
   audio_enhance: 'улучшение',
   transcribe: 'транскрипт',
+  audio_sfx: 'эффект',
+  video_to_audio: 'звук по видео',
+  // Редактор звука называет операцию именем AudioOp (camelCase)
+  sfx: 'эффект',
+  videoToAudio: 'звук по видео',
   lora_train: 'обучение LoRA',
   lora_delete: 'удаление LoRA',
   editor_inputs: 'входы редактора',

@@ -75,6 +75,10 @@ public static partial class AudioCatalog
     public const string BasicPitch = "basic-pitch";
     public const string SeedVc = "seed-vc";
     public const string Rvc = "rvc";
+    public const string MossSfx = "moss-sfx-v2";
+    public const string MmAudio = "mmaudio-large-44k";
+    public const string FoleyXl = "hunyuanvideo-foley-xl";
+    public const string FoleyXxl = "hunyuanvideo-foley-xxl";
 
     // Привязка операции модуля к операции шва ILocalAudioMedia: фиксированные аргументы (engine, task,
     // mode) — под именами инструментов local-media; Params запроса их не перебивают
@@ -91,6 +95,11 @@ public static partial class AudioCatalog
     private const int ReferenceMaxSec = 60;
     private const int UpsampleMaxSec = 120;
     private const int InputMaxSec = 600;
+    // Эффекты и звук по видео (замеры стенда 13.11.2026, LocalMediaService.Audio): длины клипов
+    private const int SfxPromptChars = 1000;
+    private const int SfxMossMaxSec = 10;
+    private const int MmAudioMaxSec = 8;
+    private const int FoleyMaxSec = 10;
 
     private static readonly string[] QwenLanguages = ["ru", "en", "zh", "ja", "ko", "de", "fr", "pt", "es", "it"];
 
@@ -174,6 +183,39 @@ public static partial class AudioCatalog
             ops => new AudioCaps(ops, [], [AudioVoiceKind.Rvc], [AudioOutputs.Audio, AudioOutputs.Model, AudioOutputs.Index],
                 AudioLicenses.Mit, AudioPriceUnits.Free, InputMaxSec: InputMaxSec, LanguageNeutral: true,
                 HeavyOps: [AudioOp.TrainVoice])),
+
+        // Эффекты по тексту и звук по видео (Ш4). Первая модель операции — умолчание «Авто»:
+        // эффекты — MOSS-SFX, звук по видео — Foley XL; MMAudio — «быстро», Foley XXL — «качественно».
+        // Строки легко убрать по итогам недели живого использования: каждая модель — одна запись
+        Model(MossSfx, "MOSS-SoundEffect v2 · по умолчанию", new Dictionary<AudioOp, LocalBinding>
+            {
+                [AudioOp.Sfx] = Bind(LocalAudioOp.Sfx, ("engine", "moss")),
+            },
+            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.Apache2, AudioPriceUnits.Free,
+                MaxTextChars: SfxPromptChars, MinDurationSec: 1, MaxDurationSec: SfxMossMaxSec, LanguageNeutral: true,
+                HeavyOps: [AudioOp.Sfx])),
+        Model(FoleyXl, "HunyuanVideo-Foley XL · по умолчанию", new Dictionary<AudioOp, LocalBinding>
+            {
+                [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "foley-xl")),
+            },
+            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.TencentHunyuan, AudioPriceUnits.Free,
+                MaxTextChars: SfxPromptChars, InputMaxSec: FoleyMaxSec, LanguageNeutral: true)),
+        Model(FoleyXxl, "HunyuanVideo-Foley XXL · качественно", new Dictionary<AudioOp, LocalBinding>
+            {
+                [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "foley-xxl")),
+            },
+            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.TencentHunyuan, AudioPriceUnits.Free,
+                MaxTextChars: SfxPromptChars, InputMaxSec: FoleyMaxSec, LanguageNeutral: true,
+                HeavyOps: [AudioOp.VideoToAudio])),
+        Model(MmAudio, "MMAudio · быстро", new Dictionary<AudioOp, LocalBinding>
+            {
+                [AudioOp.Sfx] = Bind(LocalAudioOp.Sfx, ("engine", "mmaudio")),
+                [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "mmaudio")),
+            },
+            // Код MIT, веса CC BY-NC 4.0 (README MMAudio)
+            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.CcByNc4, AudioPriceUnits.Free,
+                MaxTextChars: SfxPromptChars, MinDurationSec: 1, MaxDurationSec: MmAudioMaxSec, InputMaxSec: MmAudioMaxSec,
+                LanguageNeutral: true)),
 
         // Музыка
         Model(AceStep, "ACE-Step 1.5 XL", new Dictionary<AudioOp, LocalBinding>

@@ -1,9 +1,11 @@
 // Тесты блока подтверждения маршрута (C2, доработка по вердикту R-C2): строка «шаблон
 // изменился» — только про правку ПОДТВЁЖДЁННОГО шаблона: выбор другого шаблона в Select
 // строки не даёт (это смена выбора, не правка маршрута), а правка подтверждённого шаблона
-// при выбранном другом — строка есть, с версиями подтверждённого (v3 → v4). Окружение node:
-// mount (fakeDom), каталог — заглушка workflowTemplatesApi; «Подобрать» в этих тестах не
-// нажимается (его гонка — в модели, applyRecommend).
+// при выбранном другом — строка есть, с версиями подтверждённого (v3 → v4). Плюс показ
+// имён этапов (дефект 56a684c0): имя из шаблона — имя строки и основа aria-label, фолбэк
+// без имени — прежний (подпись роли + машинный id). Окружение node: mount (fakeDom),
+// каталог — заглушка workflowTemplatesApi; «Подобрать» в этих тестах не нажимается
+// (его гонка — в модели, applyRecommend).
 
 import { act, createElement } from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -47,6 +49,16 @@ const fastTrack = (): WorkflowTemplate =>
     st({ role: 'step', lane: 'back' }),
     st({ role: 'review', presence: 'optional' }),
     st({ role: 'merge' }),
+  ]);
+
+// «Параллельный цикл» — спорный случай дефекта 56a684c0: два qa-этапа, различимых только
+// именем (с именами — как шаблон с 14777aa1f; без — легаси-состав для проверки фолбэка).
+const parallelCycle = (withTitles: boolean): WorkflowTemplate =>
+  tpl('parallel-cycle', 2, [
+    st({ role: 'plan' }),
+    st({ id: 'qa-plan', role: 'qa', presence: 'optional', ...(withTitles ? { title: 'Проверка плана' } : {}) }),
+    st({ id: 'qa', role: 'qa', presence: 'optional', ...(withTitles ? { title: 'Проверка' } : {}) }),
+    st({ role: 'final' }),
   ]);
 
 const entry = (template: WorkflowTemplate): WorkflowTemplateEntry => ({ scope: 'global', projectId: null, template });
@@ -127,5 +139,28 @@ describe('FeatureWorkflowConfirm: строка «шаблон изменился
     expect(t).toContain('Шаблон изменился: v3 → v4, обновить маршрут?');
     // Версии подтверждённого шаблона, а не выбранного B (v5): ложного «v3 → v5» нет.
     expect(t).not.toContain('v3 → v5');
+  });
+});
+
+describe('FeatureWorkflowConfirm: имена этапов в списке (дефект 56a684c0)', () => {
+  beforeEach(() => { installFakeDom(); });
+  afterEach(() => { uninstallFakeDom(); });
+
+  it('шаблон с именами: имя — имя строки и основа aria-label, параллельные этапы одной роли различимы', async () => {
+    catalog.entries = [entry(parallelCycle(true))];
+    const c = await renderBlock({ proposal: { templateId: 'parallel-cycle', scope: 'global', skipped: [] } });
+    // Имя из шаблона видно в строке (роль и id — серой подписью рядом, как в редакторе).
+    expect(text(c)).toContain('Проверка плана');
+    // Оба съёмных qa-этапа опознаются именем, а не машинным id.
+    expect(findNodeByAttr(c, 'aria-label', 'Этап «Проверка плана» включён в маршрут')).not.toBeNull();
+    expect(findNodeByAttr(c, 'aria-label', 'Этап «Проверка» включён в маршрут')).not.toBeNull();
+  });
+
+  it('этап без имени — фолбэк прежний: подпись роли и машинный id', async () => {
+    catalog.entries = [entry(parallelCycle(false))];
+    const c = await renderBlock({ proposal: { templateId: 'parallel-cycle', scope: 'global', skipped: [] } });
+    // Имени нет → строка как до правки: роль «Проверка» + id «qa-plan».
+    expect(text(c)).toContain('qa-plan');
+    expect(findNodeByAttr(c, 'aria-label', 'Этап «Проверка» включён в маршрут')).not.toBeNull();
   });
 });

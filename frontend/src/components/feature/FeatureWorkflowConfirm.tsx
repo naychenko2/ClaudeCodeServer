@@ -13,6 +13,9 @@
 //
 // Этапы — по id: порядок как в маршруте (normalizeStages, G6a), линия (бэк/фронт) — рядом
 // с подписью роли, только когда задана; переключатель — только у съёмных optional.
+// Имя строки — title из шаблона, фолбэк — подпись роли (тот же порядок, что nameShown в
+// WorkflowStageRow и nodeTitle в FeatureProcessGraph): с именем параллельные этапы одной
+// роли различимы по нему, роль и id остаются серой подписью строки.
 // Вид карточки — как FeatureAskBlock/FeaturePageAlert: поля SP.md, R.lg, спокойный тон
 // bgSelected/borderLight; тревожная строка («шаблон изменился», отказ) — токены Notice.
 // Мобила 360: кнопки полной шириной, тач-цели ≥40 (Checkbox — 40×40 из ui-кита).
@@ -253,6 +256,11 @@ export function FeatureWorkflowConfirm({
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {stages.map(s => {
             const label = STAGE_ROLE_LABEL[s.role] ?? s.role;
+            // Имя этапа для показа (тот же порядок, что nameShown в редакторе и nodeTitle в
+            // FeatureProcessGraph): имя из шаблона, фолбэк — подпись роли. Роль и id остаются
+            // подписью строки: с именем этапы одной роли различимы, без него — как раньше.
+            const titleText = (s.title ?? '').trim();
+            const nameShown = titleText || label;
             const lane = laneWord(s.lane ?? null);
             const off = (s.presence ?? '').trim() === 'off';
             const dropped = removedSet.has(s.id ?? '');
@@ -272,7 +280,10 @@ export function FeatureWorkflowConfirm({
                     textDecoration: dimmed ? 'line-through' : undefined,
                   }}
                 >
-                  {label}
+                  {nameShown}
+                  {titleText && (
+                    <span style={{ marginLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{label}</span>
+                  )}
                   {s.id !== s.role && (
                     <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
                       {s.id}
@@ -286,7 +297,7 @@ export function FeatureWorkflowConfirm({
                     <Checkbox
                       checked={!dropped}
                       onChange={() => toggleRemoved(s.id ?? '')}
-                      ariaLabel={`Этап «${label}» включён в маршрут`}
+                      ariaLabel={`Этап «${nameShown}» включён в маршрут`}
                     />
                   </span>
                 )}

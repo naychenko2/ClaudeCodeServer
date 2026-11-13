@@ -113,6 +113,12 @@ export interface WorkflowProposal {
   rationale?: string | null;
   proposedAt?: string | null;
   model?: string | null;
+  // Состояние предложения: 'none' — модель не предложила маршрут (templateId тогда нет,
+  // api.recommendWorkflow такой ответ отдаёт как null). Нет поля — предложение.
+  state?: 'proposed' | 'none';
+  reason?: string | null;
+  needsHuman?: boolean;
+  doubtReason?: string | null;
 }
 
 // Тело POST /api/tasks/{id}/workflow/confirm (B4b): человек может прислать шаблон и пропуски,

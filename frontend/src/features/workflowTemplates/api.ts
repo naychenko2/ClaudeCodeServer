@@ -55,7 +55,11 @@ export const workflowTemplatesApi = {
   recommendWorkflow: async (epicId: string, signal?: AbortSignal): Promise<WorkflowProposal | null> => {
     const resp = await request<{ proposal?: WorkflowProposal | null }>(
       `/tasks/${encodeURIComponent(epicId)}/workflow/recommend`, { method: 'POST', signal });
-    return resp?.proposal ?? null;
+    const proposal = resp?.proposal ?? null;
+    // «Предложения нет» сервер отдаёт объектом {state:'none', reason}: он truthy, но
+    // предложением не является. Ответ без state — по-прежнему предложение.
+    if (proposal?.state && proposal.state !== 'proposed') return null;
+    return proposal;
   },
 
   // Подтверждение маршрута (B4b): единственный писатель epic.Workflow, только человек (И7).

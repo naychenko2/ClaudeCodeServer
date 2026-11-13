@@ -340,4 +340,12 @@ describe('api — отказ различим по коду (Контракт к
     request.mockResolvedValue({ proposal: null });
     expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBeNull();
   });
+
+  it('recommend: state=none никогда не становится предложением, настоящее проходит', async () => {
+    request.mockResolvedValue({ proposal: { state: 'none', reason: 'invalid' } });
+    expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBeNull();
+    const proposed = { state: 'proposed' as const, templateId: 'x', scope: 'global' as const, skipped: [] };
+    request.mockResolvedValue({ proposal: proposed });
+    expect(await workflowTemplatesApi.recommendWorkflow('e1')).toBe(proposed);
+  });
 });

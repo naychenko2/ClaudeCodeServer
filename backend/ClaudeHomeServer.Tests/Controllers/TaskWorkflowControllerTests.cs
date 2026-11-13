@@ -370,9 +370,159 @@ public class TaskWorkflowControllerTests : IClassFixture<TaskWorkflowControllerT
         resp.StatusCode.Should().Be(HttpStatusCode.OK,
             "подбор не удался — обычное рабочее состояние, маршрут выбирает человек");
         var body = JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
-        body.GetProperty("proposal").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("proposal").GetProperty("state").GetString().Should().Be("none");
+        body.GetProperty("proposal").GetProperty("reason").GetString().Should().Be("no_answer");
         Tasks.GetById(epic.Id)!.WorkflowProposal.Should().BeNull();
         Tasks.GetById(epic.Id)!.Workflow.Should().BeNull();
+    }
+
+    // ─── B03: контракт предложения и подтверждения ──────────────────────────────────────
+
+    [Fact]
+    public async Task Recommend_МусорныйОтвет_StateNone_ReasonInvalid()
+    {
+        var epic = Epic();
+        _host.Runner.Reset();
+        _host.Runner.Text = "{\"templateId\":\"нет-такого\"}";
+
+        var body = await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/recommend");
+        body.GetProperty("proposal").GetProperty("state").GetString().Should().Be("none");
+        body.GetProperty("proposal").GetProperty("reason").GetString().Should().Be("invalid");
+    }
+
+    [Fact]
+    public async Task Recommend_Предложение_StateProposed_СNeedsHumanDoubtReasonProposedAt()
+    {
+        var epic = Epic();
+        _host.Runner.Reset();
+        _host.Runner.Text = """
+            {"templateId":"builtin-full-cycle","rationale":"выбор неочевиден","needsHuman":true,"doubtReason":"ambiguous"}
+            """;
+
+        var p = (await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/recommend")).GetProperty("proposal");
+        p.GetProperty("state").GetString().Should().Be("proposed");
+        p.GetProperty("needsHuman").GetBoolean().Should().BeTrue();
+        p.GetProperty("doubtReason").GetString().Should().Be("ambiguous");
+        p.GetProperty("rationale").GetString().Should().Be("выбор неочевиден");
+        p.GetProperty("proposedAt").GetDateTime().Should().BeAfter(DateTime.UtcNow.AddMinutes(-1));
+    }
+
+    [Fact]
+    public async Task ПослеConfirm_ConfirmedНесётRationaleПредложения_ПредложениеВОтветеNull()
+    {
+        var epic = Epic();
+        _host.Runner.Reset();
+        _host.Runner.Text = """
+            {"templateId":"builtin-fast-track","rationale":"малая правка","needsHuman":true,"doubtReason":"low-confidence"}
+            """;
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/recommend");
+
+        var confirm = await _owner.PostAsJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm",
+            new { templateId = FullCycle, skipped = Array.Empty<string>() });
+        confirm.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Предложение сервер не стирает; в GET оно доезжает как confirmed.* (только чтение)
+        var get = JsonSerializer.Deserialize<JsonElement>(
+            await (await _owner.GetAsync($"/api/tasks/{epic.Id}/workflow")).Content.ReadAsStringAsync());
+        get.GetProperty("proposal").ValueKind.Should().Be(JsonValueKind.Null);
+        var c = get.GetProperty("confirmed");
+        c.GetProperty("rationale").GetString().Should().Be("малая правка");
+        c.GetProperty("proposedTemplateId").GetString().Should().Be(FastTrack);
+        c.GetProperty("templateId").GetString().Should().Be(FullCycle);
+        c.GetProperty("needsHuman").GetBoolean().Should().BeTrue();
+        c.GetProperty("doubtReason").GetString().Should().Be("low-confidence");
+        Tasks.GetById(epic.Id)!.WorkflowProposal.Should().NotBeNull();
+    }
+
+    /// Клон встроенного fast-track под уникальным id: поднимать версию встроенного нельзя —
+    /// хост общий для всех тестов класса.
+    private string OwnTemplate()
+    {
+        var t = Templates.Get(FastTrack, WorkflowTemplateScope.Global)!;
+        t.Id = "b03-" + Guid.NewGuid().ToString("N")[..8];
+        t.BuiltInKey = null;
+        t.Name = "b03";
+        return Templates.Save(t, WorkflowTemplateScope.Global).Id;
+    }
+
+    private void BumpTemplate(string id)
+    {
+        var t = Templates.Get(id, WorkflowTemplateScope.Global)!;
+        Templates.Save(t, WorkflowTemplateScope.Global);
+    }
+
+    private async Task<JsonElement> PostJsonAsync(string url, object? body = null)
+    {
+        var resp = body is null ? await _owner.PostAsync(url, null) : await _owner.PostAsJsonAsync(url, body);
+        resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
+        return JsonSerializer.Deserialize<JsonElement>(await resp.Content.ReadAsStringAsync());
+    }
+
+    private async Task<JsonElement> GetWorkflowAsync(string epicId) =>
+        JsonSerializer.Deserialize<JsonElement>(
+            await (await _owner.GetAsync($"/api/tasks/{epicId}/workflow")).Content.ReadAsStringAsync());
+
+    [Fact]
+    public async Task KeepVersion_СкрываетПредупреждениеДоСледующегоРоста()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+        (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
+
+        BumpTemplate(tpl); // v2
+        var upd = (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate");
+        upd.GetProperty("fromVersion").GetInt32().Should().Be(1);
+        upd.GetProperty("toVersion").GetInt32().Should().Be(2);
+        (await GetWorkflowAsync(epic.Id)).GetProperty("updateAvailable").GetBoolean().Should().BeTrue();
+
+        var kept = await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/keep-version", new { templateVersion = 2 });
+        kept.GetProperty("confirmed").GetProperty("dismissedUpdateVersion").GetInt32().Should().Be(2);
+        kept.GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
+        kept.GetProperty("updateAvailable").GetBoolean().Should().BeFalse();
+        Tasks.GetById(epic.Id)!.Workflow!.ConfirmedVersion.Should().Be(1, "маршрут «Оставить v1» не меняет");
+        (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").ValueKind.Should().Be(JsonValueKind.Null);
+
+        BumpTemplate(tpl); // v3 — шаблон вырос дальше отклонённой версии
+        (await GetWorkflowAsync(epic.Id)).GetProperty("templateUpdate").GetProperty("toVersion").GetInt32().Should().Be(3);
+        (await GetWorkflowAsync(epic.Id)).GetProperty("updateAvailable").GetBoolean().Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task KeepVersion_НевернаяВерсияИНеПодтверждённыйИЧужой()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        var url = $"/api/tasks/{epic.Id}/workflow/keep-version";
+
+        (await _owner.PostAsJsonAsync(url, new { templateVersion = 2 })).StatusCode
+            .Should().Be(HttpStatusCode.Conflict, "маршрут не подтверждён");
+
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+        (await _owner.PostAsJsonAsync(url, new { templateVersion = 1 })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "не новее подтверждённой");
+        (await _owner.PostAsJsonAsync(url, new { templateVersion = 5 })).StatusCode
+            .Should().Be(HttpStatusCode.BadRequest, "новее текущей версии шаблона");
+        (await _stranger.PostAsJsonAsync(url, new { templateVersion = 2 })).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Confirm_ОбновлениеВерсии_БезSkippedБерётПрежние_ЯвныйПустойСнимает()
+    {
+        var tpl = OwnTemplate();
+        var epic = Epic();
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl, skipped = new[] { "plan" } });
+        BumpTemplate(tpl);
+
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl });
+        var wf = Tasks.GetById(epic.Id)!.Workflow!;
+        wf.ConfirmedVersion.Should().Be(2);
+        wf.Skipped.Should().Equal("plan");
+        wf.Stages.Select(s => s.Id).Should().NotContain("plan");
+
+        await PostJsonAsync($"/api/tasks/{epic.Id}/workflow/confirm", new { templateId = tpl, skipped = Array.Empty<string>() });
+        Tasks.GetById(epic.Id)!.Workflow!.Skipped.Should().BeEmpty("явный [] — решение человека");
     }
 
     [Fact]

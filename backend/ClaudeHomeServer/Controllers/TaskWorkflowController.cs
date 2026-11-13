@@ -54,21 +54,30 @@ public class TaskWorkflowController(
     {
         if (EpicOfCaller(taskId) is not { } epic) return NotFound(new { error = "Фича не найдена" });
 
-        // RecommendAsync сам не бросает (кроме осознанной отмены вызывающим): наружу идёт только
+        // RecommendWithReasonAsync сам не бросает (кроме осознанной отмены вызывающим): наружу идёт только
         // отрезанное им по белым спискам предложение. Ключ — владелец записи, а не тот, кто нажал
-        // кнопку: RecommendAsync сверяет ownerId с OwnerId эпика (WorkflowRecommender.cs:45), и
-        // вызов по UserId молча дал бы null, если право Write когда-нибудь получит участник.
-        await recommender.RecommendAsync(taskId, epic.OwnerId!, ct);
+        // кнопку: рекомендатель сверяет ownerId с OwnerId эпика, и вызов по UserId молча дал бы
+        // «нет предложения», если право Write когда-нибудь получит участник.
+        var outcome = await recommender.RecommendWithReasonAsync(taskId, epic.OwnerId!, ct);
 
         // Ответ — то, что стало в эпике после вызова, а не объект, вернувший рекомендатель:
         // параллельный подбор мог записать в эпике своё предложение целым.
         var current = tasks.GetById(taskId);
-        // И7: подтверждённый маршрут никогда не сопровождается «живым» предложением в ответе.
-        // ConfirmWorkflow предложения не очищает (TaskManager.cs:726), поэтому у подтверждённого
-        // эпика устаревшее предложение не отдаём и о нём не вещаем.
-        var proposal = current?.Workflow is null ? current?.WorkflowProposal : null;
-        if (proposal is not null) await TaskBoardAsync(current!);
-        return Ok(new { proposal });
+        var body = WorkflowState(current, outcome.Reason);
+        // И7: подтверждённый маршрут никогда не сопровождается «живым» предложением в ответе
+        // (ConfirmWorkflow предложения не очищает) и о нём не вещаем.
+        if (current?.Workflow is null && current?.WorkflowProposal is not null) await TaskBoardAsync(current);
+        return Ok(body);
+    }
+
+    // GET /api/tasks/{id}/workflow — текущее состояние без запуска подбора (B03): предложение
+    // (state none|proposed), подтверждённый маршрут с rationale предложения и предупреждение
+    // «шаблон изменился» (templateUpdate).
+    [HttpGet("")]
+    public IActionResult Get(string taskId)
+    {
+        if (EpicOfCaller(taskId) is not { } epic) return NotFound(new { error = "Фича не найдена" });
+        return Ok(WorkflowState(epic, null));
     }
 
     // POST /api/tasks/{id}/workflow/confirm — подтверждение маршрута человеком. Решает тело
@@ -96,8 +105,14 @@ public class TaskWorkflowController(
             .Where(s => s.Presence == WorkflowStagePresence.Optional)
             .Select(s => string.IsNullOrWhiteSpace(s.Id) ? s.Role : s.Id!)
             .ToHashSet(StringComparer.Ordinal);
+        // B03: клиент skipped не прислал (null) и маршрут уже подтверждён — обновление версии берёт
+        // прежние пропуски. Из них остаются те, что и в новой версии шаблона съёмные: этап, ставший
+        // обязательным или исчезнувший, молча не снимаем и 400 на человеке не вешаем. Явный [] —
+        // решение человека «ничего не снимать» и наследованием не подменяется.
         // req здесь точно не null: пустое тело не прошло проверку templateId выше
-        var skipped = (req!.Skipped ?? []).Select(s => string.IsNullOrWhiteSpace(s) ? "" : s.Trim())
+        var requested = req!.Skipped ?? (epic.Workflow is { } prev && prev.TemplateId == templateId
+            ? prev.Skipped.Where(optional.Contains).ToList() : []);
+        var skipped = requested.Select(s => string.IsNullOrWhiteSpace(s) ? "" : s.Trim())
             .Where(s => s.Length > 0).Distinct(StringComparer.Ordinal).ToList();
         if (skipped.FirstOrDefault(s => !optional.Contains(s)) is { } notSkippable)
             return BadRequest(new { error = $"Снять можно только этап с Presence=optional: «{notSkippable}» не снимается." });
@@ -118,7 +133,91 @@ public class TaskWorkflowController(
         var written = tasks.ConfirmWorkflow(taskId, workflow);
         if (written is null) return NotFound(new { error = "Фича не найдена" });
         await TaskBoardAsync(written);
-        return Ok(new { workflow = written.Workflow });
+        return Ok(new { workflow = written.Workflow, confirmed = ConfirmedDto(written), templateUpdate = (object?)null, updateAvailable = false });
+    }
+
+    public record KeepVersionRequest(int TemplateVersion);
+
+    // POST /api/tasks/{id}/workflow/keep-version { templateVersion } — «Оставить v1» (B03): человек
+    // отказался от обновления маршрута до версии templateVersion. Пишется confirmed.dismissedUpdateVersion;
+    // предупреждение «шаблон изменился» не отдаётся, пока версия шаблона не вырастет выше. Маршрут
+    // (граф, пропуски, ConfirmedVersion) не меняется. Версия должна быть новее подтверждённой и не новее
+    // текущей версии шаблона в каталоге — иначе 400.
+    [HttpPost("keep-version")]
+    public async Task<IActionResult> KeepVersion(string taskId, [FromBody] KeepVersionRequest? req)
+    {
+        if (EpicOfCaller(taskId) is not { } epic) return NotFound(new { error = "Фича не найдена" });
+        if (epic.Workflow is not { } wf) return Conflict(new { error = "Маршрут фичи ещё не подтверждён" });
+
+        var version = req?.TemplateVersion ?? 0;
+        var current = CurrentTemplateVersion(epic, wf);
+        if (version <= wf.ConfirmedVersion || current is null || version > current)
+            return BadRequest(new { error = "templateVersion должна быть новее подтверждённой и не новее текущей версии шаблона." });
+
+        var written = tasks.KeepWorkflowVersion(taskId, version);
+        if (written is null) return Conflict(new { error = "Маршрут фичи ещё не подтверждён" });
+        await TaskBoardAsync(written);
+        return Ok(new { workflow = written.Workflow, confirmed = ConfirmedDto(written), templateUpdate = TemplateUpdate(written), updateAvailable = TemplateUpdate(written) is not null });
+    }
+
+    // Тело ответа подбора и GET: предложение и подтверждённый маршрут. proposal — только у
+    // неподтверждённого эпика (state proposed | none c reason), у подтверждённого — null.
+    private object WorkflowState(TaskItem? epic, string? reason)
+    {
+        if (epic?.Workflow is not null)
+            return new { proposal = (object?)null, confirmed = ConfirmedDto(epic), templateUpdate = TemplateUpdate(epic), updateAvailable = TemplateUpdate(epic) is not null };
+        if (epic?.WorkflowProposal is { } p)
+            return new
+            {
+                proposal = new
+                {
+                    state = "proposed", templateId = p.TemplateId, scope = p.Scope, skipped = p.Skipped,
+                    rationale = p.Rationale, proposedAt = p.ProposedAt, model = p.Model,
+                    needsHuman = p.NeedsHuman, doubtReason = p.DoubtReason,
+                },
+                confirmed = (object?)null, templateUpdate = (object?)null, updateAvailable = false,
+            };
+        return new
+        {
+            proposal = new { state = "none", reason = reason ?? WorkflowRecommender.ReasonNoAnswer },
+            confirmed = (object?)null, templateUpdate = (object?)null, updateAvailable = false,
+        };
+    }
+
+    // Подтверждённый маршрут для экрана. rationale/needsHuman/doubtReason/proposedAt — только чтение
+    // из предложения, которое сервер не стирает; proposedTemplateId показывает, совпал ли выбор
+    // человека с предложением (rationale относится к шаблону предложения, не подтверждённого).
+    private static object ConfirmedDto(TaskItem epic)
+    {
+        var wf = epic.Workflow!;
+        var p = epic.WorkflowProposal;
+        return new
+        {
+            templateId = wf.TemplateId, scope = wf.Scope, skipped = wf.Skipped,
+            confirmedVersion = wf.ConfirmedVersion, confirmedAt = wf.ConfirmedAt,
+            confirmedByUser = wf.ConfirmedByUser, autoConfirmed = wf.AutoConfirmed,
+            dismissedUpdateVersion = wf.DismissedUpdateVersion,
+            proposedTemplateId = p?.TemplateId, rationale = p?.Rationale, needsHuman = p?.NeedsHuman,
+            doubtReason = p?.DoubtReason, proposedAt = p?.ProposedAt,
+        };
+    }
+
+    // Текущая версия шаблона подтверждённого маршрута в каталоге эпика (та же область, что при
+    // подтверждении); null — шаблон удалён.
+    private int? CurrentTemplateVersion(TaskItem epic, FeatureWorkflow wf)
+    {
+        var scope = wf.Scope == "project" ? WorkflowTemplateScope.Project : WorkflowTemplateScope.Global;
+        return templates.List(epic.ProjectId)
+            .FirstOrDefault(e => e.Template.Id == wf.TemplateId && e.Scope == scope)?.Template.Version;
+    }
+
+    // «Шаблон изменился»: версия в каталоге выше подтверждённой И выше отклонённой («Оставить v1»).
+    private object? TemplateUpdate(TaskItem epic)
+    {
+        var wf = epic.Workflow!;
+        if (CurrentTemplateVersion(epic, wf) is not { } now) return null;
+        if (now <= wf.ConfirmedVersion || now <= (wf.DismissedUpdateVersion ?? 0)) return null;
+        return new { fromVersion = wf.ConfirmedVersion, toVersion = now };
     }
 
     // Эпик вызывающего: своя запись или эпик проекта, где у вызывающего право Write — ровно тот

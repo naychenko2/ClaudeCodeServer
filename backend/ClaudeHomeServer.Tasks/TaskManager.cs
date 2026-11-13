@@ -746,6 +746,23 @@ public class TaskManager : ClaudeHomeServer.Services.Composition.ITaskStatusRead
         return epic;
     }
 
+    // B03: человек отказался от обновления v1→vN. Правит только поле DismissedUpdateVersion уже
+    // подтверждённого маршрута (граф, шаблон и версия подтверждения не трогаются), под замком маршрута.
+    // null — эпика нет или маршрут не подтверждён.
+    public TaskItem? KeepWorkflowVersion(string epicId, int templateVersion)
+    {
+        var epic = GetById(epicId);
+        if (epic is null || epic.Role != TaskRoles.Feature) return null;
+        lock (_workflowLock)
+        {
+            if (epic.Workflow is null) return null;
+            epic.Workflow.DismissedUpdateVersion = templateVersion;
+            epic.UpdatedAt = DateTime.UtcNow;
+        }
+        ScheduleSave();
+        return epic;
+    }
+
     // Локи по FeatureId (не по экземпляру менеджера и не глобальный): сериализуют только создание
     // планов ОДНОЙ фичи. Записи в словаре на фичу не чистятся — их число ограничено числом фич.
     private readonly ConcurrentDictionary<string, object> _planLocks = new(StringComparer.Ordinal);

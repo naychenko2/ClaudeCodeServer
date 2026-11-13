@@ -43,15 +43,28 @@ public sealed class WorkflowRecommender(
     // Возвращает записанное предложение либо null: эпика нет/он не эпик/не принадлежит
     // владельцу, маршрут уже подтверждён, каталога нет, сбой или мусор ответа. Наружу
     // исключение модели не уходит никогда (кроме осознанной отмены вызывающим).
-    public async Task<WorkflowProposal?> RecommendAsync(string epicId, string ownerId, CancellationToken ct)
+    public async Task<WorkflowProposal?> RecommendAsync(string epicId, string ownerId, CancellationToken ct) =>
+        (await RecommendWithReasonAsync(epicId, ownerId, ct)).Proposal;
+
+    // B03: причины, по которым предложения нет (для proposal.state='none' на REST).
+    // no_answer — модель не ответила (пустой каталог, сбой, пустой ответ); invalid — ответ не разобран
+    // или не прошёл белые списки.
+    public const string ReasonNoAnswer = "no_answer";
+    public const string ReasonInvalid = "invalid";
+
+    public readonly record struct RecommendOutcome(WorkflowProposal? Proposal, string? Reason);
+
+    // Reason заполнен только когда подбор реально был и не дал маршрута; «уже подтверждён»,
+    // «эпика нет» — Reason null и Proposal null (предложения не нужно).
+    public async Task<RecommendOutcome> RecommendWithReasonAsync(string epicId, string ownerId, CancellationToken ct)
     {
         var epic = tasks.GetById(epicId);
-        if (epic is null || epic.Role != TaskRoles.Feature || epic.OwnerId != ownerId) return null;
+        if (epic is null || epic.Role != TaskRoles.Feature || epic.OwnerId != ownerId) return default;
         // Устаревшее: маршрут уже подтверждён человеком — предложения не нужно (И7)
-        if (epic.Workflow is not null) return null;
+        if (epic.Workflow is not null) return default;
 
         var catalog = templates.List(epic.ProjectId);
-        if (catalog.Count == 0) return null;
+        if (catalog.Count == 0) return new(null, ReasonNoAnswer);
 
         string raw;
         try
@@ -65,30 +78,31 @@ public sealed class WorkflowRecommender(
         catch (Exception ex)
         {
             log?.LogWarning(ex, "feature-workflow-recommend {Epic}: вызов модели не удался — предложения нет", epicId);
-            return null;
+            return new(null, ReasonNoAnswer);
         }
 
         // Каталог перечитываем ПОСЛЕ ответа: шаблон могли править или удалить, пока модель думала.
         // Белый список тогда строится по теперешним id этапов — id, которого в шаблоне уже нет,
         // в предложение не попадает (предложение, ссылающееся на снятый этап, подтверждается
         // отказом на ручке B4b, а не тихим пропуском).
+        if (string.IsNullOrWhiteSpace(raw)) return new(null, ReasonNoAnswer);
         var proposal = ParseAndCut(raw, templates.List(epic.ProjectId));
         if (proposal is null)
         {
             log?.LogInformation("feature-workflow-recommend {Epic}: ответ модели не разобран или не прошёл белые списки", epicId);
-            return null;
+            return new(null, ReasonInvalid);
         }
 
         // Пока ждали ответ, человек мог подтвердить маршрут: перечитываем эпик и не пишем
         // поверх решения человека. Запись — целым объектом под замком маршрута (SetWorkflowProposal)
         var current = tasks.GetById(epicId);
-        if (current is null || current.Workflow is not null) return null;
+        if (current is null || current.Workflow is not null) return default;
 
         proposal.ProposedAt = DateTime.UtcNow;
-        if (tasks.SetWorkflowProposal(epicId, proposal) is null) return null;
+        if (tasks.SetWorkflowProposal(epicId, proposal) is null) return default;
         log?.LogInformation("feature-workflow-recommend {Epic}: предложен шаблон {Template} (снято: {Skipped})",
             epicId, proposal.TemplateId, proposal.Skipped.Count);
-        return proposal;
+        return new(proposal, null);
     }
 
     // M3 (правило Андрея: очевидный выбор модель подтверждает сама): авто-подтверждение предложения.

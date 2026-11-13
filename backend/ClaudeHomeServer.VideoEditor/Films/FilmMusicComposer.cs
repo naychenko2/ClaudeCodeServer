@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
@@ -15,7 +16,8 @@ public sealed class FilmMusicComposer(
     VideoJobThreads threads,
     IProjectManager projects,
     ILogger<FilmMusicComposer> log,
-    IAudioTrackSource? audio = null)
+    IAudioTrackSource? audio = null,
+    PersonalFolderResolver? personal = null)
 {
     // Громкость и затухание новой музыки по умолчанию: человек правит их в панели фильма
     public const int DefaultVolume = 60;
@@ -87,8 +89,11 @@ public sealed class FilmMusicComposer(
 
     private async Task LandAsync(AudioVersionAdded evt, string projectId, FilmSide state)
     {
-        if (projects.GetById(projectId) is not { } project || project.OwnerId != evt.OwnerId) return;
-        var scope = VideoEditScope.Of(project);
+        // Ключ ожидания — ключ области: у личной области это personal, проект — «Личное» владельца события (Find папку не создаёт)
+        var isPersonal = projectId == VideoEditScope.Personal;
+        var found = isPersonal ? personal?.Find(evt.OwnerId) : projects.GetById(projectId);
+        if (found is not { } project || project.OwnerId != evt.OwnerId) return;
+        var scope = isPersonal ? new VideoEditScope(VideoEditScope.Personal, project) { TenantOwnerId = evt.OwnerId } : VideoEditScope.Of(project);
         var resolved = FilmService.ResolveFilm(scope, state.Path, evt.OwnerId);
         if (!resolved.IsOk) return;
         var film = resolved.Value!;

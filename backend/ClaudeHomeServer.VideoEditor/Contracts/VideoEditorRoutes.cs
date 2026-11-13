@@ -2,7 +2,7 @@ namespace ClaudeHomeServer.Services.VideoEditor.Contracts;
 
 // Маршруты модуля. Проектные — api/projects/{projectId}/video-editor/*, личные (чат вне проекта) —
 // api/video-editor/chats/{sessionId}/*. Хвосты у обоих одинаковые, у проектных перед сценами стоит
-// sessions/{sessionId}/. Фильмы и сохранение в проект — только проектные (личные: personal_scope_no_films)
+// sessions/{sessionId}/. Фильмы и сохранение сцены есть и у личных (фильмы — в Personal/video/, ADR-040)
 public static class VideoEditorRoutes
 {
     public const string ProjectBase = "api/projects/{projectId}/video-editor";

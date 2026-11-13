@@ -28,10 +28,4 @@ internal static class FilmHttp
             ? new { error = text, code, state = fresh }
             : new { error = text, code }) { StatusCode = status };
     }
-
-    public static ObjectResult PersonalRefusal() => new(new
-    {
-        error = "Фильмы — только в чате проекта",
-        code = VideoEditorErrors.PersonalScopeNoFilms,
-    }) { StatusCode = StatusCodes.Status400BadRequest };
 }

@@ -46,14 +46,13 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
         return await PublishedAsync(ownerId, scope, sessionId, written);
     }
 
-    // Фокус: сцена в работе и открытый фильм. Фильм — только у проекта и только внутри video/**: путь хранится
-    // как есть, диска не касаемся
+    // Фокус: сцена в работе и открытый фильм — только внутри video/**: путь хранится как есть, диска не касаемся
+    // (у личной области фильм лежит в Personal/video/, папку создаёт пишущий путь)
     public async Task<Call> FocusAsync(string ownerId, VideoEditScope scope, string sessionId, VideoFocusDto focus,
         long? revision, ContextActor by = ContextActor.Human)
     {
-        if (focus.FilmPath is not null && (scope.IsPersonal || !InsideAllowed(focus.FilmPath)))
-            return Call.Refuse(scope.IsPersonal ? VideoEditorErrors.PersonalScopeNoFilms : VideoEditorErrors.OutsideAllowedFolders,
-                scope.IsPersonal ? "Фильмы — только в чате проекта" : "Фильм должен лежать в video/");
+        if (focus.FilmPath is not null && !InsideAllowed(focus.FilmPath))
+            return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Фильм должен лежать в video/");
         // Фильм — только по правилу пути video/<имя фильма>/*.film (то же, что у Validate вида): иначе он встал бы основным мимо него
         if (!string.IsNullOrWhiteSpace(focus.FilmPath) && !FilmPaths.IsFilmPath(FilmPaths.Normalize(focus.FilmPath) ?? ""))
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Фильм должен лежать в папке video/<имя фильма>/");
@@ -95,21 +94,18 @@ public sealed class VideoSceneService(VideoJobThreads threads, VideoPrefsService
 
     // ── Проверки входов ──────────────────────────────────────────────────────────
 
-    // Папка сцены: у личной области только пустая (диска проекта нет — отказ до RootPath); у проекта — внутри
-    // video/** без «..» и без символических ссылок по существующим сегментам
+    // Папка сцены: внутри video/** без «..» и без символических ссылок по существующим сегментам. У личной области
+    // папка «Личного» может быть ещё не создана (её создаёт пишущий путь) — тогда ссылок быть не может, проверяется форма
     public static Call? FolderProblem(VideoEditScope scope, string? raw, out string folder)
     {
         folder = "";
         var value = (raw ?? "").Trim().Replace('\\', '/').Trim('/');
         if (value.Length == 0) return null;
-        // Папки в «Личном» — Ф2-6: пока у личной области отказ, как без папки
-        if (scope.IsPersonal || scope.Project is not { } project)
-            return Call.Refuse(VideoEditorErrors.InvalidRequest,
-                "У чата вне проекта нет папок проекта: сцену можно завести только без папки");
         if (!InsideAllowed(value))
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders,
                 $"Сцены лежат только в video/ проекта, а получено «{value}»: укажи полный путь от корня проекта, например video/утро");
-        if (ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
+        if (scope.Project is { } project
+            && ClaudeHomeServer.Services.Media.ProjectLinkGuard.ResolveInside(project.RootPath, value) is null)
             return Call.Refuse(VideoEditorErrors.OutsideAllowedFolders, "Путь идёт через символическую ссылку или вне проекта");
         folder = value;
         return null;

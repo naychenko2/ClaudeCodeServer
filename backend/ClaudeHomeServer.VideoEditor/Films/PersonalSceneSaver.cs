@@ -6,26 +6,25 @@ using ClaudeHomeServer.Services.VideoEditor.Scenes;
 
 namespace ClaudeHomeServer.Services.VideoEditor.Films;
 
-// «Сохранить сцену» в «Личное» (ADR-040 §5, Ф2-3): версия клипа → Personal/video/scene-NN.mp4 (повтор → .v2.mp4, .v3…).
-// Только клип, без фильма и кадров: фильмы «Личного» — Ф2-6, до неё FilmSceneSaver для личной области отказывает.
-// Только CreateNew, перезаписи нет; занятое имя, названное человеком, — 409 name_taken. Папку «Личного» создаёт
+// «Сохранить сцену» в «Личное» (ADR-040 §5, Ф2-3/Ф2-6): версия клипа → Personal/video/scene-NN.mp4 (повтор → .v2.mp4, .v3…).
+// Без фильма — только клип. Если названы фильм (filmPath) или его папка video/<фильм> (folder запроса или папка сцены),
+// сохранение идёт общим FilmSceneSaver: клип и кадры в папку фильма, сцена встаёт в фильм. Только CreateNew, перезаписи нет; занятое имя, названное человеком, — 409 name_taken. Папку «Личного» создаёт
 // этот пишущий путь, лениво. Границу корня и символические ссылки держит ProjectLinkGuard.
 public sealed class PersonalSceneSaver(
     VideoJobThreads threads,
     VideoEditWorkspace workspace,
-    PersonalFolderResolver personal)
+    PersonalFolderResolver personal,
+    FilmSceneSaver? films = null)
 {
     private const int MaxAutoAttempts = 99;
 
     public async Task<FilmCallResult<SaveSceneResult>> SaveAsync(string ownerId, VideoEditScope scope, SaveSceneRequest? req,
-        string initiator, CancellationToken ct)
+        string initiator, CancellationToken ct, string? actorId = null)
     {
         if (!scope.IsPersonal)
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.InvalidRequest, "Сохранение в «Личное» — только в личном чате");
         if (req is null || string.IsNullOrWhiteSpace(req.SessionId) || string.IsNullOrWhiteSpace(req.SceneId))
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.InvalidRequest, "Не указана сцена");
-        if (!string.IsNullOrWhiteSpace(req.FilmPath))
-            return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы — только в чате проекта");
         if (PersonalMediaFolders.Resolve(PersonalMediaFolders.Video, req.Folder, out var folder) is { } folderError)
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.OutsideAllowedFolders, folderError);
 
@@ -38,6 +37,15 @@ public sealed class PersonalSceneSaver(
             : scene.Versions.FirstOrDefault(v => v.VersionId == req.VersionId.Trim());
         if (version is null)
             return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.VersionNotFound, "Версии нет в этой сцене");
+
+        if (WantsFilm(req, scene))
+        {
+            if (films is null)
+                return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.PersonalScopeNoFilms, "Фильмы недоступны на этом сервере");
+            if (await personal.EnsureAsync(ownerId, ct) is not { } filmProject)
+                return FilmCallResult<SaveSceneResult>.Fail(VideoEditorErrors.PersonalScopeNoFilms, PersonalFolderResolver.UnavailableText);
+            return await films.SaveAsync(ownerId, actorId, scope with { Project = filmProject }, req, initiator, ct);
+        }
 
         string? source;
         try { source = workspace.FindClip(ownerId, version.JobId, version.Variant); }
@@ -77,6 +85,12 @@ public sealed class PersonalSceneSaver(
             new { sceneId = scene.SceneId, versionId = version.VersionId, path = clipPath, framePaths = Array.Empty<string>(), addedToFilm = false, initiator }, ct);
         return FilmCallResult<SaveSceneResult>.Ok(new SaveSceneResult(clipPath, [], false));
     }
+
+    // Фильм назван явно, либо папка (запроса или сцены) — video/<фильм>, а не сама video/
+    private static bool WantsFilm(SaveSceneRequest req, VideoSceneDto scene) =>
+        !string.IsNullOrWhiteSpace(req.FilmPath)
+        || (FilmPaths.Normalize(req.Folder) ?? FilmPaths.Normalize(scene.Folder)) is { } folder
+        && folder.StartsWith(FilmPaths.VideoRoot + "/", StringComparison.Ordinal);
 
     private static int IndexOf(VideoThreadsState state, string sceneId)
     {

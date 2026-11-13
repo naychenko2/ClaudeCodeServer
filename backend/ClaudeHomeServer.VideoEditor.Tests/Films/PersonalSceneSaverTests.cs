@@ -159,7 +159,7 @@ public sealed class PersonalSceneSaverTests : IDisposable
     }
 
     [Fact]
-    public async Task Фильм_в_Личном_пока_отказ_и_проектная_область_не_принимается()
+    public async Task Без_сохранителя_фильмов_фильм_в_Личном_отказ_и_проектная_область_не_принимается()
     {
         var (scene, version) = PersonalSceneWithClip();
 

@@ -10,7 +10,7 @@ public static class VideoEditorErrors
     public const string RevisionConflict = "revision_conflict";
     // 503: нет ffmpeg на хосте или выключена подсистема images
     public const string DspUnavailable = "dsp_unavailable";
-    // 400: фильмы — только в чате проекта
+    // 400: у личной области нет папки «Личного» — фильмы и сохранение недоступны (ADR-040)
     public const string PersonalScopeNoFilms = "personal_scope_no_films";
     // 400: локальный проект (ADR-016): файлы на устройстве, сервер файлы и сборку не трогает
     public const string ProjectLocalUnsupported = "project_local_unsupported";

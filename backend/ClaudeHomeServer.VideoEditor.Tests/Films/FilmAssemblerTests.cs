@@ -103,6 +103,22 @@ public sealed class FilmAssemblerTests : IDisposable
     }
 
     [Fact]
+    public async Task Личная_область_с_папкой_собирает_фильм_ключ_personal_и_трата_без_проекта()
+    {
+        ThreeClipFilm();
+        var scope = new VideoEditScope(VideoEditScope.Personal, _w.Project) { TenantOwnerId = Owner };
+        var assembler = Assembler();
+
+        assembler.Start(Owner, Owner, scope, "video/a/a.film", VideoInitiators.Human).IsOk.Should().BeTrue();
+        await assembler.WhenIdleAsync();
+
+        File.ReadAllBytes(_w.Full("video/a/film.mp4")).Should().Equal(FakeDsp.Output);
+        _w.Registry.Get(Owner, VideoEditScope.Personal, "video/a/a.film")!.State.Should().Be(FilmBuildStates.Done);
+        _w.Registry.Get(Owner, ProjectId, "video/a/a.film").Should().BeNull("ключ области — personal, а не id «Личного»");
+        _spend.Records.Should().ContainSingle().Which.ProjectId.Should().BeNull("трата личной области идёт без проекта");
+    }
+
+    [Fact]
     public async Task Пересборка_даёт_film_v2_mp4_и_не_затирает_прежний_а_правка_делает_фильм_устаревшим()
     {
         ThreeClipFilm();

@@ -27,7 +27,7 @@ import {
   CONFLICT_MESSAGE, blankTemplate, normalizeForSave, showWriteButton, forkToProject, saveGuarded, templateSnapshot, splitEntries,
   type SaveFailure,
 } from './workflowEditorLogic';
-import { WorkflowStageRow } from './WorkflowStageRow';
+import { WorkflowStageStrip } from './WorkflowStageStrip';
 import { WorkflowGraphPreview } from './WorkflowGraphPreview';
 import { normalizeStages, removeStageReconnect, renameStageId } from './workflowGraphModel';
 import type { WorkflowStage, WorkflowTemplate } from './types';
@@ -310,23 +310,19 @@ export function WorkflowTemplatesEditor({
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         <ListLabel>Схема маршрута</ListLabel>
         <WorkflowGraphPreview stages={draft.stages} />
-        <ListLabel>Этапы маршрута</ListLabel>
-        {draft.stages.map((s, i) => (
-          <WorkflowStageRow
-            key={`${s.role}:${i}`}
-            stage={s}
-            stages={draft.stages}
-            index={i}
-            errors={errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
-            onRenameId={newId => renameStage(normalizeStages(draft.stages)[i].id ?? s.role, newId)}
-            onRemove={() => dropStage(normalizeStages(draft.stages)[i].id ?? s.role)}
-            readOnly={readOnly}
-            specialties={catalog ?? []}
-            personas={personas}
-            mcpChoices={mcpChoices}
-            onChange={next => setStage(i, next)}
-          />
-        ))}
+        <WorkflowStageStrip
+          stages={draft.stages}
+          readOnly={readOnly}
+          specialties={catalog ?? []}
+          personas={personas}
+          mcpChoices={mcpChoices}
+          errorsFor={(s, i) => errorsByRole[normalizeStages(draft.stages)[i].id ?? s.role] ?? errorsByRole[s.role] ?? []}
+          onStagesChange={stages => setDraft(d => (d ? { ...d, stages } : d))}
+          onStageChange={setStage}
+          onRenameStage={(i, newId) => renameStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role, newId)}
+          onRemoveStage={i => dropStage(normalizeStages(draft.stages)[i].id ?? draft.stages[i].role)}
+          fullCycleStages={globals.find(t => t.builtInKey === 'full-cycle')?.stages ?? null}
+        />
       </div>
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center' }}>

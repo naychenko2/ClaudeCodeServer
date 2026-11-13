@@ -3,7 +3,7 @@
 // Образец — SpecialtyEditView: те же RoutePicker для ячеек и те же примитивы ui-кита.
 
 import { useState } from 'react';
-import { ChevronDown, Lock, Trash2 } from 'lucide-react';
+import { ChevronDown, GripVertical, Lock, Trash2 } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Badge, Button, Chip, Field, PillSwitch, Select, TextArea, TextField } from '../../components/ui';
@@ -17,11 +17,12 @@ import type { SpecialtyCatalogEntry } from '../specialties/types';
 import { PROMPT_LIMIT, STALL_POLICIES, TITLE_LIMIT, titleRequired } from './workflowTemplateModel';
 import { listOrNull, parseList, presenceEditable } from './workflowEditorLogic';
 import { afterOptions, normalizeStages } from './workflowGraphModel';
+import { presenceTag } from './workflowStripModel';
 import type { WorkflowStage, WorkflowStagePresence } from './types';
 
 // Подписи ролей этапа (ключи — TaskRoles, разрез §0.3).
 export const STAGE_ROLE_LABEL: Record<string, string> = {
-  cut: 'Нарезка', design: 'Дизайн', plan: 'План', step: 'Шаг', review: 'Ревью',
+  cut: 'Разрез', design: 'Дизайн', plan: 'План', step: 'Шаг', review: 'Ревью',
   qa: 'Проверка', final: 'Финал', merge: 'Слияние',
 };
 
@@ -64,10 +65,18 @@ interface Props {
   // Переименование id с каскадом по «после» других этапов (делает родитель: нужен весь список).
   onRenameId: (newId: string) => void;
   onRemove: () => void;
+  // Лента (F20): номер колонки (null — выключен), «после» именами, строка «кто», ручка ⠿.
+  column?: number | null;
+  afterText?: string[];
+  who?: string | null;
+  grip?: { onPointerDown: (e: React.PointerEvent) => void; onKeyDown: (e: React.KeyboardEvent) => void };
+  dragging?: boolean;
+  dropHere?: boolean;
 }
 
 export function WorkflowStageRow({
   stage, stages, index, errors, readOnly, specialties, personas, mcpChoices, onChange, onRenameId, onRemove,
+  column = index + 1, afterText = [], who = null, grip, dragging = false, dropHere = false,
 }: Props): React.ReactElement {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
@@ -107,45 +116,83 @@ export function WorkflowStageRow({
     patch({ after: next.length > 0 ? next : null });
   };
 
+  const tag = presenceTag(stage.presence);
+  const isOff = stage.presence === 'off';
+  const laneText = stage.role === 'step' && stage.lane ? (LANE_OPTIONS.find(l => l.value === stage.lane)?.label ?? stage.lane) : null;
+
   return (
-    <div style={{
-      border: `1px solid ${errors.length ? C.dangerBorder : C.border}`, borderRadius: R.xl,
-      background: C.bgWhite, overflow: 'hidden',
-    }}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        aria-expanded={open}
-        aria-label={`Этап «${nameShown}»`}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left',
-          padding: `${SP.md}px`, minHeight: 44, background: 'none', border: 'none', cursor: 'pointer',
-          fontFamily: FONT.sans, color: C.textHeading,
-        }}
-      >
-        <ChevronDown
-          size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
-          style={{ flexShrink: 0, transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.12s' }}
-        />
-        <span style={{ fontSize: FS.base, fontWeight: 600, flex: 1, minWidth: 0 }}>
-          {nameShown}
-          {titleText && (
-            <span style={{ marginLeft: SP.sm, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{label}</span>
-          )}
-          {stageId !== stage.role && (
-            <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>{stageId}</span>
-          )}
-        </span>
-        {fixed && (
-          <Badge tone="neutral" size="xs" icon={<Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} title={NON_SKIPPABLE_HINT}>
-            несъёмный
-          </Badge>
+    <div
+      data-stage-index={index}
+      style={{
+        border: `1px ${isOff ? 'dashed' : 'solid'} ${errors.length ? C.dangerBorder : isOff ? C.dashed : dropHere ? C.accent : C.border}`,
+        borderRadius: R.xl, background: isOff ? 'transparent' : C.bgWhite, overflow: 'hidden',
+        opacity: dragging ? 0.5 : 1,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, padding: `0 ${SP.md}px 0 ${SP.xs}px` }}>
+        {!readOnly && (
+          <button
+            type="button"
+            aria-label={`Переставить этап «${nameShown}»: стрелки вверх и вниз или перетащите`}
+            title="Перетащите (на сенсорном — долгое нажатие) или стрелками вверх/вниз"
+            onPointerDown={grip?.onPointerDown}
+            onKeyDown={grip?.onKeyDown}
+            style={{
+              flexShrink: 0, width: 44, minHeight: 44, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'none', border: 'none', cursor: 'grab', color: C.textMuted, touchAction: 'pan-y',
+            }}
+          >
+            <GripVertical size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </button>
         )}
-        <Badge tone={stage.presence === 'on' ? 'success' : stage.presence === 'optional' ? 'warning' : 'neutral'} size="xs">
-          {PRESENCE_OPTIONS.find(o => o.value === stage.presence)?.label ?? stage.presence}
-        </Badge>
+        <span
+          aria-label={column === null ? 'Нет в маршруте' : `Колонка ${column}`}
+          style={{
+            flexShrink: 0, minWidth: 22, textAlign: 'center', fontFamily: FONT.mono, fontSize: FS.sm,
+            fontWeight: 600, color: column === null ? C.textMuted : C.textSecondary,
+          }}
+        >{column === null ? '—' : column}</span>
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          aria-label={`Этап «${nameShown}»`}
+          style={{
+            flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: SP.sm, textAlign: 'left',
+            padding: `${SP.sm}px 0`, minHeight: 44, background: 'none', border: 'none', cursor: 'pointer',
+            fontFamily: FONT.sans, color: C.textHeading,
+          }}
+        >
+          <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontSize: FS.base, fontWeight: 600 }}>
+              {nameShown}
+              {laneText && (
+                <span style={{ marginLeft: SP.sm, fontSize: FS.xs, fontWeight: 600, color: C.textSecondary }}>{laneText}</span>
+              )}
+              <span style={{ marginLeft: SP.sm, fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 400, color: C.textMuted }}>
+                {stage.role}{stageId !== stage.role ? ` · ${stageId}` : ''}
+              </span>
+            </span>
+            <span style={{ fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {isOff ? 'нет в этом шаблоне' : who}
+            </span>
+            {!isOff && afterText.length > 0 && (
+              <span style={{ fontSize: FS.xs, color: C.textMuted }}>после: {afterText.join(', ')}</span>
+            )}
+          </span>
+          <ChevronDown
+            size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
+            style={{ flexShrink: 0, transform: open ? 'none' : 'rotate(-90deg)', transition: 'transform 0.12s' }}
+          />
+        </button>
+        {fixed && (
+          <span title={NON_SKIPPABLE_HINT} aria-label="Несъёмный этап" style={{ display: 'flex', color: C.textMuted }}>
+            <Lock size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </span>
+        )}
+        <Badge tone={tag.tone} size="xs">{tag.text}</Badge>
         {errors.length > 0 && <Badge tone="danger" size="xs">{errors.length}</Badge>}
-      </button>
+      </div>
 
       {errors.length > 0 && (
         <div role="alert" style={{

@@ -37,13 +37,7 @@ public class PersonalAudioEditorController(
     public IActionResult Catalog(string sessionId) =>
         Gate(sessionId, out var scope, out var denied) ? CatalogIn(scope) : denied;
 
-    // Библиотека «Голоса» живёт только в проекте: у личного чата — честное пустое состояние, мутирующих
-    // ручек голосов здесь нет вовсе
-    [HttpGet("voices")]
-    public IActionResult Voices(string sessionId) =>
-        Gate(sessionId, out _, out var denied)
-            ? Ok(new { available = false, reason = AudioEditor.Voices.VoiceLibrary.ProjectOnlyReason, voices = Array.Empty<object>() })
-            : denied;
+    // Библиотека «Голоса» — PersonalAudioVoicesController (voices/ в папке «Личного»)
 
     [HttpGet("prefs")]
     public IActionResult GetPrefs(string sessionId) =>

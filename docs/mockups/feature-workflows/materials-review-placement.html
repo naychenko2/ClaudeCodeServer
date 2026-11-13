@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light" data-w="desk" data-v="b" data-st="route" data-tab="stage" data-f="all">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Процессы фичи · где жить «Материалам» и «Разбору» — на согласование</title>
+<!--
+  Макет к записке materials-review-placement.md. Код продукта не правится.
+  Привязка: featureId a149e308-fc09-4ad1-9bdd-e72b54e6360d, задача 2ff8b0f1 (role=design). Пользуется шаг C3b (фронт, страница фичи).
+  Варианты: A — «Три вида страницы» (вкладки сверху, граф внутри «Процесса»);
+            B — «Граф-навигатор» (граф всегда сверху, под ним «Этап · Материалы · Разбор», выбор узла фильтрует материалы и разбор);
+            C — «Узел „Фича целиком“» (обзор фичи — первый узел графа, остальное разложено по этапам).
+  Легаси без маршрута — сегодняшние вкладки «Ход · Материалы · Разбор» во всех вариантах.
+  Токены и примитивы — копия блока из feature-page.html (значения из theme.css).
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, имена — C.* / SHADOW.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--…). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF; --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E; --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-progress-track:#D8CFBE; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 12px 40px rgba(40,30,20,.22);
+  /* FS */ --fs-xxs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px; --fs-h2:22px;
+  /* SP */ --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  /* R  */ --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-max:999px;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+:root[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25; --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072; --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-progress-track:#5C544A; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.6);
+}
+/* ===== дальше — только переменные ===== */
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font:var(--fs-base)/1.45 var(--font-sans); }
+button, input, textarea, select { font:inherit; color:inherit; }
+button { cursor:pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+.serif { font-family:var(--font-serif); }
+.muted { color:var(--c-text-muted); } .sec { color:var(--c-text-secondary); }
+.row { display:flex; align-items:center; gap:var(--sp-sm); min-width:0; } .wrap { flex-wrap:wrap; }
+.col { display:flex; flex-direction:column; gap:var(--sp-sm); min-width:0; }
+.grow { flex:1 1 auto; min-width:0; } .ell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sp { flex:1 1 auto; }
+
+/* --- пульт прототипа (не продукт) --- */
+.ctl { position:sticky; top:0; z-index:40; display:flex; flex-wrap:wrap; gap:var(--sp-sm) var(--sp-md); align-items:center;
+  padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.ctl h1 { font:600 var(--fs-md)/1.2 var(--font-serif); margin:0 var(--sp-sm) 0 0; color:var(--c-text-heading); }
+.ctl .lb { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.pseg { display:inline-flex; flex-wrap:wrap; gap:var(--sp-xxs); align-items:center; }
+.pseg button { border:1px solid var(--c-border); background:var(--c-bg-card); padding:0 var(--sp-md); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); min-height:32px; }
+.pseg button[aria-pressed="true"] { background:var(--c-text-heading); border-color:var(--c-text-heading); color:var(--c-bg-main); font-weight:600; }
+.stage { padding:var(--sp-xl); }
+/* подпись карточки: какой шаг закрывает, статус согласования */
+.cap { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-sm); align-items:center; font-size:var(--fs-xs); color:var(--c-text-muted); margin:0 auto var(--sp-sm); max-width:1240px; }
+.cap b { color:var(--c-text-secondary); }
+.agree { font:600 var(--fs-xxs)/1.6 var(--font-sans); text-transform:uppercase; letter-spacing:.06em; padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-plan-light); color:var(--c-plan-text); }
+.why { max-width:1240px; margin:0 auto var(--sp-md); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+
+/* --- раскладка: десктоп 1240 — острова в ряд; мобила — панели становятся телефонами 360×740 --- */
+.app { display:flex; gap:var(--sp-sm); width:min(1240px,100%); margin:0 auto; height:800px; position:relative; }
+.pane { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.m-only { display:none !important; }
+[data-w="mob"] .d-only { display:none !important; }
+[data-w="mob"] .m-only { display:revert !important; }
+[data-w="mob"] .m-only.flex { display:flex !important; }
+[data-w="mob"] .app { height:auto; width:auto; max-width:100%; flex-wrap:wrap; gap:var(--sp-xxl) var(--sp-xl); justify-content:center; align-items:flex-start; }
+[data-w="mob"] .app > .pane { width:360px !important; height:740px; flex:none !important; border:1px solid var(--c-border); border-radius:var(--r-xl); overflow:hidden; position:relative; background:var(--c-bg-main); }
+[data-w="mob"] .app > .pane[data-mcap]::before { content:attr(data-mcap); position:absolute; top:0; left:0; right:0; z-index:30; font:600 var(--fs-xxs)/18px var(--font-mono); color:var(--c-on-accent); background:var(--c-info); padding:0 var(--sp-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+[data-w="mob"] .app > .pane[data-mcap] { padding-top:18px; }
+[data-w="mob"] .pane .island { border-radius:0; box-shadow:none; }
+@media (max-width:480px) { .stage { padding:var(--sp-sm) 0; } [data-w="mob"] .app > .pane { border-radius:0; border-left:0; border-right:0; } }
+
+/* ===== Компоненты продукта (имя — как в коде) ===== */
+/* Island + IslandHeader */
+.island { background:var(--c-bg-panel); border-radius:var(--r-xl); box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-width:0; min-height:0; flex:1; }
+.ih { display:flex; align-items:center; gap:var(--sp-sm); min-height:44px; padding:0 var(--sp-md) 0 var(--sp-lg); border-bottom:1px solid var(--c-border-light); flex:none; }
+.ih .t { font:600 var(--fs-md)/1.2 var(--font-sans); color:var(--c-text-heading); }
+.body { flex:1; min-height:0; overflow:auto; padding:var(--sp-lg); background:var(--c-bg-card); }
+[data-w="mob"] .body { padding:var(--sp-md); }
+/* Toolbar (TB.heightDesktop 52 / Mobile 56) */
+.tb { display:flex; align-items:center; gap:var(--sp-sm); min-height:52px; padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-main); border-bottom:1px solid var(--c-border); flex:none; min-width:0; }
+[data-w="mob"] .tb { min-height:56px; padding:var(--sp-sm) 14px; }
+.tname { font:600 var(--fs-lg)/1.25 var(--font-serif); color:var(--c-text-heading); }
+/* IconButton / ToolbarIconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; flex:none; border:0; background:none; border-radius:var(--r-md); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-md); }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+[data-w="mob"] .ib { width:40px; height:40px; }
+/* BackButton */
+.back { display:inline-flex; align-items:center; gap:var(--sp-xxs); min-height:32px; border:0; background:none; border-radius:var(--r-md); padding:0 var(--sp-xs) 0 0; color:var(--c-text-secondary); font-weight:600; flex:none; }
+.back:hover { background:var(--c-bg-selected); }
+[data-w="mob"] .back { min-height:40px; }
+/* Button: xs h24 · sm min-h 32 · md min-h 40; вес 600 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:var(--sp-xs); font-weight:600; white-space:nowrap; flex:none; border:1px solid transparent; background:transparent; }
+.btn.xs { height:24px; padding:0 9px; font-size:var(--fs-sm); border-radius:var(--r-md); }
+.btn.sm { min-height:32px; padding:6px 13px; font-size:var(--fs-base); border-radius:var(--r-lg); }
+.btn.md { min-height:40px; padding:10px var(--sp-lg); font-size:var(--fs-md); border-radius:var(--r-xl); }
+[data-w="mob"] .btn.sm, [data-w="mob"] .btn.xs { min-height:40px; height:auto; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghostAccent { color:var(--c-accent); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity:.45; cursor:not-allowed; }
+.btn.primary:disabled { opacity:1; background:var(--c-accent-muted); color:var(--c-text-muted); }
+/* Badge / StatusTag (FS.xs 600, R.sm) */
+.tag { display:inline-flex; align-items:center; gap:var(--sp-xxs); font:600 var(--fs-xs)/16px var(--font-sans); padding:2px var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); white-space:nowrap; flex:none; }
+.tag.info { background:var(--c-info-bg); color:var(--c-info); } .tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.w { background:var(--c-warning-bg); color:var(--c-warning-text); } .tag.s { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag.plan { background:var(--c-plan-light); color:var(--c-plan-text); } .tag.acc { background:var(--c-accent-light); color:var(--c-accent); }
+/* Chip (soft) + ChipX */
+.chip { display:inline-flex; align-items:center; gap:var(--sp-xs); min-height:28px; padding:0 var(--sp-sm); border-radius:var(--r-max); border:1px solid var(--c-border); background:var(--c-bg-white); font-size:var(--fs-sm); color:var(--c-text-primary); white-space:nowrap; }
+.chip .x { border:0; background:none; padding:0; width:18px; height:18px; border-radius:var(--r-max); color:var(--c-text-muted); line-height:18px; }
+.chip.off { color:var(--c-text-muted); text-decoration:line-through; border-style:dashed; background:transparent; }
+[data-w="mob"] .chip { min-height:36px; }
+/* Field: TextField / TextArea / Select + FieldLabel */
+.fl { font:600 var(--fs-xs)/1.3 var(--font-sans); color:var(--c-text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:var(--sp-xs); display:flex; gap:var(--sp-xs); align-items:baseline; }
+.fl .h { text-transform:none; letter-spacing:0; font-weight:400; color:var(--c-text-muted); }
+.fld { width:100%; min-height:36px; padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg-white); font-size:var(--fs-base); color:var(--c-text-primary); }
+textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
+.fld.inh { color:var(--c-text-muted); background:var(--c-bg-inset); border-style:dashed; }
+.fld.err { border-color:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.fld[disabled] { opacity:.7; cursor:not-allowed; }
+.ferr { font-size:var(--fs-xs); color:var(--c-danger-text); margin-top:var(--sp-xs); }
+.fhint { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
+[data-w="mob"] .fld { min-height:44px; font-size:var(--fs-lg); }
+/* SegmentedControl */
+.seg { display:inline-flex; padding:2px; gap:2px; border-radius:var(--r-lg); background:var(--c-bg-inset); flex:none; }
+.seg button { border:0; background:none; min-height:28px; padding:0 var(--sp-md); border-radius:var(--r-md); font-size:var(--fs-sm); color:var(--c-text-secondary); white-space:nowrap; }
+.seg button[aria-pressed="true"] { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-card); }
+.seg button:disabled { opacity:.45; cursor:not-allowed; }
+[data-w="mob"] .seg button { min-height:36px; }
+/* Toggle */
+.tgl { width:34px; height:20px; border-radius:var(--r-max); background:var(--c-progress-track); position:relative; flex:none; border:0; padding:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:var(--r-max); background:var(--c-bg-white); transition:left .15s; }
+.tgl[aria-checked="true"] { background:var(--c-accent); } .tgl[aria-checked="true"]::after { left:16px; }
+.tgl:disabled { opacity:.45; }
+/* Checkbox */
+.cb { display:inline-flex; align-items:center; gap:var(--sp-sm); font-size:var(--fs-base); min-height:28px; }
+.cb i { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--c-border); background:var(--c-bg-white); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); font-style:normal; color:var(--c-on-accent); }
+.cb i.on { background:var(--c-accent); border-color:var(--c-accent); }
+.cb.dis { color:var(--c-text-muted); } .cb.dis i.on { background:var(--c-text-muted); border-color:var(--c-text-muted); }
+[data-w="mob"] .cb { min-height:40px; }
+/* Notice (warning / danger / info) */
+.notice { display:flex; gap:var(--sp-sm); align-items:flex-start; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-warning); background:var(--c-warning-bg); color:var(--c-warning-text); font-size:var(--fs-sm); }
+.notice.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); color:var(--c-danger-text); }
+.notice.info { border-color:var(--c-info); background:var(--c-info-bg); color:var(--c-text-primary); }
+.notice .ic { flex:none; font-weight:700; }
+.notice .act { display:flex; gap:var(--sp-xs); flex-wrap:wrap; margin-top:var(--sp-xs); }
+/* EmptyState */
+.empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:var(--sp-sm); padding:var(--sp-xl) var(--sp-lg); color:var(--c-text-secondary); }
+.empty .em-ic { width:40px; height:40px; border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; font-size:var(--fs-lg); }
+.empty .em-t { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.empty .em-x { font-size:var(--fs-sm); max-width:340px; }
+.empty.sm { padding:var(--sp-md); } .empty.sm .em-ic { width:28px; height:28px; font-size:var(--fs-sm); }
+/* Карточка-строка внутри острова */
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); }
+.sect { font:600 var(--fs-xxs)/1.4 var(--font-sans); text-transform:uppercase; letter-spacing:.07em; color:var(--c-text-muted); margin:var(--sp-lg) 0 var(--sp-sm); }
+.sect:first-child { margin-top:0; }
+.hr { height:1px; background:var(--c-border-light); margin:var(--sp-md) 0; }
+/* Menu / Tooltip (статично) */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-island); padding:var(--sp-xs); min-width:220px; }
+.mi { display:flex; gap:var(--sp-sm); align-items:center; padding:6px var(--sp-sm); border-radius:var(--r-md); font-size:var(--fs-base); }
+.mi:hover, .mi.on { background:var(--c-bg-selected); }
+.tip { position:absolute; z-index:12; background:var(--c-text-heading); color:var(--c-bg-main); font-size:var(--fs-xs); padding:var(--sp-xs) var(--sp-sm); border-radius:var(--r-md); max-width:240px; }
+/* Modal + ModalActions; на мобиле — шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:20; display:flex; align-items:center; justify-content:center; padding:var(--sp-lg); }
+.modal { background:var(--c-bg-card); border-radius:var(--r-xl); box-shadow:var(--shadow-modal); width:100%; max-height:100%; display:flex; flex-direction:column; overflow:hidden; }
+.modal .mh { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-bottom:1px solid var(--c-border-light); font:600 var(--fs-lg)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.modal .mb { padding:var(--sp-lg); overflow:auto; }
+.modal .ma { display:flex; justify-content:flex-end; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-top:1px solid var(--c-border-light); }
+[data-w="mob"] .scrim { align-items:flex-end; padding:0; }
+[data-w="mob"] .modal { border-radius:var(--r-xl) var(--r-xl) 0 0; max-width:none !important; max-height:88%; }
+[data-w="mob"] .modal .ma { flex-direction:column-reverse; } [data-w="mob"] .modal .ma .btn { width:100%; }
+/* ProgressBar */
+.pb { height:6px; border-radius:var(--r-max); background:var(--c-progress-track); overflow:hidden; display:flex; }
+.pb i { display:block; height:100%; background:var(--c-accent); }
+/* Tabs (подчёркивание) */
+.tabs { display:flex; gap:var(--sp-lg); border-bottom:1px solid var(--c-border-light); overflow-x:auto; flex:none; }
+.tabs button { border:0; background:none; padding:var(--sp-sm) 0; min-height:36px; font-size:var(--fs-base); color:var(--c-text-secondary); border-bottom:2px solid transparent; white-space:nowrap; display:inline-flex; gap:var(--sp-xs); align-items:center; }
+.tabs button[aria-selected="true"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+[data-w="mob"] .tabs button { min-height:44px; }
+.cnt { font:600 var(--fs-xxs)/16px var(--font-sans); min-width:16px; padding:0 var(--sp-xs); border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-secondary); text-align:center; }
+.cnt.s { background:var(--c-danger-bg); color:var(--c-danger-text); } .cnt.w { background:var(--c-warning-bg); color:var(--c-warning-text); }
+/* Аватар-кружок персоны (UserAvatar-подобный) */
+.av { width:22px; height:22px; border-radius:var(--r-max); background:var(--c-accent-light); color:var(--c-accent); font:700 var(--fs-xxs)/22px var(--font-sans); text-align:center; flex:none; }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); } .av.i { background:var(--c-info-bg); color:var(--c-info); } .av.g { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.lg { width:40px; height:40px; line-height:40px; font-size:var(--fs-md); }
+/* «унаследовано» — серая подпись со ссылкой на источник */
+.inh { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.inh a, a.lnk { color:var(--c-accent); text-decoration:none; } .inh a:hover, a.lnk:hover { text-decoration:underline; }
+</style>
+<script>
+// Пульт прототипа: кнопки .pseg[data-k] пишут значение в html[data-<k>]; элементы с data-show="k:v1|v2 k2:v" видны,
+// когда совпали все условия. Кликабельные элементы макета с data-go="k:v" переключают то же состояние.
+(function(){
+  const H = document.documentElement;
+  function sync(){
+    document.querySelectorAll('.pseg[data-k]').forEach(g=>{ const k=g.dataset.k; g.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', String(H.dataset[k]===b.dataset.v))); });
+    document.querySelectorAll('[data-show]').forEach(el=>{
+      const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
+      el.hidden = !ok;
+    });
+  }
+  function set(k,v){ H.dataset[k]=v; sync(); }
+  document.addEventListener('click', e=>{
+    const b = e.target.closest('.pseg[data-k] button'); if (b) { set(b.closest('.pseg').dataset.k, b.dataset.v); return; }
+    const g = e.target.closest('[data-go]'); if (g) { e.preventDefault(); g.dataset.go.split(/\s+/).forEach(p=>{ const [k,v]=p.split(':'); set(k,v); }); }
+  });
+  document.addEventListener('DOMContentLoaded', sync);
+})();
+</script>
+<style>
+.fh { padding:var(--sp-lg) var(--sp-xl) var(--sp-md); background:var(--c-bg-card); border-bottom:1px solid var(--c-border-light); flex:none; }
+[data-w="mob"] .fh { padding:var(--sp-md); }
+.ftitle { font:600 var(--fs-h2)/1.25 var(--font-serif); color:var(--c-text-heading); margin:var(--sp-xxs) 0 0; }
+[data-w="mob"] .ftitle { font-size:var(--fs-xl); }
+.hrow { margin-top:var(--sp-sm); display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-border-light); background:var(--c-bg-white); font-size:var(--fs-sm); }
+.scroll { flex:1; min-height:0; overflow:auto; background:var(--c-bg-card); }
+/* полосы вкладок: Tabs size md, липкие к верху тела страницы (как FeaturePageTabs) */
+.tbar { position:sticky; top:0; z-index:2; background:var(--c-bg-white); border-bottom:1px solid var(--c-border-light); padding:0 var(--sp-xl); display:flex; align-items:center; gap:var(--sp-md); }
+[data-w="mob"] .tbar { padding:0 var(--sp-md); }
+.tbar .tabs { border-bottom:0; flex:1; min-width:0; scrollbar-width:none; }
+.tabs button[data-t] { border-bottom:2px solid transparent; color:var(--c-text-secondary); font-weight:400; }
+[data-tab="stage"] .tabs button[data-t="stage"], [data-tab="mat"] .tabs button[data-t="mat"], [data-tab="rev"] .tabs button[data-t="rev"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+.t-top { display:none; } [data-v="a"] .t-top, [data-st="legacy"] .t-top { display:flex; }
+.t-mid { display:none; } [data-v="b"][data-st="route"] .t-mid { display:flex; }
+/* граф (копия ProcessGraph из feature-page.html, компактнее) */
+.gwrap { padding:var(--sp-md) var(--sp-xl); border-bottom:1px solid var(--c-border-light); background:var(--c-bg-card); }
+[data-w="mob"] .gwrap { padding:var(--sp-sm) var(--sp-md); }
+[data-st="legacy"] .gwrap, [data-v="a"]:not([data-tab="stage"]) .gwrap { display:none; }
+.graph { display:flex; align-items:stretch; }
+.node { position:relative; flex:1 1 0; min-width:96px; display:flex; flex-direction:column; gap:var(--sp-xxs); padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-border-light); background:var(--c-bg-white); text-align:left; }
+.node:hover { border-color:var(--c-border); }
+.node .nn { font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:var(--sp-xs); white-space:nowrap; }
+.node .nm { font-size:var(--fs-xs); color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.node .ico { width:16px; height:16px; border-radius:var(--r-max); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); border:2px solid var(--c-progress-track); }
+.node.done .ico { background:var(--c-success); border-color:var(--c-success); color:var(--c-on-accent); }
+.node.act .ico { border-color:var(--c-accent); background:var(--c-accent-light); }
+.node.act .ico::after { content:""; width:6px; height:6px; border-radius:var(--r-max); background:var(--c-accent); }
+.node.hum .ico { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.node.todo { background:transparent; border-style:dashed; } .node.todo .nn { color:var(--c-text-secondary); }
+/* узел «Фича целиком» (только C): закреплён первым, отделён разделителем, не часть маршрута */
+.node.ov { flex:0 0 auto; background:var(--c-bg-inset); border-color:var(--c-border); }
+.node.ov .ico { border-color:var(--c-text-muted); background:var(--c-bg-white); }
+.gsep { flex:none; width:1px; background:var(--c-divider); margin:var(--sp-xs) var(--sp-md); }
+.link { flex:none; width:16px; align-self:center; height:2px; background:var(--c-progress-track); } .link.done { background:var(--c-success); }
+.ret { position:absolute; top:-7px; right:-6px; }
+/* выбранный узел — правило выбора по состоянию пульта */
+[data-tab="stage"] .node[data-n="steps"],
+[data-v="b"]:not([data-tab="stage"])[data-f="one"] .node[data-n="design"],
+[data-v="c"]:not([data-tab="stage"]) .node[data-n="ov"] { border-color:var(--c-accent); box-shadow:var(--shadow-focus); border-style:solid; }
+/* мобила: A и C — вертикальный список, B — лента-переключатель в одну строку */
+[data-w="mob"][data-v="a"] .graph, [data-w="mob"][data-v="c"] .graph { flex-direction:column; gap:var(--sp-xs); }
+[data-w="mob"][data-v="a"] .link, [data-w="mob"][data-v="c"] .link { display:none; }
+[data-w="mob"][data-v="a"] .node, [data-w="mob"][data-v="c"] .node { flex-direction:row; align-items:center; min-height:48px; flex:none; }
+[data-w="mob"][data-v="a"] .node .nm, [data-w="mob"][data-v="c"] .node .nm { margin-left:auto; }
+[data-w="mob"][data-v="c"] .gsep { width:auto; height:1px; margin:var(--sp-xxs) 0; }
+[data-w="mob"][data-v="b"] .graph { overflow-x:auto; gap:var(--sp-xs); scrollbar-width:none; }
+[data-w="mob"][data-v="b"] .link { display:none; }
+[data-w="mob"][data-v="b"] .node { flex:none; min-width:0; min-height:40px; padding:0 var(--sp-md); border-radius:var(--r-max); justify-content:center; }
+[data-w="mob"][data-v="b"] .node .nm { display:none; }
+/* граф с параллельными ветками: строка «Фича целиком» + граф; мобила A и C — вертикаль, B — лента пилюль */
+.gline { display:flex; align-items:center; }
+.gline > .pgraph { flex:1; min-width:0; gap:var(--sp-lg); }
+.pgraph .lv { min-width:96px; }
+[data-w="mob"] .gline { flex-direction:column; align-items:stretch; gap:var(--sp-xs); }
+[data-w="mob"][data-v="a"] .pgraph, [data-w="mob"][data-v="c"] .pgraph { flex-direction:column; }
+[data-w="mob"][data-v="b"] .gline > .pgraph { overflow-x:auto; overflow-y:hidden; gap:var(--sp-md); scrollbar-width:none; }
+[data-w="mob"][data-v="b"] .pgraph .lv { flex:none; min-width:0; width:auto; }
+[data-w="mob"][data-v="b"] .pgraph .lv.par { padding-top:var(--sp-xs); }
+[data-w="mob"][data-v="b"] .pgraph .lv.par > .pl { display:none; }
+[data-w="mob"][data-v="b"] .pgraph .node { min-height:36px; white-space:nowrap; }
+[data-w="mob"][data-v="b"] .pgraph .node .nn { white-space:nowrap; flex-wrap:nowrap; }
+.gcap { display:flex; align-items:center; gap:var(--sp-sm); margin-bottom:var(--sp-sm); }
+[data-w="mob"][data-v="b"] .gcap { display:none; }
+/* тело вида */
+.cnt-area { padding:var(--sp-lg) var(--sp-xl); }
+[data-w="mob"] .cnt-area { padding:var(--sp-md); }
+/* фильтр «по этапу» (B): чип-срез над материалами и разбором */
+.frow { display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; margin-bottom:var(--sp-md); font-size:var(--fs-sm); }
+/* карточки документов (FeaturePlansTab: сетка 3 / 1) */
+.dgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-sm); }
+[data-w="mob"] .dgrid { grid-template-columns:1fr; }
+.dcard { display:flex; flex-direction:column; gap:var(--sp-xxs); text-align:left; background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); min-height:72px; }
+.dcard:hover { border-color:var(--c-border); }
+.dcard .dt { font-weight:600; color:var(--c-text-heading); }
+.dcard .ds { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.stg { display:none; } [data-st="route"][data-v="b"] .stg, [data-st="route"][data-v="c"] .stg { display:inline-flex; }
+/* Разбор: якоря-чипы и секции */
+.anch { display:flex; gap:var(--sp-xs); flex-wrap:wrap; margin:var(--sp-sm) 0 var(--sp-md); }
+[data-w="mob"] .anch { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+.rsec { margin-bottom:var(--sp-lg); }
+.lanebar { display:flex; height:10px; border-radius:var(--r-max); overflow:hidden; gap:2px; margin:var(--sp-xs) 0; }
+.lanebar i { display:block; height:100%; background:var(--c-progress-track); }
+.lanebar i.d { background:var(--c-success); } .lanebar i.a { background:var(--c-accent); } .lanebar i.p { background:var(--c-plan); } .lanebar i.hl { outline:2px solid var(--c-accent); outline-offset:1px; }
+.ev { display:flex; gap:var(--sp-sm); align-items:baseline; padding:var(--sp-xs) 0; font-size:var(--fs-sm); border-top:1px solid var(--c-border-light); }
+.ev .tm { font-family:var(--font-mono); font-size:var(--fs-xs); color:var(--c-text-muted); flex:none; width:72px; }
+[data-w="mob"] .ev { flex-wrap:wrap; } [data-w="mob"] .ev .tm { width:auto; }
+.kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--sp-sm); }
+[data-w="mob"] .kpis { grid-template-columns:repeat(2,1fr); }
+.kpi { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-sm) var(--sp-md); }
+.kpi .kl { font-size:var(--fs-xs); color:var(--c-text-muted); } .kpi .kv { font:600 var(--fs-lg)/1.3 var(--font-sans); color:var(--c-text-heading); } .kpi .ks { font-size:var(--fs-xs); color:var(--c-text-secondary); }
+.trow { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); }
+.trow + .trow { margin-top:var(--sp-xs); }
+.trow .tt { font-weight:600; color:var(--c-text-heading); } .trow .ts { font-size:var(--fs-xs); color:var(--c-text-muted); }
+[data-w="mob"] .trow { min-height:56px; }
+.sh { display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; margin-bottom:var(--sp-md); }
+.sh .stt { font:600 var(--fs-xl)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.lvl { font:600 var(--fs-xxs)/18px var(--font-mono); color:var(--c-plan-text); background:var(--c-plan-light); border-radius:var(--r-sm); padding:0 var(--sp-xs); }
+/* записка варианта под макетом */
+.note { max-width:1240px; margin:var(--sp-lg) auto 0; display:grid; grid-template-columns:repeat(3,1fr); gap:var(--sp-md); }
+[data-w="mob"] .note { grid-template-columns:1fr; max-width:520px; }
+.note .card h3 { margin:0 0 var(--sp-xs); font:600 var(--fs-md)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.note .card ul { margin:0; padding-left:18px; font-size:var(--fs-sm); }
+.app { height:760px; }
+.mini { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-xs) 0; font-size:var(--fs-sm); }
+/* срез по этапу действует только в B, с маршрутом и не на виде «Этап» */
+.fone { display:none !important; }
+[data-v="b"][data-st="route"][data-f="one"]:not([data-tab="stage"]) .lanebar i[data-n="design"] { outline:2px solid var(--c-accent); outline-offset:1px; }
+[data-v="b"][data-st="route"][data-f="one"]:not([data-tab="stage"]) .lanebar i:not([data-n="design"]) { opacity:.35; }
+[data-v="b"][data-st="route"][data-f="one"]:not([data-tab="stage"]) .fone { display:revert !important; }
+[data-v="b"][data-st="route"][data-f="one"]:not([data-tab="stage"]) .fall { display:none !important; }
+</style>
+<style>
+/* ===== граф с параллельными ветками (общий блок макетов «Процессы фичи») =====
+   Уровень .lv = колонка маршрута (глубина = длиннейший путь от корня, как previewColumns).
+   .lv.par — несколько этапов одной колонки в рамке «параллельно», узлы всегда друг над другом.
+   Рёбра — SVG по data-after узла (нет атрибута — после всех узлов предыдущего уровня).
+   Направление задаёт страница (flex-direction у .pgraph); вертикаль скрипт помечает .is-v. */
+.pgraph { position:relative; display:flex; align-items:center; gap:var(--sp-xl); }
+.pgraph.is-v { align-items:stretch; gap:var(--sp-md); padding-left:var(--sp-xl); }
+.pgraph.is-v.skip { padding-right:var(--sp-xl); }
+.pgraph.skip:not(.is-v) { padding-bottom:var(--sp-xl); }
+.pgraph > svg.edges { position:absolute; left:0; top:0; pointer-events:none; overflow:visible; z-index:0; }
+.pgraph > svg.edges path { fill:none; stroke:var(--c-border); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.pgraph > svg.edges path.done { stroke:var(--c-success); }
+.pgraph > svg.edges path.prop { stroke:var(--c-plan-border); stroke-dasharray:4 4; }
+.pgraph > svg.edges path.far { stroke-dasharray:2 5; }
+.pgraph > svg.edges circle { fill:var(--c-border); } .pgraph > svg.edges circle.done { fill:var(--c-success); } .pgraph > svg.edges circle.prop { fill:var(--c-plan-border); }
+.lv { position:relative; z-index:1; flex:1 1 0; min-width:116px; display:flex; flex-direction:column; gap:var(--sp-xs); }
+.pgraph.is-v .lv { flex:none; min-width:0; }
+.lv.par { padding:20px var(--sp-xs) var(--sp-xs); border:1px dashed var(--c-border); border-radius:var(--r-xl); }
+.lv.par > .pl { position:absolute; top:3px; left:var(--sp-sm); right:var(--sp-sm); font-size:var(--fs-xxs); line-height:14px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pgraph .node { flex:none; width:100%; min-width:0; }
+.pgraph .node .nn { white-space:normal; flex-wrap:wrap; row-gap:0; }
+.node .lane { font:500 var(--fs-xxs)/16px var(--font-sans); padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.node .role { font:var(--fs-xxs)/16px var(--font-mono); color:var(--c-text-muted); font-weight:400; }
+</style>
+<script>
+// Рёбра графа: пересчёт по раскладке. Соседние уровни — кривая из края в край; ребро через уровень
+// (например «Проверка плана» → «QA») идёт обходом: под графом в горизонтали, справа в вертикали.
+// Вертикаль: прямая из центра в центр, только если между узлами никого нет; иначе — дуга слева.
+(function(){
+  const NS = 'http://www.w3.org/2000/svg';
+  function draw(g){
+    const levels = [...g.querySelectorAll(':scope > .lv')];
+    const pos = {};
+    levels.forEach((lv,li)=>{ const ns=[...lv.querySelectorAll('.node[data-id]')]; ns.forEach((el,i)=>pos[el.dataset.id]={el,li,i,n:ns.length}); });
+    const edges = [];
+    Object.values(pos).forEach(t=>{
+      const after = t.el.dataset.after != null ? t.el.dataset.after.split(/\s+/).filter(Boolean)
+        : (t.li>0 ? [...levels[t.li-1].querySelectorAll('.node[data-id]')].map(e=>e.dataset.id) : []);
+      after.forEach(f=>{ if (pos[f]) edges.push([pos[f], t]); });
+    });
+    const vert = getComputedStyle(g).flexDirection.startsWith('column');
+    g.classList.toggle('is-v', vert);
+    g.classList.toggle('skip', edges.some(([s,t])=>t.li-s.li>1));
+    let svg = g.querySelector(':scope > svg.edges');
+    if (!svg) { svg = document.createElementNS(NS,'svg'); svg.setAttribute('class','edges'); svg.setAttribute('aria-hidden','true'); g.prepend(svg); }
+    if (!g.offsetParent) return;
+    svg.setAttribute('width',0); svg.setAttribute('height',0); svg.innerHTML='';
+    const gr = g.getBoundingClientRect(), ox = gr.left - g.scrollLeft, oy = gr.top - g.scrollTop;
+    const R = el=>{ const r=el.getBoundingClientRect(); return {l:r.left-ox, r:r.right-ox, t:r.top-oy, b:r.bottom-oy, cx:(r.left+r.right)/2-ox, cy:(r.top+r.bottom)/2-oy}; };
+    let maxB=0, maxR=0; Object.values(pos).forEach(p=>{ const r=R(p.el); maxB=Math.max(maxB,r.b); maxR=Math.max(maxR,r.r); });
+    let out='';
+    edges.forEach(([s,t])=>{
+      const a=R(s.el), b=R(t.el), span=t.li-s.li;
+      const cls = (s.el.classList.contains('prop')||t.el.classList.contains('prop')) ? 'prop' : s.el.classList.contains('done') ? 'done' : '';
+      let d, ex, ey;
+      if (!vert && span===1) { const m=(a.r+b.l)/2; d=`M${a.r} ${a.cy}C${m} ${a.cy} ${m} ${b.cy} ${b.l} ${b.cy}`; ex=b.l; ey=b.cy; }
+      else if (!vert) { const y=maxB+14, r=8; d=`M${a.cx} ${a.b}V${y-r}Q${a.cx} ${y} ${a.cx+r} ${y}H${b.cx-r}Q${b.cx} ${y} ${b.cx} ${y-r}V${b.b}`; ex=b.cx; ey=b.b; }
+      else if (span===1 && s.i===s.n-1 && t.i===0) { const m=(a.b+b.t)/2; d=`M${a.cx} ${a.b}C${a.cx} ${m} ${b.cx} ${m} ${b.cx} ${b.t}`; ex=b.cx; ey=b.t; }
+      else if (span===1) { const w=14; d=`M${a.l} ${a.cy}C${a.l-w} ${a.cy} ${b.l-w} ${b.cy} ${b.l} ${b.cy}`; ex=b.l; ey=b.cy; }
+      else { const x=maxR+14; d=`M${a.r} ${a.cy}C${x} ${a.cy} ${x} ${b.cy} ${b.r} ${b.cy}`; ex=b.r; ey=b.cy; }
+      out += `<path class="${cls}${span>1?' far':''}" d="${d}"/><circle class="${cls}" cx="${ex}" cy="${ey}" r="3"/>`;
+    });
+    svg.setAttribute('width', g.scrollWidth); svg.setAttribute('height', g.scrollHeight);
+    svg.innerHTML = out;
+  }
+  function all(){ document.querySelectorAll('.pgraph').forEach(draw); }
+  window.fwEdges = all;
+  document.addEventListener('DOMContentLoaded', ()=>{ all(); if (document.fonts) document.fonts.ready.then(all); });
+  document.addEventListener('click', ()=>setTimeout(all,0));
+  window.addEventListener('resize', all);
+})();
+</script>
+</head>
+<body>
+<div class="ctl">
+  <h1>«Материалы» и «Разбор» на странице с графом</h1>
+  <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
+  <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
+  <span class="lb">Вариант</span><span class="pseg" data-k="v"><button data-v="a">A · три вида</button><button data-v="b">B · граф-навигатор ★</button><button data-v="c">C · узел «Фича целиком»</button></span>
+  <span class="lb">Фича</span><span class="pseg" data-k="st"><button data-v="route">С маршрутом</button><button data-v="legacy">Старая, без маршрута</button></span>
+  <span class="lb">Вид</span><span class="pseg" data-k="tab"><button data-v="stage">Этап / Ход</button><button data-v="mat">Материалы</button><button data-v="rev">Разбор</button></span>
+  <span data-show="v:b st:route" class="row"><span class="lb">Срез</span><span class="pseg" data-k="f"><button data-v="all">Вся фича</button><button data-v="one">Этап «Дизайн»</button></span></span>
+</div>
+<div class="stage">
+  <div class="cap"><span class="agree">на согласование</span><b>C3b · страница фичи · место «Материалов» и «Разбора»</b>
+    <span data-show="v:a st:route">· A: вкладки «Процесс · Материалы · Разбор» сразу под шапкой; граф и этап — содержимое «Процесса»</span>
+    <span data-show="v:b st:route">· B: граф всегда сверху, под ним «Этап · Материалы · Разбор»; узел графа на «Материалах» и «Разборе» — срез по этапу</span>
+    <span data-show="v:c st:route">· C: первый узел графа — «Фича целиком» (материалы и разбор), этапное разложено по своим этапам</span>
+    <span data-show="st:legacy">· старая фича без маршрута: графа и экрана этапа нет — сегодняшние вкладки «Ход · Материалы · Разбор» без изменений, во всех вариантах</span>
+  </div>
+  <div class="app">
+    <div class="pane" style="flex:1" data-mcap="C3b · страница фичи (360)">
+      <div class="island">
+        <div class="tb"><button class="back">‹ Фичи</button><span class="sp"></span><button class="btn xs ghost d-only">Ключевой чат</button><button class="ib" title="Ещё">⋯</button></div>
+        <div class="scroll">
+          <div class="fh">
+            <div class="row wrap"><span class="tag info">в работе</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only" data-show="st:route">4 из 10 этапов · 2 ветки параллельно · ≈ 7 ч до финала</span></div>
+            <h2 class="ftitle">Процессы фичи: шаблоны и наследование</h2>
+            <div class="pb" style="margin-top:var(--sp-sm)" data-show="st:route"><i style="width:40%"></i></div>
+            <div class="hrow" data-show="st:route"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил человек</span><button class="btn xs ghost">Почему так</button></div>
+            <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow"><b>Маршрута ещё нет.</b> Создана до шаблонов: страница как раньше, графа нет.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
+          </div>
+
+          <!-- ===== полоса вкладок сверху: вариант A и легаси ===== -->
+          <div class="tbar t-top"><div class="tabs" role="tablist" aria-label="Разделы фичи">
+            <button role="tab" data-t="stage" data-go="tab:stage"><span data-show="st:route">Процесс</span><span data-show="st:legacy">Ход</span></button>
+            <button role="tab" data-t="mat" data-go="tab:mat">Материалы <span class="cnt">7</span></button>
+            <button role="tab" data-t="rev" data-go="tab:rev">Разбор</button>
+          </div></div>
+
+          <!-- ===== граф: в A — только во вкладке «Процесс», в B и C — всегда ===== -->
+          <div class="gwrap">
+            <div class="gcap"><span class="sect" style="margin:0">Процесс</span><span class="sp"></span><span class="inh">Параллельный цикл v1</span>
+              <span class="inh" data-show="v:b !tab:stage">· клик по этапу — срез материалов и разбора</span></div>
+            <div class="gline">
+              <button class="node ov" data-n="ov" data-show="v:c" data-go="tab:mat"><span class="nn"><span class="ico">≡</span>Фича целиком</span><span class="nm">материалы · разбор</span></button><span class="gsep" data-show="v:c"></span>
+            <div class="pgraph" role="listbox" aria-label="Этапы фичи">
+              <div class="lv"><button class="node done" data-n="cut" data-id="cut" data-go="f:one"><span class="nn"><span class="ico">✓</span>Разрез</span><span class="nm">Александр · 1 ч 10</span></button></div>
+              <div class="lv"><button class="node done" data-n="design" data-id="design" data-go="f:one"><span class="nn"><span class="ico">✓</span>Дизайн</span><span class="nm">Майя · 2 ч 05</span></button></div>
+              <div class="lv par"><span class="pl">⇉ параллельно</span>
+                <button class="node done" data-n="plan" data-id="plan" data-after="design" data-go="f:one"><span class="nn"><span class="ico">✓</span>План</span><span class="nm">Егор · 35 мин</span></button>
+                <button class="node done" data-n="qa-plan" data-id="qa-plan" data-after="design" data-go="f:one"><span class="nn"><span class="ico">✓</span>Проверка плана <span class="role">qa</span></span><span class="nm">Вера · 25 мин</span></button>
+              </div>
+              <div class="lv par"><span class="pl">⇉ параллельно</span>
+                <button class="node act" data-n="steps" data-id="step-back" data-after="plan" data-go="tab:stage"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3 · ◐ вопрос</span></button>
+                <button class="node act" data-n="steps-f" data-id="step-front" data-after="plan" data-go="tab:stage"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">Полина · 1/2</span></button>
+              </div>
+              <div class="lv"><button class="node todo" data-n="review" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">ждёт ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-n="qa" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">Вера</span></button></div>
+              <div class="lv"><button class="node todo" data-n="final" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">Александр</span></button></div>
+              <div class="lv"><button class="node todo" data-n="merge" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">Марк</span></button></div>
+            </div>
+            </div>
+          </div>
+
+          <!-- ===== полоса вкладок под графом: вариант B ===== -->
+          <div class="tbar t-mid"><div class="tabs" role="tablist" aria-label="Что показать под графом">
+            <button role="tab" data-t="stage" data-go="tab:stage f:all">Этап «Шаги · бэк»</button>
+            <button role="tab" data-t="mat" data-go="tab:mat">Материалы <span class="cnt" data-show="f:all">7</span><span class="cnt" data-show="f:one">3</span></button>
+            <button role="tab" data-t="rev" data-go="tab:rev">Разбор</button>
+          </div></div>
+
+          <div class="cnt-area">
+            <!-- C: переключатель внутри обзора фичи — SegmentedControl -->
+            <div class="row" style="margin-bottom:var(--sp-md)" data-show="v:c st:route !tab:stage">
+              <span class="serif" style="font-size:var(--fs-xl);font-weight:600;color:var(--c-text-heading)">Фича целиком</span><span class="sp"></span>
+              <span class="seg"><button data-go="tab:mat" aria-pressed="false" data-show="!tab:mat">Материалы · 7</button><button aria-pressed="true" data-show="tab:mat">Материалы · 7</button><button data-go="tab:rev" data-show="!tab:rev">Разбор</button><button aria-pressed="true" data-show="tab:rev">Разбор</button></span>
+            </div>
+            <div class="inh" style="margin:-4px 0 var(--sp-md)" data-show="v:c st:route !tab:stage w:mob"><span class="lvl">уровень 3</span> список этапов → «Материалы / Разбор» → якоря секций</div>
+
+            <!-- B: срез по этапу -->
+            <div class="frow" data-show="v:b st:route !tab:stage">
+              <span class="muted">Показано:</span>
+              <span class="chip" data-show="f:all">вся фича</span>
+              <span class="chip" data-show="f:one" style="border-color:var(--c-accent)">этап «Дизайн» <button class="x" data-go="f:all" title="Снять срез" aria-label="Снять срез">×</button></span>
+              <span class="inh d-only" data-show="f:all">выберите этап в графе, чтобы оставить только его</span>
+              <span class="sp"></span><button class="btn xs ghostAccent" data-show="f:one">Открыть этап «Дизайн» →</button>
+            </div>
+
+            <!-- ===== вид «Этап» (маршрут) ===== -->
+            <div data-show="tab:stage st:route">
+              <div class="sh"><span class="stt">Шаги</span><span class="tag acc">в работе</span><span class="tag s">1 возврат</span><span class="sp"></span><button class="btn sm primary">Открыть этап →</button></div>
+              <div class="kpis">
+                <div class="kpi"><div class="kl">Время этапа</div><div class="kv">4 ч 05 мин</div><div class="ks">исп. 2:50 · ревью 40 · вы 35</div></div>
+                <div class="kpi"><div class="kl">Ходы</div><div class="kv">186</div><div class="ks">5 задач</div></div>
+                <div class="kpi"><div class="kl">Токены</div><div class="kv">4,1 М</div><div class="ks">кэш 82 %</div></div>
+                <div class="kpi"><div class="kl">Ждёт вас</div><div class="kv" style="color:var(--c-warning-text)">1 вопрос</div><div class="ks">35 мин</div></div>
+              </div>
+              <div class="sect">Задачи этапа</div>
+              <div class="trow"><span class="tag ok">✓</span><div class="col grow" style="gap:0"><span class="tt ell">B2 · маршрут на эпике и слепок этапа</span><span class="ts">Тимур · 40 мин · принято</span></div></div>
+              <div class="trow"><span class="tag acc">●</span><div class="col grow" style="gap:0"><span class="tt ell">B3 · исполнение по этапу</span><span class="ts">Тимур · 1 ч 15 · доработка после ревью</span></div><span class="cnt s">↺1</span></div>
+              <div class="trow"><span class="tag">○</span><div class="col grow" style="gap:0"><span class="tt ell">C1b · редактор шаблонов</span><span class="ts">Полина · ждёт B3</span></div></div>
+              <!-- C: этапное из «Материалов» и «Разбора» переезжает сюда -->
+              <div data-show="v:c">
+                <div class="sect">Хронология этапа <span class="tag plan" style="margin-left:var(--sp-xs)">из «Разбора»</span></div>
+                <div class="ev"><span class="tm">13.11 09:40</span><span class="grow">Глеб вернул B3: «нет проверки снятого этапа» · блокер</span></div>
+                <div class="ev"><span class="tm">13.11 08:15</span><span class="grow">Тимур закрыл B2 · принято</span></div>
+                <div class="sect">Документы этапа <span class="tag plan" style="margin-left:var(--sp-xs)">из «Материалов»</span></div>
+                <div class="dgrid"><button class="dcard"><span class="dt mono">ADR-032-workflow-templates.md</span><span class="ds">docs/adr · задача B1</span></button><button class="dcard"><span class="dt mono">workflow-route.md</span><span class="ds">docs/features · задача B2</span></button></div>
+              </div>
+            </div>
+
+            <!-- ===== вид «Ход» (легаси): сегодняшний FeatureProgressTab ===== -->
+            <div data-show="tab:stage st:legacy">
+              <div class="sect">Этапы</div>
+              <div class="trow"><span class="tag ok">✓</span><span class="grow">Разрез · План</span><span class="ts">≈ 1 ч 40</span></div>
+              <div class="trow" style="border-color:var(--c-accent)"><span class="tag acc">●</span><div class="col grow" style="gap:0"><span class="tt">Производство · 2/4</span><span class="ts">Тимур · B3 в работе 45 мин</span></div><button class="btn xs ghost">Все 4 шага ›</button></div>
+              <div class="trow"><span class="tag">○</span><span class="grow sec">Ревью · Финал</span></div>
+              <div class="sect">Дальше</div>
+              <div class="mi">Ревью шага B3 — Глеб</div>
+            </div>
+
+            <!-- ===== вид «Материалы» (FeaturePlansTab целиком) ===== -->
+            <div data-show="tab:mat">
+              <div class="sect">Документы <span class="fall">· 3</span><span class="fone">· 1</span></div>
+              <div class="dgrid">
+                <button class="fall dcard"><span class="row"><span class="tag">разрез</span><span class="tag stg plan">этап Разрез</span></span><span class="dt">Процессы фичи — разрез</span><span class="ds">Александр · 12.11 14:20</span></button>
+                <button class="dcard"><span class="row"><span class="tag">дизайн</span><span class="tag stg plan">этап Дизайн</span></span><span class="dt">Макеты всех экранов</span><span class="ds">Майя · 12.11 19:05</span></button>
+                <button class="fall dcard"><span class="row"><span class="tag">план</span><span class="tag stg plan">этап План</span></span><span class="dt">План по шагам A1–D1d</span><span class="ds">Егор · 12.11 21:30</span></button>
+              </div>
+              <div class="fall">
+                <div class="sect">Прочие документы · 2</div>
+                <div class="dgrid">
+                  <button class="dcard"><span class="row"><span class="tag stg plan">этап Шаги</span></span><span class="dt mono">ADR-032-workflow-templates.md</span><span class="ds">docs/adr · задача B1</span></button>
+                  <button class="dcard"><span class="row"><span class="tag stg plan">этап Шаги</span></span><span class="dt mono">workflow-route.md</span><span class="ds">docs/features · задача B2</span></button>
+                </div>
+              </div>
+              <div class="sect">Макеты · 2</div>
+              <div class="dgrid">
+                <button class="dcard"><span class="row"><span class="tag stg plan">этап Дизайн</span></span><span class="dt mono">feature-page.html</span><span class="ds">v2 · прошлые версии: 1</span></button>
+                <button class="dcard"><span class="row"><span class="tag stg plan">этап Дизайн</span></span><span class="dt mono">stage-screen.html</span><span class="ds">v1</span></button>
+              </div>
+            </div>
+
+            <!-- ===== вид «Разбор» (FeatureReviewTab целиком) ===== -->
+            <div data-show="tab:rev">
+              <div class="card row wrap"><span class="grow"><b>Итог:</b> <span class="fall">идёт 1 д 4 ч · на 20 % дольше типичной · 1 возврат · вы задержали на 35 мин</span><span class="fone">этап «Дизайн»: 2 ч 05 · 0 возвратов · вы ответили за 12 мин</span></span><button class="btn xs ghost">Резюме фичи</button></div>
+              <div class="anch"><span class="chip">Время и срок</span><span class="chip">Объём</span><span class="chip">Возвраты и потери</span><span class="chip">Кто работал</span><span class="chip">Расход</span><span class="chip">Хронология</span></div>
+              <div class="rsec">
+                <div class="sect">Время и срок · дорожки этапов</div>
+                <div class="lanebar"><i class="d" style="flex:1.2"></i><i class="d" style="flex:2" data-n="design"></i><i class="d" style="flex:.6"></i><i class="a" style="flex:4"></i><i style="flex:1.5"></i><i style="flex:1"></i></div>
+                <div class="inh">Разрез · Дизайн · План · Шаги · Ревью · Финал <span class="fone">· выбранный этап выделен, остальные — фоном для сравнения</span></div>
+              </div>
+              <div class="rsec">
+                <div class="sect">Возвраты и потери</div>
+                <div class="fall mini"><span class="tag s">↺1</span><span class="grow">Шаги · B3 — «нет проверки снятого этапа»</span><span class="muted">40 мин</span></div>
+                <div class="fone empty sm"><div class="em-x">У этапа «Дизайн» возвратов не было.</div></div>
+              </div>
+              <div class="rsec">
+                <div class="sect">Расход</div>
+                <div class="fall mini"><span class="grow">Всего 9,8 М токенов · $14,20</span></div>
+                <div class="fone mini"><span class="grow">Этап «Дизайн»: 1,2 М токенов · $2,10</span><span class="muted">12 % фичи</span></div>
+              </div>
+              <div class="rsec">
+                <div class="sect">Хронология</div>
+                <div class="fall">
+                  <div class="ev"><span class="tm">13.11 09:40</span><span class="grow">Глеб вернул B3 · блокер</span></div>
+                  <div class="ev"><span class="tm">12.11 21:30</span><span class="grow">Егор выложил план</span></div>
+                  <div class="ev"><span class="tm">12.11 19:05</span><span class="grow">Майя сдала макеты</span></div>
+                </div>
+                <div class="fone">
+                  <div class="ev"><span class="tm">12.11 19:05</span><span class="grow">Майя сдала макеты · принято</span></div>
+                  <div class="ev"><span class="tm">12.11 18:53</span><span class="grow">Человек ответил на вопрос о финале</span></div>
+                  <div class="ev"><span class="tm">12.11 17:00</span><span class="grow">Майя взяла задачу c1a597af</span></div>
+                </div>
+              </div>
+              <div class="inh" data-show="v:c st:route">Хронология и возвраты отдельного этапа — ещё и внутри самого этапа.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== записки: выигрыш и цена ===== -->
+  <div class="note">
+    <div class="card"><h3>A · Три вида страницы</h3><ul>
+      <li><b>Выигрыш:</b> самая дешёвая правка — «Ход» переименовываем в «Процесс» и кладём в него граф с этапом, остальное не трогаем. Легаси отличается одной подписью.</li>
+      <li><b>Цена:</b> на «Материалах» и «Разборе» графа не видно, и документы никак не связаны с этапами. Это прежние вкладки, только переставленные наверх.</li>
+      <li><b>360:</b> два уровня: вкладки и под ними список.</li></ul></div>
+    <div class="card" style="border-color:var(--c-accent)"><h3>B · Граф-навигатор ★</h3><ul>
+      <li><b>Выигрыш:</b> граф остаётся сверху на всех трёх видах. Узел на «Материалах» и «Разборе» становится срезом: «документы Дизайна», «хронология Шагов». «Этап» стоит в одном ряду с «Материалами» и «Разбором», а не над ними.</li>
+      <li><b>Цена:</b> узел делает разное в зависимости от вида. На «Этапе» он выбирает этап, на остальных фильтрует. Поэтому срез всегда подписан чипом с «×» и кнопкой «Открыть этап». Для части секций «Разбора» бэку нужен ключ этапа у событий и расхода.</li>
+      <li><b>360:</b> граф становится лентой чипов в одну строку, под ним вкладки. Два уровня, лента — переключатель, а не ещё один экран.</li></ul></div>
+    <div class="card"><h3>C · Узел «Фича целиком»</h3><ul>
+      <li><b>Выигрыш:</b> выбор всегда один — узел графа. Всё, что относится к одному этапу (его документы, хронология, возвраты), видно прямо в этом этапе.</li>
+      <li><b>Цена:</b> в маршрут добавляется узел, который этапом не является. Сводка фичи разрезана: чтобы найти ADR, надо знать, на каком этапе его писали. Самая дорогая переделка.</li>
+      <li><b>360:</b> три уровня: список этапов → «Материалы / Разбор» → якоря. Именно этого постановка просила избежать.</li></ul></div>
+  </div>
+</div>
+</body>
+</html>

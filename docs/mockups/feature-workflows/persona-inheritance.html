@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light" data-w="desk" data-st="inherit" data-ps="base" data-ms="own">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Процессы фичи · форма персоны с наследованием (A3b) — на согласование</title>
+<!--
+  Макет к записке feature-workflows-proposal.md, §2. Код продукта не правится.
+  Привязка: featureId a149e308-fc09-4ad1-9bdd-e72b54e6360d, задача c1a597af (role=design). Пользуется шаг A3b (фронт, форма персоны).
+  Опора на код: PersonaForm.tsx, секция «Поведение и контекст» (поля «Специальность», «Модели» с RoutePicker и «Сбросить»,
+  «Профиль доступа» Полный/Только чтение/Свой) и вкладка «Умения» (PersonaBindingsPanel.tsx).
+  Контракт: Persona.InheritsAccess (bool), пустая ячейка TierX = как у специальности, Skill-умения специальности
+  наследуются, своё выключение — привязка Mode=Off с тем же SkillName (разрез 12.11, §2).
+  Один вариант; состояния — пультом.
+  Слой секций промпта (13.11, второй ряд макета): вкладка «Промпт» формы персоны — PersonaPromptTab.tsx + promptSectionsModel.ts
+  (ветка feat/feature-workflows, 03405c23d / 19e37f2fd). Режимы inherit / own / off; «выключено специальностью» = enabled=false
+  с enabledSource≠persona (режим остаётся inherit); «Своё» = startOwn: черновик из текущего эффективного текста; лимит 1024
+  (SpecialtyPromptPresets.SectionTextLimit); источник текста PromptSectionSource: code → global → user → owner → persona.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, имена — C.* / SHADOW.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--…). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF; --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E; --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-progress-track:#D8CFBE; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 12px 40px rgba(40,30,20,.22);
+  /* FS */ --fs-xxs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px; --fs-h2:22px;
+  /* SP */ --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  /* R  */ --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-max:999px;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+:root[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25; --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072; --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-progress-track:#5C544A; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.6);
+}
+/* ===== дальше — только переменные ===== */
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font:var(--fs-base)/1.45 var(--font-sans); }
+button, input, textarea, select { font:inherit; color:inherit; }
+button { cursor:pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+.serif { font-family:var(--font-serif); }
+.muted { color:var(--c-text-muted); } .sec { color:var(--c-text-secondary); }
+.row { display:flex; align-items:center; gap:var(--sp-sm); min-width:0; } .wrap { flex-wrap:wrap; }
+.col { display:flex; flex-direction:column; gap:var(--sp-sm); min-width:0; }
+.grow { flex:1 1 auto; min-width:0; } .ell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sp { flex:1 1 auto; }
+
+/* --- пульт прототипа (не продукт) --- */
+.ctl { position:sticky; top:0; z-index:40; display:flex; flex-wrap:wrap; gap:var(--sp-sm) var(--sp-md); align-items:center;
+  padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.ctl h1 { font:600 var(--fs-md)/1.2 var(--font-serif); margin:0 var(--sp-sm) 0 0; color:var(--c-text-heading); }
+.ctl .lb { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.pseg { display:inline-flex; flex-wrap:wrap; gap:var(--sp-xxs); align-items:center; }
+.pseg button { border:1px solid var(--c-border); background:var(--c-bg-card); padding:0 var(--sp-md); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); min-height:32px; }
+.pseg button[aria-pressed="true"] { background:var(--c-text-heading); border-color:var(--c-text-heading); color:var(--c-bg-main); font-weight:600; }
+.stage { padding:var(--sp-xl); }
+/* подпись карточки: какой шаг закрывает, статус согласования */
+.cap { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-sm); align-items:center; font-size:var(--fs-xs); color:var(--c-text-muted); margin:0 auto var(--sp-sm); max-width:1240px; }
+.cap b { color:var(--c-text-secondary); }
+.agree { font:600 var(--fs-xxs)/1.6 var(--font-sans); text-transform:uppercase; letter-spacing:.06em; padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-plan-light); color:var(--c-plan-text); }
+.why { max-width:1240px; margin:0 auto var(--sp-md); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+
+/* --- раскладка: десктоп 1240 — острова в ряд; мобила — панели становятся телефонами 360×740 --- */
+.app { display:flex; gap:var(--sp-sm); width:min(1240px,100%); margin:0 auto; height:800px; position:relative; }
+.pane { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.m-only { display:none !important; }
+[data-w="mob"] .d-only { display:none !important; }
+[data-w="mob"] .m-only { display:revert !important; }
+[data-w="mob"] .m-only.flex { display:flex !important; }
+[data-w="mob"] .app { height:auto; width:auto; max-width:100%; flex-wrap:wrap; gap:var(--sp-xxl) var(--sp-xl); justify-content:center; align-items:flex-start; }
+[data-w="mob"] .app > .pane { width:360px !important; height:740px; flex:none !important; border:1px solid var(--c-border); border-radius:var(--r-xl); overflow:hidden; position:relative; background:var(--c-bg-main); }
+[data-w="mob"] .app > .pane[data-mcap]::before { content:attr(data-mcap); position:absolute; top:0; left:0; right:0; z-index:30; font:600 var(--fs-xxs)/18px var(--font-mono); color:var(--c-on-accent); background:var(--c-info); padding:0 var(--sp-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+[data-w="mob"] .app > .pane[data-mcap] { padding-top:18px; }
+[data-w="mob"] .pane .island { border-radius:0; box-shadow:none; }
+@media (max-width:480px) { .stage { padding:var(--sp-sm) 0; } [data-w="mob"] .app > .pane { border-radius:0; border-left:0; border-right:0; } }
+
+/* ===== Компоненты продукта (имя — как в коде) ===== */
+/* Island + IslandHeader */
+.island { background:var(--c-bg-panel); border-radius:var(--r-xl); box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-width:0; min-height:0; flex:1; }
+.ih { display:flex; align-items:center; gap:var(--sp-sm); min-height:44px; padding:0 var(--sp-md) 0 var(--sp-lg); border-bottom:1px solid var(--c-border-light); flex:none; }
+.ih .t { font:600 var(--fs-md)/1.2 var(--font-sans); color:var(--c-text-heading); }
+.body { flex:1; min-height:0; overflow:auto; padding:var(--sp-lg); background:var(--c-bg-card); }
+[data-w="mob"] .body { padding:var(--sp-md); }
+/* Toolbar (TB.heightDesktop 52 / Mobile 56) */
+.tb { display:flex; align-items:center; gap:var(--sp-sm); min-height:52px; padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-main); border-bottom:1px solid var(--c-border); flex:none; min-width:0; }
+[data-w="mob"] .tb { min-height:56px; padding:var(--sp-sm) 14px; }
+.tname { font:600 var(--fs-lg)/1.25 var(--font-serif); color:var(--c-text-heading); }
+/* IconButton / ToolbarIconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; flex:none; border:0; background:none; border-radius:var(--r-md); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-md); }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+[data-w="mob"] .ib { width:40px; height:40px; }
+/* BackButton */
+.back { display:inline-flex; align-items:center; gap:var(--sp-xxs); min-height:32px; border:0; background:none; border-radius:var(--r-md); padding:0 var(--sp-xs) 0 0; color:var(--c-text-secondary); font-weight:600; flex:none; }
+.back:hover { background:var(--c-bg-selected); }
+[data-w="mob"] .back { min-height:40px; }
+/* Button: xs h24 · sm min-h 32 · md min-h 40; вес 600 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:var(--sp-xs); font-weight:600; white-space:nowrap; flex:none; border:1px solid transparent; background:transparent; }
+.btn.xs { height:24px; padding:0 9px; font-size:var(--fs-sm); border-radius:var(--r-md); }
+.btn.sm { min-height:32px; padding:6px 13px; font-size:var(--fs-base); border-radius:var(--r-lg); }
+.btn.md { min-height:40px; padding:10px var(--sp-lg); font-size:var(--fs-md); border-radius:var(--r-xl); }
+[data-w="mob"] .btn.sm, [data-w="mob"] .btn.xs { min-height:40px; height:auto; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghostAccent { color:var(--c-accent); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity:.45; cursor:not-allowed; }
+.btn.primary:disabled { opacity:1; background:var(--c-accent-muted); color:var(--c-text-muted); }
+/* Badge / StatusTag (FS.xs 600, R.sm) */
+.tag { display:inline-flex; align-items:center; gap:var(--sp-xxs); font:600 var(--fs-xs)/16px var(--font-sans); padding:2px var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); white-space:nowrap; flex:none; }
+.tag.info { background:var(--c-info-bg); color:var(--c-info); } .tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.w { background:var(--c-warning-bg); color:var(--c-warning-text); } .tag.s { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag.plan { background:var(--c-plan-light); color:var(--c-plan-text); } .tag.acc { background:var(--c-accent-light); color:var(--c-accent); }
+/* Chip (soft) + ChipX */
+.chip { display:inline-flex; align-items:center; gap:var(--sp-xs); min-height:28px; padding:0 var(--sp-sm); border-radius:var(--r-max); border:1px solid var(--c-border); background:var(--c-bg-white); font-size:var(--fs-sm); color:var(--c-text-primary); white-space:nowrap; }
+.chip .x { border:0; background:none; padding:0; width:18px; height:18px; border-radius:var(--r-max); color:var(--c-text-muted); line-height:18px; }
+.chip.off { color:var(--c-text-muted); text-decoration:line-through; border-style:dashed; background:transparent; }
+[data-w="mob"] .chip { min-height:36px; }
+/* Field: TextField / TextArea / Select + FieldLabel */
+.fl { font:600 var(--fs-xs)/1.3 var(--font-sans); color:var(--c-text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:var(--sp-xs); display:flex; gap:var(--sp-xs); align-items:baseline; }
+.fl .h { text-transform:none; letter-spacing:0; font-weight:400; color:var(--c-text-muted); }
+.fld { width:100%; min-height:36px; padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg-white); font-size:var(--fs-base); color:var(--c-text-primary); }
+textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
+.fld.inh { color:var(--c-text-muted); background:var(--c-bg-inset); border-style:dashed; }
+.fld.err { border-color:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.fld[disabled] { opacity:.7; cursor:not-allowed; }
+.ferr { font-size:var(--fs-xs); color:var(--c-danger-text); margin-top:var(--sp-xs); }
+.fhint { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
+[data-w="mob"] .fld { min-height:44px; font-size:var(--fs-lg); }
+/* SegmentedControl */
+.seg { display:inline-flex; padding:2px; gap:2px; border-radius:var(--r-lg); background:var(--c-bg-inset); flex:none; }
+.seg button { border:0; background:none; min-height:28px; padding:0 var(--sp-md); border-radius:var(--r-md); font-size:var(--fs-sm); color:var(--c-text-secondary); white-space:nowrap; }
+.seg button[aria-pressed="true"] { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-card); }
+.seg button:disabled { opacity:.45; cursor:not-allowed; }
+[data-w="mob"] .seg button { min-height:36px; }
+/* Toggle */
+.tgl { width:34px; height:20px; border-radius:var(--r-max); background:var(--c-progress-track); position:relative; flex:none; border:0; padding:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:var(--r-max); background:var(--c-bg-white); transition:left .15s; }
+.tgl[aria-checked="true"] { background:var(--c-accent); } .tgl[aria-checked="true"]::after { left:16px; }
+.tgl:disabled { opacity:.45; }
+/* Checkbox */
+.cb { display:inline-flex; align-items:center; gap:var(--sp-sm); font-size:var(--fs-base); min-height:28px; }
+.cb i { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--c-border); background:var(--c-bg-white); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); font-style:normal; color:var(--c-on-accent); }
+.cb i.on { background:var(--c-accent); border-color:var(--c-accent); }
+.cb.dis { color:var(--c-text-muted); } .cb.dis i.on { background:var(--c-text-muted); border-color:var(--c-text-muted); }
+[data-w="mob"] .cb { min-height:40px; }
+/* Notice (warning / danger / info) */
+.notice { display:flex; gap:var(--sp-sm); align-items:flex-start; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-warning); background:var(--c-warning-bg); color:var(--c-warning-text); font-size:var(--fs-sm); }
+.notice.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); color:var(--c-danger-text); }
+.notice.info { border-color:var(--c-info); background:var(--c-info-bg); color:var(--c-text-primary); }
+.notice .ic { flex:none; font-weight:700; }
+.notice .act { display:flex; gap:var(--sp-xs); flex-wrap:wrap; margin-top:var(--sp-xs); }
+/* EmptyState */
+.empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:var(--sp-sm); padding:var(--sp-xl) var(--sp-lg); color:var(--c-text-secondary); }
+.empty .em-ic { width:40px; height:40px; border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; font-size:var(--fs-lg); }
+.empty .em-t { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.empty .em-x { font-size:var(--fs-sm); max-width:340px; }
+.empty.sm { padding:var(--sp-md); } .empty.sm .em-ic { width:28px; height:28px; font-size:var(--fs-sm); }
+/* Карточка-строка внутри острова */
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); }
+.sect { font:600 var(--fs-xxs)/1.4 var(--font-sans); text-transform:uppercase; letter-spacing:.07em; color:var(--c-text-muted); margin:var(--sp-lg) 0 var(--sp-sm); }
+.sect:first-child { margin-top:0; }
+.hr { height:1px; background:var(--c-border-light); margin:var(--sp-md) 0; }
+/* Menu / Tooltip (статично) */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-island); padding:var(--sp-xs); min-width:220px; }
+.mi { display:flex; gap:var(--sp-sm); align-items:center; padding:6px var(--sp-sm); border-radius:var(--r-md); font-size:var(--fs-base); }
+.mi:hover, .mi.on { background:var(--c-bg-selected); }
+.tip { position:absolute; z-index:12; background:var(--c-text-heading); color:var(--c-bg-main); font-size:var(--fs-xs); padding:var(--sp-xs) var(--sp-sm); border-radius:var(--r-md); max-width:240px; }
+/* Modal + ModalActions; на мобиле — шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:20; display:flex; align-items:center; justify-content:center; padding:var(--sp-lg); }
+.modal { background:var(--c-bg-card); border-radius:var(--r-xl); box-shadow:var(--shadow-modal); width:100%; max-height:100%; display:flex; flex-direction:column; overflow:hidden; }
+.modal .mh { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-bottom:1px solid var(--c-border-light); font:600 var(--fs-lg)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.modal .mb { padding:var(--sp-lg); overflow:auto; }
+.modal .ma { display:flex; justify-content:flex-end; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-top:1px solid var(--c-border-light); }
+[data-w="mob"] .scrim { align-items:flex-end; padding:0; }
+[data-w="mob"] .modal { border-radius:var(--r-xl) var(--r-xl) 0 0; max-width:none !important; max-height:88%; }
+[data-w="mob"] .modal .ma { flex-direction:column-reverse; } [data-w="mob"] .modal .ma .btn { width:100%; }
+/* ProgressBar */
+.pb { height:6px; border-radius:var(--r-max); background:var(--c-progress-track); overflow:hidden; display:flex; }
+.pb i { display:block; height:100%; background:var(--c-accent); }
+/* Tabs (подчёркивание) */
+.tabs { display:flex; gap:var(--sp-lg); border-bottom:1px solid var(--c-border-light); overflow-x:auto; flex:none; }
+.tabs button { border:0; background:none; padding:var(--sp-sm) 0; min-height:36px; font-size:var(--fs-base); color:var(--c-text-secondary); border-bottom:2px solid transparent; white-space:nowrap; display:inline-flex; gap:var(--sp-xs); align-items:center; }
+.tabs button[aria-selected="true"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+[data-w="mob"] .tabs button { min-height:44px; }
+.cnt { font:600 var(--fs-xxs)/16px var(--font-sans); min-width:16px; padding:0 var(--sp-xs); border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-secondary); text-align:center; }
+.cnt.s { background:var(--c-danger-bg); color:var(--c-danger-text); } .cnt.w { background:var(--c-warning-bg); color:var(--c-warning-text); }
+/* Аватар-кружок персоны (UserAvatar-подобный) */
+.av { width:22px; height:22px; border-radius:var(--r-max); background:var(--c-accent-light); color:var(--c-accent); font:700 var(--fs-xxs)/22px var(--font-sans); text-align:center; flex:none; }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); } .av.i { background:var(--c-info-bg); color:var(--c-info); } .av.g { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.lg { width:40px; height:40px; line-height:40px; font-size:var(--fs-md); }
+/* «унаследовано» — серая подпись со ссылкой на источник */
+.inh { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.inh a, a.lnk { color:var(--c-accent); text-decoration:none; } .inh a:hover, a.lnk:hover { text-decoration:underline; }
+</style>
+<script>
+// Пульт прототипа: кнопки .pseg[data-k] пишут значение в html[data-<k>]; элементы с data-show="k:v1|v2 k2:v" видны,
+// когда совпали все условия. Кликабельные элементы макета с data-go="k:v" переключают то же состояние.
+(function(){
+  const H = document.documentElement;
+  function sync(){
+    document.querySelectorAll('.pseg[data-k]').forEach(g=>{ const k=g.dataset.k; g.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', String(H.dataset[k]===b.dataset.v))); });
+    document.querySelectorAll('[data-show]').forEach(el=>{
+      const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
+      el.hidden = !ok;
+    });
+  }
+  function set(k,v){ H.dataset[k]=v; sync(); }
+  document.addEventListener('click', e=>{
+    const b = e.target.closest('.pseg[data-k] button'); if (b) { set(b.closest('.pseg').dataset.k, b.dataset.v); return; }
+    const g = e.target.closest('[data-go]'); if (g) { e.preventDefault(); g.dataset.go.split(/\s+/).forEach(p=>{ const [k,v]=p.split(':'); set(k,v); }); }
+  });
+  document.addEventListener('DOMContentLoaded', sync);
+})();
+</script>
+
+<style>
+.p-prof { flex:1 1 60%; } .p-skills { flex:1 1 40%; }
+.grp { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-xl); padding:var(--sp-md) var(--sp-lg); }
+.grp + .grp { margin-top:var(--sp-md); }
+.grp.inherit { background:var(--c-bg-card); }
+.gh { display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; margin-bottom:var(--sp-sm); }
+.gh .gt { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.src { display:block; font-size:var(--fs-xs); color:var(--c-text-muted); }
+[data-w="mob"] .sk .row { flex-wrap:wrap; row-gap:0; }
+.trow { display:flex; align-items:center; gap:var(--sp-sm); }
+.trow + .trow { margin-top:var(--sp-xs); }
+.trow .tn { width:68px; flex:none; font-size:var(--fs-sm); color:var(--c-text-secondary); }
+.rp { flex:1; min-width:0; display:flex; align-items:center; gap:var(--sp-xs); min-height:34px; padding:0 var(--sp-md); border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg-white); font-size:var(--fs-base); }
+.rp.inh { background:var(--c-bg-inset); border-style:dashed; color:var(--c-text-muted); }
+.rp .mono { font-size:var(--fs-xs); }
+.prev { padding-left:76px; font-size:var(--fs-xs); color:var(--c-text-muted); }
+[data-w="mob"] .trow { flex-wrap:wrap; } [data-w="mob"] .trow .tn { width:100%; } [data-w="mob"] .prev { padding-left:0; }
+[data-w="mob"] .rp { min-height:44px; }
+.tools { display:grid; grid-template-columns:1fr 1fr 1fr; gap:var(--sp-xs) var(--sp-md); margin-top:var(--sp-sm); }
+[data-w="mob"] .tools { grid-template-columns:1fr; }
+.sk { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); }
+.sk + .sk { margin-top:var(--sp-xs); }
+.sk .sn { font-weight:600; color:var(--c-text-heading); }
+.sk .sd { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.sk.offd { background:transparent; border-style:dashed; }
+.sk.offd .sn { color:var(--c-text-muted); text-decoration:line-through; }
+.sk .ico { width:28px; height:28px; border-radius:var(--r-md); background:var(--c-bg-inset); color:var(--c-text-secondary); display:flex; align-items:center; justify-content:center; flex:none; font-size:var(--fs-sm); }
+[data-w="mob"] .sk { min-height:56px; }
+.diff { font-size:var(--fs-xs); color:var(--c-warning-text); }
+
+/* ===== Слой секций промпта (вкладка «Промпт» формы персоны · P2b) ===== */
+.app.app2 { height:auto; margin-top:var(--sp-xl); align-items:stretch; }
+.app2 .island { flex:none; }
+.app2 .body { overflow:visible; }
+.p-prompt { flex:1 1 60%; } .p-specsec { flex:1 1 40%; }
+[data-w="mob"] .app.app2 { margin-top:var(--sp-xxl); }
+[data-w="mob"] .app2 > .pane { height:auto; min-height:740px; }
+.chain { display:flex; flex-wrap:wrap; align-items:center; gap:var(--sp-xxs) var(--sp-xs); font-size:var(--fs-xs); color:var(--c-text-muted); }
+.chain .lv { display:inline-flex; align-items:center; min-height:22px; padding:0 var(--sp-xs); border-radius:var(--r-sm); border:1px solid var(--c-border-light); background:var(--c-bg-white); color:var(--c-text-secondary); white-space:nowrap; }
+.chain .lv.spec { background:var(--c-bg-inset); }
+.chain .lv.per { background:var(--c-plan-light); color:var(--c-plan-text); border-color:var(--c-plan-border); font-weight:600; }
+.chain .arr { color:var(--c-text-muted); }
+.chain .brace { display:inline-flex; flex-wrap:wrap; max-width:100%; align-items:center; gap:var(--sp-xxs); padding:var(--sp-xxs) var(--sp-xs); border:1px dashed var(--c-border); border-radius:var(--r-md); }
+.chain .brace .bl { font-weight:600; color:var(--c-text-secondary); margin-right:var(--sp-xxs); }
+.psec { padding:var(--sp-md) 0; border-top:1px solid var(--c-border-light); display:flex; flex-direction:column; gap:var(--sp-xs); }
+.psec:first-of-type { border-top:0; padding-top:0; }
+.psec .ph { display:flex; align-items:baseline; gap:var(--sp-xs); flex-wrap:wrap; }
+.psec .pn { font-weight:600; color:var(--c-text-heading); }
+.psrc { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.psrc b { font-weight:600; color:var(--c-text-secondary); }
+.psrc.offspec { color:var(--c-text-muted); font-style:italic; }
+.ps-seg { display:flex; width:100%; max-width:420px; }
+.ps-seg button { flex:1 1 0; }
+[data-w="mob"] .ps-seg { max-width:none; }
+[data-w="mob"] .ps-seg button { white-space:normal; line-height:1.2; padding:0 var(--sp-xs); }
+.ptext { font-size:var(--fs-sm); line-height:1.5; color:var(--c-text-muted); background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-sm) var(--sp-md); white-space:pre-wrap; overflow-wrap:anywhere; }
+.ptext.offd { border-style:dashed; background:transparent; text-decoration:line-through; text-decoration-color:var(--c-border); }
+.ptext.fresh { border-color:var(--c-info); background:var(--c-info-bg); color:var(--c-text-primary); }
+.poff { font-size:var(--fs-sm); color:var(--c-text-muted); }
+.pcnt { align-self:flex-end; white-space:nowrap; flex:none; font-size:var(--fs-xs); color:var(--c-text-muted); font-variant-numeric:tabular-nums; }
+.pcnt.over { color:var(--c-danger-text); font-weight:600; }
+.pcnt.near { color:var(--c-warning-text); }
+textarea.fld.pown { min-height:120px; font-size:var(--fs-sm); }
+.spsec { display:flex; align-items:flex-start; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); }
+.spsec + .spsec { margin-top:var(--sp-xs); }
+.spsec.offd { background:transparent; border-style:dashed; }
+.spsec.offd .sn { color:var(--c-text-muted); }
+.spsec.hot { border-color:var(--c-info); box-shadow:0 0 0 3px var(--c-info-bg); }
+.spsec .sn { font-weight:600; color:var(--c-text-heading); }
+.spsec .sd { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.spsec .tgl { margin-top:var(--sp-xxs); }
+.heirs { display:flex; flex-wrap:wrap; gap:var(--sp-xs); align-items:center; font-size:var(--fs-xs); color:var(--c-text-secondary); }
+</style>
+</head>
+<body>
+<div class="ctl">
+  <h1>Форма персоны · наследование от специальности</h1>
+  <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
+  <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
+  <span class="lb">Состояние</span><span class="pseg" data-k="st">
+    <button data-v="inherit">Всё как у специальности</button><button data-v="own">Свои права и ячейки</button><button data-v="back">Вернуть к специальности?</button><button data-v="spec">Смена специальности</button><button data-v="swapped">После смены</button><button data-v="none">Без специальности</button><button data-v="member">Участник (только чтение)</button></span>
+  <span class="lb">Секции промпта</span><span class="pseg" data-k="ps"><button data-v="base">Всё как у специальности</button><button data-v="own">Своё и выключено</button><button data-v="edit">Админ поправил специальность</button><button data-v="over">Длиннее 1024</button></span>
+</div>
+<div class="stage">
+  <div class="cap"><span class="agree">на согласование</span><b>A3b · Форма персоны с наследованием</b> · один вариант, проработаны состояния групп «как у специальности / своё»</div>
+  <p class="why">Персона — Вера, специальность «QA-тестер». Серое с пунктиром — пришло от специальности и само поменяется, когда админ поправит специальность. Белое — своё у персоны: правка специальности сюда больше не доезжает.</p>
+  <div class="app">
+    <!-- ===== Профиль: поведение и контекст ===== -->
+    <div class="pane p-prof" data-mcap="A3b · вкладка «Профиль» → «Поведение и контекст»">
+      <div class="island">
+        <div class="tb">
+          <button class="back">‹ Персоны</button><span class="av lg i">В</span>
+          <div class="col grow" style="gap:0"><span class="tname">Вера</span><span class="inh">QA-тестер AI Home</span></div>
+        </div>
+        <div class="ih" style="background:var(--c-bg-main)"><div class="tabs" style="border:0"><button>Профиль</button><button aria-selected="true">Поведение</button><button>Промпт</button><button>Умения</button><button>Память</button></div></div>
+        <div class="body">
+          <div class="notice info" data-show="st:member" style="margin-bottom:var(--sp-md)"><span class="ic">i</span><span>Права, модели и специальность меняет владелец проекта — вам они видны только для чтения.</span></div>
+
+          <div class="fl">Специальность</div>
+          <select class="fld" data-show="!st:none|spec|swapped" ><option>QA-тестер</option></select>
+          <select class="fld" data-show="st:none"><option>Без специальности</option></select>
+          <select class="fld" data-show="st:spec" style="border-color:var(--c-accent)"><option>Код-ревьюер</option></select>
+          <select class="fld" data-show="st:swapped"><option>Код-ревьюер</option></select>
+          <div class="notice info" data-show="st:swapped" style="margin-top:var(--sp-sm)"><span class="ic">i</span><span>Специальность сменена на «Код-ревьюер»: права и модели пересчитаны, умения специальности заменены — ваши отключения и свои умения остались.</span></div>
+          <div class="fhint" data-show="!st:none">От неё приходят права, модели и типовые умения. <a class="lnk" href="#">Открыть специальность «QA-тестер» →</a> <span class="muted">(правит админ)</span></div>
+          <div class="fhint" data-show="st:none">Наследовать не от кого: права — полный доступ, модели — «Модели по умолчанию», типовых умений нет.</div>
+
+          <!-- === Группа: права === -->
+          <div class="sect">Группы, которые приходят от специальности</div>
+          <div class="grp inherit" data-show="st:inherit|none|member|spec|swapped">
+            <div class="gh"><span class="gt">Права</span><span class="tag ok" data-show="st:swapped">права пересчитаны</span><span class="sp"></span>
+              <span class="seg"><button aria-pressed="true">Как у специальности</button><button data-go="st:own" data-show="!st:member">Своё</button><button disabled data-show="st:member">Своё</button></span></div>
+            <div class="src" data-show="!st:none">↳ от специальности «<span data-show="!st:spec|swapped">QA-тестер</span><span data-show="st:spec|swapped">Код-ревьюер</span>» · обновится вместе с ней</div>
+            <div class="src" data-show="st:none">↳ по умолчанию: полный доступ без ограничений</div>
+            <div class="fl" style="margin-top:var(--sp-md)">Профиль доступа</div>
+            <span class="seg"><button disabled aria-pressed="true">Полный</button><button disabled>Только чтение</button><button disabled data-show="!st:spec|swapped">Свой</button><button disabled data-show="st:spec|swapped" aria-pressed="true">Свой</button></span>
+            <div class="fl" style="margin-top:var(--sp-md)">Инструменты продукта</div>
+            <div class="tools">
+              <span class="cb dis"><i class="on">✓</i>Задачи</span><span class="cb dis"><i class="on">✓</i>Заметки</span><span class="cb dis"><i class="on">✓</i>Веб-поиск</span>
+            </div>
+            <div class="fl" style="margin-top:var(--sp-md)">Запрещённые инструменты</div>
+            <div class="row wrap" data-show="!st:spec|swapped"><span class="muted">нет</span></div>
+            <div class="row wrap" data-show="st:spec|swapped"><span class="chip off mono" style="text-decoration:none">Edit</span><span class="chip off mono" style="text-decoration:none">Write</span></div>
+            <div class="fhint">Править нельзя, пока права наследуются. Нужно иначе — «Своё»: скопируем текущие значения, дальше они ваши.</div>
+          </div>
+          <div class="grp" data-show="st:own|back">
+            <div class="gh"><span class="gt">Права</span><span class="tag plan">своё</span><span class="sp"></span>
+              <span class="seg"><button data-go="st:back">Как у специальности</button><button aria-pressed="true">Своё</button></span></div>
+            <div class="src">↳ скопировано со специальности «QA-тестер» · <span class="diff">отличается в 2 местах</span> · правка специальности сюда не доедет</div>
+            <div class="fl" style="margin-top:var(--sp-md)">Профиль доступа</div>
+            <span class="seg"><button>Полный</button><button>Только чтение</button><button aria-pressed="true">Свой</button></span>
+            <div class="fl" style="margin-top:var(--sp-md)">Инструменты продукта</div>
+            <div class="tools"><span class="cb"><i class="on">✓</i>Задачи</span><span class="cb"><i class="on">✓</i>Заметки</span><span class="cb"><i></i>Веб-поиск <span class="diff">≠</span></span></div>
+            <div class="fl" style="margin-top:var(--sp-md)">Запрещённые инструменты</div>
+            <div class="row wrap"><span class="chip mono">Bash<button class="x">×</button></span><span class="diff">≠ у специальности нет</span><button class="btn xs dashed">+ Инструмент</button></div>
+          </div>
+
+          <!-- === Группа: модели === -->
+          <div class="grp inherit" data-show="!st:own|back">
+            <div class="gh"><span class="gt">Модели</span><span class="sp"></span>
+              <span class="seg"><button aria-pressed="true">Как у специальности</button><button data-go="st:own" data-show="!st:member">Своё</button><button disabled data-show="st:member">Своё</button></span></div>
+            <div class="src" data-show="!st:none">↳ ячейки специальности «QA-тестер»</div><div class="src" data-show="st:none">↳ «Модели по умолчанию»</div>
+            <div style="margin-top:var(--sp-sm)">
+              <div class="trow"><span class="tn">Сильная</span><span class="rp inh">Opus 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Средняя</span><span class="rp inh">Sonnet 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Слабая</span><span class="rp inh">Flash <span class="sp"></span><span class="mono">спец.</span></span></div>
+            </div>
+          </div>
+          <div class="grp" data-show="st:own|back ms:own">
+            <div class="gh"><span class="gt">Модели</span><span class="tag plan">своё · 1 из 3</span><span class="sp"></span>
+              <span class="seg"><button data-go="ms:spec">Как у специальности</button><button aria-pressed="true">Своё</button></span></div>
+            <div class="src">↳ пустая ячейка по-прежнему берётся у специальности</div>
+            <div style="margin-top:var(--sp-sm)">
+              <div class="trow"><span class="tn">Сильная</span><span class="rp inh">пусто — как у специальности · Opus 5.5</span></div>
+              <div class="trow"><span class="tn">Средняя</span><span class="rp inh">пусто — как у специальности · Sonnet 5.5</span></div>
+              <div class="trow"><span class="tn">Слабая</span><span class="rp">Flash Lite <span class="sp"></span><span class="mono">своя</span></span><button class="btn xs ghostAccent">Сбросить</button></div>
+              <div class="prev">Сейчас пойдёт: Flash Lite · своя ячейка персоны</div>
+            </div>
+          </div>
+          <div class="grp inherit" data-show="st:own|back ms:spec">
+            <div class="gh"><span class="gt">Модели</span><span class="tag">своё не действует · 1 из 3</span><span class="sp"></span>
+              <span class="seg"><button aria-pressed="true">Как у специальности</button><button data-go="ms:own">Своё</button></span></div>
+            <div class="src">↳ действуют ячейки специальности «QA-тестер». Ваше значение остаётся в форме и вернётся по «Своё» — в отличие от прав, здесь ничего не стирается</div>
+            <div style="margin-top:var(--sp-sm)">
+              <div class="trow"><span class="tn">Сильная</span><span class="rp inh">Opus 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Средняя</span><span class="rp inh">Sonnet 5.5 <span class="sp"></span><span class="mono">спец.</span></span></div>
+              <div class="trow"><span class="tn">Слабая</span><span class="rp inh">Flash <span class="sp"></span><span class="mono">спец.</span></span><span class="diff">≠ своё: Flash Lite</span></div>
+              <div class="prev">Сейчас пойдёт: Flash · как у специальности. «Flash Lite» не действует, пока выбрано «Как у специальности»</div>
+            </div>
+          </div>
+        </div>
+        <div class="foot" style="display:flex;gap:var(--sp-sm);padding:var(--sp-sm) var(--sp-lg);border-top:1px solid var(--c-border-light);background:var(--c-bg-panel)" data-show="!st:member">
+          <span class="sp"></span><button class="btn sm ghost">Отменить</button><button class="btn sm primary">Сохранить</button></div>
+
+        <!-- ConfirmDialog: возврат к наследованию -->
+        <div class="scrim" data-show="st:back">
+          <div class="modal" style="max-width:380px">
+            <div class="mh">Вернуть права как у специальности?</div>
+            <div class="mb">Ваши права отличаются от «QA-тестера» в 2 местах: выключен веб-поиск, запрещён <span class="mono">Bash</span>. После возврата Вера получит права специальности и будет менять их вместе с ней.</div>
+            <div class="ma"><button class="btn sm ghost" data-go="st:own">Оставить своё</button><button class="btn sm primary" data-go="st:inherit">Вернуть</button></div>
+          </div>
+        </div>
+        <!-- ConfirmDialog: смена специальности при своих правах — показываем, только если права «своё» -->
+        <div class="scrim" data-show="st:spec">
+          <div class="modal" style="max-width:380px">
+            <div class="mh">Специальность — «Код-ревьюер»</div>
+            <div class="mb">Права и модели Веры наследуются — они станут как у «Код-ревьюера»: запрещены <span class="mono">Edit</span> и <span class="mono">Write</span>. Умения специальности заменятся, ваши отключения и свои умения останутся.<div class="fhint">Отмена вернёт «QA-тестер», ничего не меняя. Если права были бы «своими», здесь стоял бы выбор: оставить свои или перейти на новые.</div></div>
+            <div class="ma"><button class="btn sm ghost" data-go="st:inherit">Отмена</button><button class="btn sm primary" data-go="st:swapped">Сменить специальность</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== Умения ===== -->
+    <div class="pane p-skills" data-mcap="A3b · вкладка «Умения»">
+      <div class="island">
+        <div class="ih"><span class="t">Умения</span><span class="cnt" data-show="!st:none">7</span><span class="cnt" data-show="st:none">3</span><span class="sp"></span><button class="btn xs ghost" data-show="!st:member">+ Умение</button></div>
+        <div class="body">
+          <div class="sect row"><span class="grow">От специальности «QA-тестер»</span><span class="tag" data-show="!st:none">наследуются</span></div>
+          <div data-show="st:none"><div class="empty sm"><div class="em-x">Без специальности типовых умений нет — только свои.</div></div></div>
+          <div data-show="!st:none">
+            <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">playwright-e2e</span><span class="tag">от специальности</span></span><span class="sd ell">навык · проверка UI в браузере</span></div><button class="btn xs ghost" data-show="!st:member">Отключить</button></div>
+            <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">regression-matrix</span><span class="tag">от специальности</span></span><span class="sd ell">навык · матрица регрессий</span></div><button class="btn xs ghost" data-show="!st:member">Отключить</button></div>
+            <div class="sk offd" data-show="!st:inherit"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">web-design-guidelines</span><span class="tag w">отключено вами</span></span><span class="sd ell">у специальности есть, у Веры выключено</span></div><button class="btn xs ghost" data-show="!st:member">Вернуть</button></div>
+            <div class="sk" data-show="st:inherit"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">web-design-guidelines</span><span class="tag">от специальности</span></span><span class="sd ell">навык · аудит интерфейса</span></div><button class="btn xs ghost">Отключить</button></div>
+            <div class="sk offd"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="row"><span class="sn ell">perf-profiling</span><span class="tag">выключено специальностью</span></span><span class="sd ell">админ выключил для всех «QA-тестеров» — у Веры его нет</span></div></div>
+            <p class="fhint">Новое умение специальности появится у Веры само. «Отключить» гасит умение только у неё: оно остаётся в списке с пометкой «отключено вами», и «Вернуть» включает его обратно. «Выключено специальностью» — пометка админа для всех; у персоны кнопки нет, вернуть можно только в самой специальности.</p>
+          </div>
+          <div class="sect">Свои</div>
+          <div class="sk"><span class="ico">⚙</span><div class="col grow" style="gap:0"><span class="sn ell">vera-checklists</span><span class="sd ell">навык · добавлен вручную</span></div><button class="ib" title="Убрать" data-show="!st:member">×</button></div>
+          <div class="sect row"><span class="grow">Подобраны ИИ под проект</span><span class="tag">копия, не наследуются</span></div>
+          <div class="sk"><span class="ico">▤</span><div class="col grow" style="gap:0"><span class="sn ell">docs/mockups</span><span class="sd ell">папка проекта · всегда под рукой</span></div><button class="ib" title="Убрать" data-show="!st:member">×</button></div>
+          <div class="sk"><span class="ico">✎</span><div class="col grow" style="gap:0"><span class="sn ell">Заметки AI Home</span><span class="sd ell">заметки · по запросу</span></div><button class="ib" title="Убрать" data-show="!st:member">×</button></div>
+          <button class="btn sm ghost" style="margin-top:var(--sp-md)" data-show="!st:member">Подобрать ещё под проект</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================= Слой секций промпта ======================= -->
+  <div class="cap" style="margin-top:var(--sp-xl)"><span class="agree">на согласование</span><b>P2b · Наследование промптов</b> · вкладка «Промпт» формы персоны и секции специальности рядом — как текст специальности доезжает до персоны</div>
+  <p class="why">Специальность задаёт базу: у каждой секции свой текст и своя включённость. Персона по умолчанию берёт секцию «как у специальности» и меняется вместе с ней. «Своё» кладёт свой текст поверх — правка специальности его не трогает; «Выключено» убирает секцию из промпта только этой персоны.</p>
+  <div class="app app2">
+    <!-- ===== Персона: вкладка «Промпт» ===== -->
+    <div class="pane p-prompt" data-mcap="P2b · форма персоны → вкладка «Промпт»">
+      <div class="island">
+        <div class="tb">
+          <button class="back">‹ Персоны</button><span class="av lg i">В</span>
+          <div class="col grow" style="gap:0"><span class="tname">Вера</span><span class="inh">QA-тестер AI Home</span></div>
+        </div>
+        <div class="ih" style="background:var(--c-bg-main)"><div class="tabs" style="border:0"><button>Профиль</button><button>Поведение</button><button aria-selected="true">Промпт</button><button>Умения</button><button>Память</button></div></div>
+        <div class="body">
+          <div class="sect">От специальности</div>
+          <!-- откуда берётся текст: цепочка слоёв -->
+          <div class="chain" data-show="!st:none|spec" aria-label="Откуда берётся текст секции">
+            <span>Откуда текст:</span>
+            <span class="brace"><span class="bl">специальность «QA-тестер»</span><span class="lv spec">код</span><span class="arr">→</span><span class="lv spec">глобально</span><span class="arr">→</span><span class="lv spec">пользователь</span><span class="arr">→</span><span class="lv spec">владелец</span></span>
+            <span class="arr">→</span><span class="lv per">персона</span>
+          </div>
+          <div class="fhint" data-show="!st:none|spec" style="margin-bottom:var(--sp-md)">Побеждает последний слой, где секция задана. Подпись у секции говорит, из какого слоя пришёл текст.</div>
+
+          <div data-show="st:none"><div class="empty sm"><div class="em-x">Без специальности секций нет — только свои подразделы ниже.</div></div></div>
+          <div data-show="st:spec" class="poff" style="margin-bottom:var(--sp-md)">Секции новой специальности появятся после сохранения — свои секции будут сброшены.</div>
+
+          <div data-show="!st:none|spec">
+            <div class="notice info" data-show="ps:edit" style="margin-bottom:var(--sp-md)"><span class="ic">i</span><span>Админ только что поправил у «QA-тестера» секции «Процессы роли» и «Правила роли». У Веры сразу обновились «Процессы роли» — они наследуются; «Правила роли» — свои, их текст остался как был.</span></div>
+
+            <!-- 1. История решений -->
+            <div class="psec">
+              <div class="ph"><span class="pn">История решений</span>
+                <span class="psrc" data-show="!ps:own|over">по умолчанию · <b>код</b></span></div>
+              <span class="seg ps-seg" data-show="!ps:own|over"><button aria-pressed="true">Как у специальности</button><button data-go="ps:own">Своё</button><button data-go="ps:own">Выключено</button></span>
+              <span class="seg ps-seg" data-show="ps:own|over"><button data-go="ps:base">Как у специальности</button><button>Своё</button><button aria-pressed="true">Выключено</button></span>
+              <div class="ptext" data-show="!ps:own|over">История решений проекта — зачем меняли код и что при этом отвергли.
+Когда звать: проверяя фичу — dossier_lookup по её файлам: что намеренно отвергли (это не баг) и какие грабли уже ловили.</div>
+              <div class="poff" data-show="ps:own|over">Секция не попадает в промпт этой персоны.</div>
+              <div class="fhint" data-show="ps:own|over">У специальности секция включена — выключили вы, только у Веры.</div>
+            </div>
+
+            <!-- 2. Навигация по коду — выключена специальностью -->
+            <div class="psec">
+              <div class="ph"><span class="pn">Навигация по коду</span>
+                <span class="psrc offspec">выключено специальностью · <b>глобально</b></span></div>
+              <span class="seg ps-seg"><button aria-pressed="true">Как у специальности</button><button>Своё</button><button>Выключено</button></span>
+              <div class="ptext offd">Навигация по коду — два уровня: типы (codegraph), текст (Grep).
+«Что затронет эта правка» — codegraph_neighbors: границы влияния для объёма проверки.</div>
+              <div class="fhint">Админ выключил её для всех «QA-тестеров» — у Веры её нет, пока она наследует. Нужна именно Вере — «Своё»: текст специальности станет черновиком и секция включится только у неё.</div>
+            </div>
+
+            <!-- 3. Процессы роли — настроено админом, наследуется -->
+            <div class="psec">
+              <div class="ph"><span class="pn">Процессы роли (DoD)</span>
+                <span class="psrc">настроено админом · <b>владелец</b></span>
+                <span class="tag info" data-show="ps:edit">обновилось от специальности</span></div>
+              <span class="seg ps-seg"><button aria-pressed="true">Как у специальности</button><button>Своё</button><button>Выключено</button></span>
+              <div class="ptext" data-show="!ps:edit">До сдачи проверки:
+• шаги воспроизводимы — напиши их;
+• краевые случаи и негативные пути — пройдены;
+• «не проверено» фиксируй явно — это тоже результат.</div>
+              <div class="ptext fresh" data-show="ps:edit">До сдачи проверки:
+• шаги воспроизводимы — напиши их;
+• краевые случаи и негативные пути — пройдены;
+• обе темы и ширина 360 — проверены скриншотом;
+• «не проверено» фиксируй явно — это тоже результат.</div>
+            </div>
+
+            <!-- 4. Правила роли — своё -->
+            <div class="psec">
+              <div class="ph"><span class="pn">Правила роли</span>
+                <span class="psrc" data-show="ps:base">по умолчанию · <b>код</b></span>
+                <span class="psrc" data-show="!ps:base">своё · <b>персона</b></span>
+                <span class="tag plan" data-show="!ps:base">своё</span></div>
+              <span class="seg ps-seg" data-show="ps:base"><button aria-pressed="true">Как у специальности</button><button data-go="ps:own">Своё</button><button>Выключено</button></span>
+              <span class="seg ps-seg" data-show="!ps:base"><button data-go="ps:base">Как у специальности</button><button aria-pressed="true">Своё</button><button>Выключено</button></span>
+              <div class="ptext" data-show="ps:base">Воспроизводимость прежде вердикта: «не работает» без шагов — не находка.
+Ищи края: пустые значения, границы, негативные пути.
+Отчёт честный: что проверено, что нет, что спорно.</div>
+              <div class="fhint" data-show="ps:base">«Своё» подставит этот текст черновиком — дальше правите его как свой.</div>
+              <textarea class="fld pown" data-pcount data-show="ps:own|edit" aria-label="Свой текст секции «Правила роли»">Воспроизводимость прежде вердикта: «не работает» без шагов — не находка.
+Ищи края: пустые значения, границы, негативные пути.
+Отчёт честный: что проверено, что нет, что спорно.
+Интерфейс смотри в обеих темах и на ширине 360 — в отчёт клади скриншоты.</textarea>
+              <textarea class="fld pown err" data-pcount data-show="ps:over" aria-label="Свой текст секции «Правила роли»" aria-invalid="true">Воспроизводимость прежде вердикта: «не работает» без шагов — не находка. Каждая находка — шаги, ожидаемое и фактическое поведение, окружение (тема, ширина, браузер) и скриншот.
+Ищи края: пустые значения, границы, негативные пути, очень длинные строки, медленная сеть, офлайн и повторный клик по кнопке во время сохранения.
+Отчёт честный: что проверено, что нет, что спорно. Непроверенное пиши отдельным списком с причиной, почему не дошли руки.
+Интерфейс смотри в обеих темах и на ширине 360, отдельно — мобильные шторки, клавиатура поверх поля ввода и поворот экрана.
+Регрессии: после каждой правки прогоняй соседние сценарии экрана, а не только исправленный; спорное пиши как вопрос к автору, а не как дефект.
+Доступность: фокус виден, у кнопок есть подписи, всё доходит с клавиатуры, контраст текста в тёмной теме не ниже нормы.
+Сроки: если проверка не укладывается в час, напиши постановщику, что успела, и спроси, что важнее.
+Вердикт: «принято», «принято с замечаниями» или «возврат» — и одна строка почему, без оговорок.</textarea>
+              <div class="row" data-show="!ps:base" style="justify-content:space-between">
+                <span class="fhint" style="margin:0" data-show="ps:own">Правка специальности сюда больше не доедет. Вернуть общий текст — «Как у специальности».</span>
+                <span class="fhint" style="margin:0" data-show="ps:edit">У специальности текст поменялся — ваш остался. Хотите новый общий — «Как у специальности».</span>
+                <span class="ferr" style="margin:0" data-show="ps:over" data-pover>Длиннее 1024 символов — сократите, иначе не сохранится.</span>
+                <span class="pcnt" data-pcnt>0 / 1024</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="sect">Свои подразделы</div>
+          <div class="fhint" style="margin-top:0">Слоты «Моя роль», «Основное», «Правила» — как раньше, они не наследуются.</div>
+        </div>
+        <div class="foot" style="display:flex;gap:var(--sp-sm);padding:var(--sp-sm) var(--sp-lg);border-top:1px solid var(--c-border-light);background:var(--c-bg-panel)" data-show="!st:member">
+          <span class="sp"></span><button class="btn sm ghost">Отменить</button><button class="btn sm primary" data-show="!ps:over">Сохранить</button><button class="btn sm primary" disabled data-show="ps:over">Сохранить</button></div>
+      </div>
+    </div>
+
+    <!-- ===== Специальность: секции (правит админ) ===== -->
+    <div class="pane p-specsec" data-mcap="P2b · специальность «QA-тестер» → секции промпта (админ)">
+      <div class="island">
+        <div class="ih"><span class="t">Специальность «QA-тестер» · секции</span><span class="sp"></span><span class="tag">правит админ</span></div>
+        <div class="body">
+          <div class="heirs"><span>Наследуют:</span><span class="av i">В</span><span>Вера</span><span class="av g">Л</span><span>Лиза</span><span class="muted">· своё у Веры: <span data-show="ps:base">нет</span><span data-show="!ps:base">1 секция</span></span></div>
+          <div class="fhint">Правка здесь сразу действует на каждую персону, у которой секция «как у специальности». Свой текст и своё выключение у персоны остаются.</div>
+          <div class="sect">Секции</div>
+          <div class="spsec"><button class="tgl" role="switch" aria-checked="true" aria-label="Включено"></button><div class="col grow" style="gap:0"><span class="sn">История решений</span><span class="sd">текст по умолчанию · код</span></div></div>
+          <div class="spsec offd"><button class="tgl" role="switch" aria-checked="false" aria-label="Выключено"></button><div class="col grow" style="gap:0"><span class="sn">Навигация по коду</span><span class="sd">выключено глобально — у всех наследников секции нет</span></div></div>
+          <div class="spsec" data-show="!ps:edit"><button class="tgl" role="switch" aria-checked="true" aria-label="Включено"></button><div class="col grow" style="gap:0"><span class="sn">Процессы роли (DoD)</span><span class="sd">свой текст · владелец</span></div></div>
+          <div class="spsec hot" data-show="ps:edit"><button class="tgl" role="switch" aria-checked="true" aria-label="Включено"></button><div class="col grow" style="gap:0"><span class="row"><span class="sn">Процессы роли (DoD)</span><span class="tag info">изменено только что</span></span><span class="sd">свой текст · владелец · у Веры и Лизы уже новый</span></div></div>
+          <div class="spsec" data-show="!ps:edit"><button class="tgl" role="switch" aria-checked="true" aria-label="Включено"></button><div class="col grow" style="gap:0"><span class="sn">Правила роли</span><span class="sd">текст по умолчанию · код</span></div></div>
+          <div class="spsec hot" data-show="ps:edit"><button class="tgl" role="switch" aria-checked="true" aria-label="Включено"></button><div class="col grow" style="gap:0"><span class="row"><span class="sn">Правила роли</span><span class="tag info">изменено только что</span></span><span class="sd">у Лизы обновилось · у Веры своё — не тронуто</span></div></div>
+          <p class="fhint">Счётчик и лимит те же: до 1024 символов на секцию. Выключение здесь персона видит подписью «выключено специальностью» — это не её выбор, и «Выключено» у неё не нажато.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// Счётчик «N / 1024» у своего текста секции: считает видимое поле, красный — сверх лимита (как textCounter/overLimit)
+(function(){
+  const LIMIT = 1024;
+  function upd(){
+    document.querySelectorAll('.psec').forEach(sec=>{
+      const ta = [...sec.querySelectorAll('textarea[data-pcount]')].find(t=>!t.hidden);
+      const c = sec.querySelector('[data-pcnt]'); if (!ta || !c) return;
+      const n = ta.value.length, over = n > LIMIT;
+      c.textContent = n.toLocaleString('ru-RU') + ' / ' + LIMIT;
+      c.classList.toggle('over', over);
+      ta.classList.toggle('err', over); ta.setAttribute('aria-invalid', String(over));
+    });
+  }
+  document.addEventListener('input', e=>{ if (e.target.matches('textarea[data-pcount]')) upd(); });
+  document.addEventListener('click', ()=>setTimeout(upd,0));
+  document.addEventListener('DOMContentLoaded', ()=>setTimeout(upd,0));
+})();
+</script>
+</body>
+</html>

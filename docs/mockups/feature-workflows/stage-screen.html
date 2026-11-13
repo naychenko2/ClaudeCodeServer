@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="ru" data-theme="light" data-w="desk" data-v="a" data-st="full" data-tab="rev">
+<html lang="ru" data-theme="light" data-w="desk" data-v="a" data-st="full" data-tab="rev" data-tk="b3">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -227,6 +227,7 @@ textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
   const H = document.documentElement;
   function sync(){
     document.querySelectorAll('.pseg[data-k]').forEach(g=>{ const k=g.dataset.k; g.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', String(H.dataset[k]===b.dataset.v))); });
+    document.querySelectorAll('.tsw .chip').forEach(c=>c.classList.toggle('on', c.dataset.go==='tk:'+H.dataset.tk));
     document.querySelectorAll('[data-show]').forEach(el=>{
       const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
       el.hidden = !ok;
@@ -319,7 +320,7 @@ table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
   <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
   <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
   <span class="lb">Вариант</span><span class="pseg" data-k="v"><button data-v="a">A · вкладки</button><button data-v="b">B · панель 2×2</button></span>
-  <span class="lb">Вкладка (A)</span><span class="pseg" data-k="tab"><button data-v="rev">Ревью и вопросы</button><button data-v="art">Артефакты</button><button data-v="inp">Вход</button><button data-v="met">Метрики</button></span>
+  <span class="lb">Вкладка (A)</span><span class="pseg" data-k="tab"><button data-v="art">Артефакты</button><button data-v="inp">Вход</button><button data-v="rev">Ревью</button><button data-v="met">Метрики</button></span>
   <span class="lb">Состояние</span><span class="pseg" data-k="st"><button data-v="full">Идёт, есть всё</button><button data-v="empty">Только начался</button><button data-v="legacy">Старая фича (approx)</button></span>
 </div>
 <div class="stage">
@@ -332,10 +333,11 @@ table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
       <div class="island">
         <div class="tb"><button class="back">‹ Фича</button><span class="inh ell grow d-only">Процессы фичи: шаблоны и наследование</span><span class="sp m-only flex"></span><button class="btn xs ghost">Чат исполнителя</button></div>
         <div class="sh">
-          <div class="row wrap"><span class="sect" style="margin:0">Этап · Шаги</span><span class="lane-t">бэк</span><span class="tag acc" data-show="!st:empty">доработка</span><span class="tag info" data-show="st:empty">в работе</span><span class="tag s" data-show="st:full">↺ 1 возврат</span></div>
-          <h2 class="stt">B3 · исполнение по этапу</h2>
-          <div class="row wrap" style="margin-top:var(--sp-xxs)"><span class="av i">Т</span><span class="sec">Тимур · Backend-разработчик</span><span class="inh" data-show="!st:legacy">· Sonnet 5.5 (своя ячейка этапа) · молчит 45 мин → только сообщить</span><span class="inh" data-show="st:legacy">· этап без слепка шаблона</span></div>
-          <div class="tsw"><span class="chip">B1 ✓</span><span class="chip">B2 ✓</span><span class="chip on">B3 ●</span></div>
+          <div class="row wrap"><span class="sect" style="margin:0">Этап · Шаги</span><span class="lane-t">бэк</span><span class="tag acc" data-show="st:full tk:b3">доработка</span><span class="tag ok" data-show="tk:b1|b2 st:full">принято</span><span class="tag info" data-show="st:empty">в работе</span><span class="tag ok" data-show="st:legacy">принято · 1 раунд</span><span class="tag s" data-show="st:full tk:b3">↺ 1 возврат</span></div>
+          <h2 class="stt"><span data-show="tk:b1">B1 · модели и стор шаблонов</span><span data-show="tk:b2">B2 · маршрут на эпике и слепок этапа</span><span data-show="tk:b3">B3 · исполнение по этапу</span></h2>
+          <div class="row wrap" style="margin-top:var(--sp-xxs)"><span class="av g" data-show="tk:b1">Д</span><span class="av i" data-show="tk:b2|b3">Т</span><span class="sec" data-show="tk:b1">Денис · Backend-разработчик (.NET)</span><span class="sec" data-show="tk:b2|b3">Тимур · Backend-разработчик (.NET)</span><span class="inh" data-show="!st:legacy">· Sonnet 5.5 (своя ячейка этапа) · молчит 45 мин → только сообщить</span><span class="inh" data-show="st:legacy">· этап без слепка шаблона</span></div>
+          <div class="tsw"><span class="chip" data-go="tk:b1">B1 ✓ · Денис</span><span class="chip" data-go="tk:b2">B2 ✓ · Тимур</span><span class="chip on" data-go="tk:b3">B3 ● · Тимур</span></div>
+          <div class="inh" style="margin-top:var(--sp-xxs)" data-show="!tk:b3">Исполнитель в шапке — у выбранной задачи; блоки ниже в макете подробно нарисованы для B3.</div>
           <div class="parnote" data-show="!st:legacy"><span class="pi">⇉</span><span class="grow">Ветка «бэк» идёт параллельно с <a class="lnk" href="#">Шаги · фронт</a> (Полина, 1 из 2). Обе сходятся в «Ревью»: оно стартует, когда закончатся обе.</span></div>
           <div class="strip">
             <div class="kpi"><div class="kl">Всего</div><div class="kv" data-show="st:full">2 ч 30 мин</div><div class="kv" data-show="st:empty">12 мин</div><div class="kv" data-show="st:legacy">≈ 1 ч 40 мин</div></div>
@@ -347,45 +349,25 @@ table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
         </div>
         <div class="sbody">
           <div class="tabsbar"><div class="tabs">
-            <button data-go="tab:rev" data-show="!tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button><button aria-selected="true" data-show="tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button>
-            <button data-go="tab:art" data-show="!tab:art">Артефакты <span class="cnt" data-show="!st:empty">13</span></button><button aria-selected="true" data-show="tab:art">Артефакты <span class="cnt" data-show="!st:empty">13</span></button>
+<button data-go="tab:art" data-show="!tab:art">Артефакты <span class="cnt" data-show="st:full">13</span></button><button aria-selected="true" data-show="tab:art">Артефакты <span class="cnt" data-show="st:full">13</span></button>
             <button data-go="tab:inp" data-show="!tab:inp">Вход и транскрипт</button><button aria-selected="true" data-show="tab:inp">Вход и транскрипт</button>
+            <button data-go="tab:rev" data-show="!tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button><button aria-selected="true" data-show="tab:rev">Ревью и вопросы <span class="cnt w" data-show="st:full">1</span></button>
             <button data-go="tab:met" data-show="!tab:met">Метрики</button><button aria-selected="true" data-show="tab:met">Метрики</button>
           </div></div>
-          <div class="anch"><a class="chip" href="#b-rev">Ревью · 1</a><a class="chip" href="#b-art">Артефакты</a><a class="chip" href="#b-met">Метрики</a><a class="chip" href="#b-inp">Вход</a></div>
+          <div class="anch"><a class="chip" href="#b-art">Артефакты</a><a class="chip" href="#b-inp">Вход</a><a class="chip" href="#b-rev">Ревью · 1</a><a class="chip" href="#b-met">Метрики</a></div>
 
           <div class="blocks">
-            <!-- ===== Ревью и вопросы ===== -->
-            <section class="blk rev" id="b-rev">
-              <div class="bh"><span class="bt">Ревью и вопросы</span><span class="cnt w" data-show="st:full">1</span></div>
-              <div class="sect">Вопросы к вам</div>
-              <div data-show="st:full">
-                <div class="q"><div class="row"><span class="av g">Г</span><span class="qt grow">Глеб · 12.11 17:20</span><span class="tag w">ждёт 35 мин</span></div>
-                  <div style="margin:var(--sp-xs) 0 var(--sp-sm)">Финал в шаблоне сделан несъёмным, но в разрезе это открытый вопрос. Оставляем несъёмным или даём снять у мелких фич?</div>
-                  <textarea class="fld" style="min-height:56px" placeholder="Ваш ответ — уйдёт исполнителю и ревьюеру"></textarea>
-                  <div class="row" style="margin-top:var(--sp-xs)"><span class="sp"></span><button class="btn sm primary">Ответить</button></div></div>
-                <div class="rv" style="margin-top:var(--sp-xs)"><div class="row"><span class="tag ok">отвечено</span><span class="sec grow ell">Тимур: «Слепок этапа пишем и для rework?» — «Да, текущая версия»</span></div></div>
-              </div>
-              <div data-show="!st:full"><div class="empty sm"><div class="em-ic">✓</div><div class="em-t">Вопросов к вам нет</div><div class="em-x">Если исполнитель или ревьюер спросит — вопрос появится здесь и на странице фичи.</div></div></div>
-
-              <div class="sect">Ревью</div>
-              <div data-show="st:full">
-                <div class="rv"><div class="row wrap"><span class="tag s">возвращено</span><span class="sec">Глеб · раунд 1 · 12.11 16:40 · причина «контракт»</span></div>
-                  <div class="bl"><span class="tag s">блокер</span><span class="grow"><span class="mono">TaskExecutionService.cs:412</span> — <span class="mono">ClassifyStall</span> берёт порог из конфига, а не из <span class="mono">task.Stage</span>.</span></div>
-                  <div class="bl"><span class="tag s">блокер</span><span class="grow">Нет сторожа «правила в постановке байт в байт» при промпте этапа.</span></div>
-                  <div class="bl"><span class="tag">замечание</span><span class="grow">Имя <span class="mono">StallPolicy.StopAlert</span> расходится с разрезом.</span></div>
-                </div>
-                <div class="rv"><div class="row"><span class="tag">раунд 2</span><span class="sec grow">ждёт доработку Тимура</span><span class="inh">запустится сам</span></div></div>
-              </div>
-              <div data-show="st:empty"><div class="empty sm"><div class="em-ic">◇</div><div class="em-t">Ревью ещё не было</div><div class="em-x">Ревьюер подключится, когда исполнитель закроет задачу.</div></div></div>
-              <div data-show="st:legacy"><div class="rv"><div class="row"><span class="tag ok">принято</span><span class="sec grow">Глеб · 1 раунд</span></div><div class="fhint">Подробностей нет: ревью старой фичи не хранило блокеры.</div></div></div>
-            </section>
-
             <!-- ===== Артефакты ===== -->
             <section class="blk art" id="b-art">
-              <div class="bh"><span class="bt">Артефакты</span><span class="cnt" data-show="!st:empty">13</span></div>
+              <div class="bh"><span class="bt">Артефакты</span><span class="cnt" data-show="st:full">13</span></div>
+              <div data-show="st:legacy">
+                <div class="sect">Прикреплённые файлы</div>
+                <div class="fi"><span class="mono grow ell">TaskExecutionService.cs</span></div>
+                <div class="fi"><span class="mono grow ell">StageSnapshotTests.cs</span></div>
+                <div class="fhint">Коммитов с трейлером CCS-Task не нашлось, поэтому версий файлов, диффа и итога исполнителя нет — только файлы, прикреплённые к задаче.</div>
+              </div>
               <div data-show="st:empty"><div class="empty sm"><div class="em-ic">▤</div><div class="em-t">Артефактов пока нет</div><div class="em-x">Появятся с первым коммитом исполнителя (трейлер CCS-Task) или итогом задачи.</div></div></div>
-              <div data-show="!st:empty">
+              <div data-show="st:full">
                 <div class="art-grid">
                   <div>
                     <div class="sect">Файлы</div>
@@ -410,11 +392,55 @@ table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
                     </div>
                     <div class="fhint">v3 — после возврата Глеба. Версия файла = коммит этапа, который его тронул.</div>
                     <div class="sect">Итог исполнителя</div>
-                    <div class="card" style="font-size:var(--fs-sm)" data-show="st:full">Гейт подтверждения, секция <span class="mono">## ЭТАП</span>, сужение прав этапа и порог молчания из слепка. Сторож правил байт в байт — добавлен после ревью.</div>
-                    <div class="card" style="font-size:var(--fs-sm)" data-show="st:legacy">Итог задачи из трекера (resultMarkdown). Коммитов с трейлером не нашлось — показаны только прикреплённые файлы.</div>
+                    <div class="card" style="font-size:var(--fs-sm)">Гейт подтверждения, секция <span class="mono">## ЭТАП</span>, сужение прав этапа и порог молчания из слепка. Сторож правил байт в байт — добавлен после ревью.</div>
                   </div>
                 </div>
               </div>
+            </section>
+
+            <!-- ===== Вход и транскрипт ===== -->
+            <section class="blk inp" id="b-inp">
+              <div class="bh"><span class="bt">Вход и транскрипт</span></div>
+              <div class="sect">Постановка исполнителю</div>
+              <div class="ps"><div class="psh"><span class="grow">ПРАВИЛА · ДЕЛЕГИРОВАНИЕ</span><span class="inh">общие, без изменений</span><span class="muted">▸</span></div></div>
+              <div class="ps stage" data-show="!st:legacy"><div class="psh"><span class="grow">## ЭТАП</span><span class="tag plan">из шаблона «Полный цикл» v4</span><span class="muted">▾</span></div>
+                <div class="psb">Шаги исполняй строго по плану. Тесты — только затронутые проекты. Перед закрытием — мутация своего теста.</div></div>
+              <div class="ps"><div class="psh"><span class="grow">ЗАДАЧА · КОНТЕКСТ</span><span class="inh">3 120 знаков</span><span class="muted">▸</span></div></div>
+              <div class="sect">Прочитанные файлы <span class="cnt" data-show="!st:legacy">21</span></div>
+              <div data-show="!st:legacy"><div class="row wrap"><span class="chip mono">TaskExecutionService.cs ×6</span><span class="chip mono">TaskItem.cs ×3</span><span class="chip mono">PersonaAccessPolicy.cs ×2</span><span class="chip">ещё 18</span></div></div>
+              <div data-show="st:legacy"><div class="empty sm"><div class="em-x">Транскрипт старого хода не разобран — откройте чат исполнителя.</div></div></div>
+              <div data-show="!st:legacy">
+                <div class="sect">Вызванные инструменты</div>
+                <table class="t"><thead><tr><th>Инструмент</th><th class="n">Раз</th><th>Последний</th></tr></thead>
+                  <tbody><tr><td class="mono">Read</td><td class="n">42</td><td class="sec">16:58</td></tr><tr><td class="mono">Edit</td><td class="n">18</td><td class="sec">17:02</td></tr><tr><td class="mono">mcp__tests__run_tests</td><td class="n" data-show="st:full">4</td><td class="n" data-show="st:empty">0</td><td class="sec">17:10</td></tr><tr><td class="mono">mcp__tasks__tasks_update</td><td class="n">2</td><td class="sec">17:11</td></tr></tbody></table>
+              </div>
+              <button class="btn sm ghost" style="margin-top:var(--sp-md)">Весь транскрипт в чате исполнителя →</button>
+            </section>
+
+            <!-- ===== Ревью и вопросы ===== -->
+            <section class="blk rev" id="b-rev">
+              <div class="bh"><span class="bt">Ревью и вопросы</span><span class="cnt w" data-show="st:full">1</span></div>
+              <div class="sect">Вопросы к вам</div>
+              <div data-show="st:full">
+                <div class="q"><div class="row"><span class="av g">Г</span><span class="qt grow">Глеб · 12.11 17:20</span><span class="tag w">ждёт 35 мин</span></div>
+                  <div style="margin:var(--sp-xs) 0 var(--sp-sm)">Финал в шаблоне сделан несъёмным, но в разрезе это открытый вопрос. Оставляем несъёмным или даём снять у мелких фич?</div>
+                  <textarea class="fld" style="min-height:56px" placeholder="Ваш ответ — уйдёт исполнителю и ревьюеру"></textarea>
+                  <div class="row" style="margin-top:var(--sp-xs)"><span class="sp"></span><button class="btn sm primary">Ответить</button></div></div>
+                <div class="rv" style="margin-top:var(--sp-xs)"><div class="row"><span class="tag ok">отвечено</span><span class="sec grow ell">Тимур: «Слепок этапа пишем и для rework?» — «Да, текущая версия»</span></div></div>
+              </div>
+              <div data-show="!st:full"><div class="empty sm"><div class="em-ic">✓</div><div class="em-t">Вопросов к вам нет</div><div class="em-x">Если исполнитель или ревьюер спросит — вопрос появится здесь и на странице фичи.</div></div></div>
+
+              <div class="sect">Ревью</div>
+              <div data-show="st:full">
+                <div class="rv"><div class="row wrap"><span class="tag s">возвращено</span><span class="sec">Глеб · раунд 1 · 12.11 16:40 · причина «контракт»</span></div>
+                  <div class="bl"><span class="tag s">блокер</span><span class="grow"><span class="mono">TaskExecutionService.cs:412</span> — <span class="mono">ClassifyStall</span> берёт порог из конфига, а не из <span class="mono">task.Stage</span>.</span></div>
+                  <div class="bl"><span class="tag s">блокер</span><span class="grow">Нет сторожа «правила в постановке байт в байт» при промпте этапа.</span></div>
+                  <div class="bl"><span class="tag">замечание</span><span class="grow">Имя <span class="mono">StallPolicy.StopAlert</span> расходится с разрезом.</span></div>
+                </div>
+                <div class="rv"><div class="row"><span class="tag">раунд 2</span><span class="sec grow">ждёт доработку Тимура</span><span class="inh">запустится сам</span></div></div>
+              </div>
+              <div data-show="st:empty"><div class="empty sm"><div class="em-ic">◇</div><div class="em-t">Ревью ещё не было</div><div class="em-x">Ревьюер подключится, когда исполнитель закроет задачу.</div></div></div>
+              <div data-show="st:legacy"><div class="rv"><div class="row"><span class="tag ok">принято · 1 раунд</span><span class="sec grow">Глеб</span></div><div class="fhint">Подробностей нет: ревью старой фичи не хранило блокеры.</div></div></div>
             </section>
 
             <!-- ===== Метрики ===== -->
@@ -440,25 +466,6 @@ table.t { width:100%; border-collapse:collapse; font-size:var(--fs-sm); }
                 <table class="t" style="margin-top:var(--sp-md)"><thead><tr><th>Кто</th><th class="n">Время</th><th class="n">Ходы</th><th class="n">Токены</th></tr></thead>
                   <tbody><tr class="tot"><td>Этап целиком</td><td class="n">≈ 1:40</td><td class="n muted">—</td><td class="n muted">—</td></tr></tbody></table>
               </div>
-            </section>
-
-            <!-- ===== Вход и транскрипт ===== -->
-            <section class="blk inp" id="b-inp">
-              <div class="bh"><span class="bt">Вход и транскрипт</span></div>
-              <div class="sect">Постановка исполнителю</div>
-              <div class="ps"><div class="psh"><span class="grow">ПРАВИЛА · ДЕЛЕГИРОВАНИЕ</span><span class="inh">общие, без изменений</span><span class="muted">▸</span></div></div>
-              <div class="ps stage" data-show="!st:legacy"><div class="psh"><span class="grow">## ЭТАП</span><span class="tag plan">из шаблона «Полный цикл» v4</span><span class="muted">▾</span></div>
-                <div class="psb">Шаги исполняй строго по плану. Тесты — только затронутые проекты. Перед закрытием — мутация своего теста.</div></div>
-              <div class="ps"><div class="psh"><span class="grow">ЗАДАЧА · КОНТЕКСТ</span><span class="inh">3 120 знаков</span><span class="muted">▸</span></div></div>
-              <div class="sect">Прочитанные файлы <span class="cnt" data-show="!st:legacy">21</span></div>
-              <div data-show="!st:legacy"><div class="row wrap"><span class="chip mono">TaskExecutionService.cs ×6</span><span class="chip mono">TaskItem.cs ×3</span><span class="chip mono">PersonaAccessPolicy.cs ×2</span><span class="chip">ещё 18</span></div></div>
-              <div data-show="st:legacy"><div class="empty sm"><div class="em-x">Транскрипт старого хода не разобран — откройте чат исполнителя.</div></div></div>
-              <div data-show="!st:legacy">
-                <div class="sect">Вызванные инструменты</div>
-                <table class="t"><thead><tr><th>Инструмент</th><th class="n">Раз</th><th>Последний</th></tr></thead>
-                  <tbody><tr><td class="mono">Read</td><td class="n">42</td><td class="sec">16:58</td></tr><tr><td class="mono">Edit</td><td class="n">18</td><td class="sec">17:02</td></tr><tr><td class="mono">mcp__tests__run_tests</td><td class="n" data-show="st:full">4</td><td class="n" data-show="st:empty">0</td><td class="sec">17:10</td></tr><tr><td class="mono">mcp__tasks__tasks_update</td><td class="n">2</td><td class="sec">17:11</td></tr></tbody></table>
-              </div>
-              <button class="btn sm ghost" style="margin-top:var(--sp-md)">Весь транскрипт в чате исполнителя →</button>
             </section>
           </div>
         </div>

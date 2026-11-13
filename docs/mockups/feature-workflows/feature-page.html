@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light" data-w="desk" data-v="a" data-st="run">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Home · Процессы фичи · страница фичи с графом процесса (C3b) — на согласование</title>
+<!--
+  Макет к записке feature-workflows-proposal.md, §3. Код продукта не правится.
+  Привязка: featureId a149e308-fc09-4ad1-9bdd-e72b54e6360d, задача c1a597af (role=design). Пользуется шаг C3b (фронт), шапка — C2.
+  Источник графа — FeatureRun.Stages (при epic.Workflow != null — Workflow.Route; снятые маршрутом НЕ показываются, решение Андрея).
+  Без Workflow — легаси: нынешний фиксированный список стадий. PlanMap — не источник графа (разрез 12.11, §3).
+  Варианты: A — граф во всю ширину сверху, этап ниже; B — граф узкой вертикальной колонкой слева, этап справа.
+-->
+<style>
+/* ===== Токены: значения из frontend/src/lib/theme.css, имена — C.* / SHADOW.* из design.ts.
+   Единственное место с сырыми значениями; ниже — только var(--…). ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF; --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E; --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-progress-track:#D8CFBE; --c-dashed:#D0C6B4;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --c-plan:#6C5CB0; --c-plan-light:#EEEBF8; --c-plan-text:#4E4196; --c-plan-border:#D6CFEF;
+  --c-diff-add-bg:#E8F5E9; --c-diff-add-text:#1B5E20; --c-diff-rem-bg:#FFEBEE; --c-diff-rem-text:#B71C1C;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 12px 40px rgba(40,30,20,.22);
+  /* FS */ --fs-xxs:10px; --fs-xs:11px; --fs-sm:12px; --fs-base:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:18px; --fs-h2:22px;
+  /* SP */ --sp-xxs:2px; --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  /* R  */ --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:12px; --r-max:999px;
+  --font-sans:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-serif:'PT Serif',Georgia,serif;
+  --font-mono:'JetBrains Mono','Courier New',monospace;
+}
+:root[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25; --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072; --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-progress-track:#5C544A; --c-dashed:#4A443B;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --c-plan:#9385D8; --c-plan-light:#2A2540; --c-plan-text:#B0A4E6; --c-plan-border:#45406A;
+  --c-diff-add-bg:#1E2E1E; --c-diff-add-text:#8FCB79; --c-diff-rem-bg:#33201E; --c-diff-rem-text:#EE8A72;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-modal:0 16px 48px rgba(0,0,0,.6);
+}
+/* ===== дальше — только переменные ===== */
+* { box-sizing:border-box; }
+[hidden] { display:none !important; }
+body { margin:0; background:var(--c-bg-main); color:var(--c-text-primary); font:var(--fs-base)/1.45 var(--font-sans); }
+button, input, textarea, select { font:inherit; color:inherit; }
+button { cursor:pointer; }
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.mono { font-family:var(--font-mono); }
+.serif { font-family:var(--font-serif); }
+.muted { color:var(--c-text-muted); } .sec { color:var(--c-text-secondary); }
+.row { display:flex; align-items:center; gap:var(--sp-sm); min-width:0; } .wrap { flex-wrap:wrap; }
+.col { display:flex; flex-direction:column; gap:var(--sp-sm); min-width:0; }
+.grow { flex:1 1 auto; min-width:0; } .ell { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sp { flex:1 1 auto; }
+
+/* --- пульт прототипа (не продукт) --- */
+.ctl { position:sticky; top:0; z-index:40; display:flex; flex-wrap:wrap; gap:var(--sp-sm) var(--sp-md); align-items:center;
+  padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); }
+.ctl h1 { font:600 var(--fs-md)/1.2 var(--font-serif); margin:0 var(--sp-sm) 0 0; color:var(--c-text-heading); }
+.ctl .lb { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.pseg { display:inline-flex; flex-wrap:wrap; gap:var(--sp-xxs); align-items:center; }
+.pseg button { border:1px solid var(--c-border); background:var(--c-bg-card); padding:0 var(--sp-md); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); min-height:32px; }
+.pseg button[aria-pressed="true"] { background:var(--c-text-heading); border-color:var(--c-text-heading); color:var(--c-bg-main); font-weight:600; }
+.stage { padding:var(--sp-xl); }
+/* подпись карточки: какой шаг закрывает, статус согласования */
+.cap { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-sm); align-items:center; font-size:var(--fs-xs); color:var(--c-text-muted); margin:0 auto var(--sp-sm); max-width:1240px; }
+.cap b { color:var(--c-text-secondary); }
+.agree { font:600 var(--fs-xxs)/1.6 var(--font-sans); text-transform:uppercase; letter-spacing:.06em; padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-plan-light); color:var(--c-plan-text); }
+.why { max-width:1240px; margin:0 auto var(--sp-md); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+
+/* --- раскладка: десктоп 1240 — острова в ряд; мобила — панели становятся телефонами 360×740 --- */
+.app { display:flex; gap:var(--sp-sm); width:min(1240px,100%); margin:0 auto; height:800px; position:relative; }
+.pane { min-width:0; min-height:0; display:flex; flex-direction:column; }
+.m-only { display:none !important; }
+[data-w="mob"] .d-only { display:none !important; }
+[data-w="mob"] .m-only { display:revert !important; }
+[data-w="mob"] .m-only.flex { display:flex !important; }
+[data-w="mob"] .app { height:auto; width:auto; max-width:100%; flex-wrap:wrap; gap:var(--sp-xxl) var(--sp-xl); justify-content:center; align-items:flex-start; }
+[data-w="mob"] .app > .pane { width:360px !important; height:740px; flex:none !important; border:1px solid var(--c-border); border-radius:var(--r-xl); overflow:hidden; position:relative; background:var(--c-bg-main); }
+[data-w="mob"] .app > .pane[data-mcap]::before { content:attr(data-mcap); position:absolute; top:0; left:0; right:0; z-index:30; font:600 var(--fs-xxs)/18px var(--font-mono); color:var(--c-on-accent); background:var(--c-info); padding:0 var(--sp-sm); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+[data-w="mob"] .app > .pane[data-mcap] { padding-top:18px; }
+[data-w="mob"] .pane .island { border-radius:0; box-shadow:none; }
+@media (max-width:480px) { .stage { padding:var(--sp-sm) 0; } [data-w="mob"] .app > .pane { border-radius:0; border-left:0; border-right:0; } }
+
+/* ===== Компоненты продукта (имя — как в коде) ===== */
+/* Island + IslandHeader */
+.island { background:var(--c-bg-panel); border-radius:var(--r-xl); box-shadow:var(--shadow-island); overflow:hidden; display:flex; flex-direction:column; min-width:0; min-height:0; flex:1; }
+.ih { display:flex; align-items:center; gap:var(--sp-sm); min-height:44px; padding:0 var(--sp-md) 0 var(--sp-lg); border-bottom:1px solid var(--c-border-light); flex:none; }
+.ih .t { font:600 var(--fs-md)/1.2 var(--font-sans); color:var(--c-text-heading); }
+.body { flex:1; min-height:0; overflow:auto; padding:var(--sp-lg); background:var(--c-bg-card); }
+[data-w="mob"] .body { padding:var(--sp-md); }
+/* Toolbar (TB.heightDesktop 52 / Mobile 56) */
+.tb { display:flex; align-items:center; gap:var(--sp-sm); min-height:52px; padding:var(--sp-sm) var(--sp-lg); background:var(--c-bg-main); border-bottom:1px solid var(--c-border); flex:none; min-width:0; }
+[data-w="mob"] .tb { min-height:56px; padding:var(--sp-sm) 14px; }
+.tname { font:600 var(--fs-lg)/1.25 var(--font-serif); color:var(--c-text-heading); }
+/* IconButton / ToolbarIconButton 32 (мобила 40) */
+.ib { width:32px; height:32px; flex:none; border:0; background:none; border-radius:var(--r-md); color:var(--c-text-muted); display:inline-flex; align-items:center; justify-content:center; font-size:var(--fs-md); }
+.ib:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+[data-w="mob"] .ib { width:40px; height:40px; }
+/* BackButton */
+.back { display:inline-flex; align-items:center; gap:var(--sp-xxs); min-height:32px; border:0; background:none; border-radius:var(--r-md); padding:0 var(--sp-xs) 0 0; color:var(--c-text-secondary); font-weight:600; flex:none; }
+.back:hover { background:var(--c-bg-selected); }
+[data-w="mob"] .back { min-height:40px; }
+/* Button: xs h24 · sm min-h 32 · md min-h 40; вес 600 */
+.btn { display:inline-flex; align-items:center; justify-content:center; gap:var(--sp-xs); font-weight:600; white-space:nowrap; flex:none; border:1px solid transparent; background:transparent; }
+.btn.xs { height:24px; padding:0 9px; font-size:var(--fs-sm); border-radius:var(--r-md); }
+.btn.sm { min-height:32px; padding:6px 13px; font-size:var(--fs-base); border-radius:var(--r-lg); }
+.btn.md { min-height:40px; padding:10px var(--sp-lg); font-size:var(--fs-md); border-radius:var(--r-xl); }
+[data-w="mob"] .btn.sm, [data-w="mob"] .btn.xs { min-height:40px; height:auto; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); }
+.btn.secondary { background:var(--c-bg-white); color:var(--c-text-primary); border-color:var(--c-border); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghostAccent { color:var(--c-accent); }
+.btn.danger { background:var(--c-danger); color:var(--c-on-accent); }
+.btn.dashed { border:1px dashed var(--c-dashed); color:var(--c-text-secondary); }
+.btn:disabled, .btn[aria-disabled="true"] { opacity:.45; cursor:not-allowed; }
+.btn.primary:disabled { opacity:1; background:var(--c-accent-muted); color:var(--c-text-muted); }
+/* Badge / StatusTag (FS.xs 600, R.sm) */
+.tag { display:inline-flex; align-items:center; gap:var(--sp-xxs); font:600 var(--fs-xs)/16px var(--font-sans); padding:2px var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); white-space:nowrap; flex:none; }
+.tag.info { background:var(--c-info-bg); color:var(--c-info); } .tag.ok { background:var(--c-success-bg); color:var(--c-success-text); }
+.tag.w { background:var(--c-warning-bg); color:var(--c-warning-text); } .tag.s { background:var(--c-danger-bg); color:var(--c-danger-text); }
+.tag.plan { background:var(--c-plan-light); color:var(--c-plan-text); } .tag.acc { background:var(--c-accent-light); color:var(--c-accent); }
+/* Chip (soft) + ChipX */
+.chip { display:inline-flex; align-items:center; gap:var(--sp-xs); min-height:28px; padding:0 var(--sp-sm); border-radius:var(--r-max); border:1px solid var(--c-border); background:var(--c-bg-white); font-size:var(--fs-sm); color:var(--c-text-primary); white-space:nowrap; }
+.chip .x { border:0; background:none; padding:0; width:18px; height:18px; border-radius:var(--r-max); color:var(--c-text-muted); line-height:18px; }
+.chip.off { color:var(--c-text-muted); text-decoration:line-through; border-style:dashed; background:transparent; }
+[data-w="mob"] .chip { min-height:36px; }
+/* Field: TextField / TextArea / Select + FieldLabel */
+.fl { font:600 var(--fs-xs)/1.3 var(--font-sans); color:var(--c-text-secondary); text-transform:uppercase; letter-spacing:.04em; margin-bottom:var(--sp-xs); display:flex; gap:var(--sp-xs); align-items:baseline; }
+.fl .h { text-transform:none; letter-spacing:0; font-weight:400; color:var(--c-text-muted); }
+.fld { width:100%; min-height:36px; padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border); border-radius:var(--r-lg); background:var(--c-bg-white); font-size:var(--fs-base); color:var(--c-text-primary); }
+textarea.fld { min-height:88px; resize:vertical; line-height:1.45; }
+.fld.inh { color:var(--c-text-muted); background:var(--c-bg-inset); border-style:dashed; }
+.fld.err { border-color:var(--c-danger); box-shadow:0 0 0 3px var(--c-danger-bg); }
+.fld[disabled] { opacity:.7; cursor:not-allowed; }
+.ferr { font-size:var(--fs-xs); color:var(--c-danger-text); margin-top:var(--sp-xs); }
+.fhint { font-size:var(--fs-xs); color:var(--c-text-muted); margin-top:var(--sp-xs); }
+[data-w="mob"] .fld { min-height:44px; font-size:var(--fs-lg); }
+/* SegmentedControl */
+.seg { display:inline-flex; padding:2px; gap:2px; border-radius:var(--r-lg); background:var(--c-bg-inset); flex:none; }
+.seg button { border:0; background:none; min-height:28px; padding:0 var(--sp-md); border-radius:var(--r-md); font-size:var(--fs-sm); color:var(--c-text-secondary); white-space:nowrap; }
+.seg button[aria-pressed="true"] { background:var(--c-bg-white); color:var(--c-text-heading); font-weight:600; box-shadow:var(--shadow-card); }
+.seg button:disabled { opacity:.45; cursor:not-allowed; }
+[data-w="mob"] .seg button { min-height:36px; }
+/* Toggle */
+.tgl { width:34px; height:20px; border-radius:var(--r-max); background:var(--c-progress-track); position:relative; flex:none; border:0; padding:0; }
+.tgl::after { content:""; position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:var(--r-max); background:var(--c-bg-white); transition:left .15s; }
+.tgl[aria-checked="true"] { background:var(--c-accent); } .tgl[aria-checked="true"]::after { left:16px; }
+.tgl:disabled { opacity:.45; }
+/* Checkbox */
+.cb { display:inline-flex; align-items:center; gap:var(--sp-sm); font-size:var(--fs-base); min-height:28px; }
+.cb i { width:16px; height:16px; border-radius:4px; border:1.5px solid var(--c-border); background:var(--c-bg-white); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); font-style:normal; color:var(--c-on-accent); }
+.cb i.on { background:var(--c-accent); border-color:var(--c-accent); }
+.cb.dis { color:var(--c-text-muted); } .cb.dis i.on { background:var(--c-text-muted); border-color:var(--c-text-muted); }
+[data-w="mob"] .cb { min-height:40px; }
+/* Notice (warning / danger / info) */
+.notice { display:flex; gap:var(--sp-sm); align-items:flex-start; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-warning); background:var(--c-warning-bg); color:var(--c-warning-text); font-size:var(--fs-sm); }
+.notice.danger { border-color:var(--c-danger-border); background:var(--c-danger-bg); color:var(--c-danger-text); }
+.notice.info { border-color:var(--c-info); background:var(--c-info-bg); color:var(--c-text-primary); }
+.notice .ic { flex:none; font-weight:700; }
+.notice .act { display:flex; gap:var(--sp-xs); flex-wrap:wrap; margin-top:var(--sp-xs); }
+/* EmptyState */
+.empty { display:flex; flex-direction:column; align-items:center; text-align:center; gap:var(--sp-sm); padding:var(--sp-xl) var(--sp-lg); color:var(--c-text-secondary); }
+.empty .em-ic { width:40px; height:40px; border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-muted); display:flex; align-items:center; justify-content:center; font-size:var(--fs-lg); }
+.empty .em-t { font:600 var(--fs-md)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.empty .em-x { font-size:var(--fs-sm); max-width:340px; }
+.empty.sm { padding:var(--sp-md); } .empty.sm .em-ic { width:28px; height:28px; font-size:var(--fs-sm); }
+/* Карточка-строка внутри острова */
+.card { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-md); }
+.sect { font:600 var(--fs-xxs)/1.4 var(--font-sans); text-transform:uppercase; letter-spacing:.07em; color:var(--c-text-muted); margin:var(--sp-lg) 0 var(--sp-sm); }
+.sect:first-child { margin-top:0; }
+.hr { height:1px; background:var(--c-border-light); margin:var(--sp-md) 0; }
+/* Menu / Tooltip (статично) */
+.menu { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:var(--r-lg); box-shadow:var(--shadow-island); padding:var(--sp-xs); min-width:220px; }
+.mi { display:flex; gap:var(--sp-sm); align-items:center; padding:6px var(--sp-sm); border-radius:var(--r-md); font-size:var(--fs-base); }
+.mi:hover, .mi.on { background:var(--c-bg-selected); }
+.tip { position:absolute; z-index:12; background:var(--c-text-heading); color:var(--c-bg-main); font-size:var(--fs-xs); padding:var(--sp-xs) var(--sp-sm); border-radius:var(--r-md); max-width:240px; }
+/* Modal + ModalActions; на мобиле — шторка */
+.scrim { position:absolute; inset:0; background:var(--c-overlay); z-index:20; display:flex; align-items:center; justify-content:center; padding:var(--sp-lg); }
+.modal { background:var(--c-bg-card); border-radius:var(--r-xl); box-shadow:var(--shadow-modal); width:100%; max-height:100%; display:flex; flex-direction:column; overflow:hidden; }
+.modal .mh { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-bottom:1px solid var(--c-border-light); font:600 var(--fs-lg)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.modal .mb { padding:var(--sp-lg); overflow:auto; }
+.modal .ma { display:flex; justify-content:flex-end; gap:var(--sp-sm); padding:var(--sp-md) var(--sp-lg); border-top:1px solid var(--c-border-light); }
+[data-w="mob"] .scrim { align-items:flex-end; padding:0; }
+[data-w="mob"] .modal { border-radius:var(--r-xl) var(--r-xl) 0 0; max-width:none !important; max-height:88%; }
+[data-w="mob"] .modal .ma { flex-direction:column-reverse; } [data-w="mob"] .modal .ma .btn { width:100%; }
+/* ProgressBar */
+.pb { height:6px; border-radius:var(--r-max); background:var(--c-progress-track); overflow:hidden; display:flex; }
+.pb i { display:block; height:100%; background:var(--c-accent); }
+/* Tabs (подчёркивание) */
+.tabs { display:flex; gap:var(--sp-lg); border-bottom:1px solid var(--c-border-light); overflow-x:auto; flex:none; }
+.tabs button { border:0; background:none; padding:var(--sp-sm) 0; min-height:36px; font-size:var(--fs-base); color:var(--c-text-secondary); border-bottom:2px solid transparent; white-space:nowrap; display:inline-flex; gap:var(--sp-xs); align-items:center; }
+.tabs button[aria-selected="true"] { color:var(--c-text-heading); font-weight:600; border-bottom-color:var(--c-accent); }
+[data-w="mob"] .tabs button { min-height:44px; }
+.cnt { font:600 var(--fs-xxs)/16px var(--font-sans); min-width:16px; padding:0 var(--sp-xs); border-radius:var(--r-max); background:var(--c-bg-inset); color:var(--c-text-secondary); text-align:center; }
+.cnt.s { background:var(--c-danger-bg); color:var(--c-danger-text); } .cnt.w { background:var(--c-warning-bg); color:var(--c-warning-text); }
+/* Аватар-кружок персоны (UserAvatar-подобный) */
+.av { width:22px; height:22px; border-radius:var(--r-max); background:var(--c-accent-light); color:var(--c-accent); font:700 var(--fs-xxs)/22px var(--font-sans); text-align:center; flex:none; }
+.av.p { background:var(--c-plan-light); color:var(--c-plan-text); } .av.i { background:var(--c-info-bg); color:var(--c-info); } .av.g { background:var(--c-success-bg); color:var(--c-success-text); }
+.av.lg { width:40px; height:40px; line-height:40px; font-size:var(--fs-md); }
+/* «унаследовано» — серая подпись со ссылкой на источник */
+.inh { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.inh a, a.lnk { color:var(--c-accent); text-decoration:none; } .inh a:hover, a.lnk:hover { text-decoration:underline; }
+</style>
+<script>
+// Пульт прототипа: кнопки .pseg[data-k] пишут значение в html[data-<k>]; элементы с data-show="k:v1|v2 k2:v" видны,
+// когда совпали все условия. Кликабельные элементы макета с data-go="k:v" переключают то же состояние.
+(function(){
+  const H = document.documentElement;
+  function sync(){
+    document.querySelectorAll('.pseg[data-k]').forEach(g=>{ const k=g.dataset.k; g.querySelectorAll('button').forEach(b=>b.setAttribute('aria-pressed', String(H.dataset[k]===b.dataset.v))); });
+    document.querySelectorAll('[data-show]').forEach(el=>{
+      const ok = el.dataset.show.trim().split(/\s+/).every(c=>{ const [k,v]=c.split(':'); const neg=k.startsWith('!'); const kk=neg?k.slice(1):k; const hit=v.split('|').includes(H.dataset[kk]); return neg?!hit:hit; });
+      el.hidden = !ok;
+    });
+  }
+  function set(k,v){ H.dataset[k]=v; sync(); }
+  document.addEventListener('click', e=>{
+    const b = e.target.closest('.pseg[data-k] button'); if (b) { set(b.closest('.pseg').dataset.k, b.dataset.v); return; }
+    const g = e.target.closest('[data-go]'); if (g) { e.preventDefault(); g.dataset.go.split(/\s+/).forEach(p=>{ const [k,v]=p.split(':'); set(k,v); }); }
+  });
+  document.addEventListener('DOMContentLoaded', sync);
+})();
+</script>
+
+<style>
+.p-page { flex:1; }
+.fh { padding:var(--sp-lg) var(--sp-xl) var(--sp-md); background:var(--c-bg-card); border-bottom:1px solid var(--c-border-light); flex:none; }
+[data-w="mob"] .fh { padding:var(--sp-md); }
+.ftitle { font:600 var(--fs-h2)/1.25 var(--font-serif); color:var(--c-text-heading); margin:var(--sp-xxs) 0 0; }
+[data-w="mob"] .ftitle { font-size:var(--fs-xl); }
+.hrow { margin-top:var(--sp-sm); display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-border-light); background:var(--c-bg-white); font-size:var(--fs-sm); }
+.hrow.plan { border-color:var(--c-plan-border); background:var(--c-plan-light); }
+.hrow.warn { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.pg { flex:1; min-height:0; display:flex; gap:0; background:var(--c-bg-card); }
+[data-v="a"] .pg { flex-direction:column; }
+.gwrap { flex:none; padding:var(--sp-lg) var(--sp-xl); border-bottom:1px solid var(--c-border-light); }
+[data-v="b"] .gwrap { width:300px; border-bottom:0; border-right:1px solid var(--c-border-light); overflow:auto; padding:var(--sp-lg); }
+[data-w="mob"] .gwrap { padding:var(--sp-md); }
+[data-w="mob"][data-v="b"] .gwrap { width:auto; border-right:0; }
+[data-w="mob"] .pg { flex-direction:column; overflow:auto; }
+.sdetail { flex:1; min-height:0; overflow:auto; padding:var(--sp-lg) var(--sp-xl); }
+[data-w="mob"] .sdetail { padding:var(--sp-md); overflow:visible; }
+/* граф: узлы и связи */
+.graph { display:flex; align-items:stretch; gap:0; }
+[data-v="b"] .graph { flex-direction:column; }
+[data-w="mob"][data-v="a"] .graph { overflow-x:auto; padding-bottom:var(--sp-xs); }
+.node { position:relative; flex:1 1 0; min-width:120px; display:flex; flex-direction:column; gap:var(--sp-xxs); padding:var(--sp-sm) var(--sp-md); border-radius:var(--r-lg); border:1px solid var(--c-border-light); background:var(--c-bg-white); cursor:pointer; text-align:left; }
+[data-v="b"] .node { min-width:0; flex:none; }
+[data-w="mob"][data-v="a"] .node { min-width:104px; flex:none; }
+[data-w="mob"][data-v="a"] .graph .node.todo .nm { display:none; }
+[data-w="mob"] .node { min-height:56px; }
+.node:hover { border-color:var(--c-border); }
+.node.sel { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+.node .nn { font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:var(--sp-xs); }
+.node .nm { font-size:var(--fs-xs); color:var(--c-text-muted); }
+.node .ico { width:16px; height:16px; border-radius:var(--r-max); flex:none; display:inline-flex; align-items:center; justify-content:center; font:700 var(--fs-xxs)/1 var(--font-sans); border:2px solid var(--c-progress-track); }
+.node.done .ico { background:var(--c-success); border-color:var(--c-success); color:var(--c-on-accent); }
+.node.act .ico { border-color:var(--c-accent); background:var(--c-accent-light); }
+.node.act .ico::after { content:""; width:6px; height:6px; border-radius:var(--r-max); background:var(--c-accent); }
+.node.hum .ico { border-color:var(--c-warning); background:var(--c-warning-bg); }
+.node.todo { background:transparent; border-style:dashed; }
+.node.todo .nn { color:var(--c-text-secondary); }
+.node.prop { background:transparent; border:1px dashed var(--c-plan); }
+.node.prop .nn { color:var(--c-plan-text); }
+.link { flex:none; width:20px; align-self:center; height:2px; background:var(--c-progress-track); }
+.link.done { background:var(--c-success); }
+.link.prop { background:none; border-top:2px dashed var(--c-plan-border); height:0; }
+[data-v="b"] .link { width:2px; height:14px; margin-left:var(--sp-lg); align-self:flex-start; }
+[data-v="b"] .link.prop { border-top:0; border-left:2px dashed var(--c-plan-border); height:14px; width:0; }
+[data-w="mob"][data-v="a"] .link { width:12px; }
+.ret { position:absolute; top:-7px; right:-6px; }
+/* граф с параллельными ветками: B и мобила B — вертикаль, мобила A — лента с прокруткой */
+[data-v="b"] .pgraph { flex-direction:column; }
+[data-w="mob"][data-v="a"] .pgraph { overflow-x:auto; overflow-y:hidden; padding-top:var(--sp-xs); scrollbar-width:thin; }
+[data-w="mob"][data-v="a"] .pgraph .node.todo .nm { display:none; }
+[data-w="mob"][data-v="a"] .lv { flex:none; width:128px; }
+.lanes { display:flex; gap:2px; margin-top:var(--sp-xxs); }
+.lanes i { flex:1; height:4px; border-radius:var(--r-max); background:var(--c-progress-track); }
+.lanes i.d { background:var(--c-success); } .lanes i.a { background:var(--c-accent); }
+.glegend { display:flex; flex-wrap:wrap; gap:var(--sp-xs) var(--sp-md); margin-top:var(--sp-sm); font-size:var(--fs-xs); color:var(--c-text-muted); }
+/* выбранный этап */
+.sh { display:flex; align-items:center; gap:var(--sp-sm); flex-wrap:wrap; }
+.sh .stt { font:600 var(--fs-xl)/1.3 var(--font-serif); color:var(--c-text-heading); }
+.kpis { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--sp-sm); margin-top:var(--sp-md); }
+[data-v="b"] .kpis { grid-template-columns:repeat(2,1fr); }
+[data-w="mob"] .kpis { grid-template-columns:repeat(2,1fr); }
+.kpi { background:var(--c-bg-white); border:1px solid var(--c-border-light); border-radius:var(--r-lg); padding:var(--sp-sm) var(--sp-md); }
+.kpi .kl { font-size:var(--fs-xs); color:var(--c-text-muted); } .kpi .kv { font:600 var(--fs-lg)/1.3 var(--font-sans); color:var(--c-text-heading); }
+.kpi .ks { font-size:var(--fs-xs); color:var(--c-text-secondary); }
+.two { display:grid; grid-template-columns:3fr 2fr; gap:var(--sp-lg); margin-top:var(--sp-md); }
+[data-v="b"] .two, [data-w="mob"] .two { grid-template-columns:1fr; }
+.trow { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px solid var(--c-border-light); border-radius:var(--r-lg); background:var(--c-bg-white); }
+.trow + .trow { margin-top:var(--sp-xs); }
+.trow .tt { font-weight:600; color:var(--c-text-heading); }
+.trow .ts { font-size:var(--fs-xs); color:var(--c-text-muted); }
+[data-w="mob"] .trow { min-height:56px; }
+.mini { display:flex; align-items:center; gap:var(--sp-sm); padding:var(--sp-xs) 0; font-size:var(--fs-sm); }
+.mini + .mini { border-top:1px solid var(--c-border-light); }
+.lane-t { font-size:var(--fs-sm); padding:0 var(--sp-sm); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.parnote { display:flex; gap:var(--sp-sm); align-items:flex-start; margin-top:var(--sp-sm); padding:var(--sp-sm) var(--sp-md); border:1px dashed var(--c-border); border-radius:var(--r-lg); font-size:var(--fs-sm); color:var(--c-text-secondary); }
+.parnote .pi { color:var(--c-text-muted); }
+</style>
+<style>
+/* ===== граф с параллельными ветками (общий блок макетов «Процессы фичи») =====
+   Уровень .lv = колонка маршрута (глубина = длиннейший путь от корня, как previewColumns).
+   .lv.par — несколько этапов одной колонки в рамке «параллельно», узлы всегда друг над другом.
+   Рёбра — SVG по data-after узла (нет атрибута — после всех узлов предыдущего уровня).
+   Направление задаёт страница (flex-direction у .pgraph); вертикаль скрипт помечает .is-v. */
+.pgraph { position:relative; display:flex; align-items:center; gap:var(--sp-xl); }
+.pgraph.is-v { align-items:stretch; gap:var(--sp-md); padding-left:var(--sp-xl); }
+.pgraph.is-v.skip { padding-right:var(--sp-xl); }
+.pgraph.skip:not(.is-v) { padding-bottom:var(--sp-xl); }
+.pgraph > svg.edges { position:absolute; left:0; top:0; pointer-events:none; overflow:visible; z-index:0; }
+.pgraph > svg.edges path { fill:none; stroke:var(--c-border); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.pgraph > svg.edges path.done { stroke:var(--c-success); }
+.pgraph > svg.edges path.prop { stroke:var(--c-plan-border); stroke-dasharray:4 4; }
+.pgraph > svg.edges path.far { stroke-dasharray:2 5; }
+.pgraph > svg.edges circle { fill:var(--c-border); } .pgraph > svg.edges circle.done { fill:var(--c-success); } .pgraph > svg.edges circle.prop { fill:var(--c-plan-border); }
+.lv { position:relative; z-index:1; flex:1 1 0; min-width:116px; display:flex; flex-direction:column; gap:var(--sp-xs); }
+.pgraph.is-v .lv { flex:none; min-width:0; }
+.lv.par { padding:20px var(--sp-xs) var(--sp-xs); border:1px dashed var(--c-border); border-radius:var(--r-xl); }
+.lv.par > .pl { position:absolute; top:3px; left:var(--sp-sm); right:var(--sp-sm); font-size:var(--fs-xxs); line-height:14px; color:var(--c-text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.pgraph .node { flex:none; width:100%; min-width:0; }
+.pgraph .node .nn { white-space:normal; flex-wrap:wrap; row-gap:0; }
+.node .lane { font:500 var(--fs-xxs)/16px var(--font-sans); padding:0 var(--sp-xs); border-radius:var(--r-sm); background:var(--c-bg-inset); color:var(--c-text-secondary); }
+.node .role { font:var(--fs-xxs)/16px var(--font-mono); color:var(--c-text-muted); font-weight:400; }
+</style>
+<script>
+// Рёбра графа: пересчёт по раскладке. Соседние уровни — кривая из края в край; ребро через уровень
+// (например «Проверка плана» → «QA») идёт обходом: под графом в горизонтали, справа в вертикали.
+// Вертикаль: прямая из центра в центр, только если между узлами никого нет; иначе — дуга слева.
+(function(){
+  const NS = 'http://www.w3.org/2000/svg';
+  function draw(g){
+    const levels = [...g.querySelectorAll(':scope > .lv')];
+    const pos = {};
+    levels.forEach((lv,li)=>{ const ns=[...lv.querySelectorAll('.node[data-id]')]; ns.forEach((el,i)=>pos[el.dataset.id]={el,li,i,n:ns.length}); });
+    const edges = [];
+    Object.values(pos).forEach(t=>{
+      const after = t.el.dataset.after != null ? t.el.dataset.after.split(/\s+/).filter(Boolean)
+        : (t.li>0 ? [...levels[t.li-1].querySelectorAll('.node[data-id]')].map(e=>e.dataset.id) : []);
+      after.forEach(f=>{ if (pos[f]) edges.push([pos[f], t]); });
+    });
+    const vert = getComputedStyle(g).flexDirection.startsWith('column');
+    g.classList.toggle('is-v', vert);
+    g.classList.toggle('skip', edges.some(([s,t])=>t.li-s.li>1));
+    let svg = g.querySelector(':scope > svg.edges');
+    if (!svg) { svg = document.createElementNS(NS,'svg'); svg.setAttribute('class','edges'); svg.setAttribute('aria-hidden','true'); g.prepend(svg); }
+    if (!g.offsetParent) return;
+    svg.setAttribute('width',0); svg.setAttribute('height',0); svg.innerHTML='';
+    const gr = g.getBoundingClientRect(), ox = gr.left - g.scrollLeft, oy = gr.top - g.scrollTop;
+    const R = el=>{ const r=el.getBoundingClientRect(); return {l:r.left-ox, r:r.right-ox, t:r.top-oy, b:r.bottom-oy, cx:(r.left+r.right)/2-ox, cy:(r.top+r.bottom)/2-oy}; };
+    let maxB=0, maxR=0; Object.values(pos).forEach(p=>{ const r=R(p.el); maxB=Math.max(maxB,r.b); maxR=Math.max(maxR,r.r); });
+    let out='';
+    edges.forEach(([s,t])=>{
+      const a=R(s.el), b=R(t.el), span=t.li-s.li;
+      const cls = (s.el.classList.contains('prop')||t.el.classList.contains('prop')) ? 'prop' : s.el.classList.contains('done') ? 'done' : '';
+      let d, ex, ey;
+      if (!vert && span===1) { const m=(a.r+b.l)/2; d=`M${a.r} ${a.cy}C${m} ${a.cy} ${m} ${b.cy} ${b.l} ${b.cy}`; ex=b.l; ey=b.cy; }
+      else if (!vert) { const y=maxB+14, r=8; d=`M${a.cx} ${a.b}V${y-r}Q${a.cx} ${y} ${a.cx+r} ${y}H${b.cx-r}Q${b.cx} ${y} ${b.cx} ${y-r}V${b.b}`; ex=b.cx; ey=b.b; }
+      else if (span===1 && s.i===s.n-1 && t.i===0) { const m=(a.b+b.t)/2; d=`M${a.cx} ${a.b}C${a.cx} ${m} ${b.cx} ${m} ${b.cx} ${b.t}`; ex=b.cx; ey=b.t; }
+      else if (span===1) { const w=14; d=`M${a.l} ${a.cy}C${a.l-w} ${a.cy} ${b.l-w} ${b.cy} ${b.l} ${b.cy}`; ex=b.l; ey=b.cy; }
+      else { const x=maxR+14; d=`M${a.r} ${a.cy}C${x} ${a.cy} ${x} ${b.cy} ${b.r} ${b.cy}`; ex=b.r; ey=b.cy; }
+      out += `<path class="${cls}${span>1?' far':''}" d="${d}"/><circle class="${cls}" cx="${ex}" cy="${ey}" r="3"/>`;
+    });
+    svg.setAttribute('width', g.scrollWidth); svg.setAttribute('height', g.scrollHeight);
+    svg.innerHTML = out;
+  }
+  function all(){ document.querySelectorAll('.pgraph').forEach(draw); }
+  window.fwEdges = all;
+  document.addEventListener('DOMContentLoaded', ()=>{ all(); if (document.fonts) document.fonts.ready.then(all); });
+  document.addEventListener('click', ()=>setTimeout(all,0));
+  window.addEventListener('resize', all);
+})();
+</script>
+</head>
+<body>
+<div class="ctl">
+  <h1>Страница фичи · граф процесса</h1>
+  <span class="lb">Тема</span><span class="pseg" data-k="theme"><button data-v="light">Светлая</button><button data-v="dark">Тёмная</button></span>
+  <span class="lb">Ширина</span><span class="pseg" data-k="w"><button data-v="desk">1240</button><button data-v="mob">360</button></span>
+  <span class="lb">Вариант</span><span class="pseg" data-k="v"><button data-v="a">A · граф во всю ширину</button><button data-v="b">B · граф колонкой</button></span>
+  <span class="lb">Состояние</span><span class="pseg" data-k="st"><button data-v="run">В работе</button><button data-v="unconf">Маршрут не подтверждён</button><button data-v="changed">Шаблон изменился</button><button data-v="legacy">Старая фича</button><button data-v="empty">Этапов нет</button></span>
+</div>
+<div class="stage">
+  <div class="cap"><span class="agree">на согласование</span><b>C3b · Страница фичи</b>
+    <span data-show="v:a">· вариант A: граф во всю ширину сверху — читается как маршрут слева направо, этап ниже на всю ширину</span>
+    <span data-show="v:b">· вариант B: граф узкой колонкой слева — список этапов всегда рядом, детали этапа справа</span>
+    <span>· шапка — блок C2</span></div>
+  <p class="why">Маршрут фичи — встроенный «Параллельный цикл»: после дизайна план и его проверка идут одновременно, шаги — двумя линиями (бэк ‖ фронт) и сходятся в «Ревью»; «QA» ждёт и ревью, и проверку плана (пунктирное ребро в обход). Этапы одной колонки — в рамке «параллельно»; у двух qa-этапов разные имена, по ним их и различают. Граф показывает только фактические этапы: снятые при подтверждении в нём не рисуются. Клик по узлу меняет нижнюю (правую) часть; «Открыть этап» ведёт на экран этапа.</p>
+  <div class="app">
+    <div class="pane p-page" data-mcap="C3b · страница фичи (360)">
+      <div class="island">
+        <div class="tb"><button class="back">‹ Фичи</button><span class="sp"></span><button class="btn xs ghost d-only">Ключевой чат</button><button class="ib" title="Ещё">⋯</button></div>
+        <div class="fh">
+          <div class="row wrap"><span class="tag info" data-show="!st:empty|unconf">в работе</span><span class="tag w" data-show="st:unconf">ждёт подтверждения</span><span class="tag" data-show="st:empty">новая</span><span class="inh">эпик a149e308 · 12.11</span><span class="sp"></span><span class="inh d-only" data-show="!st:empty|unconf|legacy">4 из 10 этапов · 2 ветки идут параллельно · ≈ 7 ч до финала</span></div>
+          <h2 class="ftitle">Процессы фичи: шаблоны и наследование</h2>
+          <div class="pb" style="margin-top:var(--sp-sm)" data-show="!st:empty|unconf|legacy"><i style="width:40%"></i></div>
+          <!-- шапка: C2 в компактном виде -->
+          <div class="hrow" data-show="st:run"><span class="tag ok">✓ маршрут</span><span class="sec grow ell">Параллельный цикл v1 · подтвердил человек</span><button class="btn xs ghost">Почему так</button></div>
+          <div class="hrow plan" data-show="st:unconf"><span class="tag w">ждёт вас</span><span class="grow">Модель предлагает «Параллельный цикл»: шаги бэка и фронта одновременно, план проверяет тестировщик. Пока не подтвердите, исполнители не стартуют.</span><button class="btn sm primary">Посмотреть и подтвердить</button></div>
+          <div class="hrow warn" data-show="st:changed"><span class="tag w">шаблон изменился</span><span class="grow">«Параллельный цикл» v1 → v2: «Проверка плана» стала обязательной. Пока маршрут прежний.</span><button class="btn xs secondary">Обновить маршрут</button><button class="btn xs ghost">Оставить v1</button></div>
+          <div class="hrow" data-show="st:legacy"><span class="tag">старая фича</span><span class="sec grow"><b>Маршрута ещё нет.</b> Создана до шаблонов: выберите шаблон — появятся граф и экран этапа.</span><button class="btn xs ghost">Выбрать шаблон</button></div>
+          <div class="hrow plan" data-show="st:empty"><span class="tag w">ждёт вас</span><span class="grow">Маршрута ещё нет.</span><button class="btn sm primary">Подобрать маршрут</button><button class="btn sm ghost">Выбрать шаблон</button></div>
+        </div>
+
+        <div class="pg">
+          <!-- ===== граф ===== -->
+          <div class="gwrap">
+            <div class="row" style="margin-bottom:var(--sp-sm)"><span class="sect" style="margin:0">Процесс</span><span class="sp"></span><span class="inh" data-show="st:run|changed">Параллельный цикл v1</span><span class="inh" data-show="st:unconf">предложение · ещё не подтверждено</span></div>
+            <div data-show="st:empty"><div class="empty"><div class="em-ic">⇢</div><div class="em-t">Этапов пока нет</div><div class="em-x">Граф появится, когда вы подтвердите маршрут: модель подберёт шаблон по описанию фичи, вы снимете лишнее.</div></div></div>
+
+            <div class="pgraph" data-show="st:run|changed" aria-label="Этапы фичи">
+              <div class="lv"><button class="node done" data-id="cut"><span class="nn"><span class="ico">✓</span>Разрез</span><span class="nm">Александр · 1 ч 10 мин</span></button></div>
+              <div class="lv"><button class="node done" data-id="design"><span class="nn"><span class="ico">✓</span>Дизайн</span><span class="nm">Майя · 2 ч 05 мин</span></button></div>
+              <div class="lv par" title="Этапы одной колонки идут одновременно"><span class="pl">⇉ параллельно</span>
+                <button class="node done" data-id="plan" data-after="design"><span class="nn"><span class="ico">✓</span>План</span><span class="nm">Егор · 35 мин</span></button>
+                <button class="node done" data-id="qa-plan" data-after="design"><span class="nn"><span class="ico">✓</span>Проверка плана <span class="role">qa</span></span><span class="nm">Вера · 25 мин</span></button>
+              </div>
+              <div class="lv par" title="Этапы одной колонки идут одновременно"><span class="pl">⇉ параллельно</span>
+                <button class="node act sel" data-id="step-back" data-after="plan"><span class="cnt s ret" title="Один возврат на доработку">↺1</span><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">Тимур, Денис · 2/3 · ◐ вопрос</span><span class="lanes"><i class="d"></i><i class="d"></i><i class="a"></i></span></button>
+                <button class="node act" data-id="step-front" data-after="plan"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">Полина · 1/2</span><span class="lanes"><i class="d"></i><i class="a"></i></span></button>
+              </div>
+              <div class="lv"><button class="node todo" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">Глеб · ждёт ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">Вера · ждёт обе ветки</span></button></div>
+              <div class="lv"><button class="node todo" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">Александр</span></button></div>
+              <div class="lv"><button class="node todo" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">Марк</span></button></div>
+            </div>
+            <div class="pgraph" data-show="st:unconf" aria-label="Предложенный маршрут">
+              <div class="lv"><button class="node done" data-id="cut"><span class="nn"><span class="ico">✓</span>Разрез</span><span class="nm">Александр · до маршрута</span></button></div>
+              <div class="lv"><button class="node prop" data-id="design"><span class="nn"><span class="ico"></span>Дизайн</span><span class="nm">предложено</span></button></div>
+              <div class="lv par"><span class="pl">⇉ параллельно</span>
+                <button class="node prop" data-id="plan" data-after="design"><span class="nn"><span class="ico"></span>План</span><span class="nm">предложено</span></button>
+                <button class="node prop" data-id="qa-plan" data-after="design"><span class="nn"><span class="ico"></span>Проверка плана <span class="role">qa</span></span><span class="nm">по решению</span></button>
+              </div>
+              <div class="lv par"><span class="pl">⇉ параллельно</span>
+                <button class="node prop" data-id="step-back" data-after="plan"><span class="nn"><span class="ico"></span>Шаги <span class="lane">бэк</span></span><span class="nm">предложено</span></button>
+                <button class="node prop" data-id="step-front" data-after="plan"><span class="nn"><span class="ico"></span>Шаги <span class="lane">фронт</span></span><span class="nm">предложено</span></button>
+              </div>
+              <div class="lv"><button class="node prop" data-id="review"><span class="nn"><span class="ico"></span>Ревью</span><span class="nm">предложено</span></button></div>
+              <div class="lv"><button class="node prop" data-id="qa" data-after="review qa-plan"><span class="nn"><span class="ico"></span>QA <span class="role">qa</span></span><span class="nm">по решению</span></button></div>
+              <div class="lv"><button class="node prop" data-id="final"><span class="nn"><span class="ico"></span>Финал</span><span class="nm">предложено</span></button></div>
+              <div class="lv"><button class="node prop" data-id="merge"><span class="nn"><span class="ico"></span>Слияние</span><span class="nm">предложено</span></button></div>
+            </div>
+            <div data-show="st:legacy"><div class="empty"><div class="em-ic">⇢</div><div class="em-t">Маршрута ещё нет</div><div class="em-x">Фича создана до шаблонов, графа у неё нет. Выберите шаблон — этапы появятся, и можно будет следить за маршрутом.</div><button class="btn sm primary">Выбрать шаблон</button></div></div>
+            <div class="glegend" data-show="!st:empty|legacy"><span>✓ готово</span><span>● в работе</span><span>◐ ждёт человека</span><span>пунктир — впереди</span><span data-show="st:unconf">фиолетовый пунктир — предложено, не подтверждено</span><span>↺ — возвраты на доработку</span><span>рамка «параллельно» — ветки идут одновременно, следующий этап ждёт все входящие</span><span>одна роль — разные имена: «Проверка плана» и «QA» (обе <span class="mono">qa</span>)</span></div>
+          </div>
+
+          <!-- ===== выбранный этап ===== -->
+          <div class="sdetail">
+            <div data-show="st:empty"><div class="empty"><div class="em-ic">☰</div><div class="em-t">Здесь будет выбранный этап</div><div class="em-x">Исполнитель, задачи этапа, сколько ушло времени и что ждёт вас.</div></div></div>
+            <div data-show="st:unconf">
+              <div class="notice" style="margin-bottom:var(--sp-md)"><span class="ic">!</span><span>Разрез готов, дальше работа стоит: исполнители не стартуют, пока маршрут не подтверждён. <a class="lnk" href="#">Подтвердить</a></span></div>
+              <div class="empty sm"><div class="em-x">Детали этапов появятся после подтверждения маршрута.</div></div>
+            </div>
+            <div data-show="st:legacy"><div class="empty"><div class="em-ic">☰</div><div class="em-t">Этапов нет — нечего показать</div><div class="em-x">Замеры и задачи этапа появятся после выбора шаблона.</div></div></div>
+            <div data-show="st:run|changed">
+              <div class="sh"><span class="stt">Шаги</span><span class="lane-t">бэк</span><span class="tag acc">в работе</span><span class="tag s">1 возврат</span><span class="sp"></span><button class="btn sm primary">Открыть этап →</button></div>
+              <div class="inh" style="margin-top:var(--sp-xxs)">Исполнители из плана · шаблон «Параллельный цикл» v1 · этап: молчит 45 мин → только сообщить</div>
+              <div class="parnote"><span class="pi">⇉</span><span class="grow">Параллельно идёт <a class="lnk" href="#">Шаги · фронт</a> — Полина, 1 из 2. «Ревью» стартует, когда закончатся обе ветки.</span></div>
+                            <div class="kpis">
+                <div class="kpi"><div class="kl">Время этапа</div><div class="kv">4 ч 05 мин</div><div class="ks">исп. 2 ч 50 · ревью 40 · вы 35</div></div>
+                <div class="kpi"><div class="kl">Ходы</div><div class="kv">186</div><div class="ks">3 задачи ветки</div></div>
+                <div class="kpi"><div class="kl">Токены</div><div class="kv">4,1 М</div><div class="ks">кэш 82 %</div></div>
+                <div class="kpi"><div class="kl">Ждёт вас</div><div class="kv" style="color:var(--c-warning-text)">1 вопрос</div><div class="ks">35 мин ожидания</div></div>
+              </div>
+              <div class="two">
+                <div>
+                  <div class="sect">Задачи ветки «бэк»</div>
+                  <div class="trow"><span class="tag ok">✓</span><div class="col grow" style="gap:0"><span class="tt ell">B1 · модели и стор шаблонов</span><span class="ts">Денис · 50 мин · принято</span></div></div>
+                  <div class="trow"><span class="tag ok">✓</span><div class="col grow" style="gap:0"><span class="tt ell">B2 · маршрут на эпике и слепок этапа</span><span class="ts">Тимур · 40 мин · принято</span></div></div>
+                  <div class="trow"><span class="tag acc">●</span><div class="col grow" style="gap:0"><span class="tt ell">B3 · исполнение по этапу</span><span class="ts">Тимур · 1 ч 15 мин · доработка после ревью</span></div><span class="cnt s">↺1</span></div>
+                </div>
+                <div>
+                  <div class="sect">Что ждёт вас</div>
+                  <div class="card"><div class="mini"><span class="tag w">вопрос</span><span class="grow">Тимур: «Финал — несъёмный этап: запретить снятие на сервере?»</span></div><button class="btn xs secondary" style="margin-top:var(--sp-xs)">Ответить</button></div>
+                  <div class="sect">Артефакты этапа</div>
+                  <div class="card"><div class="mini"><span class="mono">TaskManager.cs</span><span class="sp"></span><span class="tag">v3</span></div><div class="mini"><span class="mono">WorkflowTemplateStore.cs</span><span class="sp"></span><span class="tag">v1</span></div><div class="mini"><span class="sec">ещё 11 файлов · 6 коммитов</span></div></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+// мобила A: лента графа сама прокручивается к выбранному этапу (в продукте — scrollIntoView({inline:'center'}) при открытии)
+function fwScrollSel(){ document.querySelectorAll('.graph, .pgraph').forEach(g=>{ const n=g.querySelector('.sel'); if(n && g.scrollWidth>g.clientWidth) g.scrollLeft = n.offsetLeft - g.offsetLeft - 24; }); }
+document.addEventListener('click', ()=>setTimeout(fwScrollSel,0)); document.addEventListener('DOMContentLoaded', ()=>setTimeout(fwScrollSel,0));
+</script>
+</body>
+</html>

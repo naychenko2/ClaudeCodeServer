@@ -100,3 +100,40 @@ export function tierCellView(personaCell: TierCell, specialtyCell: TierCell | nu
   const inheritedValue = specialtyCell?.[tier] ?? null;
   return { value: inheritedValue, inherited: inheritedValue !== null };
 }
+
+// ── Отличия своих прав от прав специальности ─────────────────────────────────────────
+
+export interface AccessDiff {
+  // Профиль доступа отличается от шаблона
+  access: boolean;
+  // Ключи возможностей (tasks/notes/web), у которых включённость иная, чем у шаблона
+  tools: string[];
+  // Запрещённые инструменты, которых у специальности нет
+  extraDisallowed: string[];
+  // Запрещённые у специальности, но снятые здесь
+  missingDisallowed: string[];
+  // Всего мест отличия (профиль + возможности + запреты)
+  count: number;
+}
+
+const ALL_TOOLS = ['tasks', 'notes', 'web'];
+
+// Сравнение текущих значений группы с шаблоном специальности. Отсутствующее у шаблона —
+// как у бэка (materialize): full, все возможности, без запретов. Запреты сравниваются
+// только при профиле «Свой» — у остальных профилей они не действуют.
+export function accessDiff(own: AccessGroup, template: AccessGroup | null | undefined): AccessDiff {
+  const base = materialize(template ?? {});
+  const mine = materialize(own);
+  const baseTools = new Set(base.tools ?? ALL_TOOLS);
+  const myTools = new Set(mine.tools ?? ALL_TOOLS);
+  const tools = ALL_TOOLS.filter(k => baseTools.has(k) !== myTools.has(k));
+  const baseDis = base.access === 'custom' ? base.disallowedTools ?? [] : [];
+  const myDis = mine.access === 'custom' ? mine.disallowedTools ?? [] : [];
+  const extraDisallowed = myDis.filter(t => !baseDis.includes(t));
+  const missingDisallowed = baseDis.filter(t => !myDis.includes(t));
+  const access = mine.access !== base.access;
+  return {
+    access, tools, extraDisallowed, missingDisallowed,
+    count: (access ? 1 : 0) + tools.length + extraDisallowed.length + missingDisallowed.length,
+  };
+}

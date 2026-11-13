@@ -4,6 +4,7 @@ import {
   type AccessGroup,
   type TierCell,
   type TierKey,
+  accessDiff,
   accessMode,
   toInherited,
   toOwn,
@@ -114,5 +115,25 @@ describe('tierCellView — ячейка матрицы: своё / унасле�
     for (const tier of TIER_KEYS) {
       expect(tierCellView({}, TOPIC_MATRIX, tier)).toEqual({ value: expected[tier], inherited: true });
     }
+  });
+});
+
+describe('accessDiff — отличия своих прав от специальности', () => {
+  const tpl: AccessGroup = { access: 'custom', tools: ['tasks', 'notes', 'web'], disallowedTools: ['Edit'] };
+
+  it('совпадение — ноль отличий', () => {
+    expect(accessDiff(tpl, tpl).count).toBe(0);
+  });
+  it('считает профиль, возможности и запреты по отдельности', () => {
+    const d = accessDiff({ access: 'custom', tools: ['tasks', 'notes'], disallowedTools: ['Bash'] }, tpl);
+    expect(d.tools).toEqual(['web']);
+    expect(d.extraDisallowed).toEqual(['Bash']);
+    expect(d.missingDisallowed).toEqual(['Edit']);
+    expect(d.access).toBe(false);
+    expect(d.count).toBe(3);
+  });
+  it('запреты вне профиля «Свой» не сравниваются; null у tools = все', () => {
+    const d = accessDiff({ access: 'readOnly', tools: null, disallowedTools: ['Bash'] }, { access: 'readOnly' });
+    expect(d).toMatchObject({ access: false, tools: [], extraDisallowed: [], count: 0 });
   });
 });

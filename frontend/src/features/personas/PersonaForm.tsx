@@ -5,7 +5,8 @@ import type { Persona, PersonaAccess, PersonaContract, PersonaGender, PersonaMem
 import { api } from '../../lib/api';
 import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
-import { accessMode as readAccessMode, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { PersonaAccessGroup } from './PersonaAccessGroup';
+import { accessDiff, accessMode as readAccessMode, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -1286,14 +1287,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
-  // Подпись под профилем доступа: у «Полного» пояснять нечего (это состояние по умолчанию),
-  // у «Своего» подсказка описывает формат поля запретов под контролом
-  const accessHint = access === 'readOnly'
-    ? 'Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок'
-    : access === 'custom'
-      ? 'Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete'
-      : undefined;
-
   // === Секция 3 — Поведение и контекст (сетка 2×2) ===
   const behaviorSection = (
     <div style={section}>
@@ -1494,51 +1487,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <div style={{ gridColumn: '1 / -1' }}>
           {/* Профиль доступа — права арендатора (Configure): участнику выключен с видимой
               подсказкой вместо обычного hint */}
-          <Field label="Права" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
-            <SegmentedControl<'inherited' | 'own'>
-              value={inheritsAccess ? 'inherited' : 'own'}
-              onChange={v => switchAccessMode(v === 'own')}
-              columns={2}
-              options={[
-                { value: 'inherited', label: 'Как у специальности', disabled: ownerOnlyFields },
-                { value: 'own', label: 'Своё', disabled: ownerOnlyFields },
-              ]}
-            />
-          </Field>
-          {inheritsAccess && (
-            <div
-              data-testid="access-inherited"
-              style={{ marginTop: 8, fontFamily: FONT.sans, fontSize: 12.5, lineHeight: 1.45, color: C.textMuted }}
-            >
-              {inheritedAccessText(effectiveGroup)}
-              {specialty !== 'none' && (
-                <>
-                  {' · '}
-                  <a href={`#/specialties/${specialty}`} style={{ color: C.textMuted, textDecoration: 'underline' }}>
-                    роль «{specialtyLabel(specialtyCatalog, specialty)}»
-                  </a>
-                </>
-              )}
-            </div>
-          )}
-          {!inheritsAccess && (
-          <Field label="Профиль доступа" hint={ownerOnlyFields ? OWNER_ONLY_HINT : accessHint}>
-            <SegmentedControl<PersonaAccess>
-              value={access}
-              onChange={setAccess}
-              columns={3}
-              options={[
-                { value: 'full', label: 'Полный', disabled: ownerOnlyFields },
-                { value: 'readOnly', label: 'Только чтение', disabled: ownerOnlyFields },
-                { value: 'custom', label: 'Свой', disabled: ownerOnlyFields },
-              ]}
-            />
-            {access === 'custom' && (
-              <TextArea value={disallowedText} onChange={setDisallowedText}
-                autoGrow minHeight={56} placeholder="Bash, Edit, Write" disabled={ownerOnlyFields} />
-            )}
-          </Field>
-          )}
+          <PersonaAccessGroup
+            inherited={inheritsAccess}
+            onModeChange={switchAccessMode}
+            readOnly={ownerOnlyFields}
+            readOnlyHint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}
+            specialtyKey={specialty}
+            specialtyTitle={specialtyLabel(specialtyCatalog, specialty)}
+            access={inheritsAccess ? (effectiveGroup.access ?? 'full') : access}
+            tools={inheritsAccess ? (effectiveGroup.tools ?? ALL_TOOL_KEYS) : tools}
+            disallowed={inheritsAccess ? (effectiveGroup.disallowedTools ?? []) : parseDisallowed(disallowedText)}
+            onAccess={setAccess}
+            onTools={setTools}
+            onDisallowed={d => setDisallowedText(d.join(', '))}
+            diff={inheritsAccess || !specialtyTemplate ? null : accessDiff(
+              { access, tools, disallowedTools: parseDisallowed(disallowedText) },
+              { access: specialtyTemplate.access, tools: specialtyTemplate.tools, disallowedTools: specialtyTemplate.disallowedTools })}
+          />
         </div>
       </div>
 
@@ -1725,17 +1690,6 @@ function parseDisallowed(s: string): string[] {
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
 
 const TIER_KEY: Record<ModelTierKey, TierKey> = { strong: 'tierStrong', medium: 'tierMedium', weak: 'tierWeak' };
-
-// Сводка унаследованных прав: профиль и (для «Своего») список запретов
-function inheritedAccessText(g: AccessGroup): string {
-  const a = g.access ?? 'full';
-  if (a === 'readOnly') return 'Только чтение';
-  if (a === 'custom') {
-    const d = g.disallowedTools ?? [];
-    return d.length ? `Свой профиль · запрещено: ${d.join(', ')}` : 'Свой профиль';
-  }
-  return 'Полный доступ';
-}
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [

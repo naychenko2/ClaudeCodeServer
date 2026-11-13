@@ -198,6 +198,24 @@ export interface FeatureStageExecutor {
 // только показывает (шаг Ф5).
 export interface FeatureStage {
   key: StageKey;
+  // Графовые поля стадии (G3, разрез 2 §1.7, бэк: FeatureRun.cs:279-292). Аддитивные:
+  // старые ответы их не несут — UI обязан пережить отсутствие; фолбэк модели зеркалит
+  // бэка (id → ключ, after → [], column → 0 — FeatureProjector.cs:804-814), ничего не
+  // пересчитывает (C3a).
+  // Id этапа: у фичи с маршрутом — id этапа маршрута (уникален в графе), у легаси-стадии —
+  // её ключ (бэк: FeatureStage.Id). Выбор стадии — по нему, не по индексу.
+  id?: string;
+  // Роль этапа (ключ TaskRoles): у фичи с маршрутом — из RouteStage.Role, у легаси — роль
+  // её задач (бэк: FeatureStage.Role).
+  role?: string;
+  // Линия этапа (back | front | other) — только у графового этапа роли step, иначе null
+  // (бэк: FeatureStage.Lane).
+  lane?: string | null;
+  // Предшественники в графе — id этапов (бэк: FeatureStage.After): у легаси пусто, графа нет.
+  after?: string[];
+  // Колонка графа = длиннейший путь от корня (бэк: WorkflowGraph.Columns, FeatureRun.cs:290-292);
+  // у легаси-стадии — 0. Фронт группирует строго по этому полю и НЕ пересчитывает колонки.
+  column?: number;
   state: StageState;
   // Тон — только у active, иначе null.
   tone?: StageTone | null;
@@ -416,7 +434,7 @@ export interface FeatureQueue {
 // Старые поля (epic/steps/reviews/qa/final/merge/verdicts/progress/ready) пока
 // использует `FeatureRunView` (страница фичи) — не удалять.
 // Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
-// stepsAccepted/stepsTotal/lastActivityAt/closed/summary) — аддитивные и
+// stepsAccepted/stepsTotal/stagesPassed/stagesTotal/lastActivityAt/closed/summary) — аддитивные и
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
 export interface FeatureRun {
   featureId: string;
@@ -466,6 +484,12 @@ export interface FeatureRun {
   // Счётчик шагов: принятые (Done) / все (из StepChains).
   stepsAccepted?: number;
   stepsTotal?: number;
+  // Счётчик этапов «пройдено N из M» (G3, разрез 2 §1.7, бэк: FeatureRun.cs:91-95): отдельная
+  // ось от процента по шагам (StepProgress не трогается). M — число этапов подтверждённого
+  // маршрута (у легаси-фичи — 0, графа нет); N — стадии с состоянием done. Аддитивное:
+  // старые ответы поля не несут — UI обязан пережить отсутствие.
+  stagesPassed?: number;
+  stagesTotal?: number;
   // Честный прогресс по шагам (волна 3, Ф-pr): planState/total/accepted/review/work/
   // notCreated/withdrawn/unlinkedReworks. Аддитивное: старые ответы не несут.
   stepProgress?: StepProgress;

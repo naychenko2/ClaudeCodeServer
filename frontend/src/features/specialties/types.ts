@@ -125,6 +125,22 @@ export interface SpecialtyPromptSectionsForSpecialty {
   defaultBindings: SpecialtyDefaultBinding[];
 }
 
+// Наследник секций специальности — элемент inheritors из GET /api/specialties/{key} (B09):
+// персона владельца с этой специальностью и число её собственных подмен секций
+// (ownSections — нормализованный слой персоны, только реальные подмены).
+export interface SpecialtyInheritor {
+  personaId: string;
+  name: string;
+  ownSections: number;
+}
+
+// Ответ GET /api/specialties/{key}: подпись специальности и её наследники (B09).
+export interface SpecialtyWithInheritors {
+  key: string;
+  label: string;
+  inheritors: SpecialtyInheritor[];
+}
+
 // Результат POST /api/personas/{id}/bindings/apply-defaults: сколько типовых умений
 // роли ДОБАВЛЕНО в личные привязки персоны (0 — профиль пуст или ничего не подошло).
 export interface ApplyDefaultBindingsResult {

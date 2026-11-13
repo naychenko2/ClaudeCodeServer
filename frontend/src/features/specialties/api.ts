@@ -8,6 +8,7 @@ import type {
   SpecialtyPromptSectionsCatalog,
   SpecialtySettingsLayer,
   SpecialtySettingsResponse,
+  SpecialtyWithInheritors,
 } from '../../types';
 
 // Методы домена; lib/api.ts подмешивает их в объект api spread'ом
@@ -20,6 +21,10 @@ export const specialtiesApi = {
   // их больше нет, и любой такой вызов вернул бы 404.
   specialties: {
     list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
+    // Одна специальность и её наследники (B09): кто из персон вызывающего наследует
+    // её секции и сколько секций у каждой «своё». Пустой key — 404 на бэке.
+    get: (key: string) =>
+      request<SpecialtyWithInheritors>(`/specialties/${encodeURIComponent(key)}`),
     getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
     saveGlobalLayer: (layer: SpecialtySettingsLayer) =>
       request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {

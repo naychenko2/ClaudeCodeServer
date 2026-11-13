@@ -31,6 +31,7 @@ import {
 } from '../../components/ui';
 import { Toolbar, ToolbarIconButton, tbBtnGhost, tbBtnPrimary } from '../../components/Toolbar';
 import { useIsMobile } from '../../lib/breakpoints';
+import { api } from '../../lib/api';
 import type { LayerReducer } from '../../lib/presets';
 import { useModels } from '../../lib/models';
 import { TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
@@ -47,7 +48,7 @@ import {
 import { usePresets, usePreview, formatEffectiveLine, routeDisplayLabel } from '../../lib/presets';
 import type {
   ModelTierValue, PersonaAccess,
-  SpecialtyCatalogEntry, SpecialtyDefaultBinding, SpecialtyPromptSection,
+  SpecialtyCatalogEntry, SpecialtyDefaultBinding, SpecialtyInheritor, SpecialtyPromptSection,
   SpecialtyPromptSectionsCatalog, SpecialtySettingsLayer, SpecialtyTemplateSettings,
 } from '../../types';
 
@@ -131,9 +132,14 @@ export function SpecialtyEditView({
   // Активный раздел формы — локальное состояние (как у визитки роли). При смене
   // roleKey (родитель не перемонтирует экран) возвращаемся на «Общую информацию».
   const [tab, setTab] = useState<RoleTab>('general');
+  // Секции, изменённые последним сохранением (P58): подсветка «изменено только что»
+  // в панели секций. Пересчитывается при каждом успешном сохранении, сбрасывается
+  // при смене роли.
+  const [justChanged, setJustChanged] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс локального UI при смене роли
     setTab('general');
+    setJustChanged(new Set());
   }, [roleKey]);
 
   // Резолв роли из каталога (системные подписи — не редактируются)
@@ -157,6 +163,20 @@ export function SpecialtyEditView({
     void loadPromptSectionsCatalog().then(c => { if (!cancelled && c) setPromptSectionsCatalog(c); });
     return () => { cancelled = true; };
   }, [promptSectionsCatalogProp]);
+
+  // === Наследники секций (B09) ===
+  // Строка «Наследуют: …» панели RolePresetsBlock. Один запрос на роль; успешное
+  // сохранение списка не меняет — «своё» это слой самой персоны, не этот экран.
+  // Ответа нет (несуществующая роль/сеть) — строки нет, остальной экран работает как раньше.
+  const [inheritors, setInheritors] = useState<SpecialtyInheritor[] | null>(null);
+  useEffect(() => {
+    setInheritors(null);
+    let cancelled = false;
+    void api.specialties.get(roleKey)
+      .then(r => { if (!cancelled) setInheritors(r.inheritors ?? []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [roleKey]);
 
   // Запись специальности из слоя (если есть) — инициализация черновика формы
   const initialRec: SpecialtyTemplateSettings = useMemo(() => {
@@ -241,6 +261,16 @@ export function SpecialtyEditView({
     setSaving(true);
     setError(null);
     const draft = recDraft;
+    // До записи — какие секции отличаются от ранее сохранённого состояния:
+    // они получат подсветку «изменено только что» (P58). Сравнение по enabled и
+    // тексту каждой записи; отсутствие записи и пустой список равны («своего нет»).
+    const stateOf = (s: SpecialtyPromptSection): string => `${s.enabled ? 1 : 0}|${s.text ?? ''}`;
+    const prevSections = new Map((lastInitRef.current.promptSections ?? []).map(s => [s.id, stateOf(s)]));
+    const nextSections = new Map((draft.promptSections ?? []).map(s => [s.id, stateOf(s)]));
+    const changedIds = new Set<string>();
+    for (const id of new Set([...prevSections.keys(), ...nextSections.keys()])) {
+      if (prevSections.get(id) !== nextSections.get(id)) changedIds.add(id);
+    }
     const disallowed = draft.access === 'custom' ? parseDisallowed((draft.disallowedTools ?? []).join(', ')) : null;
     const promptSections: SpecialtyPromptSection[] | null = ((draft.promptSections ?? []).length > 0)
       ? (draft.promptSections ?? []).slice()
@@ -275,6 +305,7 @@ export function SpecialtyEditView({
     try {
       await onSave(reducer);
       lastInitRef.current = finalRec;
+      setJustChanged(changedIds);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить роль');
     } finally {
@@ -410,6 +441,8 @@ export function SpecialtyEditView({
                 mode="edit"
                 onSave={applySectionReducer}
                 showTitle={false}
+                inheritors={inheritors}
+                justChanged={justChanged}
               />
             </Section>
 

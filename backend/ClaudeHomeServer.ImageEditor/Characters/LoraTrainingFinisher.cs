@@ -16,7 +16,8 @@ public sealed class LoraTrainingFinisher(
     ILocalLoraTrainer? trainer = null,
     ILocalImageMedia? localMedia = null,
     IProjectFiles? files = null,
-    TimeProvider? time = null) : BackgroundService
+    TimeProvider? time = null,
+    IPersonalProjects? personal = null) : BackgroundService
 {
     public static readonly TimeSpan Interval = TimeSpan.FromSeconds(30);
     // Запись training моложе этого срока «потерянной» не считаем: задача шва заводится до записи, но запас дешевле гонки
@@ -41,6 +42,13 @@ public sealed class LoraTrainingFinisher(
         while (await WaitNextAsync(timer, stoppingToken));
     }
 
+    // «Личное» не отдают ни GetById, ни GetAll (ADR-040 §2.3): id и обход берутся из серверного состояния обучения
+    private Project? ProjectById(string id) =>
+        projects.GetById(id) ?? personal?.GetByIdIncludingPersonal(id);
+
+    private IEnumerable<Project> AllProjects() =>
+        personal is null ? projects.GetAll() : projects.GetAll().Concat(personal.GetAllPersonal());
+
     private static async Task<bool> WaitNextAsync(PeriodicTimer timer, CancellationToken ct)
     {
         try { return await timer.WaitForNextTickAsync(ct); }
@@ -57,7 +65,7 @@ public sealed class LoraTrainingFinisher(
         foreach (var group in trainer.ListAll().GroupBy(s => (s.OwnerId, s.ProjectId, s.Slug)))
         {
             ct.ThrowIfCancellationRequested();
-            if (projects.GetById(group.Key.ProjectId) is { } p) settled.Add((p.RootPath, group.Key.Slug));
+            if (ProjectById(group.Key.ProjectId) is { } p) settled.Add((p.RootPath, group.Key.Slug));
             await SettleAsync(group.Key.OwnerId, group.Key.ProjectId, group.Key.Slug, ct);
         }
 
@@ -65,7 +73,7 @@ public sealed class LoraTrainingFinisher(
         {
             // Записи training без задачи в сторе (откат кода, потеря jobs.json) группой из ListAll не находятся:
             // первичное наполнение индекса, дальше его ведёт CharacterLoraRuns
-            foreach (var project in projects.GetAll())
+            foreach (var project in AllProjects())
             {
                 ct.ThrowIfCancellationRequested();
                 if (project.OwnerId is null || !ProjectCapabilities.FilesOnServer(project) || !Directory.Exists(project.RootPath)) continue;
@@ -74,7 +82,7 @@ public sealed class LoraTrainingFinisher(
                         runs.RegisterTraining(project.RootPath, character.Slug);
             }
 
-            foreach (var project in projects.GetAll())
+            foreach (var project in AllProjects())
             {
                 ct.ThrowIfCancellationRequested();
                 // Файлы локального проекта лежат на устройстве, сервер к ним не ходит
@@ -90,7 +98,7 @@ public sealed class LoraTrainingFinisher(
         var trainingPending = runs.CharactersWithTraining().Where(k => !settled.Contains(k)).ToList();
         if (trainingPending.Count > 0)
         {
-            var roots = projects.GetAll().Where(ProjectCapabilities.FilesOnServer)
+            var roots = AllProjects().Where(ProjectCapabilities.FilesOnServer)
                 .GroupBy(p => p.RootPath).ToDictionary(g => g.Key, g => g.First());
             foreach (var (root, slug) in trainingPending)
             {
@@ -102,7 +110,7 @@ public sealed class LoraTrainingFinisher(
 
         var pending = runs.CharactersWithDeleting().Where(k => !settled.Contains(k)).ToList();
         if (pending.Count == 0) return;
-        var byRoot = projects.GetAll().Where(ProjectCapabilities.FilesOnServer)
+        var byRoot = AllProjects().Where(ProjectCapabilities.FilesOnServer)
             .GroupBy(p => p.RootPath).ToDictionary(g => g.Key, g => g.First());
         foreach (var (root, slug) in pending)
         {
@@ -116,7 +124,7 @@ public sealed class LoraTrainingFinisher(
     public async Task SettleAsync(string ownerId, string projectId, string slug, CancellationToken ct)
     {
         if (trainer is null) return;
-        if (projects.GetById(projectId) is not { } project || project.OwnerId != ownerId || !ProjectCapabilities.FilesOnServer(project)) return;
+        if (ProjectById(projectId) is not { } project || project.OwnerId != ownerId || !ProjectCapabilities.FilesOnServer(project)) return;
         if (CharacterStore.Get(project.RootPath, slug) is null) return;
 
         // Записи читаем ДО снимка задач: задача шва заводится раньше записи, обратный порядок дал бы ложный «lost»

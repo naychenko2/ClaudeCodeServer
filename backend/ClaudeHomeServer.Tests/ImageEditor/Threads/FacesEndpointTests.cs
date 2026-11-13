@@ -19,7 +19,7 @@ namespace ClaudeHomeServer.Tests.ImageEditor.Threads;
 // «Найти лица на версии» (ADR-028, этап 2): POST .../threads/{threadId}/versions/{versionId}/faces.
 // 200 — список лиц + facesKey,
 // повторный запрос на те же байты берётся из кэша (детектор один раз), Busy — 503, Error — 409, оба не кэшируются,
-// версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — 404 (маршрута нет).
+// версии нет — 404 version_not_found, чужая нить — 404 thread_not_found, личная область — тот же маршрут (Ф2-4).
 [Trait("Category", "Host")]
 public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDisposable
 {
@@ -241,9 +241,10 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
         (await Code(resp)).Should().Be(ImageEditErrorCodes.ThreadNotFound);
     }
 
-    // Личная область: маршрута faces нет (404) — персонажей у личного чата нет по построению
+    // Личная область (ADR-040, Ф2-4): маршрут faces есть — у пустого черновика нет картинки версии,
+    // отказ несёт код version_not_found (не 404 маршрутизации без тела)
     [Fact]
-    public async Task Личная_область_маршрута_нет()
+    public async Task Личная_область_маршрут_есть_у_черновика_нет_картинки()
     {
         var chat = await Sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный чат");
         var resp = await _client.PostAsJsonAsync($"/api/image-editor/chats/{chat.Id}/threads",
@@ -253,7 +254,9 @@ public class FacesEndpointTests : IClassFixture<FacesEndpointTests.Host>, IDispo
 
         var faces = await _client.PostAsync($"/api/image-editor/chats/{chat.Id}/threads/{threadId}/versions/{ImageThreadVersion.OriginId}/faces", null!);
 
-        faces.StatusCode.Should().Be(HttpStatusCode.NotFound, "в личной области маршрута faces нет");
+        faces.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await Code(faces)).Should().Be(ImageEditErrorCodes.VersionNotFound);
+        _media.DetectCalls.Should().Be(0, "детектор без картинки не зовётся");
     }
 
     // PNG с узором от seed: разные seed дают разные байты — кэш лиц (ключ — sha256 байт)

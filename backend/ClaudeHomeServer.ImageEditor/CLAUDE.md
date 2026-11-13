@@ -42,8 +42,14 @@ MF-remote `frontend/modules/image-editor` над кодом `frontend/src/featur
 - **Сопоставление «чат ↔ область» — только `ImageEditScope.Of`** (`OwnChat`, `RunningLaunch`,
   восстановление после перезапуска). Инлайновый `?? "personal"` разойдётся, и варианты личного
   запуска молча не станут версиями.
-- У личной области `Project == null`: всё, что читает диск проекта (образцы путями, персонаж,
-  `SourcePath`, `transform` от файла, нить по файлу), отказывает ДО `RootPath`, а не падает.
+- У личной области `Project == null`, пока нет папки «Личного» (ADR-040): всё, что читает диск проекта
+  (образцы путями, персонаж, `SourcePath`, `transform` от файла, нить по файлу), отказывает ДО `RootPath`,
+  а не падает. Персонажи личной области лежат в `{home}/Personal/characters/`: ручки `characters*`, `loras`,
+  `training-photos`, `lora-train`, `lora-versions` и `…/faces` — второй маршрут `api/image-editor/chats/{sessionId}/…`
+  (общее тело — `ImageEditorCharacterEndpoints`; обучение и версии — те же контроллеры с двумя `[Route]`,
+  проект берёт `ImageEditScopeGate.TryCharacterProject`). Читающие ручки папку не создают, первый персонаж
+  (`POST characters`) создаёт её через `EnsurePersonalFolderAsync`. Ключ области остаётся `personal`, а id «Личного»
+  идёт только в ключи обучения LoRA (`LoraTrainingFinisher` находит его через `IPersonalProjects`).
 - Трата личного запуска пишет `ProjectId = null` (`ImageEditScope.ProjectIdOf`), иначе «Расход»
   получит несуществующий проект.
 - **Агент с тулсетом есть и в личном чате** (ADR-019, «Изменение 29.09», агент): сервер

@@ -86,6 +86,37 @@ public sealed class ImageEditScopeGate(
         return true;
     }
 
+    // Проект персонажа по маршруту ручек обучения LoRA: с projectId — гейт проекта, с sessionId (личный чат) —
+    // «Личное» владельца чата. Папки ещё нет — персонажа нет: 404 как у несуществующего slug
+    public bool TryCharacterProject(string userId, string? projectId, string? sessionId,
+        [NotNullWhen(true)] out Project? project, [NotNullWhen(false)] out IActionResult? denied)
+    {
+        if (sessionId is null) return TryProject(userId, projectId ?? "", out project, out denied);
+        project = null;
+        if (!TryPersonalChat(userId, sessionId, out var scope, out denied)) return false;
+        if (scope.Project is not { } folder)
+        {
+            denied = new ObjectResult(new { error = "Персонаж не найден", code = ImageEditErrorCodes.CharacterNotFound })
+            { StatusCode = StatusCodes.Status404NotFound };
+            return false;
+        }
+        project = folder;
+        return true;
+    }
+
+    // Пишущий путь личной области (первый персонаж): «Личное» создаётся лениво (ADR-040 §1.2). Читающие пути
+    // идут через scope.Project из TryPersonalChat и папку не создают. Папку получить нельзя — 503
+    public async Task<(Project? Project, IActionResult? Denied)> EnsurePersonalFolderAsync(
+        ImageEditScope scope, CancellationToken ct)
+    {
+        if (scope.Project is { } have) return (have, null);
+        var made = personal is null ? null : await personal.EnsureAsync(scope.TenantOwnerId, ct);
+        return made is not null
+            ? (made, null)
+            : (null, new ObjectResult(new { error = PersonalFolderResolver.UnavailableText, code = PersonalFolderResolver.UnavailableCode })
+            { StatusCode = StatusCodes.Status503ServiceUnavailable });
+    }
+
     private static ObjectResult ChatNotFound() =>
         new(new { error = "Чат не найден", code = ImageEditErrorCodes.ChatNotFound }) { StatusCode = StatusCodes.Status404NotFound };
 }

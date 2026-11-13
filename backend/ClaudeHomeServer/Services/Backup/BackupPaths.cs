@@ -10,6 +10,9 @@ public static class BackupPaths
     public const string PostRestoreMarker = ".post-restore";
     public const string DefaultBackupDirName = "backups";
     public const string DefaultSecretsDirName = "backups-secrets";
+    // Инкрементальные снимки перед выкаткой: {data}/backups/snapshots. Лежат внутри
+    // дефолтной папки backups, которую ShouldInclude исключает целиком
+    public const string SnapshotsDirName = "snapshots";
 
     // Профили claude CLI: внутри них бэкапим ТОЛЬКО подпапку projects (транскрипты для
     // --resume; они невосстановимы). Всё остальное — `.credentials.json` с OAuth-токенами,

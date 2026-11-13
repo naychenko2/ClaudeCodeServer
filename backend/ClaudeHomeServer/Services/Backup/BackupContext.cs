@@ -10,6 +10,14 @@ public class BackupContext
     public required string SecretsDir { get; init; }
 
     /// <summary>
+    /// Каталог инкрементальных снимков: всегда {data}/backups/snapshots, независимо от
+    /// <see cref="BackupDir"/>. Снимки на жёстких ссылках обязаны жить на одной ФС с data
+    /// и НЕ должны ехать в облачную папку, куда настроен BackupDir (41 ГБ данных).
+    /// </summary>
+    public string SnapshotsDir =>
+        Path.Combine(DataDir, BackupPaths.DefaultBackupDirName, BackupPaths.SnapshotsDirName);
+
+    /// <summary>
     /// Отпечаток инстанса, если он уже есть на диске; null — папки data ещё нет либо
     /// файла в ней нет. Читаем, а НЕ создаём: создание прямо здесь делало бы недостижимой
     /// ветку «усыновить id из архива» в восстановлении — на чистой машине (умер диск,

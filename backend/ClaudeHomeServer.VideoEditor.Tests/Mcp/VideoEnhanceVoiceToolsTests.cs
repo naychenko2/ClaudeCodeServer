@@ -6,6 +6,7 @@ using ClaudeHomeServer.Services.VideoEditor.Contracts;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
 using ClaudeHomeServer.Services.VideoEditor.Scenes;
 using FluentAssertions;
+using Moq;
 using Xunit;
 using static ClaudeHomeServer.Services.VideoEditor.Mcp.VideoEditorToolset;
 
@@ -189,6 +190,35 @@ public sealed class VideoEnhanceVoiceToolsTests
 
         result.IsError.Should().BeFalse(result.Text);
         (voice.Seen!.Model, voice.Seen.VersionId, voice.Seen.ProjectId).Should().Be((null, null, null));
+    }
+
+    [Fact]
+    public async Task Voice_в_личном_чате_с_папкой_Личное_передаёт_шву_null_а_не_id_Личного()
+    {
+        var store = new Mock<ClaudeHomeServer.Services.Composition.IPersonalProjects>();
+        var folder = Path.Combine(Path.GetTempPath(), "voice-personal-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            store.Setup(s => s.GetPersonalOf(FilmWorld.Owner)).Returns(new ClaudeHomeServer.Models.Project
+            {
+                Id = "personal-id", OwnerId = FilmWorld.Owner, RootPath = folder, Kind = ClaudeHomeServer.Models.ProjectKind.Personal,
+            });
+            var voice = new FakeVoice();
+            using var w = new AgentWorld(voice: voice, personalFolder: new ClaudeHomeServer.Services.Composition.PersonalFolderResolver(store.Object));
+            var scene = w.F.Threads.AddScene(w.Owner, AgentWorld.PersonalChat, "",
+                new VideoSceneSettingsDto(null, null, "кадр", "fal", "fal-model", 5, "16:9", false, 1), null, "Личная").Scene!;
+            w.F.Threads.AddLaunch(w.Owner, AgentWorld.PersonalChat, scene.SceneId, new VideoLaunchDto("jf", DateTime.UtcNow, VideoLaunchStatus.Running,
+                false, VideoInitiators.Human, "fal", "fal-model", 1, "т", null, null));
+            w.F.Threads.FinishLaunch(w.Owner, AgentWorld.PersonalChat, scene.SceneId, "jf", VideoLaunchStatus.Done,
+                [new VideoVariantResult(1, 5, 4, false, new VideoCostDto("usd", 0))], VideoSignatures.Snapshot(scene.Settings));
+
+            var result = await w.Call(ToolVoice, new JsonObject { ["sceneId"] = scene.SceneId }, AgentWorld.PersonalChat);
+
+            result.IsError.Should().BeFalse(result.Text);
+            voice.Seen!.ProjectId.Should().BeNull();
+        }
+        finally { Directory.Delete(folder, true); }
     }
 
     [Fact]

@@ -492,7 +492,7 @@ public sealed partial class VideoEditorToolset : IMcpParameterizedToolset
         if (_voice is null)
             return Fail(VideoEditorErrors.ProviderUnavailable, "Модуль «Звук» на этом сервере не подключён: сцену озвучить нельзя");
 
-        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), scope.Project?.Id, session.Id,
+        var started = await _voice.StartAsync(new VideoVoiceRequest(owner, Actor(owner, session), VideoEditScope.ProjectIdOf(scope.Key), session.Id,
             sceneId, versionId, Str(args, "text"), Str(args, "model")), ct);
         if (started.Value is not { } created) return Fail(started.Code, started.Error);
         return Json(new

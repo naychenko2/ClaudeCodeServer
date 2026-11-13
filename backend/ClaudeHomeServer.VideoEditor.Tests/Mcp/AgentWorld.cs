@@ -49,7 +49,8 @@ internal sealed class AgentWorld : IDisposable
 
     public AgentWorld(bool blocking = false, bool agentLaunch = true, bool delegatedDenied = false, bool withGate = true,
         bool withContext = false, IVideoEngine? extraEngine = null, IVideoSceneVoice? voice = null,
-        Func<FilmWorld, PersonalSceneSaver>? personalSaver = null)
+        Func<FilmWorld, PersonalSceneSaver>? personalSaver = null,
+        ClaudeHomeServer.Services.Composition.PersonalFolderResolver? personalFolder = null)
     {
         F = new FilmWorld(new ToolDsp(), withContext);
         Engine = new FakeEngine("fal", blocking);
@@ -76,7 +77,7 @@ internal sealed class AgentWorld : IDisposable
 
         Toolset = new VideoEditorToolset(accessor.Object, projects.Object, [Engine], F.JobThreads, Jobs, Prefs,
             Scenes, F.Service, Saver, Assembler, withGate ? Gate.Object : null, config, voice: voice,
-            personalSaver: personalSaver?.Invoke(F));
+            personalSaver: personalSaver?.Invoke(F), personalFolder: personalFolder);
 
         // Ручки человека поверх тех же сервисов: гейт — настоящий, поверх подставных справочников
         var access = new Mock<ClaudeHomeServer.Services.Access.IProjectAccess>();

@@ -113,7 +113,7 @@ export function templateSnapshot(t: WorkflowTemplate): string {
       role: s.role, presence: s.presence,
       specialty: s.specialty ?? null, personaId: s.personaId ?? null,
       prompt: s.prompt ?? '', tierStrong: s.tierStrong ?? null, tierMedium: s.tierMedium ?? null,
-      tierWeak: s.tierWeak ?? null, disallowedTools: s.disallowedTools ?? null,
+      tierWeak: s.tierWeak ?? null, defaultTier: s.defaultTier ?? null, disallowedTools: s.disallowedTools ?? null,
       mcpAllow: s.mcpAllow ?? null, stallMinutes: s.stallMinutes ?? null,
       stallPolicy: s.stallPolicy ?? null,
     })),

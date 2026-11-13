@@ -67,7 +67,7 @@ describe('F23: настройка этапа в редакторе', () => {
   it('пока этап не выбран — панели нет, строки не раскрыты', async () => {
     const m = await openTemplate();
     expect(findNodeByAttr(m.container, 'data-stage-settings', '')).toBeNull();
-    expect(text(m)).not.toContain('Присутствие');
+    expect(text(m)).not.toContain('Есть в маршруте');
   });
 
   it('клик по строке «Ревью» открывает панель «Этап «Ревью» review»; «✕» закрывает', async () => {
@@ -78,7 +78,7 @@ describe('F23: настройка этапа в редакторе', () => {
     const t = text(m);
     expect(t).toContain('Этап «Ревью»');
     expect(t).toContain('review');
-    expect(t).toContain('Присутствие');
+    expect(t).toContain('Есть в маршруте');
     click(findNodeByAttr(m.container, 'aria-label', 'Закрыть настройку этапа')!);
     expect(findNodeByAttr(m.container, 'data-stage-settings', '')).toBeNull();
   });

@@ -36,7 +36,7 @@ describe('настройка этапа — оболочка', () => {
     expect(h).toContain('review');
     expect(h).toContain('aria-label="Закрыть настройку этапа"');
     expect(h).not.toContain('Готово');
-    expect(h).toContain('Присутствие');
+    expect(h).toContain('Есть в маршруте');
   });
 
   it('мобила: экран на всю область с «‹» и «Готово», без шторки 540px', () => {
@@ -53,7 +53,7 @@ describe('настройка этапа — оболочка', () => {
     const h = html(null);
     expect(h).toContain('Этап не выбран');
     expect(h).toContain('появятся исполнитель, промпт, модели, права и таймаут');
-    expect(h).not.toContain('Присутствие');
+    expect(h).not.toContain('Есть в маршруте');
   });
 });
 
@@ -72,6 +72,6 @@ describe('строка этапа — выбор', () => {
   });
 
   it('строка не раскрывается: полей настройки в ней нет', () => {
-    expect(row(true)).not.toContain('Присутствие');
+    expect(row(true)).not.toContain('Есть в маршруте');
   });
 });

@@ -149,4 +149,14 @@ describe('FeatureProcessGraph: раскладка (F07)', () => {
     expect(all).toHaveLength(2); // колонки 2 и 3
     expect(byId(container, 'pgraph-edge-qa-plan-final')!.getAttribute('stroke-dasharray')).toBe('5 4');
   });
+
+  it('прокрутка по X — только у ленты графа; корень секции и заголовок не прокручиваются', () => {
+    for (const mobile of [false, true]) {
+      mobileFlag.value = mobile;
+      const { container } = mount(createElement(FeatureProcessGraph, { run: run() }));
+      expect(styleOf(byId(container, 'feature-process-graph')).overflowX).toBe('auto');
+      expect(styleOf(byId(container, 'feature-process-section')).overflowX).toBeUndefined();
+      expect(styleOf(byId(container, 'pgraph-legend')).overflowX).toBeUndefined();
+    }
+  });
 });

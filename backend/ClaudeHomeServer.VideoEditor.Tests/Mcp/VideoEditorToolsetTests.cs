@@ -445,7 +445,7 @@ public sealed class VideoEditorToolsetTests
         using var w = new AgentWorld();
 
         (await w.Call(ToolNew, new JsonObject { ["folder"] = "docs" })).Text.Should().Contain(VideoEditorErrors.OutsideAllowedFolders);
-        (await w.Call(ToolNew, new JsonObject { ["folder"] = "video/a" }, AgentWorld.PersonalChat)).IsError.Should().BeTrue();
+        (await w.Call(ToolNew, new JsonObject { ["folder"] = "docs" }, AgentWorld.PersonalChat)).Text.Should().Contain(VideoEditorErrors.OutsideAllowedFolders);
         w.F.Threads.Get(w.Owner, w.Chat).Scenes.Should().BeEmpty();
     }
 
@@ -516,7 +516,7 @@ public sealed class VideoEditorToolsetTests
         var state = AgentWorld.Parse(await w.Call(ToolState, chat: AgentWorld.PersonalChat));
 
         state["films"].Should().BeNull();
-        state["note"]!.GetValue<string>().Should().Contain("фильмов и файлов проекта тут нет");
+        state["note"]!.GetValue<string>().Should().Contain("файлы и фильмы здесь — в «Личном»");
     }
 
     [Fact]

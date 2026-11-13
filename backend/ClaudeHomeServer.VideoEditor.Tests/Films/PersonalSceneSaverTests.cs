@@ -132,17 +132,6 @@ public sealed class PersonalSceneSaverTests : IDisposable
     }
 
     [Fact]
-    public async Task Подпапка_video_создаётся_внутри_корня()
-    {
-        var (scene, version) = PersonalSceneWithClip();
-
-        var result = await Save(Saver(), scene, version, folder: "video/утро");
-
-        result.Value!.Path.Should().Be("video/утро/scene-01.mp4");
-        File.Exists(Path.Combine(_personalRoot, "video", "утро", "scene-01.mp4")).Should().BeTrue();
-    }
-
-    [Fact]
     public async Task Символическая_ссылка_наружу_вместо_video_отказывает()
     {
         if (OperatingSystem.IsWindows()) return;

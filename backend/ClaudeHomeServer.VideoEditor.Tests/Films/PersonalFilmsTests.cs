@@ -282,7 +282,10 @@ public sealed class PersonalFilmsTests : IDisposable
     [Fact]
     public void Сборка_в_личной_области_без_папки_отказывает_до_диска()
     {
-        var assembler = new FilmAssembler(_w.Service, _w.Registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance);
+        var dsp = new Mock<IVideoDsp>();
+        dsp.SetupGet(d => d.Available).Returns(true);
+        var assembler = new FilmAssembler(_w.Service, _w.Registry, new ConfigurationBuilder().Build(), NullLogger<FilmAssembler>.Instance,
+            dsp.Object);
 
         assembler.Start(Owner, Owner, new VideoEditScope(VideoEditScope.Personal, null), "video/a/a.film", VideoInitiators.Human)
             .ErrorCode.Should().Be(VideoEditorErrors.PersonalScopeNoFilms);

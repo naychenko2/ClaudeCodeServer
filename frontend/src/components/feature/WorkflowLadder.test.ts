@@ -90,6 +90,18 @@ describe('WorkflowLadder', () => {
     expect(pill.style.border).toContain('var(--c-success)');
   });
 
+  it('тач-цель: minHeight ≥ 40 у чипа лестницы и у чипа возврата в «Снято»', () => {
+    for (const isMobile of [false, true]) {
+      const { container: c } = render({ removedIds: ['qa-plan'], isMobile });
+      const inLadder = findNodeByAttr(c, 'data-ladder-chip', 'back')!;
+      const back = findNodeByAttr(findNodeByAttr(c, 'data-testid', 'workflow-ladder-removed')!, 'data-ladder-chip', 'qa-plan')!;
+      for (const n of [inLadder, back]) {
+        const style = reactProps(n)!.style as { minHeight: number };
+        expect(style.minHeight).toBeGreaterThanOrEqual(40);
+      }
+    }
+  });
+
   it('readonly: съёмные чипы без onClick', () => {
     const { container: c } = render({ mode: 'readonly' });
     const chip = findNodeByAttr(c, 'data-ladder-chip', 'qa-plan')!;

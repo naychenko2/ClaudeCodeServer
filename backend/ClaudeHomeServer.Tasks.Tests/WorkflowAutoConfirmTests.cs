@@ -18,7 +18,7 @@ public class WorkflowAutoConfirmTests : IDisposable
     {
         Directory.CreateDirectory(_dir);
         _store = new WorkflowTemplateStore(Path.Combine(_dir, "workflow-templates.json"));
-        _tasks = new TaskManager(Config());
+        _tasks = new TaskManager(Config(), workflows: _store);
     }
 
     private IConfiguration Config() => new ConfigurationBuilder()
@@ -117,6 +117,24 @@ public class WorkflowAutoConfirmTests : IDisposable
         wf.Stages.Should().NotBeEmpty();
     }
 
+    // Гейт запуска: фича в режиме маршрута (RouteRequired=true) до авто-подтверждения закрыта, после — открыта
+    [Fact]
+    public void РежимМаршрута_АвтоПодтверждениеОткрываетГейтЗапуска()
+    {
+        var tpl = Template();
+        var epic = Epic();
+        epic.RouteRequired.Should().BeTrue();
+        var step = new TaskItem { OwnerId = Owner, FeatureId = epic.Id, Role = TaskRoles.Step };
+        _tasks.FeatureRouteLaunchRefusal(step).Should().NotBeNull();
+
+        MakeService(new StubRunner()).TryAutoConfirm(epic.Id, Obvious(tpl.Id)).Should().NotBeNull();
+
+        var wf = _tasks.GetById(epic.Id)!.Workflow!;
+        wf.AutoConfirmed.Should().BeTrue();
+        wf.ConfirmedByUser.Should().BeFalse();
+        _tasks.FeatureRouteLaunchRefusal(step).Should().BeNull();
+    }
+
     [Fact]
     public void НуженЧеловек_ИлиПричина_ИлиСнятыЭтапы_МаршрутаНет()
     {
@@ -131,7 +149,9 @@ public class WorkflowAutoConfirmTests : IDisposable
         foreach (var p in variants)
         {
             var epic = Epic();
+            _tasks.SetWorkflowProposal(epic.Id, p);
             service.TryAutoConfirm(epic.Id, p).Should().BeNull();
+            _tasks.GetById(epic.Id)!.WorkflowProposal.Should().NotBeNull();
             _tasks.GetById(epic.Id)!.Workflow.Should().BeNull();
         }
     }
@@ -189,8 +209,10 @@ public class WorkflowAutoConfirmTests : IDisposable
         var proposal = Obvious(tpl.Id);
         _store.Delete(tpl.Id, WorkflowTemplateScope.Global);
 
+        _tasks.SetWorkflowProposal(epic.Id, proposal);
         MakeService(new StubRunner()).TryAutoConfirm(epic.Id, proposal).Should().BeNull();
         _tasks.GetById(epic.Id)!.Workflow.Should().BeNull();
+        _tasks.GetById(epic.Id)!.WorkflowProposal.Should().NotBeNull();
     }
 
     // Весь фоновый путь: RecommendAsync + TryAutoConfirm по очевидному ответу модели

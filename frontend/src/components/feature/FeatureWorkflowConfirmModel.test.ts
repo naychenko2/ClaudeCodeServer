@@ -1,6 +1,8 @@
 // Тесты модели блока подтверждения маршрута (C2): confirmBody по id и только по съёмным
-// (дубль роли 'qa' с id 'qa-plan' — снятие по id, не по роли); «шаблон изменился» — только
-// при смене набора id (правка промпта/версии тот же состав — не перемена); начальное снятие
+// (дубль роли 'qa' с id 'qa-plan' — снятие по id, не по роли; порядок skipped — порядок
+// маршрута, вход намеренно обратный); «шаблон изменился» — только при смене набора id
+// (правка промпта/версии тот же состав — не перемена; этапы 'off' вне сравнения);
+// начальное снятие
 // из предложения — только съёмное в показанном шаблоне; выбор стартового шаблона по id+scope;
 // гонка recommend: устаревший ответ после смены featureId не применяется. Окружение node:
 // модель чистая — ни DOM, ни запросов.
@@ -52,7 +54,9 @@ describe('isRemovableStage / снятие этапов', () => {
   });
 
   it('confirmBody: несъёмные этапы в skipped не попадают, порядок — как в маршруте', () => {
-    const body = confirmBodyOf(baseTemplate(), 'global', ['step', 'final', 'merge', 'review', 'qa', 'нет-такого']);
+    // Входной порядок — ОБРАТНЫЙ порядку маршрута (qa раньше review): иначе тест
+    // не отличает «порядок маршрута» от «порядка вызывающего» и вырождается.
+    const body = confirmBodyOf(baseTemplate(), 'global', ['qa', 'review', 'merge', 'final', 'step', 'нет-такого']);
     expect(body).toEqual({
       templateId: 'full-cycle',
       scope: 'global',
@@ -107,6 +111,20 @@ describe('templateChanged / строка «шаблон изменился»', (
       stages: baseTemplate().stages.map(s => (s.role === 'review' ? { ...s, id: 'review-2' } : s)),
     });
     expect(templateChanged(CONFIRMED, renamed)).toBe(true);
+  });
+
+  it("этап 'off' вне сравнения: живой шаблон с выключенным этапом — не перемена", () => {
+    // 'audit' с presence='off' не был в маршруте и не записан в skipped — считать его
+    // в состав нельзя: при живом шаблоне с выключенным этапом это была бы ложная «перемена».
+    const withOff = baseTemplate({
+      stages: [...baseTemplate().stages, st({ id: 'audit', role: 'review', presence: 'off' })],
+    });
+    expect(templateChanged(CONFIRMED, withOff)).toBe(false);
+    // Тот же этап, включённый ('on'), вошёл бы в состав — это перемена.
+    const onAgain = baseTemplate({
+      stages: [...baseTemplate().stages, st({ id: 'audit', role: 'review' })],
+    });
+    expect(templateChanged(CONFIRMED, onAgain)).toBe(true);
   });
 
   it('снятый при подтверждении optional-этап живёт в шаблоне optional — состава это не меняет', () => {

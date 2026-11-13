@@ -170,7 +170,15 @@ export function FeatureWorkflowConfirm({
   // Предложенного/подтверждённого шаблона нет в каталоге (например, удалён): сказать прямо,
   // человек выбирает другой — «удалённый шаблон не ломает идущие фичи» (§4).
   const missingTemplate = !loading && !selectedEntry && (!!shownProposal || !!confirmed);
-  const updateText = templateUpdateText(confirmed ?? null, selectedEntry?.template ?? null);
+  // Строка «шаблон изменился» — только про правку ПОДТВЁЖДЁННОГО шаблона (§4): ищем в
+  // каталоге его (по id+scope), а не выбранный в Select. Выбор другого шаблона — смена
+  // выбора, не правка маршрута (ложной строки нет); правка подтверждённого шаблона при
+  // выбранном другом — истинный сигнал не теряется.
+  const confirmedTemplate = useMemo(() => {
+    if (!entries || !confirmed) return null;
+    return entries.find(e => e.template?.id === confirmed.templateId && e.scope === confirmed.scope)?.template ?? null;
+  }, [entries, confirmed]);
+  const updateText = templateUpdateText(confirmed ?? null, confirmedTemplate);
   const canConfirm = !!selectedEntry && !busyConfirm;
 
   const templateOptions = (entries ?? []).map(e => ({

@@ -27,6 +27,9 @@ export interface ConfirmedRoute {
   skipped: string[];
   // Версия шаблона на момент подтверждения: с неё сравнивается «шаблон изменился».
   confirmedVersion: number;
+  // Подтверждение сделано моделью (бэк: `FeatureWorkflow.AutoConfirmed`): true — строка
+  // блока говорит «выбрано моделью — можно сменить». Отсутствует/false — «подтверждён вами».
+  autoConfirmed?: boolean;
 }
 
 // Съёмный ли этап: presence='optional' и роль съёмная. Несъёмные (step/merge/final) — без
@@ -127,4 +130,44 @@ export function applyRecommend(
   proposal: WorkflowProposal | null,
 ): WorkflowProposal | null {
   return requestedFeatureId === currentFeatureId ? proposal : null;
+}
+
+// Состояние блока маршрута на экране фичи (M4): 'none' — режим маршрута, но предложения
+// нет (модель не ответила / ответ не разобран); 'proposal' — предложение есть;
+// 'confirmed' — маршрут подтверждён; null — не режим маршрута (легаси-эпик): блока нет.
+// Порядок решения — по силе факта: подтверждённый важнее предложения, предложение важнее
+// пустоты; routeRequired включает блок только когда ни того, ни другого нет.
+export type RouteBlockState = 'none' | 'proposal' | 'confirmed';
+
+export function routeBlockState(
+  routeRequired: boolean | null | undefined,
+  proposal: WorkflowProposal | null | undefined,
+  confirmed: ConfirmedRoute | null | undefined,
+): RouteBlockState | null {
+  if (confirmed) return 'confirmed';
+  if (proposal) return 'proposal';
+  if (routeRequired === true) return 'none';
+  return null;
+}
+
+// Постоянная строка о подтверждённом маршруте (M4): кто выбрал и что снято. Этапы
+// маршрута в строку не перечисляются — они только в графе. Имя снятого этапа — title
+// этапа шаблона с этим id (после нормализации id = роль), иначе сам id: замороженного
+// RouteStage.Title здесь нет — строка строится по шаблону, он под рукой.
+export function confirmedLineText(route: ConfirmedRoute, template: WorkflowTemplate | null): string {
+  const parts: string[] = [
+    template?.name || route.templateId,
+    `v${route.confirmedVersion}`,
+  ];
+  const skipped = route.skipped ?? [];
+  if (skipped.length > 0) {
+    const titles = new Map(
+      normalizeStages(template?.stages ?? [])
+        .map(s => [(s.id ?? '').trim(), (s.title ?? '').trim()] as const)
+        .filter(([id, title]) => id && title),
+    );
+    parts.push(`снято: ${skipped.map(id => titles.get(id) ?? id).join(', ')}`);
+  }
+  parts.push(route.autoConfirmed === true ? 'выбрано моделью — можно сменить' : 'подтверждён вами');
+  return parts.join(' · ');
 }

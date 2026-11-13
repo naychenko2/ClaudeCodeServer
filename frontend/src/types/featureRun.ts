@@ -76,6 +76,10 @@ export interface FeatureTask {
   // другого — блока подтверждения у него нет.
   workflowProposal?: WorkflowProposal | null;
   workflow?: ConfirmedRoute | null;
+  // Режим маршрута (бэк: `TaskItem.RouteRequired`): true — блок маршрута показывается,
+  // даже когда предложения нет (модель не ответила / ответ не разобран). У легаси-эпика
+  // поля нет (undefined/null) — блока нет.
+  routeRequired?: boolean | null;
 }
 
 // Голос фичи на wire (зеркало бэкового `FeatureNote`, camelCase; bySessionId наружу

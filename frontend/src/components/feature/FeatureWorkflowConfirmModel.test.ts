@@ -4,13 +4,15 @@
 // (правка промпта/версии тот же состав — не перемена; этапы 'off' вне сравнения);
 // начальное снятие
 // из предложения — только съёмное в показанном шаблоне; выбор стартового шаблона по id+scope;
-// гонка recommend: устаревший ответ после смены featureId не применяется. Окружение node:
+// гонка recommend: устаревший ответ после смены featureId не применяется; M4: состояние
+// блока маршрута (none/proposal/confirmed/легаси-null) и строка о подтверждённом маршруте
+// (имя шаблона · версия · снятые этапы по title шаблона · кто выбрал). Окружение node:
 // модель чистая — ни DOM, ни запросов.
 
 import { describe, it, expect } from 'vitest';
 import {
-  applyRecommend, confirmBodyOf, initialRemovedIds, isRemovableStage,
-  pickInitialTemplate, templateChanged, templateUpdateText, type ConfirmedRoute,
+  applyRecommend, confirmBodyOf, confirmedLineText, initialRemovedIds, isRemovableStage,
+  pickInitialTemplate, routeBlockState, templateChanged, templateUpdateText, type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from '../../features/workflowTemplates/types';
 
@@ -194,5 +196,70 @@ describe('гонка «Подобрать маршрут»', () => {
 
   it('устаревший ответ recommend после смены featureId не применяется', () => {
     expect(applyRecommend('f1', 'f2', proposal)).toBeNull();
+  });
+});
+
+describe('routeBlockState / состояние блока маршрута (M4)', () => {
+  const proposal = { templateId: 'full-cycle', scope: 'global' as const, skipped: [] };
+
+  it('режим маршрута без предложения — none', () => {
+    expect(routeBlockState(true, null, null)).toBe('none');
+    expect(routeBlockState(true, undefined, undefined)).toBe('none');
+  });
+
+  it('есть предложение — proposal', () => {
+    expect(routeBlockState(true, proposal, null)).toBe('proposal');
+    // routeRequired false при живом предложении — предложение важнее.
+    expect(routeBlockState(false, proposal, null)).toBe('proposal');
+  });
+
+  it('подтверждённый маршрут — confirmed при любых остальных аргументах', () => {
+    expect(routeBlockState(true, null, CONFIRMED)).toBe('confirmed');
+    expect(routeBlockState(false, proposal, CONFIRMED)).toBe('confirmed');
+    expect(routeBlockState(undefined, undefined, CONFIRMED)).toBe('confirmed');
+  });
+
+  it('не режим маршрута (легаси: routeRequired нет/false) — null, блока нет', () => {
+    expect(routeBlockState(undefined, null, null)).toBeNull();
+    expect(routeBlockState(null, null, null)).toBeNull();
+    expect(routeBlockState(false, null, null)).toBeNull();
+  });
+});
+
+describe('confirmedLineText / строка о подтверждённом маршруте (M4)', () => {
+  // Тот же шаблон, но у снятого optional-'qa' есть title — по нему строка называет этап.
+  const titledTemplate = baseTemplate({
+    stages: baseTemplate().stages.map(s => (s.role === 'qa' ? { ...s, title: 'Проверка' } : s)),
+  });
+
+  it('autoConfirmed со снятым этапом: имя · vN · снято: <title> · выбрано моделью', () => {
+    expect(confirmedLineText({ ...CONFIRMED, autoConfirmed: true }, titledTemplate))
+      .toBe('Полный цикл · v3 · снято: Проверка · выбрано моделью — можно сменить');
+  });
+
+  it('autoConfirmed не задан, снятых нет: подтверждён вами', () => {
+    const noSkipped = { ...CONFIRMED, skipped: [] };
+    expect(confirmedLineText(noSkipped, baseTemplate()))
+      .toBe('Полный цикл · v3 · подтверждён вами');
+    // autoConfirmed=false — то же, что не задан.
+    expect(confirmedLineText({ ...noSkipped, autoConfirmed: false }, baseTemplate()))
+      .toBe('Полный цикл · v3 · подтверждён вами');
+  });
+
+  it('шаблона нет: имя = templateId, имя снятого этапа = его id', () => {
+    expect(confirmedLineText(CONFIRMED, null))
+      .toBe('full-cycle · v3 · снято: qa · подтверждён вами');
+  });
+
+  it('этап без title — его id; несколько снятых — через «, » в порядке skipped', () => {
+    const twoSkipped = { ...CONFIRMED, skipped: ['review', 'qa'] };
+    expect(confirmedLineText(twoSkipped, baseTemplate()))
+      .toBe('Полный цикл · v3 · снято: review, qa · подтверждён вами');
+    // review с title, qa без — смешанная подпись.
+    const reviewTitled = baseTemplate({
+      stages: baseTemplate().stages.map(s => (s.role === 'review' ? { ...s, title: 'Ревью плана' } : s)),
+    });
+    expect(confirmedLineText({ ...twoSkipped, autoConfirmed: true }, reviewTitled))
+      .toBe('Полный цикл · v3 · снято: Ревью плана, qa · выбрано моделью — можно сменить');
   });
 });

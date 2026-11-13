@@ -39,6 +39,12 @@ function render(props: Partial<Parameters<typeof FeatureStageInput>[0]> = {}) {
 }
 const text = (c: FNode) => textNodes(c).join('|');
 const get = (c: FNode, id: string) => findNodeByAttr(c, 'data-testid', id);
+function findAll(c: FNode, id: string): FNode[] {
+  const out: FNode[] = [];
+  const walk = (x: FNode) => { if (x.nodeType === 1 && x.getAttribute?.('data-testid') === id) out.push(x); for (const ch of x.childNodes) walk(ch); };
+  walk(c);
+  return out;
+}
 
 describe('splitPromptSections', () => {
   it('три секции: правила+делегирование, этап, задача+контекст', () => {
@@ -82,6 +88,21 @@ describe('FeatureStageInput', () => {
     expect(textNodes(get(c, 'stage-files-read')!).join('')).toContain('Прочитанные файлы · 2');
     const rows = textNodes(get(c, 'stage-tool-calls')!).join('|');
     expect(rows).toContain('Read|2|17:01');
+  });
+
+  it('21 файл: при лимите 3 — три чипа и «ещё 18»; сумма «Раз» равна числу вызовов', () => {
+    const files = Array.from({ length: 21 }, (_, i) => `/x/F${i}.cs`);
+    const calls = [...files.map(f => call('Read', f, at(16, 0))), call('Edit', null, at(17, 0)), call('Edit', null, at(17, 5))];
+    const c = render({ input: input({ filesRead: files, toolCalls: calls, toolCallsTotal: calls.length }) });
+    expect(textNodes(get(c, 'stage-files-read')!).join('')).toContain('Прочитанные файлы · 21');
+    expect(findAll(c, 'stage-file-chip').length).toBe(3);
+    expect(text(get(c, 'stage-files-more')!)).toContain('ещё 18');
+    const t = textNodes(get(c, 'stage-tool-calls')!).join('|');
+    expect(t).toContain('Инструмент');
+    expect(t).toContain('Раз');
+    expect(t).toContain('Последний');
+    const sum = findAll(c, 'stage-tool-row').reduce((a, r) => a + Number(textNodes(r)[1]), 0);
+    expect(sum).toBe(calls.length);
   });
 
   it('кнопка перехода в чат: есть при executorSessionId и зовёт onOpenChat, без него нет', () => {

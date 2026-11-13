@@ -99,7 +99,7 @@ export function fileChips(files: string[], calls: StageToolCall[]): FileChip[] {
   return files.map(path => ({ path, name: path.split('/').pop() || path, count: Math.max(1, reads.get(path) ?? 1) }));
 }
 
-const FILES_SHOWN = 6;
+const FILES_SHOWN = 3;
 
 function Collapsible({ id, title, children, isMobile, hint, badge, defaultOpen = false }: {
   id: string; title: string; children: React.ReactNode; isMobile: boolean;

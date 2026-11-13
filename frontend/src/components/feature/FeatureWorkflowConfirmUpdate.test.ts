@@ -72,6 +72,8 @@ describe('FeatureWorkflowConfirm: карточка «шаблон изменил
     expect(findNodeByAttr(c, 'aria-label', 'Этап «Общее ревью» включён в маршрут, новый этап')).not.toBeNull();
     expect(text(c)).toContain('В v2 «Общее ревью» стала обязательной.');
     expect(text(c)).toContain('Настройки этапов действуют со следующего шага без подтверждения.');
+    expect(text(c)).toContain('Обновить маршрут до v2');
+    expect(text(c)).toContain('Оставить v1');
     // Обычный редактор под карточкой молчит.
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm-submit')).toBeNull();
   });
@@ -88,6 +90,7 @@ describe('FeatureWorkflowConfirm: карточка «шаблон изменил
     api.entries = [entry(tpl(2, [NEW_REVIEW]))];
     const c = await render(CONFIRMED);
     await click(c, 'feature-workflow-confirm-update-keep');
+    expect(api.keep).toHaveBeenCalledTimes(1);
     expect(api.keep).toHaveBeenCalledWith('f1', 2);
     expect(api.confirm).not.toHaveBeenCalled();
   });

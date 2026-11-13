@@ -294,6 +294,17 @@ scope.HasFolder => Project is not null   // новый признак: «ест�
 - Тексты: «скачать может только человек» → «сохранить в «Личное»» в MCP-тулсетах, схемах инструментов и `*StateContributor` (картинки, звук, видео), в `LocalMediaDefaultContributor.PersonalVideoEditorRule`. Фронт (кнопки, «Скачать» → «Сохранить в Личное») — Ф2-7.
 - `AudioConcatService:173/227`, `AudioOpInputs:116`, `VideoSceneService.SettingsProblem`, `VideoFrameReader`, `DspAudioEngine` переведены на `HasFolder`; для не-личной области поведение прежнее.
 
+**Что реально сделано в Ф2-6 (расхождения с текстом ADR):**
+
+- Тело ручек фильмов вынесено из `FilmController` в базу `FilmEndpoints`; `PersonalFilmController` отдаёт ту же реализацию (`api/video-editor/chats/{sessionId}/films…`). `personal_scope_no_films` для области с папкой исчез; остался только как отказ «папка недоступна» (`FilmService.ProjectOf`, текст `PersonalFolderResolver.UnavailableText`) и в `FilmsRefusal` тулсета. `FilmHttp.PersonalRefusal` удалён.
+- GET и отказы папку не создают: без папки список фильмов пуст (200), состояние/правка/сборка/музыка — 404 `file_not_found`, статус сборки — 404 `job_not_found`. Создаёт папку только `POST films` (`WithFolderAsync`) и сохранение сцены (`PersonalSceneSaver`). Чат берётся из маршрута: `sessionId` из query/тела личных ручек не читается (правка и сборка идут от этого чата; тело `films/music` игнорируется).
+- «Сохранить сцену» в «Личное» остаётся в `PersonalSceneSaver`, он делегирует `FilmSceneSaver`, если названа `filmPath` либо папка (запроса или сцены) лежит в `video/<фильм>`; иначе, как в Ф2-3, плоский клип `Personal/video/scene-NN.mp4`. Поведение Ф2-3 меняется только для `folder = video/<x>`: раньше плоский клип в подпапку, теперь сохранение в фильм.
+- Папка сцены личной области (`VideoSceneService.FolderProblem`) принимается по форме (video/**), без проверки ссылок, если «Личного» ещё нет; `FocusAsync` принимает путь фильма. `VideoContextKind` берёт «Личное» через `PersonalFolderResolver.Find` (только для чата без проекта), `SpentOf` в `VideoEditorStateContributor` включён для личной области.
+- Расхождение: `FilmMusicComposer` не использует `GetByIdIncludingPersonal`. Ключ ожидания музыки у личной области — `personal`, а не id «Личного», поэтому проект берётся через `PersonalFolderResolver.Find(ownerId)` (id из серверного состояния нет). Сторож `PersonalProjectAccessAllowList.txt` не менялся. Музыка личного фильма ложится в `Personal/music/` (общий `FilmPaths.MusicRoot`), а не в `Personal/audio/`.
+- Переименования и удаления фильмов в вертикали нет (файлы правит «Мои файлы», вне шага), поэтому тестов на них нет.
+- Вне вертикали: `LocalMediaDefaultContributor.PersonalVideoEditorRule` («Фильмов в этом чате нет» убрано) и его тест.
+- Фронту (Ф2-7): личные ручки фильмов теперь живые; `GET films` без папки — `[]`; создание фильма и сохранение сцены создают папку; в «Сохранить сцену» передавать `filmPath`/`folder` для сохранения в фильм.
+
 Порядок: Ф2-1 → Ф2-2 → {Ф2-3, Ф2-4, Ф2-5 параллельно после Ф2-2} → Ф2-6 → Ф2-7 → Ф2-8. Файлы вертикалей не пересекаются между Ф2-3/4/5 (картинки/звук/видео), общий — только Ф2-2. Шаг «бэкап» отдельным не выделяется: фильтр уже пропускает файл (п. 1.4), правка — одна строка теста и `ValidateBackupPath` в Ф2-1.
 
 ## 8. Вопросы к Андрею (закрыты 2026-11-13: приняты все рекомендации)

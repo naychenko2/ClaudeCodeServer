@@ -32,6 +32,11 @@ namespace ClaudeHomeServer.Tests.Controllers;
 // LI-2: PUT, включивший ночной разбор, заводит вику (pages/_schema.md): человек поставил
 // тумблер, а ночная служба вики не заводит. PUT класса или автоприменения вики не заводит;
 // svc (403) и выключенный флаг (409) до заведения не доходят; GET остаётся читающим.
+//
+// W6b: GET несёт список исполнителей ночи (nightly.executors — из подменённого шва
+// LocalExecutorsFor, порядок включительно) и разбивку итога по ним (lastNight.executors —
+// счётчики из файла + подпись из текущего списка). Оба — только имена и числа: ни текста,
+// ни причин. PUT их не принимает: тело с полем executors читается так, будто его нет.
 public class WikiSettingsControllerTests : IDisposable
 {
     private const string User = "u1";
@@ -287,6 +292,98 @@ public class WikiSettingsControllerTests : IDisposable
         dto.LastNight.Should().BeNull();
     }
 
+    // ─── W6b: список исполнителей (только чтение) и разбивка итога по ним ───────
+
+    [Fact]
+    public async Task GETНесётСписокИсполнителейИзШва_ПорядокКакВСписке()
+    {
+        // Список принадлежит инстансу и одинаков для всех владельцев: в ответ идёт ровно то,
+        // что вернул LocalExecutorsFor(wiki-nightly), в его порядке — без чисел и слотов.
+        _llm.Executors = [new("gemma", "Gemma 3 27B", 1), new("qwen", "Qwen3 Coder", 2)];
+
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.Nightly.Executors.Should().HaveCount(2);
+        dto.Nightly.Executors.Select(e => e.Engine).Should().Equal("gemma", "qwen");
+        dto.Nightly.Executors.Select(e => e.Title).Should().Equal("Gemma 3 27B", "Qwen3 Coder");
+    }
+
+    [Fact]
+    public async Task GETБезИсполнителейОтдаётПустойМассив()
+    {
+        // «Исполнителей нет» — состояние, а не отсутствие блока: пустой список — пустой
+        // массив (тот же ответ, что у состава без шва).
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        dto.Nightly.Executors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task LastNight_ExecutorsNumbersOnly()
+    {
+        // Разбивка итога по исполнителям (W6a → W6b): в строке только engine/title и числа
+        // файла — ни текста, ни причин (инвариант блока). Подпись — из текущего списка;
+        // движка в списке нет — техническое имя (тот же приём, что EngineTitle журнала).
+        _llm.Executors = [new("gemma", "Gemma 3 27B", 1)];
+        WriteLastNight("""{"date":"2026-11-02","selected":4,"analyzed":3,"applied":3,"toInbox":1,"estTokens":1200,"outcome":"completed","executors":[{"engine":"gemma","analyzed":2,"rejected":1,"inputTokens":900,"withdrawnAt":"2026-11-02T03:20:00+00:00"},{"engine":"qwen","analyzed":1,"rejected":0,"inputTokens":300,"withdrawnAt":null}]}""");
+
+        var res = await Controller().Get();
+
+        var dto = (WikiSettingsDto)((OkObjectResult)res.Result!).Value!;
+        var rows = ExecutorRows(dto);
+        rows.Should().HaveCount(2);
+        // В строке исполнителя — только имена и числа: ни текста, ни причин.
+        foreach (var row in rows)
+            row.EnumerateObject().Select(p => p.Name).OrderBy(n => n, StringComparer.Ordinal)
+                .Should().Equal("analyzed", "engine", "inputTokens", "rejected", "title", "withdrawnAt");
+        rows[0].GetProperty("engine").GetString().Should().Be("gemma");
+        rows[0].GetProperty("title").GetString().Should().Be("Gemma 3 27B");
+        rows[0].GetProperty("analyzed").GetInt32().Should().Be(2);
+        rows[0].GetProperty("rejected").GetInt32().Should().Be(1);
+        rows[0].GetProperty("inputTokens").GetInt64().Should().Be(900);
+        rows[0].GetProperty("withdrawnAt").GetDateTimeOffset().Should().Be(new DateTimeOffset(2026, 11, 2, 3, 20, 0, TimeSpan.Zero));
+        rows[1].GetProperty("engine").GetString().Should().Be("qwen");
+        rows[1].GetProperty("title").GetString().Should().Be("qwen", "движка нет в текущем списке — техническое имя");
+        rows[1].GetProperty("withdrawnAt").ValueKind.Should().Be(JsonValueKind.Null, "дожил до конца прохода");
+    }
+
+    [Fact]
+    public async Task LastNight_СтарыйФайлБезПоляЧитаетсяNull_ПустойСписокВФайлеПустымМассивом()
+    {
+        // W6a: «не измерено» (старый файл без поля) и «путь без названных исполнителей»
+        // (пустой список) — разные состояния, и DTO их различает: null против пустого массива.
+        WriteLastNight(LastNightJson);
+        var old = (WikiSettingsDto)((OkObjectResult)(await Controller().Get()).Result!).Value!;
+        old.LastNight!.Executors.Should().BeNull("старый файл: «не измерено», а не «никого не было»");
+
+        WriteLastNight("""{"date":"2026-11-02","selected":0,"analyzed":0,"applied":0,"toInbox":0,"estTokens":0,"outcome":"completed","executors":[]}""");
+        var empty = (WikiSettingsDto)((OkObjectResult)(await Controller().Get()).Result!).Value!;
+        empty.LastNight!.Executors.Should().BeEmpty("пустой список в файле — путь без названных исполнителей");
+    }
+
+    [Fact]
+    public async Task Put_IgnoresExecutors()
+    {
+        // Список исполнителей — только чтение (W6b): у тела PUT такого поля нет. Тело с ним
+        // читается так, будто его нет: тот же ответ и тот же файл, что без него, — и в ответ
+        // идёт список шва, а не присланный.
+        _llm.Executors = [new("gemma", "Gemma 3 27B", 1), new("qwen", "Qwen3 Coder", 2)];
+        var req = JsonSerializer.Deserialize<WikiSettingsRequest>(
+            """{"nightly":{"maxPackagesPerNight":7,"executors":[{"engine":"intruder","title":"Присланный"}]}}""", WebJson)!;
+
+        var put = await Controller().Put(req);
+
+        var dto = (WikiSettingsDto)((OkObjectResult)put.Result!).Value!;
+        dto.Nightly.MaxPackagesPerNight.Should().Be(7);
+        dto.Nightly.Executors.Select(e => e.Engine).Should().Equal("gemma", "qwen");
+        var (settings, _) = WikiSettingsStore.Read(Root());
+        settings.Nightly!.MaxPackagesPerNight.Should().Be(7);
+        // Чужой список в теле не оставил следа ни в settings.json, ни в ответе.
+        File.ReadAllText(SettingsPath()).Should().NotContain("intruder");
+    }
+
     // ─── B2b: сервисный токен (typ=svc) — PUT 403, GET остаётся 200 ────────────
 
     // Мутация (критерий c2): убрать проверку IsServiceToken в Put — этот тест падает
@@ -538,6 +635,15 @@ public class WikiSettingsControllerTests : IDisposable
         File.WriteAllText(LastNightPath(), json, new UTF8Encoding(false));
     }
 
+    // Сериализование ответа как транспорт (ASP.NET Core — camelCase): проверяются ключи JSON,
+    // которые увидит фронт, а не поля DTO; тело PUT читается теми же опциями, что связывает
+    // модель запроса.
+    private static readonly JsonSerializerOptions WebJson = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+
+    private static List<JsonElement> ExecutorRows(WikiSettingsDto dto) =>
+        JsonDocument.Parse(JsonSerializer.Serialize(dto, WebJson)).RootElement
+            .GetProperty("lastNight").GetProperty("executors").EnumerateArray().ToList();
+
     private WikiSettingsController Controller(WikiNightlyService? nightly = null, string user = User, bool svc = false)
     {
         var http = new DefaultHttpContext();
@@ -546,7 +652,9 @@ public class WikiSettingsControllerTests : IDisposable
         // MapInboundClaims=false оставляет raw-имена, как в бою.
         if (svc) identity.AddClaim(new Claim("typ", "svc"));
         http.User = new ClaimsPrincipal(identity);
-        return new WikiSettingsController(_health, _flags, _keeper, _config, nightly)
+        // W6b: контроллер получает тот же подменный шов, что и служба, — список исполнителей
+        // для блока ночи берётся из него (пустой по умолчанию: прежние тесты его не ждут).
+        return new WikiSettingsController(_health, _flags, _keeper, _config, nightly, _llm)
         {
             ControllerContext = new ControllerContext { HttpContext = http },
         };
@@ -604,9 +712,13 @@ public class WikiSettingsControllerTests : IDisposable
     }
 
     // Модель тестов ручного запуска не зовётся вовсе (разбор подменён делегатом службы):
-    // шов службы требует только HasRoute.
+    // шов службы требует только HasRoute. Список исполнителей (W6b) — по полю: пустой по
+    // умолчанию (прежние тесты и проходы службы идут прежним маршрутом без названных
+    // движков); тесты W6b заполняют его и проверяют, что в ответ идёт ровно он.
     private sealed class LlmStub : ICheapTextRunner
     {
+        public List<LocalEngineExecutor> Executors = [];
+
         public bool UsesLocal(string actionKey) => false;
         public bool HasFreeRoute(string actionKey) => true;
         public bool HasRoute(string actionKey) => true;
@@ -624,5 +736,10 @@ public class WikiSettingsControllerTests : IDisposable
             string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null, object? jsonFormat = null,
             CancellationToken ct = default) =>
             Task.FromResult(new OneShotResult("{}", null, 0));
+
+        // Список — по ключу действия, как в бою: запрос чужого ключа (мутация «спросить
+        // не тот actionKey») даёт пустой список, и тест W6b краснеет.
+        public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey) =>
+            actionKey == LocalActionCatalog.WikiNightly ? Executors : [];
     }
 }

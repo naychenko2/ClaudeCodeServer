@@ -202,8 +202,8 @@ public sealed class WikiNightlyService : BackgroundService
     private readonly WikiKeeper? _keeper;
     private readonly ILogger<WikiNightlyService> _log;
     // Шов разбора (W4a1): владелец, чат, engine, ct. engine (W3) — названный локальный исполнитель
-    // («local» или имя из LocalEngines:*); null — прежний маршрут места. Сама ночь engine пока не
-    // называет (её выбор — W4a2), но шов обязан его донести: его задаёт публичный конструктор.
+    // («local» или имя из LocalEngines:*); null — прежний маршрут места. Ночь называет engine в
+    // координаторе (W4a2): слоту — исполнитель из списка места, последовательному проходу — null.
     private readonly Func<string, string, string?, CancellationToken, Task<WikiChatIngestService.ChatResult>> _analyze;
     // Проход судьи (J-J4, точка «а»): тот же приём шва Func-делегатом, что у _analyze — точка
     // запуска проверяется без настоящей облачной модели. null (тест без судьи) — прохода судьи нет,
@@ -218,8 +218,8 @@ public sealed class WikiNightlyService : BackgroundService
         Composition.INotificationSender? notifications = null)
         : this(sessions, recalc, stage2,
             // actionKey — только константа места: внешнего ввода у ночи нет. engine (W4a1) —
-            // проброс аргумента шва в тот же вызов: названного исполнительа у ночи ещё нет (W4a2),
-            // поэтому на практике сюда приходит null — прежний маршрут места.
+            // проброс аргумента шва в тот же вызов: его называет координатор ночи (W4a2) или null
+            // для последовательного прохода без исполнителей.
             (owner, chat, engine, ct) => ingest.AnalyzeAsync(owner, chat, ct, LocalActionCatalog.WikiNightly, engine),
             llm, config, log, flags, clock: null, notifications: notifications, keeper: keeper,
             judge: (owner, root, ct) => judge.RunAsync(owner, root, ct))
@@ -624,6 +624,23 @@ public sealed class WikiNightlyService : BackgroundService
 
     private sealed record Candidate(Session Session, WikiChatTriageEntry? Entry, bool Important, string Home);
 
+    /// <summary>Исход подготовки чата до выдачи (W4a2): ровно одно из Stop/Skip/Ready.
+    /// Ready — чат выбран (selected), его оценка зарезервирована в бюджете и счётчик раздела
+    /// поднят: всё это ДО выдачи, чтобы оценка чата в полёте учитывалась против следующего
+    /// («BudgetReservedBeforeIssue»). Cfg — настройки момента подготовки: верхняя проверка
+    /// лимита пакетов ночи пользуется ими, как прежний цикл в пределах одной итерации.</summary>
+    private sealed record Prep(bool Ready, string? Stop, WikiSettingsStore.NightlyConfig? Cfg, long ChatEst)
+    {
+        public static readonly Prep Skip = new(false, null, null, 0);
+    }
+
+    /// <summary>Исход одного слота координатора (W4a2): результат разбора или ошибка отказа —
+    /// задача слота никогда не бывает faulted, кроме отмены хоста (см. RunCoordinatedAsync).
+    /// Ссылки на чат и настройки момента выдачи: их результат обрабатывает координатор.</summary>
+    private sealed record SlotOutcome(
+        Candidate Chat, string Engine, WikiSettingsStore.NightlyConfig Cfg,
+        WikiChatIngestService.ChatResult Result, Exception? Error);
+
     private async Task<NightResult> RunPassAsync(string ownerId, string root, DateOnly date, bool manual, CancellationToken ct)
     {
         int selected = 0, analyzed = 0, applied = 0, toInbox = 0, packagesNight = 0, overrodeHuman = 0, rejected = 0;
@@ -660,25 +677,31 @@ public sealed class WikiNightlyService : BackgroundService
             var chatsBySection = new Dictionary<string, int>(StringComparer.Ordinal);
             var packagesBySection = new Dictionary<string, int>(StringComparer.Ordinal);
 
-            foreach (var c in queue)
+            // ── подготовка одного чата до выдачи — общая у обоих драйверов (W4a2) ──
+            // Порядок прежнего цикла: CheckStop (open_limit, окно, флаг, маршрут) и лимит пакетов
+            // ночи — перед каждой выдачей; лимиты раздела, дельта, ступень 2 и бюджет чата —
+            // как были. «Ready»: чат выбран, его оценка зарезервирована в бюджете и счётчик
+            // раздела поднят — до выдачи, оценка чата в полёте учитывается против следующей.
+            async Task<Prep> PrepareAsync(Candidate c)
             {
                 ct.ThrowIfCancellationRequested();
                 // Лимит пакетов за ночь: при остатке 0 чат не начинается.
                 var (stop, cfgNow) = CheckStop(ownerId, root, date, manual);
-                if (stop is not null) { outcome = stop; break; }
-                if (packagesNight >= cfgNow!.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
+                if (stop is not null) return new Prep(false, stop, null, 0);
+                if (packagesNight >= cfgNow!.MaxPackagesPerNight) return new Prep(false, OutcomeBudget, null, 0);
 
-                if (chatsBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxChatsPerSection) continue;
-                if (packagesBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxPackagesPerSection) continue;
+                if (chatsBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxChatsPerSection) return Prep.Skip;
+                if (packagesBySection.GetValueOrDefault(c.Home) >= cfgNow.MaxPackagesPerSection) return Prep.Skip;
 
                 var history = await _sessions.GetHistoryAsync(c.Session.Id);
                 var lines = WikiChatSlicer.Lines(history, 1, history.Count);
                 var cursor = c.Entry?.Cursor ?? 0;
                 if (cursor > history.Count) cursor = 0; // история переписана — курсор в 0, как у разбора
                 var delta = lines.Where(l => l.Index > cursor).ToList();
-                if (delta.Count(l => l.IsHuman) < MinHumanDelta) continue;
+                if (delta.Count(l => l.IsHuman) < MinHumanDelta) return Prep.Skip;
 
                 // Серый чат — только с «да» ступени 2. Спрашиваем лениво: очередь дошла до чата.
+                // Ступень 2 остаётся в координаторе и идёт последовательно (W4a2).
                 if (!c.Important && c.Entry?.Stage1Zone == WikiChatScorer.ZoneGray)
                 {
                     var verdict = c.Entry.Stage2Zone;
@@ -687,7 +710,7 @@ public sealed class WikiNightlyService : BackgroundService
                     // Свежий отказ — чат отложен до следующей ночи без переспроса. Неопрешённый
                     // вердикт и устаревший (≥3 новых реплик человека) переспрашиваются одинаково —
                     // «да» так же, как «нет»: чат берётся только по новому решению.
-                    if (verdict == WikiChatScorer.ZoneSkipped && !stale) continue;
+                    if (verdict == WikiChatScorer.ZoneSkipped && !stale) return Prep.Skip;
                     if (verdict != WikiChatScorer.ZoneTriage || stale)
                     {
                         var judged = await _stage2.JudgeAsync(ownerId, c.Session.Id, ct);
@@ -713,7 +736,7 @@ public sealed class WikiNightlyService : BackgroundService
                                 ownerId, c.Session.Id, judged.Detail ?? "причина не названа");
                         }
                         if (judged.Outcome != WikiChatStage2.Outcome.Judged
-                            || judged.Zone != WikiChatScorer.ZoneTriage) continue;
+                            || judged.Zone != WikiChatScorer.ZoneTriage) return Prep.Skip;
                     }
                 }
 
@@ -723,22 +746,21 @@ public sealed class WikiNightlyService : BackgroundService
                 {
                     LogInfoSafe("Ночной разбор {Owner}: дельта чата {Chat} (~{Tokens} ток.) не помещается в бюджет, чат пропущен",
                         ownerId, c.Session.Id, chatEst);
-                    continue;
+                    return Prep.Skip;
                 }
-                if (est + chatEst > chatCap) { outcome = OutcomeBudget; break; }
+                if (est + chatEst > chatCap) return new Prep(false, OutcomeBudget, null, 0);
 
                 chatsBySection[c.Home] = chatsBySection.GetValueOrDefault(c.Home) + 1;
                 est += chatEst;
-                WikiChatIngestService.ChatResult r;
-                // Исполнителя ночи ещё нет (W4a2): engine = null — прежний маршрут места.
-                try { r = await _analyze(ownerId, c.Session.Id, null, ct); }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-                catch (Exception ex)
-                {
-                    // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему.
-                    LogSafe(ex, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, c.Session.Id);
-                    continue;
-                }
+                return new Prep(true, null, cfgNow, chatEst);
+            }
+
+            // Обработка одного результата разбора — общая у обоих драйверов: счётчики, выключатель
+            // мёртвого локального ряда, лимит пакетов ночи. Возвращает причину остановить ночь
+            // (null — продолжать). Исключение разбора сюда не доходит: его обрабатывает вызывающий
+            // (курсор не двигает, в analyzed не считает) — как прежний catch.
+            string? ApplyResult(Candidate c, WikiSettingsStore.NightlyConfig cfgNow, WikiChatIngestService.ChatResult r)
+            {
                 analyzed++;
                 // Фактический вход (WC-4b): сумма по всем разобранным чатам независимо от исхода —
                 // отказанный план понесённый расход не отменяет (тот же смысл, что у ChatResult).
@@ -757,13 +779,13 @@ public sealed class WikiNightlyService : BackgroundService
                     // продолжать не за чем — каждый следующий чат дал бы тот же отказ с тем же
                     // нулевым входом. Итог — error с причиной первого из ряда (firstRejectReason
                     // уже назван); error дату не закрывает, следующий тик окна пробует снова.
+                    // Ряд пока общий на весь проход: его переделывает W5 (W4a2).
                     localDownStreak = IsLocalDownRejection(r) ? localDownStreak + 1 : 0;
                     if (localDownStreak >= LocalDownBreakAfter)
                     {
                         LogInfoSafe("Ночной разбор {Owner}: {Reason} — {Streak} отказов подряд, проход остановлен",
                             ownerId, WikiIngestService.ReasonLocalUnavailable, localDownStreak);
-                        outcome = OutcomeError;
-                        break;
+                        return OutcomeError;
                     }
                 }
                 else
@@ -795,7 +817,38 @@ public sealed class WikiNightlyService : BackgroundService
                 // дальше не идти. Лимит раздела закрывает только его раздел: счётчик раздела уже
                 // выше лимита, его последующие чаты отсекает предпроверка (как раздел с нулевым
                 // остатком), ночь продолжает по другим разделам, итог остаётся completed.
-                if (packagesNight > cfgNow.MaxPackagesPerNight) { outcome = OutcomeBudget; break; }
+                if (packagesNight > cfgNow.MaxPackagesPerNight) return OutcomeBudget;
+                return null;
+            }
+
+            // ── драйвер прохода (W4a2) ────────────────────────────────────────────
+            // Исполнители места — список стора админа через шов (уже урезанный до maxTotal,
+            // см. CheapTextRunner.LocalExecutorsFor). Пустой список — прежний последовательный
+            // проход с engine=null: ночь не параллельна, исполнитель места не назван (как до фичи).
+            var executors = _llm.LocalExecutorsFor(LocalActionCatalog.WikiNightly);
+            if (executors.Count == 0)
+            {
+                foreach (var c in queue)
+                {
+                    var prep = await PrepareAsync(c);
+                    if (prep.Stop is not null) { outcome = prep.Stop; break; }
+                    if (!prep.Ready) continue;
+                    WikiChatIngestService.ChatResult r;
+                    try { r = await _analyze(ownerId, c.Session.Id, null, ct); }
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему.
+                        LogSafe(ex, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, c.Session.Id);
+                        continue;
+                    }
+                    var stopAfter = ApplyResult(c, prep.Cfg!, r);
+                    if (stopAfter is not null) { outcome = stopAfter; break; }
+                }
+            }
+            else
+            {
+                outcome = await RunCoordinatedAsync(ownerId, queue, executors, PrepareAsync, ApplyResult, ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -845,6 +898,100 @@ public sealed class WikiNightlyService : BackgroundService
             overrodeHuman, disputedPages.Count, inputTokens, rejected, firstRejectReason, manual, dropped, firstDropReason,
             judgeCalls, judgeCost, judgeApplied, judgeRejected, judgeDeferred, codeRejected,
             stage2Refused, firstStage2Refusal);
+    }
+
+    // ── координатор ночи (W4a2, разрез «ночь вики на нескольких локальных исполнителях») ──────
+    // Слоты = сумма Parallel исполнителей (шов уже урезал её до maxTotal места, см.
+    // CheapTextRunner.LocalExecutorsFor): координатор заводит ровно столько окон, сколько ему
+    // отдали. Свободный слот получает первый чат очереди, чей раздел сейчас не в работе:
+    // сродство — два чата одного раздела никогда не выдаются одновременно, порядок внутри
+    // раздела прежний (очередь не переставляется: к занятому разделу возвращаются позже).
+    // Счётчики и бюджет меняет только координатор (через prepare/apply в своей же последовательности);
+    // слот только зовёт _analyze на своём исполнителе и возвращает исход. CheckStop и лимиты
+    // проверяются перед каждой выдачей; при упоре выдача останавливается, чаты в полёте
+    // доигрываются и их результаты обрабатываются как обычно. Исключение слота — отказ чата
+    // (тот же смысл, что прежний catch): координатор и соседние слоты живы; отмена хоста —
+    // конец прохода. Готовность движка (IsLocalEngineReady) здесь не проверяется: выбывание и
+    // повтор — W5.
+    private async Task<string> RunCoordinatedAsync(
+        string ownerId, List<Candidate> queue,
+        IReadOnlyList<LocalEngineExecutor> executors,
+        Func<Candidate, Task<Prep>> prepare,
+        Func<Candidate, WikiSettingsStore.NightlyConfig, WikiChatIngestService.ChatResult, string?> apply,
+        CancellationToken ct)
+    {
+        var remaining = new List<Candidate>(queue);
+        var busy = new Dictionary<string, int>(StringComparer.Ordinal); // раздел → чаты в полёте
+        var engineBusy = new Dictionary<string, int>(StringComparer.Ordinal); // исполнитель → занятые слоты
+        var inflight = new List<Task<SlotOutcome>>();
+        string? stop = null;
+
+        while (true)
+        {
+            // Выдача, пока есть свободный слот, нет упора и есть чат со свободным разделом.
+            while (stop is null && remaining.Count > 0)
+            {
+                string? engine = null;
+                foreach (var e in executors)
+                    if (engineBusy.GetValueOrDefault(e.Engine) < e.Parallel) { engine = e.Engine; break; }
+                if (engine is null) break; // все слоты заняты — ждать завершения
+
+                var idx = -1;
+                for (var i = 0; i < remaining.Count; i++)
+                    if (!busy.ContainsKey(remaining[i].Home)) { idx = i; break; }
+                if (idx < 0) break; // все оставшиеся чаты — занятых разделов: ждать завершения
+
+                var c = remaining[idx];
+                remaining.RemoveAt(idx); // чат выдаётся не более одного раза за проход
+                var prep = await prepare(c);
+                if (prep.Stop is not null) { stop = prep.Stop; break; }
+                if (!prep.Ready) continue; // чат пропущен — слот свободен, к следующему
+
+                busy[c.Home] = 1;
+                engineBusy[engine] = engineBusy.GetValueOrDefault(engine) + 1;
+                inflight.Add(RunSlotAsync(c, engine, prep.Cfg!));
+            }
+
+            if (inflight.Count == 0) break;
+            var done = await Task.WhenAny(inflight);
+            inflight.Remove(done);
+            SlotOutcome o;
+            try { o = await done; }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // Отмена хоста: в полёте остаются только гасимые той же ct — не оставляем их за собой.
+                try { await Task.WhenAll(inflight); } catch { /* их исходы проходу уже не нужны */ }
+                throw;
+            }
+            // Ключ снимают при нуле: ContainsKey по оставшемуся ключу с нулём читался бы как
+            // «раздел в работе», и второй его чат не вышел бы никогда.
+            if (--busy[o.Chat.Home] == 0) busy.Remove(o.Chat.Home);
+            engineBusy[o.Engine]--;
+            if (o.Error is not null)
+            {
+                // Сбой одного разбора курсор не двигает (его пишет только AnalyzeAsync) — к следующему;
+                // координатор и соседние слоты живы.
+                LogSafe(o.Error, "Ночной разбор {Owner}: чат {Chat} не разобран", ownerId, o.Chat.Session.Id);
+                continue;
+            }
+            var stopAfter = apply(o.Chat, o.Cfg, o.Result);
+            if (stopAfter is not null) stop ??= stopAfter; // первый названный упор держит итог
+        }
+        return stop ?? OutcomeCompleted;
+
+        // Один слот: только _analyze на названном исполнителе (W4a1). Исключение становится
+        // отказом чата (тот же смысл, что прежний catch) — задача слота не faulted: один сбой
+        // не рвёт координатор и соседние слоты. Отмена хоста остаётся исключением: проход кончается.
+        async Task<SlotOutcome> RunSlotAsync(Candidate c, string engine, WikiSettingsStore.NightlyConfig cfg)
+        {
+            try
+            {
+                var r = await _analyze(ownerId, c.Session.Id, engine, ct).ConfigureAwait(false);
+                return new SlotOutcome(c, engine, cfg, r, null);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (Exception ex) { return new SlotOutcome(c, engine, cfg, default, ex); }
+        }
     }
 
     /// <summary>Отказ окна по мёртвому локальному маршруту (2e13d45c): причина отказа несёт

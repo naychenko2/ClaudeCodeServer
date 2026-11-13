@@ -23,13 +23,19 @@
 // (тот же ACTION_ZONES), иначе «Все»; выбор не запоминается. Поиск (TextField) — только при >10
 // чатов, клиентский, по name ?? sessionId без учёта регистра, вместе с сегментом. Пусто под
 // фильтром — EmptyState compact inline с текстом по состоянию; загрузка, отказ и «чатов нет
-// вообще» — как раньше. Рамка, её шапка и карточка строки — следующий шаг (M1b), здесь не
-// тронуты; число в шапке рамки равно тому, что под ней (иначе шапка лжёт о пустом списке).
+// вообще» — как раньше.
+//
+// Рамка и карточка (M1b, план «Рамка»/«Фокус» и П2/П3): рамка с пределом высоты LIST_MAX_H и
+// своей прокруткой, шапка закреплена: «Показано N из M» — число равно тому, что под ней
+// (иначе шапка лжёт о пустом списке). В карточке нет колонок: балл — справа от строки
+// названия, мета — строкой через «·», причина — 2 строки с полным текстом в title. Раскладка —
+// по narrow (useWikiNarrow, M0): узко — пометки своим рядом, широко — справа; тач-размеры
+// остаются на isMobile. При смене фильтра скролл рамки возвращается в начало.
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Ban, MessageSquare, SearchX, Star } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP, useIsMobile,
+  C, FONT, FS, LIST_MAX_H, R, SHADOW, SP, useIsMobile,
   WikiError, loadWikiChats, setWikiChatMark,
   type WikiChatMark, type WikiChatTriage,
 } from 'aihome_shell/kit';
@@ -40,7 +46,8 @@ import { TextField } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { SegmentedControl } from '../../../components/ui/Segmented';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { countWord, wikiErrorText } from './wikiLabels';
+import { wikiErrorText } from './wikiLabels';
+import { useWikiNarrow } from './useWikiNarrow';
 
 // ─── Подписи состояний строки ───
 
@@ -124,6 +131,17 @@ export const filterTriage = (items: WikiChatTriage[], filter: TriageFilter, quer
 // сразу, и поле — лишний контрол над пятью строками.
 const SEARCH_MIN_CHATS = 10;
 
+// ─── Шапка рамки (M1b, план «Рамка») ───
+
+// «Показано N из M» — всегда с «из M»: шапка говорит не только сколько показано, но и на
+// каком основании считается это число (в макете рамка «Все» — «100 из 100»). Формулировка
+// живёт в этих константах: и текст, и рендер (числа в нём — FONT.mono) собираются из них.
+const SHOWN_LEAD = 'Показано ';
+const SHOWN_MID = ' из ';
+export function shownText(shown: number, total: number): string {
+  return `${SHOWN_LEAD}${shown}${SHOWN_MID}${total}`;
+}
+
 // Бейджи строки. Порядок — «действие поверх пометки» (дефект 82567033): для action-зон
 // первым идёт бейдж зоны, пометка — вторым (ряд заголовка flexWrap: непоместившийся
 // бейдж уходит на вторую строку, действие остаётся видимым). Обычная зона с пометкой —
@@ -154,9 +172,15 @@ function LoadingSkeleton() {
 
 // ─── Строка списка ───
 
-function TriageRow({ item, busy, onMark }: {
+// Карточка строка (M1b, план «Карточка чата» и П3): без колонок. Строка 1 — название в одну
+// строку с многоточием и балл справа («без балла», когда балла нет); строка 2 — бейджи и мета
+// через «·»; строка 3 — «Почему» в 2 строки, полный текст в title. Пометки: узко — своим рядом
+// под текстом (выровнены по его левому краю), широко — справа карточки. narrow даёт
+// useWikiNarrow (замер рамки вызывающим); тач-размеры — по-прежнему на isMobile.
+function TriageRow({ item, busy, narrow, onMark }: {
   item: WikiChatTriage;
   busy: boolean;
+  narrow: boolean;
   onMark: (item: WikiChatTriage, mark: WikiChatMark | null) => void;
 }) {
   const isMobile = useIsMobile();
@@ -201,40 +225,55 @@ function TriageRow({ item, busy, onMark }: {
     );
   };
 
+  const marks = (
+    <span style={{ display: 'flex', gap: SP.xs, flexShrink: 0 }}>
+      {markButton('important')}
+      {markButton('skip')}
+    </span>
+  );
+
   return (
     <div
       data-testid="wiki-triage-row"
       style={{
-        display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'flex-start',
+        display: 'flex', gap: SP.md, alignItems: 'flex-start',
         padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.borderLight}`,
       }}
     >
-      <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textSecondary, width: 28, textAlign: 'right', flexShrink: 0, paddingTop: 2 }}>
-        {item.score ?? '—'}
-      </span>
       <span style={{ flex: 1, minWidth: 0 }}>
-        <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
-          <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+        {/* строка 1: название в одну строку с многоточием, балл — справа (П3: колонки балла нет) */}
+        <span style={{ display: 'flex', gap: SP.sm, alignItems: 'baseline' }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: FS.base, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
-          {badges.map(b => <Badge key={b.text} tone={b.tone} size="xs">{b.text}</Badge>)}
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
+            {item.score === null ? 'без балла' : `балл ${item.score}`}
+          </span>
         </span>
+        {/* строка 2: бейджи и мета через «·» (FONT.mono FS.xs C.textMuted — по П3) */}
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center', marginTop: SP.xs }}>
+          {badges.map(b => <Badge key={b.text} tone={b.tone} size="xs">{b.text}</Badge>)}
+          {metaParts.length > 0 && (
+            <span style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{metaParts.join(' · ')}</span>
+          )}
+        </span>
+        {/* строка 3: причина в 2 строки, полный текст — в title (обрезанное не потеряно) */}
         {item.reason && (
-          <span style={{ display: 'block', fontSize: FS.sm, color: C.textSecondary, marginTop: 2, overflowWrap: 'break-word' }}>
+          <span
+            title={item.reason}
+            style={{
+              display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+              fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs, overflowWrap: 'break-word',
+            }}
+          >
             <b style={{ color: C.textMuted, fontWeight: 600 }}>Почему:</b> {item.reason}
           </span>
         )}
-        {metaParts.length > 0 && (
-          <span style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: 3, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
-            {metaParts.map(p => <span key={p}>{p}</span>)}
-          </span>
-        )}
+        {/* узко: пометки — свой ряд под текстом, выровнен по его левому краю (П3) */}
+        {narrow && marks}
       </span>
-      {/* на 360 пометки — своей строю под содержимым (макет .app.m .marks) */}
-      <span style={{ display: 'flex', gap: SP.xs, ...(isMobile ? { width: '100%' } : { flexShrink: 0 }) }}>
-        {markButton('important')}
-        {markButton('skip')}
-      </span>
+      {/* широко: пометки — справа карточки */}
+      {!narrow && marks}
     </div>
   );
 }
@@ -256,6 +295,16 @@ export function WikiChatTriageList() {
   // Поколение загрузок (урок S5b/S5e, образец — loadSeq в WikiJournal): только последний
   // запрос пишет список
   const loadSeq = useRef(0);
+  // Узкость меряется по рамке (П1): карточки живут внутри неё и равны её ширине; до первого
+  // замера — широкая раскладка (тот же договор, что у useWikiNarrow)
+  const [listRef, narrow] = useWikiNarrow<HTMLDivElement>();
+  // Тот же узел ещё и для сброса скролла при смене фильтра
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const attachFrame = useCallback((node: HTMLDivElement | null) => {
+    frameRef.current = node;
+    const detach = listRef(node);
+    return () => { frameRef.current = null; detach?.(); };
+  }, [listRef]);
 
   const load = useCallback(() => {
     const mine = ++loadSeq.current;
@@ -269,6 +318,13 @@ export function WikiChatTriageList() {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- старт загрузки при монтировании блока: другого места старта нет, список живёт в компоненте
     load();
   }, [load]);
+
+  // Смена фильтра (план «Фокус»): скролл рамки — в начало, новый отбор начинается с верхнего
+  // края нового списка, а не с середины прежнего
+  const chooseFilter = (f: TriageFilter) => {
+    setFilter(f);
+    if (frameRef.current) frameRef.current.scrollTop = 0;
+  };
 
   const doMark = async (item: WikiChatTriage, mark: WikiChatMark | null) => {
     if (busy) return;
@@ -332,7 +388,7 @@ export function WikiChatTriageList() {
           <div style={{ marginTop: SP.md }}>
             <SegmentedControl
               value={activeFilter}
-              onChange={setFilter}
+              onChange={chooseFilter}
               touch={isMobile}
               options={[
                 { value: 'awaiting', label: `Ждут вас · ${counts.awaiting}`, muted: counts.awaiting === 0 },
@@ -365,13 +421,33 @@ export function WikiChatTriageList() {
             </div>
           ) : (
             <>
-              <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card, overflow: 'hidden', marginTop: SP.md }}>
-                <div style={{ display: 'flex', gap: SP.sm, alignItems: 'center', flexWrap: 'wrap', padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`, background: C.bgInset }}>
-                  <b style={{ color: C.textHeading, fontSize: FS.md, flex: 1 }}>{countWord(shown.length, 'чат', 'чата', 'чатов')}</b>
-                  <span style={{ fontSize: FS.xs, color: C.textMuted }}>балл · состояние · причина · пометка</span>
+              <div
+                data-testid="wiki-triage-list"
+                ref={attachFrame}
+                style={{
+                  border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card,
+                  // M1b (П2): список выше предела скроллится внутри рамки и не выталкивает
+                  // соседние блоки за нижний край панели; overscrollBehavior — прокрутка списка
+                  // не отдаёт колесо странице
+                  maxHeight: LIST_MAX_H, overflowY: 'auto', overscrollBehavior: 'contain',
+                  marginTop: SP.md,
+                }}
+              >
+                <div
+                  data-testid="wiki-triage-header"
+                  style={{
+                    // закреплённая шапка рамки (П2): счёт виден, пока список скроллится;
+                    // фон — inset, строки под ней не просвечивают
+                    position: 'sticky', top: 0, background: C.bgInset,
+                    padding: `${SP.sm}px ${SP.md}px`, borderBottom: `1px solid ${C.border}`,
+                  }}
+                >
+                  <span style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                    {SHOWN_LEAD}<span style={{ fontFamily: FONT.mono }}>{shown.length}</span>{SHOWN_MID}<span style={{ fontFamily: FONT.mono }}>{items.length}</span>
+                  </span>
                 </div>
                 {shown.map(it => (
-                  <TriageRow key={it.sessionId} item={it} busy={busy} onMark={(item, mark) => { void doMark(item, mark); }} />
+                  <TriageRow key={it.sessionId} item={it} busy={busy} narrow={narrow} onMark={(item, mark) => { void doMark(item, mark); }} />
                 ))}
               </div>
               <div style={{ marginTop: SP.sm, fontSize: FS.xs, color: C.textMuted }}>

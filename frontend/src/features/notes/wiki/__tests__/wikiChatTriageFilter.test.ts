@@ -14,6 +14,17 @@
 // (4) в filterTriage не брать name ?? sessionId, а только name → «по sessionId» краснеет;
 // (5) в компоненте убрать ветку пустого состояния под фильтром → «пусто под сегментом
 //     «Ждут вас»» краснеет.
+//
+// M1b (эта задача) — рамка и карточка (план «Рамка»/«Фокус», П2/П3): предел высоты LIST_MAX_H
+// со своей прокруткой, закреплённая шапка «Показано N из M» (shownText), легенды нет; балл —
+// справа от строки названия («без балла»), мета строкой через «·», причина в 2 строки с полным
+// текстом в title; при смене фильтра скролл рамки — в начало. Ассертция «1 чат» в тестах M1a
+// стала «Показано 1 из 4»: текст шапки — ровно то, что изменил этот шаг.
+// Мутации M1b (прогнаны в копии дерева, вывод — в отчёте):
+// (6) снять maxHeight рамки → «рамка: предел высоты» краснеет;
+// (7) убрать у шапки position: sticky → краснеет;
+// (8) в балле убрать ветку «без балла» (всегда `балл ${score}`) → «балл справа» краснеет;
+// (9) в chooseFilter не сбрасывать scrollTop → «скролл при смене фильтра» краснеет.
 
 import { act, createElement } from 'react';
 import type { Root } from 'react-dom/client';
@@ -22,9 +33,9 @@ import {
   mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps,
 } from '../../../../components/chat/__tests__/fakeDom';
 import {
-  WikiChatTriageList, defaultFilter, filterTriage, triageCounts, type TriageFilter,
+  WikiChatTriageList, defaultFilter, filterTriage, triageCounts, shownText, type TriageFilter,
 } from '../WikiChatTriageList';
-import type { WikiChatTriage } from 'aihome_shell/kit';
+import { C, LIST_MAX_H, type WikiChatTriage } from 'aihome_shell/kit';
 
 vi.mock('../../../../lib/signalr', async (orig) => ({
   ...await orig<typeof import('../../../../lib/signalr')>(),
@@ -194,6 +205,27 @@ describe('фильтры и поиск «Отбора чатов» (M1a)', () =>
     act(() => { props.onClick(undefined); });
   }
 
+  // Инлайн-стиль узла — из props React (в fakeDom он не дублируется в атрибут): тест читает
+  // ровно то, что задал компонент (тот же приём, что в WikiApplySettings.test)
+  function styleOf(n: AnyNode): Record<string, unknown> {
+    return ((reactProps(n) ?? {}).style ?? {}) as Record<string, unknown>;
+  }
+
+  // Элемент, который сам рендерит этот текст (textNodes рекурсивен: внешний контейнер тоже
+  // «содержит» строку, а стиль и title нужны у того, кто её рендерит)
+  function findNodeWithOwnText(root: AnyNode, needle: string): AnyNode | null {
+    let hit: AnyNode | null = null;
+    const walk = (x: AnyNode) => {
+      if (hit || x.nodeType !== 1) return;
+      const own = Array.from(x.childNodes as unknown[]).some(
+        ch => (ch as { nodeType?: number; nodeValue?: string }).nodeType === 3 && (ch as { nodeValue?: string }).nodeValue?.includes(needle));
+      if (own) { hit = x; return; }
+      for (const c of x.childNodes) walk(c);
+    };
+    walk(root);
+    return hit;
+  }
+
   function typeQuery(container: AnyNode, value: string): void {
     const input = inputNode(container);
     if (!input) throw new Error('поля поиска нет');
@@ -223,7 +255,8 @@ describe('фильтры и поиск «Отбора чатов» (M1a)', () =>
     // выбран «Ждут вас»: под рамкой ровно одна строка, ordinary-чаты скрыты
     expect(texts(c).filter(t => t === 'Пакет на решении').length).toBe(1);
     expect(has(c, 'Обычный')).toBe(false);
-    expect(has(c, '1 чат')).toBe(true); // шапка рамки считает то, что под ней
+    // M1b: шапка рамки считает то, что под ней, и говорит, из чего это считается
+    expect(has(c, 'Показано 1 из 4')).toBe(true);
     // клик по «Все» — видим всё; выбор живёт до конца просмотра, не дальше
     click(segNode(c, 'all')!, 'Все');
     await settle();
@@ -294,5 +327,94 @@ describe('фильтры и поиск «Отбора чатов» (M1a)', () =>
     // без поля (2 чата) поиск не показывается — но строка без имени видна как есть: по sessionId
     expect(has(c, 'sess-42-hidden')).toBe(true);
     expect(has(c, 'Ничего не нашлось')).toBe(false);
+  });
+
+  // ─── M1b: рамка, шапка и карточка (план «Рамка»/«Фокус», П2/П3) ───
+
+  describe('рамка и шапка «Отбора чатов» (M1b)', () => {
+    it('shownText: «Показано 12 из 48»; пустой отбор называется тем же текстом', () => {
+      expect(shownText(12, 48)).toBe('Показано 12 из 48');
+      expect(shownText(0, 48)).toBe('Показано 0 из 48');
+    });
+
+    it('рамка: предел высоты LIST_MAX_H, своя прокрутка; шапка закреплена с «Показано N из M», легенды нет', async () => {
+      serverItems = [plainItem('p1'), plainItem('p2'), awaitingItem()];
+      const c = render();
+      await settle();
+      const frame = findNodeByAttr(c, 'data-testid', 'wiki-triage-list')!;
+      const st = styleOf(frame);
+      expect(st.maxHeight).toBe(LIST_MAX_H);
+      expect(st.overflowY).toBe('auto');
+      expect(st.overscrollBehavior).toBe('contain');
+      const hdr = findNodeByAttr(c, 'data-testid', 'wiki-triage-header')!;
+      const hs = styleOf(hdr);
+      // закреплённая шапка (П2): счёт виден, пока список скроллится; фон — inset, строки не просвечивают
+      expect(hs.position).toBe('sticky');
+      expect(hs.top).toBe(0);
+      expect(hs.background).toBe(C.bgInset);
+      // шапка считает то, что под ней, и говорит, из чего: под «Ждут вас» один чат из трёх
+      expect(has(hdr, 'Показано 1 из 3')).toBe(true);
+      // легенда несуществующей таблицы убрана (план «Рамка»)
+      expect(has(c, 'балл · состояние · причина · пометка')).toBe(false);
+    });
+
+    it('при смене фильтра скролл рамки — в начало (план «Фокус»)', async () => {
+      serverItems = [plainItem('p1'), plainItem('p2'), awaitingItem()];
+      const c = render();
+      await settle();
+      const frame = findNodeByAttr(c, 'data-testid', 'wiki-triage-list')!;
+      frame.scrollTop = 120;
+      click(segNode(c, 'all')!, 'Все');
+      await settle();
+      expect(frame.scrollTop).toBe(0);
+    });
+  });
+
+  describe('карточка строки (M1b, П3)', () => {
+    it('балл — справа от строки названия; без балла — «без балла»; колонки балла слева нет', async () => {
+      serverItems = [item({ sessionId: 's1', name: 'С баллом', score: 7 }), item({ sessionId: 's2', name: 'Без балла', zone: 'skipped', score: null })];
+      const c = render();
+      await settle();
+      expect(has(c, 'без балла')).toBe(true);
+      // первый текстовый узел строки — название, второй — балл: отдельной колонки балла слева больше нет
+      const row = findNodeByAttr(c, 'data-testid', 'wiki-triage-row')!;
+      const ts = textNodes(row).map(t => t.trim()).filter(Boolean);
+      expect(ts[0]).toBe('С баллом');
+      expect(ts[1]).toBe('балл 7');
+    });
+
+    it('причина обрезана до 2 строк, полный текст — в title; мета — строкой через «·»', async () => {
+      const longReason = 'балл 31: очень длинная причина отбора, которая не помещается в две строки списка и обрезается по границе в две строки, а полный её текст остаётся в подсказке';
+      serverItems = [item({ sessionId: 'q1', name: 'Длинная причина', score: 31, reason: longReason, cursor: 5 })];
+      const c = render();
+      await settle();
+      const row = findNodeByAttr(c, 'data-testid', 'wiki-triage-row')!;
+      const reasonEl = findNodeWithOwnText(row, 'очень длинная причина');
+      expect(reasonEl).toBeTruthy();
+      const st = styleOf(reasonEl!);
+      expect(st.WebkitLineClamp).toBe(2);
+      expect(st.WebkitBoxOrient).toBe('vertical');
+      expect(st.overflow).toBe('hidden');
+      // обрезанное не потеряно: полный текст — в title элемента причины
+      expect((reactProps(reasonEl!) as { title?: string }).title).toBe(longReason);
+      // мета одной строкой с разделителем: дата · «разобран до m5»
+      expect(has(row, '01.11 · разобран до m5')).toBe(true);
+    });
+
+    it('широкая раскладка: пометки — справа карточки (второй ряд карточки), а не своим рядом под текстом', async () => {
+      // до первого замера ширины narrow=false (тот же договор, что у useWikiNarrow): в тесте
+      // проверяется широкая ветка; узкая включается тем же признаком по замеру контейнера
+      serverItems = [plainItem('p1')];
+      const c = render();
+      await settle();
+      const row = findNodeByAttr(c, 'data-testid', 'wiki-triage-row')!;
+      const content = row.childNodes[0];
+      const marks = row.childNodes[1];
+      expect(content.nodeName).toBe('SPAN');
+      expect(marks.nodeName).toBe('SPAN');
+      expect(styleOf(marks).display).toBe('flex');
+      // оба контрола на месте: «Важный» и «Не разбирать»
+      expect(textNodes(marks).map(t => t.trim()).filter(Boolean)).toEqual(['Важный', 'Не разбирать']);
+    });
   });
 });

@@ -284,7 +284,8 @@ public static partial class ComfyWorkflows
             ["seed"] = seed,
             ["force_offload"] = true,
         }),
-        ["save"] = SaveFlac("smp", filenamePrefix),
+        ["lim"] = Limiter("smp"),
+        ["save"] = SaveFlac("lim", filenamePrefix),
     };
 
     // MMAudio large 44k: по видео (video != null) или по одному тексту; результат — flac 44,1 кГц
@@ -322,9 +323,19 @@ public static partial class ComfyWorkflows
             sampler["images"] = Link("comp");
         }
         wf["smp"] = Node("MMAudioSampler", sampler);
-        wf["save"] = SaveFlac("smp", filenamePrefix);
+        wf["lim"] = Limiter("smp");
+        wf["save"] = SaveFlac("lim", filenamePrefix);
         return wf;
     }
+
+    // Потолок true peak −1 dBFS: MMAudio по тексту отдаёт +0,7 dBFS (замер 13.11.2026). Узел — в пакете ccs_audio_worker
+    public const double TruePeakCeilingDb = -1.0;
+
+    private static JsonObject Limiter(string source) => Node("CcsTruePeakLimit", new JsonObject
+    {
+        ["audio"] = Link(source),
+        ["ceiling_db"] = TruePeakCeilingDb,
+    });
 
     private static JsonObject SaveFlac(string source, string filenamePrefix) => Node("SaveAudio", new JsonObject
     {

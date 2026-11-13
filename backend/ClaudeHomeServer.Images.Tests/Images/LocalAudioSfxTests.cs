@@ -61,6 +61,9 @@ public class LocalAudioSfxTests
         g["smp"]!["inputs"]!["images"].Should().BeNull();
         g.ContainsKey("lv").Should().BeFalse();
         g["save"]!["class_type"]!.GetValue<string>().Should().Be("SaveAudio");
+        g["lim"]!["class_type"]!.GetValue<string>().Should().Be("CcsTruePeakLimit");
+        g["lim"]!["inputs"]!["ceiling_db"]!.GetValue<double>().Should().Be(-1.0);
+        g["save"]!["inputs"]!["audio"]!.ToJsonString().Should().Be("[\"lim\",0]", "в файл идёт звук после ограничителя");
         submitted.EtaSeconds.Should().Be(LocalMediaService.MmAudioTextEta(6));
     }
 
@@ -101,6 +104,8 @@ public class LocalAudioSfxTests
         smp["image"]!.ToJsonString().Should().Be("[\"comp\",0]");
         smp["frame_rate"]!.ToJsonString().Should().Be("[\"comp\",2]");
         smp["prompt"]!.GetValue<string>().Should().Be("footsteps");
+        g["lim"]!["inputs"]!["audio"]!.ToJsonString().Should().Be("[\"smp\",0]");
+        g["save"]!["inputs"]!["audio"]!.ToJsonString().Should().Be("[\"lim\",0]");
         submitted.EtaSeconds.Should().Be(LocalMediaService.FoleyEta(engine == "foley-xxl", 5));
     }
 

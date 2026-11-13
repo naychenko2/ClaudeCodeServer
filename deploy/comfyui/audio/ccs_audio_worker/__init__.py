@@ -495,5 +495,37 @@ class CcsAudioWorker:
             }}
 
 
-NODE_CLASS_MAPPINGS = {"CcsAudioWorker": CcsAudioWorker}
-NODE_DISPLAY_NAME_MAPPINGS = {"CcsAudioWorker": "CCS Audio Worker (venv)"}
+class CcsTruePeakLimit:
+    """Ограничитель громкости: true peak звука не выше ceiling_db (по умолчанию −1 dBFS).
+
+    Нужен эффектам и звуку по видео (Ш4): MMAudio по тексту отдаёт пик +0,7 dBFS, MOSS-SFX — +1,1 dBFS.
+    Чистая функция над звуком в памяти: файлов не читает и не пишет. Алгоритм общий с воркером
+    sfx_moss (workers/ccs_common.limit_true_peak, тест test_limiter.py); тише потолка звук не меняется.
+    """
+    CATEGORY = "audio/ccs"
+    FUNCTION = "run"
+    RETURN_TYPES = ("AUDIO",)
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {"required": {
+            "audio": ("AUDIO",),
+            "ceiling_db": ("FLOAT", {"default": -1.0, "min": -12.0, "max": 0.0, "step": 0.1}),
+        }}
+
+    def run(self, audio, ceiling_db):
+        import sys
+        import numpy as np
+        import torch
+        workers = os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "workers")
+        if workers not in sys.path:
+            sys.path.insert(0, workers)
+        from ccs_common import limit_true_peak
+        sr = int(audio["sample_rate"])
+        wave = audio["waveform"].detach().float().cpu().numpy()  # [партия, каналы, отсчёты]
+        out = np.stack([limit_true_peak(w, sr, float(ceiling_db)) for w in wave])
+        return ({"waveform": torch.from_numpy(out), "sample_rate": sr},)
+
+
+NODE_CLASS_MAPPINGS = {"CcsAudioWorker": CcsAudioWorker, "CcsTruePeakLimit": CcsTruePeakLimit}
+NODE_DISPLAY_NAME_MAPPINGS = {"CcsAudioWorker": "CCS Audio Worker (venv)", "CcsTruePeakLimit": "CCS True Peak Limit"}

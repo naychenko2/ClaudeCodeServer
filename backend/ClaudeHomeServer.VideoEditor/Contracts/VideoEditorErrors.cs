@@ -45,6 +45,16 @@ public static class VideoEditorErrors
     public const string ContextChanged = "context_changed";
 }
 
+// Тексты отказов «Увеличить ×2/×4» (RelayVSR, local): показываются как есть
+public static class VideoEnhanceTexts
+{
+    public const string NotSupported = "Увеличение ×2/×4 есть только у локальных моделей";
+    public const string ClipGone = "Файл версии уже убран из рабочей папки — увеличить нечего";
+    public const string BadScale = "Увеличение — ×2 или ×4";
+    public const string OutOfRange = "Ролик вне замеренных пределов увеличения: кадр до 1344×768 и длина до 10 секунд";
+    public const string AlreadyEnhanced = "Эта версия уже получена увеличением — увеличивайте исходную";
+}
+
 // Тексты отказов «Повторить увеличение»: показываются как есть (ADR-022, «Повторить увеличение»)
 public static class VideoUpscaleRetryTexts
 {

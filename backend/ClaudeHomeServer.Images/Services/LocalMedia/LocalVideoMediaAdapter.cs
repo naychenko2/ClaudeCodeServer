@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // кладёт клип в свою рабочую папку. Белый список размеров — ComfyWorkflows.VideoSizes, потолок длины —
 // LocalMediaOptions.MaxVideoSeconds, проверка кадров и ETA — статика LocalMediaService. Живость ComfyUI
 // общая с картинками: её кеширует адаптер ILocalImageMedia.
-public sealed class LocalVideoMediaAdapter(
+public sealed partial class LocalVideoMediaAdapter(
     ComfyClient comfy,
     IConfiguration config,
     ILocalImageMedia images,
@@ -19,7 +19,8 @@ public sealed class LocalVideoMediaAdapter(
     TimeProvider? time = null,
     ComfyProgressTracker? steps = null,
     ComfyPromptLedger? ledger = null,
-    ComfyQueueMonitor? monitor = null) : ILocalVideoMedia
+    ComfyQueueMonitor? monitor = null,
+    IVideoDsp? dsp = null) : ILocalVideoMedia
 {
     private DateTime Now => (time ?? TimeProvider.System).GetUtcNow().UtcDateTime;
 
@@ -87,6 +88,7 @@ public sealed class LocalVideoMediaAdapter(
     internal void Sweep(DateTime now)
     {
         var options = LocalMediaOptions.Read(config);
+        SweepEnhances(now, options);
         foreach (var (ticket, shot) in _shots)
         {
             // Пока апскейл съёмки в полёте, ComfyUI ещё может читать латенты и копии в input: не трогаем ни шот,
@@ -246,6 +248,7 @@ public sealed class LocalVideoMediaAdapter(
                 Percent: PercentOf(ticket), Gpu: _gpuBuilder.Build(ticket, 0));
             ledger?.Complete(ticket, "completed", null, error: null);
             ForgetPercent(ticket);
+            if (_enhances.TryGetValue(ticket, out var enhance)) return await FinishEnhanceAsync(ticket, enhance, history, ct);
             var upscale = _upscales.TryGetValue(ticket, out var upInputs) ? upInputs : null;
             ReleaseUpscale(ticket);
             if (_shots.TryGetValue(ticket, out var shot))
@@ -288,6 +291,7 @@ public sealed class LocalVideoMediaAdapter(
             ledger?.Complete(ticket, "failed", null, error: error);
             ForgetPercent(ticket);
             ReleaseUpscale(ticket);
+            ReleaseEnhance(ticket);
             // Съёмка не удалась — латента нет и увеличивать нечего: контекст и входы убираем сразу
             if (_shots.TryRemove(ticket, out var failedShot)) PurgeShot(failedShot, LocalMediaOptions.Read(config));
             return new(LocalVideoState.Failed, null, null, error);
@@ -423,6 +427,7 @@ public sealed class LocalVideoMediaAdapter(
         finally
         {
             ReleaseUpscale(ticket);
+            ReleaseEnhance(ticket);
         }
     }
 

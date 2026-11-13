@@ -106,6 +106,17 @@ public sealed class FfmpegVideoDsp(
         return Finish(run, outPath, "Не удалось снять последний кадр.");
     }
 
+    // Копия без перекодирования: картинка из videoPath, звук первой дорожки audioSourcePath (нет дорожки — одна картинка)
+    public async Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioSourcePath, string outPath, CancellationToken ct)
+    {
+        if (!Available) return VideoDspResult.Fail(Unavailable);
+        if (!Rooted(videoPath) || !Rooted(audioSourcePath) || !Rooted(outPath)) return VideoDspResult.Fail("Пути к файлам должны быть полными.");
+        var run = await RunShortAsync(Ffmpeg, [.. Head, "-protocol_whitelist", "file", "-i", videoPath,
+            "-protocol_whitelist", "file", "-i", audioSourcePath, "-map", "0:v:0", "-map", "1:a:0?", "-c", "copy",
+            "-shortest", "-movflags", "+faststart", outPath], ct);
+        return Finish(run, outPath, "Не удалось вернуть звук в ролик.");
+    }
+
     // ── Сборка фильма ─────────────────────────────────────────────────────────────
 
     public async Task<VideoDspResult> AssembleAsync(FilmPlan plan, string outPath, IProgress<VideoAssembleProgress>? progress,

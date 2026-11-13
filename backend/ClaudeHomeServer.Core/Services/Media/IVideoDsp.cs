@@ -27,6 +27,12 @@ public interface IVideoDsp
     // Отмена убивает дерево процессов ffmpeg
     Task<VideoDspResult> AssembleAsync(FilmPlan plan, string outPath, IProgress<VideoAssembleProgress>? progress,
         CancellationToken ct);
+
+    // Вернуть звук: видеодорожка из videoPath, звуковая — из audioSourcePath (копия без перекодирования), итог в outPath.
+    // Нужна после увеличения: RelayVSR звук не переносит. Нет звуковой дорожки у источника — копия видео как есть.
+    // Реализация по умолчанию — «не умею»
+    Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioSourcePath, string outPath, CancellationToken ct) =>
+        Task.FromResult(VideoDspResult.Fail("Склейка звука недоступна."));
 }
 
 // Длительность в секундах; Fps — средняя частота видеодорожки

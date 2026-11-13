@@ -77,6 +77,15 @@ public sealed record VideoLaunchResult(string? JobId, string? ErrorCode, string?
 // SourceVersionId — версия 768p, из которой она растёт. Готовый ролик станет НОВОЙ версией сцены, исходная остаётся
 public sealed record VideoUpscaleRetryResult(string JobId, string SourceVersionId);
 
+// «Увеличить» версию: Scale — 2 или 4
+public sealed record VideoEnhanceRequest(int Scale);
+public sealed record VideoEnhanceResult(string JobId, string SourceVersionId, int Scale, int? EtaSeconds);
+
+// Варианты «Увеличить» версии до запуска: Available=false — Reason говорит почему; EtaSeconds — по таблице замеров
+// (null — не замерено, число не выдумываем); Width/Height — размер результата
+public sealed record VideoEnhanceOptionDto(int Scale, bool Available, string? Reason, int? EtaSeconds, int? Width, int? Height);
+public sealed record VideoEnhanceQuoteDto(string VersionId, IReadOnlyList<VideoEnhanceOptionDto> Options);
+
 // «Сохранить сцену» в проект: версия → файл video/<фильм>/scene-NN.mp4 (перезаписи нет → .v2.mp4)
 // вместе с кадрами-нитями в кадры/. Реализация — блок 2. FilmPath — необязательный полный путь открытого фильма
 // (video/<папка>/<любое имя>.film): есть — сцена встаёт именно в него, а папка сцены = папка фильма (Folder игнорируется);

@@ -45,3 +45,15 @@ describe('«Повторить увеличение»: понятный текс
     expect(upscaleRetryError(err(500))).toBe('Не удалось повторить увеличение');
   });
 });
+
+describe('«Увеличить ×2/×4»: ручки версии', () => {
+  it('котировка — GET, запуск — POST с масштабом в теле, версия кодируется в пути', async () => {
+    await videoApi.enhanceQuote('p1', 'c1', 's1', 'v/1');
+    await videoApi.enhance('p1', 'c1', 's1', 'v/1', 4);
+    expect(urlOf(0)).toBe('/projects/p1/video-editor/sessions/c1/scenes/s1/versions/v%2F1/enhance');
+    expect(urlOf(1)).toBe(urlOf(0));
+    const opts = requestMock.mock.calls[1][1] as { method: string; body: string };
+    expect(opts.method).toBe('POST');
+    expect(JSON.parse(opts.body)).toEqual({ scale: 4 });
+  });
+});

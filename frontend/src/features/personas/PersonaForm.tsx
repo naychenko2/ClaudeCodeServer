@@ -7,7 +7,8 @@ import { specialtyLabel, useSpecialtyCatalog } from '../../lib/specialties';
 import { PersonaVoicePicker } from './PersonaVoicePicker';
 import { ReturnInheritDialog, SwitchSpecialtyInheritDialog, SwitchSpecialtyOwnDialog } from './PersonaInheritDialogs';
 import { PersonaAccessGroup } from './PersonaAccessGroup';
-import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, takeReturn, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
+import { PersonaModelsGroup } from './PersonaModelsGroup';
+import { accessDiff, accessMode as readAccessMode, describeAccessDiff, describeAccessGroup, ownTierCount, takeReturn, tierCellView, toInherited, toOwn, type AccessGroup, type TierKey } from './personaInheritModel';
 import { createVoicePayload } from './voicePayload';
 import { PersonaPromptTab, SECTIONS_RESET_TEXT, SECTIONS_RESET_TITLE, sectionsResetNeedsConfirm } from './PersonaPromptTab';
 import { applySections, emptyState, toOverrides, type PromptSectionsState } from './promptSectionsModel';
@@ -17,7 +18,7 @@ import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
-import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import { parseTier, useTierModels, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import {
   formatEffectiveLine, invalidateEffectiveLines, routeDisplayLabel,
   usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
@@ -168,6 +169,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Точечный сброс уровней персоны (план model-settings-reset.md, шаг 3) — отдельный
   // busy от общего сохранения формы, бьёт сразу PUT'ом, не дожидаясь кнопки «Сохранить»
   const [tiersResetBusy, setTiersResetBusy] = useState(false);
+  // Группа «Модели»: «Своё» (true) или «Как у специальности». Пока задана хоть одна ячейка —
+  // «Своё»; пустые ячейки при выбранном «Своём» — тоже допустимое состояние (ещё не заполнили)
+  const [tiersOwn, setTiersOwn] = useState(!!(persona?.tierStrong || persona?.tierMedium || persona?.tierWeak));
+  const [pendingTiersInherit, setPendingTiersInherit] = useState(false);
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
@@ -787,27 +792,49 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // (тот же контракт, что и обычное сохранение) — Model/ModelTier не трогаем, это другие
   // оси настройки. Бьёт сразу, не дожидаясь общего «Сохранить» — уровни в форме и так
   // независимы от остальных полей (пусто = наследование от специальности/слотов).
+  // Busy-ref, а не state: два вызова до перерисовки видят одно замкнутое состояние.
+  // Ответ, пришедший после смены персоны в форме, игнорируем — он чужой.
+  const tiersBusyRef = useRef(false);
+  const currentPersonaIdRef = useRef(persona?.id);
+  currentPersonaIdRef.current = persona?.id;
   const resetPersonaTiers = async () => {
-    if (!persona || tiersResetBusy) return;
+    if (tiersBusyRef.current) return;
+    if (!persona) { setTierStrong(''); setTierMedium(''); setTierWeak(''); setTiersOwn(false); return; }
+    tiersBusyRef.current = true;
     setTiersResetBusy(true);
     setError(null);
+    const personaId = persona.id;
     try {
       // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
       // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
       // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
       const dto = { tierStrong: '', tierMedium: '', tierWeak: '' } as unknown as UpdatePersonaDto;
-      const saved = await api.personas.update(persona.id, dto);
+      const saved = await api.personas.update(personaId, dto);
+      if (currentPersonaIdRef.current !== personaId) return;
       setTierStrong('');
       setTierMedium('');
       setTierWeak('');
+      setTiersOwn(false);
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
       onSaved(saved);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Не удалось сбросить уровни');
+      if (currentPersonaIdRef.current === personaId) {
+        setError(e instanceof Error ? e.message : 'Не удалось сбросить уровни');
+      }
     } finally {
+      tiersBusyRef.current = false;
       setTiersResetBusy(false);
     }
+  };
+
+  // Переключатель группы «Модели»: «Своё» только открывает ячейки; возврат к специальности
+  // стирает заданные ячейки — сначала подтверждение
+  const switchTiersMode = (own: boolean) => {
+    if (tiersBusyRef.current || own === tiersOwn) return;
+    if (own) { setTiersOwn(true); return; }
+    if (ownTierCount({ tierStrong, tierMedium, tierWeak }) > 0) { setPendingTiersInherit(true); return; }
+    setTiersOwn(false);
   };
 
   // Отдаём тулбару-родителю императивные действия. save — через ref-зеркало: он
@@ -1325,69 +1352,38 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <div style={{ gridColumn: '1 / -1' }}>
           {/* Модель/уровень/усилие — деньга арендатора (Configure): участнику поля выключены
               с видимой подсказкой (не только в title), и в DTO они не едут */}
-          <Field label="Модели" hint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {isEdit && (tierStrong || tierMedium || tierWeak) && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    onClick={resetPersonaTiers}
-                    disabled={tiersResetBusy || ownerOnlyFields}
-                    title="Вернуть наследование"
-                    style={{
-                      font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
-                      background: 'transparent', border: 'none', padding: 0,
-                      cursor: tiersResetBusy || ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
-                      opacity: tiersResetBusy ? 0.5 : 1,
-                    }}
-                  >
-                    {tiersResetBusy ? 'Сбрасываю…' : 'Вернуть наследование'}
-                  </button>
-                </div>
-              )}
-              {TIER_ORDER.map(t => {
-                const cell = tierCell(t);
-                return (
-                  <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ width: 64, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
-                        {TIER_TITLE[t]}
-                      </span>
-                      <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
-                        <RoutePicker
-                          route={cell}
-                          label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
-                          models={models}
-                          tierModels={tierModels}
-                          placeholder={personaCellPlaceholder(t)}
-                          showTiers={false}
-                          showPresets
-                          readOnly={ownerOnlyFields}
-                          onChange={v => setTierCell(t, v)}
-                        />
-                      </div>
-                      {cell && (
-                        <button
-                          type="button"
-                          onClick={() => setTierCell(t, '')}
-                          title="Вернуть наследование"
-                          disabled={ownerOnlyFields}
-                          style={{
-                            flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
-                            background: 'transparent', border: 'none', padding: 0,
-                            cursor: ownerOnlyFields ? 'default' : 'pointer', textDecoration: 'underline',
-                          }}
-                        >
-                          Сбросить
-                        </button>
-                      )}
-                    </div>
-                    <div style={{ paddingLeft: 72 }}>
-                      <PersonaTierPreview personaId={persona?.id ?? null} tier={t} />
-                    </div>
-                  </div>
-                );
-              })}
+          <PersonaModelsGroup
+            own={tiersOwn}
+            onModeChange={switchTiersMode}
+            busy={tiersResetBusy}
+            readOnly={ownerOnlyFields}
+            readOnlyHint={ownerOnlyFields ? OWNER_ONLY_HINT : undefined}
+            ownCount={ownTierCount({ tierStrong, tierMedium, tierWeak })}
+            cells={{ strong: tierStrong, medium: tierMedium, weak: tierWeak }}
+            inheritedLabel={t => {
+              const ph = personaCellPlaceholder(t);
+              const m = /^Как у (специальности|всех) · (.+)$/.exec(ph);
+              return m ? `${m[2]} · ${m[1] === 'специальности' ? 'спец.' : 'общая'}` : ph;
+            }}
+            renderPicker={t => {
+              const cell = tierCell(t);
+              return (
+                <RoutePicker
+                  route={cell}
+                  label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
+                  models={models}
+                  tierModels={tierModels}
+                  placeholder={personaCellPlaceholder(t)}
+                  showTiers={false}
+                  showPresets
+                  readOnly={ownerOnlyFields || tiersResetBusy}
+                  onChange={v => setTierCell(t, v)}
+                />
+              );
+            }}
+            renderPreview={t => <PersonaTierPreview personaId={persona?.id ?? null} tier={t} />}
+            onReset={t => setTierCell(t, '')}
+            footer={(
               <div style={{
                 fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45,
                 marginTop: 2,
@@ -1395,8 +1391,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 Когда {persona?.name?.trim() ? persona.name.trim() : 'персону'} зовут сабагентом в чужой чат,
                 она отвечает моделью вызова — эти настройки касаются её собственного чата и задач.
               </div>
-            </div>
-          </Field>
+            )}
+          />
         </div>
 
         {caps.supportsEffort && (
@@ -1540,6 +1536,17 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           cancelLabel="Оставить как есть"
           onConfirm={() => { const next = pendingSectionsReset; setPendingSectionsReset(null); proceedSpecialtyChange(next); }}
           onCancel={() => setPendingSectionsReset(null)}
+        />
+      )}
+
+      {pendingTiersInherit && (
+        <ConfirmDialog
+          title="Вернуть модели как у специальности?"
+          subtitle="Заданные вами ячейки моделей будут стёрты, персона станет брать модели у специальности и менять их вместе с ней."
+          confirmLabel="Вернуть"
+          cancelLabel="Оставить своё"
+          onConfirm={() => { setPendingTiersInherit(false); void resetPersonaTiers(); }}
+          onCancel={() => setPendingTiersInherit(false)}
         />
       )}
 

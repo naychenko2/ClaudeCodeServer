@@ -17,7 +17,7 @@
 // Зона — главный путь (PersonaZoneSelect): флаг spheres включён setAllFlags.
 // Маркеры: поле имени — input с placeholder="Например, Ассистент"; выбор зоны — select
 // с title="Зона персоны" (его ставит только PersonaZoneSelect); модельные контролы —
-// кнопки «Вернуть наследование»/«Сбросить» (рисуются только при заполненной ячейке —
+// переключатель группы «Модели» и «Сбросить» (рисуются только при заполненной ячейке —
 // в фикстуре задан tierStrong).
 
 import { createElement } from 'react';
@@ -40,7 +40,7 @@ vi.mock('../../../lib/aiJobStore', async (importOriginal) => {
 });
 
 // Проектная персона проекта 'proj1'. Заполненная ячейка уровня: контролы модельного поля
-// «Вернуть наследование»/«Сбросить» рисуются только при значении — они маркеры состояния
+// «Сбросить» рисуется только при значении — они маркеры состояния
 // модельного поля (ячейка сильной модели у персоны задана)
 const PERSONA: Persona = {
   id: 'per-1', ownerId: 'o1', name: 'Светлана', role: 'Дизайнер', handle: 'designer',
@@ -126,9 +126,11 @@ describe('PersonaForm: гейт по роли (W3-F1e)', () => {
     const resetTag = buttonTagWithText(html, 'Сбросить');
     expect(resetTag, 'контрола модели («Сбросить» ячейки) нет').not.toBeNull();
     expect(resetTag!, 'контроль модели редактору не выключен').toContain('disabled');
-    const inheritTag = buttonTagWithText(html, 'Вернуть наследование');
-    expect(inheritTag, 'кнопки «Вернуть наследование» нет').not.toBeNull();
-    expect(inheritTag!, '«Вернуть наследование» редактору не выключена').toContain('disabled');
+    // «Вернуть наследование» заменён переключателем группы «Модели» (F28): его сегменты выключены
+    const modelsHtml = html.slice(html.indexOf('data-testid="models-group"'));
+    const segTag = buttonTagWithText(modelsHtml, 'Как у специальности');
+    expect(segTag, 'переключателя «Как у специальности» в группе моделей нет').not.toBeNull();
+    expect(segTag!, 'переключатель моделей редактору не выключен').toContain('disabled');
     // доработка ревью fd328e70 п.3: бэк (01ebbf0ed) 403-ит участнику смену специальности —
     // фронт выключает её тем же гейтом, что зону и модель
     const specTag = openTagWith(html, '<select', SPEC_MARK);

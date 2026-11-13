@@ -183,3 +183,8 @@ export function describeAccessGroup(group: AccessGroup | null | undefined): stri
 export function takeReturn(pending: boolean): { pending: false; apply: boolean } {
   return { pending: false, apply: pending };
 }
+
+// Сколько из трёх ячеек уровней заданы самой персоной («своё · N из 3»)
+export function ownTierCount(cells: TierCell): number {
+  return TIER_KEYS.filter(k => !!cells[k]).length;
+}

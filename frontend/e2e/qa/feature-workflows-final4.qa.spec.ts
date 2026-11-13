@@ -5,7 +5,7 @@ import { login } from './helpers';
 // Приёмка «Процессы фичи», четвёртый спек: чип «← к фиче» (сценарий 9).
 const SHOTS = '.cc-attachments/qa-wf-final';
 const PID = '32527f34-1907-4202-8c5c-9587b89d6366';
-const A = '351d5c4e-c51f-4dce-b64e-2bc6be2e982d', D = 'fa5b0598-cbea-4d2f-94ef-8ecbacadabff';
+const D = 'fa5b0598-cbea-4d2f-94ef-8ecbacadabff';
 const url = (f: string) => `/#/project/${PID}/feature/${f}`;
 let token: string;
 
@@ -24,7 +24,6 @@ async function open(context: BrowserContext, path: string, w = 1280): Promise<Pa
   await page.waitForTimeout(3000);
   return page;
 }
-const flat = (s: string) => s.replace(/\n/g, ' | ');
 
 for (const [id, label] of [[D, 'Ход']] as const) {
   test(`С9: чип возврата — ${label}`, async ({ context }) => {

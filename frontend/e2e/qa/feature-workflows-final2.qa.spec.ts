@@ -1,4 +1,4 @@
-import { test, expect, type BrowserContext, type Page } from '@playwright/test';
+import { test, type BrowserContext, type Page } from '@playwright/test';
 import { mkdirSync } from 'node:fs';
 import { login } from './helpers';
 
@@ -28,7 +28,6 @@ async function open(context: BrowserContext, path: string, theme: 'light' | 'dar
   await page.waitForTimeout(2500);
   return page;
 }
-const ov = (p: Page) => p.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
 
 test('4г: «шаблон изменился» после правки состава шаблона', async ({ context }) => {
   for (const id of [F.G, F.I]) {

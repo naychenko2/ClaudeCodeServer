@@ -2700,7 +2700,7 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     taskId, featureId: 'f1', role: 'step', stepRef: null, title: `задача ${taskId}`, status: 'inProgress', stage: null,
     artifacts: { commits: [], commitsAvailable: true, linkedFiles: [], resultMarkdown: null },
     input: { stage: null, sessionId: null, transcriptAvailable: false, transcript: null },
-    review: { items: [] }, metrics: null, questions: [], stageSummary: { executorSessionId: sid },
+    review: { own: null, reviews: [], awaitingHuman: null }, metrics: null, questions: [], stageSummary: { executorSessionId: sid },
   });
   const openStage = async (c: ReturnType<typeof render>) => {
     await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-stage-area-open')!)!.onClick as () => void)(); });

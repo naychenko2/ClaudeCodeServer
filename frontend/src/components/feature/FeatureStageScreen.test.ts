@@ -72,9 +72,9 @@ function screen(taskId: string, over: Partial<StageScreen> = {}): StageScreen {
 const flush = () => new Promise(r => setTimeout(r, 0));
 const roots: ReturnType<typeof mount>['root'][] = [];
 
-function render(tasks = [{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }], isMobile = false) {
+function render(tasks: { id: string; title: string; stepRef?: string }[] = [{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }], isMobile = false, chrome?: Parameters<typeof FeatureStageScreen>[0]['chrome']) {
   installFakeDom();
-  const r = mount(createElement(FeatureStageScreen, { tasks, isMobile }));
+  const r = mount(createElement(FeatureStageScreen, { tasks, isMobile, chrome }));
   roots.push(r.root);
   return r;
 }
@@ -135,16 +135,15 @@ afterEach(() => {
 });
 
 describe('FeatureStageScreen', () => {
-  it('открыт один блок: первая вкладка — «Артефакты», входа и ревью в DOM нет', async () => {
+  it('открыт один блок: первая вкладка — «Ревью и вопросы», артефактов и входа в DOM нет', async () => {
     stageMock.mockResolvedValue(screen('A'));
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
     const t = text(container);
-    expect(t).toContain('коммит A');
-    expect(t).toContain('итог A');
-    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).not.toBeNull();
+    expect(t).toContain('замечание');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).not.toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'stage-input')).toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'stage-screen-picker')).toBeNull(); // одна задача — выбора нет
   });
 
@@ -157,18 +156,18 @@ describe('FeatureStageScreen', () => {
     expect(text(container)).toContain('/x/A.cs');
     expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
     expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
-    clickTab(container, 'Ревью');
-    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).not.toBeNull();
-    expect(text(container)).toContain('замечание');
+    clickTab(container, 'Артефакты');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).not.toBeNull();
+    expect(text(container)).toContain('коммит A');
     expect(findNodeByAttr(container, 'data-testid', 'stage-input')).toBeNull();
-    expect(findNodeByAttr(container, 'data-testid', 'stage-artifacts')).toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-review')).toBeNull();
   });
 
   it('сводка — над полосой вкладок и видна при любой открытой вкладке', async () => {
     stageMock.mockResolvedValue(screen('A', { metrics: METRICS }));
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
-    clickTab(container, 'Ревью');
+    clickTab(container, 'Артефакты');
     const summary = findNodeByAttr(container, 'data-testid', 'stage-screen-summary');
     expect(summary).not.toBeNull();
     const t = text(container);
@@ -177,7 +176,7 @@ describe('FeatureStageScreen', () => {
     expect(t).toContain('A · ');
     expect(t).toContain('задача A');
     expect(t).toContain('готово');
-    expect(t.indexOf('задача A'), 'сводка над содержимым вкладки').toBeLessThan(t.indexOf('замечание'));
+    expect(t.indexOf('задача A'), 'сводка над содержимым вкладки').toBeLessThan(t.indexOf('коммит A'));
     // ключевые цифры — из metrics как есть
     expect(t).toContain('Время');
     expect(t).toContain('Ходы');
@@ -186,7 +185,7 @@ describe('FeatureStageScreen', () => {
     // (мутация «перенести сводку под вкладки» — red: порядок детей меняется)
     const kids = findNodeByAttr(container, 'data-testid', 'stage-screen-body')!.children;
     const iSummary = kids.findIndex(k => k.getAttribute('data-testid') === 'stage-screen-summary');
-    const iTabs = kids.findIndex(k => k.getAttribute('role') === 'tablist');
+    const iTabs = kids.findIndex(k => k.getAttribute('data-testid') === 'stage-screen-tabs');
     expect(iSummary, 'сводки нет среди детей body').toBeGreaterThanOrEqual(0);
     expect(iTabs, 'полосы нет среди детей body').toBeGreaterThanOrEqual(0);
     expect(iSummary, 'сводка обязана стоять перед полосой вкладок').toBeLessThan(iTabs);
@@ -218,15 +217,15 @@ describe('FeatureStageScreen', () => {
     stageMock.mockImplementation((id: string) => Promise.resolve(screen(id)));
     const { container } = render();
     await act(async () => { await flush(); });
-    clickTab(container, 'Ревью'); // у A открыт «Ревью»
-    expect(text(container)).toContain('замечание');
+    clickTab(container, 'Артефакты'); // у A открыты «Артефакты»
+    expect(text(container)).toContain('коммит A');
     click(container, 'stage-screen-pick-B');
     await act(async () => { await flush(); });
     const body = findNodeByAttr(container, 'data-testid', 'stage-screen-body')!;
     expect(body.getAttribute('data-task-id')).toBe('B');
-    expect(text(container)).toContain('коммит B');
-    expect(text(container)).not.toContain('замечание'); // чужая вкладка не перешла
-    expect(findTab(container, 'Артефакты')!.getAttribute('aria-selected')).toBe('true');
+    expect(text(container)).toContain('замечание');
+    expect(text(container)).not.toContain('коммит B'); // чужая вкладка не перешла
+    expect(findTab(container, 'Ревью')!.getAttribute('aria-selected')).toBe('true');
   });
 
   it('полоса на 360: горизонтальный скролл без видимой прокрутки — класс на tablist и инжект стиля (R-D1e)', async () => {
@@ -254,22 +253,22 @@ describe('FeatureStageScreen', () => {
     stageMock.mockImplementation((id: string) => Promise.resolve(screen(id)));
     const { container } = render([{ id: 'A', title: 'A' }, { id: 'B', title: 'B' }], true);
     await act(async () => { await flush(); });
-    const anyTab = findTab(container, 'Ревью');
-    expect(anyTab, 'вкладки «Ревью»').not.toBeNull();
+    const anyTab = findTab(container, 'Артефакты');
+    expect(anyTab, 'вкладки «Артефакты»').not.toBeNull();
     // узлы полосы пересоздаются при каждом монтировании — шпион на прототипе узла,
     // чтобы ловить вызовы на любых узлах
     const proto = Object.getPrototypeOf(anyTab!) as { scrollIntoView: (...args: unknown[]) => void };
     const spy = vi.spyOn(proto, 'scrollIntoView');
-    clickTab(container, 'Ревью');
+    clickTab(container, 'Артефакты');
     expect(spy.mock.calls.length, 'клик по вкладке обязан докрутить полосу').toBeGreaterThanOrEqual(1);
     click(container, 'stage-screen-pick-B');
     await act(async () => { await flush(); });
     click(container, 'stage-screen-pick-A');
     await act(async () => { await flush(); });
-    // возврат к A: выбор вкладки помечен taskId, активна снова «Ревью» (не первая) — полоса
+    // возврат к A: выбор вкладки помечен taskId, активна снова «Артефакты» (не первая) — полоса
     // обязана докрутиться к ней (с deps [tabSel, isMobile] — вызовов больше не будет)
     expect(spy.mock.calls.length, 'после смены задачи полоса осталась недокрученной').toBeGreaterThanOrEqual(2);
-    expect(findTab(container, 'Ревью')!.getAttribute('aria-selected')).toBe('true');
+    expect(findTab(container, 'Артефакты')!.getAttribute('aria-selected')).toBe('true');
   });
 
   it('гонка: ответ этапа A после выбора этапа B не применяется', async () => {
@@ -294,6 +293,7 @@ describe('FeatureStageScreen', () => {
     diffMock.mockReturnValue(d.promise);
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
+    clickTab(container, 'Артефакты');
     click(container, `stage-commit-toggle-${SHA_A}`); // открыть, запрос ушёл
     click(container, `stage-commit-toggle-${SHA_A}`); // скрыть
     click(container, `stage-commit-toggle-${SHA_A}`); // снова открыть, пока первый в полёте
@@ -307,12 +307,13 @@ describe('FeatureStageScreen', () => {
     diffMock.mockRejectedValue(new Error('Коммит не найден'));
     const { container } = render([{ id: 'A', title: 'A' }]);
     await act(async () => { await flush(); });
+    clickTab(container, 'Артефакты');
     click(container, `stage-commit-toggle-${SHA_A}`);
     await act(async () => { await flush(); });
     expect(text(findNodeByAttr(container, 'data-testid', `stage-commit-error-${SHA_A}`)!)).toContain('Коммит не найден');
     const t = text(container);
     expect(t).toContain('коммит A'); // артефакты живы
-    clickTab(container, 'Ревью');
+    clickTab(container, 'Ревью и вопросы');
     expect(text(container)).toContain('замечание'); // ревью живо
     clickTab(container, 'Вход');
     expect(text(container)).toContain('/x/A.cs'); // вход живой
@@ -381,5 +382,85 @@ describe('FeatureStageScreen', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('шапка и каркас (F12)', () => {
+    const SUM = {
+      executorSessionId: 's1',
+      executor: { personaId: 'p1', name: 'Тимур', roleTitle: 'Backend-разработчик', modelLabel: 'Sonnet', modelIsOwnCell: true, silenceMinutes: 45, silenceAction: 'notify' },
+      returns: 2,
+      kpi: { totalMinutes: 90, execMinutes: 60, reviewMinutes: 20, waitedHumanMinutes: 10, turns: 5, tokens: { input: 1000, output: 500, cache: 200 }, approx: false },
+      tasks: [
+        { taskId: 'A', stepRef: 'B1', title: 'a', state: 'done', executor: null, minutes: 1, verdict: null, returns: 0 },
+        { taskId: 'B', stepRef: 'B2', title: 'b', state: 'inProgress', executor: null, minutes: 1, verdict: null, returns: 0 },
+      ],
+    };
+    const q = (status: 'open' | 'answered') => ({ id: 'q' + status, status, askedBy: { personaId: null, name: 'Тимур' }, askedAt: '2026-11-12T10:00:00Z', text: 'вопрос', waitedMinutes: 3, answer: null });
+
+    it('шапка: «Этап · …», чип линии, тег «доработка» по роли, «↺ N возвраты», h2 serif', async () => {
+      stageMock.mockResolvedValue(screen('A', { role: 'rework', stage: { templateId: 't', templateVersion: 1, role: 'rework', stageId: 's', lane: 'back', after: [] }, stageSummary: SUM }));
+      const { container } = render([{ id: 'A', title: 'A' }], false, { featureTitle: 'Ф', stageTitle: 'Шаги', onBack: () => {}, onOpenChat: () => {} });
+      await act(async () => { await flush(); });
+      const c = container;
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-eyebrow')!)).toContain('Этап · Шаги');
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-lane')!)).toContain('бэк');
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-tag')!)).toContain('доработка');
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-returns')!)).toContain('↺ 2 возврата');
+      const h2 = findNodeByAttr(c, 'data-testid', 'stage-screen-title')!;
+      expect(h2.tagName.toLowerCase()).toBe('h2');
+      expect((h2 as { style?: Record<string, string> }).style?.fontFamily).toContain('PT Serif');
+    });
+
+    it('тег «доработка» не рисуется по умолчанию: шаг в статусе done — тега нет', async () => {
+      stageMock.mockResolvedValue(screen('A', { stageSummary: SUM }));
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await act(async () => { await flush(); });
+      expect(findNodeByAttr(container, 'data-testid', 'stage-head-tag')).toBeNull();
+    });
+
+    it('строка исполнителя и пять плиток — по данным выбранной задачи', async () => {
+      stageMock.mockResolvedValue(screen('A', { stageSummary: SUM }));
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await act(async () => { await flush(); });
+      const c = container;
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-executor-name')!)).toContain('Тимур · Backend-разработчик');
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-head-executor-model')!)).toContain('Sonnet (своя ячейка этапа) · молчит 45 мин → только сообщить');
+      for (const k of ['total', 'exec', 'review', 'waited', 'tokens']) expect(findNodeByAttr(c, 'data-testid', `stage-plate-${k}`), k).not.toBeNull();
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-plate-tokens-value')!)).toContain('2 тыс.');
+    });
+
+    it('чипы задач несут пометки ✓ и ●', async () => {
+      stageMock.mockImplementation((id: string) => Promise.resolve(screen(id, { stageSummary: SUM })));
+      const { container } = render([{ id: 'A', title: 'A', stepRef: 'B1' }, { id: 'B', title: 'B', stepRef: 'B2' }]);
+      await act(async () => { await flush(); });
+      const c = container;
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-screen-pick-A')!)).toContain('B1 ✓');
+      expect(text(findNodeByAttr(c, 'data-testid', 'stage-screen-pick-B')!)).toContain('B2 ●');
+    });
+
+    it('порядок вкладок макета, счётчики и точка при открытом вопросе', async () => {
+      stageMock.mockResolvedValue(screen('A', { metrics: METRICS, questions: [q('open')] }));
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await act(async () => { await flush(); });
+      const c = container;
+      const tabs: string[] = [];
+      const walk = (x: FNode) => { if (x.nodeType === 1 && x.getAttribute?.('role') === 'tab') tabs.push(textNodes(x).join('')); for (const ch of x.childNodes) walk(ch); };
+      walk(c);
+      expect(tabs[0]).toContain('Ревью и вопросы');
+      expect(tabs[0]).toContain('2'); // одно ревью + один вопрос
+      expect(tabs[1]).toContain('Артефакты');
+      expect(tabs[1]).toContain('1');
+      expect(tabs[2]).toContain('Вход и транскрипт');
+      expect(tabs[3]).toContain('Метрики');
+      expect(findTab(c, 'Ревью и вопросы')!.getAttribute('aria-selected')).toBe('true');
+    });
+
+    it('полоса вкладок липкая', async () => {
+      stageMock.mockResolvedValue(screen('A'));
+      const { container } = render([{ id: 'A', title: 'A' }]);
+      await act(async () => { await flush(); });
+      const strip = findNodeByAttr(container, 'data-testid', 'stage-screen-tabs') as { style?: Record<string, string> };
+      expect(strip.style?.position).toBe('sticky');
+    });
   });
 });

@@ -1,9 +1,10 @@
 // Экран выбранного этапа (D1c/D1e) под графом процесса: выбор задачи этапа, затем её экран по
 // GET /api/tasks/{id}/stage.
-// Вариант A (решение Андрея 13.11, макет docs/mockups/feature-workflows/stage-screen.html):
-// над блоками — сводка задачи (название, состояние, ключевые цифры — время, ходы, «ждёт вас»),
-// под ней — полоса вкладок «Артефакты · Вход · Ревью · Метрики», и один блок на экране.
-// Сводка видна при любой вкладке — иначе теряется контекст, когда открыт только «Ревью».
+// Вариант A (решение Андрея 13.11, макет docs/mockups/feature-workflows/stage-screen.html, F12):
+// над блоками — шапка этапа (FeatureStageHead: чипы, h2, исполнитель, плитки), под ней — липкая
+// полоса вкладок «Ревью и вопросы · Артефакты · Вход и транскрипт · Метрики», и один блок на экране.
+// По умолчанию открыто «Ревью и вопросы» (при открытом вопросе — тем более). Вариант B (панель
+// 2×2, S11) не реализуется. Шапка видна при любой вкладке.
 // metrics = null (у задачи нет фичи с эпиком) — вкладка «Метрики» не показывается.
 // При выборе другой задачи открывается первая вкладка: выбор вкладки помечен taskId, как и
 // состояние загрузки. Полоса на 360 — горизонтальный скролл внутри полосы (кит ui/Tabs,
@@ -18,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { SP, FS, C } from '../../lib/design';
 import { Button } from '../ui/Button';
+import { StageHead, StagePlates, StageTaskPicker } from './FeatureStageHead';
 import { Notice } from '../ui/Notice';
 import { Tabs } from '../ui/Tabs';
 import { api } from '../../lib/api';
@@ -28,7 +30,7 @@ import { FeatureStageMetrics } from './FeatureStageMetrics';
 import { NO_DATA, taskStatusLabel } from './FeatureLabels';
 import { formatDuration, minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
-import type { StageScreen } from '../../types/featureStage';
+import type { StageScreen, StageSummaryTask } from '../../types/featureStage';
 import type { StageMetrics } from '../../types/featureStats';
 
 export interface StageScreenTask { id: string; title: string; stepRef?: string | null }
@@ -38,11 +40,24 @@ type LoadState = { taskId: string } & (
   | { status: 'ok'; screen: StageScreen }
   | { status: 'error'; message: string });
 
-// Вкладки экрана этапа (вариант A): первая — «Артефакты», она же открывается при выборе
-// другой задачи. Подписи — по постановке D1e, блок под каждой — существующий FeatureStage*.
-type StageTab = 'artifacts' | 'input' | 'review' | 'metrics';
-const FIRST_TAB: StageTab = 'artifacts';
-const TAB_LABEL: Record<StageTab, string> = { artifacts: 'Артефакты', input: 'Вход', review: 'Ревью', metrics: 'Метрики' };
+// Вкладки экрана этапа (порядок макета): «Ревью и вопросы» первая и открывается по умолчанию.
+type StageTab = 'review' | 'artifacts' | 'input' | 'metrics';
+const FIRST_TAB: StageTab = 'review';
+const TAB_LABEL: Record<StageTab, string> = { review: 'Ревью и вопросы', artifacts: 'Артефакты', input: 'Вход и транскрипт', metrics: 'Метрики' };
+
+// Счётчики вкладок: ревью + вопросы; коммиты артефактов. Нулевой счётчик не рисуется.
+export function stageTabItems(s: StageScreen): { value: StageTab; label: string; count?: number; dot?: boolean }[] {
+  const reviewN = (s.review?.own ? 1 : 0) + (s.review?.reviews?.length ?? 0) + (s.questions?.length ?? 0);
+  const artN = s.artifacts?.commits?.length ?? 0;
+  const openQ = (s.questions ?? []).some(q => q.status === 'open');
+  return [
+    { value: 'review', label: TAB_LABEL.review, count: reviewN || undefined, dot: openQ || s.review?.awaitingHuman != null },
+    { value: 'artifacts', label: TAB_LABEL.artifacts, count: artN || undefined },
+    { value: 'input', label: TAB_LABEL.input },
+    // metrics = null — нечего показывать: вкладка «Метрики» не предлагается вовсе.
+    ...(s.metrics ? [{ value: 'metrics' as StageTab, label: TAB_LABEL.metrics }] : []),
+  ];
+}
 
 // Горизонтальный скролл полосы без видимой полосы прокрутки — тот же приём, что у
 // FeaturePageTabs (инжект отдельный: чужой стиль переживать не будем).
@@ -61,18 +76,16 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-stage-screen
 // длительность от waitingNow.since: `now` приходит из StageBody (useNow) — то же значение,
 // что у блока «Метрики» (R-D1e: две цифры об одном не должны расходиться).
 // metrics = null — цифр нет: сводка остаётся названием и состоянием.
-function StageSummary({ s, now }: { s: StageScreen; now: number }) {
+function StageSummary({ s, now, stageTitle }: { s: StageScreen; now: number; stageTitle?: string }) {
+  // Новая шапка (StageHead) несёт плитки из stageSummary.kpi; живые цифры метрик — только когда
+  // сводки нет (старые ответы и фикстуры).
   return (
-    <div data-testid="stage-screen-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, minWidth: 0 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
-        <span data-testid="stage-screen-title" style={{ fontSize: FS.md, fontWeight: 600, color: C.textHeading, overflowWrap: 'anywhere' }}>
-          {s.stepRef ? `${s.stepRef} · ` : ''}{s.title}
-        </span>
-        <span data-testid="stage-screen-status" style={{ fontSize: FS.xs, color: C.textMuted }}>
-          {taskStatusLabel(s.status)}
-        </span>
-      </div>
-      {s.metrics && <SummaryKpis metrics={s.metrics} now={now} />}
+    <div data-testid="stage-screen-summary" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm, minWidth: 0 }}>
+      <StageHead s={s} stageTitle={stageTitle} />
+      <span data-testid="stage-screen-status" style={{ fontSize: FS.xs, color: C.textMuted }}>
+        {taskStatusLabel(s.status)}
+      </span>
+      {s.stageSummary?.kpi ? <StagePlates kpi={s.stageSummary.kpi} /> : s.metrics && <SummaryKpis metrics={s.metrics} now={now} />}
     </div>
   );
 }
@@ -99,7 +112,7 @@ function SummaryKpis({ metrics: m, now }: { metrics: StageMetrics; now: number }
   );
 }
 
-function StageBody({ taskId, isMobile, onChat }: { taskId: string; isMobile: boolean; onChat?: (taskId: string, sessionId: string | null) => void }) {
+function StageBody({ taskId, isMobile, stageTitle, onChat }: { taskId: string; isMobile: boolean; stageTitle?: string; onChat?: (taskId: string, sessionId: string | null, marks: StageSummaryTask[] | null) => void }) {
   const [loaded, setState] = useState<LoadState>({ taskId, status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   // Выбор вкладки помечен taskId: при выборе другой задачи открыта первая вкладка,
@@ -126,7 +139,8 @@ function StageBody({ taskId, isMobile, onChat }: { taskId: string; isMobile: boo
   const state: LoadState = loaded.taskId === taskId ? loaded : { taskId, status: 'loading' };
   // Чат исполнителя нужен тулбару экрана (он вне StageBody): сообщаем по готовности ответа.
   const sessionId = state.status === 'ok' ? (state.screen.stageSummary?.executorSessionId ?? null) : null;
-  useEffect(() => { onChat?.(taskId, sessionId); }, [onChat, taskId, sessionId]);
+  const marks = state.status === 'ok' ? (state.screen.stageSummary?.tasks ?? null) : null;
+  useEffect(() => { onChat?.(taskId, sessionId, marks); }, [onChat, taskId, sessionId, marks]);
   const tab: StageTab = tabSel.taskId === taskId ? tabSel.tab : FIRST_TAB;
   // На 360: активная вкладка докручивается в видимость (полоса скроллится внутри себя).
   // Эффект помечен выбором (tabSel) и рендером состояния (loaded): при смене задачи её
@@ -159,26 +173,22 @@ function StageBody({ taskId, isMobile, onChat }: { taskId: string; isMobile: boo
     );
   }
   const s = state.screen;
-  const items = [
-    { value: 'artifacts' as StageTab, label: TAB_LABEL.artifacts },
-    { value: 'input' as StageTab, label: TAB_LABEL.input },
-    { value: 'review' as StageTab, label: TAB_LABEL.review },
-    // metrics = null — нечего показывать: вкладка «Метрики» не предлагается вовсе.
-    ...(s.metrics ? [{ value: 'metrics' as StageTab, label: TAB_LABEL.metrics }] : []),
-  ];
+  const items = stageTabItems(s);
   return (
     <div ref={bodyRef} data-testid="stage-screen-body" data-task-id={s.taskId} style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
-      <StageSummary s={s} now={now} />
-      <Tabs
-        transparent
-        size="md"
-        isMobile={isMobile}
-        className={NO_SB_CLASS}
-        ariaLabel="Разделы экрана этапа"
-        value={tab}
-        items={items}
-        onChange={(t) => setTabSel({ taskId, tab: t })}
-      />
+      <StageSummary s={s} now={now} stageTitle={stageTitle} />
+      <div data-testid="stage-screen-tabs" style={{ position: 'sticky', top: 0, zIndex: 1, background: C.bgWhite, borderBottom: `1px solid ${C.borderLight}` }}>
+        <Tabs
+          transparent
+          size="md"
+          isMobile={isMobile}
+          className={NO_SB_CLASS}
+          ariaLabel="Разделы экрана этапа"
+          value={tab}
+          items={items}
+          onChange={(t) => setTabSel({ taskId, tab: t })}
+        />
+      </div>
       {tab === 'artifacts' && <FeatureStageArtifacts key={s.taskId} taskId={s.taskId} artifacts={s.artifacts} isMobile={isMobile} />}
       {tab === 'input' && <FeatureStageInput input={s.input} isMobile={isMobile} />}
       {tab === 'review' && <FeatureStageReview review={s.review} />}
@@ -192,6 +202,8 @@ function StageBody({ taskId, isMobile, onChat }: { taskId: string; isMobile: boo
 // без тулбара.
 export interface StageScreenChrome {
   featureTitle: string;
+  // Название этапа для шапки «Этап · …».
+  stageTitle?: string;
   onBack: () => void;
   onOpenChat: (sessionId: string) => void;
 }
@@ -199,8 +211,8 @@ export interface StageScreenChrome {
 export function FeatureStageScreen({ tasks, isMobile, chrome }: { tasks: StageScreenTask[]; isMobile: boolean; chrome?: StageScreenChrome }) {
   // Выбор задачи этапа: явный — только если такая задача ещё в списке, иначе первая
   const [picked, setPicked] = useState<string | null>(null);
-  const [chat, setChat] = useState<{ taskId: string; sessionId: string | null } | null>(null);
-  const onChat = useCallback((taskId: string, sessionId: string | null) => setChat({ taskId, sessionId }), []);
+  const [chat, setChat] = useState<{ taskId: string; sessionId: string | null; marks: StageSummaryTask[] | null } | null>(null);
+  const onChat = useCallback((taskId: string, sessionId: string | null, marks: StageSummaryTask[] | null) => setChat({ taskId, sessionId, marks }), []);
   if (tasks.length === 0 && !chrome) return null;
   const taskId = tasks.length === 0 ? null : tasks.some(t => t.id === picked) ? picked! : tasks[0].id;
   const executorChat = chat && chat.taskId === taskId ? chat.sessionId : null;
@@ -222,19 +234,8 @@ export function FeatureStageScreen({ tasks, isMobile, chrome }: { tasks: StageSc
           )}
         </div>
       )}
-      {tasks.length > 1 && (
-        <div data-testid="stage-screen-picker" role="group" aria-label="Задача этапа" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
-          {tasks.map(t => (
-            <Button key={t.id} size="xs" variant={t.id === taskId ? 'primary' : 'ghost'}
-              style={isMobile ? { minHeight: 40 } : undefined}
-              dataTestId={`stage-screen-pick-${t.id}`}
-              onClick={() => setPicked(t.id)}>
-              {t.stepRef || t.title}
-            </Button>
-          ))}
-        </div>
-      )}
-      {taskId ? <StageBody taskId={taskId} isMobile={isMobile} onChat={onChat} /> : (
+      {tasks.length > 1 && <StageTaskPicker tasks={tasks} activeId={taskId} marks={chat?.marks ?? null} isMobile={isMobile} onPick={setPicked} />}
+      {taskId ? <StageBody taskId={taskId} isMobile={isMobile} stageTitle={chrome?.stageTitle} onChat={onChat} /> : (
         <div data-testid="stage-screen-empty" style={{ fontSize: FS.sm, color: C.textSecondary }}>У этапа пока нет задач.</div>
       )}
     </div>

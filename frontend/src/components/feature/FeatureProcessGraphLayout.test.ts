@@ -131,4 +131,22 @@ describe('FeatureProcessGraph: раскладка (F07)', () => {
     expect(calls).toEqual([{ inline: 'center', block: 'nearest', behavior: 'smooth' }]);
     expect(styleOf(byId(container, 'pgraph-node-b')).width).toBe(104);
   });
+
+  it('пресет «Параллельный цикл»: подпись «⇉ параллельно» — по одной на параллельную колонку, не в легенде', () => {
+    const preset = mkRun([
+      mkStage('cut', 'cut', 'cut', 0, 'done'),
+      mkStage('design', 'design', 'design', 1, 'done', ['cut']),
+      mkStage('plan', 'plan', 'plan', 2, 'done', ['design']),
+      mkStage('qa', 'qa-plan', 'qa', 2, 'pending', ['design']),
+      mkStage('prod', 'step-back', 'step', 3, 'active', ['plan']),
+      mkStage('prod', 'step-front', 'step', 3, 'pending', ['plan']),
+      mkStage('review', 'review', 'review', 4, 'pending', ['step-back', 'step-front']),
+      mkStage('final', 'final', 'final', 5, 'pending', ['review', 'qa-plan']),
+      mkStage('merge', 'merge', 'merge', 6, 'pending', ['final']),
+    ]);
+    const { container } = mount(createElement(FeatureProcessGraph, { run: preset }));
+    const all = textNodes(container as never).filter(t => t === '⇉ параллельно');
+    expect(all).toHaveLength(2); // колонки 2 и 3
+    expect(byId(container, 'pgraph-edge-qa-plan-final')!.getAttribute('stroke-dasharray')).toBe('5 4');
+  });
 });

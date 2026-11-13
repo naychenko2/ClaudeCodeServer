@@ -112,7 +112,11 @@ public class ProjectManager : IProjectManager
         if (taken is not null)
             throw new ArgumentException($"Эта папка уже подключена как проект «{taken.Name}»");
         // «Личное» лежит в другом сторе и в _projects не попадает, но папку делить с ним нельзя (ADR-040 §1.3)
-        if (_personal?.GetPersonalOf(userId) is { } personal && ProjectCapabilities.FolderKey(personal) == key)
+        // Совпадение, вложенность и родитель: корень проекта не должен пересекаться с папкой «Личного»
+        if (_personal?.GetPersonalOf(userId) is { } personal
+            && (ProjectCapabilities.FolderKey(personal) == key
+                || deviceId is null && personal.DeviceId is null
+                    && (UserHomeResolver.IsInside(rootPath, personal.RootPath) || UserHomeResolver.IsInside(personal.RootPath, rootPath))))
             throw new ArgumentException("Эта папка занята служебным проектом");
     }
 

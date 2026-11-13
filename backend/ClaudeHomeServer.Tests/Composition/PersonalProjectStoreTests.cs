@@ -232,6 +232,23 @@ public class PersonalProjectStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task EnsureRootFree_КореньВнутриЛичногоИРодительЛичного_Отклоняются()
+    {
+        var store = CreateStore();
+        var personal = await store.EnsurePersonalAsync(_ownerId);
+        var manager = CreateManager(store);
+        var inside = Path.Combine(personal.RootPath, "sub");
+        Directory.CreateDirectory(inside);
+
+        var insideAct = () => manager.Create("Внутри", inside, _ownerId, Username);
+        var parentAct = () => manager.Create("Родитель", _home, _ownerId, Username);
+
+        insideAct.Should().Throw<ArgumentException>().WithMessage("*служебным*");
+        parentAct.Should().Throw<ArgumentException>().WithMessage("*служебным*");
+        manager.GetAll().Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task EnsureRootFree_ДругойВладелец_НеБлокируется()
     {
         // Сверка идёт только с «Личным» самого владельца, как и у обычных проектов

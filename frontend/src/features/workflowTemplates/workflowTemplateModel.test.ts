@@ -16,6 +16,7 @@ vi.mock('../../lib/offline', async (importOriginal) => {
 
 import {
   NON_SKIPPABLE,
+  SINGLE_ROLES,
   STAGE_ROLES,
   clampStall,
   isNonSkippable,
@@ -118,6 +119,8 @@ describe('setPresence — несъёмная роль не снимается', 
     expect(isNonSkippable('qa')).toBe(false);
     // роли этапов — закрытый набор TaskRoles без feature/rework/consult (разрез §0.3)
     expect([...STAGE_ROLES]).toEqual(['cut', 'design', 'plan', 'step', 'review', 'qa', 'final', 'merge']);
+    // одиночные роли — тот же список, что WorkflowRules.SingleRoles на бэке (разрез 2 §1.6)
+    expect([...SINGLE_ROLES]).toEqual(['cut', 'final', 'merge']);
   });
 });
 
@@ -132,14 +135,30 @@ describe('stageErrors — подсказки до отправки (зеркал
     ]))).toEqual([]);
   });
 
-  it('неизвестная роль и дубль роли — каждая названа; метка неизвестной — по номеру', () => {
+  it('неизвестная роль и дубль одиночной роли — каждая названа; метка неизвестной — по номеру', () => {
     const e = stageErrors(tpl([
       stage({ role: 'deploy' }),
-      stage({ role: 'step' }),
-      stage({ role: 'step' }),
+      stage({ role: 'merge' }),
+      stage({ role: 'merge' }),
     ]));
     expect(e.some(x => x.includes('этап #1') && x.includes('неизвестная роль этапа «deploy»'))).toBe(true);
-    expect(e.some(x => x.includes('этап «step»') && x.includes('встречается в маршруте дважды'))).toBe(true);
+    expect(e.some(x => x.includes('этап «merge»') && x.includes('роль «merge» одиночная'))).toBe(true);
+  });
+
+  // Зеркало бэка (WorkflowRulesTests.ПовторяемаяРольСРазнымиId_Допустима): повтор не-одиночной
+  // роли легален (дублем на бэке считается id, не роль) — редактор не подсвечивает валидный
+  // шаблон красным до отправки (дефект: был отказ на паре qa).
+  it.each(['design', 'plan', 'step', 'review', 'qa'])('повтор не-одиночной роли %s — не ошибка', (role) => {
+    expect(stageErrors(tpl([stage({ role }), stage({ role })]))).toEqual([]);
+  });
+
+  // Зеркало бэка (WorkflowRulesTests.ОдиночнаяРольДваждыСРазнымиId_Ошибка): cut/final/merge —
+  // по одному на маршрут, повтор назван явно («одиночная»).
+  it.each(['cut', 'final', 'merge'])('дубль одиночной роли %s — отказ с текстом про одиночность', (role) => {
+    const e = stageErrors(tpl([stage({ role }), stage({ role })]));
+    expect(e).toHaveLength(1);
+    expect(e[0]).toContain('одиночная');
+    expect(e[0]).toContain(role);
   });
 
   it('несъёмная роль в off/optional — отказ (тот же, что у сервера)', () => {

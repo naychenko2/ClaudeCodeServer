@@ -19,6 +19,11 @@ export const STAGE_ROLES: readonly WorkflowStageRole[] =
 // а не логику ниже (на бэке — та же строка в WorkflowRules.NonSkippable).
 export const NON_SKIPPABLE: readonly WorkflowStageRole[] = ['step', 'merge', 'final'];
 
+// Роли, которых в маршруте не больше одного (разрез 2 §1.6, на бэке — WorkflowRules.SingleRoles):
+// cut, final и merge — по одному на фичу. Повторяться могут design, plan, step, review и qa —
+// у каждого свой id (дублем на бэке считается id, не роль).
+export const SINGLE_ROLES: readonly WorkflowStageRole[] = ['cut', 'final', 'merge'];
+
 // Присутствие этапа (разрез §1 «Пропуск») и политика простоя (серверные WorkflowStagePresence.All /
 // WorkflowStallPolicies.All).
 export const STAGE_PRESENCES: readonly WorkflowStagePresence[] = ['on', 'optional', 'off'];
@@ -86,7 +91,9 @@ export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] 
     return errors;
   }
 
-  const seenRoles = new Set<string>();
+  // Только одиночные роли (SINGLE_ROLES): повтор не-одиночной здесь молчит, как на бэке
+  // (singleRoleSeen в WorkflowRules.Validate держит лишь их).
+  const seenSingleRoles = new Set<string>();
 
   stages.forEach((stage, i) => {
     // Метка: роль, если она известна; иначе порядковый номер — «неизвестную роль»
@@ -107,11 +114,15 @@ export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] 
 
     if (!known) {
       errors.push(`${label}: неизвестная роль этапа «${role}». Допустимы: ${STAGE_ROLES.join(', ')}.`);
-    } else if (seenRoles.has(role)) {
-      // Та же семантика, что у серверного `!seenRoles.Add(role)`: проверка и запись — вместе.
-      errors.push(`${label}: роль встречается в маршруте дважды.`);
-    } else {
-      seenRoles.add(role);
+    } else if ((SINGLE_ROLES as readonly string[]).includes(role)) {
+      // Та же граница, что у серверного `SingleRoles.Contains(role) && !singleRoleSeen.Add(role)`
+      // (WorkflowRules.cs): проверка и запись — вместе. Повтор design/plan/step/review/qa
+      // легален (у этапа свой id) — редактор не подсвечивает валидный шаблон красным.
+      if (seenSingleRoles.has(role)) {
+        errors.push(`${label}: роль «${role}» одиночная — в маршруте она встречается дважды.`);
+      } else {
+        seenSingleRoles.add(role);
+      }
     }
 
     if (!(STAGE_PRESENCES as readonly string[]).includes(presence)) {

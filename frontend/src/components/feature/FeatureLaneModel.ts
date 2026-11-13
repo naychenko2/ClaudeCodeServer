@@ -70,12 +70,22 @@ export function axisFrac(t: string, axis: LaneAxis): number {
 // этапа, который стоит (run.attention.kind === 'stopped'). Пороги «стоит» фронт не считает.
 export type LaneIntervalState = 'done' | 'live' | 'wait' | 'stalled';
 
+// Исход-отказ последнего хода — зеркало бэкового предиката И7 (FeatureTimeMath.IsFailedTurn):
+// любой исход паспорта хода, кроме success. Отрицание, а не список: словарь исходов на бэке
+// растёт (failed/crashed/egress_down/local_*, window_1m_unavailable) — новый отказ попадает
+// сам. null (паспорт не собран) — не отказ. Своего списка исходов фронт не держит: второй
+// словарь и был дефектом (поповер говорил «работа завершена» при «Последний ход: failed»).
+export function isFailedTurnOutcome(outcome: string | null): boolean {
+  return outcome !== null && outcome !== 'success';
+}
+
 export interface LaneInterval {
   from: string;
   // Конец, обрезанный границей окна (см. шапку файла).
   to: string;
   state: LaneIntervalState;
-  // Исход последнего хода интервала (cancelled/interrupted/error) — риска на конце.
+  // Исход последнего хода, если он отказ (isFailedTurnOutcome; бэк заполняет поле только
+  // для отказа — FeatureStageIntervals.cs) — риска на конце.
   lastOutcome: string | null;
   taskIds: string[];
   // Пауза до следующего интервала этого же этапа (минуты; 0 у последнего).

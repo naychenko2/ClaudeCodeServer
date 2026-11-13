@@ -45,7 +45,8 @@ export interface StageInterval {
   minutes: number;
   // true — интервал дотянут до «сейчас» (в нём живой хвост идущей задачи).
   live: boolean;
-  // Исход ПОСЛЕДНЕГО хода интервала, если он cancelled/interrupted/error; иначе null.
+  // Исход ПОСЛЕДНЕГО хода интервала, если он отказ (бэк: FeatureTimeMath.IsFailedTurn —
+  // любой исход паспорта хода кроме success); иначе null.
   lastOutcome: string | null;
   // Id задач, чьи ходы вошли в интервал (уникальные, по первому появлению).
   taskIds: string[];

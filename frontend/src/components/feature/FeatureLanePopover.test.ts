@@ -15,7 +15,8 @@
 // Мутации (в отчёте): (1) «click — toggle» (закрывать повторным кликом) → c1 краснеет;
 // (2) не возвращать фокус на интервал при Esc → c2 краснеет; (3) рендерить превью в
 // потоке, а не в портале → c3 краснеет; (4) оставить интервалы кнопками на 360 → c4
-// краснеет; (5) убрать «Задач в интервале: N» → проверка слов краснеет.
+// краснеет; (5) убрать «Задач в интервале: N» → проверка слов краснеет;
+// (6) вернуть локальный список исходов вместо isFailedTurnOutcome → тест отказа краснеет.
 
 import { act } from 'react';
 import { createElement } from 'react';
@@ -26,6 +27,7 @@ import {
   intervalWorkerLines, intervalPauseText, primaryLaneTask,
   type LaneIntervalDetails,
 } from './FeatureLanePopover';
+import { isFailedTurnOutcome } from './FeatureLaneModel';
 import { C } from '../../lib/design';
 import { mount, installFakeDom, uninstallFakeDom, findNodeByAttr, textNodes, reactProps } from '../chat/__tests__/fakeDom';
 import type { FeatureRun, FeatureStage, FeatureStageExecutor, FeatureTask } from '../../types/featureRun';
@@ -202,6 +204,22 @@ describe('FeatureLanePopover: слова и модель интервала (GC-
     expect(intervalStateWord('live', 'interrupted')).toBe('прервано');
   });
 
+  // Дефект 29c053fb: «прервано» — по общему предикату отказа (isFailedTurnOutcome —
+  // зеркало бэкового FeatureTimeMath.IsFailedTurn: любой исход кроме success), а не по
+  // локальному списку cancelled/interrupted/error: поповер говорил «работа завершена» при
+  // «Последний ход: failed». Мутация «вернуть сравнение со старым списком» красит
+  // failed/crashed/egress_down/local_*.
+  it('«прервано» — по любому отказному исходу (failed/crashed/egress_down/local_*), не по своему списку', () => {
+    for (const bad of ['cancelled', 'interrupted', 'failed', 'crashed', 'egress_down', 'local_down', 'local_busy', 'window_1m_unavailable']) {
+      expect(isFailedTurnOutcome(bad), bad).toBe(true);
+      expect(intervalStateWord('done', bad), bad).toBe('прервано');
+      expect(intervalStateWord('live', bad), bad).toBe('прервано');
+    }
+    expect(isFailedTurnOutcome('success'), 'success — не отказ').toBe(false);
+    expect(isFailedTurnOutcome(null), 'без исхода — не отказ').toBe(false);
+    expect(intervalStateWord('done', 'success')).toBe('работа завершена');
+  });
+
   it('состав интервала — по taskIds: «X ждёт с времени, в этом же интервале работала Y», число задач явно', () => {
     const d = details({
       state: 'wait',
@@ -278,6 +296,21 @@ describe('FeatureLanePopover: поповер на дорожке (GC-F6)', () =>
     expect(inBody('lane-popover-show-in-feed'), 'кнопка «Показать в ленте»').not.toBeNull();
     expect(inBody('lane-popover-open-task'), 'кнопка «Открыть задачу»').not.toBeNull();
     expect(inBody('lane-popover-open-chat'), 'кнопка «чат →»').not.toBeNull();
+  });
+
+  // Дефект 29c053fb (симптом на живом пути): интервал с отказным последним ходом —
+  // поповер говорит «прервано», а не «работа завершена» рядом с «Последний ход: failed».
+  it('интервал с последним ходом failed — в поповере «прервано» и исход назван', () => {
+    const stats = mkStats({
+      prod: [iv('2026-10-20T10:00:00Z', '2026-10-20T10:30:00Z', ['t-prod'], false, 'failed')],
+    });
+    const c = renderTab(mkRun(), stats);
+    fire(findNodeByAttr(c as never, 'data-testid', 'lane-interval-prod-0')! as never, 'onClick');
+    const state = inBody('lane-popover-state');
+    expect(state, 'блок состояния есть').not.toBeNull();
+    expect(textNodes(state! as never).join(' ')).toBe('прервано');
+    // «Последний ход: » и сам исход — два текстовых узла (JSX), в склейке — двойной пробел.
+    expect(textNodes(inBody('lane-popover')! as never).join(' ')).toMatch(/Последний ход:\s*failed/);
   });
 
   // === c2: Esc закрывает, фокус на интервале, превью не всплывает заново ===

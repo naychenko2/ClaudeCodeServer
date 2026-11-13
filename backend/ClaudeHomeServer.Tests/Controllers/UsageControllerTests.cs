@@ -460,6 +460,42 @@ public class UsageControllerTests : IClassFixture<TestWebApplicationFactory>
         engines[0].GetProperty("maxConcurrency").GetInt32().Should().Be(TrackedLocalLlmClient.DefaultLimit);
     }
 
+    // Подпись основной локали в списке «Исполнителей ночи» — то же значение, чем зовёт её
+    // панель «Локальные модели» (LlmProviders:<ключ>:Stats:Title): под алиасом qwen3.8-27b с
+    // октября работает Flash-Next, и экран не имеет права показывать старое имя. Мутация:
+    // убрать ветку MainLocalTitle в UsageController.BuildLocalEngineOptions — краснеет первый
+    // assert; убрать её в CheapTextRunner.EngineTitle — краснеет
+    // LocalExecutorsFor_MainLocalTitleFromStats… в Llm.Tests.
+    [Fact]
+    public async Task GetUsage_ОсновнаяЛокаль_ПодписьИзStatsTitle_БезНего_ПрежнийЗапасныйВариант()
+    {
+        using var host = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureAppConfiguration((_, config) =>
+            {
+                config.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["LlmProviders:local-qwen:IsLocal"] = "true",
+                    ["LlmProviders:local-qwen:Stats:Title"] = "Flash-Next",
+                });
+            });
+        });
+
+        var client = await AuthenticateAsync(host);
+        var engines = (await client.GetFromJsonAsync<JsonElement>("/api/usage"))
+            .GetProperty("ollama").GetProperty("localEngines").EnumerateArray().ToList();
+        engines[0].GetProperty("name").GetString().Should().Be(LocalActionOverridesStore.LocalRoute,
+            "ключ исполнителя не меняется: подпись — только то, что видит человек");
+        engines[0].GetProperty("title").GetString().Should().Be("Flash-Next");
+
+        // Без явной подписи — прежнее поведение. В базовом тестовом хосте основная локаль
+        // не настроена (Ollama:Model="") → запасный «Основная», как и раньше.
+        var plain = _factory.CreateAuthenticatedClient();
+        var plainEngines = (await plain.GetFromJsonAsync<JsonElement>("/api/usage"))
+            .GetProperty("ollama").GetProperty("localEngines").EnumerateArray().ToList();
+        plainEngines[0].GetProperty("title").GetString().Should().Be("Основная");
+    }
+
     [Fact]
     public async Task GetUsage_МестоСПресетом_ОтдаётPresetИдентичноОписателю()
     {

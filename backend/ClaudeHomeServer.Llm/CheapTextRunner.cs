@@ -8,13 +8,16 @@ namespace ClaudeHomeServer.Services.Llm;
 // (LocalExecutorsFor). executorsStore — стор списка исполнителей места
 // (data/local-action-executors.json): единственный источник этого списка (место без
 // строки в нём идёт по своему маршруту, как до фичи). Оба параметра опциональны, как у
-// LocalActionRouter: в DI — синглтоны, в тестах передаются руками.
+// LocalActionRouter: в DI — синглтоны, в тестах передаются руками. providers — реестр
+// провайдеров: нужен в одном месте — подписи основной локали в списке исполнителей
+// (EngineTitle): человек должен видеть то же имя модели, что и на панели «Локальные модели»,
+// а не технический алиас. Маршрутов и ключей не касается: алиас остаётся в маршруте.
 public sealed class CheapTextRunner(
     LocalActionRouter router, ILocalLlmClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log, ITierModelResolver? appSettings = null,
     UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null,
     EngineCallLedger? ledger = null, NamedLocalEngines? namedEngines = null,
-    LocalActionExecutorsStore? executorsStore = null)
+    LocalActionExecutorsStore? executorsStore = null, LlmProviderRegistry? providers = null)
     : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
@@ -607,9 +610,10 @@ public sealed class CheapTextRunner(
     // (RunLocalOrChosen*), а не «куда-нибудь» — конфиг, который назначает месту один
     // движок, здесь подмены не даёт. Title — подпись движка для владельца, та же сборка,
     // что у LocalActionRouter.EngineLabel (Title → модель → имя): человеку нужно видеть,
-    // КУДА он отправляет ночь, а не технический ключ. У основной локали подписи движка нет —
-    // её именем становится модель, на которую она реально ходит (TextModel), а без неё —
-    // сам ключ «local».
+    // КУДА он отправляет ночь, а не технический ключ. У основной локали своей подписи движка
+    // нет — берётся явная подпись основной локали (Stats:Title реестра, та же, что читает
+    // панель «Локальные модели»), без неё — модель, на которую она реально ходит (TextModel),
+    // а без неё — сам ключ «local».
     public IReadOnlyList<LocalEngineExecutor> LocalExecutorsFor(string actionKey)
     {
         if (executorsStore?.TryGet(actionKey) is not { } cfg) return [];
@@ -659,10 +663,18 @@ public sealed class CheapTextRunner(
         return list;
     }
 
+    // Подпись исполнителя для человека. Именованный движок — его Spec (Title → модель → имя).
+    // Основная локаль: явная подпись реестра (Stats:Title) — то же значение, что показывает
+    // вкладка панели «Локальные модели»: два экрана не имеют права звать одну модель по-разному
+    // (под «старым» алиасом qwen3.8-27b с октября работает Flash-Next, и в «Исполнителях» он
+    // читался как другая модель). Без неё — прежнее поведение: модель, на которую реально
+    // ходит (TextModel → Model), а без неё — ключ «local». Ключ и алиас не меняются нигде:
+    // «local» — маршрут стора, алиас — значение конфига.
     private string EngineTitle(string engine)
     {
         if (IsMainLocalEngine(engine))
-            return !string.IsNullOrWhiteSpace(ollama.TextModel) ? ollama.TextModel
+            return providers?.MainLocalTitle is { } title ? title
+                : !string.IsNullOrWhiteSpace(ollama.TextModel) ? ollama.TextModel
                 : !string.IsNullOrWhiteSpace(ollama.Model) ? ollama.Model : engine;
         return namedEngines?.Get(engine)?.Spec is { } s ? s.Title ?? s.Model ?? s.Name : engine;
     }

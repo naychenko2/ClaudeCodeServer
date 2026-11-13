@@ -451,7 +451,8 @@ public class LocalActionExecutorsStoreTests
     // Стенд: ОДИН экземпляр стора и у раннера, и у теста — в бою это синглтон DI, и запись
     // админа должна быть видна раннеру сразу, без перезагрузки.
     private static (CheapTextRunner Runner, LocalActionExecutorsStore Store) Stand(
-        string dir, NamedLocalEngines engines, ILocalLlmClient? mainLocal = null)
+        string dir, NamedLocalEngines engines, ILocalLlmClient? mainLocal = null,
+        LlmProviderRegistry? providers = null)
     {
         var config = Config(dir);
         var http = new NoHttp();
@@ -460,9 +461,14 @@ public class LocalActionExecutorsStoreTests
         var router = new LocalActionRouter(ollama, overrides, config, NullLogger<LocalActionRouter>.Instance,
             engines: engines);
         var store = Store(dir, engines);
+        // Реестр один на весь стенд: в бою это тот же синглтон, который читает панель
+        // «Локальные модели». Без явного — пустой (тестовый конфиг не грузит appsettings.json),
+        // это случай «подпись основной локали не задана».
+        providers ??= new LlmProviderRegistry(config);
         var runner = new CheapTextRunner(router, ollama,
-            new CloudCheapClient(http, config, new LlmProviderRegistry(config), NullLogger<CloudCheapClient>.Instance),
-            new NoClaude(), NullLogger<CheapTextRunner>.Instance, namedEngines: engines, executorsStore: store);
+            new CloudCheapClient(http, config, providers, NullLogger<CloudCheapClient>.Instance),
+            new NoClaude(), NullLogger<CheapTextRunner>.Instance, namedEngines: engines, executorsStore: store,
+            providers: providers);
         return (runner, store);
     }
 
@@ -499,6 +505,38 @@ public class LocalActionExecutorsStoreTests
         // Основная локаль: подписи движка нет — её именем становится модель, на которую она
         // ходит (TextModel основной локали).
         Assert.Equal("main-модель", list[3].Title);
+    }
+
+    [Fact]
+    public void LocalExecutorsFor_MainLocalTitleFromStats_UsesIt_WithoutIt_KeepsModelAlias()
+    {
+        // Явная подпись основной локали (LlmProviders:<ключ>:Stats:Title — то же значение, чем
+        // зовёт модель панель «Локальные модели») идёт и в список исполнителей: под алиасом
+        // qwen3.8-27b с октября работает Flash-Next, и рядом с «Qwen 27B (пилот)» человек читал
+        // две «27» как две модели. Ключ исполнителя и маршрут не тронуты — «local» остаётся
+        // «local», меняется только подпись.
+        var dir = DataDir();
+        var engines = Engines(("gemma", 2));
+        var providers = new LlmProviderRegistry(Config(dir, new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Stats:Title"] = "Flash-Next",
+        }));
+        var (runner, store) = Stand(dir, engines, mainLocal: new PlainEngineClient("main"), providers);
+        Assert.True(store.Save(Key, Cfg(2, Ex("local"), Ex("gemma"))));
+
+        var list = runner.LocalExecutorsFor(Key);
+        Assert.Equal(["local", "gemma"], list.Select(e => e.Engine));
+        Assert.Equal("Flash-Next", list[0].Title);
+        // Именованный движок — по-прежнему своей цепочке (Title → модель → имя; здесь ни Title,
+        // ни Model не заданы → ключ движка): общая подпись основной локали его не касается.
+        Assert.Equal("gemma", list[1].Title);
+
+        // Без Stats:Title — прежнее поведение: модель, на которую реально ходит основной
+        // движок (TextModel). Тот же случай проверяет и …WithEngineTitles выше.
+        var (plainRunner, plainStore) = Stand(dir, engines, mainLocal: new PlainEngineClient("main"));
+        Assert.True(plainStore.Save(Key, Cfg(1, Ex("local"))));
+        Assert.Equal("main-модель", plainRunner.LocalExecutorsFor(Key)[0].Title);
     }
 
     [Fact]

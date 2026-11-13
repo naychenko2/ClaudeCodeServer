@@ -193,10 +193,14 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
         var options = new List<OllamaLocalEngineInfo>
         {
             new(LocalActionOverridesStore.LocalRoute,
-                // Подпись той же цепочки, что Engine (EngineLabel: Title → модель → имя): у основной
-                // локали Title нет — её подпись есть модель; без настроенной модели — «Основная»
-                // (тот же запасный вариант, что у панели «Локальные модели», LocalModelStatsController:177).
-                localRouter.LocalModel is { Length: > 0 } mainModel ? mainModel : "Основная",
+                // Подпись той же цепочки, что Engine (EngineLabel: Title → модель → имя). Роль Title
+                // у основной локали играет явная подпись реестра (MainLocalTitle — то же значение,
+                // что читает вкладка панели «Локальные модели»): список исполнителей и панель не
+                // имеют права звать одну модель по-разному. Без неё — прежнее: модель, на которую
+                // она ходит; без неё — «Основная» (тот же запасный вариант, что у панели,
+                // LocalModelStatsController:177).
+                providers.MainLocalTitle
+                    ?? (localRouter.LocalModel is { Length: > 0 } mainModel ? mainModel : "Основная"),
                 executors.MaxConcurrencyOf(LocalActionOverridesStore.LocalRoute)),
         };
         foreach (var engine in namedEngines.Engines)

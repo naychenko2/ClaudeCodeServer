@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Check, GitBranch, ListChecks, ListEnd, ListX, Pause, Play, RotateCcw, Zap } from 'lucide-react';
+import { Check, GitBranch, ListChecks, ListEnd, ListX, MessageSquare, Pause, Play, RotateCcw, Zap } from 'lucide-react';
 import { C, R, FS, SP, FONT, MODAL_W } from '../../lib/design';
 import { refetchFeaturePage } from '../../lib/featurePage';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -22,7 +22,6 @@ import type { FeatureIndexFeature } from '../../types/featureIndex';
 import { NavTargetButton } from './NavTargetButton';
 import { FeatureWorkflowConfirm } from './FeatureWorkflowConfirm';
 import { routeBlockState } from './FeatureWorkflowConfirmModel';
-import { StatusTag, shortRunTagLabel, type FeatureRunTag } from './FeatureStatusTag';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { minutesSince } from './FeatureStatsBits';
 import { useNow } from '../../lib/useNow';
@@ -409,7 +408,6 @@ export interface FeaturePageToolbarProps {
   run: FeatureRun | null;
   feature: FeatureIndexFeature | null;
   isMobile: boolean;
-  tag: FeatureRunTag | null;
   // «Мерж…»: открыть общую модалку подтверждения (Ф6); undefined — без действия.
   onMerge?: () => void;
   // Гейт владельца для «Закрыть фичу» (F2) и «Возобновить» (F3): true — только
@@ -418,7 +416,7 @@ export interface FeaturePageToolbarProps {
   canClose?: boolean;
 }
 
-export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canClose }: FeaturePageToolbarProps) {
+export function FeaturePageToolbar({ run, feature, isMobile, onMerge, canClose }: FeaturePageToolbarProps) {
   const branch = feature?.branch ?? null;
   const keyChat = feature?.keySessionId ?? null;
   const epic = run?.epic ?? null;
@@ -551,13 +549,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
   // старыми данными UI обязан пережить и то, и другое — hold важнее.
   const attention = run?.attention ?? null;
   const primary = featurePrimaryAction(attention, attentionPersonaName(attention));
-  const notStarted = run?.state === 'not_started';
   // «Мерж…» — только когда state === 'merge_pending'; никогда при merging/merged/closed.
   const mergePending = run?.state === 'merge_pending';
   const effectivePrimary = (primary?.kind === 'merge' && !mergePending) ? null : primary;
   // У фичи в очереди главной кнопки нет: «Снять паузу» там был бы запуском вне очереди без предупреждения.
   const holdAction: 'unpause' | 'start' | null = paused && !queued ? 'unpause' : draft ? 'start' : null;
-  const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null || (notStarted && keyChat != null));
+  const showPrimary = !isMobile && (holdAction != null || effectivePrimary != null);
   // Название фичи для плашки «← к фиче {название}» в открытом чате — из пропов
   // компонента, как в блоке тревоги: переход в чат из шапки тоже пишет возврат (FS-FKEY).
   const featureTitle = run?.epic?.title ?? null;
@@ -572,10 +569,12 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onMerge?.();
       return;
     }
-    if (notStarted && keyChat) {
-      recordFeatureReturn(fid, { kind: 'chat', id: keyChat }, featureTitle);
-      void openChatById(keyChat);
-    }
+  };
+  // «Ключевой чат» (F09): отдельная кнопка, не главное действие; запись возврата — как у остальных переходов.
+  const openKeyChat = () => {
+    if (!keyChat) return;
+    recordFeatureReturn(fid, { kind: 'chat', id: keyChat }, featureTitle);
+    void openChatById(keyChat);
   };
 
   // Пункты ⋯: только существующие (ветки/эпика/ключевого чата нет — пункта нет).
@@ -655,27 +654,18 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
       onClick: () => void resumeClick(),
     });
   }
-  // Пункта «Открыть ключевой чат» здесь нет: ключевой чат открывается из вкладки «Чаты».
+  // На мобиле кнопки «Ключевой чат» в ряду нет (не лезет в 360) — пункт шторки.
+  if (isMobile && keyChat) {
+    items.push({
+      key: 'key-chat',
+      icon: <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+      label: 'Открыть ключевой чат',
+      onClick: openKeyChat,
+    });
+  }
 
   return (
     <>
-      {tag && (
-        // На 360 тег не должен вытеснять название: показываем только тон-слово (без суффикса
-        // стадии «· Производство», полный текст — в title/aria), потолок обёртки 64 px; обёртка не сжимается (flex-shrink 0) —
-        // сжимается название, иначе в ряду 332 px слово тега схлопывалось до 0–17 px.
-        // Расчёт: 360 − поля 24 − «К списку» ~72 − глиф 14 − ⋯ 36 − зазоры 24 − тег 64 = 126 px
-        // названию (≥ 2 слов, хвост — многоточием). На десктопе — без изменений.
-        <span
-          title={isMobile ? tag.label : undefined}
-          style={isMobile ? { display: 'inline-flex', flexShrink: 0, maxWidth: TAG_MAX_W_MOBILE, overflow: 'hidden' } : { display: 'contents' }}
-        >
-          <StatusTag
-            tag={isMobile ? { ...tag, label: shortRunTagLabel(tag.label) } : tag}
-            testId="feature-page-status"
-            clip={isMobile}
-          />
-        </span>
-      )}
       {canPause && !isMobile && (
         <span data-testid="feature-page-pause-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
           <Button
@@ -703,7 +693,14 @@ export function FeaturePageToolbar({ run, feature, isMobile, tag, onMerge, canCl
           >
             {holdAction === 'unpause' ? (holdBusy ? 'Снимаю паузу…' : 'Снять паузу')
               : holdAction === 'start' ? (holdBusy ? 'Запускаю…' : 'Запустить фичу')
-              : effectivePrimary ? effectivePrimary.label : 'Открыть ключевой чат'}
+              : effectivePrimary?.label}
+          </Button>
+        </span>
+      )}
+      {!isMobile && keyChat && (
+        <span data-testid="feature-page-key-chat-wrap" style={{ display: 'inline-flex', flexShrink: 0 }}>
+          <Button size="xs" variant="ghost" dataTestId="feature-page-key-chat" onClick={openKeyChat}>
+            Ключевой чат
           </Button>
         </span>
       )}

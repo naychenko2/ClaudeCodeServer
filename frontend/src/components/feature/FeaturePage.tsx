@@ -31,6 +31,7 @@ import {
   featurePageStatusTag, toRunTag, type FeatureRunTag,
 } from './FeaturePageHeader';
 import { FeaturePageTabs } from './FeaturePageTabs';
+import { FeaturePageHero } from './FeaturePageHero';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
 import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
 import { FeatureStageArea, resolveSelectedStage, type StageSelection } from './FeatureStageArea';
@@ -432,7 +433,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       }
       trailing={
         // Тег (1280) · главное действие (1280) · ⋯ (макет §1/§11).
-        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} tag={tag} onMerge={openMergeDialog} canClose={canClose} />
+        <FeaturePageToolbar run={run} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} canClose={canClose} />
       }
       rootRef={rootRef}
       rootTestId="feature-page"
@@ -443,6 +444,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       <>
         {/* Тело: прокрутка, поля 16 16 24 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: `${SP.lg}px ${SP.lg}px ${SP.xl}px` }}>
+          <FeaturePageHero title={title} tag={tag} run={run} />
           {body}
         </div>
         {/* Модалка подтверждения мержа (Ф6): портал, рендерится при mergeOpen. */}

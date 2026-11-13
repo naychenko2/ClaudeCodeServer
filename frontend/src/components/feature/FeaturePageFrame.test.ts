@@ -895,30 +895,30 @@ describe('Ш9a: тег статуса на 360', () => {
     expect(shortRunTagLabel('ждёт согласия на мерж')).toBe('ждёт');
   });
 
-  it('360: тег в обёртке с потолком ширины и клипом; на 1280 обёртка прозрачна', async () => {
+  it('тег живёт в шапке тела (над заголовком), а не в тулбаре, на обеих ширинах', async () => {
     mockGetFeature.result = pageData({ state: 'waiting' });
     for (const isMobile of [true, false]) {
       const c = render({ isMobile });
       await settle();
       const tag = findNodeByAttr(c, 'data-testid', 'feature-page-status');
       expect(tag).not.toBeNull();
-      const wrap = reactProps(tag!.parentNode as never) as { style?: Record<string, unknown> };
-      if (isMobile) {
-        // Исход: название получает ≥ 125 px (≈ 2 слова). Остальное в строке тулбара на 360:
-        // поля 24 + «К списку» ~72 + глиф 14 + ⋯ 36 + зазоры 24 = 170.
-        const titleW = 360 - 170 - Number(wrap.style?.maxWidth);
-        expect(titleW).toBeGreaterThanOrEqual(125);
-        expect(wrap.style?.overflow).toBe('hidden');
-        // Корень дефекта 7bcf9a39: обёртка не должна сжиматься flex'ом ниже слова тега.
-        expect(wrap.style?.flexShrink, 'обёртка тега сжимается flex-ом').toBe(0);
-        expect(wrap.style?.minWidth, 'min-width: 0 даёт путь сжатия ниже содержимого').toBeUndefined();
-        // Только тон-слово, без суффикса стадии; тег клипается многоточием, не посреди слова.
-        expect(String(tag!.textContent)).not.toContain('·');
-        const tagStyle = (reactProps(tag as never) as { style?: Record<string, unknown> }).style;
-        expect(tagStyle?.overflow).toBe('hidden');
-      } else {
-        expect(wrap.style?.display).toBe('contents');
-      }
+      const hero = findNodeByAttr(c, 'data-testid', 'feature-page-hero');
+      expect(hero, 'шапка в теле').not.toBeNull();
+      expect(findNodeByAttr(hero as never, 'data-testid', 'feature-page-status'), `тег внутри шапки в теле (mobile=${isMobile})`).not.toBeNull();
     }
+  });
+
+  it('шапка в теле: метастрока этапов с «≈», полоса по progressPct; без meta — ни строки, ни полосы', async () => {
+    mockGetFeature.result = pageData({ state: 'running', meta: { stagesDone: 4, stagesTotal: 10, parallelBranches: 2, etaMinutes: 180, progressPct: 52, approx: true } });
+    const c = render({});
+    await settle();
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-stages-meta')!).join('')).toBe('4 из 10 этапов · 2 ветки идут параллельно · ≈ 3 ч до финала');
+    const bar = findNodeByAttr(c, 'data-testid', 'feature-page-progress')!;
+    expect((bar as unknown as { attributes: Record<string, string> }).attributes['aria-valuenow']).toBe('52');
+    mockGetFeature.result = pageData({ state: 'running' });
+    const c2 = render({});
+    await settle();
+    expect(findNodeByAttr(c2, 'data-testid', 'feature-page-stages-meta')).toBeNull();
+    expect(findNodeByAttr(c2, 'data-testid', 'feature-page-progress')).toBeNull();
   });
 });

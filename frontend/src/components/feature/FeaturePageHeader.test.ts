@@ -219,7 +219,7 @@ describe('FeaturePageToolbar: главная кнопка — запись во�
     }
     if (!win.document.querySelector) win.document.querySelector = () => null;
     if (!win.getComputedStyle) win.getComputedStyle = () => ({ overflowY: 'visible' });
-    const { container } = mount(createElement(FeaturePageToolbar, { run, feature, isMobile: false, tag: null }));
+    const { container } = mount(createElement(FeaturePageToolbar, { run, feature, isMobile: false }));
     return container;
   }
 
@@ -244,13 +244,16 @@ describe('FeaturePageToolbar: главная кнопка — запись во�
     expect(atOpen.records, 'в момент открытия чата запись уже стоит').toBe(1);
   });
 
-  it('not_started: «Открыть ключевой чат» записывает возврат ровно один раз и раньше открытия', async () => {
+  it('«Ключевой чат» (не главное действие): возврат ровно один раз и раньше открытия', async () => {
     const run = mkRun({ state: 'not_started' });
     const feature = { featureId: 'f1', title: 'Фича', keySessionId: 'chat-key' } as FeatureIndexFeature;
     const c = mountToolbar(run, feature);
     const atOpen: { records: number } = { records: -1 };
     openChatHook.fn = () => { atOpen.records = recFeatureReturnCalls.length; };
-    await clickMain(c);
+    expect(findNodeByAttr(c, 'data-testid', 'feature-page-main-action'), 'главного действия у not_started нет').toBeNull();
+    const kwrap = findNodeByAttr(c, 'data-testid', 'feature-page-key-chat-wrap');
+    expect(kwrap, 'кнопка «Ключевой чат» в шапке').not.toBeNull();
+    await act(async () => { (reactProps(firstButton(kwrap as unknown as AnyNode) as never)!.onClick as () => void)(); });
     expect(openChatCalls, 'переход в ключевой чат').toEqual(['chat-key']);
     expect(recFeatureReturnCalls.length, 'ровно одна запись возврата').toBe(1);
     expect(recFeatureReturnCalls[0], 'запись: фича → ключевой чат, с названием').toEqual({ featureId: 'f1', to: { kind: 'chat', id: 'chat-key' }, title: 'Фича' });

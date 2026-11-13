@@ -80,13 +80,16 @@ public sealed partial class LocalMediaService
         "ru", "sv", "sw", "tr", "zh",
     };
 
-    // Тяжёлые аудио-операции держат GPU десятки минут: обучение голоса и правка трека моделью
-    // xl-base (20 ГБ весов fp32)
+    // Тяжёлые аудио-операции держат GPU десятки минут: обучение голоса, правка трека моделью
+    // xl-base (20 ГБ весов fp32), эффекты MOSS-SFX (18 ГБ видеопамяти) и Foley XXL. Тяжесть — у модели
+    // (движка), а не у операции: MMAudio и Foley XL лёгкие
     public static bool IsHeavyAudio(LocalMediaRequest request) => IsHeavyAudio(request.Op, request.Args);
 
     public static bool IsHeavyAudio(string op, JsonObject? args) =>
         op == LocalMediaOps.VoiceTrain
-        || (op == LocalMediaOps.MusicEdit && Str(args, "task") is "extract" or "lego" or "complete");
+        || (op == LocalMediaOps.MusicEdit && Str(args, "task") is "extract" or "lego" or "complete")
+        || (op == LocalMediaOps.AudioSfx && (Str(args, "engine") ?? "moss") == "moss")
+        || (op == LocalMediaOps.VideoToAudio && Str(args, "engine") == "foley-xxl");
 
     // Источник входов аудио-сборки: у инструментов local-media — файлы проекта и job_id прошлых
     // задач, у шва ILocalAudioMedia — байты запроса. Ссылка на вход — значение аргумента (audio,

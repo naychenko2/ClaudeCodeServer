@@ -100,6 +100,19 @@ public class LocalAudioLimitsSyncTests
             }
             else if (id == AudioCatalog.AudioSr)
                 caps.InputMaxSec.Should().Be(LocalMediaService.UpsampleMaxSeconds, $"{id}: вход расширения частот");
+            else if (id is AudioCatalog.FoleyXl or AudioCatalog.FoleyXxl)
+                caps.InputMaxSec.Should().Be(LocalMediaService.FoleyMaxSeconds, $"{id}: длина видео Foley");
+            else if (id == AudioCatalog.MossSfx)
+            {
+                caps.MinDurationSec.Should().Be(LocalMediaService.SfxMinSeconds, $"{id}: кратчайший эффект");
+                caps.MaxDurationSec.Should().Be(LocalMediaService.SfxMossMaxSeconds, $"{id}: длиннейший эффект");
+            }
+            else if (id == AudioCatalog.MmAudio)
+            {
+                caps.MinDurationSec.Should().Be(LocalMediaService.SfxMinSeconds, $"{id}: кратчайший эффект");
+                caps.MaxDurationSec.Should().Be(LocalMediaService.MmAudioMaxSeconds, $"{id}: длиннейший эффект");
+                caps.InputMaxSec.Should().Be(LocalMediaService.MmAudioMaxSeconds, $"{id}: длина видео");
+            }
             else if (caps.InputMaxSec is not null)
                 caps.InputMaxSec.Should().Be(inputMax, $"{id}: общий потолок входного звука");
         }

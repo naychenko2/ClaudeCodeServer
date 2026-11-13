@@ -1,3 +1,4 @@
+using Xunit;
 using ClaudeHomeServer.Services.Media;
 using ClaudeHomeServer.Services.VideoEditor.Jobs;
 using ClaudeHomeServer.Services.VideoEditor.Tests.Films;

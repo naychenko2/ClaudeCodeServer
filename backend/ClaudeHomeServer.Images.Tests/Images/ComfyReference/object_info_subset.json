@@ -4736,6 +4736,7 @@
       "rvc_convert",
       "rvc_train",
       "separate",
+      "sfx_moss",
       "transcribe",
       "tts",
       "tts_chatterbox",

@@ -823,3 +823,13 @@ flowchart LR
 
 ComfyUI слушает `0.0.0.0` без авторизации. Бэкенд ходит на 127.0.0.1, но сам порт стоит
 закрыть (`--listen 127.0.0.1` или файрвол): это отдельная задача инфраструктуры.
+
+## Kandinsky 6 Lite — вторая локальная видеомодель (Ш5, 2026-11-13)
+
+Экспериментальная, **только ручной выбор** (`ManualOnly`: «Авто» и умолчания её не берут, по умолчанию остаётся H3).
+Веса `Lite-distill-5s`: ролик ровно 5 с, 864×480 (16:9), 24 к/с, звук 44,1 кГц моно, одна ступень «Стандарт».
+Съёмка по тексту или по кадру A; кадра B у ноды нет (`Kandinsky6ImageToVideoAudio` берёт один `reference_latent`).
+Время ≈ 170 с (замер 13.11: T2V 168 с, I2V 180 с). Граф — `ComfyWorkflows.Kandinsky6Video`, ветка адаптера —
+`LocalVideoMediaAdapter.Kandinsky.cs`. Хуже H3: вдвое медленнее, искажает текст в кадре. Крупнее 480p — отдельным «Увеличить».
+Установка на Video: нода `kandinsky6` в `~/ComfyUI-h3/custom_nodes`, веса в `~/ai-data/video-extra/k6` (секция `video_k6`
+в `extra_model_paths.yaml`), `models/audio_vae` — ссылки на `v1-44.pth` и `bigvgan_vocoder`; откат — `~/ComfyUI-h3/rollback-k6.sh`.

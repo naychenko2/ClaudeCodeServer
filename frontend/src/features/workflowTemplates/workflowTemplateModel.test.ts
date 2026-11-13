@@ -19,7 +19,6 @@ import {
   SINGLE_ROLES,
   STAGE_ROLES,
   TITLE_LIMIT,
-  clampStall,
   isNonSkippable,
   setPresence,
   stageErrors,
@@ -46,31 +45,18 @@ const tpl = (stages: WorkflowStage[], over: Partial<WorkflowTemplate> = {}): Wor
   ...over,
 });
 
-describe('clampStall — порог молчания (И3, зеркало NormalizeStall)', () => {
-  // null/0/отрицательное — не «бесконечно», а дефолт конфига (null — берёт вызывающая сторона).
-  it('NaN и нечисло (поле таймаута из UI) → null, а не NaN', () => {
-    expect(clampStall(NaN)).toBeNull();
-    expect(clampStall('abc' as unknown as number)).toBeNull();
-    expect(clampStall(Infinity)).toBeNull();
+describe('порог молчания (И3): вне [5..240] — ошибка, а не молчаливый кламп', () => {
+  const err = (n: number | null | undefined) =>
+    stageErrors(tpl([{ role: 'plan', presence: 'on', stallMinutes: n }])).filter(e => e.includes('От 5 до 240 минут'));
+
+  it('null/undefined и границы 5, 60, 240 — без ошибки', () => {
+    for (const n of [null, undefined, 5, 60, 240]) expect(err(n)).toEqual([]);
   });
 
-  it('null/undefined/0/отрицательное → null (дефолт конфига)', () => {
-    expect(clampStall(null)).toBeNull();
-    expect(clampStall(undefined)).toBeNull();
-    expect(clampStall(0)).toBeNull();
-    expect(clampStall(-5)).toBeNull();
-  });
-
-  // 1..4 ниже пола → 5; >240 → 240; внутри — как есть.
-  it('1..4 поднимаются до 5, больше 240 клампятся, серединные не трогаются', () => {
-    expect(clampStall(1)).toBe(5);
-    expect(clampStall(3)).toBe(5);
-    expect(clampStall(4)).toBe(5);
-    expect(clampStall(5)).toBe(5);
-    expect(clampStall(60)).toBe(60);
-    expect(clampStall(240)).toBe(240);
-    expect(clampStall(241)).toBe(240);
-    expect(clampStall(999)).toBe(240);
+  it('0, 1..4, 241, отрицательное, NaN, Infinity — «От 5 до 240 минут» с меткой этапа', () => {
+    for (const n of [0, 1, 4, 241, 999, -5, NaN, Infinity]) {
+      expect(err(n)).toEqual(['этап «plan»: От 5 до 240 минут']);
+    }
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { afterOptions, normalizeStages, previewColumns, removeStage, removeStageReconnect, renameStageId } from './workflowGraphModel';
+import { addStage, afterOptions, moveStage, normalizeStages, previewColumns, removeStage, removeStageReconnect, renameStageId } from './workflowGraphModel';
 import type { WorkflowStage } from './types';
 
 // Форма тестов — третий встроенный пресет parallel-cycle (разрез 2 §1.10):
@@ -155,5 +155,53 @@ describe('removeStageReconnect', () => {
     expect(r.map(s => [s.id, s.after])).toEqual([['design', []], ['merge', ['design']]]);
     const src = linear();
     expect(removeStageReconnect(src, 'nope')).toBe(src);
+  });
+});
+
+describe('addStage', () => {
+  it('встаёт в конец с уникальным id и заданными «после»; неизвестные отбрасываются', () => {
+    const r = addStage(linear(), { role: 'design', after: ['cut', 'ghost', 'cut'] });
+    const last = r[r.length - 1];
+    expect(last).toMatchObject({ role: 'design', id: 'design-2', after: ['cut'], presence: 'on' });
+    expect(r).toHaveLength(4);
+  });
+  it('удалённый этап можно вернуть: роль снова свободна — id прежний', () => {
+    const removed = removeStageReconnect(linear(), 'design');
+    const back = addStage(removed, { role: 'design', after: ['cut'] });
+    expect(back[back.length - 1]).toMatchObject({ id: 'design', after: ['cut'] });
+  });
+  it('исходный список не меняется', () => {
+    const src = linear();
+    addStage(src, { role: 'plan', after: [] });
+    expect(src).toHaveLength(3);
+  });
+});
+
+describe('moveStage', () => {
+  const chain = () => normalizeStages([
+    { role: 'cut', presence: 'on' }, { role: 'design', presence: 'on' },
+    { role: 'plan', presence: 'on' }, { role: 'merge', presence: 'on' },
+  ]);
+  const edges = (r: WorkflowStage[]) => r.map(s => `${s.id}<${(s.after ?? []).join(',')}`);
+
+  it('вперёд по цепочке: соседи пересвязываются, цепочка не рвётся', () => {
+    expect(edges(moveStage(chain(), 1, 2))).toEqual(['cut<', 'plan<cut', 'design<plan', 'merge<design']);
+  });
+  it('назад: этап встаёт в цепочку перед бывшим соседом', () => {
+    expect(edges(moveStage(chain(), 2, 1))).toEqual(['cut<', 'plan<cut', 'design<plan', 'merge<design']);
+  });
+  it('в начало: становится корнем, бывший первый ссылается на него', () => {
+    expect(edges(moveStage(chain(), 2, 0))).toEqual(['plan<', 'cut<plan', 'design<cut', 'merge<design']);
+  });
+  it('на месте и вне списка — список как есть; to клампится', () => {
+    const c = chain();
+    expect(moveStage(c, 1, 1)).toBe(c);
+    expect(moveStage(c, 9, 0)).toBe(c);
+    expect(edges(moveStage(c, 0, 99)).at(-1)).toBe('cut<merge');
+  });
+  it('порядок остаётся топологическим: «после» ссылается только на стоящих раньше', () => {
+    const r = moveStage(normalizeStages(parallelCycle()), 4, 8);
+    r.forEach((s, i) => (s.after ?? []).forEach(a => expect(r.findIndex(x => x.id === a)).toBeLessThan(i)));
+    expect(r).toHaveLength(10);
   });
 });

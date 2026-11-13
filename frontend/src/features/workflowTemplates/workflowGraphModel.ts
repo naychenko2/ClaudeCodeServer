@@ -87,6 +87,50 @@ export function removeStageReconnect(stages: WorkflowStage[], id: string): Workf
   });
 }
 
+// Свободный id по роли: «qa», затем «qa-2», «qa-3»… — slug остаётся [a-z0-9-].
+function freeId(taken: Set<string>, role: string): string {
+  const base = trimOrNull(role) ?? 'stage';
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+// Добавление этапа (в том числе возврат удалённого): встаёт в конец маршрута — так порядок
+// остаётся топологическим при любых родителях. after — id существующих этапов; неизвестные
+// отбрасываются (висячую ссылку редактор сам не создаёт), повторы схлопываются.
+// Правила одиночных ролей здесь не проверяются — их скажет stageErrors/сервер.
+export function addStage(stages: WorkflowStage[], opts: { role: string; after: string[] }): WorkflowStage[] {
+  const norm = normalizeStages(stages);
+  const ids = new Set(norm.map(s => s.id ?? ''));
+  const after = Array.from(new Set(opts.after.map(a => a.trim()).filter(a => ids.has(a))));
+  const role = opts.role.trim();
+  return [...norm, { role, presence: 'on', id: freeId(ids, role), after }];
+}
+
+// Перестановка этапа с пересвязкой «после»: этап вынимается как при removeStageReconnect
+// (наследники подцепляются к его родителям), затем вставляется на позицию `to` (индекс в
+// списке без него) в цепочку — после предыдущего по списку; тот, кто стоял на этом месте и
+// ссылался на этого предыдущего, теперь ссылается на перемещённый. Так маршрут не рвётся и
+// остаётся топологическим. Тот же индекс, вне списка — список как есть; `to` клампится.
+export function moveStage(stages: WorkflowStage[], from: number, to: number): WorkflowStage[] {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from < 0 || from >= stages.length) return stages;
+  const norm = normalizeStages(stages);
+  const moved = norm[from];
+  const movedId = moved.id ?? '';
+  const rest = removeStageReconnect(norm, movedId);
+  const at = Math.max(0, Math.min(to, rest.length));
+  if (at === from) return stages;
+  const prevId = at > 0 ? rest[at - 1].id ?? '' : null;
+  const placed: WorkflowStage = { ...moved, after: prevId === null ? [] : [prevId] };
+  const next = rest.map((s, i) => {
+    if (i !== at) return s;
+    const after = s.after ?? [];
+    if (prevId === null) return after.length === 0 ? { ...s, after: [movedId] } : s;
+    return after.includes(prevId) ? { ...s, after: after.map(a => (a === prevId ? movedId : a)) } : s;
+  });
+  next.splice(at, 0, placed);
+  return next;
+}
+
 // Колонка этапа для мини-превью (G6b): глубина = длиннейший путь от корня (корень — 0),
 // зеркало WorkflowGraph.Columns. Ребро на неизвестный id колонки не даёт (на бэке —
 // то же: нет глубины предка — нет и колонки от него). Валидации здесь нет: битый граф

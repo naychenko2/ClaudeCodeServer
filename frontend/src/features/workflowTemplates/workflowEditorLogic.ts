@@ -3,7 +3,7 @@
 // сервера, форк глобального шаблона в проектный, разбор списков «через запятую».
 
 import { normalizeStages } from './workflowGraphModel';
-import { STAGE_ROLES, clampStall, isNonSkippable } from './workflowTemplateModel';
+import { STAGE_ROLES, isNonSkippable, stageErrors } from './workflowTemplateModel';
 import type { WorkflowStage, WorkflowTemplate, WorkflowTemplateEntry } from './types';
 
 // Список обёрток { scope, template } → области. Разбиение — по метке entry.scope, а не по id:
@@ -37,6 +37,48 @@ export function blankStage(role: string): WorkflowStage {
 // Пустой шаблон: все роли маршрута по порядку. version 0 — «ещё не лежал в сторе» (POST).
 export function blankTemplate(name = 'Новый шаблон'): WorkflowTemplate {
   return { id: '', name, description: '', version: 0, stages: STAGE_ROLES.map(blankStage) };
+}
+
+// Пустой черновик нового шаблона: без этапов — состав человек собирает сам или берёт готовый
+// (takeComposition). version 0 — «ещё не лежал в сторе» (POST).
+export function newTemplateDraft(name = 'Новый шаблон'): WorkflowTemplate {
+  return { id: '', name, description: '', version: 0, stages: [] };
+}
+
+function cloneStages(stages: WorkflowStage[]): WorkflowStage[] {
+  return JSON.parse(JSON.stringify(stages)) as WorkflowStage[];
+}
+
+// «Взять состав «Полного цикла»»: этапы пресета копируются в черновик целиком (id, «после»,
+// настройки), имя и описание черновика остаются. Пресет не меняется.
+export function takeComposition(preset: WorkflowTemplate, draft: WorkflowTemplate = newTemplateDraft()): WorkflowTemplate {
+  return { ...draft, stages: cloneStages(preset.stages) };
+}
+
+// Копия под новым именем — выход из 409: новый ключ (id пустой — генерирует сервер),
+// version 0, встроенность и basedOn не тащим.
+export function saveAsNew(draft: WorkflowTemplate, name?: string): WorkflowTemplate {
+  return {
+    ...draft,
+    basedOn: null,
+    id: '',
+    name: (name ?? '').trim() || `${draft.name} (копия)`,
+    version: 0,
+    builtInKey: null,
+    stages: cloneStages(draft.stages),
+  };
+}
+
+// Откат правок: копия последнего сохранённого шаблона (снимок, с которого форма стала «грязной»).
+export function discardChanges(saved: WorkflowTemplate): WorkflowTemplate {
+  return { ...saved, stages: cloneStages(saved.stages) };
+}
+
+// «Сохранить» доступен, пока нет клиентских ошибок этапов и отказа сервера, который
+// правкой не снять без перечитывания (409) или без исправления шаблона (400).
+export function canSave(draft: WorkflowTemplate, failure?: SaveFailure | null): boolean {
+  if (failure && (failure.kind === 'conflict' || failure.kind === 'invalid')) return false;
+  return stageErrors(draft).length === 0;
 }
 
 // Проектная копия глобального: новый ключ (id пустой — генерирует сервер), version 0,
@@ -114,31 +156,43 @@ export type GuardedSave =
   | { kind: 'stale'; saved: WorkflowTemplate }
   | ({ kind: 'conflict' | 'invalid' | 'failed' } & SaveFailure);
 
+// Отправки в полёте по id шаблона: два одновременных save одного шаблона — одна отправка
+// (оба вызывающих получают результат первой). Блокировка по id, а не по экземпляру формы.
+const inFlight = new Map<string, Promise<GuardedSave>>();
+
 // Сохранение с защитой от устаревшего ответа: запоминаем ключ формы до отправки и сверяем
 // после. Ключ — id шаблона на момент отправки (у нового — '' и тот же '' у чистой формы нового).
-// Необработанных rejection нет: любой отказ превращается в значение.
-export async function saveGuarded(opts: {
+// Необработанных rejection нет: любой отказ (в том числе синхронный) превращается в значение.
+export function saveGuarded(opts: {
   tpl: WorkflowTemplate;
   save: (tpl: WorkflowTemplate) => Promise<WorkflowTemplate>;
   activeKey: () => string;
 }): Promise<GuardedSave> {
-  const sentKey = opts.activeKey();
-  try {
-    const saved = await opts.save(opts.tpl);
-    return opts.activeKey() === sentKey ? { kind: 'applied', saved } : { kind: 'stale', saved };
-  } catch (e) {
-    return classifySaveError(e);
-  }
+  const lockKey = opts.tpl.id || '\u0000new';
+  const running = inFlight.get(lockKey);
+  if (running) return running;
+  const run = (async (): Promise<GuardedSave> => {
+    try {
+      const sentKey = opts.activeKey();
+      const saved = await opts.save(opts.tpl);
+      return opts.activeKey() === sentKey ? { kind: 'applied', saved } : { kind: 'stale', saved };
+    } catch (e) {
+      return classifySaveError(e);
+    }
+  })().finally(() => { inFlight.delete(lockKey); });
+  inFlight.set(lockKey, run);
+  return run;
 }
 
-// Перед отправкой: порог молчания клампится (И3), имя этапа нормализуется (trim, пустое → null) —
-// как это делает сервер (WorkflowTemplateStore.Normalize: WorkflowRules.NormalizeStall и «пустая → null»).
+// Перед отправкой: имя этапа нормализуется (trim, пустое → null) — как это делает сервер
+// (WorkflowTemplateStore.Normalize). Порог молчания не клампится: вне [5..240] его ловит
+// stageErrors, и до отправки дело не доходит (canSave).
 export function normalizeForSave(tpl: WorkflowTemplate): WorkflowTemplate {
   return {
     ...tpl,
     stages: tpl.stages.map(s => ({
       ...s,
-      stallMinutes: clampStall(s.stallMinutes),
+      stallMinutes: s.stallMinutes ?? null,
       title: (s.title ?? '').trim() || null,
     })),
   };

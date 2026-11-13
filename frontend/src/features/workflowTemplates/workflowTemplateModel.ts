@@ -75,16 +75,16 @@ export function setPresence(
   return { ...tpl, stages };
 }
 
-// Порог молчания этапа (И3 «таймаут обойти нельзя»): null/0/отрицательное — не «бесконечно»,
-// а дефолт конфига (null — его берёт вызывающая сторона); 1..4 — ниже пола, поднимаем до 5;
-// больше 240 — клампим. Тот же WorkflowRules.NormalizeStall: кламп — часть контракта,
-// а не ошибка — редактор сохраняет клампнутое значение, валидатору на диапазон ругаться не за что.
-export function clampStall(n: number | null | undefined): number | null {
-  // NaN/нечисло (поле таймаута из UI) — не значение: null, а не NaN в состоянии и теле запроса.
-  if (typeof n !== 'number' || !Number.isFinite(n) || n <= 0) return null;
-  if (n < 5) return 5;
-  if (n > 240) return 240;
-  return n;
+// Порог молчания этапа (И3 «таймаут обойти нельзя»): null — дефолт конфига; число обязано
+// лежать в [5..240] минут. Молча клампить нельзя — человек не увидит, что сохранилось другое
+// число, поэтому вне диапазона (и нечисло) — ошибка в stageErrors, а «Сохранить» заблокирован.
+export const STALL_MIN = 5;
+export const STALL_MAX = 240;
+export const STALL_RANGE_ERROR = 'От 5 до 240 минут';
+
+export function stallInRange(n: number | null | undefined): boolean {
+  if (n === null || n === undefined) return true;
+  return typeof n === 'number' && Number.isFinite(n) && n >= STALL_MIN && n <= STALL_MAX;
 }
 
 // Ячейка матрицы — та же проверка, что серверной ModelCellRules.ValidateModelCell:
@@ -175,6 +175,10 @@ export function stageErrors(tpl: WorkflowTemplate | null | undefined): string[] 
     for (const cell of [stage.tierStrong, stage.tierMedium, stage.tierWeak]) {
       const cellError = modelCellError(cell, label);
       if (cellError) errors.push(cellError);
+    }
+
+    if (!stallInRange(stage.stallMinutes)) {
+      errors.push(`${label}: ${STALL_RANGE_ERROR}`);
     }
 
     if (stallPolicy !== '' && !(STALL_POLICIES as readonly string[]).includes(stallPolicy)) {

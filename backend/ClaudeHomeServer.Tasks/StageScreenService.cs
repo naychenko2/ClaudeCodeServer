@@ -238,6 +238,9 @@ public sealed class StageScreenService(
     {
         if (Visible(taskId, actorId) is not { } task) return StageResult<StageFileDiff>.NotFound();
         if (string.IsNullOrWhiteSpace(path)) return StageResult<StageFileDiff>.BadRequest("path обязателен");
+        // Путь — строго внутри дерева задачи: «..», абсолютный и корень — 400 (SafePath), до списка файлов и git
+        try { SafePath.JoinBelowRoot(task.WorktreePath is { Length: > 0 } root ? root : Path.GetTempPath(), path); }
+        catch (UnauthorizedAccessException) { return StageResult<StageFileDiff>.BadRequest("path вне дерева задачи"); }
         if (!TryVersion(from, out var f)) return StageResult<StageFileDiff>.BadRequest("from — номер версии или all");
         if (!TryVersion(to, out var t)) return StageResult<StageFileDiff>.BadRequest("to — номер версии или all");
         if (f is not null && t is not null && f > t) return StageResult<StageFileDiff>.BadRequest("from не может быть позже to");
@@ -420,7 +423,39 @@ public sealed class StageScreenService(
         StageReviewItem? own = task.Verification is null ? null : ToReview(task, task.Verification);
         StageAwaitingHuman? awaiting = task.AwaitingHumanSince is { } since
             ? new StageAwaitingHuman(since, task.AwaitingHumanReason) : null;
-        return new StageReview(own, reviews, awaiting);
+        return new StageReview(own, reviews, awaiting, BuildReviewRounds(task));
+    }
+
+    // Раунды ревью (B05): по одной записи на ревью-задачу с вердиктом, по времени создания. Эпик без
+    // маршрута и без предложения — легаси: разбор блокеров не делаем, структурность не обещаем.
+    // pending — последний раунд вернул шаг, а шаг ещё не закрыт: следующий раунд запустится сам
+    // после доработки исполнителя.
+    private StageReviewRounds BuildReviewRounds(TaskItem task)
+    {
+        var epic = task.FeatureId is { } fid ? tasks.GetById(fid) : null;
+        var legacy = epic is not null && epic.Workflow is null && epic.WorkflowProposal is null;
+        var verified = tasks.GetAll()
+            .Where(t => t.Role == TaskRoles.Review && t.OwnerId == task.OwnerId && t.ReviewOf?.Contains(task.Id) == true
+                && t.Verification?.Verdict is not null)
+            .OrderBy(t => t.CreatedAt)
+            .ToList();
+        var rounds = new List<StageReviewRound>();
+        for (var i = 0; i < verified.Count; i++)
+        {
+            var t = verified[i];
+            var v = t.Verification!;
+            var (blockers, remarks, structured) = legacy
+                ? ([], string.IsNullOrWhiteSpace(v.Notes) ? [] : new List<string> { v.Notes.Trim() }, false)
+                : ReviewNotesParser.Parse(v.Notes);
+            var pid = v.PersonaId ?? t.PersonaId;
+            StageQuestionAuthor? reviewer = pid is null ? null
+                : new StageQuestionAuthor(pid, personas?.GetByIdInternal(pid)?.Name ?? t.Title);
+            var pending = i == verified.Count - 1 && v.Verdict == TaskVerdicts.Returned
+                && task.Status != TaskItemStatus.Done;
+            rounds.Add(new StageReviewRound(i + 1, reviewer, v.Verdict!, v.ReturnReason, v.VerifiedAt,
+                blockers, remarks, structured, pending));
+        }
+        return new StageReviewRounds(rounds, rounds.Count > 0 && rounds.All(r => r.Structured), legacy ? "legacy" : null);
     }
 
     private static StageReviewItem ToReview(TaskItem t, TaskVerification? v) => new(
@@ -476,7 +511,18 @@ public sealed record StageTranscript(
 public sealed record StageToolCall(string Name, string? Summary, DateTime? At, bool IsError);
 
 public sealed record StageReview(
-    StageReviewItem? Own, IReadOnlyList<StageReviewItem> Reviews, StageAwaitingHuman? AwaitingHuman);
+    StageReviewItem? Own, IReadOnlyList<StageReviewItem> Reviews, StageAwaitingHuman? AwaitingHuman,
+    StageReviewRounds ReviewRounds);
+
+// Раунды ревью этапа (B05). Structured — notes всех раундов разобраны по договорённости формата;
+// Hint = "legacy" у эпика без шаблона (подробностей нет)
+public sealed record StageReviewRounds(IReadOnlyList<StageReviewRound> Rounds, bool Structured, string? Hint);
+
+public sealed record StageReviewRound(
+    int Round, StageQuestionAuthor? Reviewer, string Verdict, string? ReturnReason, DateTime At,
+    IReadOnlyList<StageReviewBlocker> Blockers, IReadOnlyList<string> Remarks, bool Structured, bool Pending);
+
+public sealed record StageReviewBlocker(string Tag, string? File, int? Line, string Text);
 
 public sealed record StageReviewItem(
     string TaskId, string Title, string? Role, string Status, string? Verdict, string? ReturnReason,

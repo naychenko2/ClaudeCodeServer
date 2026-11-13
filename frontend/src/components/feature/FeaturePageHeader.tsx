@@ -1221,8 +1221,13 @@ export function FeaturePageWorkflowConfirm({ run, featureId, projectId, isMobile
       confirmed={run.epic?.workflow ?? null}
       routeRequired={run.epic?.routeRequired ?? null}
       isMobile={isMobile}
+      sheetOpenRequest={open}
     />
   );
+  // Мобила (F05): предложение — компактная строка блока и шторка «Маршрут фичи», а не ProposalRow.
+  if (proposalAwaitsConfirm(run) && isMobile) {
+    return <div data-testid="feature-page-workflow-confirm">{block(true)}</div>;
+  }
   if (proposalAwaitsConfirm(run) && !open) {
     return (
       <div data-testid="feature-page-workflow-confirm">

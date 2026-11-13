@@ -26,6 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Badge, Button, Select } from '../../components/ui';
 import { WorkflowLadder } from './WorkflowLadder';
+import { WorkflowRouteSheet } from './WorkflowRouteSheet';
 import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStageRow';
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
@@ -54,6 +55,9 @@ export interface FeatureWorkflowConfirmProps {
   // epic.routeRequired: фича в режиме маршрута. Без предложения и подтверждения блок
   // всё равно виден — состояние «предложения нет» (M5).
   routeRequired?: boolean | null;
+  // Мобильный вид (F05): шапка страницы запросила открыть шторку («Подтвердить» из области
+  // этапа). Работает при isMobile && quiet; иначе игнорируется.
+  sheetOpenRequest?: boolean;
 }
 
 interface SelectedKey { id: string; scope: WorkflowTemplateScope }
@@ -62,7 +66,7 @@ const errText = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Не получилось, попробуйте ещё раз';
 
 export function FeatureWorkflowConfirm({
-  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired,
+  featureId, projectId, proposal, confirmed, isMobile, quiet, routeRequired, sheetOpenRequest,
 }: FeatureWorkflowConfirmProps): React.ReactElement {
   const [entries, setEntries] = useState<WorkflowTemplateEntry[] | null>(null);
   const [selKey, setSelKey] = useState<SelectedKey | null>(null);
@@ -79,6 +83,9 @@ export function FeatureWorkflowConfirm({
   const [whyOpen, setWhyOpen] = useState(false);
   // «Выбрать вручную» в состоянии «Подбираем»: показать Select, не дожидаясь ответа модели.
   const [manual, setManual] = useState(false);
+  // Мобила (F05): шторка «Маршрут фичи» и раскрытое по ⓘ обоснование в ней.
+  const [sheetOpen, setSheetOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const featureIdRef = useRef(featureId);
   // ref-guard, а не state: state обновился бы только со следующим рендером, а двойной
@@ -99,8 +106,11 @@ export function FeatureWorkflowConfirm({
     setExpanded(false);
     setWhyOpen(false);
     setManual(false);
+    setSheetOpen(false);
+    setInfoOpen(false);
     abortRef.current?.abort();
   }
+  useEffect(() => { if (sheetOpenRequest) setSheetOpen(true); }, [sheetOpenRequest]);
 
   const load = useCallback(() => workflowTemplatesApi.listTemplates(projectId), [projectId]);
   useEffect(() => {
@@ -279,7 +289,9 @@ export function FeatureWorkflowConfirm({
     </div>
   );
 
-  if (quiet && !actionable) {
+  // Мобильный вид шапки (F05): компактная строка вместо блока, всё остальное — в шторке.
+  const sheetMode = isMobile && !!quiet;
+  if (quiet && !actionable && !(sheetMode && sheetOpen)) {
     if (!confirmed || !lineText) return <></>;
     if (!expanded) {
       return (
@@ -371,6 +383,163 @@ export function FeatureWorkflowConfirm({
       {recommendLabel}
     </Button>
   );
+
+  if (sheetMode) {
+    // Шаблон и снятые этапы строки: предложение/выбор — из редактора, «изменился»/подтверждено — из маршрута.
+    const rowTemplate = updateCardOn || isConfirmed ? confirmedTemplate : selectedEntry?.template ?? null;
+    const rowRemoved = updateCardOn || isConfirmed ? confirmed?.skipped ?? [] : removedIds;
+    const rowName = rowTemplate?.name
+      || (updateCardOn || isConfirmed ? confirmed?.templateId : shownProposal?.templateId) || '';
+    let rowCount = '';
+    if (rowTemplate) {
+      const all = normalizeStages(rowTemplate.stages ?? []);
+      const off = new Set(rowRemoved);
+      rowCount = ` · ${all.filter(x => !off.has(x.id ?? '')).length} из ${all.length} этапов`;
+    }
+    const rowTag = updateCardOn ? 'шаблон изменился' : noneState || searching ? 'нет маршрута' : 'ждёт вас';
+    const rowText = searching ? 'Подбираем маршрут…'
+      : noneState ? 'Модель не предложила маршрут'
+        : `${rowName}${rowCount}`;
+    const closeSheet = () => { setSheetOpen(false); setInfoOpen(false); };
+    // Подвал по состоянию (R36–R38): подтвердить + подобрать заново / обновить + оставить /
+    // закрыть; в «Подбираем» и «нет предложения» — «Подобрать заново» (на десктопе подпись другая).
+    const fb = { fullWidth: true, style: { minHeight: 40 } } as const;
+    const redo = (
+      <Button variant="ghost" size="sm" {...fb} loading={busyRecommend} disabled={loading}
+        dataTestId="feature-workflow-confirm-recommend" onClick={onRecommend}>
+        Подобрать заново
+      </Button>
+    );
+    const sheetFooter = isConfirmed && !updateCardOn ? (
+      <Button variant="primary" size="sm" {...fb} dataTestId="feature-workflow-confirm-close" onClick={closeSheet}>
+        Закрыть
+      </Button>
+    ) : updateCardOn ? (
+      <>
+        <Button variant="primary" size="sm" {...fb} loading={busyConfirm} disabled={busyConfirm || busyKeep}
+          dataTestId="feature-workflow-confirm-update-apply" onClick={onUpdateRoute}>
+          {`Обновить маршрут до v${confirmedTemplate!.version}`}
+        </Button>
+        <Button variant="ghost" size="sm" {...fb} loading={busyKeep} disabled={busyConfirm || busyKeep}
+          dataTestId="feature-workflow-confirm-update-keep" onClick={onKeepVersion}>
+          {`Оставить v${confirmed!.confirmedVersion}`}
+        </Button>
+      </>
+    ) : searching ? redo : (
+      <>
+        <Button variant="primary" size="sm" {...fb} loading={busyConfirm} disabled={!canConfirm}
+          dataTestId="feature-workflow-confirm-submit" onClick={onConfirm}>
+          Подтвердить маршрут
+        </Button>
+        {redo}
+      </>
+    );
+    const rationaleText = (confirmed ? confirmedRationale : (shownProposal?.rationale ?? '').trim()) || '';
+    return (
+      <>
+        {(!isConfirmed || updateCardOn) && (
+          <div
+            data-testid="feature-workflow-confirm-mobile-row"
+            style={{
+              display: 'flex', alignItems: 'center', gap: SP.sm, padding: `${SP.sm}px ${SP.md}px`,
+              borderRadius: R.lg, marginBottom: SP.md, fontFamily: FONT.sans, fontSize: FS.sm,
+              color: C.textPrimary, background: updateCardOn ? C.warningBg : C.planLight,
+              border: `1px solid ${updateCardOn ? C.warning : C.planBorder}`,
+            }}
+          >
+            <Badge tone="warning" size="xs">{rowTag}</Badge>
+            <span
+              data-testid="feature-workflow-confirm-mobile-row-text"
+              style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              {rowText}
+            </span>
+            <Button variant="primary" size="sm" style={{ minHeight: 40, flexShrink: 0 }}
+              dataTestId="feature-workflow-confirm-mobile-open" onClick={() => setSheetOpen(true)}>
+              Посмотреть
+            </Button>
+          </div>
+        )}
+        {sheetOpen && (
+          <WorkflowRouteSheet onClose={closeSheet} footer={sheetFooter}>
+            {isConfirmed && !updateCardOn && lineReady && confirmedRow(false)}
+            {doubt && (
+              <div data-testid="feature-workflow-confirm-doubt" style={{ fontSize: FS.sm, color: C.warningText }}>
+                Сомневаюсь: {doubt}.
+              </div>
+            )}
+            {searching && (
+              <div data-testid="feature-workflow-confirm-searching" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                Модель обычно отвечает до полуминуты: она читает название и описание фичи и выбирает из шаблонов проекта и глобальных.
+              </div>
+            )}
+            {noneState && (
+              <div data-testid="feature-workflow-confirm-none" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                Подбор не ответил или ответ не прошёл проверку. Выберите шаблон сами, этапы появятся ниже.
+              </div>
+            )}
+            {updateCardOn && (
+              <div data-testid="feature-workflow-confirm-update-text" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                <b>{`«${confirmedTemplate!.name || confirmed!.templateId}»: v${confirmed!.confirmedVersion} → v${confirmedTemplate!.version}. `}</b>
+                {updateExplainText(confirmed!, confirmedTemplate!, role => STAGE_ROLE_LABEL[role] ?? role)}
+              </div>
+            )}
+            {!searching && !isConfirmed && !updateCardOn && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                <span style={{ fontSize: FS.xs, color: C.textMuted }}>Шаблон</span>
+                <Select
+                  value={selectedEntry ? `${selectedEntry.scope}:${selectedEntry.template.id}` : ''}
+                  onChange={pickTemplate}
+                  disabled={loading || templateOptions.length === 0}
+                  placeholder={loading ? 'Загрузка шаблонов…' : 'Выберите шаблон…'}
+                  options={templateOptions}
+                  title="Шаблон маршрута"
+                />
+                {edited && <Badge tone="neutral" size="xs">сменили вы</Badge>}
+              </div>
+            )}
+            {missingTemplate && !isConfirmed && (
+              <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
+                Предложенный шаблон не найден в каталоге — выберите другой.
+              </div>
+            )}
+            {!searching && (
+              <WorkflowLadder
+                stages={updateCardOn || isConfirmed
+                  ? confirmedTemplate ? normalizeStages(confirmedTemplate.stages ?? []) : null
+                  : selectedEntry ? normalizeStages(selectedEntry.template.stages ?? []) : null}
+                removedIds={updateCardOn || isConfirmed ? confirmed?.skipped ?? [] : removedIds}
+                mode={updateCardOn || isConfirmed ? 'readonly' : 'interactive'}
+                newIds={updateCardOn ? newStageIds(confirmed!, confirmedTemplate!) : undefined}
+                onToggle={updateCardOn || isConfirmed ? undefined : toggleRemoved}
+                isMobile
+              />
+            )}
+            {rationaleText && !updateCardOn && !isConfirmed && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                <Button variant="ghost" size="sm" style={{ minHeight: 40, alignSelf: 'flex-start' }}
+                  ariaExpanded={infoOpen} dataTestId="feature-workflow-confirm-info"
+                  onClick={() => setInfoOpen(v => !v)}>
+                  ⓘ Почему так
+                </Button>
+                {infoOpen && (
+                  <div data-testid="feature-workflow-confirm-rationale">
+                    {edited
+                      ? quote('Модель предлагала другой шаблон. Вы выбрали этот — обоснование к нему не относится, решение за вами.',
+                        rationaleByText(shownProposal!.model, shownProposal!.proposedAt, ''))
+                      : quote(rationaleText, rationaleByText(shownProposal?.model, shownProposal?.proposedAt, 'обоснование модели'))}
+                  </div>
+                )}
+              </div>
+            )}
+            {errorText && (
+              <div role="alert" style={{ fontSize: FS.sm, fontWeight: 600, color: C.dangerText }}>{errorText}</div>
+            )}
+          </WorkflowRouteSheet>
+        )}
+      </>
+    );
+  }
 
   return (
     <div

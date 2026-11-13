@@ -34,6 +34,8 @@ export interface FeatureTask {
   worktreeBranch?: string | null;
   personaId?: string | null;
   createdAt?: string | null;
+  // Первые 8 знаков id (бэк: TaskItem.ShortId) — для шапки страницы фичи (B02).
+  shortId?: string | null;
   completedAt?: string | null;
   // Запуск исполнителя: отметка старта Claude-исполнителя (у step/rework/финала).
   // Уже приходит в JSON — просто не было описано.
@@ -269,6 +271,23 @@ export interface FeatureStage {
   // Б2: исполнители стадии (по одному на задачу стадии, в порядке, в котором задачи дал
   // вызывающий). Сырые данные — подпись роли строит фронт (roleLabel).
   executors: FeatureStageExecutor[];
+  // B01 (узел графа процесса). Аддитивные: старые ответы их не несут — UI переживает отсутствие.
+  // Имена исполнителей по порядку personaIds; минуты работы (null — не начат);
+  // чего ждёт этап (human — вопрос человеку, branches — ветки-предшественники);
+  // число возвратов на доработку; полоска задач ветки; линия узла (back | front).
+  personaNames?: string[];
+  elapsedMinutes?: number | null;
+  waiting?: 'human' | 'branches' | null;
+  returns?: number;
+  taskSegments?: FeatureStageSegments | null;
+  line?: 'back' | 'front' | null;
+}
+
+// Полоска задач этапа (B01, бэк: FeatureStageSegments): закрытые / идущие / всего.
+export interface FeatureStageSegments {
+  done: number;
+  running: number;
+  total: number;
 }
 
 // Цепочка шага (бэк: `FeatureStepChain`): задача шага + её доработки, в порядке времени.
@@ -452,8 +471,21 @@ export interface FeatureQueue {
 // Новые поля (cut/plan/stages/stepChains/now/attention/returnsBySource/lanes/
 // stepsAccepted/stepsTotal/stagesPassed/stagesTotal/lastActivityAt/closed/summary) — аддитивные и
 // nullable-терпимые: опциональны, UI обязан пережить их отсутствие (старые данные).
+// Метастрока шапки страницы фичи (B02, бэк: FeatureRunMeta). Снятые этапы в stagesTotal не входят;
+// у легаси-фичи: 0/0, parallelBranches 0, progressPct null, approx true («≈»).
+export interface FeatureRunMeta {
+  stagesDone: number;
+  stagesTotal: number;
+  parallelBranches: number;
+  etaMinutes: number | null;
+  progressPct: number | null;
+  approx: boolean;
+}
+
 export interface FeatureRun {
   featureId: string;
+  // B02: метастрока шапки. Аддитивное: старые ответы не несут.
+  meta?: FeatureRunMeta;
   // Состояние фичи (бэк: `FeatureRun.State`, 11 значений, всегда отдаётся).
   // Единая точка правды: из неё выводится bucket строки индекса и порядок OrderRuns.
   state: FeatureState;

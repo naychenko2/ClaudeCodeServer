@@ -1176,6 +1176,8 @@ public class TasksController(
         // queueStartEstimate: набор фич проекта нужен, только когда фича сама стоит в очереди.
         var projectRuns = run.Queue is null ? null : features!.ProjectAll(UserId, snapshot);
         var brief = FeatureBrief.Build(run, timeline, typical, now, projectRuns, FeatureQueuePolicy.Limit(config));
+        // B02: срок метастроки — тот же brief.eta (единая точка правды), без второго расчёта.
+        run.ApplyEta(brief.Eta?.Minutes);
         // Б-mk-b: макеты фичи (вкладка «Планы и макеты»): mockups[] + mockupsUnavailable.
         // Порядок и fail-closed — в BuildMockups (ADR-031 «Макеты фичи»).
         var (mockups, mockupsUnavailable) = await BuildMockups(run, catalog);

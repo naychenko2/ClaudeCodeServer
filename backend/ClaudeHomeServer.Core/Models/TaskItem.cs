@@ -252,6 +252,8 @@ public class TaskItem
     public PregateRecord? Pregate { get; set; }
     private List<AcceptanceEvidence> _evidence = [];
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    // Короткий id (первые 8 знаков) для шапки страницы фичи (B02); вычисляемое, не хранится.
+    public string ShortId => Id.Length <= 8 ? Id : Id[..8];
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
     // Дата+время завершения: когда статус стал Done. null — не завершена.
     // Сбрасывается при переоткрытии (статус ≠ Done). Не переносится в следующий

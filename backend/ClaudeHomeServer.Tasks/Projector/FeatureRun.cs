@@ -93,6 +93,11 @@ public sealed class FeatureRun
     // графа нет); N = стадии с состоянием done (active/pending/absent в пройденные не входят).
     public int StagesPassed { get; init; }
     public int StagesTotal { get; init; }
+    // B02: данные метастроки шапки страницы фичи. Срок (EtaMinutes) проставляет вызывающий,
+    // у которого есть бриф (ApplyEta): единая точка правды по сроку — FeatureBrief.EtaOf.
+    public FeatureRunMeta Meta { get; private set; } = new();
+    public void ApplyEta(int? etaMinutes) => Meta = Meta with { EtaMinutes = etaMinutes };
+    internal FeatureRun WithMeta(FeatureRunMeta meta) { Meta = meta; return this; }
     // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи и времени мержа.
     public DateTime? LastActivityAt { get; init; }
     // W4-ANB (разрез §4, решение Андрея 24.10): «тихо» — фича стоит без движения ≥ 24 часов.
@@ -125,6 +130,22 @@ public sealed class FeatureRun
     // Волна после мержа: после последнего закрытого мержа заведён шаг/доработка (или к предыдущему
     // мержу осталась открытая работа) — состояние merged снято до следующего мержа без неё.
     public bool WaveAfterMerge { get; init; }
+}
+
+// Метастрока шапки страницы фичи (B02). Снятые (skipped) этапы в StagesTotal не входят.
+// У легаси-фичи (без маршрута): stages 0/0, ParallelBranches 0, ProgressPct null, Approx true.
+public sealed record FeatureRunMeta
+{
+    public int StagesDone { get; init; }
+    public int StagesTotal { get; init; }
+    // Макс. число этапов в одной колонке маршрута (≥1); у легаси — 0.
+    public int ParallelBranches { get; init; }
+    // Минут до финала; null — замера нет.
+    public int? EtaMinutes { get; init; }
+    // Доля этапов done/total, 0..100; у легаси — null.
+    public int? ProgressPct { get; init; }
+    // true у легаси — число приблизительное («≈»).
+    public bool Approx { get; init; } = true;
 }
 
 // Метка мержа на гантe: id задачи мержа, момент закрытия и шаги, попавшие в master по этому мержу

@@ -649,6 +649,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // фичи — 0: графа нет), N = стадии с состоянием done (active/pending/absent не входят).
         int stagesTotal = graph?.Count ?? 0;
         int stagesPassed = graphStates is not null ? stages.Count(s => s.State == "done") : 0;
+        var meta = BuildMeta(graphStates is not null ? stages : null);
 
         // Последняя активность: максимум по CompletedAt/ClaudeStartedAt задач фичи
         // (время мержа — это CompletedAt merge-задачи, уже учтено).
@@ -768,6 +769,24 @@ public sealed class FeatureProjector(TaskManager tasks)
             // корзины: второй предикат «что такое хвост» не заводится, список только переносится.
             ClosedTailKeys = accounting.ClosedTailKeys,
             Tracker = tracker,
+        }.WithMeta(meta);
+    }
+
+    // B02: метастрока шапки. stages == null — легаси (графа нет). Снятые (skipped) этапы в
+    // знаменатель не входят; ветки = макс. число оставшихся этапов в одной колонке.
+    internal static FeatureRunMeta BuildMeta(IReadOnlyList<FeatureStage>? stages)
+    {
+        if (stages is null) return new FeatureRunMeta();
+        var live = stages.Where(s => s.State != "skipped").ToList();
+        int total = live.Count;
+        int done = live.Count(s => s.State == "done");
+        return new FeatureRunMeta
+        {
+            StagesDone = done,
+            StagesTotal = total,
+            ParallelBranches = total == 0 ? 1 : live.GroupBy(s => s.Column).Max(g => g.Count()),
+            ProgressPct = total == 0 ? 0 : (int)Math.Round(done * 100.0 / total, MidpointRounding.AwayFromZero),
+            Approx = false,
         };
     }
 
@@ -1157,7 +1176,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // облегчёнными копиями (Slim), вычисленные поля (стадии/цепочки/счётчики/«сейчас»/тревога)
     // передаются по ссылке — они уже вычислены по исходным задачам. Страница фичи (GetFeature)
     // сначала считает ленту событий (BuildEvents) по ПОЛНОМУ run, а в ответ run облегчает SlimRun.
-    internal static FeatureRun SlimRun(FeatureRun run) => new()
+    internal static FeatureRun SlimRun(FeatureRun run) => new FeatureRun
     {
         FeatureId = run.FeatureId,
         Epic = Slim(run.Epic),
@@ -1202,7 +1221,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         // обязан пережить облегчение (тот же смысл, что с PostMergeTails).
         ClosedTailKeys = run.ClosedTailKeys,
         Tracker = run.Tracker,
-    };
+    }.WithMeta(run.Meta);
 
     // ─── Б2: хелперы и вычислители цепочек/возвратов/линий ─────────────────────────────────
 

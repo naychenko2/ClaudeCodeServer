@@ -144,7 +144,8 @@ describe('FeatureWorkflowConfirm: строка «шаблон изменился
     catalog.entries = [entry(fullCycle(4, [st({ id: 'audit', role: 'review', presence: 'optional' })])), entry(fastTrack())];
     const c = await renderBlock({ proposal: PROPOSED_FAST, confirmed: CONFIRMED });
     const t = text(c);
-    expect(t).toContain('Шаблон изменился: v3 → v4, обновить маршрут?');
+    expect(t).toContain('шаблон изменился');
+    expect(t).toContain('v3 → v4');
     // Версии подтверждённого шаблона, а не выбранного B (v5): ложного «v3 → v5» нет.
     expect(t).not.toContain('v3 → v5');
   });

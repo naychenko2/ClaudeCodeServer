@@ -17,6 +17,8 @@
 // Состояния: «предлагает» (тег «ждёт вас» только при needsHuman), «правит человек» (тег
 // «сменили вы», вместо обоснования пометка), «подтверждено» (✓ маршрут / авто, «Почему так»),
 // «Подбираем» (идущий recommend) и «Модель не предложила маршрут» (proposal.state='none').
+// «Шаблон изменился» (F04): янтарная карточка — лестница v2 (readonly, новые этапы с зелёной рамкой),
+// «Обновить маршрут до vN» (confirm с прежним skipped из confirmed) и «Оставить vN» (keep-version).
 // Мобила 360: кнопки полной шириной, тач-цели ≥40.
 // Встраивание в шапку страницы фичи и мини-граф — вне этого шага (C3b / хвосты).
 
@@ -24,11 +26,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Badge, Button, Select } from '../../components/ui';
 import { WorkflowLadder } from './WorkflowLadder';
+import { STAGE_ROLE_LABEL } from '../../features/workflowTemplates/WorkflowStageRow';
 import { workflowTemplatesApi } from '../../features/workflowTemplates/api';
 import { normalizeStages } from '../../features/workflowTemplates/workflowGraphModel';
 import {
   applyRecommend, confirmBodyOf, confirmedLineText, doubtReasonText,
-  initialRemovedIds, pickInitialTemplate, rationaleByText, routeBlockState, templateUpdateText,
+  initialRemovedIds, newStageIds, pickInitialTemplate, rationaleByText, routeBlockState, templateUpdateText,
+  updateExplainText,
   type ConfirmedRoute,
 } from './FeatureWorkflowConfirmModel';
 import type { WorkflowProposal, WorkflowTemplateEntry, WorkflowTemplateScope } from '../../features/workflowTemplates/types';
@@ -67,6 +71,7 @@ export function FeatureWorkflowConfirm({
   const [localProposal, setLocalProposal] = useState<WorkflowProposal | null>(null);
   const [busyConfirm, setBusyConfirm] = useState(false);
   const [busyRecommend, setBusyRecommend] = useState(false);
+  const [busyKeep, setBusyKeep] = useState(false);
   const [errorText, setErrorText] = useState<string | null>(null);
   // Тихий режим: подтверждённый маршрут свёрнут в строку, «Сменить» разворачивает блок.
   const [expanded, setExpanded] = useState(false);
@@ -80,6 +85,7 @@ export function FeatureWorkflowConfirm({
   // клик приходит двумя обработчиками за один (тот же приём, что busyRef в редакторе).
   const confirmBusyRef = useRef(false);
   const recommendBusyRef = useRef(false);
+  const keepBusyRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // Смена фичи — синхронный сброс до рендера: выбор, снятие и локальное предложение
@@ -152,6 +158,31 @@ export function FeatureWorkflowConfirm({
       .finally(() => { confirmBusyRef.current = false; setBusyConfirm(false); });
   };
 
+  // «Обновить маршрут до vN»: то же подтверждение, но с прежним снятием из confirmed.skipped
+  // (confirmBodyOf отсеивает то, что в новой версии уже не съёмно), а не из предложения модели.
+  const onUpdateRoute = () => {
+    if (!confirmed || !confirmedTemplate || confirmBusyRef.current) return;
+    confirmBusyRef.current = true;
+    setBusyConfirm(true);
+    setErrorText(null);
+    workflowTemplatesApi
+      .confirmWorkflow(featureId, confirmBodyOf(confirmedTemplate, confirmed.scope, confirmed.skipped ?? []))
+      .catch(e => setErrorText(errText(e)))
+      .finally(() => { confirmBusyRef.current = false; setBusyConfirm(false); });
+  };
+
+  // «Оставить vN»: маршрут не меняется, предупреждение закрывается до следующей версии шаблона.
+  const onKeepVersion = () => {
+    if (!confirmedTemplate || keepBusyRef.current) return;
+    keepBusyRef.current = true;
+    setBusyKeep(true);
+    setErrorText(null);
+    workflowTemplatesApi
+      .keepVersion(featureId, confirmedTemplate.version)
+      .catch(e => setErrorText(errText(e)))
+      .finally(() => { keepBusyRef.current = false; setBusyKeep(false); });
+  };
+
   const onRecommend = () => {
     if (recommendBusyRef.current) return;
     // Фича на момент запроса: ответ сверяется с ней же (applyRecommend), а не с текущим
@@ -203,7 +234,7 @@ export function FeatureWorkflowConfirm({
   // шаблон подтверждённого маршрута изменился; ошибка и идущий запрос блок не прячут.
   const blockState = routeBlockState(routeRequired, rawProposal, confirmed ?? null);
   const actionable = (!!shownProposal && !confirmed) || !!localProposal || !!updateText
-    || blockState === 'none' || !!errorText || busyConfirm || busyRecommend;
+    || blockState === 'none' || !!errorText || busyConfirm || busyRecommend || busyKeep;
   // Пока каталог не загружен, имя шаблона неизвестно: строку не рисуем, иначе она мигнёт id → имя.
   const lineReady = !!confirmed && !loading;
   const lineText = lineReady ? confirmedLineText(confirmed!, confirmedTemplate) : null;
@@ -285,7 +316,51 @@ export function FeatureWorkflowConfirm({
   const tone = isConfirmed
     ? { bg: C.bgWhite, border: C.borderLight }
     : showProposal ? { bg: C.planLight, border: C.planBorder } : { bg: C.bgSelected, border: C.borderLight };
-  const showEditor = !searching && (!isConfirmed || !quiet || expanded);
+  // Карточка «шаблон изменился» (R28–R32): ждёт решения человека, обычный редактор под ней молчит.
+  const updateCardOn = !!updateText && !!confirmed && !!confirmedTemplate;
+  const showEditor = !searching && !updateCardOn && (!isConfirmed || !quiet || expanded);
+  const touch = isMobile ? { minHeight: 40 } : undefined;
+  const updateCard = updateCardOn ? (
+    <div
+      data-testid="feature-workflow-confirm-update"
+      role="alert"
+      style={{
+        display: 'flex', flexDirection: 'column', gap: SP.sm, padding: SP.md, borderRadius: R.lg,
+        background: C.warningBg, border: `1px solid ${C.warning}`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Badge tone="warning" size="xs">шаблон изменился</Badge>
+        <span data-testid="feature-workflow-confirm-update-title" style={{ fontSize: FS.sm, fontWeight: 600, color: C.warningText }}>
+          {`«${confirmedTemplate!.name || confirmed!.templateId}»: v${confirmed!.confirmedVersion} → v${confirmedTemplate!.version}`}
+        </span>
+      </div>
+      <WorkflowLadder
+        stages={normalizeStages(confirmedTemplate!.stages ?? [])}
+        removedIds={confirmed!.skipped ?? []}
+        mode="readonly"
+        newIds={newStageIds(confirmed!, confirmedTemplate!)}
+        isMobile={isMobile}
+      />
+      <div data-testid="feature-workflow-confirm-update-text" style={{ fontSize: FS.sm, color: C.textSecondary }}>
+        {updateExplainText(confirmed!, confirmedTemplate!, role => STAGE_ROLE_LABEL[role] ?? role)}
+      </div>
+      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Button
+          variant="primary" size="sm" loading={busyConfirm} disabled={busyConfirm || busyKeep}
+          fullWidth={isMobile} style={touch} dataTestId="feature-workflow-confirm-update-apply" onClick={onUpdateRoute}
+        >
+          {`Обновить маршрут до v${confirmedTemplate!.version}`}
+        </Button>
+        <Button
+          variant="ghost" size="sm" loading={busyKeep} disabled={busyConfirm || busyKeep}
+          fullWidth={isMobile} style={touch} dataTestId="feature-workflow-confirm-update-keep" onClick={onKeepVersion}
+        >
+          {`Оставить v${confirmed!.confirmedVersion}`}
+        </Button>
+      </div>
+    </div>
+  ) : null;
   const recommendLabel = showProposal ? 'Подобрать заново' : noneState ? 'Подобрать ещё раз' : 'Подобрать маршрут';
   const recommendBtn = (
     <Button
@@ -352,9 +427,7 @@ export function FeatureWorkflowConfirm({
         </div>
       )}
 
-      {updateText && (
-        <div role="alert" style={{ fontSize: FS.sm, fontWeight: 600, color: C.warningText }}>{updateText}</div>
-      )}
+      {updateCard}
 
       {showEditor && (
         <>

@@ -66,4 +66,9 @@ export const workflowTemplatesApi = {
   // Тело ответа не используется: состояние эпика приходит штатным task_changed.
   confirmWorkflow: (epicId: string, body: ConfirmWorkflowBody) =>
     request<void>(`/tasks/${encodeURIComponent(epicId)}/workflow/confirm`, { method: 'POST', body: JSON.stringify(body) }),
+
+  // «Оставить vN» (B03): отказ от обновления маршрута до версии templateVersion; маршрут не меняется,
+  // предупреждение не возвращается до следующей версии. Состояние придёт штатным task_changed.
+  keepVersion: (epicId: string, templateVersion: number) =>
+    request<void>(`/tasks/${encodeURIComponent(epicId)}/workflow/keep-version`, { method: 'POST', body: JSON.stringify({ templateVersion }) }),
 };

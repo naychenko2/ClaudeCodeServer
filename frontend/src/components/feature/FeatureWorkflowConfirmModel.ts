@@ -27,6 +27,9 @@ export interface ConfirmedRoute {
   skipped: string[];
   // Версия шаблона на момент подтверждения: с неё сравнивается «шаблон изменился».
   confirmedVersion: number;
+  // «Оставить vN» (B03): версия шаблона, обновление до которой человек отклонил; предупреждение
+  // «шаблон изменился» не возвращается, пока версия шаблона не вырастет выше.
+  dismissedUpdateVersion?: number | null;
   // Подтверждение сделано моделью (бэк: `FeatureWorkflow.AutoConfirmed`): true — строка
   // блока говорит «выбрано моделью — можно сменить». Отсутствует/false — «подтверждён вами».
   autoConfirmed?: boolean;
@@ -104,8 +107,40 @@ export function templateChanged(route: ConfirmedRoute, template: WorkflowTemplat
 export function templateUpdateText(route: ConfirmedRoute | null, template: WorkflowTemplate | null): string | null {
   if (!route || !template) return null;
   if (!(route.confirmedVersion < template.version)) return null;
+  if ((route.dismissedUpdateVersion ?? 0) >= template.version) return null;
   if (!templateChanged(route, template)) return null;
   return `Шаблон изменился: v${route.confirmedVersion} → v${template.version}, обновить маршрут?`;
+}
+
+// Этапы, которых не было в подтверждённом маршруте, а текущий шаблон при том же снятии их
+// включил бы (порядок — как в шаблоне). Состав прежнего снятия берётся из route.skipped,
+// а не из предложения модели.
+export function newStageIds(route: ConfirmedRoute, template: WorkflowTemplate): string[] {
+  const confirmed = new Set((route.stages ?? []).map(s => s.id));
+  const current = activeIdsOfTemplate(template, route.skipped);
+  return normalizeStages(template?.stages ?? []).map(s => s.id ?? '').filter(id => current.has(id) && !confirmed.has(id));
+}
+
+// Пояснение карточки «шаблон изменился»: какие этапы v2 стали обязательными (presence 'on'),
+// какие добавлены «по решению». Названия — title этапа, иначе подпись роли, иначе id.
+export function updateExplainText(
+  route: ConfirmedRoute,
+  template: WorkflowTemplate,
+  roleLabel: (role: string) => string,
+): string {
+  const ids = new Set(newStageIds(route, template));
+  const stages = normalizeStages(template?.stages ?? []).filter(s => ids.has(s.id ?? ''));
+  const name = (s: WorkflowStage) => `«${(s.title ?? '').trim() || roleLabel(s.role) || s.id}»`;
+  const required = stages.filter(s => (s.presence ?? '').trim() !== 'optional');
+  const optional = stages.filter(s => (s.presence ?? '').trim() === 'optional');
+  const v = `v${template.version}`;
+  const parts: string[] = [];
+  if (required.length === 1) parts.push(`В ${v} ${name(required[0])} стала обязательной.`);
+  else if (required.length > 1) parts.push(`В ${v} обязательными стали ${required.map(name).join(', ')}.`);
+  if (optional.length > 0) parts.push(`В ${v} добавлено по решению: ${optional.map(name).join(', ')}.`);
+  if (parts.length === 0) parts.push(`В ${v} состав этапов изменился.`);
+  parts.push('Настройки этапов действуют со следующего шага без подтверждения.');
+  return parts.join(' ');
 }
 
 // Какой шаблон показать первым: предложение модели, затем шаблон подтверждённого маршрута
@@ -157,6 +192,18 @@ export function routeBlockState(
   if (proposal && proposal.state === 'none') return 'none';
   if (routeRequired === true) return 'none';
   return null;
+}
+
+// Вид маршрута фичи для страницы (F08): состояние блока маршрута либо 'legacy' — режима
+// маршрута нет вовсе (эпик создан до шаблонов).
+export type RunRouteKind = RouteBlockState | 'legacy';
+
+export function runRouteKind(epic: {
+  routeRequired?: boolean | null;
+  workflowProposal?: WorkflowProposal | null;
+  workflow?: ConfirmedRoute | null;
+} | null | undefined): RunRouteKind {
+  return routeBlockState(epic?.routeRequired, epic?.workflowProposal, epic?.workflow) ?? 'legacy';
 }
 
 // Сводка подтверждённого маршрута (R25): «Имя vN · снято: … / все этапы». Этапы маршрута

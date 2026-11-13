@@ -112,6 +112,9 @@ describe('FeatureStageMetrics', () => {
     expect(out).toContain('stage-metrics-table');
     expect(out).toContain('Ожидание');
     expect(out).toContain('Итого');
+    const total = out.slice(out.indexOf('Итого'));
+    expect(total).toContain('1:36');
+    expect(total).toContain('>27<');
     expect(out).toContain('1:14');
     expect(out).toContain('0:41');
     expect(out).toContain('stage-metrics-seg-executor');

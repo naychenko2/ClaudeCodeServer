@@ -245,7 +245,7 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(has(c, '· 26 → 27.10')).toBe(true);
     expect(has(c, '7 чатов отобрано')).toBe(true);
     expect(has(c, '11 пакетов применено само')).toBe(true);
-    expect(has(c, '2 ждут вас во «Входящих»')).toBe(true);
+    expect(has(c, '2 ждут вас в «Решениях»')).toBe(true);
     expect(has(c, '≈ 512 000 из 700 000')).toBe(true);
     expect(has(c, 'Разобрано всё отобранное.')).toBe(true);
     expect(has(c, 'Не хватило бюджета')).toBe(false);
@@ -286,15 +286,16 @@ describe('блок «Ночной разбор» (F2)', () => {
     expect(has(c, '13 пакетов применено само')).toBe(true);
   });
 
-  it('open_limit: предупреждение с потолком и кнопка «Открыть «Входящие»» зовёт контейнер', async () => {
+  it('open_limit: предупреждение с потолком и кнопка «Открыть «Решения»» зовёт контейнер', async () => {
     server = settings({ lastNight: LAST({ selected: 12, analyzed: 4, applied: 5, toInbox: 6, estTokens: 218000, outcome: 'open_limit' }) });
     let inbox = 0;
     const c = render({ onOpenInbox: () => { inbox += 1; }, onOpenJournal: () => {} });
     await settle();
-    expect(has(c, 'Остановились: во «Входящих» 20 пакетов ждут вашего решения')).toBe(true);
+    expect(has(c, 'Остановились: в «Решениях» 20 пакетов ждут вашего решения')).toBe(true);
     expect(has(c, 'Больше 20 спорных пакетов сразу Хранитель не копит — иначе их не разобрать. Решите часть, и следующая ночь продолжит с того же места.')).toBe(true);
     expect(has(c, '≈ 218 000 из 700 000')).toBe(true);
-    click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-inbox')!, 'Открыть «Входящие»');
+    expect(has(c, 'Открыть «Решения»')).toBe(true);
+    click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-inbox')!, 'Открыть «Решения»');
     expect(inbox).toBe(1);
     click(findNodeByAttr(c, 'data-testid', 'wiki-nightly-open-journal')!, 'Открыть «Журнал»');
   });
@@ -388,7 +389,7 @@ describe('блок «Ночной разбор» (F2)', () => {
     callProp(input, 'onFocus');
     callProp(input, 'onChange', { target: { value: '25' } });
     await settle();
-    expect(has(c, 'Не больше 20 — иначе ночь упрётся в лимит «Входящих»')).toBe(true);
+    expect(has(c, 'Не больше 20 — иначе ночь упрётся в лимит «Решений»')).toBe(true);
     callProp(input, 'onBlur');
     await settle();
     expect(putCalls().length).toBe(0);

@@ -73,7 +73,7 @@ const ZONE_META: Record<string, RowMeta> = {
   skipped: { tone: 'neutral', text: 'пропущено' },
   nothing_new: { tone: 'neutral', text: 'нечего добавить' },
   rejected_skipped: { tone: 'danger', text: 'пропущено после 3 отказов' },
-  awaiting_human: { tone: 'warning', text: 'ждёт решения во «Входящих»' },
+  awaiting_human: { tone: 'warning', text: 'ждёт решения в «Решениях»' },
   excluded: { tone: 'neutral', text: 'не разбирается' },
 };
 const UNKNOWN_ZONE: RowMeta = { tone: 'neutral', text: 'неизвестное состояние' };

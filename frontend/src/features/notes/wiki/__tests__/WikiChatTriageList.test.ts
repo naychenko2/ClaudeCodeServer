@@ -204,7 +204,7 @@ describe('блок «Отбор чатов» (S7d-2)', () => {
     await settle();
     // подпись зоны — точный текстовый узел бейджа: переформулированную подпись тест ловит
     // именно точным узлом, а не подстрокой «Почему: …»
-    expect(texts(c).some(t => t === 'ждёт решения во «Входящих»')).toBe(true);
+    expect(texts(c).some(t => t === 'ждёт решения в «Решениях»')).toBe(true);
     expect(has(c, 'Почему: 2 операции на решении')).toBe(true);
     expect(has(c, 'неизвестное состояние')).toBe(false);
     // действия строки не тронуты: пометки на месте
@@ -220,7 +220,7 @@ describe('блок «Отбор чатов» (S7d-2)', () => {
     const c = render();
     await settle();
     const ts = texts(c);
-    const iAction = ts.indexOf('ждёт решения во «Входящих»');
+    const iAction = ts.indexOf('ждёт решения в «Решениях»');
     const iMark = ts.indexOf('важный');
     expect(iAction).toBeGreaterThanOrEqual(0);
     expect(iMark).toBeGreaterThan(iAction);

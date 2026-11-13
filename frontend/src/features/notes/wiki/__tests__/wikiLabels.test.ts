@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import { WikiError, type WikiErrorCode } from '../../../../lib/wiki';
 import {
-  INBOX_REASON_TEXT, INBOX_TEXT, PAGE_TYPE, analyzeRefusalText, countWord, isHumanTargetClass,
+  INBOX_REASON_TEXT, INBOX_TEXT, JUDGE_TEXT, PAGE_TYPE, analyzeRefusalText, countWord, isHumanTargetClass,
   wikiErrorText, wikiInboxReasonCode, wikiInboxReasonText,
 } from '../wikiLabels';
 
@@ -242,5 +242,11 @@ describe('типы страниц: словарь знает все виды б�
     expect(PAGE_TYPE.rule).toBe('Правило');
     expect(PAGE_TYPE.term).toBe('Термин');
     expect(PAGE_TYPE.state).toBe('Состояние');
+  });
+});
+
+describe('подпись облачного судьи (T1)', () => {
+  it('JUDGE_TEXT.caption — формулировка Софьи: вердикты и причины, откат пакета', () => {
+    expect(JUDGE_TEXT.caption).toBe('Спорные правки решает облачный судья — здесь его вердикты и причины. Передумали — «Откатить пакет».');
   });
 });

@@ -108,8 +108,8 @@ const NUM_MAX: Record<NumKey, number> = {
 // Тексты — по записке («Срез Ф2 02.11»); «на раздел» бэк мерит тем же потолком, что и
 // «на всю вики» (IsValidNightly), поэтому и причина та же
 const OVER_MAX_TEXT: Record<NumKey, string> = {
-  maxPackagesPerNight: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Входящих»`,
-  maxPackagesPerSection: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Входящих»`,
+  maxPackagesPerNight: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Решений»`,
+  maxPackagesPerSection: `Не больше ${NIGHTLY_MAX_PACKAGES} — иначе ночь упрётся в лимит «Решений»`,
   inputTokenBudget: `Не больше ${fmtNum(NIGHTLY_MAX_TOKENS)}`,
 };
 
@@ -231,7 +231,7 @@ function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: 
     kvCell(last.selected, 'чатов отобрано'),
     kvCell(last.analyzed, 'разобрано'),
     kvCell(last.applied, 'пакетов применено само'),
-    kvCell(last.toInbox, 'ждут вас во «Входящих»'),
+    kvCell(last.toInbox, 'ждут вас в «Решениях»'),
     ...(rejected > 0 ? [rejectedCell(rejected)] : []),
   ];
   return (
@@ -243,7 +243,7 @@ function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: 
             icon={OUTCOME_ICON[last.outcome] ?? AlertTriangle}
             title={notice.title ?? undefined}
             action={last.outcome === 'open_limit' && onOpenInbox
-              ? <Button variant="secondary" size="sm" dataTestId="wiki-nightly-open-inbox" onClick={onOpenInbox}>Открыть «Входящие»</Button>
+              ? <Button variant="secondary" size="sm" dataTestId="wiki-nightly-open-inbox" onClick={onOpenInbox}>Открыть «Решения»</Button>
               : undefined}
           >
             {notice.text}
@@ -478,7 +478,7 @@ export function WikiNightlyBlock({ onOpenInbox, onOpenJournal }: {
       </h2>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: SP.xs }}>
         Раз в ночь Хранитель разбирает новое в ваших разговорах. Неспорное применяется само,
-        спорное ждёт вас во «Входящих». Утром — уведомление с итогом.
+        спорное ждёт вас в «Решениях». Утром — уведомление с итогом.
       </div>
 
       <div

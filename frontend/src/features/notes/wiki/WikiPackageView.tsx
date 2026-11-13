@@ -347,7 +347,7 @@ export function WikiPackageView({ pkg: initialPkg, judgeMode = false, onBack }: 
     <div style={{ padding: `0 ${SP.md}px ${SP.md}px` }}>
       <div style={{ paddingTop: SP.sm }}>
         <Button
-          variant="ghost" size="sm" dataTestId="wiki-pkg-back" ariaLabel="Вернуться к списку «Входящих»"
+          variant="ghost" size="sm" dataTestId="wiki-pkg-back" ariaLabel="Вернуться к списку «Решений»"
           leftIcon={<ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
           onClick={onBack}
         >

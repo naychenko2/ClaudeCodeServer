@@ -11,6 +11,9 @@
 //   страж в обработчике / снять заморозку черновика — красные);
 // — устаревший ответ: новая value во время сохранения сбрасывает черновик, и ответ
 //   сохранения её не затирает; новая value вне сохранения тоже сбрасывает черновик;
+// — смена основной локали без смены value перестраивает черновик по новому составу
+//   видимых движков (ревью W7b, minor 1): локаль возвращается ОТМЕЧЕННОЙ, а не
+//   неотмеченной. Мутация: ключ синхронизации только value → тест красный;
 // — пустой выбор = сброс к одному маршруту: тело { maxTotal: 0, executors: [] };
 //   потолок общего Stepper — 4.
 //
@@ -303,6 +306,21 @@ describe('«Исполнители ночи» (W7b)', () => {
     expect(checked(c, 'local')).toBe(true);
     rerender(root, { value: { maxTotal: 1, items: [{ engine: 'gemma', parallel: 1 }] } });
     expect(checked(c, 'local')).toBe(false);
+    expect(checked(c, 'gemma')).toBe(true);
+  });
+
+  it('смена основной локали без смены value: черновик по новому составу движков, локаль — отмечена', () => {
+    // Значение места отмечало «local»; при выключенной основной локали его нет ни в
+    // списке, ни в черновике. Когда локаль вернулась, она обязана вернуться ОТМЕЧЕННОЙ:
+    // неотмеченную её «Сохранить» снял бы с места (ревью W7b, minor 1)
+    const { c, root } = render({ mainLocalEnabled: false, value: VALUE });
+    expect(row(c, 'local')).toBeNull();
+    expect(row(c, 'gemma')).not.toBeNull();
+    expect(checked(c, 'gemma')).toBe(true);
+
+    rerender(root, { mainLocalEnabled: true, value: VALUE });
+    expect(row(c, 'local')).not.toBeNull();
+    expect(checked(c, 'local')).toBe(true);
     expect(checked(c, 'gemma')).toBe(true);
   });
 });

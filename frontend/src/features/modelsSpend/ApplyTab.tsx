@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { RotateCcw, Zap } from 'lucide-react';
 import { IconButton, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -10,9 +10,10 @@ import type { LayerReducer } from '../../lib/presets';
 import { C, FS, R } from '../../lib/design';
 import { localEngineLabel } from '../../lib/localEngine';
 import { ImageGenSection } from './ImageGenSection';
+import { NightExecutorsEditor, type NightExecutorsBody } from './NightExecutorsEditor';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
-import type { AppSettings, OllamaActionInfo } from '../../types';
+import type { AppSettings, OllamaActionInfo, OllamaUsageInfo } from '../../types';
 
 // Вкладка «Применение» (макет models-spend-v3.html §3): стратегия («Автоматически» /
 // «Бесплатно · локальная») + таблица «Кто что выполняет» — группы мест, выбор маршрута
@@ -80,19 +81,54 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
   const patch = (a: OllamaActionInfo) =>
     setInfo(prev => prev ? { ...prev, actions: prev.actions.map(x => x.key === a.key ? a : x) } : prev);
 
+  // Момент последней записи в строку места. Сохранение «Исполнителей ночи» и выбор
+  // маршрута — два запроса об одном состоянии строки, и они не обязаны идти по очереди
+  // (блок и пикер — разные контролы). До экрана доходит только ответ последней записи:
+  // ответ старого запроса не затирает более свежий.
+  const lastWrite = useRef(new Map<string, number>());
+  const claimWrite = (key: string): number => {
+    const n = (lastWrite.current.get(key) ?? 0) + 1;
+    lastWrite.current.set(key, n);
+    return n;
+  };
+  const isLastWrite = (key: string, n: number): boolean => lastWrite.current.get(key) === n;
+
   async function pick(a: OllamaActionInfo, route: string) {
+    const my = claimWrite(a.key);
     setBusy(a.key); setError(null);
     patch({ ...a, route, preset: null, engine: null, routedToOllama: route === 'local', source: 'admin' });
     try {
       const res = await api.localActions.setRoute(a.key, route);
+      // Ответ устаревшего выбора не затирает более свежую запись этой строки
+      if (!isLastWrite(a.key, my)) return;
       patch({ ...a, route: res.route, preset: res.preset ?? null, engine: res.engine ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       void loadModels();
       // Кэш effective-line ключуется по actionKey и сам по себе не видит смену маршрута —
       // сбрасываем, чтобы подсказка перерисовалась сразу, а не после переоткрытия модалки
       invalidateEffectiveLines();
-    } catch (e) { patch(a); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); }
+    } catch (e) {
+      if (isLastWrite(a.key, my)) { patch(a); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); }
+    }
     finally { setBusy(null); }
+  }
+
+  // «Исполнители ночи» (W7c): сохранение списка места. Ответ PUT для рендера не берётся:
+  // его форма (плоский executors) не равна форме списка в снимке (хвост ревью W7a) —
+  // состояние строки перечитываем из /usage, как после массового пресета. Отказ не
+  // глотаем здесь: тексты валидатора показывает сам блок (Notice W7b), строка места
+  // остаётся какой была.
+  async function saveExecutors(a: OllamaActionInfo, body: NightExecutorsBody) {
+    const my = claimWrite(a.key);
+    await api.localActions.putLocalActionExecutors(a.key, body);
+    const d = await api.usage.get().catch(() => undefined);
+    // Более свежая запись этой строки (выбор маршрута) уже в полёте — её ответ важнее
+    if (!isLastWrite(a.key, my)) return;
+    // Перечитка не удалась — оставляем строку как есть: сохранение прошло, а пустая
+    // таблица выглядела бы как его отказ.
+    if (!d?.ollama) return;
+    setInfo(d.ollama);
+    invalidateEffectiveLines();
   }
 
   async function reset(a: OllamaActionInfo) {
@@ -156,6 +192,9 @@ export function ApplyTab({ isAdmin, data, models, tierModels, savingScope, onSav
                 onSaveLayer={onSaveLayer}
                 onPick={route => pick(a, route)}
                 onReset={() => reset(a)}
+                localEngines={info.localEngines}
+                mainLocalEnabled={ollamaOn}
+                onSaveExecutors={(body) => saveExecutors(a, body)}
                 enabled={a.key === BRIEFING_KEY ? briefingOn : undefined}
                 onToggleEnabled={a.key === BRIEFING_KEY ? toggleBriefing : undefined}
                 toggleBusy={a.key === BRIEFING_KEY && briefingBusy}
@@ -210,7 +249,7 @@ function StrategyCard({ active, disabled, loading, title, desc, onClick }: {
 
 // === Строка места каталога ===
 function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProvider, models, savingScope,
-  onSaveLayer, onPick, onReset, enabled, onToggleEnabled, toggleBusy }: {
+  onSaveLayer, onPick, onReset, localEngines, mainLocalEnabled, onSaveExecutors, enabled, onToggleEnabled, toggleBusy }: {
   action: OllamaActionInfo;
   first: boolean;
   busy: boolean;
@@ -225,6 +264,13 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
     userId?: string | null) => Promise<void>;
   onPick: (route: string) => void;
   onReset: () => void;
+  // Блок «Исполнители ночи» (W7c): движки из снимка (ollama.localEngines), флаг основной
+  // локали и сохранение списка места. Рисуются только месту с флагом каталога
+  // parallelExecutors; ActionRow живёт лишь при админе (не-админ выходит выше по isAdmin),
+  // отдельного условия по роли здесь нет.
+  localEngines?: OllamaUsageInfo['localEngines'];
+  mainLocalEnabled: boolean;
+  onSaveExecutors: (body: NightExecutorsBody) => Promise<void>;
   enabled?: boolean;
   onToggleEnabled?: (v: boolean) => void;
   toggleBusy?: boolean;
@@ -245,12 +291,22 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
     ? 'Цепочка удалена — по умолчанию'
     : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels, a.engine);
 
+  // Место, умеющее вести несколько ночных работ (флаг каталога, сейчас это одно
+  // wiki-nightly): под выбором его маршрута — блок «Исполнители ночи». При непустом
+  // списке сам выбор маршрута к ночи больше не относится — он подписан ниже строкой,
+  // чтобы админ не выбирал маршрут, который ничего не делает.
+  const nightExec = a.parallelExecutors === true;
+  const nightRunners = a.executors?.items ?? [];
+
   return (
-    <div className="cc-mprov-row" style={{
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+    // Строка места — сетка «описание | выбор маршрута» (как была flex), а подпись и блок
+    // «Исполнители ночи» занимают всю ширину строки под ней: на 360 px они не шире строки
+    // и не дают горизонтального переполнения.
+    <div className="cc-mprov-row" data-testid={`action-row-${a.key}`} style={{
+      display: 'grid', gridTemplateColumns: '1fr auto', alignItems: 'center', columnGap: 10,
       padding: '8px 12px', borderTop: first ? 'none' : `1px solid ${C.borderLight}`, transition: 'background 0.12s',
     }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0, flex: 1 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
           <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.title}</span>
@@ -313,6 +369,28 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, ollamaProv
           place={{ input: a.input ?? 'text', facePose: !!a.facePose }}
         />
       </div>
+
+      {/* Подпись выбора маршрута места: при непустом списке ночь идёт списком исполнителей,
+          а не этим маршрутом — админ видит это сразу под контролем, а не догадывается. */}
+      {nightExec && nightRunners.length > 0 && (
+        <div data-testid="night-executors-caption" style={{ gridColumn: '1 / -1', minWidth: 0,
+          fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          ночь идёт по списку исполнителей
+        </div>
+      )}
+
+      {/* Блок «Исполнители ночи» — сразу под выбором маршрута своего места, на всю ширину
+          строки; остальные места его не получают (флага каталога у них нет). */}
+      {nightExec && (
+        <div style={{ gridColumn: '1 / -1', minWidth: 0 }}>
+          <NightExecutorsEditor
+            engines={localEngines ?? []}
+            value={a.executors ?? null}
+            mainLocalEnabled={mainLocalEnabled}
+            onSave={(body) => onSaveExecutors(body)}
+          />
+        </div>
+      )}
     </div>
   );
 }

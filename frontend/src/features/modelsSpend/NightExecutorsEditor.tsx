@@ -115,14 +115,19 @@ export function NightExecutorsEditor({ engines, value, mainLocalEnabled, onSave 
   // всегда (ревью W2c), здесь она скрывается и из черновика, и из тела сохранения
   const visible = engines.filter((e) => mainLocalEnabled || e.name !== MAIN_LOCAL);
 
-  const valueKey = JSON.stringify(value ?? null);
+  // Ключ синхронизации черновика: значение места + состав видимых движков. Одного
+  // значения мало: при включении/выключении основной локали состав движков меняется, а
+  // значение — нет, и черновик остался бы по старому составу: движок, которого только
+  // что не было в списке, вернулся бы неотмеченным, и «Сохранить» снял бы его с места.
+  // Инвариант: черновик всегда отражает value по всем видимым движкам.
+  const syncKey = JSON.stringify([value ?? null, visible.map((e) => e.name)]);
   const [draft, setDraft] = useState<Draft>(() => draftFrom(value, visible));
-  const [syncedKey, setSyncedKey] = useState(valueKey);
-  // Новая value сбрасывает черновик: источник правды — value, черновик — только
-  // незавершённая работа. Сравнение по содержанию, не по ссылке: перечитка тех же
-  // настроек не должна стирать то, что человек уже пометил
-  if (syncedKey !== valueKey) {
-    setSyncedKey(valueKey);
+  const [syncedKey, setSyncedKey] = useState(syncKey);
+  // Новое значение (или новый состав видимых движков) сбрасывает черновик: источник
+  // правды — value, черновик — только незавершённая работа. Сравнение по содержанию,
+  // не по ссылке: перечитка тех же настроек не должна стирать то, что человек пометил
+  if (syncedKey !== syncKey) {
+    setSyncedKey(syncKey);
     setDraft(draftFrom(value, visible));
   }
 

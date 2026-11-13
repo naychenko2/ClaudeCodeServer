@@ -2746,8 +2746,8 @@ public class FeatureProjectorTests
 
         run.Stages.Single(x => x.Key == "qa").ByDecision.Should().BeTrue();
         run.Stages.Single(x => x.Key == "prod").ByDecision.Should().BeFalse();
-        // этап, которого нет в словаре (off/не в шаблоне), — признака нет
-        run.Stages.Where(x => x.Key is not ("qa" or "prod")).Should().OnlyContain(x => x.ByDecision == null);
+        // этапа, которого нет в словаре (off/не в шаблоне), в графе предложения нет вовсе (B11b)
+        run.Stages.Select(x => x.Key).Should().NotContain(["cut", "design", "plan", "review", "final", "merge"]);
     }
 
     [Fact]
@@ -2766,6 +2766,61 @@ public class FeatureProjectorTests
             .Stages.Should().OnlyContain(s => s.ByDecision == null);
         FeatureProjector.BuildCore(confirmed, [confirmed], t, proposalPresence: _ => presence)
             .Stages.Should().OnlyContain(s => s.ByDecision == null);
+    }
+
+    // B11b: этапы, выключенные в шаблоне предложения (off), в графе предложения быть не должно —
+    // узел ИСЧЕЗАЕТ, а не просто теряет признак «по решению». Словарь Presence — ровно стадии
+    // шаблона «Быстрый трек»: plan optional, prod/review/final/merge on; cut/design/qa off.
+    [Fact]
+    public void Build_Stages_Предложение_OffСтадииВГрафеНет()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        var epic = new TaskItem
+        {
+            Id = "e-b11b-p", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "builtin-fast-track", ProposedAt = t.AddHours(-1) },
+        };
+        var s1 = new TaskItem { Id = "s1", FeatureId = epic.Id, Role = TaskRoles.Step, StepRef = "G1", Status = TaskItemStatus.Todo };
+        var qa = new TaskItem { Id = "q1", FeatureId = epic.Id, Role = TaskRoles.Qa, Status = TaskItemStatus.Todo };
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+        {
+            ["plan"] = WorkflowStagePresence.Optional,
+            ["prod"] = WorkflowStagePresence.On,
+            ["review"] = WorkflowStagePresence.On,
+            ["final"] = WorkflowStagePresence.On,
+            ["merge"] = WorkflowStagePresence.On,
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, qa], t, proposalPresence: _ => presence);
+
+        run.Stages.Select(x => x.Key).Should().NotContain(["qa", "cut", "design"]);
+        run.Stages.Select(x => x.Key).Should().Contain(["plan", "prod", "review", "final", "merge"]);
+        run.Stages.Single(x => x.Key == "plan").ByDecision.Should().BeTrue("optional — «по решению»");
+        run.Stages.Single(x => x.Key == "prod").ByDecision.Should().BeFalse("on — не по решению");
+    }
+
+    // B11b: фильтр графа предложения не трогает легаси-фичу и подтверждённый маршрут —
+    // там словаря Presence нет (словарь зовётся только при предложении), состав стадий прежний.
+    [Fact]
+    public void Build_Stages_ЛегасиИПодтверждённый_СоставСтадийНеИзменён()
+    {
+        var t = new DateTime(2026, 11, 14, 10, 0, 0, DateTimeKind.Utc);
+        IReadOnlyDictionary<string, string> presence = new Dictionary<string, string>
+        {
+            ["plan"] = WorkflowStagePresence.Optional,
+            ["prod"] = WorkflowStagePresence.On,
+        };
+        var legacy = new TaskItem { Id = "e-b11b-l", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var confirmed = new TaskItem
+        {
+            Id = "e-b11b-c", Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t),
+            WorkflowProposal = new WorkflowProposal { TemplateId = "tpl", ProposedAt = t.AddHours(-9) },
+        };
+
+        FeatureProjector.BuildCore(legacy, [legacy], t, proposalPresence: _ => presence)
+            .Stages.Select(x => x.Key).Should().Equal("cut", "design", "plan", "prod", "review", "qa", "final", "merge");
+        FeatureProjector.BuildCore(confirmed, [confirmed], t, proposalPresence: _ => presence)
+            .Stages.Select(x => x.Id).Should().Equal("plan", "step-back", "step-front", "review");
     }
 
     // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном

@@ -230,7 +230,14 @@ public sealed class FeatureProjector(TaskManager tasks)
         // Определения строятся ДО «Сейчас»: стадия задачи в Now — ключ стадии (RoleToStage),
         // та же величина, что ключ стадии в run.Stages (FS-V1: одна «текущая стадия», R-G3);
         // id этапа — в отдельном поле StageId.
-        var stageDefs = BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge);
+        // B11: «по решению» — только у предложенного (не подтверждённого) маршрута; Presence этапов
+        // берётся из шаблона предложения вызывающим (проектор шаблонов не видит), ключ — ключ стадии.
+        bool proposedRoute = epic.WorkflowProposal is not null && epic.Workflow is null;
+        var proposalPresenceByKey = proposedRoute ? proposalPresence?.Invoke(epic) : null;
+
+        var stageDefs = FilterProposalStages(
+            BuildStageDefs(epic, cut, design, plan, steps, reviews, qa, final, merge),
+            proposedRoute, proposalPresenceByKey);
         var graph = epic.Workflow is { } confirmed ? confirmed.Stages : null;
 
         // «Сейчас»: только действительно идущие InProgress-задачи фичи (эпик + дочерние),
@@ -310,11 +317,6 @@ public sealed class FeatureProjector(TaskManager tasks)
                     && t.ExecutorStoppedAt >= epic.Hold!.Since)
                 .Select(t => t.Id)
                 .ToList();
-
-        // B11: «по решению» — только у предложенного (не подтверждённого) маршрута; Presence этапов
-        // берётся из шаблона предложения вызывающим (проектор шаблонов не видит), ключ — ключ стадии.
-        bool proposedRoute = epic.WorkflowProposal is not null && epic.Workflow is null;
-        var proposalPresenceByKey = proposedRoute ? proposalPresence?.Invoke(epic) : null;
 
         // Состояния стадий (G3): у фичи с маршрутом — WorkflowGraph.States по DAG графа
         // (done/active/pending/absent; активным этап делает ИДУЩАЯ по Status задача — держащая
@@ -878,6 +880,21 @@ public sealed class FeatureProjector(TaskManager tasks)
             ("merge", "merge", TaskRoles.Merge, null, null, [], 0, byKey["merge"]),
         };
     }
+
+    // B11b: в графе ПРЕДЛОЖЕНИЯ стадии, выключенные в шаблоне (off), быть не должно — узел
+    // исчезает, а не просто теряет признак. Словарь ProposalPresence содержит ровно стадии
+    // шаблона предложения (off в него не входит), поэтому фильтр — по его ключам.
+    // Применяется только к предложению с непустым словарём: легаси-фича и подтверждённый
+    // маршрут словаря не имеют (словарь зовётся только при proposedRoute), их состав стадий
+    // не меняется. Пустой словарь — фильтр не включаем (шаблон не найден: оставляем как было).
+    private static (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+        List<TaskItem> tasks)[] FilterProposalStages(
+        (string key, string id, string role, string? lane, string? title, List<string> after, int column,
+            List<TaskItem> tasks)[] stageDefs,
+        bool proposedRoute, IReadOnlyDictionary<string, string>? presenceByKey)
+        => proposedRoute && presenceByKey is { Count: > 0 }
+            ? stageDefs.Where(d => presenceByKey.ContainsKey(d.key)).ToArray()
+            : stageDefs;
 
     // Роль для выбора этапа графа (G3): rework → step (как TaskManager.StageRoleOf),
     // consult → cut (задача консультации относится к стадии «Разрез», как в таблице

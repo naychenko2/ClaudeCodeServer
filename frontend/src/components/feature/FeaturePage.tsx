@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Inbox } from 'lucide-react';
 import { R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -300,9 +300,12 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       </Notice>
     );
   } else {
-    // ok: мета-строка (макет §1), тревога по attention (макет §2), липкие вкладки
-    // (макет §4) и содержимое: «Хронология» — блок «Сводка» (волна 6, Ф6) + конвейер,
-    // остальные — «Скоро».
+    // ok: мета-строка (макет §1), тревога по attention (макет §2), вкладки под шапкой
+    // и содержимое выбранной вкладки. Вариант A (решение Андрея 13.11, макет
+    // materials-review-placement.html): у фичи с маршрутом «Процесс» — граф и выбранный
+    // этап (их работа делает прежний «Ход», конвейер не рисуется); «Материалы» и «Разбор»
+    // — прежние виды всей фичи, без графа. У легаси-фичи без маршрута — прежний «Ход»
+    // (конвейер), графа нет.
     // ok: run есть (page.page.run) — локальная переменная без null.
     const okRun = page.page.run;
     // Строки «Сейчас»: переход в задачу.
@@ -351,34 +354,36 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
           // тебя» не покрыты: во всех этих случаях блок состояния остаётся на её месте.
           stateBlock={holdLike || !page.page.brief || watchdogOrIdle ? <FeaturePageAlert run={okRun} feature={feature} isMobile={isMobile} onMerge={openMergeDialog} marks={marks} /> : undefined}
         />
-        {graphShown && (
-          <div data-testid="feature-page-process" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, marginTop: SP.md }}>
-            <FeatureProcessGraph
-              run={okRun}
-              selectedId={selectedStageId}
-              onSelect={(id) => setStageSel({ featureId, id })}
-            />
-            <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
-          </div>
-        )}
         <FeaturePageTabs
           value={mainTab}
           onChange={setFeatureMainTab}
           isMobile={isMobile}
+          progressLabel={featureMainTabLabel('progress', graphShown)}
           plansCount={plansTabCount(page.page)}
         />
         <div data-testid="feature-page-body" style={{ marginTop: SP.md }}>
           {mainTab === 'progress' ? (
-            <FeatureProgressWithNames
-              stages={okRun.stages ?? []}
-              next={page.page.brief?.next ?? []}
-              active={page.page.brief?.active ?? []}
-              isMobile={isMobile}
-              // «Все N шагов этапа ›» раскрывает шаги внутри «Производства».
-              stepsSlot={<FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />}
-              stepsTotal={stepsTabCount(okRun)}
-              onOpenActive={openActiveTask}
-            />
+            graphShown ? (
+              <div data-testid="feature-page-process" style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
+                <FeatureProcessGraph
+                  run={okRun}
+                  selectedId={selectedStageId}
+                  onSelect={(id) => setStageSel({ featureId, id })}
+                />
+                <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
+              </div>
+            ) : (
+              <FeatureProgressWithNames
+                stages={okRun.stages ?? []}
+                next={page.page.brief?.next ?? []}
+                active={page.page.brief?.active ?? []}
+                isMobile={isMobile}
+                // «Все N шагов этапа ›» раскрывает шаги внутри «Производства».
+                stepsSlot={<FeatureTasksTab run={okRun} featureId={featureId} marks={marks} isMobile={isMobile} />}
+                stepsTotal={stepsTabCount(okRun)}
+                onOpenActive={openActiveTask}
+              />
+            )
           ) : mainTab === 'materials' ? (
             <FeaturePlansTab page={page.page} materials={page.page.materials} isMobile={isMobile} onOpenFile={onOpenFile} onOpenKeyChat={onOpenKeyChat} marks={marks} featureId={featureId} projectId={projectId} />
           ) : (

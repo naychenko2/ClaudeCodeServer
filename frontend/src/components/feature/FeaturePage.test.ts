@@ -2566,8 +2566,13 @@ describe('FeaturePage: первый экран (FS-FS)', () => {
   });
 });
 
-// C3b: граф процесса сверху, выбранный этап ниже, подтверждение маршрута в шапке.
-describe('FeaturePage: граф процесса, этап и подтверждение маршрута (C3b)', () => {
+// C3d (вариант A, решение Андрея 13.11): вкладки «Процесс · Материалы · Разбор» под шапкой.
+// Граф и выбранный этап — содержимое «Процесса» (конвейер прежнего «Хода» у фичи с маршрутом
+// не рисуется); «Материалы» и «Разбор» открываются без графа, содержимое прежнее. Легаси-фича:
+// вкладки прежние «Ход · Материалы · Разбор», графа и блока подтверждения нет. Выбор этапа
+// живёт в состоянии страницы и переживает уход с вкладки (resolveSelectedStage — чужой фиче
+// не принадлежит). Подтверждение маршрута в шапке — как в C3b.
+describe('FeaturePage: вариант A — граф и этап внутри «Процесса» (C3d)', () => {
   const stage = (id: string, state: 'done' | 'active' | 'pending', after: string[], column: number, taskIds: string[] = []) =>
     ({ key: 'prod', id, role: 'step', title: `Этап ${id}`, after, column, state, passes: 1, taskIds, rounds: [] });
   const routed = (over: Record<string, unknown> = {}) => {
@@ -2586,6 +2591,35 @@ describe('FeaturePage: граф процесса, этап и подтвержд
     mockGetFeature.result = pageData({ run: run as never });
   };
   const areaId = (c: ReturnType<typeof render>) => findNodeByAttr(c, 'data-testid', 'feature-stage-area')?.getAttribute('data-stage-id');
+
+  // Подписи вкладок полосы (role=tab внутри feature-page-tabs), без счётчиков.
+  const tabLabels = (c: ReturnType<typeof render>): string[] => {
+    const tabs = findNodeByAttr(c, 'data-testid', 'feature-page-tabs');
+    if (!tabs) return [];
+    const labels: string[] = [];
+    const walk = (x: AnyNode) => {
+      if ((x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('role') === 'tab') labels.push(textNodes(x).join(''));
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(tabs as unknown as AnyNode);
+    return labels.map(l => l.replace(/\d+$/, ''));
+  };
+  // Есть ли в поддереве узел с testid (граф ВНУТРИ содержимого вкладки).
+  const hasIn = (root: AnyNode, testid: string): boolean => {
+    if ((root as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('data-testid') === testid) return true;
+    return root.childNodes.some(ch => hasIn(ch, testid));
+  };
+  // data-testid в порядке документа: положение блоков (полоса вкладок выше графа).
+  const testidOrder = (c: ReturnType<typeof render>): string[] => {
+    const ids: string[] = [];
+    const walk = (x: AnyNode) => {
+      const id = (x as unknown as { getAttribute?: (a: string) => string | null }).getAttribute?.('data-testid');
+      if (id) ids.push(id);
+      for (const ch of x.childNodes) walk(ch);
+    };
+    walk(c as unknown as AnyNode);
+    return ids;
+  };
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -2614,17 +2648,58 @@ describe('FeaturePage: граф процесса, этап и подтвержд
     expect(resolveSelectedStage({ featureId: 'f1', id: 'нет' }, 'f1', run)).toBe('b');
   });
 
-  it('граф сверху, этап по умолчанию — активный; клик по узлу меняет область этапа', async () => {
+  // Мутации (в отчёте): вернуть граф над FeaturePageTabs → порядок и hasIn краснеют;
+  // снять featureMainTabLabel('progress', true) → «Процесс» → «Ход» → labels краснеют;
+  // вернуть конвейер рядом с графом → progress-tab ≠ null → красный.
+  it('фича с маршрутом: вкладки «Процесс · Материалы · Разбор», «Процесс» по умолчанию, граф и этап внутри него', async () => {
     routed();
     const c = render({});
     await settle();
-    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph')).not.toBeNull();
+    expect(tabLabels(c), 'вкладки фичи с маршрутом').toEqual(['Процесс', 'Материалы', 'Разбор']);
+    const selected = findNodeByAttr(c, 'aria-selected', 'true')!;
+    expect(textNodes(selected).join(''), 'дефолтная вкладка').toBe('Процесс');
+    // Порядок варианта A: полоса вкладок выше содержимого, граф — внутри содержимого.
+    const order = testidOrder(c);
+    expect(order.indexOf('feature-page-tabs') < order.indexOf('feature-page-process'), 'полоса вкладок выше графа').toBe(true);
+    const body = findNodeByAttr(c, 'data-testid', 'feature-page-body')!;
+    expect(hasIn(body as unknown as AnyNode, 'feature-process-graph'), 'граф внутри содержимого вкладки').toBe(true);
     expect(areaId(c)).toBe('b');
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-t-b')!).join('')).toContain('Задача B');
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-status-t-b')!).join('')).toBe('в работе');
+    // Конвейер прежнего «Хода» у фичи с маршрутом не рисуется: его делают граф и этап.
+    expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), 'конвейер на фиче с маршрутом').toBeNull();
     await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'pgraph-node-c')!)!.onClick as () => void)(); });
     expect(areaId(c)).toBe('c');
     expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-task-status-t-c')!).join('')).toBe('не начата');
+  });
+
+  it('«Материалы» и «Разбор» открываются без графа, содержимое прежнее', async () => {
+    routed();
+    const c = render({});
+    await settle();
+    await act(async () => { (reactProps(findTab(c, 'Материалы')! as never)!.onClick as () => void)(); });
+    expect(getFeatureMainTab()).toBe('materials');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph'), 'граф на «Материалах»').toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'plans-all-empty') ?? findNodeByAttr(c, 'data-testid', 'plans-grid'), 'тело «Материалов»').not.toBeNull();
+    await act(async () => { (reactProps(findTab(c, 'Разбор')! as never)!.onClick as () => void)(); });
+    expect(getFeatureMainTab()).toBe('review');
+    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph'), 'граф на «Разборе»').toBeNull();
+    // Строка итога — часть «Разбора» и в пустом состоянии (FeatureReviewTab.tsx:61-70):
+    // фикстура routed() без stats — полный корень feature-review-tab не рисуется (ранний return).
+    expect(findNodeByAttr(c, 'data-testid', 'feature-analysis-line'), 'тело «Разбора»').not.toBeNull();
+  });
+
+  it('выбранный этап сохраняется при уходе на «Материалы» и возврате в «Процесс»', async () => {
+    routed();
+    const c = render({});
+    await settle();
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'pgraph-node-c')!)!.onClick as () => void)(); });
+    expect(areaId(c)).toBe('c');
+    await act(async () => { (reactProps(findTab(c, 'Материалы')! as never)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'feature-stage-area'), 'область этапа на «Материалах»').toBeNull();
+    await act(async () => { (reactProps(findTab(c, 'Процесс')! as never)!.onClick as () => void)(); });
+    expect(getFeatureMainTab()).toBe('progress');
+    expect(areaId(c), 'выбор после возврата в «Процесс»').toBe('c');
   });
 
   it('смена фичи сбрасывает выбор этапа на defaultSelected', async () => {
@@ -2638,14 +2713,17 @@ describe('FeaturePage: граф процесса, этап и подтвержд
     expect(areaId(c)).toBe('b');
   });
 
-  it('легаси-эпик (ни предложения, ни маршрута): графа и блока подтверждения нет, каталог не грузится', async () => {
+  it('легаси-эпик (ни предложения, ни маршрута): вкладки прежние «Ход · Материалы · Разбор», графа и блока подтверждения нет, каталог не грузится', async () => {
     mockGetFeature.result = pageData();
     const c = render({});
     await settle();
+    expect(tabLabels(c), 'вкладки легаси-фичи').toEqual(['Ход', 'Материалы', 'Разбор']);
     expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph')).toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-page-workflow-confirm')).toBeNull();
     expect(findNodeByAttr(c, 'data-testid', 'feature-workflow-confirm')).toBeNull();
     expect(mockTemplates.calls).toBe(0);
+    // Содержимое «Хода» не меняется: конвейер на месте.
+    expect(findNodeByAttr(c, 'data-testid', 'progress-tab'), 'конвейер легаси-фичи').not.toBeNull();
   });
 
   it('предложение без подтверждения — блок подтверждения в шапке', async () => {

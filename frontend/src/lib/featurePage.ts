@@ -339,6 +339,14 @@ export const FEATURE_MAIN_TAB_LABEL: Record<FeatureMainTab, string> = {
   review: 'Разбор',
 };
 
+// Название мейн-вкладки. Первая вкладка именуется по наличию маршрута (вариант A,
+// решение Андрея 13.11, docs/mockups/feature-workflows/materials-review-placement.md):
+// у фичи с маршрутом — «Процесс» (её содержимое — граф процесса и выбранный этап),
+// у легаси — «Ход» (содержимое прежнее). Прочие имена — из словаря выше.
+export function featureMainTabLabel(t: FeatureMainTab, hasRoute: boolean): string {
+  return t === 'progress' && hasRoute ? 'Процесс' : FEATURE_MAIN_TAB_LABEL[t];
+}
+
 // Перевод старых значений в новые — строго по таблице FS-FTABS:
 // timeline/tasks → progress, plans → materials, chats/events/stats → review.
 // Полного покрытия union — нет: новая вкладка FeaturePageTab без строки здесь

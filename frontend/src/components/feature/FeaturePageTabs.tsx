@@ -3,7 +3,10 @@ import { C } from '../../lib/design';
 import { Tabs, type TabItem } from '../ui/Tabs';
 import { FEATURE_MAIN_TAB_LABEL, type FeatureMainTab } from '../../lib/featurePage';
 
-// Вкладки страницы фичи (макет v4): «Ход» (по умолчанию) · «Материалы» · «Разбор».
+// Вкладки страницы фичи: «Ход»/«Процесс» (по умолчанию) · «Материалы» · «Разбор».
+// Вариант A (решение Андрея 13.11): у фичи с маршрутом первая вкладка — «Процесс»
+// (её содержимое — граф и этап), у легаси — «Ход». Полоса стоит под шапкой страницы;
+// подпись первой вкладки приходит снаружи (featureMainTabLabel), сама полоса её не выводит.
 // Кит ui/Tabs (size md, R-1: 38/44, поля 10/12) — самодельных не заводить; счётчик
 // есть только у «Материалов».
 //
@@ -25,11 +28,14 @@ export interface FeaturePageTabsProps {
   value: FeatureMainTab;
   onChange: (t: FeatureMainTab) => void;
   isMobile: boolean;
+  // Подпись первой вкладки: «Процесс» (фича с маршрутом) / «Ход» (легаси) —
+  // её выводит страница через featureMainTabLabel, полоса только показывает.
+  progressLabel: string;
   // Счётчик «Материалов»; 0/null — без счётчика.
   plansCount?: number | null;
 }
 
-export function FeaturePageTabs({ value, onChange, isMobile, plansCount }: FeaturePageTabsProps) {
+export function FeaturePageTabs({ value, onChange, isMobile, progressLabel, plansCount }: FeaturePageTabsProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
 
   // На 360: активная вкладка в видимости (макет §4).
@@ -40,7 +46,7 @@ export function FeaturePageTabs({ value, onChange, isMobile, plansCount }: Featu
   }, [value, isMobile]);
 
   const items: TabItem<FeatureMainTab>[] = [
-    { value: 'progress', label: FEATURE_MAIN_TAB_LABEL.progress },
+    { value: 'progress', label: progressLabel },
     { value: 'materials', label: FEATURE_MAIN_TAB_LABEL.materials, count: plansCount != null && plansCount > 0 ? plansCount : undefined },
     { value: 'review', label: FEATURE_MAIN_TAB_LABEL.review },
   ];

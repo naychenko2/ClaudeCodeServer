@@ -151,7 +151,14 @@ function LegacyArtifacts({ taskId, artifacts, isMobile }: {
 
 // ── Новый вид: файлы с версиями слева, дифф выбранного файла справа ─────────────────────────────
 
-const FILES_COLLAPSED = 6;
+const FILES_COLLAPSED = 10;
+
+function filesWord(n: number): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'файл';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'файла';
+  return 'файлов';
+}
 
 type FileDiffState =
   | { status: 'loading' }
@@ -160,13 +167,15 @@ type FileDiffState =
 
 interface DiffMode { id: string; label: string; from: string; to: string }
 
-// Режимы разницы по числу версий: «v1» = изменение первой версии, «v2 → vN» = между v1 и vN, «всё»
+// Режимы разницы по числу версий: «v1» = изменение первой версии, «v(N-1) → vN» = между двумя
+// последними, «всё» = всё изменение файла за этап
 export function diffModes(file: StageFile): DiffMode[] {
   const n = file.versions.length;
   const modes: DiffMode[] = [];
-  if (n >= 2) modes.push({ id: 'first', label: 'v1', from: 'all', to: '1' });
-  if (n === 2) modes.push({ id: 'last', label: 'v2', from: '1', to: '2' });
-  if (n >= 3) modes.push({ id: 'last', label: `v2 → v${n}`, from: '1', to: String(n) });
+  if (n >= 2) {
+    modes.push({ id: 'first', label: 'v1', from: 'all', to: '1' });
+    modes.push({ id: 'last', label: `v${n - 1} → v${n}`, from: String(n - 1), to: String(n) });
+  }
   modes.push({ id: 'all', label: 'всё', from: 'all', to: 'all' });
   return modes;
 }
@@ -255,7 +264,7 @@ function FilesArtifacts({ taskId, artifacts, files, isMobile }: {
           })}
           {hidden > 0 && (
             <Button size="xs" variant="ghost" dataTestId="stage-files-more" style={isMobile ? { minHeight: 40 } : undefined}
-              onClick={() => setExpanded(true)}>ещё {hidden} {hidden === 1 ? 'файл' : 'файлов'}</Button>
+              onClick={() => setExpanded(true)}>ещё {hidden} {filesWord(hidden)}</Button>
           )}
           {artifacts.commits.length > 0 && (
             <div data-testid="stage-commits" style={{ display: 'flex', flexDirection: 'column', gap: SP.xxs, marginTop: SP.sm }}>

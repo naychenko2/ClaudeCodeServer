@@ -42,6 +42,16 @@ function click(c: FNode, testid: string) {
   act(() => { (reactProps(n!)!.onClick as (e: unknown) => void)({ stopPropagation() {}, preventDefault() {} }); });
 }
 const text = (c: FNode) => textNodes(c).join('|');
+function findByLabel(c: FNode, label: string): FNode | null {
+  let hit: FNode | null = null;
+  const walk = (x: FNode) => {
+    if (hit) return;
+    if (x.nodeType === 1 && typeof reactProps(x)?.onClick === 'function' && textNodes(x).join('') === label) { hit = x; return; }
+    for (const ch of x.childNodes) walk(ch);
+  };
+  walk(c);
+  return hit;
+}
 function deferred<T>() {
   let resolve!: (v: T) => void; let reject!: (e: unknown) => void;
   const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
@@ -54,8 +64,8 @@ afterEach(() => { for (const r of roots) act(() => { r.unmount(); }); roots.leng
 describe('diffModes', () => {
   it('режимы по числу версий', () => {
     expect(diffModes(file('a', 1)).map(m => m.label)).toEqual(['всё']);
-    expect(diffModes(file('a', 2)).map(m => [m.label, m.from, m.to])).toEqual([['v1', 'all', '1'], ['v2', '1', '2'], ['всё', 'all', 'all']]);
-    expect(diffModes(file('a', 3)).map(m => [m.label, m.from, m.to])).toEqual([['v1', 'all', '1'], ['v2 → v3', '1', '3'], ['всё', 'all', 'all']]);
+    expect(diffModes(file('a', 2)).map(m => [m.label, m.from, m.to])).toEqual([['v1', 'all', '1'], ['v1 → v2', '1', '2'], ['всё', 'all', 'all']]);
+    expect(diffModes(file('a', 3)).map(m => [m.label, m.from, m.to])).toEqual([['v1', 'all', '1'], ['v2 → v3', '2', '3'], ['всё', 'all', 'all']]);
   });
 });
 
@@ -64,6 +74,19 @@ describe('FeatureStageArtifacts · файлы', () => {
     const { container } = render(arts([], { resultMarkdown: 'сделано' }));
     expect(text(findNodeByAttr(container, 'data-testid', 'stage-artifacts-empty')!)).toContain('Артефактов пока нет');
     expect(text(container)).toContain('Итог исполнителя');
+  });
+
+  it('файл с тремя версиями: чипы v3·v2·v1, переключатель, клик «v2 → v3» — один запрос from=2,to=3', async () => {
+    diffMock.mockResolvedValue(fdiff('A.cs', 'AAA'));
+    const { container } = render(arts([file('A.cs', 3)]));
+    await act(async () => { await flush(); });
+    expect(text(container)).toMatch(/v\|3\|v\|2\|v\|1/);
+    for (const l of ['v1', 'v2 → v3', 'всё']) expect(findByLabel(container, l), l).not.toBeNull();
+    diffMock.mockClear();
+    act(() => { (reactProps(findByLabel(container, 'v2 → v3')!)!.onClick as () => void)(); });
+    await act(async () => { await flush(); });
+    expect(diffMock).toHaveBeenCalledTimes(1);
+    expect(diffMock.mock.calls[0].slice(0, 4)).toEqual(['t1', 'A.cs', '2', '3']);
   });
 
   it('первый файл выбран, дифф «всё» грузится по умолчанию', async () => {
@@ -109,12 +132,12 @@ describe('FeatureStageArtifacts · файлы', () => {
 
   it('сворачивает длинный список: «ещё N файлов», по клику раскрывает', () => {
     diffMock.mockReturnValue(new Promise(() => {}));
-    const files = Array.from({ length: 9 }, (_, i) => file(`f${i}.cs`, 1));
+    const files = Array.from({ length: 13 }, (_, i) => file(`f${i}.cs`, 1));
     const { container } = render(arts(files));
-    expect(findNodeByAttr(container, 'data-testid', 'stage-file-f8.cs')).toBeNull();
-    expect(text(findNodeByAttr(container, 'data-testid', 'stage-files-more')!)).toContain('ещё');
+    expect(findNodeByAttr(container, 'data-testid', 'stage-file-f12.cs')).toBeNull();
+    expect(text(findNodeByAttr(container, 'data-testid', 'stage-files-more')!)).toContain('ещё |3| |файла');
     click(container, 'stage-files-more');
-    expect(findNodeByAttr(container, 'data-testid', 'stage-file-f8.cs')).not.toBeNull();
+    expect(findNodeByAttr(container, 'data-testid', 'stage-file-f12.cs')).not.toBeNull();
   });
 
   it('размонтирование отменяет запрос', async () => {

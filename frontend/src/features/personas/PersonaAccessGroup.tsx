@@ -29,8 +29,10 @@ function formatCopiedAt(iso: string): string | null {
   return (d.getFullYear() === new Date().getFullYear() ? FMT_COPIED : FMT_COPIED_YEAR).format(d);
 }
 
-// Бэк считает отличия областями (профиль / набор инструментов / набор запретов), т. е. 0..3
-// (PersonaManager.AccessDiff) — падеж нужен только для «1 месте», дальше «местах».
+// Падеж подписи копии: число в ней — число видимых меток отличия на этой карточке
+// (список visibleDiff ниже, F26a), а не бэковский счёт областей 0..3
+// (PersonaManager.AccessDiff) — он в подписи больше не используется.
+// Падеж нужен только для «1 месте», дальше «местах».
 const placesWord = (n: number) => (n === 1 ? 'месте' : 'местах');
 
 export interface PersonaAccessGroupProps {
@@ -53,10 +55,8 @@ export interface PersonaAccessGroupProps {
   // Дата, когда права были скопированы в «своё» (бэковый accessCopiedAt): null/пусто —
   // копирования не было, строки нет
   copiedAt?: string | null;
-  // Число отличий копии от текущего шаблона (бэковый accessDiffCount, 0..3). НЕ diff.count:
-  // фронтовый список считает по местам (каждый ключ и запрет), бэковский — по областям;
-  // для пометок «≠» остаётся diff, число в подписи — бэковское (F26a)
-  diffCount?: number | null;
+  // Бэковый accessDiffCount (области 0..3) в карточку больше не передаётся: число в
+  // подписи копии считается из списка видимых меток этой карточки (F26a).
 }
 
 export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
@@ -74,8 +74,27 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
 
   const toggleTool = (key: string, on: boolean) => p.onTools(toggleToolKey(p.tools, key, on));
 
+  // Список видимых меток отличия (F26a): из него рисуются ВСЕ метки «≠» и то же самое
+  // число стоит в подписи копии — метки и число из одного списка, второй арифметики нет.
+  // Условия входа — ровно условия показа блоков: не отрисуем блок — его вклад не считается.
+  // Блок «Запрещённые» рендерится только при профиле «Свой» или непустом своём списке
+  // (showDisallowedBlock), поэтому его строки лишних/снятых запретов в счёт идут только там же.
+  const showDisallowedBlock = p.access === 'custom' || p.disallowed.length > 0;
+  const visibleDiff = new Set<string>();
+  if (!p.inherited && p.diff) {
+    if (p.diff.access) visibleDiff.add('access');
+    for (const t of ACCESS_TOOL_LABELS) {
+      if (p.diff.tools.includes(t.key)) visibleDiff.add(`tool:${t.key}`);
+    }
+    if (showDisallowedBlock) {
+      if (p.diff.extraDisallowed.length > 0) visibleDiff.add('extra');
+      if (p.diff.missingDisallowed.length > 0) visibleDiff.add('missing');
+    }
+  }
+
   // Строка «скопировано …» — только в «своём» и только когда копия была: при наследовании
   // бэк дату обнуляет, а карточка и так показывает источник (access-source ниже).
+  // «отличается в N местах» — только когда есть видимые метки (N = их число, F26a).
   const copiedDate = !p.inherited && p.copiedAt ? formatCopiedAt(p.copiedAt) : null;
 
   return (
@@ -107,8 +126,8 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
         {copiedDate && (
           <div data-testid="access-copied" style={{ ...hint, marginTop: SP.sm }}>
             ↳ скопировано {copiedDate}
-            {typeof p.diffCount === 'number' && p.diffCount > 0 && (
-              <> · <span style={diffMark}>отличается в {p.diffCount} {placesWord(p.diffCount)}</span></>
+            {visibleDiff.size > 0 && (
+              <> · <span style={diffMark}>отличается в {visibleDiff.size} {placesWord(visibleDiff.size)}</span></>
             )}
           </div>
         )}
@@ -134,7 +153,7 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
             { value: 'custom', label: 'Свой', disabled: locked },
           ]}
         />
-        {!p.inherited && p.diff?.access && <div style={diffMark}>≠ у специальности другой профиль</div>}
+        {visibleDiff.has('access') && <div style={diffMark}>≠ у специальности другой профиль</div>}
 
         <div style={fieldLabel}>Инструменты продукта</div>
         <div style={{ display: 'flex', gap: SP.lg, flexWrap: 'wrap' }}>
@@ -147,12 +166,12 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
                 ariaLabel={t.label}
               />
               {t.label}
-              {!p.inherited && p.diff?.tools.includes(t.key) && <span data-testid={`access-diff-${t.key}`} style={diffMark}>≠</span>}
+              {visibleDiff.has(`tool:${t.key}`) && <span data-testid={`access-diff-${t.key}`} style={diffMark}>≠</span>}
             </label>
           ))}
         </div>
 
-        {(p.access === 'custom' || p.disallowed.length > 0) && (
+        {showDisallowedBlock && (
           <>
             <div style={fieldLabel}>Запрещённые инструменты</div>
             <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -166,11 +185,11 @@ export function PersonaAccessGroup(p: PersonaAccessGroupProps) {
                   <span style={{ fontFamily: FONT.mono }}>{name}</span>
                 </Chip>
               ))}
-              {!p.inherited && p.diff && p.diff.extraDisallowed.length > 0 && (
-                <span data-testid="access-diff-extra" style={diffMark}>≠ у специальности нет: {p.diff.extraDisallowed.join(', ')}</span>
+              {visibleDiff.has('extra') && (
+                <span data-testid="access-diff-extra" style={diffMark}>≠ у специальности нет: {p.diff!.extraDisallowed.join(', ')}</span>
               )}
-              {!p.inherited && p.diff && p.diff.missingDisallowed.length > 0 && (
-                <span data-testid="access-diff-missing" style={diffMark}>≠ у специальности запрещено: {p.diff.missingDisallowed.join(', ')}</span>
+              {visibleDiff.has('missing') && (
+                <span data-testid="access-diff-missing" style={diffMark}>≠ у специальности запрещено: {p.diff!.missingDisallowed.join(', ')}</span>
               )}
               {!locked && !adding && <Chip dashed onClick={() => setAdding(true)} keyboard>+ Инструмент</Chip>}
               {!locked && adding && (

@@ -1,6 +1,7 @@
 // A3b: группа прав формы персоны — «Как у специальности» / «Своё» (разрез §2 «Форма персоны»).
-// F26a: строка «скопировано <дата> · отличается в N местах» — число из бэка (accessDiffCount),
-// не из фронтового accessDiff.
+// F26a: строка «скопировано <дата> · отличается в N местах» — N равно числу ВИДИМЫХ меток
+// отличия на этой карточке (профиль / ключ инструмента / строка запретов), а не бэковскому
+// accessDiffCount (области 0..3): число обязано сходиться со списком «≠» на той же карточке.
 // SSR renderToStaticMarkup (образец PersonaForm.gate.test.ts): effects не идут, каталог
 // специальностей не загружен — эффективные значения берутся из полей персоны, которые сервер
 // подставил при выдаче.
@@ -11,7 +12,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PersonaForm } from '../PersonaForm';
 import { PersonaAccessGroup } from '../PersonaAccessGroup';
 import { setAllFlags } from '../../../lib/featureFlags';
-import type { Persona } from '../../../types';
+import type { Persona, PersonaAccess } from '../../../types';
+import type { AccessDiff } from '../personaInheritModel';
 
 vi.mock('../../../lib/breakpoints', async (importOriginal) => {
   const orig = await importOriginal<typeof import('../../../lib/breakpoints')>();
@@ -34,6 +36,15 @@ function render(p: Partial<Persona>): string {
   return renderToStaticMarkup(createElement(PersonaForm, {
     persona: { ...BASE, ...p } as Persona, projects: [], onSaved: () => {}, onDelete: () => {},
   }));
+}
+
+// Ожидаемая дата считается НЕ форматтером компонента (тот же формат, что lib/postTime.ts:
+// «13 нояб.», год — только если он не текущий), чтобы мутация формата краснила тест.
+function expectedDate(iso: string): string {
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('ru-RU', opts);
 }
 
 beforeEach(() => { setAllFlags({}); });
@@ -60,10 +71,14 @@ describe('PersonaForm: группа «Права» (F26)', () => {
     }
   });
 
-  it('копия есть: форма передаёт поля бэка в карточку — строка с датой и «2 местах» (F26a)', () => {
+  it('копия есть: форма передаёт дату бэка в карточку; число бэка в подписи не участвует (F26a)', () => {
     const html = render({ inheritsAccess: false, accessCopiedAt: COPIED_ISO, accessDiffCount: 2 });
     expect(html).toContain('data-testid="access-copied"');
-    expect(html).toContain('отличается в 2 местах');
+    expect(html).toContain('скопировано');
+    expect(html).toContain(expectedDate(COPIED_ISO));
+    // В SSR каталог специальностей не загружен → у формы нет diff → на карточке нет меток.
+    // «отличается» не выходит, хотя бэк говорит «2»: бэковское число в подпись больше не доезжает.
+    expect(html).not.toContain('отличается в');
   });
 
   it('«скопировано … · отличается в N местах» не рисуется: бэк не отдаёт accessCopiedAt/accessDiffCount', () => {
@@ -72,74 +87,108 @@ describe('PersonaForm: группа «Права» (F26)', () => {
 });
 
 // ── F26a: строка «скопировано …» в самой карточке ─────────────────────────────────────
-// Карточка рендерится напрямую: здесь нужен и фронтовый diff (пометки «≠»), и бэковский
-// diffCount — их числа РАЗНЫЕ по построению (фронт считает по местам, бэк — областями,
-// PersonaManager.AccessDiff): в сценарии ниже фронт насчитал 3 (ключ web + два запрета),
-// бэк — 2 (набор инструментов + набор запретов). Подпись обязана нести бэковское число.
+// Карточка рендерится напрямую: число в подписи обязано равняться числу меток «≠»,
+// нарисованных на этой же карточке. Бэковое число карточке не передаётся вовсе —
+// поле accessDiffCount остаётся только в types.ts (бэк его шлёт, подпись его не читает).
 
-const DIFF3 = { access: false, tools: ['web'], extraDisallowed: ['Bash', 'Edit'], missingDisallowed: [], count: 3 };
+const NO_DIFF: AccessDiff = { access: false, tools: [], extraDisallowed: [], missingDisallowed: [], count: 0 };
 
-// Ожидаемая дата считается НЕ форматтером компонента (тот же формат, что lib/postTime.ts:
-// «13 нояб.», год — только если он не текущий), чтобы мутация формата краснила тест.
-function expectedDate(iso: string): string {
-  const d = new Date(iso);
-  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
-  if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
-  return d.toLocaleDateString('ru-RU', opts);
-}
+// Сценарий прежнего теста F26a: ключ web + два лишних запрета. Фронтовый diff.count = 3
+// (каждый запрет отдельно), бэк посчитал бы 2 области (набор инструментов + набор запретов),
+// а карточка рисует РОВНО 2 метки: «≠» у ключа web и одну строку лишних запретов.
+const DIFF_KEY_PLUS_LINE: AccessDiff = { access: false, tools: ['web'], extraDisallowed: ['Bash', 'Edit'], missingDisallowed: [], count: 3 };
 
-function renderGroup(extra: { copiedAt?: string | null; diffCount?: number | null; inherited?: boolean } = {}): string {
+function renderGroup(extra: {
+  copiedAt?: string | null;
+  inherited?: boolean;
+  access?: PersonaAccess;
+  tools?: string[];
+  disallowed?: string[];
+  diff?: AccessDiff;
+} = {}): string {
   return renderToStaticMarkup(createElement(PersonaAccessGroup, {
     inherited: extra.inherited ?? false,
     onModeChange: () => {},
     specialtyKey: 'qa',
     specialtyTitle: 'QA-тестер',
-    access: 'custom',
-    tools: ['tasks', 'notes'],
-    disallowed: ['Bash', 'Edit'],
+    access: extra.access ?? 'custom',
+    tools: extra.tools ?? ['tasks', 'notes'],
+    disallowed: extra.disallowed ?? ['Bash', 'Edit'],
     onAccess: () => {},
     onTools: () => {},
     onDisallowed: () => {},
-    diff: DIFF3,
+    diff: extra.diff ?? NO_DIFF,
     copiedAt: extra.copiedAt,
-    diffCount: extra.diffCount,
   }));
 }
 
-describe('PersonaAccessGroup: «скопировано <дата> · отличается в N местах» (F26a)', () => {
-  it('копия есть: строка с датой (не ISO) и числом из бэка, не из фронтового diff', () => {
-    const html = renderGroup({ copiedAt: COPIED_ISO, diffCount: 2 });
+describe('PersonaAccessGroup: «отличается в N местах» = число видимых меток (F26a)', () => {
+  it('ключ + строка лишних запретов: две метки — «в 2 местах», не по каждому запрету', () => {
+    const html = renderGroup({ copiedAt: COPIED_ISO, diff: DIFF_KEY_PLUS_LINE });
     expect(html).toContain('data-testid="access-copied"');
     expect(html).toContain('скопировано');
     expect(html).toContain(expectedDate(COPIED_ISO));
+    expect(html).toContain('data-testid="access-diff-web"');
+    expect(html).toContain('data-testid="access-diff-extra"');
     expect(html).toContain('отличается в 2 местах');
-    // 3 — фронтовое число (diff.count): в подписи его быть не должно
+    // diff.count = 3 (каждый запрет отдельно): строка считается ОДНОЙ меткой, её числа в подписи нет
     expect(html).not.toContain('3 местах');
     expect(html).not.toContain(COPIED_ISO);
   });
 
-  it('одно отличие — «в 1 месте»', () => {
-    expect(renderGroup({ copiedAt: COPIED_ISO, diffCount: 1 })).toContain('отличается в 1 месте');
+  it('два отличающихся ключа инструментов — «в 2 местах» (бэк считает это одной областью)', () => {
+    const html = renderGroup({
+      copiedAt: COPIED_ISO,
+      diff: { access: false, tools: ['notes', 'web'], extraDisallowed: [], missingDisallowed: [], count: 2 },
+    });
+    expect(html).toContain('data-testid="access-diff-notes"');
+    expect(html).toContain('data-testid="access-diff-web"');
+    expect(html).toContain('отличается в 2 местах');
   });
 
-  it('копия совпадает с шаблоном (0): дата есть, «отличается» — нет', () => {
-    const html = renderGroup({ copiedAt: COPIED_ISO, diffCount: 0 });
+  it('метка запретов скрыта (чужой профиль, свой список пуст) — число не завышено', () => {
+    // Бэк в этом сценарии — 2 области (профиль + запреты), diff.count = 2; но блок
+    // «Запрещённые» не рендерится (профиль не «Свой», свой список пуст) → его строка
+    // «≠ у специальности запрещено» до экрана не доезжает и в счёт не идёт.
+    const html = renderGroup({
+      copiedAt: COPIED_ISO,
+      access: 'readOnly',
+      disallowed: [],
+      diff: { access: true, tools: [], extraDisallowed: [], missingDisallowed: ['Bash'], count: 2 },
+    });
+    expect(html).not.toContain('Запрещённые инструменты');
+    expect(html).not.toContain('у специальности запрещено');
+    expect(html).toContain('≠ у специальности другой профиль');
+    expect(html).toContain('отличается в 1 месте');
+  });
+
+  it('одна метка — «в 1 месте»', () => {
+    const html = renderGroup({
+      copiedAt: COPIED_ISO,
+      diff: { access: false, tools: ['web'], extraDisallowed: [], missingDisallowed: [], count: 1 },
+    });
+    expect(html).toContain('data-testid="access-diff-web"');
+    expect(html).toContain('отличается в 1 месте');
+  });
+
+  it('копия совпадает с шаблоном (меток нет): дата есть, «отличается» — нет', () => {
+    const html = renderGroup({ copiedAt: COPIED_ISO });
     expect(html).toContain('data-testid="access-copied"');
     expect(html).not.toContain('отличается в');
   });
 
   it('копии нет (accessCopiedAt пустой/нет): строки нет', () => {
     for (const copiedAt of [null, undefined, '']) {
-      expect(renderGroup({ copiedAt, diffCount: 2 })).not.toContain('access-copied');
+      expect(renderGroup({ copiedAt, diff: DIFF_KEY_PLUS_LINE })).not.toContain('access-copied');
     }
   });
 
   it('дата невалидная: строки нет', () => {
-    expect(renderGroup({ copiedAt: 'not-a-date', diffCount: 2 })).not.toContain('access-copied');
+    expect(renderGroup({ copiedAt: 'not-a-date', diff: DIFF_KEY_PLUS_LINE })).not.toContain('access-copied');
   });
 
   it('наследование: строки копии нет, даже если старые поля остались в ответе', () => {
-    const html = renderGroup({ inherited: true, copiedAt: COPIED_ISO, diffCount: 2 });
+    const html = renderGroup({ inherited: true, copiedAt: COPIED_ISO, diff: DIFF_KEY_PLUS_LINE });
     expect(html).not.toContain('access-copied');
     expect(html).toContain('data-testid="access-source"');
   });

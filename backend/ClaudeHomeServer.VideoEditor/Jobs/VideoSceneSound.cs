@@ -55,17 +55,20 @@ public sealed class VideoSceneSound(
             workspace.SaveClip(scene.OwnerId, jobId, 1, bytes, ".mp4");
 
             var baseVersion = found.Version;
-            var launch = new VideoLaunchDto(jobId, store.Now(), VideoLaunchStatus.Running, false, VideoInitiators.Human, Provider,
+            var initiator = scene.Initiator == VideoInitiators.Agent ? VideoInitiators.Agent : VideoInitiators.Human;
+            var launch = new VideoLaunchDto(jobId, store.Now(), VideoLaunchStatus.Running, false, initiator, Provider,
                 model, 1, null, baseVersion.License, null);
             var added = store.AddLaunch(scene.OwnerId, scene.SessionId, scene.SceneId, launch);
             if (added.Status != VideoThreadWriteStatus.Ok) return VideoSoundVersion.Fail("Сцена изменилась: версия со звуком не добавлена.");
             var written = store.FinishLaunch(scene.OwnerId, scene.SessionId, scene.SceneId, jobId, VideoLaunchStatus.Done,
-                [new VideoVariantResult(1, baseVersion.DurationSec, bytes.LongLength, true, null, baseVersion.Width, baseVersion.Height)],
+                [new VideoVariantResult(1, baseVersion.DurationSec, bytes.LongLength, true, new VideoCostDto("local", 0), baseVersion.Width, baseVersion.Height)],
                 baseVersion.Inputs, null,
                 new VideoThreadEvent(store.Now(), VideoThreadEventKinds.Versions,
                     $"Озвучена сцена: новая версия со звуком ({model})", scene.SceneId, jobId));
             if (written.Status != VideoThreadWriteStatus.Ok || written.NewVersions.Count == 0)
                 return VideoSoundVersion.Fail("Версия со звуком не записалась в сцену.");
+            await threads.OnSoundVersionAsync(scene.SessionId, scene.SceneId, jobId, model, initiator, baseVersion.License,
+                (int)Math.Ceiling(baseVersion.DurationSec), CancellationToken.None);
             await threads.BroadcastAsync(scene.OwnerId, scene.ScopeKey, scene.SessionId, written.State);
             return new VideoSoundVersion(written.NewVersions[0].VersionId, null);
         }

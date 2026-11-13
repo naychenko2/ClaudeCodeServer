@@ -56,6 +56,8 @@ OPS = {
     "music_edit": "acestep",
     "transcribe": "asr",
     "transcribe_diarize": "whisperx",
+    # Эффекты по тексту MOSS-SoundEffect v2: 18 ГБ видеопамяти, своё семейство (venv с пинами автора)
+    "sfx_moss": "sfx_moss",
     # Обучение LoRA (ADR-026 §5): отдельное семейство с полной выгрузкой и сбросом RAM-кэша,
     # путь к весам из workers.json (loras_root обязан совпасть с folder_paths loras)
     "lora_train": "lora",

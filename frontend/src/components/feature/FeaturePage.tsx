@@ -34,7 +34,9 @@ import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeaturePageHero } from './FeaturePageHero';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
 import { FeatureProcessGraphSection } from './FeatureProcessGraphSection';
-import { FeatureStageArea, resolveSelectedStage, type StageSelection } from './FeatureStageArea';
+import { FeatureStageArea, resolveSelectedStage, stageTasksOf, type StageSelection } from './FeatureStageArea';
+import { FeatureStageScreen } from './FeatureStageScreen';
+import { stageNodeId } from './FeatureProcessGraphModel';
 import { analysisLineState } from './FeatureAnalysisModel';
 import { runRouteKind } from './FeatureWorkflowConfirmModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
@@ -154,6 +156,9 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // с фичей, а читается через resolveSelectedStage: чужой фиче выбор не принадлежит, при
   // смене фичи страница сама возвращается к defaultSelected — без эффекта сброса.
   const [stageSel, setStageSel] = useState<StageSelection | null>(null);
+  // Отдельный экран этапа (F10): «Открыть этап →» заменяет центр экраном, «‹ Фича» и Esc возвращают.
+  // Выбранный узел и вкладка живут отдельно (stageSel, стор вкладки) и возврат переживают.
+  const [stageOpen, setStageOpen] = useState<StageSelection | null>(null);
   // Блок подтверждения маршрута раскрыт (F08): «Посмотреть и подтвердить» в шапке и «Подтвердить»
   // в области этапа открывают один и тот же блок. Ключ — featureId: чужой фиче раскрытие не принадлежит.
   const [confirmOpenFor, setConfirmOpenFor] = useState<string | null>(null);
@@ -203,6 +208,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // Esc закрывает страницу — общим хуком useEscapeClose (в CenterViewShell): не
   // перехватываем, если печатают в поле/редакторе или уже открыт диалог/меню.
   const goBack = () => { onBack(target); clearBackNav(); };
+  const closeStageScreen = () => setStageOpen(null);
 
   // === Мерж (Ф6): общая модалка подтверждения → POST /merge ===
   // Состояния: pending (запрос в полёте, кнопка «Запускаю…» заблокирована),
@@ -402,17 +408,20 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
                     </div>
                   </div>
                 ) : (
-                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} />
+                  <FeatureStageArea run={okRun} selectedId={selectedStageId} isMobile={isMobile} onOpenTask={openActiveTask} onOpenStage={() => selectedStageId && setStageOpen({ featureId, id: selectedStageId })} />
                 )}
               </div>
             ) : emptyGraph ? (
-              <div data-testid="feature-page-empty-graph">
+              <div data-testid="feature-page-empty-graph" style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
                 <EmptyState
                   compact inline
                   icon={<Workflow size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
                   title="Этапов пока нет"
                   subtitle="Граф появится, когда вы подтвердите маршрут."
                 />
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, textAlign: 'center' }}>
+                  Детали этапов появятся после подтверждения маршрута.
+                </div>
               </div>
             ) : (
               <FeatureProgressWithNames
@@ -451,10 +460,26 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
   // на 4 строки и ломает шапку. Видимое — «Чат»/«К списку», полный текст — в title/aria-label.
   const shortLabel = fromChat ? 'Чат' : (isMobile ? 'К списку' : 'Назад');
 
+  // Экран этапа показываем, только пока этап этой же фичи ещё есть в run (иначе — страница).
+  const openStageObj = run && stageOpen && stageOpen.featureId === featureId
+    ? (run.stages ?? []).find(st => stageNodeId(st) === stageOpen.id)
+    : undefined;
+  const stageView = run && openStageObj ? (
+    <FeatureStageScreen
+      tasks={stageTasksOf(run, openStageObj).map(t => ({ id: t.id, title: t.title, stepRef: t.stepRef }))}
+      isMobile={isMobile}
+      chrome={{
+        featureTitle: title,
+        onBack: closeStageScreen,
+        onOpenChat: (sid) => { recordFeatureReturn(featureId, { kind: 'chat', id: sid }, title); void openChatById(sid); },
+      }}
+    />
+  ) : null;
+
   return (
     <CenterViewShell
       isMobile={isMobile}
-      onClose={goBack}
+      onClose={stageView ? closeStageScreen : goBack}
       closeLabel={shortLabel}
       mobileTitle={label}
       closeTitle="Закрыть"
@@ -485,8 +510,10 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
       <>
         {/* Тело: прокрутка, поля 16 16 24 (макет §5.4; 16 сверху — как у файла, Майя m2). */}
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: `${SP.lg}px ${SP.lg}px ${SP.xl}px` }}>
-          <FeaturePageHero title={title} tag={tag} run={run} />
-          {body}
+          {stageView ?? (<>
+            <FeaturePageHero title={title} tag={tag} run={run} />
+            {body}
+          </>)}
         </div>
         {/* Модалка подтверждения мержа (Ф6): портал, рендерится при mergeOpen. */}
         {mergeOpen && (

@@ -104,6 +104,8 @@ export interface StageScreen {
   metrics: StageMetrics | null;
   // Вопросы человеку: сначала открытые, затем история (новые сверху); пусто — вопросов не было
   questions: StageQuestion[];
+  // Сводка шапки этапа (B07): нужен только чат исполнителя; null/нет поля — кнопки «Чат исполнителя» нет
+  stageSummary?: { executorSessionId: string | null } | null;
 }
 
 export interface StageAnswer {

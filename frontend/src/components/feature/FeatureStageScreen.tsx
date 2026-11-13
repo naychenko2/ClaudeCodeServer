@@ -14,7 +14,7 @@
 // затрут уже пришедшее B. Пока состояние чужой задачи, рисуется загрузка. Отказ запроса показывается в области экрана текстом
 // с «Повторить», необработанных rejection нет.
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { SP, FS, C } from '../../lib/design';
 import { Button } from '../ui/Button';
@@ -99,7 +99,7 @@ function SummaryKpis({ metrics: m, now }: { metrics: StageMetrics; now: number }
   );
 }
 
-function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) {
+function StageBody({ taskId, isMobile, onChat }: { taskId: string; isMobile: boolean; onChat?: (taskId: string, sessionId: string | null) => void }) {
   const [loaded, setState] = useState<LoadState>({ taskId, status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   // Выбор вкладки помечен taskId: при выборе другой задачи открыта первая вкладка,
@@ -124,6 +124,9 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
   }, [taskId, attempt]);
 
   const state: LoadState = loaded.taskId === taskId ? loaded : { taskId, status: 'loading' };
+  // Чат исполнителя нужен тулбару экрана (он вне StageBody): сообщаем по готовности ответа.
+  const sessionId = state.status === 'ok' ? (state.screen.stageSummary?.executorSessionId ?? null) : null;
+  useEffect(() => { onChat?.(taskId, sessionId); }, [onChat, taskId, sessionId]);
   const tab: StageTab = tabSel.taskId === taskId ? tabSel.tab : FIRST_TAB;
   // На 360: активная вкладка докручивается в видимость (полоса скроллится внутри себя).
   // Эффект помечен выбором (tabSel) и рендером состояния (loaded): при смене задачи её
@@ -184,13 +187,41 @@ function StageBody({ taskId, isMobile }: { taskId: string; isMobile: boolean }) 
   );
 }
 
-export function FeatureStageScreen({ tasks, isMobile }: { tasks: StageScreenTask[]; isMobile: boolean }) {
+// Оболочка отдельного экрана этапа (F10): тулбар «‹ Фича» · название фичи (десктоп) · «Чат исполнителя»
+// (скрыта, если executorSessionId = null) над выбором задачи и телом. Без `chrome` — прежний вид
+// без тулбара.
+export interface StageScreenChrome {
+  featureTitle: string;
+  onBack: () => void;
+  onOpenChat: (sessionId: string) => void;
+}
+
+export function FeatureStageScreen({ tasks, isMobile, chrome }: { tasks: StageScreenTask[]; isMobile: boolean; chrome?: StageScreenChrome }) {
   // Выбор задачи этапа: явный — только если такая задача ещё в списке, иначе первая
   const [picked, setPicked] = useState<string | null>(null);
-  if (tasks.length === 0) return null;
-  const taskId = tasks.some(t => t.id === picked) ? picked! : tasks[0].id;
+  const [chat, setChat] = useState<{ taskId: string; sessionId: string | null } | null>(null);
+  const onChat = useCallback((taskId: string, sessionId: string | null) => setChat({ taskId, sessionId }), []);
+  if (tasks.length === 0 && !chrome) return null;
+  const taskId = tasks.length === 0 ? null : tasks.some(t => t.id === picked) ? picked! : tasks[0].id;
+  const executorChat = chat && chat.taskId === taskId ? chat.sessionId : null;
+  const touch = isMobile ? { minHeight: 40 } : undefined;
   return (
     <div data-testid="stage-screen" style={{ display: 'flex', flexDirection: 'column', gap: SP.md, minWidth: 0 }}>
+      {chrome && (
+        <div data-testid="stage-screen-toolbar" style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+          <Button size="sm" variant="ghost" style={touch} dataTestId="stage-screen-back" onClick={chrome.onBack}>‹ Фича</Button>
+          {!isMobile && (
+            <span data-testid="stage-screen-feature-title" style={{ flex: '1 1 auto', minWidth: 0, fontSize: FS.sm, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {chrome.featureTitle}
+            </span>
+          )}
+          {executorChat && (
+            <Button size="sm" variant="ghost" style={{ ...touch, marginLeft: 'auto' }} dataTestId="stage-screen-executor-chat" onClick={() => chrome.onOpenChat(executorChat)}>
+              Чат исполнителя
+            </Button>
+          )}
+        </div>
+      )}
       {tasks.length > 1 && (
         <div data-testid="stage-screen-picker" role="group" aria-label="Задача этапа" style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs }}>
           {tasks.map(t => (
@@ -203,7 +234,9 @@ export function FeatureStageScreen({ tasks, isMobile }: { tasks: StageScreenTask
           ))}
         </div>
       )}
-      <StageBody taskId={taskId} isMobile={isMobile} />
+      {taskId ? <StageBody taskId={taskId} isMobile={isMobile} onChat={onChat} /> : (
+        <div data-testid="stage-screen-empty" style={{ fontSize: FS.sm, color: C.textSecondary }}>У этапа пока нет задач.</div>
+      )}
     </div>
   );
 }

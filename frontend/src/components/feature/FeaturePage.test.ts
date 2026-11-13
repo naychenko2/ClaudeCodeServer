@@ -37,6 +37,8 @@ const mockIndex = vi.hoisted(() => ({
   features: [] as FeatureIndexFeature[],
   chats: {} as Record<string, import('../../types/featureIndex').FeatureChatLink[]>,
 }));
+// Экран этапа (F10): по умолчанию запрос вечно «в пути»; тест подставляет ответ с executorSessionId.
+const mockStage = vi.hoisted(() => ({ fn: (_id: string): Promise<unknown> => new Promise(() => {}) }));
 // Управляемые ответы api.chats.get: id чата → Session (name).
 const mockChats = vi.hoisted(() => new Map<string, Session>());
 // Управляемый ответ api.tasks.getFeature: pending (загрузка) / error (статус) / result (ok).
@@ -96,7 +98,7 @@ vi.mock('../../lib/api', () => ({
     tasks: {
       featuresIndex: async () => mockIndex,
       // Экран этапа (D1c) в этих тестах не предмет: запрос вечно «в пути»
-      stage: () => new Promise(() => {}),
+      stage: (id: string) => mockStage.fn(id),
       getFeature: (fid: string, eventsLimit?: string) => {
         mockGetFeature.calls.push({ fid, eventsLimit });
         if (mockGetFeature.pending) return new Promise<FeaturePageData>(() => {});
@@ -2689,6 +2691,57 @@ describe('FeaturePage: вариант A — граф и этап внутри «
     expect(findNodeByAttr(c, 'data-testid', 'feature-analysis-line'), 'тело «Разбора»').not.toBeNull();
   });
 
+  // F10: «Открыть этап →» заменяет центр экраном этапа; «‹ Фича» и Esc возвращают на страницу с тем же узлом
+  // и вкладкой; встроенного экрана под графом нет; «Чат исполнителя» — из stageSummary.executorSessionId.
+  // Мутации (в отчёте): (1) вернуть встроенный экран в FeatureStageArea → «нет под графом» красный;
+  // (2) onClose={goBack} вместо closeStageScreen → Esc-тест красный (onBack вызван); (3) показывать «Чат
+  // исполнителя» без проверки sessionId → тест null красный.
+  const stageResp = (taskId: string, sid: string | null) => Promise.resolve({
+    taskId, featureId: 'f1', role: 'step', stepRef: null, title: `задача ${taskId}`, status: 'inProgress', stage: null,
+    artifacts: { commits: [], commitsAvailable: true, linkedFiles: [], resultMarkdown: null },
+    input: { stage: null, sessionId: null, transcriptAvailable: false, transcript: null },
+    review: { items: [] }, metrics: null, questions: [], stageSummary: { executorSessionId: sid },
+  });
+  const openStage = async (c: ReturnType<typeof render>) => {
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'feature-stage-area-open')!)!.onClick as () => void)(); });
+    await settle();
+  };
+
+  it('«Открыть этап →»: экран этапа вместо страницы, встроенного под графом нет, «‹ Фича» возвращает к тому же узлу и вкладке', async () => {
+    routed();
+    mockStage.fn = (id) => stageResp(id, 'sess-x');
+    const c = render({});
+    await settle();
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'pgraph-node-c')!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'stage-screen'), 'экрана под графом нет').toBeNull();
+    await openStage(c);
+    expect(findNodeByAttr(c, 'data-testid', 'stage-screen-toolbar'), 'тулбар экрана этапа').not.toBeNull();
+    expect(findNodeByAttr(c, 'data-testid', 'feature-process-graph'), 'граф скрыт').toBeNull();
+    expect(textNodes(findNodeByAttr(c, 'data-testid', 'stage-screen-feature-title')!).join('')).toBe('Моя фича');
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'stage-screen-back')!)!.onClick as () => void)(); });
+    expect(findNodeByAttr(c, 'data-testid', 'stage-screen'), 'вернулись на страницу').toBeNull();
+    expect(areaId(c), 'тот же выбранный узел').toBe('c');
+    expect(getFeatureMainTab()).toBe('progress');
+  });
+
+  it('экран этапа: Esc возвращает на страницу, а не закрывает её; «Чат исполнителя» ведёт в чат, при null кнопки нет', async () => {
+    routed();
+    const onBack = vi.fn();
+    mockStage.fn = (id) => stageResp(id, 'sess-x');
+    const c = render({ onBack });
+    await settle();
+    await openStage(c);
+    await act(async () => { (reactProps(findNodeByAttr(c, 'data-testid', 'stage-screen-executor-chat')!)!.onClick as () => void)(); });
+    expect(openChatCalls.at(-1)).toBe('sess-x');
+    await act(async () => { (globalThis as any).window.dispatchEvent({ type: 'keydown', key: 'Escape', defaultPrevented: false, target: null }); });
+    expect(findNodeByAttr(c, 'data-testid', 'stage-screen'), 'Esc вернул на страницу').toBeNull();
+    expect(onBack).not.toHaveBeenCalled();
+    mockStage.fn = (id) => stageResp(id, null);
+    await openStage(c);
+    expect(findNodeByAttr(c, 'data-testid', 'stage-screen-executor-chat'), 'executorSessionId = null — кнопки нет').toBeNull();
+    mockStage.fn = () => new Promise(() => {});
+  });
+
   it('выбранный этап сохраняется при уходе на «Материалы» и возврате в «Процесс»', async () => {
     routed();
     const c = render({});
@@ -2853,7 +2906,9 @@ describe('FeaturePage: состояния без подтверждённого 
     setRun({ routeRequired: true }, []);
     const c = render({});
     await settle();
-    expect(textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-empty-graph')!).join('')).toContain('Этапов пока нет');
+    const empty = textNodes(findNodeByAttr(c, 'data-testid', 'feature-page-empty-graph')!).join('');
+    expect(empty).toContain('Этапов пока нет');
+    expect(empty).toContain('Детали этапов появятся после подтверждения маршрута');
     expect(has(c, 'feature-process-graph')).toBe(false);
     expect(has(c, 'progress-tab')).toBe(false);
   });

@@ -17,7 +17,6 @@ import { nodeTitle } from './FeatureProcessGraph';
 import { stageNodeId, defaultSelected } from './FeatureProcessGraphModel';
 import { allFeatureTasks } from './FeatureTasksTab';
 import { FeatureStepDetails } from './FeatureStepDetails';
-import { FeatureStageScreen } from './FeatureStageScreen';
 import type { FeatureRun, FeatureStage, FeatureTask } from '../../types/featureRun';
 
 // Выбор стадии на странице: ключ — featureId + id стадии.
@@ -70,11 +69,19 @@ export interface FeatureStageAreaProps {
   selectedId: string | null;
   isMobile: boolean;
   onOpenTask?: (taskId: string) => void;
-  // Дополнительное место под экраном этапа.
+  // «Открыть этап →»: переход к отдельному экрану этапа (F10).
+  onOpenStage?: () => void;
+  // Дополнительное место под областью этапа.
   slot?: ReactNode;
 }
 
-export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, slot }: FeatureStageAreaProps) {
+// Задачи этапа в порядке stage.taskIds (общий источник для области и экрана этапа).
+export function stageTasksOf(run: FeatureRun, stage: FeatureStage): FeatureTask[] {
+  const byId = new Map(allFeatureTasks(run).map(t => [t.id, t]));
+  return (stage.taskIds ?? []).map(id => byId.get(id)).filter((t): t is FeatureTask => !!t);
+}
+
+export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, onOpenStage, slot }: FeatureStageAreaProps) {
   const stage: FeatureStage | undefined = selectedId
     ? (run.stages ?? []).find(s => stageNodeId(s) === selectedId)
     : undefined;
@@ -85,8 +92,7 @@ export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, slot }
       </div>
     );
   }
-  const byId = new Map(allFeatureTasks(run).map(t => [t.id, t]));
-  const tasks = (stage.taskIds ?? []).map(id => byId.get(id)).filter((t): t is FeatureTask => !!t);
+  const tasks = stageTasksOf(run, stage);
   const status = stageStatusLabel(stage)?.text ?? 'готово';
   return (
     <div
@@ -103,6 +109,12 @@ export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, slot }
           {nodeTitle(stage)}
         </span>
         <span style={{ fontSize: FS.xs, color: C.textMuted }}>{status}</span>
+        {onOpenStage && tasks.length > 0 && (
+          <Button size="sm" variant="primary" dataTestId="feature-stage-area-open"
+            style={{ marginLeft: 'auto', ...(isMobile ? { minHeight: 40 } : undefined) }} onClick={onOpenStage}>
+            Открыть этап →
+          </Button>
+        )}
       </div>
       {tasks.length === 0 ? (
         <div data-testid="feature-stage-area-empty" style={{ fontSize: FS.sm, color: C.textSecondary }}>
@@ -111,7 +123,6 @@ export function FeatureStageArea({ run, selectedId, isMobile, onOpenTask, slot }
       ) : (
         tasks.map(t => <TaskRow key={t.id} task={t} isMobile={isMobile} onOpenTask={onOpenTask} />)
       )}
-      <FeatureStageScreen tasks={tasks.map(t => ({ id: t.id, title: t.title, stepRef: t.stepRef }))} isMobile={isMobile} />
       {slot}
     </div>
   );

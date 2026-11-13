@@ -71,6 +71,10 @@ export interface ImageThreadLaunch {
   // similarity — сходство лица (null — не считалось), status — итог прохода (нет — запуск идёт).
   // Старый одиночный faceTarget читается рядом — на случай ответа старого сервера
   faceTargets?: ImageThreadFaceTarget[] | null;
+  // Модель, которая отработала (id каталога): фактическая, если драйвер ушёл на запасную; нет — старые нити
+  model?: string | null;
+  // Почему «Авто» выбрало модель («Авто → MOSS: …»); нет — модель названа явно
+  routeReason?: string | null;
 }
 
 export interface ImageThreadFaceTarget {

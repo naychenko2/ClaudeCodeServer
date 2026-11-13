@@ -40,7 +40,7 @@ export const dedupeVariants = (v: number[]) => [...new Set(v)].sort((a, b) => a 
 function statusOf(job: ImageEditJob): JobStatus {
   const base = {
     variants: job.variants, count: job.variants.length, cost: job.cost ?? null, charged: job.charged ?? null,
-    error: job.error ?? null, model: job.model, createdAt: Date.parse(job.createdAt) || null,
+    error: job.error ?? null, model: job.actualModel ?? job.model, createdAt: Date.parse(job.createdAt) || null,
     run: job.run ?? null, runs: job.runs ?? null, eta: job.etaSeconds ?? null,
     runStartedAt: localStart(job.runElapsedSeconds), queuePosition: job.queuePosition ?? null,
     fallbackEta: job.estimate?.etaSeconds ?? null,
@@ -87,6 +87,7 @@ export function useJobStatus(projectId: string, jobId: string | null) {
             runStartedAt: e.stage === 'running' ? localStart(e.runElapsedSeconds ?? 0)
               : e.stage === 'queued' ? null : prev.runStartedAt,
             gpu: e.gpu ?? null,
+            model: e.actualModel ?? prev.model,
           };
         });
       } else if (e.type === 'image_edit_completed') {

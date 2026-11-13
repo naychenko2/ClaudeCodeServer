@@ -571,6 +571,27 @@ public class LocalImageEditorTests : IDisposable
         reports.Should().OnlyContain(r => r.Runs == 2 && r.EtaSeconds == 52);
     }
 
+    // Подпись карточки версии (жалоба 13.11): отчёт прогресса несёт модель, на которой прогон идёт на
+    // самом деле. MOSS-Image картинок на входе не берёт — генерация с образцом уходит на Qwen «качественно»
+    [Theory]
+    [InlineData(false, LocalImageEditor.MossImage)]
+    [InlineData(true, LocalImageEditor.QwenImage)]
+    public async Task Прогресс_НесётФактическуюМодель(bool withReference, string expected)
+    {
+        var media = new FakeMedia();
+        var reports = new List<EditProgress>();
+        List<ReferenceImage> refs = withReference
+            ? [new ReferenceImage(TestImages.Png(4, 4), "image/png", ReferenceRole.Object, null)]
+            : [];
+        var request = new ImageEditRequest(ImageEditOp.Generate, "рыбак", null, null, refs, 1, "1:1", null,
+            LocalImageEditor.MossImage, null);
+
+        var result = await Editor(media).RunAsync(request, new SyncProgress(reports.Add), default);
+
+        result.Outcome.Should().Be(EditOutcome.Ok, result.Error);
+        reports.Should().NotBeEmpty().And.OnlyContain(r => r.Model == expected);
+    }
+
     // Шаг 28: метка происхождения прогона (владелец, чат, вид=картинка, операция, тяжёлый ли)
     // заполняется при постановке; снимок очереди GPU из опроса прокидывается в отчёт прогресса
     [Fact]

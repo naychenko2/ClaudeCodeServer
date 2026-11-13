@@ -22,12 +22,15 @@ public static class ImageEditEventNames
 
 // Run/Runs/EtaSeconds/RunElapsedSeconds — как в ImageEditJobDto: полоса прогресса;
 // Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, null — поставщик не знает
-// или задача вне локальных моделей; null не пишется (camelCase как соседние поля)
+// или задача вне локальных моделей; null не пишется (camelCase как соседние поля).
+// ActualModel — как в ImageEditJobDto: модель, на которой задача идёт на самом деле; null не пишется
 public record ImageEditProgressMessage(string JobId, string ProjectId, EditStage Stage, int? QueuePosition,
     string? ChatSessionId = null, ImageEditInitiator Initiator = ImageEditInitiator.Human, string? ThreadId = null,
     int? Run = null, int? Runs = null, int? EtaSeconds = null, int? RunElapsedSeconds = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null)
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    string? ActualModel = null)
     : ServerMessage(ImageEditEventNames.Progress);
 
 // SizeNote — как в ImageEditJobDto: варианты не приведены к размеру исходника

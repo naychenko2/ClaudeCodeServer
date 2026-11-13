@@ -153,7 +153,11 @@ POST                …/threads/{threadId}/rollback      { stepId | null, revisi
 нет. У нити: `versions[]` — `{ id, number, jobId, variant, baseVersionId, baseStepId, steps[],
 currentStepId, createdAt }` по порядку, первая всегда исходник (`id: "origin"`, `number: 0`, `jobId:
 null`); `currentVersionId` — версия «в работе»; `launches[]` — `{ jobId, baseVersionId, baseStepId, at,
-status: running | done | failed | cancelled | interrupted, initiator: human | agent, prompt }`.
+status: running | done | failed | cancelled | interrupted, initiator: human | agent, prompt, model?, routeReason? }`.
+`model` — модель, которая отработала (id каталога): при запуске — модель котировки, с первым отчётом
+драйвера — фактическая (local: `LocalImageModels.Effective`, запасная Qwen вместо Krea/MOSS/Klein);
+`routeReason` — причина «Авто» из котировки («Авто → MOSS: …»), у явной модели нет. Задача
+(`GET …/jobs/{id}`) и событие `image_edit_progress` несут ту же фактическую модель в `actualModel`.
 Картинка версии — шаг `currentStepId` (`GET …/steps/{id}`); у исходника без правок — файл нити, а у
 старой нити — её текущий шаг стопки (`currentStepId` нити). Старые поля (`stacks`, `currentStackId`,
 `currentStepId`, `pendingJobId`, `interruptedJobId`) остаются у нитей до 27.09.

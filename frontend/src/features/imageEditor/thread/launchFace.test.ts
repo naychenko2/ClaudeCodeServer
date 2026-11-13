@@ -93,7 +93,7 @@ describe('LaunchAnchor: строка идущего запуска', () => {
     online: true, projectId, sessionId: 's1', persona: null,
   });
 
-  it('faceTarget: строка «{имя нити} · {Имя} → лицо {n} · {info}»; модель — «локальные модели», «1 вариант» не пишется', async () => {
+  it('faceTarget: строка «{имя нити} · {Имя} → лицо {n} · {info}»; модель — имя из каталога, «1 вариант» не пишется', async () => {
     putCharacter('p4', marina);
     await loadCatalog('p4');
     const t = thread([launch({ status: 'running', faceTarget })]);
@@ -101,8 +101,8 @@ describe('LaunchAnchor: строка идущего запуска', () => {
     const html = renderToStaticMarkup(createElement(LaunchAnchor, {
       ctx: ctx('p4', { threadId: 't1', jobId: 'j1', model: 'qwen-image-2.1', count: 1, estimate: { amount: 0, unit: 'free' } }),
     }));
-    // Подстановка: модель — «локальные модели» (не id qwen-image-2.1), «1 вариант» не пишется (v2)
-    expect(html).toContain('hero.png · Марина → лицо 2 · локальные модели · бесплатно');
+    // Подстановка: модель — имя из каталога (не id qwen-image-2.1), «1 вариант» не пишется (v2)
+    expect(html).toContain('hero.png · Марина → лицо 2 · Qwen-Image 2.1 · бесплатно');
     expect(html).not.toContain('1 вариант');
   });
 

@@ -26,6 +26,7 @@ import { SCENE_KIND } from '../context/state';
 import { stagesOf, upscaleFailView, upscaleInfo, upscaledCaption, type CardStage } from './upscale';
 import { ic } from '../editor/primitives';
 import { recordOf, str } from './records';
+import { SoundChooser } from '../sound/SoundChooser';
 
 
 // Потолки карточки в ленте: ширина читаемой колонки и высота плеера
@@ -177,6 +178,8 @@ export interface SceneCardActions {
   onDownload: () => void;
   onAddToFilm: () => void;
   onReshoot: () => void;
+  // «Озвучить сцену»: звук по видео версии; нет колбэка (строка запуска) — кнопки нет
+  onVoice?: () => void;
   onWork: () => void;
   onOpenFilm: () => void;
   // «Макс» local H3: отмена запуска и только увеличения, «Повторить» после сбоя увеличения
@@ -271,6 +274,7 @@ export function SceneCardView({ v, src, busy, a, chooser, gpuBlock }: { v: Scene
             title="Сцена станет основной в контексте хода: чипы действий и панель «Контекст»">Работать с этой</Button>
         )}
         {v.version && <Button size="sm" variant="ghost" onClick={a.onReshoot}>Переснять</Button>}
+        {v.version && a.onVoice && <Button size="sm" variant="ghost" onClick={a.onVoice} title="Сгенерировать звук по видео этой версии: новая версия сцены со звуком">Озвучить сцену</Button>}
       </div>
       {chooser}
       {v.film && (
@@ -366,6 +370,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
   const [pos, setPos] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [ask, setAsk] = useState<'save' | 'film' | null>(null);
+  const [voicing, setVoicing] = useState(false);
   const scene = state.scenes.find(s => s.sceneId === sceneId) ?? null;
   if (!scene || !sessionId) return null;
   const jobs = getJobsOf(sessionId, scene.sceneId);
@@ -392,7 +397,9 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
     : null;
   return (
     <SceneCardView v={v} busy={busy} gpuBlock={gpuBlock}
-      chooser={ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
+      chooser={voicing && ver
+        ? <SoundChooser scope={scope} sessionId={sessionId} sceneId={scene.sceneId} versionId={ver.versionId} durationSec={ver.durationSec} onClose={() => setVoicing(false)} />
+        : ask && <FilmChooser scope={scope} sessionId={sessionId} onCancel={() => setAsk(null)}
         onPick={folder => { const k = ask; setAsk(null); void act(k, folder); }} />}
       src={ver ? videoApi.versionFileUrl(scope, sessionId, scene.sceneId, ver.versionId) : null}
       a={{
@@ -404,6 +411,7 @@ export function SceneCard({ ctx, sceneId, jobId, record }: { ctx: ChatItemToolCt
         onDownload: () => { if (ver) downloadClip(scope, sessionId, scene, ver.versionId); },
         onAddToFilm: () => start('film'),
         onWork: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId); },
+        onVoice: () => setVoicing(v => !v),
         onReshoot: () => { void selectSceneByHuman(scope, sessionId, scene.sceneId).then(() => openScenePanel(sessionId)); },
         onCancelJob: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopJob(scope, sessionId, j.jobId); },
         onCancelUpscale: () => { const j = getJobsOf(sessionId, scene.sceneId)[0]; if (j) void stopUpscale(scope, sessionId, j.jobId); },

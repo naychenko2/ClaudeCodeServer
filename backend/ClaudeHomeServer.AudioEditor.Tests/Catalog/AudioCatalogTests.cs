@@ -10,12 +10,12 @@ public class AudioCatalogTests
     private static AudioModelInfo Model(string id) => AudioCatalog.Local.Single(m => m.Info.Id == id).Info;
 
     [Fact]
-    public void Local_CoversAllNineLocalMediaOps()
+    public void Local_CoversAllElevenLocalMediaOps()
     {
         var covered = AudioCatalog.Local.SelectMany(m => m.Bindings.Values).Select(b => b.Op).ToHashSet();
 
         covered.Should().BeEquivalentTo(Enum.GetValues<LocalAudioOp>());
-        Enum.GetValues<LocalAudioOp>().Should().HaveCount(9);
+        Enum.GetValues<LocalAudioOp>().Should().HaveCount(11);
     }
 
     [Fact]

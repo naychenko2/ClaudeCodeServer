@@ -46,6 +46,9 @@ public sealed class LocalAudioMediaAdapter(
     {
         var options = LocalMediaOptions.Read(config);
         if (OpName(request.Op) is not { } op) return null;
+        // Котировка звука по видео идёт до загрузки клипа: длина — из duration_seconds запроса (длина версии сцены)
+        if (request.Op == LocalAudioOp.VideoToAudio && request.Video is null)
+            return LocalMediaService.VideoToAudioEta(Args(request), request.Args?["duration_seconds"] is JsonValue d && d.TryGetValue<double>(out var sec) ? sec : null);
         var build = LocalMediaService.BuildAudioGraphAsync(op, Args(request), new LocalMediaService.AudioBuildInfo(NewId()),
             new BytesInputs(request, null), (request.Prompt ?? "").Trim(), 1, "eta", options.MaxAudioInputSeconds,
             CancellationToken.None);

@@ -422,6 +422,9 @@ describe('historyKindLabel / historyOpLabel / historyRowTitle', () => {
   });
   it('операция: известные → человек, неизвестная — как есть, null → пусто', () => {
     expect(historyOpLabel('generate_image')).toBe('по тексту');
+    expect(historyOpLabel('audio_sfx')).toBe('эффект');
+    expect(historyOpLabel('video_to_audio')).toBe('звук по видео');
+    expect(historyOpLabel('videoToAudio')).toBe('звук по видео');
     expect(historyOpLabel('image_to_video')).toBe('из картинки');
     expect(historyOpLabel('music_generate')).toBe('песня');
     expect(historyOpLabel('lora_train')).toBe('обучение LoRA');

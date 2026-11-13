@@ -194,15 +194,6 @@ public static partial class AudioCatalog
             ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.Apache2, AudioPriceUnits.Free,
                 MaxTextChars: SfxPromptChars, MinDurationSec: 1, MaxDurationSec: SfxMossMaxSec, LanguageNeutral: true,
                 HeavyOps: [AudioOp.Sfx])),
-        Model(MmAudio, "MMAudio · быстро", new Dictionary<AudioOp, LocalBinding>
-            {
-                [AudioOp.Sfx] = Bind(LocalAudioOp.Sfx, ("engine", "mmaudio")),
-                [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "mmaudio")),
-            },
-            // Код MIT, веса CC BY-NC 4.0 (README MMAudio)
-            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.CcByNc4, AudioPriceUnits.Free,
-                MaxTextChars: SfxPromptChars, MinDurationSec: 1, MaxDurationSec: MmAudioMaxSec, InputMaxSec: MmAudioMaxSec,
-                LanguageNeutral: true)),
         Model(FoleyXl, "HunyuanVideo-Foley XL · по умолчанию", new Dictionary<AudioOp, LocalBinding>
             {
                 [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "foley-xl")),
@@ -216,6 +207,15 @@ public static partial class AudioCatalog
             ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.TencentHunyuan, AudioPriceUnits.Free,
                 MaxTextChars: SfxPromptChars, InputMaxSec: FoleyMaxSec, LanguageNeutral: true,
                 HeavyOps: [AudioOp.VideoToAudio])),
+        Model(MmAudio, "MMAudio · быстро", new Dictionary<AudioOp, LocalBinding>
+            {
+                [AudioOp.Sfx] = Bind(LocalAudioOp.Sfx, ("engine", "mmaudio")),
+                [AudioOp.VideoToAudio] = Bind(LocalAudioOp.VideoToAudio, ("engine", "mmaudio")),
+            },
+            // Код MIT, веса CC BY-NC 4.0 (README MMAudio)
+            ops => new AudioCaps(ops, [], [], [AudioOutputs.Audio], AudioLicenses.CcByNc4, AudioPriceUnits.Free,
+                MaxTextChars: SfxPromptChars, MinDurationSec: 1, MaxDurationSec: MmAudioMaxSec, InputMaxSec: MmAudioMaxSec,
+                LanguageNeutral: true)),
 
         // Музыка
         Model(AceStep, "ACE-Step 1.5 XL", new Dictionary<AudioOp, LocalBinding>

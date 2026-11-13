@@ -582,6 +582,22 @@ public sealed partial class LocalMediaService
         ? 45 + (int)Math.Ceiling(seconds * 5.0)
         : 25 + (int)Math.Ceiling(seconds * 2.6);
 
+    // ETA звука по видео без самого клипа (котировка): модель — по engine, длина — как у клипа версии, не больше
+    // предела модели; нет длины или модель неизвестна — null
+    public static int? VideoToAudioEta(JsonObject? args, double? videoSeconds)
+    {
+        if (videoSeconds is not { } length || length <= 0) return null;
+        var engine = Str(args, "engine") ?? "foley-xl";
+        if (!VideoToAudioEngines.Contains(engine)) return null;
+        var seconds = Math.Round(Math.Min(length, engine == "mmaudio" ? MmAudioMaxSeconds : FoleyMaxSeconds), 2);
+        return engine switch
+        {
+            "mmaudio" => MmAudioVideoEta(seconds),
+            "foley-xxl" => FoleyEta(true, seconds),
+            _ => FoleyEta(false, seconds),
+        };
+    }
+
     // Whisper large-v3-turbo на GPU: 180 с вокала — 6,5 с, 101 с речи — 4,8 с
     public static int? TranscribeEta(double? seconds) => seconds is { } s ? 3 + (int)Math.Ceiling(s * 0.02) : null;
 

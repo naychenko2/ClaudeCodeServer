@@ -833,8 +833,8 @@ public class TasksController(
         var snapshot = SessionSnapshot();
         var resolver = ChatModelResolver();
         var runs = sessionId is null
-            ? features.ProjectAll(UserId, snapshot, resolver)
-            : features.ProjectForSession(sessionId, UserId, snapshot, resolver);
+            ? features.ProjectAll(UserId, snapshot, resolver, PersonaNameOf)
+            : features.ProjectForSession(sessionId, UserId, snapshot, resolver, PersonaNameOf);
         return Ok(runs.Select(r => FeatureChatDoor.MaskRunChats(r, sessions, projects, UserId)).ToList());
     }
 
@@ -868,8 +868,11 @@ public class TasksController(
     // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
     // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
     // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
+    // Имя персоны для узла графа процесса (B01): только персона владельца, иначе null.
+    private string? PersonaNameOf(string personaId) => personas.Get(personaId, UserId)?.Name;
+
     // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
-    internal Func<FeatureIndexSession, (string? Label, string? Full)>? ChatModelResolver()
+    internal Func<FeatureIndexSession,(string? Label, string? Full)>? ChatModelResolver()
     {
         if (assignments is null) return null;
         return s =>
@@ -949,7 +952,7 @@ public class TasksController(
         // функция (ChatModelResolver), что у исполнителей: список и страница дают одинаковые.
         var snapshot = SessionSnapshot();
         var resolver = ChatModelResolver();
-        var run = features.ProjectFull(featureId, UserId, snapshot, resolver);
+        var run = features.ProjectFull(featureId, UserId, snapshot, resolver, PersonaNameOf);
         if (run is null) return NotFound(new { error = "Фича не найдена" });
         // Снимок сессий владельца — как для индекса (SessionSnapshot): sessionId события наружу
         // только если в нём (fail-closed: удалённый/чужой чат → null). Лента считается по

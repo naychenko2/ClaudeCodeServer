@@ -29,12 +29,14 @@ public sealed class FeatureProjector(TaskManager tasks)
     // только если в нём (fail-closed); null — снимка нет, все чаты null (как в BuildIndexCore).
     public static FeatureRun Build(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
-        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver));
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
+        => SlimRun(BuildCore(epic, featureTasks, now, sessions, modelResolver, personaName));
 
     internal static FeatureRun BuildCore(TaskItem epic, IEnumerable<TaskItem> featureTasks, DateTime? now = null,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var nowUtc = now ?? DateTime.UtcNow;
         ArgumentNullException.ThrowIfNull(epic);
@@ -566,8 +568,39 @@ public sealed class FeatureProjector(TaskManager tasks)
                 };
             }).ToList();
 
+            // B01: данные узла графа процесса — только у фичи с маршрутом (graphStates), у легаси — пусто.
+            bool routed = graphStates is not null;
+            var personaIds = StagePersonaIds(tasks);
+            List<string> personaNames = !routed ? [] : personaIds
+                .Select(pid => personaName?.Invoke(pid))
+                .Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n!).ToList();
+            string? waiting = null;
+            if (routed && state != "done")
+            {
+                if (tasks.Any(t => t.Status != TaskItemStatus.Done && t.AwaitingHumanSince is not null))
+                    waiting = "human";
+                else if (after.Count >= 2 && !tasks.Any(IsRunning)
+                    && after.Any(a => graphStates!.TryGetValue(a, out var ps) && ps is not ("done" or "skipped" or "absent")))
+                    waiting = "branches";
+            }
+            int stageReturns = routed ? tasks.Count(t => t.Role == TaskRoles.Rework) : 0;
+            FeatureStageSegments? taskSegments = routed && key == "prod" && tasks.Count > 1
+                ? new FeatureStageSegments
+                {
+                    Done = tasks.Count(t => t.Status == TaskItemStatus.Done),
+                    Running = tasks.Count(IsRunning),
+                    Total = tasks.Count,
+                }
+                : null;
+
             stages.Add(new FeatureStage
             {
+                PersonaNames = personaNames,
+                ElapsedMinutes = routed && firstStartedAt is not null ? approxMinutes : null,
+                Waiting = waiting,
+                Returns = stageReturns,
+                TaskSegments = taskSegments,
+                Line = routed && lane is "back" or "front" ? lane : null,
                 Key = key,
                 // G3 (разрез 2 §1.7): id/роль/линия/предшественники/колонка — из графа маршрута;
                 // у легаси-стадии id = ключ, роль — роль её задач, After/Column пустые (графа нет).
@@ -586,7 +619,7 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Rounds = stageRounds,
                 LongestStepRef = longestStepRef,
                 // Б5: исполнители, число задач и исход последней по времени закрытой задачи стадии.
-                PersonaIds = StagePersonaIds(tasks),
+                PersonaIds = personaIds,
                 TaskCount = tasks.Count,
                 Verdict = StageVerdict(tasks),
                 // Б2: границы, длительность (объединение интервалов), пересечение, исполнители.
@@ -1526,11 +1559,12 @@ public sealed class FeatureProjector(TaskManager tasks)
     // modelLabel/modelFull (оба маршрута GetFeatures/GetFeature — одна и та же функция).
     public FeatureRun? ProjectFull(string featureId, string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var epic = owner.FirstOrDefault(t => t.Id == featureId && t.Role == TaskRoles.Feature);
-        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver), owner);
+        return epic is null ? null : WithQueue(BuildCore(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName), owner);
     }
 
     // Все фичи владельца (REST без sessionId): каждый эпик → свой FeatureRun.
@@ -1539,12 +1573,13 @@ public sealed class FeatureProjector(TaskManager tasks)
     // modelResolver (Б4) — как в ProjectFull: одинаковые modelLabel/modelFull во всех ветвлениях.
     public IReadOnlyList<FeatureRun> ProjectAll(string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature)
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName))
             .ToList();
         ApplyQueue(runs, owner);
         return runs;
@@ -1559,7 +1594,8 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пилюля показывает runs[0], поэтому порядок определяет бэк, фронт его не пересортирует.
     public IReadOnlyList<FeatureRun> ProjectForSession(string sessionId, string ownerId,
         IReadOnlyCollection<FeatureIndexSession>? sessions = null,
-        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null)
+        Func<FeatureIndexSession, (string? Label, string? Full)>? modelResolver = null,
+        Func<string, string?>? personaName = null)
     {
         var owner = tasks.GetByOwner(ownerId).ToList();
         // Набор фич чата — из единого правила, не из локального фильтра по эпику.
@@ -1569,7 +1605,7 @@ public sealed class FeatureProjector(TaskManager tasks)
             featureIds.UnionWith(links.Keys);
         var runs = owner
             .Where(t => t.Role == TaskRoles.Feature && featureIds.Contains(t.Id))
-            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver))
+            .Select(epic => Build(epic, FeatureTasks(epic, owner), null, sessions, modelResolver, personaName))
             .ToList();
         ApplyQueue(runs, owner);
         var ordered = OrderRuns(runs);

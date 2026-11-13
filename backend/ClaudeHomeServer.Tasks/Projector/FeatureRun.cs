@@ -349,6 +349,28 @@ public sealed class FeatureStage
     // вызывающий. Бэк отдаёт сырые данные (TaskRole/StepRef/Lane, статус, исполнителя) —
     // подпись роли (roleLabel) строит фронт.
     public List<FeatureStageExecutor> Executors { get; init; } = [];
+    // B01 (узел графа процесса; у легаси-стадии без маршрута — пусто/null/0):
+    // имена исполнителей по порядку PersonaIds (нерезолвнутые id пропускаются).
+    public List<string> PersonaNames { get; init; } = [];
+    // Минуты работы этапа (ApproxMinutes); null — этап не начат или маршрута нет.
+    public int? ElapsedMinutes { get; init; }
+    // Чего ждёт этап: human — открыт вопрос человеку на задаче этапа; branches — ждёт завершения
+    // веток-предшественников; null — не ждёт.
+    public string? Waiting { get; init; }
+    // Возвраты на доработку: число rework-задач этапа (≥0).
+    public int Returns { get; init; }
+    // Полоска задач — только у этапа шагов с несколькими задачами ветки; иначе null.
+    public FeatureStageSegments? TaskSegments { get; init; }
+    // Линия этапа для узла графа: back | front; иначе null.
+    public string? Line { get; init; }
+}
+
+// Полоска задач этапа (B01): закрытые / идущие / всего.
+public sealed class FeatureStageSegments
+{
+    public int Done { get; init; }
+    public int Running { get; init; }
+    public int Total { get; init; }
 }
 
 // Исполнитель стадии (Б2): одна запись на задачу стадии. Сырые данные для подписи:

@@ -2578,6 +2578,114 @@ public class FeatureProjectorTests
         run.StagesPassed.Should().Be(2, "done: cut, plan");
     }
 
+    private static FeatureWorkflow ParallelBranchesRoute(DateTime t) => new()
+    {
+        TemplateId = "builtin-parallel-cycle", Scope = "global",
+        Stages =
+        [
+            new RouteStage { Id = "plan", Role = "plan" },
+            new RouteStage { Id = "step-back", Role = "step", Lane = "back", After = ["plan"] },
+            new RouteStage { Id = "step-front", Role = "step", Lane = "front", After = ["plan"] },
+            new RouteStage { Id = "review", Role = "review", After = ["step-back", "step-front"] },
+        ],
+        ConfirmedVersion = 1, ConfirmedAt = t.AddHours(-7), ConfirmedByUser = true,
+    };
+
+    // B01: этап с двумя ветками — ревью ждёт ветки (waiting=branches), у ветки с двумя задачами
+    // полоска задач и возврат, линия и имена исполнителей заполнены, у плана — нет.
+    [Fact]
+    public void Build_УзелГрафа_ДветВетки_РевьюЖдётВетки()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-branches";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t) };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done,
+            CompletedAt = t.AddHours(-5), PersonaId = "egor",
+        };
+        var back1 = new TaskItem
+        {
+            Id = "b1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.Done,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-90), CompletedAt = t.AddMinutes(-60),
+        };
+        var back2 = new TaskItem
+        {
+            Id = "b2", FeatureId = epicId, Role = TaskRoles.Rework, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-30),
+        };
+        var front = new TaskItem
+        {
+            Id = "f1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G2", Lane = "front", Status = TaskItemStatus.InProgress,
+            PersonaId = "polina", ClaudeStartedAt = t.AddMinutes(-20),
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, plan, back1, back2, front], t,
+            personaName: id => id switch { "egor" => "Егор", "timur" => "Тимур", "polina" => "Полина", _ => null });
+
+        var sb = StageById(run, "step-back");
+        sb.PersonaNames.Should().Equal("Тимур");
+        sb.Line.Should().Be("back");
+        sb.Returns.Should().Be(1);
+        sb.TaskSegments.Should().BeEquivalentTo(new FeatureStageSegments { Done = 1, Running = 1, Total = 2 });
+        sb.ElapsedMinutes.Should().Be(60, "объединение интервалов: 30 мин закрытой задачи + 30 мин идущей");
+        StageById(run, "step-front").TaskSegments.Should().BeNull("у ветки одна задача полоски нет");
+        StageById(run, "step-front").Line.Should().Be("front");
+        var review = StageById(run, "review");
+        review.Waiting.Should().Be("branches");
+        review.ElapsedMinutes.Should().BeNull("этап не начат");
+        review.Line.Should().BeNull();
+        StageById(run, "plan").Waiting.Should().BeNull();
+        StageById(run, "plan").PersonaNames.Should().Equal("Егор");
+    }
+
+    // B01: открытый вопрос человеку на задаче этапа → waiting=human (приоритетнее ожидания веток).
+    [Fact]
+    public void Build_УзелГрафа_ОткрытыйВопрос_WaitingHuman()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-human";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8), Workflow = ParallelBranchesRoute(t) };
+        var plan = new TaskItem
+        {
+            Id = "p1", FeatureId = epicId, Role = TaskRoles.Plan, Status = TaskItemStatus.Done, CompletedAt = t.AddHours(-5),
+        };
+        var back = new TaskItem
+        {
+            Id = "b1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            ClaudeStartedAt = t.AddMinutes(-40), AwaitingHumanSince = t.AddMinutes(-5), AwaitingHumanReason = "нужно решение",
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, plan, back], t);
+
+        StageById(run, "step-back").Waiting.Should().Be("human");
+        StageById(run, "step-front").Waiting.Should().BeNull();
+    }
+
+    // B01: легаси-эпик без маршрута — все новые поля пусты (null/[]/0).
+    [Fact]
+    public void Build_УзелГрафа_ЛегасиБезМаршрута_НовыеПоляПусты()
+    {
+        var t = new DateTime(2026, 11, 12, 10, 0, 0, DateTimeKind.Utc);
+        const string epicId = "epic-b01-legacy";
+        var epic = new TaskItem { Id = epicId, Role = TaskRoles.Feature, CreatedAt = t.AddHours(-8) };
+        var s1 = new TaskItem
+        {
+            Id = "s1", FeatureId = epicId, Role = TaskRoles.Step, StepRef = "G1", Lane = "back", Status = TaskItemStatus.InProgress,
+            PersonaId = "timur", ClaudeStartedAt = t.AddMinutes(-30), AwaitingHumanSince = t.AddMinutes(-5),
+        };
+        var s2 = new TaskItem
+        {
+            Id = "s2", FeatureId = epicId, Role = TaskRoles.Rework, StepRef = "G1", Lane = "back", Status = TaskItemStatus.Todo,
+        };
+
+        var run = FeatureProjector.BuildCore(epic, [epic, s1, s2], t, personaName: _ => "Тимур");
+
+        run.Stages.Should().NotBeEmpty();
+        run.Stages.Should().OnlyContain(s => s.PersonaNames.Count == 0 && s.ElapsedMinutes == null && s.Waiting == null
+            && s.Returns == 0 && s.TaskSegments == null && s.Line == null);
+    }
+
     // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном
     // цикле» различаются именами. Маршрут построен Resolve'ом из пресета кода — проверяется
     // вся цепочка контракта: Title пресета → валидация → заморозка в RouteStage → проекция.

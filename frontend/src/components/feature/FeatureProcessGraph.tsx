@@ -25,15 +25,18 @@
 // Мобильные тач-цели: карточка 120×56 (≥40, контракт C3a); ширина графа ≤140 — документ
 // на 360 не переполняется.
 //
-// Имя внутри карточки: узел фиксирован (NODE_W×NODE_H), поэтому подпись ограничена рамкой —
-// две строки с многоточием (multiline-clamp, тот же приём, что GlobalSearch.tsx:114). Длинное
-// имя с бэка не должно лезть за нижнюю границу узла и на соседнюю колонку; полное имя остаётся
-// в title (тултип) и aria-label — доступность и смысл не режутся.
+// Узел (F06, макет feature-page.html P16–P22, materials-review-placement.html M14–M19):
+// имя переносится целиком, без обрезки (узел 152×88 вмещает до трёх строк имени вместе со
+// строками меты); вторая строка — «Персона · время» / «ждёт ответа вас» (warning) /
+// «ждёт обе ветки»; третья — метка роли mono, чип линии (бэк/фронт), полоска задач ветки и
+// «2/3»; бейдж «↺N» над узлом при возвратах. Всё рисуется по данным бэка (B01): состояние
+// «ждёт» берётся из stage.waiting, а не из примера макета. Полное имя — ещё и в title/aria-label.
 
 import type { CSSProperties } from 'react';
 import { C, R, FS, SP, FONT, SHADOW } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { laneWord } from '../../lib/roleLabel';
+import { formatDuration } from '../../lib/chatGroups';
 import { stageName, stageStatusLabel } from './FeatureTimelineBits';
 import { graphColumns, graphEdges, stageNodeId, type GraphColumn } from './FeatureProcessGraphModel';
 import type { FeatureRun, FeatureStage, StageTone } from '../../types/featureRun';
@@ -46,10 +49,9 @@ export interface FeatureProcessGraphProps {
   onSelect?: (id: string) => void;
 }
 
-// Фиксированная геометрия карточек (макет feature-page.html .node: min-width 120, min-height 56;
-// 56 ≥ 40 — тач-цель контракта C3a). Позиции и рёбра выводятся из этих констант — замера DOM нет.
-const NODE_W = 120;
-const NODE_H = 56;
+// Фиксированная геометрия карточек (макет feature-page.html .node; 88 ≥ 40 — тач-цель контракта C3a). Позиции и рёбра выводятся из этих констант — замера DOM нет.
+const NODE_W = 152;
+const NODE_H = 88;
 // Зазор между колонками — пространство для рёбер (макет .link 20 + запас на кривую).
 const GAP_X = 24;
 // Зазор между стадиями внутри колонки.
@@ -159,6 +161,37 @@ export function nodeTitle(stage: FeatureStage): string {
 // для done слова нет — подпись легенды макета «готово».
 function nodeAria(stage: FeatureStage): string {
   return `${nodeTitle(stage)}: ${stageStatusLabel(stage)?.text ?? 'готово'}`;
+}
+
+// Вторая строка узла (B01): ждёт человека — warning («ждёт ответа вас»), ждёт ветки —
+// приглушённо; иначе «Персона · время» (части без данных пропускаются); пусто — строки нет.
+export function nodeMeta(stage: FeatureStage): { text: string; color: string } | null {
+  if (stage.waiting === 'human') return { text: 'ждёт ответа вас', color: C.warning };
+  if (stage.waiting === 'branches') return { text: 'ждёт обе ветки', color: C.textMuted };
+  const parts: string[] = [];
+  const names = (stage.personaNames ?? []).filter(Boolean);
+  if (names.length > 0) parts.push(names.join(', '));
+  if (stage.elapsedMinutes != null) parts.push(formatDuration(stage.elapsedMinutes));
+  return parts.length > 0 ? { text: parts.join(' · '), color: C.textSecondary } : null;
+}
+
+// Сегменты полоски задач ветки: готово (success) → в работе (accent) → остальное (трек).
+function SegmentBar({ done, running, total }: { done: number; running: number; total: number }) {
+  const kind = (i: number) => (i < done ? 'done' : i < done + running ? 'run' : 'todo');
+  return (
+    <span aria-hidden="true" data-testid="pgraph-segments" style={{ display: 'inline-flex', gap: SP.xxs, flex: '1 1 auto', minWidth: 0 }}>
+      {Array.from({ length: total }, (_, i) => (
+        <span
+          key={i}
+          data-kind={kind(i)}
+          style={{
+            flex: '1 1 0', height: 4, borderRadius: R.full,
+            background: kind(i) === 'done' ? C.success : kind(i) === 'run' ? C.accent : C.progressTrack,
+          }}
+        />
+      ))}
+    </span>
+  );
 }
 
 // Круг-маркер состояния (16 px, форма .ico макета): done — залитый success с «✓»;
@@ -272,6 +305,10 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
           const selected = selectedId === id;
           const active = stage.state === 'active';
           const quiet = stage.state !== 'done' && !active; // pending/absent/skipped
+          const returns = stage.returns ?? 0;
+          const meta = nodeMeta(stage);
+          const line = laneWord(stage.line ?? null);
+          const seg = stage.taskSegments;
           return (
             <button
               key={id}
@@ -284,9 +321,9 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
               onClick={() => onSelect?.(id)}
               style={{
                 position: 'absolute', left: p.x, top: p.y, width: NODE_W, height: NODE_H,
-                boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: SP.sm,
-                padding: `0 ${SP.sm}`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
-                borderRadius: R.lg,
+                boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center',
+                gap: SP.xs, padding: `${SP.xs}px ${SP.sm}px`, textAlign: 'left', cursor: 'pointer', zIndex: 1,
+                borderRadius: R.lg, font: 'inherit',
                 background: quiet ? 'transparent' : C.bgWhite,
                 border: `1px ${quiet ? 'dashed' : 'solid'} ${
                   active ? toneColor(stage.tone)
@@ -295,20 +332,67 @@ export function FeatureProcessGraph({ run, selectedId = null, onSelect }: Featur
                 ...(selected ? { boxShadow: SHADOW.selected } : {}),
               }}
             >
-              <MarkerIcon stage={stage} />
-              {/* Подпись ограничена рамкой узла (дефект: длинное имя давало подпись 70 px
-                  при узле 56 и лезла за нижнюю границу). Ширина текста: NODE_W − 2·SP.sm (padding)
-                  − 16 (маркер) − SP.sm (gap) = 80 px; две строки FS.sm×1.25 = 30 px ≤ NODE_H.
-                  Полное имя — в title (тултип) и aria-label. */}
-              <span
-                title={nodeTitle(stage)}
-                style={{
-                  flex: '1 1 auto', minWidth: 0, lineHeight: 1.25,
-                  fontSize: FS.sm, fontWeight: 600, color: quiet ? C.textSecondary : C.textHeading,
-                  display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-                }}
-              >
-                {nodeTitle(stage)}
+              {returns > 0 && (
+                <span
+                  data-testid={`pgraph-returns-${id}`}
+                  title={`возвратов на доработку: ${returns}`}
+                  style={{
+                    position: 'absolute', top: -8, right: SP.sm, padding: `0 ${SP.xs}px`, borderRadius: R.full,
+                    background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warning,
+                    fontFamily: FONT.mono, fontSize: FS.xxs, fontWeight: 700, lineHeight: '14px',
+                  }}
+                >
+                  ↺{returns}
+                </span>
+              )}
+              <span style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
+                <span style={{ marginTop: 1, display: 'inline-flex' }}><MarkerIcon stage={stage} /></span>
+                {/* Имя переносится целиком (без clamp): узел вмещает три строки.
+                    Полное имя — ещё и в title (тултип) и aria-label. */}
+                <span
+                  data-testid={`pgraph-title-${id}`}
+                  title={nodeTitle(stage)}
+                  style={{
+                    flex: '1 1 auto', minWidth: 0, lineHeight: 1.25, overflowWrap: 'anywhere',
+                    fontSize: FS.sm, fontWeight: 600, color: quiet ? C.textSecondary : C.textHeading,
+                  }}
+                >
+                  {nodeTitle(stage)}
+                </span>
+              </span>
+              {meta && (
+                <span
+                  data-testid={`pgraph-meta-${id}`}
+                  style={{ fontSize: FS.xs, color: meta.color, lineHeight: 1.2, overflowWrap: 'anywhere' }}
+                >
+                  {meta.text}
+                </span>
+              )}
+              <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+                {stage.role && (
+                  <span data-testid={`pgraph-role-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
+                    {stage.role}
+                  </span>
+                )}
+                {line && (
+                  <span
+                    data-testid={`pgraph-line-${id}`}
+                    style={{
+                      padding: `0 ${SP.xs}px`, borderRadius: R.full, border: `1px solid ${C.border}`,
+                      fontSize: FS.xxs, color: C.textSecondary, lineHeight: '14px',
+                    }}
+                  >
+                    {line}
+                  </span>
+                )}
+                {seg && seg.total > 0 && (
+                  <>
+                    <SegmentBar done={seg.done} running={seg.running} total={seg.total} />
+                    <span data-testid={`pgraph-segcount-${id}`} style={{ fontFamily: FONT.mono, fontSize: FS.xxs, color: C.textMuted }}>
+                      {seg.done}/{seg.total}
+                    </span>
+                  </>
+                )}
               </span>
             </button>
           );

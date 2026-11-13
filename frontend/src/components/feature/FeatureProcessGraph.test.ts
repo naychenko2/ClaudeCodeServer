@@ -73,8 +73,9 @@ function parallelCycle(withTitles: boolean): FeatureStage[] {
 function nodeLabel(container: unknown, id: string): { text: string; aria: string } {
   const n = findNodeByAttr(container as never, 'data-testid', `pgraph-node-${id}`);
   expect(n, `узел pgraph-node-${id}`).not.toBeNull();
+  const title = findNodeByAttr(container as never, 'data-testid', `pgraph-title-${id}`);
   return {
-    text: textNodes(n as never).join(''),
+    text: textNodes(title as never).join(''),
     aria: n!.getAttribute('aria-label') ?? '',
   };
 }
@@ -121,48 +122,64 @@ describe('FeatureProcessGraph: подпись узла — имя этапа с 
   });
 });
 
-// Узел карточки фиксирован (NODE_W×NODE_H = 120×56, FeatureProcessGraph.tsx), поэтому длинное
-// имя с бэка обязано остаться внутри рамки: перенос не больше двух строк с многоточием.
-// Раньше (дефект) длинное имя давало подпись 70 px при узле 56 — слова наезжали на обводку
-// и на соседнюю колонку.
-describe('FeatureProcessGraph: длинное имя этапа остаётся внутри узла', () => {
-  const LONG_TITLE = 'Проверка плана и макетов перед работами'; // имя из шагов воспроизведения дефекта
-
-  type AnyNode = { getAttribute(n: string): string | null; children: AnyNode[] };
-
-  function nodeById(c: unknown, id: string): AnyNode {
-    const n = findNodeByAttr(c as never, 'data-testid', `pgraph-node-${id}`) as unknown as AnyNode | null;
-    expect(n, `узел pgraph-node-${id}`).not.toBeNull();
-    return n;
-  }
-
-  // Span подписи внутри кнопки узла (дети: маркер состояния, затем подпись).
-  function titleSpanOf(c: unknown, id: string): AnyNode {
-    const span = nodeById(c, id).children.find((ch) => textNodes(ch as never).join('').includes(LONG_TITLE));
-    expect(span, 'span подписи узла').not.toBeNull();
-    return span!;
-  }
+describe('FeatureProcessGraph: длинное имя этапа переносится без обрезки', () => {
+  const LONG_TITLE = 'Проверка плана и макетов перед работами';
 
   const longQaNode = () => render([mkStage('qa', 'qa-long', 'qa', 0, 'pending', [], undefined, LONG_TITLE)]);
+  const titleSpan = (c: unknown) => findNodeByAttr(c as never, 'data-testid', 'pgraph-title-qa-long')!;
 
-  it('подпись узла ограничена рамкой: multiline-clamp на 2 строки, overflow hidden', () => {
-    const c = longQaNode();
-    const style = (reactProps(titleSpanOf(c, 'qa-long') as never) as { style: Record<string, unknown> }).style;
-    // Тот же приём, что GlobalSearch.tsx:114: 2 строки и многоточие вместо выхода за рамку.
-    expect(style.display).toBe('-webkit-box');
-    expect(style.WebkitLineClamp).toBe(2);
-    expect(style.WebkitBoxOrient).toBe('vertical');
-    expect(style.overflow).toBe('hidden');
-    // flex-item должен сжиматься до ширины узла (80 px между маркером и правым padding),
-    // иначе длинное слово раздвинет подпись за NODE_W.
+  it('подпись без clamp и overflow hidden, сжимается по ширине узла', () => {
+    const style = (reactProps(titleSpan(longQaNode()) as never) as { style: Record<string, unknown> }).style;
+    expect(style.WebkitLineClamp).toBeUndefined();
+    expect(style.overflow).toBeUndefined();
     expect(style.minWidth).toBe(0);
+    expect(textNodes(titleSpan(longQaNode()) as never).join('')).toBe(LONG_TITLE);
   });
 
-  it('полное имя остаётся доступным: aria-label и title не обрезаются', () => {
+  it('полное имя доступно: aria-label и title', () => {
     const c = longQaNode();
-    // Доступность и смысл не режутся: экран показывает две строки, полное имя — в title
-    // (тултип при наведении) и в aria-label (скринридер).
-    expect(nodeById(c, 'qa-long').getAttribute('aria-label')).toBe(`${LONG_TITLE}: впереди`);
-    expect(titleSpanOf(c, 'qa-long').getAttribute('title')).toBe(LONG_TITLE);
+    expect(findNodeByAttr(c as never, 'data-testid', 'pgraph-node-qa-long')!.getAttribute('aria-label')).toBe(`${LONG_TITLE}: впереди`);
+    expect(titleSpan(c).getAttribute('title')).toBe(LONG_TITLE);
+  });
+});
+
+describe('FeatureProcessGraph: данные узла B01 (F06)', () => {
+  const get = (c: unknown, tid: string) => findNodeByAttr(c as never, 'data-testid', tid);
+  const txt = (n: unknown) => textNodes(n as never).join('');
+  const one = (extra: Partial<FeatureStage>) =>
+    render([{ ...mkStage('review', 'rv', 'review', 0, 'active', [], 'back'), ...extra }]);
+
+  it('вторая строка: «Персона · время»', () => {
+    const c = one({ personaNames: ['Полина'], elapsedMinutes: 70 });
+    expect(txt(get(c, 'pgraph-meta-rv'))).toBe('Полина · 1 ч 10 мин');
+  });
+
+  it('ждёт человека — warning-цвет; ждёт ветки — текст про ветки и не warning', () => {
+    const human = get(one({ waiting: 'human' }), 'pgraph-meta-rv')!;
+    expect(txt(human)).toBe('ждёт ответа вас');
+    expect((reactProps(human as never) as { style: { color: string } }).style.color).toBe('var(--c-warning)');
+    const br = get(one({ waiting: 'branches' }), 'pgraph-meta-rv')!;
+    expect(txt(br)).toBe('ждёт обе ветки');
+    expect((reactProps(br as never) as { style: { color: string } }).style.color).not.toBe('var(--c-warning)');
+  });
+
+  it('метка роли и чип линии — всегда; без данных меты строки нет', () => {
+    const c = one({ line: 'front' });
+    expect(txt(get(c, 'pgraph-role-rv'))).toBe('review');
+    expect(txt(get(c, 'pgraph-line-rv'))).toBe('фронт');
+    expect(get(c, 'pgraph-meta-rv')).toBeNull();
+    expect(get(c, 'pgraph-returns-rv')).toBeNull();
+    expect(get(c, 'pgraph-segments')).toBeNull();
+  });
+
+  it('бейдж ↺N при returns>0', () => {
+    expect(txt(get(one({ returns: 2 }), 'pgraph-returns-rv'))).toBe('↺2');
+  });
+
+  it('полоска задач: сегменты и «2/3»', () => {
+    const c = one({ taskSegments: { done: 1, running: 1, total: 3 } });
+    expect(txt(get(c, 'pgraph-segcount-rv'))).toBe('1/3');
+    const bar = get(c, 'pgraph-segments') as unknown as { children: { getAttribute(n: string): string | null }[] };
+    expect(bar.children.map((x) => x.getAttribute('data-kind'))).toEqual(['done', 'run', 'todo']);
   });
 });

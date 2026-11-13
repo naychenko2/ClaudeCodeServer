@@ -23,11 +23,18 @@
 // списка (порядок бэка — Ordinal по ключу). «Снова применять само» — PUT с enable:true по каждой
 // выключенной записи агрегата (.:440); общий busy-слот действия покрывает всю последовательность.
 // Записи `human×…` (без «@») — шум до SV1-Б, фронт их не показывает (тот же ADR).
+//
+// M4 (wiki-panels-v1-proposal, «Применение» (А4) и П2): список классов — в рамке с пределом
+// высоты LIST_MAX_H (длинный список скроллится внутри рамки и не выталкивает соседние блоки);
+// шапка рамки закреплена (sticky) и считает строки так, как их видит человек: «Классов: N ·
+// выключено: K», при выключенных — бейдж «выключено K». Выключенные классы поднимаются наверх
+// списка, порядок внутри групп — бэковый (disabledFirst). Агрегат — одна строка-класс: в счёт
+// он входит одним, его состояние «выключен» — когда выключена любая его запись.
 
 import { useCallback, useEffect, useState } from 'react';
 import { AlertTriangle, SlidersHorizontal } from 'lucide-react';
 import {
-  C, FONT, FS, R, SHADOW, SP,
+  C, FONT, FS, LIST_MAX_H, R, SHADOW, SP,
   WikiError,
   loadWikiSettings, putWikiAutoApply, resumeWikiApplyClass, useWikiSettings,
   type WikiApplyClassDto,
@@ -58,6 +65,18 @@ function disabledDateText(iso: string): string {
 // Класс показывается по бэковому ключу, но с пробелами вокруг «×» — слитное «session×append»
 // человеку нечитабельно; ключ для запроса остаётся исходным
 const classLabel = (key: string) => key.split('×').join(' × ');
+
+// M4 (П2): выключенные классы — наверх списка, ради них сюда и приходят; внутри каждой
+// группы порядок остаётся как пришёл с бэка (стабильная перестановка, без сортировки по имени)
+export function disabledFirst(classes: WikiApplyClassDto[]): WikiApplyClassDto[] {
+  return [...classes.filter(c => c.disabled), ...classes.filter(c => !c.disabled)];
+}
+
+// Шапка рамки классов (M4, А4): «Классов: N · выключено: K»; при K = 0 части «выключено»
+// нет — она ничего не сообщает, как и бейдж, который ставят только при K > 0
+export function classesHeaderText(total: number, disabled: number): string {
+  return disabled > 0 ? `Классов: ${total} · выключено: ${disabled}` : `Классов: ${total}`;
+}
 
 // Замер строки — шесть чисел, а не весь DTO: строке агрегата (F6c) их считает HumanClassRow
 // из суммы записей, а не берёт из одной строки бэка
@@ -233,11 +252,20 @@ export function WikiApplySettings() {
   if (!snapshot) return <LoadingSkeleton />;
 
   const auto = snapshot.autoApplyEnabled;
+  // M4 (П2): список сначала упорядочен (выключенные наверх, внутри групп — бэковый порядок),
+  // потом разделён: агрегат остаётся первой строкой (по макету F6c это именованная настройка),
+  // среди строк с ключом наверх встают выключенные
+  const ordered = disabledFirst(snapshot.classes);
   // F6c: записи `…@human` — один агрегат под именем класса (первым в списке: по макету это
   // именованная настройка, а не одна из сырых пар); записи `human×…` (без «@») — шум до SV1-Б,
   // фронт их не показывает (ADR-038:440); остальные — строки с ключом, как раньше
-  const human = snapshot.classes.filter(c => isHumanTargetClass(c.class));
-  const plain = snapshot.classes.filter(c => !isHumanTargetClass(c.class) && !c.class.startsWith('human×'));
+  const human = ordered.filter(c => isHumanTargetClass(c.class));
+  const plain = ordered.filter(c => !isHumanTargetClass(c.class) && !c.class.startsWith('human×'));
+  // Счёт шапки — строки списка так, как их видит человек: агрегат — один класс, его состояние
+  // «выключен» — когда выключена любая его запись (тот же off, что рисует HumanClassRow)
+  const humanOff = human.some(c => c.disabled);
+  const classesTotal = plain.length + (human.length > 0 ? 1 : 0);
+  const classesDisabled = plain.filter(c => c.disabled).length + (humanOff ? 1 : 0);
   return (
     <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.md}px` }}>
       <h2 style={{ margin: `${SP.xs}px 0 0`, fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>
@@ -290,7 +318,29 @@ export function WikiApplySettings() {
           subtitle={<span style={{ maxWidth: 360 }}>Здесь появятся классы «источник × операция» с их долей откатов, когда в вике начнутся применения.</span>}
         />
       ) : (
-        <div style={{ border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card, overflow: 'hidden' }}>
+        <div
+          data-testid="wiki-apply-classes"
+          style={{
+            border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel, boxShadow: SHADOW.card,
+            // M4 (П2): список выше предела скроллится внутри рамки — он не выталкивает
+            // соседние блоки за нижний край панели; overscrollBehavior — прокрутка списка
+            // не отдаёт колесо странице
+            maxHeight: LIST_MAX_H, overflowY: 'auto', overscrollBehavior: 'contain',
+          }}
+        >
+          <div
+            data-testid="wiki-apply-classes-header"
+            style={{
+              // закреплённая шапка рамки (П2): счёт классов и выключенных виден, пока список
+              // скроллится; фон — inset, строки под ним не просвечивают
+              position: 'sticky', top: 0, background: C.bgInset,
+              display: 'flex', flexWrap: 'wrap', gap: SP.sm, alignItems: 'center',
+              padding: `${SP.sm}px ${SP.md}px`,
+            }}
+          >
+            <span style={{ fontSize: FS.sm, color: C.textMuted }}>{classesHeaderText(classesTotal, classesDisabled)}</span>
+            {classesDisabled > 0 && <Badge tone="warning">выключено {classesDisabled}</Badge>}
+          </div>
           {human.length > 0 && (
             <HumanClassRow
               entries={human}

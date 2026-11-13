@@ -793,6 +793,48 @@ public class WikiNightlyParallelTests : IDisposable
         last.Rejected.Should().Be(3);
     }
 
+    [Fact]
+    public async Task LimitNamedFirst_WinsOverExecutorDeath()
+    {
+        // Хвост ревью R-W4a2 (3): «смерть движка» больше не называет итог из ApplyResult — она
+        // названа в CheckStop («нет живого исполнителя») и в ветке «никого живого и готового»,
+        // и обе доступны только пока упора нет (условие цикла выдачи — stop is null). Здесь
+        // порядок обратный прежнему: три отказа local (выбывание) — первыми, limit пакетов
+        // (пакет c2) — вторым. Итог — limit (budget), дату он закрывает; error его не подменяет.
+        // Мутация «вернуть OutcomeError из ApplyResult при выбывании» (прежнее поведение) →
+        // красный последний assert: итог error вместо budget.
+        Configure(perNight: 1);
+        _llm.Executors = [new LocalEngineExecutor("local", "local", 1), new LocalEngineExecutor("gemma", "Gemma", 1)];
+        AddChat("c1", SectionA, ageMinutes: 10);
+        AddChat("c2", SectionB, ageMinutes: 20);
+        AddChat("c3", SectionC, ageMinutes: 30);
+        AddChat("c4", SectionD, ageMinutes: 40);
+        var g2 = NewGate();
+        var sut = Sut(async (owner, chat, engine, ct) =>
+        {
+            lock (_calls) _calls.Add((chat, engine));
+            EnteredOf(chat).TrySetResult();
+            if (chat == "c2") await g2.Task.ConfigureAwait(false); // gemma держит свой Applied-чат: новые берутся на local
+            return engine == "local"
+                ? new WikiChatIngestService.ChatResult(
+                    WikiChatIngestService.OutcomeRejected,
+                    "разбор окна m1-m8 не удался: синтез: " + WikiIngestService.ReasonLocalUnavailable, [],
+                    InputTokens: 0)
+                : new WikiChatIngestService.ChatResult(WikiChatIngestService.OutcomeApplied, null, ["p1"]);
+        });
+
+        var tick = Tick(sut);
+        await GateOpened(EnteredOf("c4")); // local отказал c1, c3, c4 — выбыл; пакет c2 ещё в полёте
+        g2.SetResult();
+        await tick;
+
+        var last = Last();
+        _calls.Count(c => c.Engine == "local").Should().Be(3);
+        last.Rejected.Should().Be(3, "ряд мёртвого исполнителя дошёл до лимита");
+        last.Applied.Should().Be(1, "пакет живого исполнителя применён");
+        last.Outcome.Should().Be(WikiNightlyService.OutcomeBudget, "первый названный упор держит итог: limit пакетов назван раньше");
+    }
+
     // ─── подмены ─────────────────────────────────────────────────────────────
 
     private sealed class Llm : ICheapTextRunner

@@ -40,14 +40,54 @@ public class AudioVoicesControllerTests : IClassFixture<AudioVoicesControllerTes
     {
         public MiniMaxCloner Cloner { get; } = new();
 
-        public MiniMaxHost() => ExtraServices = services => services.AddSingleton<IAudioEngine>(Cloner);
+        // «Личное» — в памяти, папка внутри TempDir: боевой стор требует домашней папки пользователя
+        public FakePersonal Personal { get; }
 
-        // Чистый счётчик фейка на начало теста
+        public MiniMaxHost()
+        {
+            Personal = new FakePersonal(Path.Combine(TempDir, "Personal"));
+            ExtraServices = services =>
+            {
+                services.AddSingleton<IAudioEngine>(Cloner);
+                services.AddSingleton<IPersonalProjects>(Personal);
+            };
+        }
+
+        // Чистый счётчик фейка и нет папки «Личного» на начало теста
         public MiniMaxHost Use()
         {
             Cloner.Reset();
+            Personal.Reset();
             return this;
         }
+    }
+
+    public sealed class FakePersonal(string root) : IPersonalProjects
+    {
+        private Project? _project;
+
+        public string Root => root;
+
+        public void Reset()
+        {
+            _project = null;
+            if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+        }
+
+        public Project? GetPersonalOf(string ownerId) => _project;
+
+        public Task<Project> EnsurePersonalAsync(string ownerId, CancellationToken ct = default)
+        {
+            Directory.CreateDirectory(root);
+            return Task.FromResult(_project ??= new Project
+                { Id = "personal-id", OwnerId = ownerId, RootPath = root, Kind = ProjectKind.Personal });
+        }
+
+        public Project? GetByIdIncludingPersonal(string id) => null;
+
+        public IReadOnlyCollection<Project> GetAllPersonal() => _project is null ? [] : [_project];
+
+        public bool DeleteOf(string ownerId) => false;
     }
 
     private TestWebApplicationFactory _factory = null!;
@@ -348,21 +388,90 @@ public class AudioVoicesControllerTests : IClassFixture<AudioVoicesControllerTes
         cloner.Runs.Should().Be(0);
     }
 
-    [Fact]
-    public async Task Личный_чат_пустое_состояние()
+    private async Task<string> PersonalChat()
     {
         Start();
         var sessions = _factory.Services.GetRequiredService<SessionManager>();
-        var chatId = (await sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный")).Id;
+        return (await sessions.CreateChatAsync(_ownerId, ClaudeMode.AcceptEdits, name: "Личный")).Id;
+    }
 
-        var resp = await _client.GetAsync($"/api/audio-editor/chats/{chatId}/voices");
+    // Чтение папку «Личного» не создаёт: список пуст, правка и удаление несуществующего голоса — 404 без мутаций
+    [Fact]
+    public async Task Личный_чат_без_папки_список_пуст_папка_не_создаётся()
+    {
+        var chatId = await PersonalChat();
+        var url = $"/api/audio-editor/chats/{chatId}/voices";
+
+        var resp = await _client.GetAsync(url);
 
         resp.StatusCode.Should().Be(HttpStatusCode.OK, await resp.Content.ReadAsStringAsync());
         var body = await Json(resp);
-        body.GetProperty("available").GetBoolean().Should().BeFalse();
+        body.GetProperty("available").GetBoolean().Should().BeTrue();
         body.GetProperty("voices").GetArrayLength().Should().Be(0);
-        (await _client.PostAsync($"/api/audio-editor/chats/{chatId}/voices", Form("Аня"))).StatusCode
-            .Should().BeOneOf(HttpStatusCode.NotFound, HttpStatusCode.MethodNotAllowed);
+        (await _client.GetAsync($"{url}/anya")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PatchAsJsonAsync($"{url}/anya", new { name = "X" })).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.DeleteAsync($"{url}/anya")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await _client.PostAsync($"{url}/anya/samples", Form(null))).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        Directory.Exists(_hosts.MiniMax.Personal.Root).Should().BeFalse();
+    }
+
+    // CRUD голоса в личном чате: добавление создаёт папку «Личного», файлы лежат в Personal/voices/<slug>/
+    [Fact]
+    public async Task Личный_чат_Crud_голоса_в_папке_Личного()
+    {
+        var chatId = await PersonalChat();
+        var url = $"/api/audio-editor/chats/{chatId}/voices";
+
+        var created = await _client.PostAsync(url, Form("Аня", "Привет"));
+        created.StatusCode.Should().Be(HttpStatusCode.Created, await created.Content.ReadAsStringAsync());
+        var slug = (await Json(created)).GetProperty("slug").GetString()!;
+        var dir = Path.Combine(_hosts.MiniMax.Personal.Root, "voices", slug);
+        File.Exists(Path.Combine(dir, "sample-01.wav")).Should().BeTrue();
+
+        var list = await Json(await _client.GetAsync(url));
+        list.GetProperty("voices").EnumerateArray().Select(v => v.GetProperty("slug").GetString()).Should().Equal(slug);
+
+        (await _client.PatchAsJsonAsync($"{url}/{slug}", new { name = "Анна" })).StatusCode.Should().Be(HttpStatusCode.OK);
+        (await Json(await _client.GetAsync($"{url}/{slug}"))).GetProperty("name").GetString().Should().Be("Анна");
+
+        var added = await _client.PostAsync($"{url}/{slug}/samples", Form(null));
+        added.StatusCode.Should().Be(HttpStatusCode.OK, await added.Content.ReadAsStringAsync());
+        (await Json(added)).GetProperty("samples").GetArrayLength().Should().Be(2);
+        var sample = await _client.GetAsync($"{url}/{slug}/files/sample-02.wav");
+        sample.StatusCode.Should().Be(HttpStatusCode.OK);
+        (await sample.Content.ReadAsByteArrayAsync()).Should().Equal(Wav);
+        (await _client.DeleteAsync($"{url}/{slug}/samples/sample-01.wav")).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        (await _client.DeleteAsync($"{url}/{slug}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        Directory.Exists(dir).Should().BeFalse();
+        (await _client.GetAsync($"{url}/{slug}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    // Файлов проекта у личного чата нет: путь из формы — 400, голос не создан
+    [Fact]
+    public async Task Личный_чат_файлы_проекта_в_форме_отклоняются()
+    {
+        var chatId = await PersonalChat();
+        var url = $"/api/audio-editor/chats/{chatId}/voices";
+        await _client.PostAsync(url, Form("Аня"));
+
+        var resp = await _client.PostAsync(url, Form("Борис", projectFile: "voices/anya/sample-01.wav", upload: false));
+
+        resp.StatusCode.Should().Be(HttpStatusCode.BadRequest, await resp.Content.ReadAsStringAsync());
+        (await Json(await _client.GetAsync(url))).GetProperty("voices").GetArrayLength().Should().Be(1);
+    }
+
+    // Голос личного чата не виден из чужого чата проекта: ручка личного чата — только для чата без проекта
+    [Fact]
+    public async Task Личные_голоса_через_чат_проекта_недоступны()
+    {
+        Start();
+        var sessions = _factory.Services.GetRequiredService<SessionManager>();
+        var chat = await sessions.CreateAsync(_projectId, ClaudeMode.AcceptEdits, name: "В проекте");
+
+        var resp = await _client.GetAsync($"/api/audio-editor/chats/{chat.Id}/voices");
+
+        resp.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     // Пересоздание клона в две фазы: без quoteId — котировка с ценой и ничего не запущено; с quoteId — задача

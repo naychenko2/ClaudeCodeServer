@@ -49,8 +49,35 @@ ComfyUI, аренде от CCS или чужом GPU-процессе и воз�
 `ARBITER_VRAM_NEEDED_MB` (22 000) свободных, иначе состояние `waiting-vram`.
 
 `GET /ready` — 200, когда модель отвечает (это и спрашивает CCS перед вызовом места);
-`GET /state` — `{"engine": "ready|yielded|starting|waiting-vram", "reasons", счётчики, quiet_left_s, leases}`.
+`GET /state` — `{"engine": "ready|yielded|starting|waiting-vram|failed", "reasons", "comfy_alive", счётчики, quiet_left_s, leases}`.
 До 01.11.2026 поле состояния называлось `bonsai` — CCS читает и его, если `engine` нет.
+
+С 13.11.2026 (дефекты cd70e91e, 8bf952a5):
+- работающую LLM арбитр не останавливает ради задания ComfyUI, если тот не отвечает на `/system_stats`
+  (там CUDA-вызов; после TDR `/queue` жив, а `/system_stats` — 500). Проверка не чаще
+  `ARBITER_COMFY_ALIVE_EVERY_S` (5 с), итог — поле `comfy_alive`;
+- `systemctl stop` ждёт `ARBITER_STOP_TIMEOUT_S` (90 с), таймаут — запись в журнал, а не смерть потока;
+  любая ошибка круга пишется в журнал, цикл продолжается;
+- не дождались `/health` за `ARBITER_START_WAIT_S` — стоп и новая попытка; после `ARBITER_START_RETRIES` (3)
+  неудач подряд — состояние `failed` на `ARBITER_START_BACKOFF_S` (600 с), потом снова.
+
+## Сторож живости (`gpu-watchdog.timer`)
+
+`gpu-watchdog.py` раз в минуту проверяет `comfyui-h3` (`:8188/system_stats` и строку
+`CUDA error: unknown error` в журнале текущего процесса) и `hyperqwen` (`:18020/health`) и делает
+`systemctl restart`, если юнит active, а CUDA в нём мёртв. Таймер, а не поток арбитра: отдельный домен
+отказа (12.11.2026 умер именно поток арбитра), долгие пробы и перезапуск не тормозят арбитраж.
+
+- Мёртв — две пробы подряд 5xx, или две без ответа при висящей или пустой очереди (занятый генерацией
+  ComfyUI не трогаем), или строка в журнале. hyperqwen судим, только если в этой активации `/health`
+  уже отвечал: старт ведёт арбитр (до 240–900 с).
+- Не чаще раза в 5 мин; после 3 перезапусков за 30 мин — пауза и запись уровня crit, снять:
+  `sudo python3 -I /home/an/local-llm/gpu-watchdog.py --clear comfyui-h3`.
+- Счётчик и пауза — `/var/lib/gpu-watchdog/state.json`, журнал — `journalctl -u gpu-watchdog`.
+- Установка: `gpu-watchdog.py` → `/home/an/local-llm/`, юниты → `/etc/systemd/system/`,
+  `systemctl enable --now gpu-watchdog.timer`. Откат: `systemctl disable --now gpu-watchdog.timer`.
+- Не ловит vLLM, который простаивает с мёртвым CUDA: его `/health` отвечает 200 (13.11.2026 так и было).
+  Он падает на первом запросе, и юнит поднимает арбитр.
 
 Для vLLM арбитру нужны две переменные окружения: `ARBITER_ENGINE_HEALTH=http://127.0.0.1:18020/health`
 (дефолт в `gpu-arbiter.py:28` — прежний `:18030/health`) и `ARBITER_OWN_PROCS` с именем процесса vLLM

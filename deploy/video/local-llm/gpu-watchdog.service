@@ -1,0 +1,12 @@
+[Unit]
+Description=Сторож живости GPU-сервисов Video (comfyui-h3, hyperqwen): перезапуск при мёртвом CUDA
+After=comfyui-h3.service
+
+[Service]
+Type=oneshot
+# root: нужен systemctl restart и чтение журнала чужих юнитов.
+User=root
+ExecStart=/usr/bin/python3 -I /home/an/local-llm/gpu-watchdog.py
+SyslogIdentifier=gpu-watchdog
+# Две пробы по 20 с + пауза 15 с + перезапуск до 150 с.
+TimeoutStartSec=300

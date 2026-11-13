@@ -1,0 +1,10 @@
+[Unit]
+Description=Сторож живости GPU-сервисов Video — раз в минуту
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=60s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

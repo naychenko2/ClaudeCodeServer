@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services.ImageEditor;
 using ClaudeHomeServer.Services.ImageEditor.ChatContext;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
 using ClaudeHomeServer.Tests.ImageEditor.Characters;
+using ClaudeHomeServer.Services.Composition;
 using FluentAssertions;
 using Moq;
 
@@ -53,6 +54,32 @@ public sealed class ImageContextRefsTests : IDisposable
     private string NewCharacter(string name = "Аня") =>
         CharacterStore.Create(_project, new CharacterDraft(name, null, CharacterStoreTests.Photos(3)), DateTime.UtcNow)
             .Value!.Manifest.Slug;
+
+    private PersonalFolderResolver PersonalFolder(bool withFolder)
+    {
+        var store = new Mock<IPersonalProjects>();
+        store.Setup(s => s.GetPersonalOf(Owner)).Returns(withFolder
+            ? new Project { Id = "personal-id", OwnerId = Owner, RootPath = _project, Kind = ProjectKind.Personal }
+            : null);
+        return new PersonalFolderResolver(store.Object);
+    }
+
+    [Fact]
+    public void Персонаж_личного_чата_с_папкой_Личное_принимается_а_без_папки_прежний_отказ()
+    {
+        var slug = NewCharacter();
+        var withFolder = new ImageContextKind(_threads, null, null, null, PersonalFolder(true));
+        var withoutFolder = new ImageContextKind(_threads, null, null, null, PersonalFolder(false));
+        var item = new ContextItem("c", "image-character", Slug(slug), null, ContextActor.Human, DateTime.UtcNow);
+
+        withFolder.Validate(Personal, "image-character", Slug(slug)).Should().BeNull();
+        withFolder.Validate(Personal, "image-character", Slug("net-takogo")).Should().Contain("не найден");
+        withFolder.Describe(Personal, item).Missing.Should().BeFalse();
+        withoutFolder.Validate(Personal, "image-character", Slug(slug)).Should().Contain("личном чате");
+        // Чат проекта «Личным» не подменяется
+        var projectChat = new ContextScope(Owner, new Session { Id = Chat, OwnerId = Owner, ProjectId = "p-2" }, null);
+        withFolder.Validate(projectChat, "image-character", Slug(slug)).Should().Contain("личном чате");
+    }
 
     [Fact]
     public void Основным_бывает_только_картинка()

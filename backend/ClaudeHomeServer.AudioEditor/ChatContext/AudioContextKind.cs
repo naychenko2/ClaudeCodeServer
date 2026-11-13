@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.AudioEditor.Catalog;
 using ClaudeHomeServer.Services.AudioEditor.Voices;
 using ClaudeHomeServer.Services.AudioEditor.Jobs;
@@ -25,7 +27,8 @@ public static class AudioContextRoles
 public sealed class AudioContextKind(
     AudioThreadStore store,
     IEnumerable<IAudioEngine>? engines = null,
-    AudioPrefsService? prefs = null) : IContextKindProvider, IChatContextSeedSource
+    AudioPrefsService? prefs = null,
+    PersonalFolderResolver? personal = null) : IContextKindProvider, IChatContextSeedSource
 {
     public const string Kind = "audio";
     public const string VoiceKind = "audio-voice";
@@ -49,11 +52,15 @@ public sealed class AudioContextKind(
         return null;
     }
 
-    private static string? ValidateVoice(ContextScope scope, JsonObject reference)
+    // Голоса: проект чата, у личного чата — «Личное» владельца, если папка уже есть (Find ничего не создаёт)
+    private Project? VoiceProject(ContextScope scope) =>
+        scope.Project ?? (scope.Session.ProjectId is null ? personal?.Find(scope.OwnerId) : null);
+
+    private string? ValidateVoice(ContextScope scope, JsonObject reference)
     {
-        if (scope.Project is null) return "В личном чате нет библиотеки голосов";
+        if (VoiceProject(scope) is not { } project) return "В личном чате нет библиотеки голосов";
         if (!VoiceStore.IsValidSlug(Text(reference, "slug"))) return "Не указан голос";
-        return VoiceStore.Get(scope.Project.RootPath, Text(reference, "slug")!) is null
+        return VoiceStore.Get(project.RootPath, Text(reference, "slug")!) is null
             ? "Голос не найден в проекте"
             : null;
     }
@@ -62,7 +69,7 @@ public sealed class AudioContextKind(
     {
         if (item.Kind == VoiceKind)
         {
-            var voice = scope.Project is { } project && VoiceStore.IsValidSlug(Text(item.Ref, "slug"))
+            var voice = VoiceProject(scope) is { } project && VoiceStore.IsValidSlug(Text(item.Ref, "slug"))
                 ? VoiceStore.Get(project.RootPath, Text(item.Ref, "slug")!)
                 : null;
             return voice is null

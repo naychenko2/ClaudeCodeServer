@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.ChatContext;
+using ClaudeHomeServer.Services.Composition;
 using ClaudeHomeServer.Services.ImageEditor.Mcp;
 using ClaudeHomeServer.Services.ImageEditor.Prefs;
 using ClaudeHomeServer.Services.ImageEditor.Threads;
@@ -31,7 +33,8 @@ public sealed class ImageContextKind(
     ImageThreadStore store,
     ImageProjectPrefsStore? prefs = null,
     IEnumerable<IImageEditor>? editors = null,
-    ImageEditWorkspace? workspace = null) : IContextKindProvider, IChatContextSeedSource
+    ImageEditWorkspace? workspace = null,
+    PersonalFolderResolver? personal = null) : IContextKindProvider, IChatContextSeedSource
 {
     public const string Kind = "image";
     public const string CharacterKind = "image-character";
@@ -60,11 +63,15 @@ public sealed class ImageContextKind(
         return null;
     }
 
-    private static string? ValidateCharacter(ContextScope scope, JsonObject reference)
+    // Персонажи: проект чата, у личного чата — «Личное» владельца, если папка уже есть (Find ничего не создаёт)
+    private Project? CharacterProject(ContextScope scope) =>
+        scope.Project ?? (scope.Session.ProjectId is null ? personal?.Find(scope.OwnerId) : null);
+
+    private string? ValidateCharacter(ContextScope scope, JsonObject reference)
     {
-        if (scope.Project is null) return "В личном чате нет персонажей";
+        if (CharacterProject(scope) is not { } project) return "В личном чате нет персонажей";
         if (!CharacterStore.IsValidSlug(Text(reference, "slug"))) return "Не указан персонаж";
-        return CharacterStore.Get(scope.Project.RootPath, Text(reference, "slug")!) is null
+        return CharacterStore.Get(project.RootPath, Text(reference, "slug")!) is null
             ? "Персонаж не найден в проекте"
             : null;
     }
@@ -73,7 +80,7 @@ public sealed class ImageContextKind(
     {
         if (item.Kind == CharacterKind)
         {
-            var character = scope.Project is { } project && CharacterStore.IsValidSlug(Text(item.Ref, "slug"))
+            var character = CharacterProject(scope) is { } project && CharacterStore.IsValidSlug(Text(item.Ref, "slug"))
                 ? CharacterStore.Get(project.RootPath, Text(item.Ref, "slug")!)
                 : null;
             return character is null

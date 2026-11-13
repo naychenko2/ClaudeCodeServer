@@ -33,12 +33,8 @@ export function resolveSelectedStage(
   return defaultSelected(run);
 }
 
-// Граф показываем, когда у фичи есть маршрут: подтверждённый (epic.workflow) или рёбра в
-// стадиях. Легаси-фича (восемь стадий одной колонкой) остаётся на вкладках — рисовать её
-// цепочкой графа незачем.
-export function hasProcessGraph(run: FeatureRun): boolean {
-  return !!run.epic?.workflow || (run.stages ?? []).some(s => (s.after?.length ?? 0) > 0);
-}
+// Признак маршрута (показывать ли граф) живёт одним предикатом в lib/featurePage
+// (hasRouteOfRun) — там же, где имя вкладки «Процесс»; здесь его копии нет (минор 8910d5b6).
 
 const TASK_STATUS: Record<string, string> = { todo: 'не начата', inProgress: 'в работе', done: 'готово' };
 

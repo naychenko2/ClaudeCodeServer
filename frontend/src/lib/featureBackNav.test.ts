@@ -421,8 +421,9 @@ describe('featureBackNav: вкладка возврата — FeatureMainTab (FS
 // словаря. Мутации (в отчёте): (15) не писать fromTabLabel в recordFeatureReturn →
 // «Процесс» краснеет; (16) игнорировать fromTabLabel в featureBackNavFrom (всегда
 // словарь) → «Процесс» и «старая запись» краснеют; (17) в featureHasRoute не проверять
-// открытую страницу (читать любой run) → «чужая фича» и «без данных» краснеют;
-// (18) в featureHasRoute не проверять рёбра стадий → «по рёбрам стадий» краснеет.
+// открытую страницу/данные (читать любой готовый run) → «чужая фича» и «без данных» краснеют;
+// (18) в hasRouteOfRun (единый предикат, lib/featurePage) не проверять рёбра стадий →
+// «по рёбрам стадий» краснеет.
 describe('featureBackNav: имя вкладки — то же, что у страницы (дефект 762b7c03)', () => {
   beforeEach(() => { __test.reset(); pageStore.reset(); });
 
@@ -475,7 +476,11 @@ describe('featureBackNav: имя вкладки — то же, что у стр�
     openPage('other', routed); // страница другой фичи: её run чужому переходу не имя
     recordFeatureReturn('f1', { kind: 'chat', id: 'c1' }, 'Моя фича', 'timeline');
     expect(featureBackNavFrom('c1')?.tabLabel, 'чужой run дал имя').toBe('Ход');
-    pageStore.setState({ status: 'loading' }); // данных нет
+    // данных нет: страница открыта для 'f1', но run не готов — имя не берётся из run.
+    // (Раньше здесь оставался открытый 'other', и проверка проходила на признаке чужой
+    // фичи — ветка «данных нет» никогда не выполнялась.)
+    openPage('f1', routed);
+    pageStore.setState({ status: 'loading' });
     __test.reset();
     recordFeatureReturn('f1', { kind: 'chat', id: 'c2' }, 'Моя фича', 'timeline');
     expect(featureBackNavFrom('c2')?.tabLabel, 'имя без данных страницы').toBe('Ход');

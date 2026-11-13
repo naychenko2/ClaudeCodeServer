@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { Inbox } from 'lucide-react';
 import { R, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, type FeatureBrief } from '../../lib/featurePage';
+import { useFeaturePage, refetchFeaturePage, useFeatureMainTab, setFeatureMainTab, stepsTabCount, featureMainTabLabel, hasRouteOfRun, type FeatureBrief } from '../../lib/featurePage';
 import { useMe } from '../../lib/defaultPersona';
 import { buildNavMarks } from '../../lib/featureNavMarks';
 import { getBackNav, clearBackNav, registerFeaturePage, recordFeatureReturn } from '../../lib/featureBackNav';
@@ -33,7 +33,7 @@ import {
 import { FeaturePageTabs } from './FeaturePageTabs';
 import { FeatureFirstScreen } from './FeatureFirstScreen';
 import { FeatureProcessGraph } from './FeatureProcessGraph';
-import { FeatureStageArea, resolveSelectedStage, hasProcessGraph, type StageSelection } from './FeatureStageArea';
+import { FeatureStageArea, resolveSelectedStage, type StageSelection } from './FeatureStageArea';
 import { analysisLineState } from './FeatureAnalysisModel';
 import type { FeatureRun, MergeTailDecision } from '../../types/featureRun';
 
@@ -334,7 +334,7 @@ export function FeaturePage({ featureId, projectId, projectOwnerId, isMobile = f
     // только когда attention нет — иначе то же говорит плашка «от тебя») и «ещё не начата».
     const lineKey = okRun.attention ? null : analysisLineState(okRun, Date.now()).key;
     const watchdogOrIdle = okRun.state === 'not_started' || lineKey === 'stuck' || lineKey === 'nudged' || lineKey === 'quiet';
-    const graphShown = hasProcessGraph(okRun);
+    const graphShown = hasRouteOfRun(okRun);
     const selectedStageId = resolveSelectedStage(stageSel, featureId, okRun);
     body = (
       <>

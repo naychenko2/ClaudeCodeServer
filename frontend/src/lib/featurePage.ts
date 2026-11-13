@@ -347,14 +347,22 @@ export function featureMainTabLabel(t: FeatureMainTab, hasRoute: boolean): strin
   return t === 'progress' && hasRoute ? 'Процесс' : FEATURE_MAIN_TAB_LABEL[t];
 }
 
-// Признак маршрута ОТКРЫТОЙ страницы фичи (дефект 762b7c03): тот же предикат, что
-// hasProcessGraph (FeatureStageArea.tsx:39) — по нему страница именует первую вкладку
-// (featureMainTabLabel), тем же именем канал возврата (featureBackNav) записывает вкладку
-// в момент перехода. false — страница не открыта, данных нет, страница другой фичи, легаси.
+// Признак маршрута по run фичи: подтверждённый (epic.workflow) или рёбра в стадиях. ЕДИНЫЙ
+// предикат для показа графа процесса (FeaturePage → FeatureStageArea) и для имени первой
+// вкладки (featureMainTabLabel) — минор ревью 8910d5b6 (дефект 762b7c03): та же формула
+// вторым экземпляром жила в FeatureStageArea.hasProcessGraph, и правка на одной стороне
+// молча разошлась бы с именем на другой. Легаси (ни подтверждённого, ни рёбер) — false.
+export function hasRouteOfRun(run: FeatureRun): boolean {
+  return !!run.epic?.workflow || (run.stages ?? []).some(s => (s.after?.length ?? 0) > 0);
+}
+
+// Признак маршрута ОТКРЫТОЙ страницы фичи: тонкая обёртка «открытая страница + её run» —
+// по нему страница именует первую вкладку (featureMainTabLabel), тем же именем канал
+// возврата (featureBackNav) записывает вкладку в момент перехода. false — страница не
+// открыта, данных нет, страница другой фичи.
 export function featureHasRoute(featureId: string): boolean {
   if (_fid !== featureId || _state.status !== 'ok') return false;
-  const run = _state.page.run;
-  return !!run.epic?.workflow || (run.stages ?? []).some(s => (s.after?.length ?? 0) > 0);
+  return hasRouteOfRun(_state.page.run);
 }
 
 // Перевод старых значений в новые — строго по таблице FS-FTABS:

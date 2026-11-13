@@ -34,15 +34,20 @@
 
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { AlertTriangle, Ban, MessageSquare, SearchX, Star } from 'lucide-react';
+// TextField — из кита, а не из components/ui/Field: Field.tsx:3 тянет нелистовую цепочку
+// VoiceMicButton → useVoiceInput → lib/toast и lib/talkDiag → lib/offline, и remote «Заметок»
+// собрал бы вторую копию сторов ядра (дефект c86f08b8, блокёр мержа M1a). Остальные ui-контролы
+// этого файла листовые: через них идут только design/breakpoints (Badge.tsx:14-16, Button.tsx:2,
+// EmptyState.tsx:2, Notice.tsx:10-12, Segmented.tsx:1), что плагин сборки разрешает
+// (modules/notes/guardLists.mjs:99-101).
 import {
-  C, FONT, FS, LIST_MAX_H, R, SHADOW, SP, useIsMobile,
+  C, FONT, FS, LIST_MAX_H, R, SHADOW, SP, TextField, useIsMobile,
   WikiError, loadWikiChats, setWikiChatMark,
   type WikiChatMark, type WikiChatTriage,
 } from 'aihome_shell/kit';
 import { Badge, type BadgeTone } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { EmptyState } from '../../../components/ui/EmptyState';
-import { TextField } from '../../../components/ui/Field';
 import { Notice } from '../../../components/ui/Notice';
 import { SegmentedControl } from '../../../components/ui/Segmented';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';

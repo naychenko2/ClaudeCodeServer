@@ -241,6 +241,16 @@ public class LlmProviderRegistry
     private LlmProviderConfig? MainLocalProvider() =>
         _providers.Values.Where(p => p.IsLocal).OrderBy(p => p.Stats is null).FirstOrDefault();
 
+    // Явная подпись основной локали для показа человеку: Stats:Title того провайдера, чью дорожку
+    // рисует панель «Локальные модели» (тот же выбор MainLocalProvider, что у панели
+    // LocalModelStatsController:177 и у поллера LocalModelStatsPoller:260). Нужен, чтобы список
+    // исполнителей места (CheapTextRunner.EngineTitle) и «Исполнители ночи» экрана
+    // «Поставщики моделей» (UsageController.BuildLocalEngineOptions) звали модель тем же
+    // значением, что и вкладка панели, а не своим алиасом. null — подпись не задана: запасной
+    // вариант (алиас модели, имя движка, «Основная») у каждого потребителя свой и остаётся за ним.
+    public string? MainLocalTitle =>
+        MainLocalProvider()?.Stats?.Title is { } t && !string.IsNullOrWhiteSpace(t) ? t.Trim() : null;
+
     // Провайдер по модели: сперва точное совпадение с каталогом провайдера,
     // затем по префиксу (модели из GET /models, не описанные в конфиге).
     // null → Claude. Выключенные провайдеры тоже резолвятся — доступность

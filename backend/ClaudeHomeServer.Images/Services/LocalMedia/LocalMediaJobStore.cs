@@ -23,6 +23,9 @@ public static class LocalMediaOps
     public const string AudioToMidi = "audio_to_midi";
     public const string AudioEnhance = "audio_enhance";
     public const string Transcribe = "transcribe";
+    // Эффекты по тексту (MOSS-SFX, MMAudio) и звук по видео (Foley XL/XXL, MMAudio): Ш4
+    public const string AudioSfx = "audio_sfx";
+    public const string VideoToAudio = "video_to_audio";
 
     // Обучение LoRA персонажа (ADR-026): ставит только адаптер шва, в IsKnown не входит
     public const string LoraTrain = "lora_train";
@@ -34,7 +37,7 @@ public static class LocalMediaOps
     public static bool IsLora(string? op) => op is LoraTrain or LoraDelete;
 
     public static bool IsAudio(string? op) => op is MusicGenerate or MusicEdit or Speech or VoiceConvert or VoiceTrain
-        or AudioSeparate or AudioToMidi or AudioEnhance or Transcribe;
+        or AudioSeparate or AudioToMidi or AudioEnhance or Transcribe or AudioSfx or VideoToAudio;
 
     public static bool IsKnown(string? op) => op is GenerateImage or EditImage or FaceDetail or ImageToVideo
         or TextToVideo or VideoUpscale or VideoInpaint or ReferenceToVideo || IsAudio(op);

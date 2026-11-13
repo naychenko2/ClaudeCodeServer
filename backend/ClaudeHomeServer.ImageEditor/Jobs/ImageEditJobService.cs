@@ -136,6 +136,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
         public int? EtaSeconds { get; set; }
         // Снимок очереди GPU ComfyUI (шаг 28): живой, обновляется каждым отчётом прогресса
         public ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu { get; set; }
+        // Модель, на которой прогон идёт на самом деле (EditProgress.Model); null — как в котировке
+        public string? ActualModel { get; set; }
         public DateTime? RunStartedAt { get; set; }
         public List<int> Variants { get; } = [];
         // Итоги проходов подстановки (ADR-028, §9): статус и сходство каждого лица; пусто — не цепочка
@@ -901,6 +903,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             int? elapsed;
             lock (job.Gate)
             {
+                // Фактическая модель — до готовых вариантов: их событие несёт её нити
+                if (value.Model is { } actual) job.ActualModel = actual;
                 if (value.Ready is { Count: > 0 } ready)
                 {
                     job.Pipeline = owner.DeliverReadyAsync(job.Pipeline, job, job.ReadyCount + 1, ready);
@@ -928,7 +932,7 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
             _ = owner.Broadcast(job.OwnerId, ImageEditScope.ProjectIdOf(job.ProjectId), job.ChatSessionId,
                 new ImageEditProgressMessage(job.Id, job.ProjectId, value.Stage, value.QueuePosition,
                     job.ChatSessionId, job.Initiator, job.ThreadId, value.Run, value.Runs, value.EtaSeconds,
-                    elapsed, value.Gpu));
+                    elapsed, value.Gpu, job.ActualModel));
         }
     }
 
@@ -975,6 +979,8 @@ public sealed class ImageEditJobService : IImageEditJobs, IDisposable
                 Op: ImageEditOpNames.OpName(j.Quote.Op),
                 FaceResults: j.FaceResults.Count > 0 ? [.. j.FaceResults] : null,
                 Gpu: j.Gpu,
+                ActualModel: j.ActualModel,
+                RouteReason: j.Quote.RouteReason,
                 Scenes: j.Scenes.Count > 0 ? new Dictionary<int, ImageVglScene>(j.Scenes) : null);
     }
 

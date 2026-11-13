@@ -67,6 +67,8 @@ export interface VideoClipVersion {
   upscaleError?: string;
   // Увеличение отменил человек (у сбоя поля нет): отличать по тексту upscaleError нельзя
   upscaleCancelled?: boolean;
+  // Версия получена действием «Увеличить» (RelayVSR, локально): 2 или 4; у обычной съёмки поля нет. width×height — уже увеличенные
+  enhanceScale?: number;
 }
 
 export type VideoLaunchStatus = 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted';
@@ -130,6 +132,12 @@ export interface VideoModelInfo {
   license?: string;
   // Ступени и пропорции «Формата»; нет — «Как у модели»
   format?: MediaFormatCaps;
+  // Экспериментальная: «Авто» и умолчания её не берут, только ручной выбор
+  experimental?: boolean;
+  // Снимает и по одному тексту, и по кадру A (кадра B нет)
+  firstFrameOptional?: boolean;
+  // Что модель даёт и чем хуже соседей
+  hint?: string;
 }
 
 export interface VideoProvider {
@@ -406,6 +414,12 @@ export interface VideoFramesPreview { aspect: string; anchor: FrameAnchor; frame
 // «Повторить увеличение»: новая задача `jobId` со стадией upscaling; прежняя версия 768p остаётся как была
 export interface VideoUpscaleRetryResult { jobId: string; sourceVersionId: string }
 
+// «Увеличить ×2/×4» версии (RelayVSR, local): варианты до запуска — время по замеру (нет числа — «не замерено»), размер результата
+export interface VideoEnhanceOption { scale: 2 | 4; available: boolean; reason?: string; etaSeconds?: number; width?: number; height?: number }
+export interface VideoEnhanceQuote { versionId: string; options: VideoEnhanceOption[] }
+// 202: новая задача `jobId` со стадией upscaling; итог — новая версия с enhanceScale, исходная остаётся
+export interface VideoEnhanceResult { jobId: string; sourceVersionId: string; scale: number; etaSeconds?: number }
+
 // Тело 409 film_format_locked: замок держит сервер, «Всё равно» — повтор с force
 export interface VideoFormatLocked { error: string; code: 'film_format_locked'; lockedBy: VideoFilmLock }
 
@@ -464,6 +478,11 @@ export const videoApi = {
   // Повторить увеличение версии с upscaleError (ADR-022): 202 с новым jobId; 409 upscale_retry_unavailable — переснимите сцену
   retryUpscale: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
     json<VideoUpscaleRetryResult>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/upscale`, {}),
+  // «Увеличить ×2/×4»: GET — варианты и время до запуска, POST — запуск (202 с jobId; отказы 400/409/429 с текстом в теле)
+  enhanceQuote: (scope: string, sessionId: string, sceneId: string, versionId: string) =>
+    request<VideoEnhanceQuote>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/enhance`),
+  enhance: (scope: string, sessionId: string, sceneId: string, versionId: string, scale: 2 | 4) =>
+    json<VideoEnhanceResult>(`${sceneUrl(scope, sessionId, sceneId)}/versions/${encodeURIComponent(versionId)}/enhance`, { scale }),
   // Отменить только увеличение «Макс» local H3: съёмка 768p остаётся версией с пометкой
   cancelUpscale: (scope: string, sessionId: string | null, jobId: string) =>
     request<VideoJob>(`${videoBase(scope, sessionId)}/jobs/${encodeURIComponent(jobId)}/upscale`, { method: 'DELETE' }),

@@ -97,3 +97,24 @@
 на параллели. Правило `from 192.168.7.83 lookup main` пускает соединения с адресом `br0`
 напрямую (≈9 МБ/с, потолок линии). Для больших загрузок: `curl --interface br0` или локальный
 CONNECT-прокси с этим исходным адресом (`HTTPS_PROXY=http://127.0.0.1:18888`).
+
+## Эффекты по тексту и звук по видео (Ш4)
+
+Ставит `install_sfx_v2a.sh` (подкоманды `nodes`, `moss`, `link`; описание — в шапке скрипта).
+
+- **Foley XL / XXL и MMAudio** — ноды ComfyUI (`ComfyUI-HunyuanVideo-Foley`, `ComfyUI-MMAudio`) в прод-venv. Ставятся
+  только если pip не меняет ни одного существующего пакета (`pip freeze` до/после, констрейнты = всё установленное);
+  иначе отказ, и модель живёт семейством воркера. 13.11.2026 встали 28 новых пакетов, существующие не тронуты.
+  Откат — `~/ComfyUI-h3/rollback-sfx-v2a.sh` + рестарт `comfyui-h3` при пустой очереди.
+- **MOSS-SFX** — семейство `sfx_moss` (свой venv с пинами автора, `moss-sfx-requirements.txt`), операция узла `sfx_moss`.
+  `TORCHDYNAMO_DISABLE=1` в окружении семейства обязателен: одноразовый процесс иначе тратит ~70 с на компиляцию inductor
+  (клип 5 с: 44 с вместо 110 с).
+- **Потолок громкости.** MOSS-SFX (+1,1 dBFS) и MMAudio по тексту (+0,7 dBFS) перегружают звук. MOSS ограничивается в
+  воркере, Foley и MMAudio — узлом `CcsTruePeakLimit` перед `SaveAudio`; оба используют `ccs_common.limit_true_peak`
+  (true peak ≤ −1 dBFS, тест `test_limiter.py`).
+- **Арбитр GPU.** При `ARBITER_MODE=exclusive` (так на Video сейчас) любая задача ComfyUI уводит дежурную LLM. В режиме
+  `shared` маркеры по умолчанию (`h3,minimax,video,fasth3,whisper`) ловят только графы с `LoadVideo`; для эффектов
+  по тексту добавьте `sfx_moss,MMAudioSampler` в `ARBITER_HEAVY_MARKERS`. Тяжёлыми для очереди CCS помечены MOSS-SFX
+  и Foley XXL (`HeavyOps` каталога).
+- **Холодный старт.** Первая загрузка модели с диска даёт разброс: Foley XXL 5 с — 152 с холодно, 27 с при прогретом кэше;
+  Foley XL 10 с — 35–52 с (130 с после смены модели). ETA в `LocalMediaService.Audio` рассчитаны на прогретый случай.

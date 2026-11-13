@@ -21,6 +21,13 @@ public interface IVideoDsp
     // Последний кадр клипа PNG — основа «продолжить от конца»
     Task<VideoDspResult> LastFrameAsync(string path, string outPath, CancellationToken ct);
 
+    // Вклеить звуковую дорожку в клип: видео копируется как есть, прежний звук заменяется, звук обрезается
+    // по длине видео. Источник звука — аудиофайл («Озвучить сцену») или ролик («Увеличить»: RelayVSR звук
+    // не переносит); нет звуковой дорожки — копия видео как есть. Пишет только в outPath и удаляет его при отказе.
+    // Реализации без поддержки — отказ значением
+    Task<VideoDspResult> MuxAudioAsync(string videoPath, string audioPath, string outPath, CancellationToken ct) =>
+        Task.FromResult(VideoDspResult.Fail("Вклейка звука этим движком не поддерживается."));
+
     // Сборка фильма: перекодирование всех клипов под общий размер и частоту, склейки, музыка. Пишет ТОЛЬКО в
     // outPath (его выбирает вызывающий — временный файл) и удаляет его при отказе и отмене. Запуск тяжёлый:
     // слот BuildConcurrencyGate берётся до старта процесса, ожидание слота видно в progress как «waiting».

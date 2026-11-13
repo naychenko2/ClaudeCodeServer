@@ -91,7 +91,9 @@ public sealed record VideoClipVersionDto(
     int? Width = null,
     int? Height = null,
     string? UpscaleError = null,
-    bool? UpscaleCancelled = null);
+    bool? UpscaleCancelled = null,
+    // Версия получена действием «Увеличить» (RelayVSR): 2 или 4; поля нет — обычная съёмка. Размер Width×Height — уже увеличенный
+    int? EnhanceScale = null);
 
 // Запуск в нить: якорь в ленте — по JobId. Status — VideoLaunchStatus.*. Interrupted дублирует
 // Status == "interrupted" ради простого условия на фронте: запуск оборвал перезапуск сервера,
@@ -191,7 +193,9 @@ public sealed record VideoProviderDto(
     IReadOnlyList<VideoModelDto> Models);
 
 // Durations и Aspects — что модель принимает; LastFrame — умеет ли «кадр A → кадр B»;
-// Format — возможности по формату (null — «Как у модели», размеров модель не сообщает)
+// Format — возможности по формату (null — «Как у модели», размеров модель не сообщает).
+// Experimental — экспериментальная модель, берётся только ручным выбором; FirstFrameOptional — снимает и без кадра;
+// Hint — подсказка человеку (что даёт и чем хуже соседей)
 public sealed record VideoModelDto(
     string Id,
     string Label,
@@ -200,4 +204,7 @@ public sealed record VideoModelDto(
     bool Sound,
     bool LastFrame,
     string? License,
-    MediaFormatCaps? Format = null);
+    MediaFormatCaps? Format = null,
+    bool? Experimental = null,
+    bool? FirstFrameOptional = null,
+    string? Hint = null);

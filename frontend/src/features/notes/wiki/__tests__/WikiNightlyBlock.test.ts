@@ -71,10 +71,18 @@
 // (16) не склонять через plural (всегда «попытка») → тест склонения краснеет;
 // (17) оставить общую подсказку и при непустом списке → «подсказки нет» краснеет.
 //
+// T3 (хвост R-W8b п.1 и п.3): ключ строки разбивки — engine + индекс: в файле стора до
+// дедупа (T1) возможны два элемента с одним engine, один engine дал бы равные ключи —
+// warning React и возможный сбой перерисовки; нечитаемый withdrawnAt — без суффикса.
+// (18) вернуть key={e.engine} → тест «дубль имени движка…» краснеет (console.error
+//     «same key»);
+// (19) убрать ветку isNaN в localClockText → тест «withdrawnAt нечитаемый…» краснеет
+//     («выбыл в NaN:NaN»).
+//
 // М3 (узкие сетки, принцип П1): сетки полей и итога ночи берут «узкость» из useWikiNarrow
 // (ширина контейнера), а не из ширины окна; сами чистые функции nightlyFieldCols/lastNightCols
 // проверяются без DOM (решение «узко» — у теста useWikiNarrow, M0).
-// (18) lastNightCols всегда возвращает широкую ветку → «сетка итога» краснеет
+// (20) lastNightCols всегда возвращает широкую ветку → «сетка итога» краснеет
 //     (проверено мутацией, вывод — в отчёте задачи).
 
 import { act, createElement } from 'react';
@@ -810,6 +818,44 @@ describe('исполнители ночи и разбивка итога (W8b)',
     // только текст, без контролов
     const block = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors')!;
     expect(block.querySelectorAll('select,button,input').length).toBe(0);
+  });
+
+  it('дубль имени движка: обе строки на месте, warning React о ключах не идёт', async () => {
+    // правленный руками файл стора до дедупа (T1): два элемента с одним engine. Ключ
+    // строки — engine + индекс (хвост R-W8b п.1): один engine дал бы равные ключи.
+    // Мутация (18): вернуть key={e.engine} → проверка warning краснеет (React 19 печатает
+    // «Encountered two children with the same key» в console.error, dev-сборка).
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'local', title: 'Strata', analyzed: 9, rejected: 0, inputTokens: 123000, withdrawnAt: null },
+      { engine: 'local', title: 'Strata', analyzed: 4, rejected: 0, inputTokens: 50000, withdrawnAt: null },
+    ] }) });
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = render();
+      await settle();
+      expect(has(c, 'Strata: 9 попыток')).toBe(true);
+      expect(has(c, 'Strata: 4 попытки')).toBe(true);
+      const block = findNodeByAttr(c, 'data-testid', 'wiki-nightly-executors')!;
+      expect(block.children.length).toBe(2); // обе строки — элементы, не «одна вместо двух»
+      const keyWarn = errSpy.mock.calls.some((args) => String(args[0] ?? '').includes('same key'));
+      expect(keyWarn).toBe(false);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('withdrawnAt нечитаемый («not-a-date»): без суффикса «выбыл в», без «NaN», рендер не падает', async () => {
+    // хвост R-W8b п.3: время строится только из читаемой даты (localClockText, тот же
+    // приём, что у nightRangeText). Мутация (19): убрать ветку isNaN в localClockText →
+    // суффикс «выбыл в NaN:NaN» вернулся бы.
+    server = settings({ lastNight: LAST({ executors: [
+      { engine: 'e1', title: 'M1', analyzed: 3, rejected: 0, inputTokens: 100, withdrawnAt: 'not-a-date' },
+    ] }) });
+    const c = render();
+    await settle();
+    expect(has(c, 'M1: 3 попытки')).toBe(true);
+    expect(has(c, 'выбыл в')).toBe(false);
+    expect(has(c, 'NaN')).toBe(false);
   });
 
   it('склонение через plural: 1 попытка / 2 попытки / 5 попыток / 11 попыток', async () => {

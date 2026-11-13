@@ -40,12 +40,24 @@ public interface ILocalVideoMedia
     // Можно ли сейчас увеличить съёмку по её тикету (контекст жив, латент сохранён). Нет — Fail у SubmitUpscaleAsync
     bool CanUpscale(string ticket) => false;
 
+    // «Увеличить» готовый ролик ×2 / ×4 (RelayVSR в ядре ComfyUI, отдельное действие над версией, не часть «Макс»):
+    // время по таблице замеров для ролика width×height и seconds секунд; null — размер или длина не замерены
+    int? EnhanceEtaSeconds(int scale, int width, int height, double seconds) => null;
+
+    // Тяжёлая задача GPU: ролик целиком в ComfyUI, звук исходника адаптер возвращает на место сам (RelayVSR звук не
+    // переносит). Тикет опрашивают PollAsync и снимают CancelAsync, как у съёмки. Нет ffmpeg, размер вне замеренных
+    // пределов или очередь занята — Fail с причиной. Реализация по умолчанию — «не умею»
+    Task<LocalVideoSubmitted> SubmitEnhanceAsync(LocalVideoEnhanceRequest request, CancellationToken ct) =>
+        Task.FromResult(LocalVideoSubmitted.Fail("Увеличение ролика недоступно: адаптер локальной съёмки его не поддерживает."));
+
     // Снять задачу: ждущую — из очереди, идущую — прервать адресно по её prompt_id. Задачи в очереди нет — false
     Task<bool> CancelAsync(string ticket, CancellationToken ct);
 }
 
 // FirstFrame — обязательный первый кадр (байты картинки), LastFrame — последний (узел last_frame).
-// Seconds — длительность (потолок — LocalMediaService.MaxVideoSeconds), Size — "full" | "half", Fast — ускоренный режим
+// Seconds — длительность (потолок — LocalMediaService.MaxVideoSeconds), Size — "full" | "half", Fast — ускоренный режим.
+// Model — модель шва (LocalVideoModels); null — MiniMax H3. У Kandinsky 6 Lite FirstFrame необязателен (пустой — съёмка
+// по тексту), LastFrame не берётся, Seconds — только 5, Size и Fast не действуют; звук, как у H3, есть всегда
 public sealed record LocalVideoRequest(
     string Prompt,
     byte[] FirstFrame,
@@ -56,7 +68,21 @@ public sealed record LocalVideoRequest(
     long? Seed = null,
     // Метка происхождения прогона (шаг 23): кто, из какой сессии, вид, операция, тяжёлая ли.
     // null — вызывающая сторона ещё не передаёт (шаги 28–30); реестр пишет неопределённое происхождение.
-    LocalJobOrigin? Origin = null);
+    LocalJobOrigin? Origin = null,
+    string? Model = null);
+
+// Идентификаторы локальных видеомоделей — общие для модуля «Видео» и адаптера local-media
+public static class LocalVideoModels
+{
+    public const string MiniMaxH3 = "minimax-h3";
+    public const string Kandinsky6Lite = "kandinsky-6-lite";
+
+    public static bool IsKandinsky(string? model) =>
+        string.Equals(model?.Trim(), Kandinsky6Lite, StringComparison.OrdinalIgnoreCase);
+}
+
+// Video — mp4 исходной версии; Scale — 2 или 4; Origin — метка происхождения прогона (владелец, чат, «видео ×2», тяжёлый)
+public sealed record LocalVideoEnhanceRequest(byte[] Video, int Scale, LocalJobOrigin? Origin = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: «попробуй позже», а не ошибка запроса
 public sealed record LocalVideoSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)
@@ -78,4 +104,5 @@ public sealed record LocalVideoPoll(
     LocalGpuQueueInfo? Gpu = null);
 
 // Extension — с точкой («.mp4»); HasSound — в ролике есть звуковая дорожка
-public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound);
+// Width и Height — размер ролика, если адаптер его знает (у увеличения — всегда)
+public sealed record LocalVideoFile(byte[] Bytes, string ContentType, string Extension, bool HasSound, int? Width = null, int? Height = null);

@@ -46,7 +46,7 @@ public static class VideoCatalog
     // Модель поставщика под сцену: «Авто» — первая подходящая, явная — только она. Серая модель не берётся
     public static VideoModelInfo? Pick(IVideoEngine engine, string? modelId, Need need) =>
         IsAuto(modelId)
-            ? engine.Models.FirstOrDefault(m => Fits(m, need))
+            ? engine.Models.FirstOrDefault(m => !m.ManualOnly && Fits(m, need))
             : engine.Models.FirstOrDefault(m => string.Equals(m.Id, modelId!.Trim(), StringComparison.OrdinalIgnoreCase) && Fits(m, need));
 
     // Модель подходит: нет второго кадра без первого; кадры берёт модель (нет кадров — модель «только текст»);
@@ -56,7 +56,7 @@ public static class VideoCatalog
         if (model.DisabledReason is not null) return false;
         if (need.FrameB && !need.FrameA) return false;
         if (need.FrameA && !model.Caps.FirstFrame) return false;
-        if (!need.FrameA && model.Caps.FirstFrame) return false;
+        if (!need.FrameA && model.Caps.FirstFrame && !model.Caps.FirstFrameOptional) return false;
         if (need.FrameB && !model.Caps.LastFrame) return false;
         if (model.Caps.LastFrameRequired && !need.FrameB) return false;
         return model.Caps.Durations.Count == 0 || model.Caps.Durations.Contains(need.DurationSec);
@@ -105,7 +105,8 @@ public static class VideoCatalogView
     }
 
     private static VideoModelDto ToDto(VideoModelInfo m) =>
-        new(m.Id, m.Label, m.Caps.Durations, m.Caps.Aspects, m.Caps.Sound, m.Caps.LastFrame, m.Caps.License.Label, m.Caps.Format);
+        new(m.Id, m.Label, m.Caps.Durations, m.Caps.Aspects, m.Caps.Sound, m.Caps.LastFrame, m.Caps.License.Label, m.Caps.Format,
+            m.ManualOnly ? true : null, m.Caps.FirstFrameOptional ? true : null, m.Hint);
 }
 
 public static class VideoThreadLimits

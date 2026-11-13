@@ -84,6 +84,9 @@ public enum AudioOp
     Separate, Denoise, Upsample, Master, Transcribe, ToMidi, Align,
     // Без ИИ
     Trim, GainFade, Normalize, MixStems, Concat,
+    // Звук по видео (Ш4): вход — версия сцены или видеофайл проекта плюс подсказка. В конце перечисления,
+    // чтобы не сдвинуть числовые значения прежних операций
+    VideoToAudio,
 }
 
 public static class AudioOps
@@ -119,6 +122,7 @@ public static class AudioLicenses
     // Закрытая модель за API поставщика: результат можно использовать коммерчески по его условиям
     public static readonly AudioLicense Commercial = new("коммерческая · условия поставщика", AudioLicenseKind.Permissive);
     public static readonly AudioLicense CommercialWatermark = new("коммерческая · водяной знак", AudioLicenseKind.Watermark);
+    public static readonly AudioLicense TencentHunyuan = new("Tencent Hunyuan Community · не для ЕС, Великобритании и Кореи", AudioLicenseKind.Unknown);
     public static readonly AudioLicense MitWatermark = new("MIT · водяной знак Perth", AudioLicenseKind.Watermark);
     public static readonly AudioLicense SynthId = new("коммерческая · водяной знак SynthID", AudioLicenseKind.Watermark);
 }
@@ -227,7 +231,9 @@ public sealed record AudioRequest(
     bool Heavy = false,
     // Связь с источником (шаг 2, журнал истории): проект и job_id задачи редактора — для LocalJobOrigin
     string? ProjectId = null,
-    string? SourceJobId = null);
+    string? SourceJobId = null,
+    // Исходное видео (mp4) для VideoToAudio
+    AudioBytes? Video = null);
 
 // Role — роль файла версии (LocalAudioRoles.*); Extension — с точкой
 public sealed record AudioFile(string Role, byte[] Bytes, string ContentType, string Extension);

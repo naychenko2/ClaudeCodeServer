@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Services.Images.LocalMedia;
 // кладёт клип в свою рабочую папку. Белый список размеров — ComfyWorkflows.VideoSizes, потолок длины —
 // LocalMediaOptions.MaxVideoSeconds, проверка кадров и ETA — статика LocalMediaService. Живость ComfyUI
 // общая с картинками: её кеширует адаптер ILocalImageMedia.
-public sealed class LocalVideoMediaAdapter(
+public sealed partial class LocalVideoMediaAdapter(
     ComfyClient comfy,
     IConfiguration config,
     ILocalImageMedia images,
@@ -19,7 +19,8 @@ public sealed class LocalVideoMediaAdapter(
     TimeProvider? time = null,
     ComfyProgressTracker? steps = null,
     ComfyPromptLedger? ledger = null,
-    ComfyQueueMonitor? monitor = null) : ILocalVideoMedia
+    ComfyQueueMonitor? monitor = null,
+    IVideoDsp? dsp = null) : ILocalVideoMedia
 {
     private DateTime Now => (time ?? TimeProvider.System).GetUtcNow().UtcDateTime;
 
@@ -87,6 +88,7 @@ public sealed class LocalVideoMediaAdapter(
     internal void Sweep(DateTime now)
     {
         var options = LocalMediaOptions.Read(config);
+        SweepEnhances(now, options);
         foreach (var (ticket, shot) in _shots)
         {
             // Пока апскейл съёмки в полёте, ComfyUI ещё может читать латенты и копии в input: не трогаем ни шот,
@@ -117,7 +119,7 @@ public sealed class LocalVideoMediaAdapter(
         foreach (var latent in new[] { shot.LatentVideo, shot.LatentAudio })
             if (latent is not null) cleanup.DeleteOwn(output, latent, shot.Id, LocalMediaCleanup.OutputPrefixes, '_');
         foreach (var frame in new[] { shot.FirstName, shot.LastName })
-            if (frame is not null) cleanup.DeleteOwn(input, frame, shot.Id, LocalMediaCleanup.InputPrefixes, '-');
+            if (!string.IsNullOrEmpty(frame)) cleanup.DeleteOwn(input, frame, shot.Id, LocalMediaCleanup.InputPrefixes, '-');
         foreach (var (ownerId, path) in shot.Outputs)
             cleanup.DeleteOwn(output, path, ownerId, LocalMediaCleanup.OutputPrefixes, '_');
     }
@@ -151,6 +153,7 @@ public sealed class LocalVideoMediaAdapter(
     // при котировке, до выбора кадров (портрет даёт те же секунды, что пейзаж)
     public int? EtaSeconds(LocalVideoRequest request)
     {
+        if (LocalVideoModels.IsKandinsky(request.Model)) return KandinskyEta(request);
         var shape = Shape(request, LocalMediaOptions.Read(config));
         return shape is null ? null : LocalMediaService.ImageToVideoEta(shape.Value.Size, shape.Value.Seconds, shape.Value.Fast);
     }
@@ -167,6 +170,8 @@ public sealed class LocalVideoMediaAdapter(
     {
         var options = LocalMediaOptions.Read(config);
         if (!options.Enabled) return LocalVideoSubmitted.Fail("Локальные модели выключены на этом сервере.");
+
+        if (LocalVideoModels.IsKandinsky(request.Model)) return await SubmitKandinskyAsync(request, options, ct);
 
         Run plan;
         try
@@ -246,6 +251,7 @@ public sealed class LocalVideoMediaAdapter(
                 Percent: PercentOf(ticket), Gpu: _gpuBuilder.Build(ticket, 0));
             ledger?.Complete(ticket, "completed", null, error: null);
             ForgetPercent(ticket);
+            if (_enhances.TryGetValue(ticket, out var enhance)) return await FinishEnhanceAsync(ticket, enhance, history, ct);
             var upscale = _upscales.TryGetValue(ticket, out var upInputs) ? upInputs : null;
             ReleaseUpscale(ticket);
             if (_shots.TryGetValue(ticket, out var shot))
@@ -259,7 +265,7 @@ public sealed class LocalVideoMediaAdapter(
                 var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
                 if (LocalMediaService.ContentTypeOf(ext) is not { } type || !type.StartsWith("video/", StringComparison.Ordinal))
                     continue;
-                // Звук H3 генерирует сам, CreateVideo склеивает его с кадрами: дорожка есть всегда
+                // Звук модель генерирует сама (H3 и Kandinsky 6), CreateVideo склеивает его с кадрами: дорожка есть всегда
                 RememberOutput(upscale, ticket, file);
                 var bytes = await comfy.DownloadAsync(file, ct);
                 return new LocalVideoPoll(LocalVideoState.Completed, null, new LocalVideoFile(bytes, type, ext, HasSound: true), null);
@@ -288,6 +294,7 @@ public sealed class LocalVideoMediaAdapter(
             ledger?.Complete(ticket, "failed", null, error: error);
             ForgetPercent(ticket);
             ReleaseUpscale(ticket);
+            ReleaseEnhance(ticket);
             // Съёмка не удалась — латента нет и увеличивать нечего: контекст и входы убираем сразу
             if (_shots.TryRemove(ticket, out var failedShot)) PurgeShot(failedShot, LocalMediaOptions.Read(config));
             return new(LocalVideoState.Failed, null, null, error);
@@ -325,6 +332,7 @@ public sealed class LocalVideoMediaAdapter(
 
     public int? UpscaleEtaSeconds(LocalVideoRequest request)
     {
+        if (LocalVideoModels.IsKandinsky(request.Model)) return null;
         var options = LocalMediaOptions.Read(config);
         var shape = Shape(request, options);
         return shape is null ? null : LocalMediaService.Upscale1440Eta(ComfyWorkflows.FramesFor(shape.Value.Seconds), options.Upscale1440Tiled);
@@ -423,6 +431,7 @@ public sealed class LocalVideoMediaAdapter(
         finally
         {
             ReleaseUpscale(ticket);
+            ReleaseEnhance(ticket);
         }
     }
 

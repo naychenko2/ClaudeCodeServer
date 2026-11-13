@@ -274,6 +274,20 @@ public sealed class ImageThreadStore(string root, TimeProvider? time = null)
             });
         });
 
+    // Фактическая модель запуска (драйвер ушёл на запасную): правится только у идущего запуска, без журнала —
+    // подпись карточки версии читает её из записи запуска
+    public ImageThreadWrite SetLaunchModel(string ownerId, string sessionId, string threadId, string jobId, string model) =>
+        Mutate(ownerId, sessionId, threadId, null, (state, thread) =>
+        {
+            if (thread.Launches.FirstOrDefault(l => l.JobId == jobId) is not { Status: ImageThreadLaunchStatus.Running } launch
+                || launch.Model == model)
+                return new ImageThreadWrite(ImageThreadWriteStatus.Ok, state);
+            return Replace(state, thread with
+            {
+                Launches = [.. thread.Launches.Select(l => l.JobId == jobId ? l with { Model = model } : l)],
+            });
+        });
+
     // Готовые по ходу варианты идущего запуска: версии добавляются, статус запуска НЕ меняется — его
     // меняет только FinishLaunch (иначе финал не нашёл бы запуск Running и потерял бы хвост).
     // Журнал не пишется: строка одна на весь запуск, в финале

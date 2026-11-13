@@ -537,9 +537,7 @@ public sealed partial class ImageEditorToolset : IMcpParameterizedToolset
         // Пока «Создать» не сохраняли (старый фронт), генерация берёт настройки нити, как раньше.
         // Явный provider агента не подменяется. Персонаж — подключённый в полосе проекта (у
         // личной области его нет)
-        var settings = op == ImageEditOp.Generate && prefs is { Create: not null }
-            ? prefs.CreateSettings()
-            : thread.Settings ?? prefs?.EditSettings();
+        var settings = prefs?.LaunchSettings(op, thread.Settings) ?? thread.Settings;
         var provider = Str(args, "provider") ?? settings?.Provider ?? DefaultProvider();
         if (provider is null)
             return Deny("Поставщик рисования не настроен. Обратитесь к администратору.");

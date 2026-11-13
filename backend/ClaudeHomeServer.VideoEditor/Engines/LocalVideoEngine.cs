@@ -18,7 +18,16 @@ namespace ClaudeHomeServer.Services.VideoEditor.Engines;
 public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IVideoQuoter
 {
     public const string ProviderKey = "local";
-    public const string MiniMaxH3 = "minimax-h3";
+    public const string MiniMaxH3 = LocalVideoModels.MiniMaxH3;
+    public const string Kandinsky6Lite = LocalVideoModels.Kandinsky6Lite;
+
+    // Kandinsky 6 Lite: веса «Lite-distill-5s» — ролик ровно 5 с; проверено только 864×480 (16:9)
+    public const int Kandinsky6Seconds = 5;
+    public static readonly (int Width, int Height) Kandinsky6Size = (864, 480);
+
+    public const string Kandinsky6Hint =
+        "Экспериментальная. Понимает русские промпты и снимает по своей картинке (кадр A) или по одному тексту; "
+        + "ролик 5 с, 480p, со звуком. Вдвое медленнее H3 (≈ 3 мин), искажает текст в кадре, кадра B нет";
 
     public const string PersonalScopeReason =
         "Локальные модели работают только в чате проекта: в личном чате им некуда положить ролик. " +
@@ -63,6 +72,12 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             new VideoCaps([.. Enumerable.Range(1, MaxSeconds)], ["16:9", "9:16"], Sound: true, LastFrame: true,
                 VideoLicense.NotStated, VideoPriceUnits.Free, FirstFrame: true, MaxFrameBytes: MaxFrameBytes,
                 Format: VideoFormatCatalog.LocalH3(["16:9", "9:16"]))),
+        // Только ручной выбор: «Авто» и умолчания её не берут, по умолчанию остаётся H3 (решение Андрея 13.11)
+        new(Kandinsky6Lite, "Kandinsky 6 Lite",
+            new VideoCaps([Kandinsky6Seconds], ["16:9"], Sound: true, LastFrame: false,
+                VideoLicense.NotStated, VideoPriceUnits.Free, FirstFrame: true, MaxFrameBytes: MaxFrameBytes,
+                Format: VideoFormatCatalog.LocalKandinsky6(["16:9"]), FirstFrameOptional: true),
+            ManualOnly: true, Hint: Kandinsky6Hint),
     ];
 
     public string Key => ProviderKey;
@@ -78,8 +93,12 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         return ProjectCapabilities.FilesOnServer(project) ? null : DeviceProjectReason;
     }
 
+    private static readonly IReadOnlySet<string> NoParams = new HashSet<string>(StringComparer.Ordinal);
+
     public IReadOnlySet<string>? ParamNames(VideoModelInfo model) =>
-        string.Equals(model.Id, MiniMaxH3, StringComparison.OrdinalIgnoreCase) ? H3Params : null;
+        string.Equals(model.Id, MiniMaxH3, StringComparison.OrdinalIgnoreCase) ? H3Params
+        : string.Equals(model.Id, Kandinsky6Lite, StringComparison.OrdinalIgnoreCase) ? NoParams
+        : null;
 
     // ── Котировка ────────────────────────────────────────────────────────────────
 
@@ -107,8 +126,13 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     private static LocalVideoRequest Shape(VideoRequest req)
     {
         var fast = req.Params?["fast"] is { } f && (f.GetValueKind() is JsonValueKind.True or JsonValueKind.False) ? f.GetValue<bool>() : (bool?)null;
-        return new LocalVideoRequest(req.Text, [], null, req.DurationSec, SizeOf(req), fast, req.Seed);
+        return new LocalVideoRequest(req.Text, [], null, req.DurationSec, SizeOf(req), fast, req.Seed, Model: ModelOf(req));
     }
+
+    // Шов знает модель только у Kandinsky: у H3 поле остаётся пустым, как до Ш5
+    private static string? ModelOf(VideoRequest req) => IsKandinsky(req) ? Kandinsky6Lite : null;
+
+    private static bool IsKandinsky(VideoRequest req) => LocalVideoModels.IsKandinsky(req.Model);
 
     private int? ShotEta(VideoRequest req) => media?.EtaSeconds(Shape(req));
     private int? UpscaleEta(VideoRequest req) => media?.UpscaleEtaSeconds(Shape(req));
@@ -128,6 +152,63 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         if (media is null) return VideoResult.Fail(VideoOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
         if (UpscaleRetryRefusal(request.ShotTicket) is { } refusal) return VideoResult.Fail(VideoOutcome.Rejected, refusal);
         return await UpscaleAsync(request.Format, request.ShotTicket, null, request.UpscaleEtaSeconds, progress, ct);
+    }
+
+    // ── «Увеличить» версию ×2 / ×4 (RelayVSR) ─────────────────────────────────────
+
+    public string? EnhanceRefusal(VideoEditScope scope) =>
+        ScopeRefusal(scope) ?? (media?.Available == true ? null : "Локальные модели сейчас недоступны");
+
+    public int? EnhanceEtaSeconds(int scale, int? width, int? height, double seconds) =>
+        media is not null && width is { } w && height is { } h ? media.EnhanceEtaSeconds(scale, w, h, seconds) : null;
+
+    // Отдельная тяжёлая задача над готовым клипом, стадия — upscaling: так «Отменить увеличение» работает как у «Макс».
+    // Отмена человеком — Cancelled без версии (съёмка-источник цела), сбой — Failed с причиной
+    public async Task<VideoResult> EnhanceAsync(EnhanceRequest request, IProgress<VideoProgress> progress, CancellationToken ct)
+    {
+        if (media is null) return VideoResult.Fail(VideoOutcome.Unavailable, "Локальные модели недоступны на этом сервере");
+        var origin = request.OwnerId is { } owner
+            ? new LocalJobOrigin(owner, request.SessionId, "video", $"видео ×{request.Scale} · RelayVSR", true,
+                ProjectId: request.ProjectId, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: request.SourceJobId)
+            : null;
+        string? ticket = null;
+        try
+        {
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(Ceiling);
+            var submitted = await media.SubmitEnhanceAsync(new LocalVideoEnhanceRequest(request.Video, request.Scale, origin), timeout.Token);
+            if (submitted.Ticket is null)
+                return VideoResult.Fail(submitted.Busy ? VideoOutcome.Unavailable : VideoOutcome.Rejected,
+                    submitted.Error ?? "Локальная видеокарта не приняла увеличение");
+            ticket = submitted.Ticket;
+            _upscaleTickets[ticket] = false;
+            progress.Report(new VideoProgress(VideoStage.Upscaling, submitted.QueuePosition, submitted.EtaSeconds, RemoteId: ticket));
+
+            var done = await WaitAsync(ticket, submitted.EtaSeconds, VideoStage.Upscaling, null, progress, timeout.Token);
+            var cancelledByUser = _upscaleTickets.TryGetValue(ticket, out var flag) && flag;
+            var finished = ticket;
+            ticket = null;
+            _upscaleTickets.TryRemove(finished, out _);
+            if (done.State == LocalVideoState.Failed || done.File is null)
+                return cancelledByUser
+                    ? VideoResult.Fail(VideoOutcome.Cancelled, "Увеличение отменено")
+                    : VideoResult.Fail(VideoOutcome.Failed, "Увеличение не удалось: " + (done.Error ?? "локальная модель не вернула ролика"));
+            progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: finished));
+            return new VideoResult(VideoOutcome.Ok,
+                new VideoFile(done.File.Bytes, done.File.ContentType, done.File.Extension, HasSound: done.File.HasSound,
+                    Width: done.File.Width, Height: done.File.Height),
+                Free, false, finished, null);
+        }
+        catch (OperationCanceledException)
+        {
+            if (ticket is not null) await media.CancelAsync(ticket, CancellationToken.None);
+            if (ct.IsCancellationRequested) throw;
+            return VideoResult.Fail(VideoOutcome.Failed, $"Увеличение не уложилось в {Ceiling.TotalMinutes:0} минут");
+        }
+        finally
+        {
+            if (ticket is not null) _upscaleTickets.TryRemove(ticket, out _);
+        }
     }
 
     // ── Запуск ───────────────────────────────────────────────────────────────────
@@ -163,8 +244,10 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             if (done.File is not { } file)
                 return new VideoResult(VideoOutcome.Failed, null, Free, false, submitted.Ticket, "Локальная модель не вернула ролика");
 
+            var kandinsky = IsKandinsky(req);
             var shotFile = new VideoFile(file.Bytes, file.ContentType, file.Extension, HasSound: file.HasSound,
-                Width: req.Format?.Width, Height: req.Format?.Height);
+                Width: req.Format?.Width ?? (kandinsky ? Kandinsky6Size.Width : null),
+                Height: req.Format?.Height ?? (kandinsky ? Kandinsky6Size.Height : null));
             if (!upscale)
             {
                 progress.Report(new VideoProgress(VideoStage.Downloading, RemoteId: submitted.Ticket));
@@ -297,6 +380,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
     // даёт), size и fast — из Params. Белый список размеров и потолок длины проверяет адаптер шва
     internal static (LocalVideoRequest? Run, string? Error) Compose(VideoRequest req)
     {
+        if (IsKandinsky(req)) return ComposeKandinsky(req);
         if (!string.Equals(req.Model, MiniMaxH3, StringComparison.OrdinalIgnoreCase))
             return (null, "Локальные модели так не умеют");
         if (req.FrameA is not { } first) return (null, "Локальной модели нужен первый кадр");
@@ -316,6 +400,23 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
             }
         }
         var run = new LocalVideoRequest(req.Text, first.Bytes, req.FrameB?.Bytes, req.DurationSec, size, fast, req.Seed);
+        return (WithOrigin(run, req), null);
+    }
+
+    // Kandinsky 6 Lite: текст, кадр A необязателен; кадра B, частных параметров и длины кроме 5 с у модели нет
+    private static (LocalVideoRequest? Run, string? Error) ComposeKandinsky(VideoRequest req)
+    {
+        if (req.FrameB is not null) return (null, "Kandinsky 6 Lite не берёт кадр B: только текст или кадр A");
+        if (req.DurationSec != Kandinsky6Seconds) return (null, $"Kandinsky 6 Lite снимает ролик только в {Kandinsky6Seconds} секунд");
+        if (req.Params is { } p && p.FirstOrDefault() is { Key: { } unknown })
+            return (null, $"Неизвестный параметр {unknown}");
+        var run = new LocalVideoRequest(req.Text, req.FrameA?.Bytes ?? [], null, Kandinsky6Seconds, "half", null, req.Seed,
+            Model: Kandinsky6Lite);
+        return (WithOrigin(run, req), null);
+    }
+
+    private static LocalVideoRequest WithOrigin(LocalVideoRequest run, VideoRequest req)
+    {
         // Метка происхождения прогона (шаг 30): владелец, чат/сцена, вид=видео, операция, тяжёлый ли.
         // «видео 1440p» — из операции и ступени задачи (PostStep=upscale), размер не пересчитываем;
         // данные у движка есть из задачи (VideoEditJobService кладёт их в запрос); без задачи (тесты) — null.
@@ -323,7 +424,7 @@ public sealed class LocalVideoEngine(ILocalVideoMedia? media) : IVideoEngine, IV
         if (req.OwnerId is { } owner)
             run = run with { Origin = new LocalJobOrigin(owner, req.SessionId, "video", OpName(req), req.Heavy,
                 ProjectId: req.ProjectId, Source: LocalJobOrigin.SourceVideoEditor, SourceJobId: req.SourceJobId) };
-        return (run, null);
+        return run;
     }
 
     // Операция для метки происхождения (шаг 30): «видео» для съёмки, «видео 1440p» для «Макс» (PostStep=upscale)

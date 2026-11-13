@@ -129,7 +129,12 @@ public sealed record ImageThreadLaunch(
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] ImageThreadFaceTarget? FaceTarget = null,
     // Подстановка нескольких персонажей (ADR-028, этап 3): по одному элементу на лицо, с
     // сходством и статусом прохода; null — запуск без подстановки или старые нити (этап 2)
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] IReadOnlyList<ImageThreadFaceTarget>? FaceTargets = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] IReadOnlyList<ImageThreadFaceTarget>? FaceTargets = null,
+    // Модель, которая отработала (id каталога): при запуске — модель котировки, с первым отчётом драйвера —
+    // фактическая (local: запасная Qwen вместо Krea/MOSS/Klein); null — старые нити
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] string? Model = null,
+    // Почему «Авто» выбрало модель котировки («Авто → MOSS: …»); null — модель названа явно или старые нити
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] string? RouteReason = null);
 
 // Подстановка персонажа на лицо в запуске нити (ADR-028): N — номер лица (с 1),
 // BBox — [x1, y1, x2, y2] в пикселях базовой версии, CharacterSlug — slug персонажа.

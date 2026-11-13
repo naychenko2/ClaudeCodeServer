@@ -160,6 +160,10 @@ export interface ImageEditJob {
   // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
   // или задача вне локальных моделей
   gpu?: LocalGpuQueueInfo | null;
+  // Модель, на которой задача идёт на самом деле (local: запасная Qwen); нет — верна model
+  actualModel?: string | null;
+  // Почему «Авто» выбрало модель («Авто → MOSS: …»); нет — модель названа явно
+  routeReason?: string | null;
 }
 
 // Кто запустил задачу или написал промпт: человек в редакторе или агент чата картинки
@@ -389,7 +393,9 @@ export type ImageEditEvent = ImageEditEventOrigin & (
   | { type: 'image_edit_progress'; jobId: string; projectId: string; stage: EditStage; queuePosition?: number | null;
       run?: number | null; runs?: number | null; etaSeconds?: number | null; runElapsedSeconds?: number | null;
       // Снимок очереди GPU ComfyUI (шаг 28): живой, только отображение; null — поставщик не знает
-      gpu?: LocalGpuQueueInfo | null }
+      gpu?: LocalGpuQueueInfo | null;
+      // Модель, на которой задача идёт на самом деле; нет — драйвер не сообщил
+      actualModel?: string | null }
   | { type: 'image_edit_completed'; jobId: string; projectId: string; variants: number[]; cost?: EditCost | null }
   | { type: 'image_edit_failed'; jobId: string; projectId: string; outcome: EditOutcome; charged?: boolean | null; error?: string | null; retryQuote?: ImageEditQuote | null });
 

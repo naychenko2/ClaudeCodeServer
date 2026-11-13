@@ -118,9 +118,14 @@ export function runReason(p: {
   if (p.personal && p.r.provider?.key === LOCAL_PROVIDER) return PERSONAL_LOCAL_REASON;
   // Нечем снимать — это главная причина, кадры тут вторичны
   if (!p.providerOk) return p.providerReason || 'Поставщик недоступен';
-  if (!p.r.frameA && !p.r.frameB) return 'Нужны оба кадра: выберите кадр A и кадр B выше';
-  if (!p.r.frameA) return 'Нужен кадр A: выберите его выше';
-  if (!p.r.frameB) return 'Нужен кадр B: выберите его выше';
+  // Модель без кадра B, которой кадр A не нужен (Kandinsky): хватает текста
+  const singleFrame = !!p.r.model && !p.r.model.lastFrame && !!p.r.model.firstFrameOptional;
+  if (singleFrame && p.r.frameB) return `${p.r.model!.label} не берёт кадр B: уберите его или выберите другую модель`;
+  if (!singleFrame) {
+    if (!p.r.frameA && !p.r.frameB) return 'Нужны оба кадра: выберите кадр A и кадр B выше';
+    if (!p.r.frameA) return 'Нужен кадр A: выберите его выше';
+    if (!p.r.frameB) return 'Нужен кадр B: выберите его выше';
+  }
   if (!p.r.text.trim()) return 'Напишите текст сцены — что происходит от кадра A к кадру B';
   if (p.quoteError) return p.quoteError;
   return null;
@@ -166,11 +171,12 @@ export function executorRows(catalog: VideoCatalog, personal: boolean, autoSub: 
       let reason: string | undefined;
       if (local && personal) reason = PERSONAL_LOCAL_REASON;
       else if (!p.available) reason = p.reason ?? 'Поставщик недоступен';
-      else if (!m.lastFrame) reason = 'Не умеет «кадр A → кадр B»';
+      else if (!m.lastFrame && !m.experimental) reason = 'Не умеет «кадр A → кадр B»';
       rows.push({
         id: `${p.key}|${m.id}`, group: local ? 'local' : 'cloud', name: m.label,
-        sub: [p.label, m.durations.length ? `${m.durations.join(' / ')} с` : '', m.sound ? 'со звуком' : 'без звука'].filter(Boolean).join(' · '),
+        sub: m.hint ?? [p.label, m.durations.length ? `${m.durations.join(' / ')} с` : '', m.sound ? 'со звуком' : 'без звука'].filter(Boolean).join(' · '),
         price: local ? 'бесплатно' : unitMark(p.priceUnit),
+        ...(m.experimental ? { badges: [{ label: 'экспериментальная', tone: 'warn' as const }] } : {}),
         ...(reason ? { disabled: true, reason } : {}),
         ...(local && personal ? { locked: true } : {}),
       });

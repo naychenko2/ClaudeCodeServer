@@ -268,11 +268,13 @@ function LastNightBlock({ last, snapshot, narrow, onOpenInbox, onOpenJournal }: 
             разбор. null («не измерено», старый файл итога), [] (путь без названных
             исполнителей) и отсутствие поля — блока нет (тот же приём, что с judge-строками:
             нечего сказать — строки нет). Длинный список на мобиле переносится: ни фиксированных
-            ширин, ни nowrap здесь нет. */}
+            ширин, ни nowrap здесь нет. Ключ строки — engine + индекс: в файле стора до дедупа
+            возможны два элемента с одним engine (хвост R-W8b п.1), один engine дал бы равные
+            ключи — warning React и возможный сбой перерисовки. */}
         {last.executors && last.executors.length > 0 ? (
           <div data-testid="wiki-nightly-executors" style={{ marginTop: SP.md }}>
             {last.executors.map((e, i) => (
-              <div key={e.engine} style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: i === 0 ? 0 : SP.xs }}>
+              <div key={`${e.engine}:${i}`} style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: i === 0 ? 0 : SP.xs }}>
                 {executorLine(e)}
               </div>
             ))}

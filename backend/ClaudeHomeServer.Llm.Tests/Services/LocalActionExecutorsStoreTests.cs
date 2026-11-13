@@ -21,6 +21,8 @@ namespace ClaudeHomeServer.Tests.Services;
 //   не становится исполнителем и не роняет чтение;
 // • та же судьба у битой СТРОКИ списка: «"executors":[null]» и элемент без имени —
 //   пропуск с Warning, а не NRE в TryGet / LocalExecutorsFor / GET /api/usage;
+// • повтор имени движка в правленном руками файле: остаётся ПЕРВАЯ строка (порядок =
+//   приоритет), дубли выпадают — иначе два кандидата на одном физическом движке;
 // • числа из правленного руками файла урезаются при чтении до тех же границ, что держит
 //   Validate: maxTotal 1..MaxTotalLimit, parallel 1..потолок движка.
 public class LocalActionExecutorsStoreTests
@@ -330,6 +332,27 @@ public class LocalActionExecutorsStoreTests
         Assert.All(cfg.Executors, e => Assert.False(string.IsNullOrWhiteSpace(e.Engine)));
     }
 
+    [Theory]
+    // Файл правят руками: строку копируют. Validate при записи повтор запрещает (:131), в
+    // чтении его держит Load: остаётся ПЕРВАЯ строка — порядок списка есть приоритет, а две
+    // строки одного движка дали бы два кандидата в LocalExecutorsFor и до 2× его потолка
+    // слотов на одном физическом движке. Регистр имени не меняет (тот же ключ, что у Validate).
+    [InlineData("""{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"gemma","parallel":1},{"engine":"local","parallel":1},{"engine":"local","parallel":2},{"engine":"gemma","parallel":2}]}}""")]
+    [InlineData("""{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"gemma","parallel":1},{"engine":"Gemma","parallel":2},{"engine":"local","parallel":1},{"engine":"LOCAL","parallel":2}]}}""")]
+    public void Load_DuplicateEngine_KeepsFirstLineOthersInOrder(string json)
+    {
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir), json);
+        var store = Store(dir, Engines(("gemma", 2)));
+
+        var cfg = store.TryGet(Key);
+        Assert.NotNull(cfg);
+        // Первая строка каждого имени — со своими числами (parallel 1), хвостовые дубли
+        // выпали; порядок остальных имён — прежний.
+        Assert.Equal(["gemma", "local"], cfg.Executors.Select(e => e.Engine));
+        Assert.Equal([1, 1], cfg.Executors.Select(e => e.Parallel));
+    }
+
     [Fact]
     public void Load_HandEditedNumbers_ClampedToTheBoundsValidateEnforces()
     {
@@ -428,7 +451,8 @@ public class LocalActionExecutorsStoreTests
     // Стенд: ОДИН экземпляр стора и у раннера, и у теста — в бою это синглтон DI, и запись
     // админа должна быть видна раннеру сразу, без перезагрузки.
     private static (CheapTextRunner Runner, LocalActionExecutorsStore Store) Stand(
-        string dir, NamedLocalEngines engines, ILocalLlmClient? mainLocal = null)
+        string dir, NamedLocalEngines engines, ILocalLlmClient? mainLocal = null,
+        LlmProviderRegistry? providers = null)
     {
         var config = Config(dir);
         var http = new NoHttp();
@@ -437,9 +461,14 @@ public class LocalActionExecutorsStoreTests
         var router = new LocalActionRouter(ollama, overrides, config, NullLogger<LocalActionRouter>.Instance,
             engines: engines);
         var store = Store(dir, engines);
+        // Реестр один на весь стенд: в бою это тот же синглтон, который читает панель
+        // «Локальные модели». Без явного — пустой (тестовый конфиг не грузит appsettings.json),
+        // это случай «подпись основной локали не задана».
+        providers ??= new LlmProviderRegistry(config);
         var runner = new CheapTextRunner(router, ollama,
-            new CloudCheapClient(http, config, new LlmProviderRegistry(config), NullLogger<CloudCheapClient>.Instance),
-            new NoClaude(), NullLogger<CheapTextRunner>.Instance, namedEngines: engines, executorsStore: store);
+            new CloudCheapClient(http, config, providers, NullLogger<CloudCheapClient>.Instance),
+            new NoClaude(), NullLogger<CheapTextRunner>.Instance, namedEngines: engines, executorsStore: store,
+            providers: providers);
         return (runner, store);
     }
 
@@ -479,6 +508,38 @@ public class LocalActionExecutorsStoreTests
     }
 
     [Fact]
+    public void LocalExecutorsFor_MainLocalTitleFromStats_UsesIt_WithoutIt_KeepsModelAlias()
+    {
+        // Явная подпись основной локали (LlmProviders:<ключ>:Stats:Title — то же значение, чем
+        // зовёт модель панель «Локальные модели») идёт и в список исполнителей: под алиасом
+        // qwen3.8-27b с октября работает Flash-Next, и рядом с «Qwen 27B (пилот)» человек читал
+        // две «27» как две модели. Ключ исполнителя и маршрут не тронуты — «local» остаётся
+        // «local», меняется только подпись.
+        var dir = DataDir();
+        var engines = Engines(("gemma", 2));
+        var providers = new LlmProviderRegistry(Config(dir, new Dictionary<string, string?>
+        {
+            ["LlmProviders:local-qwen:IsLocal"] = "true",
+            ["LlmProviders:local-qwen:Stats:Title"] = "Flash-Next",
+        }));
+        var (runner, store) = Stand(dir, engines, mainLocal: new PlainEngineClient("main"), providers);
+        Assert.True(store.Save(Key, Cfg(2, Ex("local"), Ex("gemma"))));
+
+        var list = runner.LocalExecutorsFor(Key);
+        Assert.Equal(["local", "gemma"], list.Select(e => e.Engine));
+        Assert.Equal("Flash-Next", list[0].Title);
+        // Именованный движок — по-прежнему своей цепочке (Title → модель → имя; здесь ни Title,
+        // ни Model не заданы → ключ движка): общая подпись основной локали его не касается.
+        Assert.Equal("gemma", list[1].Title);
+
+        // Без Stats:Title — прежнее поведение: модель, на которую реально ходит основной
+        // движок (TextModel). Тот же случай проверяет и …WithEngineTitles выше.
+        var (plainRunner, plainStore) = Stand(dir, engines, mainLocal: new PlainEngineClient("main"));
+        Assert.True(plainStore.Save(Key, Cfg(1, Ex("local"))));
+        Assert.Equal("main-модель", plainRunner.LocalExecutorsFor(Key)[0].Title);
+    }
+
+    [Fact]
     public void LocalExecutorsFor_NoStoreEntry_IsEmpty()
     {
         // Пустой список = сегодняшнее поведение: место идёт по своему маршруту
@@ -498,5 +559,23 @@ public class LocalActionExecutorsStoreTests
             """{"wiki-nightly":{"maxTotal":2,"executors":[{"engine":"gemma","parallel":1},{"engine":"claude-sonnet-4-5","parallel":1}]}}""");
         var (runner, _) = Stand(dir, Engines(("gemma", 2)));
         Assert.Equal(["gemma"], runner.LocalExecutorsFor(Key).Select(e => e.Engine));
+    }
+
+    [Fact]
+    public void LocalExecutorsFor_DuplicateEngineInFile_NotDoubled()
+    {
+        // Тот же правленный руками файл на стороне вызывающего ночи: без дедупа в списке
+        // было бы два «local» (parallel 1 и 2) — два кандидата и 3 слота на одном физическом
+        // движке, а его потолок без реестра провайдеров — DefaultLimit (3), то есть дубль
+        // впритык съел бы весь потолок. С дедупом — одна первая строка.
+        var dir = DataDir();
+        File.WriteAllText(StoreFile(dir),
+            """{"wiki-nightly":{"maxTotal":4,"executors":[{"engine":"local","parallel":1},{"engine":"local","parallel":2}]}}""");
+        var (runner, _) = Stand(dir, Engines(("gemma", 2)));
+
+        var list = runner.LocalExecutorsFor(Key);
+        Assert.Equal(["local"], list.Select(e => e.Engine));
+        Assert.Equal([1], list.Select(e => e.Parallel));
+        Assert.True(list.Sum(e => e.Parallel) <= TrackedLocalLlmClient.DefaultLimit);
     }
 }

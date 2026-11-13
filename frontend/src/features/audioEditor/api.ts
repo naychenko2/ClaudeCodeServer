@@ -15,7 +15,7 @@ export type AudioOp =
   | 'speak' | 'designVoice' | 'cloneVoice' | 'convertVoice' | 'trainVoice' | 'dialogue'
   | 'song' | 'cover' | 'repaint' | 'outpaint' | 'extract' | 'lego' | 'complete' | 'sfx'
   | 'separate' | 'denoise' | 'upsample' | 'master' | 'transcribe' | 'toMidi' | 'align'
-  | 'trim' | 'gainFade' | 'normalize' | 'mixStems' | 'concat';
+  | 'trim' | 'gainFade' | 'normalize' | 'mixStems' | 'concat' | 'videoToAudio';
 
 export type AudioVoiceKind = 'preset' | 'description' | 'clone' | 'element' | 'rvc';
 export type AudioOutcome = 'ok' | 'failed' | 'insufficientCredits' | 'rejected' | 'cancelled' | 'unavailable';
@@ -232,6 +232,12 @@ export interface AudioJobInput {
   voice?: string | null;
   // Ревизия контекста чата (ADR-023): сервер берёт нить, версию, голос и образец из стора
   contextRevision?: number | null;
+  // Звук по видео: версия сцены чата (videoSceneId + videoVersionId, пусто — текущая) или файл проекта;
+  // pasteIntoScene — по готовности добавить в сцену версию со вклеенным звуком
+  videoSceneId?: string | null;
+  videoVersionId?: string | null;
+  videoPath?: string | null;
+  pasteIntoScene?: boolean | null;
 }
 
 export interface AudioCost { amount: number; unit: string }
@@ -444,6 +450,10 @@ export function jobForm(input: AudioJobInput): FormData {
   put('voiceIndexPath', input.voiceIndexPath);
   put('voice', input.voice);
   put('contextRevision', input.contextRevision);
+  put('videoSceneId', input.videoSceneId);
+  put('videoVersionId', input.videoVersionId);
+  put('videoPath', input.videoPath);
+  if (input.pasteIntoScene != null) form.append('pasteIntoScene', String(input.pasteIntoScene));
   return form;
 }
 

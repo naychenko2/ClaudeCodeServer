@@ -233,10 +233,12 @@ public record EditCost(double Amount, string Unit);
 // остальных. Итоговый ImageEditResult.Images всё равно несёт ВСЕ варианты по порядку.
 // Gpu — живой снимок очереди GPU ComfyUI (шаг 28): только отображение, в статус запуска, траты
 // и журналы не идёт; null — поставщик не знает или задача вне локальных моделей, заполняет
-// драйвер, который его знает (local)
+// драйвер, который его знает (local).
+// Model — id модели, на которой прогон идёт на самом деле (local: LocalImageModels.Effective — запуск мог
+// уйти на запасную Qwen); null — драйвер не подменяет модель котировки
 public record EditProgress(EditStage Stage, int? QueuePosition = null, int? Run = null, int? Runs = null,
     int? EtaSeconds = null, IReadOnlyList<EditedImage>? Ready = null,
-    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null);
+    ClaudeHomeServer.Services.Media.LocalGpuQueueInfo? Gpu = null, string? Model = null);
 
 // Charged: true — списано, false — точно не списано, null — неизвестно («Списание
 // уточняется у сервиса»)

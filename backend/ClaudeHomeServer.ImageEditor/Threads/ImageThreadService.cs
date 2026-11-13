@@ -485,7 +485,7 @@ public sealed class ImageThreadService(
             var written = store.AddLaunch(ownerId, sessionId, threadId,
                 new ImageThreadLaunch(jobId, baseVersionId, baseStepId, store.Now(), ImageThreadLaunchStatus.Running,
                     agent ? SpendInitiators.Agent : SpendInitiators.Human, prompt.Trim(), Op: job?.Op,
-                    FaceTargets: faceTargets),
+                    FaceTargets: faceTargets, Model: job?.ActualModel ?? job?.Model, RouteReason: job?.RouteReason),
                 new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Launched,
                     $"{who}: «{prompt.Trim()}» · {model}{variants}{from}{EstimateText(job?.Estimate)}", threadId, jobId));
             if (written.Status != ImageThreadWriteStatus.Ok) return;
@@ -531,6 +531,7 @@ public sealed class ImageThreadService(
                 var taken = TakeVariants(ownerId, job, thread, launch);
                 if (taken.Count == 0) return;
                 initiator = launch.Initiator;
+                SetActualModel(ownerId, sessionId, threadId, job);
                 written = store.AddLaunchVersions(ownerId, sessionId, threadId, job.JobId, taken, job.Scenes);
             }
             finally { _versionsGate.Release(); }
@@ -582,6 +583,7 @@ public sealed class ImageThreadService(
                         ? [(one[0].N, status == ImageThreadLaunchStatus.Done ? "done" : status,
                             job.Similarities is { Count: > 0 } sims ? sims.Values.First() : (double?)null)]
                         : null;
+                SetActualModel(ownerId, sessionId, threadId, job);
                 written = store.FinishLaunch(ownerId, sessionId, threadId, job.JobId, status, taken,
                     (after, all) => new ImageThreadEvent(store.Now(), ImageThreadEventKinds.Versions,
                         VersionsText(after, launch, all, job), threadId, job.JobId),
@@ -625,6 +627,13 @@ public sealed class ImageThreadService(
         if (mediaEvents is null) return;
         foreach (var version in written.NewVersions)
             await mediaEvents.PublishAsync(new ImageVersionAdded(ownerId, sessionId, projectId, threadId, version.Id, initiator));
+    }
+
+    // Драйвер сообщил модель, на которой задача пошла на самом деле: она ложится в запись запуска до версий,
+    // и следующая запись нити уносит её клиенту вместе с ними
+    private void SetActualModel(string ownerId, string sessionId, string threadId, ImageEditJobDto job)
+    {
+        if (job.ActualModel is { } actual) store.SetLaunchModel(ownerId, sessionId, threadId, job.JobId, actual);
     }
 
     // Идущий запуск задачи в нити своего чата; иначе null

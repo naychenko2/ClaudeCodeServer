@@ -45,6 +45,9 @@ public enum LocalAudioOp
     ToMidi,
     Enhance,
     Transcribe,
+    // Эффекты по тексту (engine moss | mmaudio) и звук по видео (engine foley-xl | foley-xxl | mmaudio)
+    Sfx,
+    VideoToAudio,
 }
 
 // Prompt — стиль и содержание у музыки и правки трека. Args — параметры операции под теми же
@@ -52,7 +55,7 @@ public enum LocalAudioOp
 // mode, lyrics …); белые списки и пределы проверяет реализация. Ссылки на входы (audio,
 // reference, audios, voice_model, voice_index) в Args не передаются — их место занимают байты:
 // Audio — исходный звук, Reference — образец голоса или трек-эталон мастеринга, Clips — записи
-// для обучения голоса, VoiceModel/VoiceIndex — .pth и .index для RVC
+// для обучения голоса, VoiceModel/VoiceIndex — .pth и .index для RVC, Video — mp4 для VideoToAudio
 public sealed record LocalAudioRequest(
     LocalAudioOp Op,
     string? Prompt = null,
@@ -64,7 +67,8 @@ public sealed record LocalAudioRequest(
     byte[]? VoiceIndex = null,
     long? Seed = null,
     // Метка происхождения прогона (шаг 23): null — вызывающая сторона ещё не передаёт (шаги 28–30).
-    LocalJobOrigin? Origin = null);
+    LocalJobOrigin? Origin = null,
+    byte[]? Video = null);
 
 // Busy — очередь GPU занята или ComfyUI не ответил: это «попробуй позже», а не ошибка запроса
 public sealed record LocalAudioSubmitted(string? Ticket, int? QueuePosition, int? EtaSeconds, string? Error, bool Busy = false)

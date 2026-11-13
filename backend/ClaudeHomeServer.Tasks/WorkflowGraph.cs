@@ -19,8 +19,8 @@ public static class WorkflowGraph
     // Допустимые линии этапа step (лексика FeatureProjector.NormalizeLane).
     public static readonly IReadOnlyList<string> Lanes = ["back", "front", "other"];
 
-    // Этап шаблона после нормализации: Id и After уже подставлены.
-    public sealed record Node(string Id, string Role, string? Lane, string Presence, List<string> After);
+    // Этап шаблона после нормализации: Id и After уже подставлены, Title обрезан.
+    public sealed record Node(string Id, string Role, string? Lane, string? Title, string Presence, List<string> After);
 
     // Состояния этапа маршрута (разрез §1.7).
     public static class StageStates
@@ -50,11 +50,14 @@ public static class WorkflowGraph
             var role = stage?.Role?.Trim() ?? "";
             var id = string.IsNullOrWhiteSpace(stage?.Id) ? role : stage!.Id!.Trim();
             var lane = string.IsNullOrWhiteSpace(stage?.Lane) ? null : stage!.Lane!.Trim();
+            // Имя этапа (G7): трим и «пустая → null» — здесь, чтобы Resolve и ValidateTitleGroups
+            // видели одно и то же нормализованное значение.
+            var title = string.IsNullOrWhiteSpace(stage?.Title) ? null : stage!.Title.Trim();
             var presence = stage?.Presence?.Trim() ?? "";
             var after = stage?.After is { } explicitAfter
                 ? explicitAfter.Select(a => a?.Trim() ?? "").ToList()
                 : i == 0 ? [] : [result[i - 1].Id];
-            result.Add(new Node(id, role, lane, presence, after));
+            result.Add(new Node(id, role, lane, title, presence, after));
         }
         return result;
     }
@@ -90,7 +93,9 @@ public static class WorkflowGraph
             var drop = node.Presence == WorkflowStagePresence.Off
                 || (node.Presence == WorkflowStagePresence.Optional && skipped.Contains(node.Id));
             if (drop) removed[node.Id] = after;
-            else route.Add(new RouteStage { Id = node.Id, Role = node.Role, Lane = node.Lane, After = after });
+            // Заморозка имени (G7): Title копируется в момент подтверждения рядом с Id/Role/Lane —
+            // дальше маршрут от шаблона не зависит (И7).
+            else route.Add(new RouteStage { Id = node.Id, Role = node.Role, Lane = node.Lane, Title = node.Title, After = after });
         }
         return route;
     }

@@ -28,6 +28,9 @@ public static class WorkflowRules
     // Лимит текста промпта этапа (разрез §1).
     public const int PromptLimit = 4000;
 
+    // Лимит имени этапа (G7, решение контракта a5d0c76e): 1..40 после обрезки.
+    public const int TitleLimit = 40;
+
     // Id этапа — slug (разрез 2 §1.1).
     private static readonly Regex StageIdPattern = new("^[a-z0-9-]{1,32}$", RegexOptions.Compiled);
 
@@ -145,6 +148,13 @@ public static class WorkflowRules
                 errors.Add($"{label}: текст промпта этапа длиннее {PromptLimit} символов");
             }
 
+            // Имя этапа (G7): длина проверяется по каждому; требования группы (обязательность
+            // и различность) по одному этапу ответить нельзя — ValidateTitleGroups.
+            if (stage.Title?.Trim() is { Length: > TitleLimit })
+            {
+                errors.Add($"{label}: имя этапа длиннее {TitleLimit} символов");
+            }
+
             // Ячейки матрицы — той же проверкой, что ячейки специальности (разрез §3:
             // «ячейку этапа валидировать как ячейку специальности»), не копией: общий
             // метод живёт в спине ModelCellRules (Core) — Tasks не зависит от Llm (R-B1a, п.1).
@@ -158,11 +168,56 @@ public static class WorkflowRules
             }
         }
 
-        // Графовые правила идут только по структурно целым данным: на дубле id или висящей ссылке
-        // «висящие ветки» и Resolve дали бы шум поверх уже названной причины.
-        if (errors.Count == 0) ValidateGraph(nodes, errors);
+        // Графовые и именные правила идут только по структурно целым данным: на дубле id,
+        // неизвестной роли или пустой записи «висящие ветки», Resolve и группы имён дали бы шум
+        // поверх уже названной причины. Порядок: сначала граф (он не читает имена), затем имена
+        // — обе группы ошибок доезжают до редактора за один проход.
+        if (errors.Count == 0)
+        {
+            ValidateGraph(nodes, errors);
+            ValidateTitleGroups(nodes, errors);
+        }
 
         return errors;
+    }
+
+    // Имена этапов одной роли и линии (G7, решение контракта a5d0c76e по возврату R-C3a):
+    // этапы с общей парой (Role, Lane) граф показывает одинаково подписанными узлами
+    // (qa-plan и qa — две неотличимые «Проверки»). У таких этапов Title обязателен у каждого
+    // и различен в группе без учёта регистра; вне группы Title необязателен. «У каждого» —
+    // бэк не знает фронтовой таблицы имён ролей и не может проверить, что Title не совпадёт
+    // с подписью по умолчанию (a5d0c76e). Группа строится по нормализованным Role/Lane:
+    // линия есть только у step, поэтому группы других ролей — по одной роли.
+    private static void ValidateTitleGroups(List<WorkflowGraph.Node> nodes, List<string> errors)
+    {
+        var groups = new Dictionary<string, List<WorkflowGraph.Node>>(StringComparer.Ordinal);
+        foreach (var node in nodes)
+        {
+            // Роль вне белого списка уже названа ошибкой в основном проходе — группу по ней
+            // не собираем.
+            if (!StageRoles.Contains(node.Role)) continue;
+            var key = node.Role + " " + (node.Lane ?? "");
+            if (!groups.TryGetValue(key, out var members)) groups[key] = [node];
+            else members.Add(node);
+        }
+
+        foreach (var members in groups.Values)
+        {
+            if (members.Count < 2) continue;
+            var taken = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var member in members)
+            {
+                var label = $"этап «{member.Id}»";
+                if (member.Title is null)
+                {
+                    errors.Add($"{label}: этап делит роль и линию с другим этапом — имя (Title) обязательно.");
+                }
+                else if (!taken.Add(member.Title))
+                {
+                    errors.Add($"{label}: имя «{member.Title}» повторяет имя другого этапа той же роли и линии.");
+                }
+            }
+        }
     }
 
     // Нет висящих веток: каждый этап, кроме последнего, стоит в «после» кого-то из более поздних,

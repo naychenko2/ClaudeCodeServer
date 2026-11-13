@@ -73,12 +73,19 @@ public class WorkflowRulesTests
             Stages = [Stage(), Stage()],
         }).Should().ContainSingle().Which.Should().Contain("id этапа «step»").And.Contain("дважды");
 
+    // G7 (a5d0c76e): два этапа одной роли без имени дали бы в графе две неотличимые подписи —
+    // по правилу группы имён здесь обязателен Title у каждого и различный (имена добавлены).
     [Fact]
     public void ПовторяемаяРольСРазнымиId_Допустима() =>
         WorkflowRules.Validate(new WorkflowTemplate
         {
             Name = "тест",
-            Stages = [Stage(TaskRoles.Plan), WithId(TaskRoles.Plan, "plan-qa"), Stage(TaskRoles.Step)],
+            Stages =
+            [
+                WithId(TaskRoles.Plan, "plan", title: "План"),
+                WithId(TaskRoles.Plan, "plan-qa", title: "Проверка плана"),
+                Stage(TaskRoles.Step),
+            ],
         }).Should().BeEmpty();
 
     [Theory]
@@ -93,8 +100,8 @@ public class WorkflowRulesTests
         }).Should().ContainSingle().Which.Should().Contain("одиночная").And.Contain(role);
 
     private static WorkflowStage WithId(string role, string id, string[]? after = null, string? lane = null,
-        string presence = WorkflowStagePresence.On) =>
-        new() { Role = role, Id = id, After = after?.ToList(), Lane = lane, Presence = presence };
+        string presence = WorkflowStagePresence.On, string? title = null) =>
+        new() { Role = role, Id = id, After = after?.ToList(), Lane = lane, Presence = presence, Title = title };
 
     private static List<string> ValidateStages(params WorkflowStage[] stages) =>
         WorkflowRules.Validate(new WorkflowTemplate { Name = "тест", Stages = stages.ToList() });
@@ -155,10 +162,12 @@ public class WorkflowRulesTests
     [Fact]
     public void СнятиеOptionalОставляетВисящуюВетку_Ошибка()
     {
+        // Имена двух plan-этапов даны (G7): иначе ошибка имени заглушила бы проверяемую здесь
+        // графовую.
         var errors = ValidateStages(
-            WithId(TaskRoles.Plan, "a"),
+            WithId(TaskRoles.Plan, "a", title: "План"),
             WithId(TaskRoles.Design, "x", after: ["a"], presence: WorkflowStagePresence.Optional),
-            WithId(TaskRoles.Plan, "w", after: ["a"]),
+            WithId(TaskRoles.Plan, "w", after: ["a"], title: "План второй"),
             WithId(TaskRoles.Qa, "y", after: ["x", "w"], presence: WorkflowStagePresence.Optional));
 
         errors.Should().ContainSingle().Which.Should().Contain("при снятии").And.Contain("y").And.Contain("не сходится");
@@ -168,10 +177,11 @@ public class WorkflowRulesTests
     public void ОффЭтапОставляетВисящуюВетку_Ошибка()
     {
         // x выключен (off): w и z остаются без стока, а x был единственным их потомком.
+        // Имена трёх plan-этапов даны (G7) — чтобы проверялась именно графовая ошибка.
         var errors = ValidateStages(
-            WithId(TaskRoles.Plan, "a"),
-            WithId(TaskRoles.Plan, "w", after: ["a"]),
-            WithId(TaskRoles.Plan, "z", after: ["a"]),
+            WithId(TaskRoles.Plan, "a", title: "План"),
+            WithId(TaskRoles.Plan, "w", after: ["a"], title: "План второй"),
+            WithId(TaskRoles.Plan, "z", after: ["a"], title: "План третий"),
             WithId(TaskRoles.Design, "x", after: ["w", "z"], presence: WorkflowStagePresence.Off));
 
         errors.Should().ContainSingle().Which.Should().Contain("off").And.Contain("не сходится");
@@ -212,25 +222,28 @@ public class WorkflowRulesTests
     [InlineData(17, true)]
     public void ПотолокЭтапов(int count, bool expectError)
     {
+        // Имена даны (G7: все этапы здесь одной роли): проверяется именно потолок.
         var errors = ValidateStages(Enumerable.Range(1, count)
-            .Select(i => WithId(TaskRoles.Plan, $"p{i}")).ToArray());
+            .Select(i => WithId(TaskRoles.Plan, $"p{i}", title: $"План {i}")).ToArray());
 
         if (expectError) errors.Should().ContainSingle().Which.Should().Contain("предел — 16");
         else errors.Should().BeEmpty();
     }
 
     // Форма parallel-cycle (разрез 2 §1.10) проходит валидатор целиком, включая перебор снятий.
+    // qa-plan и qa делят роль (линии у qa нет) — по правилу G7 (a5d0c76e) обоим обязателен
+    // Title, тот же, что в пресете стора.
     [Fact]
     public void ParallelCycle_Валиден() =>
         ValidateStages(
             Stage(TaskRoles.Cut),
             WithId(TaskRoles.Design, "design", presence: WorkflowStagePresence.Optional),
             WithId(TaskRoles.Plan, "plan", ["design"]),
-            WithId(TaskRoles.Qa, "qa-plan", ["design"], presence: WorkflowStagePresence.Optional),
+            WithId(TaskRoles.Qa, "qa-plan", ["design"], presence: WorkflowStagePresence.Optional, title: "Проверка плана"),
             WithId(TaskRoles.Step, "step-back", ["plan"], "back"),
             WithId(TaskRoles.Step, "step-front", ["plan"], "front"),
             WithId(TaskRoles.Review, "review", ["step-back", "step-front"]),
-            WithId(TaskRoles.Qa, "qa", ["review", "qa-plan"]),
+            WithId(TaskRoles.Qa, "qa", ["review", "qa-plan"], title: "Проверка"),
             Stage(TaskRoles.Final),
             Stage(TaskRoles.Merge)).Should().BeEmpty();
 
@@ -387,5 +400,82 @@ public class WorkflowRulesTests
         stage.StallPolicy = policy;
 
         ValidateOne(stage).Should().BeEmpty();
+    }
+
+    // ─── G7 (решение контракта a5d0c76e по возврату R-C3a): имена этапов общей роли ──────────
+    // Исходная проблема: qa-plan и qa в «Параллельном цикле» делят роль → граф показывал две
+    // неотличимые «Проверки». Правило: у этапов с общей парой (Role, Lane) Title обязателен
+    // у каждого и различен в группе без учёта регистра; вне группы — необязателен.
+
+    [Fact]
+    public void ДваЭтапаОднойРолиБезИмени_ОшибкаУКаждого()
+    {
+        var errors = ValidateStages(WithId(TaskRoles.Qa, "qa1"), WithId(TaskRoles.Qa, "qa2", after: ["qa1"]));
+
+        errors.Should().HaveCount(2)
+            .And.Contain(e => e.Contains("qa1") && e.Contains("имя (Title) обязательно"))
+            .And.Contain(e => e.Contains("qa2") && e.Contains("имя (Title) обязательно"));
+    }
+
+    [Fact]
+    public void ДваЭтапаОднойРолиСОдинаковымиИменами_Ошибка()
+    {
+        // Без учёта регистра и с обрезкой краев: «Проверка» и « проверка » — одно имя.
+        var errors = ValidateStages(
+            WithId(TaskRoles.Qa, "qa1", title: "Проверка"),
+            WithId(TaskRoles.Qa, "qa2", after: ["qa1"], title: " проверка "));
+
+        // Ошибка адресована второму этапу и называет его имя после обрезки («проверка» —
+        // трим делает Normalize).
+        errors.Should().ContainSingle().Which
+            .Should().Contain("qa2").And.Contain("повторяет имя").And.Contain("проверка");
+    }
+
+    [Fact]
+    public void ДваЭтапаОднойРолиСРазнымиИменами_Проходит()
+    {
+        ValidateStages(
+            WithId(TaskRoles.Qa, "qa-plan", title: "Проверка плана"),
+            WithId(TaskRoles.Qa, "qa", after: ["qa-plan"], title: "Проверка")).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ИмяТолькоИзПробелов_КакБезИмени_Ошибка()
+    {
+        var errors = ValidateStages(
+            WithId(TaskRoles.Qa, "qa1", title: "  "),
+            WithId(TaskRoles.Qa, "qa2", after: ["qa1"], title: "Проверка"));
+
+        errors.Should().ContainSingle().Which.Should().Contain("qa1").And.Contain("обязательно");
+    }
+
+    // Вне группы Title не обязателен и не мешает: одиночный этап той же роли проходит без него.
+    [Fact]
+    public void ОдиночныйЭтапБезИмени_TitleНеТребует() =>
+        ValidateStages(WithId(TaskRoles.Qa, "qa")).Should().BeEmpty();
+
+    // Этапы одной роли, но разных линий (step back/front) — разные группы: имена не нужны.
+    [Fact]
+    public void ОднаРольРазныеЛинии_ГруппыНет_ИмяНеТребует() =>
+        ValidateStages(
+            WithId(TaskRoles.Plan, "plan"),
+            WithId(TaskRoles.Step, "s-back", after: ["plan"], lane: "back"),
+            WithId(TaskRoles.Step, "s-front", after: ["plan"], lane: "front"),
+            WithId(TaskRoles.Review, "review", after: ["s-back", "s-front"])).Should().BeEmpty();
+
+    // Граница длины имени (тот же порядок, что у промпта): 40 проходит, 41 краснеет.
+    [Theory]
+    [InlineData(40, false)]
+    [InlineData(41, true)]
+    public void ИмяЭтапа_ГраницаЛимита(int length, bool expectError)
+    {
+        var stage = Stage();
+        stage.Title = new string('а', length);
+
+        var errors = ValidateOne(stage);
+        if (expectError)
+            errors.Should().ContainSingle().Which.Should().Contain("длиннее 40");
+        else
+            errors.Should().BeEmpty();
     }
 }

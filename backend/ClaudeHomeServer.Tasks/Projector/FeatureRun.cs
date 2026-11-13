@@ -284,6 +284,10 @@ public sealed class FeatureStage
     public string Role { get; init; } = "";
     // Линия этапа (back | front | other) — только у графового этапа роли step; иначе null.
     public string? Lane { get; init; }
+    // Имя этапа (G7, a5d0c76e): из RouteStage.Title подтверждённого маршрута (заморожено при
+    // подтверждении); у легаси-стадии и этапа без имени — null (фронт тогда подписывает узел
+    // именем роли и линией — доработка C3a/C1b).
+    public string? Title { get; init; }
     // Предшественники в графе (id этапов): у фичи с маршрутом — из маршрута; у легаси-стадии —
     // пусто (графа нет).
     public List<string> After { get; init; } = [];

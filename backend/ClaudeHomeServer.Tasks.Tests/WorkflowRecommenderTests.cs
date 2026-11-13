@@ -101,6 +101,7 @@ public class WorkflowRecommenderTests : IDisposable
     // Графовый шаблон (R-B4a Major 2): два этапа одной роли review с разными id — ровно та форма,
     // где id этапа НЕ равен роли. На step её не построить: роль несъёмная, Presence «optional»
     // ей запрещён (WorkflowRules.cs:22,127), а повторить без id нельзя — id = роль был бы дублем.
+    // Имена (G7, a5d0c76e): общая роль — обязательный и различный Title у каждого этапа группы.
     private WorkflowTemplate GraphTemplate() => _store.Save(new WorkflowTemplate
     {
         Name = "граф",
@@ -109,8 +110,8 @@ public class WorkflowRecommenderTests : IDisposable
         [
             new() { Role = TaskRoles.Plan },
             new() { Role = TaskRoles.Step },
-            new() { Id = "review-back", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional },
-            new() { Id = "review-front", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional },
+            new() { Id = "review-back", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional, Title = "Ревью бэка" },
+            new() { Id = "review-front", Role = TaskRoles.Review, Presence = WorkflowStagePresence.Optional, Title = "Ревью фронта" },
             new() { Role = TaskRoles.Final },
         ],
     }, WorkflowTemplateScope.Global);

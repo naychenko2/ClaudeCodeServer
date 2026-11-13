@@ -377,6 +377,44 @@ public class TaskManagerWorkflowTests : IDisposable
         System.Text.Json.JsonSerializer.Serialize(_tasks.GetById(epic.Id)!.WorkflowProposal).Should().Be(pr);
     }
 
+    // G7 (a5d0c76e) + И7: имя этапа заморожено в маршруте при подтверждении. Правка Title в
+    // шаблоне после подтверждения не меняет подтверждённый маршрут: из шаблона на лету имя не
+    // берётся — иначе получилась бы вторая точка правды.
+    [Fact]
+    public void ConfirmWorkflow_TitleЗаморожен_ПравкаШаблонаПослеПодтвержденияНеМенитМаршрут()
+    {
+        var tpl = _store.Save(new WorkflowTemplate
+        {
+            Name = "две проверки",
+            Stages =
+            [
+                new() { Role = TaskRoles.Plan },
+                new() { Role = TaskRoles.Qa, Id = "qa1", Title = "Проверка" },
+                new() { Role = TaskRoles.Qa, Id = "qa2", After = ["qa1"], Title = "Проверка кода" },
+                new() { Role = TaskRoles.Final, After = ["qa2"] },
+                new() { Role = TaskRoles.Merge },
+            ],
+        }, WorkflowTemplateScope.Global);
+
+        var epic = _tasks.Create(null, Owner, new CreateTaskRequest("фича", Role: TaskRoles.Feature));
+        _tasks.ConfirmWorkflow(epic.Id, new FeatureWorkflow
+        {
+            TemplateId = tpl.Id, Scope = "global", Stages = WorkflowGraph.Resolve(tpl, []),
+            Skipped = [], ConfirmedVersion = tpl.Version, ConfirmedAt = DateTime.UtcNow,
+        });
+
+        // Правка шаблона: имена переписаны (снятие Title здесь же сделало бы шаблон
+        // невалидным — у группы обязателен у каждого, это правило, а не проверка заморозки).
+        var edited = _store.Get(tpl.Id, WorkflowTemplateScope.Global)!;
+        edited.Stages.Single(s => s.Id == "qa1").Title = "Первая проверка";
+        edited.Stages.Single(s => s.Id == "qa2").Title = "Другая проверка";
+        _store.Save(edited, WorkflowTemplateScope.Global);
+
+        var route = _tasks.GetById(epic.Id)!.Workflow!.Stages;
+        route.Single(s => s.Id == "qa1").Title.Should().Be("Проверка");
+        route.Single(s => s.Id == "qa2").Title.Should().Be("Проверка кода");
+    }
+
     // Двери PUT (UpdateTaskRequest — его принимают REST и MCP tasks_update/tasks_complete) и Create
     // не содержат полей маршрута вовсе: принять их нечем.
     [Theory]
@@ -456,6 +494,7 @@ public class TaskManagerWorkflowTests : IDisposable
     // ─── G2: выбор этапа по графу (WorkflowGraph.StageFor) ───────────────────────────
 
     // cut → design → {plan, qa-plan}; plan → {step-back, step-front} → review → qa ← qa-plan; qa → final → merge.
+    // Имена qa-этапов (G7, a5d0c76e): общая роль — обязательный и различный Title у каждого.
     private static WorkflowTemplate ParallelCycle() => new()
     {
         Name = "parallel-cycle",
@@ -464,11 +503,11 @@ public class TaskManagerWorkflowTests : IDisposable
             new() { Role = TaskRoles.Cut },
             new() { Role = TaskRoles.Design },
             new() { Role = TaskRoles.Plan, After = ["design"], Prompt = "план" },
-            new() { Role = TaskRoles.Qa, Id = "qa-plan", After = ["design"], Prompt = "тест-план" },
+            new() { Role = TaskRoles.Qa, Id = "qa-plan", After = ["design"], Prompt = "тест-план", Title = "Проверка плана" },
             new() { Role = TaskRoles.Step, Id = "step-back", After = ["plan"], Lane = "back", Prompt = "бэк" },
             new() { Role = TaskRoles.Step, Id = "step-front", After = ["plan"], Lane = "front", Prompt = "фронт" },
             new() { Role = TaskRoles.Review, After = ["step-back", "step-front"] },
-            new() { Role = TaskRoles.Qa, After = ["review", "qa-plan"], Prompt = "qa-итог" },
+            new() { Role = TaskRoles.Qa, After = ["review", "qa-plan"], Prompt = "qa-итог", Title = "Проверка" },
             new() { Role = TaskRoles.Final },
             new() { Role = TaskRoles.Merge },
         ],

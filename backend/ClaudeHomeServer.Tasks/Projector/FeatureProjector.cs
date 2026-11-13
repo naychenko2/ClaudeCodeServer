@@ -417,7 +417,7 @@ public sealed class FeatureProjector(TaskManager tasks)
         var stages = new List<FeatureStage>(stageDefs.Length);
         for (int i = 0; i < stageDefs.Length; i++)
         {
-            var (key, id, role, lane, after, column, tasks) = stageDefs[i];
+            var (key, id, role, lane, title, after, column, tasks) = stageDefs[i];
 
             // Состояние стадии.
             string state;
@@ -574,6 +574,8 @@ public sealed class FeatureProjector(TaskManager tasks)
                 Id = id,
                 Role = role,
                 Lane = lane,
+                // G7: имя — из замороженного RouteStage.Title; у легаси-стадии — null.
+                Title = title,
                 After = after,
                 Column = column,
                 State = state,
@@ -753,7 +755,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Повтор id этапа (битые данные) не даёт второй копии стадии (правило B5 «повтор роли →
     // одна стадия prod»: в линейном маршруте id = роль, повтор роли = повтор id). Пустой граф —
     // пустой список (проектор не падает; activeIndex для пустого списка — -1, см. BuildCore).
-    private static (string key, string id, string role, string? lane, List<string> after, int column,
+    private static (string key, string id, string role, string? lane, string? title, List<string> after, int column,
         List<TaskItem> tasks)[] BuildStageDefs(
         TaskItem epic,
         List<TaskItem> cut, List<TaskItem> design, List<TaskItem> plan, List<TaskItem> steps,
@@ -785,14 +787,15 @@ public sealed class FeatureProjector(TaskManager tasks)
                     if (TaskStageId(route, t) is { } sid)
                         stageIdByTask[t.Id] = sid;
 
-            var defs = new List<(string, string, string, string?, List<string>, int, List<TaskItem>)>();
+            var defs = new List<(string, string, string, string?, string?, List<string>, int, List<TaskItem>)>();
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var stage in route)
             {
                 if (!WorkflowRules.StageRoles.Contains(stage.Role)) continue;
                 if (!seen.Add(stage.Id)) continue;
                 var key = FeatureTimeMath.RoleToStage(stage.Role);
-                defs.Add((key, stage.Id, stage.Role, stage.Lane, stage.After, columns[stage.Id],
+                // Имя — из RouteStage.Title (G7): из шаблона на лету не берём (И7).
+                defs.Add((key, stage.Id, stage.Role, stage.Lane, stage.Title, stage.After, columns[stage.Id],
                     byKey[key].Where(t => stageIdByTask.TryGetValue(t.Id, out var tid) && tid == stage.Id).ToList()));
             }
             return defs.ToArray();
@@ -800,17 +803,18 @@ public sealed class FeatureProjector(TaskManager tasks)
 
         // Легаси: порядок жизненного цикла, «design» — необязательный этап после «cut» (W4-DES-B).
         // Новые поля описывают существующую цепь: id = ключ, роль — роль задач стадии
-        // (TaskStageRole отображает её обратно); After/Column пусты — графа нет.
-        return new (string, string, string, string?, List<string>, int, List<TaskItem>)[]
+        // (TaskStageRole отображает её обратно); After/Column пусты — графа нет;
+        // имени нет — оно живёт только в маршруте (G7).
+        return new (string, string, string, string?, string?, List<string>, int, List<TaskItem>)[]
         {
-            ("cut", "cut", TaskRoles.Cut, null, [], 0, cut),
-            ("design", "design", TaskRoles.Design, null, [], 0, design),
-            ("plan", "plan", TaskRoles.Plan, null, [], 0, plan),
-            ("prod", "prod", TaskRoles.Step, null, [], 0, steps),
-            ("review", "review", TaskRoles.Review, null, [], 0, reviews),
-            ("qa", "qa", TaskRoles.Qa, null, [], 0, qa),
-            ("final", "final", TaskRoles.Final, null, [], 0, byKey["final"]),
-            ("merge", "merge", TaskRoles.Merge, null, [], 0, byKey["merge"]),
+            ("cut", "cut", TaskRoles.Cut, null, null, [], 0, cut),
+            ("design", "design", TaskRoles.Design, null, null, [], 0, design),
+            ("plan", "plan", TaskRoles.Plan, null, null, [], 0, plan),
+            ("prod", "prod", TaskRoles.Step, null, null, [], 0, steps),
+            ("review", "review", TaskRoles.Review, null, null, [], 0, reviews),
+            ("qa", "qa", TaskRoles.Qa, null, null, [], 0, qa),
+            ("final", "final", TaskRoles.Final, null, null, [], 0, byKey["final"]),
+            ("merge", "merge", TaskRoles.Merge, null, null, [], 0, byKey["merge"]),
         };
     }
 
@@ -1425,7 +1429,7 @@ public sealed class FeatureProjector(TaskManager tasks)
     // Пересечение строгое (положительный нахлёст): касание «подряд» (конец одного = старт
     // другого) пересечением не считается.
     private static bool StageOverlapsActive(
-        int index, (string key, string id, string role, string? lane, List<string> after, int column,
+        int index, (string key, string id, string role, string? lane, string? title, List<string> after, int column,
             List<TaskItem> tasks)[] stageDefs, DateTime now)
     {
         var selfEnd = StageLastCompletedAt(stageDefs[index].tasks);

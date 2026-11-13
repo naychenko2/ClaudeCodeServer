@@ -153,6 +153,23 @@ public class WorkflowTemplateStoreTests : IDisposable
         saved.Stages[0].Presence.Should().Be("on");
     }
 
+    // G7: Title нормализуется тем же путём, что проверяет Validate: трим по краям, «пустая → null».
+    [Fact]
+    public void Save_TitleТриммится_ПустойСтановитсяNull()
+    {
+        var t = Custom();
+        t.Stages[0].Title = "  Рабочий шаг  ";
+
+        var saved = NewStore().Save(t, WorkflowTemplateScope.Global);
+
+        saved.Stages[0].Title.Should().Be("Рабочий шаг");
+
+        var blank = NewStore().Get(saved.Id, WorkflowTemplateScope.Global)!;
+        blank.Stages[0].Title = "   ";
+        var second = NewStore().Save(blank, WorkflowTemplateScope.Global);
+        second.Stages[0].Title.Should().BeNull();
+    }
+
     [Fact]
     public void Delete_Встроенный_Отказ_Свой_Удаляется()
     {
@@ -253,6 +270,15 @@ public class WorkflowTemplateStoreTests : IDisposable
             .Equal(("step-back", "back"), ("step-front", "front"));
         // специальность ветки проверки плана — тестировщик (разрез 2 §1.10)
         preset.Stages.Single(s => s.Id == "qa-plan").Specialty.Should().Be(PersonaSpecialty.Tester);
+
+        // G7 (a5d0c76e): qa-plan и qa делят роль — в пресете у каждого своё имя, и Resolve
+        // копирует его в подтверждённый маршрут (заморозка рядом с Id/Role/Lane).
+        preset.Stages.Single(s => s.Id == "qa-plan").Title.Should().Be("Проверка плана");
+        preset.Stages.Single(s => s.Id == "qa").Title.Should().Be("Проверка");
+        route.Single(s => s.Id == "qa-plan").Title.Should().Be("Проверка плана");
+        route.Single(s => s.Id == "qa").Title.Should().Be("Проверка");
+        route.Single(s => s.Id == "review").Title.Should().BeNull(
+            "у этапа без имени в пресете Title нет — он не выдумывается проекцией");
     }
 
     // G5: сброс parallel-cycle идёт тем же путём, что у full-cycle/fast-track (B1b):

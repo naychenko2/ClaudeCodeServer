@@ -2428,6 +2428,8 @@ public class FeatureProjectorTests
         run.Stages.Select(s => s.Key).Should().Equal(
             new[] { "cut", "design", "plan", "prod", "review", "qa", "final", "merge" },
             "без подтверждённого маршрута — прежний фиксированный список (W4-DES-B)");
+        run.Stages.Should().OnlyContain(s => s.Title == null,
+            "у легаси-стадий имени нет: Title живёт только в подтверждённом маршруте (G7)");
     }
 
     // Пустой граф маршрута (битые данные: валидатор маршрута ещё не на месте подтверждения):
@@ -2574,6 +2576,40 @@ public class FeatureProjectorTests
         // Счётчик «этапов пройдено N из M» (п.6): M = число этапов маршрута, пройденные — done.
         run.StagesTotal.Should().Be(10);
         run.StagesPassed.Should().Be(2, "done: cut, plan");
+    }
+
+    // G7 (решение контракта a5d0c76e по возврату R-C3a): две стадии роли qa в «Параллельном
+    // цикле» различаются именами. Маршрут построен Resolve'ом из пресета кода — проверяется
+    // вся цепочка контракта: Title пресета → валидация → заморозка в RouteStage → проекция.
+    // Без имён граф показал бы две неотличимые «Проверки» (Key у обеих общий — «qa»).
+    [Fact]
+    public void Build_МаршрутParallelCycle_ДвеQaСтадииОтличаютсяИменами()
+    {
+        const string epicId = "epic-qa-titles";
+        var preset = WorkflowTemplateStore.BuiltInPreset(WorkflowTemplateStore.ParallelCycleKey);
+        var epic = new TaskItem
+        {
+            Id = epicId, Role = TaskRoles.Feature,
+            Workflow = new FeatureWorkflow
+            {
+                TemplateId = preset.Id, Scope = "global",
+                Stages = WorkflowGraph.Resolve(preset, []),
+                Skipped = [], ConfirmedVersion = preset.Version,
+                ConfirmedAt = new DateTime(2026, 11, 13, 10, 0, 0, DateTimeKind.Utc),
+                ConfirmedByUser = true,
+            },
+        };
+
+        var run = FeatureProjector.Build(epic, [epic]);
+
+        run.Stages.Where(s => s.Key == "qa").Select(s => s.Id).Should()
+            .Equal(new[] { "qa-plan", "qa" }, "обе стадии общей роли в проекции и различаются id");
+        StageById(run, "qa-plan").Title.Should().Be("Проверка плана");
+        StageById(run, "qa").Title.Should().Be("Проверка");
+        // Этап без имени в пресете — null: имя не выдумывается из роли (подпись — дело фронта, C3a).
+        StageById(run, "plan").Title.Should().BeNull();
+        run.Stages.Should().OnlyContain(s => s.Title == null || s.Id == "qa-plan" || s.Id == "qa",
+            "имена есть только у двух qa-этапов пресета");
     }
 
     // Две активные стадии (п.4): шапка и Гант — FeatureBrief.CurrentStageOf — берут первую активную

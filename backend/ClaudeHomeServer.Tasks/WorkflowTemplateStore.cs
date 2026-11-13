@@ -116,6 +116,9 @@ public sealed class WorkflowTemplateStore
         // Третий пресет — графовой формы (разрез 2 §1.10): две линии шага параллельно и
         // отдельная ветка QA плана. Presence — по образцу full-cycle (съёмные там же, где у
         // него); несъёмные (step/final/merge) — всегда «on», их требует WorkflowRules.
+        // Имена qa-этапов (G7, a5d0c76e): qa-plan и qa делят роль (линии у qa нет) — по правилу
+        // WorkflowRules у каждого обязателен Title, различный в группе; без них граф показал бы
+        // две неотличимые «Проверки». Остальным этапам имени не нужно: их роли в шаблоне уникальны.
         ParallelCycleKey => GraphPreset(key, "Параллельный цикл",
             "Две линии работы: шаг по бэку и фронту параллельно, проверка плана — отдельной веткой.",
             new() { Role = TaskRoles.Cut, Presence = WorkflowStagePresence.On },
@@ -124,12 +127,12 @@ public sealed class WorkflowTemplateStore
             new()
             {
                 Id = "qa-plan", Role = TaskRoles.Qa, Presence = WorkflowStagePresence.Optional,
-                After = ["design"], Specialty = PersonaSpecialty.Tester,
+                After = ["design"], Specialty = PersonaSpecialty.Tester, Title = "Проверка плана",
             },
             new() { Id = "step-back", Role = TaskRoles.Step, Lane = "back", After = ["plan"] },
             new() { Id = "step-front", Role = TaskRoles.Step, Lane = "front", After = ["plan"] },
             new() { Role = TaskRoles.Review, After = ["step-back", "step-front"] },
-            new() { Id = "qa", Role = TaskRoles.Qa, Presence = WorkflowStagePresence.Optional, After = ["review", "qa-plan"] },
+            new() { Id = "qa", Role = TaskRoles.Qa, Presence = WorkflowStagePresence.Optional, After = ["review", "qa-plan"], Title = "Проверка" },
             new() { Role = TaskRoles.Final },
             new() { Role = TaskRoles.Merge }),
         _ => throw new ArgumentException($"неизвестный встроенный пресет «{key}»", nameof(key)),
@@ -330,6 +333,8 @@ public sealed class WorkflowTemplateStore
         {
             s.Role = s.Role.Trim();
             s.Presence = s.Presence.Trim();
+            // Имя этапа (G7): та же нормализация, что проверяет Validate, — «пустая → null».
+            s.Title = string.IsNullOrWhiteSpace(s.Title) ? null : s.Title.Trim();
             s.StallPolicy = string.IsNullOrWhiteSpace(s.StallPolicy) ? null : s.StallPolicy.Trim();
             s.StallMinutes = WorkflowRules.NormalizeStall(s.StallMinutes);
         }

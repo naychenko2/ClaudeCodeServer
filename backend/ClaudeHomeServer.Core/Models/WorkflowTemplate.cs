@@ -49,6 +49,11 @@ public class WorkflowStage
     // Id этапа (разрез 2 §1.1): slug [a-z0-9-]{1,32}, уникален в шаблоне; null → Role
     // (у линейных шаблонов id этапа равен роли). Роль может повторяться, id — нет.
     public string? Id { get; set; }
+    // Имя этапа (G7, решение контракта a5d0c76e по возврату R-C3a): необязательное, 1..40
+    // после обрезки по краям, пустая → null. Обязательно и различно в группе этапов с общей
+    // парой (Role, Lane) — сторож один: WorkflowRules. В StageSnapshot не входит: показ идёт
+    // через проекцию (FeatureStage.Title), исполнителю имя не нужно.
+    public string? Title { get; set; }
     // Предшественники: id этапов, стоящих РАНЬШЕ в списке; null → [предыдущий в списке];
     // [] → корень. Порядок списка — топологический, поэтому цикл невозможен по построению.
     public List<string>? After { get; set; }
@@ -144,6 +149,10 @@ public class RouteStage
     public string Id { get; set; } = "";
     public string Role { get; set; } = "";
     public string? Lane { get; set; }
+    // Имя, замороженное из шаблона в момент подтверждения (G7, И7): копируется в
+    // WorkflowGraph.Resolve рядом с Id/Role/Lane. Из шаблона на лету не читается — иначе
+    // правка шаблона после подтверждения меняла бы подтверждённый маршрут.
+    public string? Title { get; set; }
     public List<string> After { get; set; } = [];
 }
 

@@ -38,6 +38,8 @@ public class PersonaScopeGuardTests
         // Чтение эффективных секций промпта (разрез 2, §2.6, P1d): то же право, что у карточки
         ["PromptSections"] = ProjectRight.Read,
         ["Update"] = ProjectRight.WriteContent,
+        // Отметка «секции специальности просмотрены» (B09): права как у правки персоны
+        ["MarkSectionsSeen"] = ProjectRight.WriteContent,
         ["Delete"] = ProjectRight.Configure,
         ["MakeDefault"] = ProjectRight.Configure,
         ["Chats"] = ProjectRight.Read,

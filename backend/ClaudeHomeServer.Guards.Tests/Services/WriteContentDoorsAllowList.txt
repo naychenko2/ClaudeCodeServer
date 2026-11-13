@@ -43,3 +43,6 @@ PersonasController.ClearFocus
 PersonasController.UpdateMemory
 PersonasController.Forget
 PersonasController.ConfirmMemory
+# B09 (aa1b0838d): POST /api/personas/{id}/sections-seen — отметка просмотра секций специальности двигает
+# базу «изменено админом» у персоны; права как у правки персоны ([ProjectScope(From = Persona, Right = WriteContent)]).
+PersonasController.MarkSectionsSeen

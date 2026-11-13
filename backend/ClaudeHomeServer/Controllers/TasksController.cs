@@ -917,8 +917,12 @@ public class TasksController(
     // места «исполнитель» = Strong → UserModelTierResolver.ModelFor, единственная точка, инвариант
     // CLAUDE.md). assignments null (Llm выключена) → null (без разворота). Функцию передаём
     // в проектор: он в Main не лезет (инвариант изоляции вертикалей).
-    // Имя персоны для узла графа процесса (B01): только персона владельца, иначе null.
-    private string? PersonaNameOf(string personaId) => personas.Get(personaId, UserId)?.Name;
+    // Имя персоны для узла графа процесса (B01): только персона, видимая вызывающему (ResolvePersona
+    // с правом Read: своя глобальная или командная проекта), иначе null.
+    private string? PersonaNameOf(string personaId) =>
+        access?.ResolvePersona(UserId, personaId, ProjectRight.Read) is { } scope
+            ? personas.Get(personaId, scope.TenantOwnerId)?.Name
+            : null;
 
     // internal — тестовый хук (минор 5): сверка owner-check задачи (чужая задача → «без задачи»).
     internal Func<FeatureIndexSession,(string? Label, string? Full)>? ChatModelResolver()

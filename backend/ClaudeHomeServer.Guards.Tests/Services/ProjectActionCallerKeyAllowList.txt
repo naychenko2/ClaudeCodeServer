@@ -307,7 +307,11 @@ backend/ClaudeHomeServer/Controllers/SkillsController.cs|8
 # АКТОР проверки видимости: задача берётся по id и пропускается, если актор — владелец записи или у него
 # право Read на проект (IProjectAccess.Resolve). Ключом хранилищ он не служит, ничего не пишется —
 # тот же класс мест, что «access.Resolve(UserId, …)» в GET /api/tasks/{id} (S2c-9).
-backend/ClaudeHomeServer/Controllers/TasksController.cs|96
+# Разбор красных сторожей (B01/B04/B06): TasksController 96→99 — «stage.AnswerQuestion(…, UserId)» (B04),
+# «stage.BuildFileDiff(…, UserId)» (B06) и «access.ResolvePersona(UserId, …)» в PersonaNameOf (B01). id
+# вызывающего идёт актором видимости (StageScreenService.Visible) и аргументом И-1 (ResolvePersona), тот же
+# класс мест, что D1a: ключом хранилищ не служит; ответ на вопрос этапа адресован id задачи и вопроса.
+backend/ClaudeHomeServer/Controllers/TasksController.cs|99
 # Задача b078fa12 (блокер мержа, шаги P1e/P2b): TaskWorkflowController 0→1 — «FeatureOwnerGate.IsOwnerOf(access, UserId, epic)»
 # в EpicOfCaller (recommend/confirm маршрута эпика). id вызывающего — актор права «только владелец»
 # (владелец записи либо ProjectRight.Write через IProjectAccess), тот же предикат, что у двери правки
@@ -324,7 +328,10 @@ backend/ClaudeHomeServer/Controllers/TurnRightExtensions.cs|7
 # IProjectAccess.Resolve (запрошенные права Read/Configure и чтение для развилки 403/404), тот же
 # класс мест, что вердикт S1-3c. Ключом хранилищ ничто не стало: шаблоны ключуются (scope, projectId) —
 # проектная область адресована id проекта, вызывающий нигде ключом не служит.
-backend/ClaudeHomeServer/Controllers/WorkflowTemplatesController.cs|3
+# B08 (ea16d56d9): WorkflowTemplatesController 3→4 — «tasks.GetByOwner(UserId)» в мете списка шаблонов:
+# только чтение своих эпиков для счётчика «использование», рядом читаются проектные (GetByProject, после
+# DenyProjectRead). Ничего не пишется, ключом хранилищ вызывающий не служит.
+backend/ClaudeHomeServer/Controllers/WorkflowTemplatesController.cs|4
 backend/ClaudeHomeServer/Hubs/SessionHub.cs|7
 backend/ClaudeHomeServer/Hubs/TerminalHub.cs|1
 # S2d-4b2: TasksToolset 0→1 — id актора хода (`actor`, неизвестный → пустая строка) входит только в
